@@ -269,7 +269,7 @@ export async function renameChatThread(threadId: string, newTitle: string): Prom
 const BUILT_IN_HANDLES = new Set(["chatgpt"]);
 
 const BUILT_IN_ENDPOINTS: Record<string, string> = {
-  chatgpt: "/api/chat/chatgpt",
+  chatgpt: "/api/assistants/chatgpt",
 };
 
 /**
@@ -301,7 +301,8 @@ export async function resolveMessageRouting(
     if (resolved.length > 0) {
       const builtIn = resolved.find((m) => BUILT_IN_HANDLES.has(m.handle));
       if (builtIn) {
-        // Built-in assistant: route to its dedicated endpoint instead of /api/chat.
+        // Built-in assistant: route to its dedicated AG-UI producer endpoint
+        // instead of the default Cinatra assistant endpoint.
         // Its reply is attributed to the built-in principal (builtInMention), not Cinatra.
         return {
           shouldCallLlm: true,

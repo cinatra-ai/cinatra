@@ -139,7 +139,7 @@ export function readChatThreadPayloadById(
 /**
  * Raw ownership-axis lookup for a chat thread by id. Returns the persisted
  * `ownerUserId` / `teamId` (or `null` when the row does not exist) WITHOUT any
- * authorization — the write path (POST /api/chat/save) uses this to decide
+ * authorization — the write path (POST /api/assistants/threads) uses this to decide
  * overwrite authorization from the EXISTING row rather than from client-supplied
  * body fields (so the body can never spoof ownership). Distinguishing "missing"
  * from "unauthorized" is intentional here: a missing row is a create, a present

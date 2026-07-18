@@ -67,6 +67,18 @@ export type TriggerEmailSendDeps = {
   getCampaign: (campaignId: string) => Promise<Campaign | null>;
   getDraftsByIds: (draftIds: string[]) => Promise<Draft[]>;
   sendEmail: (message: EmailMessage, options?: { userId?: string }) => Promise<EmailSendReceipt>;
+  // Fetch a bundle envelope by ref. Defaults to the deterministic objects
+  // client (`fetchObjectsByRef`). Injectable so the initial-send fan-out is
+  // unit-testable without loading `@cinatra-ai/objects`.
+  getObjectByRef?: (
+    ref: string,
+    actor: PrimitiveActorContext,
+  ) => Promise<ObjectsEnvelope | null>;
+  // Pipeline-owned per-email artifact projection (cinatra#1455). The SINGLE
+  // write authority for the `email:body` / `email:recipient` per-item
+  // projections derived from the run-scoped bundles. Best-effort: a projection
+  // failure never fails the send. Defaults to the objects-client materializer.
+  emitEmailFanout?: (args: EmailFanoutArgs) => Promise<EmailFanoutResult>;
 };
 
 // Lazy default deps — heavy imports happen only when the adapter is actually
@@ -148,6 +160,12 @@ function buildLazyDefaultDeps(): TriggerEmailSendDeps {
       if (!cachedSend) cachedSend = await loadDefaultSendEmail();
       return cachedSend(message, options);
     },
+    getObjectByRef(ref, actor) {
+      return fetchObjectsByRef(ref, actor);
+    },
+    emitEmailFanout(args) {
+      return defaultEmitEmailFanout(args);
+    },
   };
 }
 
@@ -213,6 +231,9 @@ type ObjectsEnvelope = {
 };
 
 type DraftRow = {
+  id?: string;
+  draftId?: string;
+  step?: string | number;
   contactId?: string;
   recipientEmail?: string;
   email?: string;
@@ -285,6 +306,297 @@ function recipientEmailFor(
   return recipients[0]?.email ?? recipients[0]?.recipientEmail ?? null;
 }
 
+// ===========================================================================
+// Per-email artifact fan-out (cinatra#1455).
+//
+// The campaign bundles (`@cinatra-ai/campaigns:email-draft-bundle`,
+// `:recipients`, …) stay INTERNAL run-scoped machinery — HITL and the send
+// loop keep reading arrays out of them, unchanged. This seam is the durable
+// PROJECTION: at the initial-send fan-out boundary it materializes one
+// `email:body` artifact per draft item and one `email:recipient` record per
+// confirmed recipient. It is the SINGLE write authority for those per-item
+// projections; the projection is one-way (bundle -> artifact), so no
+// synchronization back to the bundle is needed (library-side draft editing is
+// not enabled here — if it ever is, an explicit sync-back must be added).
+//
+// Coupling with the email-artifacts pack (cinatra#1454, runs in parallel):
+// #1454 CLAIMS these types (claim-only manifest mode, epic #1448) — its
+// package registers each claim into `objectTypeRegistry` with an inline JSON
+// Schema + `identityKey`, and carries the `email:recipient` `projection:none`
+// PII disposition. Until that pack is installed the types are not registered,
+// so this seam is DORMANT (guarded on registration — see the `registeredTypes`
+// gate in `defaultEmitEmailFanout`). It never mints a dynamic type, matching
+// the "types exist only by installation" ruling (epic #1785). Idempotency is
+// driven HERE via an explicit `externalId` on each payload, which the objects
+// identity resolver honors as its strongest layer
+// (`packages/objects/src/identity.ts` Layer 1) — so retried sends UPDATE the
+// same row instead of duplicating, independent of #1454's `identityKey`.
+//
+// Bounded backfill: forward-only. Per-item artifacts materialize from the
+// point this ships, at the send boundary; historical campaign bundles are NOT
+// retroactively exploded into per-item artifacts (no blind historical
+// explosion). A bounded, opt-in backfill — if ever wanted — is deferred to the
+// #1454 dev-stack E2E / a dedicated migration.
+// ===========================================================================
+
+/** `email:body` claimed artifact type (registered by the #1454 pack). */
+export const EMAIL_BODY_TYPE_ID = "@cinatra-ai/email:body";
+/** `email:recipient` claimed record type (registered by the #1454 pack). */
+export const EMAIL_RECIPIENT_TYPE_ID = "@cinatra-ai/email:recipient";
+
+/**
+ * Deterministic external identity for a per-draft `email:body` projection.
+ * `(runScopeId, draftItemId)` is the fan-out key (cinatra#1455). The objects
+ * identity resolver lowercases the key, so equal keys converge on one row.
+ */
+export function emailBodyExternalId(runScopeId: string, draftItemId: string): string {
+  return `email-body:${runScopeId}:${draftItemId}`;
+}
+
+/**
+ * Deterministic external identity for a per-recipient `email:recipient`
+ * projection. `(runScopeId, contactKey)` where contactKey is the
+ * provider-scoped contact id (retry-safe identity) or the normalized-email
+ * fallback (cinatra#1454 mitigations).
+ */
+export function emailRecipientExternalId(runScopeId: string, contactKey: string): string {
+  return `email-recipient:${runScopeId}:${contactKey}`;
+}
+
+/**
+ * Stable per-draft item id for the `(runScopeId, draftItemId)` key. Uses ONLY
+ * an explicit, non-PII draft id (`draft.id` / `draft.draftId`), falling back to
+ * the draft's position in the approved bundle. Deliberately does NOT fall back
+ * to `contactId` (which would COLLAPSE multiple drafts targeting one contact
+ * into a single artifact) or to the recipient email (which would leak PII into
+ * the body artifact's identity fields). The positional index is stable for a
+ * given approved bundle (the ref is immutable per approval), so a retried send
+ * of the same approval re-derives the same key. A stable draft id from the
+ * bundle producer is preferred — the index is the last resort.
+ */
+function deriveDraftItemId(draft: DraftRow, index: number): string {
+  const explicit = draft.id ?? draft.draftId;
+  if (typeof explicit === "string" && explicit.trim() !== "") return explicit.trim();
+  return `idx-${index}`;
+}
+
+/**
+ * Retry-safe recipient contact key: provider-scoped contact id first, then a
+ * normalized-email fallback. Returns null when neither is present — an
+ * unidentifiable recipient is never projected.
+ */
+function deriveRecipientContactKey(r: RecipientRow): string | null {
+  if (typeof r.contactId === "string" && r.contactId.trim() !== "") {
+    return `contact:${r.contactId.trim()}`;
+  }
+  const email = r.email ?? r.recipientEmail;
+  if (typeof email === "string" && email.trim() !== "") {
+    return `email:${email.trim().toLowerCase()}`;
+  }
+  return null;
+}
+
+export type EmailFanoutSaveResult = {
+  objectId: string;
+  type: string;
+  isNew: boolean;
+  wasMerged: boolean;
+};
+
+export type EmailFanoutSaveFn = (input: {
+  rawData: Record<string, unknown>;
+  typeHint: string;
+}) => Promise<EmailFanoutSaveResult>;
+
+export type EmailFanoutInput = {
+  /** At least the campaign run id; the campaign id is the stable fallback. */
+  runScopeId: string;
+  campaignId: string;
+  drafts: readonly DraftRow[];
+  recipients: readonly RecipientRow[];
+};
+
+export type EmailFanoutArgs = EmailFanoutInput & {
+  actor: PrimitiveActorContext;
+};
+
+export type EmailFanoutEmission = {
+  typeId: string;
+  externalId: string;
+  objectId: string;
+  isNew: boolean;
+};
+
+export type EmailFanoutResult = {
+  bodies: EmailFanoutEmission[];
+  recipients: EmailFanoutEmission[];
+  /** true when the claimed type is not registered yet (#1454 not installed). */
+  skipped: { bodies: boolean; recipients: boolean };
+};
+
+/**
+ * Pure per-email fan-out materializer — the single write authority for the
+ * `email:body` / `email:recipient` per-item projections. Deterministic
+ * (pipeline-owned, never prompt-directed): one `email:body` per draft item,
+ * one `email:recipient` per confirmed recipient, each carrying an explicit
+ * `externalId` so a retried run updates rather than duplicates.
+ *
+ * `save` performs the typed write (the objects deterministic client in
+ * production; a fake in tests). `registeredTypes` is the installed-type gate:
+ * a type absent from it is skipped, keeping this seam dormant until the #1454
+ * pack registers the claim — no dynamic-type minting.
+ */
+export async function materializeEmailFanout(
+  input: EmailFanoutInput,
+  deps: { save: EmailFanoutSaveFn; registeredTypes: ReadonlySet<string> },
+): Promise<EmailFanoutResult> {
+  const { runScopeId, campaignId, drafts, recipients } = input;
+  const bodies: EmailFanoutEmission[] = [];
+  const recipientsOut: EmailFanoutEmission[] = [];
+
+  const canBody = deps.registeredTypes.has(EMAIL_BODY_TYPE_ID);
+  const canRecipient = deps.registeredTypes.has(EMAIL_RECIPIENT_TYPE_ID);
+
+  // One `email:body` artifact per draft item, keyed (runScopeId, draftItemId).
+  if (canBody) {
+    let index = 0;
+    for (const draft of drafts) {
+      const draftItemId = deriveDraftItemId(draft, index);
+      index += 1;
+      const externalId = emailBodyExternalId(runScopeId, draftItemId);
+      const contactId =
+        typeof draft.contactId === "string" && draft.contactId.trim() !== ""
+          ? draft.contactId.trim()
+          : undefined;
+      const rawData: Record<string, unknown> = {
+        externalId,
+        runId: runScopeId,
+        campaignId,
+        draftItemId,
+        subject: draft.subject ?? "",
+        body: draft.body ?? draft.bodyHtml ?? "",
+        // Soft-provenance correlation ONLY (atomicity, epic #1448 rule 2): a
+        // plain contact-id string, never an artifact-id reference. No recipient
+        // address is stored on the body projection — the address lives on the
+        // `email:recipient` record (projection:none), keeping PII off this
+        // draftable surface.
+        ...(contactId ? { contactId } : {}),
+        ...(draft.step !== undefined ? { step: draft.step } : {}),
+      };
+      const res = await deps.save({ rawData, typeHint: EMAIL_BODY_TYPE_ID });
+      bodies.push({
+        typeId: EMAIL_BODY_TYPE_ID,
+        externalId,
+        objectId: res.objectId,
+        isNew: res.isNew,
+      });
+    }
+  }
+
+  // One `email:recipient` record per confirmed recipient, keyed
+  // (runScopeId, provider-scoped contact key | normalized email).
+  if (canRecipient) {
+    const seen = new Set<string>();
+    for (const r of recipients) {
+      const contactKey = deriveRecipientContactKey(r);
+      if (!contactKey) continue; // unidentifiable recipient — never projected
+      if (seen.has(contactKey)) continue; // de-dupe within the batch
+      seen.add(contactKey);
+      const externalId = emailRecipientExternalId(runScopeId, contactKey);
+      const email = r.email ?? r.recipientEmail;
+      const rawData: Record<string, unknown> = {
+        externalId,
+        runId: runScopeId,
+        campaignId,
+        // Minimum fields. The `email:recipient` claim carries projection:none
+        // (owned by #1454), so the address never lands in a Graphiti
+        // title/excerpt.
+        ...(typeof r.contactId === "string" && r.contactId.trim() !== ""
+          ? { contactId: r.contactId.trim() }
+          : {}),
+        ...(typeof email === "string" && email.trim() !== ""
+          ? { email: email.trim() }
+          : {}),
+        ...(typeof r.name === "string" && r.name.trim() !== "" ? { name: r.name.trim() } : {}),
+      };
+      const res = await deps.save({ rawData, typeHint: EMAIL_RECIPIENT_TYPE_ID });
+      recipientsOut.push({
+        typeId: EMAIL_RECIPIENT_TYPE_ID,
+        externalId,
+        objectId: res.objectId,
+        isNew: res.isNew,
+      });
+    }
+  }
+
+  return {
+    bodies,
+    recipients: recipientsOut,
+    skipped: { bodies: !canBody, recipients: !canRecipient },
+  };
+}
+
+// Lazy default projection: resolves registered types via the objects client
+// (claim-registered artifact types surface through `objects_types_list`), then
+// runs the materializer with the deterministic objects-save write path.
+async function loadDefaultEmitEmailFanout(): Promise<
+  NonNullable<TriggerEmailSendDeps["emitEmailFanout"]>
+> {
+  const { createDeterministicObjectsClient } = await import("@cinatra-ai/objects");
+  return async (args: EmailFanoutArgs): Promise<EmailFanoutResult> => {
+    const client = createDeterministicObjectsClient({ actor: args.actor });
+    let registeredTypes: ReadonlySet<string>;
+    try {
+      const listed = (await client.typesList()) as { types?: Array<{ type: string }> };
+      registeredTypes = new Set((listed?.types ?? []).map((t) => t.type));
+    } catch {
+      // If type discovery fails, stay dormant rather than risk a misclassified
+      // write — the projection is best-effort and must never break the send.
+      registeredTypes = new Set();
+    }
+    return materializeEmailFanout(
+      {
+        runScopeId: args.runScopeId,
+        campaignId: args.campaignId,
+        drafts: args.drafts,
+        recipients: args.recipients,
+      },
+      {
+        save: (inp) => client.save(inp) as Promise<EmailFanoutSaveResult>,
+        registeredTypes,
+      },
+    );
+  };
+}
+
+let cachedDefaultEmit: NonNullable<TriggerEmailSendDeps["emitEmailFanout"]> | null = null;
+async function defaultEmitEmailFanout(args: EmailFanoutArgs): Promise<EmailFanoutResult> {
+  if (!cachedDefaultEmit) cachedDefaultEmit = await loadDefaultEmitEmailFanout();
+  return cachedDefaultEmit(args);
+}
+
+/**
+ * The run-scope id for the fan-out identity: the campaign run id carried on
+ * either bundle envelope (system-injected as `cinatraAgentRunId` on every
+ * objects_save). Returns null when no real run id is present — the projection
+ * is then SKIPPED rather than collapsing distinct runs of the same campaign
+ * onto a shared `campaignId` key (which would merge their per-item artifacts).
+ * `campaignId` remains on the payload as soft-provenance correlation only, never
+ * as the identity key — the key is strictly `(runId, itemKey)` per cinatra#1455.
+ */
+function resolveRunScopeId(
+  draftEnv: ObjectsEnvelope | null,
+  recipEnv: ObjectsEnvelope | null,
+): string | null {
+  const fromEnv = (env: ObjectsEnvelope | null): string | null => {
+    const d = (env?.data ?? null) as Record<string, unknown> | null;
+    if (!d || typeof d !== "object") return null;
+    const rid = d.cinatraAgentRunId ?? d.cinatra_agent_run_id ?? d.runId;
+    return typeof rid === "string" && rid.trim() !== "" ? rid.trim() : null;
+  };
+  return fromEnv(draftEnv) ?? fromEnv(recipEnv);
+}
+
 async function runInitialSend(args: {
   input: {
     campaignId: string;
@@ -294,8 +606,13 @@ async function runInitialSend(args: {
   };
   actor: PrimitiveActorContext;
   sendEmail: TriggerEmailSendDeps["sendEmail"];
+  getObjectByRef: (
+    ref: string,
+    actor: PrimitiveActorContext,
+  ) => Promise<ObjectsEnvelope | null>;
+  emitEmailFanout: (args: EmailFanoutArgs) => Promise<EmailFanoutResult>;
 }): Promise<InitialSendStateRow> {
-  const { input, actor, sendEmail } = args;
+  const { input, actor, sendEmail, getObjectByRef, emitEmailFanout } = args;
   const startedAt = new Date().toISOString();
   sendStateByCampaign.set(input.campaignId, {
     status: "running",
@@ -318,8 +635,8 @@ async function runInitialSend(args: {
 
   try {
     const [draftEnv, recipEnv] = await Promise.all([
-      fetchObjectsByRef(input.approvedDraftBundleRef, actor),
-      fetchObjectsByRef(input.confirmedRecipientsRef, actor),
+      getObjectByRef(input.approvedDraftBundleRef, actor),
+      getObjectByRef(input.confirmedRecipientsRef, actor),
     ]);
     if (!draftEnv || !recipEnv) {
       return {
@@ -340,6 +657,37 @@ async function runInitialSend(args: {
         sentCount: 0,
         errorMessage: "Approved draft bundle has no drafts.",
       };
+    }
+
+    // Durable per-item projection AT the fan-out boundary (cinatra#1455) —
+    // where the run-scoped bundle is dissolved into individual items, BEFORE
+    // the per-email send. `email:body` is draftable and `email:recipient` is
+    // the confirmed-recipient snapshot, so the projection captures the
+    // CONFIRMED campaign set independent of the send outcome. Best-effort: a
+    // projection failure NEVER fails the send — the send is the critical path;
+    // the artifacts are the derived, idempotent projection.
+    const runScopeId = resolveRunScopeId(draftEnv, recipEnv);
+    if (runScopeId) {
+      try {
+        await emitEmailFanout({
+          runScopeId,
+          campaignId: input.campaignId,
+          drafts,
+          recipients,
+          actor,
+        });
+      } catch (fanoutErr) {
+        console.warn(
+          "[trigger-email-send] per-email artifact fan-out failed (send unaffected):",
+          fanoutErr instanceof Error ? fanoutErr.message : String(fanoutErr),
+        );
+      }
+    } else {
+      // No run id on either bundle — skip rather than key the fan-out on a
+      // campaign scope shared across runs (cinatra#1455 identity is (runId, …)).
+      console.warn(
+        "[trigger-email-send] skipping per-email fan-out: no run id on the campaign bundles",
+      );
     }
 
     let sentCount = 0;
@@ -465,6 +813,10 @@ export function createTriggerEmailSendUseCases(
         input,
         actor,
         sendEmail: deps.sendEmail,
+        // Fall back to the production defaults when an injected deps object
+        // (e.g. a unit test) omits the optional fan-out seams.
+        getObjectByRef: deps.getObjectByRef ?? fetchObjectsByRef,
+        emitEmailFanout: deps.emitEmailFanout ?? defaultEmitEmailFanout,
       });
       sendStateByCampaign.set(input.campaignId, result);
       return {

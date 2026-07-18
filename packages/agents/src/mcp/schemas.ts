@@ -139,6 +139,19 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
       messageType: z.enum(["setup", "user", "assistant", "tool", "final"]).optional().describe("Filter to a specific message type. Omit to return all messages."),
     }),
   },
+  "agent_run_hitl_prompts_list": {
+    description:
+      "Run-scoped snapshot of THIS run's captured HITL amendment prompts (id, stepKey, message, submittedValues, schemaSnapshot, excluded, capturedAt), for pre-interrupt payload assembly by the run's OWN workflow. The run and its declaring agent package are derived from the run-bound invocation context — there is NO runId input and a caller-supplied one is ignored. Only callable from inside a run (deterministic pre-interrupt seam or an agent-run OBO frame); a bare chat/session call fails closed. Returns { runId, agentPackageName, prompts[] }.",
+    inputSchema: z.object({}).describe("No input — run + declaring agent package come from the invocation context."),
+  },
+  "agent_run_hitl_prompts_exclude": {
+    description:
+      "Batch, idempotent (un)exclusion of THIS run's own captured HITL prompts — flags them so autosave / payload assembly skips (or re-includes) them. Every id must belong to the current run + declaring agent package; any unknown id rejects the whole batch (no partial application). The run, declaring agent package, and actor are context-derived, never caller input. Returns { runId, agentPackageName, excluded, requested, applied, ids[] }.",
+    inputSchema: z.object({
+      ids: z.array(z.string().min(1)).min(1).max(500).describe("Prompt ids to (un)exclude. Every id MUST belong to the current run + declaring agent; unknown ids reject the batch. Bounded at 500."),
+      excluded: z.boolean().optional().describe("Target exclusion state. Defaults true (exclude). Pass false to re-include. Idempotent."),
+    }),
+  },
   "agent_run_stop": {
     description: "Stop a running agent run by ID. Marks the run as stopped in the database; the background job halts after its current step completes.",
     inputSchema: z.object({

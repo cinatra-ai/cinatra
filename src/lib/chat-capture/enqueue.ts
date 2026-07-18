@@ -4,8 +4,8 @@ import "server-only";
 //
 // Called fire-and-forget (dynamic import) from upsertChatThreadInDatabase —
 // the single persistence chokepoint every chat entry point funnels through
-// (browser POST /api/chat/save, packages/chat server actions, the MCP
-// chat_thread_send handlers). Hooking beneath all of them gives the #1367
+// (browser POST /api/assistants/threads, packages/chat server actions, the
+// MCP chat_thread_send handlers). Hooking beneath all of them gives the #1367
 // identity contract for free: the thread id is the persisted row id and the
 // turn id is the SAME deterministic injective id the structured
 // assistant_turns mirror mints (buildLegacyMirrorTurnId), across every entry

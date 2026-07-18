@@ -1,9 +1,7 @@
 {
   "note": "Vendor-token core-gate residual floor (cinatra#973 — epic cinatra-ai/cinatra#978: core owns integration MECHANISM, never vendor CODE). Each key is a CURRENT tolerated vendor-token occurrence in core (src/ + packages/) — a vendor-named file/route path segment or a vendor-named import specifier — outside the sanctioned surfaces enumerated in scripts/audit/extension-coupling-gates.md. SHRINK-ONLY: regenerate with `node scripts/audit/vendor-token-core-gate.mjs --write-baseline` (it refuses growth); the floor ratchets down as the epic waves evict each cluster into its owning extension.",
   "occurrences": {
-    "packages/agents/src/blog-wordpress-draft-confirm-renderer.tsx :: path :: wordpress": 1,
     "packages/agents/src/import-skill-from-github-form.tsx :: path :: github": 1,
-    "packages/agents/src/register-default-renderers.ts :: import :: ./blog-wordpress-draft-confirm-renderer": 1,
     "packages/agents/src/screens.tsx :: import :: ./import-skill-from-github-form": 1,
     "packages/google-oauth-connection/package.json :: path :: google": 1,
     "packages/google-oauth-connection/src/disconnect.ts :: path :: google": 1,

@@ -1,0 +1,149 @@
+# Authoring guide — run-scoped HITL prompt primitives (prep-node + resume-mutation)
+
+How an agent extension assembles and shapes its human-in-the-loop (HITL) payload
+from **inside its own workflow** — with a deterministic primitive call before the
+interrupt and a typed mutation applied after the resume — instead of a field
+renderer reaching an authenticated host action.
+
+- Status: normative authoring guidance (epic #1620, owner action-boundary ruling
+  2026-07-18; the enabling primitives landed with #1794).
+- Audience: authors of `kind:"agent"` workflow extensions (`cinatra/oas.json`)
+  whose HITL screens used to depend on host server actions — the auditor and
+  skill-recommender families, and the generic review surface built on top.
+
+## Why this exists
+
+The public field-renderer props contract is deliberately a pure
+`snapshot → onChange` surface: a renderer receives an authorized snapshot and
+emits a value; it **cannot** call an authenticated host action. Action-coupled
+HITL screens therefore move their authenticated work into the agent's **own
+workflow**:
+
+- **data prep** runs *pre-interrupt* as a deterministic node in the workflow, and
+- **mutations** ride the typed resume payload and are applied *post-resume* via a
+  deterministic node.
+
+Two run-scoped MCP primitives supply the missing machinery for the HITL prompt
+store:
+
+| Primitive | Purpose |
+|-----------|---------|
+| `agent_run_hitl_prompts_list` | Run-scoped snapshot of the run's own captured HITL amendment prompts, for pre-interrupt payload assembly. |
+| `agent_run_hitl_prompts_exclude` | Batch, idempotent (un)exclusion of the run's own prompts — flags which rows autosave / payload assembly skips. |
+
+## Trust model (read this first)
+
+Both primitives derive **everything that scopes them** from the invocation
+context — never from caller input:
+
+- **run** — a run id from a VERIFIED channel only: either an OBO
+  `delegation:"agent_run"` actor (its run id is a signed token claim) or the
+  `verifiedRunScopeId` a trusted server-side seam stamps (`/api/agents/passthrough`
+  after `bindBridgeRunId`). The plain ambient `runId` is deliberately NOT trusted
+  — the MCP transport also fills it from the caller-controlled `x-cinatra-run-id`
+  header — so a `runId` in the tool `input` OR that header cannot redirect the
+  scope. No verified channel ⇒ fail closed.
+- **declaring agent package** — the run's own template `packageName` (the
+  prompts store `agent_id = template.packageName` at capture time). Not a
+  caller-supplied `agentPackageName`, and not the untrusted provenance tag on the
+  frame.
+- **actor** — the context-built actor envelope, gated by `enforceRunAccess`
+  against the run row (`read` for list, `respondToHitl` for exclude).
+
+Consequences an author can rely on:
+
+- calling either primitive **outside a run** fails closed (a bare chat/session
+  MCP call can never reach another run's prompts);
+- `exclude` validates **every** id against the run's own `(run, declaring-agent)`
+  prompt set and rejects the **whole batch** on any unknown id — no cross-run,
+  cross-agent, stale, or partial mutation;
+- `exclude` is idempotent (re-applying the same target state is a no-op) and
+  batch-bounded.
+
+## The deterministic pre-interrupt seam
+
+A workflow reaches these primitives deterministically through the existing
+**`/api/agents/passthrough`** node — an `ApiNode` whose body is
+`{ tool, input, agent_run_id }`. The route binds the body-selected
+`agent_run_id` to the run actually executing the callback (the auth-injected
+context-id header — not author-writable), then invokes the named primitive
+**inside a run-bound `mcpRequestContextStorage` frame** carrying that verified
+run id. That frame is what makes "derive the run from context" work off the
+LLM path.
+
+`agent_run_hitl_prompts_list` and `agent_run_hitl_prompts_exclude` are on the
+route's deterministic-dispatch allowlist.
+
+### Prep-node shape (`oas.json`)
+
+A prep `ApiNode` placed *before* the interrupt (gate) node, wired into the gate
+via a `DataFlowEdge`:
+
+```jsonc
+// $referenced_components.prep_list
+{
+  "component_type": "ApiNode",
+  "id": "prep_list",
+  "name": "Assemble HITL payload",
+  "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+  "http_method": "POST",
+  "data": {
+    "tool": "agent_run_hitl_prompts_list",
+    "input": {},
+    "agent_run_id": "{{ agent_run_id }}"   // bound + verified route-side; NOT trusted as the run scope
+  },
+  "outputs": [{ "title": "prompts", "type": "array" }]
+}
+```
+
+```jsonc
+// data_flow_connections — route the prep output into the gate input
+{ "component_type": "DataFlowEdge", "source": "prep_list", "source_output": "prompts",
+  "target": "review_gate", "target_input": "prompts" }
+```
+
+Control flow: `start → prep_list → review_gate (InputMessageNode) → … → end`.
+The renderer bound to `review_gate` reads `prompts` from its snapshot and stays a
+pure `snapshot → onChange` surface — it never calls a host action.
+
+## The resume-mutation pattern
+
+The interrupt returns a typed resume payload (the renderer's `onChange` value).
+Apply any mutation **after** the resume in a deterministic node — do NOT mutate
+from the renderer.
+
+- To drop bare-approval rows (or any the user deselected) from autosave /
+  downstream assembly, call `agent_run_hitl_prompts_exclude` from a post-resume
+  `ApiNode` with the ids to exclude (or `{ excluded: false }` to re-include).
+  Because it is scoped + idempotent, a resume that re-runs the node is safe.
+
+```jsonc
+// $referenced_components.apply_exclusions (post-resume)
+{
+  "component_type": "ApiNode",
+  "id": "apply_exclusions",
+  "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+  "http_method": "POST",
+  "data": {
+    "tool": "agent_run_hitl_prompts_exclude",
+    "input": { "ids": "{{ review_gate.excludedPromptIds }}" }, // wired from the resume payload
+    "agent_run_id": "{{ agent_run_id }}"
+  },
+  "outputs": [{ "title": "applied", "type": "integer" }]
+}
+```
+
+## Rules of thumb
+
+- Assemble the payload in a **prep node**, not the renderer; apply mutations in a
+  **post-resume node**, not the renderer.
+- Never pass a `runId` / `agentPackageName` in the primitive `input` expecting it
+  to scope the call — it is ignored; the run-bound frame is authoritative.
+- Treat an `exclude` batch as all-or-nothing: an unknown id rejects the batch, so
+  compute the id set from the same run's `list` snapshot.
+- Keep exclude batches within the documented bound; the captured HITL set for one
+  run is small (one row per gate).
+
+See also: the artifact-UI boundary ADR
+([`../decisions/artifact-ui-boundary-adr.md`](../decisions/artifact-ui-boundary-adr.md))
+for the renderer/host boundary this pattern preserves.
