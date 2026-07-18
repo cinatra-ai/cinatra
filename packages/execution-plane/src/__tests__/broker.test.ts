@@ -13,6 +13,16 @@ import type {
   SandboxWorker,
 } from "../types";
 import type { DockerCli } from "../docker-cli";
+import {
+  EnvironmentMountRefusedError,
+  type ResolvedEnvironmentMount,
+} from "../environment/mount";
+import { signEnvironmentProvenance } from "../environment/provenance";
+import {
+  computeEnvironmentRecipeKey,
+  ENVIRONMENT_BUILDER_VERSION,
+  type EnvironmentBuildRecipe,
+} from "../environment/recipe";
 
 const SECRET = "unit-test-broker-secret";
 
@@ -512,5 +522,73 @@ describe("verifyServiceToken (broker service boundary seam)", () => {
     expect(verifyServiceToken("", "")).toBe(false);
     expect(verifyServiceToken(undefined, "tok")).toBe(false);
     expect(verifyServiceToken("tok", undefined)).toBe(false);
+  });
+});
+
+function environmentMount(key = "prov-key"): ResolvedEnvironmentMount {
+  const recipe: EnvironmentBuildRecipe = {
+    spec: { pip: ["pandas"] },
+    l0BaseDigest: "sha256:l0base",
+    builderVersion: ENVIRONMENT_BUILDER_VERSION,
+    platform: { os: "linux", arch: "arm64" },
+    buildPolicy: { networkPolicy: "registry-allowlist", registryAllowlist: ["pypi.org"] },
+    resolvedArtifacts: { pip: "sha256:pinned" },
+  };
+  const recipeKey = computeEnvironmentRecipeKey(recipe);
+  return {
+    imageRef: `cinatra-sandbox-l1:${recipeKey}`,
+    provenance: signEnvironmentProvenance(
+      {
+        recipeKey,
+        recipe,
+        imageDigest: "sha256:l1digest",
+        partition: "instance",
+        builderIdentity: ENVIRONMENT_BUILDER_VERSION,
+        builtAtMs: 1,
+      },
+      key,
+    ),
+  };
+}
+
+describe("openJob — L1 environment mount (exec-plane S3)", () => {
+  it("threads the resolved environment onto EVERY command spec", async () => {
+    const { broker, worker } = makeBroker();
+    const env = environmentMount();
+    const opened = await broker.openJob(carrierFor(), { environment: env });
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    await broker.exec(opened.jobId, "echo one");
+    await broker.exec(opened.jobId, "echo two");
+    expect(worker.specs).toHaveLength(2);
+    expect(worker.specs[0].environment).toEqual(env);
+    expect(worker.specs[1].environment).toEqual(env);
+  });
+
+  it("omits environment when the job declares none (byte-identical S1/S2 spec)", async () => {
+    const { broker, worker } = makeBroker();
+    const opened = await broker.openJob(carrierFor());
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    await broker.exec(opened.jobId, "echo hi");
+    expect(worker.specs[0].environment).toBeUndefined();
+  });
+
+  it("maps a worker EnvironmentMountRefusedError to an audited environment_untrusted refusal", async () => {
+    const throwingWorker: SandboxWorker = {
+      async runCommand() {
+        throw new EnvironmentMountRefusedError("unverifiable_provenance");
+      },
+    };
+    const { broker, audits } = makeBroker({ worker: throwingWorker });
+    const opened = await broker.openJob(carrierFor(), { environment: environmentMount() });
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    const result = await broker.exec(opened.jobId, "echo hi");
+    expect(result).toMatchObject({ ok: false, reason: "environment_untrusted" });
+    const refusal = audits.find(
+      (a) => a.decision === "refused" && a.reason === "environment_untrusted",
+    );
+    expect(refusal).toBeTruthy();
   });
 });
