@@ -465,6 +465,95 @@ function registerEmailObjectTypes(): void {
 }
 
 // ---------------------------------------------------------------------------
+// LinkedIn member post-draft work-product object type.
+//
+// The @cinatra-ai/linkedin-artifacts pack (cinatra#1457, epic #1448) CLAIMS
+// @cinatra-ai/linkedin:post-draft [draftable] — a member LinkedIn post drafted
+// by an agent (or authored/edited by a user) before it publishes to the member's
+// feed via the social_media_publish path. The TYPE registrar stays host-side
+// HERE (epic #1448 principle 5: exactly one runtime registrar per type; the pack
+// claim adds only disposition / mutability class / arbitration, never a second
+// registrar — mirrors the @cinatra-ai/email:* work products above). In hybrid
+// mode the artifact bridge registers a validator-only shadow for this
+// cross-namespace claim; this host re-register (no package arg) clears that
+// provenance and wins as the single runtime registrar. The ORGANIZATION-page
+// post-draft is a SEPARATE type (@cinatra-ai/linkedin-community:org-post-draft,
+// cinatra#1767) and is NOT registered here.
+//
+// draftable: content edits are allowed only while the row is a draft, then it
+// locks (the draft→scheduled→published state machine + publish receipts — the
+// post URN/URL — ride the publication-operation ledger, cinatra#1450 — declared
+// here, enforced by that write-path owner). `draftable` narrows a NON-empty
+// mutableBy baseline, so mutableBy is ["agent","user"].
+//
+// destinationType is constrained to "member" (the per-network constraint,
+// cinatra#1457). mediaAssetRefs are provider asset references (LinkedIn asset
+// URNs) — NEVER artifact ids (epic #1448 atomicity, principle 2). runId /
+// campaignId are soft-provenance correlation keys only. Generic renderers
+// suffice — the draft is read by the social publish path and the library, not
+// edited via a bespoke inline renderer here.
+//
+// Identity requires BOTH a run frame AND a resolved destination:
+// dedup on (runId, destinationId) so an agent retry within the same run updates
+// THAT destination's draft in place. A draftable post is user-editable content,
+// so identity NEVER collapses onto runId alone — two distinct drafts in one run
+// (or an untargeted/run-less draft) must not merge (that would silently discard
+// user edits). Any draft missing runId OR destinationId keeps its random-UUID
+// identity (identityKey → null) rather than deduping. runId is a colon-free
+// run-id, so the first colon unambiguously delimits the composite key (the
+// established email/campaigns identityKey idiom).
+// ---------------------------------------------------------------------------
+
+function registerLinkedinObjectTypes(): void {
+  objectTypeRegistry.register({
+    type: "@cinatra-ai/linkedin:post-draft",
+    category: "content",
+    schema: z.object({
+      content: z.string().optional(),
+      destination: z
+        .object({
+          accountId: z.string().optional(),
+          // Per-network constraint (cinatra#1457): this MEMBER post-draft type is
+          // member-destined; the organization-page draft is a separate type.
+          destinationType: z.literal("member").optional(),
+          destinationId: z.string().optional(),
+        })
+        .optional(),
+      visibility: z.enum(["PUBLIC", "CONNECTIONS"]).optional(),
+      // Provider asset references (LinkedIn asset URNs), NEVER artifact ids.
+      mediaAssetRefs: z.array(z.string()).optional(),
+      runId: z.string().optional(),
+      campaignId: z.string().optional(),
+    }),
+    lifecycle: {
+      sources: ["agent", "user", "import"],
+      mutableBy: ["agent", "user"],
+    },
+    renderers: {
+      listRow: GenericObjectListRow,
+      card: GenericObjectCard,
+      detail: GenericObjectDetail,
+    },
+    identityKey: (data) => {
+      const d = data as Record<string, unknown>;
+      const runId = typeof d.runId === "string" && d.runId.length > 0 ? d.runId : null;
+      const dest =
+        d.destination && typeof d.destination === "object"
+          ? (d.destination as Record<string, unknown>)
+          : {};
+      const destinationId =
+        typeof dest.destinationId === "string" && dest.destinationId.length > 0
+          ? dest.destinationId
+          : null;
+      // Require BOTH: never collapse distinct drafts onto runId alone (a
+      // draftable-content merge would discard user edits). No stable identity
+      // ⇒ null (random UUID, no auto-dedup).
+      return runId && destinationId ? `${runId}:${destinationId}` : null;
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // @cinatra-ai/memory:concept — envelope contract (cinatra#1376, epic #1373).
 // ---------------------------------------------------------------------------
 //
@@ -648,6 +737,7 @@ export function registerAllObjectTypes(): void {
   registerCampaignRecipientsType();
   registerCampaignBundleTypes();
   registerEmailObjectTypes();
+  registerLinkedinObjectTypes();
   registerMemoryConceptType();
   // CRM types (account / contact / list) are registered by the crm-connector
   // extension via the host boot path (createCrmModule() +
