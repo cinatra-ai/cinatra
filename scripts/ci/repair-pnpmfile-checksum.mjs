@@ -2,6 +2,23 @@
 // Restore the `pnpmfileChecksum` that the hosted Renovate (Mend) app strips
 // from a regenerated pnpm-lock.yaml.
 //
+// SCOPE / SUPERSEDED-FOR-AUTOMATION
+// ---------------------------------
+// This is the SURGICAL checksum-only primitive: it re-inserts the single
+// `pnpmfileChecksum:` line and nothing else. It flips the *plain* frozen-install
+// gates green, but Mend ALSO strips every `extensions/<scope>/*` workspace
+// IMPORTER entry (it regenerates with `--ignore-pnpmfile` AND without the
+// companion repos cloned), so the *companion-cloning* frozen-install gates
+// (design-visual-verify, e2e-app-suites, the IoC gates, the Docker build) still
+// red out after a checksum-only repair with ERR_PNPM_OUTDATED_LOCKFILE. The
+// COMPLETE repair — which regenerates the lockfile with the pinned companions
+// present and this pnpmfile active, restoring the importers AND the checksum in
+// one deterministic install — is `scripts/ci/repair-renovate-lockfile.mjs`, and
+// the `renovate-lockfile-repair.yml` workflow runs THAT. This file remains (1)
+// the pure checksum primitive the full repair imports (`computeChecksum`,
+// `CHECKSUM_LINE`), and (2) a node-builtins-only manual fallback for the plain
+// gates. Prefer the full repair for any branch whose gates clone the companions.
+//
 // ROOT CAUSE (why this script exists at all)
 // ------------------------------------------
 // This repo ships a default-path `.pnpmfile.cjs` whose `readPackage` hook
