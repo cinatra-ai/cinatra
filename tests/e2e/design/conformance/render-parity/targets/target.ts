@@ -66,3 +66,33 @@ export type RenderTarget = {
   /** Render one content markdown source at a theme into HTML + side-embeds. */
   renderContent(source: string, theme: RenderTheme): ContentRenderResult;
 };
+
+/**
+ * The ASYNC live-run analogue of {@link RenderTarget} (the seam the static slice
+ * reserved for the live-run targets). A live target drives a REAL running
+ * surface — a browser navigating `/chat` (S2-enabled, live today), and — after
+ * S5 (#1221) — the generic embedded conversation-view and the WordPress/Drupal
+ * iframes — so rendering one fixture is asynchronous (seed a thread, navigate,
+ * wait for the surface to settle, scrape the rendered content). The static
+ * reference target stays synchronous and browser-free; the two seams coexist so
+ * the deterministic static gate never pays the live boot cost, and the live
+ * compare reuses the SAME corpus + goldens rather than a second source of truth.
+ *
+ * The live `/chat` target implements this in the agents-run live suite
+ * (tests/e2e/agents-run/chat-render-parity-target.ts) — the only live target
+ * S2 unblocks. The embedded-view and CMS-iframe targets implement it after S5;
+ * the #1214 no-direct-egress assertion joins THEIR embedded E2E (not `/chat`).
+ * The returned shape is identical to the sync result so the compare logic is
+ * seam-agnostic: a live target fills `html` (the surface's rendered content)
+ * and leaves `charts`/`mermaid` empty — those render as separate components on
+ * the live surface (outside the content block) and stay the static detection
+ * golden's job until the S4 interactive-layer render-compare lands.
+ */
+export type AsyncRenderTarget = {
+  /** Stable id, e.g. `"chat-live"`, `"embedded-view"`, `"wordpress-iframe"`. */
+  readonly id: string;
+  /** Human label for reports. */
+  readonly label: string;
+  /** Render one content markdown source at a theme by driving the real surface. */
+  renderContent(source: string, theme: RenderTheme): Promise<ContentRenderResult>;
+};
