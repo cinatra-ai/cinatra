@@ -2,7 +2,6 @@ import "server-only";
 
 import { agentCreationRequestsSource } from "./agent-creation-requests";
 import { hostPortGrantsSource } from "./host-port-grants";
-import { dynamicTypeArtifactVisibilitySource } from "./dynamic-type-artifact-visibility";
 import { promotionRequestsSource } from "./promotion-requests";
 import { marketplaceSubmissionModerationSource } from "./marketplace-submission-moderation";
 import { marketplaceVendorAppModerationSource } from "./marketplace-vendor-app-moderation";
@@ -13,9 +12,8 @@ import type { ApprovalSource, ApprovalViewer } from "./types";
 // ---------------------------------------------------------------------------
 // Ordered approval-source registry. Local sources first, then the marketplace
 // group. The array order is the section render order within each direction tab:
-//   Inbox         → agent, host-port grants, dynamic-type coverage,
-//                   promotion requests, submission-moderation,
-//                   vendor-app-moderation
+//   Inbox         → agent, host-port grants, promotion requests,
+//                   submission-moderation, vendor-app-moderation
 //   Your requests → agent, promotion requests, my-submissions,
 //                   vendor-app-status
 // A source is removed by deleting its adapter file + its entry here (the
@@ -29,7 +27,6 @@ import type { ApprovalSource, ApprovalViewer } from "./types";
 export const approvalSourceRegistry: ApprovalSource[] = [
   agentCreationRequestsSource,
   hostPortGrantsSource,
-  dynamicTypeArtifactVisibilitySource,
   promotionRequestsSource,
   marketplaceSubmissionModerationSource,
   marketplaceVendorAppModerationSource,

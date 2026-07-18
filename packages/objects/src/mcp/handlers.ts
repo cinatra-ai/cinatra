@@ -15,13 +15,6 @@ import { runResourceProjectMove } from "@/lib/resource-project-move";
 import { classifyObject } from "../classifier";
 import type { ClassifierOutput } from "../classifier/schema";
 import { resolveIdentity, hashIdentity } from "../identity";
-// `ensureDynamicObjectType` / `readAllDynamicObjectTypes` remain for the
-// explicit `objects_type_register` + `objects_types_list` paths. The
-// classifier-driven auto-registration on `objects_save` is retired (epic
-// #1785 slice C, cinatra#1787): unclassifiable saves fall back to the generic
-// object type instead of minting a dynamic type, so the save path no longer
-// reads or writes the dynamic-type registry.
-import { ensureDynamicObjectType, readAllDynamicObjectTypes } from "../auto-registrar";
 import {
   searchNodes,
   identityHashToUuid,
@@ -1337,12 +1330,6 @@ export function createObjectsPrimitiveHandlers() {
         description: `Registered type with identityKey=${t.identityKey ? "yes" : "no"}`,
         identityKey: t.identityKey ? "fn" : undefined,
       }));
-      const dynamicTypes = (await readAllDynamicObjectTypes()).map((t) => ({
-        type: t.type,
-        category: t.inferredCategory,
-        description: `Auto-registered dynamic type (${t.inferredName}) — status: ${t.status}`,
-        identityKey: t.identityKey ?? undefined,
-      }));
 
       // Edge-bound object-type serve (cinatra#1392) — type DISCOVERY. When the
       // caller is edge-bound to a NON-DEFAULT version of an object-type-
@@ -1353,9 +1340,9 @@ export function createObjectsPrimitiveHandlers() {
       // is where fail-closed enforcement bites, mirroring the S8 tool-discovery
       // union that keeps default names advertised on a torn lookup.
       const servePort = readObjectTypeServePort();
-      if (!servePort) return { types: [...staticTypes, ...dynamicTypes] };
+      if (!servePort) return { types: staticTypes };
       const { substitutions } = await servePort.planListing();
-      if (substitutions.length === 0) return { types: [...staticTypes, ...dynamicTypes] };
+      if (substitutions.length === 0) return { types: staticTypes };
 
       // Suppress the DEFAULT-registered types of every pinned package (by
       // registration provenance) and append the pinned versions' retained types.
@@ -1377,44 +1364,7 @@ export function createObjectsPrimitiveHandlers() {
           identityKey: d.identityKey ? "fn" : undefined,
         })),
       );
-      return { types: [...baseStatic, ...servedTypes, ...dynamicTypes] };
-    },
-
-    // `objects_type_register` deliberately registers a new dynamic object type
-    // as `active` (skips the proposed-review queue used by the classifier path
-    // above). MCP-source registrations are explicit, structured acts; the
-    // classifier path is autonomous and inherits the lower trust tier.
-    // Namespace validation is enforced by `objectsTypeRegisterSchema`; never
-    // check the regex inside this handler body.
-    "objects_type_register": async (request: PrimitiveInvocationRequest<unknown>) => {
-      const input = schemas.objectsTypeRegisterSchema.parse(request.input);
-      const actorExt = getActorExt(request.actor);
-
-      // Conditional spread; external callers may have no agentId/runId in the
-      // actor extension.
-      const originContext: Record<string, unknown> = {};
-      if (actorExt.agentId) originContext.agentId = actorExt.agentId;
-      if (actorExt.runId) originContext.runId = actorExt.runId;
-
-      await ensureDynamicObjectType({
-        type: input.typeId,
-        inferredName: input.displayName,
-        inferredCategory: input.category,
-        createdBy: actorExt.userId,
-        originContext,
-        source: "mcp",
-        canonicalKeys: input.canonicalKeys ?? null,
-        identityKey: input.identityKey ?? null,
-        status: "active",
-      });
-
-      // Idempotency: caller may invoke twice with the same typeId. Read the
-      // current DB status rather than assuming "active" — admin may have
-      // already archived this row, in which case the re-insert above is a
-      // no-op (onConflictDoNothing) and the status stays "archived".
-      const all = await readAllDynamicObjectTypes();
-      const record = all.find((t) => t.type === input.typeId);
-      return { type: input.typeId, status: record?.status ?? "active" };
+      return { types: [...baseStatic, ...servedTypes] };
     },
   } as const;
 }

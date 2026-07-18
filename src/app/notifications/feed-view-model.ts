@@ -42,10 +42,8 @@ import {
 // same stable keys `canonicalSourceKey`/the registry key on; a drift would break
 // the E5 dedup tests too. Source of truth:
 //   • host-port-grants.contract.ts        → HOST_PORT_GRANTS_SOURCE_ID
-//   • dynamic-type-artifact-visibility.contract.ts → DYNAMIC_TYPE_VISIBILITY_SOURCE_ID
 //   • marketplace-shared.ts               → the two moderation ids
 const HOST_PORT_GRANTS_SOURCE_ID = "extension-host-port-grants";
-const DYNAMIC_TYPE_VISIBILITY_SOURCE_ID = "dynamic-type-artifact-visibility";
 const MARKETPLACE_SUBMISSION_MODERATION_SOURCE_ID = "marketplace-submission-moderation";
 const MARKETPLACE_VENDOR_APP_MODERATION_SOURCE_ID = "marketplace-vendor-app-moderation";
 
@@ -63,7 +61,6 @@ export const FEED_PAGE_SIZE = 30;
 export type ApprovalDecideKind =
   | "agent"
   | "host-port"
-  | "dynamic-type"
   | "promotion"
   | "marketplace-moderate"
   | "none";
@@ -118,8 +115,6 @@ export function approvalDecideKind(sourceId: string): ApprovalDecideKind {
       return "agent";
     case HOST_PORT_GRANTS_SOURCE_ID:
       return "host-port";
-    case DYNAMIC_TYPE_VISIBILITY_SOURCE_ID:
-      return "dynamic-type";
     case PROMOTION_SOURCE_ID:
       // One shared source for every row-scope promotion flow (#1560); an inbox
       // row's subject type rides its id — the generic promotion decide affordance
