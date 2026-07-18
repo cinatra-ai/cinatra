@@ -11,6 +11,7 @@
     "./module": "./src/integration/module.ts",
     "./namespace": "./src/namespace.ts",
     "./claims": "./src/claims.ts",
+    "./connector-ref": "./src/connector-ref.ts",
     "./effective-identity": "./src/effective-identity.ts",
     "./artifact-renderer-registry": "./src/artifact-renderer-registry.ts",
     "./artifact-ui-cutover-matrix": "./src/artifact-ui-cutover-matrix.ts",
