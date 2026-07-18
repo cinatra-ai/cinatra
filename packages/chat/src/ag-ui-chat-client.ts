@@ -39,11 +39,11 @@
 //     for the contract version. Fail-closed semantics are unchanged — the
 //     surface mounts the AG-UI wire only on an `ok` negotiation, and both
 //     sides of this first-party handshake are served by the same deployment.
-//   - The legacy thread-persistence fetch helpers (formerly
-//     `chat-persistence.ts`) are ABSORBED below: they ride the same locked
-//     graph, and the S2 delete stage removes them together with the legacy
-//     wire, so co-locating them keeps the module count flat through the
-//     transition.
+//   - The thread-persistence fetch helpers (formerly `chat-persistence.ts`)
+//     are ABSORBED below: they ride the same locked graph, and since the
+//     cinatra#1218 predecessor 1 they target the first-class
+//     /api/assistants/threads surface, so co-locating them keeps the module
+//     count flat.
 // ---------------------------------------------------------------------------
 
 import type { AgUiEvent } from "@cinatra-ai/agent-ui-protocol";
@@ -133,9 +133,9 @@ let negotiationCache: Promise<StreamNegotiation> | null = null;
 /** Negotiate the S1 stream contract for the `/chat` surface (session auth).
  *  The pure negotiation executes SERVER-side against this client's posted
  *  hello (see the module docstring); the outcome is enforced HERE, fail-closed
- *  per CONTRACT.md §5 — the caller decides the fallback (during the flagged
- *  transition the legacy wire is the safe harbor). Cached — one round-trip per
- *  page load. */
+ *  per CONTRACT.md §5 — since the cinatra#1218 delete stage there is no
+ *  legacy fallback: the caller surfaces a turn error. Cached — one round-trip
+ *  per page load. */
 export function negotiateAssistantChatContract(): Promise<StreamNegotiation> {
   if (!negotiationCache) {
     negotiationCache = (async (): Promise<StreamNegotiation> => {
@@ -159,7 +159,7 @@ export function negotiateAssistantChatContract(): Promise<StreamNegotiation> {
 
 /** Convenience: true only on an `ok` negotiation; every failure (fail-closed
  *  reason or transport error) logs loudly and returns false so the caller can
- *  pin the page to the retained legacy wire. */
+ *  surface a fail-closed turn error (there is no legacy wire to fall back to). */
 export async function ensureAssistantChatWireNegotiated(): Promise<boolean> {
   try {
     const negotiation = await negotiateAssistantChatContract();
@@ -556,11 +556,10 @@ export async function driveAssistantChatTurn(
 // budget stays flat through the cutover transition — one module replaces one).
 //
 // As of cinatra#1218 (predecessor 1 of the bespoke-wire delete stage) these
-// target the FIRST-CLASS /api/assistants/threads persistence surface, NOT the
-// legacy /api/chat/{save,threads,thread/:id} subroutes — the assistants
-// handlers reproduce the legacy authz/session matrix exactly, so the client no
-// longer touches a delete target. The legacy subroutes stay in place (deleted
-// in the later stage); the client just stopped calling them.
+// target the FIRST-CLASS /api/assistants/threads persistence surface — the
+// assistants handlers reproduce the legacy authz/session matrix exactly. The
+// legacy /api/chat/{save,threads,thread/:id} subroutes were deleted by the
+// delete stage itself.
 //
 // Plain fetch instead of a Next.js server action — avoids the RSC re-render
 // that server actions trigger, which caused a corrective navigation (visible

@@ -9,8 +9,9 @@ import {
 //
 // First-class structured-thread persistence on the assistants surface
 // (cinatra#1218). Same authz/session semantics as the legacy
-// GET /api/chat/threads + POST /api/chat/save subroutes (which stay in place,
-// untouched, until the delete stage). See @/lib/assistant-thread-http.
+// GET /api/chat/threads + POST /api/chat/save subroutes (deleted in the #1218
+// delete stage — this route is their sole replacement). See
+// @/lib/assistant-thread-http.
 export const dynamic = "force-dynamic";
 
 export function GET() {

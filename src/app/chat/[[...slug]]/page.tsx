@@ -46,18 +46,10 @@ export default async function ChatPageMount({
   const initialPrompt = wf
     ? `Regarding workflow ${wf}${task ? `, task "${task}"` : ""}: `
     : undefined;
-  // The unified-stream cutover flag (cinatra#1218, epic #1216 S2). Default:
-  // the AG-UI wire — this PR IS the cutover; the retained bespoke wire is the
-  // kill-switch (`CHAT_STREAM_WIRE=legacy`) until the parity-gated legacy
-  // deletes land in the follow-up stage. Resolved server-side so the client
-  // bundle carries no env coupling.
-  const streamWire: "ag-ui" | "legacy" =
-    process.env.CHAT_STREAM_WIRE === "legacy" ? "legacy" : "ag-ui";
   return (
     <ChatPage
       initialThreadId={threadId}
       userId={session.user.id}
-      streamWire={streamWire}
       initialMention={mention}
       initialMode={
         mode === "create-agent"

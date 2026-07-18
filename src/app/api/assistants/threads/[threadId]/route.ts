@@ -5,8 +5,8 @@ import { handleGetAssistantThreadById } from "@/lib/assistant-thread-http";
 //
 // First-class structured-thread persistence on the assistants surface
 // (cinatra#1218). Same authz/session semantics as the legacy
-// GET /api/chat/thread/[threadId] subroute (which stays in place, untouched,
-// until the delete stage). The historical legacy-content read decision is
+// GET /api/chat/thread/[threadId] subroute (deleted in the #1218 delete stage
+// — this route is its sole replacement). The legacy-content read decision is
 // deferred behind resolveThreadReadPayload() — see @/lib/assistant-thread-http.
 export const dynamic = "force-dynamic";
 

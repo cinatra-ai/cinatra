@@ -109,8 +109,9 @@ export default defineConfig({
     },
     {
       name: "chat-discovery",
-      // API-level chat-discoverability probes. POST /api/chat with vague
-      // prompts, assert the chat picked the right cinatra_<slug>.
+      // API-level chat-discoverability probes. POST /api/assistants/chat
+      // (the unified AG-UI wire) with vague prompts, assert the chat picked
+      // the right cinatra_<slug>.
       testMatch: /chat-discovery\.spec\.ts/,
       use: {
         ...desktopChrome,
@@ -120,8 +121,9 @@ export default defineConfig({
     },
     {
       name: "chat-mcp",
-      // Chat-MCP end-to-end coverage. Send a specific prompt to /api/chat,
-      // extract the runId from the tool_result, drive the resulting run's
+      // Chat-MCP end-to-end coverage. Send a specific prompt to
+      // /api/assistants/chat (the unified AG-UI wire), resolve the spawned
+      // runId (wire DATA_PART or DB fallback), drive the resulting run's
       // HITL gates via the UI helpers, and assert terminal status. Costs
       // about $0.05 per fixture in chat LLM tokens plus the agent's own
       // LLM cost; gated to manual / weekly runs.
