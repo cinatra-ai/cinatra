@@ -449,11 +449,22 @@ export function registerArtifactExtensionDir(dir: string): boolean {
   return registerOneArtifactDir(dir);
 }
 
+// An artifact-extension directory is named for its package slug, which ends in
+// either the SINGULAR `-artifact` (single-type pack) or the PLURAL `-artifacts`
+// (multi-type pack) suffix — both ratified by the plural-naming decision (epic
+// cinatra#1448 / cinatra#1453, merged #1769; the host name gate
+// `GENERIC_VENDOR_ARTIFACT_NAME_RE` is `-artifacts?`). The bundled-scan layout
+// mirrors the slug, so this predicate must accept both or a plural pack (e.g.
+// `email-artifacts`) is silently skipped at boot.
+function isArtifactExtensionDirName(name: string): boolean {
+  return name.endsWith("-artifact") || name.endsWith("-artifacts");
+}
+
 function scanDirForArtifacts(dir: string): number {
   if (!existsSync(dir)) return 0;
   let n = 0;
   for (const dirent of readdirSync(dir, { withFileTypes: true })) {
-    if (!dirent.isDirectory() || !dirent.name.endsWith("-artifact")) continue;
+    if (!dirent.isDirectory() || !isArtifactExtensionDirName(dirent.name)) continue;
     if (registerOneArtifactDir(path.join(dir, dirent.name))) n += 1;
   }
   return n;
@@ -461,9 +472,9 @@ function scanDirForArtifacts(dir: string): number {
 
 /**
  * Register every `kind:"artifact"` extension under `root`. Robust to caller
- * depth: scans BOTH `<root>/*-artifact` AND `<root>/<vendor>/*-artifact`, so it
- * is correct whether the caller passes the `extensions/` root (dev-watcher /
- * instrumentation) or the `extensions/cinatra-ai` vendor dir
+ * depth: scans BOTH `<root>/*-artifact(s)` AND `<root>/<vendor>/*-artifact(s)`,
+ * so it is correct whether the caller passes the `extensions/` root (dev-watcher
+ * / instrumentation) or the `extensions/cinatra-ai` vendor dir
  * (registerAllObjectTypes). Idempotent — the registry is replace-by-id.
  * Returns the count registered.
  */
@@ -471,7 +482,7 @@ export function registerArtifactExtensions(root: string): number {
   if (!existsSync(root)) return 0;
   let registered = scanDirForArtifacts(root);
   for (const dirent of readdirSync(root, { withFileTypes: true })) {
-    if (!dirent.isDirectory() || dirent.name.endsWith("-artifact")) continue;
+    if (!dirent.isDirectory() || isArtifactExtensionDirName(dirent.name)) continue;
     registered += scanDirForArtifacts(path.join(root, dirent.name));
   }
   return registered;
