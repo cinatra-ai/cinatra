@@ -37,6 +37,44 @@ import { canActorAccessClaimedArtifactExtension } from "@/lib/artifacts/artifact
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
 
+// ---------------------------------------------------------------------------
+// Registry-internal object types (epic #1785 ruling, 2026-07-18).
+//
+// A small set of object types are INTERNAL platform concepts: they exist as
+// registered runtime types (schema/identity enforcement) but must NEVER appear
+// in the installed-type registry or any admin type surface. The epic ruling
+// (2026-07-18) is explicit: registry provenance is installed extension claims
+// and nothing else; the OKF (Object Knowledge Fabric) memory-concept type is
+// exempt from that model AS AN INTERNAL CONCEPT — not as a visible registry
+// row. This resolver is the single authority the registry surface
+// (`/configuration/objects`, #1786) reads, so the exemption lives here: an
+// internal type is filtered out of the resolved catalog in ONE documented
+// place. The type stays registered and fully functional everywhere else (the
+// memory sync/write path resolves it directly through `objectTypeRegistry`,
+// never through this registry-facing catalog).
+// ---------------------------------------------------------------------------
+
+/** The OKF memory-concept type id. Mirrors `MEMORY_CONCEPT_TYPE_ID` in
+ * `packages/objects/src/integration/register-types.ts` (kept as a local
+ * literal to avoid widening this server-lib's import edges — the same idiom
+ * `packages/objects/src/mcp/handlers.ts` uses for the same constant). */
+const OKF_MEMORY_CONCEPT_TYPE_ID = "@cinatra-ai/memory:concept";
+
+/** Object types that are INTERNAL platform concepts and are excluded from the
+ * installed-type registry / every admin type surface (epic #1785 ruling). The
+ * OKF memory-concept type is the sole member today. */
+export const REGISTRY_INTERNAL_OBJECT_TYPE_IDS: ReadonlySet<string> = new Set([
+  OKF_MEMORY_CONCEPT_TYPE_ID,
+]);
+
+/** True when `typeId` is an internal platform concept that must never surface
+ * in the installed-type registry (the OKF memory-concept type today). Registry
+ * consumers filter on this so an internal type is never shown as a registry
+ * row (epic #1785). */
+export function isRegistryInternalObjectTypeId(typeId: string): boolean {
+  return REGISTRY_INTERNAL_OBJECT_TYPE_IDS.has(typeId);
+}
+
 export type EffectiveTypeEntryKind = "row-type" | "artifact-extension-descriptor";
 
 export interface EffectiveClaimInfo {
@@ -181,5 +219,11 @@ export async function resolveEffectiveTypeCatalog(input: {
     });
   }
 
-  return Array.from(entries.values()).sort((a, b) => a.typeId.localeCompare(b.typeId));
+  // INTERNAL-type exemption (epic #1785 ruling): drop registry-internal types
+  // (the OKF memory-concept type) from every source before sorting — they are
+  // never installed-type-registry rows. Filtering the final union covers a type
+  // arriving from the static cache, the dynamic table, or a claim alike.
+  return Array.from(entries.values())
+    .filter((entry) => !isRegistryInternalObjectTypeId(entry.typeId))
+    .sort((a, b) => a.typeId.localeCompare(b.typeId));
 }

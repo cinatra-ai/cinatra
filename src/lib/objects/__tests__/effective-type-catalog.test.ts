@@ -25,7 +25,10 @@ vi.mock("@/lib/artifacts/artifact-extension-access", () => ({
 }));
 
 import type { ActorContext } from "@/lib/authz/actor-context";
-import { resolveEffectiveTypeCatalog } from "@/lib/objects/effective-type-catalog";
+import {
+  resolveEffectiveTypeCatalog,
+  isRegistryInternalObjectTypeId,
+} from "@/lib/objects/effective-type-catalog";
 
 const grantedActor = { principalId: "user-in", principalType: "HumanUser", organizationId: "org-1" } as unknown as ActorContext;
 const outsideActor = { principalId: "user-out", principalType: "HumanUser", organizationId: "org-1" } as unknown as ActorContext;
@@ -130,6 +133,51 @@ describe("resolveEffectiveTypeCatalog", () => {
     ]);
     const catalog = await resolveEffectiveTypeCatalog({ orgId: "org-1", actor: outsideActor });
     expect(catalog.find((e) => e.typeId === "@other/unregistered:thing")).toBeUndefined();
+  });
+
+  it("epic #1785 floor re-point: objects:object is attributed to its @cinatra-ai/default-artifact claim (fresh-install default claim), not shown claimless/built-in", async () => {
+    // A fresh install activates the default-artifact system extension's default
+    // claim on the generic fallback floor type. The registry then resolves the
+    // floor's DEFINING extension through that claim — the re-point's observable.
+    canActorAccessClaimedArtifactExtension.mockResolvedValue(true);
+    listTypes.mockReturnValue([{ type: "@cinatra-ai/objects:object", category: "report" }]);
+    readActiveDynamicObjectTypes.mockResolvedValue([]);
+    readArtifactTypeClaimsForOrg.mockReturnValue([
+      claimRow({
+        id: "floor",
+        scope: "platform",
+        objectTypeId: "@cinatra-ai/objects:object",
+        claimKind: "default",
+        extensionPackage: "@cinatra-ai/default-artifact",
+        dispositions: { projection: "artifact-safe", pinnable: false },
+      }),
+    ]);
+    const catalog = await resolveEffectiveTypeCatalog({ orgId: "org-1", actor: grantedActor });
+    const entry = catalog.find((e) => e.typeId === "@cinatra-ai/objects:object");
+    expect(entry).toBeDefined();
+    expect(entry?.claim?.extensionPackage).toBe("@cinatra-ai/default-artifact");
+    expect(entry?.claim?.claimKind).toBe("default");
+  });
+
+  it("epic #1785 OKF exemption: the internal @cinatra-ai/memory:concept type is registered but NEVER surfaced in the registry catalog", async () => {
+    canActorAccessClaimedArtifactExtension.mockResolvedValue(true);
+    listTypes.mockReturnValue([
+      { type: "@cinatra-ai/memory:concept", category: "content" },
+      { type: "@cinatra-ai/campaigns:campaign", category: "campaign" },
+    ]);
+    readActiveDynamicObjectTypes.mockResolvedValue([]);
+    readArtifactTypeClaimsForOrg.mockReturnValue([]);
+    const catalog = await resolveEffectiveTypeCatalog({ orgId: "org-1", actor: grantedActor });
+    // OKF is internal — excluded even though it is a registered runtime type.
+    expect(catalog.find((e) => e.typeId === "@cinatra-ai/memory:concept")).toBeUndefined();
+    // An unrelated registered type on the same list still surfaces.
+    expect(catalog.find((e) => e.typeId === "@cinatra-ai/campaigns:campaign")).toBeDefined();
+  });
+
+  it("isRegistryInternalObjectTypeId: only the OKF memory-concept type is internal", () => {
+    expect(isRegistryInternalObjectTypeId("@cinatra-ai/memory:concept")).toBe(true);
+    expect(isRegistryInternalObjectTypeId("@cinatra-ai/objects:object")).toBe(false);
+    expect(isRegistryInternalObjectTypeId("@vendor/report-artifact:artifact")).toBe(false);
   });
 
   it("invalid dispositions resolve to null (fail-closed), the claim itself still surfaces", async () => {

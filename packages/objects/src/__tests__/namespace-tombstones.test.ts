@@ -39,7 +39,8 @@ const NOT_TOMBSTONED = [
   "@cinatra-ai/dynamic-legacy:invoice", // package is `dynamic-legacy`, not `dynamic`
   "@vendor/pkg:thing", // a normal vendor type
   "@cinatra-ai/campaigns:email", // a normal first-party type
-  "@cinatra-ai/artifact:object", // the permanent floor claim — never matched
+  "@cinatra-ai/artifact:object", // generic artifact base type, floored by the @cinatra-ai/default-artifact extension — never tombstoned
+  "@cinatra-ai/objects:object", // the generic fallback floor, DEFINED by the @cinatra-ai/default-artifact extension claim (epic #1785 re-point) — never tombstoned
   "plain-type",
   "",
 ];

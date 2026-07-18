@@ -87,7 +87,10 @@ function compileClaimValidator(jsonSchema: Record<string, unknown>): z.ZodType<u
   });
 }
 
-// Register a per-claim VALIDATOR-ONLY object type for each inline-schema claim.
+// Register a per-claim VALIDATOR-ONLY object type for each inline-schema
+// `dedicated` claim. `default` claims are SKIPPED — they are coverage over an
+// owner-registered type, never a provision, so registering one here would
+// clobber the owner's registrar (epic #1785 floor re-point; see the guard).
 // Deliberately WITHOUT `isArtifact` — `listArtifacts()` (the serving / library /
 // MCP surface) must stay one-generic-type-per-package; these entries exist so
 // the activation gate can `resolve()` a real schema, nothing more. Provenance is
@@ -114,6 +117,20 @@ function registerClaimValidators(
       );
       continue;
     }
+    // DEFAULT-claim guard (epic #1785 floor re-point; epic #1448 "exactly one
+    // runtime registrar per type"). A `default` claim is COVERAGE over a type
+    // that already exists and is registered by its OWNER — never a provision of
+    // a new type — so the bridge must not register a runtime type for it. The
+    // sole `default` claim today is the `@cinatra-ai/default-artifact` floor's
+    // claim on `@cinatra-ai/objects:object` (owned + registered host-side by
+    // `@cinatra-ai/objects`): registering it here (the registry is replace-by-id)
+    // would CLOBBER the host registrar's schema / identity / renderers — breaking
+    // the re-point's reads-unchanged invariant — and let THIS package's
+    // `removeByPackage` reap the OWNER's floor type on teardown. The owner's own
+    // registration is the activation-gate schema source. `dedicated` claims are
+    // unaffected (a pack that PROVIDES a type still registers its validator,
+    // including the cinatra#1432 cross-namespace inline-schema case).
+    if (claim.claim === "default") continue;
     if (!claim.schema) continue;
     if (claim.type === umbrellaType) continue; // never clobber the umbrella
     const schema = compileClaimValidator(claim.schema);

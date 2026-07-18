@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 // register-artifact-extensions.ts is `import "server-only"` (fs + bridge);
 // neutralise the RSC guard for the node test env (same pattern as the
@@ -337,6 +338,105 @@ describe("registerArtifactExtensions — per-claim validators (cinatra#1429)", (
     const removed = objectTypeRegistry.removeByPackage("@cinatra-ai/invoice-artifact");
     expect(removed).toContain("@cinatra-ai/invoice-artifact:invoice");
     expect(objectTypeRegistry.resolve("@cinatra-ai/invoice-artifact:invoice")).toBeNull();
+  });
+
+  it("floor re-point (#1785): a cross-namespace `default` claim never clobbers or reaps the host registrar", () => {
+    // The host registers the generic fallback floor type with its REAL schema +
+    // identity (register-types.ts registerGenericObjectType). Model it here as a
+    // provenance-less built-in (registered WITHOUT a packageName).
+    objectTypeRegistry.register({
+      type: "@cinatra-ai/objects:object",
+      category: "report",
+      schema: z.record(z.string(), z.unknown()),
+      lifecycle: { sources: ["agent", "user", "import"], mutableBy: ["agent", "user"] },
+      renderers: { listRow: null, card: null, detail: null },
+      identityKey: (data) => {
+        const runId = (data as { cinatraAgentRunId?: unknown }).cinatraAgentRunId;
+        return typeof runId === "string" && runId.length > 0 ? runId : null;
+      },
+    });
+
+    // @cinatra-ai/default-artifact is a HYBRID manifest: its own descriptor PLUS
+    // a `default` claim on the CROSS-NAMESPACE floor type it does not own.
+    writeExt(root, "default-artifact", {
+      name: "@cinatra-ai/default-artifact",
+      version: "0.1.0",
+      cinatra: {
+        kind: "artifact",
+        artifact: {
+          accepts: {
+            file: { mimeTypes: ["*/*"] },
+            connectorRef: { resolvedMimeTypes: ["*/*"] },
+            dashboard: true,
+          },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/objects:object",
+              claim: "default",
+              dispositions: {
+                projection: "artifact-safe",
+                pinnable: false,
+                snapshotPolicy: "none",
+                sensitivity: "normal",
+              },
+              schema: { type: "object" },
+            },
+          ],
+        },
+      },
+    });
+    expect(registerArtifactExtensions(root)).toBe(1);
+
+    // The pack registers ITS OWN umbrella...
+    expect(objectTypeRegistry.listArtifacts().map((d) => d.type)).toContain(
+      "@cinatra-ai/default-artifact:artifact",
+    );
+
+    // ...but the host floor registrar is UNTOUCHED — identityKey preserved (the
+    // re-point's reads-unchanged invariant), NOT clobbered by a validator-only
+    // default-artifact registration.
+    const floor = objectTypeRegistry.resolve("@cinatra-ai/objects:object");
+    expect(floor).not.toBeNull();
+    expect(typeof floor!.identityKey).toBe("function");
+    expect(floor!.identityKey?.({ cinatraAgentRunId: "run-1" })).toBe("run-1");
+
+    // Teardown of the CLAIMANT never reaps the floor (owned by @cinatra-ai/objects).
+    const removed = objectTypeRegistry.removeByPackage("@cinatra-ai/default-artifact");
+    expect(removed).not.toContain("@cinatra-ai/objects:object");
+    expect(objectTypeRegistry.resolve("@cinatra-ai/objects:object")).not.toBeNull();
+  });
+
+  it("floor re-point (#1785): the default-claim guard is surgical — a `dedicated` cross-namespace inline-schema claim still registers (no regression)", () => {
+    // The guard skips `default` claims only. A pack that PROVIDES a type via a
+    // cross-namespace inline-schema `dedicated` claim (cinatra#1432) is still the
+    // sole registrar and its enforcing validator still lands.
+    writeExt(root, "provider-artifact", {
+      name: "@cinatra-ai/provider-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        artifact: {
+          accepts: { file: { mimeTypes: ["application/json"] } },
+          objectTypes: [
+            {
+              type: "@other/owned:thing",
+              claim: "dedicated",
+              schema: {
+                type: "object",
+                required: ["amount"],
+                properties: { amount: { type: "number" } },
+                additionalProperties: true,
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(registerArtifactExtensions(root)).toBe(1);
+    const def = objectTypeRegistry.resolve("@other/owned:thing");
+    expect(def).not.toBeNull();
+    expect(def!.schema.safeParse({ amount: 42 }).success).toBe(true);
+    expect(def!.schema.safeParse({ amount: "not-a-number" }).success).toBe(false);
   });
 });
 

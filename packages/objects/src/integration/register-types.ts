@@ -21,11 +21,29 @@ import {
 } from "./generic-renderers";
 
 /**
- * Generic default object type. Registered alongside the per-package static
- * types so any object saved during an agent run gains stable identity via the
- * shared `cinatraAgentRunId` dedup key (injected by the objects layer from
- * `actorExt.runId`). The classifier may choose this type for ambiguous shapes;
- * it is also the natural target for "everything I just saved" reads via
+ * Generic fallback FLOOR object type — the lossless target for unclassifiable
+ * saves (epic #1785 slice C, `packages/objects/src/mcp/handlers.ts`).
+ *
+ * DEFINING PROVENANCE (epic #1785 floor re-point, 2026-07-18): the id
+ * `@cinatra-ai/objects:object` is no longer a bare host built-in — its defining
+ * extension is the `@cinatra-ai/default-artifact` system extension, which
+ * CLAIMS this id (a `default` claim, present in every install because
+ * default-artifact is a `systemExtensions` member). Registry provenance resolves
+ * through that claim, so the floor shows the extension as its claimant rather
+ * than an empty "built-in" group.
+ *
+ * The registration BELOW stays: it is the single RUNTIME registrar for this
+ * type (its schema, renderers, and `cinatraAgentRunId` identity), exactly the
+ * host-registrar / pack-claim split the email object types use ("the claim adds
+ * provenance + dispositions, never a second registrar" — epic #1448). The
+ * re-point moves the DEFINING source, never the reads: existing rows keep their
+ * `@cinatra-ai/objects:object` type string and every read path is unchanged.
+ *
+ * Registered alongside the per-package static types so any object saved during
+ * an agent run gains stable identity via the shared `cinatraAgentRunId` dedup
+ * key (injected by the objects layer from `actorExt.runId`). The classifier may
+ * choose this type for ambiguous shapes; it is also the natural target for
+ * "everything I just saved" reads via
  * `objects_list { type: "@cinatra-ai/objects:object", runId: ... }`.
  *
  * Returning `null` from `identityKey` when `cinatraAgentRunId` is absent

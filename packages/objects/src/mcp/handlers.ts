@@ -553,13 +553,17 @@ function enforceMemoryConceptEnvelope(
 // ---------------------------------------------------------------------------
 
 /**
- * The generic host object type. A payload the classifier cannot place under an
- * installed type is persisted here, byte-for-byte. Inlined as a literal on
- * purpose (same route-graph-budget reasoning as MEMORY_CONCEPT_TYPE_ID above):
- * importing the register-types module would add a static edge to the
- * locked-route-reachable objects_save handler graph. Source of truth is the
- * `registerGenericObjectType()` registration in
- * `packages/objects/src/integration/register-types.ts`.
+ * The generic fallback FLOOR object type. A payload the classifier cannot place
+ * under an installed type is persisted here, byte-for-byte. Since epic #1785's
+ * floor re-point it is DEFINED by the `@cinatra-ai/default-artifact` system
+ * extension's claim on this id (present in every install); the persisted type
+ * string is UNCHANGED by the re-point. Inlined as a literal on purpose (same
+ * route-graph-budget reasoning as MEMORY_CONCEPT_TYPE_ID above): importing the
+ * register-types module would add a static edge to the locked-route-reachable
+ * objects_save handler graph. The RUNTIME registrar of record is still
+ * `registerGenericObjectType()` in
+ * `packages/objects/src/integration/register-types.ts` (the extension claim
+ * adds provenance + dispositions, never a second registrar).
  */
 const GENERIC_OBJECT_TYPE_ID = "@cinatra-ai/objects:object" as const;
 
