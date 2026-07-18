@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ARTIFACT_MUTABILITY_CLASSES,
   claimPrecedenceRank,
   claimWinnerProjectionDisposition,
+  effectiveMutableBy,
   isDefaultClaimDominated,
   isValidClaimScope,
   isWinnerEligible,
@@ -10,8 +12,23 @@ import {
   parseClaimDispositions,
   resolveClaimProjectionDisposition,
   resolveClaimWinner,
+  validateMutabilityNarrowsBaseline,
   type ArbitrableClaim,
+  type ArtifactMutability,
+  type ObjectMutator,
 } from "../claims";
+import type { ArtifactObjectTypeClaim } from "../types";
+
+// Type-mirror parity (cinatra#1449): the type-only
+// `ArtifactObjectTypeClaim.dispositions.mutability` in ../types is a structural
+// twin of `ArtifactMutability` in ../claims. These two assignments are legal
+// ONLY while the unions are identical — if either side gains or drops a member,
+// `tsgo --noEmit` (CI typecheck, which includes this file) fails here.
+type MirroredMutability = NonNullable<ArtifactObjectTypeClaim["dispositions"]>["mutability"];
+const _mutabilityFwd: MirroredMutability = undefined as ArtifactMutability | undefined;
+const _mutabilityRev: ArtifactMutability | undefined = undefined as MirroredMutability;
+void _mutabilityFwd;
+void _mutabilityRev;
 
 function claim(partial: Partial<ArbitrableClaim> & Pick<ArbitrableClaim, "id" | "scope" | "claimKind">): ArbitrableClaim {
   return {
@@ -179,6 +196,95 @@ describe("claim dispositions union", () => {
     expect(parseClaimDispositions({ projection: "raw", surprise: 1 }).ok).toBe(false);
     expect(parseClaimDispositions({ projection: "full" }).ok).toBe(false);
     expect(parseClaimDispositions("raw").ok).toBe(false);
+  });
+
+  it("mutability is optional — an absent class parses to undefined", () => {
+    const parsed = parseClaimDispositions({ projection: "raw" });
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.dispositions.mutability).toBeUndefined();
+  });
+
+  it("accepts each mutability class (cinatra#1449)", () => {
+    for (const mutability of ARTIFACT_MUTABILITY_CLASSES) {
+      // external must be pinnable:false; draftable/record are unconstrained here.
+      const parsed = parseClaimDispositions({
+        projection: "artifact-safe",
+        pinnable: false,
+        mutability,
+      });
+      expect(parsed.ok, mutability).toBe(true);
+      if (parsed.ok) expect(parsed.dispositions.mutability).toBe(mutability);
+    }
+  });
+
+  it("the mutability vocabulary is exactly draftable|record|external", () => {
+    expect([...ARTIFACT_MUTABILITY_CLASSES]).toEqual(["draftable", "record", "external"]);
+  });
+
+  it("rejects an unknown mutability class (fail-closed strict union)", () => {
+    expect(parseClaimDispositions({ projection: "raw", mutability: "frozen" }).ok).toBe(false);
+  });
+
+  it("rejects a pinnable external claim — pin the snapshot record, not the pointer", () => {
+    expect(
+      parseClaimDispositions({ projection: "artifact-safe", mutability: "external", pinnable: true })
+        .ok,
+    ).toBe(false);
+    // The same class is fine when the pointer is not pinnable.
+    expect(
+      parseClaimDispositions({ projection: "artifact-safe", mutability: "external", pinnable: false })
+        .ok,
+    ).toBe(true);
+    // A never-projected external claim is fine (projection:"none" forces pinnable:false).
+    expect(parseClaimDispositions({ projection: "none", mutability: "external" }).ok).toBe(true);
+  });
+});
+
+// The pure baseline-narrowing rule (cinatra#1449) the object write path consumes:
+// a mutability class may only NARROW the registering type's mutableBy, never widen.
+describe("mutability baseline-narrowing rule", () => {
+  const allBaselines: readonly ObjectMutator[][] = [[], ["agent"], ["user"], ["agent", "user"]];
+
+  it("effectiveMutableBy: record/external narrow to [] for every baseline", () => {
+    for (const baseline of allBaselines) {
+      expect(effectiveMutableBy("record", baseline)).toEqual([]);
+      expect(effectiveMutableBy("external", baseline)).toEqual([]);
+    }
+  });
+
+  it("effectiveMutableBy: draftable and an absent class preserve the baseline (as a copy)", () => {
+    const baseline: ObjectMutator[] = ["agent", "user"];
+    expect(effectiveMutableBy("draftable", baseline)).toEqual(["agent", "user"]);
+    expect(effectiveMutableBy(undefined, baseline)).toEqual(["agent", "user"]);
+    // never widens: the result is always a subset of the baseline
+    for (const mutability of [...ARTIFACT_MUTABILITY_CLASSES, undefined] as const) {
+      for (const b of allBaselines) {
+        expect(effectiveMutableBy(mutability, b).every((p) => b.includes(p))).toBe(true);
+      }
+    }
+    // returns a fresh array — mutating it never aliases the baseline
+    const copy = effectiveMutableBy("draftable", baseline);
+    copy.pop();
+    expect(baseline).toEqual(["agent", "user"]);
+  });
+
+  it("validateMutabilityNarrowsBaseline: record/external narrow ANY baseline (incl. immutable)", () => {
+    for (const baseline of allBaselines) {
+      expect(validateMutabilityNarrowsBaseline("record", baseline)).toBeNull();
+      expect(validateMutabilityNarrowsBaseline("external", baseline)).toBeNull();
+    }
+  });
+
+  it("validateMutabilityNarrowsBaseline: draftable is legal on any MUTABLE baseline", () => {
+    expect(validateMutabilityNarrowsBaseline("draftable", ["agent"])).toBeNull();
+    expect(validateMutabilityNarrowsBaseline("draftable", ["user"])).toBeNull();
+    expect(validateMutabilityNarrowsBaseline("draftable", ["agent", "user"])).toBeNull();
+  });
+
+  it("validateMutabilityNarrowsBaseline: draftable over an immutable type widens (rejected)", () => {
+    const violation = validateMutabilityNarrowsBaseline("draftable", []);
+    expect(violation).not.toBeNull();
+    expect(violation).toMatch(/widens an immutable type/);
   });
 });
 

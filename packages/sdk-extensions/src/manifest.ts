@@ -195,6 +195,26 @@ export type CinatraManifest = {
    */
   dashboardContribution?: DashboardContributionManifest;
 
+  /**
+   * Execution-plane declarations (exec-plane S3, cinatra#1708; epic #1705).
+   * `execution.environment` is the L1 DECLARED ENVIRONMENT — the packages an
+   * agent's runs require (see `ExecutionEnvironmentSpec` in
+   * `./execution-environment`): the trusted builder turns it into an
+   * immutable, content-addressed L1 layer every same-recipe run mounts.
+   * AGENT-ONLY (`kind:"agent"`): any other kind's declaration is never
+   * carried onto a record (see `resolveExecutionEnvironmentClaim`). Carried
+   * UNVALIDATED as DATA on the generated record
+   * (`NormalizedExtensionRecord.executionEnvironment`); consumers validate
+   * fail-closed via `parseExecutionEnvironment` — which, unlike the
+   * field-tolerant claims, REJECTS unknown keys/malformed entries outright
+   * (a build recipe must never silently drop a declared package). Env edits
+   * inherit the agent's existing review path (epic D8): packaged agents =
+   * extension review/lock choreography.
+   */
+  execution?: {
+    environment?: Record<string, unknown>;
+  };
+
   // ---- dependency graph (canonical) ----
   /** Canonical cross-kind dependency edges. */
   dependencies?: ExtensionDependency[];
@@ -341,6 +361,21 @@ export type NormalizedExtensionRecord = {
    * drop the claim.
    */
   dashboardContribution?: Record<string, unknown> | null;
+  /**
+   * RAW `cinatra.execution.environment` pass-through (exec-plane S3,
+   * cinatra#1708), or `null` when the package declares none / for a
+   * non-`agent` kind (the sole allowlisted carrier — see
+   * `resolveExecutionEnvironmentClaim` in `./execution-environment`).
+   * OPTIONAL on the type (strictly additive; the record shape is ABI-frozen);
+   * the manifest generator emits it on EVERY record. Carried UNVALIDATED as
+   * data — the execution plane validates it FAIL-CLOSED via
+   * `parseExecutionEnvironment` before any build (unknown keys / malformed
+   * entries reject the declaration outright); a consumer must never trust
+   * this field without that validation. The runtime loader
+   * (`recordFromManifest`) carries the same field with the same agent-kind
+   * gate so both loader paths round-trip identically.
+   */
+  executionEnvironment?: Record<string, unknown> | null;
 };
 
 export function isUiSurfaceKind(value: unknown): value is UiSurfaceKind {

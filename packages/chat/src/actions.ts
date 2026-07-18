@@ -11,7 +11,7 @@ import { betterAuthDb } from "@/lib/better-auth-db";
 import { sql } from "drizzle-orm";
 import { runDeterministicLlmTask } from "@cinatra-ai/llm";
 import { readLocalPackageSkillContent } from "@cinatra-ai/skills";
-import { parseMentions, resolveMentions } from "./mentions";
+import { parseMentions, resolveMentions, resolveBuiltInCinatraAssistantUserId } from "./mentions";
 import type { ChatThread, Mention } from "./types";
 
 // Chat prompt-window HITL extraction skill, loaded once at module init
@@ -291,7 +291,7 @@ export async function resolveMessageRouting(
     pausedParticipants: string[];
     handleMap: Record<string, string>;
   },
-): Promise<{ shouldCallLlm: boolean; activeHandle?: string; externalMentions?: Mention[]; isBroadcast?: boolean; chatEndpoint?: string; builtInMention?: Mention }> {
+): Promise<{ shouldCallLlm: boolean; activeHandle?: string; externalMentions?: Mention[]; isBroadcast?: boolean; chatEndpoint?: string; builtInMention?: Mention; hostAssistantUserId?: string }> {
   // Parse explicit @mentions — explicit always wins over broadcast.
   const rawMentions = parseMentions(message);
 
@@ -303,6 +303,7 @@ export async function resolveMessageRouting(
       if (builtIn) {
         // Built-in assistant: route to its dedicated AG-UI producer endpoint
         // instead of the default Cinatra assistant endpoint.
+        // Its reply is attributed to the built-in principal (builtInMention), not Cinatra.
         return {
           shouldCallLlm: true,
           activeHandle: builtIn.handle,
@@ -313,10 +314,17 @@ export async function resolveMessageRouting(
       const external = resolved.filter((m) => m.handle !== "cinatra");
       const allExternal = resolved.length > 0 && external.length === resolved.length;
       const lastExternal = external[external.length - 1];
+      // When Cinatra replies (!allExternal), cinatra IS in `resolved` (allExternal
+      // is false only if a non-external handle — cinatra — is present). Attribute
+      // the host reply to that principal (P2.4).
+      const cinatraMention = resolved.find((m) => m.handle === "cinatra");
       return {
         shouldCallLlm: !allExternal,
         activeHandle: lastExternal?.handle ?? "cinatra",
         externalMentions: allExternal ? external : undefined,
+        ...(!allExternal && cinatraMention
+          ? { hostAssistantUserId: cinatraMention.assistantUserId }
+          : {}),
       };
     }
 
@@ -343,14 +351,19 @@ export async function resolveMessageRouting(
       .filter((m): m is Mention => m !== null);
 
     const cinatraPaused = paused.includes("cinatra");
+    // Broadcast: Cinatra also replies unless paused — attribute its reply (P2.4).
+    const hostId = cinatraPaused ? null : await resolveBuiltInCinatraAssistantUserId();
     return {
       shouldCallLlm: !cinatraPaused,
       externalMentions: externalMentions.length > 0 ? externalMentions : undefined,
       isBroadcast: true,
+      ...(hostId ? { hostAssistantUserId: hostId } : {}),
     };
   }
 
-  return { shouldCallLlm: true };
+  // Default: the host Cinatra assistant replies — attribute its reply (P2.4).
+  const hostId = await resolveBuiltInCinatraAssistantUserId();
+  return { shouldCallLlm: true, ...(hostId ? { hostAssistantUserId: hostId } : {}) };
 }
 
 /**

@@ -411,7 +411,7 @@ export async function createExternalMcpServerAction(formData: FormData) {
   const scope: ExternalMcpServerScope = parsed.scope === "user" ? "user" : "global";
 
   // Authorization boundary. Global external MCP rows are injected into every LLM call's
-  // MCP toolbox with `requireApproval: "never"` — a global write is a
+  // MCP toolbox with `approval: "auto_execute"` — a global write is a
   // platform-wide trust mutation and MUST require platform admin. The default
   // scope is "global", so the unauthenticated/non-admin default path is
   // admin-gated. User-scoped rows only require an authenticated actor, and are

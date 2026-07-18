@@ -1584,26 +1584,60 @@ jobs:
 
       - name: Add CI build swap (default-runner only)
         # Best-effort, default-runner ONLY (skipped when CI_BUILD_RUNNER moves this
-        # job to a larger runner). A 4G swapfile absorbs `pnpm build` memory SPIKES
-        # so the 2-vCPU/7GB runner is not RECLAIMED for unresponsiveness (Mode B).
-        # Subshell-guarded so a swap-setup failure NEVER fails the build — it falls
-        # back to today's behavior. 4G (not 8G+): the runner SSD is small + huge
-        # swap turns an OOM into a long I/O stall; the 20-min build cap still bounds
-        # a true thrash.
+        # job to a larger runner). Subshell-guarded so a swap-setup failure NEVER
+        # fails the build — it falls back to today's behavior.
+        # 12G target (was 4G; PR #1746 briefly overshot to 20G, which ate the
+        # docker build's root disk and ENOSPC-failed PR #1756 -- so the image
+        # build now FREES disk instead of swapping, and these memory-bound build
+        # jobs cap swap at 12G behind a 12G disk margin). The entry-66 CI-memory
+        # investigation (2026-07-17): the modern ubuntu-latest runner is
+        # 4 vCPU / 15.8G RAM, but the fleet's DISK is heterogeneous (entry-66
+        # measured ~86G-free AND ~15G-free root disks the same day), so the
+        # script below sizes the swapfile to the disk it actually gets. A
+        # heavy-but-BOUNDED `pnpm build` (Turbopack NATIVE memory -- the JS heap
+        # stays tiny, so NODE_OPTIONS cannot cap it) peaked at ~33G total on the
+        # PRE-fix tree; the #1747/#1748 static-import fixes have since bounded it
+        # well under RAM + stock + a modest swap, so 12G (+3G stock) is ample and
+        # leaves the disk headroom the 20G cap did not. Swap only helps BOUNDED
+        # builds: an UNBOUNDED Turbopack runaway (the server-side dynamic-import
+        # detonation entry-66 root-caused -- >33G and still climbing) fills any
+        # swap and still reclaims the runner; that class needs the content fix,
+        # not more swap.
         if: ${{ needs.detect.outputs.skip != 'true' && vars.CI_BUILD_RUNNER == '' }}
         run: |
           set -uxo pipefail
-          SWAPFILE=/swapfile-ci-build
           # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
           # if/else makes it best-effort — any failure exits the step 0 with a warning.
-          if { sudo fallocate -l 4G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=4096; }; } \
+          # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
+          # size to what fits behind a 12G disk margin, and ALWAYS remove a
+          # partial file on failure — a swapfile that fills the disk kills the
+          # build on ENOSPC, strictly worse than no swap.
+          # Genuinely best-effort from here: +e (Actions invokes bash -e) so no
+          # discovery/diagnostic hiccup can fail the build; explicit exit 0 at
+          # the end. The && chain still gates the success path; every var the
+          # arithmetic reads is defaulted so set -u cannot abort either.
+          set +e
+          target=/
+          free_kb=$(df -Pk / 2>/dev/null | awk 'NR==2{print $4}'); free_kb=${free_kb:-0}
+          if [ -d /mnt ]; then
+            mnt_kb=$(df -Pk /mnt 2>/dev/null | awk 'NR==2{print $4}'); mnt_kb=${mnt_kb:-0}
+            if [ "$mnt_kb" -gt "$free_kb" ]; then target=/mnt; free_kb=$mnt_kb; fi
+          fi
+          SWAPFILE="${target%/}/swapfile-ci-build"
+          size_kb=$(( free_kb - 12*1024*1024 )); want_kb=$(( 20*1024*1024 ))
+          if [ "$size_kb" -gt "$want_kb" ]; then size_kb=$want_kb; fi
+          if [ "$size_kb" -lt $(( 2*1024*1024 )) ]; then
+            echo "::notice::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
+          elif { sudo fallocate -l "${size_kb}K" "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=$(( size_kb / 1024 )); }; } \
             && sudo chmod 600 "$SWAPFILE" \
             && sudo mkswap "$SWAPFILE" \
             && sudo swapon "$SWAPFILE"; then
-            swapon --show; free -h
+            swapon --show || true; free -h || true; df -h "$target" || true
           else
-            echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
+            echo "::warning::CI build swap setup failed — removing any partial swapfile and proceeding without extra swap (today's behavior)"
+            sudo rm -f "$SWAPFILE" || true
           fi
+          exit 0
 
       - name: Build app (production)
         if: ${{ needs.detect.outputs.skip != 'true' }}
@@ -1770,6 +1804,86 @@ jobs:
       # tracking tree). The prod-boot e2e step below then BOOTS that image and
       # asserts it serves — proving the no-private-extensions path end to end
       # (issue #81), not just at build/typecheck level.
+
+      - name: Free runner disk for the image build (default-runner only)
+        # entry-66 DISK-regression fix (PR #1756): this docker-buildx job died
+        # with "no space left on device" mid-build because PR #1746's swapfile
+        # landed on the same root disk buildkit writes its layers + the mode=max
+        # gha cache export to (the failing run had only ~6G left on / after a
+        # 9.4G swapfile, while RAM was 14Gi FREE -- the bottleneck HERE is DISK,
+        # not memory). The #1747/#1748 static-import fixes already bounded the
+        # Turbopack memory class, so this job needs disk headroom, not swap:
+        # DROP the swapfile and instead reclaim the ~25-30G of preinstalled
+        # toolchains this job never uses (plus the preloaded docker images)
+        # BEFORE the build. Best-effort -- a prune hiccup never fails the job.
+        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        run: |
+          set -uxo pipefail
+          set +e
+          echo "disk before prune:"; df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker system prune -af
+          echo "disk after prune:"; df -h /
+          exit 0
+
+      - name: Add CI build swap (default-runner only, after the disk prune)
+        # Cold-cache OOM fix (issue #1758 follow-up, folded into #1759). The
+        # docker-buildx build below runs `pnpm build` (Turbopack) INSIDE buildkit;
+        # a COLD `next build` peaks ~33G, above the default runner's 15.8G RAM +
+        # ~3G stock swap, so buildkit is reclaimed mid-compile. The failing head-
+        # of-lane run logged `Creating an optimized production build ...` ->
+        # `[ELIFECYCLE] Command failed.` (118.9s) -> `ResourceExhausted: ... pnpm
+        # build did not complete successfully: cannot allocate memory` (run
+        # 29612773246, `build` job). #1757 DROPPED this job's swapfile (see the
+        # prune step above) because PR #1746's 20G swapfile shared the root disk
+        # buildkit writes its layers + mode=max gha cache to and ENOSPC-killed
+        # #1756 (~6G left after a 9.4G swapfile, with NO prune). Both conditions
+        # behind that ENOSPC are gone now: (1) the prune above runs FIRST and
+        # reclaims ~23G (this run: / 19G->42G avail), and (2) this step sizes the
+        # swapfile at min(20G, free-12G) on the ROOMIER of / and the /mnt temp
+        # disk, so it ALWAYS leaves >=12G free on the chosen disk. On a roomy
+        # runner (~96G avail post-prune) a 20G swapfile leaves ~76G, above the
+        # ~73G baseline docker builds were historically green under, so #1757's
+        # ENOSPC structurally cannot recur — while 15.8G RAM + 20G swap (~35.8G)
+        # clears the ~33G cold peak. Byte-identical best-effort/fail-open script
+        # to the four memory-bound jobs' swap step (subshell-guarded, partial-
+        # file cleanup on failure, swapon --show/df -h diagnostics); skipped when
+        # CI_BUILD_RUNNER moves this job to a larger runner.
+        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        run: |
+          set -uxo pipefail
+          # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
+          # if/else makes it best-effort — any failure exits the step 0 with a warning.
+          # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
+          # size to what fits behind a 12G disk margin, and ALWAYS remove a
+          # partial file on failure — a swapfile that fills the disk kills the
+          # build on ENOSPC, strictly worse than no swap.
+          # Genuinely best-effort from here: +e (Actions invokes bash -e) so no
+          # discovery/diagnostic hiccup can fail the build; explicit exit 0 at
+          # the end. The && chain still gates the success path; every var the
+          # arithmetic reads is defaulted so set -u cannot abort either.
+          set +e
+          target=/
+          free_kb=$(df -Pk / 2>/dev/null | awk 'NR==2{print $4}'); free_kb=${free_kb:-0}
+          if [ -d /mnt ]; then
+            mnt_kb=$(df -Pk /mnt 2>/dev/null | awk 'NR==2{print $4}'); mnt_kb=${mnt_kb:-0}
+            if [ "$mnt_kb" -gt "$free_kb" ]; then target=/mnt; free_kb=$mnt_kb; fi
+          fi
+          SWAPFILE="${target%/}/swapfile-ci-build"
+          size_kb=$(( free_kb - 12*1024*1024 )); want_kb=$(( 20*1024*1024 ))
+          if [ "$size_kb" -gt "$want_kb" ]; then size_kb=$want_kb; fi
+          if [ "$size_kb" -lt $(( 2*1024*1024 )) ]; then
+            echo "::notice::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
+          elif { sudo fallocate -l "${size_kb}K" "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=$(( size_kb / 1024 )); }; } \
+            && sudo chmod 600 "$SWAPFILE" \
+            && sudo mkswap "$SWAPFILE" \
+            && sudo swapon "$SWAPFILE"; then
+            swapon --show || true; free -h || true; df -h "$target" || true
+          else
+            echo "::warning::CI build swap setup failed — removing any partial swapfile and proceeding without extra swap (today's behavior)"
+            sudo rm -f "$SWAPFILE" || true
+          fi
+          exit 0
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
@@ -2323,6 +2437,45 @@ jobs:
           src/lib/__tests__/extension-degraded-consumers.test.ts
           src/lib/generated/__tests__/guarded-optional-loaders.test.ts
           src/lib/__tests__/connectors-readiness-fail-soft.test.ts
+
+      - name: Add CI build swap (default-runner only)
+        # Same 12G step + rationale as the RBAC-e2e job's swap step above
+        # (entry-66 CI-memory investigation, 2026-07-17): this job runs the same
+        # memory-heavy `pnpm build` directly on the runner and was reclaimed
+        # mid-build on the held PRs with no swap at all.
+        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        run: |
+          set -uxo pipefail
+          # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
+          # size to what fits behind a 12G disk margin, and ALWAYS remove a
+          # partial file on failure — a swapfile that fills the disk kills the
+          # build on ENOSPC, strictly worse than no swap.
+          # Genuinely best-effort from here: +e (Actions invokes bash -e) so no
+          # discovery/diagnostic hiccup can fail the build; explicit exit 0 at
+          # the end. The && chain still gates the success path; every var the
+          # arithmetic reads is defaulted so set -u cannot abort either.
+          set +e
+          target=/
+          free_kb=$(df -Pk / 2>/dev/null | awk 'NR==2{print $4}'); free_kb=${free_kb:-0}
+          if [ -d /mnt ]; then
+            mnt_kb=$(df -Pk /mnt 2>/dev/null | awk 'NR==2{print $4}'); mnt_kb=${mnt_kb:-0}
+            if [ "$mnt_kb" -gt "$free_kb" ]; then target=/mnt; free_kb=$mnt_kb; fi
+          fi
+          SWAPFILE="${target%/}/swapfile-ci-build"
+          size_kb=$(( free_kb - 12*1024*1024 )); want_kb=$(( 20*1024*1024 ))
+          if [ "$size_kb" -gt "$want_kb" ]; then size_kb=$want_kb; fi
+          if [ "$size_kb" -lt $(( 2*1024*1024 )) ]; then
+            echo "::notice::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
+          elif { sudo fallocate -l "${size_kb}K" "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=$(( size_kb / 1024 )); }; } \
+            && sudo chmod 600 "$SWAPFILE" \
+            && sudo mkswap "$SWAPFILE" \
+            && sudo swapon "$SWAPFILE"; then
+            swapon --show || true; free -h || true; df -h "$target" || true
+          else
+            echo "::warning::CI build swap setup failed — removing any partial swapfile and proceeding without extra swap (today's behavior)"
+            sudo rm -f "$SWAPFILE" || true
+          fi
+          exit 0
 
       # Same inert env placeholders as the Dockerfile build stage; CI=true is
       # implicit on Actions runners, so next.config skips the in-build tsc

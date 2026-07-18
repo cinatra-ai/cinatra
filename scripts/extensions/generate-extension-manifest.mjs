@@ -428,6 +428,32 @@ export function resolveDashboardContributionClaim(kind, cin) {
   return isObj(cin?.dashboardContribution) ? cin.dashboardContribution : null;
 }
 
+// The RAW `cinatra.execution.environment` pass-through emitted onto a record
+// (exec-plane S3, cinatra#1708). CARRIER-KIND GATED: only `kind:"agent"` may
+// declare an L1 execution environment, so any other kind emits null even if a
+// stray declaration is present. Mirrors `resolveExecutionEnvironmentClaim` in
+// packages/sdk-extensions/src/execution-environment.ts (the sdk leaf owns the
+// semantic; a parity test pins the two). The value is carried UNVALIDATED —
+// the execution plane parses it FAIL-CLOSED via `parseExecutionEnvironment`
+// before any build (unknown keys / malformed entries reject the declaration
+// outright; a build recipe must never silently drop a declared package).
+// PRESENT-but-malformed declarations (a non-object `execution` /
+// `execution.environment`) are carried as the sdk leaf's poison marker so the
+// fail-closed parser rejects them at consumption — a declaration attempt must
+// never silently collapse to "no environment" (codex S3-r0 finding 3; the
+// invalidMigrationsDirDeclared doctrine).
+const EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY =
+  "__invalidExecutionEnvironmentDeclaration";
+
+export function resolveExecutionEnvironmentClaim(kind, cin) {
+  if (kind !== "agent") return null;
+  if (!cin || !("execution" in cin) || cin.execution === undefined) return null;
+  const poison = { [EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY]: true };
+  if (!isObj(cin.execution)) return poison;
+  if (!("environment" in cin.execution) || cin.execution.environment === undefined) return null;
+  return isObj(cin.execution.environment) ? cin.execution.environment : poison;
+}
+
 // ---------------------------------------------------------------------------
 // Widget-stream capability declaration (`cinatra.widgetStream`).
 //
@@ -1565,6 +1591,15 @@ export async function buildManifest() {
       // until a successor agent ships the claim (no bundled extension declares it
       // yet), exactly like the artifact `ui` seam.
       dashboardContribution: resolveDashboardContributionClaim(x.kind, cin),
+      // RAW `cinatra.execution.environment` pass-through (exec-plane S3,
+      // cinatra#1708): the L1 declared-environment claim, emitted ONLY on
+      // kind:"agent" records (the sole carrier kind per the sdk leaf) — null
+      // on every other kind, and null when the agent declares none. Carried
+      // UNVALIDATED (same pattern as accessConfig/envOverrides/
+      // dashboardContribution); the execution plane validates it FAIL-CLOSED
+      // via `parseExecutionEnvironment` before any environment build. INERT
+      // until a bundled agent ships a declaration.
+      executionEnvironment: resolveExecutionEnvironmentClaim(x.kind, cin),
     };
   });
   records.sort((a, b) => a.packageName.localeCompare(b.packageName));
@@ -2087,9 +2122,10 @@ export async function buildManifest() {
     })
     .sort((a, b) => a.packageName.localeCompare(b.packageName));
 
-  // cinatra.artifact.ui renderers (cinatra#1629, epic #1620 S2): a
-  // `kind:"artifact"` extension ships its type's view via
-  // `cinatra.artifact.ui.renderers.{detail,preview}` (the S1 schema). The host
+  // cinatra.artifact.ui renderers (cinatra#1629, epic #1620 S2; S7/M2 slot
+  // activation cinatra#1631): a `kind:"artifact"` extension ships its type's
+  // view via `cinatra.artifact.ui.renderers.{detail,preview,listRow}` (the S1
+  // schema). The host
   // dispatch spine resolves a row to a KEY in this generated build map (the
   // connector-setup-pages literal-import pattern), keyed `<pkg>::<slot>`. STAGED
   // + INERT: no bundled artifact declares `ui` yet (the companion-repo kind gate
@@ -2101,7 +2137,7 @@ export async function buildManifest() {
   // generation error. ARTIFACT_UI_RENDER_SLOTS mirrors ARTIFACT_UI_SLOTS in
   // packages/sdk-extensions/src/artifact-contract.ts (the closed v1 slot enum);
   // the authoritative slot-enum validation is the S1 publish/conformance gate.
-  const ARTIFACT_UI_RENDER_SLOTS = ["detail", "preview"];
+  const ARTIFACT_UI_RENDER_SLOTS = ["detail", "preview", "listRow"];
   const artifactRenderers = records
     .filter((r) => r.kind === "artifact")
     .flatMap((r) => {
@@ -2409,6 +2445,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
             accessConfig: r.accessConfig,
             envOverrides: r.envOverrides,
             dashboardContribution: r.dashboardContribution,
+            executionEnvironment: r.executionEnvironment,
           },
         )},`,
     )
@@ -2940,7 +2977,7 @@ function emitArtifactRenderers(artifactRenderers) {
     `export type GeneratedArtifactRendererEntry = {\n` +
     `  resolution: ExtensionResolution;\n` +
     `  packageName: string;\n` +
-    `  slot: "detail" | "preview";\n` +
+    `  slot: "detail" | "preview" | "listRow";\n` +
     `  representations: readonly string[];\n` +
     `  propsApiVersion: number;\n` +
     `  load: GeneratedArtifactRendererLoader;\n` +

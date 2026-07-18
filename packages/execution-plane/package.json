@@ -1,0 +1,22 @@
+{
+  "name": "@cinatra-ai/execution-plane",
+  "description": "Execution-plane broker + sandbox worker (exec-plane S1, cinatra#1706): opens the sealed execution-session carrier minted by @cinatra-ai/llm, revalidates run liveness per command, enforces per-org quotas and bounded queueing, and dispatches each command to a fresh hardened container over the digest-pinned L0 image with a per-run L2 workspace volume (enforced disk quota) and network-layer egress policy (none / allowlist / default-internet, all via the attributing egress gateway). Local-dev worker placement; other placements ride the deployment layer.",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts"
+  },
+  "dependencies": {
+    "@cinatra-ai/llm": "workspace:*",
+    "@cinatra-ai/sdk-extensions": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10"
+  }
+}

@@ -804,7 +804,7 @@ export async function buildRegisteredExternalMcpServerTools(): Promise<LlmMcpSer
         headers,
         serverDescription: `External MCP server: ${row.label}`,
         allowedTools: row.allowedTools,
-        requireApproval: "never",
+        approval: "auto_execute",
         // Transport persisted on the row (llm-providers S2, #1713); legacy rows
         // classify as "unknown". Never inferred from serverUrl.
         transport: row.transport,
@@ -898,7 +898,7 @@ export async function buildSingleExternalMcpTool(
       headers,
       serverDescription: `External MCP server: ${row.label}`,
       allowedTools: row.allowedTools,
-      requireApproval: "never",
+      approval: "auto_execute",
       // Transport persisted on the row (llm-providers S2, #1713); legacy rows
       // classify as "unknown". Never inferred from serverUrl.
       transport: row.transport,

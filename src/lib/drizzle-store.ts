@@ -2203,6 +2203,12 @@ $body$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS agent_kind text NOT NULL DEFAULT 'executor', ADD COLUMN IF NOT EXISTS assistant_config text` },
     { text: `DO $$ BEGIN ${addConstraintIfAbsentSql(schemaName, "agent_templates", "agent_templates_agent_kind_check", `CHECK (agent_kind IN ('assistant', 'executor'))`)} ${addConstraintIfAbsentSql(schemaName, "agent_templates", "agent_templates_agent_kind_config_check", `CHECK ((agent_kind = 'assistant' AND assistant_config IS NOT NULL) OR (agent_kind = 'executor' AND assistant_config IS NULL))`)} END $$;` },
     { text: `CREATE INDEX IF NOT EXISTS agent_templates_agent_kind_idx ON "${schemaName.replaceAll('"', '""')}"."agent_templates" (agent_kind)` },
+    // 1:1 template<->principal link (#1037 P1.3): assistant_user_id is the bare text id of the
+    // Better Auth public."user" assistant principal an agent_kind='assistant' template is registered AS
+    // (no cross-schema FK, like assistant_threads.assistant_user_id). Partial UNIQUE over non-null values
+    // enforces the 1:1; executor rows stay NULL and are excluded by the predicate. Transformational half in migration core__0054.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS assistant_user_id text` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_templates_assistant_user_id_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_templates" (assistant_user_id) WHERE assistant_user_id IS NOT NULL` },
     // agent_runs.org_id: org-scoping for run lists. Nullable; existing rows stay
     // NULL (platform-admin cross-org reads only, via skipOrgFilter). No backfill.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS org_id text` },
@@ -2823,7 +2829,12 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
       'visibility', 'public',
       'registryUrl', 'https://registry.cinatra.ai'
     )
-    WHERE package_name IS NOT NULL AND origin IS NULL;
+    -- #1037 P1.3: never grandfather a conversational (assistant) row to a PUBLIC
+    -- Cinatra registry origin — the built-in Cinatra assistant is a seeded
+    -- principal-linked instance, not a marketplace extension. It carries NULL
+    -- package_name (excluded by the first predicate already); this arm hardens
+    -- against any future assistant row that does declare a package identity.
+    WHERE package_name IS NOT NULL AND origin IS NULL AND agent_kind IS DISTINCT FROM 'assistant';
   END IF;
 END $$` },
     // Step 5: Grandfather backfill — existing skill_packages rows are public.
@@ -3677,6 +3688,46 @@ END $$` },
     { text: `CREATE INDEX IF NOT EXISTS agent_creation_request_org_status_idx ON "${schemaName.replaceAll('"', '""')}"."agent_creation_request" (org_id, status)` },
     { text: `CREATE INDEX IF NOT EXISTS agent_creation_request_author_idx ON "${schemaName.replaceAll('"', '""')}"."agent_creation_request" (author_id, status)` },
     { text: `CREATE INDEX IF NOT EXISTS agent_creation_request_resolved_approvers_gin ON "${schemaName.replaceAll('"', '""')}"."agent_creation_request" USING gin (resolved_approver_ids)` },
+    // Artifact row-scope promotion (cinatra#1437, epic #1424). Pending
+    // requests to WIDEN an individual artifact row's visibility (private →
+    // team | organization) through the shared approvals surface. Mirrors the
+    // agent_creation_request lifecycle: pending state lives ONLY on this row;
+    // the artifact OBJECT is widened + re-projected only when an admin approve
+    // passes the CAS/never-narrow/secret-scan gates. `row_version` is the
+    // objects.version captured at request time — the CAS anchor an
+    // edit-after-request supersedes. State machine:
+    // pending → approved | rejected | superseded (terminal).
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" (
+      id                 text PRIMARY KEY,
+      org_id             text NOT NULL,
+      object_id          text NOT NULL,
+      object_title       text NOT NULL,
+      requested_by       text NOT NULL,
+      from_visibility    text NOT NULL,
+      to_visibility      text NOT NULL,
+      to_owner_level     text NOT NULL,
+      to_owner_id        text NOT NULL,
+      to_owner_label     text,
+      row_version        integer NOT NULL,
+      status             text NOT NULL DEFAULT 'pending',
+      decided_by         text,
+      decided_at         timestamptz,
+      decision_note      text,
+      created_at         timestamptz NOT NULL DEFAULT now(),
+      updated_at         timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT apr_status_chk CHECK (status IN ('pending','approved','rejected','superseded')),
+      CONSTRAINT apr_to_visibility_chk CHECK (to_visibility IN ('team','organization'))
+    )` },
+    // Idempotent column add for dev DBs that bootstrapped the lane table before
+    // to_owner_label existed (display-only reviewer snapshot of the team name).
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" ADD COLUMN IF NOT EXISTS to_owner_label text` },
+    { text: `CREATE INDEX IF NOT EXISTS artifact_promotion_request_org_status_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" (org_id, status)` },
+    { text: `CREATE INDEX IF NOT EXISTS artifact_promotion_request_requester_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" (requested_by, status)` },
+    { text: `CREATE INDEX IF NOT EXISTS artifact_promotion_request_object_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" (object_id)` },
+    // At most ONE pending promotion request per artifact row — a second
+    // request while one is in flight is a constraint-backed conflict, never a
+    // duplicate queue item.
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_promotion_request_one_pending ON "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" (object_id) WHERE status = 'pending'` },
     // Data Safety: Undo & Versioning substrate.
     // object_change_event = append-only history with canonical before/after
     // SNAPSHOTS. Emitted in the SAME DB transaction as the

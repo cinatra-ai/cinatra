@@ -38,6 +38,7 @@ vi.mock("@cinatra-ai/mcp-server/credentials", () => ({
   getLocalMcpServerUrl: () => "http://local.test/api/mcp",
 }));
 vi.mock("@/lib/llm-provider-surfaces", () => ({
+  getLlmProviderAdapterSurface: vi.fn(() => null),
   getLlmProviderSurface: () => undefined,
 }));
 vi.mock("@cinatra-ai/agents", () => ({

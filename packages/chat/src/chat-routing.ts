@@ -80,6 +80,12 @@ export type MessageRoutingResult = {
   isBroadcast?: boolean;
   chatEndpoint?: string;
   builtInMention?: Mention;
+  /** cinatra#1037 P2.4 (attribution, I4): the HOST Cinatra assistant's own
+   *  principal id, set on every branch where Cinatra itself produces the reply
+   *  (default / @cinatra / broadcast-with-Cinatra). Threaded onto the reply
+   *  message as `authorUserId` so the host turn is attributed to @cinatra —
+   *  the legacy gap where only @-mentioned externals carried attribution. */
+  hostAssistantUserId?: string;
 };
 
 export type DispatchPlan =
@@ -113,7 +119,9 @@ export function resolveDispatchPlan(
     return {
       kind: "stream",
       endpoint: routing.chatEndpoint ?? "/api/assistants/chat",
-      authorUserId: routing.builtInMention?.assistantUserId,
+      // A built-in @-mention (@chatgpt) attributes to that assistant; otherwise
+      // the HOST Cinatra reply carries the Cinatra principal (P2.4 attribution).
+      authorUserId: routing.builtInMention?.assistantUserId ?? routing.hostAssistantUserId,
     };
   }
   // shouldCallLlm=false + isBroadcast=true is covered by the first branch;

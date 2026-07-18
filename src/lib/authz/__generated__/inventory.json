@@ -255,47 +255,52 @@
     {
       "primitiveName": "artifact_assertion_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 304
+      "line": 328
     },
     {
       "primitiveName": "artifact_assertion_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 289
+      "line": 313
     },
     {
       "primitiveName": "artifact_authoring_chain_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 484
+      "line": 508
     },
     {
       "primitiveName": "artifact_authoring_emit",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 436
+      "line": 460
     },
     {
       "primitiveName": "artifact_extension_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 417
+      "line": 441
     },
     {
       "primitiveName": "artifact_extension_search",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 400
+      "line": 424
+    },
+    {
+      "primitiveName": "artifact_promote_request",
+      "file": "src/lib/artifacts/mcp.ts",
+      "line": 532
     },
     {
       "primitiveName": "artifact_representation_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 345
+      "line": 369
     },
     {
       "primitiveName": "artifact_representation_latest",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 375
+      "line": 399
     },
     {
       "primitiveName": "artifact_representation_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 327
+      "line": 351
     },
     {
       "primitiveName": "artifact_source_compile",
@@ -320,32 +325,32 @@
     {
       "primitiveName": "artifacts_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 250
+      "line": 274
     },
     {
       "primitiveName": "artifacts_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 222
+      "line": 246
     },
     {
       "primitiveName": "artifacts_tombstone",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 262
+      "line": 286
     },
     {
       "primitiveName": "assistant_send",
       "file": "src/lib/assistant-mcp.ts",
-      "line": 876
+      "line": 916
     },
     {
       "primitiveName": "assistant_thread_get",
       "file": "src/lib/assistant-mcp.ts",
-      "line": 886
+      "line": 926
     },
     {
       "primitiveName": "assistant_thread_list",
       "file": "src/lib/assistant-mcp.ts",
-      "line": 881
+      "line": 921
     },
     {
       "primitiveName": "blog_connector_list",

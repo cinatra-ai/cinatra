@@ -30,6 +30,8 @@ import {
   IN_SCOPE_FILE,
   MIGRATION_MANIFEST_PATH,
   MIGRATION_FRAGMENT_DIR,
+  SHIPPED_MODULE_CORRECTION_EXEMPTIONS,
+  contentDigest,
 } from "../schema-migration-gate.mjs";
 import { buildManifestUnion, readManifestUnion } from "../../../migrations/manifest-reader.mjs";
 
@@ -563,6 +565,130 @@ test("artifact: deleting, renaming, or EDITING a shipped artifact is an integrit
     readBase,
   );
   assert.ok(moduleEdited.integrity.some((p) => p.includes("never be edited")), moduleEdited.integrity.join("; "));
+});
+
+// ---------------------------------------------------------------------------
+// Poison-pill correction exemption: ONE-SHOT, digest-bound (codex blocker on
+// the core__0053 correction PR: a basename-only exemption would permanently
+// disable append-only protection for that module).
+// ---------------------------------------------------------------------------
+
+const BROKEN_SRC = "export async function up(pgm) { broken(); }\n";
+const CORRECTED_SRC = "export async function up(pgm) { fixed(); }\n";
+const CORRECTION_BASENAME = "core__0042_poisoned.mjs";
+const CORRECTION_PATH = `migrations/core/${CORRECTION_BASENAME}`;
+const syntheticExemptions = new Map([
+  [
+    CORRECTION_BASENAME,
+    {
+      baseSha256: contentDigest(BROKEN_SRC),
+      correctedSha256: contentDigest(CORRECTED_SRC),
+      justification: "synthetic poison-pill for the exemption contract test",
+    },
+  ],
+]);
+const readCorrectionBase = (p) =>
+  p === CORRECTION_PATH ? BROKEN_SRC : p === MIGRATION_MANIFEST_PATH ? BASE_MANIFEST : null;
+
+test("correction exemption: ONLY the exact recorded base->corrected transition passes", () => {
+  // The intended transition: no integrity failure, loud correction notice.
+  const intended = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff(CORRECTION_PATH, BROKEN_SRC, CORRECTED_SRC)),
+    readCorrectionBase,
+    () => null,
+    syntheticExemptions,
+  );
+  assert.deepEqual(intended.integrity, [], intended.integrity.join("; "));
+  assert.ok(
+    intended.corrections.some((n) => n.includes(CORRECTION_PATH) && n.includes("poison-pill")),
+    intended.corrections.join("; "),
+  );
+
+  // runGate end-to-end: pass, and the correction notice reaches the output.
+  const gated = runGate({
+    diffText: fullReplaceDiff(CORRECTION_PATH, BROKEN_SRC, CORRECTED_SRC),
+    readBaseFile: readCorrectionBase,
+    correctionExemptions: syntheticExemptions,
+  });
+  assert.equal(gated.verdict, "pass");
+  assert.ok(gated.notices.some((n) => n.includes("poison-pill")), gated.notices.join("; "));
+
+  // A DIFFERENT RESULT than the recorded corrected content fails.
+  const wrongResult = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff(CORRECTION_PATH, BROKEN_SRC, "export async function up(pgm) { evil(); }\n")),
+    readCorrectionBase,
+    () => null,
+    syntheticExemptions,
+  );
+  assert.ok(wrongResult.integrity.some((n) => n.includes("one-shot")), wrongResult.integrity.join("; "));
+
+  // A SUBSEQUENT EDIT (base is already the corrected content) fails — the
+  // exemption is spent once the correction has shipped.
+  const afterShipped = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff(CORRECTION_PATH, CORRECTED_SRC, "export async function up(pgm) { again(); }\n")),
+    (p) => (p === CORRECTION_PATH ? CORRECTED_SRC : readCorrectionBase(p)),
+    () => null,
+    syntheticExemptions,
+  );
+  assert.ok(afterShipped.integrity.some((n) => n.includes("one-shot")), afterShipped.integrity.join("; "));
+
+  // An UNREADABLE base fails closed.
+  const noBase = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff(CORRECTION_PATH, BROKEN_SRC, CORRECTED_SRC)),
+    () => null,
+    () => null,
+    syntheticExemptions,
+  );
+  assert.ok(noBase.integrity.some((n) => n.includes("one-shot")), noBase.integrity.join("; "));
+
+  // A NON-exempted module edit still fails with the plain append-only message.
+  const other = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff("migrations/core/core__0001_first.mjs", BROKEN_SRC, CORRECTED_SRC)),
+    readCorrectionBase,
+    () => null,
+    syntheticExemptions,
+  );
+  assert.ok(other.integrity.some((n) => n.includes("never be edited")), other.integrity.join("; "));
+
+  // DELETING the exempted module is still tampering.
+  const deleted = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff(CORRECTION_PATH, BROKEN_SRC, null)),
+    readCorrectionBase,
+    () => null,
+    syntheticExemptions,
+  );
+  assert.ok(deleted.integrity.some((n) => n.includes("never be deleted")), deleted.integrity.join("; "));
+
+  // RENAMING it away is still tampering (rename branch runs before the exemption).
+  const renamed = detectMigrationArtifact(
+    parseUnifiedDiff(
+      `diff --git a/${CORRECTION_PATH} b/migrations/core/core__9999_renamed-away.mjs\n` +
+        `similarity index 100%\nrename from ${CORRECTION_PATH}\nrename to migrations/core/core__9999_renamed-away.mjs\n`,
+    ),
+    readCorrectionBase,
+    () => null,
+    syntheticExemptions,
+  );
+  assert.ok(renamed.integrity.some((n) => n.includes("never be renamed")), renamed.integrity.join("; "));
+});
+
+test("correction exemption: the LIVE map's pins are well-formed and its corrected digests match the shipped tree", () => {
+  for (const [basename, entry] of SHIPPED_MODULE_CORRECTION_EXEMPTIONS) {
+    assert.match(basename, /^core__\d{4}_[a-z0-9][a-z0-9-]*\.mjs$/, `${basename}: exemption key must be a module basename`);
+    assert.match(entry.baseSha256, /^[0-9a-f]{64}$/, `${basename}: baseSha256 must be a sha256 hex digest`);
+    assert.match(entry.correctedSha256, /^[0-9a-f]{64}$/, `${basename}: correctedSha256 must be a sha256 hex digest`);
+    assert.ok(entry.justification?.length > 0, `${basename}: justification is required`);
+    assert.notEqual(entry.baseSha256, entry.correctedSha256, `${basename}: base and corrected digests must differ`);
+    // The corrected digest must match the module as it ships in THIS tree —
+    // the exemption never authorizes content that is not the reviewed fix
+    // (and any later drift of the file would surface here immediately).
+    const live = readFileSync(join(REPO_ROOT, "migrations", "core", basename), "utf8");
+    assert.equal(
+      contentDigest(live),
+      entry.correctedSha256,
+      `${basename}: the live module content does not match the recorded corrected digest`,
+    );
+  }
 });
 
 test("artifact: re-using a shipped seq (non-wrapper) or duplicating a seq in one diff is an integrity failure", () => {

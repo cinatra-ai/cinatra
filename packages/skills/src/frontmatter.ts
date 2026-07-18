@@ -85,6 +85,30 @@ export function readMatchWhen(content: string): unknown {
  * nested `metadata.match_when` block is re-emitted as a top-level document the
  * downstream parser reads identically to a legacy top-level block.
  */
+/**
+ * Resolve the optional `requires_execution` skill-metadata flag (exec-plane S2,
+ * cinatra#1707): a skill whose steps must run shell commands/scripts declares
+ * it so agent configuration can warn when the skill is attached to an agent
+ * whose execution capability is disabled.
+ *
+ * Read from `metadata.requires_execution` PREFERRED (the upstream Anthropic
+ * SKILL.md validator only permits name/description/license/allowed-tools/
+ * metadata at top level — same dual-read rationale as `readMatchWhen`) with a
+ * top-level `requires_execution` fallback. ONLY the literal boolean `true`
+ * declares the requirement — any other value (absent, `false`, strings) reads
+ * as `false` (fail-quiet: a malformed declaration must not invent warnings).
+ */
+export function readRequiresExecution(content: string): boolean {
+  const fm = parseSkillFrontmatterYaml(content);
+  if (!fm) return false;
+  const metadata = fm.metadata;
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+    const nested = (metadata as Record<string, unknown>).requires_execution;
+    if (nested !== undefined) return nested === true;
+  }
+  return fm.requires_execution === true;
+}
+
 export function readMatchWhenRaw(content: string): string | undefined {
   const value = readMatchWhen(content);
   // `undefined` (no key) and `null` (`match_when:` with an empty value) both mean

@@ -15,7 +15,7 @@
 //
 // Humanness contract: a user row is HUMAN when its "userType" is 'human' or
 // NULL (rows predating the column). EVERY other value is a machine account —
-// 'assistant' (ensureBuiltInCinatraAssistant) and the dev UAT fixture type
+// 'assistant' (minted by assistant-agent registration) and the dev UAT fixture type
 // below. This module is dependency-free on purpose so the decision is unit-
 // testable without the server-only auth graph (same pattern as
 // `closed-registration-gate.ts`).

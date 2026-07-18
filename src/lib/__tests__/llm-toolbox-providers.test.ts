@@ -73,6 +73,70 @@ describe("buildToolboxProviderTools", () => {
     });
     expect(await buildToolboxProviderTools("apify-connector", "openai")).toBeNull();
   });
+
+  // Approval-vocabulary boundary (llm-providers S2, #1713 AC2): the
+  // registration-driven provider path shares the ONE enforcement module with
+  // the manifest-driven toolbox loader — legacy/garbage approval intent must
+  // never slip through THIS boundary either.
+  describe("approval-vocabulary boundary", () => {
+    const register = (built: unknown[]) => {
+      registerCapabilityProvider("llm-toolbox", {
+        packageName: "@v/apify-connector",
+        impl: { toolboxId: "apify-connector", build: async () => built },
+      });
+    };
+
+    it("passes auto_execute / approval_required / absent through unchanged", async () => {
+      register([
+        TOOL,
+        { ...TOOL, serverLabel: "auto", approval: "auto_execute" },
+        { ...TOOL, serverLabel: "guarded", approval: "approval_required" },
+      ]);
+      expect(await buildToolboxProviderTools("apify-connector", "openai")).toEqual([
+        TOOL,
+        { ...TOOL, serverLabel: "auto", approval: "auto_execute" },
+        { ...TOOL, serverLabel: "guarded", approval: "approval_required" },
+      ]);
+    });
+
+    it("DROPS a tool carrying an unknown approval value (fail closed)", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        register([{ ...TOOL, approval: "always" }, { ...TOOL, serverLabel: "ok" }]);
+        expect(await buildToolboxProviderTools("apify-connector", "openai")).toEqual([
+          { ...TOOL, serverLabel: "ok" },
+        ]);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("unknown approval value"));
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('STRIPS a legacy requireApproval: "never" (identical semantics to the default) and keeps the tool', async () => {
+      register([{ ...TOOL, requireApproval: "never" }]);
+      const tools = await buildToolboxProviderTools("apify-connector", "openai");
+      expect(tools).toEqual([TOOL]);
+      expect(tools?.[0]).not.toHaveProperty("requireApproval");
+    });
+
+    it('DROPS legacy requireApproval approval intent ("always" / "read-only") instead of auto-executing it', async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        register([
+          { ...TOOL, requireApproval: "always" },
+          { ...TOOL, serverLabel: "ro", requireApproval: "read-only" },
+          { ...TOOL, serverLabel: "ok" },
+        ]);
+        expect(await buildToolboxProviderTools("apify-connector", "openai")).toEqual([
+          { ...TOOL, serverLabel: "ok" },
+        ]);
+        expect(warn).toHaveBeenCalledTimes(2);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("retired requireApproval"));
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
 });
 
 describe("buildAllToolboxProviderTools", () => {

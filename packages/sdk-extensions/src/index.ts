@@ -438,6 +438,18 @@ export type {
   ArtifactUiRegistryItemType,
 } from "./artifact-contract";
 
+// The AUTHOR-FACING artifact-renderer props contract (the `./artifact-renderer-props`
+// subpath, cinatra#1629 epic #1620 S2/M1): the versioned, serializable snapshot a
+// `cinatra.artifact.ui` renderer's default-export component receives. The TYPE is
+// re-exported here (and at the subpath) so an extension's renderer types its props
+// against the SDK — never a host-internal import. Host-neutral MIRROR of the host
+// source of truth (`src/lib/artifacts/artifact-renderer-props.ts`); a host-side
+// mutual-assignability test keeps the two in lockstep. TYPE-ONLY on purpose: the
+// runtime `ARTIFACT_RENDERER_PROPS_API_VERSION` const lives at the subpath ONLY —
+// a runtime barrel re-export would add the module to every route graph that
+// reaches this barrel (route-graph-ratchet), while `export type` is erased.
+export type { ArtifactRendererProps } from "./artifact-renderer-props";
+
 // The CHAT RENDERABLE-VIEW declaration contract (the `./chat-views-contract`
 // subpath, cinatra#1626 epic #1620 S9/M4): the versioned top-level
 // `cinatra.views` field by which an extension ships the chat renderable-view
@@ -647,7 +659,15 @@ export type {
   EmailSystemProvider,
   HostExtensionActionGuardService,
   LlmProviderSurface,
+  LlmProviderAdapterSurface,
 } from "./host-connector-services-contract";
+
+// LLM provider ADAPTER surface version (llm-providers S4 — cinatra#1715). The
+// capability-id constant stays host-fenced (./internal); this VERSION literal is
+// author-facing (a connector sets its `abiVersion` against it) — a
+// non-capability value, like `LLM_PROVIDER_ABI_VERSION` and
+// `SDK_EXTENSIONS_ABI_VERSION`.
+export { LLM_PROVIDER_ADAPTER_ABI_VERSION } from "./host-connector-services-contract";
 
 // Chat user-context contribution: a connector contributes pre-formatted chat
 // system-prompt sections through the generic capability registry (see the
@@ -714,3 +734,23 @@ export type {
   KnownCapabilityId,
   ResolvedCapabilityProvider,
 } from "./capability-contract-map";
+
+// L1 declared-environment leaf (exec-plane S3, cinatra#1708; epic #1705): the
+// CANONICAL internal env-spec type + the fail-closed parser + canonicalization
+// shared by BOTH declaration sources (packaged-agent manifests and project-
+// agent config) and consumed by the trusted environment builder
+// (@cinatra-ai/execution-plane). Pure data/validation — nothing here executes.
+export {
+  EXECUTION_ENVIRONMENT_MANAGERS,
+  EXECUTION_ENVIRONMENT_MAX_ENTRIES_PER_MANAGER,
+  EXECUTION_ENVIRONMENT_MAX_ENTRY_LENGTH,
+  EXECUTION_ENVIRONMENT_CARRIER_KIND,
+  EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY,
+  parseExecutionEnvironment,
+  isEmptyExecutionEnvironment,
+  canonicalExecutionEnvironmentJson,
+  resolveExecutionEnvironmentClaim,
+  type ExecutionEnvironmentSpec,
+  type ExecutionEnvironmentManager,
+  type ParseExecutionEnvironmentResult,
+} from "./execution-environment";

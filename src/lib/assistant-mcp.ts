@@ -21,9 +21,11 @@ import {
 import { evaluateAssistantThreadAccess } from "@/lib/assistant-thread-access";
 import {
   resolveAssistantMcpPolicy,
+  safeParseAssistantConfig,
   type AssistantConfig,
   type AssistantMcpPolicy,
 } from "@/lib/assistant-config";
+import { readAssistantConfigByPrincipalId } from "@cinatra-ai/agents";
 import {
   buildAssistantRuntimeConfig,
   type AssistantRuntimeConfig,
@@ -72,14 +74,16 @@ import { resolveUserContextForUserId } from "@/lib/auth-session";
 //      carried forward, and the `.strict()` schemas REFUSE any smuggled
 //      identity operand (userId / orgId / assistantClientId / platformRole).
 //
-// RUNTIME BINDING is handle-generic: handle -> assistantUserId -> attempt the
-// template-linked config (P1.3 — NOT landed, see the seam below) -> the
-// built-in Cinatra reference config for the built-in principal -> otherwise
-// fail CLOSED as the sealed-room NOT_FOUND (a config-less principal is not an
-// addressable target, and a distinguishable code would make assistant_send a
-// handle-existence oracle over the platform-global registry; the real reason
-// is logged server-side). Nothing here re-hardcodes Cinatra as "the"
-// assistant; it is the only principal with a resolvable config today.
+// RUNTIME BINDING is handle-generic: handle -> assistantUserId -> the
+// template-linked config (P1.3 LANDED — the 1:1 agent_templates.assistant_user_id
+// link, resolveTemplateLinkedAssistantConfig) -> else the built-in Cinatra
+// reference config for the built-in principal when no link is resolvable yet ->
+// otherwise fail CLOSED as the sealed-room NOT_FOUND (a config-less principal is
+// not an addressable target, and a distinguishable code would make assistant_send
+// a handle-existence oracle over the platform-global registry; the real reason is
+// logged server-side). A linked-but-CORRUPT sidecar also fails closed (never a
+// silent fallback). Nothing here re-hardcodes Cinatra as "the" assistant — any
+// principal with a valid linked assistant template resolves.
 //
 // AGENT-RUN OBO CEILING: assistant threads carry ORG scoping only, a sent turn
 // runs with the target user's FULL server-resolved context, the platform-admin
@@ -298,19 +302,43 @@ type ResolvedAssistantTarget = {
 };
 
 /**
- * P1.3 SEAM — the 1:1 agent_templates <-> assistant_user principal link that
- * would resolve a persisted assistant sidecar from its principal id has NOT
- * landed on main (no link field exists in packages/agents/src/schema.ts or the
- * assistant_handles table). Until it does, every non-built-in principal
- * resolves to null here and assistant_send fails CLOSED with a structured
- * code. When P1.3 lands, this function becomes the template-linked lookup and
- * the rest of this module is already handle-generic.
+ * The P1.3 template-linked config lookup (cinatra#1037 P1.3 — LANDED). Resolves a
+ * persisted assistant sidecar from a principal id through the 1:1
+ * `agent_templates.assistant_user_id` link (readAssistantConfigByPrincipalId).
+ * Three outcomes drive the handle-generic binding below:
+ *   - `ok`      — a linked assistant template with a VALID sidecar; the surface
+ *                 binds it (this is now the forward path for the built-in Cinatra
+ *                 principal once its registration link is live);
+ *   - `invalid` — a linked row exists but its persisted sidecar is MALFORMED;
+ *                 the send fails CLOSED (never silently falls back to the
+ *                 hardcoded reference config — that would hide the corruption);
+ *   - `none`    — no linked assistant template for this principal (a store fault
+ *                 degrades to this too, never a throw / oracle); the built-in
+ *                 handle keeps its reference-config fallback, any other principal
+ *                 fails closed.
  */
+type LinkedConfigResolution =
+  | { kind: "ok"; config: AssistantConfig }
+  | { kind: "invalid" }
+  | { kind: "none" };
+
 async function resolveTemplateLinkedAssistantConfig(
   assistantUserId: string,
-): Promise<AssistantConfig | null> {
-  void assistantUserId; // the P1.3 lookup key once the principal link lands
-  return null;
+): Promise<LinkedConfigResolution> {
+  let raw: string | null;
+  try {
+    raw = await readAssistantConfigByPrincipalId(assistantUserId);
+  } catch (err) {
+    sanitize(`readAssistantConfigByPrincipalId(${assistantUserId})`, err, "");
+    return { kind: "none" };
+  }
+  if (raw == null) return { kind: "none" };
+  const parsed = safeParseAssistantConfig(raw);
+  if (!parsed.ok) {
+    sanitize(`assistant_config parse(${assistantUserId})`, parsed.error, "");
+    return { kind: "invalid" };
+  }
+  return { kind: "ok", config: parsed.config };
 }
 
 /** Resolve the effective MCP target policy for a resolved principal. An
@@ -336,10 +364,18 @@ async function resolveRuntimeConfigForTarget(
   target: ResolvedAssistantTarget,
 ): Promise<RuntimeConfigResolution> {
   const linked = await resolveTemplateLinkedAssistantConfig(target.assistantUserId);
-  if (linked) {
+  if (linked.kind === "ok") {
     // P1.3 forward path: build from the persisted sidecar with defaults.
-    return { ok: true, runtimeConfig: buildAssistantRuntimeConfig(linked) };
+    return { ok: true, runtimeConfig: buildAssistantRuntimeConfig(linked.config) };
   }
+  if (linked.kind === "invalid") {
+    // A corrupt linked sidecar fails CLOSED — never fall back to the reference
+    // config (that would mask corruption). 404-hidden at the call site.
+    return { ok: false, code: "ASSISTANT_CONFIG_UNAVAILABLE" };
+  }
+  // kind === "none": no linked template. The built-in Cinatra principal keeps the
+  // reference config (transitional until its registration link is resolvable);
+  // any other principal fails closed.
   if (target.handle === CINATRA_BUILTIN_HANDLE) {
     return { ok: true, runtimeConfig: buildCinatraAssistantRuntimeConfig() };
   }
@@ -379,9 +415,13 @@ export async function authorizeAssistantMcpTurn(
   // the same resolution ladder the runtime binding uses; a principal with no
   // resolvable config carries the platform-default policy at this step (its
   // send still fails closed later at config resolution).
-  const linkedConfig = await resolveTemplateLinkedAssistantConfig(assistantUserId);
+  const linked = await resolveTemplateLinkedAssistantConfig(assistantUserId);
   const config =
-    linkedConfig ?? (normalized === CINATRA_BUILTIN_HANDLE ? cinatraAssistantConfig : null);
+    linked.kind === "ok"
+      ? linked.config
+      : linked.kind === "none" && normalized === CINATRA_BUILTIN_HANDLE
+        ? cinatraAssistantConfig
+        : null;
   const target: ResolvedAssistantTarget = { handle: normalized, assistantUserId, config };
   const policy = policyFor(target);
   if (!policy.enabled) return { ok: false, miss: notFound() };

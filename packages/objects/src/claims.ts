@@ -39,6 +39,29 @@ export const ARTIFACT_CLAIM_EVENTS = [
 ] as const;
 export type ArtifactClaimEvent = (typeof ARTIFACT_CLAIM_EVENTS)[number];
 
+// ---------------------------------------------------------------------------
+// Mutability class — the per-claim disposition that names HOW a claimed type's
+// rows may change (cinatra#1449, epic #1448 principle 4). This leaf owns the
+// VOCABULARY only; the disposition-enforcing write policy (trusted transition
+// commands, the draftable draft→scheduled→published state machine + publish
+// receipts, the external linked→stale→dangling reference lifecycle) lives at
+// the object write path and its owners — the publication-operation ledger
+// (#1450) and the connectorRef external-pointer lifecycle (#1451) — which
+// CONSUME this vocabulary and the narrowing rule below.
+//
+//   - draftable: cinatra-authored; content edits (new revisions / ref-swap)
+//     are allowed only while a row is a draft, then it locks. Publishing rides
+//     the publication-operation ledger and never rewrites the type into the
+//     external entity. There is no direct draft→published edge.
+//   - record: create-only, self-contained, immutable — any post-create update
+//     to a claimed row is rejected.
+//   - external: a connector-owned pointer to third-party-canonical content;
+//     rows are written by connector sync only and are never pinnable (pin the
+//     snapshot record instead — enforced on the disposition union below).
+// ---------------------------------------------------------------------------
+export const ARTIFACT_MUTABILITY_CLASSES = ["draftable", "record", "external"] as const;
+export type ArtifactMutability = (typeof ARTIFACT_MUTABILITY_CLASSES)[number];
+
 /** `'platform'` or `org:<id>` — the two claim-bearing owner levels. */
 export type ArtifactClaimScope = string;
 
@@ -64,6 +87,10 @@ export function isValidClaimScope(scope: string): boolean {
 // snapshots at resolution time — nothing to snapshot for a never-projected
 // type). The snapshotPolicy / sensitivity vocabularies are the FOUNDATION
 // set; the pinning + projection sub-issues consume (and may extend) them.
+// The optional `mutability` class (cinatra#1449) is a second, orthogonal
+// disposition: it names how the claimed rows may change (see
+// ARTIFACT_MUTABILITY_CLASSES) and carries one cross-field invariant enforced
+// on the union — `external` rows are never pinnable.
 // Strict objects: an unknown key is a validation error, never silently
 // carried (fail-closed — dispositions gate write/serving behavior).
 // ---------------------------------------------------------------------------
@@ -72,26 +99,47 @@ const sharedDispositionFields = {
   snapshotPolicy: z.enum(["content", "metadata", "none"]).default("none"),
   redactionPolicyVersion: z.string().min(1).optional(),
   sensitivity: z.enum(["normal", "sensitive"]).default("normal"),
+  // Per-claim mutability class (cinatra#1449). OPTIONAL: an absent value imposes
+  // no claim-level narrowing — the registering type's own lifecycle.mutableBy
+  // governs unchanged. A present class may only NARROW that baseline, never
+  // widen it (validateMutabilityNarrowsBaseline). See ARTIFACT_MUTABILITY_CLASSES
+  // above for the per-class semantics; enforcement is the write path's concern.
+  mutability: z.enum(ARTIFACT_MUTABILITY_CLASSES).optional(),
 };
 
-export const claimDispositionsSchema = z.discriminatedUnion("projection", [
-  z.strictObject({
-    projection: z.literal("raw"),
-    pinnable: z.boolean().default(false),
-    ...sharedDispositionFields,
-  }),
-  z.strictObject({
-    projection: z.literal("artifact-safe"),
-    pinnable: z.boolean().default(false),
-    ...sharedDispositionFields,
-  }),
-  z.strictObject({
-    projection: z.literal("none"),
-    // Never-projected rows cannot be pinned into context.
-    pinnable: z.literal(false).default(false),
-    ...sharedDispositionFields,
-  }),
-]);
+export const claimDispositionsSchema = z
+  .discriminatedUnion("projection", [
+    z.strictObject({
+      projection: z.literal("raw"),
+      pinnable: z.boolean().default(false),
+      ...sharedDispositionFields,
+    }),
+    z.strictObject({
+      projection: z.literal("artifact-safe"),
+      pinnable: z.boolean().default(false),
+      ...sharedDispositionFields,
+    }),
+    z.strictObject({
+      projection: z.literal("none"),
+      // Never-projected rows cannot be pinned into context.
+      pinnable: z.literal(false).default(false),
+      ...sharedDispositionFields,
+    }),
+  ])
+  .superRefine((val, ctx) => {
+    // An `external` claim points at live third-party-canonical content; the
+    // pointer is never pinned — pin the immutable snapshot record instead
+    // (epic #1448 principle 4). `projection:"none"` already forces
+    // pinnable:false; this closes the raw / artifact-safe external case.
+    if (val.mutability === "external" && val.pinnable !== false) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["pinnable"],
+        message:
+          "external mutability requires pinnable:false — pin the snapshot record, not the live pointer",
+      });
+    }
+  });
 
 export type ClaimDispositions = z.infer<typeof claimDispositionsSchema>;
 
@@ -109,6 +157,60 @@ export function parseClaimDispositions(
     ok: false,
     errors: parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Baseline-narrowing rule (cinatra#1449) — the SINGLE pure statement of "a claim
+// disposition may only NARROW the registering type's lifecycle.mutableBy, never
+// widen it". The object write path consumes both helpers (it is the enforcer;
+// this leaf is side-effect-free). `mutableBy` is the (agent|user) vocabulary
+// from ObjectLifecycle in ./types — restated inline here so this leaf keeps its
+// zero-import purity (the same reason ArtifactObjectTypeClaim restates the claim
+// shape structurally rather than importing this schema).
+// ---------------------------------------------------------------------------
+
+/** The (agent|user) principals ObjectLifecycle.mutableBy enumerates. */
+export type ObjectMutator = "agent" | "user";
+
+/**
+ * The effective post-create mutable-principal ceiling a mutability class imposes
+ * on the registering type's baseline `mutableBy`:
+ *   - record / external → [] (no agent/user post-create mutation; an external
+ *     row changes only via connector sync, a channel outside this vocabulary),
+ *   - draftable, or no class declared → the baseline unchanged (its principals
+ *     may edit — the write path additionally gates draftable edits to the draft
+ *     state; that STATE gating is not encoded here).
+ * The result is always a subset of `baselineMutableBy`, so a mutability class can
+ * only ever remove principals, never add one. Pure — no I/O.
+ */
+export function effectiveMutableBy(
+  mutability: ArtifactMutability | undefined,
+  baselineMutableBy: readonly ObjectMutator[],
+): ObjectMutator[] {
+  if (mutability === "record" || mutability === "external") return [];
+  return [...baselineMutableBy];
+}
+
+/**
+ * Validate that a mutability class NARROWS (never widens) the registering type's
+ * baseline `mutableBy`. `record` / `external` narrow every baseline (their
+ * ceiling is empty). `draftable` adds no principal, but declaring it over a
+ * fully-immutable type (`mutableBy: []`) would widen — draftable grants
+ * draft-state edits a create-only type forbids — so that pairing is rejected.
+ * Returns a human-readable violation string, or null when the class is a legal
+ * narrowing. Pure — the caller (write path) supplies the type's baseline.
+ */
+export function validateMutabilityNarrowsBaseline(
+  mutability: ArtifactMutability,
+  baselineMutableBy: readonly ObjectMutator[],
+): string | null {
+  if (mutability === "draftable" && baselineMutableBy.length === 0) {
+    return (
+      "mutability 'draftable' widens an immutable type (mutableBy: []) — " +
+      "draftable permits draft-state edits the type baseline forbids"
+    );
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

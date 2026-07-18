@@ -97,6 +97,28 @@ describe("resolveDispatchPlan", () => {
     ).toEqual({ kind: "stream", endpoint: "/api/assistants/chatgpt", authorUserId: "b-1" });
   });
 
+  it("host Cinatra reply carries the host principal as authorUserId (P2.4 attribution)", () => {
+    expect(resolveDispatchPlan({ shouldCallLlm: true, hostAssistantUserId: "cinatra-9" }, undefined)).toEqual({
+      kind: "stream",
+      endpoint: "/api/assistants/chat",
+      authorUserId: "cinatra-9",
+    });
+  });
+
+  it("a built-in @-mention author wins over the host fallback", () => {
+    expect(
+      resolveDispatchPlan(
+        {
+          shouldCallLlm: true,
+          chatEndpoint: "/api/assistants/chatgpt",
+          builtInMention: mention({ assistantUserId: "b-1" }),
+          hostAssistantUserId: "cinatra-9",
+        },
+        "chatgpt",
+      ),
+    ).toEqual({ kind: "stream", endpoint: "/api/assistants/chatgpt", authorUserId: "b-1" });
+  });
+
   it("keeps the 20s takeover window", () => {
     expect(EXTERNAL_TAKEOVER_MS).toBe(20_000);
   });

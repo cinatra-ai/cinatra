@@ -23,6 +23,7 @@
  */
 
 import type { ExecutionSession } from "./session";
+import type { SandboxStagedSkill } from "../types";
 
 /** Per-org / per-agent D4 availability posture, resolved by the caller. */
 export type ExecutionAvailability = "enabled" | "disabled";
@@ -76,16 +77,28 @@ export function ensureToolAwareStepBudget(requested: number | undefined): number
  * host detail — the sandbox holds no credentials or host data (D5), and the cue
  * says so, steering the model away from expecting ambient authority inside it.
  */
-export function composeExecutionCue(session: ExecutionSession): string {
+export function composeExecutionCue(
+  session: ExecutionSession,
+  opts?: { stagedSkills?: SandboxStagedSkill[] },
+): string {
   const runNote = session.runId
     ? " Files you create persist across steps within this run."
     : " Files you create persist across the steps of this task.";
+  const staged = opts?.stagedSkills ?? [];
+  const skillNote =
+    staged.length > 0
+      ? " Skill files are staged read-only under /skills/<slug> inside the " +
+        "sandbox (available: " +
+        staged.map((s) => `/skills/${s.slug}`).join(", ") +
+        ") — read them lazily with cat/head/tail when a skill applies."
+      : "";
   return (
     "You have a `sandbox_execute` tool: an isolated, non-root sandbox for " +
     "running shell commands, scripts, and unprivileged package installs " +
     "(pip / npm / user-space binaries). It has internet access for downloading " +
     "and installing tools. It contains NO credentials and NO host data — use " +
     "the connector/MCP tools for authenticated actions, never the sandbox." +
-    runNote
+    runNote +
+    skillNote
   );
 }

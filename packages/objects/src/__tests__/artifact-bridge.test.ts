@@ -8,8 +8,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // extensions package tests).
 vi.mock("server-only", () => ({}));
 
+import { ARTIFACT_UI_SDK_ABI_RANGE } from "@cinatra-ai/sdk-extensions/artifact-contract";
+import type { EffectiveIdentity } from "../effective-identity";
+import type { SemanticArtifactManifest } from "../types";
 import { objectTypeRegistry } from "../registry";
-import { registerArtifactExtensions } from "../integration/register-artifact-extensions";
+import { semanticRendererRegistry } from "../artifact-renderer-registry";
+import {
+  registerArtifactExtensions,
+  registerParsedArtifactManifest,
+  resolveArtifactManifestMode,
+} from "../integration/register-artifact-extensions";
 
 // Proves the pluggability guarantee: a brand-new artifact type (a NOVEL
 // artifactType string that appears NOWHERE in core code) is discovered and
@@ -329,5 +337,461 @@ describe("registerArtifactExtensions — per-claim validators (cinatra#1429)", (
     const removed = objectTypeRegistry.removeByPackage("@cinatra-ai/invoice-artifact");
     expect(removed).toContain("@cinatra-ai/invoice-artifact:invoice");
     expect(objectTypeRegistry.resolve("@cinatra-ai/invoice-artifact:invoice")).toBeNull();
+  });
+});
+
+// S7/M2 (cinatra#1631): the bridge registers EVERY declared semantic slot —
+// `detail` AND the activated `listRow` — for the umbrella type and each claimed
+// type; `preview` never enters the semantic keyspace.
+describe("registerArtifactExtensions — semantic slot registration (S7 listRow)", () => {
+  let root: string;
+
+  const rowWinner: EffectiveIdentity = {
+    kind: "extension",
+    extension: "@cinatra-ai/rowful-artifact",
+    basis: "binding",
+    selectable: true,
+    assertionId: "sa_row",
+  };
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), "artifact-bridge-s7-"));
+    objectTypeRegistry._clearForTests();
+    semanticRendererRegistry._clearForTests();
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    objectTypeRegistry._clearForTests();
+    semanticRendererRegistry._clearForTests();
+  });
+
+  it("registers detail + listRow renderers per declared slot (preview stays representation-only)", () => {
+    writeExt(root, "rowful-artifact", {
+      name: "@cinatra-ai/rowful-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        artifact: {
+          accepts: { file: { mimeTypes: ["application/json"] } },
+          ui: {
+            abiVersion: 1,
+            sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+            renderers: {
+              detail: { entry: "./src/detail.tsx", propsApiVersion: 1 },
+              preview: { entry: "./src/preview.tsx", propsApiVersion: 1 },
+              listRow: { entry: "./src/row.tsx", propsApiVersion: 1 },
+            },
+          },
+        },
+      },
+    });
+
+    expect(registerArtifactExtensions(root)).toBe(1);
+
+    const umbrella = "@cinatra-ai/rowful-artifact:artifact";
+    expect(semanticRendererRegistry.resolve(umbrella, rowWinner)).toMatchObject({
+      slot: "detail",
+      generatedKey: "@cinatra-ai/rowful-artifact::detail",
+    });
+    expect(semanticRendererRegistry.resolve(umbrella, rowWinner, "listRow")).toMatchObject({
+      slot: "listRow",
+      generatedKey: "@cinatra-ai/rowful-artifact::listRow",
+    });
+    // `preview` is representation-only — never a semantic descriptor.
+    const snapshot = semanticRendererRegistry._snapshot();
+    expect(snapshot.every((d) => d.slot === "detail" || d.slot === "listRow")).toBe(true);
+  });
+
+  it("a detail-only manifest registers no listRow descriptor (glyph floors)", () => {
+    writeExt(root, "detailonly-artifact", {
+      name: "@cinatra-ai/detailonly-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        artifact: {
+          accepts: { file: { mimeTypes: ["application/json"] } },
+          ui: {
+            abiVersion: 1,
+            sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+            renderers: { detail: { entry: "./src/detail.tsx", propsApiVersion: 1 } },
+          },
+        },
+      },
+    });
+
+    expect(registerArtifactExtensions(root)).toBe(1);
+    const umbrella = "@cinatra-ai/detailonly-artifact:artifact";
+    const detailWinner: EffectiveIdentity = {
+      kind: "extension",
+      extension: "@cinatra-ai/detailonly-artifact",
+      basis: "binding",
+      selectable: true,
+      assertionId: "sa_d",
+    };
+    expect(semanticRendererRegistry.resolve(umbrella, detailWinner)).not.toBeNull();
+    expect(semanticRendererRegistry.resolve(umbrella, detailWinner, "listRow")).toBeNull();
+  });
+
+  it("a listRow-only manifest registers the row capability for umbrella + claimed types", () => {
+    writeExt(root, "rowonly-artifact", {
+      name: "@cinatra-ai/rowonly-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        artifact: {
+          accepts: { file: { mimeTypes: ["application/json"] } },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/rowonly-artifact:thing",
+              claim: "dedicated",
+              schema: { type: "object" },
+            },
+          ],
+          ui: {
+            abiVersion: 1,
+            sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+            renderers: { listRow: { entry: "./src/row.tsx", propsApiVersion: 1 } },
+          },
+        },
+      },
+    });
+
+    expect(registerArtifactExtensions(root)).toBe(1);
+    const w: EffectiveIdentity = {
+      kind: "extension",
+      extension: "@cinatra-ai/rowonly-artifact",
+      basis: "binding",
+      selectable: true,
+      assertionId: "sa_r",
+    };
+    expect(
+      semanticRendererRegistry.resolve("@cinatra-ai/rowonly-artifact:artifact", w, "listRow"),
+    ).not.toBeNull();
+    expect(
+      semanticRendererRegistry.resolve("@cinatra-ai/rowonly-artifact:thing", w, "listRow"),
+    ).not.toBeNull();
+    expect(semanticRendererRegistry.resolve("@cinatra-ai/rowonly-artifact:artifact", w)).toBeNull();
+  });
+});
+
+// cinatra#1452 (epic #1448) — CLAIM-ONLY manifest mode + the exact objectTypeId
+// registry substrate. A claim-only pack mints NO generic `${pkg}:artifact`
+// umbrella; each objectTypes claim is registered as its own first-class artifact
+// type, surfaced under its exact objectTypeId with NO package-wide
+// matcher/authoring inheritance. Exercised through the exported mode-dispatch
+// seam `registerParsedArtifactManifest` because the `mode` manifest FIELD (its
+// schema/type/kind-gate) is owned by the sibling substrate lanes (#1449 / #1453)
+// and cannot yet flow through the fs/parse fixture path.
+describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1452)", () => {
+  beforeEach(() => {
+    objectTypeRegistry._clearForTests();
+  });
+  afterEach(() => {
+    objectTypeRegistry._clearForTests();
+  });
+
+  it("mints NO umbrella and registers each claim as its own surfaced artifact type", () => {
+    const registered = registerParsedArtifactManifest(
+      {
+        // `mode` is the ratified claim-only discriminator; its schema/type lands
+        // in #1449/#1453, so cast until the manifest type carries it.
+        mode: "claim-only",
+        accepts: { file: { mimeTypes: ["text/markdown"] } },
+        // Package-wide matcher/authoring surface that MUST NOT be inherited.
+        skills: { matchers: ["@cinatra-ai/pkg-matcher:skill"] },
+        matcherConfidenceThreshold: 0.9,
+        templates: [
+          { id: "t", form: "file", mimeType: "text/markdown", path: "./t.md" },
+        ],
+        objectTypes: [
+          {
+            type: "@cinatra-ai/linkedin-artifacts:post-draft",
+            claim: "dedicated",
+            schema: {
+              type: "object",
+              required: ["text"],
+              properties: { text: { type: "string" } },
+              additionalProperties: true,
+            },
+          },
+          {
+            type: "@cinatra-ai/linkedin-artifacts:org-post-draft",
+            claim: "dedicated",
+            schema: { type: "object" },
+          },
+        ],
+      } as unknown as SemanticArtifactManifest,
+      "@cinatra-ai/linkedin-artifacts",
+    );
+    expect(registered).toBe(true);
+
+    // AC: zero catch-all — the generic umbrella is NEVER minted.
+    expect(
+      objectTypeRegistry.resolve("@cinatra-ai/linkedin-artifacts:artifact"),
+    ).toBeNull();
+    const listed = objectTypeRegistry.listArtifacts().map((d) => d.type);
+    expect(listed).not.toContain("@cinatra-ai/linkedin-artifacts:artifact");
+
+    // AC: each claim IS surfaced as an artifact under its exact objectTypeId.
+    expect(listed).toContain("@cinatra-ai/linkedin-artifacts:post-draft");
+    expect(listed).toContain("@cinatra-ai/linkedin-artifacts:org-post-draft");
+    expect(listed).toHaveLength(2);
+
+    // The per-claim type ENFORCES its inline schema (activation gate is live).
+    const postDraft = objectTypeRegistry.resolve(
+      "@cinatra-ai/linkedin-artifacts:post-draft",
+    );
+    expect(postDraft!.schema.safeParse({ text: "hi" }).success).toBe(true);
+    expect(postDraft!.schema.safeParse({ text: 5 }).success).toBe(false);
+    expect(postDraft!.schema.safeParse({}).success).toBe(false); // required 'text'
+
+    // AC: NO package-wide matcher/authoring inheritance — the per-claim descriptor
+    // carries representation forms but NOT the package skills / threshold /
+    // templates / nested claims.
+    expect(postDraft!.isArtifact).toBeDefined();
+    expect(postDraft!.isArtifact!.accepts.file?.mimeTypes).toEqual(["text/markdown"]);
+    expect(postDraft!.isArtifact!.skills).toBeUndefined();
+    expect(postDraft!.isArtifact!.matcherConfidenceThreshold).toBeUndefined();
+    expect(postDraft!.isArtifact!.templates).toBeUndefined();
+    expect(postDraft!.isArtifact!.objectTypes).toBeUndefined();
+
+    // Provenance reaps every claim-only type on teardown (like the umbrella).
+    const removed = objectTypeRegistry.removeByPackage(
+      "@cinatra-ai/linkedin-artifacts",
+    );
+    expect(removed).toContain("@cinatra-ai/linkedin-artifacts:post-draft");
+    expect(removed).toContain("@cinatra-ai/linkedin-artifacts:org-post-draft");
+    expect(
+      objectTypeRegistry.resolve("@cinatra-ai/linkedin-artifacts:post-draft"),
+    ).toBeNull();
+  });
+
+  it("resolves the claim-only type by its EXACT objectTypeId (discriminator substrate)", () => {
+    registerParsedArtifactManifest(
+      {
+        mode: "claim-only",
+        accepts: { file: { mimeTypes: ["application/json"] } },
+        objectTypes: [
+          {
+            type: "@cinatra-ai/x-artifacts:post-draft",
+            claim: "dedicated",
+            schema: { type: "object" },
+          },
+        ],
+      } as unknown as SemanticArtifactManifest,
+      "@cinatra-ai/x-artifacts",
+    );
+    expect(
+      objectTypeRegistry.resolve("@cinatra-ai/x-artifacts:post-draft"),
+    ).not.toBeNull();
+    // A DIFFERENT id in the same package does not resolve — exact-id resolution,
+    // never a package-coarse umbrella match.
+    expect(objectTypeRegistry.resolve("@cinatra-ai/x-artifacts:other")).toBeNull();
+    expect(objectTypeRegistry.resolve("@cinatra-ai/x-artifacts:artifact")).toBeNull();
+  });
+
+  it("registers per-claim semantic renderers (never an umbrella renderer)", () => {
+    semanticRendererRegistry._clearForTests();
+    registerParsedArtifactManifest(
+      {
+        mode: "claim-only",
+        accepts: { file: { mimeTypes: ["application/json"] } },
+        objectTypes: [
+          {
+            type: "@cinatra-ai/x-artifacts:post-draft",
+            claim: "dedicated",
+            schema: { type: "object" },
+          },
+        ],
+        ui: {
+          abiVersion: 1,
+          sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+          renderers: { detail: { entry: "./src/detail.tsx", propsApiVersion: 1 } },
+        },
+      } as unknown as SemanticArtifactManifest,
+      "@cinatra-ai/x-artifacts",
+    );
+    const winner: EffectiveIdentity = {
+      kind: "extension",
+      extension: "@cinatra-ai/x-artifacts",
+      basis: "binding",
+      selectable: true,
+      assertionId: "sa_x",
+    };
+    expect(
+      semanticRendererRegistry.resolve("@cinatra-ai/x-artifacts:post-draft", winner),
+    ).not.toBeNull();
+    // No umbrella type exists, so no umbrella renderer was registered.
+    expect(
+      semanticRendererRegistry.resolve("@cinatra-ai/x-artifacts:artifact", winner),
+    ).toBeNull();
+    semanticRendererRegistry._clearForTests();
+  });
+
+  it("surfaces only self-namespaced claims; skips cross-namespace claims (WITH or WITHOUT a schema)", () => {
+    // Ownership is by namespace, never by inline schema (epic #1448/#1424: exactly
+    // one runtime registrar per type; the claimant schema is activation evidence,
+    // not a second registrar). A claim-only pack must never shadow another
+    // package's registrant — that would let this pack's removeByPackage delete the
+    // real owner's type via the replace-by-id registry.
+    const ok = registerParsedArtifactManifest(
+      {
+        mode: "claim-only",
+        accepts: { file: { mimeTypes: ["text/markdown"] } },
+        objectTypes: [
+          // self-owned → registered as an artifact.
+          {
+            type: "@cinatra-ai/x-artifacts:post-draft",
+            claim: "dedicated",
+            schema: { type: "object" },
+          },
+          // cross-namespace, NO inline schema → the owner registers it; skip.
+          { type: "@cinatra-ai/other-pkg:thing", claim: "dedicated" },
+          // cross-namespace WITH an inline schema → schema is activation evidence,
+          // NOT ownership; still the owner's to register; skip (never shadow).
+          {
+            type: "@cinatra-ai/another-pkg:widget",
+            claim: "dedicated",
+            schema: { type: "object" },
+          },
+        ],
+      } as unknown as SemanticArtifactManifest,
+      "@cinatra-ai/x-artifacts",
+    );
+    expect(ok).toBe(true);
+    expect(
+      objectTypeRegistry.resolve("@cinatra-ai/x-artifacts:post-draft"),
+    ).not.toBeNull();
+    expect(objectTypeRegistry.resolve("@cinatra-ai/other-pkg:thing")).toBeNull();
+    expect(objectTypeRegistry.resolve("@cinatra-ai/another-pkg:widget")).toBeNull();
+    expect(objectTypeRegistry.listArtifacts().map((d) => d.type)).toEqual([
+      "@cinatra-ai/x-artifacts:post-draft",
+    ]);
+  });
+
+  it("reconciles a mode change: hybrid -> claim-only drops the stale umbrella catch-all", () => {
+    // First register the package as HYBRID (umbrella minted + validator claim).
+    registerParsedArtifactManifest(
+      {
+        accepts: { file: { mimeTypes: ["application/json"] } },
+        objectTypes: [
+          {
+            type: "@cinatra-ai/linkedin-artifacts:post-draft",
+            claim: "dedicated",
+            schema: { type: "object" },
+          },
+        ],
+      } as SemanticArtifactManifest,
+      "@cinatra-ai/linkedin-artifacts",
+    );
+    expect(
+      objectTypeRegistry.resolve("@cinatra-ai/linkedin-artifacts:artifact"),
+    ).not.toBeNull();
+
+    // Re-register the SAME package as CLAIM-ONLY (its manifest changed mode). The
+    // forbidden `${pkg}:artifact` umbrella must not survive the transition.
+    registerParsedArtifactManifest(
+      {
+        mode: "claim-only",
+        accepts: { file: { mimeTypes: ["application/json"] } },
+        objectTypes: [
+          {
+            type: "@cinatra-ai/linkedin-artifacts:post-draft",
+            claim: "dedicated",
+            schema: { type: "object" },
+          },
+        ],
+      } as unknown as SemanticArtifactManifest,
+      "@cinatra-ai/linkedin-artifacts",
+    );
+    expect(
+      objectTypeRegistry.resolve("@cinatra-ai/linkedin-artifacts:artifact"),
+    ).toBeNull();
+    expect(objectTypeRegistry.listArtifacts().map((d) => d.type)).toEqual([
+      "@cinatra-ai/linkedin-artifacts:post-draft",
+    ]);
+  });
+
+  it("skips a claim-only manifest that ships no objectTypes claims", () => {
+    const warns: string[] = [];
+    const orig = console.warn;
+    console.warn = (...a: unknown[]) => {
+      warns.push(a.map(String).join(" "));
+    };
+    let ok: boolean;
+    try {
+      ok = registerParsedArtifactManifest(
+        {
+          mode: "claim-only",
+          accepts: { file: { mimeTypes: ["text/markdown"] } },
+        } as unknown as SemanticArtifactManifest,
+        "@cinatra-ai/empty-artifacts",
+      );
+    } finally {
+      console.warn = orig;
+    }
+    expect(ok).toBe(false);
+    expect(objectTypeRegistry.listArtifacts()).toHaveLength(0);
+    expect(
+      warns.some((w) => w.includes("claim-only mode but ships no objectTypes")),
+    ).toBe(true);
+  });
+
+  // PARITY (AC: descriptor-only / hybrid extensions unaffected). With no explicit
+  // `mode` — the state of EVERY manifest today, since the parser strips an unknown
+  // field — the umbrella is still minted, byte-for-byte today's behavior.
+  it("descriptor-only (no mode, no claims) still mints the umbrella", () => {
+    expect(resolveArtifactManifestMode({
+      accepts: { file: { mimeTypes: ["text/markdown"] } },
+    } as SemanticArtifactManifest)).toBe("descriptor-only");
+    expect(
+      registerParsedArtifactManifest(
+        { accepts: { file: { mimeTypes: ["text/markdown"] } } } as SemanticArtifactManifest,
+        "@cinatra-ai/classic-artifact",
+      ),
+    ).toBe(true);
+    expect(
+      objectTypeRegistry.resolve("@cinatra-ai/classic-artifact:artifact"),
+    ).not.toBeNull();
+    expect(objectTypeRegistry.listArtifacts().map((d) => d.type)).toContain(
+      "@cinatra-ai/classic-artifact:artifact",
+    );
+  });
+
+  it("hybrid (no mode, WITH claims) mints the umbrella + a validator-only claim type", () => {
+    expect(
+      resolveArtifactManifestMode({
+        accepts: { file: { mimeTypes: ["application/json"] } },
+        objectTypes: [
+          { type: "@cinatra-ai/hybrid-artifact:thing", claim: "dedicated" },
+        ],
+      } as SemanticArtifactManifest),
+    ).toBe("hybrid");
+    expect(
+      registerParsedArtifactManifest(
+        {
+          accepts: { file: { mimeTypes: ["application/json"] } },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/hybrid-artifact:thing",
+              claim: "dedicated",
+              schema: {
+                type: "object",
+                required: ["k"],
+                properties: { k: { type: "string" } },
+              },
+            },
+          ],
+        } as SemanticArtifactManifest,
+        "@cinatra-ai/hybrid-artifact",
+      ),
+    ).toBe(true);
+    const listed = objectTypeRegistry.listArtifacts().map((d) => d.type);
+    // umbrella surfaced; the claim is validator-ONLY (resolvable, NOT surfaced).
+    expect(listed).toContain("@cinatra-ai/hybrid-artifact:artifact");
+    expect(listed).not.toContain("@cinatra-ai/hybrid-artifact:thing");
+    const claim = objectTypeRegistry.resolve("@cinatra-ai/hybrid-artifact:thing");
+    expect(claim).not.toBeNull();
+    expect(claim!.schema.safeParse({}).success).toBe(false); // enforces required 'k'
   });
 });
