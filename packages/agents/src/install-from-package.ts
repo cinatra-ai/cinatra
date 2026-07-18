@@ -15,6 +15,8 @@ import {
 } from "@cinatra-ai/registries";
 import {
   parseAgentPackageManifestForInstall,
+  resolveTypedProducesContract,
+  artifactDepVersionQuery,
   CINATRA_AGENT_PACKAGE_TYPE,
   CINATRA_AGENT_MANIFEST_VERSION,
 } from "./verdaccio/package-contract";
@@ -31,9 +33,6 @@ import {
   type CompiledStep,
   type ApprovalPolicy,
 } from "./store";
-import { compileOasAgentJson } from "./oas-compiler";
-import { ensureDynamicObjectType } from "@cinatra-ai/objects/auto-registrar";
-import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
 import {
   materializeAgentPackageToDisk,
@@ -108,16 +107,6 @@ export type InstallAgentFromPackageResult = {
   } | null;
   /** Explanation when materialize was skipped. */
   materializeSkippedReason?: string;
-  /**
-   * ADVISORY (cinatra#1059): the agent's declared `cinatra.produces` artifact
-   * extensions that are NOT installed+governing for the installing org scope.
-   * The `produces` edge is a SOFT cross-kind edge — this is purely
-   * informational (NON-BLOCKING; the run degrades per-output if these stay
-   * uninstalled). Empty when every produced-artifact extension is present (or
-   * the agent declares none). The single authority the follow-on pre-install
-   * "Produces" badge / post-install needs-attention UI consumes.
-   */
-  missingProducedArtifacts?: string[];
 };
 
 export async function installAgentFromPackage(
@@ -412,31 +401,24 @@ async function _installAgentFromPackageImpl(
       ),
     };
 
-    // PRODUCED-ARTIFACT ADVISORY (cinatra#1059): the agent's declared
-    // `cinatra.produces` artifact extensions that are NOT installed+governing
-    // for the installing org scope. `produces` is a SOFT cross-kind edge —
-    // this is NON-BLOCKING (log-continue, the canonical artifact
-    // optional-missing behavior); the run degrades per-output (visible
-    // materialization failure) if these stay uninstalled. Computed once in the
-    // shared window so both finalize branches return it consistently.
-    const missingProducedArtifacts = await computeProducedArtifactAdvisory({
-      agentPackageName: extracted.packageName,
+    // TYPED-PRODUCTION PREFLIGHT (cinatra#1788, epic #1785): the manifest
+    // `cinatra.produces` contract is the ONLY path for typed agent output.
+    // Every produces entry MUST resolve to a REQUIRED artifact-kind dependency
+    // in the install closure whose manifest declares the referenced object-type
+    // claim (exact objectTypeId when the entry carries one). Enforced
+    // FAIL-CLOSED HERE, in the same inert window as the pin / dependency-edge
+    // gates above — BEFORE the disk materialize and any agent_templates / skill
+    // write, so a refusal mutates nothing. REPLACES the removed post-write
+    // produced-artifact advisory (#1059): no mutate-then-warn path remains and
+    // no dynamic type is minted. The required artifact-kind dependency's claims
+    // resolve from the registry (the same PLANNED-closure manifests the batch
+    // saga installs), never by querying post-write installed state.
+    await enforceTypedProducesContractForInstall({
       manifest: extracted.manifest,
-      // Effective INSTALLING-org scope for the artifact-governance check:
-      // `orgId` on direct/seed callers; the dispatcher-routed install (the
-      // saga-owned fan-out) passes only `anchorOrgId` (== the actor's org, the
-      // scope its canonical rows live at) and omits `orgId`, so fall back to it
-      // — else an artifact active only for that org (no ambient null-org row)
-      // would be falsely reported missing (codex).
-      orgId: input.orgId ?? input.anchorOrgId ?? null,
+      packageName: extracted.packageName,
+      packageVersion: extracted.packageVersion,
+      config: resolvedConfig,
     });
-    if (missingProducedArtifacts.length > 0) {
-      console.warn(
-        `[installAgentFromPackage] ${extracted.packageName} declares produces of artifact ` +
-          `extension(s) not installed for this org — typed materialization will degrade ` +
-          `until installed: ${missingProducedArtifacts.join(", ")}`,
-      );
-    }
 
     // Canonical agent type for the template row. Sourced from the OAS-compile
     // result (compiled.type), falling back to manifest.cinatra.type, with the
@@ -541,14 +523,6 @@ async function _installAgentFromPackageImpl(
       // failure on this path.
       await writeDependencyEdgesToCanonicalRows(dependencyEdgeTargets, dependencyEdges);
 
-      // Register agent-declared output object types (upsert branch).
-      // See registerDeclaredObjectTypes helper at the bottom of this function.
-      await registerDeclaredObjectTypes({
-        extractedTempDir: extracted.tempDir,
-        extractedPackageName: extracted.packageName,
-        creatorId: input.creatorId ?? null,
-      });
-
       // Commit the materialize (deletes .old backup).
       if (materializeResult !== null) {
         await commitMaterialize(materializeResult);
@@ -559,7 +533,6 @@ async function _installAgentFromPackageImpl(
         packageName: extracted.packageName,
         packageVersion: extracted.packageVersion,
         agentDependencies,
-        missingProducedArtifacts,
         materialized: materializeResult?.materialized
           ? { targetDir: materializeResult.targetDir, wasReinstall: materializeResult.wasReinstall }
           : null,
@@ -660,13 +633,6 @@ async function _installAgentFromPackageImpl(
     // above — covers both the fresh INSERT and the 23505-race upsert path.
     await writeDependencyEdgesToCanonicalRows(dependencyEdgeTargets, dependencyEdges);
 
-    // Register agent-declared output object types (fresh-install branch).
-    await registerDeclaredObjectTypes({
-      extractedTempDir: extracted.tempDir,
-      extractedPackageName: extracted.packageName,
-      creatorId: input.creatorId ?? null,
-    });
-
     // Commit the materialize (deletes .old backup).
     if (materializeResult !== null) {
       await commitMaterialize(materializeResult);
@@ -677,7 +643,6 @@ async function _installAgentFromPackageImpl(
       packageName: extracted.packageName,
       packageVersion: extracted.packageVersion,
       agentDependencies,
-      missingProducedArtifacts,
       materialized: materializeResult?.materialized
         ? { targetDir: materializeResult.targetDir, wasReinstall: materializeResult.wasReinstall }
         : null,
@@ -701,113 +666,83 @@ async function _installAgentFromPackageImpl(
 }
 
 // ---------------------------------------------------------------------------
-// Produced-artifact advisory helper (cinatra#1059)
+// Typed-production install preflight (cinatra#1788, epic #1785)
 // ---------------------------------------------------------------------------
 
 /**
- * Compute the agent's declared `cinatra.produces` artifact extensions that are
- * NOT installed+governing for the installing org scope. SOFT / best-effort:
- * the `produces` edge is advisory by construction, so a read failure degrades
- * to "no advisory" and NEVER fails the install. First production caller of the
- * cross-kind dependency graph (`resolveInstall`, SOFT mode).
+ * FAIL-CLOSED preflight for an agent's `cinatra.produces` typed-production
+ * contract — the ONLY path for typed agent output. Resolves the agent's
+ * REQUIRED artifact-kind dependencies from the registry (the PLANNED-closure
+ * manifests, the same ones the batch saga installs) and verifies every
+ * produces entry resolves to one whose manifest declares the referenced
+ * object-type claim (the exact `objectTypeId` when the entry carries one).
+ * THROWS a precise error NAMING the missing claimant/claim on any violation —
+ * the caller (direct install or batch-saga member) aborts BEFORE any write, so
+ * a refusal mutates nothing. A no-produces agent is a no-op.
  *
- * Dynamic imports keep the @cinatra-ai/agents → @cinatra-ai/extensions edge out
- * of the static graph (same posture as the manifest-dependencies import above).
+ * REPLACES the removed produced-artifact advisory (#1059): typed production is
+ * the enforced manifest contract, not a soft post-write signal, and no dynamic
+ * type is minted. Dynamic imports keep the @cinatra-ai/agents →
+ * @cinatra-ai/extensions / @cinatra-ai/registries edges off the static graph
+ * (same posture as the manifest-dependencies / store-payload reads above).
  */
-async function computeProducedArtifactAdvisory(input: {
-  agentPackageName: string;
+async function enforceTypedProducesContractForInstall(input: {
   manifest: unknown;
-  orgId: string | null | undefined;
-}): Promise<string[]> {
-  try {
-    const [{ readAgentProducesFromPackageManifest }, advisory, { readInstalledExtensionsByPackageNames }] =
-      await Promise.all([
-        import("@cinatra-ai/extensions/agent-produces-reader"),
-        import("@cinatra-ai/extensions/cross-kind-dep-graph"),
-        import("@cinatra-ai/extensions/canonical-store"),
-      ]);
-    const produces = readAgentProducesFromPackageManifest(input.manifest).map((r) => r.extension);
-    if (produces.length === 0) return [];
-    const rowsByPkg = await readInstalledExtensionsByPackageNames(produces);
-    const rows = [...rowsByPkg.values()].flat();
-    const installed = advisory.governingInstalledArtifactSet(rows, input.orgId ?? null);
-    return advisory.computeMissingProducedArtifacts(input.agentPackageName, produces, installed);
-  } catch (err) {
-    console.warn(
-      `[installAgentFromPackage] produced-artifact advisory skipped for ${input.agentPackageName}: ` +
-        `${err instanceof Error ? err.message : String(err)}`,
-    );
-    return [];
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Post-compile object-type registration helper
-// ---------------------------------------------------------------------------
-
-/**
- * After a package has been installed and its template row written, compile
- * the on-disk agent.json one more time and register any declared
- * `metadata.cinatra.output_object_types` entries via @cinatra-ai/objects'
- * `ensureDynamicObjectType` mutator.
- *
- * Invariants honored:
- *   - createdBy: input.creatorId is available here, unlike import-agent-core.
- *   - compiled.packageName must be non-null; never write the literal string
- *     "unknown" into originContext.
- *   - Skip type IDs already registered statically by @cinatra/* packages. Log
- *     a console.warn on category mismatch but never fail the install.
- *
- * Non-fatal: a thrown error is swallowed so the otherwise-successful install
- * does not roll back. The template row is already persisted at this point.
- */
-async function registerDeclaredObjectTypes(opts: {
-  extractedTempDir: string;
-  extractedPackageName: string;
-  creatorId: string | null;
+  packageName: string;
+  packageVersion: string;
+  config: VerdaccioConfig;
 }): Promise<void> {
-  try {
-    const compileResult = await compileOasAgentJson({
-      packageName: opts.extractedPackageName,
-      // The OAS source doc ships at <tempDir>/cinatra/oas.json (every published
-      // @cinatra-ai/*-agent package declares files:["cinatra","skills"]). Prior
-      // code passed <tempDir>/agent.json, which does NOT exist for
-      // OAS-only tarballs — the compile silently no-op'd (the catch below
-      // swallows it) and declared output_object_types were never registered.
-      // Repointing to cinatra/oas.json fixes that latent bug.
-      oasSourcePath: join(opts.extractedTempDir, "cinatra", "oas.json"),
-    });
-    if (
-      compileResult.ok &&
-      compileResult.value.producesObjectTypes?.length &&
-      compileResult.value.packageName
-    ) {
-      for (const pt of compileResult.value.producesObjectTypes) {
-        const staticReg = objectTypeRegistry.resolve(pt.typeId);
-        if (staticReg) {
-          if (staticReg.category !== pt.category) {
-            console.warn(
-              `[oas-install] type_id ${pt.typeId} declares category=${pt.category} but static registry has ${staticReg.category}; ignoring declaration`,
-            );
-          }
-          continue;
+  const { readAgentProducesFromPackageManifest } = await import(
+    "@cinatra-ai/extensions/agent-produces-reader"
+  );
+  const produces = readAgentProducesFromPackageManifest(input.manifest);
+  if (produces.length === 0) return;
+  const cinatraDependencies = (
+    input.manifest as { cinatra?: { dependencies?: unknown } } | null | undefined
+  )?.cinatra?.dependencies;
+  const { getPublishedExtensionSummary, resolveMaxSatisfyingVersion } = await import(
+    "@cinatra-ai/registries"
+  );
+  const findings = await resolveTypedProducesContract({
+    produces,
+    cinatraDependencies,
+    resolveManifest: async (dep, versionConstraint) => {
+      try {
+        // Resolve the manifest at the EXACT version the edge PINS — never
+        // `latest`; matches the version the install closure selects. An
+        // unsatisfiable range or a non-registry pin (git-ref / malformed) FAILS
+        // CLOSED (return null → typed entry BLOCKS).
+        const q = artifactDepVersionQuery(versionConstraint);
+        let packageVersion: string;
+        if ("exact" in q) {
+          packageVersion = q.exact;
+        } else if ("range" in q) {
+          const resolved = await resolveMaxSatisfyingVersion(
+            { packageName: dep, range: q.range },
+            input.config,
+          );
+          if (!resolved) return null; // no satisfying version → fail closed
+          packageVersion = resolved;
+        } else {
+          return null; // git-ref / malformed constraint → fail closed
         }
-        await ensureDynamicObjectType({
-          type: pt.typeId,
-          inferredName: pt.displayName,
-          inferredCategory: pt.category,
-          canonicalKeys: pt.canonicalKeys ?? null,
-          identityKey: pt.identityKey ?? null,
-          source: "install",
-          status: "active",
-          createdBy: opts.creatorId, // input.creatorId is in scope here.
-          originContext: { agentId: compileResult.value.packageName },
-        });
+        const summary = await getPublishedExtensionSummary(
+          { packageName: dep, packageVersion },
+          input.config,
+        );
+        return summary.manifest;
+      } catch {
+        // A not-found / unresolvable required dependency contributes no claims
+        // (fail-closed: a typed produces entry then reads as unclaimed → BLOCK).
+        return null;
       }
-    }
-  } catch (err) {
-    // Type registration is non-fatal: install has already succeeded
-    // (template row written). Log and continue.
-    console.warn("[install-from-package] failed to register output_object_types:", err);
+    },
+  });
+  if (findings.length > 0) {
+    throw new Error(
+      `[installAgentFromPackage] typed-production contract failed for ` +
+        `${input.packageName}@${input.packageVersion} (cinatra#1788): ` +
+        `${findings.map((f) => f.message).join(" | ")}`,
+    );
   }
 }

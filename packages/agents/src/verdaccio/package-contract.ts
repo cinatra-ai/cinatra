@@ -113,6 +113,29 @@ export const cinatraConsumesSchema = z
     });
   });
 
+// The `produces` array schema (cinatra#1788) — the ONLY path for typed agent
+// output. Extracted so the PUBLISH path can validate a source manifest's
+// `cinatra.produces` block FAIL-CLOSED with the SAME strict schema (a malformed
+// entry — bad `extension`, a smuggled key, or a malformed `objectTypeId` — is
+// REFUSED, never silently laundered into a coarse `{ extension }` entry).
+// Byte-mirrors `packages/objects/src/semantic-manifest.ts semanticProducesSchema`
+// and the `agent-produces-reader` leaf; the objectTypeId regex is pinned equal
+// by the byte-mirror test.
+export const agentProducesSchema = z.array(
+  z
+    .object({
+      extension: z.string().min(1),
+      objectTypeId: z
+        .string()
+        .regex(/^@[\w-]+\/[\w-]+:[\w-]+$/, {
+          message:
+            "produces objectTypeId must be a namespaced object type id (@scope/package:local-id)",
+        })
+        .optional(),
+    })
+    .strict(),
+);
+
 export const cinatraAgentPackageMetadataSchema = z.object({
   packageType: z.literal(CINATRA_AGENT_PACKAGE_TYPE),
   manifestVersion: z.literal(CINATRA_AGENT_MANIFEST_VERSION),
@@ -142,16 +165,22 @@ export const cinatraAgentPackageMetadataSchema = z.object({
   // packages without these fields to continue validating.
   kind: cinatraExtensionKindSchema.optional(),
   apiVersion: z.string().optional(),
-  // `produces: SemanticArtifactRef[]` declarations are honored at output time
-  // as a classifier signal. Schema is optional and mirrors
+  // `produces: SemanticArtifactRef[]` declarations are the ONLY path for typed
+  // agent output (cinatra#1788, epic #1785): each entry names a REQUIRED
+  // artifact-kind dependency (`extension`) and OPTIONALLY the exact
+  // `@scope/pkg:local-id` type it produces (`objectTypeId` — the #1452
+  // discriminator, completing that direction for `produces`). The typed-
+  // production contract (evaluateTypedProducesContract, wired into the publish
+  // gate + install preflight) resolves every entry to a required artifact-kind
+  // closure member whose manifest declares the referenced `objectTypes` claim,
+  // FAIL-CLOSED before any write — runtime dynamic-type minting is retired.
+  // Schema is optional and byte-mirrors
   // `packages/objects/src/semantic-manifest.ts semanticProducesSchema`; the
   // cross-package import is skipped to avoid a new agents<->objects dependency
-  // edge. Equivalence is pinned by
+  // edge. Equivalence (incl. the objectTypeId regex) is pinned by
   // `packages/extensions/src/__tests__/agent-produces-reader.test.ts`, which
   // parses against both schemas and asserts byte-equivalent acceptance.
-  produces: z
-    .array(z.object({ extension: z.string().min(1) }).strict())
-    .optional(),
+  produces: agentProducesSchema.optional(),
 });
 
 export type CinatraAgentPackageMetadata = z.infer<typeof cinatraAgentPackageMetadataSchema>;
@@ -423,4 +452,229 @@ export function evaluateProducesMaterializationContract(args: {
   }
 
   return findings;
+}
+
+// ---------------------------------------------------------------------------
+// Layer 3 — typed-production closure contract (cinatra#1788, epic #1785).
+//
+// The MANIFEST is the ONLY path for typed agent output. An agent's
+// `cinatra.produces` entry must resolve to an artifact-kind package in the
+// agent's REQUIRED transitive install closure whose manifest declares the
+// referenced object-type claim (the exact `objectTypeId` when the entry
+// carries one). Enforced FAIL-CLOSED at BOTH seams — the publish gate
+// (verdaccio/client.ts) and the install preflight (install-from-package.ts) —
+// against the PLANNED closure BEFORE any template/install write, never by
+// querying installed state after writing.
+//
+// There is no WARN phase (unlike the #924 materialization seam above): the
+// epic ruling is "enforced fail-closed at publish and install, before any
+// write", and runtime dynamic-type minting — the escape hatch a soft phase
+// would have protected — is retired in this SAME slice (producesObjectTypes +
+// the outputs[].cinatra.object_type annotation are gone), so the end state is
+// BLOCK from day one.
+//
+// `evaluateTypedProducesContract` is PURE (no I/O, no registry). The caller
+// resolves each required artifact-kind dependency's declared claim ids and
+// passes them in `closureArtifactClaims`; `resolveTypedProducesContract` is the
+// shared FAIL-CLOSED orchestrator that builds that map via an injected manifest
+// resolver (the registry summary at publish; the same at install) so both
+// seams enforce identically and stay unit-testable.
+// ---------------------------------------------------------------------------
+
+/** A produces entry as declared on the agent manifest — structural mirror of
+ *  `@cinatra-ai/objects` SemanticArtifactRef (the cross-package import is
+ *  skipped per the `produces` schema precedent above). */
+export type TypedProducesRef = { extension: string; objectTypeId?: string };
+
+/**
+ * Evaluate the typed-production closure contract for one agent package. PURE.
+ *   - `produces`: the agent's declared `cinatra.produces` entries.
+ *   - `closureArtifactClaims`: extension package name → the object-type ids that
+ *     REQUIRED artifact-kind closure member declares
+ *     (`cinatra.artifact.objectTypes[].type`). ONLY required artifact-kind
+ *     closure members are keys; an absent key means "not provided by a required
+ *     artifact-kind dependency in the closure".
+ *
+ * Returns BLOCKER `ReviewFinding[]` (empty ⇒ conforming). Empty `produces` ⇒
+ * no findings. Each finding NAMES the missing claimant/claim so the failure is
+ * actionable at publish/install time — never a runtime surprise.
+ */
+export function evaluateTypedProducesContract(args: {
+  produces: readonly TypedProducesRef[];
+  closureArtifactClaims: ReadonlyMap<string, ReadonlySet<string>>;
+}): ReviewFinding[] {
+  const { produces, closureArtifactClaims } = args;
+  const findings: ReviewFinding[] = [];
+  for (const entry of produces) {
+    const claims = closureArtifactClaims.get(entry.extension);
+    if (claims === undefined) {
+      findings.push({
+        code: "ARTIFACT-CONTRACT-PRODUCES-UNCLAIMED",
+        severity: "blocker",
+        message:
+          `cinatra.produces names artifact extension "${entry.extension}"` +
+          `${entry.objectTypeId ? ` (type "${entry.objectTypeId}")` : ""} but it is not a ` +
+          `REQUIRED artifact-kind dependency in the install closure — declare it as a ` +
+          `required cinatra.dependencies edge (kind:"artifact") that ships the type, so ` +
+          `the type exists at install time.`,
+        source: "deterministic",
+      });
+      continue;
+    }
+    if (entry.objectTypeId !== undefined && !claims.has(entry.objectTypeId)) {
+      const declared = [...claims].sort();
+      findings.push({
+        code: "ARTIFACT-CONTRACT-PRODUCES-UNCLAIMED",
+        severity: "blocker",
+        message:
+          `cinatra.produces names type "${entry.objectTypeId}" from artifact extension ` +
+          `"${entry.extension}", but that extension's manifest declares no such objectTypes ` +
+          `claim (declares: ${declared.length > 0 ? declared.join(", ") : "none"}).`,
+        source: "deterministic",
+      });
+    }
+  }
+  return findings;
+}
+
+/** The object-type claim ids a resolved artifact-kind package manifest declares
+ *  (`cinatra.artifact.objectTypes[].type`). Defensive structural read — the
+ *  artifact package's OWN publish validated the claim shape (claims.ts); here
+ *  we only collect the well-formed namespaced ids. Empty for a descriptor-only
+ *  pack (no claims), an unresolved manifest (`null`), or a hostile/malformed
+ *  block (fail-closed: an objectTypeId entry then reads as unclaimed → BLOCK). */
+export function readArtifactManifestClaimIds(manifest: unknown): Set<string> {
+  try {
+    const ids = new Set<string>();
+    const cinatra = (manifest as { cinatra?: unknown } | null | undefined)?.cinatra;
+    const artifact = (cinatra as { artifact?: unknown } | undefined)?.artifact;
+    const objectTypes = (artifact as { objectTypes?: unknown } | undefined)?.objectTypes;
+    if (!Array.isArray(objectTypes)) return ids;
+    for (const claim of objectTypes) {
+      const type = (claim as { type?: unknown } | null | undefined)?.type;
+      // Count ONLY well-formed namespaced claim ids — the exact shape a real
+      // objectTypes claim carries (claims.ts CLAIMED_OBJECT_TYPE_ID_RE, inlined
+      // to keep this leaf import-free). A garbage `type` is not a resolvable
+      // claim and must never satisfy a produces objectTypeId.
+      if (typeof type === "string" && /^@[\w-]+\/[\w-]+:[\w-]+$/.test(type)) ids.add(type);
+    }
+    return ids;
+  } catch {
+    // Hostile manifest (throwing getters / Proxies) anywhere in the walk →
+    // EMPTY (fail-closed): a PARTIALLY-built set must never leak, so an
+    // objectTypeId entry reads as unclaimed → BLOCK.
+    return new Set<string>();
+  }
+}
+
+/** The raw `cinatra.dependencies` edge fields this helper reads defensively
+ *  (structural mirror of `cinatraExtensionDependencySchema`). */
+type RawDependencyEdge = {
+  packageName?: unknown;
+  kind?: unknown;
+  edgeType?: unknown;
+  requirement?: unknown;
+  versionConstraint?: unknown;
+};
+
+/** A required artifact-kind closure member + the RAW versionConstraint its edge
+ *  pins — carried so the claim check resolves the manifest at the SAME version
+ *  the install closure will select (never `latest`). */
+export type RequiredArtifactDependency = { packageName: string; versionConstraint: unknown };
+
+/** The REQUIRED, install-blocking, artifact-kind edges in a raw
+ *  `cinatra.dependencies` array — the closure members a `produces` entry must
+ *  resolve to (a required non-peer artifact-kind edge is guaranteed present in
+ *  the transitive install closure), each with the raw `versionConstraint` its
+ *  edge pins. Peer/optional edges do NOT guarantee closure membership and are
+ *  excluded. Mirrors the shared `isAutoInstallableEdge` predicate (requirement
+ *  === "required" && edgeType !== "peer") without importing it (keeps this
+ *  contract leaf import-free). */
+export function requiredArtifactDependencies(
+  cinatraDependencies: unknown,
+): RequiredArtifactDependency[] {
+  if (!Array.isArray(cinatraDependencies)) return [];
+  const deps: RequiredArtifactDependency[] = [];
+  for (const raw of cinatraDependencies as RawDependencyEdge[]) {
+    if (
+      raw &&
+      typeof raw.packageName === "string" &&
+      raw.packageName.length > 0 &&
+      raw.kind === "artifact" &&
+      raw.requirement === "required" &&
+      raw.edgeType !== "peer"
+    ) {
+      deps.push({ packageName: raw.packageName, versionConstraint: raw.versionConstraint });
+    }
+  }
+  return deps;
+}
+
+/** The concrete registry version lookup a raw `versionConstraint` selects so the
+ *  claim check resolves the EXACT manifest version the closure installs — never
+ *  `latest`:
+ *   - `{ exact }` → fetch that exact version;
+ *   - `{ range }` → max-satisfy against the registry (the caller FAILS CLOSED
+ *      when nothing satisfies — an unsatisfiable range cannot install, so no
+ *      claim is provable);
+ *   - `{ unresolvable: true }` → git-ref / absent / malformed: NOT a
+ *      registry-version pin, so the registry manifest cannot PROVE the claim at
+ *      the pinned ref. The caller FAILS CLOSED (a typed produces entry then
+ *      BLOCKS; a coarse entry still passes on required-dep membership alone) —
+ *      declare a typed produces against an exact/range-pinned artifact dep.
+ *  Pure — the caller performs the (impure) registry resolution + the fail-close. */
+export type ArtifactDepVersionQuery =
+  | { exact: string }
+  | { range: string }
+  | { unresolvable: true };
+
+export function artifactDepVersionQuery(versionConstraint: unknown): ArtifactDepVersionQuery {
+  const vc = versionConstraint as { kind?: unknown; version?: unknown; range?: unknown } | null | undefined;
+  if (vc?.kind === "exact" && typeof vc.version === "string" && vc.version.length > 0) {
+    return { exact: vc.version };
+  }
+  if (vc?.kind === "semver-range" && typeof vc.range === "string" && vc.range.length > 0) {
+    return { range: vc.range };
+  }
+  return { unresolvable: true };
+}
+
+/**
+ * Resolve + evaluate the typed-production closure contract for one agent
+ * package — the shared FAIL-CLOSED orchestrator behind both enforcement seams.
+ * Builds `closureArtifactClaims` by resolving each REQUIRED artifact-kind
+ * dependency's manifest (via the injected `resolveManifest` seam — the registry
+ * summary at publish, the same at install) and reading its declared claim ids,
+ * then runs the pure contract. A required artifact dependency that cannot be
+ * resolved contributes NO claims (an `objectTypeId` entry then reads as
+ * unclaimed → BLOCK), so an unresolvable/unpublished dependency never silently
+ * passes a typed entry. Returns BLOCKER findings (empty ⇒ conforming).
+ *
+ * `resolveManifest` receives the dependency package name AND the raw
+ * `versionConstraint` its edge pins (resolve the version via
+ * {@link artifactDepVersionQuery} so the claim check reads the SAME manifest
+ * version the closure installs — never `latest`), and returns that version's raw
+ * manifest (registry packument entry — carries `cinatra`) or `null` for a
+ * not-found/unresolvable package; it MUST NOT throw (the caller maps its
+ * registry seam's throw to `null`; this function additionally guards).
+ */
+export async function resolveTypedProducesContract(args: {
+  produces: readonly TypedProducesRef[];
+  cinatraDependencies: unknown;
+  resolveManifest: (packageName: string, versionConstraint: unknown) => Promise<unknown | null>;
+}): Promise<ReviewFinding[]> {
+  const { produces, cinatraDependencies, resolveManifest } = args;
+  if (produces.length === 0) return [];
+  const requiredArtifactDeps = requiredArtifactDependencies(cinatraDependencies);
+  const closureArtifactClaims = new Map<string, ReadonlySet<string>>();
+  for (const dep of requiredArtifactDeps) {
+    let manifest: unknown | null = null;
+    try {
+      manifest = await resolveManifest(dep.packageName, dep.versionConstraint);
+    } catch {
+      manifest = null;
+    }
+    closureArtifactClaims.set(dep.packageName, readArtifactManifestClaimIds(manifest));
+  }
+  return evaluateTypedProducesContract({ produces, closureArtifactClaims });
 }

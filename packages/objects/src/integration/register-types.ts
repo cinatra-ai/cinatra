@@ -218,13 +218,19 @@ function registerCampaignBundleTypes(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Email transport object types.
+// Email transport + work-product object types.
 //
-// Four provider-neutral object types backing the @cinatra-ai/email-connector
-// facade. These are platform-write objects (`sources: ["agent", "import"]`,
-// NOT mutable by users). Generic renderers are sufficient since the data is
-// read by orchestration code and the notifications/inbox surface, not edited
-// inline.
+// Provider-neutral object types backing the @cinatra-ai/email-connector facade
+// (sender-identity, sent-email, received-reply, thread) plus the two work
+// products the @cinatra-ai/email-artifacts pack claims (body, recipient —
+// cinatra#1454). The transport records are platform-write (`sources: ["agent",
+// "import"]`); the draftable `body` additionally admits `user` edits. Generic
+// renderers are sufficient — the data is read by orchestration code and the
+// notifications/inbox/library surfaces, not edited inline. The TYPE registrar
+// for every `@cinatra-ai/email:*` type stays host-side HERE; the pack's manifest
+// claims (packages/objects reads them via the artifact bridge) add only the
+// per-type disposition / mutability class / arbitration — never a second
+// registrar (epic #1448: exactly one runtime registrar per type).
 // ---------------------------------------------------------------------------
 
 function registerEmailObjectTypes(): void {
@@ -374,6 +380,91 @@ function registerEmailObjectTypes(): void {
       const c = typeof d.connectorId === "string" ? d.connectorId : null;
       const t = typeof d.providerThreadId === "string" ? d.providerThreadId : null;
       return c && t ? `${c}:${t}` : null;
+    },
+  });
+
+  // 5. body — the reusable body of a sent/retained email message. The
+  // @cinatra-ai/email-artifacts pack CLAIMS this type [draftable] and absorbs
+  // the former single-type @cinatra-ai/email-body-artifact (cinatra#1454). The
+  // TYPE registrar stays host-side here (the claim adds disposition/mutability/
+  // arbitration, not a second registrar). `draftable` narrows a NON-empty
+  // mutableBy baseline (draftable requires draft-state edits), so mutableBy is
+  // ["agent","user"]. Run-scoped per-email bodies dedup on (runId, contactId);
+  // uploaded/library bodies with no run frame keep their random-UUID identity
+  // (identityKey → null), preserving existing artifact ids.
+  objectTypeRegistry.register({
+    type: "@cinatra-ai/email:body",
+    category: "content",
+    schema: z.object({
+      subject: z.string().optional(),
+      bodyMarkdown: z.string().optional(),
+      connectorId: z.string().optional(),
+      campaignId: z.string().optional(),
+      contactId: z.string().optional(),
+      runId: z.string().optional(),
+    }),
+    lifecycle: {
+      sources: ["agent", "user", "import"],
+      mutableBy: ["agent", "user"],
+    },
+    renderers: {
+      listRow: GenericObjectListRow,
+      card: GenericObjectCard,
+      detail: GenericObjectDetail,
+    },
+    identityKey: (data) => {
+      const d = data as Record<string, unknown>;
+      const runId = typeof d.runId === "string" && d.runId.length > 0 ? d.runId : null;
+      if (!runId) return null;
+      const contactId =
+        typeof d.contactId === "string" && d.contactId.length > 0 ? d.contactId : null;
+      return contactId ? `${runId}:${contactId}` : runId;
+    },
+  });
+
+  // 6. recipient — a run-scoped delivery-target SNAPSHOT (cinatra#1454). NEVER a
+  // person/contact: `contactKey`/`contactId` are connector-scoped soft
+  // provenance only, no CRM writeback. The @cinatra-ai/email-artifacts pack
+  // claims this type [record] with `projection: "none"` + `sensitivity:
+  // "sensitive"` (addresses are kept out of the derived index by the claim; the
+  // row still carries `email` for delivery + fallback identity). Mandatory
+  // retry-safe identity (cinatra#1454): (runId + provider-scoped contactKey),
+  // normalized-email fallback — a retry within the same run updates the snapshot
+  // in place; no run frame yields no identity (HITL rather than a global merge).
+  objectTypeRegistry.register({
+    type: "@cinatra-ai/email:recipient",
+    category: "report",
+    schema: z.object({
+      runId: z.string().min(1),
+      connectorId: z.string().optional(),
+      contactKey: z.string().optional(),
+      // `.trim().min(1)` normalizes and rejects a whitespace-only address — the
+      // normalized-email fallback identity below must never collapse to an empty
+      // contact key.
+      email: z.string().trim().min(1),
+      campaignId: z.string().optional(),
+      confirmed: z.boolean().optional(),
+    }),
+    lifecycle: {
+      sources: ["agent", "import"],
+      mutableBy: ["agent"],
+    },
+    renderers: {
+      listRow: GenericObjectListRow,
+      card: GenericObjectCard,
+      detail: GenericObjectDetail,
+    },
+    identityKey: (data) => {
+      const d = data as Record<string, unknown>;
+      const runId = typeof d.runId === "string" && d.runId.length > 0 ? d.runId : null;
+      if (!runId) return null;
+      const contactKey =
+        typeof d.contactKey === "string" && d.contactKey.length > 0 ? d.contactKey : null;
+      if (contactKey) return `${runId}:${contactKey}`;
+      // Normalize FIRST, then require a non-empty result — a whitespace-only
+      // email must yield no identity (HITL) rather than a bare `${runId}:`.
+      const email = typeof d.email === "string" ? d.email.trim().toLowerCase() : "";
+      return email.length > 0 ? `${runId}:${email}` : null;
     },
   });
 }
