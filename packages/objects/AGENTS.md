@@ -95,7 +95,7 @@ Every episode carries a `_cinatra` key in its JSON body:
 |---|---|---|
 | `classifier` | `proposed` | `objects_classify` handler cannot match a static type |
 | `mcp` | `active` | MCP caller invokes `objects_type_register` |
-| `install` | `active` | Agent package imported with `output_object_types` in `agent.json` |
+| `install` | — | **RETIRED (cinatra#1788, epic #1785):** agent install no longer mints types. Typed agent output is now the fail-closed `cinatra.produces` manifest contract backed by required artifact-kind claims (see `@cinatra-ai/agents` AGENTS.md); there is no `output_object_types` / `producesObjectTypes` path. |
 
 ### `ensureDynamicObjectType` — INSERT-ONLY semantics
 
