@@ -233,11 +233,61 @@ export function validateMutabilityNarrowsBaseline(
  * equal. */
 export const CLAIMED_OBJECT_TYPE_ID_RE = /^@[\w-]+\/[\w-]+:[\w-]+$/;
 
+// ---------------------------------------------------------------------------
+// PERMANENT namespace tombstones (cinatra#1789, epic #1785). The two retired
+// dynamic prefixes — INLINED (not imported from ./namespace) so this policy
+// leaf keeps its zero-non-zod-imports invariant, the same reason
+// CLAIMED_OBJECT_TYPE_ID_RE mirrors OBJECT_TYPE_NAMESPACE_RE. The namespace
+// test (`namespace-tombstones.test.ts`) pins this array byte-equal to
+// TOMBSTONED_OBJECT_TYPE_ID_PREFIXES in ./namespace (the single canonical
+// declaration), so the mirror can never silently diverge.
+// ---------------------------------------------------------------------------
+
+/** The permanently-tombstoned object-type id prefixes (mirror of ./namespace
+ * `TOMBSTONED_OBJECT_TYPE_ID_PREFIXES`, pinned equal by test). Prefix-exact —
+ * a look-alike scope like `@dynamics/...` is NOT tombstoned. */
+export const TOMBSTONED_CLAIMED_TYPE_PREFIXES = [
+  "@dynamic/types:",
+  "@cinatra-ai/dynamic:",
+] as const;
+
+/** True when a claimed/registered object-type id is under a permanently-
+ * tombstoned dynamic namespace (mirrors `isTombstonedObjectTypeId` in
+ * ./namespace). The manifest claim schema below, the registration bridge, and
+ * the claim-store write path all reject on this. */
+export function isTombstonedClaimedTypeId(id: string): boolean {
+  return (
+    typeof id === "string" &&
+    TOMBSTONED_CLAIMED_TYPE_PREFIXES.some((prefix) => id.startsWith(prefix))
+  );
+}
+
+/** The canonical named rejection for a tombstoned claimed/registered type —
+ * emitted identically by the manifest-validation refine and the claim-store
+ * write guard so every caller sees the same named error. */
+export function tombstonedClaimedTypeMessage(id: string): string {
+  return (
+    `tombstoned object type '${id}': the '@dynamic/types:' and legacy ` +
+    `'@cinatra-ai/dynamic:' namespaces are permanently retired (cinatra#1789) ` +
+    `and can never be claimed or registered`
+  );
+}
+
 export const artifactObjectTypeClaimManifestSchema = z.strictObject({
-  /** The claimed object type id (`@scope/package:local-id`). */
-  type: z.string().regex(CLAIMED_OBJECT_TYPE_ID_RE, {
-    message: "claimed object type must be a namespaced id (@scope/package:local-id)",
-  }),
+  /** The claimed object type id (`@scope/package:local-id`). Rejected when it
+   * falls under a permanently-tombstoned dynamic namespace (cinatra#1789) — a
+   * well-formed id like `@dynamic/types:invoice` passes the regex but is a
+   * retired namespace, so the refine names the tombstone. */
+  type: z
+    .string()
+    .regex(CLAIMED_OBJECT_TYPE_ID_RE, {
+      message: "claimed object type must be a namespaced id (@scope/package:local-id)",
+    })
+    .superRefine((id, ctx) => {
+      if (isTombstonedClaimedTypeId(id)) {
+        ctx.addIssue({ code: "custom", message: tombstonedClaimedTypeMessage(id) });
+      }
+    }),
   /** Claim kind — arbitration is kind-over-scope (see claimPrecedenceRank). */
   claim: z.enum(ARTIFACT_CLAIM_KINDS),
   /** Per-claim disposition payload (projection/pinnable/snapshot/redaction/

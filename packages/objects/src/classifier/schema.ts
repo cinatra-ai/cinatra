@@ -1,24 +1,28 @@
 import { z } from "zod";
-import { DYNAMIC_TYPE_ID_RE } from "../namespace";
 
 /**
  * Build classifier output schema dynamically. The `type` field is enum-
- * constrained to the set of registered static types PLUS dynamic-type ids —
- * preventing LLM output drift where a model would return "account" instead
- * of "@cinatra-ai/entity-accounts:account". NEW dynamic ids mint ONLY under
- * the reserved `@dynamic/types:` scope (cinatra#1425); a legacy
- * `@cinatra-ai/dynamic:` id is accepted ONLY when it is already a known type
- * (the caller's catalog includes the ACTIVE dynamic rows) — existing rows
- * keep classifying, but a legacy-prefixed id the DB has never seen is
- * REJECTED, enforcing "legacy ids are never re-minted".
+ * constrained to the set of KNOWN, INSTALLED type ids the caller passes in —
+ * the registered static/host types plus the ACTIVE dynamic rows that already
+ * exist — preventing LLM output drift where a model would return "account"
+ * instead of "@cinatra-ai/entity-accounts:account".
+ *
+ * The classifier NO LONGER MINTS dynamic type ids (epic #1785 slice C,
+ * cinatra#1787 — "types exist only by installation"): a NEW `@dynamic/types:`
+ * id, or ANY id the catalog has never seen, is REJECTED here at parse time.
+ * An unmatched payload comes back as the generic `@cinatra-ai/objects:object`
+ * id with `isNewType: true` (the host then persists it losslessly as a plain
+ * object). Existing dynamic rows still ride `knownTypeIds`, so READ/classify
+ * of already-minted ids is untouched — only the mint path is closed.
  */
 export function buildClassifierOutputSchema(knownTypeIds: readonly string[]) {
   return z.object({
     type: z.string().refine(
-      // knownTypeIds covers legacy ids that already exist as ACTIVE dynamic
-      // rows; the NEW-mint pattern is the reserved scope ONLY.
-      (v) => knownTypeIds.includes(v) || DYNAMIC_TYPE_ID_RE.test(v),
-      { message: "type must be a registered ID or @dynamic/types:<slug>" },
+      // Only ids the catalog already knows are valid — the classifier can no
+      // longer propose a fresh dynamic-type id (the generic fallback id rides
+      // knownTypeIds because it is a registered host type).
+      (v) => knownTypeIds.includes(v),
+      { message: "type must be an installed/known type id (the classifier never mints new type ids)" },
     ),
     confidence: z.number().min(0).max(1),
     normalizedData: z.record(z.string(), z.unknown()),

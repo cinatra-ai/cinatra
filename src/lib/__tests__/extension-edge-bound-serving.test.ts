@@ -10,12 +10,14 @@ import {
   planSelfInvokerRetainedUnion,
   EdgeBoundMcpServeRefusal,
   owningPackageOfObjectType,
+  DYNAMIC_OBJECT_TYPE_ID_PREFIXES,
   resolveEdgeBoundObjectType,
   planEdgeBoundObjectTypeListing,
   getPublishedObjectTypeServePort,
   type ResolveEdgeBoundExtensionDeps,
   type RunRowForEdgeBoundServing,
 } from "@/lib/extension-edge-bound-serving";
+import { TOMBSTONED_OBJECT_TYPE_ID_PREFIXES } from "@cinatra-ai/objects/namespace";
 import {
   _resetExtensionMcpForTests,
   getEffectiveExtensionMcpTool,
@@ -963,6 +965,18 @@ describe("owningPackageOfObjectType", () => {
     expect(owningPackageOfObjectType("plain-type")).toBeNull();
     expect(owningPackageOfObjectType("")).toBeNull();
     expect(owningPackageOfObjectType(undefined as never)).toBeNull();
+    // NEAR-MISS (cinatra#1789, prefix-exact): a look-alike scope/package is a
+    // NORMAL extension type, NOT a tombstoned dynamic id — it keeps its owning
+    // package and stays edge-bindable.
+    expect(owningPackageOfObjectType("@dynamics/types:invoice")).toBe("@dynamics/types");
+    expect(owningPackageOfObjectType("@dynamic/typesx:invoice")).toBe("@dynamic/typesx");
+  });
+
+  it("the inlined dynamic-prefix exclusion set is pinned byte-equal to the objects tombstone source of truth (cinatra#1789)", () => {
+    // This host lib cannot import @cinatra-ai/objects (route-graph is
+    // shrink-only), so it inlines DYNAMIC_OBJECT_TYPE_ID_PREFIXES — this pin
+    // guarantees the inline copy never drifts from the canonical declaration.
+    expect([...DYNAMIC_OBJECT_TYPE_ID_PREFIXES]).toEqual([...TOMBSTONED_OBJECT_TYPE_ID_PREFIXES]);
   });
 });
 
