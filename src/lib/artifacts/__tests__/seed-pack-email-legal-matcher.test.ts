@@ -69,8 +69,24 @@ import {
   buildArtifactMatcherActorContext,
 } from "../matcher-runtime";
 
-import { emailBodyArtifactManifest } from "../../../../extensions/cinatra-ai/email-body-artifact/src/index";
 import { contractArtifactManifest } from "../../../../extensions/cinatra-ai/contract-artifact/src/index";
+
+// email-body-artifact was RETIRED from the dev-extension set (cinatra#1454), so
+// its markdown/plain matcher-based seed artifact no longer exists to import. This
+// integration test exercises the matcher RUNTIME's multi-candidate arbitration
+// (a markdown upload matches two candidates; text/plain narrows to one; pdf to
+// the other) with fully mocked I/O — it needs two candidate manifests with the
+// right MIME overlap, not a specific installed extension. This synthetic
+// markdown+plain fixture stands in for the second candidate, preserving the exact
+// arbitration coverage without depending on a retired extension.
+const markdownPlainArtifactManifest: typeof contractArtifactManifest = {
+  accepts: { file: { mimeTypes: ["text/markdown", "text/plain"] } },
+  skills: {
+    matchers: ["@cinatra-ai/fixture-markdown-plain-artifact:markdown-plain-matcher"],
+  },
+  matcherConfidenceThreshold: 0.7,
+};
+const MARKDOWN_PLAIN_PKG = "@cinatra-ai/fixture-markdown-plain-artifact";
 
 const PAYLOAD = {
   orgId: "org-a",
@@ -81,10 +97,10 @@ const ACTOR = buildArtifactMatcherActorContext({ orgId: "org-a" });
 
 type PackDef = {
   pkgName: string;
-  manifest: typeof emailBodyArtifactManifest;
+  manifest: typeof contractArtifactManifest;
 };
 const PACK_DEFS: PackDef[] = [
-  { pkgName: "@cinatra-ai/email-body-artifact", manifest: emailBodyArtifactManifest },
+  { pkgName: MARKDOWN_PLAIN_PKG, manifest: markdownPlainArtifactManifest },
   { pkgName: "@cinatra-ai/contract-artifact", manifest: contractArtifactManifest },
 ];
 
@@ -154,34 +170,34 @@ describe("Email+Legal pack — target-aware matcher integration", () => {
     assertSemanticTypeMock.mockReturnValue({ inserted: true });
   });
 
-  it("text/markdown upload + target=email-body → both classified, only email-body asserts", async () => {
+  it("text/markdown upload + target=markdown-plain → both classified, only markdown-plain asserts", async () => {
     stageAuthoritative("text/markdown");
     registerAllAsArtifactDefs();
     registerAllAsSkills();
-    targetAwareLlmMock("@cinatra-ai/email-body-artifact");
+    targetAwareLlmMock(MARKDOWN_PLAIN_PKG);
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
-    // text/markdown matches BOTH email-body + contract.
+    // text/markdown matches BOTH the markdown+plain fixture + contract.
     expect(runLlmMock).toHaveBeenCalledTimes(2);
     expect(assertSemanticTypeMock).toHaveBeenCalledTimes(1);
     expect(assertSemanticTypeMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        extension: "@cinatra-ai/email-body-artifact",
+        extension: MARKDOWN_PLAIN_PKG,
         assertedBy: "matcher",
       }),
     );
   });
 
-  it("text/plain upload + target=email-body → only email-body classified (contract excludes text/plain)", async () => {
+  it("text/plain upload + target=markdown-plain → only markdown-plain classified (contract excludes text/plain)", async () => {
     stageAuthoritative("text/plain");
     registerAllAsArtifactDefs();
     registerAllAsSkills();
-    targetAwareLlmMock("@cinatra-ai/email-body-artifact");
+    targetAwareLlmMock(MARKDOWN_PLAIN_PKG);
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
     expect(runLlmMock).toHaveBeenCalledTimes(1);
     expect(assertSemanticTypeMock).toHaveBeenCalledTimes(1);
   });
 
-  it("application/pdf upload + target=contract → only contract classified (email-body excludes pdf)", async () => {
+  it("application/pdf upload + target=contract → only contract classified (markdown-plain excludes pdf)", async () => {
     stageAuthoritative("application/pdf");
     registerAllAsArtifactDefs();
     registerAllAsSkills();

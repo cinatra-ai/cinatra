@@ -12,7 +12,10 @@ import * as path from "node:path";
 import { parseSemanticArtifactManifest } from "../semantic-manifest";
 import type { SemanticArtifactManifest } from "../types";
 
-import { emailBodyArtifactManifest } from "../../../../extensions/cinatra-ai/email-body-artifact/src/index";
+// email-body-artifact was RETIRED from the dev-extension set (cinatra#1454);
+// the Email body now lives as the host-registered `@cinatra-ai/email:body` type
+// claimed by @cinatra-ai/email-artifacts, not a matcher-based seed artifact.
+// The parity guard below covers the remaining matcher-based seed artifact.
 import { contractArtifactManifest } from "../../../../extensions/cinatra-ai/contract-artifact/src/index";
 
 import { resolveAttachmentCapability } from "../../../llm/src/attachments/capability-registry";
@@ -27,12 +30,6 @@ type PackEntry = {
 const REPO_ROOT = path.resolve(__dirname, "../../../..");
 
 const PACK: PackEntry[] = [
-  {
-    slug: "email-body-artifact",
-    pkgName: "@cinatra-ai/email-body-artifact",
-    manifest: emailBodyArtifactManifest,
-    expectedMimes: ["text/markdown", "text/plain"],
-  },
   {
     slug: "contract-artifact",
     pkgName: "@cinatra-ai/contract-artifact",
