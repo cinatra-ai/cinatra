@@ -298,6 +298,37 @@ describe("injected tool contract (S2: carrier-in-closure)", () => {
       expect(reads).toEqual(["skill-1"]);
     }
   });
+
+  it("threads the resolved L1 environment mount to the executor, never onto the tool object (S3, cinatra#1708)", async () => {
+    const rec = makeExecutor();
+    const mount = {
+      imageRef: "cinatra-sandbox-l1:recipe-key",
+      provenance: { imageDigest: "sha256:declared", signature: "sig" },
+    };
+    const r = inj({ tools: undefined, session, executor: rec.executor, environment: mount });
+    expect(r.status).toBe("injected");
+    if (r.status === "injected") {
+      const t = r.tools.find(isSandboxExecutionTool)!;
+      // The mount is captured in the execute closure — never a tool field, so
+      // it cannot cross the provider boundary (same guarantee as the carrier).
+      expect(t).not.toHaveProperty("environment");
+      expect(JSON.stringify(t)).not.toContain("sha256:declared");
+      // It reaches the executor on dispatch (→ broker.openJob({ environment })).
+      await t.execute({ commands: ["python -c 'import pandas'"] });
+      expect(rec.calls[0].environment).toEqual(mount);
+    }
+  });
+
+  it("omits environment at the executor seam when no declared env is supplied (byte-identical L0 dispatch)", async () => {
+    const rec = makeExecutor();
+    const r = inj({ tools: undefined, session, executor: rec.executor });
+    expect(r.status).toBe("injected");
+    if (r.status === "injected") {
+      const t = r.tools.find(isSandboxExecutionTool)!;
+      await t.execute({ commands: ["echo hi"] });
+      expect(rec.calls[0].environment).toBeUndefined();
+    }
+  });
 });
 
 describe("tool helpers", () => {

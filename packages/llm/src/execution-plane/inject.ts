@@ -26,6 +26,7 @@
 
 import type {
   LlmTool,
+  SandboxEnvironmentMount,
   SandboxExecutor,
   SandboxStagedSkill,
 } from "../types";
@@ -99,6 +100,15 @@ export type ExecutionInjectionParams = {
    * be a schema the model can call into a void.
    */
   executor?: SandboxExecutor;
+  /**
+   * The run's resolved L1 declared-environment mount (exec-plane S3,
+   * cinatra#1708). Supplied by the app wiring layer; captured in the tool's
+   * `execute` closure and threaded to `broker.openJob({ environment })` so the
+   * job mounts the declared layer. ABSENT ⇒ commands run over the L0 base
+   * (byte-identical S1/S2 dispatch) — it is an optimization, never a
+   * precondition for the capability.
+   */
+  environment?: SandboxEnvironmentMount;
 };
 
 /**
@@ -236,6 +246,7 @@ export function injectExecutionCapability(
     sessionCarrier: carrier,
     executor: params.executor,
     stagedSkills,
+    ...(params.environment ? { environment: params.environment } : {}),
   });
   const systemCue = composeExecutionCue(session, { stagedSkills });
   return {

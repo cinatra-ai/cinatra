@@ -290,6 +290,9 @@ export type {
   SandboxStagedSkillFile,
   SealedExecutionSessionCarrier,
   LlmSandboxExecutionTool,
+  // Execution plane S3 (cinatra#1708): the resolved L1 declared-environment
+  // mount projection the app wiring layer resolves and threads through.
+  SandboxEnvironmentMount,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -297,7 +300,7 @@ export type {
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import type { LlmProvider, LlmCapabilityRequirement, LlmProviderAdapter, LlmFileReference, GenerateInput, LlmTool, LlmUsageData, LlmResponse, LlmMcpServerTool, OrchestrateGenerateInput, OrchestrateStreamInput, OrchestrateUploadFileInput, OrchestrateFileInputGenerateInput, LlmAttachmentRef, SandboxExecutor } from "./types";
+import type { LlmProvider, LlmCapabilityRequirement, LlmProviderAdapter, LlmFileReference, GenerateInput, LlmTool, LlmUsageData, LlmResponse, LlmMcpServerTool, OrchestrateGenerateInput, OrchestrateStreamInput, OrchestrateUploadFileInput, OrchestrateFileInputGenerateInput, LlmAttachmentRef, SandboxExecutor, SandboxEnvironmentMount } from "./types";
 import type { OpenAIConnectionConfig } from "./providers/openai";
 // Shared orchestration-entry attachment step plus the app-injected
 // resolver-ports type used by the entry input types.
@@ -497,6 +500,13 @@ export type DeterministicLlmExecutionInput = {
    * flag is on — a tool schema is never delivered without a live executor.
    */
   executionExecutor?: SandboxExecutor;
+  /**
+   * Execution plane (exec-plane S3, cinatra#1708): the run's resolved L1
+   * declared-environment mount, supplied by the app wiring layer. Threaded to
+   * the broker so the job mounts the declared layer. Absent ⇒ the L0 base
+   * (byte-identical S1/S2 dispatch).
+   */
+  executionEnvironment?: SandboxEnvironmentMount;
 };
 
 export type SkillAwareDeterministicLlmExecutionInput = DeterministicLlmExecutionInput & {
@@ -752,6 +762,7 @@ function applyExecutionInjection(params: {
   session: ExecutionSession | undefined;
   availability: ExecutionAvailability | undefined;
   executor: SandboxExecutor | undefined;
+  environment: SandboxEnvironmentMount | undefined;
   streaming: boolean;
   requestedMaxSteps: number | undefined;
   outputSchema: unknown;
@@ -766,6 +777,7 @@ function applyExecutionInjection(params: {
     session: params.session,
     availability: params.availability,
     executor: params.executor,
+    ...(params.environment ? { environment: params.environment } : {}),
     task: {
       outputSchema: params.outputSchema,
       maxSteps: params.requestedMaxSteps,
@@ -828,6 +840,7 @@ async function runDeterministicLlmTaskImpl(input: DeterministicLlmExecutionInput
     session: input.executionSession,
     availability: input.executionAvailability,
     executor: input.executionExecutor,
+    environment: input.executionEnvironment,
     streaming: false,
     requestedMaxSteps: input.maxSteps,
     outputSchema: input.outputSchema,
@@ -990,6 +1003,7 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
     session: input.executionSession,
     availability: input.executionAvailability,
     executor: input.executionExecutor,
+    environment: input.executionEnvironment,
     streaming: false,
     requestedMaxSteps: input.maxSteps,
     outputSchema: input.outputSchema,
@@ -1141,6 +1155,7 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
     executionSession: _executionSession,
     executionAvailability: _executionAvailability,
     executionExecutor: _executionExecutor,
+    executionEnvironment: _executionEnvironment,
     ...adapterInput
   } = input as OrchestrateGenerateInput & { resolvedAttachments?: unknown };
   // Explicit MCP injection.
@@ -1156,6 +1171,7 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
     session: input.executionSession,
     availability: input.executionAvailability,
     executor: input.executionExecutor,
+    environment: input.executionEnvironment,
     streaming: false,
     requestedMaxSteps: adapterInput.maxSteps,
     outputSchema: adapterInput.outputSchema,
@@ -1242,6 +1258,7 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<voi
     session: input.executionSession,
     availability: input.executionAvailability,
     executor: input.executionExecutor,
+    environment: input.executionEnvironment,
     streaming: true,
     requestedMaxSteps: undefined,
     outputSchema: undefined,
@@ -1266,6 +1283,7 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<voi
     executionSession: _executionSession,
     executionAvailability: _executionAvailability,
     executionExecutor: _executionExecutor,
+    executionEnvironment: _executionEnvironment,
     ...rest
   } = input as OrchestrateStreamInput & { resolvedAttachments?: unknown };
   // Per-message resolution. Resolve EACH user message's attachments via the
