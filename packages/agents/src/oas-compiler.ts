@@ -648,6 +648,11 @@ async function readSiblingPackageJson(
    *  is FAIL-CLOSED against it (a binding then errors). Only an unreadable
    *  package.json (this function returning null) skips parity. */
   produces: string[];
+  /** The FULL typed `produces` entries `{extension, objectTypeId?}` (cinatra#1454)
+   *  — carries the per-entry objectTypeId so the binding/materialize collectors
+   *  can cross-check a binding's declared type against a typed produces entry.
+   *  Same fail-closed all-or-nothing parse as `produces`. */
+  producesRefs: Array<{ extension: string; objectTypeId?: string }>;
 } | null> {
   // OAS source lives at either:
   //   agents/<slug>/cinatra/oas.json  → package.json is ../../package.json (one up from cinatra/)
@@ -674,22 +679,33 @@ async function readSiblingPackageJson(
       // declared binding then errors — production must be declared), never
       // a silent skip (codex round 0).
       let produces: string[] = [];
+      let producesRefs: Array<{ extension: string; objectTypeId?: string }> = [];
       const producesRaw = parsed.cinatra?.produces;
       if (Array.isArray(producesRaw)) {
-        const collected = producesRaw
-          .map((r) =>
-            r && typeof r === "object" && typeof (r as { extension?: unknown }).extension === "string"
-              ? ((r as { extension: string }).extension)
-              : null,
-          )
-          .filter((e): e is string => typeof e === "string" && e.length > 0);
-        if (collected.length === producesRaw.length) produces = collected;
+        const collectedRefs = producesRaw
+          .map((r) => {
+            if (!r || typeof r !== "object") return null;
+            const ext = (r as { extension?: unknown }).extension;
+            if (typeof ext !== "string" || ext.length === 0) return null;
+            const otid = (r as { objectTypeId?: unknown }).objectTypeId;
+            return typeof otid === "string" && otid.length > 0
+              ? { extension: ext, objectTypeId: otid }
+              : { extension: ext };
+          })
+          .filter((e): e is { extension: string; objectTypeId?: string } => e !== null);
+        // All-or-nothing (fail-closed): a malformed entry drops the whole set so
+        // a declared binding then errors rather than passing an unvalidated set.
+        if (collectedRefs.length === producesRaw.length) {
+          producesRefs = collectedRefs;
+          produces = collectedRefs.map((r) => r.extension);
+        }
       }
       return {
         packageName: typeof parsed.name === "string" ? parsed.name : null,
         packageVersion: typeof parsed.version === "string" ? parsed.version : null,
         agentDependencies: parsed.cinatra?.agentDependencies ?? {},
         produces,
+        producesRefs,
       };
     } catch {
       // try next candidate
@@ -1803,6 +1819,7 @@ export async function compileOasAgentJson(opts: {
   {
     const bindingResult = collectArtifactBindingsFromOasDocument(parsed, {
       produces: sibling?.produces ?? null,
+      producesRefs: sibling?.producesRefs ?? null,
     });
     if (bindingResult.errors.length > 0) {
       return {
@@ -1823,7 +1840,7 @@ export async function compileOasAgentJson(opts: {
   {
     const materializeResult = collectArtifactMaterializeNodesFromOasDocument(
       parsed,
-      { produces: sibling?.produces ?? null },
+      { produces: sibling?.produces ?? null, producesRefs: sibling?.producesRefs ?? null },
     );
     if (materializeResult.errors.length > 0) {
       return {

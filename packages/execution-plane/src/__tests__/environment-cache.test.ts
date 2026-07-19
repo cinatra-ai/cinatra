@@ -60,61 +60,61 @@ function makeEntry(opts: {
 }
 
 describe("EnvironmentLayerCache lookup", () => {
-  it("instance-shared layers hit for every org (single build across agents)", () => {
+  it("instance-shared layers hit for every org (single build across agents)", async () => {
     const cache = new EnvironmentLayerCache({ provenanceKey: KEY });
     const entry = makeEntry({});
-    cache.put(entry);
-    expect(cache.lookup(entry.recipeKey, { orgId: "org-a" }).hit).toBe(true);
-    expect(cache.lookup(entry.recipeKey, { orgId: "org-b" }).hit).toBe(true);
+    await cache.put(entry);
+    expect((await cache.lookup(entry.recipeKey, { orgId: "org-a" })).hit).toBe(true);
+    expect((await cache.lookup(entry.recipeKey, { orgId: "org-b" })).hit).toBe(true);
   });
 
-  it("org-partitioned layers stay private by default; share toggle opens them", () => {
+  it("org-partitioned layers stay private by default; share toggle opens them", async () => {
     const entry = makeEntry({ partition: "org:org-a" });
     const closed = new EnvironmentLayerCache({ provenanceKey: KEY });
-    closed.put(entry);
-    expect(closed.lookup(entry.recipeKey, { orgId: "org-a" }).hit).toBe(true);
-    expect(closed.lookup(entry.recipeKey, { orgId: "org-b" })).toEqual({
+    await closed.put(entry);
+    expect((await closed.lookup(entry.recipeKey, { orgId: "org-a" })).hit).toBe(true);
+    expect(await closed.lookup(entry.recipeKey, { orgId: "org-b" })).toEqual({
       hit: false,
       reason: "partition_denied",
     });
 
     const shared = new EnvironmentLayerCache({ provenanceKey: KEY, sharePrivateLayers: true });
-    shared.put(entry);
-    expect(shared.lookup(entry.recipeKey, { orgId: "org-b" }).hit).toBe(true);
+    await shared.put(entry);
+    expect((await shared.lookup(entry.recipeKey, { orgId: "org-b" })).hit).toBe(true);
   });
 
-  it("two orgs' private layers for the SAME recipe coexist (no clobbering)", () => {
+  it("two orgs' private layers for the SAME recipe coexist (no clobbering)", async () => {
     const cache = new EnvironmentLayerCache({ provenanceKey: KEY });
     const a = makeEntry({ partition: "org:org-a" });
     const b = makeEntry({ partition: "org:org-b" });
-    cache.put(a);
-    cache.put(b);
-    const hitA = cache.lookup(a.recipeKey, { orgId: "org-a" });
-    const hitB = cache.lookup(b.recipeKey, { orgId: "org-b" });
+    await cache.put(a);
+    await cache.put(b);
+    const hitA = await cache.lookup(a.recipeKey, { orgId: "org-a" });
+    const hitB = await cache.lookup(b.recipeKey, { orgId: "org-b" });
     expect(hitA.hit && hitA.entry.partition).toBe("org:org-a");
     expect(hitB.hit && hitB.entry.partition).toBe("org:org-b");
   });
 
-  it("verifies provenance BEFORE returning a hit (tamper ⇒ rebuild, never mount)", () => {
+  it("verifies provenance BEFORE returning a hit (tamper ⇒ rebuild, never mount)", async () => {
     const cache = new EnvironmentLayerCache({ provenanceKey: KEY });
     const entry = makeEntry({ signingKey: "wrong-key" });
-    cache.put(entry);
-    expect(cache.lookup(entry.recipeKey, { orgId: "org-a" })).toEqual({
+    await cache.put(entry);
+    expect(await cache.lookup(entry.recipeKey, { orgId: "org-a" })).toEqual({
       hit: false,
       reason: "provenance_invalid",
     });
   });
 
-  it("lookupBySpecKey returns a verified admitted layer for the spec fast path", () => {
+  it("lookupBySpecKey returns a verified admitted layer for the spec fast path", async () => {
     const cache = new EnvironmentLayerCache({ provenanceKey: KEY });
     const entry = makeEntry({});
-    cache.put(entry);
-    const result = cache.lookupBySpecKey(entry.specKey, { orgId: "org-a" });
+    await cache.put(entry);
+    const result = await cache.lookupBySpecKey(entry.specKey, { orgId: "org-a" });
     expect(result.hit && result.entry.recipeKey).toBe(entry.recipeKey);
-    expect(cache.lookupBySpecKey("absent-spec-key", { orgId: "org-a" }).hit).toBe(false);
+    expect((await cache.lookupBySpecKey("absent-spec-key", { orgId: "org-a" })).hit).toBe(false);
   });
 
-  it("a poisoned spec-key index row can never redirect to a sibling entry of a DIFFERENT spec", () => {
+  it("a poisoned spec-key index row can never redirect to a sibling entry of a DIFFERENT spec", async () => {
     // codex S3-r1 finding 1: seed a VALID entry, then a tampered sibling row
     // that carries the victim's specKey in its unsigned index field but whose
     // SIGNED recipe derives a different spec key. The fast path must not
@@ -123,35 +123,35 @@ describe("EnvironmentLayerCache lookup", () => {
     const cache = new EnvironmentLayerCache({ provenanceKey: KEY });
     const victimSpecKey = "victim-spec-key";
     const other = makeEntry({ pipDigest: "other-recipe" }); // valid, different spec
-    cache.put(other);
+    await cache.put(other);
     const tampered = makeEntry({ pipDigest: "other-recipe", partition: "org:org-a" });
     tampered.specKey = victimSpecKey; // unsigned index field poisoned
-    cache.put(tampered);
-    const result = cache.lookupBySpecKey(victimSpecKey, { orgId: "org-a" });
+    await cache.put(tampered);
+    const result = await cache.lookupBySpecKey(victimSpecKey, { orgId: "org-a" });
     expect(result.hit).toBe(false);
   });
 
-  it("requiredPartition admits ONLY the exact partition (org-private requests)", () => {
+  it("requiredPartition admits ONLY the exact partition (org-private requests)", async () => {
     const cache = new EnvironmentLayerCache({ provenanceKey: KEY });
     const instance = makeEntry({});
-    cache.put(instance);
+    await cache.put(instance);
     // An org-private request must NOT resolve to the instance-shared layer.
     expect(
-      cache.lookup(instance.recipeKey, { orgId: "org-a", requiredPartition: "org:org-a" }),
+      await cache.lookup(instance.recipeKey, { orgId: "org-a", requiredPartition: "org:org-a" }),
     ).toEqual({ hit: false, reason: "partition_denied" });
     const priv = makeEntry({ partition: "org:org-a" });
-    cache.put(priv);
-    const hit = cache.lookup(priv.recipeKey, { orgId: "org-a", requiredPartition: "org:org-a" });
+    await cache.put(priv);
+    const hit = await cache.lookup(priv.recipeKey, { orgId: "org-a", requiredPartition: "org:org-a" });
     expect(hit.hit && hit.entry.partition).toBe("org:org-a");
   });
 
-  it("unsigned entry fields must MATCH the signed provenance (binding checks)", () => {
+  it("unsigned entry fields must MATCH the signed provenance (binding checks)", async () => {
     const cache = new EnvironmentLayerCache({ provenanceKey: KEY });
     // imageDigest drifted from the signed record: refused.
     const drifted = makeEntry({});
     drifted.imageDigest = "sha256:swapped";
-    cache.put(drifted);
-    expect(cache.lookup(drifted.recipeKey, { orgId: "org-a" })).toEqual({
+    await cache.put(drifted);
+    expect(await cache.lookup(drifted.recipeKey, { orgId: "org-a" })).toEqual({
       hit: false,
       reason: "provenance_invalid",
     });
@@ -159,8 +159,8 @@ describe("EnvironmentLayerCache lookup", () => {
     const relabeled = makeEntry({ partition: "org:org-a" });
     relabeled.partition = "instance";
     const cache2 = new EnvironmentLayerCache({ provenanceKey: KEY });
-    cache2.put(relabeled);
-    expect(cache2.lookup(relabeled.recipeKey, { orgId: "org-b" })).toEqual({
+    await cache2.put(relabeled);
+    expect(await cache2.lookup(relabeled.recipeKey, { orgId: "org-b" })).toEqual({
       hit: false,
       reason: "provenance_invalid",
     });
@@ -168,8 +168,8 @@ describe("EnvironmentLayerCache lookup", () => {
     const wrongSpec = makeEntry({});
     wrongSpec.specKey = "some-other-spec-key";
     const cache3 = new EnvironmentLayerCache({ provenanceKey: KEY });
-    cache3.put(wrongSpec);
-    expect(cache3.lookup(wrongSpec.recipeKey, { orgId: "org-a" })).toEqual({
+    await cache3.put(wrongSpec);
+    expect(await cache3.lookup(wrongSpec.recipeKey, { orgId: "org-a" })).toEqual({
       hit: false,
       reason: "provenance_invalid",
     });
@@ -177,7 +177,7 @@ describe("EnvironmentLayerCache lookup", () => {
 });
 
 describe("references + retention GC (lifecycle doctrine)", () => {
-  const setup = () => {
+  const setup = async () => {
     let clock = 0;
     const cache = new EnvironmentLayerCache({
       provenanceKey: KEY,
@@ -185,13 +185,13 @@ describe("references + retention GC (lifecycle doctrine)", () => {
       now: () => clock,
     });
     const entry = makeEntry({ now: 0 });
-    cache.put(entry);
-    cache.addReference({
+    await cache.put(entry);
+    await cache.addReference({
       recipeKey: entry.recipeKey,
       orgId: "org-a",
       holder: { packageName: "@cinatra-ai/x-agent", versionId: "v1" },
     });
-    cache.addReference({
+    await cache.addReference({
       recipeKey: entry.recipeKey,
       orgId: "org-b",
       holder: { packageName: "@cinatra-ai/x-agent", versionId: "v1" },
@@ -200,21 +200,21 @@ describe("references + retention GC (lifecycle doctrine)", () => {
   };
 
   it("archive (org-scoped reference drop) PRESERVES the layer; restore = cache hit", async () => {
-    const { cache, entry, advance } = setup();
+    const { cache, entry, advance } = await setup();
     // org-a admin archives: only org-a's references drop.
-    expect(cache.dropReferences({ orgId: "org-a", packageName: "@cinatra-ai/x-agent" })).toBe(1);
-    expect(cache.referenceCount(entry.recipeKey)).toBe(1);
+    expect(await cache.dropReferences({ orgId: "org-a", packageName: "@cinatra-ai/x-agent" })).toBe(1);
+    expect(await cache.referenceCount(entry.recipeKey)).toBe(1);
     // Layer still present and mountable (restore = cache hit, no rebuild).
     advance(1_000);
     const gc = await cache.reapUnreferencedLayers({ removeImage: async () => {} });
     expect(gc.reaped).toEqual([]); // org-b's reference still pins it
-    expect(cache.lookup(entry.recipeKey, { orgId: "org-a" }).hit).toBe(true);
+    expect((await cache.lookup(entry.recipeKey, { orgId: "org-a" })).hit).toBe(true);
   });
 
   it("fully-unreferenced layers are reaped ONLY after the retention window", async () => {
-    const { cache, entry, advance } = setup();
-    cache.dropReferences({ packageName: "@cinatra-ai/x-agent" }); // hard removal: all orgs
-    expect(cache.referenceCount(entry.recipeKey)).toBe(0);
+    const { cache, entry, advance } = await setup();
+    await cache.dropReferences({ packageName: "@cinatra-ai/x-agent" }); // hard removal: all orgs
+    expect(await cache.referenceCount(entry.recipeKey)).toBe(0);
     // Inside the retention window: preserved.
     let gc = await cache.reapUnreferencedLayers({ removeImage: async () => {} });
     expect(gc.reaped).toEqual([]);
@@ -228,15 +228,15 @@ describe("references + retention GC (lifecycle doctrine)", () => {
     });
     expect(gc.reaped).toEqual([entry.recipeKey]);
     expect(removed).toEqual([entry.imageRef]);
-    expect(cache.lookup(entry.recipeKey, { orgId: "org-a" })).toEqual({
+    expect(await cache.lookup(entry.recipeKey, { orgId: "org-a" })).toEqual({
       hit: false,
       reason: "absent",
     });
   });
 
   it("a failing image removal keeps the entry for the next sweep (best-effort)", async () => {
-    const { cache, entry, advance } = setup();
-    cache.dropReferences({ packageName: "@cinatra-ai/x-agent" });
+    const { cache, entry, advance } = await setup();
+    await cache.dropReferences({ packageName: "@cinatra-ai/x-agent" });
     advance(1_000);
     const gc = await cache.reapUnreferencedLayers({
       removeImage: async () => {
@@ -244,27 +244,27 @@ describe("references + retention GC (lifecycle doctrine)", () => {
       },
     });
     expect(gc.reaped).toEqual([]);
-    expect(cache.lookup(entry.recipeKey, { orgId: "org-a" }).hit).toBe(true);
+    expect((await cache.lookup(entry.recipeKey, { orgId: "org-a" })).hit).toBe(true);
   });
 
-  it("side-by-side version removal drops only that version's references", () => {
-    const { cache, entry } = setup();
-    cache.addReference({
+  it("side-by-side version removal drops only that version's references", async () => {
+    const { cache, entry } = await setup();
+    await cache.addReference({
       recipeKey: entry.recipeKey,
       orgId: "org-a",
       holder: { packageName: "@cinatra-ai/x-agent", versionId: "v2" },
     });
     expect(
-      cache.dropReferences({ packageName: "@cinatra-ai/x-agent", versionId: "v2" }),
+      await cache.dropReferences({ packageName: "@cinatra-ai/x-agent", versionId: "v2" }),
     ).toBe(1);
-    expect(cache.referenceCount(entry.recipeKey)).toBe(2); // both v1 refs intact
+    expect(await cache.referenceCount(entry.recipeKey)).toBe(2); // both v1 refs intact
   });
 
   it("teardown participant is idempotent (double-fire safe) and drops all orgs' refs", async () => {
-    const { cache, entry } = setup();
+    const { cache, entry } = await setup();
     const participant = makeEnvironmentTeardownParticipant(cache);
     expect(await participant("@cinatra-ai/x-agent")).toEqual({ droppedReferences: 2 });
     expect(await participant("@cinatra-ai/x-agent")).toEqual({ droppedReferences: 0 });
-    expect(cache.referenceCount(entry.recipeKey)).toBe(0);
+    expect(await cache.referenceCount(entry.recipeKey)).toBe(0);
   });
 });

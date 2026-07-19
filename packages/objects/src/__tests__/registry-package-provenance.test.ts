@@ -37,6 +37,22 @@ describe("objectTypeRegistry — package provenance + removeByPackage", () => {
     expect(objectTypeRegistry.getTypesForPackage("@scope/none")).toEqual([]);
   });
 
+  it("definerOf returns the defining package, null for host built-ins and unknown ids", () => {
+    objectTypeRegistry.register(def("@scope/a:one"), "@scope/a");
+    objectTypeRegistry.register(def("@cinatra-ai/objects:builtin")); // host, no provenance
+
+    // A package-defined type resolves to its owning package.
+    expect(objectTypeRegistry.definerOf("@scope/a:one")).toBe("@scope/a");
+    // A host/built-in registration is provenance-less → null (never the type id).
+    expect(objectTypeRegistry.definerOf("@cinatra-ai/objects:builtin")).toBeNull();
+    // An unregistered id → null.
+    expect(objectTypeRegistry.definerOf("@scope/never:type")).toBeNull();
+
+    // Follows the provenance through teardown: once removed, the definer is gone.
+    objectTypeRegistry.removeByPackage("@scope/a");
+    expect(objectTypeRegistry.definerOf("@scope/a:one")).toBeNull();
+  });
+
   it("removeByPackage deregisters ONLY the named package's types and returns them", () => {
     objectTypeRegistry.register(def("@scope/a:one"), "@scope/a");
     objectTypeRegistry.register(def("@scope/a:two"), "@scope/a");

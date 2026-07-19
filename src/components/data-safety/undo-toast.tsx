@@ -10,12 +10,11 @@ import { canRestoreChangeSetAction } from "@/components/data-safety/restore-chan
 // The data-safety "Saved … [Undo]" toast.
 //
 // On a successful mutation that produced a change-set, fires a toast whose
-// Undo action deep-links to the consolidated undo surface, carrying the
-// change-set id so that exact row's restore modal auto-opens
-// (/artifacts?mode=undo&openRestore=<changeSetId> — the former
-// /data-safety change-set route was retired in cinatra#1431 §VII; the flat
-// undo list carries the per-row restore modal and honours the deep-link).
-// On failure, an error toast.
+// Undo action deep-links to that single change set's targeted-restore route
+// nested under the Artifacts console
+// (/configuration/artifacts/restore/<changeSetId>, cinatra#1786), which
+// re-checks the same per-object eligibility and auto-opens the restore
+// confirmation. On failure, an error toast.
 // On success WITHOUT a change-set id, nothing. Uses the project's
 // cinatra-toast wrapper (owner-mandated; never sonner directly).
 //
@@ -36,11 +35,13 @@ import { canRestoreChangeSetAction } from "@/components/data-safety/restore-chan
 // toast, just without the host's default router navigation.
 
 export function undoDeepLink(changeSetId: string): string {
-  // The per-change-set restore route was retired (cinatra#1431 §VII); the Undo
-  // toast now lands on the consolidated undo surface. The change-set id rides in
-  // `openRestore` so the flat undo list auto-opens THIS change-set's restore
-  // modal (the same deep-open the retired detail route gave via ?openRestore).
-  return `/artifacts?mode=undo&openRestore=${encodeURIComponent(changeSetId)}`;
+  // The entry affordances (this toast + the in-chat "Undo last action" chip)
+  // deep-link to the SINGLE addressed change set's targeted-restore surface,
+  // nested under the Artifacts console (cinatra#1786, spec design@923fa0d8 §IV).
+  // That route holds to the same per-object eligibility the affordance already
+  // checked and auto-opens the restore confirmation, so a rendered control never
+  // dead-ends on the not-authorized panel.
+  return `/configuration/artifacts/restore/${encodeURIComponent(changeSetId)}`;
 }
 
 export type UndoToastOptions = {

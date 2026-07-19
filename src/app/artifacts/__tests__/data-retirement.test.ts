@@ -43,3 +43,19 @@ describe("merge-proposals relocated under /artifacts", () => {
     expect(existsSync(p("artifacts/page.tsx"))).toBe(true);
   });
 });
+
+// cinatra#1786 (epic #1785): the admin type/stored-object/restore surfaces are
+// relocated OUT of `/artifacts` and into the `/configuration/artifacts`
+// console. This is a source-level contract: the console route and its nested
+// single-change-set restore route must exist.
+describe("cinatra#1786 — /configuration/artifacts console surface exists", () => {
+  it("the three-tab console page exists", () => {
+    expect(existsSync(p("configuration/artifacts/page.tsx"))).toBe(true);
+  });
+
+  it("the nested targeted-restore route exists", () => {
+    expect(
+      existsSync(p("configuration/artifacts/restore/[changeSetId]/page.tsx")),
+    ).toBe(true);
+  });
+});

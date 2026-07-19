@@ -25,12 +25,12 @@ import { showUndoToast, undoDeepLink } from "../undo-toast";
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe("undoDeepLink", () => {
-  it("lands on the consolidated undo surface AND carries the change-set id so that row's restore modal auto-opens (the per-change-set route was retired in cinatra#1431 §VII)", () => {
-    expect(undoDeepLink("cs_9")).toBe("/artifacts?mode=undo&openRestore=cs_9");
+  it("deep-links to the single change set's targeted-restore route nested under the Artifacts console (cinatra#1786)", () => {
+    expect(undoDeepLink("cs_9")).toBe("/configuration/artifacts/restore/cs_9");
   });
 
   it("url-encodes the change-set id", () => {
-    expect(undoDeepLink("cs/9 a")).toBe("/artifacts?mode=undo&openRestore=cs%2F9%20a");
+    expect(undoDeepLink("cs/9 a")).toBe("/configuration/artifacts/restore/cs%2F9%20a");
   });
 });
 

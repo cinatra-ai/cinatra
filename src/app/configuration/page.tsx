@@ -60,6 +60,18 @@ const administrationSections = [
     ],
   },
   {
+    title: "Artifacts",
+    description:
+      "The type definitions your artifact extensions declare, the stored objects across them, and object-change-set restore.",
+    href: "/configuration/artifacts",
+    icon: domainIcons.artifacts,
+    links: [
+      { label: "Type definitions", href: "/configuration/artifacts" },
+      { label: "Stored objects", href: "/configuration/artifacts?tab=objects" },
+      { label: "Restore objects", href: "/configuration/artifacts?tab=restore" },
+    ],
+  },
+  {
     title: "Extensions",
     description: "Installed and archived extensions for this workspace.",
     href: "/configuration/extensions",

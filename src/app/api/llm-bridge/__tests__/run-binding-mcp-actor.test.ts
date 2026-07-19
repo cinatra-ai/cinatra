@@ -135,6 +135,11 @@ vi.mock("@cinatra-ai/agents", async () => {
     readAgentRunByTokenHash: readAgentRunByTokenHashMock,
     readAgentRunTokenHashById: readAgentRunTokenHashByIdMock,
     readAgentTemplateById: readAgentTemplateByIdMock,
+    // Run-execution-environment seam consumed by the route via
+    // resolve-run-execution-binding.ts (exec-plane S3 A2, cinatra#1708). These
+    // runs declare NO environment, so the resolver reports `kind:"none"` and the
+    // binding resolves to L0 — the route path under test is unchanged.
+    resolveRunExecutionEnvironment: () => ({ kind: "none" }),
     // Capability-matrix helpers consumed by _llm-dispatch.ts (engineering#417).
     // Pure mirrors of llm-provider-policy.ts so the dispatch capability gate +
     // actionable 503 message resolve without the heavy real barrel.

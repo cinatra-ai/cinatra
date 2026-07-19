@@ -3,9 +3,11 @@ import { createHash } from "node:crypto";
 import type { Pool } from "pg";
 import {
   collectArtifactBindingsFromOasDocument,
+  producesObjectTypeIdForExtension,
   type CollectedArtifactBinding,
+  type SemanticArtifactProducesRef,
 } from "@cinatra-ai/agents/artifact-binding";
-import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { resolveBoundArtifactTarget } from "./resolve-bound-artifact-type";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
 import { getPooledDb } from "@/lib/db/pooled";
 import {
@@ -77,8 +79,6 @@ export type RunArtifactMaterializationOutcome =
       error: string;
     };
 
-const ARTIFACT_TYPE_SUFFIX = ":artifact";
-
 function pool(): Pool {
   return getPooledDb({
     name: "run-artifact-materializer",
@@ -92,7 +92,12 @@ function pool(): Pool {
 // never cached.
 const pinnedBindingsCache = new Map<
   string,
-  { bindings: CollectedArtifactBinding[]; errors: string[]; produces: string[] }
+  {
+    bindings: CollectedArtifactBinding[];
+    errors: string[];
+    produces: string[];
+    producesRefs: SemanticArtifactProducesRef[];
+  }
 >();
 
 async function loadRunPackageBindings(input: {
@@ -102,6 +107,9 @@ async function loadRunPackageBindings(input: {
   bindings: CollectedArtifactBinding[];
   errors: string[];
   produces: string[];
+  /** The FULL typed produces entries (cinatra#1454) — carries per-entry
+   *  objectTypeId so the materializer resolves the declared target type. */
+  producesRefs: SemanticArtifactProducesRef[];
 }> {
   const cacheKey =
     input.packageVersion !== null
@@ -129,20 +137,19 @@ async function loadRunPackageBindings(input: {
   // a skipped check (codex round 0). The produces set is also the runtime
   // authority for the `artifact_materialize` tool path (cinatra#925), so it
   // is computed (and cached) even when the OAS payload is absent/malformed.
-  const produces = producesReader
-    .readAgentProducesFromPackageManifest(pkg.manifest)
-    .map((r) => r.extension);
+  const producesRefs = producesReader.readAgentProducesFromPackageManifest(pkg.manifest);
+  const produces = producesRefs.map((r) => r.extension);
   const payload = pkg.payload;
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    const empty = { bindings: [], errors: [] as string[], produces };
+    const empty = { bindings: [], errors: [] as string[], produces, producesRefs };
     if (cacheKey !== null) pinnedBindingsCache.set(cacheKey, empty);
     return empty;
   }
   const collected = collectArtifactBindingsFromOasDocument(
     payload as Record<string, unknown>,
-    { produces },
+    { produces, producesRefs },
   );
-  const result = { ...collected, produces };
+  const result = { ...collected, produces, producesRefs };
   if (cacheKey !== null) pinnedBindingsCache.set(cacheKey, result);
   return result;
 }
@@ -171,8 +178,6 @@ async function* asUtf8Stream(s: string): AsyncIterable<Uint8Array> {
   yield new TextEncoder().encode(s);
 }
 
-type ArtifactDefs = ReturnType<typeof objectTypeRegistry.listArtifacts>;
-
 /**
  * Shared write core for both materialization paths (cinatra#923 EndNode
  * bindings, cinatra#925 `artifact_materialize` tool): registry/accepts/
@@ -193,7 +198,10 @@ async function writeClaimedArtifact(input: {
   title: string;
   mime: string;
   content: string;
-  artifactDefs: ArtifactDefs;
+  /** The declared object type + its accepted representation forms, ALREADY
+   *  resolved by `resolveBoundArtifactTarget` (cinatra#1454) — replaces the
+   *  retired `${extension}:artifact` umbrella lookup (#1824). */
+  resolvedTarget: { objectTypeId: string; acceptedFileMimeTypes: string[] };
   /** Per-path wording for the accepts-mismatch error message. */
   mimeDescription: string;
 }): Promise<
@@ -205,21 +213,13 @@ async function writeClaimedArtifact(input: {
     }
   | { ok: false; error: string }
 > {
-  const def = input.artifactDefs.find(
-    (d) => d.type === `${input.extension}${ARTIFACT_TYPE_SUFFIX}`,
-  );
-  const manifest = def?.isArtifact;
-  if (!manifest) {
-    return {
-      ok: false,
-      error: `artifact extension "${input.extension}" is not installed/registered on this host`,
-    };
-  }
-  const acceptedMimes = manifest.accepts?.file?.mimeTypes ?? [];
+  const acceptedMimes = input.resolvedTarget.acceptedFileMimeTypes;
   if (!acceptedMimes.includes(input.mime)) {
     return {
       ok: false,
-      error: `extension "${input.extension}" accepts [${acceptedMimes.join(", ")}]; ${input.mimeDescription} "${input.mime}"`,
+      error:
+        `object type "${input.resolvedTarget.objectTypeId}" (extension "${input.extension}") accepts ` +
+        `[${acceptedMimes.join(", ")}]; ${input.mimeDescription} "${input.mime}"`,
     };
   }
   if (!(await isArtifactExtensionWriteAllowed(input.extension, input.orgId))) {
@@ -326,6 +326,7 @@ export async function materializeRunArtifacts(input: {
   endNodeOutputs: Record<string, unknown> | null;
 }): Promise<RunArtifactMaterializationOutcome[]> {
   let bindings: CollectedArtifactBinding[];
+  let producesRefs: SemanticArtifactProducesRef[] = [];
   const outcomes: RunArtifactMaterializationOutcome[] = [];
   try {
     const packageName = await resolveTemplatePackageName(input.templateId);
@@ -335,6 +336,7 @@ export async function materializeRunArtifacts(input: {
       packageVersion: input.packageVersion,
     });
     bindings = loaded.bindings;
+    producesRefs = loaded.producesRefs;
     for (const error of loaded.errors) {
       outcomes.push({
         ok: false,
@@ -361,9 +363,9 @@ export async function materializeRunArtifacts(input: {
   }
   if (bindings.length === 0) return outcomes;
 
-  // Warm the registry once for the accepts checks below.
+  // Warm the registry once so the declared-type resolution below sees every
+  // installed type (the resolver reads `objectTypeRegistry.resolve`).
   registerAllObjectTypes();
-  const artifactDefs = objectTypeRegistry.listArtifacts();
 
   for (const { nodeId, outputId, binding } of bindings) {
     const fail = (error: string): void => {
@@ -446,9 +448,28 @@ export async function materializeRunArtifacts(input: {
       }
 
       // ------------------------------------------------------------------
-      // Registry/accepts/write-gate validation + ledger claim → write-
-      // through (finalize atomic with the write) — the shared core
-      // (writeClaimedArtifact, also driving the #925 tool path).
+      // Resolve the binding to its DECLARED object type (cinatra#1454) — the
+      // umbrella `${extension}:artifact` (#1824) is retired. Eligibility is the
+      // org-chain winner-arbitrated artifact-safe claim set ∩ registered host
+      // type; a binding objectTypeId (or the typed produces entry) pins the
+      // exact type, else the single-artifact-safe-type fallback.
+      // ------------------------------------------------------------------
+      const resolved = await resolveBoundArtifactTarget({
+        orgId: input.orgId,
+        extension: binding.extension,
+        bindingObjectTypeId: binding.objectTypeId,
+        producesObjectTypeId:
+          producesObjectTypeIdForExtension(producesRefs, binding.extension) ?? undefined,
+      });
+      if (!resolved.ok) {
+        fail(resolved.error);
+        continue;
+      }
+
+      // ------------------------------------------------------------------
+      // Accepts/write-gate validation + ledger claim → write-through (finalize
+      // atomic with the write) — the shared core (writeClaimedArtifact, also
+      // driving the #925 tool path).
       // ------------------------------------------------------------------
       const result = await writeClaimedArtifact({
         runId: input.runId,
@@ -461,7 +482,7 @@ export async function materializeRunArtifacts(input: {
         title,
         mime,
         content,
-        artifactDefs,
+        resolvedTarget: resolved.target,
         mimeDescription: "the binding resolved MIME",
       });
       if (!result.ok) {
@@ -524,6 +545,9 @@ export async function materializeToolArtifact(input: {
   /** The calling ApiNode's id — the ledger output identity. */
   nodeId: string;
   extension: string;
+  /** OPTIONAL declared-type discriminator (cinatra#1454) — the exact
+   *  `@scope/pkg:local-id` the tool materializes into. */
+  objectTypeId?: string;
   title: string;
   mime: string;
   content: string;
@@ -568,9 +592,18 @@ export async function materializeToolArtifact(input: {
       };
     }
 
-    // Warm the registry for the accepts checks in the shared core.
+    // Warm the registry so declared-type resolution sees every installed type.
     registerAllObjectTypes();
-    const artifactDefs = objectTypeRegistry.listArtifacts();
+
+    // Resolve the tool call to its DECLARED object type (cinatra#1454).
+    const resolved = await resolveBoundArtifactTarget({
+      orgId: input.orgId,
+      extension: input.extension,
+      bindingObjectTypeId: input.objectTypeId,
+      producesObjectTypeId:
+        producesObjectTypeIdForExtension(loaded.producesRefs, input.extension) ?? undefined,
+    });
+    if (!resolved.ok) return { ok: false, error: resolved.error };
 
     return await writeClaimedArtifact({
       runId: input.runId,
@@ -583,7 +616,7 @@ export async function materializeToolArtifact(input: {
       title,
       mime: input.mime,
       content: input.content,
-      artifactDefs,
+      resolvedTarget: resolved.target,
       mimeDescription: "the call declared MIME",
     });
   } catch (err) {

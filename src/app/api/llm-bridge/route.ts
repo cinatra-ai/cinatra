@@ -79,6 +79,11 @@ import {
 } from "@/lib/agent-run-actor-resolve";
 import { verifyAgentRunBinding } from "@/lib/agent-run-binding";
 import { verifyRunToken, RUN_TOKEN_HEADER } from "@/lib/agent-run-token";
+// exec-plane S3 A2 (cinatra#1708): the run-seam fail-closed decision matrix that
+// resolves a run's DECLARED L1 environment into a mountable layer + broker
+// executor (or refuses a declared env that cannot be honored — never a silent L0
+// downgrade). Reaches the execution service through a lightweight DI slot.
+import { resolveRunExecutionBinding } from "@/lib/execution/resolve-run-execution-binding";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import { emitUsageEvent } from "@cinatra-ai/metric-usage-api";
 import {
@@ -1512,6 +1517,38 @@ export async function POST(req: Request): Promise<Response> {
               return buildMachineToolWithDurableBinding();
             }
           : undefined;
+
+      // exec-plane S3 A2 (cinatra#1708 §1.1): resolve the run's DECLARED L1
+      // environment into a mountable layer + broker executor, or REFUSE a
+      // declared env that cannot be honored (never a silent L0 downgrade). Only
+      // a vetted run (a resolved templateId) carries a declared-env source here;
+      // absent ⇒ L0 (byte-identical). Today's instances resolve the service
+      // `disabled` and no current agent declares an environment, so this stays a
+      // no-op L0 until the service is `ready` + a declared env lands.
+      let runEnvBinding: Awaited<ReturnType<typeof resolveRunExecutionBinding>> | undefined;
+      if (runForPorts?.templateId) {
+        const envTemplate = await readAgentTemplateById(runForPorts.templateId);
+        runEnvBinding = await resolveRunExecutionBinding({
+          liveTemplateEnvironment: envTemplate?.executionEnvironment,
+          orgId: runForPorts.orgId!,
+          holder: {
+            templateId: runForPorts.templateId,
+            ...(envTemplate?.packageName ? { packageName: envTemplate.packageName } : {}),
+            ...(body.agent_spec_version ? { versionId: body.agent_spec_version } : {}),
+          },
+        });
+        if (runEnvBinding.kind === "refuse") {
+          return NextResponse.json(
+            {
+              error: "environment_refused",
+              code: "ENVIRONMENT_REFUSED",
+              reason: runEnvBinding.auditReason,
+              detail: runEnvBinding.detail,
+            },
+            { status: 409 },
+          );
+        }
+      }
       result = await runResolvedSkillAwareDeterministicLlmTask({
         runtime: resolvedRuntime,
         model: body.model_id,
@@ -1549,6 +1586,16 @@ export async function POST(req: Request): Promise<Response> {
           ? { attachments: envelope.attachments }
           : {}),
         ...(attachmentResolverPorts ? { attachmentResolverPorts } : {}),
+        // exec-plane S3 A2 (cinatra#1708): supply the broker executor + opaque
+        // mount ONLY when a declared environment resolved to a signed layer; the
+        // broker re-verifies the signed provenance fail-closed before every
+        // mount (AC4). Absent ⇒ byte-identical L0 dispatch.
+        ...(runEnvBinding?.kind === "mount"
+          ? {
+              executionExecutor: runEnvBinding.executor,
+              executionEnvironment: runEnvBinding.environment,
+            }
+          : {}),
         ...dispatchOverrides,
       });
     } catch (err) {

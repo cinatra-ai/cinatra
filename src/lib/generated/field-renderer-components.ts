@@ -32,4 +32,5 @@ export const GENERATED_FIELD_RENDERER_COMPONENTS: Record<string, GeneratedFieldR
   "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm": { resolution: "guardedOptional", packageName: "@cinatra-ai/blog-wordpress-publish-agent", propsApiVersion: 1, load: () => import("@cinatra-ai/blog-wordpress-publish-agent/src/renderers/draft-confirm") },
   "@cinatra-ai/list-curator-agent:final-list-review": { resolution: "guardedOptional", packageName: "@cinatra-ai/list-curator-agent", propsApiVersion: 1, load: () => import("@cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer") },
   "@cinatra-ai/list-curator-agent:scrape-schema-review": { resolution: "guardedOptional", packageName: "@cinatra-ai/list-curator-agent", propsApiVersion: 1, load: () => import("@cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer") },
+  "@cinatra-ai/skill-recommender-agent:recommend": { resolution: "guardedOptional", packageName: "@cinatra-ai/skill-recommender-agent", propsApiVersion: 1, load: () => import("@cinatra-ai/skill-recommender-agent/src/skill-recommender-renderer") },
 };

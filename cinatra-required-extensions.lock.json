@@ -12,9 +12,9 @@
     {
       "packageName": "@cinatra-ai/audio-artifact",
       "repo": "cinatra-ai/audio-artifact",
-      "resolvedSha": "111437d4cd8a35cc01f58b2141db607f09eb5670",
-      "packageVersion": "0.1.0",
-      "treeSha256": "483f3e6c75ed3453e1ecb8c236d837a586f74a4ed4763e20b5f029acdc1cec2b"
+      "resolvedSha": "67733d7f73768395d5eb78fa11d530b55dd7262c",
+      "packageVersion": "0.1.1",
+      "treeSha256": "2a978d8aec62480b9a31a0f5fcc62720e3a22772a4f7f947d32813f59917fd73"
     },
     {
       "packageName": "@cinatra-ai/author-agent",
@@ -47,9 +47,9 @@
     {
       "packageName": "@cinatra-ai/image-artifact",
       "repo": "cinatra-ai/image-artifact",
-      "resolvedSha": "44f8395e7bd26c9b547fc361b7a8e6516e913fe8",
-      "packageVersion": "0.1.0",
-      "treeSha256": "c99e9cd37fd49ccb7de424cfc877552055ccc0eff34f79aaeafd2e6303150d77"
+      "resolvedSha": "f17a4f9fbe2e85ca47f43bae0c77934d75148695",
+      "packageVersion": "0.1.1",
+      "treeSha256": "55f20e69d600369d539ef17cea5cd7630a76c958a31d7e779e49d4a8bf487ba0"
     },
     {
       "packageName": "@cinatra-ai/lint-policy-agent",
@@ -75,9 +75,9 @@
     {
       "packageName": "@cinatra-ai/pdf-artifact",
       "repo": "cinatra-ai/pdf-artifact",
-      "resolvedSha": "4c604fda2d9568417edd54db890830a7d19069a0",
-      "packageVersion": "0.1.0",
-      "treeSha256": "a111f5e4d0cf6b3e9da8aff8e6afb85eafcbc69e5ba0c52af0f3e6a58b3eeb30"
+      "resolvedSha": "daad9da02664e0fba333ee6c5a50a8c5cd212808",
+      "packageVersion": "0.1.1",
+      "treeSha256": "d7de2a5cc1fedb85ecd4c3713980ead785dcefade4b2cd9bb72d7acb3d49f9db"
     },
     {
       "packageName": "@cinatra-ai/planner-agent",
@@ -96,9 +96,9 @@
     {
       "packageName": "@cinatra-ai/video-artifact",
       "repo": "cinatra-ai/video-artifact",
-      "resolvedSha": "8a07f955932c3cdd9d874ef34728a76800cac8f3",
+      "resolvedSha": "6051244596aa0f256ebedf7d37c8a1e30c2500fc",
       "packageVersion": "0.1.1",
-      "treeSha256": "8f8bad6344f32e2fb7efd0d188925b50c73c09fec27acb4fa870c7b48f739067"
+      "treeSha256": "8236946e0d85a8dc5627fc29069d8699a459ce45cbf9e7a9e8c67489547394b6"
     }
   ]
 }

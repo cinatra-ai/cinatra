@@ -33,6 +33,7 @@ import { userStoreMountCheckPhases } from "@/lib/boot/phases/user-store-mount-ch
 import { artifactDataRootGuardPhases } from "@/lib/boot/phases/artifact-data-root-guard";
 import { bootDegradeProbePhases } from "@/lib/boot/phases/boot-degrade-probe";
 import { executionPlaneHealthPhases } from "@/lib/boot/phases/execution-plane-health";
+import { environmentExecutionServicePhases } from "@/lib/boot/phases/environment-execution-service";
 import { systemServicesPhases } from "@/lib/boot/phases/system-services";
 import { systemLoopPhases } from "@/lib/boot/phases/system-loops";
 import {
@@ -211,6 +212,16 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // REQUIRED=1 → degraded policy), non-blocking degraded otherwise. Inert (skipped)
   // on an instance that has not opted into the plane, so today's boots are unchanged.
   await run(executionPlaneHealthPhases());
+
+  // ── environment-execution-service (exec-plane S3 A2 — cinatra#1708) ──────────
+  // Instantiates the A2 execution-environment singletons (durable layer store +
+  // cache + trusted builder + broker-executor) and registers the tri-state DI
+  // slot the run seam + the A3 GC/teardown reach through. AFTER
+  // execution-plane-health (reuses that readiness signal) and AFTER core boot
+  // (the core__0057 migration ran → the durable tables exist). Fail-closed +
+  // never fatal: `disabled` for today's instances (byte-unchanged), `ready` when
+  // fully wired, `unavailable` (declared-env runs fail closed) otherwise.
+  await run(environmentExecutionServicePhases());
 
   // Boot reached its serving prerequisites: the eager worker + runtime engines are
   // wired and the required-set was enforced. Mark ready (degraded if any

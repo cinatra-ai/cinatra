@@ -170,12 +170,12 @@
     {
       "packageName": "@cinatra-ai/email-drafting-agent",
       "repo": "cinatra-ai/email-drafting-agent",
-      "resolvedSha": "9bce0cb48420fad3049cb1d02544673d460e48d6"
+      "resolvedSha": "543ac40f5b3e7b489cf61d3e05aaf1e6667d9add"
     },
     {
       "packageName": "@cinatra-ai/email-follow-up-agent",
       "repo": "cinatra-ai/email-follow-up-agent",
-      "resolvedSha": "f9b2fe41c3ba6d9a25e9ee40835cd876a2cc75a0"
+      "resolvedSha": "09402904ba78b965455da187d81b91434928305e"
     },
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
@@ -310,7 +310,7 @@
     {
       "packageName": "@cinatra-ai/skill-recommender-agent",
       "repo": "cinatra-ai/skill-recommender-agent",
-      "resolvedSha": "75a5b4f1951fe41b7505caacfeecf86b020c7f9a"
+      "resolvedSha": "4636be974a29bda0a3f1e5dbe46ddf69a85c0d5c"
     },
     {
       "packageName": "@cinatra-ai/slide-deck-artifact",
