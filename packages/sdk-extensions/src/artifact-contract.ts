@@ -35,6 +35,40 @@ export type ArtifactSkillBundle = {
   enrichers?: string[];
 };
 
+/**
+ * A manifest `objectTypes` claim entry (cinatra#1432): the claimant declares
+ * a claim over one TYPED object type. Structural twin of the zod schema in
+ * `@cinatra-ai/objects`'s `./claims` (`artifactObjectTypeClaimManifestSchema`)
+ * — this SDK copy stays type-only and structurally IDENTICAL to the
+ * `@cinatra-ai/objects` source of truth (`ArtifactObjectTypeClaim` in
+ * `packages/objects/src/types.ts`); the objects-contract parity guard pins them
+ * equal. Exported from the SDK public surface so a `kind:"artifact"` pack can
+ * type its claim array without importing the internal host package.
+ */
+export type ArtifactObjectTypeClaim = {
+  /** The claimed object type id (`@scope/package:local-id`). */
+  type: string;
+  /** Claim kind — arbitration is kind-over-scope (dedicated beats default). */
+  claim: "dedicated" | "default";
+  /** Per-claim disposition payload (the claim registry's strict union). */
+  dispositions?: {
+    projection: "raw" | "artifact-safe" | "none";
+    pinnable?: boolean;
+    snapshotPolicy?: "content" | "metadata" | "none";
+    redactionPolicyVersion?: string;
+    sensitivity?: "normal" | "sensitive";
+    /** Mutability class (cinatra#1449) — how the claimed rows may change
+     * (`draftable` | `record` | `external`); a claim may only NARROW the
+     * registering type's `lifecycle.mutableBy`, never widen it. Structural twin
+     * of `ArtifactMutability` in objects' `./claims`; the claims test pins them
+     * equal. */
+    mutability?: "draftable" | "record" | "external";
+  };
+  /** Inline JSON Schema for the claimed type's rows (schema-source rule:
+   * required unless self-registered or dependency-registered). */
+  schema?: Record<string, unknown>;
+};
+
 export type SemanticArtifactManifest = {
   accepts: ArtifactRepresentationForms;
   satisfies?: string[];
@@ -47,6 +81,15 @@ export type SemanticArtifactManifest = {
    * value. The runtime defaults to 0.7 when absent.
    */
   matcherConfidenceThreshold?: number;
+  /**
+   * Claims over TYPED object rows (cinatra#1432, epic #1424): installing this
+   * extension reserves→activates these claims in the durable claim registry;
+   * uninstalling retires them. Optional — a purely semantic artifact extension
+   * (representation forms only) declares none. Structurally IDENTICAL to the
+   * `@cinatra-ai/objects` `SemanticArtifactManifest.objectTypes` field; the
+   * objects-contract parity guard pins the two copies equal.
+   */
+  objectTypes?: ArtifactObjectTypeClaim[];
   /**
    * The versioned `cinatra.artifact.ui` block (cinatra#1621, epic #1620): an
    * artifact extension declares an extension-shipped renderer per v1 slot
@@ -63,8 +106,14 @@ export type SemanticArtifactManifest = {
 /**
  * Counterpart on the AGENT-extension side: deterministic agents declare the
  * semantic artifact types they produce. Schema-only.
+ *
+ * `extension` names the REQUIRED artifact-kind dependency that provides the
+ * produced type; `objectTypeId` is the OPTIONAL exact `@scope/pkg:local-id`
+ * discriminator (cinatra#1788) that pins production to ONE claimed type of a
+ * multi-type artifact pack. Mirrors the `@cinatra-ai/objects`
+ * `SemanticArtifactRef`; the objects-contract parity guard pins them equal.
  */
-export type SemanticArtifactRef = { extension: string };
+export type SemanticArtifactRef = { extension: string; objectTypeId?: string };
 
 /**
  * The complete allowlist of top-level `cinatra.*` package.json keys a
