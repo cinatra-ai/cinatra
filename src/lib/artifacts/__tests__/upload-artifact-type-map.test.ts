@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   mimeAcceptedByAccepts,
   resolveUploadArtifactTypeFromCandidates,
+  selectRequiredArtifactUploadCandidates,
+  type RegisteredArtifactType,
   type UploadArtifactTypeCandidate,
 } from "../upload-artifact-type-map";
 
@@ -63,7 +65,7 @@ describe("resolveUploadArtifactTypeFromCandidates", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.matched).toEqual([]);
-      expect(r.reason).toMatch(/no installed system-base artifact pack/);
+      expect(r.reason).toMatch(/no installed required-base artifact type/);
     }
   });
 
@@ -96,6 +98,65 @@ describe("resolveUploadArtifactTypeFromCandidates", () => {
     expect(resolveUploadArtifactTypeFromCandidates("application/pdf", dup)).toEqual({
       ok: true,
       objectTypeId: "@cinatra-ai/pdf-artifact:document",
+    });
+  });
+});
+
+describe("selectRequiredArtifactUploadCandidates", () => {
+  // A mixed registry snapshot: two required base packs, one required floor pack
+  // (universal `*/*`), one required pack with no file accepts, one non-required
+  // third-party pack, and one host/built-in (no definer).
+  const REGISTRY: RegisteredArtifactType[] = [
+    { objectTypeId: "@cinatra-ai/pdf-artifact:document", definer: "@cinatra-ai/pdf-artifact", acceptMimes: ["application/pdf"] },
+    { objectTypeId: "@cinatra-ai/image-artifact:image", definer: "@cinatra-ai/image-artifact", acceptMimes: ["image/*"] },
+    // The retired generic floor — required, but a `*/*` catch-all: EXCLUDED.
+    { objectTypeId: "@cinatra-ai/objects:object", definer: "@cinatra-ai/default-artifact", acceptMimes: ["*/*"] },
+    // Required but declares no file MIMEs (dashboard-only): EXCLUDED.
+    { objectTypeId: "@cinatra-ai/dashboard-artifact:board", definer: "@cinatra-ai/dashboard-artifact", acceptMimes: undefined },
+    // A third-party pack that also accepts image/* but is NOT required: EXCLUDED
+    // (this is what stops silent third-party capture of uploads).
+    { objectTypeId: "@vendor/screenshot-artifact:shot", definer: "@vendor/screenshot-artifact", acceptMimes: ["image/*"] },
+    // A host/built-in registration (no provenance): EXCLUDED.
+    { objectTypeId: "@cinatra-ai/email:body", definer: null, acceptMimes: ["message/rfc822"] },
+  ];
+  const REQUIRED = new Set([
+    "@cinatra-ai/pdf-artifact",
+    "@cinatra-ai/image-artifact",
+    "@cinatra-ai/default-artifact",
+    "@cinatra-ai/dashboard-artifact",
+  ]);
+  const isRequired = (pkg: string) => REQUIRED.has(pkg);
+
+  it("keeps only required, dedicated (non-universal), file-accepting types", () => {
+    const candidates = selectRequiredArtifactUploadCandidates(REGISTRY, isRequired);
+    expect(candidates).toEqual([
+      { objectTypeId: "@cinatra-ai/pdf-artifact:document", acceptMimes: ["application/pdf"] },
+      { objectTypeId: "@cinatra-ai/image-artifact:image", acceptMimes: ["image/*"] },
+    ]);
+  });
+
+  it("EXCLUDES the retired `*/*` generic floor even when it is required", () => {
+    const candidates = selectRequiredArtifactUploadCandidates(REGISTRY, isRequired);
+    expect(candidates.some((c) => c.acceptMimes.includes("*/*"))).toBe(false);
+  });
+
+  it("EXCLUDES a non-required third-party pack (no silent upload capture)", () => {
+    const candidates = selectRequiredArtifactUploadCandidates(REGISTRY, isRequired);
+    expect(candidates.some((c) => c.objectTypeId === "@vendor/screenshot-artifact:shot")).toBe(false);
+  });
+
+  it("EXCLUDES host/built-in (null definer) and no-file-accepts types", () => {
+    const candidates = selectRequiredArtifactUploadCandidates(REGISTRY, isRequired);
+    const ids = candidates.map((c) => c.objectTypeId);
+    expect(ids).not.toContain("@cinatra-ai/email:body");
+    expect(ids).not.toContain("@cinatra-ai/dashboard-artifact:board");
+  });
+
+  it("resolves end-to-end through the selected candidates (image/png → image pack)", () => {
+    const candidates = selectRequiredArtifactUploadCandidates(REGISTRY, isRequired);
+    expect(resolveUploadArtifactTypeFromCandidates("image/png", candidates)).toEqual({
+      ok: true,
+      objectTypeId: "@cinatra-ai/image-artifact:image",
     });
   });
 });

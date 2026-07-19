@@ -1,8 +1,9 @@
 import "server-only";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { isPackageRequiredInProd } from "@cinatra-ai/extensions/required-in-prod";
 
 // ---------------------------------------------------------------------------
-// Upload MIME → system-base artifact type map (epic #1785, wave A3).
+// Upload MIME → required-base artifact type map (epic #1785, wave A3).
 //
 // The dynamic-types retirement removes the generic `@cinatra-ai/artifact:object`
 // catch-all: every artifact row now carries its EXACT declared object type in
@@ -12,32 +13,26 @@ import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 // matcher that used to type an artifact AFTER it was persisted under the generic
 // type is gone (it cannot type a row that must be typed at write time).
 //
-// The map domain is the four REQUIRED system-base artifact packs (pdf / audio /
-// video / image). They are the guaranteed-installed base that gives an arbitrary
-// binary upload a typed home by MIME. Scoping the map to exactly these four (and
-// reading each one's declared type + accepts FROM THE REGISTRY by provenance)
-// keeps the resolution unambiguous: a third-party pack that also happens to
-// accept `image/*` cannot silently capture uploads, and a MIME no base pack
-// accepts (e.g. `text/markdown` from URL import) fails closed rather than
-// landing under a fallback name.
+// THE MAP DOMAIN IS DERIVED, NOT HARDCODED (true-IoC — core-extension-instance-
+// coupling-ban): core NEVER names a specific artifact pack. The domain is every
+// installed `isArtifact` object type whose DEFINING package is REQUIRED-in-prod
+// (the manifest-declared `cinatra.extensions` set — data, not a literal), read
+// from the in-process object-type registry by provenance. Today that resolves to
+// the base packs (pdf / audio / video / image); a third-party pack that also
+// happens to accept `image/*` is NOT required and so cannot silently capture
+// uploads, and a MIME no required type accepts (e.g. `text/markdown` from URL
+// import) fails closed rather than landing under a fallback name.
 //
-// EXACTLY-ONE-OR-REFUSE: a MIME accepted by exactly one base-pack type resolves
-// to that type; zero or more-than-one accepting types both REFUSE (fail closed).
+// THE RETIRED GENERIC FLOOR IS EXCLUDED: a candidate whose `accepts.file` is the
+// universal `*/*` (or bare `*`) catch-all is the retired default-artifact floor
+// — it must NEVER participate in upload resolution (it would swallow every MIME
+// and make the resolution ambiguous). Upload resolution maps only to DEDICATED,
+// non-universal MIME homes; the floor is not an upload target.
+//
+// EXACTLY-ONE-OR-REFUSE: a MIME accepted by exactly one required base type
+// resolves to that type; zero or more-than-one accepting types both REFUSE
+// (fail closed).
 // ---------------------------------------------------------------------------
-
-/**
- * The four REQUIRED system-base artifact packs. Each declares exactly one
- * dedicated artifact-safe object type (`:document` / `:recording` / `:video` /
- * `:image`) plus its pack-level `accepts.file.mimeTypes`. The concrete type id
- * and accepted MIMEs are read from the in-process registry by provenance — this
- * list only fixes the SET of packs the upload map is allowed to resolve into.
- */
-export const SYSTEM_BASE_ARTIFACT_PACKS: readonly string[] = [
-  "@cinatra-ai/pdf-artifact",
-  "@cinatra-ai/audio-artifact",
-  "@cinatra-ai/video-artifact",
-  "@cinatra-ai/image-artifact",
-] as const;
 
 export type UploadArtifactTypeCandidate = {
   objectTypeId: string;
@@ -101,7 +96,7 @@ export function resolveUploadArtifactTypeFromCandidates(
     return {
       ok: false,
       reason:
-        "no MIME on the upload — cannot map to a system-base artifact type (pdf/audio/video/image)",
+        "no MIME on the upload — cannot map to a required-base artifact type",
       matched: [],
     };
   }
@@ -121,7 +116,7 @@ export function resolveUploadArtifactTypeFromCandidates(
     return {
       ok: false,
       reason:
-        `no installed system-base artifact pack (pdf/audio/video/image) accepts "${normalized}"`,
+        `no installed required-base artifact type accepts "${normalized}"`,
       matched: [],
     };
   }
@@ -134,31 +129,71 @@ export function resolveUploadArtifactTypeFromCandidates(
   };
 }
 
+// Whether a single declared `accepts.file` entry is the UNIVERSAL catch-all
+// (a bare "*" or the star/star "*"+"/*" pair) — the retired generic
+// default-artifact floor. A TYPE wildcard ("image/*") is NOT universal and
+// stays a legitimate dedicated home.
+function isUniversalAcceptEntry(accept: string): boolean {
+  const a = accept.trim().toLowerCase();
+  return a === "*/*" || a === "*";
+}
+
+/** One installed `isArtifact` type as read from the registry: its id, the
+ *  package that DEFINES it (provenance; `null` for a host/built-in), and its
+ *  declared `accepts.file.mimeTypes`. */
+export type RegisteredArtifactType = {
+  objectTypeId: string;
+  definer: string | null;
+  acceptMimes: readonly string[] | undefined;
+};
+
 /**
- * Read the four REQUIRED system-base packs' registered artifact types +
- * accepts from the in-process object-type registry (by provenance). The caller
- * must have warmed the registry (`registerAllObjectTypes()`); an unregistered /
- * uninstalled base pack simply contributes no candidate (its uploads then fail
- * closed at the map).
+ * PURE: select the upload-resolution candidates from every installed
+ * `isArtifact` type. A type qualifies iff it (a) has a non-null defining
+ * package, (b) that package is REQUIRED-in-prod (`isRequired`), (c) declares a
+ * non-empty `accepts.file.mimeTypes`, and (d) is NOT the universal star/star
+ * floor.
+ * Injectable (`artifactTypes`, `isRequired`) so the selection is unit-testable
+ * without the global registry or the on-disk required-set manifest.
  */
-export function readSystemBaseUploadCandidates(): UploadArtifactTypeCandidate[] {
+export function selectRequiredArtifactUploadCandidates(
+  artifactTypes: readonly RegisteredArtifactType[],
+  isRequired: (packageName: string) => boolean,
+): UploadArtifactTypeCandidate[] {
   const out: UploadArtifactTypeCandidate[] = [];
-  for (const pkg of SYSTEM_BASE_ARTIFACT_PACKS) {
-    for (const typeId of objectTypeRegistry.getTypesForPackage(pkg)) {
-      const def = objectTypeRegistry.resolve(typeId);
-      const accepts = def?.isArtifact?.accepts?.file?.mimeTypes;
-      if (!def?.isArtifact || !Array.isArray(accepts) || accepts.length === 0) {
-        continue;
-      }
-      out.push({ objectTypeId: typeId, acceptMimes: accepts });
-    }
+  for (const t of artifactTypes) {
+    if (t.definer == null || !isRequired(t.definer)) continue;
+    const accepts = t.acceptMimes;
+    if (!Array.isArray(accepts) || accepts.length === 0) continue;
+    // Drop the retired generic floor (a `*/*` / `*` catch-all is not a
+    // dedicated upload home — it would swallow every MIME).
+    if (accepts.some(isUniversalAcceptEntry)) continue;
+    out.push({ objectTypeId: t.objectTypeId, acceptMimes: accepts });
   }
   return out;
 }
 
 /**
- * Resolve an upload MIME to the exactly-one installed system-base artifact type,
- * or refuse (fail closed). Registry-driven; the caller warms the registry.
+ * Read the REQUIRED-in-prod artifact types' registered ids + accepts from the
+ * in-process object-type registry (by provenance). The caller must have warmed
+ * the registry (`registerAllObjectTypes()`); an unregistered / uninstalled /
+ * non-required type simply contributes no candidate (its uploads then fail
+ * closed at the map). No pack is named here — the required set is manifest data.
+ */
+export function readSystemBaseUploadCandidates(): UploadArtifactTypeCandidate[] {
+  const artifactTypes: RegisteredArtifactType[] = objectTypeRegistry
+    .listArtifacts()
+    .map((def) => ({
+      objectTypeId: def.type,
+      definer: objectTypeRegistry.getRegisteringPackage(def.type),
+      acceptMimes: def.isArtifact?.accepts?.file?.mimeTypes,
+    }));
+  return selectRequiredArtifactUploadCandidates(artifactTypes, isPackageRequiredInProd);
+}
+
+/**
+ * Resolve an upload MIME to the exactly-one installed required-base artifact
+ * type, or refuse (fail closed). Registry-driven; the caller warms the registry.
  */
 export function resolveUploadArtifactType(
   mime: string | undefined,
