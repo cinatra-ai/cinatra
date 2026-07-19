@@ -59,9 +59,14 @@ export type LibraryImportError =
         | "fetch-failed"
         | "fetch-timeout"
         | "no-readable-content"
-        | "unsupported-content-type";
+        | "unsupported-content-type"
+        // Write-boundary type refusal (epic #1785, wave A3): the produced MIME
+        // maps to no installed system-base artifact type — a fail-closed refusal
+        // surfaced BEFORE any fetch.
+        | "type-not-registered";
       message: string;
-      /** Final URL the redirect chain settled on (diagnostics). */
+      /** Final URL the redirect chain settled on (diagnostics). Absent on a
+       *  pre-fetch type refusal. */
       finalUrl?: string;
     };
 
@@ -125,7 +130,9 @@ export async function importArtifactFromUrl(
       ok: false,
       reason: result.reason,
       message: result.message,
-      finalUrl: result.finalUrl,
+      // Only the fetch/redirect error variant carries a finalUrl; the pre-fetch
+      // type refusal does not.
+      finalUrl: "finalUrl" in result ? result.finalUrl : undefined,
     };
   }
 

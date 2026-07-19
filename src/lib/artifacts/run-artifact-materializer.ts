@@ -258,6 +258,9 @@ async function writeClaimedArtifact(input: {
       // The EXACT declared object type resolved from the binding/produces
       // discriminator (cinatra#1454) — no longer discarded (epic #1785 wave A3).
       objectType: input.resolvedTarget.objectTypeId,
+      // The resolved accepts so the writer enforces the MIME even for a
+      // claim-backed host type that carries no `isArtifact.accepts` on its def.
+      expectedAcceptMimes: input.resolvedTarget.acceptedFileMimeTypes,
       createdBy: input.createdBy,
       ownerLevel: "organization",
       ownerId: input.orgId,

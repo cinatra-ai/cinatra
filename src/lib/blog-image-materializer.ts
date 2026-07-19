@@ -101,6 +101,7 @@ export async function materializeBlogImageArtifact(
   const result = await createSemanticArtifact({
     orgId,
     objectType: resolvedTarget.target.objectTypeId,
+    expectedAcceptMimes: resolvedTarget.target.acceptedFileMimeTypes,
     createdBy: null,
     ownerLevel: "organization",
     ownerId: orgId,

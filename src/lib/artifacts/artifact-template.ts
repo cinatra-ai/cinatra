@@ -200,6 +200,7 @@ export async function materializeArtifactFromTemplate(
     // The EXACT declared object type resolved for this extension (cinatra#1454);
     // the `${ext}:artifact` umbrella assumption is retired (epic #1785 wave A3).
     objectType: objectTypeId,
+    expectedAcceptMimes: resolved.target.acceptedFileMimeTypes,
     createdBy: input.actor.principalId ?? null,
     ownerLevel: "organization",
     ownerId: input.orgId,
