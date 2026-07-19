@@ -79,27 +79,33 @@ except Exception:  # pragma: no cover
 
 
 # Agents whose gate is KNOWN to still fail this mount guard, pending a separate
-# fix — allowlisted as ``xfail`` so the red stays VISIBLE (the suite reports it,
-# it does not silently pass) while CI stays green, rather than masking it or
-# hard-failing the whole guard.
+# fix — allowlisted as a strict ``xfail`` so the red stays VISIBLE (the suite
+# reports it, it does not silently pass) while CI stays green, rather than
+# masking it or hard-failing the whole guard. ``strict`` flips an unexpected
+# PASS into a FAILURE, so the day a listed agent starts mounting this guard
+# forces its allowlist entry to be removed.
 #
-#   auditor-agent (cinatra#1625 / cinatra#1830): its ``review_gate`` is an
-#   ``InputMessageNode`` whose declared, DataFlowEdge-fed inputs carry the
-#   renderer ``inputMessageSchema`` shape the load-time reconcile shim
-#   (``_reconcile_input_message_gates``) cannot yet fold into a
-#   ``message_template`` — so it is deliberately left unrewritten and fails to
-#   mount on the pin. The gate re-encode that makes it foldable is tracked
-#   separately in cinatra#1625/#1830; drop this entry when it lands. ``strict``
-#   flips an unexpected PASS into a FAILURE, so the day the re-encode ships this
-#   guard forces the allowlist entry to be removed.
-_KNOWN_FAILING_GATE_AGENTS = {
-    "auditor-agent",
-}
+# EMPTY. auditor-agent formerly sat here (cinatra#1625 / cinatra#1830). Both of
+# its known ``review_gate`` forms mount, so no conditional is warranted:
+#   - auditor-agent revision ``179a7d13`` declares NO gate ``inputs`` (the
+#     renderer ``inputMessageSchema`` lives under ``metadata.cinatra``); with no
+#     ``{{placeholder}}`` ``message`` pyagentspec 26.1.2 infers an empty input
+#     set, so the gate mounts NATIVELY and ``_reconcile_input_message_gates``
+#     (which only touches an ``InputMessageNode`` with non-empty ``inputs``) is a
+#     no-op. A strict-xfail entry against this form XPASSes and FAILS the guard.
+#   - the cinatra#1625 HITL gate re-encode moves those to declared,
+#     DataFlowEdge-fed inputs with plain ``[A-Za-z_]\w*`` titles
+#     (``prompts``/``preview``) — which the shim folds into a
+#     ``PluginInputMessageNode`` ``message_template`` (covered by
+#     test_input_message_gate_reconcile.py), so that form mounts too.
+# A conditional xfail would have no failing state to represent and could conceal
+# a future regression, so the entry is removed unconditionally.
+_KNOWN_FAILING_GATE_AGENTS: set[str] = set()
 _KNOWN_FAILING_REASON = (
-    "cinatra#1625/#1830: auditor-agent review_gate awaits the HITL gate "
-    "re-encode; the declared-input reconcile shim cannot fold its renderer "
-    "schema yet, so it fails to mount on the pin. Remove this allowlist entry "
-    "when the re-encode lands (a strict-xfail PASS will force it)."
+    "known-failing HITL gate mount (see _KNOWN_FAILING_GATE_AGENTS) — awaits a "
+    "separately-tracked fix; strict-xfail keeps the red visible without failing "
+    "the guard. Remove the entry when the agent mounts (a strict-xfail PASS "
+    "forces it)."
 )
 
 
