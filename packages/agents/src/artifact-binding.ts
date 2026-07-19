@@ -12,11 +12,23 @@
 //
 //   "outputs": [{ "title": "draft", ...,
 //     "cinatra": { "artifact": {
-//       "extension": "@cinatra-ai/blog-post-artifact",  // ∈ package.json cinatra.produces
+//       "extension": "@cinatra-ai/email-artifacts",      // ∈ package.json cinatra.produces
+//       "objectTypeId": "@cinatra-ai/email:body",        // OPTIONAL declared-type discriminator (see below)
 //       "contentFrom": "draft",       // names an EndNode output (edge-sourced per the runtime invariant)
 //       "declaredMime": "text/markdown",                 // XOR mimeFrom
 //       "titleFrom": "title"          // explicit — a title is never prompt-invented
 //     }}}]
+//
+// `objectTypeId` (cinatra#1454, completing the #1788 direction on the binding
+// side — symmetric with `cinatra.produces`'s SemanticArtifactRef.objectTypeId)
+// names the EXACT `@scope/pkg:local-id` object type the bound output
+// materializes into. The umbrella `${extension}:artifact` type is RETIRED
+// (#1824): a claim-based artifact pack registers its DECLARED types
+// (e.g. `@cinatra-ai/email:body`), never an `:artifact` umbrella, so the
+// materializer resolves a binding to its declared type. The field is OPTIONAL:
+// a single-artifact-safe-type pack resolves from `{extension}` alone; an
+// AMBIGUOUS multi-type pack REQUIRES it (the materializer fails closed, never
+// guesses — see `resolveArtifactBindingObjectType`).
 //
 // Every field is an explicit reference to a sourced flow output; the host
 // materializes the artifact deterministically at run completion. This module
@@ -43,10 +55,34 @@ export const ARTIFACT_BINDING_AUTHORABLE_MIMES: ReadonlySet<string> = new Set([
   "application/xml",
 ]);
 
+/**
+ * Namespaced object-type id shape (`@scope/package:local-id`) — byte-mirror of
+ * `CLAIMED_OBJECT_TYPE_ID_RE` (`@cinatra-ai/objects/claims`) and the produces
+ * reader's `semanticArtifactRefSchema.objectTypeId` regex
+ * (`@cinatra-ai/extensions/agent-produces-reader`). Kept inline so this leaf
+ * stays import-light; equivalence is pinned by the binding grammar test.
+ */
+export const BINDING_OBJECT_TYPE_ID_RE = /^@[\w-]+\/[\w-]+:[\w-]+$/;
+
 export const artifactOutputBindingSchema = z
   .object({
     /** Artifact-extension package name — must be ∈ `cinatra.produces`. */
     extension: z.string().min(1),
+    /**
+     * OPTIONAL exact declared-type discriminator (`@scope/pkg:local-id`,
+     * cinatra#1454). When present it pins the bound output to ONE claimed type
+     * of the extension (symmetric with `cinatra.produces`); when absent the
+     * materializer resolves a single-artifact-safe-type pack from `extension`
+     * alone and FAILS CLOSED on an ambiguous multi-type pack. Never the retired
+     * `${extension}:artifact` umbrella (#1824).
+     */
+    objectTypeId: z
+      .string()
+      .regex(BINDING_OBJECT_TYPE_ID_RE, {
+        message:
+          "objectTypeId must be a namespaced object type id (@scope/package:local-id)",
+      })
+      .optional(),
     /** EndNode output name that carries the artifact CONTENT. */
     contentFrom: z.string().min(1),
     /** Static MIME. XOR `mimeFrom`. Must be text-authorable (v1). */
@@ -82,6 +118,36 @@ export const artifactOutputBindingSchema = z
   });
 
 export type ArtifactOutputBinding = z.infer<typeof artifactOutputBindingSchema>;
+
+/**
+ * A `cinatra.produces` entry — structural mirror of `@cinatra-ai/objects`
+ * `SemanticArtifactRef` and the agent-produces-reader leaf. Passed to the
+ * collectors as `producesRefs` so a binding/materialize `objectTypeId` can be
+ * cross-checked against the TYPED produces declaration (cinatra#1454): a coarse
+ * `{extension}` produces entry may be NARROWED by an explicit binding
+ * objectTypeId, but a TYPED produces entry and an explicit binding objectTypeId
+ * must AGREE (a contradiction is fail-closed at compile/publish time).
+ */
+export type SemanticArtifactProducesRef = { extension: string; objectTypeId?: string };
+
+/**
+ * The `objectTypeId` a TYPED `produces` entry pins for `extension`, or null when
+ * the produces set is unknown/absent OR every entry for that extension is coarse
+ * (`{extension}` only). Returns the FIRST typed entry's objectTypeId — the
+ * publish/install typed-production contract already rejects a manifest that
+ * declares two conflicting typed entries for one extension, so first-typed is
+ * deterministic here. A pure helper shared by both collectors + the resolver.
+ */
+export function producesObjectTypeIdForExtension(
+  producesRefs: readonly SemanticArtifactProducesRef[] | null | undefined,
+  extension: string,
+): string | null {
+  if (producesRefs == null) return null;
+  for (const ref of producesRefs) {
+    if (ref.extension === extension && ref.objectTypeId !== undefined) return ref.objectTypeId;
+  }
+  return null;
+}
 
 export type CollectedArtifactBinding = {
   /** EndNode component id the annotated output lives on. */
@@ -122,10 +188,22 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  */
 export function collectArtifactBindingsFromOasDocument(
   doc: Record<string, unknown>,
-  opts?: { produces?: readonly string[] | null },
+  opts?: {
+    produces?: readonly string[] | null;
+    /** Full typed `produces` entries (cinatra#1454). When provided, a binding
+     *  `objectTypeId` that CONTRADICTS a typed produces entry for the same
+     *  extension is rejected; the extension-name parity set is derived from
+     *  these when `produces` is not separately supplied. */
+    producesRefs?: readonly SemanticArtifactProducesRef[] | null;
+  },
 ): CollectArtifactBindingsResult {
   const bindings: CollectedArtifactBinding[] = [];
   const errors: string[] = [];
+  // Extension-name parity set: prefer an explicit `produces` list; else derive
+  // from `producesRefs` (so a single fuller source suffices at each caller).
+  const producesNames: readonly string[] | null =
+    opts?.produces ??
+    (opts?.producesRefs != null ? opts.producesRefs.map((r) => r.extension) : null);
   const refs = isPlainObject(doc.$referenced_components)
     ? (doc.$referenced_components as Record<string, unknown>)
     : {};
@@ -191,11 +269,29 @@ export function collectArtifactBindingsFromOasDocument(
       // declared production is a contract violation, never a skip. Only
       // null/undefined (the produces set is UNKNOWN — e.g. the builder path
       // with no package.json on disk) skips the check.
-      if (opts?.produces != null && !opts.produces.includes(binding.extension)) {
+      if (producesNames != null && !producesNames.includes(binding.extension)) {
         errors.push(
           `${where}.extension: "${binding.extension}" is not declared in ` +
-            `package.json cinatra.produces ([${opts.produces.join(", ")}]) — ` +
+            `package.json cinatra.produces ([${producesNames.join(", ")}]) — ` +
             "declared production and bindings must agree",
+        );
+        continue;
+      }
+
+      // Typed-produces AGREEMENT (cinatra#1454): when the manifest declares a
+      // TYPED produces entry for this extension, an explicit binding
+      // `objectTypeId` must equal it — the binding may NARROW a coarse
+      // `{extension}` produces entry but must never CONTRADICT a typed one.
+      const producesType = producesObjectTypeIdForExtension(opts?.producesRefs, binding.extension);
+      if (
+        producesType != null &&
+        binding.objectTypeId !== undefined &&
+        binding.objectTypeId !== producesType
+      ) {
+        errors.push(
+          `${where}.objectTypeId: "${binding.objectTypeId}" contradicts the typed ` +
+            `cinatra.produces entry for "${binding.extension}" (declares type "${producesType}") — ` +
+            "a binding may narrow a coarse produces entry but must agree with a typed one",
         );
         continue;
       }
@@ -205,6 +301,87 @@ export function collectArtifactBindingsFromOasDocument(
   }
 
   return { bindings, errors };
+}
+
+// ---------------------------------------------------------------------------
+// Binding → declared-type resolution (cinatra#1454).
+//
+// The materializer + create-from-template seams resolve a binding/produces
+// `{extension, objectTypeId?}` to the EXACT declared object type it
+// materializes into. The retired umbrella `${extension}:artifact` (#1824) is
+// GONE: a claim-based pack registers its declared types (host-owned, e.g.
+// `@cinatra-ai/email:body`), so resolution names the declared type.
+//
+// PURE + host-agnostic on purpose: the caller supplies the extension's
+// EFFECTIVE artifact-safe declared type ids (the host sources these from the
+// org-chain DB claim registry via winner arbitration, intersected with a
+// currently-registered host type — see
+// `src/lib/artifacts/resolve-bound-artifact-type`). This function only decides
+// WHICH declared type the binding targets, fail-closed:
+//   - explicit `objectTypeId` (binding first, else the typed produces entry) →
+//     must be one of the extension's artifact-safe declared types;
+//   - no explicit id → resolve iff the extension has EXACTLY ONE artifact-safe
+//     declared type (the single-claim fallback); 0 or >1 fails closed (never a
+//     guess — an ambiguous multi-type pack REQUIRES an explicit objectTypeId).
+// ---------------------------------------------------------------------------
+
+export type ResolveArtifactBindingObjectTypeInput = {
+  /** The bound artifact-extension package name. */
+  extension: string;
+  /** The OAS binding's explicit `objectTypeId` (highest precedence). */
+  bindingObjectTypeId?: string;
+  /** The matching `cinatra.produces` entry's `objectTypeId`, if typed. */
+  producesObjectTypeId?: string;
+  /** The extension's EFFECTIVE artifact-safe declared type ids (projection
+   *  `artifact-safe`), each already intersected with a registered host type. */
+  declaredArtifactSafeTypeIds: readonly string[];
+};
+
+export type ResolveArtifactBindingObjectTypeResult =
+  | { ok: true; objectTypeId: string; source: "explicit" | "single-claim-fallback" }
+  | { ok: false; error: string };
+
+/**
+ * Resolve a binding/produces reference to its declared object type id.
+ * PURE — see the module note above. Never throws.
+ */
+export function resolveArtifactBindingObjectType(
+  input: ResolveArtifactBindingObjectTypeInput,
+): ResolveArtifactBindingObjectTypeResult {
+  const declared = input.declaredArtifactSafeTypeIds;
+  // Precedence: an explicit binding objectTypeId wins; else the typed produces
+  // entry. (A binding objectTypeId that contradicts a typed produces entry is
+  // rejected upstream at compile/publish — collectArtifactBindingsFromOasDocument.)
+  const explicit = input.bindingObjectTypeId ?? input.producesObjectTypeId;
+  if (explicit !== undefined) {
+    if (!declared.includes(explicit)) {
+      return {
+        ok: false,
+        error:
+          `objectTypeId "${explicit}" is not an artifact-safe declared type of extension ` +
+          `"${input.extension}" (declares: [${declared.join(", ") || "none"}])`,
+      };
+    }
+    return { ok: true, objectTypeId: explicit, source: "explicit" };
+  }
+  if (declared.length === 1) {
+    return { ok: true, objectTypeId: declared[0]!, source: "single-claim-fallback" };
+  }
+  if (declared.length === 0) {
+    return {
+      ok: false,
+      error:
+        `extension "${input.extension}" declares no artifact-safe object type — ` +
+        "cannot materialize a binding (declare a produces/binding objectTypeId over an artifact-safe claim)",
+    };
+  }
+  return {
+    ok: false,
+    error:
+      `extension "${input.extension}" declares ${declared.length} artifact-safe object types ` +
+      `([${declared.join(", ")}]); the binding must set an explicit objectTypeId to disambiguate ` +
+      "(fail-closed — the materializer never guesses)",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +417,10 @@ export type CollectedArtifactMaterializeNode = {
   nodeId: string;
   extension: string;
   declaredMime: string;
+  /** OPTIONAL declared-type discriminator (cinatra#1454) — the exact
+   *  `@scope/pkg:local-id` the tool materializes into; resolved the same way as
+   *  an EndNode binding (single-artifact-safe-type fallback else fail-closed). */
+  objectTypeId?: string;
 };
 
 export type CollectArtifactMaterializeNodesResult = {
@@ -305,10 +486,17 @@ function walkPassthroughApiNodes(
  */
 export function collectArtifactMaterializeNodesFromOasDocument(
   doc: Record<string, unknown>,
-  opts?: { produces?: readonly string[] | null },
+  opts?: {
+    produces?: readonly string[] | null;
+    /** Full typed `produces` entries (cinatra#1454) — see the binding collector. */
+    producesRefs?: readonly SemanticArtifactProducesRef[] | null;
+  },
 ): CollectArtifactMaterializeNodesResult {
   const nodes: CollectedArtifactMaterializeNode[] = [];
   const errors: string[] = [];
+  const producesNames: readonly string[] | null =
+    opts?.produces ??
+    (opts?.producesRefs != null ? opts.producesRefs.map((r) => r.extension) : null);
 
   walkPassthroughApiNodes(doc, (node, refKey, path) => {
     const nodeId =
@@ -372,12 +560,40 @@ export function collectArtifactMaterializeNodesFromOasDocument(
         "extension",
         `must be a literal artifact-extension package name (got ${JSON.stringify(extension)})`,
       );
-    } else if (opts?.produces != null && !opts.produces.includes(extension)) {
+    } else if (producesNames != null && !producesNames.includes(extension)) {
       fieldError(
         "extension",
         `"${extension}" is not declared in package.json cinatra.produces ` +
-          `([${opts.produces.join(", ")}]) — declared production and materialization must agree`,
+          `([${producesNames.join(", ")}]) — declared production and materialization must agree`,
       );
+    }
+
+    // OPTIONAL objectTypeId discriminator (cinatra#1454): literal, namespaced,
+    // and — when the manifest declares a TYPED produces entry for this
+    // extension — in AGREEMENT with it (may narrow a coarse entry, never
+    // contradict a typed one). Mirrors the EndNode-binding grammar.
+    const objectTypeId = input.objectTypeId;
+    if (objectTypeId !== undefined) {
+      if (
+        typeof objectTypeId !== "string" ||
+        objectTypeId.length === 0 ||
+        isTemplated(objectTypeId) ||
+        !BINDING_OBJECT_TYPE_ID_RE.test(objectTypeId)
+      ) {
+        fieldError(
+          "objectTypeId",
+          `when present, must be a literal namespaced object type id (@scope/package:local-id) (got ${JSON.stringify(objectTypeId)})`,
+        );
+      } else if (typeof extension === "string") {
+        const producesType = producesObjectTypeIdForExtension(opts?.producesRefs, extension);
+        if (producesType != null && producesType !== objectTypeId) {
+          fieldError(
+            "objectTypeId",
+            `"${objectTypeId}" contradicts the typed cinatra.produces entry for "${extension}" ` +
+              `(declares type "${producesType}") — narrowing a coarse entry is allowed, contradicting a typed one is not`,
+          );
+        }
+      }
     }
 
     const declaredMime = input.declaredMime;
@@ -448,6 +664,7 @@ export function collectArtifactMaterializeNodesFromOasDocument(
         nodeId,
         extension: extension as string,
         declaredMime: declaredMime as string,
+        ...(typeof objectTypeId === "string" ? { objectTypeId } : {}),
       });
     }
   });

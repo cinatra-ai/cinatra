@@ -106,7 +106,7 @@ export async function ensureAgentPackage(opts: {
 // packages and already carries the canonical @cinatra/<slug> name.
 async function readSiblingPackageJsonIdentity(
   oasSourcePath: string,
-): Promise<{ name?: string; version?: string; description?: string; license?: string; agentDependencies?: Record<string, string>; type?: string } | null> {
+): Promise<{ name?: string; version?: string; description?: string; license?: string; agentDependencies?: Record<string, string>; type?: string; produces?: unknown[] } | null> {
   try {
     const pkgPath = join(dirname(oasSourcePath), "..", "package.json");
     const raw = await readFile(pkgPath, "utf8");
@@ -122,8 +122,18 @@ async function readSiblingPackageJsonIdentity(
         : undefined;
     const agentDependencies = cinatraBlock?.agentDependencies as Record<string, string> | undefined;
     const type = typeof cinatraBlock?.type === "string" ? cinatraBlock.type : undefined;
+    // `cinatra.produces` is CONTRACT-LOAD-BEARING for the OAS compiler's sibling
+    // read (oas-compiler.ts readSiblingPackageJson): a declared EndNode artifact
+    // binding fail-closes when produces is absent/[]. The git-file loader
+    // synthesizes the sibling package.json for the import ZIP, so produces MUST
+    // ride through the synthesis or dev import of any binding-bearing agent
+    // errors (cinatra#1454). Carried as a raw passthrough array (the compiler
+    // re-parses each {extension, objectTypeId?} entry tolerantly).
+    const produces = Array.isArray(cinatraBlock?.produces)
+      ? (cinatraBlock.produces as unknown[])
+      : undefined;
     if (!name) return null;
-    return { name, version, description, license, agentDependencies, type };
+    return { name, version, description, license, agentDependencies, type, produces };
   } catch {
     // ENOENT, EACCES, JSON.parse SyntaxError, etc. — fallback unavailable.
     return null;
@@ -236,6 +246,11 @@ export async function ensureAgentPackageFromGitFile(opts: {
   const cinatraForZip: Record<string, unknown> = {};
   if (sibling?.type) cinatraForZip.type = sibling.type;
   if (sibling?.agentDependencies) cinatraForZip.agentDependencies = sibling.agentDependencies;
+  // Carry `cinatra.produces` through the synthesis: the OAS compiler's sibling
+  // read fail-closes a declared artifact binding when produces is absent, so
+  // dropping it here breaks dev git-file import of every binding-bearing agent
+  // (cinatra#1454). Preserve the raw declared entries verbatim.
+  if (sibling?.produces) cinatraForZip.produces = sibling.produces;
   const packageJsonForZip = JSON.stringify(
     {
       name: packageName,

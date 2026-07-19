@@ -19,6 +19,7 @@ const {
   buildFinalizeMaterializationQueryMock,
   readFinalizedMaterializationMock,
   isWriteAllowedMock,
+  resolveBoundArtifactTargetMock,
 } = vi.hoisted(() => ({
   poolQueryMock: vi.fn(),
   getAgentPackageMock: vi.fn(),
@@ -32,6 +33,7 @@ const {
   })),
   readFinalizedMaterializationMock: vi.fn(async (): Promise<unknown> => null),
   isWriteAllowedMock: vi.fn(async () => true),
+  resolveBoundArtifactTargetMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db/pooled", () => ({
@@ -52,6 +54,9 @@ vi.mock("@cinatra-ai/objects/registry", () => ({
 }));
 vi.mock("@/lib/register-all-object-types", () => ({
   registerAllObjectTypes: registerAllObjectTypesMock,
+}));
+vi.mock("../resolve-bound-artifact-type", () => ({
+  resolveBoundArtifactTarget: resolveBoundArtifactTargetMock,
 }));
 vi.mock("../artifact-creation", () => ({
   createSemanticArtifact: createSemanticArtifactMock,
@@ -122,6 +127,29 @@ beforeEach(() => {
     payload: null,
   });
   listArtifactsMock.mockReturnValue([artifactDef()]);
+  // Mirror the legacy `${extension}:artifact` lookup off the same fixture.
+  resolveBoundArtifactTargetMock.mockImplementation(
+    async ({ extension }: { extension: string }) => {
+      const defs = listArtifactsMock() as Array<{
+        type: string;
+        isArtifact?: { accepts?: { file?: { mimeTypes?: string[] } } };
+      }>;
+      const def = defs.find((d) => d.type === `${extension}:artifact`);
+      if (!def) {
+        return {
+          ok: false,
+          error: `artifact extension "${extension}" is not installed/registered on this host`,
+        };
+      }
+      return {
+        ok: true,
+        target: {
+          objectTypeId: def.type,
+          acceptedFileMimeTypes: def.isArtifact?.accepts?.file?.mimeTypes ?? [],
+        },
+      };
+    },
+  );
   isWriteAllowedMock.mockResolvedValue(true);
   claimMaterializationMock.mockResolvedValue({ kind: "claimed", ledgerId: "led-1" });
   createSemanticArtifactMock.mockResolvedValue({
