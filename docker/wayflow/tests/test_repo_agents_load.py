@@ -40,14 +40,23 @@ from pathlib import Path
 
 import pytest
 
-# repo root: docker/wayflow/tests/test_repo_agents_load.py → ../../../
-REPO_ROOT = Path(__file__).resolve().parents[3]
 _ENV_DIR = os.environ.get("CINATRA_AGENTS_DIR")
-# Default to the multi-vendor ``extensions`` root — the SAME tree docker-compose
-# bind-mounts at ``/agents`` and that ``discover_agents`` two-level-walks. The
-# container CI overrides this with ``CINATRA_AGENTS_DIR=/agents`` (the mounted
-# installed tree) so the guard tracks exactly what the runtime loads.
-AGENTS_DIR = Path(_ENV_DIR) if _ENV_DIR else (REPO_ROOT / "extensions")
+_HERE = Path(__file__).resolve()
+# parents[3] = repo root when this file lives at ``<repo>/docker/wayflow/tests/``.
+# In the wayflow image the file lives at ``/app/tests/`` (only two levels deep),
+# so ``parents[3]`` would IndexError at import — guard it. The container ALWAYS
+# sets ``CINATRA_AGENTS_DIR=/agents``, so the repo-root default is never needed
+# there; a shallow mount with no override simply has nothing to scan.
+_REPO_ROOT = _HERE.parents[3] if len(_HERE.parents) > 3 else None
+if _ENV_DIR:
+    AGENTS_DIR = Path(_ENV_DIR)
+elif _REPO_ROOT is not None:
+    # Default to the multi-vendor ``extensions`` root — the SAME tree
+    # docker-compose bind-mounts at ``/agents`` and that ``discover_agents``
+    # two-level-walks.
+    AGENTS_DIR = _REPO_ROOT / "extensions"
+else:
+    AGENTS_DIR = Path("/__no_agents_dir__")  # shallow mount, no override → inert
 
 try:
     from wayflowcore.agentspec import AgentSpecLoader  # type: ignore[import-not-found]
