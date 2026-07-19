@@ -7,6 +7,10 @@ import {
 } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { isDelegatedChatMcpToolAllowed } from "./delegated-chat-tool-policy";
+import {
+  isDelegatedWidgetMcpToolAllowed,
+  type WidgetDelegationKind,
+} from "./delegated-widget-tool-policy";
 import { mcpRequestContextStorage } from "./request-context";
 
 export type ScreenDescriptor = {
@@ -84,8 +88,22 @@ export async function createMcpRuntimeServer(input: {
    * tools are additionally wrapped with a defense-in-depth handler guard
    * that re-checks `mcpRequestContextStorage.delegatedRestricted` at call
    * time. "unrestricted" (default) registers everything as before.
+   *
+   * "delegated-widget" (S5-W1 §4.1) applies the CLOSED, KIND-KEYED
+   * `public_site_widget` allowlist instead: only the bound kind's
+   * `*_content_editor_run` primitive registers (`widgetDelegationKind` names
+   * the kind). This is STRICTLY narrower than delegated-chat and enforces the
+   * G9 knd↔primitive binding at the boundary — a wordpress widget token can
+   * never see/call `drupal_content_editor_run`, and vice versa.
    */
-  toolPolicyMode?: "unrestricted" | "delegated-chat";
+  toolPolicyMode?: "unrestricted" | "delegated-chat" | "delegated-widget";
+  /**
+   * REQUIRED when `toolPolicyMode === "delegated-widget"`: the connector KIND
+   * the widget delegation is bound to (the OBO token's `knd` claim, resolved
+   * from the verified delegated actor at the transport boundary — NEVER caller
+   * input). Selects the kind-scoped allowlist. Ignored for other modes.
+   */
+  widgetDelegationKind?: WidgetDelegationKind;
 }) {
   const server = new McpServer(
     {
@@ -111,12 +129,46 @@ export async function createMcpRuntimeServer(input: {
   // The delegated-chat carve-out (`workflow_draft_create` /_update)
   // short-circuits via the typed CarveOut entry.
   const policyMode = input.toolPolicyMode ?? "unrestricted";
+  const widgetKind = input.widgetDelegationKind;
+
+  // Registration-time filter: is the named tool permitted under the ACTIVE
+  // policy mode? delegated-widget applies the CLOSED kind-keyed allowlist (G9 /
+  // G12) selected by `widgetKind`. An absent/unknown widgetKind on a
+  // delegated-widget request denies everything (fail-closed) — no widget
+  // delegation may register a tool without a resolved kind.
+  const isRegistrableUnderPolicy = (name: string): boolean => {
+    if (policyMode === "delegated-chat") return isDelegatedChatMcpToolAllowed(name);
+    if (policyMode === "delegated-widget") {
+      return widgetKind ? isDelegatedWidgetMcpToolAllowed(widgetKind, name) : false;
+    }
+    return true;
+  };
+
+  // Call-time guard (defense-in-depth): re-derive the policy from the DELEGATED
+  // ACTOR in the live ALS frame so a tool that somehow slipped registration is
+  // still denied. Delegation-aware — chat uses the chat allowlist, a
+  // public_site_widget delegation uses its own KIND-scoped allowlist (reading
+  // the kind from the actor's `knd`, NEVER caller input).
+  const isCallableForCtxActor = (
+    ctx: ReturnType<typeof mcpRequestContextStorage.getStore>,
+    name: string,
+  ): boolean => {
+    const actor = ctx?.delegatedActor;
+    if (actor?.delegation === "public_site_widget") {
+      return isDelegatedWidgetMcpToolAllowed(actor.kind, name);
+    }
+    // Legacy chat gate keyed on `delegatedRestricted` (set only for the chat
+    // delegation at the transport boundary).
+    if (ctx?.delegatedRestricted) return isDelegatedChatMcpToolAllowed(name);
+    return true;
+  };
+
   const policedRegisterTool: InstanceType<typeof McpServer>["registerTool"] = ((
     name: string,
     config: unknown,
     cb: (...cbArgs: unknown[]) => unknown,
   ) => {
-    if (policyMode === "delegated-chat" && !isDelegatedChatMcpToolAllowed(name)) {
+    if (!isRegistrableUnderPolicy(name)) {
       // Not registered: invisible to tools/list, unresolvable by tools/call.
       return undefined as never;
     }
@@ -128,12 +180,12 @@ export async function createMcpRuntimeServer(input: {
       ) => unknown
     )(name, config, async (...cbArgs: unknown[]) => {
       const ctx = mcpRequestContextStorage.getStore();
-      if (ctx?.delegatedRestricted && !isDelegatedChatMcpToolAllowed(name)) {
+      if (!isCallableForCtxActor(ctx, name)) {
         return {
           content: [
             {
               type: "text",
-              text: `Tool ${name} is not available to delegated chat MCP requests.`,
+              text: `Tool ${name} is not available to this delegated MCP request.`,
             },
           ],
           isError: true,

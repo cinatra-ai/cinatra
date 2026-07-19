@@ -12,6 +12,18 @@ import type { OboCeilingChain } from "./obo-ceiling";
  *   tool policy UNRESTRICTED because the dispatched agent's job is to
  *   perform REAL operations (the dispatcher's design intent). Per-handler
  *   authz still gates mutations.
+ * - `public_site_widget`: an authenticated end user driving the S5
+ *   WordPress/Drupal public-site widget through `/api/assistants/chat`. The
+ *   transport maps this to a dedicated CLOSED, kind-keyed `delegated-widget`
+ *   tool policy (NOT the broad chat allowlist) that caps the token to the one
+ *   CMS-edit primitive for its bound `kind`. `platformRole` is union-narrowed
+ *   to `"member"` (NEVER `platform_admin`): the widget OBO token omits the role
+ *   claim and the verifier hard-codes `member`, so the platform-admin
+ *   immediate-allow can't trigger for a widget delegation. `instanceId` is the
+ *   SERVER-DERIVED canonical row (verified-origin re-pin) the boundary asserts
+ *   the tool-arg instance against. (Transport wiring — verifier + tool policy
+ *   + `jti` turn-binding — lands in a later S5 wave; this branch is the type
+ *   contract they build against.)
  *
  * Existing callers that only read `userId`, `orgId`, `platformRole` are
  * union-compatible; discriminating callsites must check `actor.delegation`.
@@ -37,7 +49,65 @@ export type DelegatedMcpActor =
        * closed at the verifier (never reconstructs this actor).
        */
       oboCeiling: OboCeilingChain;
+    }
+  | {
+      delegation: "public_site_widget";
+      /** The authenticated end user (cwu_ claim). */
+      userId: string;
+      /** The end user's org — REQUIRED (the widget path is org-scoped). */
+      orgId: string;
+      /**
+       * The SERVER-DERIVED canonical instance id (the verified-origin re-pin).
+       * The boundary asserts the model-supplied `*_content_editor_run`
+       * `instanceId` arg equals THIS value (fail-closed `instance_pin_mismatch`),
+       * re-imposing the OLD route's origin pin across the model-chosen-instance
+       * seam. Never a forgeable body/tool field.
+       */
+      instanceId: string;
+      /**
+       * The connector KIND (from the token's `knd` claim). Binds the token to
+       * its editor primitive — a `wordpress` widget token can never drive a
+       * `drupal_content_editor_run` and vice versa.
+       */
+      kind: "wordpress" | "drupal";
+      /**
+       * Per-turn nonce (the token's `jti`). The transport records it against the
+       * active thread/turn so the token cannot be replayed on a DIFFERENT
+       * turn/thread; the token's short TTL bounds the residual window.
+       */
+      jti: string;
+      /**
+       * ALWAYS `"member"` — union-narrowed, NEVER `platform_admin`. The widget
+       * OBO token omits the role claim and the verifier hard-codes `member`, so
+       * the platform-admin immediate-allow at the boundary is un-triggerable for
+       * a widget delegation (the platform-admin suppression, imposed at mint).
+       */
+      platformRole: "member";
     };
+
+/**
+ * Fail-closed tool-policy dispatch over the VERIFIED delegation type. The
+ * `public_site_widget` actor maps to the CLOSED, kind-keyed `delegated-widget`
+ * policy and NEVER falls through to "unrestricted"; `chat` maps to the narrow
+ * chat allowlist; `agent_run` / no delegation stay unrestricted at registration
+ * (per-handler authz + `enforceMcpBoundary` still gate mutations).
+ * `widgetDelegationKind` is the VERIFIED `knd` (never caller input) and is
+ * undefined for every non-widget mode.
+ */
+export function selectDelegatedToolPolicy(
+  delegatedActor: DelegatedMcpActor | null | undefined,
+): {
+  toolPolicyMode: "unrestricted" | "delegated-chat" | "delegated-widget";
+  widgetDelegationKind: "wordpress" | "drupal" | undefined;
+} {
+  if (delegatedActor?.delegation === "chat") {
+    return { toolPolicyMode: "delegated-chat", widgetDelegationKind: undefined };
+  }
+  if (delegatedActor?.delegation === "public_site_widget") {
+    return { toolPolicyMode: "delegated-widget", widgetDelegationKind: delegatedActor.kind };
+  }
+  return { toolPolicyMode: "unrestricted", widgetDelegationKind: undefined };
+}
 
 /**
  * Read by tool registries (e.g. chat registry, objects layer) to build the actor

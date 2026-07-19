@@ -554,11 +554,18 @@ describe("widget stream route — dual-path auth (cinatra#220)", () => {
     });
   }
 
-  it("accepts a short-lived cit_ token (no Deprecation header on the modern path)", async () => {
-    dispatchMock.mockResolvedValueOnce("hi");
+  it("401s a short-lived cit_ token — its audience was re-scoped to /api/assistants/chat (S5 cinatra#1221 cutover)", async () => {
+    // S5 (cinatra#1221) AUDIENCE RE-SCOPE: the cit_ token is now minted with
+    // aud=/api/assistants/chat (the unified assistant chat route), while this
+    // LEGACY per-agent stream route consumes against its own path
+    // (`/api/agents/<slug>/stream`). The audiences no longer match, so consume
+    // fails `aud_mismatch` and the route returns 401 — the designed,
+    // owner-reviewed cutover: the widget token is now served ONLY by
+    // /api/assistants/chat, never the legacy stream route.
     const token = mintCit();
     const res = await POST(streamRequestWith(token), wpParams);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(401);
+    // Not the deprecated long-lived KEY path, so no Deprecation/Sunset advisory.
     expect(res.headers.get("Deprecation")).toBeNull();
     expect(res.headers.get("Sunset")).toBeNull();
   });

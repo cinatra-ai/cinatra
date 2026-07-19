@@ -232,6 +232,38 @@ describe("auth-route-guard - CMS widget public surface stays NARROW", () => {
   });
 });
 
+describe("auth-route-guard - cinatra#1221 S5 /api/assistants/chat broker-auth widget branch", () => {
+  // The unified assistant chat route ALSO serves the cross-origin public-site
+  // (WordPress/Drupal) widget via its broker-auth branch (Bearer cit_ + cwu_).
+  // A cookie-less browser widget must reach the handler (whose OWN dual-token
+  // sequence is the authoritative gate), not be 307'd to /sign-in. It is an
+  // EXACT-path exemption (never a broad /api/assistants prefix that would expose
+  // sibling sub-routes).
+  function isNext(res: { status?: number; headers?: Headers }): boolean {
+    const status = res.status ?? 200;
+    const location = res.headers?.get?.("location") ?? null;
+    return status !== 307 && location === null;
+  }
+
+  it("EXACT-exempts /api/assistants/chat so a cookie-less widget reaches the handler (not 307→/sign-in)", async () => {
+    const res = await guardAppRoute(fakeRequest("/api/assistants/chat"));
+    expect(isNext(res)).toBe(true);
+    // Source pin: the exact entry is present with an in-handler-auth comment.
+    expect(guardSource).toMatch(/"\/api\/assistants\/chat",\s*\/\//);
+    const line = guardSource.split("\n").find((l) => l.includes('"/api/assistants/chat"'));
+    expect((line ?? "").toLowerCase()).toMatch(/dual-token|broker-auth/);
+  });
+
+  it("does NOT expose a sibling assistants sub-route (exact-path list, no prefix)", async () => {
+    // A broad /api/assistants prefix would make every assistant API route
+    // public; only the exact /api/assistants/chat pathname is exempt.
+    expect(guardSource).not.toMatch(/"\/api\/assistants"\s*,/);
+    const res = await guardAppRoute(fakeRequest("/api/assistants/chat/capabilities"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/sign-in");
+  });
+});
+
 describe("auth-route-guard - cinatra#340 generic /webhook namespace (behavioral)", () => {
   // The whole /webhook namespace skips the sign-in redirect (a webhook arrives
   // from an unauthenticated connected site). Both a DECLARED hook path and an

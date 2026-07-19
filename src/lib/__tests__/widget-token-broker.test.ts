@@ -198,12 +198,18 @@ function mint(overrides: Partial<Parameters<typeof mintWidgetStreamToken>[0]> = 
   });
 }
 
+// cinatra#1221 S5 AUDIENCE RE-SCOPE: the cit_ token's aud is now the UNIFIED
+// assistant chat route, so consume authorizes against it (NOT the legacy stream
+// path). A token presented at the legacy stream routePath now fails aud_mismatch
+// — the designed cutover (asserted in its own test below).
+const BROKER_ROUTE_PATH = "/api/assistants/chat";
+
 function consume(token: string, overrides: Partial<Parameters<typeof consumeWidgetStreamToken>[0]> = {}) {
   return consumeWidgetStreamToken({
     token,
     agentSlug: "wordpress-content-editor",
     auth: WP_AUTH,
-    routePath: "/api/agents/wordpress-content-editor/stream",
+    routePath: BROKER_ROUTE_PATH,
     requestOrigin: ORIGIN,
     ...overrides,
   });
@@ -269,6 +275,19 @@ describe("widget-token-broker — rejections", () => {
     const res = consume(minted!.token, { routePath: "/api/agents/other/stream" });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toBe("aud_mismatch");
+  });
+
+  it("cinatra#1221 cutover: a token minted now binds the UNIFIED chat aud, so the LEGACY stream routePath fails aud_mismatch", () => {
+    const minted = mint();
+    // The mint audience moved to /api/assistants/chat; the legacy stream route
+    // (still consuming with its own path) can no longer accept this token.
+    const legacy = consume(minted!.token, {
+      routePath: "/api/agents/wordpress-content-editor/stream",
+    });
+    expect(legacy.ok).toBe(false);
+    if (!legacy.ok) expect(legacy.reason).toBe("aud_mismatch");
+    // …while the unified broker-auth route (the new default routePath) accepts it.
+    expect(consume(minted!.token).ok).toBe(true);
   });
 
   it("rejects an agent_slug mismatch", () => {
