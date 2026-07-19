@@ -31,6 +31,16 @@ import {
   stageSkillsVolume,
 } from "../staging";
 import { buildHardenedRunArgs, assertNoBindMounts } from "../l0-profile";
+import {
+  signEnvironmentProvenance,
+  type EnvironmentLayerProvenance,
+} from "../environment/provenance";
+import {
+  computeEnvironmentRecipeKey,
+  ENVIRONMENT_BUILDER_VERSION,
+  type EnvironmentBuildRecipe,
+} from "../environment/recipe";
+import type { ResolvedEnvironmentMount } from "../environment/mount";
 import type {
   ExecutionAuditRecord,
   SandboxCommandResult,
@@ -41,9 +51,38 @@ import type {
 import type { DockerCli } from "../docker-cli";
 
 const SECRET = "unit-test-broker-secret";
+const PROV_KEY = "unit-test-provenance-key";
 
 const sha256 = (content: string) =>
   createHash("sha256").update(content, "utf8").digest("hex");
+
+/** A signed L1 mount projection — the app-layer service's openJob input. */
+function mountFor(imageDigest = "sha256:l1layerdigest"): ResolvedEnvironmentMount {
+  const recipe: EnvironmentBuildRecipe = {
+    spec: { pip: ["pandas==2.2.2"] },
+    l0BaseDigest: "sha256:l0base",
+    builderVersion: ENVIRONMENT_BUILDER_VERSION,
+    platform: { os: "linux", arch: "arm64" },
+    buildPolicy: {
+      networkPolicy: "registry-allowlist",
+      registryAllowlist: ["pypi.org"],
+    },
+    resolvedArtifacts: { pip: { resolved: "sha256:pinned", integrity: "sha256:int" } },
+  };
+  const recipeKey = computeEnvironmentRecipeKey(recipe);
+  const prov: EnvironmentLayerProvenance = {
+    recipeKey,
+    recipe,
+    imageDigest,
+    partition: "instance",
+    builderIdentity: ENVIRONMENT_BUILDER_VERSION,
+    builtAtMs: 1_000,
+  };
+  return {
+    imageRef: `cinatra-sandbox-l1:${recipeKey}`,
+    provenance: signEnvironmentProvenance(prov, PROV_KEY),
+  };
+}
 
 function stagedSkill(over: Partial<StagedSkillInput> = {}): StagedSkillInput {
   const content = "# My skill\nbody";
@@ -332,6 +371,34 @@ describe("createBrokerSandboxExecutor", () => {
     expect(jobIds.size).toBe(1);
     // Staged skills rode the single open.
     expect(worker.specs[0].skillsVolume).toBeDefined();
+  });
+
+  it("threads the resolved L1 environment mount into openJob → every worker dispatch (exec-plane S3, cinatra#1708)", async () => {
+    const { docker } = recordingDocker();
+    const worker = fakeWorker();
+    const { broker } = makeBroker(worker, docker);
+    const executor = createBrokerSandboxExecutor(broker);
+    const mount = mountFor("sha256:declared-env");
+
+    const outputs = await executor({
+      sessionCarrier: carrierFor("run-env"),
+      commands: ["python -c 'import pandas'", "echo again"],
+      environment: mount,
+    });
+    expect(outputs).toHaveLength(2);
+    // The job mounts the SAME resolved layer on every command of the request.
+    expect(worker.specs[0].environment).toEqual(mount);
+    expect(worker.specs[1].environment).toEqual(mount);
+  });
+
+  it("omits the environment when no declared env is supplied — byte-identical L0 dispatch", async () => {
+    const { docker } = recordingDocker();
+    const worker = fakeWorker();
+    const { broker } = makeBroker(worker, docker);
+    const executor = createBrokerSandboxExecutor(broker);
+
+    await executor({ sessionCarrier: carrierFor("run-noenv"), commands: ["echo hi"] });
+    expect(worker.specs[0].environment).toBeUndefined();
   });
 
   it("returns a STRUCTURED refusal (never throws) when the carrier is rejected", async () => {
