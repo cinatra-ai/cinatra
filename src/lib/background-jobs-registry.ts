@@ -20,6 +20,7 @@ import {
   PM_SCHEDULE_RECONCILE_LOOP_JOB_ID,
   EXTENSION_STORE_GC_REAP_LOOP_JOB_ID,
   EXTENSION_AUTO_UPDATE_LOOP_JOB_ID,
+  ENVIRONMENT_LAYER_GC_REAP_LOOP_JOB_ID,
 } from "@/lib/background-jobs-names";
 // TYPE-ONLY (erased at compile; not a route-graph edge) — the reaper VALUE is
 // boot-registered through the slot below, never imported here.
@@ -952,6 +953,44 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           } else {
             console.log(`[extension-auto-update] ${line}`);
           }
+        },
+      });
+    },
+  },
+  [BACKGROUND_JOB_NAMES.ENVIRONMENT_LAYER_GC_REAP]: {
+    payloadSchema: looseObject(),
+    async handle(job) {
+      // L1 environment-layer retention GC reaper (exec-plane S3 A3,
+      // cinatra#1708). Reaps zero-reference layers past the retention window
+      // from the durable environment-layer store via the advisory-lock-
+      // serialized delete→commit→rmi protocol on the A2 execution service. The
+      // reaper is reached through the boot-registered DI slot (route-graph
+      // ratchet: this registry sits in the locked routes' reachable graph, so
+      // only a TYPE-erased, lightweight slot accessor is imported — never the
+      // heavy execution-plane graph). An unregistered / non-`ready` slot no-ops
+      // loudly; runRecurringLoop always re-delays. Self-reschedules at 24h.
+      const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+      await runRecurringLoop({
+        job,
+        loopJobId: ENVIRONMENT_LAYER_GC_REAP_LOOP_JOB_ID,
+        delayMs: TWENTY_FOUR_HOURS_MS,
+        label: "environment-layer-gc-reap",
+        run: async () => {
+          const { getEnvironmentLayerReaper } = await import(
+            "@/lib/execution/register-execution-environment-service"
+          );
+          const reap = getEnvironmentLayerReaper();
+          if (!reap) {
+            console.warn(
+              "[environment-layer-gc-reap] execution-environment service not `ready` in this process (slot disabled/unavailable) — skipping this cycle",
+            );
+            return;
+          }
+          const report = await reap();
+          console.log(
+            `[environment-layer-gc-reap] reaped=${report.reaped.length}`,
+            report.reaped.length > 0 ? { reaped: report.reaped } : undefined,
+          );
         },
       });
     },
