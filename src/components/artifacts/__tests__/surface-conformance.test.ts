@@ -102,8 +102,8 @@ describe("§VI undo deep-link preserves the change-set target (no static list du
   const PAGE = read("src/app/artifacts/page.tsx");
   const UNDO = read("src/components/artifacts/undo-mode.tsx");
 
-  it("undoDeepLink carries the change-set id in openRestore (url-encoded), not a bare /artifacts?mode=undo", () => {
-    expect(TOAST).toMatch(/mode=undo&openRestore=\$\{encodeURIComponent\(changeSetId\)\}/);
+  it("undoDeepLink carries the change-set id in the nested restore route (url-encoded), not a static list dump", () => {
+    expect(TOAST).toMatch(/\/configuration\/artifacts\/restore\/\$\{encodeURIComponent\(changeSetId\)\}/);
   });
 
   it("the surface page threads openRestore through to UndoMode", () => {
