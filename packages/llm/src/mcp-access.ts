@@ -141,6 +141,29 @@ export type AgentRunMcpActorTokenIssuer = (actor: AgentRunMcpActor) => string;
 
 export type ChatMcpActorTokenIssuer = (actor: ChatMcpActor) => string;
 
+/**
+ * Server-built inputs for the public-site widget → MCP delegated OBO token
+ * (S5, cinatra#1221). Structurally mirrors the app-layer
+ * `WidgetMcpActorTokenInput` (src/lib/widget-mcp-actor-token.ts); the issuer is
+ * INJECTED from the app layer so this package stays `@/`-free.
+ *
+ * `platformRole` is deliberately ABSENT — a widget user is floored to `member`
+ * at the token mint (the token omits `prole`, the verifier hard-codes it), so
+ * there is no way to mint a platform-admin widget token here (G5). The pinned
+ * `instanceId` + `kind` ride the token as its FAIL-CLOSED `inst`/`knd` claims,
+ * and `jti` is the per-turn nonce the transport turn-binds for replay
+ * containment.
+ */
+export type WidgetMcpActor = {
+  userId: string;
+  orgId: string;
+  instanceId: string;
+  kind: "wordpress" | "drupal";
+  jti: string;
+};
+
+export type WidgetMcpActorTokenIssuer = (actor: WidgetMcpActor) => string;
+
 function buildCinatraMcpServerTool(
   serverUrl: string,
   authorizationHeader: string,
@@ -267,6 +290,54 @@ export async function buildLlmMcpServerToolForChat(
   } catch (err) {
     console.warn(
       `[mcp-access] delegated chat token for provider ${provider} failed — skipping cinatra self-MCP`,
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+}
+
+/**
+ * Build the Cinatra self-MCP tool for the PUBLIC-SITE WIDGET path using a
+ * `cinatra.widget.mcp-obo` delegated actor token (NOT the chat-OBO token, NOT
+ * the machine client_credentials token) — S5, cinatra#1221.
+ *
+ * The `/api/assistants/chat` broker-auth branch has already run the full
+ * dual-token fail-closed sequence and built a SERVER-VERIFIED widget principal
+ * (pinned canonical instance + connector kind). The assistant runtime seam
+ * calls this instead of `...ForChat` so the hosted-MCP relay carries the widget
+ * OBO token: the MCP transport verifies it to a `delegation: "public_site_widget"`
+ * actor → the CLOSED, kind-keyed `delegated-widget` tool policy applies (only the
+ * bound kind's `*_content_editor_run`), the write authorizes AS THE END USER
+ * against the pinned instance, and platform-admin is floored to `member`. No
+ * privilege widening vs. the OLD relay.
+ *
+ * `issueActorToken` is injected by the app layer
+ * (`src/lib/widget-mcp-actor-token.ts`) so this package stays `@/`-free.
+ * Returns null gracefully if the public MCP URL is unavailable or the issuer
+ * throws (preserves the machine-token fallback — which is DENIED at the widget
+ * boundary, so a mint failure fails CLOSED, never opening the chat surface).
+ */
+export async function buildLlmMcpServerToolForWidget(
+  provider: Extract<LlmProvider, "openai" | "anthropic">,
+  actor: WidgetMcpActor,
+  issueActorToken: WidgetMcpActorTokenIssuer,
+): Promise<LlmMcpServerTool | null> {
+  const serverUrl = getPublicMcpServerUrl();
+  if (!serverUrl) return null;
+
+  try {
+    // No tool-level allowlist here: the CLOSED `delegated-widget` tool policy is
+    // applied at the MCP transport, keyed off the VERIFIED actor's delegation +
+    // kind (packages/mcp-server) — never from a caller-supplied list. Passing an
+    // allowlist here would be advisory only and could drift from the authoritative
+    // transport policy, so it is intentionally omitted.
+    return buildCinatraMcpServerTool(
+      serverUrl,
+      `Bearer ${issueActorToken(actor)}`,
+    );
+  } catch (err) {
+    console.warn(
+      `[mcp-access] delegated widget token for provider ${provider} failed — skipping cinatra self-MCP`,
       err instanceof Error ? err.message : String(err),
     );
     return null;

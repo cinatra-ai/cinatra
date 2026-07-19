@@ -22,6 +22,13 @@ const COMMITTED = join(REPO_ROOT, "src/lib/generated/field-renderer-components.t
 // cinatra.fieldRenderers[].component declarations. Append the next claimant here.
 const MIGRATED_ENTRIES = [
   {
+    bindingId: "@cinatra-ai/auditor-agent:review",
+    packageName: "@cinatra-ai/auditor-agent",
+    specifier: "@cinatra-ai/auditor-agent/src/auditor-review-renderer",
+    resolution: "guardedOptional",
+    propsApiVersion: 1,
+  },
+  {
     bindingId: "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
     packageName: "@cinatra-ai/blog-linkedin-publish-agent",
     specifier: "@cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review",

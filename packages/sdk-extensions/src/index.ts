@@ -613,6 +613,8 @@ export type {
   HostConnectorConfigService,
   HostMcpPaginationService,
   HostContentEditorDispatchService,
+  WidgetActorContext,
+  WidgetActorOverride,
   HostDrupalMcpService,
   HostDrupalWidgetAuthService,
   HostWordPressMcpService,

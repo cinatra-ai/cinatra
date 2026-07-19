@@ -26,6 +26,7 @@ import "server-only";
 import "@/lib/register-host-connector-services";
 
 import { existsSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import {
   detectExplicitDispatchDirective,
   detectExplicitDispatchPackage,
@@ -50,10 +51,12 @@ import {
   resolveDefaultAdapter,
   resolveChatExternalMcpTools,
   buildLlmMcpServerToolForChat,
+  buildLlmMcpServerToolForWidget,
   checkPublicMcpReachability,
 } from "@cinatra-ai/llm";
 import type { LlmTool } from "@cinatra-ai/llm";
 import { issueChatMcpActorToken } from "@/lib/chat-mcp-actor-token";
+import { issueWidgetMcpActorToken } from "@/lib/widget-mcp-actor-token";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import {
@@ -63,6 +66,7 @@ import {
 // (auth-derived; never caller-controlled).
 import { buildAttachmentResolverPorts } from "@/lib/artifacts/attachment-resolver-ports";
 import { isAllowedByList, type AssistantRuntimeConfig } from "./ports";
+import type { WidgetPrincipal } from "./widget-principal";
 
 // ---------------------------------------------------------------------------
 // Public types (unchanged from the pre-extraction runner; re-exported by
@@ -87,6 +91,22 @@ export type RunChatTurnArgs = {
   /** Aborted when the client disconnects (#503) so the run stops LLM/MCP work
    *  promptly instead of running to completion with nobody listening. */
   signal?: AbortSignal;
+  /**
+   * S5 public-site (WordPress/Drupal) widget path. When present, the caller is
+   * the broker-auth widget branch of `/api/assistants/chat`, which has already
+   * run the full dual-token fail-closed sequence and built this SERVER-VERIFIED
+   * principal (pinned canonical instance + connector kind + `public_site_widget`
+   * discriminator). The seam then mints a `cinatra.widget.mcp-obo` OBO token
+   * (`src/lib/widget-mcp-actor-token.ts`) instead of the chat token so the CMS
+   * write authorizes AS THE END USER against the pinned instance, with
+   * platform-admin floored to `member` — no privilege widening.
+   *
+   * `null`/absent = the cookie-session `@cinatra` chat path, which is
+   * byte-identical to before (chat token + `delegated-chat` allowlist). The
+   * seam swap that consumes this lands with the audience-rescope wave; this arg
+   * is threaded now so the type contract is stable for both waves.
+   */
+  widgetPrincipal?: WidgetPrincipal | null;
 };
 
 export { hasConfiguredLlmRuntime };
@@ -349,6 +369,14 @@ export async function runAssistantTurn(
   args: RunChatTurnArgs,
 ): Promise<void> {
   const { messages, actorContext, userId, platformRole, sessionOrgId, send, signal } = args;
+  // S5 (cinatra#1221) — the public-site (WordPress/Drupal) widget path. When
+  // present, the caller is the `/api/assistants/chat` broker-auth branch, which
+  // has already run the full dual-token fail-closed sequence and built this
+  // SERVER-VERIFIED principal. The seam below mints a `cinatra.widget.mcp-obo`
+  // OBO token instead of the chat token so the CMS write authorizes AS THE END
+  // USER against the pinned instance, floored to `member`. `null` = the
+  // cookie-session `@cinatra` chat path, byte-identical to before.
+  const widgetPrincipal = args.widgetPrincipal ?? null;
 
   // Assistant-owned native MCP injection with a delegated human actor token.
   //
@@ -436,11 +464,38 @@ export async function runAssistantTurn(
     });
     return;
   }
-  const chatCinatraMcpTool = await buildLlmMcpServerToolForChat(
-    adapter.provider,
-    { delegation: "chat", userId, orgId: sessionOrgId, platformRole },
-    issueChatMcpActorToken,
-  );
+  // SEAM (S5, cinatra#1221). The cinatra self-MCP tool carries a DIFFERENT
+  // delegated actor token depending on the caller:
+  //   · widget principal present → a `cinatra.widget.mcp-obo` OBO token (pinned
+  //     canonical instance + connector kind + `public_site_widget` discriminator;
+  //     platform-admin floored to `member` at mint). A fresh per-turn `jti` is
+  //     minted here (turn-binding for replay containment); the 120 s TTL is bound
+  //     at verify. The MCP transport verifies it to a `delegation:
+  //     "public_site_widget"` actor → the CLOSED, kind-keyed `delegated-widget`
+  //     tool policy applies (only the bound kind's `*_content_editor_run`).
+  //   · absent → the existing chat OBO token (`delegation: "chat"`), byte-
+  //     identical to before — the cookie-session `@cinatra` path is unchanged.
+  //
+  // A mint/build failure returns null on BOTH paths → the same fail-closed error
+  // below (the widget path never silently falls back to the chat token or the
+  // machine token).
+  const chatCinatraMcpTool = widgetPrincipal
+    ? await buildLlmMcpServerToolForWidget(
+        adapter.provider,
+        {
+          userId: widgetPrincipal.userId,
+          orgId: widgetPrincipal.orgId,
+          instanceId: widgetPrincipal.instanceId,
+          kind: widgetPrincipal.assistantHandle,
+          jti: randomUUID(),
+        },
+        issueWidgetMcpActorToken,
+      )
+    : await buildLlmMcpServerToolForChat(
+        adapter.provider,
+        { delegation: "chat", userId, orgId: sessionOrgId, platformRole },
+        issueChatMcpActorToken,
+      );
   if (!chatCinatraMcpTool) {
     send("error", {
       message:

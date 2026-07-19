@@ -39,12 +39,7 @@ import { ContextSelectorRenderer } from "./context-selector-renderer";
 import { FollowUpCadenceFieldRenderer } from "./follow-up-cadence-renderer";
 import { CampaignRecipientsReviewRenderer } from "./campaign-recipients-review-renderer";
 import { EmailDraftsReviewRenderer } from "./email-drafts-review-renderer";
-import {
-  AiReviewPanelRenderer,
-  isAiReviewPanelField,
-} from "./ai-review-panel-renderer";
 import { ReviewerAgentOutputRenderer } from "./reviewer-agent-output-renderer";
-import { AuditorReviewRenderer } from "./auditor-review-renderer";
 import { SendConfirmationRenderer } from "./send-confirmation-renderer";
 import { CtaRenderer } from "./cta-renderer";
 import {
@@ -107,7 +102,15 @@ const RENDERER_KIND_TABLE: Record<
     makeCondition?: (matchIds: readonly string[]) => FieldRendererCondition;
   }
 > = {
-  "auditor-review": { renderer: AuditorReviewRenderer },
+  // MIGRATED (cinatra#1625): the auditor-review component moved into
+  // @cinatra-ai/auditor-agent (the pure snapshot->onChange renderer). The KIND
+  // stays (the manifest still declares it — kind-vocabulary set-equality), but
+  // the host ships no component: a bundled binding resolves map-first to the
+  // extension wrapper (hasFieldRendererComponent -> makeExtensionFieldRenderer),
+  // and a not-in-build binding of this kind degrades to the SchemaFieldRenderer
+  // floor here (AC4 never-blank). Same shape as final-list-review /
+  // linkedin-draft-review / wordpress-draft-confirm below.
+  "auditor-review": { renderer: SchemaFieldRenderer },
   "campaign-recipients-review": {
     renderer: CampaignRecipientsReviewRenderer,
     bareAliases: ["campaign-recipients-review"],
@@ -333,12 +336,17 @@ export function ensureDefaultFieldRenderersRegistered(): void {
     renderer: ReviewerAgentOutputRenderer,
   });
 
-  fieldRendererRegistry.register({
-    id: "@cinatra/email-reviewer-agent:ai-review-panel",
-    priority: 80,
-    condition: isAiReviewPanelField,
-    renderer: AiReviewPanelRenderer,
-  });
+  // The `@cinatra/email-reviewer-agent:ai-review-panel` legacy-scope alias was
+  // DELETED (cinatra#1625 S8/M3, owner action-boundary ruling 2026-07-18): a
+  // retired-scope binding whose review-check server mutations (Run/Dismiss/Apply)
+  // were already inert stubs — though its "Approve review" action still emitted
+  // onChange and could resume the interrupt. No live agent OAS/manifest emits it.
+  // A stored pre-rename interrupt now resolves to NO renderer: the HITL surface
+  // shows "no renderer configured for this step" and — the id is not
+  // mid-run-classified and its x-renderer is not the generic schema-field-fallback
+  // — presents no Continue button, so it cannot be resumed. Losing that working
+  // resume path is an unresumable dead-end explicitly accepted under the owner's
+  // backward-compat waiver. NOT a schema floor.
 
   // -------------------------------------------------------------------------
   // Manifest-driven entries: the generated build-time bindings (presence-

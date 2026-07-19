@@ -9,6 +9,7 @@ import {
 import { readAgentRunByTokenHash } from "@cinatra-ai/agents";
 import { verifyChatMcpActorToken } from "./chat-mcp-actor-token";
 import { verifyAgentRunMcpActorToken } from "./agent-run-mcp-actor-token";
+import { verifyWidgetMcpActorToken } from "./widget-mcp-actor-token";
 import { createObjectsModule } from "@cinatra-ai/objects/module";
 import { createArtifactsModule } from "@/lib/artifacts/mcp";
 import { createContextModule } from "@/lib/artifacts/context-mcp";
@@ -488,16 +489,27 @@ export const mcpServerMount = createMcpServerMount({
   //      per-handler authz + `enforceMcpBoundary` gate the rest. The
   //      run's owner identity (userId + orgId) is carried in the token
   //      and the runId is propagated into the request store for audit.
+  //   3. widget-OBO (`cinatra.widget.mcp-obo`, S5 cinatra#1221): the
+  //      public-site (WordPress/Drupal) widget turn on /api/assistants/chat.
+  //      Resolves to `delegation: "public_site_widget"` → the CLOSED,
+  //      kind-keyed `delegated-widget` tool policy (only the bound kind's
+  //      `*_content_editor_run`), the pinned canonical `instanceId`, and
+  //      `platformRole: "member"` (floored at mint). A missing/blank `inst`
+  //      or `knd`, wrong `t`, expired/over-long TTL, or bad HMAC → the
+  //      verifier returns null → this falls through to the machine-token
+  //      path, DENIED at the boundary (never an un-pinned OBO actor).
   //
   // App-layer callback because the mcp-server package cannot import
-  // app-local modules (no `@/` imports in packages/mcp-server). Try chat
-  // first then agent-run — both verifiers are fail-closed (return null on
-  // any mismatch), and the chat token type discriminator (`t` claim) is
-  // distinct from the agent-run discriminator, so the order is purely
-  // about which path is more common.
+  // app-local modules (no `@/` imports in packages/mcp-server). Each token
+  // type carries a DISTINCT `t` discriminator and every verifier is
+  // fail-closed (returns null on any mismatch), so the try order is purely
+  // about which path is more common — a non-matching type can never be
+  // mis-resolved by the wrong verifier.
   verifyDelegatedActorToken: async (input) => {
     const chatActor = await verifyChatMcpActorToken(input);
     if (chatActor) return chatActor;
-    return verifyAgentRunMcpActorToken(input);
+    const agentRunActor = await verifyAgentRunMcpActorToken(input);
+    if (agentRunActor) return agentRunActor;
+    return verifyWidgetMcpActorToken(input);
   },
 });

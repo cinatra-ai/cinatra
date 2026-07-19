@@ -1,5 +1,5 @@
 {
-  "note": "Committed clone-back pins for the NON-required cinatra.devExtensions universe (cinatra#141). CI checks each companion repo out detached at resolvedSha (scripts/ci/sync-dev-extensions.mjs --pinned); the prod bootable set is pinned separately in cinatra-required-extensions.lock.json (never duplicated here). Regenerate with scripts/extensions/update-dev-extension-lock.mjs and move pnpm-lock.yaml + the generated maps in the SAME PR — see docs/internals/contracts/extension-clone-pinning.md.",
+  "note": "Committed clone-back pins for the NON-required cinatra.devExtensions universe (cinatra#141). CI checks each companion repo out detached at resolvedSha (scripts/ci/sync-dev-extensions.mjs --pinned); the prod bootable set is pinned separately in cinatra-required-extensions.lock.json (never duplicated here). Regenerate with scripts/extensions/update-dev-extension-lock.mjs and move pnpm-lock.yaml + the generated maps in the SAME PR \u2014 see docs/internals/contracts/extension-clone-pinning.md.",
   "schemaVersion": 1,
   "packages": [
     {
@@ -30,7 +30,7 @@
     {
       "packageName": "@cinatra-ai/auditor-agent",
       "repo": "cinatra-ai/auditor-agent",
-      "resolvedSha": "179a7d13dd464e4566b5ae3c8f7c8ff6d173bcd1"
+      "resolvedSha": "dc290a3e1c2b24ce6374a5b744429db0666083f5"
     },
     {
       "packageName": "@cinatra-ai/blog-connector",
@@ -145,7 +145,7 @@
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "f9a870e6c4d23c15f1144266bc30d8a7af619d6f"
+      "resolvedSha": "b2b1fc0aa8928fd166fd2bb787cc62cf772ff718"
     },
     {
       "packageName": "@cinatra-ai/drupal-skills",
@@ -355,7 +355,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",
       "repo": "cinatra-ai/wordpress-mcp-connector",
-      "resolvedSha": "99511bcc811df6b6832d2a527c8d9230a25745c6"
+      "resolvedSha": "5f9fd9025e752527d6b35a4479bfbca3c0a39280"
     },
     {
       "packageName": "@cinatra-ai/youtube-connector",

@@ -449,7 +449,9 @@ describe("redeemUserAuthCode — PKCE + single-use + cross-site binding", () => 
 });
 
 describe("consumeUserWidgetToken — live binding re-checks (CHILD 3 surface)", () => {
-  const STREAM_PATH = "/api/agents/wordpress-content-editor/stream";
+  // cinatra#1221 S5 AUDIENCE RE-SCOPE — the cwu_ token's aud is now the UNIFIED
+  // assistant chat route; consume authorizes against it.
+  const STREAM_PATH = "/api/assistants/chat";
 
   function mintToken(site = SITE_A) {
     const t = newTxn(site);
@@ -607,7 +609,8 @@ describe("rotation TOCTOU regression (cinatra#407 merge-time codex finding)", ()
   // validateConnectServerCredential), so the minted token carries the OLD
   // (pre-rotation) version and dies at the consume-time live re-check.
 
-  const STREAM_PATH = "/api/agents/wordpress-content-editor/stream";
+  // cinatra#1221 S5 AUDIENCE RE-SCOPE — the cwu_ token binds the unified chat aud.
+  const STREAM_PATH = "/api/assistants/chat";
 
   // Mint a cwu_ exactly as the token route would: resolve the verified site
   // from the presented cnx_ (real resolveVerifiedSiteFromCredential, fed by the

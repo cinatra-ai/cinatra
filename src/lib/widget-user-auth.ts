@@ -15,6 +15,7 @@ import {
   type ValidatedConnectCredential,
 } from "@/lib/widget-stream-auth";
 import { normalizeOriginStrict } from "@/lib/widget-token-broker";
+import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
 import {
   getPostgresConnectionString,
   postgresSchema,
@@ -110,8 +111,13 @@ function qTable(table: string): string {
   return `${quotePostgresIdentifier(postgresSchema)}.${quotePostgresIdentifier(table)}`;
 }
 
-function streamRoutePath(agentSlug: string): string {
-  return `/api/agents/${agentSlug}/stream`;
+// S5 (cinatra#1221) AUDIENCE RE-SCOPE — see widget-token-broker.ts. The `cwu_`
+// per-user token's audience is the UNIFIED assistant chat route; it stays
+// AGENT-BOUND via its `agent_slug` column + `scope` (`<agentSlug>.user`), only
+// the `aud` moves so `/api/assistants/chat` consumes it. The mint site is
+// unchanged; a legacy-route consume now fails `aud_mismatch` (designed cutover).
+function streamRoutePath(_agentSlug: string): string {
+  return WIDGET_BROKER_ROUTE_PATH;
 }
 
 function userTokenScope(agentSlug: string): string {
