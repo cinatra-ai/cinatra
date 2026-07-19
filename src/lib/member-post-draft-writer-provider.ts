@@ -4,6 +4,13 @@ import "server-only";
 // lazy/guarded host-access cutover — the same shape as
 // `social-media-system-provider.ts` and `crm-integration-providers.ts`).
 //
+// This file is named by its host MECHANISM (a member post-draft writer
+// provider), never by the vendor — core owns integration mechanism, not vendor
+// code (epic cinatra#978, vendor-token-core-gate). The LinkedIn identity lives
+// ONLY in the host↔connector contract string literals below (capability id +
+// draftable type id), exactly as `host-content-editor-dispatch.ts` names the
+// shared WordPress/Drupal writer mechanism generically.
+//
 // The linkedin-connector's `register(ctx)` registers a member post-draft row
 // writer behind the `linkedin-post-draft-writer` capability id
 // (linkedin-connector#59, cinatra#1457). Unlike the wordpress:post /

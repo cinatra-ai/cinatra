@@ -18,7 +18,7 @@ import {
   createLinkedinPostDraft,
   type LinkedinPostDraftWriteRequest,
   type LinkedinPostDraftWriteResult,
-} from "@/lib/linkedin-post-draft-writer";
+} from "@/lib/member-post-draft-writer-provider";
 
 const REQUEST: LinkedinPostDraftWriteRequest = {
   content: "hello from a member draft",
