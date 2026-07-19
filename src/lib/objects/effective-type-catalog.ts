@@ -24,7 +24,13 @@ import "server-only";
 // (fail-closed — never a permissive fallback), with a warn.
 // ---------------------------------------------------------------------------
 
-import { objectTypeRegistry, readActiveDynamicObjectTypes } from "@cinatra-ai/objects";
+import {
+  objectTypeRegistry,
+  readActiveDynamicObjectTypes,
+  resolveTypeProjectionDisposition,
+  type TypeDispositions,
+  type TypeProjectionDisposition,
+} from "@cinatra-ai/objects";
 import {
   parseClaimDispositions,
   resolveClaimWinner,
@@ -64,6 +70,18 @@ export interface EffectiveTypeCatalogEntry {
   /** The org's winning claim for this type, iff the ACTOR is inside the
    * claiming install's access grants; otherwise null. */
   claim: EffectiveClaimInfo | null;
+  /** The type-driven DECLARED disposition payload (epic #1785), read from the
+   * registered type — the single disposition authority the retirement cuts this
+   * catalog (and the projector / rebuild / recall) over to, replacing the
+   * DB-claim arbitration. Null for a type with no local registration (a
+   * dynamic- or claim-sourced entry) or one that declares none (a plain data
+   * object). Distinct from `claim.dispositions`, which is per-actor access
+   * provenance, not the governing disposition. */
+  declaredDispositions: TypeDispositions | null;
+  /** The resolved projection for this type via the shared registry resolver:
+   * the declared projection, `artifact-safe` when installed but undeclared, or
+   * `none` when the defining extension is not installed (fail closed). */
+  projectionDisposition: TypeProjectionDisposition;
 }
 
 function claimInfoFrom(winner: {
@@ -118,6 +136,8 @@ export async function resolveEffectiveTypeCatalog(input: {
       category: def.category,
       displayName: null,
       claim: null,
+      declaredDispositions: def.dispositions ?? null,
+      projectionDisposition: resolveTypeProjectionDisposition(def.type),
     });
   }
 
@@ -132,6 +152,10 @@ export async function resolveEffectiveTypeCatalog(input: {
       category: dyn.inferredCategory ?? null,
       displayName: dyn.inferredName ?? null,
       claim: null,
+      // A dynamic (non-statically-registered) type declares no type-driven
+      // disposition; the resolver fails it closed to 'none'.
+      declaredDispositions: null,
+      projectionDisposition: resolveTypeProjectionDisposition(dyn.type),
     });
   }
 
@@ -178,6 +202,10 @@ export async function resolveEffectiveTypeCatalog(input: {
       category: null,
       displayName: null,
       claim: claimInfoFrom(winner),
+      // A claim-only type has no local registration; the type-driven disposition
+      // authority (the registry) declares none — fail closed to 'none'.
+      declaredDispositions: null,
+      projectionDisposition: resolveTypeProjectionDisposition(objectTypeId),
     });
   }
 

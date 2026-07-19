@@ -1,17 +1,18 @@
 // Artifact-scope projection lanes in graphiti-projector.ts (cinatra#1436).
 //
 // Generalizes the #1379 memory-lane mechanism to ARTIFACT rows: the generic
-// artifact object type AND any claimed type whose winning disposition is
-// artifact-safe / faceted NEST under a server-derived per-scope lane (AC1),
-// move lanes on a scope change purging the prior-lane episode (AC2), and reuse
-// the SAME hardened scope->lane function memory uses — never an independent
-// artifact branch (AC6). A claimed 'raw' opt-in keeps the single ambient org
-// lane (guardrail).
+// artifact object type AND any DISPOSITION-GOVERNED type whose type-driven
+// disposition is artifact-safe / faceted NEST under a server-derived per-scope
+// lane (AC1), move lanes on a scope change purging the prior-lane episode (AC2),
+// and reuse the SAME hardened scope->lane function memory uses — never an
+// independent artifact branch (AC6). A governed 'raw' opt-in keeps the single
+// ambient org lane (guardrail).
 //
 // Same harness as graphiti-projector-memory.test.ts: mock @/lib/postgres-sync +
 // ../graphiti-client; identityHashToUuid is lane-AWARE (`${hash}@${group}`) so a
-// lane-move deletes the OLD lane's UUID and writes the NEW lane's. The claim
-// store + effective-identity resolver are mocked to drive the faceted path.
+// lane-move deletes the OLD lane's UUID and writes the NEW lane's. The
+// disposition comes from the type-driven registry (epic #1785); the
+// effective-identity resolver is mocked to drive the faceted path.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -36,30 +37,44 @@ vi.mock("@/lib/objects/effective-identity", () => ({
   })),
 }));
 
+import { z } from "zod";
+
 import { projectObjectToGraphiti } from "../graphiti-projector";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { addEpisode, deleteEpisode } from "../graphiti-client";
-import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
 import { deriveProjectionGroupId, deriveScopeLane } from "../graphiti-projection-policy";
 import { GENERIC_ARTIFACT_OBJECT_TYPE } from "../effective-identity";
+import { objectTypeRegistry } from "../registry";
+import type { TypeProjectionDisposition } from "../types";
 
 const runPg = runPostgresQueriesSync as unknown as ReturnType<typeof vi.fn>;
 const addEp = addEpisode as unknown as ReturnType<typeof vi.fn>;
 const delEp = deleteEpisode as unknown as ReturnType<typeof vi.fn>;
-const readClaims = readArtifactTypeClaimsForOrg as unknown as ReturnType<typeof vi.fn>;
 
 const ORG = "org-1";
 const BASE = deriveProjectionGroupId(ORG); // cinatra-org-org-1
 const CLAIMED_TYPE = "@cinatra-ai/email:message";
 
+// Register CLAIMED_TYPE as a disposition-GOVERNED type with the given projection
+// (the type-driven authority the retirement replaced the DB claim with).
+function registerClaimed(projection: TypeProjectionDisposition) {
+  objectTypeRegistry.register({
+    type: CLAIMED_TYPE,
+    category: "report",
+    schema: z.record(z.string(), z.unknown()),
+    lifecycle: { sources: ["agent"], mutableBy: ["agent"] },
+    renderers: { listRow: null, card: null, detail: null },
+    dispositions: { projection },
+  });
+}
+
 beforeEach(() => {
+  objectTypeRegistry._clearForTests();
   runPg.mockReset();
   addEp.mockReset();
   delEp.mockReset();
-  readClaims.mockReset();
   addEp.mockResolvedValue({ uuid: "ep", name: "x", content: "{}", group_id: "g" });
   delEp.mockResolvedValue(undefined);
-  readClaims.mockReturnValue([]);
 });
 
 // A generic artifact row (artifactType + latestRepresentationRevisionId ⇒
@@ -86,24 +101,7 @@ function artifactRow(over: Record<string, unknown> = {}) {
   };
 }
 
-function activeClaim(dispositions: unknown) {
-  return {
-    id: "claim-1",
-    scope: "platform",
-    objectTypeId: CLAIMED_TYPE,
-    claimKind: "dedicated",
-    status: "active",
-    extensionPackage: "@cinatra-ai/email-artifact",
-    extensionVersion: "1.0.0",
-    generation: 1,
-    dispositions,
-    installId: null,
-    createdAt: null,
-    updatedAt: null,
-  };
-}
-
-// A claimed typed row with a scope; the winner's disposition decides faceting.
+// A governed typed row with a scope; the type's disposition decides faceting.
 function claimedRow(over: Record<string, unknown> = {}) {
   return {
     id: "obj-clm-1",
@@ -234,7 +232,7 @@ describe("generic artifact row — AC2 lane-move", () => {
 
 describe("claimed faceted row — AC1 scope-derived lane; 'raw' opt-in stays ambient (guardrail)", () => {
   it("an artifact-safe (faceted) claimed row nests under its scope-derived lane", async () => {
-    readClaims.mockReturnValue([activeClaim({ projection: "artifact-safe" })]);
+    registerClaimed("artifact-safe");
     runPg.mockReturnValueOnce([{ rows: [claimedRow({ owner_level: "team", owner_id: "team-3", visibility: "team" })] }]);
     runPg.mockReturnValue([{ rows: [], rowCount: 1 }]);
     await projectObjectToGraphiti({ objectId: "obj-clm-1", objectVersion: 1, orgId: ORG });
@@ -247,7 +245,7 @@ describe("claimed faceted row — AC1 scope-derived lane; 'raw' opt-in stays amb
   });
 
   it("a claimed row with null dispositions (⇒ artifact-safe default) also nests by scope", async () => {
-    readClaims.mockReturnValue([activeClaim(null)]);
+    registerClaimed("artifact-safe"); // bridge default when a manifest omits dispositions
     runPg.mockReturnValueOnce([{ rows: [claimedRow({ owner_level: "user", owner_id: "user-9", visibility: "private" })] }]);
     runPg.mockReturnValue([{ rows: [], rowCount: 1 }]);
     await projectObjectToGraphiti({ objectId: "obj-clm-1", objectVersion: 1, orgId: ORG });
@@ -255,7 +253,7 @@ describe("claimed faceted row — AC1 scope-derived lane; 'raw' opt-in stays amb
   });
 
   it("a claimed 'raw' opt-in keeps the SINGLE ambient org lane (excluded from lane treatment)", async () => {
-    readClaims.mockReturnValue([activeClaim({ projection: "raw" })]);
+    registerClaimed("raw");
     // Even a user-private scope stays ambient for a raw row (no nesting, no lane-move).
     runPg.mockReturnValueOnce([{ rows: [claimedRow({ owner_level: "user", owner_id: "user-42", visibility: "private", data: { subject: "S", customField: "kept" } })] }]);
     runPg.mockReturnValue([{ rows: [], rowCount: 1 }]);
@@ -275,7 +273,7 @@ describe("claimed faceted row — AC1 scope-derived lane; 'raw' opt-in stays amb
     // projection='raw', so the row LEAVES lane treatment. The prior nested
     // episode must be purged (it lives outside the ambient group a rebuild
     // clears) and the row re-projects into the ambient org lane as raw.
-    readClaims.mockReturnValue([activeClaim({ projection: "raw" })]);
+    registerClaimed("raw");
     const priorLane = `${BASE}-user-user-42`;
     runPg.mockReturnValueOnce([{
       rows: [claimedRow({
@@ -307,7 +305,7 @@ describe("claimed faceted row — AC1 scope-derived lane; 'raw' opt-in stays amb
     // A prior nested-lane episode (from when it was artifact-safe) must be
     // purged, not orphaned: the ambient-group rebuild that a claim change opens
     // never reaches a nested lane, and 'none' types are excluded from verify.
-    readClaims.mockReturnValue([activeClaim({ projection: "none" })]);
+    registerClaimed("none");
     const priorLane = `${BASE}-user-user-42`;
     runPg.mockReturnValueOnce([{
       rows: [claimedRow({

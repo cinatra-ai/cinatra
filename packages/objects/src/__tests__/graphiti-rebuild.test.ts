@@ -37,6 +37,9 @@ import {
 } from "../graphiti-rebuild";
 import { orgIdFromProjectionGroupId } from "../graphiti-projection-policy";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+import { objectTypeRegistry } from "../registry";
+import type { TypeDispositions } from "../types";
+import { z } from "zod";
 
 const runPg = runPostgresQueriesSync as unknown as ReturnType<typeof vi.fn>;
 
@@ -187,46 +190,60 @@ describe("lane-eligible type set (#1436 AC4)", () => {
     expect(laneEligibleTypes(["@acme/crm:ticket"])).toEqual([MEM, ARTIFACT, "@acme/crm:ticket"]);
   });
 
-  it("readClaimedTypeDispositions(null) issues no query and returns empty sets", () => {
+  // Register a disposition-GOVERNED type in the type-driven registry (the
+  // authority the retirement replaced the per-org DB claim with).
+  const register = (type: string, dispositions: TypeDispositions) =>
+    objectTypeRegistry.register({
+      type,
+      category: "report",
+      schema: z.record(z.string(), z.unknown()),
+      lifecycle: { sources: ["agent"], mutableBy: ["agent"] },
+      renderers: { listRow: null, card: null, detail: null },
+      dispositions,
+    });
+
+  it("readClaimedTypeDispositions(null) reads no registry and returns empty sets", () => {
+    objectTypeRegistry._clearForTests();
+    register("@acme/t:safe", { projection: "artifact-safe" });
     const out = readClaimedTypeDispositions(null);
     expect(out).toEqual({ excludedTypes: [], artifactSafeTypes: [] });
+    // No DB read on the type-driven path.
     expect(runPg).not.toHaveBeenCalled();
   });
 
-  it("classifies each type's WINNING disposition: artifact-safe (incl. null-default + fail-closed) vs none vs raw", () => {
-    // Platform-scoped active dedicated claims (each the sole winner for its type).
-    const mk = (objectTypeId: string, dispositions: unknown) => ({
-      id: `c-${objectTypeId}`,
-      scope: "platform",
-      object_type_id: objectTypeId,
-      claim_kind: "dedicated",
-      status: "active",
-      extension_package: "@acme/x",
-      extension_version: "1.0.0",
-      generation: 1,
-      dispositions,
+  it("classifies each governed type's disposition: artifact-safe (incl. bridge-default + fail-closed) vs none vs raw", () => {
+    objectTypeRegistry._clearForTests();
+    register("@acme/t:safe-explicit", { projection: "artifact-safe" });
+    // The bridge writes an explicit artifact-safe payload when a manifest omits
+    // dispositions — a governed type at the default.
+    register("@acme/t:safe-default", { projection: "artifact-safe" });
+    // An invalid declared projection fails closed DOWN to artifact-safe.
+    register("@acme/t:safe-failclosed", {
+      projection: "totally-bogus" as unknown as TypeDispositions["projection"],
     });
-    runPg.mockReturnValue([
-      {
-        rows: [
-          mk("@acme/t:safe-explicit", { projection: "artifact-safe" }),
-          mk("@acme/t:safe-default", null), // no dispositions ⇒ artifact-safe default
-          mk("@acme/t:safe-failclosed", { projection: "totally-bogus" }), // invalid ⇒ fail-closed artifact-safe
-          mk("@acme/t:raw", { projection: "raw" }),
-          mk("@acme/t:none", { projection: "none" }),
-        ],
-      },
-    ]);
+    register("@acme/t:raw", { projection: "raw" });
+    register("@acme/t:none", { projection: "none" });
+    // An UNGOVERNED data type (no dispositions) is in NEITHER set.
+    objectTypeRegistry.register({
+      type: "@acme/crm:account",
+      category: "report",
+      schema: z.record(z.string(), z.unknown()),
+      lifecycle: { sources: ["agent"], mutableBy: ["agent"] },
+      renderers: { listRow: null, card: null, detail: null },
+    });
+
     const out = readClaimedTypeDispositions("org-1");
-    // Artifact-safe (lane-eligible): explicit + null-default + invalid-fail-closed.
+    // Artifact-safe (lane-eligible): explicit + bridge-default + invalid-fail-closed.
     expect(out.artifactSafeTypes.sort()).toEqual(
       ["@acme/t:safe-default", "@acme/t:safe-explicit", "@acme/t:safe-failclosed"].sort(),
     );
-    // 'none' → excluded from counts; 'raw' is in NEITHER (keeps the ambient lane).
+    // 'none' → excluded from counts; 'raw' + ungoverned are in NEITHER set.
     expect(out.excludedTypes).toEqual(["@acme/t:none"]);
     expect(out.artifactSafeTypes).not.toContain("@acme/t:raw");
     expect(out.excludedTypes).not.toContain("@acme/t:raw");
-    // The full lane-eligible set threaded into the exclusion carries the literals + the artifact-safe claimed types.
+    expect(out.artifactSafeTypes).not.toContain("@acme/crm:account");
+    expect(out.excludedTypes).not.toContain("@acme/crm:account");
+    // The full lane-eligible set threaded into the exclusion carries the literals + the artifact-safe governed types.
     const laneSet = laneEligibleTypes(out.artifactSafeTypes);
     expect(laneSet).toContain(MEM);
     expect(laneSet).toContain(ARTIFACT);

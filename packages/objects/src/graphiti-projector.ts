@@ -5,18 +5,24 @@ import { addEpisode, deleteEpisode, identityHashToUuid } from "./graphiti-client
 import { DEFAULT_ARTIFACT_EXTENSION } from "./generated/artifact-floor";
 import { objectSyncAdapterRegistry } from "./sync-adapters/registry";
 import type { ObjectSyncAdapter, StoredObject } from "./sync-adapters/adapter";
-import { claimWinnerProjectionDisposition, parseClaimDispositions, resolveClaimWinner } from "./claims";
+import { claimedTypeRegisteringPackage } from "./claims";
+import {
+  objectTypeRegistry,
+  isDispositionGovernedType,
+  resolveTypeProjectionDisposition,
+} from "./registry";
 import { GENERIC_ARTIFACT_OBJECT_TYPE } from "./effective-identity";
 import {
   deriveProjectionGroupId,
   deriveScopeLane,
   readProjectionEpochs,
 } from "./graphiti-projection-policy";
-// Claimed-row projection (#1427 AC-3) resolves the claim winner via the HOST
-// claim store and the row's identity through the ONE effective-identity
-// service (epic #1424: one resolution point for every surface — the projector
-// must not re-derive install/claim semantics).
-import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
+// Claimed-row projection (#1427 AC-3) now resolves the disposition through the
+// type-driven registry seam (epic #1785) — the single disposition authority the
+// projector / rebuild / recall / effective-type-catalog share — and the row's
+// identity through the ONE effective-identity service (epic #1424: one
+// resolution point for every surface; that enrichment call is unchanged, A2
+// owns its rework).
 import { resolveArtifactEffectiveIdentity } from "@/lib/objects/effective-identity";
 
 // ---------------------------------------------------------------------------
@@ -289,40 +295,39 @@ type ClaimedRowProjection =
   | { kind: "faceted"; body: Record<string, unknown> };
 
 /**
- * Resolve how a non-generic typed row projects under the org's claim set:
- *   - no winning claim        → null (the caller keeps the existing paths)
+ * Resolve how a non-generic typed row projects, type-driven (epic #1785):
+ *   - not disposition-governed → null (an ungoverned data object, or an
+ *     uninstalled definer — the caller keeps the existing raw/generic path)
  *   - disposition 'none'      → terminal skip (never projected, outbox done)
- *   - disposition 'raw'       → the raw-data path (an explicit claim opt-in)
- *   - 'artifact-safe' / no or invalid dispositions → the faceted shape
- *     (fail-CLOSED: an unparseable dispositions payload can gate DOWN to the
- *     metadata-only projection, never up to raw).
- * Identity comes from the effective-identity service — the ONE resolution
- * point (#1426); read errors propagate (the outbox row retries).
+ *   - disposition 'raw'       → the raw-data path (an explicit type opt-in)
+ *   - 'artifact-safe' / undeclared / invalid → the faceted shape (fail-CLOSED:
+ *     an invalid declared projection gates DOWN to the metadata-only shape,
+ *     never up to raw — the shared resolver enforces this).
+ * The disposition comes from the SAME shared registry resolver the rebuild and
+ * recall surfaces read, so the write path can never disagree with the counted /
+ * replayed / recalled set. Under the single-definer model there is no claim
+ * winner: the faceted body's claiming extension is the registering (defining)
+ * package from the registry, `claimKind` is always 'dedicated', and the
+ * generation sentinel is 1. Identity still comes from the effective-identity
+ * service — the ONE resolution point (#1426), unchanged here (A2 owns its
+ * rework); read errors propagate (the outbox row retries).
  */
 function resolveClaimedRowProjection(row: CanonicalRow): ClaimedRowProjection | null {
   const orgId = row.org_id;
-  if (orgId == null) return null; // claims are org/platform-scoped; no-tenant rows keep the raw path
-  const claims = readArtifactTypeClaimsForOrg(orgId);
-  const winner = resolveClaimWinner(claims, { orgId, objectTypeId: row.type });
-  if (!winner) return null;
-  // The raw/none/artifact-safe DECISION goes through the shared
-  // claimWinnerProjectionDisposition rule — the exact fail-closed mapping the
-  // rebuild/recall surfaces apply via resolveClaimProjectionDisposition — so the
-  // write path can never disagree with the counted / replayed / recalled set.
-  // The parse below is DIAGNOSTIC only: it surfaces WHY a malformed payload
-  // failed closed and never decides the disposition.
-  if (winner.dispositions != null) {
-    const parsed = parseClaimDispositions(winner.dispositions);
-    if (!parsed.ok) {
-      console.warn(
-        `[graphiti-projector] invalid dispositions on claim ${winner.id} (${row.type}); ` +
-          `failing closed to artifact-safe projection: ${parsed.errors.join("; ")}`,
-      );
-    }
-  }
-  const projection = claimWinnerProjectionDisposition(winner);
+  if (orgId == null) return null; // no-tenant rows keep the raw path
+  // A plain data object (no declared disposition) or an uninstalled definer is
+  // NOT disposition-governed — keep the existing raw/generic projection path.
+  if (!isDispositionGovernedType(row.type)) return null;
+  const projection = resolveTypeProjectionDisposition(row.type);
   if (projection === "none") return { kind: "skip" };
   if (projection === "raw") return { kind: "raw" };
+  // The claiming extension is the type's REGISTERING (single-definer) package —
+  // the actual provenance when a pack registered the type, else the id's
+  // namespace-defining package (a host-registered type).
+  const claimingExtension =
+    objectTypeRegistry.getRegisteringPackage(row.type) ??
+    claimedTypeRegisteringPackage(row.type) ??
+    row.type;
   const enrichment = resolveArtifactEffectiveIdentity({
     orgId,
     artifactId: row.id,
@@ -333,9 +338,9 @@ function resolveClaimedRowProjection(row: CanonicalRow): ClaimedRowProjection | 
     kind: "faceted",
     body: projectClaimedRowFaceted(row.data, {
       baseType: row.type,
-      claimingExtension: winner.extensionPackage,
-      claimKind: winner.claimKind,
-      claimGeneration: winner.generation,
+      claimingExtension,
+      claimKind: "dedicated",
+      claimGeneration: 1,
       effectiveExtension: identity.kind === "extension" ? identity.extension : null,
       identityBasis: identity.kind === "extension" ? identity.basis : identity.kind,
       selectable: identity.selectable,

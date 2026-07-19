@@ -1,16 +1,18 @@
-// Artifact-scope recall entitlement wiring (cinatra#1436 AC3).
+// Artifact-scope recall entitlement wiring (cinatra#1436 AC3; epic #1785
+// type-driven cutover).
 //
 // objects_list with a query against an ARTIFACT-scoped type — the generic
-// artifact type OR a claimed type whose winning disposition is artifact-safe /
-// faceted — must pass the actor's SERVER-DERIVED entitled lane set to Graphiti
-// searchNodes (own user lane + a lane per real team membership + the ambient
-// org lane), exactly like the memory branch. A claimed 'raw' opt-in and an
-// unclaimed type keep the single ambient org lane and do NOT resolve teams. The
-// entitled-vs-unentitled lane math is unit-tested in
-// graphiti-projection-policy-memory-lanes.test.ts; this proves the handler
-// wiring (type detection via the shared claim resolver → readTeamsForUser →
-// lane derivation → searchNodes). The lane is relevance scoping only; Postgres
-// ownership + object.read still gate every candidate (unchanged path).
+// artifact type OR a DISPOSITION-GOVERNED type whose type-driven disposition is
+// artifact-safe / faceted — must pass the actor's SERVER-DERIVED entitled lane
+// set to Graphiti searchNodes (own user lane + a lane per real team membership +
+// the ambient org lane), exactly like the memory branch. A governed 'raw'
+// opt-in, a governed 'none' type, and an ungoverned data type keep the single
+// ambient org lane and do NOT resolve teams. The entitled-vs-unentitled lane
+// math is unit-tested in graphiti-projection-policy-memory-lanes.test.ts; this
+// proves the handler wiring (type detection via the shared type-driven registry
+// resolver → readTeamsForUser → lane derivation → searchNodes). The lane is
+// relevance scoping only; Postgres ownership + object.read still gate every
+// candidate (unchanged path).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -48,18 +50,15 @@ vi.mock("@/lib/better-auth-db", () => ({
   readTeamsForUser: vi.fn(async () => [] as Array<{ id: string; name: string }>),
 }));
 
-// The claim store drives artifact-scoped detection for CLAIMED types. Default:
-// no claims; each test overrides for its type.
-vi.mock("@/lib/objects/artifact-claim-store", () => ({
-  readArtifactTypeClaimsForOrg: vi.fn(() => []),
-}));
+import { z } from "zod";
 
 import { createObjectsPrimitiveHandlers } from "../mcp/handlers";
 import { searchNodes } from "../graphiti-client";
 import { readTeamsForUser } from "@/lib/better-auth-db";
-import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
 import { deriveProjectionGroupId } from "../graphiti-projection-policy";
 import { GENERIC_ARTIFACT_OBJECT_TYPE } from "../effective-identity";
+import { objectTypeRegistry } from "../registry";
+import type { TypeProjectionDisposition } from "../types";
 
 const ORG = "org-1";
 const BASE = deriveProjectionGroupId(ORG);
@@ -67,7 +66,6 @@ const CLAIMED_TYPE = "@acme/email:message";
 
 const mockSearch = searchNodes as unknown as ReturnType<typeof vi.fn>;
 const mockTeams = readTeamsForUser as unknown as ReturnType<typeof vi.fn>;
-const mockClaims = readArtifactTypeClaimsForOrg as unknown as ReturnType<typeof vi.fn>;
 
 const ACTOR = {
   actorType: "model",
@@ -76,21 +74,18 @@ const ACTOR = {
   ...({ orgId: ORG, agentId: "a1", runId: "r1" } as unknown as Record<string, unknown>),
 } as never;
 
-function claim(dispositions: unknown, objectTypeId = CLAIMED_TYPE) {
-  return {
-    id: "claim-1",
-    scope: "platform",
-    objectTypeId,
-    claimKind: "dedicated",
-    status: "active",
-    extensionPackage: "@acme/email-artifact",
-    extensionVersion: "1.0.0",
-    generation: 1,
-    dispositions,
-    installId: null,
-    createdAt: null,
-    updatedAt: null,
-  };
+// Register CLAIMED_TYPE as a disposition-GOVERNED type with the given projection
+// (the type-driven authority the retirement replaced the DB claim with). An
+// omitted projection registers the type UNGOVERNED (no dispositions).
+function registerType(projection?: TypeProjectionDisposition, type = CLAIMED_TYPE) {
+  objectTypeRegistry.register({
+    type,
+    category: "report",
+    schema: z.record(z.string(), z.unknown()),
+    lifecycle: { sources: ["agent"], mutableBy: ["agent"] },
+    renderers: { listRow: null, card: null, detail: null },
+    ...(projection ? { dispositions: { projection } } : {}),
+  });
 }
 
 async function listWith(type: string) {
@@ -104,12 +99,11 @@ async function listWith(type: string) {
 }
 
 beforeEach(() => {
+  objectTypeRegistry._clearForTests();
   mockSearch.mockReset();
   mockSearch.mockResolvedValue({ nodes: [] });
   mockTeams.mockReset();
   mockTeams.mockResolvedValue([]);
-  mockClaims.mockReset();
-  mockClaims.mockReturnValue([]);
 });
 
 describe("objects_list — artifact recall entitlement (#1436 AC3)", () => {
@@ -125,16 +119,13 @@ describe("objects_list — artifact recall entitlement (#1436 AC3)", () => {
     // NOT entitled: an arbitrary team lane, any project lane.
     expect(groupIds).not.toContain(`${BASE}-team-team-z`);
     expect(groupIds.some((l) => l.includes("-proj-"))).toBe(false);
-    // The generic artifact type never consults the claim registry.
-    expect(mockClaims).not.toHaveBeenCalled();
   });
 
-  it("a CLAIMED artifact-safe type passes the entitled lane set (claim registry consulted)", async () => {
-    mockClaims.mockReturnValue([claim({ projection: "artifact-safe" })]);
+  it("a GOVERNED artifact-safe type passes the entitled lane set (type-driven resolver)", async () => {
+    registerType("artifact-safe");
     mockTeams.mockResolvedValue([{ id: "team-a", name: "A" }]);
     await listWith(CLAIMED_TYPE);
 
-    expect(mockClaims).toHaveBeenCalledWith(ORG);
     expect(mockTeams).toHaveBeenCalledWith("user-1", ORG);
     const groupIds = mockSearch.mock.calls[0][0].group_ids as string[];
     expect(groupIds).toContain(BASE);
@@ -142,8 +133,10 @@ describe("objects_list — artifact recall entitlement (#1436 AC3)", () => {
     expect(groupIds).toContain(`${BASE}-team-team-a`);
   });
 
-  it("a claimed type with NULL dispositions (⇒ artifact-safe default) is also entitled-lane-scoped", async () => {
-    mockClaims.mockReturnValue([claim(null)]);
+  it("a governed artifact-safe type (the bridge's default when a manifest omits dispositions) is also entitled-lane-scoped", async () => {
+    // A manifest that omits dispositions registers a GOVERNED type at the
+    // artifact-safe default (the bridge writes an explicit payload) — entitled.
+    registerType("artifact-safe");
     mockTeams.mockResolvedValue([{ id: "team-b", name: "B" }]);
     await listWith(CLAIMED_TYPE);
     const groupIds = mockSearch.mock.calls[0][0].group_ids as string[];
@@ -151,24 +144,31 @@ describe("objects_list — artifact recall entitlement (#1436 AC3)", () => {
     expect(groupIds).toContain(`${BASE}-team-team-b`);
   });
 
-  it("a claimed 'raw' type keeps the SINGLE ambient org lane and does NOT resolve teams", async () => {
-    mockClaims.mockReturnValue([claim({ projection: "raw" })]);
-    await listWith(CLAIMED_TYPE);
-    expect(mockClaims).toHaveBeenCalledWith(ORG);
-    expect(mockTeams).not.toHaveBeenCalled();
-    expect(mockSearch.mock.calls[0][0].group_ids).toEqual([BASE]);
-  });
-
-  it("a claimed 'none' type keeps the single ambient org lane (never entitled-scoped)", async () => {
-    mockClaims.mockReturnValue([claim({ projection: "none" })]);
+  it("a governed 'raw' type keeps the SINGLE ambient org lane and does NOT resolve teams", async () => {
+    registerType("raw");
     await listWith(CLAIMED_TYPE);
     expect(mockTeams).not.toHaveBeenCalled();
     expect(mockSearch.mock.calls[0][0].group_ids).toEqual([BASE]);
   });
 
-  it("an UNCLAIMED non-artifact type keeps the single ambient org lane and does NOT resolve teams", async () => {
-    mockClaims.mockReturnValue([]); // no winning claim for this type
-    await listWith("@cinatra-ai/objects:object");
+  it("a governed 'none' type keeps the single ambient org lane (never entitled-scoped)", async () => {
+    registerType("none");
+    await listWith(CLAIMED_TYPE);
+    expect(mockTeams).not.toHaveBeenCalled();
+    expect(mockSearch.mock.calls[0][0].group_ids).toEqual([BASE]);
+  });
+
+  it("an UNGOVERNED data type (no declared disposition) keeps the single ambient org lane and does NOT resolve teams", async () => {
+    registerType(undefined, "@acme/crm:account"); // registered, but ungoverned
+    await listWith("@acme/crm:account");
+    expect(mockTeams).not.toHaveBeenCalled();
+    expect(mockSearch.mock.calls[0][0].group_ids).toEqual([BASE]);
+  });
+
+  it("an UNINSTALLED definer (unregistered type → resolver 'none') keeps the single ambient org lane", async () => {
+    // No registration at all — the type-driven resolver fails closed to 'none',
+    // so the type is never artifact-scoped.
+    await listWith("@uninstalled/pkg:thing");
     expect(mockTeams).not.toHaveBeenCalled();
     expect(mockSearch.mock.calls[0][0].group_ids).toEqual([BASE]);
   });
