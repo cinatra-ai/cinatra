@@ -9,6 +9,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   readAssistantConfigByPrincipalId: vi.fn(),
+  isBuiltInCinatraAssistantUserId: vi.fn(),
 }));
 
 vi.mock("@cinatra-ai/agents", () => ({
@@ -16,13 +17,22 @@ vi.mock("@cinatra-ai/agents", () => ({
 }));
 vi.mock("@/lib/assistant-users", () => ({
   BUILT_IN_CINATRA_ASSISTANT_USERNAME: "cinatra",
+  // The built-in Cinatra principal is the one whose id is "cinatra-principal".
+  isBuiltInCinatraAssistantUserId: (id: string) =>
+    mocks.isBuiltInCinatraAssistantUserId(id),
 }));
 
 import { resolveAssistantRuntimeConfigByPrincipal } from "../resolve-runtime-config";
 import { serializeAssistantConfig } from "@/lib/assistant-config";
-import { wordpressAssistantConfig } from "../wordpress-assistant-config";
+import { wordpressAssistantConfig } from "../cms-assistant-config";
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  // Default: only the id "cinatra-principal" is the built-in Cinatra principal.
+  mocks.isBuiltInCinatraAssistantUserId.mockImplementation(
+    async (id: string) => id === "cinatra-principal",
+  );
+});
 
 describe("resolveAssistantRuntimeConfigByPrincipal", () => {
   it("resolves a registered CMS assistant to ITS OWN persisted config (not the Cinatra fallback)", async () => {
@@ -72,6 +82,19 @@ describe("resolveAssistantRuntimeConfigByPrincipal", () => {
       // The Cinatra reference runtime (chat-assistant-core system skill).
       expect(out.runtimeConfig.systemSkillId).toContain("chat-assistant-core");
     }
+  });
+
+  it("fails CLOSED when the 'cinatra' handle resolves to a NON-built-in principal (no handle-string trust)", async () => {
+    // An imposter principal that owns the "cinatra" handle but is NOT the built-in
+    // Cinatra principal, with no linked template, must never receive the reference
+    // config — the fallback verifies the persisted principal identity, not the handle.
+    mocks.readAssistantConfigByPrincipalId.mockResolvedValue(null);
+    const out = await resolveAssistantRuntimeConfigByPrincipal({
+      assistantUserId: "imposter-principal",
+      handle: "cinatra",
+    });
+    expect(out).toEqual({ ok: false, code: "ASSISTANT_CONFIG_UNAVAILABLE" });
+    expect(mocks.isBuiltInCinatraAssistantUserId).toHaveBeenCalledWith("imposter-principal");
   });
 
   it("a read failure fails CLOSED (structured, never throws)", async () => {

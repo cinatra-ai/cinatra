@@ -18,7 +18,10 @@ import "server-only";
 
 import { readAssistantConfigByPrincipalId } from "@cinatra-ai/agents";
 import { safeParseAssistantConfig } from "@/lib/assistant-config";
-import { BUILT_IN_CINATRA_ASSISTANT_USERNAME } from "@/lib/assistant-users";
+import {
+  BUILT_IN_CINATRA_ASSISTANT_USERNAME,
+  isBuiltInCinatraAssistantUserId,
+} from "@/lib/assistant-users";
 import { buildAssistantRuntimeConfig, type AssistantRuntimeConfig } from "./ports";
 import { buildCinatraAssistantRuntimeConfig } from "./cinatra-assistant-config";
 
@@ -58,8 +61,16 @@ export async function resolveAssistantRuntimeConfigByPrincipal(params: {
 
   // No linked template. The built-in @cinatra principal keeps the in-code
   // reference config (transitional until its registration link is resolvable);
-  // any other principal fails closed.
-  if (handle.trim().toLowerCase() === BUILT_IN_CINATRA_ASSISTANT_USERNAME) {
+  // any other principal fails closed. The fallback is gated on the RESOLVED
+  // principal's persisted identity (isBuiltInCinatraAssistantUserId — an assistant
+  // principal whose username is the reserved Cinatra name), NOT the caller-supplied
+  // `handle` string: a non-built-in principal that owned the "cinatra" handle must
+  // never receive the reference config (fail-closed). The cheap handle check is a
+  // pre-filter that avoids the DB round-trip for the common non-Cinatra path.
+  if (
+    handle.trim().toLowerCase() === BUILT_IN_CINATRA_ASSISTANT_USERNAME &&
+    (await isBuiltInCinatraAssistantUserId(assistantUserId))
+  ) {
     return { ok: true, runtimeConfig: buildCinatraAssistantRuntimeConfig() };
   }
   return { ok: false, code: "ASSISTANT_CONFIG_UNAVAILABLE" };

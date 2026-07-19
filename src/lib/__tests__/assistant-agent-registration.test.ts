@@ -50,8 +50,10 @@ import {
   ensureBuiltInDrupalAssistantAgent,
 } from "@/lib/assistant-agent-registration";
 import { cinatraAssistantConfig } from "@/lib/assistant-runtime/cinatra-assistant-config";
-import { wordpressAssistantConfig } from "@/lib/assistant-runtime/wordpress-assistant-config";
-import { drupalAssistantConfig } from "@/lib/assistant-runtime/drupal-assistant-config";
+import {
+  wordpressAssistantConfig,
+  drupalAssistantConfig,
+} from "@/lib/assistant-runtime/cms-assistant-config";
 import { serializeAssistantConfig } from "@/lib/assistant-config";
 
 const fakeTx = { execute: mocks.txExecute };

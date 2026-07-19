@@ -10,12 +10,10 @@ import {
   wordpressAssistantConfig,
   buildWordpressAssistantRuntimeConfig,
   WORDPRESS_ASSISTANT_SKILL_BUNDLE,
-} from "../wordpress-assistant-config";
-import {
   drupalAssistantConfig,
   buildDrupalAssistantRuntimeConfig,
   DRUPAL_ASSISTANT_SKILL_BUNDLE,
-} from "../drupal-assistant-config";
+} from "../cms-assistant-config";
 
 describe("CMS assistant configs — validity + distinctness (cinatra#1823)", () => {
   it("both parse against the P1 assistant_config schema", () => {

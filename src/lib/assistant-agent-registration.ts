@@ -18,8 +18,10 @@ import {
 } from "@cinatra-ai/agents";
 import { serializeAssistantConfig, type AssistantConfig } from "@/lib/assistant-config";
 import { cinatraAssistantConfig } from "@/lib/assistant-runtime/cinatra-assistant-config";
-import { wordpressAssistantConfig } from "@/lib/assistant-runtime/wordpress-assistant-config";
-import { drupalAssistantConfig } from "@/lib/assistant-runtime/drupal-assistant-config";
+import {
+  wordpressAssistantConfig,
+  drupalAssistantConfig,
+} from "@/lib/assistant-runtime/cms-assistant-config";
 
 // ---------------------------------------------------------------------------
 // Assistant-agent registration (cinatra-ai/cinatra#1037 P1.3).
@@ -65,8 +67,11 @@ export async function registerAssistantAgent(params: {
   packageName?: string;
   /** agent_templates description. */
   description?: string;
+  /** agent_templates `source_nl` provenance note. Defaults (store-side) to the
+   *  historical Cinatra literal when omitted, so @cinatra stays byte-identical. */
+  sourceNl?: string;
 }): Promise<{ assistantUserId: string; templateId: string }> {
-  const { username, config, name, templateId, packageName, description } = params;
+  const { username, config, name, templateId, packageName, description, sourceNl } = params;
 
   // 1. Advisory-locked resolve-or-mint of the principal. The lock + the mint ride
   //    ONE betterAuthDb transaction/connection (reusing the historical seed key)
@@ -144,6 +149,7 @@ export async function registerAssistantAgent(params: {
   if (templateId !== undefined) templateInput.templateId = templateId;
   if (packageName !== undefined) templateInput.packageName = packageName;
   if (description !== undefined) templateInput.description = description;
+  if (sourceNl !== undefined) templateInput.sourceNl = sourceNl;
   const resolvedTemplateId = await upsertBuiltInAssistantAgentTemplate(templateInput);
 
   return { assistantUserId: userId, templateId: resolvedTemplateId };
@@ -187,6 +193,7 @@ export async function ensureBuiltInWordpressAssistantAgent(): Promise<void> {
       templateId: BUILT_IN_WORDPRESS_ASSISTANT_TEMPLATE_ID,
       packageName: BUILT_IN_WORDPRESS_ASSISTANT_PACKAGE_NAME,
       description: "The built-in WordPress conversational authoring assistant.",
+      sourceNl: "Built-in WordPress assistant (seeded at boot).",
     });
   } catch (err) {
     console.warn(
@@ -211,6 +218,7 @@ export async function ensureBuiltInDrupalAssistantAgent(): Promise<void> {
       templateId: BUILT_IN_DRUPAL_ASSISTANT_TEMPLATE_ID,
       packageName: BUILT_IN_DRUPAL_ASSISTANT_PACKAGE_NAME,
       description: "The built-in Drupal conversational authoring assistant.",
+      sourceNl: "Built-in Drupal assistant (seeded at boot).",
     });
   } catch (err) {
     console.warn(
