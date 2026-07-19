@@ -156,10 +156,24 @@ export function deriveTypeDefinitionRows(
 export async function loadTypeDefinitionRows(
   organizationId: string | null,
 ): Promise<TypeDefinitionRow[]> {
-  const [{ objectTypeRegistry }, { listInstalledExtensions }] = await Promise.all([
-    import("@cinatra-ai/objects"),
-    import("@cinatra-ai/extensions/canonical-store"),
-  ]);
+  const [{ objectTypeRegistry }, { listInstalledExtensions }, { registerAllObjectTypes }] =
+    await Promise.all([
+      import("@cinatra-ai/objects"),
+      import("@cinatra-ai/extensions/canonical-store"),
+      import("@/lib/register-all-object-types"),
+    ]);
+
+  // Warm the process-global object-type registry before reading it. The registry
+  // is populated LAZILY (registerAllObjectTypes bridges every kind:"artifact"
+  // extension's declared object types into it) and boot does NOT call it, so a
+  // reader that lands FIRST — e.g. the Artifacts console's Type definitions tab
+  // on a freshly-started process — would otherwise read an unpopulated registry
+  // and render the "no artifact extension defines a type yet" empty state even
+  // though extensions ARE installed. Every other artifact read surface (the
+  // library, the matcher, the artifact-template wizard) warms it the same way;
+  // registerAllObjectTypes is idempotent (replace-by-id), so this is safe to
+  // call on every load.
+  registerAllObjectTypes();
 
   const types = objectTypeRegistry.listArtifacts().map((def) => ({
     typeId: def.type,
