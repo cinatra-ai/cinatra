@@ -44,7 +44,6 @@ import {
   isAiReviewPanelField,
 } from "./ai-review-panel-renderer";
 import { ReviewerAgentOutputRenderer } from "./reviewer-agent-output-renderer";
-import { AuditorReviewRenderer } from "./auditor-review-renderer";
 import { SendConfirmationRenderer } from "./send-confirmation-renderer";
 import { CtaRenderer } from "./cta-renderer";
 import {
@@ -107,7 +106,15 @@ const RENDERER_KIND_TABLE: Record<
     makeCondition?: (matchIds: readonly string[]) => FieldRendererCondition;
   }
 > = {
-  "auditor-review": { renderer: AuditorReviewRenderer },
+  // MIGRATED (cinatra#1625): the auditor-review component moved into
+  // @cinatra-ai/auditor-agent (the pure snapshot->onChange renderer). The KIND
+  // stays (the manifest still declares it — kind-vocabulary set-equality), but
+  // the host ships no component: a bundled binding resolves map-first to the
+  // extension wrapper (hasFieldRendererComponent -> makeExtensionFieldRenderer),
+  // and a not-in-build binding of this kind degrades to the SchemaFieldRenderer
+  // floor here (AC4 never-blank). Same shape as final-list-review /
+  // linkedin-draft-review / wordpress-draft-confirm below.
+  "auditor-review": { renderer: SchemaFieldRenderer },
   "campaign-recipients-review": {
     renderer: CampaignRecipientsReviewRenderer,
     bareAliases: ["campaign-recipients-review"],

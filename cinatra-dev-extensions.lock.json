@@ -1,5 +1,5 @@
 {
-  "note": "Committed clone-back pins for the NON-required cinatra.devExtensions universe (cinatra#141). CI checks each companion repo out detached at resolvedSha (scripts/ci/sync-dev-extensions.mjs --pinned); the prod bootable set is pinned separately in cinatra-required-extensions.lock.json (never duplicated here). Regenerate with scripts/extensions/update-dev-extension-lock.mjs and move pnpm-lock.yaml + the generated maps in the SAME PR — see docs/internals/contracts/extension-clone-pinning.md.",
+  "note": "Committed clone-back pins for the NON-required cinatra.devExtensions universe (cinatra#141). CI checks each companion repo out detached at resolvedSha (scripts/ci/sync-dev-extensions.mjs --pinned); the prod bootable set is pinned separately in cinatra-required-extensions.lock.json (never duplicated here). Regenerate with scripts/extensions/update-dev-extension-lock.mjs and move pnpm-lock.yaml + the generated maps in the SAME PR \u2014 see docs/internals/contracts/extension-clone-pinning.md.",
   "schemaVersion": 1,
   "packages": [
     {
@@ -30,7 +30,7 @@
     {
       "packageName": "@cinatra-ai/auditor-agent",
       "repo": "cinatra-ai/auditor-agent",
-      "resolvedSha": "179a7d13dd464e4566b5ae3c8f7c8ff6d173bcd1"
+      "resolvedSha": "dc290a3e1c2b24ce6374a5b744429db0666083f5"
     },
     {
       "packageName": "@cinatra-ai/blog-connector",

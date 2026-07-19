@@ -14,17 +14,11 @@ import { listEmailSenderIdentities } from "@/lib/email-sender-identities";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import {
   listInstalledSkills,
-  createOrUpdateCustomSkillForAgent,
-  buildDefaultPersonalSkillName,
-  listCustomSkillsForCurrentUserAndAgent,
   readSkillsCatalog,
   resolveEffectiveSkillAccessPolicy,
 } from "@cinatra-ai/skills";
 import {
-  readHitlPromptsForRun,
-  updateHitlPromptExcluded,
   readAgentRunById,
-  readAgentTemplateByPackageName,
 } from "./store";
 import type { FieldRendererBindingInput } from "./register-default-renderers";
 import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
@@ -202,158 +196,5 @@ export async function getSkillsForAgentAction(
       }));
   } catch {
     return [];
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Audit button server actions
-//
-// Five exported types + three exported async functions that power the Audit
-// button + Skill preview drawer in AgenticRunPanel.
-//
-// All three actions follow the same auth-gate + degrade-to-safe-default
-// contract used throughout this file: `requireAuthSession().catch(() => null)`
-// so Next.js NEXT_REDIRECT is never swallowed by the outer try/catch.
-// ---------------------------------------------------------------------------
-
-export type AuditPromptDTO = {
-  id: string;
-  stepKey: string;
-  message: string;
-  capturedAt: string; // ISO string — Date is not serialisable across "use server" boundary
-};
-
-export type AuditSkillPreviewDTO = {
-  id: string;
-  name: string;
-  description: string;
-  content: string;
-  basedOnSkillIds: string[] | undefined;
-};
-
-export type AuditDrawerData = {
-  prompts: AuditPromptDTO[];
-  preview: AuditSkillPreviewDTO | null;
-  error: string | null;
-};
-
-export type DismissAuditResult =
-  | { ok: true; dismissed: number }
-  | { ok: false; error: string };
-
-/**
- * Generates AND persists the personal skill via createOrUpdateCustomSkillForAgent (upsert).
- * The Accept button is a UI confirmation only — the persist already happened.
- * The Dismiss button does NOT delete the persisted skill (v1 quirk).
- *
- * Degrades to { prompts: [], preview: null, error: string } on auth failure or LLM error.
- */
-export async function getAuditDrawerDataAction(
-  runId: string,
-  agentPackageName: string,
-): Promise<AuditDrawerData> {
-  const session = await requireAuthSession().catch(() => null);
-  if (!session?.user?.id) return { prompts: [], preview: null, error: "Unauthorized" };
-
-  if (!runId || !agentPackageName) return { prompts: [], preview: null, error: null };
-
-  try {
-    // Ownership guard: must run BEFORE any prompt read or LLM call.
-    const run = await readAgentRunById(runId);
-    if (!run || run.runBy == null || run.runBy !== session.user.id) {
-      return { prompts: [], preview: null, error: "Unauthorized" };
-    }
-
-    const prompts = await readHitlPromptsForRun(runId, agentPackageName);
-
-    // Short-circuit: no prompts → no LLM call (verified by Wave 0 "empty preview when no prompts")
-    if (prompts.length === 0) return { prompts: [], preview: null, error: null };
-
-    const promptEntries = prompts.map((p) => ({
-      id: p.id,
-      kind: "initial" as const,
-      prompt: p.message,
-      savedAt: p.capturedAt.toISOString(),
-    }));
-
-    const template = await readAgentTemplateByPackageName(agentPackageName);
-    const skillName = buildDefaultPersonalSkillName({
-      campaignName: run?.title ?? template?.name ?? agentPackageName,
-      sourceLabel: "HITL audit",
-    });
-
-    // Thread session.user.id so each user owns their own personal skills.
-    // Auth-attribution (data ownership) is separate from the run-ownership
-    // guard above (action permission) — both apply.
-    const existing = await listCustomSkillsForCurrentUserAndAgent(agentPackageName, session.user.id);
-    const existingSkillId = existing[0]?.id;
-
-    // Thread the caller's actor into the helper so the matched-skill catalog
-    // read is gated by requireResourceAccess. Without this, admin-hidden
-    // `system` skill content leaks into the LLM generation prompt and the
-    // persisted `basedOnSkillIds`.
-    const actor = await requireActorContext();
-
-    // Persist-on-preview semantics: this upsert IS the persist call (Pitfall 1).
-    const persisted = await createOrUpdateCustomSkillForAgent({
-      agentId: agentPackageName,
-      promptEntries,
-      skillName,
-      existingSkillId,
-      userId: session.user.id,
-      actor,
-    });
-
-    return {
-      prompts: prompts.map((p) => ({
-        id: p.id,
-        stepKey: p.stepKey,
-        message: p.message,
-        capturedAt: p.capturedAt.toISOString(),
-      })),
-      preview: {
-        id: persisted.id,
-        name: persisted.name,
-        description: persisted.description,
-        content: persisted.content,
-        basedOnSkillIds: persisted.basedOnSkillIds,
-      },
-      error: null,
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn("[getAuditDrawerDataAction] failed", msg);
-    return { prompts: [], preview: null, error: msg };
-  }
-}
-
-/**
- * Marks all non-excluded HITL prompts for a run as excluded=true.
- * Degrades to { ok: false, error: string } on auth failure or store error.
- */
-export async function dismissAuditPromptsAction(
-  runId: string,
-  agentPackageName: string,
-): Promise<DismissAuditResult> {
-  const session = await requireAuthSession().catch(() => null);
-  if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
-
-  if (!runId || !agentPackageName) return { ok: false, error: "Missing inputs" };
-
-  try {
-    // Ownership guard: prevents run-ownership tampering — must run BEFORE the prompt read.
-    const run = await readAgentRunById(runId);
-    if (!run || run.runBy == null || run.runBy !== session.user.id) {
-      return { ok: false, error: "Unauthorized" };
-    }
-
-    const prompts = await readHitlPromptsForRun(runId, agentPackageName);
-    await Promise.all(prompts.map((p) => updateHitlPromptExcluded(p.id, true)));
-
-    return { ok: true, dismissed: prompts.length };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn("[dismissAuditPromptsAction] failed", msg);
-    return { ok: false, error: msg };
   }
 }

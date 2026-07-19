@@ -34,7 +34,6 @@ import { CampaignRecipientsReviewRenderer } from "../campaign-recipients-review-
 import { EmailDraftsReviewRenderer } from "../email-drafts-review-renderer";
 import { AiReviewPanelRenderer } from "../ai-review-panel-renderer";
 import { ReviewerAgentOutputRenderer } from "../reviewer-agent-output-renderer";
-import { AuditorReviewRenderer } from "../auditor-review-renderer";
 import { SendConfirmationRenderer } from "../send-confirmation-renderer";
 import { CtaRenderer } from "../cta-renderer";
 import { SchemaFieldRenderer } from "../schema-field-renderer";
@@ -108,7 +107,9 @@ const PARITY_TABLE: ReadonlyArray<
   ["cta", CtaRenderer as never, 90],
   ["@cinatra-ai/agent-builder:schema-field-fallback", SchemaFieldRenderer as never, 1],
   ["@cinatra-ai/agent-builder:grouped-setup-form", GroupedSetupFormRenderer as never, 50],
-  ["@cinatra-ai/auditor-agent:review", AuditorReviewRenderer as never, 80],
+  // NOTE: @cinatra-ai/auditor-agent:review MIGRATED into its extension
+  // (cinatra#1625) — it now resolves to the ExtensionFieldRenderer wrapper at
+  // priority 80, asserted in the migrated-binding it.each below, not here.
   // NOTE: the @cinatra-ai/trigger-agent renderers (:configure / the never-bound
   // :confirm) were RETIRED with the trigger-agent extension (cinatra#1034).
   // Scheduling is now a platform default rendered by the host TriggerScreen
@@ -157,22 +158,25 @@ describe("resolution parity with the retired hand map", () => {
   });
 
   it.each([
-    "@cinatra-ai/list-curator-agent:scrape-schema-review",
-    "@cinatra-ai/list-curator-agent:final-list-review",
-    "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
-    "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
-  ])(
+    ["@cinatra-ai/list-curator-agent:scrape-schema-review", 90],
+    ["@cinatra-ai/list-curator-agent:final-list-review", 90],
+    ["@cinatra-ai/blog-linkedin-publish-agent:draft-review", 90],
+    ["@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", 90],
+    // The auditor-review component relocated into @cinatra-ai/auditor-agent
+    // (cinatra#1625) at its pre-cutover priority 80.
+    ["@cinatra-ai/auditor-agent:review", 80],
+  ] as const)(
     "migrated field-renderer binding %s resolves to the extension wrapper at the pre-cutover priority",
-    (id) => {
-      // The COMPONENT relocated into @cinatra-ai/list-curator-agent (cinatra#1625
-      // S8/M3): the binding is present in the generated component map, so it
-      // registers as the ExtensionFieldRenderer wrapper (which lazy-loads the
-      // extension module and floors on any degrade) — NOT a host KIND component.
-      // The id + priority (90) are unchanged, so stored/in-flight runs still
-      // resolve the SAME binding.
+    (id, priority) => {
+      // The COMPONENT relocated into its claiming extension (cinatra#1625): the
+      // binding is present in the generated component map, so it registers as
+      // the ExtensionFieldRenderer wrapper (which lazy-loads the extension
+      // module and floors on any degrade) — NOT a host KIND component. The id +
+      // priority are unchanged, so stored/in-flight runs still resolve the SAME
+      // binding.
       const entry = resolveWith(id);
       expect(entry, id).toBeTruthy();
-      expect(entry!.priority, id).toBe(90);
+      expect(entry!.priority, id).toBe(priority);
       const resolved = entry!.renderer as ComponentType & { displayName?: string };
       expect(resolved.displayName).toBe(`ExtensionFieldRenderer(${id})`);
     },

@@ -1,10 +1,15 @@
 /**
- * Regression coverage: POST /api/auditor/apply bridge run-binding.
+ * POST /api/auditor/apply — per-item accept over the immutable proposal
+ * snapshot + single-use SoD receipt (cinatra#1625).
  *
- * A bridge-token holder must NOT be able to act on an arbitrary agent_run_id.
- * The body-selected id is bound to the auth-injected X-Cinatra-A2A-Context-Id
- * (the run actually executing this callback). Mismatch / missing header => 403,
- * BEFORE any run load or patch application.
+ * Covers the trust-boundary invariants:
+ *   - NEW envelope { acceptedPatchIds, dismissedPatchIds, excludedPromptIds }.
+ *   - acceptedPatchIds MUST be a subset of the ONE snapshot's patch_ids (no
+ *     union of retry rows); a non-snapshot id => 400.
+ *   - a single-use receipt is consumed; a second apply / forged replay (no live
+ *     receipt) => 403.
+ *   - no snapshot for the run => 409 (fail closed).
+ *   - patch CONTENT is sourced from the snapshot, never the request body.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -14,91 +19,126 @@ const bridge = vi.hoisted(() => ({ authed: true }));
 vi.mock("@/lib/wayflow-bridge-auth", () => ({
   isAuthorizedBridgeRequest: () => bridge.authed,
 }));
-
 vi.mock("@/lib/auth-session", () => ({
   isPlatformAdmin: () => false,
   requireAuthSession: vi.fn(async () => null),
 }));
+vi.mock("@/lib/authz/bridge-run-binding", () => ({
+  bindBridgeRunId: vi.fn(async () => ({ ok: true, runId: "run-1" })),
+}));
 
 const store = vi.hoisted(() => ({
-  readAgentRunByContextId: vi.fn(),
-  readAgentRunById: vi.fn(),
+  readAgentRunById: vi.fn(async () => ({ id: "run-1", runBy: "u1", orgId: "o1" })),
   readRunCoOwners: vi.fn(async () => []),
 }));
 vi.mock("@cinatra-ai/agents", () => ({
   readAgentRunById: store.readAgentRunById,
   readRunCoOwners: store.readRunCoOwners,
-  readAgentRunByContextId: store.readAgentRunByContextId,
 }));
 
-vi.mock("@cinatra-ai/agents/schema", () => ({ auditEvents: { reviewTaskId: "reviewTaskId", eventType: "eventType", payload: "payload" } }));
-vi.mock("@cinatra-ai/agents/db", () => ({
-  db: {
-    select: () => ({ from: () => ({ where: async () => [] }) }),
-  },
+const apply = vi.hoisted(() => ({
+  applyAuditorPatches: vi.fn((data: unknown) => ({ ...(data as object), applied: true })),
+}));
+vi.mock("@cinatra-ai/agents/auditor-apply", () => ({
+  applyAuditorPatches: apply.applyAuditorPatches,
+  AuditorApplyError: class extends Error {},
 }));
 
-vi.mock("@cinatra-ai/agents/auditor-apply", async () => {
-  const { z } = await import("zod");
-  return {
-    applyAuditorPatches: vi.fn((data: unknown) => data),
-    AuditorApplyError: class extends Error {},
-    SuggestionPatchSchema: z.object({
-      id: z.string(),
-      fieldPath: z.string(),
-      op: z.string(),
-      value: z.string(),
-      message: z.string(),
-    }),
-  };
-});
+const snap = vi.hoisted(() => ({
+  readProposalSnapshotForRun: vi.fn(),
+  consumeApprovalReceipt: vi.fn(),
+}));
+vi.mock("@cinatra-ai/agents/auditor-snapshot-store", () => ({
+  readProposalSnapshotForRun: snap.readProposalSnapshotForRun,
+  consumeApprovalReceipt: snap.consumeApprovalReceipt,
+}));
+
+const persist = vi.hoisted(() => ({ persistAcceptedAuditorSkill: vi.fn(async () => ({ persisted: true })) }));
+vi.mock("@/lib/auditor/persist-accepted-skill", () => ({
+  persistAcceptedAuditorSkill: persist.persistAcceptedAuditorSkill,
+}));
 
 import { POST } from "../route";
 
-function makeReq(body: unknown, headers: Record<string, string> = {}): Request {
+function makeReq(body: unknown): Request {
   return new Request("http://localhost/api/auditor/apply", {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-const validBody = {
-  agent_run_id: "run-1",
-  data: {},
-  reviewResult: JSON.stringify({ acceptedIds: [], dismissedIds: [] }),
+const SNAPSHOT = {
+  id: "snap-1",
+  agentRunId: "run-1",
+  preview: { name: "s", description: "d", content: "c", patches: [] },
+  patches: [
+    { id: "p1", fieldPath: "/a", op: "replace", value: "1", message: "m" },
+    { id: "p2", fieldPath: "/b", op: "replace", value: "2", message: "m" },
+  ],
+  patchIds: ["p1", "p2"],
+  inputDataDigest: "digest",
+  snapshotHash: "hash-1",
+  edited: "edited",
+  createdAt: new Date(),
 };
 
-describe("POST /api/auditor/apply — bridge run-binding", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    bridge.authed = true;
-    store.readRunCoOwners.mockResolvedValue([]);
+function envelope(accepted: string[], dismissed: string[] = [], excluded: string[] = []): string {
+  return JSON.stringify({
+    acceptedPatchIds: accepted,
+    dismissedPatchIds: dismissed,
+    excludedPromptIds: excluded,
   });
+}
 
-  it("403 when bridge-authed but the context-id header is absent", async () => {
-    const res = await POST(makeReq(validBody));
-    expect(res.status).toBe(403);
-    expect(store.readAgentRunById).not.toHaveBeenCalled();
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  bridge.authed = true;
+  store.readAgentRunById.mockResolvedValue({ id: "run-1", runBy: "u1", orgId: "o1" });
+  snap.readProposalSnapshotForRun.mockResolvedValue(SNAPSHOT);
+  snap.consumeApprovalReceipt.mockResolvedValue({ id: "r1", snapshotHash: "hash-1" });
+});
 
-  it("403 when the body agent_run_id does not match the executing (context-resolved) run", async () => {
-    store.readAgentRunByContextId.mockResolvedValue({ id: "attacker-run" });
+describe("POST /api/auditor/apply", () => {
+  it("applies accepted subset, consumes the receipt, persists per-item", async () => {
     const res = await POST(
-      makeReq(validBody, { "x-cinatra-a2a-context-id": "ctx-attacker" }),
+      makeReq({ agent_run_id: "run-1", parentPackageName: "@x/agent", data: { a: 0 }, reviewResult: envelope(["p1"]) }),
     );
-    expect(res.status).toBe(403);
-    expect(store.readAgentRunById).not.toHaveBeenCalled();
-  });
-
-  it("proceeds past the binding when context id matches the body run id", async () => {
-    store.readAgentRunByContextId.mockResolvedValue({ id: "run-1" });
-    store.readAgentRunById.mockResolvedValue({ id: "run-1", runBy: "owner" });
-    const res = await POST(
-      makeReq(validBody, { "x-cinatra-a2a-context-id": "ctx-1" }),
-    );
-    // Binding passed -> run load happened -> apply runs with empty acceptedIds.
-    expect(store.readAgentRunById).toHaveBeenCalledWith("run-1");
     expect(res.status).toBe(200);
+    expect(snap.consumeApprovalReceipt).toHaveBeenCalledWith({ agentRunId: "run-1", snapshotHash: "hash-1" });
+    // patch content came from the snapshot, not the body
+    expect(apply.applyAuditorPatches).toHaveBeenCalledWith({ a: 0 }, SNAPSHOT.patches, ["p1"]);
+    expect(persist.persistAcceptedAuditorSkill).toHaveBeenCalled();
+  });
+
+  it("rejects a non-snapshot accepted id (400) before consuming any receipt", async () => {
+    const res = await POST(makeReq({ agent_run_id: "run-1", data: {}, reviewResult: envelope(["p1", "ROGUE"]) }));
+    expect(res.status).toBe(400);
+    expect(snap.consumeApprovalReceipt).not.toHaveBeenCalled();
+  });
+
+  it("rejects when there is no live receipt (403) — second apply / forged replay", async () => {
+    snap.consumeApprovalReceipt.mockResolvedValue(null);
+    const res = await POST(makeReq({ agent_run_id: "run-1", data: {}, reviewResult: envelope(["p1"]) }));
+    expect(res.status).toBe(403);
+    expect(apply.applyAuditorPatches).not.toHaveBeenCalled();
+  });
+
+  it("fails closed (409) when there is no snapshot for the run", async () => {
+    snap.readProposalSnapshotForRun.mockResolvedValue(null);
+    const res = await POST(makeReq({ agent_run_id: "run-1", data: {}, reviewResult: envelope(["p1"]) }));
+    expect(res.status).toBe(409);
+  });
+
+  it("rejects a malformed reviewResult envelope (400)", async () => {
+    const res = await POST(makeReq({ agent_run_id: "run-1", data: {}, reviewResult: "not json" }));
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects the legacy envelope shape (acceptedIds) (400)", async () => {
+    const res = await POST(
+      makeReq({ agent_run_id: "run-1", data: {}, reviewResult: JSON.stringify({ acceptedIds: ["p1"], dismissedIds: [] }) }),
+    );
+    expect(res.status).toBe(400);
   });
 });
