@@ -32,13 +32,26 @@ vi.mock("@/lib/better-auth-oauth-client", () => ({
 vi.mock("@/lib/assistant-users", () => ({
   createAssistantUserWithTx: mocks.createAssistantUserWithTx,
   BUILT_IN_CINATRA_ASSISTANT_USERNAME: "cinatra",
+  BUILT_IN_WORDPRESS_ASSISTANT_USERNAME: "wordpress",
+  BUILT_IN_DRUPAL_ASSISTANT_USERNAME: "drupal",
 }));
 vi.mock("@cinatra-ai/agents", () => ({
   upsertBuiltInAssistantAgentTemplate: mocks.upsertBuiltInAssistantAgentTemplate,
+  BUILT_IN_WORDPRESS_ASSISTANT_TEMPLATE_ID: "agt_builtin_wordpress_assistant",
+  BUILT_IN_WORDPRESS_ASSISTANT_PACKAGE_NAME: "@cinatra-ai/wordpress-assistant",
+  BUILT_IN_DRUPAL_ASSISTANT_TEMPLATE_ID: "agt_builtin_drupal_assistant",
+  BUILT_IN_DRUPAL_ASSISTANT_PACKAGE_NAME: "@cinatra-ai/drupal-assistant",
 }));
 
-import { registerAssistantAgent, ensureBuiltInCinatraAssistantAgent } from "@/lib/assistant-agent-registration";
+import {
+  registerAssistantAgent,
+  ensureBuiltInCinatraAssistantAgent,
+  ensureBuiltInWordpressAssistantAgent,
+  ensureBuiltInDrupalAssistantAgent,
+} from "@/lib/assistant-agent-registration";
 import { cinatraAssistantConfig } from "@/lib/assistant-runtime/cinatra-assistant-config";
+import { wordpressAssistantConfig } from "@/lib/assistant-runtime/wordpress-assistant-config";
+import { drupalAssistantConfig } from "@/lib/assistant-runtime/drupal-assistant-config";
 import { serializeAssistantConfig } from "@/lib/assistant-config";
 
 const fakeTx = { execute: mocks.txExecute };
@@ -131,5 +144,148 @@ describe("ensureBuiltInCinatraAssistantAgent", () => {
   it("registers @cinatra with the reference config; swallows failures (best-effort at boot)", async () => {
     mocks.transaction.mockRejectedValueOnce(new Error("db down"));
     await expect(ensureBuiltInCinatraAssistantAgent()).resolves.toBeUndefined();
+  });
+});
+
+// cinatra#1823 (epic #1037 P4.1) — the WordPress + Drupal built-in assistants are
+// registered the SAME way @cinatra is (siblings), each through the sole
+// registerAssistantAgent path (I3) with its OWN distinct principal handle,
+// template id + package_name, and validated assistant_config.
+describe("ensureBuiltInWordpressAssistantAgent / ensureBuiltInDrupalAssistantAgent", () => {
+  function freshMint(principalId: string) {
+    mocks.txExecute
+      .mockResolvedValueOnce({ rows: [] }) // advisory lock
+      .mockResolvedValueOnce({ rows: [] }); // SELECT existing user -> none
+    mocks.createAssistantUserWithTx.mockResolvedValue({
+      id: principalId,
+      username: principalId,
+      email: `${principalId}@system.local`,
+      clientId: "cid",
+      clientSecret: "csecret",
+      userType: "assistant",
+    });
+  }
+
+  it("registers @wordpress via the sole mint path with its own handle, template identity, and distinct config", async () => {
+    freshMint("wp-principal");
+    await ensureBuiltInWordpressAssistantAgent();
+
+    expect(mocks.createAssistantUserWithTx).toHaveBeenCalledWith(fakeTx, { username: "wordpress" });
+    expect(mocks.registerAssistantHandle).toHaveBeenCalledWith("wp-principal", { desired: "wordpress" });
+    expect(mocks.upsertBuiltInAssistantAgentTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantUserId: "wp-principal",
+        name: "WordPress",
+        templateId: "agt_builtin_wordpress_assistant",
+        packageName: "@cinatra-ai/wordpress-assistant",
+        assistantConfigJson: serializeAssistantConfig(wordpressAssistantConfig),
+      }),
+    );
+    // Distinct from @cinatra's persisted config.
+    expect(serializeAssistantConfig(wordpressAssistantConfig)).not.toBe(
+      serializeAssistantConfig(cinatraAssistantConfig),
+    );
+  });
+
+  it("registers @drupal via the sole mint path with its own handle, template identity, and distinct config", async () => {
+    freshMint("drupal-principal");
+    await ensureBuiltInDrupalAssistantAgent();
+
+    expect(mocks.createAssistantUserWithTx).toHaveBeenCalledWith(fakeTx, { username: "drupal" });
+    expect(mocks.registerAssistantHandle).toHaveBeenCalledWith("drupal-principal", { desired: "drupal" });
+    expect(mocks.upsertBuiltInAssistantAgentTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantUserId: "drupal-principal",
+        name: "Drupal",
+        templateId: "agt_builtin_drupal_assistant",
+        packageName: "@cinatra-ai/drupal-assistant",
+        assistantConfigJson: serializeAssistantConfig(drupalAssistantConfig),
+      }),
+    );
+    expect(serializeAssistantConfig(drupalAssistantConfig)).not.toBe(
+      serializeAssistantConfig(cinatraAssistantConfig),
+    );
+  });
+
+  it("is best-effort at boot: a failure is swallowed (does not break bootstrap)", async () => {
+    mocks.transaction.mockRejectedValueOnce(new Error("db down"));
+    await expect(ensureBuiltInWordpressAssistantAgent()).resolves.toBeUndefined();
+    mocks.transaction.mockRejectedValueOnce(new Error("db down"));
+    await expect(ensureBuiltInDrupalAssistantAgent()).resolves.toBeUndefined();
+  });
+
+  it("steady-state re-run converges: an existing principal is reused (NO re-mint), template re-linked idempotently", async () => {
+    // wordpress principal already exists WITH an oauthClient (steady state).
+    mocks.txExecute
+      .mockResolvedValueOnce({ rows: [] }) // lock
+      .mockResolvedValueOnce({ rows: [{ id: "wp-principal" }] }) // SELECT user -> exists
+      .mockResolvedValueOnce({ rows: [{ count: "1" }] }); // oauthClient present
+
+    await ensureBuiltInWordpressAssistantAgent();
+
+    expect(mocks.createAssistantUserWithTx).not.toHaveBeenCalled();
+    expect(mocks.upsertBuiltInAssistantAgentTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantUserId: "wp-principal",
+        templateId: "agt_builtin_wordpress_assistant",
+      }),
+    );
+  });
+});
+
+// The three built-in assistants converge on THREE distinct principals / handles /
+// template ids / configs across a (mocked) full boot registration — the
+// idempotent-convergence acceptance, exercised through the real registration path.
+describe("three-assistant boot convergence (cinatra#1823)", () => {
+  it("mints three distinct principals + handles + template identities, each with a distinct config", async () => {
+    const principals: Record<string, string> = {
+      cinatra: "p-cinatra",
+      wordpress: "p-wordpress",
+      drupal: "p-drupal",
+    };
+    // Each registerAssistantAgent call: lock + SELECT(none) -> mint the mapped principal.
+    mocks.txExecute.mockImplementation(async (q: unknown) => {
+      const s = JSON.stringify(q);
+      if (s.includes("pg_advisory_xact_lock")) return { rows: [] };
+      return { rows: [] }; // SELECT existing user -> none (fresh mint each)
+    });
+    mocks.createAssistantUserWithTx.mockImplementation(async (_tx: unknown, p: { username: string }) => ({
+      id: principals[p.username],
+      username: p.username,
+      email: `${p.username}@system.local`,
+      clientId: "cid",
+      clientSecret: "csecret",
+      userType: "assistant",
+    }));
+
+    await ensureBuiltInCinatraAssistantAgent();
+    await ensureBuiltInWordpressAssistantAgent();
+    await ensureBuiltInDrupalAssistantAgent();
+
+    const mintedUsernames = mocks.createAssistantUserWithTx.mock.calls.map((c) => c[1].username);
+    expect(new Set(mintedUsernames)).toEqual(new Set(["cinatra", "wordpress", "drupal"]));
+
+    const handleCalls = mocks.registerAssistantHandle.mock.calls.map((c) => [c[0], c[1].desired]);
+    expect(handleCalls).toEqual(
+      expect.arrayContaining([
+        ["p-cinatra", "cinatra"],
+        ["p-wordpress", "wordpress"],
+        ["p-drupal", "drupal"],
+      ]),
+    );
+
+    const upserts = mocks.upsertBuiltInAssistantAgentTemplate.mock.calls.map((c) => c[0]);
+    const templateIds = upserts.map((u) => u.templateId ?? "agt_builtin_cinatra_assistant");
+    expect(new Set(templateIds)).toEqual(
+      new Set([
+        "agt_builtin_cinatra_assistant",
+        "agt_builtin_wordpress_assistant",
+        "agt_builtin_drupal_assistant",
+      ]),
+    );
+    const configs = upserts.map((u) => u.assistantConfigJson);
+    expect(new Set(configs).size).toBe(3); // three DISTINCT persisted configs
+    const principalIds = upserts.map((u) => u.assistantUserId);
+    expect(new Set(principalIds)).toEqual(new Set(["p-cinatra", "p-wordpress", "p-drupal"]));
   });
 });

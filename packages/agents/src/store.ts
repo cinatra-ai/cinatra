@@ -628,6 +628,20 @@ export const BUILT_IN_CINATRA_ASSISTANT_TEMPLATE_ID = "agt_builtin_cinatra_assis
  *  and carries a PRIVATE origin (below), so it stays out of marketplace listings. */
 export const BUILT_IN_CINATRA_ASSISTANT_PACKAGE_NAME = "@cinatra-ai/cinatra-assistant";
 
+/** Stable id + reserved (private) package identity of the built-in WordPress
+ *  assistant agent_templates row (cinatra#1823, epic #1037 P4.1). DISTINCT from
+ *  the Cinatra ids so the three built-in assistants persist as three distinct
+ *  1:1-linked rows (each keyed on its own principal); ON CONFLICT (id) keeps the
+ *  boot registration idempotent per assistant. */
+export const BUILT_IN_WORDPRESS_ASSISTANT_TEMPLATE_ID = "agt_builtin_wordpress_assistant";
+export const BUILT_IN_WORDPRESS_ASSISTANT_PACKAGE_NAME = "@cinatra-ai/wordpress-assistant";
+
+/** Stable id + reserved (private) package identity of the built-in Drupal
+ *  assistant agent_templates row (cinatra#1823, epic #1037 P4.1). See the
+ *  WordPress constants above. */
+export const BUILT_IN_DRUPAL_ASSISTANT_TEMPLATE_ID = "agt_builtin_drupal_assistant";
+export const BUILT_IN_DRUPAL_ASSISTANT_PACKAGE_NAME = "@cinatra-ai/drupal-assistant";
+
 /**
  * Idempotently upsert the agent_templates row for a built-in assistant agent and
  * link it 1:1 to its assistant-user PRINCIPAL (cinatra#1037 P1.3). Written as a
@@ -648,6 +662,11 @@ export const BUILT_IN_CINATRA_ASSISTANT_PACKAGE_NAME = "@cinatra-ai/cinatra-assi
  * ON CONFLICT (id) DO UPDATE re-links the (possibly re-minted) principal + the
  * current config. The caller (assistant-agent-registration) passes the already-
  * validated, serialized sidecar so the DB CHECK is satisfied.
+ *
+ * `templateId` + `packageName` default to the Cinatra built-in identity so the
+ * @cinatra registration is unchanged; a sibling built-in assistant (WordPress /
+ * Drupal, cinatra#1823) passes its OWN distinct pair so the three built-ins
+ * persist as three distinct 1:1-linked rows rather than colliding on one id.
  */
 export async function upsertBuiltInAssistantAgentTemplate(input: {
   assistantUserId: string;
@@ -655,12 +674,19 @@ export async function upsertBuiltInAssistantAgentTemplate(input: {
   /** Canonical JSON-as-text assistant_config (validated + serialized by the caller). */
   assistantConfigJson: string;
   description?: string;
+  /** Stable agent_templates row id (the ON CONFLICT idempotency key). Defaults
+   *  to the Cinatra built-in id. */
+  templateId?: string;
+  /** Reserved (private) package_name. Defaults to the Cinatra built-in name. */
+  packageName?: string;
 }): Promise<string> {
   const schemaName = process.env.SUPABASE_SCHEMA?.trim() || "cinatra";
   const table = sql.raw(`"${schemaName.replaceAll('"', '""')}"."agent_templates"`);
+  const templateId = input.templateId ?? BUILT_IN_CINATRA_ASSISTANT_TEMPLATE_ID;
+  const packageName = input.packageName ?? BUILT_IN_CINATRA_ASSISTANT_PACKAGE_NAME;
   const description = input.description ?? "The built-in Cinatra conversational assistant.";
   const originJson = JSON.stringify({
-    packageName: BUILT_IN_CINATRA_ASSISTANT_PACKAGE_NAME,
+    packageName,
     version: "0.0.0",
     destinationId: null,
     scope: "@cinatra-ai",
@@ -673,10 +699,10 @@ export async function upsertBuiltInAssistantAgentTemplate(input: {
        status, type, agent_kind, assistant_config, assistant_user_id, package_name, origin,
        execution_provider, source_type, created_at, updated_at)
     VALUES
-      (${BUILT_IN_CINATRA_ASSISTANT_TEMPLATE_ID}, ${input.name}, ${description},
-       'Built-in Cinatra assistant (seeded at boot).', '[]', '{}', '{"steps":[]}',
+      (${templateId}, ${input.name}, ${description},
+       'Built-in assistant (seeded at boot).', '[]', '{}', '{"steps":[]}',
        'draft', 'leaf', 'assistant', ${input.assistantConfigJson}, ${input.assistantUserId},
-       ${BUILT_IN_CINATRA_ASSISTANT_PACKAGE_NAME}, ${originJson}::jsonb,
+       ${packageName}, ${originJson}::jsonb,
        'default', 'internal', now(), now())
     ON CONFLICT (id) DO UPDATE SET
       name = EXCLUDED.name,
@@ -684,7 +710,7 @@ export async function upsertBuiltInAssistantAgentTemplate(input: {
       assistant_user_id = EXCLUDED.assistant_user_id,
       updated_at = now()
   `);
-  return BUILT_IN_CINATRA_ASSISTANT_TEMPLATE_ID;
+  return templateId;
 }
 
 /**

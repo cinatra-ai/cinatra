@@ -6,10 +6,20 @@ import { insertOAuthClientWithTx } from "@/lib/better-auth-oauth-client";
 import {
   createAssistantUserWithTx,
   BUILT_IN_CINATRA_ASSISTANT_USERNAME,
+  BUILT_IN_WORDPRESS_ASSISTANT_USERNAME,
+  BUILT_IN_DRUPAL_ASSISTANT_USERNAME,
 } from "@/lib/assistant-users";
-import { upsertBuiltInAssistantAgentTemplate } from "@cinatra-ai/agents";
+import {
+  upsertBuiltInAssistantAgentTemplate,
+  BUILT_IN_WORDPRESS_ASSISTANT_TEMPLATE_ID,
+  BUILT_IN_WORDPRESS_ASSISTANT_PACKAGE_NAME,
+  BUILT_IN_DRUPAL_ASSISTANT_TEMPLATE_ID,
+  BUILT_IN_DRUPAL_ASSISTANT_PACKAGE_NAME,
+} from "@cinatra-ai/agents";
 import { serializeAssistantConfig, type AssistantConfig } from "@/lib/assistant-config";
 import { cinatraAssistantConfig } from "@/lib/assistant-runtime/cinatra-assistant-config";
+import { wordpressAssistantConfig } from "@/lib/assistant-runtime/wordpress-assistant-config";
+import { drupalAssistantConfig } from "@/lib/assistant-runtime/drupal-assistant-config";
 
 // ---------------------------------------------------------------------------
 // Assistant-agent registration (cinatra-ai/cinatra#1037 P1.3).
@@ -46,8 +56,17 @@ export async function registerAssistantAgent(params: {
   username: string;
   config: AssistantConfig;
   name: string;
+  /** Stable agent_templates row id for this built-in. Omitted for @cinatra (the
+   *  store defaults to the Cinatra id); a sibling built-in (WordPress / Drupal,
+   *  cinatra#1823) passes its OWN id so it persists as a distinct 1:1-linked row. */
+  templateId?: string;
+  /** Reserved (private) package_name for this built-in. Defaults (store-side) to
+   *  the Cinatra reserved name when omitted. */
+  packageName?: string;
+  /** agent_templates description. */
+  description?: string;
 }): Promise<{ assistantUserId: string; templateId: string }> {
-  const { username, config, name } = params;
+  const { username, config, name, templateId, packageName, description } = params;
 
   // 1. Advisory-locked resolve-or-mint of the principal. The lock + the mint ride
   //    ONE betterAuthDb transaction/connection (reusing the historical seed key)
@@ -113,14 +132,21 @@ export async function registerAssistantAgent(params: {
     );
   }
 
-  // 3. Upsert the 1:1-linked assistant agent_templates row (idempotent).
-  const templateId = await upsertBuiltInAssistantAgentTemplate({
+  // 3. Upsert the 1:1-linked assistant agent_templates row (idempotent). The
+  //    optional templateId/packageName/description are forwarded ONLY when the
+  //    caller supplies them, so the @cinatra registration keeps the store's
+  //    Cinatra defaults (a sibling built-in passes its own distinct identity).
+  const templateInput: Parameters<typeof upsertBuiltInAssistantAgentTemplate>[0] = {
     assistantUserId: userId,
     name,
     assistantConfigJson: serializeAssistantConfig(config),
-  });
+  };
+  if (templateId !== undefined) templateInput.templateId = templateId;
+  if (packageName !== undefined) templateInput.packageName = packageName;
+  if (description !== undefined) templateInput.description = description;
+  const resolvedTemplateId = await upsertBuiltInAssistantAgentTemplate(templateInput);
 
-  return { assistantUserId: userId, templateId };
+  return { assistantUserId: userId, templateId: resolvedTemplateId };
 }
 
 /**
@@ -139,6 +165,56 @@ export async function ensureBuiltInCinatraAssistantAgent(): Promise<void> {
   } catch (err) {
     console.warn(
       "[cinatra-assistant] Could not register the built-in Cinatra assistant agent:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
+ * Register the built-in WordPress assistant agent (cinatra#1823, epic #1037
+ * P4.1) — a sibling of {@link ensureBuiltInCinatraAssistantAgent}. Mints its OWN
+ * distinct principal + handle + 1:1-linked assistant_templates row through the
+ * SAME single principal-minting path (I3, `registerAssistantAgent` — NO second
+ * mint primitive), with its own distinct `wordpressAssistantConfig`. Best-effort
+ * at boot: a failure must not break assistant bootstrap; the next boot converges.
+ */
+export async function ensureBuiltInWordpressAssistantAgent(): Promise<void> {
+  try {
+    await registerAssistantAgent({
+      username: BUILT_IN_WORDPRESS_ASSISTANT_USERNAME,
+      config: wordpressAssistantConfig,
+      name: "WordPress",
+      templateId: BUILT_IN_WORDPRESS_ASSISTANT_TEMPLATE_ID,
+      packageName: BUILT_IN_WORDPRESS_ASSISTANT_PACKAGE_NAME,
+      description: "The built-in WordPress conversational authoring assistant.",
+    });
+  } catch (err) {
+    console.warn(
+      "[cinatra-assistant] Could not register the built-in WordPress assistant agent:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
+ * Register the built-in Drupal assistant agent (cinatra#1823, epic #1037 P4.1) —
+ * a sibling of {@link ensureBuiltInCinatraAssistantAgent}. See
+ * {@link ensureBuiltInWordpressAssistantAgent}; identical shape with the Drupal
+ * identity + `drupalAssistantConfig`.
+ */
+export async function ensureBuiltInDrupalAssistantAgent(): Promise<void> {
+  try {
+    await registerAssistantAgent({
+      username: BUILT_IN_DRUPAL_ASSISTANT_USERNAME,
+      config: drupalAssistantConfig,
+      name: "Drupal",
+      templateId: BUILT_IN_DRUPAL_ASSISTANT_TEMPLATE_ID,
+      packageName: BUILT_IN_DRUPAL_ASSISTANT_PACKAGE_NAME,
+      description: "The built-in Drupal conversational authoring assistant.",
+    });
+  } catch (err) {
+    console.warn(
+      "[cinatra-assistant] Could not register the built-in Drupal assistant agent:",
       err instanceof Error ? err.message : err,
     );
   }

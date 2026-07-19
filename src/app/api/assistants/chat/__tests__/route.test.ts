@@ -29,6 +29,9 @@ const updateAssistantTurn = vi.fn();
 const touchAssistantThread = vi.fn();
 const xaddRunEvent = vi.fn();
 const expireRunStream = vi.fn();
+const resolveAssistantHandles = vi.fn();
+const resolveAssistantRuntimeConfigByPrincipal = vi.fn();
+const runAssistantTurn = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
@@ -38,6 +41,16 @@ vi.mock("@/lib/auth-session", () => ({
 vi.mock("@/app/api/chat/runner", () => ({
   hasConfiguredLlmRuntime: () => hasConfiguredLlmRuntime(),
   runChatTurn: (...a: unknown[]) => runChatTurn(...a),
+}));
+vi.mock("@/lib/better-auth-db", () => ({
+  resolveAssistantHandles: (...a: unknown[]) => resolveAssistantHandles(...a),
+}));
+vi.mock("@/lib/assistant-runtime/resolve-runtime-config", () => ({
+  resolveAssistantRuntimeConfigByPrincipal: (...a: unknown[]) =>
+    resolveAssistantRuntimeConfigByPrincipal(...a),
+}));
+vi.mock("@/lib/assistant-runtime/runtime", () => ({
+  runAssistantTurn: (...a: unknown[]) => runAssistantTurn(...a),
 }));
 vi.mock("@/lib/chat-thread-store", () => ({
   readChatThreadOwnershipById: (id: string) => readChatThreadOwnershipById(id),
@@ -112,6 +125,85 @@ beforeEach(() => {
   runChatTurn.mockImplementation(async (args: { send: (e: string, d: unknown) => void }) => {
     args.send("text", { content: "Hi there" });
     args.send("done", {});
+  });
+  // Default CMS-selector wiring: a registered handle -> a resolvable runtime.
+  resolveAssistantHandles.mockResolvedValue(new Map([["wordpress", "wp-principal"]]));
+  resolveAssistantRuntimeConfigByPrincipal.mockResolvedValue({
+    ok: true,
+    runtimeConfig: { systemSkillId: "@cinatra-ai/chat:wordpress-authoring-core" },
+  });
+  runAssistantTurn.mockImplementation(
+    async (_cfg: unknown, args: { send: (e: string, d: unknown) => void }) => {
+      args.send("text", { content: "WP reply" });
+      args.send("done", {});
+    },
+  );
+});
+
+// cinatra#1823 (epic #1037 P4.1): the OPTIONAL `assistant` selector makes a
+// registered assistant (WordPress/Drupal) reachable on THIS endpoint, driven by
+// its OWN persisted config resolved through assistant_user_id — under the SAME
+// authorization policy as @cinatra.
+describe("POST /api/assistants/chat — the assistant selector (cinatra#1823)", () => {
+  it("ABSENT selector keeps the @cinatra binding (runChatTurn), never the resolver", async () => {
+    const res = await POST(chatReq({ threadId: "th1", messages: [{ role: "user", content: "hi" }] }));
+    expect(res.status).toBe(200);
+    await readSse(res);
+    expect(runChatTurn).toHaveBeenCalledTimes(1);
+    expect(runAssistantTurn).not.toHaveBeenCalled();
+    expect(resolveAssistantHandles).not.toHaveBeenCalled();
+  });
+
+  it("a registered selector resolves the target's OWN runtime config and drives runAssistantTurn (NOT runChatTurn)", async () => {
+    const res = await POST(
+      chatReq({ threadId: "th1", messages: [{ role: "user", content: "hi" }], assistant: "wordpress" }),
+    );
+    expect(res.status).toBe(200);
+    const body = await readSse(res);
+    expect(body).toContain('"type":"RUN_FINISHED"');
+    expect(resolveAssistantHandles).toHaveBeenCalledWith(["wordpress"]);
+    expect(resolveAssistantRuntimeConfigByPrincipal).toHaveBeenCalledWith({
+      assistantUserId: "wp-principal",
+      handle: "wordpress",
+    });
+    // Driven by the resolved runtime config, not the hardcoded Cinatra binding.
+    expect(runAssistantTurn).toHaveBeenCalledTimes(1);
+    expect(runAssistantTurn.mock.calls[0][0]).toEqual({
+      systemSkillId: "@cinatra-ai/chat:wordpress-authoring-core",
+    });
+    expect(runChatTurn).not.toHaveBeenCalled();
+  });
+
+  it("404s an unknown assistant handle (fail-closed) and never starts a turn", async () => {
+    resolveAssistantHandles.mockResolvedValue(new Map());
+    const res = await POST(
+      chatReq({ threadId: "th1", messages: [{ role: "user", content: "hi" }], assistant: "ghost" }),
+    );
+    expect(res.status).toBe(404);
+    expect(runAssistantTurn).not.toHaveBeenCalled();
+    expect(appendAssistantTurn).not.toHaveBeenCalled();
+  });
+
+  it("404s a handle whose config is unresolvable/corrupt (fail-closed, no Cinatra fallback)", async () => {
+    resolveAssistantRuntimeConfigByPrincipal.mockResolvedValue({
+      ok: false,
+      code: "ASSISTANT_CONFIG_UNAVAILABLE",
+    });
+    const res = await POST(
+      chatReq({ threadId: "th1", messages: [{ role: "user", content: "hi" }], assistant: "wordpress" }),
+    );
+    expect(res.status).toBe(404);
+    expect(runAssistantTurn).not.toHaveBeenCalled();
+  });
+
+  it("applies the SAME thread authorization regardless of selector: a cross-user personal thread 403s before any resolution", async () => {
+    readChatThreadOwnershipById.mockReturnValue({ ownerUserId: "someone-else", teamId: null });
+    const res = await POST(
+      chatReq({ threadId: "th1", messages: [{ role: "user", content: "hi" }], assistant: "wordpress" }),
+    );
+    expect(res.status).toBe(403);
+    expect(resolveAssistantHandles).not.toHaveBeenCalled();
+    expect(runAssistantTurn).not.toHaveBeenCalled();
   });
 });
 

@@ -21,7 +21,11 @@ import {
 import { ensureBetterAuthMembershipRow } from "@/lib/better-auth-membership-bootstrap";
 import { ensureDefaultOrganizationRow } from "@/lib/default-organization-bootstrap";
 import { isInitialAdminBootstrapEligible } from "@/lib/initial-admin-bootstrap-policy";
-import { ensureBuiltInCinatraAssistantAgent } from "@/lib/assistant-agent-registration";
+import {
+  ensureBuiltInCinatraAssistantAgent,
+  ensureBuiltInWordpressAssistantAgent,
+  ensureBuiltInDrupalAssistantAgent,
+} from "@/lib/assistant-agent-registration";
 import { beforeCreateTeamEnsureSlug } from "@/lib/better-auth-org-hooks";
 import { buildInvitationAcceptUrl, buildInvitationEmail } from "@/lib/org-invitation-email";
 
@@ -814,6 +818,15 @@ export async function ensureAssistantBootstrap() {
   // route-graph ratchet still passes with the static form (verified: all 5
   // tracked routes within ceilings).
   await ensureBuiltInCinatraAssistantAgent();
+  // Register the WordPress + Drupal built-in assistant agents (cinatra#1823, epic
+  // #1037 P4.1) the SAME way @cinatra is registered: each mints its OWN distinct
+  // principal + handle + 1:1-linked assistant_templates row through the single
+  // principal-minting path (I3), with its own distinct assistant_config. Sequential
+  // (each serializes on the same advisory lock inside registerAssistantAgent);
+  // idempotent + best-effort (each swallows its own failure), so a re-run converges
+  // to the same three distinct principals.
+  await ensureBuiltInWordpressAssistantAgent();
+  await ensureBuiltInDrupalAssistantAgent();
   // Register mention handles for any OTHER assistant principals lacking one — the
   // Cinatra handle is minted by the registration above; this backfill self-heals
   // any principal the registry missed (it runs AFTER migrations, so core__0046's
