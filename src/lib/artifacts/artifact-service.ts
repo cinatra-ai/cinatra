@@ -16,6 +16,7 @@ import {
 } from "@/lib/objects-store";
 import type { ArtifactObjectData } from "@cinatra-ai/artifacts";
 import { SEMANTIC_ARTIFACT_OBJECT_TYPE } from "@cinatra-ai/artifacts";
+import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import {
   createSemanticArtifact,
   ObjectsTypeNotRegisteredError,
@@ -43,10 +44,15 @@ import {
 // would see an empty registry in a fresh process. Idempotent (registry is
 // replace-by-id); guarded so it runs at most once per process.
 //
-// list/get filter on the generic SEMANTIC_ARTIFACT_OBJECT_TYPE directly.
-// The registry is still warmed because other paths (cross-kind dep graph,
-// manifest validation) consume it; the artifact service no longer reads
-// `objectTypeRegistry.listArtifacts()`.
+// list/get filter on the generic SEMANTIC_ARTIFACT_OBJECT_TYPE (legacy rows,
+// until the #1785 A6 purge) PLUS every registered isArtifact pack type read
+// from the in-process registry — the A3 writer now stamps a row's EXACT
+// declared pack type (`pdf-artifact:document`, …) into `objects.type` instead
+// of the retired generic base, so a read filter pinned to the generic literal
+// alone would strand every pack-typed row (invisible in the library, 404 in
+// get/detail). Reading `objectTypeRegistry.listArtifacts()` keeps the surface
+// pluggable: a newly-installed artifact pack appears with zero per-type
+// branches here.
 let _artifactRegistryReady = false;
 function ensureArtifactRegistry(): void {
   if (_artifactRegistryReady) return;
@@ -121,9 +127,16 @@ export function connectorRefSourceUrl(data: unknown): string | null {
   return parsed.href;
 }
 
-// Every artifact row carries the same SEMANTIC_ARTIFACT_OBJECT_TYPE.
+// The admissible artifact object-type id set: the generic base (legacy rows,
+// retired by the A6 purge) plus every registered isArtifact pack type. Warms
+// the registry first (idempotent) so the set is complete in a fresh process,
+// and reads it at CALL time (never a frozen module-load snapshot) so a
+// hot-installed pack is admitted immediately.
 function artifactObjectTypeIds(): Set<string> {
-  return new Set([SEMANTIC_ARTIFACT_OBJECT_TYPE]);
+  ensureArtifactRegistry();
+  const ids = new Set<string>([SEMANTIC_ARTIFACT_OBJECT_TYPE]);
+  for (const def of objectTypeRegistry.listArtifacts()) ids.add(def.type);
+  return ids;
 }
 
 // ---------------------------------------------------------------------------

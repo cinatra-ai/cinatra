@@ -8,6 +8,8 @@ import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 
+import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+
 import type { RunContextSelectionRow } from "./run-context-selections-store";
 import type { ReferrerKind } from "./artifact-refs-store";
 import { computeClaimDispositionFingerprint } from "./object-content-snapshot";
@@ -124,6 +126,15 @@ WHERE rep.org_id = $1 AND rep.artifact_id = $2 AND rep.id = $3 LIMIT 1`,
 
 const GENERIC_ARTIFACT_OBJECT_TYPE = "@cinatra-ai/artifact:object";
 
+/** The registered isArtifact PACK type ids (NOT the generic base). The
+ * coherence gate admits a NON-CLAIMED pack row of one of these types; a
+ * CLAIMED pack row (like any claimed row) must still route through the
+ * binding-snapshot branch (cinatra#1430). Read at CALL time (never a frozen
+ * module-load snapshot). */
+function registeredPackArtifactTypes(): string[] {
+  return objectTypeRegistry.listArtifacts().map((d) => d.type);
+}
+
 type FinalizeArgs = {
   selectionId: string;
   s: Omit<RunContextSelectionRow, "id">;
@@ -140,6 +151,12 @@ type FinalizeArgs = {
    * claimant's snapshot under the new identity. Sentinel when no eligible
    * binding exists (the generic-type branch then decides admission). */
   currentBindingFingerprint: string;
+  /** epic #1785 wave A4: the registered isArtifact PACK type ids. The coherence
+   * gate admits a NON-CLAIMED row of one of these types (its producer-CLASSIC
+   * assertion supplies the NOT-NULL selection triple); a CLAIMED pack row still
+   * routes through the binding-snapshot branch (cinatra#1430). The generic base
+   * stays a separate UNCONDITIONAL branch. Read at prepare (query-build) time. */
+  packArtifactTypes: string[];
 };
 
 /**
@@ -190,7 +207,23 @@ coherent AS (
     AND EXISTS (SELECT 1 FROM res_alive)
     AND sa.extension = $9 AND sa.eligibility = 'eligible'
     AND (
+      -- Generic base: admitted UNCONDITIONALLY (legacy rows, until the #1785 A6
+      -- purge) — unchanged behavior.
       o.type = $19
+      -- epic #1785 wave A4: a registered isArtifact PACK type — admitted only
+      -- when NOT CLAIMED. Its producer-CLASSIC assertion ($8) supplies the
+      -- selection triple and its latest representation is the pinned rep (no
+      -- content snapshot required). A CLAIMED pack row (like any claimed row)
+      -- must route through the binding-snapshot branch below, NEVER this bare
+      -- type branch (cinatra#1430 claimant-isolation preserved).
+      OR (
+        o.type = ANY($22::text[])
+        AND NOT EXISTS (
+          SELECT 1 FROM "${schema}"."semantic_assertion" bnd
+          WHERE bnd.org_id = o.org_id AND bnd.artifact_id = o.id
+            AND bnd.assertion_basis = 'binding' AND bnd.eligibility = 'eligible'
+        )
+      )
       OR (
         EXISTS (
           -- Claimed-row path: the binding must be eligible AND its claim's
@@ -264,6 +297,7 @@ SELECT
       GENERIC_ARTIFACT_OBJECT_TYPE, // $19
       a.createdBy, // $20
       a.currentBindingFingerprint, // $21
+      a.packArtifactTypes, // $22
     ],
   };
 }
@@ -341,6 +375,7 @@ function prepareFinalizeArgs(input: FinalizeContextSelectionInput): FinalizeArgs
     createdBy: input.createdBy ?? null,
     resourceId: backing.resourceId,
     currentBindingFingerprint: readCurrentBindingFingerprint(s.orgId, s.artifactId),
+    packArtifactTypes: registeredPackArtifactTypes(),
   };
 }
 
@@ -480,6 +515,14 @@ function buildProbeQuery(schema: string, a: FinalizeArgs) {
       AND (
         o.type = $6
         OR (
+          o.type = ANY($8::text[])
+          AND NOT EXISTS (
+            SELECT 1 FROM "${schema}"."semantic_assertion" bnd
+            WHERE bnd.org_id = o.org_id AND bnd.artifact_id = o.id
+              AND bnd.assertion_basis = 'binding' AND bnd.eligibility = 'eligible'
+          )
+        )
+        OR (
           EXISTS (
             SELECT 1 FROM "${schema}"."semantic_assertion" b
             JOIN "${schema}"."artifact_type_claims" c ON c.id = b.binding_claim_id
@@ -510,6 +553,7 @@ function buildProbeQuery(schema: string, a: FinalizeArgs) {
       a.s.extension,
       GENERIC_ARTIFACT_OBJECT_TYPE,
       a.currentBindingFingerprint,
+      a.packArtifactTypes,
     ],
   };
 }

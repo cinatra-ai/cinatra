@@ -6,6 +6,8 @@ import {
   ensurePostgresSchema,
   postgresSchema,
 } from "@/lib/database";
+import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
 
 // ---------------------------------------------------------------------------
 // run_context_selections audit store.
@@ -66,9 +68,14 @@ function validateTripleCoherence(
   // admissible context substrate. Mirrors the resolver's pre-flight. cinatra#1430:
   // admissible = the generic semantic-artifact type OR a CLAIMED typed row that
   // carries an eligible BINDING assertion (its snapshot representation makes it
-  // context-pinnable). Without this a coherent triple could still pin a
-  // tombstoned-but-retained artifact OR an arbitrary unclaimed object row —
-  // neither would replay cleanly.
+  // context-pinnable). epic #1785 wave A4: ALSO a NON-CLAIMED registered
+  // isArtifact PACK-typed row (its producer-classic assertion completes the
+  // triple) — a CLAIMED pack row still routes through the binding branch, never
+  // the bare type branch (claimant-isolation). Without this a coherent triple
+  // could still pin a tombstoned-but-retained artifact OR an arbitrary unclaimed
+  // object row — neither would replay cleanly.
+  ensureArtifactTypesRegistered();
+  const packArtifactTypes = objectTypeRegistry.listArtifacts().map((d) => d.type);
   const [obj] = runPostgresQueriesSync({
     connectionString: conn(),
     queries: [
@@ -77,6 +84,14 @@ function validateTripleCoherence(
 WHERE o.id = $1 AND o.org_id = $2 AND o.deleted_at IS NULL
   AND (
     o.type = $3
+    OR (
+      o.type = ANY($4::text[])
+      AND NOT EXISTS (
+        SELECT 1 FROM "${schema}"."semantic_assertion" b
+        WHERE b.org_id = o.org_id AND b.artifact_id = o.id
+          AND b.assertion_basis = 'binding' AND b.eligibility = 'eligible'
+      )
+    )
     OR EXISTS (
       SELECT 1 FROM "${schema}"."semantic_assertion" b
       WHERE b.org_id = o.org_id AND b.artifact_id = o.id
@@ -84,7 +99,7 @@ WHERE o.id = $1 AND o.org_id = $2 AND o.deleted_at IS NULL
     )
   )
 LIMIT 1`,
-        values: [input.artifactId, input.orgId, SEMANTIC_ARTIFACT_OBJECT_TYPE],
+        values: [input.artifactId, input.orgId, SEMANTIC_ARTIFACT_OBJECT_TYPE, packArtifactTypes],
       },
     ],
   });
