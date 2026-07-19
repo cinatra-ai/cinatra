@@ -57,12 +57,20 @@ function writeStorePackage(
 }
 
 function artifactPkg(name: string): Record<string, unknown> {
+  // Explicit-declared-types manifest (ratified rule, entry 95, epic #1785): the
+  // pack declares the ONE self-owned object type it registers. Umbrella/derived
+  // minting is retired, so a type-less manifest would register NOTHING; the
+  // rescan mechanics under test (anchor narrowing, digest binding, fail-closed)
+  // observe registration via this declared `${name}:artifact` type id.
   return {
     name,
     version: "0.1.0",
     cinatra: {
       kind: "artifact",
-      artifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } },
+      artifact: {
+        accepts: { file: { mimeTypes: ["text/markdown"] } },
+        objectTypes: [{ type: `${name}:artifact`, claim: "dedicated", schema: { type: "object" } }],
+      },
     },
   };
 }
@@ -160,10 +168,17 @@ describe("rescanArtifactBridgeFromStore — cinatra#792 anchor narrowing", () =>
   const DIG_B = "b2".padEnd(64, "0");
 
   function artifactPkgWithMime(name: string, mime: string): Record<string, unknown> {
+    // Explicit-declared-types manifest (entry 95, epic #1785) — see artifactPkg.
     return {
       name,
       version: "0.1.0",
-      cinatra: { kind: "artifact", artifact: { accepts: { file: { mimeTypes: [mime] } } } },
+      cinatra: {
+        kind: "artifact",
+        artifact: {
+          accepts: { file: { mimeTypes: [mime] } },
+          objectTypes: [{ type: `${name}:artifact`, claim: "dedicated", schema: { type: "object" } }],
+        },
+      },
     };
   }
 
