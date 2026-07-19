@@ -16,6 +16,7 @@ import {
 import { xaddRunEvent, expireRunStream } from "@cinatra-ai/a2a";
 import { subscribeToAgUiEventsWithId } from "@cinatra-ai/agent-ui-protocol/server";
 import type { AgUiEvent } from "@cinatra-ai/agent-ui-protocol";
+import { WIDGET_CHAT_RESUME_TOKEN_HEADER } from "@/lib/widget-chat-resume-token";
 
 // ---------------------------------------------------------------------------
 // Shared AG-UI chat-turn streaming harness (cinatra#1218, epic #1216 S2 —
@@ -152,6 +153,17 @@ export async function streamAgUiChatTurn(params: {
   userId: string;
   isAdmin: boolean;
   runProducer: AgUiChatRunProducer;
+  /**
+   * OPTIONAL resume-credential mint (S5 broker-auth widget path, cinatra#1221).
+   * Given the freshly-minted `runId`, returns a DISTINCT run-bound resume token
+   * (`cinatra.widget.chat-resume`) to DELIVER to the cross-origin embed on the
+   * turn response so it can resume under broker auth (the resume route is
+   * session-only otherwise). ABSENT on the cookie-session path — that path
+   * resumes via its ambient session and this response stays byte-identical (no
+   * header emitted). The callback owns the mint (it holds the server-verified
+   * widget principal); the harness only delivers the returned token as a header.
+   */
+  mintResumeToken?: (runId: string) => string | null;
 }): Promise<Response> {
   const { request, threadId, mirrorOrgId, needsStructuredRow, userId, isAdmin, runProducer } =
     params;
@@ -190,6 +202,21 @@ export async function streamAgUiChatTurn(params: {
     status: "running",
   });
   touchAssistantThread(threadId);
+
+  // Mint the DISTINCT run-bound resume token NOW (the runId exists) so it rides
+  // the turn response header for the cross-origin embed. Only the broker-auth
+  // caller supplies the callback; on the cookie-session path it is absent and no
+  // header is emitted (byte-identical response). A `null`/throwing mint never
+  // fails the turn — resume simply degrades to a fresh mount (the shipped
+  // degrade), never a silent auth-widening.
+  let resumeToken: string | null = null;
+  if (params.mintResumeToken) {
+    try {
+      resumeToken = params.mintResumeToken(runId);
+    } catch {
+      resumeToken = null;
+    }
+  }
 
   // Aborted when the client disconnects (stream cancel / request abort) so the
   // in-flight run stops consuming work (#503 — legacy-parity lifecycle), and
@@ -339,12 +366,14 @@ export async function streamAgUiChatTurn(params: {
     },
   });
 
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    },
-  });
+  const responseHeaders: Record<string, string> = {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  };
+  if (resumeToken) {
+    responseHeaders[WIDGET_CHAT_RESUME_TOKEN_HEADER] = resumeToken;
+  }
+  return new Response(stream, { headers: responseHeaders });
 }

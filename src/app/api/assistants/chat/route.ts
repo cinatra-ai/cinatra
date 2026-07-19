@@ -26,6 +26,8 @@ import {
 import { consumeWidgetStreamToken, normalizeOriginStrict } from "@/lib/widget-token-broker";
 import { consumeUserWidgetToken, resolveCanonicalInstanceForOrigin } from "@/lib/widget-user-auth";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
+import { issueWidgetChatResumeToken } from "@/lib/widget-chat-resume-token";
+import { randomUUID } from "node:crypto";
 
 // ---------------------------------------------------------------------------
 // POST /api/assistants/chat — the Cinatra assistant AG-UI endpoint
@@ -409,6 +411,20 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     userId: widgetPrincipal.userId,
     isAdmin: false,
     runProducer,
+    // Mint the DISTINCT run-bound resume token from the SAME server-verified
+    // widget principal (userId/orgId/pinned instance/kind) — option A per the
+    // #1221 owner ruling. The harness delivers it on the turn response so the
+    // cross-origin embed can resume under broker auth; the chat-audience broker
+    // token is NEVER accepted at the resume seam. A fresh per-run `jti`.
+    mintResumeToken: (runId) =>
+      issueWidgetChatResumeToken({
+        userId: widgetPrincipal.userId,
+        orgId: widgetPrincipal.orgId,
+        instanceId: widgetPrincipal.instanceId,
+        kind: widgetPrincipal.assistantHandle,
+        runId,
+        jti: randomUUID(),
+      }),
   });
   // Reflect CORS onto the streamed response so the cross-origin widget can read
   // it (the harness builds a same-origin Response; the widget surface needs the
