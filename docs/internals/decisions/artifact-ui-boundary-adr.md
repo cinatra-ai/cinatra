@@ -184,6 +184,28 @@ be a **subset** of the base branch's — it may only ever shrink. So each migrat
 wave can only DELETE arms; nothing can add a new host-side identity branch and
 survive CI.
 
+**Amendment (2026-07-18) — the S8 HITL field-renderer arm was DELETED, not
+migrated.** The owner action-boundary ruling on epic #1620 (recorded on #1625)
+retired the `ai-review-panel` x-renderer binding rather than relocating it into a
+claimant extension. That arm was a `@cinatra/…` **retired-scope legacy alias**
+(never a real extension package; kept only so pre-rename persisted interrupts
+resolved) whose review-check server mutations (Run/Dismiss/Apply) were already
+**inert stubs** — though its "Approve review" action still emitted `onChange` and
+could resume the interrupt. No live agent OAS or manifest emitted it. Per the
+ruling — "deletion, baseline shrink and
+the ADR amendment ride one PR" — its `MIGRATE` G1 baseline entry
+(`bf083bfb2b025810`) is removed in the same PR that deletes the renderer + its
+registration + field-detection. A stored pre-rename interrupt now resolves to
+**no renderer** — the HITL surface shows "no renderer configured for this step"
+and, because the id is neither mid-run-classified nor the generic
+`schema-field-fallback`, offers no Continue button, so such an interrupt cannot be
+resumed. This is **not** a `SchemaFieldRenderer` floor; it is the loss of the
+panel's working "Approve review" resume path — an unresumable dead-end
+**explicitly accepted under the owner's backward-compat waiver**. This DELETE (vs.
+a MIGRATE relocation)
+still only **shrinks** the host-side surface, so the ratchet is honored. The
+S6-seed inventory figures above are the historical seed and are left unchanged.
+
 **Accepted residual (on the record).** A literal-scan ratchet cannot see
 const-aliased comparisons, a genuinely new presentation identity not yet in the
 vocabulary, or an arm reshaped-into-an-array AND relocated to a brand-new file

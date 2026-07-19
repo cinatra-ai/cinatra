@@ -39,10 +39,6 @@ import { ContextSelectorRenderer } from "./context-selector-renderer";
 import { FollowUpCadenceFieldRenderer } from "./follow-up-cadence-renderer";
 import { CampaignRecipientsReviewRenderer } from "./campaign-recipients-review-renderer";
 import { EmailDraftsReviewRenderer } from "./email-drafts-review-renderer";
-import {
-  AiReviewPanelRenderer,
-  isAiReviewPanelField,
-} from "./ai-review-panel-renderer";
 import { ReviewerAgentOutputRenderer } from "./reviewer-agent-output-renderer";
 import { SendConfirmationRenderer } from "./send-confirmation-renderer";
 import { CtaRenderer } from "./cta-renderer";
@@ -340,12 +336,17 @@ export function ensureDefaultFieldRenderersRegistered(): void {
     renderer: ReviewerAgentOutputRenderer,
   });
 
-  fieldRendererRegistry.register({
-    id: "@cinatra/email-reviewer-agent:ai-review-panel",
-    priority: 80,
-    condition: isAiReviewPanelField,
-    renderer: AiReviewPanelRenderer,
-  });
+  // The `@cinatra/email-reviewer-agent:ai-review-panel` legacy-scope alias was
+  // DELETED (cinatra#1625 S8/M3, owner action-boundary ruling 2026-07-18): a
+  // retired-scope binding whose review-check server mutations (Run/Dismiss/Apply)
+  // were already inert stubs — though its "Approve review" action still emitted
+  // onChange and could resume the interrupt. No live agent OAS/manifest emits it.
+  // A stored pre-rename interrupt now resolves to NO renderer: the HITL surface
+  // shows "no renderer configured for this step" and — the id is not
+  // mid-run-classified and its x-renderer is not the generic schema-field-fallback
+  // — presents no Continue button, so it cannot be resumed. Losing that working
+  // resume path is an unresumable dead-end explicitly accepted under the owner's
+  // backward-compat waiver. NOT a schema floor.
 
   // -------------------------------------------------------------------------
   // Manifest-driven entries: the generated build-time bindings (presence-
