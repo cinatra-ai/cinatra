@@ -38,8 +38,11 @@ vi.mock("@/lib/artifacts/semantic-assertion-store", () => ({
 // (cinatra#1432 — bundled to hold the drizzle-store file-size ratchet).
 import { artifactUninstallOperationSchemaQueries } from "@/lib/artifact-claim-schema";
 import {
+  acquireArtifactRetirementOperation,
   buildArchiveArtifactAssertionsWithLineageQuery,
   buildReplayReplacementAssertionQuery,
+  enumerateRetirableScopesFromStores,
+  findResumableUninstallOperation,
   runArtifactUninstallArchival,
   replayArtifactUninstallOperation,
 } from "@/lib/objects/artifact-uninstall-operations";
@@ -115,6 +118,7 @@ describe("runArtifactUninstallArchival", () => {
     const opRow = { id: "op1", scope: "org:org-1", extension_package: "@v/pkg-artifact", extension_version: "1", actor: "u1", status: "running", archived_count: 0, checkpoint: null, replayed_at: null, replayed_install_id: null, created_at: null, completed_at: null };
     runPostgresQueriesSync
       .mockReturnValueOnce([{ rows: [opRow], rowCount: 1 }]) // op read
+      .mockReturnValueOnce([{ rows: [{ status: "running" }], rowCount: 1 }]) // per-batch status recheck (cinatra#1837 R4a)
       .mockReturnValueOnce([{ rows: [{ org_id: "org-1", artifact_id: "a1" }], rowCount: 1 }]) // batch select (1 < batchSize -> last)
       .mockReturnValueOnce([{ rows: [], rowCount: 0 }, { rows: [{ assertion_id: "x" }, { assertion_id: "y" }], rowCount: 2 }, { rows: [], rowCount: 0 }]) // per-artifact tx: lock, archive(2), floor
       .mockReturnValueOnce([{ rows: [], rowCount: 1 }]) // checkpoint update
@@ -130,6 +134,85 @@ describe("runArtifactUninstallArchival", () => {
     expect(checkpointQuery.text).toMatch(/archived_count = archived_count \+ \$3/);
     // $3 is the PER-BATCH delta (2), not a cumulative total.
     expect(checkpointQuery.values[2]).toBe(2);
+  });
+});
+
+describe("acquireArtifactRetirementOperation (R4a single-writer acquire)", () => {
+  it("takes the op-key advisory lock then runs the atomic pick-or-insert CTE (ONE transaction)", () => {
+    runPostgresQueriesSync.mockReturnValueOnce([
+      { rows: [{}], rowCount: 1 }, // advisory lock
+      { rows: [{ running_id: null, inserted_id: "new-op" }], rowCount: 1 }, // CTE
+    ]);
+    const res = acquireArtifactRetirementOperation({
+      scope: "org:org-1",
+      extensionPackage: "@v/pkg-artifact",
+      extensionVersion: "1.0.0",
+      actor: "u1",
+    });
+    expect(res).toEqual({ action: "begin", operationId: "new-op" });
+    const call = runPostgresQueriesSync.mock.calls[0][0] as {
+      transaction: boolean;
+      queries: { text: string; values: unknown[] }[];
+    };
+    expect(call.transaction).toBe(true); // atomic: lock + CTE in ONE transaction
+    expect(call.queries[0].text).toMatch(/pg_advisory_xact_lock/);
+    expect(call.queries[0].values[0]).toBe("artifact-uninstall:org:org-1:@v/pkg-artifact");
+    // The CTE self-gates the INSERT on NO running op AND eligible assertions.
+    expect(call.queries[1].text).toMatch(/NOT EXISTS \(SELECT 1 FROM running\) AND EXISTS \(SELECT 1 FROM eligible\)/);
+  });
+
+  it("RESUMES an existing running op (never opens a second)", () => {
+    runPostgresQueriesSync.mockReturnValueOnce([
+      { rows: [{}], rowCount: 1 },
+      { rows: [{ running_id: "stranded", inserted_id: null }], rowCount: 1 },
+    ]);
+    expect(
+      acquireArtifactRetirementOperation({ scope: "org:o1", extensionPackage: "@v/pkg", extensionVersion: "1", actor: "u" }),
+    ).toEqual({ action: "resume", operationId: "stranded" });
+  });
+
+  it("reports DONE when no running op and no eligible assertions (mints no empty op)", () => {
+    runPostgresQueriesSync.mockReturnValueOnce([
+      { rows: [{}], rowCount: 1 },
+      { rows: [{ running_id: null, inserted_id: null }], rowCount: 1 },
+    ]);
+    expect(
+      acquireArtifactRetirementOperation({ scope: "org:o1", extensionPackage: "@v/pkg", extensionVersion: "1", actor: "u" }),
+    ).toEqual({ action: "done" });
+  });
+
+  it("applies the org filter to the eligible-assertion probe for an org scope", () => {
+    runPostgresQueriesSync.mockReturnValueOnce([
+      { rows: [{}], rowCount: 1 },
+      { rows: [{ running_id: null, inserted_id: null }], rowCount: 1 },
+    ]);
+    acquireArtifactRetirementOperation({ scope: "org:org-7", extensionPackage: "@v/pkg", extensionVersion: "1", actor: "u" });
+    const call = runPostgresQueriesSync.mock.calls[0][0] as { queries: { text: string; values: unknown[] }[] };
+    expect(call.queries[1].text).toMatch(/eligibility = 'eligible' AND org_id = \$6/);
+    expect(call.queries[1].values).toContain("org-7");
+  });
+});
+
+describe("findResumableUninstallOperation (R4b)", () => {
+  it("selects the OLDEST still-running op for (scope, package)", () => {
+    runPostgresQueriesSync.mockReturnValueOnce([
+      { rows: [{ id: "op1", scope: "org:o1", extension_package: "@v/pkg", extension_version: "1", actor: "u", status: "running", archived_count: 0, checkpoint: null, replayed_at: null, replayed_install_id: null, created_at: null, completed_at: null }], rowCount: 1 },
+    ]);
+    const row = findResumableUninstallOperation({ scope: "org:o1", extensionPackage: "@v/pkg" });
+    expect(row?.id).toBe("op1");
+    const call = runPostgresQueriesSync.mock.calls[0][0] as { queries: { text: string }[] };
+    expect(call.queries[0].text).toMatch(/status = 'running'[\s\S]*ORDER BY created_at ASC/);
+  });
+});
+
+describe("enumerateRetirableScopesFromStores (R2 union, F5)", () => {
+  it("unions claim scopes + eligible-assertion orgs + not-yet-replayed op scopes (deduped)", () => {
+    runPostgresQueriesSync
+      .mockReturnValueOnce([{ rows: [{ scope: "org:o1" }, { scope: "platform" }], rowCount: 2 }]) // claims
+      .mockReturnValueOnce([{ rows: [{ org_id: "o2" }, { org_id: "o1" }], rowCount: 2 }]) // eligible assertions
+      .mockReturnValueOnce([{ rows: [{ scope: "org:o3" }], rowCount: 1 }]); // stranded ops
+    const scopes = enumerateRetirableScopesFromStores("@v/pkg");
+    expect(scopes.sort()).toEqual(["org:o1", "org:o2", "org:o3", "platform"]);
   });
 });
 

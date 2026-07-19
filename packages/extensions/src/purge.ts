@@ -436,6 +436,23 @@ export async function purgeExtension(
       );
     }
     const removesDiskDb = plan.typeId === "agent";
+    // cinatra#1837 R2 (F6): artifact claim retirement is DEFERRED-with-diagnostic
+    // on the purge path (converged deferral). The connector-like artifact purge
+    // reaches purge_committed WITHOUT transitioning any installed_extension row
+    // (removesDiskDb false — no syncCanonicalPackageGlobalTransition on this
+    // path), so retiring claims here would leave the rows `active` and the boot
+    // backstop / reconciler would REACTIVATE the just-retired claims, undoing the
+    // retirement. Wiring all-scopes retirement into purge is gated on purge first
+    // owning a package-global canonical transition — filed as a follow-up. The
+    // wired R2 paths (platform-admin hard-delete, forceDelete) already transition
+    // every canonical row, so their retirements are not reactivated.
+    if (plan.typeId === "artifact") {
+      console.warn(
+        `[artifact-claim-archival] purge of "${packageName}": artifact claim retirement DEFERRED — ` +
+          `purge owns no package-global canonical row transition yet, so retiring here would be ` +
+          `reactivated by the boot backstop (cinatra#1837 R2/F6 — follow-up)`,
+      );
+    }
     const ref = {
       registryUrl: plan.registryUrl,
       packageName,

@@ -4,59 +4,63 @@ import "server-only";
 // POST /api/auditor/apply.
 //
 // Invokes the deterministic applyAuditorPatches transform against the request
-// `data` using the suggestions/acceptedIds from the review gate.
-// Replay-validates that every acceptedId is present in the persisted
-// suggestion set for this agent_run_id (audit_events
-// "auditor_suggestions_emitted" rows from /api/auditor/run-skills) — this
-// closes the tampering gap where a malicious resume could inject ids outside
-// the originally surfaced set.
+// `data` using the accepted per-item proposal ids from the review gate.
 //
-// Auth: requireAuthSession + run-ownership guard.
+// Security model (cinatra#1625):
+//   1. The single-string `reviewResult` envelope
+//      { acceptedPatchIds, dismissedPatchIds, excludedPromptIds } is JSON-parsed
+//      on entry (the renderer emits per-item accept/dismiss over PROPOSAL ids).
+//   2. The authoritative surfaced set is the ONE immutable
+//      auditor_proposal_snapshots row for this run (written by
+//      /api/auditor/run-skills). acceptedPatchIds MUST be a subset of that
+//      row's patch_ids — NOT a union of retry rows. Patch CONTENT (fieldPath,
+//      op, value) is sourced ONLY from the snapshot, never the request body, so
+//      a malicious resume cannot pair a legitimate id with attacker-controlled
+//      content.
+//   3. A single-use Separation-of-Duties receipt (minted by the admin-gated
+//      approveReviewTask, bound to the snapshot hash + reviewer) is CONSUMED
+//      here with a single-shot CAS. A second apply / forged resume replay finds
+//      no live receipt → 403.
+//   4. Accept persists the accepted per-item skill changes for the parent agent
+//      (parentPackageName, carried on the apply body per the OAS follow-up).
+//
+// Auth: bridge shared-secret OR requireAuthSession + run-ownership guard.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
-import { and, eq } from "drizzle-orm";
 import { isPlatformAdmin, requireAuthSession } from "@/lib/auth-session";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
 import { readAgentRunById, readRunCoOwners } from "@cinatra-ai/agents";
-import { auditEvents } from "@cinatra-ai/agents/schema";
-import { db } from "@cinatra-ai/agents/db";
 import {
   applyAuditorPatches,
   AuditorApplyError,
-  SuggestionPatchSchema,
 } from "@cinatra-ai/agents/auditor-apply";
+import {
+  readProposalSnapshotForRun,
+  consumeApprovalReceipt,
+} from "@cinatra-ai/agents/auditor-snapshot-store";
+import { persistAcceptedAuditorSkill } from "@/lib/auditor/persist-accepted-skill";
 
-// Suggestions are NOT accepted from the request body. They are reloaded
-// server-side from `audit_events` (event_type "auditor_suggestions_emitted")
-// so a malicious resume cannot smuggle a patch payload by pairing a legitimate
-// id with attacker-controlled fieldPath/op/value. The request body therefore
-// only carries the run id, the data document to mutate, and the set of accepted
-// suggestion ids.
-//
-// Per the OAS 26.1.0 InputMessageNode contract, the review_gate emits a single
-// string output (`reviewResult`) carrying a JSON-encoded envelope
-// `{ acceptedIds, dismissedIds }`. We JSON.parse on entry; the subset invariant
-// downstream is unchanged. See
-// https://docs.cinatra.ai/references/platform/wayflow-input-message-node-contract/ for the contract rationale.
+// The body carries the run id, the data document to mutate, the single-string
+// reviewResult envelope, and (per the OAS follow-up) the parent package name
+// for the per-item skill persist. Suggestions are NOT accepted from the body.
 const RequestBodySchema = z.object({
   agent_run_id: z.string().min(1),
+  parentPackageName: z.string().min(1).optional(),
   data: z.unknown(),
   reviewResult: z.string().min(1),
 });
 
 const ReviewResultEnvelopeSchema = z.object({
-  acceptedIds: z.array(z.string()),
-  // required (non-optional) so the wire schema agrees with the OAS
-  // x-envelope-shape and the renderer (which always emits this key).
-  dismissedIds: z.array(z.string()),
+  acceptedPatchIds: z.array(z.string()),
+  dismissedPatchIds: z.array(z.string()),
+  // The exclude companion (/api/auditor/exclude) owns excludedPromptIds; it is
+  // accepted here (present in the shared envelope) but not acted on.
+  excludedPromptIds: z.array(z.string()).optional().default([]),
 });
 
 export async function POST(request: Request): Promise<Response> {
-  // Dual auth: see /api/auditor/run-skills for rationale.
-  // WayFlow injects X-Cinatra-Bridge-Token on the ApiNode call; accept that
-  // trusted shared-secret path (no session cookie on the sidecar callback).
   const isBridge = isAuthorizedBridgeRequest(request);
   const session = isBridge ? null : await requireAuthSession().catch(() => null);
   const actorUserId = session?.user?.id ?? null;
@@ -74,11 +78,11 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  // JSON.parse the single-string reviewResult envelope.
-  let acceptedIds: string[];
+  // JSON.parse the single-string reviewResult envelope (NEW per-item shape).
+  let acceptedPatchIds: string[];
   try {
     const decoded = ReviewResultEnvelopeSchema.parse(JSON.parse(parsed.reviewResult));
-    acceptedIds = decoded.acceptedIds;
+    acceptedPatchIds = decoded.acceptedPatchIds;
   } catch (error) {
     return Response.json(
       { error: "Invalid reviewResult envelope", detail: String(error) },
@@ -87,11 +91,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   // Bind the body-selected agent_run_id to the run actually executing this
-  // bridge callback (proven by the auth-injected
-  // X-Cinatra-A2A-Context-Id header) before deriving authority from it. The
-  // acceptedIds replay-validation below bounds WHICH suggestions can be applied,
-  // but NOT which run supplies authority — the binding closes that gap. Session
-  // callers keep the full owner / admin / co-owner check below.
+  // bridge callback before deriving authority from it.
   if (isBridge) {
     const binding = await bindBridgeRunId(request, parsed.agent_run_id);
     if (!binding.ok) {
@@ -99,9 +99,6 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
-  // Run-ownership guard. For the trusted WayFlow bridge the run-binding check
-  // above has bound agent_run_id to the executing run; the run must still
-  // exist. Session callers keep the full check.
   const run = await readAgentRunById(parsed.agent_run_id);
   if (!run) return new Response("Not Found", { status: 404 });
   if (
@@ -116,44 +113,22 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
-  // Replay-validate acceptedIds as a subset of the persisted suggestion set.
-  const persistedRows = await db
-    .select({ payload: auditEvents.payload })
-    .from(auditEvents)
-    .where(
-      and(
-        eq(auditEvents.reviewTaskId, parsed.agent_run_id),
-        eq(auditEvents.eventType, "auditor_suggestions_emitted"),
-      ),
+  // Load the SINGLE authoritative snapshot for this run (fail-closed if none).
+  const snapshot = await readProposalSnapshotForRun(parsed.agent_run_id);
+  if (!snapshot) {
+    return Response.json(
+      { error: "No proposal snapshot for this run" },
+      { status: 409 },
     );
-
-  // Reload the authoritative suggestion payloads (id + fieldPath + op + value
-  // + message) from audit_events. The full content is required so that the
-  // patches we apply are the exact ones surfaced to the user at review time;
-  // an attacker resuming the run cannot substitute a different fieldPath or
-  // value for a legitimate id.
-  const persistedSuggestions: z.infer<typeof SuggestionPatchSchema>[] = [];
-  for (const row of persistedRows) {
-    if (!row.payload) continue;
-    try {
-      const decoded = JSON.parse(row.payload) as { suggestions?: unknown };
-      const validated = z
-        .object({ suggestions: z.array(SuggestionPatchSchema) })
-        .safeParse(decoded);
-      if (validated.success) {
-        persistedSuggestions.push(...validated.data.suggestions);
-      }
-    } catch {
-      // ignore malformed payloads
-    }
   }
 
-  const persistedIds = new Set(persistedSuggestions.map((s) => s.id));
-  for (const id of acceptedIds) {
-    if (!persistedIds.has(id)) {
+  // Replay-validate acceptedPatchIds ⊆ the snapshot's surfaced set. No union.
+  const snapshotIds = new Set(snapshot.patchIds);
+  for (const id of acceptedPatchIds) {
+    if (!snapshotIds.has(id)) {
       return Response.json(
         {
-          error: "Accepted id not in persisted suggestion set for this run",
+          error: "Accepted id not in the snapshot suggestion set for this run",
           offendingId: id,
         },
         { status: 400 },
@@ -161,18 +136,50 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
+  // Consume the single-use SoD receipt bound to this snapshot hash. A second
+  // apply / forged replay finds no live receipt → 403. The receipt is minted by
+  // the admin-gated approveReviewTask (bound snapshot-hash + reviewer).
+  const receipt = await consumeApprovalReceipt({
+    agentRunId: parsed.agent_run_id,
+    snapshotHash: snapshot.snapshotHash,
+  });
+  if (!receipt) {
+    return Response.json(
+      { error: "No live approval receipt for this snapshot (already consumed, absent, or snapshot drift)" },
+      { status: 403 },
+    );
+  }
+
+  // Deterministic apply — patch content sourced ONLY from the snapshot.
   let mutatedData: unknown;
   try {
     mutatedData = applyAuditorPatches(
       parsed.data,
-      persistedSuggestions,
-      acceptedIds,
+      snapshot.patches,
+      acceptedPatchIds,
     );
   } catch (error) {
     if (error instanceof AuditorApplyError) {
       return Response.json({ error: error.message }, { status: 400 });
     }
     throw error;
+  }
+
+  // Per-item skill persist: the accepted proposals become the durable personal
+  // skill change for the parent agent. Best-effort — the deterministic mutation
+  // + the consumed receipt are the authoritative durable acceptance record; a
+  // personal-skill persist failure must not roll back an applied write.
+  if (parsed.parentPackageName && acceptedPatchIds.length > 0) {
+    try {
+      await persistAcceptedAuditorSkill({
+        run,
+        parentPackageName: parsed.parentPackageName,
+        snapshot,
+        acceptedPatchIds,
+      });
+    } catch (err) {
+      console.warn("[auditor.apply] accepted-skill persist failed", err);
+    }
   }
 
   return Response.json({ mutatedData });

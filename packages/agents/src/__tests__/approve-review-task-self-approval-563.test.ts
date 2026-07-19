@@ -293,9 +293,11 @@ describe("approveReviewTask — run-side self-approval guard (#563)", () => {
 
     await expect(approveReviewTask("wayflow-task-9")).resolves.toBeUndefined();
 
-    // Guard skipped entirely: no resolution work, no admin-count read, resume runs.
-    expect(readAgentRunByTaskIdMock).not.toHaveBeenCalled();
-    expect(resolveRunIdByWayflowTaskIdMock).not.toHaveBeenCalled();
+    // SoD GUARD skipped entirely: no admin-count read, resume runs. (The auditor
+    // per-item receipt probe (cinatra#1625) does resolve the run id to check for
+    // a pending proposal snapshot — best-effort, separate from the SoD guard —
+    // but both resolvers return null here so no snapshot is read and no receipt
+    // is minted; the resume still runs.)
     expect(countOtherPlatformAdminsMock).not.toHaveBeenCalled();
     expect(approveReviewTaskInternalMock).toHaveBeenCalledTimes(1);
   });

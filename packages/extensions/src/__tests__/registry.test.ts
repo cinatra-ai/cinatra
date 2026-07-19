@@ -6,6 +6,10 @@ import {
   resolveLiveInstalledVersionForCas,
 } from "../index";
 import { setExtensionDataTeardownHook } from "../data-teardown-hook";
+import { setExtensionArtifactClaimArchivalHook } from "../artifact-claim-lifecycle-hook";
+import { setExtensionArtifactClaimReactivationHook } from "../artifact-claim-lifecycle-hook";
+import { setExtensionArtifactClaimArchivalAllScopesHook } from "../artifact-claim-lifecycle-hook";
+import { transitionExtensionLifecycle } from "../lifecycle-primitive";
 import { makeHandler, makeRef, makeActor } from "./__mocks__/extension-handler";
 
 // ---------------------------------------------------------------------------
@@ -15,8 +19,9 @@ vi.mock("@cinatra-ai/agents", () => ({
   readAgentTemplateByPackageName: vi.fn(),
   countRunsForTemplate: vi.fn(),
   readAgentTemplatesDependingOn: vi.fn(),
-  // forceDelete deps (additive — unused by the pre-existing tests):
-  withInstallLock: (_name: string, fn: () => unknown) => fn(),
+  // forceDelete deps (additive — unused by the pre-existing tests). A vi.fn
+  // pass-through so cinatra#1837 R4a lock-wrapping can be asserted.
+  withInstallLock: vi.fn((_name: string, fn: () => unknown) => fn()),
   removeReferencingRunRows: vi.fn(async () => {}),
 }));
 
@@ -84,6 +89,7 @@ vi.mock("../activate-hook", () => ({
 
 import {
   readEffectiveStatusByPackageNames,
+  readInstalledExtensionsByPackageName,
 } from "../canonical-store";
 // Mocked audit helpers (see vi.mock("../audit-log") above) — imported so the
 // provenance-parity tests can assert the dispatcher's calls into them.
@@ -99,12 +105,37 @@ import {
   readAgentTemplateByPackageName,
   countRunsForTemplate,
   readAgentTemplatesDependingOn,
+  withInstallLock,
 } from "@cinatra-ai/agents";
 
 function mockNeverUsedNoDepScenario() {
   (readAgentTemplateByPackageName as ReturnType<typeof vi.fn>).mockResolvedValue(null);
   (countRunsForTemplate as ReturnType<typeof vi.fn>).mockResolvedValue(0);
   (readAgentTemplatesDependingOn as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+}
+
+// Restore the module-default platform (NULL-org) seed row. A `mockImplementation`
+// override survives `vi.clearAllMocks()` (which clears calls, not implementations),
+// so any block that reseeds `readInstalledExtensionsByPackageName` must restore
+// this default in beforeEach + afterEach or it leaks into later tests (cinatra#1837).
+function restoreDefaultInstalledRows() {
+  vi.mocked(readInstalledExtensionsByPackageName).mockImplementation(async (pkg: string) => [
+    {
+      id: "iext_seed",
+      packageName: pkg,
+      ownerLevel: "platform",
+      ownerId: null,
+      organizationId: null,
+      kind: "agent",
+      status: "active",
+      source: { type: "verdaccio", version: "1.0.0" },
+      requiredInProd: false,
+      dependencies: [],
+      manifestHash: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as never,
+  ]);
 }
 
 function mockUsedScenario() {
@@ -398,6 +429,380 @@ describe("ExtensionRegistry", () => {
       await extensionRegistry.forceDelete("agent", ref, makeActor());
       expect(handler.uninstall).toHaveBeenCalled();
       expect(fired).toEqual([ref.packageName]);
+    });
+  });
+
+  // cinatra#1454 — the dispatcher fires the FAIL-CLOSED artifact claim-archival
+  // seam on the ORG-SCOPED archive transition of a `kind:"artifact"` extension
+  // (an org-admin soft uninstall + an org-scoped explicit archive), BEFORE it
+  // commits the durable row transition, so an archival failure aborts the archive
+  // (the extension is never archived while its object-type claims / governed rows
+  // stay live). It DEFERS a NULL-org (platform) archive (remainder R1 — the
+  // cross-org "platform" archival semantics are unresolved) and never fires for a
+  // non-artifact kind.
+  describe("artifact claim-archival firing (#1454)", () => {
+    // An ORG-ADMIN actor + an org-scoped canonical row so the dispatcher resolves
+    // an org:<id> claim scope (the scope-exact, wired path).
+    const ORG = "org-7";
+    const orgAdmin = {
+      actorType: "system" as const,
+      userId: "user-9",
+      source: "worker" as const,
+      orgId: ORG,
+      orgRole: "org_admin" as const,
+    };
+    // Seed an ORG row for the wired-path tests (implementation-based so it cleanly
+    // overrides the default within a single test).
+    const seedOrgRow = (pkg: string) =>
+      vi.mocked(readInstalledExtensionsByPackageName).mockImplementation(async () => [
+        {
+          id: "iext_org",
+          packageName: pkg,
+          ownerLevel: "org",
+          ownerId: null,
+          organizationId: ORG,
+          kind: "artifact",
+          status: "active",
+          source: { type: "verdaccio", version: "2.0.0" },
+          requiredInProd: false,
+          dependencies: [],
+          manifestHash: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as never,
+      ]);
+    // Restore the module-default platform (NULL-org) seed row so neither an
+    // intra-describe nor a cross-describe test inherits a `seedOrgRow` override.
+    const restoreDefaultRows = () =>
+      vi.mocked(readInstalledExtensionsByPackageName).mockImplementation(async (pkg: string) => [
+        {
+          id: "iext_seed",
+          packageName: pkg,
+          ownerLevel: "platform",
+          ownerId: null,
+          organizationId: null,
+          kind: "agent",
+          status: "active",
+          source: { type: "verdaccio", version: "1.0.0" },
+          requiredInProd: false,
+          dependencies: [],
+          manifestHash: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as never,
+      ]);
+
+    let fired: unknown[];
+    beforeEach(() => {
+      fired = [];
+      setExtensionArtifactClaimArchivalHook((input) => {
+        fired.push(input);
+      });
+      restoreDefaultRows();
+    });
+    afterEach(() => {
+      setExtensionArtifactClaimArchivalHook(null);
+      restoreDefaultRows();
+    });
+
+    it("explicit ORG-SCOPED archive of a kind:'artifact' extension fires the seam (scope = the org row)", async () => {
+      extensionRegistry.register(makeHandler("artifact"));
+      seedOrgRow("@v/pkg-artifact");
+      await extensionRegistry.archive("artifact", makeRef("@v/pkg-artifact"), orgAdmin);
+      expect(fired).toEqual([
+        expect.objectContaining({
+          packageName: "@v/pkg-artifact",
+          organizationId: ORG,
+          installId: "iext_org",
+          extensionVersion: "2.0.0", // source.version precedence
+          actorPrincipalId: "user-9",
+        }),
+      ]);
+    });
+
+    it("an ORG-ADMIN soft uninstall (archive path) fires the claim-archival seam", async () => {
+      extensionRegistry.register(makeHandler("artifact"));
+      seedOrgRow("@v/pkg-artifact");
+      await extensionRegistry.uninstall("artifact", makeRef("@v/pkg-artifact"), orgAdmin);
+      expect(fired).toEqual([expect.objectContaining({ packageName: "@v/pkg-artifact", organizationId: ORG })]);
+    });
+
+    it("DEFERS a platform (NULL-org) archive — does not fire (remainder R1)", async () => {
+      extensionRegistry.register(makeHandler("artifact"));
+      // The default seed is a platform (NULL-org) row; a platform admin resolves it.
+      await extensionRegistry.archive("artifact", makeRef("@v/pkg-artifact"), makeActor());
+      expect(fired).toEqual([]);
+    });
+
+    it("does NOT fire for a non-artifact kind (agent archive)", async () => {
+      extensionRegistry.register(makeHandler("agent"));
+      await extensionRegistry.archive("agent", makeRef(), makeActor());
+      expect(fired).toEqual([]);
+    });
+
+    it("FAIL-CLOSED: a throwing seam aborts the org-scoped archive BEFORE the durable row transition", async () => {
+      setExtensionArtifactClaimArchivalHook(() => {
+        throw new Error("claim retirement failed");
+      });
+      extensionRegistry.register(makeHandler("artifact"));
+      seedOrgRow("@v/pkg-artifact");
+      vi.mocked(transitionExtensionLifecycle).mockClear();
+      await expect(
+        extensionRegistry.archive("artifact", makeRef("@v/pkg-artifact"), orgAdmin),
+      ).rejects.toThrow("claim retirement failed");
+      // The row transition never ran — the archive aborted fail-closed.
+      expect(transitionExtensionLifecycle).not.toHaveBeenCalled();
+    });
+
+    it("FAIL-CLOSED: an UNWIRED seam throws on an org-scoped kind:'artifact' archive (no silent drop)", async () => {
+      setExtensionArtifactClaimArchivalHook(null); // simulate a worker missing the wiring
+      extensionRegistry.register(makeHandler("artifact"));
+      seedOrgRow("@v/pkg-artifact");
+      vi.mocked(transitionExtensionLifecycle).mockClear();
+      await expect(
+        extensionRegistry.archive("artifact", makeRef("@v/pkg-artifact"), orgAdmin),
+      ).rejects.toThrow(/not wired/i);
+      expect(transitionExtensionLifecycle).not.toHaveBeenCalled();
+    });
+  });
+
+  // cinatra#1837 R3 — the dispatcher fires the FAIL-CLOSED artifact claim-
+  // REACTIVATION seam on the ORG-SCOPED restore of a `kind:"artifact"` extension,
+  // BEFORE it commits the `activate` row transition, so a failed reactivation
+  // aborts the restore (the row stays archived, never active with dead claims). It
+  // DEFERS a NULL-org (platform) restore (R1, symmetric with the deferred platform
+  // archive) and never fires for a non-artifact kind.
+  describe("artifact claim-reactivation firing (R3)", () => {
+    const ORG = "org-7";
+    const orgAdmin = {
+      actorType: "system" as const,
+      userId: "user-9",
+      source: "worker" as const,
+      orgId: ORG,
+      orgRole: "org_admin" as const,
+    };
+    const seedOrgArtifactRow = (pkg: string) =>
+      vi.mocked(readInstalledExtensionsByPackageName).mockImplementation(async () => [
+        {
+          id: "iext_org",
+          packageName: pkg,
+          ownerLevel: "org",
+          ownerId: null,
+          organizationId: ORG,
+          kind: "artifact",
+          status: "active",
+          source: { type: "verdaccio", version: "2.0.0" },
+          requiredInProd: false,
+          dependencies: [],
+          manifestHash: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as never,
+      ]);
+    const seedPlatformArtifactRow = (pkg: string) =>
+      vi.mocked(readInstalledExtensionsByPackageName).mockImplementation(async () => [
+        {
+          id: "iext_plat",
+          packageName: pkg,
+          ownerLevel: "platform",
+          ownerId: null,
+          organizationId: null,
+          kind: "artifact",
+          status: "active",
+          source: { type: "verdaccio", version: "1.0.0" },
+          requiredInProd: false,
+          dependencies: [],
+          manifestHash: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as never,
+      ]);
+
+    let fired: unknown[];
+    beforeEach(() => {
+      fired = [];
+      setExtensionArtifactClaimReactivationHook((input) => {
+        fired.push(input);
+      });
+      restoreDefaultInstalledRows();
+    });
+    afterEach(() => {
+      setExtensionArtifactClaimReactivationHook(null);
+      restoreDefaultInstalledRows();
+    });
+
+    it("ORG-SCOPED restore of a kind:'artifact' extension fires the reactivation seam (scope = the org row)", async () => {
+      extensionRegistry.register(makeHandler("artifact"));
+      seedOrgArtifactRow("@v/pkg-artifact");
+      await extensionRegistry.restore("artifact", makeRef("@v/pkg-artifact"), orgAdmin);
+      expect(fired).toEqual([
+        expect.objectContaining({
+          packageName: "@v/pkg-artifact",
+          organizationId: ORG,
+          installId: "iext_org",
+          extensionVersion: "2.0.0", // source.version precedence
+          actorPrincipalId: "user-9",
+        }),
+      ]);
+    });
+
+    it("reactivation fires BEFORE the row transition (mirror of the archive seam ordering)", async () => {
+      const order: string[] = [];
+      setExtensionArtifactClaimReactivationHook(() => {
+        order.push("reactivate");
+      });
+      vi.mocked(transitionExtensionLifecycle).mockImplementation(async () => {
+        order.push("transition");
+        return undefined as never;
+      });
+      extensionRegistry.register(makeHandler("artifact"));
+      seedOrgArtifactRow("@v/pkg-artifact");
+      await extensionRegistry.restore("artifact", makeRef("@v/pkg-artifact"), orgAdmin);
+      expect(order).toEqual(["reactivate", "transition"]);
+    });
+
+    it("DEFERS a platform (NULL-org) restore — does not fire (R1)", async () => {
+      extensionRegistry.register(makeHandler("artifact"));
+      seedPlatformArtifactRow("@v/pkg-artifact");
+      await extensionRegistry.restore("artifact", makeRef("@v/pkg-artifact"), makeActor());
+      expect(fired).toEqual([]);
+    });
+
+    it("does NOT fire for a non-artifact kind (agent restore)", async () => {
+      extensionRegistry.register(makeHandler("agent"));
+      await extensionRegistry.restore("agent", makeRef(), makeActor());
+      expect(fired).toEqual([]);
+    });
+
+    it("FAIL-CLOSED: a throwing reactivation seam aborts the restore BEFORE the transition", async () => {
+      setExtensionArtifactClaimReactivationHook(() => {
+        throw new Error("reactivation failed");
+      });
+      extensionRegistry.register(makeHandler("artifact"));
+      seedOrgArtifactRow("@v/pkg-artifact");
+      vi.mocked(transitionExtensionLifecycle).mockClear();
+      await expect(
+        extensionRegistry.restore("artifact", makeRef("@v/pkg-artifact"), orgAdmin),
+      ).rejects.toThrow("reactivation failed");
+      expect(transitionExtensionLifecycle).not.toHaveBeenCalled();
+    });
+
+    it("FAIL-CLOSED: an UNWIRED reactivation seam throws on an org-scoped artifact restore", async () => {
+      setExtensionArtifactClaimReactivationHook(null);
+      extensionRegistry.register(makeHandler("artifact"));
+      seedOrgArtifactRow("@v/pkg-artifact");
+      vi.mocked(transitionExtensionLifecycle).mockClear();
+      await expect(
+        extensionRegistry.restore("artifact", makeRef("@v/pkg-artifact"), orgAdmin),
+      ).rejects.toThrow(/not wired/i);
+      expect(transitionExtensionLifecycle).not.toHaveBeenCalled();
+    });
+  });
+
+  // cinatra#1837 R2 — the dispatcher fires the FAIL-CLOSED ALL-SCOPES artifact
+  // claim-archival seam on a package-GLOBAL destruction (platform-admin hard-delete
+  // + forceDelete) of a `kind:"artifact"` extension, BEFORE it destroys the package
+  // backing, so an incomplete retirement aborts the destroy (no orphaned live
+  // claim). Never fires for a non-artifact kind.
+  describe("all-scopes artifact claim-archival firing (R2)", () => {
+    let fired: unknown[];
+    beforeEach(() => {
+      fired = [];
+      setExtensionArtifactClaimArchivalAllScopesHook((input) => {
+        fired.push(input);
+      });
+      restoreDefaultInstalledRows();
+    });
+    afterEach(() => {
+      setExtensionArtifactClaimArchivalAllScopesHook(null);
+      restoreDefaultInstalledRows();
+    });
+
+    it("platform-admin HARD-DELETE of a kind:'artifact' extension fires the all-scopes seam BEFORE handler.uninstall", async () => {
+      const order: string[] = [];
+      setExtensionArtifactClaimArchivalAllScopesHook(() => {
+        order.push("retire");
+      });
+      const handler = makeHandler("artifact");
+      (handler.uninstall as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        order.push("uninstall");
+      });
+      extensionRegistry.register(handler);
+      mockNeverUsedNoDepScenario();
+      await extensionRegistry.uninstall("artifact", makeRef("@v/pkg-artifact"), makeActor());
+      expect(order).toEqual(["retire", "uninstall"]);
+    });
+
+    it("forceDelete of a kind:'artifact' extension fires the all-scopes seam BEFORE handler.uninstall", async () => {
+      const order: string[] = [];
+      setExtensionArtifactClaimArchivalAllScopesHook((input) => {
+        order.push("retire");
+        fired.push(input);
+      });
+      const handler = makeHandler("artifact");
+      (handler.uninstall as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        order.push("uninstall");
+      });
+      extensionRegistry.register(handler);
+      await extensionRegistry.forceDelete("artifact", makeRef("@v/pkg-artifact"), makeActor());
+      expect(order).toEqual(["retire", "uninstall"]);
+      expect(fired).toEqual([
+        expect.objectContaining({ packageName: "@v/pkg-artifact" }),
+      ]);
+    });
+
+    it("does NOT fire for a non-artifact kind (agent hard-delete)", async () => {
+      const handler = makeHandler("agent");
+      extensionRegistry.register(handler);
+      mockNeverUsedNoDepScenario();
+      await extensionRegistry.uninstall("agent", makeRef(), makeActor());
+      expect(fired).toEqual([]);
+    });
+
+    it("FAIL-CLOSED: a throwing all-scopes seam aborts the hard-delete BEFORE handler.uninstall", async () => {
+      setExtensionArtifactClaimArchivalAllScopesHook(() => {
+        throw new Error("all-scopes retirement failed");
+      });
+      const handler = makeHandler("artifact");
+      extensionRegistry.register(handler);
+      mockNeverUsedNoDepScenario();
+      await expect(
+        extensionRegistry.uninstall("artifact", makeRef("@v/pkg-artifact"), makeActor()),
+      ).rejects.toThrow("all-scopes retirement failed");
+      expect(handler.uninstall).not.toHaveBeenCalled();
+    });
+  });
+
+  // cinatra#1837 R4a — archive / uninstall / restore now hold the install-
+  // lifecycle lock (the same lock install/update/forceDelete take), so a
+  // concurrent install/update cannot interleave with claim retirement/reactivation.
+  describe("install-lifecycle lock over archive/uninstall/restore (R4a)", () => {
+    beforeEach(() => {
+      setExtensionArtifactClaimReactivationHook(() => {});
+      restoreDefaultInstalledRows();
+    });
+    afterEach(() => {
+      setExtensionArtifactClaimReactivationHook(null);
+      restoreDefaultInstalledRows();
+    });
+
+    it("archive holds withInstallLock for the package", async () => {
+      extensionRegistry.register(makeHandler("agent"));
+      await extensionRegistry.archive("agent", makeRef("@v/pkg"), makeActor());
+      expect(withInstallLock).toHaveBeenCalledWith("@v/pkg", expect.any(Function));
+    });
+
+    it("uninstall holds withInstallLock for the package", async () => {
+      extensionRegistry.register(makeHandler("agent"));
+      mockUsedScenario();
+      await extensionRegistry.uninstall("agent", makeRef("@v/pkg"), makeActor());
+      expect(withInstallLock).toHaveBeenCalledWith("@v/pkg", expect.any(Function));
+    });
+
+    it("restore holds withInstallLock for the package", async () => {
+      extensionRegistry.register(makeHandler("agent"));
+      await extensionRegistry.restore("agent", makeRef("@v/pkg"), makeActor());
+      expect(withInstallLock).toHaveBeenCalledWith("@v/pkg", expect.any(Function));
     });
   });
 

@@ -5,32 +5,47 @@ import "server-only";
 //
 // Two modes driven by the `phase` field:
 //   "resolve" — hybrid skill resolution. If input.skillIds is a
-//               non-empty array, returns it verbatim. Otherwise calls
-//               skills_installed_resolve_for_agent with parentPackageName.
-//   "run"     — runs the resolved skills via @cinatra-ai/llm
-//               skill-aware deterministic LLM task with a STRUCTURED OUTPUT
-//               schema that REQUIRES suggestions in the SuggestionPatch shape
-//               { id, fieldPath, op, value, message }. No prose normalization
-//               because the LLM must not rewrite skill output.
+//               non-empty array (the skill-recommendation HITL's confirmed
+//               selection), returns it verbatim. Otherwise calls
+//               skills_installed_resolve_for_agent with parentPackageName
+//               (the agent's own installed + matched skills).
+//   "run"     — runs the resolved skills via @cinatra-ai/llm skill-aware
+//               deterministic LLM task and GENERATES the review material from
+//               the audit inputs (the resolved skills + the artifact + the
+//               user's applied changes): a personal-skill `preview`
+//               (name/description/content) AND the per-item SuggestionPatch[]
+//               { id, fieldPath, op, value, message } (owner ruled flow entry
+//               109, 2026-07-19 — the audit run itself generates the preview,
+//               no separate prompts wiring). The run derives `edited` — whether
+//               the user applied changes to the offered artifact — from the
+//               run's captured HITL amendment context; the auditor OAS
+//               `edited_gate` BranchingNode surfaces the review HITL ONLY when
+//               edited="edited".
 //
-// Skills MUST emit structured suggestions directly. The route's outputSchema
-// is the contract — the LLM is configured to return JSON matching it. If a
-// skill emits prose only, the LLM's structured-output mode will return an
-// empty suggestions array rather than guessing.
+// Persistence: run phase writes EXACTLY ONE immutable proposal snapshot per run
+// (auditor_proposal_snapshots, keyed UNIQUE by agent_run_id) so /api/auditor/
+// apply can replay-validate acceptedPatchIds ⊆ the surfaced set WITHOUT unioning
+// retry rows. Replaces the legacy audit_events "auditor_suggestions_emitted"
+// insert (which unioned on retry AND failed to insert on a fresh-bootstrap DB
+// whose audit_events carries only the structured authz shape).
 //
-// Auth: requireAuthSession + run-ownership guard.
-// Persistence: suggestions are persisted to audit_events keyed by
-// agent_run_id so the apply step can replay-validate acceptedIds.
+// Auth: bridge shared-secret OR requireAuthSession + run-ownership guard.
 // ---------------------------------------------------------------------------
 
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { isPlatformAdmin, requireAuthSession } from "@/lib/auth-session";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
-import { readAgentRunById, readRunCoOwners } from "@cinatra-ai/agents";
-import { auditEvents } from "@cinatra-ai/agents/schema";
-import { db } from "@cinatra-ai/agents/db";
+import {
+  readAgentRunById,
+  readRunCoOwners,
+  readAllHitlPromptsForRun,
+} from "@cinatra-ai/agents";
+import {
+  writeProposalSnapshot,
+  type AuditSkillPreview,
+} from "@cinatra-ai/agents/auditor-snapshot-store";
+import { AuditorSnapshotError } from "@cinatra-ai/agents/auditor-snapshot-errors";
 import { runSkillAwareDeterministicLlmTask, withActorContext } from "@cinatra-ai/llm";
 import { buildActorContextFromRun } from "@/lib/authz/build-actor-context-from-run";
 import {
@@ -104,7 +119,12 @@ async function callSkills<T>(
   });
 }
 
-const SUGGESTIONS_OUTPUT_SCHEMA = {
+// The LLM emits BOTH the per-item suggestions AND the personal-skill preview
+// (name/description/content) generated from the audit material — the single
+// review payload the renderer consumes (owner ruled flow, 2026-07-19). OpenAI
+// strict structured-output requires every object to declare
+// additionalProperties:false and list every property in `required`.
+const RUN_OUTPUT_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
@@ -117,32 +137,36 @@ const SUGGESTIONS_OUTPUT_SCHEMA = {
           id: { type: "string" },
           fieldPath: { type: "string" },
           op: { type: "string", enum: ["replace", "add", "remove"] },
-          // OpenAI strict structured-output requires every object type
-          // in the schema to have `additionalProperties: false` AND
-          // every property key in `required`. A type union including
-          // `object` violates the first (cannot declare it for an open
-          // polymorphic value); making `value`/`message` optional
-          // violates the second. Restrict `value` to a JSON-primitive
-          // string (LLM JSON-stringifies non-primitives) and require
-          // both; the LLM emits empty string for missing fields.
+          // `value` restricted to a JSON-primitive string (the LLM
+          // JSON-stringifies non-primitives); empty string for missing fields.
           value: { type: "string" },
           message: { type: "string" },
         },
         required: ["id", "fieldPath", "op", "value", "message"],
       },
     },
+    preview: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        name: { type: "string" },
+        description: { type: "string" },
+        content: { type: "string" },
+      },
+      required: ["name", "description", "content"],
+    },
   },
-  required: ["suggestions"],
+  required: ["suggestions", "preview"],
 } as const;
+
+type GeneratedPreview = { name: string; description: string; content: string };
 
 export async function POST(request: Request): Promise<Response> {
   // Dual auth: WayFlow dispatches the auditor as an agent;
   // agent_loader.py:_patch_api_call_step_bridge_token injects
   // X-Cinatra-Bridge-Token on every ApiNode call. Accept that shared-secret
   // path — same trust model as /api/llm-bridge + /api/agents/passthrough
-  // (principalId "wayflow-bridge"). Without it the WayFlow callback has no
-  // session cookie and 307-redirects to /sign-in, failing the run before
-  // resolve/run. Direct UI/MCP callers still require a session.
+  // (principalId "wayflow-bridge"). Direct UI/MCP callers still require a session.
   const isBridge = isAuthorizedBridgeRequest(request);
   const session = isBridge ? null : await requireAuthSession().catch(() => null);
   const actorUserId = session?.user?.id ?? null;
@@ -161,8 +185,6 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  // The bridge token authenticates only the caller CLASS, so a blanket
-  // ownership skip lets a bridge-token holder act on ANY run by id.
   // Bind the body-selected agent_run_id to the run actually executing this
   // callback (proven by the auth-injected X-Cinatra-A2A-Context-Id header)
   // before deriving authority from it. Session callers keep the full owner /
@@ -174,10 +196,6 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
-  // Run-ownership guard. For the trusted WayFlow bridge the run-binding check
-  // above has bound agent_run_id to the executing run (the run must still
-  // exist — 404 below). Direct session callers keep the full owner /
-  // platform-admin / co-owner check.
   const run = await readAgentRunById(parsed.agent_run_id);
   if (!run) return new Response("Not Found", { status: 404 });
   if (
@@ -216,80 +234,123 @@ export async function POST(request: Request): Promise<Response> {
     skillIds = resolved.skillIds ?? [];
   }
 
-  // "No installed skills →
-  // empty suggestions → completed" IS the correct auditor/reviewer
-  // contract. Without this early return the route runs the OpenAI
-  // structured-output task with zero skills, which 500s and terminates
-  // the reviewer/auditor agent run as `failed`.
-  if (skillIds.length === 0) {
-    return Response.json({ suggestions: [] });
+  // Derive `edited` — whether the user applied changes to the artifact the
+  // parent agent offered for review. The run's captured HITL amendment prompts
+  // (scoped to the parent agent) are the host-side record of user-applied
+  // changes / guidance; a non-empty set means the user acted on the offered
+  // artifact. The auditor OAS `edited_gate` BranchingNode surfaces the review
+  // HITL ONLY when this is "edited" (owner ruling 2026-07-19: no user changes →
+  // no audit HITL).
+  let editedSignal: "edited" | "clean" = "clean";
+  try {
+    const amendmentPrompts = await readAllHitlPromptsForRun(
+      parsed.agent_run_id,
+      parsed.parentPackageName,
+    );
+    if (amendmentPrompts.length > 0) editedSignal = "edited";
+  } catch (err) {
+    console.warn("[auditor.run-skills] amendment-prompt read failed", err);
   }
 
-  const provider = "openai" as const;
-  const system =
-    "You are an auditor running installed skills against a parent agent's data payload. " +
-    "Read each skill's SKILL.md (via the read_skill / shell tool) and apply its rules to the input data. " +
-    "Emit zero or more structured suggestions in the SuggestionPatch shape. " +
-    "Each suggestion MUST have a stable id, an RFC 6901 fieldPath into the data, " +
-    "an op of 'replace' | 'add' | 'remove', and (for replace/add) a value. " +
-    "The `value` field MUST be a string. If the underlying patch value is " +
-    "non-primitive (object, array), JSON-stringify it into the string. " +
-    "Do NOT rewrite skill output as prose. Do NOT invent suggestions when skills produce none.";
-  const user =
-    "parentPackageName: " + parsed.parentPackageName + "\n\n" +
-    "data:\n" + JSON.stringify(parsed.data, null, 2);
-
-  // Establish ALS actor-context BEFORE the LLM
-  // call. `runSkillAwareDeterministicLlmTask` reads the actor from the
-  // AsyncLocalStorage frame (for MCP injection + skills resolution).
-  // Without this wrapper it throws `ACTOR_CONTEXT_MISSING` and the
-  // auditor agent run terminates as failed BEFORE the review_gate fires.
-  // Same pattern as `src/app/api/agents/passthrough/route.ts:273`.
-  const alsActorContext = await buildActorContextFromRun({
-    id: run.id,
-    runBy: run.runBy,
-    orgId: run.orgId,
-  });
-  const response = await withActorContext(alsActorContext, () =>
-    runSkillAwareDeterministicLlmTask({
-      provider,
-      system,
-      user,
-      skillIds,
-      outputSchema: SUGGESTIONS_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
-      logLabel: "auditor.run-skills",
-    }),
-  );
-
   let suggestions: z.infer<typeof SuggestionPatchSchema>[] = [];
-  if (response.text) {
-    try {
-      const parsedText = JSON.parse(response.text) as { suggestions?: unknown };
-      const validated = z
-        .object({ suggestions: z.array(SuggestionPatchSchema) })
-        .parse(parsedText);
-      suggestions = validated.suggestions;
-    } catch (err) {
-      // Structured-output failure → empty suggestions; never fabricate.
-      // Log so a regression in the LLM's structured-output mode is observable
-      // (otherwise an empty array and a parse failure are indistinguishable
-      // downstream.
-      console.warn("[auditor.run-skills] structured-output parse failed", err);
-      suggestions = [];
+  let generatedPreview: GeneratedPreview = { name: "", description: "", content: "" };
+
+  if (skillIds.length > 0) {
+    const provider = "openai" as const;
+    const system =
+      "You are an auditor running installed skills against a parent agent's data payload " +
+      "and the changes the user applied to it. Read each skill's SKILL.md (via the " +
+      "read_skill / shell tool) and apply its rules to the input data. " +
+      "Emit zero or more structured suggestions in the SuggestionPatch shape. " +
+      "Each suggestion MUST have a stable id, an RFC 6901 fieldPath into the data, " +
+      "an op of 'replace' | 'add' | 'remove', and (for replace/add) a value. " +
+      "The `value` field MUST be a string; JSON-stringify non-primitive values. " +
+      "ALSO generate a concise personal-skill `preview` summarizing what these " +
+      "proposed changes would teach for future runs: a short `name`, a one-line " +
+      "`description`, and a `content` body (the skill guidance). " +
+      "Do NOT rewrite skill output as prose. Do NOT invent suggestions when skills produce none.";
+    const user =
+      "parentPackageName: " + parsed.parentPackageName + "\n\n" +
+      "data:\n" + JSON.stringify(parsed.data, null, 2);
+
+    // Establish ALS actor-context BEFORE the LLM call. Same pattern as
+    // src/app/api/agents/passthrough/route.ts.
+    const alsActorContext = await buildActorContextFromRun({
+      id: run.id,
+      runBy: run.runBy,
+      orgId: run.orgId,
+    });
+    const response = await withActorContext(alsActorContext, () =>
+      runSkillAwareDeterministicLlmTask({
+        provider,
+        system,
+        user,
+        skillIds,
+        outputSchema: RUN_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
+        logLabel: "auditor.run-skills",
+      }),
+    );
+
+    if (response.text) {
+      try {
+        const parsedText = JSON.parse(response.text) as {
+          suggestions?: unknown;
+          preview?: unknown;
+        };
+        const validated = z
+          .object({
+            suggestions: z.array(SuggestionPatchSchema),
+            preview: z.object({
+              name: z.string(),
+              description: z.string(),
+              content: z.string(),
+            }),
+          })
+          .parse(parsedText);
+        suggestions = validated.suggestions;
+        generatedPreview = validated.preview;
+      } catch (err) {
+        // Structured-output failure → empty; never fabricate.
+        console.warn("[auditor.run-skills] structured-output parse failed", err);
+        suggestions = [];
+        generatedPreview = { name: "", description: "", content: "" };
+      }
     }
   }
 
-  // Persist suggestions for replay-validation in /api/auditor/apply.
-  await db.insert(auditEvents).values({
-    id: randomUUID(),
-    reviewTaskId: parsed.agent_run_id,
-    // Bridge-authed (WayFlow) calls have no session user; record the bridge
-    // principal in the audit trail (same sentinel as /api/llm-bridge +
-    // /api/agents/passthrough). Direct callers record their real user id.
-    actorId: actorUserId ?? "wayflow-bridge",
-    eventType: "auditor_suggestions_emitted",
-    payload: JSON.stringify({ suggestions }),
-  });
+  // Build the single review payload the renderer consumes. `patches` is the
+  // per-item { id, fieldPath, op, message } view (value is NOT surfaced — apply
+  // sources value from the snapshot, not the wire).
+  const preview: AuditSkillPreview = {
+    name: generatedPreview.name,
+    description: generatedPreview.description,
+    content: generatedPreview.content,
+    basedOnSkillIds: skillIds,
+    patches: suggestions.map((s) => ({
+      id: s.id,
+      fieldPath: s.fieldPath,
+      op: s.op,
+      message: s.message ?? "",
+    })),
+  };
 
-  return Response.json({ suggestions });
+  // Persist EXACTLY ONE immutable snapshot per run (idempotent on retry;
+  // fail-closed on malformed patches or a differing input digest).
+  try {
+    await writeProposalSnapshot({
+      agentRunId: parsed.agent_run_id,
+      preview,
+      patches: suggestions,
+      inputData: parsed.data,
+      edited: editedSignal,
+    });
+  } catch (error) {
+    if (error instanceof AuditorSnapshotError) {
+      const status = error.code === "malformed_snapshot" ? 400 : 409;
+      return Response.json({ error: error.message, code: error.code }, { status });
+    }
+    throw error;
+  }
+
+  return Response.json({ preview, edited: editedSignal });
 }

@@ -32,9 +32,7 @@ import { ContextSelectorRenderer } from "../context-selector-renderer";
 import { FollowUpCadenceFieldRenderer } from "../follow-up-cadence-renderer";
 import { CampaignRecipientsReviewRenderer } from "../campaign-recipients-review-renderer";
 import { EmailDraftsReviewRenderer } from "../email-drafts-review-renderer";
-import { AiReviewPanelRenderer } from "../ai-review-panel-renderer";
 import { ReviewerAgentOutputRenderer } from "../reviewer-agent-output-renderer";
-import { AuditorReviewRenderer } from "../auditor-review-renderer";
 import { SendConfirmationRenderer } from "../send-confirmation-renderer";
 import { CtaRenderer } from "../cta-renderer";
 import { SchemaFieldRenderer } from "../schema-field-renderer";
@@ -99,7 +97,14 @@ const PARITY_TABLE: ReadonlyArray<
   ["@cinatra-ai/reviewer-agent:followups-output", EmailDraftsReviewRenderer as never, 80],
   ["@cinatra-ai/reviewer-agent:output", ReviewerAgentOutputRenderer as never, 80],
   ["@cinatra/email-reviewer-agent:output", ReviewerAgentOutputRenderer as never, 80],
-  ["@cinatra/email-reviewer-agent:ai-review-panel", AiReviewPanelRenderer as never, 80],
+  // NOTE: the `@cinatra/email-reviewer-agent:ai-review-panel` legacy-scope alias
+  // was DELETED (cinatra#1625 S8/M3, owner action-boundary ruling 2026-07-18) —
+  // a retired-scope binding whose review-check mutations were already inert stubs
+  // (its "Approve review" action did still resume the interrupt). It now resolves
+  // to NO custom entry (asserted below); a stored pre-rename interrupt therefore
+  // shows "no renderer configured" with no Continue and cannot be resumed — an
+  // unresumable dead-end accepted under the owner's backward-compat waiver (NOT
+  // a SchemaFieldRenderer floor).
   ["@cinatra-ai/email-delivery-agent:output", SendConfirmationRenderer as never, 80],
   ["@cinatra-ai/email-delivery-agent:send-confirmation", SendConfirmationRenderer as never, 80],
   ["send-confirmation", SendConfirmationRenderer as never, 80],
@@ -108,7 +113,9 @@ const PARITY_TABLE: ReadonlyArray<
   ["cta", CtaRenderer as never, 90],
   ["@cinatra-ai/agent-builder:schema-field-fallback", SchemaFieldRenderer as never, 1],
   ["@cinatra-ai/agent-builder:grouped-setup-form", GroupedSetupFormRenderer as never, 50],
-  ["@cinatra-ai/auditor-agent:review", AuditorReviewRenderer as never, 80],
+  // NOTE: @cinatra-ai/auditor-agent:review MIGRATED into its extension
+  // (cinatra#1625) — it now resolves to the ExtensionFieldRenderer wrapper at
+  // priority 80, asserted in the migrated-binding it.each below, not here.
   // NOTE: the @cinatra-ai/trigger-agent renderers (:configure / the never-bound
   // :confirm) were RETIRED with the trigger-agent extension (cinatra#1034).
   // Scheduling is now a platform default rendered by the host TriggerScreen
@@ -157,22 +164,25 @@ describe("resolution parity with the retired hand map", () => {
   });
 
   it.each([
-    "@cinatra-ai/list-curator-agent:scrape-schema-review",
-    "@cinatra-ai/list-curator-agent:final-list-review",
-    "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
-    "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
-  ])(
+    ["@cinatra-ai/list-curator-agent:scrape-schema-review", 90],
+    ["@cinatra-ai/list-curator-agent:final-list-review", 90],
+    ["@cinatra-ai/blog-linkedin-publish-agent:draft-review", 90],
+    ["@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", 90],
+    // The auditor-review component relocated into @cinatra-ai/auditor-agent
+    // (cinatra#1625) at its pre-cutover priority 80.
+    ["@cinatra-ai/auditor-agent:review", 80],
+  ] as const)(
     "migrated field-renderer binding %s resolves to the extension wrapper at the pre-cutover priority",
-    (id) => {
-      // The COMPONENT relocated into @cinatra-ai/list-curator-agent (cinatra#1625
-      // S8/M3): the binding is present in the generated component map, so it
-      // registers as the ExtensionFieldRenderer wrapper (which lazy-loads the
-      // extension module and floors on any degrade) — NOT a host KIND component.
-      // The id + priority (90) are unchanged, so stored/in-flight runs still
-      // resolve the SAME binding.
+    (id, priority) => {
+      // The COMPONENT relocated into its claiming extension (cinatra#1625): the
+      // binding is present in the generated component map, so it registers as
+      // the ExtensionFieldRenderer wrapper (which lazy-loads the extension
+      // module and floors on any degrade) — NOT a host KIND component. The id +
+      // priority are unchanged, so stored/in-flight runs still resolve the SAME
+      // binding.
       const entry = resolveWith(id);
       expect(entry, id).toBeTruthy();
-      expect(entry!.priority, id).toBe(90);
+      expect(entry!.priority, id).toBe(priority);
       const resolved = entry!.renderer as ComponentType & { displayName?: string };
       expect(resolved.displayName).toBe(`ExtensionFieldRenderer(${id})`);
     },
@@ -195,6 +205,17 @@ describe("resolution parity with the retired hand map", () => {
 
   it("an unknown namespaced id resolves to NO custom entry (schema-fallback path)", () => {
     expect(resolveWith("@cinatra-ai/unknown-agent:whatever")).toBeNull();
+  });
+
+  it("the DELETED ai-review-panel legacy alias resolves to NO custom entry (unresumable dead-end, not a schema floor)", () => {
+    // cinatra#1625 S8/M3: the retired-scope `ai-review-panel` alias was
+    // deleted (owner action-boundary ruling 2026-07-18). Neither the qualified
+    // legacy id nor the bare unscoped alias resolves to a custom renderer now —
+    // and neither is the `schema-field-fallback` id, so the HITL surface shows
+    // "no renderer configured" (no floor, no Continue). Accepted under the
+    // owner's backward-compat waiver.
+    expect(resolveWith("@cinatra/email-reviewer-agent:ai-review-panel")).toBeNull();
+    expect(resolveWith("ai-review-panel")).toBeNull();
   });
 });
 

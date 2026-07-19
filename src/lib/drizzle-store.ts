@@ -25,6 +25,7 @@ import {
 } from "@/lib/artifact-claim-schema";
 import { publicationOperationLedgerSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
 import { environmentLayerStoreSchemaQueries } from "@/lib/execution/environment-layer-schema";
+import { auditorSnapshotSchemaQueries } from "@/lib/auditor-snapshot-schema";
 import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
@@ -1123,6 +1124,9 @@ END $$` },
     { text: `CREATE INDEX IF NOT EXISTS audit_events_actor_principal_id_idx ON "${schemaName.replaceAll('"', '""')}"."audit_events" (actor_principal_id)` },
     { text: `CREATE INDEX IF NOT EXISTS audit_events_resource_idx ON "${schemaName.replaceAll('"', '""')}"."audit_events" (resource_type, resource_id)` },
     { text: `CREATE INDEX IF NOT EXISTS audit_events_created_at_idx ON "${schemaName.replaceAll('"', '""')}"."audit_events" (created_at DESC)` },
+    // auditor review companion (cinatra#1625): immutable per-run proposal
+    // snapshot + single-use SoD approval receipts. Additive; mirrors core__0058.
+    ...auditorSnapshotSchemaQueries(schemaName),
     // dashboards + dashboard_revisions for @cinatra-ai/dashboards.
     // Idempotent — ALTERs below handle older schemas that lack CHECK constraints + lifecycle columns.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."dashboards" (

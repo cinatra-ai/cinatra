@@ -10,6 +10,8 @@ import {
   transitionRunStatus,
 } from "@cinatra-ai/agents";
 import { resolveContentEditorIdentityForInstance } from "@/lib/content-editor-run-identity";
+import { resolveWidgetActorFromFrame } from "@/lib/widget-actor-frame";
+import { resolveOrgRoleForUser } from "@/lib/auth-session";
 
 // Host-side A2A blocking-dispatch helper shared by the Drupal + WordPress
 // content-editor connectors. The non-SDK runtime edges — `@cinatra-ai/llm`
@@ -149,6 +151,40 @@ async function assertPreCreateAuthorized(
 }
 
 /**
+ * S5-W1 §5 G11 (point-of-use grant re-assert, revocation linearization) for the
+ * per-user override path. Runs the caller-supplied `preCreateAuthorize` when
+ * present (unchanged for EVERY caller — the legacy widget-STREAM route threads
+ * its own re-assert here). When ABSENT, the behavior is contract-preserving:
+ *   • no active MCP widget FRAME → NO-OP (baked-trust / legacy stream-route
+ *     override callers keep their existing "absent hook = allow" semantics);
+ *   • an active MCP widget frame (the S5 /api/assistants/chat path) → a DEFAULT
+ *     re-assert that re-verifies the widget user's LIVE org membership right
+ *     before the carrier `agent_run` insert, so a membership revoked between the
+ *     route's own gate and run creation refuses the dispatch (fail closed, no run
+ *     created) even if the connector never threads its own hook.
+ * `hasWidgetFrame` is the SAME frame signal the atomicity guard read — so the
+ * default fires only for the real MCP-widget turn, never a bad-override server bug.
+ */
+async function assertWidgetPreCreateAuthorized(
+  input: ContentEditorDispatchInput,
+  hasWidgetFrame: boolean,
+): Promise<void> {
+  if (input.preCreateAuthorize) {
+    await assertPreCreateAuthorized(input);
+    return;
+  }
+  const override = input.actorOverride;
+  if (!override || !hasWidgetFrame) return; // no frame → preserve absent-hook no-op.
+  let member = false;
+  try {
+    member = (await resolveOrgRoleForUser(override.orgId, override.runBy)) !== undefined;
+  } catch {
+    member = false;
+  }
+  if (!member) throw new ContentEditorDispatchRefusedError();
+}
+
+/**
  * Resolve the A2A message text. When we can establish a production OBO
  * identity + template, this also creates the carrier `agent_run` and injects
  * `cinatra_run_id` into the (object) payload. Returns the text plus the
@@ -157,6 +193,47 @@ async function assertPreCreateAuthorized(
 async function prepareDispatch(
   input: ContentEditorDispatchInput,
 ): Promise<{ text: string; runId: string | null }> {
+  // S5-W1 §5 ATOMICITY GUARD (host-side, fail-loud). When the active MCP frame
+  // carries a verified `public_site_widget` delegation, the content-editor
+  // dispatch MUST run AS THE END USER — i.e. the connector MUST have resolved
+  // the trusted widget actor and passed a matching `actorOverride`. If a widget
+  // delegation is present but NO override arrived (a connector that shipped the
+  // `public_site_widget` delegation without binding `resolveWidgetActor` — the
+  // exact parity gap the contract forbids), we REFUSE rather than silently fall
+  // through to install/single-tenant identity: a silent downgrade would let a
+  // widget user's edit run under a different (broader) principal, defeating G4/G5.
+  // Fail loud so the gap is caught, never masked. Bound entirely by the host —
+  // it does not depend on any connector correctly binding the resolver.
+  const widgetFrameActor = resolveWidgetActorFromFrame();
+  if (widgetFrameActor) {
+    if (!input.actorOverride) {
+      throw new Error(
+        "[content-editor-dispatch] a public_site_widget delegation is active on the MCP " +
+          "request frame but no actorOverride was supplied (the connector did not bind " +
+          "resolveWidgetActor / reconstruct the pinned override). Refusing to dispatch " +
+          "under install identity — fail closed to avoid a silent per-user OBO parity gap.",
+      );
+    }
+    // The SERVER-VERIFIED frame actor is authoritative: the
+    // connector-reconstructed override MUST match it field-for-field. A mismatch
+    // means a connector substituted a different {runBy, orgId, instanceId} than
+    // the trusted delegation carries — refuse rather than run the carrier under a
+    // caller-chosen identity. (The frame carries no `sourceType`; the override's
+    // fixed `public_site_widget` discriminator is checked structurally elsewhere.)
+    const o = input.actorOverride;
+    if (
+      o.runBy !== widgetFrameActor.runBy ||
+      o.orgId !== widgetFrameActor.orgId ||
+      o.instanceId !== widgetFrameActor.instanceId
+    ) {
+      throw new Error(
+        "[content-editor-dispatch] actorOverride does not match the server-verified " +
+          "public_site_widget frame actor (runBy/orgId/instanceId). Refusing — the trusted " +
+          "delegation frame is authoritative over the connector-supplied override.",
+      );
+    }
+  }
+
   // Normalize payload to an object so we can splice in cinatra_run_id. The
   // drupal connector pre-serializes to a JSON string; parse it back. If the
   // payload is a non-string non-object, or parses to a non-object, we cannot
@@ -231,7 +308,10 @@ async function prepareDispatch(
     // this request and the initiated operation may complete (the ratified
     // revocation-linearization semantics); transactional grant-read/insert
     // serialization is recorded as optional future hardening.
-    await assertPreCreateAuthorized(input);
+    // G11: widget-aware re-assert — the caller hook if supplied, else (only on a
+    // live MCP widget frame) a default live-membership re-check at the
+    // run-creation boundary.
+    await assertWidgetPreCreateAuthorized(input, widgetFrameActor !== null);
     const overrideRunId = `run_${randomUUID()}`;
     const overrideRun = await createAgentRun({
       id: overrideRunId,

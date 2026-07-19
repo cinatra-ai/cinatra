@@ -222,6 +222,7 @@ export {
   buildLlmMcpServerTool,
   buildLlmMcpServerToolForChat,
   buildLlmMcpServerToolForAgentRun,
+  buildLlmMcpServerToolForWidget,
   checkPublicMcpReachability,
 } from "./mcp-access";
 export type {
@@ -229,6 +230,8 @@ export type {
   ChatMcpActorTokenIssuer,
   AgentRunMcpActor,
   AgentRunMcpActorTokenIssuer,
+  WidgetMcpActor,
+  WidgetMcpActorTokenIssuer,
   PublicMcpReachability,
 } from "./mcp-access";
 
@@ -1500,6 +1503,13 @@ export async function orchestrateCancelBatch(
 export async function resolveConfiguredLlmRuntime(input?: {
   preferredProviders?: LlmProvider[];
   openaiConnection?: OpenAIConnectionConfig | null;
+  // Opt-in LAST-RESORT Anthropic eligibility for a per-purpose caller that can
+  // legitimately run on Anthropic (e.g. personal-skill generation). Only takes
+  // effect in the implicit-global branch below, and only AFTER the openai/gemini
+  // precedence — so multi-provider installs keep their existing winner and an
+  // Anthropic-only install resolves instead of returning null. Ignored when an
+  // explicit `preferredProviders` list is supplied (that list is authoritative).
+  allowAnthropicFallback?: boolean;
 }): Promise<ResolvedLlmRuntime | null> {
   let providers: LlmProvider[];
   if (input?.preferredProviders) {
@@ -1517,6 +1527,14 @@ export async function resolveConfiguredLlmRuntime(input?: {
     const dbDefault = readDefaultLlmProviderFromDatabase() as LlmProvider;
     const globalEligible: LlmProvider[] = ["openai", "gemini"];
     providers = [dbDefault, ...globalEligible.filter((p) => p !== dbDefault)];
+    // Per-purpose opt-in ONLY: append Anthropic strictly LAST, after the
+    // openai/gemini precedence, so it is reached only when no OpenAI/Gemini
+    // runtime is available. dbDefault is sanitized to openai/gemini, so this
+    // never duplicates. The default (flag absent) leaves `providers` byte-for-
+    // byte identical, preserving the global Anthropic-exclusion invariant.
+    if (input?.allowAnthropicFallback && !providers.includes("anthropic")) {
+      providers = [...providers, "anthropic"];
+    }
   }
 
   for (const provider of providers) {
