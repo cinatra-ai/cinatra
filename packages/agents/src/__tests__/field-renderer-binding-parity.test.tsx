@@ -32,7 +32,6 @@ import { ContextSelectorRenderer } from "../context-selector-renderer";
 import { FollowUpCadenceFieldRenderer } from "../follow-up-cadence-renderer";
 import { CampaignRecipientsReviewRenderer } from "../campaign-recipients-review-renderer";
 import { EmailDraftsReviewRenderer } from "../email-drafts-review-renderer";
-import { AiReviewPanelRenderer } from "../ai-review-panel-renderer";
 import { ReviewerAgentOutputRenderer } from "../reviewer-agent-output-renderer";
 import { SendConfirmationRenderer } from "../send-confirmation-renderer";
 import { CtaRenderer } from "../cta-renderer";
@@ -98,7 +97,14 @@ const PARITY_TABLE: ReadonlyArray<
   ["@cinatra-ai/reviewer-agent:followups-output", EmailDraftsReviewRenderer as never, 80],
   ["@cinatra-ai/reviewer-agent:output", ReviewerAgentOutputRenderer as never, 80],
   ["@cinatra/email-reviewer-agent:output", ReviewerAgentOutputRenderer as never, 80],
-  ["@cinatra/email-reviewer-agent:ai-review-panel", AiReviewPanelRenderer as never, 80],
+  // NOTE: the `@cinatra/email-reviewer-agent:ai-review-panel` legacy-scope alias
+  // was DELETED (cinatra#1625 S8/M3, owner action-boundary ruling 2026-07-18) —
+  // a retired-scope binding whose review-check mutations were already inert stubs
+  // (its "Approve review" action did still resume the interrupt). It now resolves
+  // to NO custom entry (asserted below); a stored pre-rename interrupt therefore
+  // shows "no renderer configured" with no Continue and cannot be resumed — an
+  // unresumable dead-end accepted under the owner's backward-compat waiver (NOT
+  // a SchemaFieldRenderer floor).
   ["@cinatra-ai/email-delivery-agent:output", SendConfirmationRenderer as never, 80],
   ["@cinatra-ai/email-delivery-agent:send-confirmation", SendConfirmationRenderer as never, 80],
   ["send-confirmation", SendConfirmationRenderer as never, 80],
@@ -199,6 +205,17 @@ describe("resolution parity with the retired hand map", () => {
 
   it("an unknown namespaced id resolves to NO custom entry (schema-fallback path)", () => {
     expect(resolveWith("@cinatra-ai/unknown-agent:whatever")).toBeNull();
+  });
+
+  it("the DELETED ai-review-panel legacy alias resolves to NO custom entry (unresumable dead-end, not a schema floor)", () => {
+    // cinatra#1625 S8/M3: the retired-scope `ai-review-panel` alias was
+    // deleted (owner action-boundary ruling 2026-07-18). Neither the qualified
+    // legacy id nor the bare unscoped alias resolves to a custom renderer now —
+    // and neither is the `schema-field-fallback` id, so the HITL surface shows
+    // "no renderer configured" (no floor, no Continue). Accepted under the
+    // owner's backward-compat waiver.
+    expect(resolveWith("@cinatra/email-reviewer-agent:ai-review-panel")).toBeNull();
+    expect(resolveWith("ai-review-panel")).toBeNull();
   });
 });
 

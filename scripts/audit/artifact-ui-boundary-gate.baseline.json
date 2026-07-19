@@ -4,20 +4,6 @@
   "ruleId": "artifact-ui/presentation-identity-keying",
   "entries": [
     {
-      "fingerprint": "bf083bfb2b025810",
-      "ruleId": "artifact-ui/presentation-identity-keying",
-      "path": "packages/agents/src/ai-review-panel-renderer.tsx",
-      "canonicalIdentity": "@cinatra/email-reviewer-agent:ai-review-panel",
-      "identityClass": "object-type",
-      "keyingKind": "array-element",
-      "occurrence": 0,
-      "line": 24,
-      "disposition": "MIGRATE",
-      "owner": "artifact-ui S8 (M3)",
-      "wave": "S8",
-      "rationale": "HITL field-renderer binding keyed by a concrete x-renderer binding id; the component relocates into the claimant extension in M3 (S8 #1625)."
-    },
-    {
       "fingerprint": "9fb1dfebd6b21a22",
       "ruleId": "artifact-ui/presentation-identity-keying",
       "path": "packages/chat/src/renderable-views/registry.tsx",
