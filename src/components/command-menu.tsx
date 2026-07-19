@@ -29,8 +29,10 @@ export const navGroups = [
       { title: "New agent", href: "/chat?mode=create-agent" },
       { title: "Skills", href: "/skills" },
       { title: "Connectors", href: "/connectors" },
-      { title: "Artifacts — Undo", href: "/artifacts?mode=undo" },
-      { title: "Artifacts — Merge proposals", href: "/artifacts?mode=merge" },
+      { title: "Artifacts — Restore objects", href: "/configuration/artifacts?tab=restore" },
+      // Artifact change review lives on the shared artifact-review surface
+      // (cinatra#1795); pending reviews are federated in Notifications.
+      { title: "Artifacts — Change review", href: "/notifications" },
     ],
   },
   {

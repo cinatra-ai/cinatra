@@ -68,7 +68,7 @@ export function ObjectHistoryPanel(props: ObjectHistoryPanelProps) {
                   by {event.actorKind ?? "system"}
                   {event.actorId ? ` (${event.actorId.slice(0, 8)})` : ""} ·{" "}
                   <Link
-                    href="/artifacts?mode=undo"
+                    href="/configuration/artifacts?tab=restore"
                     className="text-primary hover:underline"
                   >
                     change-set
