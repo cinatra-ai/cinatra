@@ -16,6 +16,7 @@ import {
 import {
   parseArtifactObjectTypeClaims,
   validateObjectTypeClaimSchemaSources,
+  claimedTypeRegisteringPackage,
 } from "../claims";
 import { registerArtifactExtensions } from "../integration/register-artifact-extensions";
 import { objectTypeRegistry } from "../registry";
@@ -53,18 +54,37 @@ describe("@cinatra-ai/default-artifact — built-in floor type", () => {
     }
   });
 
-  it("registers through the semantic bridge from a fixture dir", () => {
+  it("registers through the semantic bridge from a fixture dir — never a derived umbrella (entry 95, #1785)", () => {
     objectTypeRegistry._clearForTests();
     const root = mkdtempSync(join(tmpdir(), "default-art-"));
     const dir = join(root, "default-artifact");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "package.json"), JSON.stringify(pkgJson));
-    expect(registerArtifactExtensions(root)).toBe(1);
-    const entry = objectTypeRegistry
+
+    // Umbrella/derived-type minting is RETIRED: the bridge registers only the
+    // SELF-OWNED declared types. The floor's sole claim is the CROSS-namespace
+    // default over the host `@cinatra-ai/objects:object`, which the owning
+    // package (`@cinatra-ai/objects`) registers — the floor pack owns nothing, so
+    // it registers nothing and NEVER mints `@cinatra-ai/default-artifact:artifact`.
+    const declaredClaims = (pkgJson.cinatra.artifact.objectTypes ?? []) as {
+      type: string;
+    }[];
+    const selfOwned = declaredClaims
+      .map((c) => c.type)
+      .filter((t) => claimedTypeRegisteringPackage(t) === "@cinatra-ai/default-artifact");
+
+    registerArtifactExtensions(root);
+
+    // No derived umbrella is ever minted.
+    expect(
+      objectTypeRegistry.resolve("@cinatra-ai/default-artifact:artifact"),
+    ).toBeNull();
+    // Exactly the self-owned declared types (if any) are surfaced.
+    const registered = objectTypeRegistry
       .listArtifacts()
-      .find((d) => d.type === "@cinatra-ai/default-artifact:artifact");
-    expect(entry).toBeDefined();
-    expect(entry?.isArtifact?.accepts.dashboard).toBe(true);
+      .map((d) => d.type)
+      .filter((t) => t.startsWith("@cinatra-ai/default-artifact:"));
+    expect(registered.sort()).toEqual([...selfOwned].sort());
     rmSync(root, { recursive: true, force: true });
   });
 });

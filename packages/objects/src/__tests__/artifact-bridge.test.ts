@@ -14,16 +14,19 @@ import type { EffectiveIdentity } from "../effective-identity";
 import type { ObjectTypeDefinition, SemanticArtifactManifest } from "../types";
 import { objectTypeRegistry } from "../registry";
 import { semanticRendererRegistry } from "../artifact-renderer-registry";
+import { claimedTypeRegisteringPackage } from "../claims";
 import {
   registerArtifactExtensions,
   registerParsedArtifactManifest,
-  resolveArtifactManifestMode,
 } from "../integration/register-artifact-extensions";
 
-// Proves the pluggability guarantee: a brand-new artifact type (a NOVEL
-// artifactType string that appears NOWHERE in core code) is discovered and
-// surfaced via `listArtifacts()` purely by dropping a `kind:"artifact"`
-// extension dir — zero core per-type branches.
+// EXPLICIT-DECLARED-TYPES model (ratified manifest rule, entry 95, epic
+// cinatra#1785): a pack declares the object types it owns in `objectTypes`, and
+// the bridge registers EXACTLY those — surfaced in `listArtifacts()` under their
+// exact objectTypeId. There is NO `${pkg}:artifact` umbrella and NO
+// auto-derivation; the `mode` discriminator is gone. A NOVEL artifact type is
+// discovered purely by dropping a `kind:"artifact"` extension dir that declares
+// the type — zero core per-type branches.
 
 function writeExt(
   root: string,
@@ -49,7 +52,7 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
     objectTypeRegistry._clearForTests();
   });
 
-  it("registers a NOVEL artifact type discovered purely from the extension dir", () => {
+  it("registers a NOVEL declared artifact type discovered purely from the extension dir", () => {
     writeExt(root, "fixture-thing-artifact", {
       name: "@cinatra-ai/fixture-thing-artifact",
       version: "0.0.1",
@@ -59,6 +62,13 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
           accepts: { file: { mimeTypes: ["text/markdown"] } },
           satisfies: ["@cinatra-ai/marketing-icp-artifact"],
           skills: { matchers: ["@cinatra-ai/fixture-matcher:skill"] },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/fixture-thing-artifact:thing",
+              claim: "dedicated",
+              schema: { type: "object" },
+            },
+          ],
         },
       },
     });
@@ -68,17 +78,23 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
 
     const artifacts = objectTypeRegistry.listArtifacts();
     const entry = artifacts.find(
-      (d) => d.type === "@cinatra-ai/fixture-thing-artifact:artifact",
+      (d) => d.type === "@cinatra-ai/fixture-thing-artifact:thing",
     );
     expect(entry).toBeDefined();
-    expect(entry?.type).toBe("@cinatra-ai/fixture-thing-artifact:artifact");
+    expect(entry?.type).toBe("@cinatra-ai/fixture-thing-artifact:thing");
     expect(entry?.isArtifact?.accepts.file?.mimeTypes).toEqual(["text/markdown"]);
     expect(entry?.isArtifact?.satisfies).toEqual([
       "@cinatra-ai/marketing-icp-artifact",
     ]);
-    // resolve() returns it generically — no per-type branch anywhere.
+    // The package-wide matcher/authoring surface is NOT inherited onto the type.
+    expect(entry?.isArtifact?.skills).toBeUndefined();
+    // NO derived umbrella is ever minted.
     expect(
       objectTypeRegistry.resolve("@cinatra-ai/fixture-thing-artifact:artifact"),
+    ).toBeNull();
+    // resolve() returns the declared type generically — no per-type branch anywhere.
+    expect(
+      objectTypeRegistry.resolve("@cinatra-ai/fixture-thing-artifact:thing"),
     ).not.toBeNull();
   });
 
@@ -92,12 +108,19 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
         dependencies: [],
         artifact: {
           accepts: { file: { mimeTypes: ["text/markdown"] } },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/roled-artifact:summary",
+              claim: "dedicated",
+              schema: { type: "object" },
+            },
+          ],
         },
       },
     });
     expect(registerArtifactExtensions(root)).toBe(1);
     expect(
-      objectTypeRegistry.resolve("@cinatra-ai/roled-artifact:artifact"),
+      objectTypeRegistry.resolve("@cinatra-ai/roled-artifact:summary"),
     ).not.toBeNull();
   });
 
@@ -115,12 +138,19 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
         vendor: { key: "cinatra-ai", name: "Cinatra" },
         artifact: {
           accepts: { file: { mimeTypes: ["text/markdown"] } },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/vendored-artifact:doc",
+              claim: "dedicated",
+              schema: { type: "object" },
+            },
+          ],
         },
       },
     });
     expect(registerArtifactExtensions(root)).toBe(1);
     expect(
-      objectTypeRegistry.resolve("@cinatra-ai/vendored-artifact:artifact"),
+      objectTypeRegistry.resolve("@cinatra-ai/vendored-artifact:doc"),
     ).not.toBeNull();
   });
 
@@ -146,11 +176,55 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
       cinatra: {
         kind: "artifact",
         toolAccess: "all",
-        artifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } },
+        artifact: {
+          accepts: { file: { mimeTypes: ["text/markdown"] } },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/drifted-artifact:thing",
+              claim: "dedicated",
+              schema: { type: "object" },
+            },
+          ],
+        },
       },
     });
     expect(registerArtifactExtensions(root)).toBe(0);
     expect(objectTypeRegistry.listArtifacts()).toHaveLength(0);
+  });
+
+  // Entry 95 / epic #1785: a type-less manifest mints NOTHING — umbrella
+  // derivation is RETIRED. It hits the deprecation/no-op path (loud warn), NEVER
+  // an umbrella. (A pure-representation renderer with no owned type binds via the
+  // representation provider, not this object-type bridge.)
+  it("registers NOTHING for a manifest that declares no objectTypes (no umbrella, deprecation path)", () => {
+    writeExt(root, "typeless-artifact", {
+      name: "@cinatra-ai/typeless-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        artifact: { accepts: { file: { mimeTypes: ["audio/mpeg"] } } },
+      },
+    });
+    const warns: string[] = [];
+    const orig = console.warn;
+    console.warn = (...a: unknown[]) => {
+      warns.push(a.map(String).join(" "));
+    };
+    let count: number;
+    try {
+      count = registerArtifactExtensions(root);
+    } finally {
+      console.warn = orig;
+    }
+    expect(count).toBe(0);
+    expect(objectTypeRegistry.listArtifacts()).toHaveLength(0);
+    // No derived umbrella minted.
+    expect(
+      objectTypeRegistry.resolve("@cinatra-ai/typeless-artifact:artifact"),
+    ).toBeNull();
+    expect(
+      warns.some((w) => w.includes("declares no objectTypes") && w.includes("retired")),
+    ).toBe(true);
   });
 
   it("ignores non-artifact dirs and is idempotent (replace-by-id)", () => {
@@ -164,7 +238,16 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
       version: "0.0.1",
       cinatra: {
         kind: "artifact",
-        artifact: { accepts: { file: { mimeTypes: ["application/pdf"] } } },
+        artifact: {
+          accepts: { file: { mimeTypes: ["application/pdf"] } },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/real-artifact:pdf",
+              claim: "dedicated",
+              schema: { type: "object" },
+            },
+          ],
+        },
       },
     });
     expect(registerArtifactExtensions(root)).toBe(1);
@@ -176,7 +259,7 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
   // cinatra#1425 AC-5 — MULTI-VENDOR registration. A THIRD-VENDOR
   // kind:"artifact" package under `<root>/<vendor>/*-artifact` registers
   // through the widened path exactly like a first-party one, keeping its
-  // vendor scope in the type id. (The host fix: register-all-object-types
+  // vendor scope in the declared type id. (The host fix: register-all-object-types
   // now passes the extensions ROOT, not the first-party vendor dir, so the
   // bridge's vendor-dir scan actually sees other vendors.)
   it("registers a THIRD-VENDOR kind:'artifact' fixture from its vendor dir, id keeps the vendor scope (AC-5)", () => {
@@ -187,6 +270,13 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
         kind: "artifact",
         artifact: {
           accepts: { file: { mimeTypes: ["text/markdown"] } },
+          objectTypes: [
+            {
+              type: "@acme-vendor/competitor-teardown-artifact:teardown",
+              claim: "dedicated",
+              schema: { type: "object" },
+            },
+          ],
         },
       },
     });
@@ -196,48 +286,58 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
       version: "0.0.1",
       cinatra: {
         kind: "artifact",
-        artifact: { accepts: { file: { mimeTypes: ["application/pdf"] } } },
+        artifact: {
+          accepts: { file: { mimeTypes: ["application/pdf"] } },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/first-party-artifact:doc",
+              claim: "dedicated",
+              schema: { type: "object" },
+            },
+          ],
+        },
       },
     });
     expect(registerArtifactExtensions(root)).toBe(2);
     const thirdVendor = objectTypeRegistry.resolve(
-      "@acme-vendor/competitor-teardown-artifact:artifact",
+      "@acme-vendor/competitor-teardown-artifact:teardown",
     );
     expect(thirdVendor).not.toBeNull();
     expect(thirdVendor?.isArtifact?.accepts.file?.mimeTypes).toEqual(["text/markdown"]);
     expect(
-      objectTypeRegistry.resolve("@cinatra-ai/first-party-artifact:artifact"),
+      objectTypeRegistry.resolve("@cinatra-ai/first-party-artifact:doc"),
     ).not.toBeNull();
     // Provenance carries the third-vendor package name (teardown symmetry).
     expect(
       objectTypeRegistry.getTypesForPackage("@acme-vendor/competitor-teardown-artifact"),
-    ).toEqual(["@acme-vendor/competitor-teardown-artifact:artifact"]);
+    ).toEqual(["@acme-vendor/competitor-teardown-artifact:teardown"]);
   });
 });
 
 // ---------------------------------------------------------------------------
 // LIVE-TREE anti-vacuity (cinatra#151 Stage 6): every kind:"artifact"
-// extension PRESENT in this tree's materialized universe must register
-// through the bridge — a skip means the allowlist or schema drifted from
-// the real manifests (exactly the silent class that left listArtifacts()
-// empty before Stage 6). Presence-aware: in the required-only universe the
-// only artifact extension is the floor type, which still keeps the
-// assertion non-vacuous; when the extensions tree is absent entirely (bare
-// package checkout) the suite skips loudly instead of asserting vacuously.
+// extension PRESENT in this tree's materialized universe must register its
+// self-owned declared object types through the bridge — a missing self-owned
+// type means the allowlist or schema drifted from the real manifests. A pack
+// that declares no owned types legitimately registers nothing (entry 95 / epic
+// #1785: umbrella derivation is retired). When the extensions tree is absent
+// entirely (bare package checkout) the suite skips loudly instead of asserting
+// vacuously.
 // ---------------------------------------------------------------------------
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 
 describe("registerArtifactExtensions — live extensions tree", () => {
   const EXT_ROOT = path.resolve(__dirname, "..", "..", "..", "..", "extensions");
 
-  it("registers EVERY present kind:'artifact' extension (zero skips)", () => {
+  it("registers every present pack's self-owned declared object types (zero drift)", () => {
     if (!existsSync(EXT_ROOT)) {
       console.warn(
         "[artifact-bridge.test] extensions/ tree absent — live-tree registration pin skipped",
       );
       return;
     }
-    const expected: string[] = [];
+    // The self-owned declared types the bridge is REQUIRED to surface.
+    const expectedTypes: string[] = [];
     for (const scope of readdirSync(EXT_ROOT, { withFileTypes: true })) {
       if (!scope.isDirectory()) continue;
       for (const dir of readdirSync(path.join(EXT_ROOT, scope.name), { withFileTypes: true })) {
@@ -246,8 +346,14 @@ describe("registerArtifactExtensions — live extensions tree", () => {
         if (!existsSync(pkgPath)) continue;
         try {
           const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-          if (pkg?.cinatra?.kind === "artifact" && typeof pkg.name === "string") {
-            expected.push(pkg.name);
+          if (pkg?.cinatra?.kind !== "artifact" || typeof pkg.name !== "string") continue;
+          const claims = pkg?.cinatra?.artifact?.objectTypes;
+          if (!Array.isArray(claims)) continue;
+          for (const claim of claims) {
+            const type = claim?.type;
+            if (typeof type === "string" && claimedTypeRegisteringPackage(type) === pkg.name) {
+              expectedTypes.push(type);
+            }
           }
         } catch {
           /* not a parseable package dir */
@@ -255,39 +361,34 @@ describe("registerArtifactExtensions — live extensions tree", () => {
       }
     }
     objectTypeRegistry._clearForTests();
-    const warns: string[] = [];
-    const orig = console.warn;
-    console.warn = (...a: unknown[]) => {
-      warns.push(a.map(String).join(" "));
-    };
-    let count: number;
+    let threw: unknown = null;
     try {
-      count = registerArtifactExtensions(EXT_ROOT);
-    } finally {
-      console.warn = orig;
+      registerArtifactExtensions(EXT_ROOT);
+    } catch (e) {
+      threw = e;
     }
-    const bridgeWarns = warns.filter((w) => w.includes("[artifacts:bridge]"));
-    expect(bridgeWarns, bridgeWarns.join("\n")).toEqual([]);
-    expect(count).toBe(expected.length);
+    expect(threw, String(threw)).toBeNull();
     const registered = new Set(objectTypeRegistry.listArtifacts().map((d) => d.type));
-    for (const name of expected) {
-      expect(registered.has(`${name}:artifact`), `${name} did not register`).toBe(true);
+    for (const type of expectedTypes) {
+      expect(registered.has(type), `${type} did not register`).toBe(true);
+    }
+    // No derived umbrella (`${pkg}:artifact`) is EVER minted for any present pack.
+    for (const t of registered) {
+      expect(t.endsWith(":artifact"), `umbrella-shaped id leaked: ${t}`).toBe(false);
     }
     objectTypeRegistry._clearForTests();
   });
 });
 
-// cinatra#1429 — per-claim JSON-Schema → Zod validator registration. The
-// activation gate (objects_save / objects_update) resolves a claimed type's
-// validator from objectTypeRegistry; before this it only found the permissive
-// `${pkg}:artifact` umbrella, so enforcement was INERT. The bridge now compiles
-// each objectTypes claim's inline JSON Schema into a real validator registered
-// under the CLAIMED type id — resolvable + enforcing, but validation-only (NOT
-// added to listArtifacts, which stays one-generic-type-per-package).
-describe("registerArtifactExtensions — per-claim validators (cinatra#1429)", () => {
+// cinatra#1429 — per-type JSON-Schema → Zod validator registration. The
+// activation gate (objects_save / objects_update) resolves a declared type's
+// validator from objectTypeRegistry. The bridge compiles each objectTypes type's
+// inline JSON Schema into a real validator registered under the declared type id
+// — resolvable, enforcing, AND surfaced in listArtifacts() (no umbrella).
+describe("registerArtifactExtensions — per-type validators (cinatra#1429)", () => {
   let root: string;
   beforeEach(() => {
-    root = mkdtempSync(path.join(tmpdir(), "artifact-claim-validator-"));
+    root = mkdtempSync(path.join(tmpdir(), "artifact-type-validator-"));
     objectTypeRegistry._clearForTests();
   });
   afterEach(() => {
@@ -295,7 +396,7 @@ describe("registerArtifactExtensions — per-claim validators (cinatra#1429)", (
     objectTypeRegistry._clearForTests();
   });
 
-  it("compiles an objectTypes inline JSON Schema into an enforcing validator under the claimed type id", () => {
+  it("compiles an objectTypes inline JSON Schema into an enforcing validator under the declared type id", () => {
     writeExt(root, "invoice-artifact", {
       name: "@cinatra-ai/invoice-artifact",
       version: "0.0.1",
@@ -328,13 +429,12 @@ describe("registerArtifactExtensions — per-claim validators (cinatra#1429)", (
     expect(def!.schema.safeParse({ amount: "not-a-number" }).success).toBe(false);
     expect(def!.schema.safeParse({}).success).toBe(false); // missing required 'amount'
 
-    // Validation-only: the per-claim type is NOT surfaced as an artifact — the
-    // serving/library surface stays one-generic-type-per-package.
+    // The declared type IS surfaced as an artifact; NO umbrella is minted.
     const listed = objectTypeRegistry.listArtifacts().map((d) => d.type);
-    expect(listed).toContain("@cinatra-ai/invoice-artifact:artifact"); // the umbrella
-    expect(listed).not.toContain("@cinatra-ai/invoice-artifact:invoice");
+    expect(listed).toContain("@cinatra-ai/invoice-artifact:invoice");
+    expect(listed).not.toContain("@cinatra-ai/invoice-artifact:artifact");
 
-    // Teardown reaps the per-claim validator via provenance (like the umbrella).
+    // Teardown reaps the declared type via provenance.
     const removed = objectTypeRegistry.removeByPackage("@cinatra-ai/invoice-artifact");
     expect(removed).toContain("@cinatra-ai/invoice-artifact:invoice");
     expect(objectTypeRegistry.resolve("@cinatra-ai/invoice-artifact:invoice")).toBeNull();
@@ -342,8 +442,8 @@ describe("registerArtifactExtensions — per-claim validators (cinatra#1429)", (
 });
 
 // S7/M2 (cinatra#1631): the bridge registers EVERY declared semantic slot —
-// `detail` AND the activated `listRow` — for the umbrella type and each claimed
-// type; `preview` never enters the semantic keyspace.
+// `detail` AND the activated `listRow` — for each declared type (no umbrella);
+// `preview` never enters the semantic keyspace.
 describe("registerArtifactExtensions — semantic slot registration (S7 listRow)", () => {
   let root: string;
 
@@ -366,7 +466,7 @@ describe("registerArtifactExtensions — semantic slot registration (S7 listRow)
     semanticRendererRegistry._clearForTests();
   });
 
-  it("registers detail + listRow renderers per declared slot (preview stays representation-only)", () => {
+  it("registers detail + listRow renderers per declared slot for the declared type (preview stays representation-only)", () => {
     writeExt(root, "rowful-artifact", {
       name: "@cinatra-ai/rowful-artifact",
       version: "0.0.1",
@@ -374,6 +474,13 @@ describe("registerArtifactExtensions — semantic slot registration (S7 listRow)
         kind: "artifact",
         artifact: {
           accepts: { file: { mimeTypes: ["application/json"] } },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/rowful-artifact:row",
+              claim: "dedicated",
+              schema: { type: "object" },
+            },
+          ],
           ui: {
             abiVersion: 1,
             sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
@@ -389,15 +496,19 @@ describe("registerArtifactExtensions — semantic slot registration (S7 listRow)
 
     expect(registerArtifactExtensions(root)).toBe(1);
 
-    const umbrella = "@cinatra-ai/rowful-artifact:artifact";
-    expect(semanticRendererRegistry.resolve(umbrella, rowWinner)).toMatchObject({
+    const declared = "@cinatra-ai/rowful-artifact:row";
+    expect(semanticRendererRegistry.resolve(declared, rowWinner)).toMatchObject({
       slot: "detail",
       generatedKey: "@cinatra-ai/rowful-artifact::detail",
     });
-    expect(semanticRendererRegistry.resolve(umbrella, rowWinner, "listRow")).toMatchObject({
+    expect(semanticRendererRegistry.resolve(declared, rowWinner, "listRow")).toMatchObject({
       slot: "listRow",
       generatedKey: "@cinatra-ai/rowful-artifact::listRow",
     });
+    // No umbrella exists → no umbrella renderer.
+    expect(
+      semanticRendererRegistry.resolve("@cinatra-ai/rowful-artifact:artifact", rowWinner),
+    ).toBeNull();
     // `preview` is representation-only — never a semantic descriptor.
     const snapshot = semanticRendererRegistry._snapshot();
     expect(snapshot.every((d) => d.slot === "detail" || d.slot === "listRow")).toBe(true);
@@ -411,6 +522,13 @@ describe("registerArtifactExtensions — semantic slot registration (S7 listRow)
         kind: "artifact",
         artifact: {
           accepts: { file: { mimeTypes: ["application/json"] } },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/detailonly-artifact:thing",
+              claim: "dedicated",
+              schema: { type: "object" },
+            },
+          ],
           ui: {
             abiVersion: 1,
             sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
@@ -421,7 +539,7 @@ describe("registerArtifactExtensions — semantic slot registration (S7 listRow)
     });
 
     expect(registerArtifactExtensions(root)).toBe(1);
-    const umbrella = "@cinatra-ai/detailonly-artifact:artifact";
+    const declared = "@cinatra-ai/detailonly-artifact:thing";
     const detailWinner: EffectiveIdentity = {
       kind: "extension",
       extension: "@cinatra-ai/detailonly-artifact",
@@ -429,11 +547,11 @@ describe("registerArtifactExtensions — semantic slot registration (S7 listRow)
       selectable: true,
       assertionId: "sa_d",
     };
-    expect(semanticRendererRegistry.resolve(umbrella, detailWinner)).not.toBeNull();
-    expect(semanticRendererRegistry.resolve(umbrella, detailWinner, "listRow")).toBeNull();
+    expect(semanticRendererRegistry.resolve(declared, detailWinner)).not.toBeNull();
+    expect(semanticRendererRegistry.resolve(declared, detailWinner, "listRow")).toBeNull();
   });
 
-  it("a listRow-only manifest registers the row capability for umbrella + claimed types", () => {
+  it("a listRow-only manifest registers the row capability for the declared type", () => {
     writeExt(root, "rowonly-artifact", {
       name: "@cinatra-ai/rowonly-artifact",
       version: "0.0.1",
@@ -466,24 +584,23 @@ describe("registerArtifactExtensions — semantic slot registration (S7 listRow)
       assertionId: "sa_r",
     };
     expect(
-      semanticRendererRegistry.resolve("@cinatra-ai/rowonly-artifact:artifact", w, "listRow"),
-    ).not.toBeNull();
-    expect(
       semanticRendererRegistry.resolve("@cinatra-ai/rowonly-artifact:thing", w, "listRow"),
     ).not.toBeNull();
-    expect(semanticRendererRegistry.resolve("@cinatra-ai/rowonly-artifact:artifact", w)).toBeNull();
+    // No umbrella exists → no umbrella renderer.
+    expect(
+      semanticRendererRegistry.resolve("@cinatra-ai/rowonly-artifact:artifact", w, "listRow"),
+    ).toBeNull();
+    expect(semanticRendererRegistry.resolve("@cinatra-ai/rowonly-artifact:thing", w)).toBeNull();
   });
 });
 
-// cinatra#1452 (epic #1448) — CLAIM-ONLY manifest mode + the exact objectTypeId
-// registry substrate. A claim-only pack mints NO generic `${pkg}:artifact`
-// umbrella; each objectTypes claim is registered as its own first-class artifact
-// type, surfaced under its exact objectTypeId with NO package-wide
-// matcher/authoring inheritance. Exercised through the exported mode-dispatch
-// seam `registerParsedArtifactManifest` because the `mode` manifest FIELD (its
-// schema/type/kind-gate) is owned by the sibling substrate lanes (#1449 / #1453)
-// and cannot yet flow through the fs/parse fixture path.
-describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1452)", () => {
+// entry 95 / epic #1785 — the EXPLICIT-DECLARED-TYPES registration substrate. A
+// pack mints NO generic `${pkg}:artifact` umbrella; each declared objectTypes
+// type it OWNS is registered as its own first-class artifact type, surfaced
+// under its exact objectTypeId with NO package-wide matcher/authoring
+// inheritance. Exercised through the exported registration seam
+// `registerParsedArtifactManifest`.
+describe("registerParsedArtifactManifest — explicit declared types (entry 95, cinatra#1785)", () => {
   beforeEach(() => {
     objectTypeRegistry._clearForTests();
   });
@@ -491,12 +608,9 @@ describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1
     objectTypeRegistry._clearForTests();
   });
 
-  it("mints NO umbrella and registers each claim as its own surfaced artifact type", () => {
+  it("mints NO umbrella and registers each declared type as its own surfaced artifact type", () => {
     const registered = registerParsedArtifactManifest(
       {
-        // `mode` is the ratified claim-only discriminator; its schema/type lands
-        // in #1449/#1453, so cast until the manifest type carries it.
-        mode: "claim-only",
         accepts: { file: { mimeTypes: ["text/markdown"] } },
         // Package-wide matcher/authoring surface that MUST NOT be inherited.
         skills: { matchers: ["@cinatra-ai/pkg-matcher:skill"] },
@@ -533,12 +647,12 @@ describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1
     const listed = objectTypeRegistry.listArtifacts().map((d) => d.type);
     expect(listed).not.toContain("@cinatra-ai/linkedin-artifacts:artifact");
 
-    // AC: each claim IS surfaced as an artifact under its exact objectTypeId.
+    // AC: each declared type IS surfaced as an artifact under its exact objectTypeId.
     expect(listed).toContain("@cinatra-ai/linkedin-artifacts:post-draft");
     expect(listed).toContain("@cinatra-ai/linkedin-artifacts:org-post-draft");
     expect(listed).toHaveLength(2);
 
-    // The per-claim type ENFORCES its inline schema (activation gate is live).
+    // The per-type validator ENFORCES its inline schema (activation gate is live).
     const postDraft = objectTypeRegistry.resolve(
       "@cinatra-ai/linkedin-artifacts:post-draft",
     );
@@ -546,9 +660,9 @@ describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1
     expect(postDraft!.schema.safeParse({ text: 5 }).success).toBe(false);
     expect(postDraft!.schema.safeParse({}).success).toBe(false); // required 'text'
 
-    // AC: NO package-wide matcher/authoring inheritance — the per-claim descriptor
+    // AC: NO package-wide matcher/authoring inheritance — the per-type descriptor
     // carries representation forms but NOT the package skills / threshold /
-    // templates / nested claims.
+    // templates / nested types.
     expect(postDraft!.isArtifact).toBeDefined();
     expect(postDraft!.isArtifact!.accepts.file?.mimeTypes).toEqual(["text/markdown"]);
     expect(postDraft!.isArtifact!.skills).toBeUndefined();
@@ -556,7 +670,7 @@ describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1
     expect(postDraft!.isArtifact!.templates).toBeUndefined();
     expect(postDraft!.isArtifact!.objectTypes).toBeUndefined();
 
-    // Provenance reaps every claim-only type on teardown (like the umbrella).
+    // Provenance reaps every declared type on teardown.
     const removed = objectTypeRegistry.removeByPackage(
       "@cinatra-ai/linkedin-artifacts",
     );
@@ -567,10 +681,9 @@ describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1
     ).toBeNull();
   });
 
-  it("resolves the claim-only type by its EXACT objectTypeId (discriminator substrate)", () => {
+  it("resolves the declared type by its EXACT objectTypeId (discriminator substrate)", () => {
     registerParsedArtifactManifest(
       {
-        mode: "claim-only",
         accepts: { file: { mimeTypes: ["application/json"] } },
         objectTypes: [
           {
@@ -591,11 +704,10 @@ describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1
     expect(objectTypeRegistry.resolve("@cinatra-ai/x-artifacts:artifact")).toBeNull();
   });
 
-  it("registers per-claim semantic renderers (never an umbrella renderer)", () => {
+  it("registers per-type semantic renderers (never an umbrella renderer)", () => {
     semanticRendererRegistry._clearForTests();
     registerParsedArtifactManifest(
       {
-        mode: "claim-only",
         accepts: { file: { mimeTypes: ["application/json"] } },
         objectTypes: [
           {
@@ -629,15 +741,14 @@ describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1
     semanticRendererRegistry._clearForTests();
   });
 
-  it("surfaces only self-namespaced claims; skips cross-namespace claims (WITH or WITHOUT a schema)", () => {
+  it("surfaces only self-namespaced types; skips cross-namespace claims (WITH or WITHOUT a schema)", () => {
     // Ownership is by namespace, never by inline schema (epic #1448/#1424: exactly
     // one runtime registrar per type; the claimant schema is activation evidence,
-    // not a second registrar). A claim-only pack must never shadow another
-    // package's registrant — that would let this pack's removeByPackage delete the
-    // real owner's type via the replace-by-id registry.
+    // not a second registrar). A pack must never shadow another package's
+    // registrant — that would let this pack's removeByPackage delete the real
+    // owner's type via the replace-by-id registry.
     const ok = registerParsedArtifactManifest(
       {
-        mode: "claim-only",
         accepts: { file: { mimeTypes: ["text/markdown"] } },
         objectTypes: [
           // self-owned → registered as an artifact.
@@ -670,8 +781,33 @@ describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1
     ]);
   });
 
-  it("reconciles a mode change: hybrid -> claim-only drops the stale umbrella catch-all", () => {
-    // First register the package as HYBRID (umbrella minted + validator claim).
+  it("reconciles a declared-type-set change: a dropped type is removed, no umbrella ever appears", () => {
+    // First register the package declaring TWO owned types.
+    registerParsedArtifactManifest(
+      {
+        accepts: { file: { mimeTypes: ["application/json"] } },
+        objectTypes: [
+          {
+            type: "@cinatra-ai/linkedin-artifacts:post-draft",
+            claim: "dedicated",
+            schema: { type: "object" },
+          },
+          {
+            type: "@cinatra-ai/linkedin-artifacts:org-post-draft",
+            claim: "dedicated",
+            schema: { type: "object" },
+          },
+        ],
+      } as SemanticArtifactManifest,
+      "@cinatra-ai/linkedin-artifacts",
+    );
+    expect(objectTypeRegistry.listArtifacts().map((d) => d.type).sort()).toEqual([
+      "@cinatra-ai/linkedin-artifacts:org-post-draft",
+      "@cinatra-ai/linkedin-artifacts:post-draft",
+    ]);
+
+    // Re-register the SAME package now declaring only ONE type. The dropped id
+    // must be reconciled away; no `${pkg}:artifact` umbrella ever appears.
     registerParsedArtifactManifest(
       {
         accepts: { file: { mimeTypes: ["application/json"] } },
@@ -687,33 +823,19 @@ describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1
     );
     expect(
       objectTypeRegistry.resolve("@cinatra-ai/linkedin-artifacts:artifact"),
-    ).not.toBeNull();
-
-    // Re-register the SAME package as CLAIM-ONLY (its manifest changed mode). The
-    // forbidden `${pkg}:artifact` umbrella must not survive the transition.
-    registerParsedArtifactManifest(
-      {
-        mode: "claim-only",
-        accepts: { file: { mimeTypes: ["application/json"] } },
-        objectTypes: [
-          {
-            type: "@cinatra-ai/linkedin-artifacts:post-draft",
-            claim: "dedicated",
-            schema: { type: "object" },
-          },
-        ],
-      } as unknown as SemanticArtifactManifest,
-      "@cinatra-ai/linkedin-artifacts",
-    );
+    ).toBeNull();
     expect(
-      objectTypeRegistry.resolve("@cinatra-ai/linkedin-artifacts:artifact"),
+      objectTypeRegistry.resolve("@cinatra-ai/linkedin-artifacts:org-post-draft"),
     ).toBeNull();
     expect(objectTypeRegistry.listArtifacts().map((d) => d.type)).toEqual([
       "@cinatra-ai/linkedin-artifacts:post-draft",
     ]);
   });
 
-  it("skips a claim-only manifest that ships no objectTypes claims", () => {
+  // entry 95 / epic #1785 — a type-less manifest hits the DEPRECATION path: it
+  // mints NO type and NEVER an umbrella. This is the "legacy manifest, if any
+  // pack is still blocked" resolution outcome.
+  it("mints NO umbrella for a type-less manifest — deprecation path, never a catch-all", () => {
     const warns: string[] = [];
     const orig = console.warn;
     console.warn = (...a: unknown[]) => {
@@ -722,84 +844,23 @@ describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1
     let ok: boolean;
     try {
       ok = registerParsedArtifactManifest(
-        {
-          mode: "claim-only",
-          accepts: { file: { mimeTypes: ["text/markdown"] } },
-        } as unknown as SemanticArtifactManifest,
-        "@cinatra-ai/empty-artifacts",
+        { accepts: { file: { mimeTypes: ["text/markdown"] } } } as SemanticArtifactManifest,
+        "@cinatra-ai/classic-artifact",
       );
     } finally {
       console.warn = orig;
     }
     expect(ok).toBe(false);
+    expect(objectTypeRegistry.resolve("@cinatra-ai/classic-artifact:artifact")).toBeNull();
     expect(objectTypeRegistry.listArtifacts()).toHaveLength(0);
     expect(
-      warns.some((w) => w.includes("claim-only mode but ships no objectTypes")),
+      warns.some((w) => w.includes("declares no objectTypes") && w.includes("retired")),
     ).toBe(true);
-  });
-
-  // PARITY (AC: descriptor-only / hybrid extensions unaffected). With no explicit
-  // `mode` — the state of EVERY manifest today, since the parser strips an unknown
-  // field — the umbrella is still minted, byte-for-byte today's behavior.
-  it("descriptor-only (no mode, no claims) still mints the umbrella", () => {
-    expect(resolveArtifactManifestMode({
-      accepts: { file: { mimeTypes: ["text/markdown"] } },
-    } as SemanticArtifactManifest)).toBe("descriptor-only");
-    expect(
-      registerParsedArtifactManifest(
-        { accepts: { file: { mimeTypes: ["text/markdown"] } } } as SemanticArtifactManifest,
-        "@cinatra-ai/classic-artifact",
-      ),
-    ).toBe(true);
-    expect(
-      objectTypeRegistry.resolve("@cinatra-ai/classic-artifact:artifact"),
-    ).not.toBeNull();
-    expect(objectTypeRegistry.listArtifacts().map((d) => d.type)).toContain(
-      "@cinatra-ai/classic-artifact:artifact",
-    );
-  });
-
-  it("hybrid (no mode, WITH claims) mints the umbrella + a validator-only claim type", () => {
-    expect(
-      resolveArtifactManifestMode({
-        accepts: { file: { mimeTypes: ["application/json"] } },
-        objectTypes: [
-          { type: "@cinatra-ai/hybrid-artifact:thing", claim: "dedicated" },
-        ],
-      } as SemanticArtifactManifest),
-    ).toBe("hybrid");
-    expect(
-      registerParsedArtifactManifest(
-        {
-          accepts: { file: { mimeTypes: ["application/json"] } },
-          objectTypes: [
-            {
-              type: "@cinatra-ai/hybrid-artifact:thing",
-              claim: "dedicated",
-              schema: {
-                type: "object",
-                required: ["k"],
-                properties: { k: { type: "string" } },
-              },
-            },
-          ],
-        } as SemanticArtifactManifest,
-        "@cinatra-ai/hybrid-artifact",
-      ),
-    ).toBe(true);
-    const listed = objectTypeRegistry.listArtifacts().map((d) => d.type);
-    // umbrella surfaced; the claim is validator-ONLY (resolvable, NOT surfaced).
-    expect(listed).toContain("@cinatra-ai/hybrid-artifact:artifact");
-    expect(listed).not.toContain("@cinatra-ai/hybrid-artifact:thing");
-    const claim = objectTypeRegistry.resolve("@cinatra-ai/hybrid-artifact:thing");
-    expect(claim).not.toBeNull();
-    expect(claim!.schema.safeParse({}).success).toBe(false); // enforces required 'k'
   });
 
   // PERMANENT namespace tombstones (cinatra#1789, epic #1785): the registration
-  // seam rejects a package under a retired dynamic namespace (its derived
-  // umbrella id is tombstoned) and drops a cross-namespace tombstoned claim.
-  it("rejects a package under a retired dynamic namespace (tombstoned umbrella) — nothing registers", () => {
+  // seam rejects a package under a retired dynamic namespace.
+  it("rejects a package under a retired dynamic namespace — nothing registers", () => {
     const warns: string[] = [];
     const orig = console.warn;
     console.warn = (...a: unknown[]) => {
@@ -808,7 +869,12 @@ describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1
     let ok: boolean;
     try {
       ok = registerParsedArtifactManifest(
-        { accepts: { file: { mimeTypes: ["text/markdown"] } } } as SemanticArtifactManifest,
+        {
+          accepts: { file: { mimeTypes: ["text/markdown"] } },
+          objectTypes: [
+            { type: "@dynamic/types:thing", claim: "dedicated", schema: { type: "object" } },
+          ],
+        } as SemanticArtifactManifest,
         "@dynamic/types",
       );
     } finally {
@@ -816,51 +882,41 @@ describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1
     }
     expect(ok).toBe(false);
     expect(objectTypeRegistry.resolve("@dynamic/types:artifact")).toBeNull();
+    expect(objectTypeRegistry.resolve("@dynamic/types:thing")).toBeNull();
     expect(objectTypeRegistry.listArtifacts()).toHaveLength(0);
     expect(warns.some((w) => w.includes("permanently-retired dynamic namespace"))).toBe(true);
   });
 
-  it("drops a cross-namespace tombstoned claim validator in a hybrid manifest (umbrella still mints)", () => {
-    const warns: string[] = [];
-    const orig = console.warn;
-    console.warn = (...a: unknown[]) => {
-      warns.push(a.map(String).join(" "));
-    };
-    try {
-      expect(
-        registerParsedArtifactManifest(
+  it("skips a cross-namespace tombstoned claim (owner-owned) — no umbrella, nothing self-owned registers", () => {
+    const registered = registerParsedArtifactManifest(
+      {
+        accepts: { file: { mimeTypes: ["application/json"] } },
+        objectTypes: [
           {
-            accepts: { file: { mimeTypes: ["application/json"] } },
-            objectTypes: [
-              {
-                type: "@dynamic/types:invoice", // a tombstoned CROSS-namespace claim
-                claim: "dedicated",
-                schema: { type: "object" },
-              },
-            ],
-          } as SemanticArtifactManifest,
-          "@cinatra-ai/normal-artifact",
-        ),
-      ).toBe(true);
-    } finally {
-      console.warn = orig;
-    }
-    // The package's own umbrella still registers...
-    expect(objectTypeRegistry.resolve("@cinatra-ai/normal-artifact:artifact")).not.toBeNull();
-    // ...but the tombstoned claim validator never did.
+            type: "@dynamic/types:invoice", // a tombstoned CROSS-namespace claim
+            claim: "dedicated",
+            schema: { type: "object" },
+          },
+        ],
+      } as SemanticArtifactManifest,
+      "@cinatra-ai/normal-artifact",
+    );
+    // No self-owned type → nothing registered, and NO umbrella is minted.
+    expect(registered).toBe(false);
+    expect(objectTypeRegistry.resolve("@cinatra-ai/normal-artifact:artifact")).toBeNull();
     expect(objectTypeRegistry.resolve("@dynamic/types:invoice")).toBeNull();
-    expect(warns.some((w) => w.includes("permanently-retired dynamic namespace"))).toBe(true);
+    expect(objectTypeRegistry.listArtifacts()).toHaveLength(0);
   });
 });
 
 // ---------------------------------------------------------------------------
-// CROSS-NAMESPACE clobber prevention (epic #1785 bridge fix). A hybrid artifact
-// pack that CLAIMS a type another registrar OWNS (a cross-namespace `objectTypes`
-// claim) must NOT re-register a generic validator-only def over it — that silently
-// clobbered the owner's rich definition and, with the registry conflict guard,
-// would now throw at boot. Empirics: the email-artifacts pack over the host
-// `@cinatra-ai/email:body` (content + identityKey) / `@cinatra-ai/email:sent-email`
-// (idempotencyKey identity), and the default-artifact floor over the host generic
+// CROSS-NAMESPACE clobber prevention (epic #1785). An artifact pack that CLAIMS
+// a type another registrar OWNS (a cross-namespace `objectTypes` claim) must NOT
+// re-register a def over it — that silently clobbered the owner's rich
+// definition and, with the registry conflict guard, would now throw at boot.
+// Empirics: the email-artifacts pack over the host `@cinatra-ai/email:body`
+// (content + identityKey) / `@cinatra-ai/email:sent-email` (idempotencyKey
+// identity), and the default-artifact floor over the host generic
 // `@cinatra-ai/objects:object` (cinatraAgentRunId identityKey).
 // ---------------------------------------------------------------------------
 
@@ -959,13 +1015,13 @@ describe("registerParsedArtifactManifest — cross-namespace claims never clobbe
     objectTypeRegistry._clearForTests();
   });
 
-  it("a hybrid pack claiming host email:body / :sent-email leaves both host definitions intact", () => {
+  it("a pack claiming host email:body / :sent-email leaves both host definitions intact and registers only its self-owned type", () => {
     // Host registers the rich definitions first (register-types.ts boot order).
     objectTypeRegistry.register(hostEmailBodyDef());
     objectTypeRegistry.register(hostSentEmailDef());
 
-    // The email-artifacts hybrid pack CLAIMS those cross-namespace ids (with the
-    // SAME shape the fs manifest carries) PLUS a self-owned claim.
+    // The email-artifacts pack CLAIMS those cross-namespace ids (with the SAME
+    // shape the fs manifest carries) PLUS a self-owned type.
     const registered = registerParsedArtifactManifest(
       {
         accepts: { file: { mimeTypes: ["text/markdown"] } },
@@ -981,7 +1037,7 @@ describe("registerParsedArtifactManifest — cross-namespace claims never clobbe
             schema: { type: "object", additionalProperties: true },
           },
           {
-            // A SELF-owned claim — this one MUST still register a validator.
+            // A SELF-owned type — this one MUST register.
             type: "@cinatra-ai/email-artifacts:local-thing",
             claim: "dedicated",
             schema: {
@@ -995,9 +1051,9 @@ describe("registerParsedArtifactManifest — cross-namespace claims never clobbe
       } as SemanticArtifactManifest,
       "@cinatra-ai/email-artifacts",
     );
-    // No conflict thrown; the pack's own umbrella registered.
+    // The self-owned type registered; NO umbrella was minted.
     expect(registered).toBe(true);
-    expect(objectTypeRegistry.resolve("@cinatra-ai/email-artifacts:artifact")).not.toBeNull();
+    expect(objectTypeRegistry.resolve("@cinatra-ai/email-artifacts:artifact")).toBeNull();
 
     // email:body — host content/identityKey definition PRESERVED (not clobbered
     // to report/no-identityKey).
@@ -1016,7 +1072,7 @@ describe("registerParsedArtifactManifest — cross-namespace claims never clobbe
     expect(sent).not.toBeNull();
     expect(sent!.identityKey!({ idempotencyKey: "idem-42" })).toBe("idem-42");
 
-    // The SELF-owned claim DID register its enforcing validator under the pack.
+    // The SELF-owned type DID register its enforcing validator under the pack.
     const local = objectTypeRegistry.resolve("@cinatra-ai/email-artifacts:local-thing");
     expect(local).not.toBeNull();
     expect(local!.schema.safeParse({ k: "ok" }).success).toBe(true);
@@ -1026,7 +1082,7 @@ describe("registerParsedArtifactManifest — cross-namespace claims never clobbe
     );
   });
 
-  it("the linkedin-artifacts pack claiming host linkedin:post-draft [draftable] leaves the host definition intact (cinatra#1457)", () => {
+  it("the linkedin-artifacts pack claiming host linkedin:post-draft [draftable] leaves the host definition intact (and mints no umbrella) (cinatra#1457)", () => {
     // Host registers the rich draftable member post-draft first (boot order).
     objectTypeRegistry.register(hostLinkedinPostDraftDef());
 
@@ -1053,12 +1109,14 @@ describe("registerParsedArtifactManifest — cross-namespace claims never clobbe
       } as SemanticArtifactManifest,
       "@cinatra-ai/linkedin-artifacts",
     );
-    // No conflict thrown; the pack's own umbrella registered.
-    expect(registered).toBe(true);
-    expect(objectTypeRegistry.resolve("@cinatra-ai/linkedin-artifacts:artifact")).not.toBeNull();
+    // The ONLY declared claim is cross-namespace (registrant @cinatra-ai/linkedin,
+    // not the claiming pack) → nothing self-owned registers, and umbrella/derived
+    // minting is retired (entry 95, epic #1785) → NO `${pkg}:artifact` umbrella.
+    expect(registered).toBe(false);
+    expect(objectTypeRegistry.resolve("@cinatra-ai/linkedin-artifacts:artifact")).toBeNull();
 
-    // linkedin:post-draft — host draftable member definition PRESERVED (not
-    // clobbered to a generic validator-only def).
+    // linkedin:post-draft — host draftable member definition PRESERVED (the pack
+    // never registers a cross-namespace type, so the host def is untouched).
     const draft = objectTypeRegistry.resolve("@cinatra-ai/linkedin:post-draft");
     expect(draft).not.toBeNull();
     expect(draft!.category).toBe("content");
@@ -1074,7 +1132,7 @@ describe("registerParsedArtifactManifest — cross-namespace claims never clobbe
     ).not.toContain("@cinatra-ai/linkedin:post-draft");
   });
 
-  it("the default-artifact floor claim over the host generic object type does not clobber its identityKey", () => {
+  it("the default-artifact floor claim over the host generic object type does not clobber its identityKey (and mints no umbrella)", () => {
     objectTypeRegistry.register(hostGenericObjectDef());
 
     const registered = registerParsedArtifactManifest(
@@ -1090,7 +1148,9 @@ describe("registerParsedArtifactManifest — cross-namespace claims never clobbe
       } as SemanticArtifactManifest,
       "@cinatra-ai/default-artifact",
     );
-    expect(registered).toBe(true);
+    // The only claim is cross-namespace → nothing self-owned registers, no umbrella.
+    expect(registered).toBe(false);
+    expect(objectTypeRegistry.resolve("@cinatra-ai/default-artifact:artifact")).toBeNull();
 
     const generic = objectTypeRegistry.resolve("@cinatra-ai/objects:object");
     expect(generic).not.toBeNull();

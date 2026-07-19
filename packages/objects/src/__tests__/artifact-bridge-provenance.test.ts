@@ -24,13 +24,25 @@ function writeExt(root: string, dir: string, pkg: Record<string, unknown>): void
   writeFileSync(path.join(root, dir, "package.json"), JSON.stringify(pkg, null, 2));
 }
 
+// A pack declares the object type it OWNS explicitly (entry 95, epic #1785):
+// the bridge registers that declared type — there is no derived `${pkg}:artifact`
+// umbrella. The declared type id is `${name}:doc`.
+function declaredTypeId(name: string): string {
+  return `${name}:doc`;
+}
+
 function artifactPkg(name: string): Record<string, unknown> {
   return {
     name,
     version: "0.0.1",
     cinatra: {
       kind: "artifact",
-      artifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } },
+      artifact: {
+        accepts: { file: { mimeTypes: ["text/markdown"] } },
+        objectTypes: [
+          { type: declaredTypeId(name), claim: "dedicated", schema: { type: "object" } },
+        ],
+      },
     },
   };
 }
@@ -51,7 +63,7 @@ describe("artifact-bridge provenance + teardown (cinatra#661)", () => {
     writeExt(root, "fixture-thing-artifact", artifactPkg("@cinatra-ai/fixture-thing-artifact"));
     expect(registerArtifactExtensions(root)).toBe(1);
 
-    const typeId = "@cinatra-ai/fixture-thing-artifact:artifact";
+    const typeId = declaredTypeId("@cinatra-ai/fixture-thing-artifact");
     expect(objectTypeRegistry.resolve(typeId)).not.toBeNull();
     expect(objectTypeRegistry.getTypesForPackage("@cinatra-ai/fixture-thing-artifact")).toEqual([
       typeId,
@@ -98,7 +110,7 @@ describe("artifact-bridge provenance + teardown (cinatra#661)", () => {
     );
 
     expect(registerArtifactExtensionDir(storeDir)).toBe(true);
-    const typeId = "@cinatra-ai/store-thing-artifact:artifact";
+    const typeId = declaredTypeId("@cinatra-ai/store-thing-artifact");
     expect(objectTypeRegistry.resolve(typeId)).not.toBeNull();
     expect(objectTypeRegistry.getTypesForPackage("@cinatra-ai/store-thing-artifact")).toEqual([
       typeId,
