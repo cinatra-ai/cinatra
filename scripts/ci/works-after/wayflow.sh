@@ -119,6 +119,22 @@ if echo "$HEALTH" | grep -q 'cinatra-works-after/echo-proof'; then
 fi
 wa_info "health: ${HEALTH}"
 
+# cinatra#1830 — exercise the HITL InputMessageNode gate mount guard against the
+# CANDIDATE runtime, pointed at the exact tree the runtime just loaded. The
+# image already carries wayflowcore/pyagentspec/pytest; running the guard here
+# proves the #1830 declared-inputs reconcile shim (and the whole mount pre-load
+# pipeline) still holds after a python/wayflowcore bump — the point of
+# works-after. CINATRA_AGENTS_DIR=/agents is the SAME value the runtime booted
+# with, so test_repo_agents_load discovers exactly the mounted set via the
+# loader's own discover_agents walk (a known-failing gate agent is strict-xfail,
+# so its red stays visible without failing the arm).
+wa_info "running #1830 HITL gate mount-guard suites inside the candidate runtime"
+docker exec -e CINATRA_AGENTS_DIR=/agents "$APP" \
+  python -m pytest -q \
+  tests/test_input_message_gate_reconcile.py \
+  tests/test_repo_agents_load.py \
+  || fail "HITL gate mount-guard suites failed inside the candidate wayflow runtime (#1830 reconcile shim / installed-tree load)."
+
 NONCE="wa-$(date +%s)-${RANDOM}"
 WAYFLOW_BASE_URL="$WAYFLOW_URL" WAYFLOW_AGENT_PATH="$AGENT_PATH" WORKS_AFTER_NONCE="$NONCE" \
   wa_node "${REPO_ROOT}/scripts/ci/works-after/rt/wayflow-a2a-send.mjs" \
