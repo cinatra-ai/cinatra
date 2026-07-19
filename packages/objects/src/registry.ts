@@ -260,13 +260,16 @@ export const objectTypeRegistry: ObjectTypeRegistryImpl =
 // artifact-scoped recall detection, and the effective-type-catalog — over to
 // THIS resolver so they never disagree and never depend on a live claim row.
 //
-// The claim-arbitration functions in ./claims (resolveClaimWinner /
-// claimWinnerProjectionDisposition / resolveClaimProjectionDisposition) are
-// retired by a later wave once every consumer reads here; the fail-closed
-// mapping below is the SAME "invalid → artifact-safe DOWN, never raw UP"
-// semantics they encoded, plus the new "uninstalled definer → none" backstop
-// (a claim row survived an uninstall and kept resolving; a registry lookup does
-// not — an uninstalled type's rows must fail closed to unprojected).
+// The dead projection-arbitration wrapper in ./claims
+// (`resolveClaimProjectionDisposition`) is deleted in wave A5 now that these
+// four disposition consumers read THIS resolver; the fail-closed mapping below
+// is the SAME "invalid → artifact-safe DOWN, never raw UP" semantics it encoded,
+// plus the new "uninstalled definer → none" backstop (a claim row survived an
+// uninstall and kept resolving; a registry lookup does not — an uninstalled
+// type's rows must fail closed to unprojected). `resolveClaimWinner` +
+// `claimWinnerProjectionDisposition` are RETAINED: A3's host-type claim binding
+// (resolve-bound-artifact-type), the access-provenance catalog, and the
+// draftable mutability lock still consume them.
 // ---------------------------------------------------------------------------
 
 /**
