@@ -59,6 +59,9 @@ const RETENTION_POLICIES: Record<string, RetentionPolicy> = {
   // pack (body [draftable], recipient [snapshot]) — cinatra#1454.
   "@cinatra-ai/email:body": { kind: "indefinite" },
   "@cinatra-ai/email:recipient": { kind: "indefinite" },
+  // LinkedIn member post-draft [draftable], host-registered for the
+  // @cinatra-ai/linkedin-artifacts pack — cinatra#1457.
+  "@cinatra-ai/linkedin:post-draft": { kind: "indefinite" },
   // Drupal external node-pointer type host-registered for the
   // @cinatra-ai/drupal-artifacts pack (drupal:node [external]) — cinatra#1465.
   "@cinatra-ai/drupal:node": { kind: "indefinite" },
