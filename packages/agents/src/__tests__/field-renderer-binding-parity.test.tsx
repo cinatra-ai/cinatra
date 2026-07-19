@@ -39,7 +39,6 @@ import { SendConfirmationRenderer } from "../send-confirmation-renderer";
 import { CtaRenderer } from "../cta-renderer";
 import { SchemaFieldRenderer } from "../schema-field-renderer";
 import { GroupedSetupFormRenderer } from "../grouped-setup-form-renderer";
-import { SkillRecommenderRenderer } from "../skill-recommender-agent-renderers";
 import { EmailTestDeliveryFormRenderer } from "../email-test-delivery-form-renderer";
 import { classifyMidRunHitl, hasMidRunHitlBinding } from "../orchestrator-mid-run-hitl";
 
@@ -140,13 +139,21 @@ describe("resolution parity with the retired hand map", () => {
     },
   );
 
-  it("skill-recommend resolves to the params-wrapped SkillRecommenderRenderer", () => {
-    const entry = resolveWith("@cinatra-ai/skill-recommender-agent:recommend");
+  it("migrated skill-recommend binding resolves to the extension wrapper at the pre-cutover priority", () => {
+    // The COMPONENT relocated into @cinatra-ai/skill-recommender-agent
+    // (cinatra#1625 S8/M3): the binding is present in the generated component
+    // map, so it registers as the ExtensionFieldRenderer wrapper (lazy-loads the
+    // extension module, floors on any degrade) — NOT the retired host component,
+    // and no longer a WithBindingParams wrapper (the 4636be97 manifest dropped
+    // `params.skillsTargetPackage`; the extension renderer is now pure display
+    // over the prep-node-gathered `value`). The id + priority (60) are unchanged,
+    // so stored/in-flight runs still resolve the SAME binding.
+    const id = "@cinatra-ai/skill-recommender-agent:recommend";
+    const entry = resolveWith(id);
     expect(entry).toBeTruthy();
     expect(entry!.priority).toBe(60);
     const resolved = entry!.renderer as ComponentType & { displayName?: string };
-    expect(resolved.displayName).toBe("WithBindingParams(SkillRecommenderRenderer)");
-    void SkillRecommenderRenderer;
+    expect(resolved.displayName).toBe(`ExtensionFieldRenderer(${id})`);
   });
 
   it.each([

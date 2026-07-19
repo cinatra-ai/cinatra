@@ -51,7 +51,7 @@ export const GENERATED_FIELD_RENDERER_BINDINGS: ReadonlyArray<GeneratedFieldRend
   { id: "@cinatra-ai/reviewer-agent:drafts-output", kind: "email-drafts-review", priority: 80, declaredBy: "@cinatra-ai/reviewer-agent" },
   { id: "@cinatra-ai/reviewer-agent:followups-output", kind: "email-drafts-review", priority: 80, declaredBy: "@cinatra-ai/reviewer-agent" },
   { id: "@cinatra-ai/reviewer-agent:output", kind: "reviewer-output", priority: 80, declaredBy: "@cinatra-ai/reviewer-agent" },
-  { id: "@cinatra-ai/skill-recommender-agent:recommend", kind: "skill-recommend", priority: 60, params: {"skillsTargetPackage":"@cinatra-ai/email-drafting-agent"}, declaredBy: "@cinatra-ai/skill-recommender-agent" },
+  { id: "@cinatra-ai/skill-recommender-agent:recommend", kind: "skill-recommend", priority: 60, declaredBy: "@cinatra-ai/skill-recommender-agent" },
 ];
 
 // Extension ROLE bindings: role name -> the single claimant package

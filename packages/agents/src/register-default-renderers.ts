@@ -66,7 +66,6 @@ import {
   SKILL_SELECTOR_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
 } from "./agent-builder-ids";
-import { SkillRecommenderRenderer } from "./skill-recommender-agent-renderers";
 import { EmailTestDeliveryFormRenderer } from "./email-test-delivery-form-renderer";
 import { hasFieldRendererComponent } from "./field-renderer-components";
 import { makeExtensionFieldRenderer } from "./extension-field-renderer";
@@ -157,7 +156,16 @@ const RENDERER_KIND_TABLE: Record<
     renderer: SendConfirmationRenderer,
     bareAliases: ["send-confirmation"],
   },
-  "skill-recommend": { renderer: SkillRecommenderRenderer },
+  // MIGRATED (cinatra#1625 S8/M3): the skill-recommender component moved into
+  // @cinatra-ai/skill-recommender-agent. The KIND stays (the manifest still
+  // declares it — kind-vocabulary set-equality; conditionFor() reads its bare
+  // aliases), but the host ships no component: a bundled binding resolves
+  // map-first to the extension wrapper (hasFieldRendererComponent →
+  // makeExtensionFieldRenderer), and a not-in-build binding of this kind degrades
+  // to the SchemaFieldRenderer floor here (AC4 never-blank). Same shape as
+  // final-list-review / scrape-schema-review / linkedin-draft-review /
+  // wordpress-draft-confirm above.
+  "skill-recommend": { renderer: SchemaFieldRenderer },
   "test-delivery-input": { renderer: EmailTestDeliveryFormRenderer },
   "wayflow-setup-form": { renderer: GroupedSetupFormRenderer },
   // MIGRATED (cinatra#1625 S8/M3): the blog-wordpress draft-confirm component

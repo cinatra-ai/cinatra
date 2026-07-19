@@ -441,9 +441,6 @@ export {
   COMPILER_AGENTIC_SKILL_ID,
 } from "./agent-builder-ids";
 
-// Skill-recommender-agent HITL renderer.
-export { SkillRecommenderRenderer } from "./skill-recommender-agent-renderers";
-
 // ---------------------------------------------------------------------------
 // Tier 2a Selective Override Registry
 // ---------------------------------------------------------------------------
