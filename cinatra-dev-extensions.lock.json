@@ -310,7 +310,7 @@
     {
       "packageName": "@cinatra-ai/skill-recommender-agent",
       "repo": "cinatra-ai/skill-recommender-agent",
-      "resolvedSha": "75a5b4f1951fe41b7505caacfeecf86b020c7f9a"
+      "resolvedSha": "4636be974a29bda0a3f1e5dbe46ddf69a85c0d5c"
     },
     {
       "packageName": "@cinatra-ai/slide-deck-artifact",
