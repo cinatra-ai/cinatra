@@ -24,6 +24,8 @@ import {
   upsertBuiltInAssistantAgentTemplate,
   readAssistantConfigByPrincipalId,
   BUILT_IN_CINATRA_ASSISTANT_TEMPLATE_ID,
+  BUILT_IN_WORDPRESS_ASSISTANT_TEMPLATE_ID,
+  BUILT_IN_WORDPRESS_ASSISTANT_PACKAGE_NAME,
 } from "../store";
 
 const dialect = new PgDialect();
@@ -63,6 +65,31 @@ describe("upsertBuiltInAssistantAgentTemplate", () => {
     // the principal + config ride as bound params (never interpolated).
     expect(params).toContain("principal-9");
     expect(params).toContain('{"persona":"p","skillBundle":["chat-assistant-core"]}');
+  });
+
+  it("a sibling built-in (WordPress, cinatra#1823) persists a DISTINCT id + package_name — no collision on the Cinatra row", async () => {
+    mocks.execute.mockResolvedValue({ rows: [] });
+    const id = await upsertBuiltInAssistantAgentTemplate({
+      assistantUserId: "wp-principal",
+      name: "WordPress",
+      assistantConfigJson: '{"persona":"wp","skillBundle":["wordpress-authoring-core"]}',
+      templateId: BUILT_IN_WORDPRESS_ASSISTANT_TEMPLATE_ID,
+      packageName: BUILT_IN_WORDPRESS_ASSISTANT_PACKAGE_NAME,
+      description: "The built-in WordPress conversational authoring assistant.",
+    });
+    // Returns (and keys ON CONFLICT on) the DISTINCT WordPress id, not the Cinatra id.
+    expect(id).toBe(BUILT_IN_WORDPRESS_ASSISTANT_TEMPLATE_ID);
+    expect(id).not.toBe(BUILT_IN_CINATRA_ASSISTANT_TEMPLATE_ID);
+
+    const { params } = dialect.sqlToQuery(mocks.execute.mock.calls[0][0] as SQL);
+    // The distinct id + reserved package name ride as bound params; the Cinatra
+    // identity is NOT written for this row.
+    expect(params).toContain(BUILT_IN_WORDPRESS_ASSISTANT_TEMPLATE_ID);
+    expect(params).toContain(BUILT_IN_WORDPRESS_ASSISTANT_PACKAGE_NAME);
+    expect(params).not.toContain("@cinatra-ai/cinatra-assistant");
+    expect(params).toContain("wp-principal");
+    // Still a PRIVATE-origin assistant row (never a marketplace/published extension).
+    expect(params.some((p) => typeof p === "string" && p.includes('"visibility":"private"'))).toBe(true);
   });
 });
 

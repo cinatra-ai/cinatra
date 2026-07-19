@@ -41,6 +41,18 @@ export type BetterAuthTxExecutor = { execute: (query: SQL) => Promise<unknown> }
  *  the admin UI. */
 export const BUILT_IN_CINATRA_ASSISTANT_USERNAME = "cinatra";
 
+/** Reserved username of the built-in WordPress assistant PRINCIPAL (cinatra#1823,
+ *  epic #1037 P4.1). Minted through the SAME single principal-minting path (I3)
+ *  as @cinatra by the assistant-agent registration bootstrap, with its own
+ *  distinct `assistant_config`. */
+export const BUILT_IN_WORDPRESS_ASSISTANT_USERNAME = "wordpress";
+
+/** Reserved username of the built-in Drupal assistant PRINCIPAL (cinatra#1823,
+ *  epic #1037 P4.1). Minted through the SAME single principal-minting path (I3)
+ *  as @cinatra by the assistant-agent registration bootstrap, with its own
+ *  distinct `assistant_config`. */
+export const BUILT_IN_DRUPAL_ASSISTANT_USERNAME = "drupal";
+
 // ---------------------------------------------------------------------------
 // listAssistantUsers
 // ---------------------------------------------------------------------------
