@@ -18,9 +18,11 @@ import type { ArtifactObjectData } from "@cinatra-ai/artifacts";
 import { SEMANTIC_ARTIFACT_OBJECT_TYPE } from "@cinatra-ai/artifacts";
 import {
   createSemanticArtifact,
+  ObjectsTypeNotRegisteredError,
   type CreateSemanticArtifactInput,
   type CreateSemanticArtifactResult,
 } from "./artifact-creation";
+import { resolveUploadArtifactType } from "./upload-artifact-type-map";
 import { tombstoneArtifact as retentionTombstone } from "./artifact-retention";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
 import { listArtifactIdsForExtension } from "./semantic-assertion-store";
@@ -219,11 +221,27 @@ function toSummary(
 
 /** Canonical creation entry: the single semantic write path. The upload
  *  route's required ownership is `organization`/orgId; other callers
- *  (MCP / agent-emit) supply their own ownership. */
+ *  (MCP / agent-emit) supply their own ownership.
+ *
+ *  The upload path only knows a MIME, so this entry MAPS `declaredMime` to the
+ *  exactly-one installed system-base artifact type (pdf/audio/video/image) and
+ *  injects it as the writer's REQUIRED `objectType` (epic #1785, wave A3). A MIME
+ *  no base pack accepts (or one accepted ambiguously) is REFUSED via
+ *  `OBJECTS_TYPE_NOT_REGISTERED` before any blob IO — the generic catch-all is
+ *  retired, so an untypable upload fails closed. Callers that already know their
+ *  exact type call `createSemanticArtifact` directly. */
 export async function createUploadedArtifact(
-  input: CreateSemanticArtifactInput,
+  input: Omit<CreateSemanticArtifactInput, "objectType">,
 ): Promise<CreateSemanticArtifactResult> {
-  return createSemanticArtifact(input);
+  ensureArtifactRegistry();
+  const resolution = resolveUploadArtifactType(input.declaredMime);
+  if (!resolution.ok) {
+    throw new ObjectsTypeNotRegisteredError(
+      null,
+      `upload cannot be typed to a system-base artifact pack: ${resolution.reason}`,
+    );
+  }
+  return createSemanticArtifact({ ...input, objectType: resolution.objectTypeId });
 }
 
 // Compatibility aliases for WriteUploadedArtifact* type names.

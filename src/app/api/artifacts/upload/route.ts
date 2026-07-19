@@ -135,6 +135,19 @@ export async function POST(request: Request): Promise<Response> {
         { status: 400 },
       );
     }
+    // Fail-closed type refusal (epic #1785): the upload MIME maps to no installed
+    // system-base artifact type. 415 Unsupported Media Type — a client error, not
+    // a transient failure (retrying the same bytes/type fails identically).
+    if (
+      err instanceof Error &&
+      (err.name === "ObjectsTypeNotRegisteredError" ||
+        (err as { code?: unknown }).code === "OBJECTS_TYPE_NOT_REGISTERED")
+    ) {
+      return Response.json(
+        { ok: false, error: err.message },
+        { status: 415 },
+      );
+    }
     console.error("[artifacts:upload] failed", err);
     return Response.json(
       { ok: false, error: "Upload failed" },

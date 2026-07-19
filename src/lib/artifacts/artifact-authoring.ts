@@ -327,6 +327,11 @@ export async function authorArtifact(
   try {
     result = await createSemanticArtifact({
       orgId: input.orgId,
+      // Write under the EXACT registered artifact type this emit resolved
+      // (`def.type`) rather than the retired generic default (epic #1785 wave
+      // A3 — the `${ext}:artifact` umbrella assumption is dropped: `def` is the
+      // installed artifact type the lookup found in `listArtifacts()`).
+      objectType: def.type,
       createdBy: input.actor.principalId ?? null,
       ownerLevel: "organization",
       ownerId: input.orgId,

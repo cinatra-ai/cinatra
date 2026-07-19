@@ -28,6 +28,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { createSemanticArtifact } from "@/lib/artifacts/artifact-creation";
+import { resolveBoundArtifactTarget } from "@/lib/artifacts/resolve-bound-artifact-type";
 import { assertSemanticType } from "@/lib/artifacts/semantic-assertion-store";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
 import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store";
@@ -62,9 +63,21 @@ export async function materializeBlogPostBodyArtifact(
   // absent claimant never leaves an orphaned floor-only artifact behind.
   const targetExtension = requireExtensionRole("artifact-blog-post-body");
   const orgId = await resolveSingletonBlogOrgId();
+  // Resolve the target extension's EXACT declared object type (epic #1785 wave
+  // A3 — the writer requires a concrete type; the generic default is retired).
+  const resolvedTarget = await resolveBoundArtifactTarget({
+    orgId,
+    extension: targetExtension,
+  });
+  if (!resolvedTarget.ok) {
+    throw new Error(
+      `blog-post body materialization: extension "${targetExtension}" resolves no declared artifact object type: ${resolvedTarget.error}`,
+    );
+  }
   const bytes = Buffer.from(input.content, "utf-8");
   const result = await createSemanticArtifact({
     orgId,
+    objectType: resolvedTarget.target.objectTypeId,
     createdBy: null,
     ownerLevel: "organization",
     ownerId: orgId,

@@ -255,6 +255,9 @@ async function writeClaimedArtifact(input: {
   try {
     created = await createSemanticArtifact({
       orgId: input.orgId,
+      // The EXACT declared object type resolved from the binding/produces
+      // discriminator (cinatra#1454) — no longer discarded (epic #1785 wave A3).
+      objectType: input.resolvedTarget.objectTypeId,
       createdBy: input.createdBy,
       ownerLevel: "organization",
       ownerId: input.orgId,

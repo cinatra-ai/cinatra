@@ -9,7 +9,13 @@ import type {
   ArtifactOriginKind,
   ArtifactRef,
 } from "@cinatra-ai/artifacts";
-import { SEMANTIC_ARTIFACT_OBJECT_TYPE } from "@cinatra-ai/artifacts";
+import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { isArtifactExtensionWriteAllowed } from "./artifact-extension-access";
+import { mimeAcceptedByAccepts } from "./upload-artifact-type-map";
+
+/** The registry definition shape (or null) — a local alias so this module needs
+ *  no type-only barrel import (avoids the heavy objects barrel graph). */
+type ResolvedObjectTypeDef = ReturnType<typeof objectTypeRegistry.resolve>;
 import { createLocalDiskBlobStore } from "./local-disk-blob-store";
 import { deriveSubstanceKey } from "./resource-store";
 import {
@@ -35,12 +41,6 @@ import {
   composeAndValidateClassifierSignals,
   type ClassifierSignals,
 } from "@cinatra-ai/objects/classifier-signals";
-// The semantic FLOOR type id comes from the generated manifest data (the
-// single "artifact-default-floor" role claimant) via the PURE-DATA
-// @cinatra-ai/objects/artifact-floor subpath — no server-heavy objects
-// barrel in the unit-test graph (the old inline-mirror rationale holds;
-// the mirror itself is retired, cinatra#151 Stage 6).
-import { DEFAULT_ARTIFACT_EXTENSION } from "@cinatra-ai/objects/artifact-floor";
 // Deterministic producer assertions resolve and org-validate BEFORE Tx2,
 // then splice into Tx2 before the floor rebalance.
 // `buildAssertSemanticTypeQueries` is the tx-composable builder
@@ -84,6 +84,20 @@ const ARTIFACT_BLOB_MAX_DEFAULT_BYTES = 100 * 1024 * 1024; // soft default
 
 export type CreateSemanticArtifactInput = {
   orgId: string;
+  /**
+   * REQUIRED exact declared object type (epic #1785, wave A3). The generic
+   * `@cinatra-ai/artifact:object` catch-all is retired: every artifact row is
+   * written under its concrete installed artifact type, validated BEFORE any
+   * blob IO (`assertWritableArtifactType`): not a generic literal, defined by an
+   * installed `kind:"artifact"` extension (`def.isArtifact` present), that
+   * extension is write-eligible for this org, and the object payload satisfies
+   * the type's declared schema. An unregistered / ungoverned / generic type is
+   * REFUSED via the `OBJECTS_TYPE_NOT_REGISTERED` contract before the writer
+   * touches the blob store. Deterministic callers pass their exact declared type
+   * (`resolveBoundArtifactTarget`); the upload route + URL import map their MIME
+   * to the exactly-one system-base pack (`resolveUploadArtifactType`) or refuse.
+   */
+  objectType: string;
   createdBy: string | null;
   // Ownership is REQUIRED. The service layer derives `organization`/orgId
   // for the upload route's public path.
@@ -187,6 +201,106 @@ export class ResourceOrphanedError extends Error {
   }
 }
 
+/**
+ * Fail-closed write-boundary refusal (epic #1785, wave A3). Carries the stable
+ * `OBJECTS_TYPE_NOT_REGISTERED` code (the same contract the MCP `objects_save`
+ * handler surfaces) so a route / caller can map a refused write to a client
+ * error, never a transient 500. A refused write is a client/authoring error —
+ * retrying the identical save fails identically.
+ */
+export class ObjectsTypeNotRegisteredError extends Error {
+  readonly code = "OBJECTS_TYPE_NOT_REGISTERED" as const;
+  readonly retryable = false;
+  constructor(
+    readonly attemptedType: string | null,
+    message: string,
+    readonly suggestedExtension?: string,
+  ) {
+    super(message);
+    this.name = "ObjectsTypeNotRegisteredError";
+  }
+}
+
+// The retired generic host object types. Under the dependency model no save may
+// ever land under either again (kept as literals so the guard rejects them by id
+// without importing register-types). Mirrors the MCP handler's GENERIC guard.
+const GENERIC_ARTIFACT_TYPE_IDS: ReadonlySet<string> = new Set([
+  "@cinatra-ai/artifact:object",
+  "@cinatra-ai/objects:object",
+]);
+
+/** The defining extension package of a namespaced object-type id
+ *  (`@scope/pkg:local` → `@scope/pkg`). Null for a non-namespaced id. */
+function definerPackageOf(typeId: string): string | null {
+  if (!typeId.startsWith("@")) return null;
+  const colon = typeId.lastIndexOf(":");
+  return colon > 0 ? typeId.slice(0, colon) : null;
+}
+
+/**
+ * Whether a registered type is an ARTIFACT write target. Two shapes qualify:
+ *  - a SELF-REGISTERED artifact type (the descriptor bridge sets `isArtifact`);
+ *  - a CLAIM-BACKED HOST type whose registration declares an `artifact-safe`
+ *    projection disposition (e.g. `@cinatra-ai/email:body`, registered host-side
+ *    with `dispositions.projection: "artifact-safe"` and NO `isArtifact` — the
+ *    pack CLAIM adds the disposition, not a second registrar). A plain data type
+ *    (no `isArtifact`, no artifact-safe disposition) is NOT a write target.
+ */
+function isArtifactWritableType(def: NonNullable<ResolvedObjectTypeDef>): boolean {
+  return def.isArtifact != null || def.dispositions?.projection === "artifact-safe";
+}
+
+/**
+ * Validate a REQUIRED object type at the write boundary BEFORE any blob IO
+ * (epic #1785, wave A3). Refuses via {@link ObjectsTypeNotRegisteredError} when
+ * the type is a retired generic literal, has no installed `kind:"artifact"`
+ * definer (`resolve` null or `def.isArtifact` absent), is not namespaced under a
+ * defining extension, or that extension is not write-eligible for the org
+ * (archived / ungoverned-denied). Returns the resolved definition so the caller
+ * reuses it for the payload-schema check. Async because the write-eligibility
+ * gate reads the canonical install store.
+ */
+async function assertWritableArtifactType(
+  objectType: string,
+  orgId: string,
+): Promise<NonNullable<ResolvedObjectTypeDef>> {
+  if (GENERIC_ARTIFACT_TYPE_IDS.has(objectType)) {
+    throw new ObjectsTypeNotRegisteredError(
+      objectType,
+      `the generic host object type "${objectType}" is retired (epic #1785) — a save must name an installed artifact extension's declared type`,
+    );
+  }
+  const def = objectTypeRegistry.resolve(objectType);
+  if (!def || !isArtifactWritableType(def)) {
+    const definer = definerPackageOf(objectType);
+    const suggest =
+      definer && objectTypeRegistry.getTypesForPackage(definer).length === 0
+        ? definer
+        : undefined;
+    throw new ObjectsTypeNotRegisteredError(
+      objectType,
+      suggest
+        ? `no installed artifact extension defines "${objectType}"; install ${suggest}`
+        : `no installed artifact extension defines "${objectType}"`,
+      suggest,
+    );
+  }
+  const definer = definerPackageOf(objectType);
+  if (!definer) {
+    throw new ObjectsTypeNotRegisteredError(
+      objectType,
+      `object type "${objectType}" is not namespaced under a defining extension`,
+    );
+  }
+  if (!(await isArtifactExtensionWriteAllowed(definer, orgId))) {
+    throw new ObjectsTypeNotRegisteredError(
+      objectType,
+      `artifact extension "${definer}" is not write-allowed for this org (archived / ungoverned-denied install state)`,
+    );
+  }
+  return def;
+}
+
 export async function createSemanticArtifact(
   input: CreateSemanticArtifactInput,
 ): Promise<CreateSemanticArtifactResult> {
@@ -215,6 +329,15 @@ export async function createSemanticArtifact(
   const maxBytes = input.maxBytes ?? ARTIFACT_BLOB_MAX_DEFAULT_BYTES;
 
   // -------------------------------------------------------------------
+  // Write-boundary type validation (epic #1785, wave A3) — BEFORE any blob IO.
+  // Refuses a generic / unregistered / ungoverned type via
+  // OBJECTS_TYPE_NOT_REGISTERED so an unwritable save never touches the blob
+  // store. (The type is re-resolved post-stream for the MIME/schema envelope
+  // check, so the definition itself is not captured here.)
+  // -------------------------------------------------------------------
+  await assertWritableArtifactType(input.objectType, input.orgId);
+
+  // -------------------------------------------------------------------
   // Pre-tx: write blob bytes to disk (orphan-safe). New writes land on the
   // org-scoped CONTENT-ADDRESSED key (cinatra#926) — a semantic dedupe
   // (same org + same substance/sha) therefore yields the SAME storage key
@@ -231,6 +354,62 @@ export async function createSemanticArtifact(
     declaredMime: input.declaredMime,
     maxBytes,
   });
+
+  // -------------------------------------------------------------------
+  // Post-stream write-boundary validation (epic #1785, wave A3). Now that the
+  // bytes are on disk we know the DETECTED MIME + size, so we can (a) re-resolve
+  // the type in case the in-memory registry was torn down mid-stream by an
+  // uninstall, (b) reject a MIME the declared type does not accept (a client
+  // cannot smuggle image bytes under an `application/pdf`-typed save), and (c)
+  // enforce the type's declared payload schema on the final object envelope. A
+  // refusal here deletes the freshly-written (still unreferenced) blob before
+  // rethrowing so a rejected save leaks nothing. `authoritative.mime` (the
+  // resource-authoritative MIME, possibly a dedupe winner's) equals
+  // `newBlob.mimeDetected` for the same substance, so validating the detected
+  // MIME/size here is equivalent to validating the final envelope.
+  // -------------------------------------------------------------------
+  try {
+    const postDef = objectTypeRegistry.resolve(input.objectType);
+    if (!postDef || !isArtifactWritableType(postDef)) {
+      throw new ObjectsTypeNotRegisteredError(
+        input.objectType,
+        `object type "${input.objectType}" is no longer a writable artifact type (definer uninstalled mid-write)`,
+      );
+    }
+    const declaredAccepts = postDef.isArtifact?.accepts?.file?.mimeTypes;
+    if (
+      Array.isArray(declaredAccepts) &&
+      declaredAccepts.length > 0 &&
+      !mimeAcceptedByAccepts(declaredAccepts, newBlob.mimeDetected)
+    ) {
+      throw new ObjectsTypeNotRegisteredError(
+        input.objectType,
+        `detected MIME "${newBlob.mimeDetected}" is not accepted by "${input.objectType}" (accepts [${declaredAccepts.join(", ")}])`,
+      );
+    }
+    const previewEnvelope: ArtifactObjectData = {
+      artifactType: "file",
+      latestRepresentationRevisionId: representationRevisionId,
+      latestDigest: newBlob.sha256,
+      mime: newBlob.mimeDetected,
+      size: newBlob.sizeBytes,
+      originKind,
+      viewerHint: "mime",
+      title: input.title,
+    };
+    const parsed = postDef.schema.safeParse(previewEnvelope);
+    if (!parsed.success) {
+      throw new ObjectsTypeNotRegisteredError(
+        input.objectType,
+        `object payload does not satisfy the declared schema for "${input.objectType}": ${parsed.error.message}`,
+      );
+    }
+  } catch (err) {
+    await blobStore
+      .deleteByStorageKey({ orgId: input.orgId, storageKey: newBlob.storageKey })
+      .catch(() => {});
+    throw err;
+  }
 
   const substanceKey = deriveSubstanceKey({
     kind: "blob",
@@ -547,18 +726,18 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
   {
     const projectIdForRow = resolveProjectInheritanceForType(
       mcpRequestContextStorage.getStore()?.projectContext?.projectId,
-      SEMANTIC_ARTIFACT_OBJECT_TYPE,
+      input.objectType,
     );
     if (projectIdForRow !== null) {
       assertProjectWritableSync(projectIdForRow);
     }
   }
   // The producer assertion ops (archive + insert-RETURNING per produced
-  // extension) are spliced AFTER the artifact_audit INSERT and BEFORE the
-  // floor-rebalance INSERT so the floor's `WHERE NOT EXISTS (... eligibility=
-  // 'eligible' AND extension <> default)` sees the producer's agent-asserted
-  // eligible row and correctly SKIPS the default. They run inside the SAME
-  // held-lock Tx2 so producer assertion + creation commit atomically.
+  // extension) are spliced AFTER the artifact_audit INSERT. They run inside the
+  // SAME held-lock Tx2 so producer assertion + creation commit atomically. (The
+  // default-floor rebalance INSERT is retired — epic #1785 wave A3: the row now
+  // carries its exact declared type in `objects.type`, so there is no default
+  // eligible assertion to rebalance.)
   const producerOps = producerSplice.flatMap((p) => p.queries);
   // Fixed leading-query count before the producer ops: lock(1) +
   // objects/outbox(1) + representation(1) + audit(1) = 4. Each
@@ -618,7 +797,7 @@ SELECT gen_random_uuid()::text, upserted.id, upserted.version, upserted.org_id,
 FROM upserted`,
           values: [
             artifactId,
-            SEMANTIC_ARTIFACT_OBJECT_TYPE,
+            input.objectType,
             input.parentId ?? null,
             input.parentType ?? null,
             JSON.stringify(objectData),
@@ -628,12 +807,12 @@ FROM upserted`,
             input.ownerId,
             visibility,
             // Artifact inherits projectId from the active
-            // mcpRequestContextStorage frame. The SEMANTIC_ARTIFACT_OBJECT_TYPE
-            // is never on the substrate exclusion list, so the helper returns
-            // the frame projectId verbatim (or null when no frame is active).
+            // mcpRequestContextStorage frame. A semantic-artifact type is never
+            // on the substrate exclusion list, so the helper returns the frame
+            // projectId verbatim (or null when no frame is active).
             resolveProjectInheritanceForType(
               mcpRequestContextStorage.getStore()?.projectContext?.projectId,
-              SEMANTIC_ARTIFACT_OBJECT_TYPE,
+              input.objectType,
             ),
           ],
         },
@@ -679,40 +858,12 @@ VALUES (gen_random_uuid()::text, $1::text, $2::text, $3::text, 'create', $4::tex
             }),
           ],
         },
-        // Producer assertion ops spliced HERE (after audit, before floor
-        // rebalance). Empty when there is no trusted producer.
+        // Producer assertion ops spliced HERE (after audit). Empty when there
+        // is no trusted producer. The default-floor rebalance INSERT/UPDATE that
+        // used to follow is RETIRED (epic #1785 wave A3) — the row carries its
+        // exact declared type in `objects.type`, so no default-artifact eligible
+        // assertion is ever written or rebalanced at creation.
         ...producerOps,
-        // Floor-rebalance INSERT: at creation, NO non-default eligible
-        // AND NO active default, so this universally inserts the
-        // default-artifact eligible assertion. (The complementary
-        // UPDATE-archive-default branch is a no-op at creation but
-        // still cheap; we include it for shape parity with the
-        // canonical floor-rebalance in semantic-assertion-store.)
-        {
-          text: `INSERT INTO "${schema}"."semantic_assertion"
-  (id, org_id, artifact_id, extension, asserted_by, eligibility)
-SELECT $1::text, $2::text, $3::text, $4::text, 'agent', 'eligible'
-WHERE NOT EXISTS (
-  SELECT 1 FROM "${schema}"."semantic_assertion"
-   WHERE org_id=$2::text AND artifact_id=$3::text AND eligibility='eligible' AND extension <> $4::text)
-AND NOT EXISTS (
-  SELECT 1 FROM "${schema}"."semantic_assertion"
-   WHERE org_id=$2::text AND artifact_id=$3::text AND extension=$4::text AND eligibility <> 'archived')`,
-          values: [
-            randomUUID(),
-            input.orgId,
-            artifactId,
-            DEFAULT_ARTIFACT_EXTENSION,
-          ],
-        },
-        {
-          text: `UPDATE "${schema}"."semantic_assertion" SET eligibility='archived', archived_at=now()
-WHERE org_id=$1 AND artifact_id=$2 AND extension=$3 AND eligibility <> 'archived'
-AND EXISTS (
-  SELECT 1 FROM "${schema}"."semantic_assertion"
-   WHERE org_id=$1 AND artifact_id=$2 AND eligibility='eligible' AND extension <> $3)`,
-          values: [input.orgId, artifactId, DEFAULT_ARTIFACT_EXTENSION],
-        },
         // Optional authoring-ledger linkage. When the caller supplies an
         // `authoringStepId`, INSERT a row tying the just-created
         // (artifactId, representationRevisionId) to the ledger step. The
@@ -813,60 +964,13 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
     }
   }
 
-  // POST-COMMIT enqueue of the async LLM artifact matcher. Tx2 has
-  // committed, so a separate worker connection sees the row. The matcher is
-  // a best-effort classification FALLBACK; agent-produced artifacts were
-  // already typed deterministically by the producer splice above, and the
-  // matcher's `matcher`-draft is precedence-blocked for those (expected
-  // no-op). Enqueue failure logs and continues: the artifact is persisted,
-  // and the artifact stays at its default-floor type until a future
-  // re-trigger. attempts:3 + exponential backoff cover transient queue
-  // infrastructure failures only; the matcher worker itself swallows every
-  // error (best-effort / default-floor contract), so a classification failure
-  // does NOT fail the job or trigger a retry.
-  //
-  // `skipFallbackClassification` lets the authoring paths skip the matcher
-  // entirely. Those paths type the artifact via their own typed
-  // `assertSemanticType` call AFTER createSemanticArtifact returns, so the
-  // matcher would (a) waste a job and (b) race with the typed assertion.
-  // Upload route NEVER sets this flag.
-  if (input.skipFallbackClassification) {
-    // Explicit caller opt-out. The producer assertion in the caller is the
-    // authoritative type; the matcher's draft would be precedence-blocked
-    // anyway. Skip the job entirely.
-  } else {
-    try {
-    const { enqueueBackgroundJob, BACKGROUND_JOB_NAMES } = await import(
-      "@/lib/background-jobs"
-    );
-    await enqueueBackgroundJob(
-      BACKGROUND_JOB_NAMES.ARTIFACT_MATCH_RUN,
-      {
-        orgId: input.orgId,
-        artifactId,
-        representationRevisionId,
-        createdByRunId: persistedRunId,
-      },
-      {
-        // Stable jobId — BullMQ dedups a duplicate enqueue for the
-        // same (org, artifact, representation) so a retry of the
-        // creating request cannot fan out two matcher runs.
-        jobId: `artifact-match:${input.orgId}:${artifactId}:${representationRevisionId}`,
-        attempts: 3,
-        backoff: { type: "exponential", delay: 5_000 },
-        // System-scope enqueue from the creation path — opt out of
-        // the HumanUser auto-attribution cascade (the matcher builds
-        // its own org-anchored System actor).
-        inheritActorContext: false,
-      },
-    );
-    } catch (enqueueErr) {
-      console.warn(
-        `[artifact-matcher] enqueue failed for artifact ${artifactId} (creation committed; classification deferred):`,
-        enqueueErr instanceof Error ? enqueueErr.message : enqueueErr,
-      );
-    }
-  }
+  // The async LLM artifact matcher enqueue is RETIRED (epic #1785 wave A3).
+  // Under the dependency model every artifact is typed at write time — its
+  // exact declared type is in `objects.type`, validated before this point — so
+  // there is no untyped default-floor row for a post-persistence matcher to
+  // classify. The matcher runtime is left dormant (a no-op on absent generic
+  // rows); `skipFallbackClassification` is retained on the input for caller
+  // back-compat but no longer gates any work here.
 
   const ref: ArtifactRef = {
     artifactId,

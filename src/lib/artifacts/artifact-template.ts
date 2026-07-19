@@ -197,6 +197,9 @@ export async function materializeArtifactFromTemplate(
   // pre-assertion and write a precedence-doomed draft).
   const result: CreateSemanticArtifactResult = await createSemanticArtifact({
     orgId: input.orgId,
+    // The EXACT declared object type resolved for this extension (cinatra#1454);
+    // the `${ext}:artifact` umbrella assumption is retired (epic #1785 wave A3).
+    objectType: objectTypeId,
     createdBy: input.actor.principalId ?? null,
     ownerLevel: "organization",
     ownerId: input.orgId,

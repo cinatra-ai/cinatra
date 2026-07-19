@@ -22,7 +22,17 @@ import {
   type UrlImportDeps,
   type UrlImportError,
 } from "./url-import";
+import { registerAllObjectTypes } from "@/lib/register-all-object-types";
+import { resolveUploadArtifactType } from "./upload-artifact-type-map";
 import type { ActorContext } from "@/lib/authz/actor-context";
+
+// The MIME a URL import always produces: the page body is normalized to
+// markdown. Under the dependency model (epic #1785, wave A3) the import is a
+// SYNCHRONOUS mime-map-or-refuse — it must resolve this MIME to an installed
+// system-base artifact type BEFORE fetching, or refuse. No system-base pack
+// (pdf/audio/video/image) accepts `text/markdown`, so absent a text/document
+// base pack the import fails closed (never a generic catch-all row).
+const URL_IMPORT_PRODUCED_MIME = "text/markdown";
 
 export type ImportArtifactFromUrlInput = {
   url: string;
@@ -48,7 +58,19 @@ export type ImportArtifactFromUrlSuccess = {
   title: string;
 };
 
-export type ImportArtifactFromUrlError = UrlImportError;
+/** Structured refusal when the produced MIME maps to no installed system-base
+ *  artifact type (epic #1785, wave A3). Distinct from the fetch/SSRF
+ *  `UrlImportError` set — this is a write-boundary type refusal, surfaced BEFORE
+ *  any network fetch. */
+export type ImportArtifactTypeNotRegisteredError = {
+  ok: false;
+  reason: "type-not-registered";
+  message: string;
+};
+
+export type ImportArtifactFromUrlError =
+  | UrlImportError
+  | ImportArtifactTypeNotRegisteredError;
 
 export type ImportArtifactFromUrlResult =
   | ImportArtifactFromUrlSuccess
@@ -82,16 +104,31 @@ async function runImportArtifactFromUrl(
   input: ImportArtifactFromUrlInput,
   deps: UrlImportDeps | undefined,
 ): Promise<ImportArtifactFromUrlResult> {
+  // SYNCHRONOUS mime-map-or-refuse (epic #1785, wave A3): resolve the produced
+  // MIME to the exactly-one installed system-base artifact type BEFORE fetching.
+  // Refuse (fail closed) when no base pack accepts it — never a generic
+  // catch-all row, and never a wasted network fetch.
+  registerAllObjectTypes();
+  const typeResolution = resolveUploadArtifactType(URL_IMPORT_PRODUCED_MIME);
+  if (!typeResolution.ok) {
+    return {
+      ok: false,
+      reason: "type-not-registered",
+      message: `URL import cannot be typed: ${typeResolution.reason}`,
+    };
+  }
+
   const fetched = await fetchUrlAsMarkdown(input.url, deps);
   if (!fetched.ok) return fetched;
 
   const result: CreateSemanticArtifactResult = await createSemanticArtifact({
     orgId: input.orgId,
+    objectType: typeResolution.objectTypeId,
     createdBy: input.actor.principalId ?? null,
     ownerLevel: "organization",
     ownerId: input.orgId,
     title: fetched.title,
-    declaredMime: "text/markdown",
+    declaredMime: URL_IMPORT_PRODUCED_MIME,
     originKind: "external_link",
     stream: asUtf8Stream(fetched.markdown),
     maxBytes: URL_IMPORT_MAX_RAW_BYTES,
