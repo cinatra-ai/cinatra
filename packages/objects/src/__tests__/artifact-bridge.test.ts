@@ -912,6 +912,45 @@ function hostGenericObjectDef(): ObjectTypeDefinition<unknown> {
   } as unknown as ObjectTypeDefinition<unknown>;
 }
 
+// Host member LinkedIn post-draft def (register-types.ts registerLinkedinObjectTypes,
+// cinatra#1457/#1808) — draftable content, member-constrained destination, dedup on
+// (runId, destinationId) so distinct drafts in one run never merge.
+function hostLinkedinPostDraftDef(): ObjectTypeDefinition<unknown> {
+  return {
+    type: "@cinatra-ai/linkedin:post-draft",
+    category: "content",
+    schema: z.object({
+      content: z.string().optional(),
+      destination: z
+        .object({
+          accountId: z.string().optional(),
+          destinationType: z.literal("member").optional(),
+          destinationId: z.string().optional(),
+        })
+        .optional(),
+      visibility: z.enum(["PUBLIC", "CONNECTIONS"]).optional(),
+      mediaAssetRefs: z.array(z.string()).optional(),
+      runId: z.string().optional(),
+      campaignId: z.string().optional(),
+    }),
+    lifecycle: { sources: ["agent", "user", "import"], mutableBy: ["agent", "user"] },
+    renderers: { listRow: null, card: null, detail: null },
+    identityKey: (data: unknown) => {
+      const d = data as Record<string, unknown>;
+      const runId = typeof d.runId === "string" && d.runId.length > 0 ? d.runId : null;
+      const dest =
+        d.destination && typeof d.destination === "object"
+          ? (d.destination as Record<string, unknown>)
+          : {};
+      const destinationId =
+        typeof dest.destinationId === "string" && dest.destinationId.length > 0
+          ? dest.destinationId
+          : null;
+      return runId && destinationId ? `${runId}:${destinationId}` : null;
+    },
+  } as unknown as ObjectTypeDefinition<unknown>;
+}
+
 describe("registerParsedArtifactManifest — cross-namespace claims never clobber the owner (epic #1785)", () => {
   beforeEach(() => {
     objectTypeRegistry._clearForTests();
@@ -985,6 +1024,54 @@ describe("registerParsedArtifactManifest — cross-namespace claims never clobbe
     expect(objectTypeRegistry.getTypesForPackage("@cinatra-ai/email-artifacts")).toEqual(
       expect.arrayContaining(["@cinatra-ai/email-artifacts:local-thing"]),
     );
+  });
+
+  it("the linkedin-artifacts pack claiming host linkedin:post-draft [draftable] leaves the host definition intact (cinatra#1457)", () => {
+    // Host registers the rich draftable member post-draft first (boot order).
+    objectTypeRegistry.register(hostLinkedinPostDraftDef());
+
+    // The linkedin-artifacts pack (fc751149) CLAIMS the cross-namespace host id
+    // (dedicated, draftable) — the pack manifest carries the disposition/mutability
+    // class + arbitration, NEVER a second runtime registrar (epic #1448 principle 5).
+    const registered = registerParsedArtifactManifest(
+      {
+        accepts: { file: { mimeTypes: ["text/markdown", "text/plain"] } },
+        objectTypes: [
+          {
+            type: "@cinatra-ai/linkedin:post-draft",
+            claim: "dedicated",
+            dispositions: {
+              projection: "artifact-safe",
+              pinnable: true,
+              snapshotPolicy: "content",
+              sensitivity: "normal",
+              mutability: "draftable",
+            },
+            schema: { type: "object", additionalProperties: true },
+          },
+        ],
+      } as SemanticArtifactManifest,
+      "@cinatra-ai/linkedin-artifacts",
+    );
+    // No conflict thrown; the pack's own umbrella registered.
+    expect(registered).toBe(true);
+    expect(objectTypeRegistry.resolve("@cinatra-ai/linkedin-artifacts:artifact")).not.toBeNull();
+
+    // linkedin:post-draft — host draftable member definition PRESERVED (not
+    // clobbered to a generic validator-only def).
+    const draft = objectTypeRegistry.resolve("@cinatra-ai/linkedin:post-draft");
+    expect(draft).not.toBeNull();
+    expect(draft!.category).toBe("content");
+    expect(typeof draft!.identityKey).toBe("function");
+    // Dedup on (runId, destinationId); never collapse onto runId alone.
+    expect(
+      draft!.identityKey!({ runId: "r1", destination: { destinationId: "d9" } }),
+    ).toBe("r1:d9");
+    expect(draft!.identityKey!({ runId: "r1" })).toBeNull();
+    // Still host-owned — no bridge provenance attaches the claimed id to the pack.
+    expect(
+      objectTypeRegistry.getTypesForPackage("@cinatra-ai/linkedin-artifacts"),
+    ).not.toContain("@cinatra-ai/linkedin:post-draft");
   });
 
   it("the default-artifact floor claim over the host generic object type does not clobber its identityKey", () => {
