@@ -39,10 +39,22 @@ const {
       text: defaultSkillContent,
       rawBody: null,
     })),
-    resolveConfiguredLlmRuntimeMock: vi.fn(async () => ({
-      provider: "openai" as const,
-      connection: { apiKey: "sk-test" },
-    })),
+    // Return type widened to the full resolver contract (openai | anthropic |
+    // gemini | null) so cinatra#1850 tests can drive the Anthropic-only and
+    // no-provider branches via mockResolvedValue/mockImplementation.
+    resolveConfiguredLlmRuntimeMock: vi.fn(
+      async (
+        _input?: { allowAnthropicFallback?: boolean; preferredProviders?: string[] },
+      ): Promise<
+        | { provider: "openai"; connection: { apiKey: string } }
+        | { provider: "anthropic" }
+        | { provider: "gemini" }
+        | null
+      > => ({
+        provider: "openai" as const,
+        connection: { apiKey: "sk-test" },
+      }),
+    ),
     parseStructuredJsonMock: vi.fn(<T>(value: string) => JSON.parse(value) as T),
     upsertCustomSkillMock: vi.fn(async (args: { content: string; [k: string]: unknown }) => ({
       id: "persisted-1",
@@ -117,7 +129,7 @@ vi.mock("./constants", () => ({
   LOCAL_USER_ID: "local-test-user",
 }));
 
-import { createOrUpdatePersonalSkillForAgent } from "./personal-skills";
+import { createOrUpdatePersonalSkillForAgent, createOrUpdateCustomSkillForAgent } from "./personal-skills";
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -305,5 +317,126 @@ describe("createOrUpdatePersonalSkillForAgent — based_on frontmatter injection
     expect(upsertArgs.content).toMatch(
       /based_on:\n[\s\S]+-\s+"@cinatra-ai\/email-outreach-agent:campaign-email-outreach"/,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#1850 — the auditor skill-persist path must resolve a runtime that can
+// include Anthropic on an Anthropic-only install. createOrUpdateCustomSkillForAgent
+// is the shared chokepoint (auditor drawer action, background skill-autosave job,
+// MCP skills_personal_skill_create_or_update primitive). It MUST opt into the
+// Anthropic last-resort fallback so the persist succeeds instead of silently
+// throwing "No LLM provider configured for personal skill generation."
+// ---------------------------------------------------------------------------
+describe("createOrUpdateCustomSkillForAgent — Anthropic-only persist (cinatra#1850)", () => {
+  const promptEntries = [
+    { id: "p1", kind: "initial" as const, prompt: "be more concise", savedAt: new Date().toISOString() },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runResolvedDeterministicLlmTaskMock.mockResolvedValue({
+      text: JSON.stringify({
+        name: "X",
+        description: "y",
+        content: "---\ndisplay_name: X\n---\nbody",
+      }),
+      rawBody: null,
+    });
+    parseStructuredJsonMock.mockImplementation(<T>(value: string) => JSON.parse(value) as T);
+    upsertCustomSkillMock.mockResolvedValue({
+      id: "persisted-1",
+      name: "Test",
+      slug: "test",
+      description: "desc",
+      content: "---\ndisplay_name: Test\n---\nbody",
+      packageId: "pkg-1",
+      packageName: "Custom Skills",
+      packageSlug: "custom",
+      usedBy: [],
+      isCustomSkill: true,
+      level: "personal" as const,
+    });
+    readAgentsForSkillMatchingMock.mockResolvedValue([
+      {
+        id: "agent-x",
+        identifier: "agent-x",
+        humanReadableName: "Agent X",
+        description: "An agent",
+        content: "# Agent X",
+        frontmatterRaw: undefined,
+      },
+    ]);
+    getAssignedSkillIdsForAgentMock.mockResolvedValue([
+      "@cinatra-ai/asset-blog:generate-blog-ideas",
+    ]);
+    listInstalledSkillsMock.mockResolvedValue([
+      {
+        id: "@cinatra-ai/asset-blog:generate-blog-ideas",
+        name: "Generate",
+        description: "x",
+        content: "base content",
+        packageId: "pkg-1",
+        packageName: "Blog",
+        packageSlug: "blog",
+        slug: "generate-blog-ideas",
+        usedBy: [],
+      },
+    ]);
+    listPersonalSkillsForCurrentUserAndAgentMock.mockResolvedValue([]);
+  });
+
+  it("resolves the runtime WITH the Anthropic last-resort fallback opted in", async () => {
+    resolveConfiguredLlmRuntimeMock.mockResolvedValue({
+      provider: "openai" as const,
+      connection: { apiKey: "sk-test" },
+    });
+
+    await createOrUpdateCustomSkillForAgent({
+      agentId: "agent-x",
+      promptEntries,
+      skillName: "Test",
+      userId: "u-1",
+    });
+
+    expect(resolveConfiguredLlmRuntimeMock).toHaveBeenCalledWith({ allowAnthropicFallback: true });
+  });
+
+  it("persists a personal skill on an Anthropic-only install (runtime resolves ONLY via the fallback)", async () => {
+    // Mirror the real resolver: on an Anthropic-only stack the implicit-global
+    // call returns null, and the Anthropic runtime is returned ONLY when the
+    // caller opts into the fallback. Because the generator passes the flag, the
+    // upsert succeeds — the drawer preview is non-null — rather than throwing.
+    resolveConfiguredLlmRuntimeMock.mockImplementation(
+      async (arg?: { allowAnthropicFallback?: boolean }) =>
+        arg?.allowAnthropicFallback ? { provider: "anthropic" as const } : null,
+    );
+
+    const persisted = await createOrUpdateCustomSkillForAgent({
+      agentId: "agent-x",
+      promptEntries,
+      skillName: "Test",
+      userId: "u-1",
+    });
+
+    expect(persisted.id).toBe("persisted-1");
+    expect(runResolvedDeterministicLlmTaskMock).toHaveBeenCalled();
+    // The Anthropic runtime is what gets threaded into the deterministic task.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const taskArg: any = (runResolvedDeterministicLlmTaskMock.mock.calls as any[][])[0]?.[0];
+    expect(taskArg.runtime).toEqual({ provider: "anthropic" });
+  });
+
+  it("still throws the explicit no-provider error when NOTHING is configured (even with the fallback)", async () => {
+    resolveConfiguredLlmRuntimeMock.mockResolvedValue(null);
+
+    await expect(
+      createOrUpdateCustomSkillForAgent({
+        agentId: "agent-x",
+        promptEntries,
+        skillName: "Test",
+        userId: "u-1",
+      }),
+    ).rejects.toThrow(/No LLM provider configured for personal skill generation/);
   });
 });
