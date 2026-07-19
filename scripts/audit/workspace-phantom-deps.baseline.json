@@ -83,9 +83,6 @@
     "@cinatra-ai/default-artifact": [
       "@cinatra-ai/sdk-extensions"
     ],
-    "@cinatra-ai/email-body-artifact": [
-      "@cinatra-ai/sdk-extensions"
-    ],
     "@cinatra-ai/marketing-icp-artifact": [
       "@cinatra-ai/sdk-extensions"
     ],

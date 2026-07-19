@@ -158,11 +158,6 @@
       "resolvedSha": "f619c68687514959098b6b64e8bce7ee0935f622"
     },
     {
-      "packageName": "@cinatra-ai/email-body-artifact",
-      "repo": "cinatra-ai/email-body-artifact",
-      "resolvedSha": "c1321ac4b83684e50068020a53e679cd8ae930fb"
-    },
-    {
       "packageName": "@cinatra-ai/email-connector",
       "repo": "cinatra-ai/email-connector",
       "resolvedSha": "99383cb9b7561e4620dbe8b5bba9d2a21332c020"
@@ -175,12 +170,12 @@
     {
       "packageName": "@cinatra-ai/email-drafting-agent",
       "repo": "cinatra-ai/email-drafting-agent",
-      "resolvedSha": "b6375582a9e6bd0540991e06e478ec44b6f3a585"
+      "resolvedSha": "9bce0cb48420fad3049cb1d02544673d460e48d6"
     },
     {
       "packageName": "@cinatra-ai/email-follow-up-agent",
       "repo": "cinatra-ai/email-follow-up-agent",
-      "resolvedSha": "02e102f41c6b52fb332cd076f70e6f91e30d4531"
+      "resolvedSha": "f9b2fe41c3ba6d9a25e9ee40835cd876a2cc75a0"
     },
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
