@@ -189,16 +189,22 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
     },
 
     async uninstall(ref: PackageRef, _actor: Actor): Promise<void> {
-      // Descriptor removal is guarded by the bridge: a type with live
-      // artifact rows is archived (kept resolvable for replay), not dropped.
+      // The handler itself does no descriptor/claim work (it has no scope). The
+      // durable claim retirement + governed-row archival for `kind:"artifact"` is
+      // fired by the DISPATCHER, scope-resolved from the canonical row, via the
+      // fail-closed `fireExtensionArtifactClaimArchival` seam (cinatra#1454) —
+      // NOT here. This call is recorded for audit parity with the other kinds.
       console.info(
-        `[artifactExtensionHandler] uninstall recorded for "${ref.packageName}" (descriptor de-registered/archived via the object-registry bridge)`,
+        `[artifactExtensionHandler] uninstall recorded for "${ref.packageName}" (claim retirement + governed-row archival fired by the dispatcher's fail-closed claim-archival seam)`,
       );
     },
 
     async archive(ref: PackageRef, _actor: Actor): Promise<void> {
+      // Same as uninstall: the durable, scope-resolved claim retirement + governed-
+      // row archival is fired by the dispatcher's fail-closed claim-archival seam
+      // (cinatra#1454), not by this metadata-only handler.
       console.info(
-        `[artifactExtensionHandler] archive recorded for "${ref.packageName}" (artifact type marked unavailable; existing artifacts stay readable)`,
+        `[artifactExtensionHandler] archive recorded for "${ref.packageName}" (artifact type marked unavailable; existing artifacts stay readable; claims/governed rows archived by the dispatcher's claim-archival seam)`,
       );
     },
 

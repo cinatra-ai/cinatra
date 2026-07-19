@@ -253,6 +253,64 @@ async function syncCanonicalRowTransition(
   });
 }
 
+// FAIL-CLOSED artifact CLAIM-ARCHIVAL fire for a committed ORG-SCOPED archive of
+// a `kind:"artifact"` extension (cinatra#1454). A no-op for every other kind.
+// Ties the archive/uninstall dispatch to the durable claim lifecycle: retire the
+// extension's `objectTypes` claims + archive its eligible governed rows via the
+// host-injected `fireExtensionArtifactClaimArchival` seam. Fired BEFORE the
+// durable row transition commits, and NON-swallowing — so a hook failure (or an
+// unwired host, which is itself a fail-closed error) aborts the whole
+// archive/uninstall rather than leaving the extension archived while its type
+// claims / governed rows stay live ("reports, never silently drops").
+//
+// SCOPE — deliberately ORG-SCOPED ONLY (the defined, scope-exact part of the
+// ratified disposition; codex convergence 2026-07-19). The claim/uninstall scope
+// "org:<id>" archives EXACTLY that org's assertions (`scopeOrgFilter` → org_id =
+// $2), so an org-admin uninstall / org-scoped archive retires precisely the right
+// rows. A NULL-org (platform) install maps to the "platform" scope, whose
+// archival applies NO org filter — a package-GLOBAL, cross-org sweep that could
+// wipe a coexisting org-scoped install's assertions. Retiring a platform
+// install's claims therefore needs the platform-scope destructive semantics
+// resolved first (owner/design-gated remainder R1, cinatra#1454); until then a
+// platform archive DEFERS (a diagnostic, not a silent drop). The package-GLOBAL
+// destructive paths (platform-admin hard-delete — common for artifacts since
+// `extensionHasBeenUsed` is agent-run-based; forceDelete; purge) likewise need an
+// ALL-SCOPES retirement primitive (remainder R2) and are not wired here.
+async function fireArtifactClaimArchivalForRow(
+  typeId: string,
+  row: InstalledExtension,
+  ref: PackageRef,
+  actor: Actor,
+): Promise<void> {
+  if (typeId !== "artifact") return;
+  // `!row.organizationId` covers null/undefined AND the empty string — an empty
+  // org id must NEVER reach the wiring (it would map to the cross-org "platform"
+  // sweep). Only a non-empty org id is the scope-exact, wired path.
+  if (!row.organizationId) {
+    // Remainder R1 (cinatra#1454): platform-scope retirement is unresolved — do
+    // NOT fire the cross-org "platform" archival. Diagnostic so the deferral is
+    // visible (never silent).
+    console.warn(
+      `[artifact-claim-archival] "${ref.packageName}" platform (NULL-org) archive: claim ` +
+        `retirement DEFERRED — platform-scope destructive semantics are unresolved (cinatra#1454 R1)`,
+    );
+    return;
+  }
+  const { fireExtensionArtifactClaimArchival } = await import("./artifact-claim-lifecycle-hook");
+  await fireExtensionArtifactClaimArchival({
+    packageName: ref.packageName,
+    organizationId: row.organizationId,
+    // Provenance precedence mirrors the install anchor: the pipeline rewrites
+    // `source.version` on the row (the trusted identity), while the separate
+    // `version` column can lag — so prefer `source.version`, then the column,
+    // then the version-less floor.
+    extensionVersion:
+      (row.source as { version?: string } | null)?.version ?? row.version ?? "0.0.0",
+    installId: row.id,
+    ...(actor.userId !== undefined ? { actorPrincipalId: actor.userId } : {}),
+  });
+}
+
 // PLATFORM-ADMIN-ONLY explicit per-row canonical cleanup for a package-GLOBAL
 // destruction. Reached ONLY behind an `isPlatformAdminActor` gate (org admins
 // are routed to the soft/archive path / refused before this). Transitions EVERY
@@ -1307,6 +1365,11 @@ class ExtensionRegistryImpl {
     // admin never reaches them — their uninstall archives their org's row.
     if (!isPlatformAdminActor(actor)) {
       await handler.archive(ref, actor);
+      // cinatra#1454: FAIL-CLOSED artifact claim archival BEFORE the durable row
+      // transition — an archive that cannot retire the extension's type claims /
+      // governed rows aborts here rather than archiving the row and leaving them
+      // live. A no-op for non-artifact kinds.
+      await fireArtifactClaimArchivalForRow(typeId, row, ref, actor);
       await syncCanonicalRowTransition(row, "archive", actor);
       // cinatra#1628 (S11a): archive this (package, org)'s extension dashboards on
       // the committed archive transition (re-homes the step W5/#1035 dropped).
@@ -1345,6 +1408,9 @@ class ExtensionRegistryImpl {
     const used = await extensionHasBeenUsed(ref);
     if (used || cascade.archivedDependentExists) {
       await handler.archive(ref, actor);
+      // cinatra#1454: FAIL-CLOSED artifact claim archival before the durable row
+      // transition (see the org-admin branch above). A no-op for non-artifact kinds.
+      await fireArtifactClaimArchivalForRow(typeId, row, ref, actor);
       await syncCanonicalRowTransition(row, "archive", actor);
       // cinatra#1628 (S11a): org-scoped dashboard archival on the committed
       // archive transition (see the org-admin branch above for rationale).
@@ -1421,6 +1487,10 @@ class ExtensionRegistryImpl {
     );
     const row = await resolveLifecycleTargetRow(ref.packageName, actor);
     await this.resolve(typeId).archive(ref, actor);
+    // cinatra#1454: FAIL-CLOSED artifact claim archival before the durable row
+    // transition — retire the extension's type claims + archive its governed rows,
+    // or abort the archive. A no-op for non-artifact kinds.
+    await fireArtifactClaimArchivalForRow(typeId, row, ref, actor);
     await syncCanonicalRowTransition(row, "archive", actor);
     // cinatra#1628 (S11a): archive this (package, org)'s extension dashboards on
     // the committed explicit-archive transition. Org-scoped, awaited, idempotent,
@@ -1684,4 +1754,17 @@ export type {
   ExtensionDashboardLifecycleHook,
   ExtensionDashboardLifecycleTransition,
 } from "./dashboard-lifecycle-hook";
+// FAIL-CLOSED artifact claim-archival seam (cinatra#1454). Host-injected; the
+// dispatcher fires it for `kind:"artifact"` BEFORE it commits the archive/uninstall
+// row transition, so a failure (or an unwired host) aborts the archive rather than
+// leaving the extension's `objectTypes` claims / governed rows live. Retirement is
+// the durable half of the claim lifecycle (`retireArtifactExtensionClaims`).
+export {
+  setExtensionArtifactClaimArchivalHook,
+  fireExtensionArtifactClaimArchival,
+} from "./artifact-claim-lifecycle-hook";
+export type {
+  ExtensionArtifactClaimArchivalHook,
+  ExtensionArtifactClaimArchivalInput,
+} from "./artifact-claim-lifecycle-hook";
 export { readEffectiveStatusByPackageNames } from "./canonical-store";

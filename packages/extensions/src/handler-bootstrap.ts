@@ -46,6 +46,14 @@ import { createArtifactExtensionHandler } from "./artifact-handler";
 // `fireExtensionActivate` returns `no-host-hook` and the dispatcher fail-closes
 // the connector install (no silent placeholder-as-success).
 import "@/lib/extension-activate-hook-wiring";
+// FAIL-CLOSED artifact claim-archival hook (cinatra#1454): co-located with the
+// artifact handler registration below so the dispatcher's archive/uninstall fire
+// (`fireExtensionArtifactClaimArchival`, gated on `kind:"artifact"`) never hits an
+// unwired slot on the Server Action path. The wiring is lightweight (only the hook
+// setter + the sync claim-lifecycle leaf); the archival body runs on the first
+// artifact archive. Without it, a `kind:"artifact"` archive/uninstall FAILS CLOSED
+// (throws) rather than silently dropping the extension's type claims.
+import "@/lib/objects/extension-artifact-claim-archival-wiring";
 
 extensionRegistry.register(createAgentExtensionHandler());
 extensionRegistry.register(createSkillExtensionHandler());

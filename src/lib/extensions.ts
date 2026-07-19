@@ -16,6 +16,12 @@ import "@/lib/extension-data-teardown-wiring";
 // (cinatra#1628, S11a — archive/restore extension dashboards on the committed
 // (package, org) transition). Same lightweight-wiring rationale as above.
 import "@/lib/extension-dashboard-lifecycle-wiring";
+// Side-effect import: installs the FAIL-CLOSED artifact claim-archival lifecycle
+// hook (cinatra#1454 — retire an artifact extension's `objectTypes` claims +
+// archive its governed rows on the committed archive/uninstall transition). Same
+// lightweight-wiring rationale as above; co-located with the artifact handler
+// registration on the Server Action path via handler-bootstrap too.
+import "@/lib/objects/extension-artifact-claim-archival-wiring";
 // The in-memory capability teardown closure (the four register-channel kinds)
 // lives in a shared lightweight module — single source of truth the host wires
 // here and the per-kind-teardown invariant test asserts directly.

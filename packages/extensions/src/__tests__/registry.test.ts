@@ -6,6 +6,8 @@ import {
   resolveLiveInstalledVersionForCas,
 } from "../index";
 import { setExtensionDataTeardownHook } from "../data-teardown-hook";
+import { setExtensionArtifactClaimArchivalHook } from "../artifact-claim-lifecycle-hook";
+import { transitionExtensionLifecycle } from "../lifecycle-primitive";
 import { makeHandler, makeRef, makeActor } from "./__mocks__/extension-handler";
 
 // ---------------------------------------------------------------------------
@@ -84,6 +86,7 @@ vi.mock("../activate-hook", () => ({
 
 import {
   readEffectiveStatusByPackageNames,
+  readInstalledExtensionsByPackageName,
 } from "../canonical-store";
 // Mocked audit helpers (see vi.mock("../audit-log") above) — imported so the
 // provenance-parity tests can assert the dispatcher's calls into them.
@@ -398,6 +401,140 @@ describe("ExtensionRegistry", () => {
       await extensionRegistry.forceDelete("agent", ref, makeActor());
       expect(handler.uninstall).toHaveBeenCalled();
       expect(fired).toEqual([ref.packageName]);
+    });
+  });
+
+  // cinatra#1454 — the dispatcher fires the FAIL-CLOSED artifact claim-archival
+  // seam on the ORG-SCOPED archive transition of a `kind:"artifact"` extension
+  // (an org-admin soft uninstall + an org-scoped explicit archive), BEFORE it
+  // commits the durable row transition, so an archival failure aborts the archive
+  // (the extension is never archived while its object-type claims / governed rows
+  // stay live). It DEFERS a NULL-org (platform) archive (remainder R1 — the
+  // cross-org "platform" archival semantics are unresolved) and never fires for a
+  // non-artifact kind.
+  describe("artifact claim-archival firing (#1454)", () => {
+    // An ORG-ADMIN actor + an org-scoped canonical row so the dispatcher resolves
+    // an org:<id> claim scope (the scope-exact, wired path).
+    const ORG = "org-7";
+    const orgAdmin = {
+      actorType: "user" as const,
+      userId: "user-9",
+      source: "worker" as const,
+      orgId: ORG,
+      orgRole: "org_admin" as const,
+    };
+    // Seed an ORG row for the wired-path tests (implementation-based so it cleanly
+    // overrides the default within a single test).
+    const seedOrgRow = (pkg: string) =>
+      vi.mocked(readInstalledExtensionsByPackageName).mockImplementation(async () => [
+        {
+          id: "iext_org",
+          packageName: pkg,
+          ownerLevel: "org",
+          ownerId: null,
+          organizationId: ORG,
+          kind: "artifact",
+          status: "active",
+          source: { type: "verdaccio", version: "2.0.0" },
+          requiredInProd: false,
+          dependencies: [],
+          manifestHash: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as never,
+      ]);
+    // Restore the module-default platform (NULL-org) seed row so neither an
+    // intra-describe nor a cross-describe test inherits a `seedOrgRow` override.
+    const restoreDefaultRows = () =>
+      vi.mocked(readInstalledExtensionsByPackageName).mockImplementation(async (pkg: string) => [
+        {
+          id: "iext_seed",
+          packageName: pkg,
+          ownerLevel: "platform",
+          ownerId: null,
+          organizationId: null,
+          kind: "agent",
+          status: "active",
+          source: { type: "verdaccio", version: "1.0.0" },
+          requiredInProd: false,
+          dependencies: [],
+          manifestHash: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as never,
+      ]);
+
+    let fired: unknown[];
+    beforeEach(() => {
+      fired = [];
+      setExtensionArtifactClaimArchivalHook((input) => {
+        fired.push(input);
+      });
+      restoreDefaultRows();
+    });
+    afterEach(() => {
+      setExtensionArtifactClaimArchivalHook(null);
+      restoreDefaultRows();
+    });
+
+    it("explicit ORG-SCOPED archive of a kind:'artifact' extension fires the seam (scope = the org row)", async () => {
+      extensionRegistry.register(makeHandler("artifact"));
+      seedOrgRow("@v/pkg-artifact");
+      await extensionRegistry.archive("artifact", makeRef("@v/pkg-artifact"), orgAdmin);
+      expect(fired).toEqual([
+        expect.objectContaining({
+          packageName: "@v/pkg-artifact",
+          organizationId: ORG,
+          installId: "iext_org",
+          extensionVersion: "2.0.0", // source.version precedence
+          actorPrincipalId: "user-9",
+        }),
+      ]);
+    });
+
+    it("an ORG-ADMIN soft uninstall (archive path) fires the claim-archival seam", async () => {
+      extensionRegistry.register(makeHandler("artifact"));
+      seedOrgRow("@v/pkg-artifact");
+      await extensionRegistry.uninstall("artifact", makeRef("@v/pkg-artifact"), orgAdmin);
+      expect(fired).toEqual([expect.objectContaining({ packageName: "@v/pkg-artifact", organizationId: ORG })]);
+    });
+
+    it("DEFERS a platform (NULL-org) archive — does not fire (remainder R1)", async () => {
+      extensionRegistry.register(makeHandler("artifact"));
+      // The default seed is a platform (NULL-org) row; a platform admin resolves it.
+      await extensionRegistry.archive("artifact", makeRef("@v/pkg-artifact"), makeActor());
+      expect(fired).toEqual([]);
+    });
+
+    it("does NOT fire for a non-artifact kind (agent archive)", async () => {
+      extensionRegistry.register(makeHandler("agent"));
+      await extensionRegistry.archive("agent", makeRef(), makeActor());
+      expect(fired).toEqual([]);
+    });
+
+    it("FAIL-CLOSED: a throwing seam aborts the org-scoped archive BEFORE the durable row transition", async () => {
+      setExtensionArtifactClaimArchivalHook(() => {
+        throw new Error("claim retirement failed");
+      });
+      extensionRegistry.register(makeHandler("artifact"));
+      seedOrgRow("@v/pkg-artifact");
+      vi.mocked(transitionExtensionLifecycle).mockClear();
+      await expect(
+        extensionRegistry.archive("artifact", makeRef("@v/pkg-artifact"), orgAdmin),
+      ).rejects.toThrow("claim retirement failed");
+      // The row transition never ran — the archive aborted fail-closed.
+      expect(transitionExtensionLifecycle).not.toHaveBeenCalled();
+    });
+
+    it("FAIL-CLOSED: an UNWIRED seam throws on an org-scoped kind:'artifact' archive (no silent drop)", async () => {
+      setExtensionArtifactClaimArchivalHook(null); // simulate a worker missing the wiring
+      extensionRegistry.register(makeHandler("artifact"));
+      seedOrgRow("@v/pkg-artifact");
+      vi.mocked(transitionExtensionLifecycle).mockClear();
+      await expect(
+        extensionRegistry.archive("artifact", makeRef("@v/pkg-artifact"), orgAdmin),
+      ).rejects.toThrow(/not wired/i);
+      expect(transitionExtensionLifecycle).not.toHaveBeenCalled();
     });
   });
 
