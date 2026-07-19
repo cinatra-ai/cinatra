@@ -75,9 +75,9 @@
     {
       "packageName": "@cinatra-ai/pdf-artifact",
       "repo": "cinatra-ai/pdf-artifact",
-      "resolvedSha": "b51ff1c3080af5b4a97e1c7b1df5fc853ad2b584",
+      "resolvedSha": "daad9da02664e0fba333ee6c5a50a8c5cd212808",
       "packageVersion": "0.1.1",
-      "treeSha256": "4cfcace58d7c61d4e81fa272039934bb27fe2fcb9be7c7151e47a154bfa44ac5"
+      "treeSha256": "d7de2a5cc1fedb85ecd4c3713980ead785dcefade4b2cd9bb72d7acb3d49f9db"
     },
     {
       "packageName": "@cinatra-ai/planner-agent",
