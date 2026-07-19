@@ -99,6 +99,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Query builders + the schema/DDL bootstrap path. The single remaining call site is build/ensure-schema serialization, not a request-time read.",
   },
+  "src/lib/execution/environment-layer-store.pg.ts": {
+    class: "migratable-background-setup",
+    justification:
+      "Durable Postgres store behind the EnvironmentLayerCache (exec-plane S3 A2/A3, cinatra#1708). Its reads/writes run on the build / retention-GC / lifecycle-reference cold paths (a later process reusing an earlier layer build; the GC reap), never a per-request hot store. Migrates with the exec-plane store async conversion.",
+  },
   "src/lib/postgres-schema-init.ts": {
     class: "migratable-background-setup",
     justification:

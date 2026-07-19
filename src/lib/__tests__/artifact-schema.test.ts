@@ -88,10 +88,14 @@ describe("artifact storage-spine DDL", () => {
     expect(sql).toContain("artifact_provider_cache_expiry_idx");
     // Artifact table CREATE statements should not declare a `version_id`
     // column. The idempotent ALTER DO block is the only place the legacy name
-    // appears for live-schema migration.
-    expect(sql).not.toMatch(/CREATE TABLE[^\n]*"artifact_provider_cache"[\s\S]*?version_id\s+text/);
-    expect(sql).not.toMatch(/CREATE TABLE[^\n]*"artifact_audit"[\s\S]*?version_id\s+text/);
-    expect(sql).not.toMatch(/CREATE TABLE[^\n]*"artifact_refs"[\s\S]*?version_id\s+text/);
+    // appears for live-schema migration. The `[\s\S]` gap is bounded to the
+    // single artifact CREATE TABLE statement (it may NOT cross into the next
+    // CREATE TABLE) so an unrelated downstream table that happens to declare a
+    // column whose name merely CONTAINS "version_id" (e.g. environment_layer_
+    // references.holder_version_id) never trips these artifact-table assertions.
+    expect(sql).not.toMatch(/CREATE TABLE[^\n]*"artifact_provider_cache"(?:(?!CREATE TABLE)[\s\S])*?version_id\s+text/);
+    expect(sql).not.toMatch(/CREATE TABLE[^\n]*"artifact_audit"(?:(?!CREATE TABLE)[\s\S])*?version_id\s+text/);
+    expect(sql).not.toMatch(/CREATE TABLE[^\n]*"artifact_refs"(?:(?!CREATE TABLE)[\s\S])*?version_id\s+text/);
   });
 
   it("cache store: expiry-aware miss, no bytes, injected deleteRemote", () => {

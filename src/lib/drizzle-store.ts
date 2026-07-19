@@ -24,6 +24,7 @@ import {
   runContextSelectionsSchemaQueries,
 } from "@/lib/artifact-claim-schema";
 import { publicationOperationLedgerSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
+import { environmentLayerStoreSchemaQueries } from "@/lib/execution/environment-layer-schema";
 import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
@@ -1983,6 +1984,14 @@ $body$` },
     // the pure-strings leaf src/lib/artifacts/publication-operation-schema.ts;
     // existing deployments also converge via migration core__0055.
     ...publicationOperationLedgerSchemaQueries(schemaName),
+    // ---- environment_layers + environment_layer_references (cinatra#1708 S3 A2) ----
+    // Durable L1 environment-layer store: content-addressed cache entries +
+    // org-scoped recipe→layer references. Backs the exec-plane
+    // EnvironmentLayerCache's injectable store so the cache is CROSS-PROCESS
+    // (reuse an earlier build; one shared GC/teardown source of truth). DDL in
+    // the pure-strings leaf src/lib/execution/environment-layer-schema.ts;
+    // existing deployments also converge via migration core__0057.
+    ...environmentLayerStoreSchemaQueries(schemaName),
     // ---- authoring_invocation_ledger ----
 
     // Operational recursion-control table for authoring-skill chains.
