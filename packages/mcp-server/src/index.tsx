@@ -31,7 +31,7 @@ import {
   createMcpRuntimeServer,
   type McpRuntimeToolServer,
 } from "./runtime-server";
-import { mcpRequestContextStorage, resolveRequestRunContext, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy } from "./request-context";
+import { mcpRequestContextStorage, resolveRequestRunContext, selectDelegatedToolPolicy, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy } from "./request-context";
 import { buildMcpHandshakeUrls } from "./handshake-urls";
 import { replaceOriginInValue } from "./origin-rewrite";
 import { McpAuthFlowBridge } from "./components/mcp-auth-flow-bridge";
@@ -994,14 +994,11 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       registerCapabilities: options.registerCapabilities, registerRequestContext: delegatedActor?.delegation === "agent_run" ? { verifiedAgentRunId: delegatedActor.runId } : undefined, // cinatra#1392 S8: the VERIFIED (signed-OBO) agent-run identity for the extension-tool discovery union; chat delegations / plain bearers carry no verified run and stay caller-agnostic (pre-S8 behavior). One line to hold the tracked-file size ratchet.
       instructions: options.serverInstructions,
       experimental: options.serverExperimental,
-      // Only the CHAT delegation type triggers the chat tool-policy
-      // allowlist. agent-run delegation is unrestricted at registration
-      // time — per-handler authz + `enforceMcpBoundary` still gate
-      // mutations. The chat allowlist is intentionally narrow (read +
-      // dispatch only); applying it to agent runs would block the
-      // operations the agent was dispatched to perform.
-      toolPolicyMode:
-        delegatedActor?.delegation === "chat" ? "delegated-chat" : "unrestricted",
+      // Fail-closed tool-policy dispatch over the VERIFIED delegation type (the
+      // widget actor never falls through to "unrestricted"); the kind-scoped
+      // widget allowlist keys off the verified `knd`. See
+      // selectDelegatedToolPolicy in ./request-context.
+      ...selectDelegatedToolPolicy(delegatedActor),
     });
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

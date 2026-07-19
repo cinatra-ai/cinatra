@@ -59,6 +59,7 @@ const PUBLIC_EXACT_PATHS = [
   "/sign-in",
   "/sign-up",
   "/widget-auth", // cinatra#407 hosted widget login — a SESSIONLESS visitor must render the login form here (NOT be 307'd to /sign-in). The page itself reads a present session normally and gates issuing a code on org membership + explicit consent. Exact path only (the ?txn=... query carries the transaction id).
+  "/api/assistants/chat", // cinatra#1221 S5 — the UNIFIED assistant chat route also serves the public-site (WordPress/Drupal) widget via its broker-auth branch (Bearer cit_ + X-Cinatra-Widget-User-Token cwu_). A cross-origin browser widget holds no cookie, so the middleware must NOT 307 it to /sign-in — the route's OWN dual-token fail-closed sequence is the authoritative gate (a non-widget, session-less request still 401s inside the handler; the cookie-session @cinatra path is byte-unchanged). Exact path only (no widget subpaths are public).
   "/api/openai/connection-status",
   "/api/app/setup-status",
   "/api/app/route-guard-status",

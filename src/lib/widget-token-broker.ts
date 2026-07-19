@@ -9,6 +9,7 @@ import {
 import { Buffer } from "node:buffer";
 
 import type { GeneratedWidgetStreamAuth } from "@/lib/generated/extensions.server";
+import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
 import { readMetadataValueFromDatabase } from "@/lib/database";
 import { getActiveConnectSiteById } from "@/lib/connect-sites-store";
 import { isConfiguredOrigin } from "@/lib/widget-stream-auth";
@@ -145,8 +146,15 @@ function qSchemaTable(): string {
   return `${quotePostgresIdentifier(postgresSchema)}.${quotePostgresIdentifier(TABLE)}`;
 }
 
-function streamRoutePath(agentSlug: string): string {
-  return `/api/agents/${agentSlug}/stream`;
+// S5 (cinatra#1221) AUDIENCE RE-SCOPE. The `cit_` token's audience is the
+// UNIFIED assistant chat route, NOT the per-agent stream path. The token stays
+// AGENT-BOUND via its `agent_slug` column + `scope` (`<agentSlug>.stream`,
+// asserted at consume); only the `aud` (route path) moves so the token is
+// consumed by `/api/assistants/chat`. A token presented at the legacy stream
+// route now fails `aud_mismatch` there — the designed, owner-reviewed cutover.
+// The mint sites are unchanged; only this bound value moves.
+function streamRoutePath(_agentSlug: string): string {
+  return WIDGET_BROKER_ROUTE_PATH;
 }
 
 // Security-critical reads (key-fingerprint rotation check, kill-switch, the

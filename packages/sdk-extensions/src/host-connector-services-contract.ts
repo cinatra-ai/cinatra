@@ -136,6 +136,39 @@ export type HostMcpPaginationService = {
 };
 
 /**
+ * The delegated-widget OBO override the content-editor dispatch carries on the
+ * `public_site_widget` path (S5-W1 §5 G1/G4). Field-for-field the shape the host
+ * dispatch seam (`host-content-editor-dispatch.ts`, cinatra#408) accepts, so the
+ * host threads it straight through with no re-mapping. Server-derived ONLY —
+ * `instanceId` is the verified-origin re-pin, never a model-forgeable value;
+ * `runBy` is the authenticated END USER, never the install identity.
+ */
+export type WidgetActorOverride = {
+  runBy: string;
+  orgId: string;
+  instanceId: string;
+  sourceType: "public_site_widget";
+};
+
+/**
+ * Trusted delegated-widget actor context for the ACTIVE MCP request frame
+ * (S5-W1). Host-derived from the SAME trusted frame the write-authority gate
+ * reads (the verified `public_site_widget` delegated actor stamped at the MCP
+ * transport boundary) — NEVER from connector tool input. `null` on the normal
+ * (non-widget) turn.
+ */
+export type WidgetActorContext = {
+  /** Fixed discriminator — a non-null context is ALWAYS a widget-delegated call. */
+  delegation: "public_site_widget";
+  /** Authenticated END-USER id (the carrier run's `runBy`). */
+  runBy: string;
+  /** Org scope (the `cwu_` claim; never session-derived). */
+  orgId: string;
+  /** SERVER-PINNED canonical instance (verified-origin re-pin). */
+  instanceId: string;
+};
+
+/**
  * Host-owned A2A blocking dispatch to a content-editor agent (shared by the
  * drupal/wordpress MCP connectors). The host helper mints the A2A bearer,
  * opens the external A2A client, sends one text-mode task and returns the
@@ -143,7 +176,41 @@ export type HostMcpPaginationService = {
  * edges stay host-side.
  */
 export type HostContentEditorDispatchService = {
-  dispatch(input: { agentUrl: string; payload: unknown; timeoutMs: number }): Promise<string>;
+  dispatch(input: {
+    agentUrl: string;
+    payload: unknown;
+    timeoutMs: number;
+    /** npm package of the content-editor agent (cinatra#246 OBO-carrier run). */
+    packageName?: string;
+    /**
+     * S5-W1 §5 G1/G4 — the delegated-widget OBO override. Present ONLY when the
+     * active turn is a trusted `public_site_widget` delegation; the host binding
+     * forwards it VERBATIM into `dispatchContentEditorViaA2A` so the carrier
+     * `agent_run` is created AS THE END USER against the SERVER-PINNED instance,
+     * with `sourceType:"public_site_widget"` (platform-admin bypass suppressed
+     * downstream). ABSENT on the normal agent path → byte-identical dispatch.
+     */
+    actorOverride?: WidgetActorOverride;
+    /**
+     * S5-W1 §5 G11 — point-of-use grant re-assert invoked immediately before the
+     * OBO-carrier `agent_run` insert (revocation linearization). `false`/throw
+     * refuses the dispatch with NO run created (fail closed).
+     */
+    preCreateAuthorize?: () => Promise<boolean>;
+  }): Promise<string>;
+  /**
+   * S5-W1 §5 — resolve the trusted `public_site_widget` delegated actor for the
+   * ACTIVE MCP request frame, or `null` on the normal (non-widget) turn. The
+   * host reads it from the SAME verified delegated actor stamped at the MCP
+   * transport boundary (`mcpRequestContextStorage`) — NEVER connector tool
+   * input or the SDK `request.actor` field. The connector binds this to its
+   * `deps.resolveWidgetActor` seam so `*_content_editor_run` can reconstruct the
+   * pinned `actorOverride` from a server-verified source. OPTIONAL for skew: a
+   * pre-S5 host leaves it absent → the connector's non-widget path (the host
+   * dispatch's own atomicity guard still fails a widget turn loud, never silent
+   * install identity).
+   */
+  resolveWidgetActor?(): WidgetActorContext | null;
 };
 
 /** Drupal external-MCP toolbox + instance-admin surfaces (instance settings +

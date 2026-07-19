@@ -135,6 +135,12 @@ import {
 // content-editor connectors). Carries the @cinatra-ai/llm + @cinatra-ai/a2a
 // runtime edges host-side so neither connector imports them.
 import { dispatchContentEditorViaA2A } from "./host-content-editor-dispatch";
+// S5-W1 §5 — the trusted `public_site_widget` actor reader for the active MCP
+// request frame. Published on the content-editor-dispatch service so the
+// wordpress/drupal connectors bind their `resolveWidgetActor` deps seam to a
+// SERVER-VERIFIED source (the delegated actor stamped at the transport
+// boundary), never connector tool input.
+import { resolveWidgetActorFromFrame } from "./widget-actor-frame";
 // Per-user / per-connector-instance WRITE authority for the CMS content path
 // (cinatra#409): the host-owned authority the wordpress/drupal content-editor
 // connectors call before EVERY write primitive. It resolves the TRUSTED user
@@ -509,8 +515,14 @@ export function registerHostConnectorServices(): void {
 
   register(svc.contentEditorDispatch, {
     // A2A blocking dispatch to the content-editor agents (host-side bearer
-    // mint + external A2A client + history-walk -> reply text).
+    // mint + external A2A client + history-walk -> reply text). Forwards the S5
+    // delegated-widget `actorOverride` + `preCreateAuthorize` VERBATIM (the
+    // input shape is a superset of the SDK contract's).
     dispatch: dispatchContentEditorViaA2A,
+    // S5-W1 §5 — trusted `public_site_widget` actor for the active MCP frame
+    // (null on non-widget turns). Read from the verified delegated actor stamped
+    // at the transport boundary, NEVER connector tool input.
+    resolveWidgetActor: resolveWidgetActorFromFrame,
   } satisfies HostContentEditorDispatchService);
 
   // Actor-scoped instance LIST filters — the read-boundary twin of the

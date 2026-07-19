@@ -222,6 +222,7 @@ export {
   buildLlmMcpServerTool,
   buildLlmMcpServerToolForChat,
   buildLlmMcpServerToolForAgentRun,
+  buildLlmMcpServerToolForWidget,
   checkPublicMcpReachability,
 } from "./mcp-access";
 export type {
@@ -229,6 +230,8 @@ export type {
   ChatMcpActorTokenIssuer,
   AgentRunMcpActor,
   AgentRunMcpActorTokenIssuer,
+  WidgetMcpActor,
+  WidgetMcpActorTokenIssuer,
   PublicMcpReachability,
 } from "./mcp-access";
 

@@ -28,7 +28,14 @@ export type WidgetAuthAuditEvent =
   // imply the dispatch succeeded), or a reject (with a reason CODE — never the
   // failing secret) on any fail-closed deny.
   | "stream_user_dispatch_authorized"
-  | "stream_user_token_rejected";
+  | "stream_user_token_rejected"
+  // cinatra#1221 S5 — the SAME dual-token DECISION on the unified
+  // /api/assistants/chat broker-auth branch (the widget moves off the stream
+  // relay onto the assistant runtime). Same authorization-decision semantics as
+  // the stream-side pair above (the AUTHORIZED event precedes the LLM turn; the
+  // turn/carrier lifecycle is the run-outcome trail).
+  | "assistant_chat_widget_dispatch_authorized"
+  | "assistant_chat_widget_token_rejected";
 
 export type WidgetAuthAuditFields = {
   actor?: string | null; // userId (never an email/secret)
