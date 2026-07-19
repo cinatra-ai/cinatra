@@ -53,6 +53,10 @@ import "@/lib/extension-activate-hook-wiring";
 // setter + the sync claim-lifecycle leaf); the archival body runs on the first
 // artifact archive. Without it, a `kind:"artifact"` archive/uninstall FAILS CLOSED
 // (throws) rather than silently dropping the extension's type claims.
+// This wiring also installs the FAIL-CLOSED claim-REACTIVATION hook (cinatra#1837
+// R3, restore) + the ALL-SCOPES archival hook (R2, package-global destruction) —
+// co-located in the same module so the dispatcher's restore / package-global
+// fires never hit an unwired slot on the Server Action path (both fail closed).
 import "@/lib/objects/extension-artifact-claim-archival-wiring";
 
 extensionRegistry.register(createAgentExtensionHandler());

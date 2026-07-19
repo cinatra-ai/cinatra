@@ -189,6 +189,18 @@ export function runArtifactUninstallArchival(input: {
   // Foreground batch loop — each iteration reads the next artifact batch,
   // processes each artifact in its own held-lock tx, then checkpoints.
   for (;;) {
+    // Per-batch status recheck (cinatra#1837 R4a/R2-1): a stale SECOND
+    // invocation must stop the instant another worker terminalized this op
+    // (marked it 'completed'/'failed'), not just at the initial read — else two
+    // resumes could both walk the (now shrinking) eligible set. Re-read under
+    // the same op id; a non-'running' status ends this invocation cleanly.
+    const [statusCheck] = run([
+      {
+        text: `SELECT status FROM "${q()}"."artifact_uninstall_operations" WHERE id = $1`,
+        values: [input.operationId],
+      },
+    ]);
+    if (statusCheck.rows.length === 0 || String(statusCheck.rows[0].status) !== "running") break;
     const cursorClause = cursor ? `AND (org_id, artifact_id) > ($${filter.values.length + 2}, $${filter.values.length + 3})` : "";
     const [batch] = run([
       {
@@ -251,6 +263,152 @@ export function runArtifactUninstallArchival(input: {
     },
   ]);
   return { archivedAssertions, processedArtifacts };
+}
+
+/** The OLDEST still-`running` operation for (scope, package) — an interrupted
+ * archival that a retry / the resume-aware acquire resumes to completion
+ * (cinatra#1837 R4b). `findReplayableUninstallOperation` only ever sees
+ * `'completed'` ops, so a mid-archival throw (status still `'running'`) is
+ * unreachable by replay; this reader makes it reachable by resumption. Oldest-
+ * first so the fixpoint drains the earliest stranded op before opening a fresh
+ * one. */
+export function findResumableUninstallOperation(input: {
+  scope: string;
+  extensionPackage: string;
+}): ArtifactUninstallOperationRow | null {
+  const [result] = run([
+    {
+      text: `SELECT ${OPERATION_COLUMNS} FROM "${q()}"."artifact_uninstall_operations"
+             WHERE extension_package = $1 AND scope = $2 AND status = 'running'
+             ORDER BY created_at ASC
+             LIMIT 1`,
+      values: [input.extensionPackage, input.scope],
+    },
+  ]);
+  return result.rows.length > 0 ? mapOperationRow(result.rows[0]) : null;
+}
+
+/**
+ * The single-writer, resume-aware ACQUIRE (cinatra#1837 R4a) — the ATOMIC
+ * pick-or-insert a retirement runs before archiving, under the (scope,package)
+ * operation-key advisory lock so two workers crossing this boundary produce at
+ * most ONE new `'running'` op (F1). One held-lock transaction (the advisory
+ * lock is taken as the first statement, then the data-modifying CTE runs in the
+ * SAME transaction so the re-read + conditional INSERT are atomic):
+ *   - a `'running'` op already exists  → `{action:'resume'}` (resume it, never
+ *     open a second — closes the empty-op data-loss, R4b);
+ *   - else eligible assertions remain  → INSERT ONE fresh `'running'` op,
+ *     `{action:'begin'}`;
+ *   - else                             → `{action:'done'}` (nothing to archive,
+ *     no empty op minted).
+ * The caller loops until `done`, so a resume that finishes one op re-acquires
+ * and either finds nothing (done) or the next stranded op. Lock key mirrors the
+ * per-artifact key style but is scoped to the operation, taken BEFORE the
+ * per-artifact `pg_advisory_xact_lock` inside archival — never the reverse (no
+ * ABBA).
+ */
+export type AcquireRetirementResult =
+  | { action: "resume"; operationId: string }
+  | { action: "begin"; operationId: string }
+  | { action: "done" };
+
+export function acquireArtifactRetirementOperation(input: {
+  scope: string;
+  extensionPackage: string;
+  extensionVersion: string;
+  actor: string;
+}): AcquireRetirementResult {
+  const s = q();
+  const newId = randomUUID();
+  const filter = scopeOrgFilter(input.scope);
+  // Eligible-assertion filter is param-shifted past the 5 op params.
+  const eligibleOrgClause = filter.clause ? `AND org_id = $6` : "";
+  const results = run(
+    [
+      {
+        text: `SELECT pg_advisory_xact_lock(hashtext($1))`,
+        values: [`artifact-uninstall:${input.scope}:${input.extensionPackage}`],
+      },
+      {
+        text: `WITH running AS (
+            SELECT id FROM "${s}"."artifact_uninstall_operations"
+            WHERE scope = $1 AND extension_package = $2 AND status = 'running'
+            ORDER BY created_at ASC LIMIT 1
+          ),
+          eligible AS (
+            SELECT 1 FROM "${s}"."semantic_assertion"
+            WHERE extension = $2 AND eligibility = 'eligible' ${eligibleOrgClause}
+            LIMIT 1
+          ),
+          inserted AS (
+            INSERT INTO "${s}"."artifact_uninstall_operations"
+              (id, scope, extension_package, extension_version, actor)
+            SELECT $5, $1, $2, $3, $4
+            WHERE NOT EXISTS (SELECT 1 FROM running) AND EXISTS (SELECT 1 FROM eligible)
+            RETURNING id
+          )
+          SELECT (SELECT id FROM running) AS running_id, (SELECT id FROM inserted) AS inserted_id`,
+        values: [
+          input.scope,
+          input.extensionPackage,
+          input.extensionVersion,
+          input.actor,
+          newId,
+          ...filter.values,
+        ],
+      },
+    ],
+    true,
+  );
+  const row = results[1].rows[0] ?? {};
+  const runningId = row.running_id == null ? null : String(row.running_id);
+  const insertedId = row.inserted_id == null ? null : String(row.inserted_id);
+  if (runningId) return { action: "resume", operationId: runningId };
+  if (insertedId) return { action: "begin", operationId: insertedId };
+  return { action: "done" };
+}
+
+/**
+ * The DB-sourced scopes that could still hold a live claim, an eligible
+ * assertion, or a stranded operation for a package (cinatra#1837 R2, F5) — the
+ * store-side legs of the all-scopes UNION (the canonical-row scopes are read by
+ * the async wiring and unioned there). Three DISTINCT reads:
+ *   1. `artifact_type_claims` — any non-`retired` claim scope.
+ *   2. `semantic_assertion`  — any `eligible` assertion's org (→ `org:<id>`;
+ *      covers a claimless package / missing canonical row that still governs
+ *      eligible rows, e.g. after a registry-backed no-row purge).
+ *   3. `artifact_uninstall_operations` — any not-yet-replayed op's scope
+ *      (a stranded running/completed op).
+ * Returns the deduped set; the caller rejects malformed scopes and routes only
+ * exact `org:<id>` legs (platform is deferred per R1).
+ */
+export function enumerateRetirableScopesFromStores(extensionPackage: string): string[] {
+  const scopes = new Set<string>();
+  const [claims] = run([
+    {
+      text: `SELECT DISTINCT scope FROM "${q()}"."artifact_type_claims"
+             WHERE extension_package = $1 AND status <> 'retired'`,
+      values: [extensionPackage],
+    },
+  ]);
+  for (const r of claims.rows) if (r.scope != null) scopes.add(String(r.scope));
+  const [assertions] = run([
+    {
+      text: `SELECT DISTINCT org_id FROM "${q()}"."semantic_assertion"
+             WHERE extension = $1 AND eligibility = 'eligible'`,
+      values: [extensionPackage],
+    },
+  ]);
+  for (const r of assertions.rows) if (r.org_id != null) scopes.add(`org:${String(r.org_id)}`);
+  const [ops] = run([
+    {
+      text: `SELECT DISTINCT scope FROM "${q()}"."artifact_uninstall_operations"
+             WHERE extension_package = $1 AND replayed_at IS NULL`,
+      values: [extensionPackage],
+    },
+  ]);
+  for (const r of ops.rows) if (r.scope != null) scopes.add(String(r.scope));
+  return [...scopes];
 }
 
 /** The LATEST completed, not-yet-replayed operation for (scope, package) —

@@ -311,6 +311,62 @@ async function fireArtifactClaimArchivalForRow(
   });
 }
 
+// FAIL-CLOSED artifact CLAIM-REACTIVATION fire for a committed ORG-SCOPED restore
+// of a `kind:"artifact"` extension (cinatra#1837 R3) — the MIRROR of
+// `fireArtifactClaimArchivalForRow`. A no-op for every other kind. Fired BEFORE
+// the durable `activate` transition, non-swallowing, so a failed reactivation
+// aborts the whole restore (the row stays archived) rather than marking it active
+// with dead claims. Symmetric R1 deferral: a NULL-org (platform) restore DEFERS
+// with a diagnostic (nothing was retired at the platform scope to reactivate).
+async function fireArtifactClaimReactivationForRow(
+  typeId: string,
+  row: InstalledExtension,
+  ref: PackageRef,
+  actor: Actor,
+): Promise<void> {
+  if (typeId !== "artifact") return;
+  if (!row.organizationId) {
+    console.warn(
+      `[artifact-claim-reactivation] "${ref.packageName}" platform (NULL-org) restore: claim ` +
+        `reactivation DEFERRED — symmetric with the deferred platform archive (cinatra#1837 R1)`,
+    );
+    return;
+  }
+  const { fireExtensionArtifactClaimReactivation } = await import(
+    "./artifact-claim-lifecycle-hook"
+  );
+  await fireExtensionArtifactClaimReactivation({
+    packageName: ref.packageName,
+    organizationId: row.organizationId,
+    extensionVersion:
+      (row.source as { version?: string } | null)?.version ?? row.version ?? "0.0.0",
+    installId: row.id,
+    ...(actor.userId !== undefined ? { actorPrincipalId: actor.userId } : {}),
+  });
+}
+
+// FAIL-CLOSED ALL-SCOPES artifact claim-archival fire for a package-GLOBAL
+// destruction (hard-delete / forceDelete) of a `kind:"artifact"` extension
+// (cinatra#1837 R2). A no-op for every other kind. Fired BEFORE the destructive
+// backing removal, non-swallowing, so an incomplete retirement aborts the destroy
+// (no orphaned live claim). Retires across every ORG scope; the platform leg is
+// diagnosed + deferred (R1) inside the host primitive.
+async function fireArtifactClaimArchivalAllScopesForPackage(
+  typeId: string,
+  ref: PackageRef,
+  actor: Actor,
+): Promise<void> {
+  if (typeId !== "artifact") return;
+  const { fireExtensionArtifactClaimArchivalAllScopes } = await import(
+    "./artifact-claim-lifecycle-hook"
+  );
+  await fireExtensionArtifactClaimArchivalAllScopes({
+    packageName: ref.packageName,
+    extensionVersion: ref.version ?? "0.0.0",
+    ...(actor.userId !== undefined ? { actorPrincipalId: actor.userId } : {}),
+  });
+}
+
 // PLATFORM-ADMIN-ONLY explicit per-row canonical cleanup for a package-GLOBAL
 // destruction. Reached ONLY behind an `isPlatformAdminActor` gate (org admins
 // are routed to the soft/archive path / refused before this). Transitions EVERY
@@ -1344,6 +1400,15 @@ class ExtensionRegistryImpl {
   //      b. archived dep exists / extensionHasBeenUsed → archive (row-scoped)
   //      c. otherwise → package-global hard-delete (platform-admin-only).
   async uninstall(typeId: string, ref: PackageRef, actor: Actor): Promise<void> {
+    // cinatra#1837 R4a: hold the install-lifecycle lock over the WHOLE
+    // uninstall (soft-archive + hard-delete branches) so a concurrent
+    // install/update cannot interleave with claim retirement. Re-entrant via ALS
+    // (the nested handler.archive / handler.uninstall acquire is a no-op).
+    const { withInstallLock } = await import("@cinatra-ai/agents");
+    return withInstallLock(ref.packageName, () => this._uninstallLocked(typeId, ref, actor));
+  }
+
+  private async _uninstallLocked(typeId: string, ref: PackageRef, actor: Actor): Promise<void> {
     // Locked-row protection is enforced at the dispatcher layer.
     await assertNoLockedCanonicalRow(ref.packageName, "uninstall");
     // Closure: refuse uninstall if an active dependent requires this package
@@ -1460,6 +1525,11 @@ class ExtensionRegistryImpl {
       danglingReferences,
       resolvedRows: affectedRows,
     });
+    // cinatra#1837 R2: FAIL-CLOSED ALL-SCOPES artifact claim retirement BEFORE
+    // the package-global backing destruction — retire claims + archive governed
+    // rows across every ORG scope (platform deferred, R1), or abort the destroy
+    // (no orphaned live claim). A no-op for non-artifact kinds.
+    await fireArtifactClaimArchivalAllScopesForPackage(typeId, ref, actor);
     await handler.uninstall(ref, actor);
     await syncCanonicalPackageGlobalTransition(ref.packageName, "uninstall", actor);
     // Process-local deregistration — fires for the HARD-DELETE branch too (then
@@ -1476,6 +1546,14 @@ class ExtensionRegistryImpl {
   // standing-gated (P5): resolve the single actor-org row, gate write standing
   // over it, then transition exactly that row (never the package-wide fan-out).
   async archive(typeId: string, ref: PackageRef, actor: Actor): Promise<void> {
+    // cinatra#1837 R4a: hold the install-lifecycle lock over the WHOLE explicit
+    // archive so a concurrent install/update cannot interleave with claim
+    // retirement. Re-entrant via ALS.
+    const { withInstallLock } = await import("@cinatra-ai/agents");
+    return withInstallLock(ref.packageName, () => this._archiveLocked(typeId, ref, actor));
+  }
+
+  private async _archiveLocked(typeId: string, ref: PackageRef, actor: Actor): Promise<void> {
     // Locked-row protection is enforced at the dispatcher layer:
     // reject archive if ANY canonical row for this package is locked
     // (package-wide over-block — standing-agnostic, the safe direction).
@@ -1535,6 +1613,15 @@ class ExtensionRegistryImpl {
   // finalized digest; the in-memory registries replace by id/name) and does NOT
   // re-record a new version's provenance.
   async restore(typeId: string, ref: PackageRef, actor: Actor): Promise<void> {
+    // cinatra#1837 R4a: hold the install-lifecycle lock over the WHOLE restore —
+    // the same lock install/update/uninstall/archive/forceDelete take — so no
+    // concurrent install/update can interleave with the claim reactivation.
+    // Re-entrant via ALS (a nested handler acquire is a no-op).
+    const { withInstallLock } = await import("@cinatra-ai/agents");
+    return withInstallLock(ref.packageName, () => this._restoreLocked(typeId, ref, actor));
+  }
+
+  private async _restoreLocked(typeId: string, ref: PackageRef, actor: Actor): Promise<void> {
     // Closure: refuse restore if the restored extension's required deps are
     // archived/missing (a restore operates on a row whose .dependencies are
     // already materialized, so a forward closure check is meaningful).
@@ -1544,6 +1631,13 @@ class ExtensionRegistryImpl {
     const { resolveLifecycleTargetRow } = await import("./lifecycle-target-resolver");
     const row = await resolveLifecycleTargetRow(ref.packageName, actor);
     await this.resolve(typeId).restore(ref, actor);
+    // cinatra#1837 R3: FAIL-CLOSED artifact claim REACTIVATION before the durable
+    // `activate` transition — reactivate the retired `objectTypes` claims + re-
+    // register the type surface so the restored type is live + bindable the
+    // instant the row flips active (no boot cycle). A failed reactivation THROWS
+    // and aborts the restore (the row stays archived). A no-op for non-artifact
+    // kinds; a NULL-org (platform) restore defers with a diagnostic (R1).
+    await fireArtifactClaimReactivationForRow(typeId, row, ref, actor);
     await syncCanonicalRowTransition(row, "activate", actor);
     // cinatra#1628 (S11a): un-archive this (package, org)'s extension dashboards on
     // the committed restore transition — the symmetric inverse of the archive
@@ -1652,6 +1746,11 @@ class ExtensionRegistryImpl {
       if (snapshot) {
         await removeReferencingRunRows(snapshot.id);
       }
+      // cinatra#1837 R2: FAIL-CLOSED ALL-SCOPES artifact claim retirement BEFORE
+      // the package-global backing destruction (see the hard-delete branch) —
+      // retire across every ORG scope (platform deferred, R1) or abort. A no-op
+      // for non-artifact kinds. Inside the held install lock (package serialized).
+      await fireArtifactClaimArchivalAllScopesForPackage(typeId, ref, actor);
       await handler.uninstall(ref, actor); // hard-delete; cascade bypassed by design
       // Drop the canonical manifest row(s) — EXPLICIT platform-admin-only per-row
       // cleanup (this method is platform-admin-gated above), so no sibling org
@@ -1766,5 +1865,28 @@ export {
 export type {
   ExtensionArtifactClaimArchivalHook,
   ExtensionArtifactClaimArchivalInput,
+} from "./artifact-claim-lifecycle-hook";
+// FAIL-CLOSED artifact claim-REACTIVATION seam (cinatra#1837 R3). Host-injected;
+// the dispatcher fires it for `kind:"artifact"` in restore() BEFORE the row flips
+// active, so a failed reactivation aborts the restore rather than leaving the row
+// active with dead claims.
+export {
+  setExtensionArtifactClaimReactivationHook,
+  fireExtensionArtifactClaimReactivation,
+} from "./artifact-claim-lifecycle-hook";
+export type {
+  ExtensionArtifactClaimReactivationHook,
+  ExtensionArtifactClaimReactivationInput,
+} from "./artifact-claim-lifecycle-hook";
+// FAIL-CLOSED ALL-SCOPES artifact claim-archival seam (cinatra#1837 R2). Fired for
+// `kind:"artifact"` on a package-global destruction (hard-delete / forceDelete)
+// BEFORE the backing is destroyed, so an incomplete retirement aborts the destroy.
+export {
+  setExtensionArtifactClaimArchivalAllScopesHook,
+  fireExtensionArtifactClaimArchivalAllScopes,
+} from "./artifact-claim-lifecycle-hook";
+export type {
+  ExtensionArtifactClaimArchivalAllScopesHook,
+  ExtensionArtifactClaimArchivalAllScopesInput,
 } from "./artifact-claim-lifecycle-hook";
 export { readEffectiveStatusByPackageNames } from "./canonical-store";

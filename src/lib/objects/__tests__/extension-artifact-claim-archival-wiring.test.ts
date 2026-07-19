@@ -30,6 +30,8 @@ vi.mock("@/lib/objects/artifact-claim-store", () => {
   };
 });
 vi.mock("@/lib/objects/artifact-uninstall-operations", () => ({
+  acquireArtifactRetirementOperation: vi.fn(() => ({ action: "done" })),
+  enumerateRetirableScopesFromStores: vi.fn(() => []),
   beginArtifactUninstallOperation: vi.fn(() => "op1"),
   runArtifactUninstallArchival: vi.fn(() => ({ archivedAssertions: 0, processedArtifacts: 0 })),
   findReplayableUninstallOperation: vi.fn(() => null),
@@ -55,13 +57,18 @@ vi.mock("@cinatra-ai/extensions", () => ({
   setExtensionArtifactClaimArchivalHook: (hook: ArchivalHook | null) => {
     holder.hook = hook;
   },
+  // The consolidated wiring module also installs the reactivation + all-scopes
+  // hooks (cinatra#1837); this test only exercises the ARCHIVAL hook, so capture
+  // the others into no-op setters so the module's wire calls resolve.
+  setExtensionArtifactClaimReactivationHook: () => {},
+  setExtensionArtifactClaimArchivalAllScopesHook: () => {},
 }));
 
 // Import the wiring ONCE (side-effect: installs the hook onto the captured slot).
 import "@/lib/objects/extension-artifact-claim-archival-wiring";
 
 import {
-  beginArtifactUninstallOperation,
+  acquireArtifactRetirementOperation,
   findReplayableUninstallOperation,
   replayArtifactUninstallOperation,
   runArtifactUninstallArchival,
@@ -82,7 +89,7 @@ beforeEach(() => {
   vi.mocked(activateArtifactTypeClaim).mockReturnValue({ changed: true } as never);
   vi.mocked(finalizeArtifactTypeClaimRetirement).mockReturnValue({ changed: true } as never);
   vi.mocked(readArtifactTypeClaimsForExtension).mockReturnValue([]);
-  vi.mocked(beginArtifactUninstallOperation).mockReturnValue("op1");
+  vi.mocked(acquireArtifactRetirementOperation).mockReturnValue({ action: "done" });
   vi.mocked(runArtifactUninstallArchival).mockReturnValue({ archivedAssertions: 0, processedArtifacts: 0 });
   vi.mocked(findReplayableUninstallOperation).mockReturnValue(null);
   vi.mocked(replayArtifactUninstallOperation).mockReturnValue({ insertedAssertions: 0, skipped: 0 });
@@ -94,6 +101,9 @@ describe("extension-artifact-claim-archival-wiring — scope mapping", () => {
   });
 
   it("maps a non-null organizationId to the org:<id> claim scope and retires", async () => {
+    vi.mocked(acquireArtifactRetirementOperation)
+      .mockReturnValueOnce({ action: "begin", operationId: "op1" })
+      .mockReturnValue({ action: "done" });
     vi.mocked(runArtifactUninstallArchival).mockReturnValue({ archivedAssertions: 4, processedArtifacts: 2 });
     vi.mocked(readArtifactTypeClaimsForExtension).mockReturnValue([
       { id: "c1", status: "active" } as never,
@@ -105,7 +115,7 @@ describe("extension-artifact-claim-archival-wiring — scope mapping", () => {
       installId: "iext_9",
       actorPrincipalId: "user-3",
     });
-    expect(beginArtifactUninstallOperation).toHaveBeenCalledWith({
+    expect(acquireArtifactRetirementOperation).toHaveBeenCalledWith({
       scope: "org:org-9",
       extensionPackage: "@v/pkg-artifact",
       extensionVersion: "1.2.3",
@@ -122,7 +132,7 @@ describe("extension-artifact-claim-archival-wiring — scope mapping", () => {
       organizationId: null,
       extensionVersion: "1.0.0",
     });
-    expect(beginArtifactUninstallOperation).toHaveBeenCalledWith(
+    expect(acquireArtifactRetirementOperation).toHaveBeenCalledWith(
       expect.objectContaining({ scope: "platform", actor: "system" }),
     );
   });
@@ -136,12 +146,12 @@ describe("extension-artifact-claim-archival-wiring — scope mapping", () => {
           extensionVersion: "1.0.0",
         }))(),
     ).rejects.toThrow(/empty organizationId/i);
-    expect(beginArtifactUninstallOperation).not.toHaveBeenCalled();
+    expect(acquireArtifactRetirementOperation).not.toHaveBeenCalled();
   });
 
   it("PROPAGATES a store failure (fail-closed — the seam aborts the archive)", async () => {
-    vi.mocked(beginArtifactUninstallOperation).mockImplementation(() => {
-      throw new Error("uninstall-operation insert failed");
+    vi.mocked(acquireArtifactRetirementOperation).mockImplementation(() => {
+      throw new Error("uninstall-operation acquire failed");
     });
     // The wired closure is sync (the lifecycle leaf is sync); the dispatcher
     // fires it as `await hook(input)`, so a sync throw surfaces as a rejection
@@ -153,7 +163,7 @@ describe("extension-artifact-claim-archival-wiring — scope mapping", () => {
           organizationId: "org-1",
           extensionVersion: "1.0.0",
         }))(),
-    ).rejects.toThrow("uninstall-operation insert failed");
+    ).rejects.toThrow("uninstall-operation acquire failed");
   });
 });
 
@@ -175,7 +185,10 @@ describe("install → rows → archive-extension → rows archived → reinstall
     expect(activated).toEqual([{ claimId: "c1", type: "@v/pkg:one", claim: "dedicated" }]);
 
     // ARCHIVE the extension via the WIRED hook (what the dispatcher fires):
-    // opens the uninstall operation, archives the governed rows, retires the claim.
+    // acquires the uninstall operation, archives the governed rows, retires the claim.
+    vi.mocked(acquireArtifactRetirementOperation)
+      .mockReturnValueOnce({ action: "begin", operationId: "op1" })
+      .mockReturnValue({ action: "done" });
     vi.mocked(runArtifactUninstallArchival).mockReturnValue({ archivedAssertions: 3, processedArtifacts: 2 });
     vi.mocked(readArtifactTypeClaimsForExtension).mockReturnValue([{ id: "c1", status: "active" } as never]);
     await holder.hook!({
@@ -185,7 +198,7 @@ describe("install → rows → archive-extension → rows archived → reinstall
       installId: "iext_1",
       actorPrincipalId: "user-1",
     });
-    expect(beginArtifactUninstallOperation).toHaveBeenCalledWith(
+    expect(acquireArtifactRetirementOperation).toHaveBeenCalledWith(
       expect.objectContaining({ scope: "org:org-1", extensionPackage: "@v/pkg-artifact" }),
     );
     expect(runArtifactUninstallArchival).toHaveBeenCalledWith({ operationId: "op1", batchSize: undefined });

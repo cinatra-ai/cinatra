@@ -88,6 +88,18 @@ export type RescanArtifactBridgeOptions = {
   /** Limit the rescan to a single package (the activate-hook path passes the
    *  just-installed package so an install registers only its own type). */
   onlyPackage?: string;
+  /**
+   * cinatra#1837 R3: a package being RESTORED whose canonical row is still
+   * archived at the moment of this call. The write-allowed gate correctly
+   * refuses archived rows for the ordinary rescan (so it can never resurrect a
+   * torn-down type), but restore must register the restored type's surface
+   * BEFORE it flips the row active in the SAME held-lock operation — else the
+   * activation gate cannot resolve the type's validator on the archived row
+   * (F3). For THIS package only, the write-allowed gate is bypassed; every other
+   * fail-closed narrowing (digest/anchor/kind) still applies. Must be paired
+   * with `onlyPackage` so nothing else is affected.
+   */
+  restorePackage?: string;
 };
 
 export type RescanArtifactBridgeResult = {
@@ -240,7 +252,10 @@ export async function rescanArtifactBridgeFromStore(
 
     // FAIL-CLOSED against the canonical store: never re-register an archived
     // install. An ungoverned (no-row) bundled/disk artifact is allowed (CG-1).
-    if (!(await isArtifactExtensionWriteAllowed(rec.packageName))) {
+    // EXCEPTION (cinatra#1837 R3): a package being RESTORED registers its
+    // still-archived type surface here so its claim reactivation can resolve the
+    // validator before the row flips active in the same locked operation.
+    if (opts.restorePackage !== rec.packageName && !(await isArtifactExtensionWriteAllowed(rec.packageName))) {
       skippedNotActive.push(rec.packageName);
       continue;
     }

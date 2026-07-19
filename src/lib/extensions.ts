@@ -21,6 +21,9 @@ import "@/lib/extension-dashboard-lifecycle-wiring";
 // archive its governed rows on the committed archive/uninstall transition). Same
 // lightweight-wiring rationale as above; co-located with the artifact handler
 // registration on the Server Action path via handler-bootstrap too.
+// This wiring also installs the FAIL-CLOSED claim-REACTIVATION hook (cinatra#1837
+// R3, restore) + the ALL-SCOPES claim-archival hook (R2, package-global
+// destruction) — co-located in the same module (no new module on the route graph).
 import "@/lib/objects/extension-artifact-claim-archival-wiring";
 // The in-memory capability teardown closure (the four register-channel kinds)
 // lives in a shared lightweight module — single source of truth the host wires

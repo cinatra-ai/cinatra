@@ -113,3 +113,140 @@ export async function fireExtensionArtifactClaimArchival(
   }
   await hook(input);
 }
+
+// ---------------------------------------------------------------------------
+// cinatra#1837 R3 — CLAIM-REACTIVATION seam (the MIRROR of archival). When a
+// `kind:"artifact"` extension is RESTORED (the inverse of an org-scoped
+// archive), the claims the paired retirement retired must be REACTIVATED
+// synchronously, BEFORE the row flips active, so the restored type is live +
+// bindable the instant the row is active — not dead until a boot rescan (which
+// refuses archived rows anyway). FAIL-CLOSED (same contract): a throwing hook
+// PROPAGATES + a missing host hook THROWS, so a failed reactivation aborts the
+// restore (the row stays archived, never active with dead claims). Co-located in
+// this module (not a separate file) so it adds no module to the locked route
+// graphs; the seam is still a DISTINCT set/fire pair with its own input shape.
+// A NULL-org (platform) restore DEFERS (R1, symmetric with the deferred platform
+// archive — nothing was retired at the platform scope to reactivate).
+// ---------------------------------------------------------------------------
+
+export interface ExtensionArtifactClaimReactivationInput {
+  packageName: string;
+  /** The restored row's organization scope; a non-empty string ⇒ `org:<id>`. */
+  organizationId: string | null | undefined;
+  /** The restored row's installed version (recorded on reactivated claims). */
+  extensionVersion: string;
+  /** The canonical install row id. */
+  installId?: string | null;
+  /** The acting principal id; a system id when absent. */
+  actorPrincipalId?: string;
+}
+
+/**
+ * Performs the durable claim reactivation for a (package, scope): re-register
+ * the type surface (bridge-semantic, so the activation gate resolves a
+ * validator on a still-archived row), drain the paired retirement's owed replay,
+ * reactivate the current claims, enqueue the binding reconcile. May be sync or
+ * async; the firer awaits it. A failure throws (fail-closed).
+ */
+export type ExtensionArtifactClaimReactivationHook = (
+  input: ExtensionArtifactClaimReactivationInput,
+) => unknown | Promise<unknown>;
+
+const REACTIVATION_HOOK_SLOT = Symbol.for("cinatra.extensions.artifactClaimReactivationHook.v1");
+type ReactivationHookHolder = { hook: ExtensionArtifactClaimReactivationHook | null };
+function reactivationHookHolder(): ReactivationHookHolder {
+  const g = globalThis as unknown as Record<symbol, ReactivationHookHolder | undefined>;
+  return (g[REACTIVATION_HOOK_SLOT] ??= { hook: null });
+}
+
+/** Host wiring entry: inject the durable claim reactivation. Pass `null` to
+ *  clear (tests). */
+export function setExtensionArtifactClaimReactivationHook(
+  hook: ExtensionArtifactClaimReactivationHook | null,
+): void {
+  reactivationHookHolder().hook = hook;
+}
+
+/**
+ * Fire (and AWAIT) the injected claim reactivation for (package, scope).
+ * FAIL-CLOSED: a throwing hook PROPAGATES, and a missing host hook THROWS. The
+ * dispatcher fires this only for `kind:"artifact"` and BEFORE it commits the
+ * restore's row transition, so either failure aborts the restore rather than
+ * marking the row active with dead claims. Never swallows.
+ */
+export async function fireExtensionArtifactClaimReactivation(
+  input: ExtensionArtifactClaimReactivationInput,
+): Promise<void> {
+  const { hook } = reactivationHookHolder();
+  if (!hook) {
+    throw new Error(
+      `[cinatra:extensions] artifact claim-reactivation hook is not wired — cannot reactivate the ` +
+        `object-type claims for "${input.packageName}" on restore (fail-closed: refusing to mark the ` +
+        `extension active while its type claims / governed rows stay retired)`,
+    );
+  }
+  await hook(input);
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#1837 R2 — ALL-SCOPES CLAIM-ARCHIVAL seam. The package-GLOBAL
+// destructive counterpart of the org-scoped archival seam: a package-global
+// destruction (platform-admin hard-delete, forceDelete) retires claims + archives
+// governed rows across ALL of a package's ORG scopes (platform deferred, R1)
+// BEFORE the backing is destroyed. FAIL-CLOSED — a failing org leg throws so the
+// destroy aborts (no orphaned live claim). SEPARATE from the org seam (no
+// `organizationId` in the input); co-located here to add no module to the graph.
+// ---------------------------------------------------------------------------
+
+export interface ExtensionArtifactClaimArchivalAllScopesInput {
+  packageName: string;
+  /** The destroyed package's version (recorded on each scope's operation). */
+  extensionVersion: string;
+  /** The acting principal id; a system id when absent. */
+  actorPrincipalId?: string;
+}
+
+/**
+ * Performs the ALL-SCOPES claim retirement for a package (every org scope; the
+ * platform leg diagnosed + deferred). Fail-closed: a failing org leg throws so
+ * the destructive delete aborts. May be sync or async; the firer awaits it.
+ */
+export type ExtensionArtifactClaimArchivalAllScopesHook = (
+  input: ExtensionArtifactClaimArchivalAllScopesInput,
+) => unknown | Promise<unknown>;
+
+const ALL_SCOPES_HOOK_SLOT = Symbol.for("cinatra.extensions.artifactClaimArchivalAllScopesHook.v1");
+type AllScopesHookHolder = { hook: ExtensionArtifactClaimArchivalAllScopesHook | null };
+function allScopesHookHolder(): AllScopesHookHolder {
+  const g = globalThis as unknown as Record<symbol, AllScopesHookHolder | undefined>;
+  return (g[ALL_SCOPES_HOOK_SLOT] ??= { hook: null });
+}
+
+/** Host wiring entry: inject the durable all-scopes claim retirement. Pass
+ *  `null` to clear (tests). */
+export function setExtensionArtifactClaimArchivalAllScopesHook(
+  hook: ExtensionArtifactClaimArchivalAllScopesHook | null,
+): void {
+  allScopesHookHolder().hook = hook;
+}
+
+/**
+ * Fire (and AWAIT) the injected all-scopes claim retirement for a package.
+ * FAIL-CLOSED: a throwing hook PROPAGATES, and a missing host hook THROWS. The
+ * dispatcher fires this only for `kind:"artifact"` and BEFORE it destroys the
+ * package backing, so either failure aborts the destroy rather than leaving
+ * orphaned live claims. Never swallows.
+ */
+export async function fireExtensionArtifactClaimArchivalAllScopes(
+  input: ExtensionArtifactClaimArchivalAllScopesInput,
+): Promise<void> {
+  const { hook } = allScopesHookHolder();
+  if (!hook) {
+    throw new Error(
+      `[cinatra:extensions] artifact all-scopes claim-archival hook is not wired — cannot retire the ` +
+        `object-type claims for "${input.packageName}" on package-global destruction (fail-closed: ` +
+        `refusing to destroy the package while its type claims / governed rows stay live)`,
+    );
+  }
+  await hook(input);
+}
