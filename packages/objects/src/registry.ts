@@ -168,6 +168,19 @@ class ObjectTypeRegistryImpl {
     return this.entries.get(typeId) ?? null;
   }
 
+  /**
+   * The package that DEFINES `typeId` — the provenance the Artifacts console's
+   * Type definitions tab reads for its "Defined by" column (cinatra#1786, epic
+   * #1785: exactly one defining extension per type). Returns the owning package
+   * name, or `null` for a host / built-in (provenance-less) registration and
+   * for a type id that is not registered at all. This is the READ side of the
+   * same `packageByType` provenance `getTypesForPackage` / `removeByPackage`
+   * write against — a pure, allocation-free lookup with no mutation surface.
+   */
+  definerOf(typeId: string): string | null {
+    return this.packageByType.get(typeId) ?? null;
+  }
+
   listByCategory(category: ObjectCategory): readonly ObjectTypeDefinition<unknown>[] {
     const out: ObjectTypeDefinition<unknown>[] = [];
     for (const def of this.entries.values()) {
