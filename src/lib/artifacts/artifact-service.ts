@@ -23,15 +23,11 @@ import {
 } from "./artifact-creation";
 import { tombstoneArtifact as retentionTombstone } from "./artifact-retention";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
-// Generated pure-data floor constant (cinatra#151 Stage 6) — core source
-// never names the floor extension package.
-import { DEFAULT_ARTIFACT_EXTENSION } from "@cinatra-ai/objects/artifact-floor";
 import { listArtifactIdsForExtension } from "./semantic-assertion-store";
-// Effective-identity service (cinatra#1426): the ONE resolution point for
-// artifact identity — total over base type × claim × binding × classic
-// assertions × install status. The enrichment below resolves THROUGH it
-// (identity requires an INSTALLED extension; a claim without a landed
-// binding is browse-only).
+// Effective-identity service (epic #1785): the ONE resolution point for
+// artifact identity — now TYPE-DRIVEN (the type's installed namespace-defining
+// extension, else no primary). The enrichment below resolves THROUGH it and
+// carries the raw eligible-extension summary set.
 import {
   resolveArtifactEffectiveIdentities,
   resolveArtifactEffectiveIdentity,
@@ -82,14 +78,14 @@ export type ArtifactSummary = {
   ownerLevel: "user" | "team" | "organization" | "workspace";
   visibility: "private" | "team" | "organization" | "public";
   // Semantic identity resolves through the effective-identity service
-  // (cinatra#1426): `effectiveIdentity` is the full resolution (extension
-  // identity with its basis + selectability, the default-artifact floor, or
-  // plain object); `primaryExtension` is the summary string derived from it
-  // (the identity's extension, or the floor). Identity requires an INSTALLED
-  // extension — an uninstalled extension's assertions are INACTIVE here.
-  // `eligibleExtensions` stays the raw active eligible set (not drafts).
+  // (epic #1785): `effectiveIdentity` is the type-driven resolution (the
+  // installed namespace-defining extension, or no-primary); `primaryExtension`
+  // is the summary string derived from it — the identity's extension, or NULL
+  // when the row has no defining extension (the retired generic catch-all, an
+  // uninstalled extension's type). `eligibleExtensions` stays the raw active
+  // eligible set (not drafts).
   eligibleExtensions: string[];
-  primaryExtension: string;
+  primaryExtension: string | null;
   effectiveIdentity: EffectiveIdentity;
   // Validated "Open in source application" URL for connector-ref artifacts,
   // projected from `objects.data.connectorRef.url` via
@@ -174,20 +170,15 @@ function actorPassesObjectAuthz(
   );
 }
 
-/** The summary `primaryExtension` string for a resolved identity: the
- *  identity's extension when it names one (binding/classic/catalog), else the
- *  floor. A `plain-object` identity cannot occur for the generic artifact
- *  base type this surface lists (the floor always covers it) — it maps to the
- *  floor string defensively; the honest signal is `effectiveIdentity.kind`. */
-function primaryExtensionOf(identity: EffectiveIdentity): string {
-  return identity.kind === "extension" ? identity.extension : DEFAULT_ARTIFACT_EXTENSION;
+/** The summary `primaryExtension` string for a resolved identity: the type's
+ *  defining extension when the identity names one, else NULL (no-primary — the
+ *  retired generic catch-all or an uninstalled extension's type). The honest
+ *  signal is `effectiveIdentity.kind`. */
+function primaryExtensionOf(identity: EffectiveIdentity): string | null {
+  return identity.kind === "extension" ? identity.extension : null;
 }
 
-const FLOOR_IDENTITY_FALLBACK: EffectiveIdentity = {
-  kind: "default-artifact",
-  selectable: false,
-  assertionId: null,
-};
+const NO_PRIMARY_IDENTITY_FALLBACK: EffectiveIdentity = { kind: "no-primary" };
 
 function toSummary(
   rec: {
@@ -215,13 +206,13 @@ function toSummary(
     updatedAt: rec.updatedAt ?? "",
     ownerLevel: rec.ownerLevel ?? "organization",
     visibility: rec.visibility ?? "organization",
-    // Default to the floor if the caller didn't enrich (e.g., from a
-    // unit test that doesn't drive the assertion store).
+    // Default to no-primary if the caller didn't enrich (e.g., from a
+    // unit test that doesn't drive the resolver).
     eligibleExtensions: semanticIdentity?.eligibleExtensions ?? [],
     primaryExtension: semanticIdentity
       ? primaryExtensionOf(semanticIdentity.identity)
-      : DEFAULT_ARTIFACT_EXTENSION,
-    effectiveIdentity: semanticIdentity?.identity ?? FLOOR_IDENTITY_FALLBACK,
+      : null,
+    effectiveIdentity: semanticIdentity?.identity ?? NO_PRIMARY_IDENTITY_FALLBACK,
     sourceUrl: connectorRefSourceUrl(rec.data),
   };
 }

@@ -141,16 +141,13 @@ export function pickArtifactRenderer(
 }
 
 /**
- * The §III activation barrier for a row's selection affordance: SELECTION
- * (pin / add-to-context) requires a settled binding. A catalog-derived identity
- * (claim active, binding not yet written) is browsable and openable but not yet
- * selectable — its Pin / Add-to-context control is replaced by a muted
- * "Preparing" label. Unchanged by the spine.
+ * The §III activation barrier for a row's selection affordance. RETIRED under
+ * type-driven identity (epic #1785): identity is now a pure function of the
+ * row's installed type — there is no pre-binding "catalog / browse-only"
+ * intermediate state a row can sit in, so a row is never "preparing". Kept as a
+ * constant-false predicate so the detail-page + library-row callers stay
+ * structurally intact (the "Preparing" affordance can never render).
  */
-export function isSelectionPreparing(identity: EffectiveIdentity): boolean {
-  return (
-    identity.kind === "extension" &&
-    identity.basis === "catalog" &&
-    identity.selectable === false
-  );
+export function isSelectionPreparing(_identity: EffectiveIdentity): boolean {
+  return false;
 }

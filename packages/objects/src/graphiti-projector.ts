@@ -172,7 +172,10 @@ function deriveEntityName(data: Record<string, unknown>, type: string): string {
 const ARTIFACT_EXCERPT_CAP = 2000;
 export type ArtifactSemanticIdentity = {
   eligibleExtensions: string[];
-  primaryExtension: string;
+  /** The row's primary extension, or NULL when it has no defining extension
+   * (epic #1785 — the retired generic catch-all, or no eligible non-floor
+   * assertion). */
+  primaryExtension: string | null;
 };
 export function projectArtifactSafe(
   data: Record<string, unknown>,
@@ -200,13 +203,11 @@ export function projectArtifactSafe(
     originKind: pick("originKind"),
     viewerHint: pick("viewerHint"),
     title: pick("title"),
-    // Semantic identity in the Graphiti projection.
-    // Empty arrays / floor-default are valid sentinels
-    // for "no enrichment yet" (e.g., projection ran before any
-    // classifier asserted) — Graphiti consumers can still navigate
-    // by the immutable artifactId.
-    primaryExtension:
-      semanticIdentity?.primaryExtension ?? DEFAULT_ARTIFACT_EXTENSION,
+    // Semantic identity in the Graphiti projection. An empty array / null
+    // primary are valid sentinels for "no enrichment / no defining extension"
+    // (epic #1785) — Graphiti consumers can still navigate by the immutable
+    // artifactId.
+    primaryExtension: semanticIdentity?.primaryExtension ?? null,
     eligibleExtensions: semanticIdentity?.eligibleExtensions ?? [],
     excerpt:
       typeof excerptRaw === "string"
@@ -255,13 +256,9 @@ export type ClaimedRowFacetInput = {
   claimingExtension: string;
   claimKind: "dedicated" | "default";
   claimGeneration: number;
-  /** The effective-identity service's resolution — null when the identity is
-   * not an extension identity (floor / plain object). */
+  /** The effective-identity service's resolution — the type's defining
+   * extension, or null when the identity is no-primary (epic #1785). */
   effectiveExtension: string | null;
-  /** 'binding' | 'classic' | 'catalog' (activation barrier — browse-only) |
-   * 'default-artifact' | 'plain-object'. */
-  identityBasis: string;
-  selectable: boolean;
   eligibleExtensions: string[];
 };
 
@@ -276,13 +273,10 @@ export function projectClaimedRowFaceted(
     claimedBy: facet.claimingExtension,
     claimKind: facet.claimKind,
     claimGeneration: facet.claimGeneration,
-    // The effective identity when resolution lands an extension identity;
-    // the claiming extension otherwise (e.g. the pre-binding activation
-    // barrier resolves catalog/browse-only — the claim still names the
-    // library-visible identity).
+    // The effective identity when resolution lands an extension identity; the
+    // claiming (defining) extension otherwise. For a disposition-governed typed
+    // row these are the same package (the type's namespace-definer).
     primaryExtension: facet.effectiveExtension ?? facet.claimingExtension,
-    identityBasis: facet.identityBasis,
-    selectable: facet.selectable,
     eligibleExtensions: facet.eligibleExtensions,
     title: scalar("title") ?? scalar("name"),
     excerpt: deriveClaimedRowExcerpt(data),
@@ -342,8 +336,6 @@ function resolveClaimedRowProjection(row: CanonicalRow): ClaimedRowProjection | 
       claimKind: "dedicated",
       claimGeneration: 1,
       effectiveExtension: identity.kind === "extension" ? identity.extension : null,
-      identityBasis: identity.kind === "extension" ? identity.basis : identity.kind,
-      selectable: identity.selectable,
       eligibleExtensions: enrichment.eligibleExtensions,
     }),
   };
@@ -1000,9 +992,11 @@ ORDER BY asserted_at, extension`,
   const eligibleExtensions = rows.map((r) => String(r.extension));
   const nonDefault = rows.filter((r) => r.extension !== DEFAULT_EXT);
   if (nonDefault.length === 0) {
+    // No non-floor eligible assertion ⇒ no primary extension (epic #1785 — the
+    // default-artifact floor is retired as an identity).
     return {
       eligibleExtensions,
-      primaryExtension: DEFAULT_EXT,
+      primaryExtension: null,
     };
   }
   const rank = (src: string): number =>

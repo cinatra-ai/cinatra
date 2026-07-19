@@ -77,7 +77,7 @@ export function representationViewerProbe(arm: {
   // The slot the arm resolved at, derived from the key (`<pkg>::<slot>`) so a
   // never-built degrade carries the ACTUAL slot (Slice B resolves at `detail`).
   const slot: ArtifactUiSlot = generatedKey.endsWith("::detail") ? "detail" : "preview";
-  const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "probe" };
+  const floor: EffectiveIdentity = { kind: "no-primary" };
   const extProvider = (built: boolean): ArtifactRenderDispatch =>
     pickArtifactRenderer({
       identity: floor,
@@ -129,14 +129,8 @@ export function semanticRendererProbe(arm: {
 }): (caseId: CutoverCaseId) => CutoverObservation {
   const ext = arm.extension ?? EXT;
   const generatedKey = arm.generatedKey ?? `${ext}::detail`;
-  const winner: EffectiveIdentity = {
-    kind: "extension",
-    extension: ext,
-    basis: "binding",
-    selectable: true,
-    assertionId: "probe",
-  };
-  const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "probe" };
+  const winner: EffectiveIdentity = { kind: "extension", extension: ext };
+  const floor: EffectiveIdentity = { kind: "no-primary" };
   const semantic = (built: boolean): ArtifactRenderDispatch =>
     pickArtifactRenderer({
       identity: winner,
