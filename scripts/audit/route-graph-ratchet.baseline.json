@@ -5,7 +5,7 @@
     "/api/mcp": 1493,
     "/chat": 1553,
     "/api/a2a": 1498,
-    "/api/llm-bridge": 1504
+    "/api/llm-bridge": 1506
   },
   "absorbs": {
     "/sign-in": {
@@ -33,10 +33,10 @@
       "pr": 1839
     },
     "/api/llm-bridge": {
-      "from": 1503,
-      "to": 1504,
-      "reason": "cinatra#1454 declarative artifact-binding → declared-object-type resolution (PR #1839) adds exactly ONE first-party module reachable from every tracked route via the shared artifact-materializer bootstrap graph: src/lib/artifacts/resolve-bound-artifact-type.ts — the server-only resolver that maps a declarative artifact binding to its EFFECTIVE declared object-type id (reading the org's artifact-type claims via @/lib/objects/artifact-claim-store and the binding grammar from @cinatra-ai/agents/artifact-binding). It is imported by the pre-existing, already-route-reachable src/lib/artifacts/run-artifact-materializer.ts and src/lib/artifacts/artifact-template.ts; every one of its own first-party imports (@cinatra-ai/objects/registry, @cinatra-ai/objects, @cinatra-ai/objects/claims, @cinatra-ai/agents/artifact-binding, @/lib/objects/artifact-claim-store) was already reachable pre-PR, so it adds exactly itself — a uniform +1 on all five tracked routes (verified by a reachable-set diff vs the merge base: the sole net-new reachable module is resolve-bound-artifact-type.ts, nothing removed). MEASURED via the route-graph ratchet with the companion extension repos cloned pinned (missingCount 0), on the branch merged with current main: a clean +1 (1503->1504).",
-      "pr": 1839
+      "from": 1504,
+      "to": 1506,
+      "reason": "exec-plane S3 A2 run-seam wiring (cinatra#1708, PR #__BOTPR__) adds exactly TWO lightweight first-party modules reachable from /api/llm-bridge ONLY (no other tracked route imports them): (1) src/lib/execution/resolve-run-execution-binding.ts — the fail-closed run-seam decision matrix, imported by src/app/api/llm-bridge/route.ts; its only value import (resolveRunExecutionEnvironment from @cinatra-ai/agents) is ALREADY reachable from the route (the route imports @cinatra-ai/agents), so it pulls no new subtree. (2) src/lib/execution/register-execution-environment-service.ts — the globalThis DI slot, imported by (1) for the slot accessors; its only package imports are statement-level `import type` (SandboxExecutor/SandboxEnvironmentMount from @cinatra-ai/llm; ReferenceMatch from @cinatra-ai/execution-plane), which the route-graph analyzer erases (scripts/route-graph.mjs skips statement-level import-type), so it adds exactly itself and never pulls the heavy execution-plane graph. The env-execution-service + pg store + boot phase live behind the DI slot / a boot-only dynamic import and are NOT route-reachable. A clean +2 (1504->1506) — REBASED onto current main: the A2 modules are disjoint from and additive to the #1827/#1839 first-party raises already merged into main (llm-bridge base ceiling 1504), so the +2 holds unchanged. MEASURED via the route-graph ratchet with the companion extension repos cloned pinned (missingCount 0), on the branch merged with current main.",
+      "pr": 1841
     }
   }
 }
