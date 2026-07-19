@@ -41,7 +41,15 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 // the teardown helper and this test's direct import see the identical instance.
 vi.mock("@cinatra-ai/objects", async () => {
   const registry = await import("@cinatra-ai/objects/registry");
-  return registry;
+  // `src/lib/register-all-object-types.ts` (pulled in transitively via
+  // ensure-artifact-registry after the epic #1785 A3/A4 reader cutover) reads
+  // the family→type-id taxonomy from the barrel. The barrel mock returns the
+  // real registry, so also re-export the light taxonomy helper — its module is
+  // boot-graph-free (`./namespace` constants + a type-only authz alias).
+  const { objectTypeIdsForFamily } = await import(
+    "../../../packages/objects/src/taxonomy"
+  );
+  return { ...registry, objectTypeIdsForFamily };
 });
 
 import { createExtensionHostContext } from "@/lib/extension-host-context";

@@ -151,6 +151,12 @@ const defaultPersonalLifecycleReader = (ids: string[]): PersonalLifecycleResult 
 let personalLifecycleReader: (ids: string[]) => PersonalLifecycleResult = defaultPersonalLifecycleReader;
 vi.mock("@/lib/database", () => ({
   readSkillLifecycleStates: (ids: string[]) => personalLifecycleReader(ids),
+  // The epic #1785 A3/A4 reader cutover pulls `notifications-host` (via
+  // `background-jobs`) into this route's module graph; it reads these two pg
+  // helpers from `@/lib/database` at import time. Neither is exercised on the
+  // resolver path under test — stub them so the wholesale module mock loads.
+  getPostgresConnectionString: () => "postgres://mock-not-used",
+  ensurePostgresSchema: async () => {},
 }));
 
 vi.mock("@/lib/agents-store", () => ({

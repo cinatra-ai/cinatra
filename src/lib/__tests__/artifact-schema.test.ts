@@ -191,10 +191,13 @@ describe("artifact storage-spine DDL", () => {
     const repBlock = src.slice(repIdx, repIdx + 800);
     expect(repBlock).toMatch(/persistedRunId/);
     expect(repBlock).not.toMatch(/input\.createdByRunId\s*\?\?\s*null/);
-    // Splice ordering: `...producerOps` MUST appear AFTER the
-    // artifact_audit INSERT and BEFORE the floor-rebalance INSERT, so
-    // the floor's NOT-EXISTS sees the producer's agent-eligible row
-    // and skips the default.
+    // Splice ordering (epic #1785 wave A3 retirement): `...producerOps` MUST
+    // appear AFTER the artifact_audit INSERT. The generic default-floor
+    // rebalance INSERT that used to FOLLOW the splice is RETIRED — the row now
+    // carries its exact declared type in `objects.type`, so no
+    // `semantic_assertion` floor row is ever written at creation. Assert the
+    // producer splice still trails the audit AND that the retired floor write
+    // is gone (never resurrected).
     const auditPos = src.indexOf('INSERT INTO "${schema}"."artifact_audit"');
     const splicePos = src.indexOf("...producerOps");
     const floorPos = src.indexOf(
@@ -202,7 +205,9 @@ describe("artifact storage-spine DDL", () => {
     );
     expect(auditPos).toBeGreaterThan(-1);
     expect(splicePos).toBeGreaterThan(auditPos);
-    expect(floorPos).toBeGreaterThan(splicePos);
+    // Retired: the generic default-floor rebalance write no longer exists in
+    // the creation path.
+    expect(floorPos).toBe(-1);
     // parseResult invoked at the documented offset (lock+objects+
     // representation+audit = 4, then 2 ops per producer).
     expect(src).toMatch(/PRODUCER_OPS_OFFSET\s*=\s*4/);
