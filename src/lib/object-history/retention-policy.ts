@@ -62,6 +62,9 @@ const RETENTION_POLICIES: Record<string, RetentionPolicy> = {
   // LinkedIn member post-draft [draftable], host-registered for the
   // @cinatra-ai/linkedin-artifacts pack — cinatra#1457.
   "@cinatra-ai/linkedin:post-draft": { kind: "indefinite" },
+  // Drupal external node-pointer type host-registered for the
+  // @cinatra-ai/drupal-artifacts pack (drupal:node [external]) — cinatra#1465.
+  "@cinatra-ai/drupal:node": { kind: "indefinite" },
   // Namespaced types registered in production via objectTypeRegistry.register
   // with a fully-qualified @cinatra-ai/<ns>:<id> identifier — surfaced by
   // scripts/audit/retention-policy-gate.mjs.

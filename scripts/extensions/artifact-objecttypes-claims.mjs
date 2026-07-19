@@ -16,12 +16,15 @@ const CLAIM_KINDS = new Set(["dedicated", "default"]);
 const PROJECTIONS = new Set(["raw", "artifact-safe", "none"]);
 const SNAPSHOT_POLICIES = new Set(["content", "metadata", "none"]);
 const SENSITIVITIES = new Set(["normal", "sensitive"]);
+// Mirrors ARTIFACT_MUTABILITY_CLASSES (claims.ts, cinatra#1449).
+const MUTABILITY_CLASSES = new Set(["draftable", "record", "external"]);
 const DISPOSITION_KEYS = new Set([
   "projection",
   "pinnable",
   "snapshotPolicy",
   "redactionPolicyVersion",
   "sensitivity",
+  "mutability",
 ]);
 const CLAIM_ENTRY_KEYS = new Set(["type", "claim", "dispositions", "schema"]);
 
@@ -128,6 +131,22 @@ export function validateArtifactObjectTypeClaims(packageName, cinatra) {
         ) {
           errors.push(
             p(`objectTypes claim '${entry.type}': dispositions.redactionPolicyVersion must be a non-empty string`),
+          );
+        }
+        // Per-claim mutability class (cinatra#1449). Optional; the enum mirrors
+        // ARTIFACT_MUTABILITY_CLASSES (claims.ts). One cross-field invariant on
+        // the union: an `external` claim points at live third-party-canonical
+        // content and is never pinnable — pin the immutable snapshot record
+        // instead. (projection:'none' already forces pinnable:false; this closes
+        // the raw / artifact-safe external case, matching the TS superRefine.)
+        if (d.mutability !== undefined && !MUTABILITY_CLASSES.has(d.mutability)) {
+          errors.push(
+            p(`objectTypes claim '${entry.type}': dispositions.mutability must be draftable | record | external`),
+          );
+        }
+        if (d.mutability === "external" && d.pinnable === true) {
+          errors.push(
+            p(`objectTypes claim '${entry.type}': external mutability requires pinnable:false — pin the snapshot record, not the live pointer`),
           );
         }
       }

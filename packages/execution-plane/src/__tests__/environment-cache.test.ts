@@ -23,7 +23,7 @@ function makeRecipe(pipDigest: string): EnvironmentBuildRecipe {
     builderVersion: ENVIRONMENT_BUILDER_VERSION,
     platform: { os: "linux", arch: "arm64" },
     buildPolicy: { networkPolicy: "registry-allowlist", registryAllowlist: ["pypi.org"] },
-    resolvedArtifacts: { pip: pipDigest },
+    resolvedArtifacts: { pip: { resolved: pipDigest, integrity: `${pipDigest}-int` } },
   };
 }
 

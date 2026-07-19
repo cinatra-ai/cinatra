@@ -23,10 +23,11 @@ const ok = (stdout = ""): DockerRunOutcome => ({
  * Scripted fake docker CLI: records every argv; answers inspect/build/run/tag
  * from a small state machine so the full ensureEnvironmentLayer flow runs.
  */
-function fakeDocker(state?: { baseDigest?: string; pipLock?: string }) {
+function fakeDocker(state?: { baseDigest?: string; pipLock?: string; pipIntegrity?: string }) {
   const calls: string[][] = [];
   const baseDigest = state?.baseDigest ?? "sha256:l0base";
   const pipLock = state?.pipLock ?? "pandas==2.2.1\n";
+  const pipIntegrity = state?.pipIntegrity ?? "pandas==2.2.1 sha256:deadbeef\n";
   const cli: DockerCli = async (args) => {
     calls.push(args);
     if (args[0] === "image" && args[1] === "inspect") {
@@ -35,7 +36,12 @@ function fakeDocker(state?: { baseDigest?: string; pipLock?: string }) {
     }
     if (args[0] === "network" && args[1] === "inspect") return ok("true"); // internal
     if (args[0] === "build") return ok();
-    if (args[0] === "run") return ok(pipLock); // lock extraction
+    if (args[0] === "run") {
+      // `... cat <path>` — the LAST arg picks the version lock vs the
+      // byte-integrity manifest for this manager.
+      const path = args[args.length - 1];
+      return ok(path.endsWith(".integrity") ? pipIntegrity : pipLock);
+    }
     if (args[0] === "tag" || args[0] === "rmi") return ok();
     return ok();
   };
@@ -90,12 +96,47 @@ describe("renderEnvironmentDockerfile (build contract)", () => {
     // across every derived L1 layer (cinatra#1708).
     expect(lines[lines.length - 1]).toBe(`USER ${SANDBOX_RUNTIME_UID}:${SANDBOX_RUNTIME_GID}`);
     expect(df).toContain("apt-get install -y --no-install-recommends 'pandoc'");
-    expect(df).toContain("pip install --no-cache-dir 'pandas==2.2.1'");
+    expect(df).toContain(
+      "pip install --no-cache-dir --report /opt/cinatra-env/pip.report.json 'pandas==2.2.1'",
+    );
     expect(df).toContain("npm install -g --no-fund --no-audit 'prettier'");
     // Every manager freezes its RESOLVED state for recipe-key extraction.
     expect(df).toContain("/opt/cinatra-env/os.lock");
     expect(df).toContain("/opt/cinatra-env/pip.lock");
     expect(df).toContain("/opt/cinatra-env/npm.lock");
+    // …and its BYTE-INTEGRITY manifest (cinatra#1708 AC1 byte identity).
+    expect(df).toContain("/opt/cinatra-env/os.integrity");
+    expect(df).toContain("/opt/cinatra-env/pip.integrity");
+    expect(df).toContain("/opt/cinatra-env/npm.integrity");
+    // os.integrity must be captured BEFORE the apt lists (holding the .deb
+    // SHA256s) are cleared, or the hashes are gone.
+    expect(df.indexOf("os.integrity")).toBeLessThan(df.indexOf("rm -rf /var/lib/apt/lists"));
+    // Integrity capture is best-effort but SCOPED: EVERY `|| true` must be
+    // brace-wrapped (`… || true; }`) so an install/lock failure still fails the
+    // RUN (a bare `… || true` would swallow it). And pip integrity reads the
+    // INSTALL report, not `pip inspect`.
+    const orTrue = (df.match(/\|\| true/g) ?? []).length;
+    const bracedOrTrue = (df.match(/\|\| true; \}/g) ?? []).length;
+    expect(orTrue).toBeGreaterThan(0);
+    expect(bracedOrTrue).toBe(orTrue); // no unscoped best-effort clause
+    expect(df).toContain("pip install --no-cache-dir --report /opt/cinatra-env/pip.report.json");
+    // os integrity is the DELTA vs an L0 baseline snapshot (captured before
+    // apt runs), so inherited-L0 packages don't spuriously bust while every
+    // added/upgraded transitive dep IS hashed.
+    expect(df).toContain("/opt/cinatra-env/os.baseline");
+    expect(df).toContain("comm -13 /opt/cinatra-env/os.baseline /opt/cinatra-env/os.lock");
+    expect(df.indexOf("os.baseline")).toBeLessThan(df.indexOf("apt-get install"));
+    // Snapshots are filtered to INSTALLED status only (config-files-state
+    // entries must not mask a config-files→installed transition in the delta).
+    expect(df).toContain("sed -n 's/^installed //p'");
+    // npm integrity is a content hash of exactly what was installed.
+    expect(df).toContain('cd "$(npm root -g)" && find . -type f -exec sha256sum');
+    // Each best-effort manifest is GUARANTEED to exist (`: >` first) so a
+    // capture hiccup degrades to an EMPTY manifest (the documented graceful
+    // degradation) rather than a missing file the mandatory extraction would
+    // hard-fail on. (os.integrity is already guaranteed by its `done >` redirect.)
+    expect(df).toContain(": > /opt/cinatra-env/pip.integrity;");
+    expect(df).toContain(": > /opt/cinatra-env/npm.integrity;");
   });
 
   it("omits managers the spec does not declare", () => {
@@ -190,6 +231,50 @@ describe("TrustedEnvironmentBuilder.ensureEnvironmentLayer", () => {
     if (a.kind !== "ready" || b.kind !== "ready") return;
     expect(b.cacheHit).toBe(false); // rebuilt — not aliased onto the old base
     expect(fakeB.calls.filter((c) => c[0] === "build").length).toBe(1);
+  });
+
+  it("a byte-differing artifact at the SAME resolved version busts the recipe key (AC1 byte identity)", async () => {
+    // Identical declared spec, identical pip.lock (same pinned version) — only
+    // the frozen pip.integrity manifest differs (a re-pushed wheel). Each build
+    // resolves into its OWN cache (no spec-key fast-path reuse), so both fully
+    // extract; their RECIPE keys must differ, so the primary content address
+    // can never serve one build's bytes under the other's resolution.
+    const fakeA = fakeDocker({ pipIntegrity: "pandas==2.2.1 sha256:AAAA\n" });
+    const { builder: builderA } = makeBuilder({ docker: fakeA.cli, allowInsecure: true });
+    const a = await builderA.ensureEnvironmentLayer({ raw: { pip: ["pandas==2.2.1"] }, orgId: "o" });
+
+    const fakeB = fakeDocker({ pipIntegrity: "pandas==2.2.1 sha256:BBBB\n" });
+    const { builder: builderB } = makeBuilder({ docker: fakeB.cli, allowInsecure: true });
+    const b = await builderB.ensureEnvironmentLayer({ raw: { pip: ["pandas==2.2.1"] }, orgId: "o" });
+
+    expect(a.kind === "ready" && b.kind === "ready").toBe(true);
+    if (a.kind !== "ready" || b.kind !== "ready") return;
+    expect(a.entry.recipeKey).not.toBe(b.entry.recipeKey); // byte drift ⇒ new key
+    // The integrity digest actually landed in the signed recipe…
+    expect(a.entry.provenance.recipe.resolvedArtifacts.pip.integrity).not.toBe(
+      b.entry.provenance.recipe.resolvedArtifacts.pip.integrity,
+    );
+    // …while the resolved version lock is identical — it was the BYTES that
+    // differed, not the resolution.
+    expect(a.entry.provenance.recipe.resolvedArtifacts.pip.resolved).toBe(
+      b.entry.provenance.recipe.resolvedArtifacts.pip.resolved,
+    );
+  });
+
+  it("same resolved version AND same bytes ⇒ the SAME content address (deterministic, no spurious bust)", async () => {
+    const fakeA = fakeDocker({ pipIntegrity: "pandas==2.2.1 sha256:SAME\n" });
+    const { builder: builderA } = makeBuilder({ docker: fakeA.cli, allowInsecure: true });
+    const a = await builderA.ensureEnvironmentLayer({ raw: { pip: ["pandas==2.2.1"] }, orgId: "o" });
+
+    const fakeB = fakeDocker({ pipIntegrity: "pandas==2.2.1 sha256:SAME\n" });
+    const { builder: builderB } = makeBuilder({ docker: fakeB.cli, allowInsecure: true });
+    const b = await builderB.ensureEnvironmentLayer({ raw: { pip: ["pandas==2.2.1"] }, orgId: "o" });
+
+    expect(a.kind === "ready" && b.kind === "ready").toBe(true);
+    if (a.kind !== "ready" || b.kind !== "ready") return;
+    // Two independent resolutions that froze identical bytes address the SAME
+    // recipe key (a shared cache would dedup them to one entry).
+    expect(a.entry.recipeKey).toBe(b.entry.recipeKey);
   });
 
   it("registers the registry allowlist at the gateway and rides proxy build-args", async () => {

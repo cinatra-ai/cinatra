@@ -148,6 +148,11 @@
       "resolvedSha": "fc6995f2744c3a9489de09c342b4b2a2d932a9e4"
     },
     {
+      "packageName": "@cinatra-ai/email-artifacts",
+      "repo": "cinatra-ai/email-artifacts",
+      "resolvedSha": "f619c68687514959098b6b64e8bce7ee0935f622"
+    },
+    {
       "packageName": "@cinatra-ai/email-body-artifact",
       "repo": "cinatra-ai/email-body-artifact",
       "resolvedSha": "c1321ac4b83684e50068020a53e679cd8ae930fb"
