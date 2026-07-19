@@ -26,6 +26,7 @@ import {
   readBlogPostsProjectById,
 } from "./store";
 import { generateBlogPostImage } from "./gemini";
+import { projectLinkedinMemberPostDraft } from "./linkedin-post-draft-projection";
 import { publishBlogPostDraftToWordPress } from "./wordpress";
 import { resolveBlogDashboardUrl } from "./dashboard-url";
 import { getActorContext } from "@cinatra-ai/llm/actor-context";
@@ -622,6 +623,53 @@ export async function publishLinkedInDraft(input: {
   const alreadyPublishedLinkedInDraft = (post.linkedinDrafts ?? []).some((entry) => entry.status === "published");
   if (alreadyPublishedLinkedInDraft) {
     throw new Error("A LinkedIn post has already been published for this blog post.");
+  }
+
+  // Publish-prep call-site (cinatra#1457): materialize the durable typed
+  // `@cinatra-ai/linkedin:post-draft` row that the draftable-lock-gate +
+  // publication ledger govern. This is the actor-scoped stage (invoked via the
+  // blog_* MCP handler), so the org the writer requires resolves from the actor
+  // frame. Best-effort/visible: a member-only projection whose absence/failure
+  // surfaces durably but NEVER blocks the publish (the real transport routes
+  // through the social-media-connector, a different extension). See
+  // ./linkedin-post-draft-projection.
+  try {
+    const linkedinCopy =
+      draft.contentArtifactId && draft.contentRepresentationRevisionId
+        ? await readBlogPostBodyArtifactBytes({
+            artifactId: draft.contentArtifactId,
+            representationRevisionId: draft.contentRepresentationRevisionId,
+          })
+        : null;
+    const projection = await projectLinkedinMemberPostDraft({
+      projectId: project.id,
+      postId: post.id,
+      draftId: draft.id,
+      orgId: getActorContext()?.organizationId ?? null,
+      userId: draft.linkedinUserId ?? null,
+      destinationType: draft.destinationType,
+      accountId: draft.linkedinAccountId,
+      destinationId: draft.destinationId,
+      content: linkedinCopy?.body ?? "",
+    });
+    if (projection.status === "degraded") {
+      // Surface the degraded state durably (survives the later success state) —
+      // no silent skip. The writer's actionable "install/activate
+      // linkedin-connector" message rides through.
+      await createNotification({
+        title: "LinkedIn draft not recorded as a typed artifact",
+        body: `The LinkedIn post is still publishing, but it was not saved as a managed draft: ${projection.message}`,
+        kind: "warning",
+      });
+    }
+  } catch (projectionErr) {
+    // Best-effort: a projection (or its notification) failure must never abort
+    // the publish. The typed row is a derived projection; the publish is the
+    // critical path.
+    console.warn(
+      "[blog:publishLinkedInDraft] typed linkedin:post-draft projection failed (publish unaffected):",
+      projectionErr instanceof Error ? projectionErr.message : String(projectionErr),
+    );
   }
 
   const jobId = await enqueueBackgroundJob(BACKGROUND_JOB_NAMES.BLOG_POST_LINKEDIN_DRAFT_PUBLISH, {
