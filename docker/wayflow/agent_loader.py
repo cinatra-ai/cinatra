@@ -2764,6 +2764,108 @@ def _read_bridge_token() -> Optional[str]:
     return tok or None
 
 
+#: A declared-input title we are willing to fold into a synthesized
+#: ``message_template``. Restricted to plain Jinja identifiers so the
+#: generated ``{% if <name> %}{% endif %}`` guard can never inject markup.
+#: Matched with ``fullmatch`` (no anchors) so a trailing newline cannot sneak
+#: past a ``$``-anchored ``match``.
+_GATE_INPUT_TITLE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _reconcile_input_message_gates(
+    doc: Any, label: str
+) -> List[Dict[str, Any]]:
+    """cinatra#1830 — make HITL ``InputMessageNode`` gates mountable on the pin.
+
+    pyagentspec 26.1.2 derives an ``InputMessageNode``'s expected inputs SOLELY
+    from ``{{placeholder}}`` tokens in its optional ``message`` field
+    (``_get_inferred_inputs``); the base component validator then rejects any
+    explicitly-declared ``inputs`` title that is not in that inferred set
+    ("received a property titled `X`, but did not expect any properties"). The
+    cinatra HITL authoring form (the #1794 primitives doc, and the host
+    ``oas-compiler`` which pins ``component_type == "InputMessageNode"``)
+    deliberately declares the gate's inputs and feeds them via a
+    ``DataFlowEdge`` — a shape the host needs (it surfaces the gate's declared
+    DFE inputs to the renderer via the runtime interrupt payload) but the pinned
+    runtime rejects.
+
+    This load-time shim reconciles the two WITHOUT touching the shipped OAS or
+    the host compiler contract: for every ``InputMessageNode`` that declares
+    non-empty ``inputs``, it rewrites the node to wayflowcore's
+    ``PluginInputMessageNode`` and synthesizes a ``message_template`` whose Jinja
+    placeholders reproduce exactly the declared input titles — so the runtime
+    infers the SAME inputs and the existing ``DataFlowEdge`` keeps delivering
+    their values to the interrupt payload (and thus to the renderer). The
+    synthesized template uses ``{% if <name> %}{% endif %}`` guards, which
+    render to the empty string, so no gate payload text leaks into the
+    conversation / renderer surface. The declared ``inputs`` descriptor is then
+    dropped (the runtime rebuilds it from the template).
+
+    Idempotent (skips a node already at ``PluginInputMessageNode`` or one that
+    already carries a ``message_template``) and conservative (a node whose
+    declared input titles are not all plain identifiers is left untouched, so it
+    fails to mount LOUDLY into ``/.health`` ``failed_agents`` rather than being
+    silently rewritten with unsafe markup). Mutates ``doc`` in place; returns a
+    per-gate report (empty when nothing was rewritten).
+
+    Runtime equivalence: both ``InputMessageNode`` and ``PluginInputMessageNode``
+    deserialize to a wayflowcore ``InputMessageStep`` at runtime, so the interrupt
+    semantics the dispatcher relies on (``state="input-required"`` →
+    ``pending_approval``) are unchanged.
+    """
+    report: List[Dict[str, Any]] = []
+
+    def _walk(obj: Any) -> None:
+        if isinstance(obj, dict):
+            if (
+                obj.get("component_type") == "InputMessageNode"
+                and isinstance(obj.get("inputs"), list)
+                and len(obj["inputs"]) > 0
+            ):
+                # Map EVERY declared input to its title (None when the descriptor
+                # is malformed or unnamed) — we must never drop the `inputs` list
+                # unless every entry contributed a fold-able identifier, or the
+                # DataFlowEdge feeding a silently-dropped input would dangle.
+                titles = [
+                    i.get("title") if isinstance(i, dict) else None
+                    for i in obj["inputs"]
+                ]
+                already_templated = bool(obj.get("message_template"))
+                all_ok = (
+                    bool(titles)
+                    and all(
+                        isinstance(t, str) and _GATE_INPUT_TITLE_RE.fullmatch(t)
+                        for t in titles
+                    )
+                    and len(set(titles)) == len(titles)  # no duplicate titles
+                )
+                if all_ok and not already_templated:
+                    obj["component_type"] = "PluginInputMessageNode"
+                    obj["message_template"] = "".join(
+                        "{% if " + t + " %}{% endif %}" for t in titles
+                    )
+                    obj.pop("inputs", None)
+                    report.append(
+                        {"node": obj.get("id") or obj.get("name"), "inputs": titles}
+                    )
+                elif not already_templated:
+                    print(
+                        f"[agent_loader] WARNING: {label}: InputMessageNode "
+                        f"{obj.get('id') or obj.get('name')!r} declares inputs whose "
+                        f"titles are not all unique plain identifiers ({titles!r}); "
+                        f"leaving it unrewritten — it will fail to mount on the "
+                        f"pinned runtime (fail-loud into /.health failed_agents)."
+                    )
+            for v in obj.values():
+                _walk(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                _walk(item)
+
+    _walk(doc)
+    return report
+
+
 def _mount_one_sync(
     loader: Any, vendor: str, slug: str, oas_path: Path, fingerprint: str, base_url: str
 ) -> MountedAgent:
@@ -2815,6 +2917,30 @@ def _mount_one_sync(
                 f"slots={[r['slot'] for r in injection_report]} "
                 f"templateVersion={CONTEXT_SUBFLOW_TEMPLATE_VERSION} "
                 f"composed_sha256={composed_sha256[:12]}…"
+            )
+
+    # cinatra#1830 — reconcile HITL InputMessageNode gates that declare explicit
+    # DFE-fed inputs into the pin-accepted PluginInputMessageNode form BEFORE
+    # AgentSpecLoader validates the graph. Runs on the current working document
+    # (post context-subflow injection when that fired). See
+    # _reconcile_input_message_gates for the full contract.
+    gate_working_doc: Optional[Dict[str, Any]] = (
+        composed_oas if composed_oas is not None else parsed_doc
+    )
+    if isinstance(gate_working_doc, dict):
+        gate_report = _reconcile_input_message_gates(gate_working_doc, label)
+        if gate_report:
+            raw_text = json.dumps(gate_working_doc)
+            if composed_oas is not None:
+                composed_oas = gate_working_doc
+                composed_sha256 = hashlib.sha256(
+                    raw_text.encode("utf-8")
+                ).hexdigest()
+            print(
+                f"[agent_loader] HITL gate reconcile {label}: "
+                f"gates={[r['node'] for r in gate_report]} "
+                f"(InputMessageNode → PluginInputMessageNode, "
+                f"inputs folded into message_template)"
             )
 
     substituted = _substitute_placeholders(raw_text)

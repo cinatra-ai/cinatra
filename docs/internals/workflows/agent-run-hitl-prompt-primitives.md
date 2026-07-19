@@ -106,6 +106,44 @@ Control flow: `start → prep_list → review_gate (InputMessageNode) → … �
 The renderer bound to `review_gate` reads `prompts` from its snapshot and stays a
 pure `snapshot → onChange` surface — it never calls a host action.
 
+### Pinned-runtime contract for the gate node (cinatra#1830)
+
+Two consumers read this same `oas.json` and disagree about the gate node's shape;
+authoring MUST satisfy both, and the WayFlow loader reconciles the difference:
+
+- **The host** (`packages/agents/src/oas-compiler.ts`) pins
+  `component_type: "InputMessageNode"` and reads the gate's **declared `inputs`**
+  to surface the DFE-delivered values (e.g. `prompts`, `preview`) to the renderer
+  via the runtime interrupt payload. So the gate is authored EXACTLY as above:
+  `component_type: "InputMessageNode"` with declared `inputs` fed by a
+  `DataFlowEdge`. Keep it that way.
+- **The pinned WayFlow runtime** (`pyagentspec==26.1.2`) does the opposite: an
+  `InputMessageNode` derives its expected inputs *only* from placeholder tokens in
+  its message field and **rejects any explicitly-declared `inputs`** ("received a
+  property titled `X`, but did not expect any properties"). A bare
+  `AgentSpecLoader().load_json()` of the authored form therefore fails.
+
+The **WayFlow agent loader reconciles this at mount** — see
+`docker/wayflow/agent_loader.py` `_reconcile_input_message_gates`: it rewrites the
+declared-input gate to wayflowcore's `PluginInputMessageNode` and synthesizes a
+`message_template` whose placeholders reproduce the declared input titles (using
+empty-rendering `{% if <name> %}{% endif %}` guards, so no payload text leaks into
+the conversation), then drops the declared `inputs`. The `DataFlowEdge` keeps
+delivering the same values. **Do not** author `PluginInputMessageNode` /
+`message_template` directly — the host compiler pins the `InputMessageNode`
+literal; author the declared-input form and let the loader reconcile it. The
+mount-time guard (`docker/wayflow/tests/test_repo_agents_load.py`, run against the
+installed extension tree) fails any PR whose gate cannot mount.
+
+**One-string-output rule.** An `InputMessageNode` gate returns **exactly one
+`string` output** — the resume payload (the renderer's JSON-encoded `onChange`
+value). Do NOT declare a second gate output (e.g. a separate `excludedPromptIds`
+array wired out by its own `DataFlowEdge`): pyagentspec/wayflowcore reject a
+multi-output `InputMessageNode`, and the loader shim cannot repair it. Extract any
+additional fields from that single resume payload in a **post-resume node** (next
+section) — `{{ review_gate.<field> }}` below refers to a field parsed out of the
+one resume output, never to a second declared gate output.
+
 ## The resume-mutation pattern
 
 The interrupt returns a typed resume payload (the renderer's `onChange` value).
