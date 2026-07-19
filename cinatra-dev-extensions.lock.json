@@ -133,6 +133,11 @@
       "resolvedSha": "f28f2e4e409dfa2ff05427815b8241d5939bea42"
     },
     {
+      "packageName": "@cinatra-ai/drupal-artifacts",
+      "repo": "cinatra-ai/drupal-artifacts",
+      "resolvedSha": "8bd7bf36bc46ccaceb0938f53b00f7d2013e4f0b"
+    },
+    {
       "packageName": "@cinatra-ai/drupal-assistant-connector",
       "repo": "cinatra-ai/drupal-assistant-connector",
       "resolvedSha": "92abb828247b1ff13098e4ddf9a52f9a5dd567e4"

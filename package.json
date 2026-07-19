@@ -60,6 +60,7 @@
       "@cinatra-ai/crm-connector": "https://github.com/cinatra-ai/crm-connector.git",
       "@cinatra-ai/default-artifact": "https://github.com/cinatra-ai/default-artifact.git",
       "@cinatra-ai/drupal-agent": "https://github.com/cinatra-ai/drupal-agent.git",
+      "@cinatra-ai/drupal-artifacts": "https://github.com/cinatra-ai/drupal-artifacts.git",
       "@cinatra-ai/drupal-assistant-connector": "https://github.com/cinatra-ai/drupal-assistant-connector.git",
       "@cinatra-ai/drupal-mcp-connector": "https://github.com/cinatra-ai/drupal-mcp-connector.git",
       "@cinatra-ai/drupal-skills": "https://github.com/cinatra-ai/drupal-skills.git",

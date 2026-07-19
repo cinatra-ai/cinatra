@@ -452,6 +452,34 @@ async function enforceActivatedTypePayload(
   });
 }
 
+/**
+ * Draftable mutability lock — write-path enforcement (cinatra#1449 forward
+ * contract, wired for linkedin:post-draft, cinatra#1457). On the
+ * `objects_save` / `objects_update` content-write paths: when the resolved type
+ * carries a winning `mutability: "draftable"` claim AND the publication ledger
+ * holds a locking operation (scheduled/published/failed) for the artifact, the
+ * content write is REJECTED (`DraftLockedError`) BEFORE any commit — a draft is
+ * editable only while a draft, then it locks. A no-op for non-draftable types
+ * and for a draftable artifact with no live publication operation.
+ *
+ * Lazy-import of the app-layer gate so the objects_save handler graph gains NO
+ * static edge to the app-layer ledger / claim store (the same discipline
+ * `enforceActivatedTypePayload` uses). Still AWAITED before the write, so it can
+ * reject. The null-org / kill-switch skips are ALSO applied inside the gate; the
+ * early returns here avoid the dynamic import on the hot path when there is
+ * nothing to enforce.
+ */
+async function enforceDraftableLock(
+  objectTypeId: string,
+  orgId: string | null,
+  artifactId: string,
+): Promise<void> {
+  if (orgId == null) return;
+  if (process.env.CINATRA_DISABLE_DRAFTABLE_LOCK_ENFORCEMENT === "true") return;
+  const { assertDraftableWriteAllowed } = await import("@/lib/objects/draftable-lock-gate");
+  await assertDraftableWriteAllowed({ orgId, objectTypeId, artifactId });
+}
+
 // The `@cinatra-ai/memory:concept` type id, inlined as a literal on purpose:
 // importing it from `../integration/register-types` would add a static edge
 // to the locked-route-reachable objects_save handler graph (same route-graph-
@@ -814,6 +842,14 @@ export function createObjectsPrimitiveHandlers() {
         persistedData,
       );
 
+      // Draftable lock (cinatra#1449/#1457): reject a content write to a draft
+      // that the publication ledger has locked (scheduled/published/failed). A
+      // no-op for non-draftable types and for an unlocked draft. The identity-
+      // resolved objectId IS the artifact id the ledger keys on; a fresh create
+      // (new id) can never be locked, so this only ever bites a re-save of an
+      // already-scheduled/published draft.
+      await enforceDraftableLock(persistedType, orgId, objectId);
+
       const record = upsertObjectAndEnqueue({
         upsertInput: {
           id: objectId,
@@ -1164,6 +1200,13 @@ export function createObjectsPrimitiveHandlers() {
       };
       if (input.data !== undefined) {
         await enforceActivatedTypePayload(existing.type, orgId, mergedData);
+        // Draftable lock (cinatra#1449/#1457): a content edit is the primary way
+        // to mutate a locked draft, so reject it here BEFORE any commit (ahead of
+        // the project-move branch, mirroring the activation gate's ordering
+        // rationale) when the ledger holds a locking operation. A no-op for
+        // non-draftable types and unlocked drafts. A move-only update (input.data
+        // undefined) is metadata, not a content revision — never gated here.
+        await enforceDraftableLock(existing.type, orgId, existing.id);
         // Memory-envelope gate (cinatra#1376): a partial update of a memory
         // row must still yield a VALID merged envelope — rejected before any
         // commit (ahead of the project-move branch below, mirroring the

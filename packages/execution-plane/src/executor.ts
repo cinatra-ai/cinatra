@@ -30,6 +30,7 @@ import type {
 } from "@cinatra-ai/llm";
 import type { ExecutionBroker } from "./broker";
 import type { StagedSkillInput } from "./types";
+import type { ResolvedEnvironmentMount } from "./environment/mount";
 
 /** Exit code for broker-refused commands (structured, model-visible). */
 const REFUSED_EXIT_CODE = 126;
@@ -107,8 +108,19 @@ export function createBrokerSandboxExecutor(
       open = (async () => {
         try {
           const stagedSkills = await resolveStagedInputs(input.stagedSkills);
+          // The llm injection contract carries the resolved L1 mount as an
+          // OPAQUE token (`provenance: unknown`) so packages/llm takes no
+          // execution-plane dependency; re-narrow it to `ResolvedEnvironmentMount`
+          // at this package seam. The broker re-verifies the signed provenance
+          // fail-closed before every mount (cinatra#1708 AC4) — this passthrough
+          // trusts nothing, it only routes. Absent ⇒ openJob over the L0 base
+          // (byte-identical S2 dispatch).
+          const environment = input.environment as
+            | ResolvedEnvironmentMount
+            | undefined;
           const result = await broker.openJob(input.sessionCarrier, {
             stagedSkills,
+            ...(environment ? { environment } : {}),
           });
           return result.ok
             ? ({ ok: true, jobId: result.jobId } as const)

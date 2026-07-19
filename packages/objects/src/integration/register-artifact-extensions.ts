@@ -5,7 +5,7 @@ import { z } from "zod";
 import { Validator } from "@cfworker/json-schema";
 import { ARTIFACT_ALLOWED_CINATRA_KEYS as ALLOWED_CINATRA_KEYS } from "@cinatra-ai/sdk-extensions/artifact-contract";
 import { objectTypeRegistry } from "../registry";
-import type { ArtifactObjectTypeClaim, SemanticArtifactManifest } from "../types";
+import type { SemanticArtifactManifest } from "../types";
 import { validateObjectTypeClaimSchemaSources, claimedTypeRegisteringPackage } from "../claims";
 import { isTombstonedObjectTypeId } from "../namespace";
 import { parseSemanticArtifactManifest } from "../semantic-manifest";
@@ -30,19 +30,18 @@ import {
 // per-type branches. That pluggability guarantee is proven by the fixture test
 // in `__tests__/artifact-bridge.test.ts`.
 //
-// THREE MANIFEST MODES (cinatra#1452, epic #1448), keyed off the manifest
-// `mode` discriminator (see `resolveArtifactManifestMode`):
-//   - "descriptor-only" (classic): mint ONE generic `${pkg.name}:artifact`
-//     umbrella carrying the whole descriptor as `isArtifact`.
-//   - "hybrid": the umbrella PLUS a per-claim VALIDATOR (not surfaced) for each
-//     `objectTypes` claim — today's behavior when a descriptor also ships claims
-//     (e.g. the `default-artifact` floor).
-//   - "claim-only" (connector artifacts packs, epic #1448): mint NO umbrella and
-//     inherit NO package-wide matcher/authoring behavior; register EACH
-//     `objectTypes` claim as its OWN first-class artifact type, surfaced in
-//     `listArtifacts()` under its exact objectTypeId. This is the substrate a
-//     context slot / agent `produces` `objectTypeId` discriminator resolves
-//     against (the consumer surfaces are wired in sibling substrate lanes).
+// EXPLICIT-DECLARED-TYPES ONLY (ratified manifest rule, entry 95, epic
+// cinatra#1785): a pack DECLARES the object types it owns in its manifest
+// `objectTypes`, and the bridge registers EXACTLY those (each as its own
+// first-class artifact type, surfaced in `listArtifacts()` under its exact
+// objectTypeId, enforcing its inline schema). There is NO umbrella and NO
+// auto-derivation: the retired `${pkg.name}:artifact` catch-all is GONE and the
+// `mode` discriminator DIES — resolution reads declared types only. A manifest
+// that declares NO `objectTypes` mints NO type (the deprecation/no-op path);
+// umbrella minting NEVER happens. Package-wide matcher/authoring surface
+// (`skills`, `matcherConfidenceThreshold`, `templates`) is KEPT in the manifest
+// — it classifies content INTO the declared types — but is NOT inherited onto
+// the per-type registered descriptor.
 //
 // Server-only + sync fs (mirrors the boot-time registration model). NOT
 // exported from the package barrel — the barrel is SSR/React-free; this is
@@ -59,18 +58,15 @@ import {
 // objects↔extensions cycle, cinatra#979) instead of each keeping their own
 // literal.
 
-// Per-claim JSON-Schema → Zod validator (cinatra#1429, epic #1424). The generic
-// artifact umbrella (`${pkg}:artifact`) registered below carries a permissive
-// `z.record` schema, so the objects_save / objects_update activation gate is
-// INERT for a bridge-registered claimed type. Compile each manifest
-// `objectTypes` claim's INLINE JSON Schema into a real validator and register it
-// under the CLAIMED type id, so the gate's `resolve(type).schema.safeParse`
-// actually enforces the declared shape once the claim activates. A z.custom
-// wrapper delegates to a `@cfworker/json-schema` validator (a fast, standards
-// JSON-Schema validator already vendored in the monorepo). A malformed inline
-// schema compiles to null → the type is left unregistered here, so the
-// pre-activation gate (assertClaimActivatable) fail-closes and the claim cannot
-// activate — never a silently-permissive validator.
+// Per-claim JSON-Schema → Zod validator (cinatra#1429, epic #1424). Compile each
+// declared `objectTypes` type's INLINE JSON Schema into a real validator and
+// register it under the declared type id, so the objects_save / objects_update
+// activation gate's `resolve(type).schema.safeParse` actually enforces the
+// declared shape. A z.custom wrapper delegates to a `@cfworker/json-schema`
+// validator (a fast, standards JSON-Schema validator already vendored in the
+// monorepo). A malformed inline schema compiles to null → the type is left
+// unregistered, so the pre-activation gate (assertClaimActivatable) fail-closes
+// and the type cannot activate — never a silently-permissive validator.
 function compileClaimValidator(jsonSchema: Record<string, unknown>): z.ZodType<unknown> | null {
   let validator: Validator;
   try {
@@ -85,85 +81,6 @@ function compileClaimValidator(jsonSchema: Record<string, unknown>): z.ZodType<u
       return false;
     }
   });
-}
-
-// Register a per-claim VALIDATOR-ONLY object type for each inline-schema claim.
-// Deliberately WITHOUT `isArtifact` — `listArtifacts()` (the serving / library /
-// MCP surface) must stay one-generic-type-per-package; these entries exist so
-// the activation gate can `resolve()` a real schema, nothing more. Provenance is
-// threaded so the teardown hook (`removeByPackage`) reaps them on
-// archive/uninstall exactly like the umbrella. Claims with no inline schema are
-// self- or dependency-registered — their owning package registers the validator
-// (the bridge already fail-closed such claims via
-// validateObjectTypeClaimSchemaSources before reaching here).
-//
-// OWNERSHIP by NAMESPACE (epic #1424/#1448, the same rule the claim-only path
-// enforces): the bridge registers a validator ONLY for a claim the hybrid pack
-// OWNS (a self-namespaced `@scope/pkg:local` id, where `@scope/pkg` is this
-// package). A CROSS-namespace claim — a hybrid pack claiming a type another
-// package/host defines (e.g. the email-artifacts pack over `@cinatra-ai/email:body`
-// / `:sent-email`, or the default-artifact floor over `@cinatra-ai/objects:object`)
-// — is DEFINED by its owning registrar; the bridge must never register a generic
-// validator-only def for it. Doing so silently clobbered the owner's rich
-// definition (email:body `content`/identityKey → `report`/no-identityKey;
-// email:sent-email lost its idempotencyKey identity) — and now, with the
-// registry's conflict-on-duplicate guard (epic #1785), it would raise an
-// install-time conflict at boot. The claim schema is activation evidence, not a
-// second registrar.
-function registerClaimValidators(
-  claims: readonly ArtifactObjectTypeClaim[],
-  umbrellaType: string,
-  packageName: string,
-): void {
-  for (const claim of claims) {
-    // PERMANENT namespace tombstone (cinatra#1789): never register a validator
-    // for a retired dynamic-namespace type. The fs path already rejects these
-    // at manifest validation; this guards direct callers of the exported
-    // registration seam that pass a hand-built descriptor (a hybrid pack can
-    // ship a CROSS-namespace claim, so the package-level umbrella guard alone
-    // would not catch it).
-    if (isTombstonedObjectTypeId(claim.type)) {
-      console.warn(
-        `[artifacts:bridge] ${packageName} claim '${claim.type}' is under a permanently-retired dynamic namespace — not registered (cinatra#1789)`,
-      );
-      continue;
-    }
-    // CROSS-NAMESPACE guard (epic #1785 bridge fix): only the OWNING package
-    // registers a claimed type. A claim over a type this pack does not own —
-    // whether or not it carries an inline schema — is defined elsewhere (host or
-    // another extension); the bridge never re-registers it here (it would clobber
-    // the owner's definition, and now trips the registry conflict guard). This
-    // mirrors the claim-only path's `claimedTypeRegisteringPackage(...) !==
-    // packageName` ownership rule; the umbrella (`${pkg}:artifact`, self-owned)
-    // still falls through to the explicit umbrella-skip below.
-    if (claimedTypeRegisteringPackage(claim.type) !== packageName) continue;
-    if (!claim.schema) continue;
-    if (claim.type === umbrellaType) continue; // never clobber the umbrella
-    const schema = compileClaimValidator(claim.schema);
-    if (!schema) {
-      console.warn(
-        `[artifacts:bridge] ${packageName} claim '${claim.type}' has an uncompilable inline JSON Schema — per-claim validation skipped (the claim cannot activate)`,
-      );
-      continue;
-    }
-    objectTypeRegistry.register(
-      {
-        type: claim.type,
-        category: "report",
-        schema,
-        lifecycle: {
-          sources: ["agent", "user", "import"],
-          mutableBy: ["agent", "user"],
-        },
-        renderers: {
-          listRow: GenericObjectListRow,
-          card: GenericObjectCard,
-          detail: GenericObjectDetail,
-        },
-      },
-      packageName,
-    );
-  }
 }
 
 function registerOneArtifactDir(dir: string): boolean {
@@ -235,180 +152,104 @@ function registerOneArtifactDir(dir: string): boolean {
       return false;
     }
   }
-  // Everything above is mode-INDEPENDENT parse/validation. The registration
-  // below forks on the resolved manifest mode (cinatra#1452, epic #1448).
+  // Everything above is parse/validation. The registration below reads the
+  // manifest's explicitly declared `objectTypes` only (entry 95, epic #1785).
   return registerParsedArtifactManifest(descriptor, pkg.name);
-}
-
-// The ratified artifact manifest modes (cinatra#1452, epic #1448). The mode
-// governs whether the bridge mints the generic `${pkg.name}:artifact` umbrella.
-export type ArtifactManifestMode = "descriptor-only" | "hybrid" | "claim-only";
-
-/**
- * Resolve a parsed manifest's registration mode.
- *
- * `mode` is the ratified claim-only discriminator (epic #1448). Its SCHEMA +
- * TYPE definition are owned by sibling substrate lanes — #1449 (`SemanticArtifactManifest`
- * in types.ts) and #1453 (the kind-gate + the byte-mirrored semantic schema) —
- * so this bridge is the CONSUMER, not the definer. It is read defensively so this
- * slice compiles and stays green before those land: until `mode` is carried by
- * the strict manifest schema, the parser strips it and every real manifest
- * resolves to today's behavior EXACTLY (umbrella minted).
- */
-export function resolveArtifactManifestMode(
-  descriptor: SemanticArtifactManifest,
-): ArtifactManifestMode {
-  const declared = (descriptor as { mode?: unknown }).mode;
-  if (declared === "claim-only") return "claim-only";
-  if (declared === "descriptor-only") return "descriptor-only";
-  if (declared === "hybrid") return "hybrid";
-  // No explicit mode (every manifest today): preserve current behavior — mint
-  // the umbrella. A pack that also ships claims is "hybrid" (umbrella + per-claim
-  // validators); otherwise "descriptor-only". Both mint the umbrella.
-  return (descriptor.objectTypes?.length ?? 0) > 0 ? "hybrid" : "descriptor-only";
 }
 
 /**
  * Register a parsed (already schema-validated) artifact manifest into the object
- * registry, forking on the resolved manifest mode. Exported as the mode-dispatch
- * seam so the mode behavior is unit-testable directly (the fs/parse path in
- * `registerOneArtifactDir` cannot yet carry a `mode` manifest field — that
- * schema plumbing lands in #1449/#1453). Returns true iff at least one artifact
- * type registered.
+ * registry, reading its EXPLICITLY DECLARED `objectTypes` only. Exported as the
+ * registration seam so the behavior is unit-testable directly. Returns true iff
+ * at least one artifact type registered.
+ *
+ * Umbrella/derived-type minting is RETIRED (ratified manifest rule, entry 95,
+ * epic cinatra#1785): the `${pkg.name}:artifact` catch-all is never
+ * minted and the `mode` discriminator is gone. Every pack declares the types it
+ * owns; a manifest with no declared types mints nothing (the no-op/deprecation
+ * path), never an umbrella.
  */
 export function registerParsedArtifactManifest(
   descriptor: SemanticArtifactManifest,
   packageName: string,
 ): boolean {
-  const mode = resolveArtifactManifestMode(descriptor);
   // PERMANENT namespace tombstone (cinatra#1789, epic #1785): a package under a
-  // retired dynamic namespace (`@dynamic/types` / `@cinatra-ai/dynamic`) derives
-  // a tombstoned umbrella id `${packageName}:artifact` and can NEVER register —
-  // reject the whole package before any type lands or any prior registration is
-  // reconciled away. This is the registration-path half of the tombstone (the
-  // manifest schema already rejects tombstoned `objectTypes[].type` claims on
-  // the fs path); it also covers direct callers of this exported seam that
-  // bypass schema parse, and — since claim-only self-owned claims share the
-  // package namespace — it tombstones a reserved-scope pack's claim-only types
-  // too.
+  // retired dynamic namespace (`@dynamic/types` / `@cinatra-ai/dynamic`) can NEVER
+  // register — reject the whole package before any type lands or any prior
+  // registration is reconciled away. Its self-owned declared types share the
+  // package namespace, so probing the (never-minted) `${packageName}:artifact` id
+  // classifies the whole reserved scope as tombstoned. This is the
+  // registration-path half of the tombstone (the manifest schema already rejects
+  // tombstoned `objectTypes[].type` on the fs path); it also covers direct callers
+  // of this exported seam that bypass schema parse.
   if (isTombstonedObjectTypeId(`${packageName}:artifact`)) {
     console.warn(
-      `[artifacts:bridge] ${packageName} is under a permanently-retired dynamic namespace — its derived umbrella '${packageName}:artifact' is tombstoned; nothing registered (cinatra#1789)`,
-    );
-    return false;
-  }
-  // A claim-only manifest with no claims is invalid (the kind-gate #1453 requires
-  // `objectTypes`); skip WITHOUT tearing down any prior registration.
-  if (mode === "claim-only" && (descriptor.objectTypes?.length ?? 0) === 0) {
-    console.warn(
-      `[artifacts:bridge] ${packageName} declares claim-only mode but ships no objectTypes claims — nothing to register, skipped`,
+      `[artifacts:bridge] ${packageName} is under a permanently-retired dynamic namespace — nothing registered (cinatra#1789)`,
     );
     return false;
   }
   // RECONCILE before re-registering: drop this package's prior bridge
-  // registrations (object types + semantic renderers) so a manifest change —
-  // especially a MODE change (hybrid -> claim-only) on the dev-watcher / rescan
-  // re-register path — never leaves stale state. The registry is replace-by-id,
-  // which only overwrites the ids the NEW manifest re-emits; ids it no longer emits
-  // (e.g. the old `${pkg.name}:artifact` umbrella once a pack becomes claim-only,
-  // which MUST NOT survive per epic #1448) must be actively removed. Host built-in
-  // types register without provenance and are therefore never touched.
+  // registrations (object types + semantic renderers) so a manifest change on the
+  // dev-watcher / rescan re-register path never leaves stale state. The registry
+  // is replace-by-id, which only overwrites the ids the NEW manifest re-emits; ids
+  // it no longer emits must be actively removed. Host built-in types register
+  // without provenance and are therefore never touched.
   objectTypeRegistry.removeByPackage(packageName);
   semanticRendererRegistry.removeByPackage(packageName);
-  if (mode === "claim-only") {
-    return registerClaimOnlyManifest(descriptor, packageName);
+  // A manifest with no explicitly declared types mints NO type. Umbrella
+  // derivation is RETIRED (entry 95, epic #1785) — resolution reads declared
+  // types only, so a type-less manifest is a no-op here (a pure-representation
+  // renderer binds via the org-scoped representation provider at install/
+  // activation, not through this object-type bridge). A legacy pack that still
+  // relied on the derived `${pkg.name}:artifact` catch-all lands here too and
+  // hits this deprecation path — it never mints an umbrella.
+  if ((descriptor.objectTypes?.length ?? 0) === 0) {
+    console.warn(
+      `[artifacts:bridge] ${packageName} declares no objectTypes — umbrella/derived-type minting is retired (entry 95, cinatra#1785); no object type registered`,
+    );
+    return false;
   }
-  // descriptor-only / hybrid (classic — UNCHANGED registration): mint the generic
-  // `${pkg.name}:artifact` umbrella carrying the whole descriptor as isArtifact.
-  const umbrellaType = `${packageName}:artifact`;
-  objectTypeRegistry.register(
-    {
-      // Namespaced id `@scope/pkg:artifact` (matches OBJECT_TYPE_NAMESPACE_RE).
-      type: umbrellaType,
-      category: "report",
-      schema: z.record(z.string(), z.unknown()),
-      lifecycle: {
-        sources: ["agent", "user", "import"],
-        mutableBy: ["agent", "user"],
-      },
-      renderers: {
-        listRow: GenericObjectListRow,
-        card: GenericObjectCard,
-        detail: GenericObjectDetail,
-      },
-      isArtifact: descriptor,
-    },
-    // PROVENANCE (cinatra#661): record the owning package so the runtime
-    // teardown hook (`teardownExtensionCapabilities` → `removeByPackage`) can
-    // deregister exactly this bridge-registered artifact type on
-    // archive/uninstall. WITHOUT this arg the provenance index never recorded
-    // the type, so `removeByPackage` was a no-op for every bridge-registered
-    // artifact type — the teardown blocker. The HOST built-in artifact types
-    // (`@cinatra-ai/artifact:object`, `@cinatra-ai/artifacts:artifact-ref`)
-    // register in `register-all-object-types.ts` WITHOUT a package name, so
-    // they stay provenance-less and are NEVER reaped by `removeByPackage`.
-    packageName,
-  );
-  // Per-claim validators (cinatra#1429): make the activation gate enforce each
-  // claimed type's declared inline schema (the umbrella above is permissive).
-  if (descriptor.objectTypes && descriptor.objectTypes.length > 0) {
-    registerClaimValidators(descriptor.objectTypes, umbrellaType, packageName);
-  }
-  // Renderer dispatch spine (cinatra#1629, epic #1620 S2; S7/M2 slot
-  // activation cinatra#1631): if the manifest declares a semantic
-  // `cinatra.artifact.ui.renderers` slot (`detail`, `listRow`), register the
-  // extension's SEMANTIC renderer(s) for its type(s). Per-org arbitration is
-  // the effective-identity winner's job at resolve time; this table just records
-  // "this extension ships a renderer for type T at slot S". Retired on
-  // archive/uninstall via the capability-teardown path (removeByPackage). The
-  // ORG-SCOPED representation-provider registrations bind at install/activation
-  // (M1/S4), not here. A malformed `ui` is already degraded away above (the
-  // manifest keeps `ui: undefined`), so this only fires for valid declared slots.
-  const rendererTypeIds = new Set<string>([umbrellaType]);
-  for (const claim of descriptor.objectTypes ?? []) rendererTypeIds.add(claim.type);
-  registerSemanticRenderersForTypes(descriptor, rendererTypeIds, packageName);
-  return true;
+  return registerDeclaredArtifactTypes(descriptor, packageName);
 }
 
 /**
- * Claim-only manifest mode (cinatra#1452, epic #1448). The pack mints NO
- * `${pkg.name}:artifact` umbrella; each `objectTypes` claim is registered as its
- * OWN first-class artifact type — surfaced in `listArtifacts()` under its exact
- * objectTypeId, enforcing its inline schema (permissive fallback when a claim
- * ships none), rendered generically (or via its declared semantic renderers),
- * and reaped by provenance on teardown exactly like the umbrella. This is the
- * registry substrate a context-slot / agent-`produces` `objectTypeId`
- * discriminator resolves against (those consumer surfaces are wired in the
- * sibling substrate lanes). Returns true iff at least one claim registered.
+ * Register each EXPLICITLY DECLARED `objectTypes` type this pack OWNS as its own
+ * first-class artifact type — surfaced in `listArtifacts()` under its exact
+ * objectTypeId, enforcing its inline schema (permissive fallback when a self-owned
+ * type ships none), rendered generically (or via its declared semantic
+ * renderers), and reaped by provenance on teardown. No umbrella is ever minted.
+ * This is the registry substrate a context-slot / agent-`produces` `objectTypeId`
+ * discriminator resolves against. Returns true iff at least one type registered.
  */
-function registerClaimOnlyManifest(
+function registerDeclaredArtifactTypes(
   descriptor: SemanticArtifactManifest,
   packageName: string,
 ): boolean {
   // Caller (registerParsedArtifactManifest) guarantees `objectTypes` is non-empty
   // and has already reconciled this package's prior registrations.
   const claims = descriptor.objectTypes ?? [];
-  const perClaimDescriptor = claimOnlyArtifactDescriptor(descriptor);
+  const perTypeDescriptor = declaredTypeArtifactDescriptor(descriptor);
   const registeredTypeIds: string[] = [];
   for (const claim of claims) {
     // OWNERSHIP is by NAMESPACE, never by inline schema. Epic #1448 / #1424: "exactly
     // one package remains the runtime type registrar per type; the claimant schema is
-    // activation evidence, not a second registrar." A claim-only pack registers ONLY
-    // the types it OWNS (a self-namespaced id, `@scope/pkg:local` where `@scope/pkg`
-    // is this package). A cross-namespace claim — WITH or WITHOUT an inline schema —
-    // is registered by its owning package; the bridge never registers it here. (The
+    // activation evidence, not a second registrar." A pack registers ONLY the types
+    // it OWNS (a self-namespaced id, `@scope/pkg:local` where `@scope/pkg` is this
+    // package). A cross-namespace claim — WITH or WITHOUT an inline schema — is
+    // registered by its owning package; the bridge never registers it here. (The
     // registry is replace-by-id, so shadowing another package's registrant and then
-    // reaping it via this pack's removeByPackage would delete the real owner's type.)
+    // reaping it via this pack's removeByPackage would delete the real owner's type
+    // — and, with the registry conflict guard, would throw at boot.)
     if (claimedTypeRegisteringPackage(claim.type) !== packageName) continue;
-    // Enforce the claim's inline JSON Schema when present; fall back to the same
-    // permissive record schema the umbrella used when a self-owned claim ships
-    // none. An uncompilable inline schema fail-closes the single claim.
+    // Enforce the type's inline JSON Schema when present; fall back to a permissive
+    // record schema when a self-owned type ships none. An uncompilable inline
+    // schema fail-closes the single type.
     const schema = claim.schema
       ? compileClaimValidator(claim.schema)
       : z.record(z.string(), z.unknown());
     if (!schema) {
       console.warn(
-        `[artifacts:bridge] ${packageName} claim '${claim.type}' has an uncompilable inline JSON Schema — claim-only type not registered (the claim cannot activate)`,
+        `[artifacts:bridge] ${packageName} type '${claim.type}' has an uncompilable inline JSON Schema — not registered (the type cannot activate)`,
       );
       continue;
     }
@@ -426,14 +267,14 @@ function registerClaimOnlyManifest(
           card: GenericObjectCard,
           detail: GenericObjectDetail,
         },
-        // Each claim IS an artifact (surfaced generically in listArtifacts) under
-        // a per-claim descriptor that carries the representation forms but DROPS
-        // the package-wide matcher/authoring surface — a claim-only type inherits
-        // none of it (epic #1448).
-        isArtifact: perClaimDescriptor,
+        // Each declared type IS an artifact (surfaced generically in
+        // listArtifacts) under a per-type descriptor that carries the
+        // representation forms but DROPS the package-wide matcher/authoring surface
+        // — a declared type inherits none of it (epic #1448 / entry 95).
+        isArtifact: perTypeDescriptor,
       },
-      // Provenance = the claiming package, so removeByPackage reaps every
-      // claim-only type on archive/uninstall (identical teardown to the umbrella).
+      // Provenance = the owning package, so removeByPackage reaps every declared
+      // type on archive/uninstall.
       packageName,
     );
     registeredTypeIds.push(claim.type);
@@ -444,30 +285,31 @@ function registerClaimOnlyManifest(
 }
 
 /**
- * The per-claim artifact descriptor for claim-only mode: representation forms
+ * The per-type artifact descriptor for a declared type: representation forms
  * (`accepts`) + `satisfies` + `ui`, with the package-wide matcher/authoring
  * surface (`skills`, `matcherConfidenceThreshold`, `templates`,
- * `agentDependencies`) and nested `objectTypes` DROPPED — the epic #1448 "inherit
- * no package-wide matcher/authoring behavior" rule. (Per-type representation
- * refinement — a form-per-type — is #1451's follow-on; until then the pack-level
- * `accepts` is the representation surface every claim shares.)
+ * `agentDependencies`) and nested `objectTypes` DROPPED — the epic #1448 / entry
+ * 95 "inherit no package-wide matcher/authoring behavior" rule (matchers/
+ * thresholds/templates are KEPT in the manifest to classify content INTO the
+ * declared types, never inherited onto a type's descriptor). (Per-type
+ * representation refinement — a form-per-type — is #1451's follow-on; until then
+ * the pack-level `accepts` is the representation surface every type shares.)
  */
-function claimOnlyArtifactDescriptor(
+function declaredTypeArtifactDescriptor(
   descriptor: SemanticArtifactManifest,
 ): SemanticArtifactManifest {
-  const perClaim: SemanticArtifactManifest = { accepts: descriptor.accepts };
-  if (descriptor.satisfies) perClaim.satisfies = descriptor.satisfies;
-  if (descriptor.ui) perClaim.ui = descriptor.ui;
-  return perClaim;
+  const perType: SemanticArtifactManifest = { accepts: descriptor.accepts };
+  if (descriptor.satisfies) perType.satisfies = descriptor.satisfies;
+  if (descriptor.ui) perType.ui = descriptor.ui;
+  return perType;
 }
 
 // Register the extension's semantic renderers (per declared SEMANTIC slot —
 // `detail`, and since S7/M2 `listRow`; `preview` is representation-only) for the
 // given object type ids — each slot keyed to its own generated build entry (an
 // extension ships at most ONE renderer per slot). Idempotent replace-by-(type,
-// slot). The caller supplies the exact type-id set: the umbrella + every claimed
-// type in classic (descriptor-only / hybrid) mode, or the claim types alone in
-// claim-only mode (no umbrella exists).
+// slot). The caller supplies the exact type-id set: every declared type this
+// pack owns (there is no umbrella).
 function registerSemanticRenderersForTypes(
   descriptor: SemanticArtifactManifest,
   typeIds: Iterable<string>,
