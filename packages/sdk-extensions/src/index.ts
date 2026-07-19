@@ -430,6 +430,7 @@ export type {
 // an `kind:"artifact"` extension depends only on the SDK — never `@cinatra-ai/objects`.
 export type {
   SemanticArtifactManifest,
+  ArtifactObjectTypeClaim,
   ArtifactRepresentationForms,
   ArtifactTemplateVariant,
   ArtifactSkillBundle,
