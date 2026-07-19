@@ -1,0 +1,88 @@
+================ DRY-RUN: statements the purge WILL execute ================
+[00] CREATE TEMP TABLE _purge_obj ON COMMIT DROP AS SELECT id FROM objects WHERE type = '@cinatra-ai/artifact:object'
+[01] CREATE TEMP TABLE _purge_cs ON COMMIT DROP AS SELECT DISTINCT change_set_id AS id FROM object_change_event WHERE object_id IN (SELECT id FROM _purge_obj)
+[02] CREATE TEMP TABLE _purge_uop ON COMMIT DROP AS SELECT DISTINCT operation_id AS id FROM artifact_uninstall_operation_assertions WHERE artifact_id IN (SELECT id FROM _purge_obj)
+[03] DO $core0059$ BEGIN IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'run_context_selections'::regclass AND tgname = 'trg_run_context_selections_append_only') THEN ALTER TABLE run_context_selections DISABLE TRIGGER trg_run_context_selections_append_only; END IF; END $core0059$
+[04] DO $core0059$ BEGIN IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'artifact_uninstall_operation_assertions'::regclass AND tgname = 'trg_artifact_uninstall_op_assertions_append_only') THEN ALTER TABLE artifact_uninstall_operation_assertions DISABLE TRIGGER trg_artifact_uninstall_op_assertions_append_only; END IF; END $core0059$
+[05] DO $core0059$ BEGIN IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'representation'::regclass AND tgname = 'trg_representation_append_only') THEN ALTER TABLE representation DISABLE TRIGGER trg_representation_append_only; END IF; END $core0059$
+[06] DELETE FROM artifact_audit WHERE artifact_id IN (SELECT id FROM _purge_obj)
+[07] DELETE FROM artifact_refs WHERE artifact_id IN (SELECT id FROM _purge_obj)
+[08] DELETE FROM artifact_provider_cache WHERE artifact_id IN (SELECT id FROM _purge_obj)
+[09] DELETE FROM artifact_materializations WHERE artifact_id IN (SELECT id FROM _purge_obj)
+[10] DELETE FROM authoring_step_artifacts WHERE artifact_id IN (SELECT id FROM _purge_obj)
+[11] DELETE FROM artifact_publication_operations WHERE artifact_id IN (SELECT id FROM _purge_obj)
+[12] DELETE FROM semantic_assertion WHERE artifact_id IN (SELECT id FROM _purge_obj)
+[13] DELETE FROM run_context_selections WHERE artifact_id IN (SELECT id FROM _purge_obj)
+[14] DELETE FROM artifact_uninstall_operation_assertions WHERE artifact_id IN (SELECT id FROM _purge_obj)
+[15] DELETE FROM representation WHERE artifact_id IN (SELECT id FROM _purge_obj)
+[16] DELETE FROM artifact_uninstall_operations op WHERE op.id IN (SELECT id FROM _purge_uop) AND NOT EXISTS ( SELECT 1 FROM artifact_uninstall_operation_assertions a WHERE a.operation_id = op.id)
+[17] DELETE FROM object_content_snapshots WHERE object_id IN (SELECT id FROM _purge_obj)
+[18] DELETE FROM graphiti_projection_outbox WHERE object_id IN (SELECT id FROM _purge_obj)
+[19] DELETE FROM merge_proposal WHERE object_id IN (SELECT id FROM _purge_obj)
+[20] DELETE FROM artifact_promotion_request WHERE object_id IN (SELECT id FROM _purge_obj)
+[21] DELETE FROM artifact_binding_reconcile_queue WHERE object_id IN (SELECT id FROM _purge_obj)
+[22] DELETE FROM object_binding_quarantine WHERE object_id IN (SELECT id FROM _purge_obj)
+[23] DELETE FROM remote_effect_attempts WHERE change_event_id IN ( SELECT id FROM object_change_event WHERE object_id IN (SELECT id FROM _purge_obj))
+[24] DELETE FROM object_change_event WHERE object_id IN (SELECT id FROM _purge_obj)
+[25] DELETE FROM change_set c WHERE c.id IN (SELECT id FROM _purge_cs) AND NOT EXISTS ( SELECT 1 FROM object_change_event e WHERE e.change_set_id = c.id)
+[26] UPDATE objects SET parent_id = NULL, parent_type = NULL WHERE parent_id IN (SELECT id FROM _purge_obj) AND id NOT IN (SELECT id FROM _purge_obj)
+[27] DELETE FROM objects WHERE id IN (SELECT id FROM _purge_obj)
+[28] DO $core0059$ BEGIN IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'run_context_selections'::regclass AND tgname = 'trg_run_context_selections_append_only') THEN ALTER TABLE run_context_selections ENABLE TRIGGER trg_run_context_selections_append_only; END IF; END $core0059$
+[29] DO $core0059$ BEGIN IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'artifact_uninstall_operation_assertions'::regclass AND tgname = 'trg_artifact_uninstall_op_assertions_append_only') THEN ALTER TABLE artifact_uninstall_operation_assertions ENABLE TRIGGER trg_artifact_uninstall_op_assertions_append_only; END IF; END $core0059$
+[30] DO $core0059$ BEGIN IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'representation'::regclass AND tgname = 'trg_representation_append_only') THEN ALTER TABLE representation ENABLE TRIGGER trg_representation_append_only; END IF; END $core0059$
+
+---------------- DRY-RUN: rows that WILL be purged (pre-counts) -------------
+{
+  retiredObjects: 1,
+  livingObjects: 2,
+  Rrep: 1,
+  Rrcs: 1,
+  Ruoa: 2,
+  Revents: 2,
+  Rrea: 1
+}
+
+================ REAL RUN: executing buildPurgeSql() + guard (single tx, as up() does) =================
+executed 31 purge stmts + 3 guard stmts in ONE transaction
+
+================ PROOF ASSERTIONS ================
+PASS  retired objects gone
+PASS  artifact_audit: no R rows
+PASS  artifact_refs: no R rows
+PASS  artifact_provider_cache: no R rows
+PASS  artifact_materializations: no R rows
+PASS  artifact_publication_operations: no R rows
+PASS  semantic_assertion: no R rows
+PASS  representation: no R rows
+PASS  run_context_selections: no R rows
+PASS  artifact_uninstall_operation_assertions: no R rows
+PASS  object_content_snapshots: no R rows
+PASS  graphiti_projection_outbox: no R rows
+PASS  merge_proposal: no R rows
+PASS  artifact_promotion_request: no R rows
+PASS  artifact_binding_reconcile_queue: no R rows
+PASS  object_binding_quarantine: no R rows
+PASS  R change events gone
+PASS  R remote_effect_attempts gone
+PASS  uop-retired swept (zero-assertion, purge-touched)
+PASS  cs-retired-only swept (no remaining events)
+PASS  living object L present
+PASS  L representation intact
+PASS  L artifact_refs intact
+PASS  L semantic_assertion intact
+PASS  L run_context_selections intact
+PASS  uop-shared SURVIVES (still has L's assertion)
+PASS  uop-shared L assertion intact
+PASS  uop-shared R assertion removed
+PASS  cs-mixed SURVIVES (living event kept)
+PASS  cs-living-only SURVIVES
+PASS  L change events intact (2)
+PASS  surviving CHILD present with parent_id NULLed  [{"parent_id":null,"parent_type":null}]
+PASS  no dangling artifact_id/object_id child references anywhere  [dangling=0]
+PASS  shared resource row untouched
+PASS  guard REJECTS new generic INSERT  [objects.type @cinatra-ai/artifact:object is the RETIRED generic Default Artifact floor (@cinatra-ai/artifact:object, epic cinatra#1785): the write is refused — an object type exists ONLY as an explicit installed artifact-extension definition, never a catch-all floor]
+PASS  guard REJECTS UPDATE to generic type  [objects.type @cinatra-ai/artifact:object is the RETIRED generic Default Artifact floor (@cinatra-ai/artifact:object, epic cinatra#1785): the write is refused — an object type exists ONLY as an explicit installed artifact-extension definition, never a catch-all floor]
+PASS  guard ALLOWS a valid pack-typed INSERT
+PASS  second purge run is a clean no-op (idempotent)
+
+38/38 assertions passed

@@ -1,0 +1,12 @@
+# ITEM 1 — upload MIME->typed system-base pack + fail-closed refusal
+# src/lib/artifacts/__tests__/upload-artifact-type-map.test.ts (resolveUploadArtifactType + mimeAcceptedByAccepts)
+
+
+ RUN  /Users/ordnas/Code/cinatra-ai/.claude/scratch/1785-deep-slice-wt
+
+
+ Test Files  1 passed (1)
+      Tests  11 passed (11)
+   Start at  22:52:59
+   Duration  121ms (transform 33ms, setup 0ms, import 43ms, tests 3ms, environment 0ms)
+
