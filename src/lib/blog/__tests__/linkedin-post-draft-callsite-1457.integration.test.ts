@@ -1,6 +1,6 @@
 /**
  * cinatra#1457 — the CALL-SITE seam proof. The converged publish-prep call-site
- * `projectLinkedinMemberPostDraft` (src/lib/blog/linkedin-post-draft-projection.ts)
+ * `projectLinkedinMemberPostDraft` (src/lib/blog/member-post-draft-projection.ts)
  * is driven against a REAL Postgres, proving it produces a typed
  * `@cinatra-ai/linkedin:post-draft` row that the merged draftable-lock gate +
  * publication ledger (#1831/#1450) then GOVERN, and that a retry is idempotent
@@ -73,7 +73,7 @@ import {
   schedulePublication,
   listPublicationOperationsForArtifact,
 } from "@/lib/artifacts/publication-ledger";
-import { projectLinkedinMemberPostDraft } from "@/lib/blog/linkedin-post-draft-projection";
+import { projectLinkedinMemberPostDraft } from "@/lib/blog/member-post-draft-projection";
 
 const PACK = "@cinatra-ai/linkedin-artifacts";
 const LINKEDIN_POST_DRAFT = "@cinatra-ai/linkedin:post-draft";

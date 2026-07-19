@@ -26,7 +26,7 @@ import {
   readBlogPostsProjectById,
 } from "./store";
 import { generateBlogPostImage } from "./gemini";
-import { projectLinkedinMemberPostDraft } from "./linkedin-post-draft-projection";
+import { projectLinkedinMemberPostDraft } from "./member-post-draft-projection";
 import { publishBlogPostDraftToWordPress } from "./wordpress";
 import { resolveBlogDashboardUrl } from "./dashboard-url";
 import { getActorContext } from "@cinatra-ai/llm/actor-context";
@@ -632,7 +632,7 @@ export async function publishLinkedInDraft(input: {
   // frame. Best-effort/visible: a member-only projection whose absence/failure
   // surfaces durably but NEVER blocks the publish (the real transport routes
   // through the social-media-connector, a different extension). See
-  // ./linkedin-post-draft-projection.
+  // ./member-post-draft-projection.
   try {
     const linkedinCopy =
       draft.contentArtifactId && draft.contentRepresentationRevisionId

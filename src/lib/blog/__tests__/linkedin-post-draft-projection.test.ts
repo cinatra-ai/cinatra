@@ -11,7 +11,7 @@ import {
   projectLinkedinMemberPostDraft,
   blogLinkedinDraftRunScopeId,
   type ProjectLinkedinMemberPostDraftInput,
-} from "@/lib/blog/linkedin-post-draft-projection";
+} from "@/lib/blog/member-post-draft-projection";
 import type {
   LinkedinPostDraftWriteRequest,
   LinkedinPostDraftWriteResult,
