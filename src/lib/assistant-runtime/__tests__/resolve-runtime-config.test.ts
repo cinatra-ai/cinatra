@@ -105,4 +105,32 @@ describe("resolveAssistantRuntimeConfigByPrincipal", () => {
     });
     expect(out).toEqual({ ok: false, code: "ASSISTANT_CONFIG_UNAVAILABLE" });
   });
+
+  // codex convergence (PR #1827): a schema-VALID-but-degenerate persisted sidecar
+  // (empty skillBundle — the P1 schema permits `[]`, the runtime-builder rejects it)
+  // must fail CLOSED as a structured result, not throw out as a 500.
+  it("fails CLOSED on a schema-valid but degenerate sidecar (empty skillBundle) — never throws", async () => {
+    mocks.readAssistantConfigByPrincipalId.mockResolvedValue(
+      JSON.stringify({ persona: "x", skillBundle: [] }),
+    );
+    const out = await resolveAssistantRuntimeConfigByPrincipal({
+      assistantUserId: "wp-principal",
+      handle: "wordpress",
+    });
+    expect(out).toEqual({ ok: false, code: "ASSISTANT_CONFIG_UNAVAILABLE" });
+  });
+
+  // codex convergence (PR #1827): the SECOND DB read (the persisted-identity
+  // verification for the transitional @cinatra fallback) must also fail CLOSED —
+  // a transient failure there yields a structured result, never a throw / 500, and
+  // never the reference config.
+  it("fails CLOSED when the persisted-identity verification read throws (structured, never throws)", async () => {
+    mocks.readAssistantConfigByPrincipalId.mockResolvedValue(null);
+    mocks.isBuiltInCinatraAssistantUserId.mockRejectedValue(new Error("db down"));
+    const out = await resolveAssistantRuntimeConfigByPrincipal({
+      assistantUserId: "cinatra-principal",
+      handle: "cinatra",
+    });
+    expect(out).toEqual({ ok: false, code: "ASSISTANT_CONFIG_UNAVAILABLE" });
+  });
 });

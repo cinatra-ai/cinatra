@@ -52,7 +52,16 @@ export async function resolveAssistantRuntimeConfigByPrincipal(params: {
     const parsed = safeParseAssistantConfig(raw);
     if (parsed.ok) {
       // Forward path: build from the persisted sidecar (schema defaults applied).
-      return { ok: true, runtimeConfig: buildAssistantRuntimeConfig(parsed.config) };
+      // buildAssistantRuntimeConfig throws on a schema-VALID-but-degenerate sidecar
+      // (e.g. an empty skillBundle — the P1 schema permits `[]`, but the runtime
+      // requires skillBundle[0] as the always-loaded system skill), so a build
+      // failure fails CLOSED here rather than escaping as an unstructured 500 — this
+      // resolver's contract is "never throws; structured result" (the caller 404-hides).
+      try {
+        return { ok: true, runtimeConfig: buildAssistantRuntimeConfig(parsed.config) };
+      } catch {
+        return { ok: false, code: "ASSISTANT_CONFIG_UNAVAILABLE" };
+      }
     }
     // A corrupt linked sidecar fails CLOSED — never fall back to the reference
     // config (that would mask corruption).
@@ -67,10 +76,21 @@ export async function resolveAssistantRuntimeConfigByPrincipal(params: {
   // `handle` string: a non-built-in principal that owned the "cinatra" handle must
   // never receive the reference config (fail-closed). The cheap handle check is a
   // pre-filter that avoids the DB round-trip for the common non-Cinatra path.
-  if (
-    handle.trim().toLowerCase() === BUILT_IN_CINATRA_ASSISTANT_USERNAME &&
-    (await isBuiltInCinatraAssistantUserId(assistantUserId))
-  ) {
+  // The cheap handle check short-circuits FIRST (no DB round-trip on the common
+  // non-Cinatra path); only a "cinatra" handle triggers the persisted-identity
+  // read. That read is a SECOND DB round-trip, so it is wrapped: a transient
+  // failure fails CLOSED (structured) rather than throwing out as a 500 — same
+  // "never throws" contract as the sidecar read above, and it never yields the
+  // reference config on an unverified principal.
+  let isBuiltInCinatra = false;
+  try {
+    isBuiltInCinatra =
+      handle.trim().toLowerCase() === BUILT_IN_CINATRA_ASSISTANT_USERNAME &&
+      (await isBuiltInCinatraAssistantUserId(assistantUserId));
+  } catch {
+    return { ok: false, code: "ASSISTANT_CONFIG_UNAVAILABLE" };
+  }
+  if (isBuiltInCinatra) {
     return { ok: true, runtimeConfig: buildCinatraAssistantRuntimeConfig() };
   }
   return { ok: false, code: "ASSISTANT_CONFIG_UNAVAILABLE" };
