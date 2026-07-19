@@ -272,6 +272,14 @@ function registerDeclaredArtifactTypes(
         // representation forms but DROPS the package-wide matcher/authoring surface
         // — a declared type inherits none of it (epic #1448 / entry 95).
         isArtifact: perTypeDescriptor,
+        // The type-driven disposition seam (epic #1785): relocate this claim's
+        // declared disposition onto the registration so the in-process registry
+        // — not a live DB claim row — is the single disposition authority the
+        // projector / rebuild / recall / effective-type-catalog resolve against.
+        // A claim that omits dispositions still registers a GOVERNED type at the
+        // artifact-safe default (an explicit payload so `def.dispositions != null`
+        // marks it disposition-governed, distinct from a plain data object).
+        dispositions: claim.dispositions ?? { projection: "artifact-safe" },
       },
       // Provenance = the owning package, so removeByPackage reaps every declared
       // type on archive/uninstall.

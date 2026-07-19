@@ -41,6 +41,8 @@ export type {
   RendererComponent,
   ObjectRenderers,
   ObjectTypeDefinition,
+  TypeProjectionDisposition,
+  TypeDispositions,
   ArtifactCapabilities,
   ArtifactDescriptor,
   SemanticArtifactManifest,
@@ -75,7 +77,11 @@ export {
   outputCardinalitySchema,
 } from "./agent-io-spec";
 
-export { objectTypeRegistry } from "./registry";
+export {
+  objectTypeRegistry,
+  resolveTypeProjectionDisposition,
+  isDispositionGovernedType,
+} from "./registry";
 export { canCompose, findCompositionMatches } from "./compose";
 
 // Artifact-type claims — pure policy leaf (cinatra#1425, epic #1424): the
