@@ -371,6 +371,81 @@ export const auditEvents = cinatraSchema.table("audit_events", {
 }));
 
 // ---------------------------------------------------------------------------
+// auditor_proposal_snapshots — immutable, one-per-run snapshot of the audit
+// run's generated review material (cinatra#1625).
+//
+// /api/auditor/run-skills (phase:run) generates the personal-skill `preview`
+// (name/description/content) + the per-item SuggestionPatch[] from the audit
+// material (the agent's own skills + matched skills + HITL-selected skills +
+// the artifact + the user's applied changes) and writes EXACTLY ONE row here
+// keyed by agent_run_id (UNIQUE). /api/auditor/apply replay-validates
+// acceptedPatchIds ⊆ this row's patch_ids — the authoritative surfaced set,
+// NOT a union of retry rows. Replaces the legacy audit_events
+// "auditor_suggestions_emitted" path (which also failed to insert on a
+// fresh-bootstrap DB whose audit_events table carries only the structured
+// authz shape). Immutable: an idempotent retry that computes the same
+// input_data_digest is a no-op returning the stored preview; a DIFFERENT
+// digest for an existing run fails closed (never silently overwrites the
+// snapshot a receipt may already be bound to).
+// ---------------------------------------------------------------------------
+
+export const auditorProposalSnapshots = cinatraSchema.table("auditor_proposal_snapshots", {
+  id:              text("id").primaryKey(),
+  agentRunId:      text("agent_run_id").notNull(),
+  // The generated review payload the renderer consumes:
+  // { id?, name, description, content, basedOnSkillIds?, patches: [{id,fieldPath,op,message}] }.
+  preview:         jsonb("preview").notNull(),
+  // The full authoritative SuggestionPatch[] (id, fieldPath, op, value, message)
+  // apply sources patch CONTENT from — never the request body.
+  patches:         jsonb("patches").notNull(),
+  // Denormalized stable-id list for O(1) subset validation.
+  patchIds:        jsonb("patch_ids").notNull(),
+  // Digest of the audited input data — makes the write idempotent on retry and
+  // fail-closed when the same run is re-run against different data.
+  inputDataDigest: text("input_data_digest").notNull(),
+  // Hash binding preview+patches+patchIds — the approval receipt is minted
+  // against this hash so a re-generated snapshot cannot be approved by a stale
+  // receipt.
+  snapshotHash:    text("snapshot_hash").notNull(),
+  // The host-derived "edited" | "clean" signal recorded for auditability.
+  edited:          text("edited").notNull().default("clean"),
+  createdAt:       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  agentRunIdUniq: uniqueIndex("auditor_proposal_snapshots_agent_run_id_uniq").on(t.agentRunId),
+}));
+
+// ---------------------------------------------------------------------------
+// auditor_approval_receipts — single-use Separation-of-Duties receipts
+// (cinatra#1625).
+//
+// approveReviewTask (admin-gated, with the SoD self-approval guard) mints ONE
+// receipt bound to (agent_run_id, snapshot_hash, reviewer_id) — conditionally,
+// only when a pending auditor snapshot exists for the resolved run.
+// /api/auditor/apply CONSUMES the receipt with a single-shot CAS
+// (consumed_at IS NULL → now()); a second apply (or a forged resume replay)
+// finds no live receipt and is rejected 403. The partial-unique index enforces
+// at most one LIVE (unconsumed) receipt per run.
+// ---------------------------------------------------------------------------
+
+export const auditorApprovalReceipts = cinatraSchema.table("auditor_approval_receipts", {
+  id:                text("id").primaryKey(),
+  agentRunId:        text("agent_run_id").notNull(),
+  snapshotHash:      text("snapshot_hash").notNull(),
+  reviewerId:        text("reviewer_id").notNull(),
+  acceptedPatchIds:  jsonb("accepted_patch_ids"),
+  dismissedPatchIds: jsonb("dismissed_patch_ids"),
+  consumedAt:        timestamp("consumed_at", { withTimezone: true }),
+  createdAt:         timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  // One LIVE receipt per run (a consumed receipt frees the slot; the CAS below
+  // guarantees single consumption).
+  liveReceiptUniq: uniqueIndex("auditor_approval_receipts_live_uniq")
+    .on(t.agentRunId)
+    .where(sql`consumed_at IS NULL`),
+  runIdIdx: index("auditor_approval_receipts_run_id_idx").on(t.agentRunId),
+}));
+
+// ---------------------------------------------------------------------------
 // agent_run_messages — per-run LLM conversation thread checkpoint
 // ---------------------------------------------------------------------------
 // Structured fields support tool-call replay after HITL pause/resume.

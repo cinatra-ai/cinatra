@@ -426,6 +426,7 @@
       "@cinatra-ai/audio-artifact/src/renderers/detail": ["./extensions/cinatra-ai/audio-artifact/src/renderers/detail.tsx"],
       "@cinatra-ai/video-artifact/src/renderers/detail": ["./extensions/cinatra-ai/video-artifact/src/renderers/detail.tsx"],
       "@cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer": ["./extensions/cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer.tsx"],
+      "@cinatra-ai/auditor-agent/src/auditor-review-renderer": ["./extensions/cinatra-ai/auditor-agent/src/auditor-review-renderer.tsx"],
       "@cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer": ["./extensions/cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer.tsx"],
       "@cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review": ["./extensions/cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review.tsx"],
       "@cinatra-ai/blog-wordpress-publish-agent/src/renderers/draft-confirm": ["./extensions/cinatra-ai/blog-wordpress-publish-agent/src/renderers/draft-confirm.tsx"],

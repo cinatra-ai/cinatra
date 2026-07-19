@@ -67,11 +67,16 @@ describe("auditor-agent oas.json", () => {
     ).toBe("@cinatra-ai/auditor-agent:review");
   });
 
-  it("control_flow_connections form a linear chain start -> resolve_skills -> run_skills -> review_gate -> apply_patches -> end", () => {
+  it("control_flow_connections wire the conditional-trigger graph: start -> resolve_skills -> run_skills -> edited_gate; edited_gate branches review -> prep_list ... apply_patches -> end and default -> end", () => {
+    // cinatra#1625 (owner ruled flow entry 109, 2026-07-19): run_skills feeds
+    // an `edited_gate` BranchingNode; the review path (prep_list -> review_gate
+    // -> apply_exclusions -> apply_patches) fires only when the user applied
+    // changes (edited="edited"), and a "clean" run routes default -> end.
     const oas = JSON.parse(fs.readFileSync(OAS_PATH, "utf8")) as {
       control_flow_connections?: Array<{
         from_node?: { $component_ref?: string };
         to_node?: { $component_ref?: string };
+        from_branch?: string;
       }>;
     };
     const edges = (oas.control_flow_connections ?? []).map((e) => [
@@ -81,12 +86,38 @@ describe("auditor-agent oas.json", () => {
     const expected: Array<[string, string]> = [
       ["start", "resolve_skills"],
       ["resolve_skills", "run_skills"],
-      ["run_skills", "review_gate"],
-      ["review_gate", "apply_patches"],
+      ["run_skills", "edited_gate"],
+      ["edited_gate", "prep_list"],
+      ["edited_gate", "end"],
+      ["prep_list", "review_gate"],
+      ["review_gate", "apply_exclusions"],
+      ["apply_exclusions", "apply_patches"],
       ["apply_patches", "end"],
     ];
     for (const pair of expected) {
       expect(edges).toContainEqual(pair);
     }
+  });
+
+  it("edited_gate is a BranchingNode routing edited->review, else default (clean skips the audit HITL)", () => {
+    const oas = JSON.parse(fs.readFileSync(OAS_PATH, "utf8")) as {
+      $referenced_components?: Record<
+        string,
+        { component_type?: string; branches?: string[]; mapping?: Record<string, string> }
+      >;
+    };
+    const gate = oas.$referenced_components?.edited_gate;
+    expect(gate?.component_type).toBe("BranchingNode");
+    expect(gate?.branches).toContain("default");
+    expect(gate?.branches).toContain("review");
+    expect(gate?.mapping?.edited).toBe("review");
+  });
+
+  it("apply_patches carries parentPackageName for the per-item skill persist", () => {
+    const oas = JSON.parse(fs.readFileSync(OAS_PATH, "utf8")) as {
+      $referenced_components?: Record<string, { data?: Record<string, unknown> }>;
+    };
+    const apply = oas.$referenced_components?.apply_patches;
+    expect(apply?.data).toHaveProperty("parentPackageName");
   });
 });

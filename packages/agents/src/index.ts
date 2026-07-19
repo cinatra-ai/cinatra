@@ -325,7 +325,7 @@ export {
   BUILT_IN_DRUPAL_ASSISTANT_TEMPLATE_ID,
   BUILT_IN_DRUPAL_ASSISTANT_PACKAGE_NAME,
 } from "./store";
-export { readHitlPromptsForRun, updateHitlPromptExcluded, readNonExcludedAgentIdsForRun } from "./store";
+export { readHitlPromptsForRun, updateHitlPromptExcluded, readNonExcludedAgentIdsForRun, readAllHitlPromptsForRun } from "./store";
 export { runSkillAutosaveOnRunCompletion } from "./skill-autosave";
 export type { HitlPromptRecord } from "./store";
 // External A2A template helpers for composite-key upsert and lookup.
