@@ -446,7 +446,7 @@ export class TrustedEnvironmentBuilder {
     // finding 8): it never resolves to a differently-placed layer.
     const requiredPartition =
       input.partition === "instance" ? undefined : input.partition;
-    const cached = this.opts.cache.lookupBySpecKey(input.specKey, {
+    const cached = await this.opts.cache.lookupBySpecKey(input.specKey, {
       orgId: input.orgId,
       ...(requiredPartition ? { requiredPartition } : {}),
     });
@@ -536,7 +536,7 @@ export class TrustedEnvironmentBuilder {
     const recipeKey = computeEnvironmentRecipeKey(recipe);
 
     // Another resolution may have produced this exact recipe already.
-    const raced = this.opts.cache.lookup(recipeKey, {
+    const raced = await this.opts.cache.lookup(recipeKey, {
       orgId: input.orgId,
       ...(requiredPartition ? { requiredPartition } : {}),
     });
@@ -581,7 +581,7 @@ export class TrustedEnvironmentBuilder {
       builtAtMs: now,
       lastUsedAtMs: now,
     };
-    this.opts.cache.put(entry);
+    await this.opts.cache.put(entry);
     return { kind: "ready", entry, cacheHit: false };
   }
 

@@ -283,6 +283,38 @@ export function systemLoopPhases(): BootPhase[] {
       },
     },
     {
+      name: "seed-environment-layer-gc-reap",
+      policy: "retryable",
+      run: async () => {
+        // Seed the L1 environment-layer retention GC reaper loop (exec-plane S3
+        // A3, cinatra#1708). The GC NEVER runs at boot — boot only creates this
+        // delayed job; the worker handler runs the advisory-lock-serialized
+        // delete→commit→rmi reap over the durable layer store (reached via the
+        // A2 DI slot, no-op when the slot is not `ready`) and self-reschedules at
+        // 24h cadence via moveToDelayed. Unlike the extension-store reaper this
+        // seed registers NO runner — the reap implementation lives in the A2
+        // execution service registered by the environment-execution-service boot
+        // phase, so this phase only PRIMES the delayed loop.
+        const {
+          enqueueBackgroundJob,
+          BACKGROUND_JOB_NAMES,
+          ENVIRONMENT_LAYER_GC_REAP_LOOP_JOB_ID,
+        } = await import("@/lib/background-jobs");
+        await enqueueBackgroundJob(
+          BACKGROUND_JOB_NAMES.ENVIRONMENT_LAYER_GC_REAP,
+          {},
+          {
+            jobId: ENVIRONMENT_LAYER_GC_REAP_LOOP_JOB_ID,
+            delay: 24 * 60 * 60 * 1000, // 24h
+            overwriteIfStale: true,
+            skipWorker: true,
+            inheritActorContext: false,
+          },
+        );
+        console.log("[environment-layer-gc-reap] daily L1 layer GC reap scheduled (24h delay)");
+      },
+    },
+    {
       name: "eager-background-worker",
       policy: "degraded",
       run: async () => {

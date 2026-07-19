@@ -21,14 +21,46 @@ import "server-only";
 
 import { setExtensionDashboardLifecycleHook } from "@cinatra-ai/extensions";
 import { extensionDashboardLifecycleHook } from "@/lib/dashboards/extension-dashboard-lifecycle";
+// TYPE-ERASED, LIGHTWEIGHT slot accessor (globalThis-backed; no heavy
+// execution-plane graph). This module is THE org-scoped archive lifecycle seam
+// (fires on the committed archive/restore transition with exact (package, org)
+// identity), so it is where the exec-plane S3 A3 archive reference-drop composes
+// (cinatra#1708 §2.2 — the data-teardown hook does NOT fire on archive).
+import { getEnvironmentArchiveReferenceDropper } from "@/lib/execution/register-execution-environment-service";
 
 let wired = false;
 
-/** Idempotently install the durable dashboard-lifecycle hook. */
+/** Idempotently install the durable, org-scoped archive/restore lifecycle hook.
+ * COMPOSED (cinatra#1708 §2.2): the dashboard archive/restore AND the L1
+ * environment-layer org-scoped reference drop. Each half is ISOLATED so one
+ * failing half never short-circuits the other (both idempotent + best-effort;
+ * the firer also swallows a throw). ARCHIVE drops only THAT org's refs
+ * (`{ orgId, packageName }`); layers stay for the retention GC (restore = cache
+ * hit or lazy rebuild). RESTORE re-materializes references lazily at the next
+ * run-per-install, so no explicit re-add is needed here. */
 export function wireExtensionDashboardLifecycleHook(): void {
   if (wired) return;
   wired = true;
-  setExtensionDashboardLifecycleHook(extensionDashboardLifecycleHook);
+  setExtensionDashboardLifecycleHook(async (input) => {
+    const isolate = async (label: string, p: () => Promise<unknown> | unknown): Promise<void> => {
+      try {
+        await p();
+      } catch (e) {
+        console.warn(
+          `[archive-lifecycle] ${label} failed for "${input.packageName}" (org "${input.organizationId}", ${input.transition}) (idempotent; backstopped):`,
+          e,
+        );
+      }
+    };
+    await Promise.all([
+      isolate("dashboards", () => extensionDashboardLifecycleHook(input)),
+      isolate("env-layer-refs", async () => {
+        if (input.transition !== "archive") return;
+        const dropper = getEnvironmentArchiveReferenceDropper();
+        if (dropper) await dropper({ orgId: input.organizationId, packageName: input.packageName });
+      }),
+    ]);
+  });
 }
 
 // Wire on import — a side-effect import

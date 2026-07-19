@@ -174,6 +174,11 @@ const SYSTEM_JOBS = new Set<string>([
   // canonical-id re-delay) applying eligible extension updates through the
   // planner/batch under a system Actor. System-initiated.
   "extension-auto-update",
+  // L1 environment-layer retention GC reaper (exec-plane S3 A3, cinatra#1708).
+  // Daily self-rescheduling maintenance sweep (boot-seeded, canonical-id
+  // re-delay) reaping zero-reference layers past the retention window from the
+  // durable environment-layer store. System-initiated.
+  "environment-layer-gc-reap",
 ]);
 
 // `started` is included so worker.on("active") can resolve a recipient for

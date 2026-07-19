@@ -374,7 +374,7 @@ describe("TrustedEnvironmentBuilder.ensureEnvironmentLayer", () => {
     });
     expect(result.kind === "ready" && result.entry.partition).toBe("org:org-a");
     if (result.kind !== "ready") return;
-    expect(cache.lookup(result.entry.recipeKey, { orgId: "org-b" })).toEqual({
+    expect(await cache.lookup(result.entry.recipeKey, { orgId: "org-b" })).toEqual({
       hit: false,
       reason: "partition_denied",
     });
@@ -387,11 +387,11 @@ describe("TrustedEnvironmentBuilder.ensureEnvironmentLayer", () => {
       orgId: "org-a",
     });
     if (result.kind !== "ready") throw new Error("expected ready");
-    const hit = cache.lookup(result.entry.recipeKey, { orgId: "org-a" });
+    const hit = await cache.lookup(result.entry.recipeKey, { orgId: "org-a" });
     expect(hit.hit).toBe(true);
     // Tampering with the stored recipe breaks verification (mount refused).
     result.entry.provenance.recipe.spec = { pip: ["evil"] };
-    expect(cache.lookup(result.entry.recipeKey, { orgId: "org-a" })).toEqual({
+    expect(await cache.lookup(result.entry.recipeKey, { orgId: "org-a" })).toEqual({
       hit: false,
       reason: "provenance_invalid",
     });
