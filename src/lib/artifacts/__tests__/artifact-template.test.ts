@@ -10,19 +10,33 @@ const {
   createSemanticArtifactMock,
   assertSemanticTypeMock,
   canAccessMock,
+  resolveBoundArtifactTargetMock,
 } = vi.hoisted(() => ({
   listArtifactsMock: vi.fn(),
   registerAllObjectTypesMock: vi.fn(),
   createSemanticArtifactMock: vi.fn(),
   assertSemanticTypeMock: vi.fn(),
   canAccessMock: vi.fn(async (): Promise<boolean> => true),
+  resolveBoundArtifactTargetMock: vi.fn(),
 }));
 
 vi.mock("@cinatra-ai/objects/registry", () => ({
-  objectTypeRegistry: { listArtifacts: listArtifactsMock },
+  objectTypeRegistry: {
+    listArtifacts: listArtifactsMock,
+    // Per-type templates are read via resolve(objectTypeId) (cinatra#1454).
+    resolve: (t: string) =>
+      (listArtifactsMock() as Array<{ type: string }>).find((d) => d.type === t) ?? null,
+  },
 }));
 vi.mock("@/lib/register-all-object-types", () => ({
   registerAllObjectTypes: registerAllObjectTypesMock,
+}));
+// The declared-type resolution seam (cinatra#1454) — mirror the legacy
+// `${extension}:artifact` def lookup off `listArtifactsMock` so the template
+// path's downstream (MIME/template defaulting, assertion) is exercised
+// unchanged. The resolver's own sourcing is unit-tested separately.
+vi.mock("../resolve-bound-artifact-type", () => ({
+  resolveBoundArtifactTarget: resolveBoundArtifactTargetMock,
 }));
 vi.mock("../artifact-creation", () => ({
   createSemanticArtifact: createSemanticArtifactMock,
@@ -65,6 +79,26 @@ describe("materializeArtifactFromTemplate", () => {
     createSemanticArtifactMock.mockReset();
     assertSemanticTypeMock.mockReset();
     canAccessMock.mockReset().mockResolvedValue(true);
+    // Mirror the legacy `${extension}:artifact` lookup off the same fixture.
+    resolveBoundArtifactTargetMock.mockReset().mockImplementation(
+      async ({ extension }: { extension: string }) => {
+        const defs = listArtifactsMock() as Array<{
+          type: string;
+          isArtifact?: { accepts?: { file?: { mimeTypes?: string[] } } };
+        }>;
+        const def = defs.find((d) => d.type === `${extension}:artifact`);
+        if (!def) {
+          return { ok: false, error: `no installed artifact type resolves for "${extension}"` };
+        }
+        return {
+          ok: true,
+          target: {
+            objectTypeId: def.type,
+            acceptedFileMimeTypes: def.isArtifact?.accepts?.file?.mimeTypes ?? [],
+          },
+        };
+      },
+    );
     createSemanticArtifactMock.mockResolvedValue({
       objectId: "art-1",
       artifactId: "art-1",

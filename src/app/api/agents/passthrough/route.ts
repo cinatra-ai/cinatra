@@ -350,6 +350,7 @@ export async function POST(req: Request): Promise<Response> {
         createdBy: run.runBy,
         nodeId: shaped.nodeId,
         extension: shaped.extension,
+        objectTypeId: shaped.objectTypeId,
         title: shaped.title,
         mime: shaped.declaredMime,
         content: shaped.content,

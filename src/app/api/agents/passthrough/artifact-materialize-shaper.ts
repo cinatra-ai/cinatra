@@ -20,7 +20,14 @@ export type ShapedArtifactMaterializeInput = {
   title: string;
   /** The calling ApiNode's id — the idempotency-ledger output identity. */
   nodeId: string;
+  /** OPTIONAL declared-type discriminator (cinatra#1454) — the exact
+   *  `@scope/pkg:local-id` the tool materializes into (else the run
+   *  materializer's single-artifact-safe-type fallback / fail-closed). */
+  objectTypeId?: string;
 };
+
+/** `@scope/package:local-id` — mirrors the binding grammar regex. */
+const OBJECT_TYPE_ID_RE = /^@[\w-]+\/[\w-]+:[\w-]+$/;
 
 function requireNonEmptyString(
   raw: Record<string, unknown>,
@@ -54,6 +61,17 @@ export function shapeArtifactMaterializeInput(
   const declaredMime = requireNonEmptyString(raw, "declaredMime");
   const title = requireNonEmptyString(raw, "title");
   const nodeId = requireNonEmptyString(raw, "node_id");
+
+  let objectTypeId: string | undefined;
+  const objectTypeIdRaw = raw.objectTypeId;
+  if (objectTypeIdRaw !== undefined) {
+    if (typeof objectTypeIdRaw !== "string" || !OBJECT_TYPE_ID_RE.test(objectTypeIdRaw)) {
+      throw new Error(
+        `artifact_materialize input.objectTypeId, when present, must be a namespaced object type id (@scope/package:local-id) (got ${JSON.stringify(objectTypeIdRaw)})`,
+      );
+    }
+    objectTypeId = objectTypeIdRaw;
+  }
 
   const contentRaw = raw.content;
   if (typeof contentRaw !== "string") {
@@ -109,5 +127,5 @@ export function shapeArtifactMaterializeInput(
     }
   }
 
-  return { extension, content, declaredMime, title, nodeId };
+  return { extension, content, declaredMime, title, nodeId, ...(objectTypeId ? { objectTypeId } : {}) };
 }

@@ -15,11 +15,13 @@ const {
   buildFinalizeMaterializationQueryMock,
   readFinalizedMaterializationMock,
   isWriteAllowedMock,
+  resolveBoundArtifactTargetMock,
 } = vi.hoisted(() => ({
   poolQueryMock: vi.fn(),
   getAgentPackageMock: vi.fn(),
   listArtifactsMock: vi.fn(),
   registerAllObjectTypesMock: vi.fn(),
+  resolveBoundArtifactTargetMock: vi.fn(),
   createSemanticArtifactMock: vi.fn(),
   claimMaterializationMock: vi.fn(),
   buildFinalizeMaterializationQueryMock: vi.fn(() => ({
@@ -48,6 +50,14 @@ vi.mock("@cinatra-ai/objects/registry", () => ({
 }));
 vi.mock("@/lib/register-all-object-types", () => ({
   registerAllObjectTypes: registerAllObjectTypesMock,
+}));
+// The declared-type resolution seam (cinatra#1454). Its own eligibility +
+// accepts sourcing is unit-tested in resolve-bound-artifact-type.test.ts; here
+// the materializer's downstream (ledger/write/accepts) is exercised by mirroring
+// the legacy `${EXT}:artifact` def lookup off `listArtifactsMock` so every
+// existing case still drives behavior through the same fixture.
+vi.mock("../resolve-bound-artifact-type", () => ({
+  resolveBoundArtifactTarget: resolveBoundArtifactTargetMock,
 }));
 vi.mock("../artifact-creation", () => ({
   createSemanticArtifact: createSemanticArtifactMock,
@@ -146,6 +156,30 @@ beforeEach(() => {
   poolQueryMock.mockResolvedValue({ rows: [{ package_name: "@test/agent" }] });
   getAgentPackageMock.mockResolvedValue(packageFixture());
   listArtifactsMock.mockReturnValue([artifactDef()]);
+  // Mirror the legacy `${extension}:artifact` lookup off the same fixture: the
+  // resolved target's accepts are the def's accepts; an absent def fails closed.
+  resolveBoundArtifactTargetMock.mockImplementation(
+    async ({ extension }: { extension: string }) => {
+      const defs = listArtifactsMock() as Array<{
+        type: string;
+        isArtifact?: { accepts?: { file?: { mimeTypes?: string[] } } };
+      }>;
+      const def = defs.find((d) => d.type === `${extension}:artifact`);
+      if (!def) {
+        return {
+          ok: false,
+          error: `artifact extension "${extension}" is not installed/registered on this host`,
+        };
+      }
+      return {
+        ok: true,
+        target: {
+          objectTypeId: def.type,
+          acceptedFileMimeTypes: def.isArtifact?.accepts?.file?.mimeTypes ?? [],
+        },
+      };
+    },
+  );
   isWriteAllowedMock.mockResolvedValue(true);
   claimMaterializationMock.mockResolvedValue({ kind: "claimed", ledgerId: "led-1" });
   createSemanticArtifactMock.mockResolvedValue({

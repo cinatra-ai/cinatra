@@ -7,6 +7,7 @@ import {
 } from "./artifact-creation";
 import { assertSemanticType } from "./semantic-assertion-store";
 import { canAccessArtifactExtension } from "./artifact-extension-access";
+import { resolveBoundArtifactTarget } from "./resolve-bound-artifact-type";
 import type { ActorContext } from "@/lib/authz/actor-context";
 
 // ---------------------------------------------------------------------------
@@ -37,8 +38,6 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 //   - Image/PDF template materialization.
 // ---------------------------------------------------------------------------
 
-const ARTIFACT_TYPE_SUFFIX = ":artifact";
-
 // The placeholder content is markdown text. Only declare a MIME from this
 // set; anything else (image/png, application/pdf, etc.) needs a real template
 // binary.
@@ -53,6 +52,10 @@ export type MaterializeArtifactFromTemplateInput = {
   /** The artifact-extension package name, e.g.
    *  "@cinatra-ai/marketing-icp-artifact". */
   extension: string;
+  /** OPTIONAL declared-type discriminator (cinatra#1454) — the exact
+   *  `@scope/pkg:local-id` to materialize. Required for an ambiguous multi-type
+   *  pack; a single-artifact-safe-type pack resolves from `extension` alone. */
+  objectTypeId?: string;
   /** Optional title for the new artifact (defaults to the extension's
    *  short label). */
   title?: string;
@@ -92,25 +95,32 @@ export async function materializeArtifactFromTemplate(
   // extension regardless of boot-order timing.
   registerAllObjectTypes();
 
-  const defs = objectTypeRegistry.listArtifacts();
-  const def = defs.find(
-    (d) => d.type === `${input.extension}${ARTIFACT_TYPE_SUFFIX}`,
-  );
-  if (!def) {
+  // Resolve the extension to its DECLARED object type (cinatra#1454) — the
+  // umbrella `${extension}:artifact` (#1824) is retired. A claim-based pack's
+  // types are host-registered (no per-def `isArtifact`); the pack CLAIM carries
+  // the artifact-safe disposition + `accepts`. `resolveBoundArtifactTarget`
+  // sources eligibility from the org-chain winner-arbitrated claim set and the
+  // accepts from the resolved def's `isArtifact` (self-registered packs) or the
+  // installed pack manifest (claim types).
+  const resolved = await resolveBoundArtifactTarget({
+    orgId: input.orgId,
+    extension: input.extension,
+    bindingObjectTypeId: input.objectTypeId,
+  });
+  if (!resolved.ok) {
     return {
       ok: false,
       reason: "extension-not-found",
-      message: `No installed artifact extension matches "${input.extension}". Check pnpm-workspace.yaml + extensions-dev-watcher boot scan.`,
+      message: `No installed artifact type resolves for "${input.extension}"${
+        input.objectTypeId ? ` (objectTypeId "${input.objectTypeId}")` : ""
+      }: ${resolved.error}`,
     };
   }
-  const manifest = def.isArtifact;
-  if (!manifest) {
-    return {
-      ok: false,
-      reason: "extension-not-found",
-      message: `Extension "${input.extension}" is registered but carries no semantic manifest.`,
-    };
-  }
+  const objectTypeId = resolved.target.objectTypeId;
+  // Per-type templates live only on a SELF-registered bridge artifact def; a
+  // host-registered claim type carries none (the placeholder path applies).
+  const selfDef = objectTypeRegistry.resolve(objectTypeId);
+  const perTypeTemplates = selfDef?.isArtifact?.templates ?? [];
 
   // CG-4 (cinatra#661) — SERVICE-LAYER write gate (defense-in-depth). The
   // single app caller (library-import-actions.ts) already gates on the same
@@ -131,7 +141,7 @@ export async function materializeArtifactFromTemplate(
     };
   }
 
-  const fileForms = manifest.accepts?.file?.mimeTypes;
+  const fileForms = resolved.target.acceptedFileMimeTypes;
   if (!fileForms || fileForms.length === 0) {
     // This deterministic path supports file-form templates only. Dashboard
     // and connectorRef template materialization are handled elsewhere.
@@ -149,8 +159,7 @@ export async function materializeArtifactFromTemplate(
     TEXT_TEMPLATE_COMPATIBLE_MIMES.has(m),
   );
 
-  const templates = manifest.templates ?? [];
-  const fileTemplate = templates.find((t) => t.form === "file");
+  const fileTemplate = perTypeTemplates.find((t) => t.form === "file");
 
   if (fileTemplate) {
     // Return a structured error instead of throwing an unstructured 500 when
