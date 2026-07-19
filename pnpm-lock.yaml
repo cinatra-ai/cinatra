@@ -663,6 +663,12 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/sdk-extensions
 
+  extensions/cinatra-ai/drupal-artifacts:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
   extensions/cinatra-ai/drupal-assistant-connector:
     dependencies:
       '@cinatra-ai/sdk-extensions':
