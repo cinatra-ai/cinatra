@@ -220,6 +220,30 @@ export type SandboxExecuteOutput = {
 };
 
 /**
+ * The resolved L1 declared-environment layer an execution session mounts for
+ * every command on its job (exec-plane S3, cinatra#1708; epic #1705). Produced
+ * by the app-layer service that resolves a run's DECLARED environment (packaged
+ * agent manifest / project-agent config) into a verified, content-addressed
+ * layer, then threaded through the injection contract into the broker — which
+ * re-verifies the signed provenance fail-closed BEFORE every mount and runs the
+ * sandbox over the SIGNED digest.
+ *
+ * OPAQUE to packages/llm: llm neither reads nor validates it (the broker/worker
+ * own verification), so it is threaded through untouched and `provenance` is
+ * `unknown` here — llm takes NO dependency on the execution-plane module,
+ * exactly as `SealedExecutionSessionCarrier` is a plain string alias. The
+ * broker-backed executor binding re-narrows it to the execution-plane
+ * `ResolvedEnvironmentMount` at the package seam. Absent ⇒ commands run over
+ * the L0 base (byte-identical S1/S2 dispatch).
+ */
+export type SandboxEnvironmentMount = {
+  /** Content-addressed display / registry-pull alias (never the run target). */
+  imageRef: string;
+  /** Signed per-layer provenance — opaque here; re-verified worker-side. */
+  provenance: unknown;
+};
+
+/**
  * The executor binding the app wiring supplies to the injection layer
  * (exec-plane S2, cinatra#1707): everything between a model tool call and the
  * broker. It receives the sealed carrier (from the tool's closure — the only
@@ -234,6 +258,13 @@ export type SandboxExecutor = (input: {
   timeoutMs?: number | null;
   maxOutputLength?: number | null;
   stagedSkills?: SandboxStagedSkill[];
+  /**
+   * The run's resolved L1 declared environment (exec-plane S3, cinatra#1708).
+   * Threaded through to `broker.openJob({ environment })` so the job mounts the
+   * declared layer; the broker re-verifies its signed provenance before every
+   * mount. Absent ⇒ the L0 base (byte-identical S1/S2 dispatch).
+   */
+  environment?: SandboxEnvironmentMount;
 }) => Promise<SandboxExecuteOutput[]>;
 
 /**
@@ -780,6 +811,13 @@ export type OrchestrateGenerateInput = Omit<GenerateInput, "resolvedAttachments"
    * fail-closed) even when the rollout flag is on.
    */
   executionExecutor?: SandboxExecutor;
+  /**
+   * Execution plane (exec-plane S3, cinatra#1708): the run's resolved L1
+   * declared-environment mount, supplied by the app wiring layer after it
+   * resolves the run's declared environment into a verified layer. Absent ⇒
+   * commands run over the L0 base (byte-identical S1/S2 dispatch).
+   */
+  executionEnvironment?: SandboxEnvironmentMount;
 };
 
 // Same INTERNAL invariant as OrchestrateGenerateInput, AND also Omit
@@ -804,6 +842,8 @@ export type OrchestrateStreamInput = Omit<
   executionAvailability?: ExecutionAvailability;
   /** Execution plane (S2): see OrchestrateGenerateInput.executionExecutor. */
   executionExecutor?: SandboxExecutor;
+  /** Execution plane (S3): see OrchestrateGenerateInput.executionEnvironment. */
+  executionEnvironment?: SandboxEnvironmentMount;
 };
 
 export type OrchestrateFileInputGenerateInput = FileInputGenerateInput & {

@@ -218,6 +218,11 @@
       "resolvedSha": "2fd3f38bfc32ebf40a22d72587b36b18bb737df1"
     },
     {
+      "packageName": "@cinatra-ai/linkedin-artifacts",
+      "repo": "cinatra-ai/linkedin-artifacts",
+      "resolvedSha": "fc751149ab866fb8b759e967aae91b4cf986e5bc"
+    },
+    {
       "packageName": "@cinatra-ai/linkedin-connector",
       "repo": "cinatra-ai/linkedin-connector",
       "resolvedSha": "ef08a4d52a233ca3f729809e8ef1cc81ae69aee3"

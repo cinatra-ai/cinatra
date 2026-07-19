@@ -265,6 +265,122 @@ describe("flag ON + session + EXECUTOR — tool + cue delivered together (S2)", 
   });
 });
 
+describe("flag ON + session + EXECUTOR + declared ENVIRONMENT — matrix (S3, cinatra#1708)", () => {
+  const MOUNT = {
+    imageRef: "cinatra-sandbox-l1:matrix-recipe",
+    provenance: { imageDigest: "sha256:matrix-declared-env", signature: "matrix-sig" },
+  };
+
+  /** Recording executor — captures the input the injection contract delivers. */
+  function recordingExecutor(): {
+    executor: SandboxExecutor;
+    calls: Array<Parameters<SandboxExecutor>[0]>;
+  } {
+    const calls: Array<Parameters<SandboxExecutor>[0]> = [];
+    const executor: SandboxExecutor = async (input) => {
+      calls.push(input);
+      return input.commands.map(() => ({
+        stdout: "ok",
+        stderr: "",
+        outcome: { type: "exit" as const, exitCode: 0 },
+      }));
+    };
+    return { executor, calls };
+  }
+
+  function sandboxToolFrom(
+    captured: { tools?: LlmTool[] } | undefined,
+  ): LlmTool | undefined {
+    return (captured?.tools ?? []).find(
+      (t) => "type" in t && (t as { type?: string }).type === "sandbox_execution",
+    );
+  }
+
+  /**
+   * For each of the four entry points: the declared environment reaches the
+   * executor on dispatch (→ broker.openJob({ environment })) but NEVER appears
+   * on the tool object that crosses to the provider adapter (closure-only, like
+   * the carrier — the adapter-leak-strip invariant).
+   */
+  async function assertEnvDeliveredNotLeaked(
+    captured: { tools?: LlmTool[] } | undefined,
+    calls: Array<Parameters<SandboxExecutor>[0]>,
+  ) {
+    const sandbox = sandboxToolFrom(captured);
+    expect(sandbox).toBeDefined();
+    // Never a field on the tool object; the signed digest never serializes out.
+    expect(sandbox).not.toHaveProperty("environment");
+    expect(JSON.stringify(sandbox)).not.toContain("sha256:matrix-declared-env");
+    // Reaches the executor on dispatch.
+    await (sandbox as unknown as { execute: (a: { commands: string[] }) => Promise<unknown> }).execute({
+      commands: ["python -c 'import pandas'"],
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].environment).toEqual(MOUNT);
+  }
+
+  it("generate delivers the environment to the executor, never to the adapter tool", async () => {
+    enablePlane();
+    const rec = recordingExecutor();
+    await generate({
+      provider: "openai",
+      system: "SYS",
+      prompt: "hi",
+      actorContext: ctx,
+      executionSession: session,
+      executionExecutor: rec.executor,
+      executionEnvironment: MOUNT,
+    });
+    await assertEnvDeliveredNotLeaked(_capturedGenerate, rec.calls);
+  });
+
+  it("stream delivers the environment to the executor, never to the adapter tool", async () => {
+    enablePlane();
+    const rec = recordingExecutor();
+    await stream({
+      provider: "openai",
+      system: "SYS",
+      messages: [{ role: "user", content: "hi" }],
+      actorContext: ctx,
+      executionSession: session,
+      executionExecutor: rec.executor,
+      executionEnvironment: MOUNT,
+      ...noopStreamCallbacks,
+    });
+    await assertEnvDeliveredNotLeaked(_capturedStream, rec.calls);
+  });
+
+  it("runDeterministicLlmTask delivers the environment to the executor, never to the adapter tool", async () => {
+    enablePlane();
+    const rec = recordingExecutor();
+    await runDeterministicLlmTask({
+      provider: "openai",
+      system: "SYS",
+      user: "hi",
+      actorContext: ctx,
+      executionSession: { ...session, surface: "deterministic_task" },
+      executionExecutor: rec.executor,
+      executionEnvironment: MOUNT,
+    });
+    await assertEnvDeliveredNotLeaked(_capturedGenerate, rec.calls);
+  });
+
+  it("runSkillAwareDeterministicLlmTask delivers the environment to the executor, never to the adapter tool", async () => {
+    enablePlane();
+    const rec = recordingExecutor();
+    await runSkillAwareDeterministicLlmTask({
+      provider: "openai",
+      system: "SYS",
+      user: "hi",
+      actorContext: ctx,
+      executionSession: { ...session, surface: "skill_task" },
+      executionExecutor: rec.executor,
+      executionEnvironment: MOUNT,
+    });
+    await assertEnvDeliveredNotLeaked(_capturedGenerate, rec.calls);
+  });
+});
+
 describe("flag ON + session, NO executor binding — fail-closed, model usable (S2)", () => {
   it("generate warns capability_unavailable; no tool, no cue reaches the adapter", async () => {
     enablePlane();

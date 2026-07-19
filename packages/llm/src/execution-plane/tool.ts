@@ -18,6 +18,7 @@
 import type {
   LlmSandboxExecutionTool,
   LlmTool,
+  SandboxEnvironmentMount,
   SandboxExecuteAction,
   SandboxExecuteOutput,
   SandboxExecutor,
@@ -81,6 +82,13 @@ export function buildSandboxExecutionTool(input: {
   sessionCarrier: SealedExecutionSessionCarrier;
   executor: SandboxExecutor;
   stagedSkills?: SandboxStagedSkill[];
+  /**
+   * The run's resolved L1 declared-environment mount (exec-plane S3,
+   * cinatra#1708). Captured in the `execute` closure and passed to the executor
+   * (→ `broker.openJob({ environment })`) — never a field on the tool object,
+   * so it cannot cross the provider boundary. Absent ⇒ the L0 base.
+   */
+  environment?: SandboxEnvironmentMount;
 }): LlmSandboxExecutionTool {
   const staged = input.stagedSkills ?? [];
   const execute = async (
@@ -104,6 +112,7 @@ export function buildSandboxExecutionTool(input: {
       timeoutMs: action.timeoutMs ?? null,
       maxOutputLength: action.maxOutputLength ?? null,
       stagedSkills: staged,
+      ...(input.environment ? { environment: input.environment } : {}),
     });
   };
   return {

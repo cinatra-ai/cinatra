@@ -78,6 +78,7 @@
       "@cinatra-ai/google-calendar-connector": "https://github.com/cinatra-ai/google-calendar-connector.git",
       "@cinatra-ai/google-oauth-connector": "https://github.com/cinatra-ai/google-oauth-connector.git",
       "@cinatra-ai/image-artifact": "https://github.com/cinatra-ai/image-artifact.git",
+      "@cinatra-ai/linkedin-artifacts": "https://github.com/cinatra-ai/linkedin-artifacts.git",
       "@cinatra-ai/linkedin-connector": "https://github.com/cinatra-ai/linkedin-connector.git",
       "@cinatra-ai/linkedin-oauth-connector": "https://github.com/cinatra-ai/linkedin-oauth-connector.git",
       "@cinatra-ai/lint-policy-agent": "https://github.com/cinatra-ai/lint-policy-agent.git",
