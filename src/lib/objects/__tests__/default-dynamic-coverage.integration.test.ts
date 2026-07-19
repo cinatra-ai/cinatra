@@ -57,7 +57,6 @@ import {
   parseArtifactObjectTypeClaims,
   validateObjectTypeClaimSchemaSources,
 } from "@cinatra-ai/objects/claims";
-import { selectableAssertionId } from "@cinatra-ai/objects/effective-identity";
 import { DEFAULT_ARTIFACT_EXTENSION } from "@cinatra-ai/objects/artifact-floor";
 
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
@@ -303,7 +302,14 @@ afterAll(async () => {
   await pool?.end().catch(() => {});
 });
 
-describe("AC-1 — generic-object floor claim (default-artifact manifest)", () => {
+// RETIRED MODEL (epic #1785): these ACs prove the default-artifact-FLOOR +
+// dynamic-default-coverage + catalog/binding IDENTITY model. A2 replaces
+// effective identity with the type-driven resolver (no floor, no catalog, no
+// binding-derived identity), so these identity assertions no longer describe
+// production behavior. Skipped here (identity coverage is obsolete); the floor
+// rebalancer + arbitration this also exercises is deleted in A5 and its DB rows
+// purged in A6 — this file is removed with that plumbing.
+describe.skip("AC-1 — generic-object floor claim (default-artifact manifest)", () => {
   it("the manifest claim entry is schema-valid and satisfies the #1432 schema-source rule with zero dependencies", () => {
     const parsed = parseArtifactObjectTypeClaims([EXPECTED_FLOOR_CLAIM]);
     expect(parsed.ok).toBe(true);
@@ -379,7 +385,6 @@ describe("AC-1 — generic-object floor claim (default-artifact manifest)", () =
       selectable: true,
       assertionId: floors[0].id,
     });
-    expect(selectableAssertionId(identity)).toBe(floors[0].id);
 
     // The PLATFORM-scope arm of the widened writer predicate: a NEW
     // generic-type row saved through the REAL universal writer enqueues its
@@ -411,7 +416,7 @@ describe("AC-1 — generic-object floor claim (default-artifact manifest)", () =
   });
 });
 
-describe("AC-2 — dynamic-type org approval gate", () => {
+describe.skip("AC-2 — dynamic-type org approval gate", () => {
   it("an MCP/install-minted active dynamic type stays plain-object until the org approval; approval flips rows to default-artifact", async () => {
     const orgId = nextId("org");
     const type = `@cinatra-ai/dynamic:${nextId("dyn")}`;
@@ -543,7 +548,7 @@ describe("AC-2 — dynamic-type org approval gate", () => {
   });
 });
 
-describe("AC-3 — dedicated upgrade / retirement fallback", () => {
+describe.skip("AC-3 — dedicated upgrade / retirement fallback", () => {
   it("dedicated install dormants the org default; rows upgrade (catalog → binding); retirement reactivates coverage on a NEW generation with NO re-approval", async () => {
     const orgId = nextId("org");
     const scope = `org:${orgId}`;
@@ -606,7 +611,6 @@ describe("AC-3 — dedicated upgrade / retirement fallback", () => {
       basis: "binding",
       selectable: true,
     });
-    expect(selectableAssertionId(boundIdentity)).not.toBeNull();
 
     // (3) RETIRE/uninstall the dedicated claimant → the default claim
     // reactivates with a NEW generation; rows fall back WITHOUT re-approval.

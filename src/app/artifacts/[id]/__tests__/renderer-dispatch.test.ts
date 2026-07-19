@@ -7,7 +7,7 @@
  * leaf composes the total precedence — semantic detail renderer → representation
  * viewer (extension provider or first-party host default) → generic fallback,
  * with never-built claimants degrading to requires-rebuild. Also pins the
- * activation barrier.
+ * (retired) activation barrier.
  */
 import { describe, expect, it } from "vitest";
 
@@ -20,37 +20,14 @@ import {
   type RepresentationRendererResolution,
 } from "../renderer-dispatch";
 
-const bindingIdentity: EffectiveIdentity = {
+// Type-driven identity (epic #1785): a row's identity is either its installed
+// defining extension or no-primary — there is no binding/classic/catalog basis
+// and no selectable activation barrier anymore.
+const extensionIdentity: EffectiveIdentity = {
   kind: "extension",
   extension: "@cinatra-ai/outreach",
-  basis: "binding",
-  selectable: true,
-  assertionId: "sa_1",
 };
-const classicIdentity: EffectiveIdentity = {
-  kind: "extension",
-  extension: "@cinatra-ai/outreach",
-  basis: "classic",
-  selectable: true,
-  assertionId: "sa_2",
-};
-const catalogIdentity: EffectiveIdentity = {
-  kind: "extension",
-  extension: "@cinatra-ai/outreach",
-  basis: "catalog",
-  selectable: false,
-  assertionId: null,
-};
-const floorIdentity: EffectiveIdentity = {
-  kind: "default-artifact",
-  selectable: true,
-  assertionId: "sa_floor",
-};
-const plainIdentity: EffectiveIdentity = {
-  kind: "plain-object",
-  selectable: false,
-  assertionId: null,
-};
+const noPrimaryIdentity: EffectiveIdentity = { kind: "no-primary" };
 
 const builtSemantic: SemanticRendererResolution = {
   packageName: "@cinatra-ai/outreach",
@@ -84,37 +61,25 @@ const unbuiltRepProvider: RepresentationRendererResolution = {
 describe("pickArtifactRenderer — semantic tier (case 1)", () => {
   it("dispatches to the built semantic renderer when the effective-identity winner ships one", () => {
     expect(
-      pickArtifactRenderer({ identity: bindingIdentity, semantic: builtSemantic, representation: pdfFirstParty }),
-    ).toEqual({ kind: "semantic", packageName: "@cinatra-ai/outreach", generatedKey: "@cinatra-ai/outreach::detail" });
-  });
-
-  it("dispatches semantic for a classic identity too (arbitration is the winner, not the basis)", () => {
-    expect(
-      pickArtifactRenderer({ identity: classicIdentity, semantic: builtSemantic, representation: null }),
-    ).toEqual({ kind: "semantic", packageName: "@cinatra-ai/outreach", generatedKey: "@cinatra-ai/outreach::detail" });
-  });
-
-  it("renders a catalog (browse-only) identity through the semantic renderer — the barrier gates selection, not rendering", () => {
-    expect(
-      pickArtifactRenderer({ identity: catalogIdentity, semantic: builtSemantic, representation: null }),
+      pickArtifactRenderer({ identity: extensionIdentity, semantic: builtSemantic, representation: pdfFirstParty }),
     ).toEqual({ kind: "semantic", packageName: "@cinatra-ai/outreach", generatedKey: "@cinatra-ai/outreach::detail" });
   });
 
   it("a NEVER-BUILT semantic claimant degrades to requires-rebuild (terminal — does NOT fall through to representation)", () => {
     expect(
-      pickArtifactRenderer({ identity: bindingIdentity, semantic: unbuiltSemantic, representation: pdfFirstParty }),
+      pickArtifactRenderer({ identity: extensionIdentity, semantic: unbuiltSemantic, representation: pdfFirstParty }),
     ).toEqual({ kind: "requires-rebuild", packageName: "@cinatra-ai/outreach", slot: "detail" });
   });
 
   it("an extension identity whose winner ships NO semantic renderer falls through to the representation tier", () => {
     expect(
-      pickArtifactRenderer({ identity: bindingIdentity, semantic: null, representation: pdfFirstParty }),
+      pickArtifactRenderer({ identity: extensionIdentity, semantic: null, representation: pdfFirstParty }),
     ).toEqual({ kind: "mime", handler: "pdf" });
   });
 
   it("does not apply a stray semantic resolution to a non-extension identity (defensive gate)", () => {
     expect(
-      pickArtifactRenderer({ identity: floorIdentity, semantic: builtSemantic, representation: imageFirstParty }),
+      pickArtifactRenderer({ identity: noPrimaryIdentity, semantic: builtSemantic, representation: imageFirstParty }),
     ).toEqual({ kind: "mime", handler: "image" });
   });
 
@@ -127,7 +92,7 @@ describe("pickArtifactRenderer — semantic tier (case 1)", () => {
     // identity winner is @cinatra-ai/outreach but the semantic names @cinatra-ai/loser
     // → the semantic tier is skipped; falls through to the representation tier.
     expect(
-      pickArtifactRenderer({ identity: bindingIdentity, semantic: mismatched, representation: imageFirstParty }),
+      pickArtifactRenderer({ identity: extensionIdentity, semantic: mismatched, representation: imageFirstParty }),
     ).toEqual({ kind: "mime", handler: "image" });
   });
 });
@@ -135,7 +100,7 @@ describe("pickArtifactRenderer — semantic tier (case 1)", () => {
 describe("pickArtifactRenderer — representation tier (case 2)", () => {
   it("routes to a built extension representation provider", () => {
     expect(
-      pickArtifactRenderer({ identity: floorIdentity, semantic: null, representation: builtRepProvider }),
+      pickArtifactRenderer({ identity: noPrimaryIdentity, semantic: null, representation: builtRepProvider }),
     ).toEqual({
       kind: "representation",
       packageName: "@cinatra-ai/pdf-viewer",
@@ -146,7 +111,7 @@ describe("pickArtifactRenderer — representation tier (case 2)", () => {
 
   it("a never-built representation provider degrades to requires-rebuild carrying the RESOLVED slot (preview)", () => {
     expect(
-      pickArtifactRenderer({ identity: floorIdentity, semantic: null, representation: unbuiltRepProvider }),
+      pickArtifactRenderer({ identity: noPrimaryIdentity, semantic: null, representation: unbuiltRepProvider }),
     ).toEqual({ kind: "requires-rebuild", packageName: "@cinatra-ai/pdf-viewer", slot: "preview" });
   });
 
@@ -160,13 +125,13 @@ describe("pickArtifactRenderer — representation tier (case 2)", () => {
       built: false,
     };
     expect(
-      pickArtifactRenderer({ identity: floorIdentity, semantic: null, representation: unbuiltDetailRepProvider }),
+      pickArtifactRenderer({ identity: noPrimaryIdentity, semantic: null, representation: unbuiltDetailRepProvider }),
     ).toEqual({ kind: "requires-rebuild", packageName: "@cinatra-ai/pdf-viewer", slot: "detail" });
   });
 
   it("a first-party default resolves to the host MIME handler", () => {
     expect(
-      pickArtifactRenderer({ identity: plainIdentity, semantic: null, representation: imageFirstParty }),
+      pickArtifactRenderer({ identity: noPrimaryIdentity, semantic: null, representation: imageFirstParty }),
     ).toEqual({ kind: "mime", handler: "image" });
   });
 });
@@ -174,28 +139,16 @@ describe("pickArtifactRenderer — representation tier (case 2)", () => {
 describe("pickArtifactRenderer — generic fallback (case 3)", () => {
   it("falls back when there is neither a semantic renderer nor a representation viewer", () => {
     expect(
-      pickArtifactRenderer({ identity: floorIdentity, semantic: null, representation: null }),
-    ).toEqual({ kind: "fallback" });
-  });
-
-  it("falls back for a plain object with nothing to render", () => {
-    expect(
-      pickArtifactRenderer({ identity: plainIdentity, semantic: null, representation: null }),
+      pickArtifactRenderer({ identity: noPrimaryIdentity, semantic: null, representation: null }),
     ).toEqual({ kind: "fallback" });
   });
 });
 
-describe("isSelectionPreparing — §III activation barrier (unchanged by the spine)", () => {
-  it("a catalog browse-only identity is preparing", () => {
-    expect(isSelectionPreparing(catalogIdentity)).toBe(true);
+describe("isSelectionPreparing — §III activation barrier RETIRED (epic #1785)", () => {
+  it("is never preparing under type-driven identity — an extension identity is settled", () => {
+    expect(isSelectionPreparing(extensionIdentity)).toBe(false);
   });
-  it("a settled binding identity is not preparing", () => {
-    expect(isSelectionPreparing(bindingIdentity)).toBe(false);
-  });
-  it("a default-artifact floor identity is not preparing", () => {
-    expect(isSelectionPreparing(floorIdentity)).toBe(false);
-  });
-  it("a plain object is not preparing", () => {
-    expect(isSelectionPreparing(plainIdentity)).toBe(false);
+  it("is never preparing for a no-primary identity", () => {
+    expect(isSelectionPreparing(noPrimaryIdentity)).toBe(false);
   });
 });

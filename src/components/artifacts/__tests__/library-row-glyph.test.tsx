@@ -100,10 +100,10 @@ import { LibraryRowGlyph } from "../library-row-glyph";
 const TYPE = "@fixture/row-ext:artifact";
 
 function winner(extension: string): EffectiveIdentity {
-  return { kind: "extension", extension, basis: "binding", selectable: true, assertionId: "sa_1" };
+  return { kind: "extension", extension };
 }
-const floorIdentity: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
-const plainIdentity: EffectiveIdentity = { kind: "plain-object", selectable: false, assertionId: null };
+const floorIdentity: EffectiveIdentity = { kind: "no-primary" };
+const plainIdentity: EffectiveIdentity = { kind: "no-primary" };
 
 function summaryOf(overrides: Partial<ArtifactSummary> = {}): ArtifactSummary {
   return {

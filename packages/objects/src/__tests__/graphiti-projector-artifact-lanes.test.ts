@@ -32,7 +32,7 @@ vi.mock("@/lib/objects/artifact-claim-store", () => ({
 }));
 vi.mock("@/lib/objects/effective-identity", () => ({
   resolveArtifactEffectiveIdentity: vi.fn(() => ({
-    identity: { kind: "default-artifact", selectable: false, assertionId: null },
+    identity: { kind: "no-primary" },
     eligibleExtensions: [],
   })),
 }));

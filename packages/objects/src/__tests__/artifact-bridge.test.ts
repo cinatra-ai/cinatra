@@ -450,9 +450,6 @@ describe("registerArtifactExtensions — semantic slot registration (S7 listRow)
   const rowWinner: EffectiveIdentity = {
     kind: "extension",
     extension: "@cinatra-ai/rowful-artifact",
-    basis: "binding",
-    selectable: true,
-    assertionId: "sa_row",
   };
 
   beforeEach(() => {
@@ -543,9 +540,6 @@ describe("registerArtifactExtensions — semantic slot registration (S7 listRow)
     const detailWinner: EffectiveIdentity = {
       kind: "extension",
       extension: "@cinatra-ai/detailonly-artifact",
-      basis: "binding",
-      selectable: true,
-      assertionId: "sa_d",
     };
     expect(semanticRendererRegistry.resolve(declared, detailWinner)).not.toBeNull();
     expect(semanticRendererRegistry.resolve(declared, detailWinner, "listRow")).toBeNull();
@@ -579,9 +573,6 @@ describe("registerArtifactExtensions — semantic slot registration (S7 listRow)
     const w: EffectiveIdentity = {
       kind: "extension",
       extension: "@cinatra-ai/rowonly-artifact",
-      basis: "binding",
-      selectable: true,
-      assertionId: "sa_r",
     };
     expect(
       semanticRendererRegistry.resolve("@cinatra-ai/rowonly-artifact:thing", w, "listRow"),
@@ -727,9 +718,6 @@ describe("registerParsedArtifactManifest — explicit declared types (entry 95, 
     const winner: EffectiveIdentity = {
       kind: "extension",
       extension: "@cinatra-ai/x-artifacts",
-      basis: "binding",
-      selectable: true,
-      assertionId: "sa_x",
     };
     expect(
       semanticRendererRegistry.resolve("@cinatra-ai/x-artifacts:post-draft", winner),

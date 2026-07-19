@@ -206,9 +206,6 @@ describe("per-kind teardown (b) — the teardown hook covers EXACTLY the four re
       semanticRendererRegistry.resolve(RTYPE, {
         kind: "extension",
         extension: PKG,
-        basis: "classic",
-        selectable: true,
-        assertionId: "sa_x",
       }),
     ).toBeNull();
     expect(representationProviderRegistry.resolve("org_1", "application/pdf", "preview")).toBeNull();

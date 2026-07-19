@@ -62,7 +62,7 @@ afterEach(() => {
 });
 
 function winner(extension: string): EffectiveIdentity {
-  return { kind: "extension", extension, basis: "binding", selectable: true, assertionId: "sa_1" };
+  return { kind: "extension", extension };
 }
 
 function dispatchFor(args: { baseType: string; identity: EffectiveIdentity; mime: string }) {
@@ -110,7 +110,7 @@ describe("golden dispatch — a fixture extension renders through the registries
       slot: "detail",
       generation: 1,
     });
-    const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
+    const floor: EffectiveIdentity = { kind: "no-primary" };
     expect(dispatchFor({ baseType: "@cinatra-ai/artifact:object", identity: floor, mime: "application/pdf" })).toEqual({
       kind: "representation",
       packageName: "@fixture/rep-ext",
@@ -123,7 +123,7 @@ describe("golden dispatch — a fixture extension renders through the registries
     // Post-G2-cutover: pickHandler no longer selects a host pdf handler, and this
     // fixture map carries no pdf-artifact base, so the row deterministically
     // reaches the generic floor — never blank.
-    const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
+    const floor: EffectiveIdentity = { kind: "no-primary" };
     expect(dispatchFor({ baseType: "@cinatra-ai/artifact:object", identity: floor, mime: "application/pdf" })).toEqual({
       kind: "fallback",
     });

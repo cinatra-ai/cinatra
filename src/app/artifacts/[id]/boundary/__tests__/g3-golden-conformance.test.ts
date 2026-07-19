@@ -75,7 +75,7 @@ describe("G3 — real arbitration through the registries + generated map", () =>
       slot: "detail",
       generation: 1,
     });
-    const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
+    const floor: EffectiveIdentity = { kind: "no-primary" };
     expect(dispatchViaRealRegistries({ baseType: "@cinatra-ai/artifact:object", identity: floor, mime: "application/pdf" })).toEqual({
       kind: "representation",
       packageName: "@fixture/rep-ext",
@@ -87,7 +87,7 @@ describe("G3 — real arbitration through the registries + generated map", () =>
   it("with NO provider installed (mocked map has no pdf base), the same PDF row falls to the generic never-blank floor", () => {
     // Post-G2-cutover: no host pdf handler + no pdf base in this fixture map → the
     // row reaches the generic floor deterministically (never blank).
-    const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
+    const floor: EffectiveIdentity = { kind: "no-primary" };
     expect(dispatchViaRealRegistries({ baseType: "@cinatra-ai/artifact:object", identity: floor, mime: "application/pdf" })).toEqual({
       kind: "fallback",
     });
@@ -95,7 +95,7 @@ describe("G3 — real arbitration through the registries + generated map", () =>
 
   it("a fixture SEMANTIC renderer routes through the real semantic registry (effective-identity winner) to its extension detail view", () => {
     semanticRendererRegistry.register({ objectTypeId: "@fixture/detail-ext:artifact", packageName: "@fixture/detail-ext" });
-    const winner: EffectiveIdentity = { kind: "extension", extension: "@fixture/detail-ext", basis: "binding", selectable: true, assertionId: "sa" };
+    const winner: EffectiveIdentity = { kind: "extension", extension: "@fixture/detail-ext" };
     expect(dispatchViaRealRegistries({ baseType: "@fixture/detail-ext:artifact", identity: winner, mime: "application/json" })).toEqual({
       kind: "semantic",
       packageName: "@fixture/detail-ext",
@@ -119,7 +119,7 @@ describe("G3 — full G2 cutover matrix through the real precedence leaf", () =>
 describe("G3 — zero core diffs", () => {
   it("an ARBITRARY, never-seen type id routes to its semantic renderer with no core branch", () => {
     for (const ext of ["@vendor/brand-new", "@third-party/whatever", "@x/z-artifact"]) {
-      const winner: EffectiveIdentity = { kind: "extension", extension: ext, basis: "binding", selectable: true, assertionId: "sa" };
+      const winner: EffectiveIdentity = { kind: "extension", extension: ext };
       expect(
         pickArtifactRenderer({ identity: winner, semantic: { packageName: ext, generatedKey: `${ext}::detail`, built: true }, representation: null }),
       ).toEqual({ kind: "semantic", packageName: ext, generatedKey: `${ext}::detail` });
@@ -127,7 +127,7 @@ describe("G3 — zero core diffs", () => {
   });
 
   it("an arbitrary unregistered identity always lands on the never-blank floor", () => {
-    const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
+    const floor: EffectiveIdentity = { kind: "no-primary" };
     expect(pickArtifactRenderer({ identity: floor, semantic: null, representation: null })).toEqual({ kind: "fallback" });
   });
 });

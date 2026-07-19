@@ -84,7 +84,7 @@ describe("projectArtifactSafe projection policy", () => {
     });
   });
 
-  it("defaults to floor primary + empty eligibles when caller does not pass identity", () => {
+  it("defaults to a NULL primary + empty eligibles when caller does not pass identity (epic #1785 — no default-artifact floor)", () => {
     const out = projectArtifactSafe({
       artifactType: "file",
       latestRepresentationRevisionId: "ver_xyz",
@@ -96,7 +96,7 @@ describe("projectArtifactSafe projection policy", () => {
     });
     expect(out).not.toBeNull();
     expect(out).toMatchObject({
-      primaryExtension: "@cinatra-ai/default-artifact",
+      primaryExtension: null,
       eligibleExtensions: [],
     });
   });

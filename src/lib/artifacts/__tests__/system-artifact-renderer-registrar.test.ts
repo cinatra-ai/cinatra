@@ -37,7 +37,7 @@ const PDF = "@cinatra-ai/pdf-artifact";
 const AUDIO = "@cinatra-ai/audio-artifact";
 const VIDEO = "@cinatra-ai/video-artifact";
 
-const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
+const floor: EffectiveIdentity = { kind: "no-primary" };
 
 function dispatchFor(mime: string) {
   return pickArtifactRenderer(

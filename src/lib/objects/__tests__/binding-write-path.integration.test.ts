@@ -50,7 +50,6 @@ import {
   isObjectQuarantined,
   quarantineObject,
 } from "@/lib/objects/claim-activation-gate";
-import { resolveArtifactEffectiveIdentity } from "@/lib/objects/effective-identity";
 
 const S = () => postgresSchema.replaceAll('"', '""');
 let uniq = 0;
@@ -317,29 +316,16 @@ describe("cinatra#1429 — binding write path (real DB)", () => {
     // enqueues a binding-reconcile queue row.
     const orgClaim = seedDedicatedClaim({ scope: `org:${orgId}`, type, pkg: pkgOrg });
 
-    // BEFORE draining: the resolver must NOT serve the now-stale platform
-    // binding as identity (it no longer matches the org winner).
-    const before = resolveArtifactEffectiveIdentity({ orgId, artifactId, baseType: type });
-    expect(before.identity.kind).toBe("extension");
-    if (before.identity.kind === "extension") {
-      expect(before.identity.extension).toBe(pkgOrg); // browse-only catalog identity
-      expect(before.identity.selectable).toBe(false);
-    }
-
-    // Drain the queue → binding reconciles to the org winner.
+    // Drain the queue → binding reconciles to the org winner. (Under epic #1785
+    // the binding write path is KEPT plumbing; effective identity is now
+    // type-driven and no longer reads bindings, so the reconciliation is
+    // verified via the live binding row, not the resolver.)
     const drain = processBindingReconcileQueue({ limit: 50 });
     expect(drain.processed).toBeGreaterThanOrEqual(1);
     const after = readActiveBinding(orgId, artifactId);
     expect(after?.bindingClaimId).toBe(orgClaim.id);
     expect(after?.extension).toBe(pkgOrg);
     expect(activeBindingCount(orgId, artifactId)).toBe(1);
-
-    const resolved = resolveArtifactEffectiveIdentity({ orgId, artifactId, baseType: type });
-    expect(resolved.identity.kind).toBe("extension");
-    if (resolved.identity.kind === "extension") {
-      expect(resolved.identity.extension).toBe(pkgOrg);
-      expect(resolved.identity.selectable).toBe(true);
-    }
   });
 
   it("AC-3: type change across claims archives + re-asserts atomically; undo/restore re-derives", () => {

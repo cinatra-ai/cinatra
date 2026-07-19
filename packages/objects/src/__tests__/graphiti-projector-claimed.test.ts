@@ -32,7 +32,7 @@ vi.mock("@/lib/objects/artifact-claim-store", () => ({
 }));
 vi.mock("@/lib/objects/effective-identity", () => ({
   resolveArtifactEffectiveIdentity: vi.fn(() => ({
-    identity: { kind: "default-artifact", selectable: false, assertionId: null },
+    identity: { kind: "no-primary" },
     eligibleExtensions: [],
   })),
 }));
@@ -113,7 +113,7 @@ beforeEach(() => {
   addEp.mockReset();
   resolveIdentity.mockReset();
   resolveIdentity.mockReturnValue({
-    identity: { kind: "default-artifact", selectable: false, assertionId: null },
+    identity: { kind: "no-primary" },
     eligibleExtensions: [],
   });
 });
@@ -155,8 +155,6 @@ describe("projectClaimedRowFaceted — whitelist-only shape", () => {
         claimKind: "dedicated",
         claimGeneration: 2,
         effectiveExtension: EMAIL_EXT,
-        identityBasis: "binding",
-        selectable: true,
         eligibleExtensions: [EMAIL_EXT],
       },
     );
@@ -166,8 +164,6 @@ describe("projectClaimedRowFaceted — whitelist-only shape", () => {
       claimKind: "dedicated",
       claimGeneration: 2,
       primaryExtension: EMAIL_EXT,
-      identityBasis: "binding",
-      selectable: true,
       eligibleExtensions: [EMAIL_EXT],
       title: "T",
       excerpt: "Hi",
@@ -187,13 +183,10 @@ describe("projectClaimedRowFaceted — whitelist-only shape", () => {
         claimKind: "dedicated",
         claimGeneration: 1,
         effectiveExtension: null,
-        identityBasis: "catalog",
-        selectable: false,
         eligibleExtensions: [],
       },
     );
     expect(body.primaryExtension).toBe(EMAIL_EXT);
-    expect(body.selectable).toBe(false);
   });
 });
 
@@ -205,7 +198,7 @@ describe("projectObjectToGraphiti — governed typed row (AC-3, type-driven)", (
   it("projects the FACETED shape (identity from the effective-identity service), never raw bytes", async () => {
     registerClaimed("artifact-safe");
     resolveIdentity.mockReturnValue({
-      identity: { kind: "extension", extension: EMAIL_EXT, basis: "binding", selectable: true, assertionId: "sa-1" },
+      identity: { kind: "extension", extension: EMAIL_EXT },
       eligibleExtensions: [EMAIL_EXT],
     });
     // readCanonicalRow returns the claimed row; every write mock returns ok.
@@ -228,8 +221,6 @@ describe("projectObjectToGraphiti — governed typed row (AC-3, type-driven)", (
     expect(body.claimedBy).toBe(EMAIL_EXT);
     expect(body.claimKind).toBe("dedicated");
     expect(body.primaryExtension).toBe(EMAIL_EXT);
-    expect(body.identityBasis).toBe("binding");
-    expect(body.selectable).toBe(true);
     expect(body.excerpt).toBe("Quarterly update");
     // The raw-data fields are absent — no bytes / storage keys reach Graphiti.
     expect(body.rawBlob).toBeUndefined();
@@ -242,7 +233,7 @@ describe("projectObjectToGraphiti — governed typed row (AC-3, type-driven)", (
     // namespace-defining package.
     registerClaimed("artifact-safe", null);
     resolveIdentity.mockReturnValue({
-      identity: { kind: "extension", extension: "@cinatra-ai/email", basis: "binding", selectable: true, assertionId: "sa-1" },
+      identity: { kind: "extension", extension: "@cinatra-ai/email" },
       eligibleExtensions: ["@cinatra-ai/email"],
     });
     runPg.mockReturnValue([{ rows: [], rowCount: 1 }]);
@@ -284,7 +275,7 @@ describe("projectObjectToGraphiti — governed typed row (AC-3, type-driven)", (
   it("an invalid declared projection fails CLOSED to the faceted (metadata-only) shape, never up to raw", async () => {
     registerClaimed("totally-invalid" as unknown as TypeProjectionDisposition);
     resolveIdentity.mockReturnValue({
-      identity: { kind: "extension", extension: EMAIL_EXT, basis: "catalog", selectable: false, assertionId: null },
+      identity: { kind: "extension", extension: EMAIL_EXT },
       eligibleExtensions: [],
     });
     runPg.mockReturnValue([{ rows: [], rowCount: 1 }]);
