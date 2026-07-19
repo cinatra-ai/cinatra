@@ -90,6 +90,7 @@ vi.mock("@/lib/widget-auth-audit", () => ({
 }));
 
 import { POST, OPTIONS } from "../route";
+import { verifyWidgetChatResumeToken } from "@/lib/widget-chat-resume-token";
 
 const ORIGIN = "https://blog.example.com";
 const WP_ENTRY = {
@@ -223,6 +224,44 @@ describe("broker-auth happy path — builds the WidgetPrincipal and drives the s
     // CORS reflected onto the streamed response for the cross-origin widget.
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
     expect(runChatTurn).not.toHaveBeenCalled();
+  });
+
+  it("supplies a mintResumeToken callback that mints a RUN-BOUND resume token from the server-verified principal (S5 #1221)", async () => {
+    const priorSecret = process.env.BETTER_AUTH_SECRET;
+    process.env.BETTER_AUTH_SECRET = "test-secret-broker-mint";
+    try {
+      await POST(widgetReq({ cit: "cit_abc", cwu: "cwu_xyz" }));
+      const mint = streamAgUiChatTurn.mock.calls[0][0].mintResumeToken as
+        | ((runId: string) => string | null)
+        | undefined;
+      expect(typeof mint).toBe("function");
+      // The harness will call it with the freshly-minted runId; the token is
+      // run-bound and verifies at the resume seam ONLY for that run.
+      const token = mint!("run-from-harness");
+      expect(token).toBeTruthy();
+      const good = verifyWidgetChatResumeToken({
+        authHeader: `Bearer ${token}`,
+        expectedRunId: "run-from-harness",
+      });
+      expect(good).toMatchObject({
+        userId: "user-7",
+        orgId: "org-3",
+        instanceId: "inst-42", // the server-derived canonical RE-PIN
+        kind: "wordpress",
+        runId: "run-from-harness",
+        platformRole: "member",
+      });
+      // Cross-run: the SAME token does not verify for a different run.
+      expect(
+        verifyWidgetChatResumeToken({
+          authHeader: `Bearer ${token}`,
+          expectedRunId: "a-different-run",
+        }),
+      ).toBeNull();
+    } finally {
+      if (priorSecret === undefined) delete process.env.BETTER_AUTH_SECRET;
+      else process.env.BETTER_AUTH_SECRET = priorSecret;
+    }
   });
 });
 
