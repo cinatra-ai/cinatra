@@ -384,9 +384,13 @@ function registerEmailObjectTypes(): void {
   });
 
   // 5. body — the reusable body of a sent/retained email message. The
-  // @cinatra-ai/email-artifacts pack CLAIMS this type [draftable] and absorbs
-  // the former single-type @cinatra-ai/email-body-artifact (cinatra#1454). The
-  // TYPE registrar stays host-side here (the claim adds disposition/mutability/
+  // @cinatra-ai/email-artifacts pack CLAIMS this type [draftable]. It supersedes
+  // the former single-type @cinatra-ai/email-body-artifact, now RETIRED from the
+  // dev-extension set (cinatra#1454): that matcher-based extension kept its own
+  // distinct `email-body-artifact:artifact` type (never this one — no collision),
+  // so retiring it is a clean extension-uninstall governed by the artifact
+  // lifecycle, not a re-type migration of this type's rows. The TYPE registrar
+  // stays host-side here (the claim adds disposition/mutability/
   // arbitration, not a second registrar). `draftable` narrows a NON-empty
   // mutableBy baseline (draftable requires draft-state edits), so mutableBy is
   // ["agent","user"]. Run-scoped per-email bodies dedup on (runId, contactId);

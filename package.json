@@ -65,7 +65,6 @@
       "@cinatra-ai/drupal-mcp-connector": "https://github.com/cinatra-ai/drupal-mcp-connector.git",
       "@cinatra-ai/drupal-skills": "https://github.com/cinatra-ai/drupal-skills.git",
       "@cinatra-ai/email-artifacts": "https://github.com/cinatra-ai/email-artifacts.git",
-      "@cinatra-ai/email-body-artifact": "https://github.com/cinatra-ai/email-body-artifact.git",
       "@cinatra-ai/email-connector": "https://github.com/cinatra-ai/email-connector.git",
       "@cinatra-ai/email-delivery-agent": "https://github.com/cinatra-ai/email-delivery-agent.git",
       "@cinatra-ai/email-drafting-agent": "https://github.com/cinatra-ai/email-drafting-agent.git",
