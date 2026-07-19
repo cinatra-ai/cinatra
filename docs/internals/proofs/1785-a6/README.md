@@ -26,10 +26,63 @@ proof item 4 below.
 
 | # | Proof item | Status | Evidence |
 |---|------------|--------|----------|
-| 1 | Upload MIME→typed pack; uncovered/ambiguous/empty MIME refused fail-closed | PROVEN (integration/unit) | `item1-upload-mime-type-map.proof.txt` (11/11) |
+| 1 | Upload MIME→typed pack; uncovered/ambiguous/empty MIME refused fail-closed | PROVEN (integration/unit), **re-proven Stage 2** | `item1-upload-mime-type-map.proof.txt` (16/16 now REGISTRY-ROUTED + coupling-ban gate OK) |
 | 2 | `/artifacts` library lists typed rows; chat context + recall resolve typed artifacts | PROVEN (integration/unit) | `item2-library-recall.proof.txt` (41/41 readers/serve/dispatch + 74/74 recall/disposition/identity/projector) |
-| 3 | Purge dry-run + real run on a seeded fixture DB; DB write-guard rejection | **PROVEN LIVE** on the real schema | `item3-purge-cascade-guard.proof.txt` (38/38) + shape unit test 19/19 |
-| 4 | Clean boot WITHOUT default-artifact | NOT PROVABLE on this branch | retirement deferred (see above); app still boots WITH default-artifact |
+| 3 | Purge dry-run + real run on a seeded fixture DB; DB write-guard rejection | **PROVEN LIVE** on the real schema, **re-proven Stage 2** | `item3-purge-cascade-guard.proof.txt` (38/38 fresh post-merge) + shape unit test 19/19 |
+| 4 | Clean boot WITHOUT default-artifact | **NOT PROVABLE on this branch** (unchanged Stage 2) | retirement deferred (see below); app still boots WITH default-artifact |
+
+## Stage 2 re-prove (branch head `851139ca7`, after the clean `origin/main` merge `4d36cdb36`)
+
+The completing wave changed three things that bear on the battery; each was re-proven
+against the merged tip:
+
+- **Item 1 — mime-map now REGISTRY-ROUTED (commit `420598c40`).** The upload
+  MIME→type resolver was re-routed OFF the hardcoded `SYSTEM_BASE_ARTIFACT_PACKS`
+  pack-name literal (which tripped the `core-extension-instance-coupling-ban` gate)
+  ONTO the data-driven required set — the installed `isArtifact` object types whose
+  defining package is `isPackageRequiredInProd`, read from the in-process registry by
+  provenance, minus the retired `*/*` floor. Re-proven: the unit suite is **16/16**
+  (adds `selectRequiredArtifactUploadCandidates` with an injected registry snapshot:
+  required / non-required / host / floor / no-accepts exclusion paths) and the
+  `core-extension-instance-coupling-ban` gate is **OK (exit 0)**. Evidence:
+  `item1-upload-mime-type-map.proof.txt`.
+- **Item 3 — purge migration unchanged by the merge.** The `core__0059` live
+  fixture proof was re-run FRESH on a newly-created lane DB (`prove_1785_purge` on the
+  verify Postgres `127.0.0.1:5634`) via the COMMITTED scripts verbatim after the merge:
+  still **38/38** (full generic-lineage cascade, precise orphan sweeps, living history
+  intact, nothing dangling, shared storage untouched, guard rejects generic
+  INSERT/UPDATE + allows a typed insert, idempotent). Evidence:
+  `item3-purge-cascade-guard.proof.txt`.
+- **Item 4 — STILL NOT PROVABLE, precisely.** "Clean boot WITHOUT default-artifact"
+  requires the `@cinatra-ai/default-artifact` EXTENSION retirement (removing it from
+  the equality **triple** `systemExtensions` + `requiredExtensions` +
+  `cinatra-required-extensions.lock.json`). That is the deliberately-DEFERRED
+  A5-remainder (couple-with-A6) and was **not started** — it is the mapped-but-not-begun
+  completing wave. On this branch `default-artifact` is still `"resolution":"required"`
+  in `src/lib/generated/extensions.server.ts` and present in the lock, so the app boots
+  WITH it; removing it from the lock alone would fail the `required-extensions-lock`
+  invariant test and the boot-time equality assertion. There is no "retired lock" on
+  this branch. `registerAllObjectTypes()` (`src/lib/register-all-object-types.ts`)
+  does confirm the generic `@cinatra-ai/artifact:object` catch-all TYPE is no longer
+  registered at boot (A3 retirement) — but that is the type retirement, not the
+  extension retirement, and does not make "boot WITHOUT the extension" demonstrable
+  here. A live app boot was therefore not run; doing so would only demonstrate boot
+  WITH `default-artifact`, a different claim. This is reported honestly rather than
+  fabricated.
+
+### Route-graph ratchet re-anchor (`851139ca7`)
+
+The item-1 registry re-route adds exactly one narrowed subpath import
+(`@cinatra-ai/extensions/required-in-prod` → `isPackageRequiredInProd`). That single
+module is the SAME +1 newly-reachable first-party module on every tracked route
+(uniform +1, MEASURED by CI with the companion extensions cloned pinned, missingCount
+0). It is a required consequence of the IoC de-coupling and is not host-narrowable
+short of lazy-loading a pure predicate, so the five tracked ceilings were re-anchored
++1 with annotated `#1854` absorb records (`from` = `origin/main` current ceiling,
+`to` = +1), retiring the carried `#1848` records as a re-raise per the baseline's
+documented pattern. The gate's own `validateAbsorbRecords` + `classifyRaises` pure
+functions accept all five raises vs `origin/main` with zero violations. The file-size
+ratchet is unaffected (10 files tracked, none over ceiling).
 
 Items 1 and 2 are proven at the integration/unit boundary (the landed A3 writer +
 A4 reader suites), NOT via a live Playwright chat-flyout browser walk — the app
@@ -89,7 +142,9 @@ not alter the migration's behavior.
 
 ## Merge prerequisite (coordinator)
 
-`origin/main` has advanced to `core__0058_auditor-review-companion`; this branch's
-tree jumps `0057 → 0059`. `0059 > 0058` so the sequence is valid, but the branch
-must be brought up to date with `main` (so `0058` is present) before an
-admin-merge — an up-to-date-only merge prerequisite, not a defect in `0059`.
+`origin/main` (`7706bcf1f`) has been merged into the branch (`4d36cdb36`), so
+`core__0058_auditor-review-companion` is now present alongside this lane's
+`core__0059_purge-default-artifact-floor`; the tree carries both. `0059 > 0058` so
+the sequence is valid and the branch is up to date with the merged `origin/main`.
+If a concurrent lane claims `0059` on `main` before this PR merges, renumber-at-merge
+to the next free seq is the standard remedy (not a defect in the migration).

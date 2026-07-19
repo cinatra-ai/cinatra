@@ -1,12 +1,19 @@
-# ITEM 1 — upload MIME->typed system-base pack + fail-closed refusal
-# src/lib/artifacts/__tests__/upload-artifact-type-map.test.ts (resolveUploadArtifactType + mimeAcceptedByAccepts)
+# ITEM 1 (Stage-2 re-prove) — upload MIME->typed pack via the REGISTRY/required set (not hardcoded packs)
+# Post-fix 420598c40: resolver re-routed off SYSTEM_BASE_ARTIFACT_PACKS literal onto isPackageRequiredInProd-filtered registry.
+#
+# (a) unit suite: src/lib/artifacts/__tests__/upload-artifact-type-map.test.ts
+#     (resolveUploadArtifactType + mimeAcceptedByAccepts + selectRequiredArtifactUploadCandidates w/ injected registry snapshot)
+# (b) core-extension-instance-coupling-ban gate (the invariant the fix satisfies)
 
-
- RUN  /Users/ordnas/Code/cinatra-ai/.claude/scratch/1785-deep-slice-wt
+===== (a) npx vitest run src/lib/artifacts/__tests__/upload-artifact-type-map.test.ts =====
+ RUN  vitest [version banner redacted] <repo-root>
 
 
  Test Files  1 passed (1)
-      Tests  11 passed (11)
-   Start at  22:52:59
-   Duration  121ms (transform 33ms, setup 0ms, import 43ms, tests 3ms, environment 0ms)
+      Tests  16 passed (16)
+   Start at  00:13:17
+   Duration  422ms (transform 85ms, setup 0ms, import 340ms, tests 4ms, environment 0ms)
 
+===== (b) node scripts/audit/core-extension-instance-coupling-ban.mjs =====
+[core-extension-instance-coupling-ban] OK — zero hardcoded extension-instance references (baseline PINNED EMPTY since the zero-floor flip, cinatra#151 Stage 7) [data-contract allowlisted (sanctioned, not counted): 0] (exempt set: generated manifest tree + documented data-contract-ID allowlist ONLY — see scripts/audit/extension-coupling-gates.md).
+exit=0

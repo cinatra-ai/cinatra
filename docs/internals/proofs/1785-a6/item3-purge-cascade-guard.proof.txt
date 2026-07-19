@@ -1,3 +1,10 @@
+# ITEM 3 (Stage-2 re-prove) — core__0059 purge cascade + generic-write guard, LIVE on the real store schema.
+# Re-run FRESH post-merge (branch head 851139ca7, after the origin/main merge 4d36cdb36) against a freshly-created
+# lane DB (prove_1785_purge) on the verify Postgres 127.0.0.1:5634 via the COMMITTED scripts verbatim:
+#   npx tsx docs/internals/proofs/1785-a6/reproduce-build-schema.mts        (all ~20 cascade tables + 3 append-only triggers)
+#   npx tsx docs/internals/proofs/1785-a6/reproduce-purge-cascade-guard.mts  (buildPurgeSql()+guard in one tx, as up())
+# Result unchanged by the merge/de-coupling fix: 38/38. Full capture below.
+
 ================ DRY-RUN: statements the purge WILL execute ================
 [00] CREATE TEMP TABLE _purge_obj ON COMMIT DROP AS SELECT id FROM objects WHERE type = '@cinatra-ai/artifact:object'
 [01] CREATE TEMP TABLE _purge_cs ON COMMIT DROP AS SELECT DISTINCT change_set_id AS id FROM object_change_event WHERE object_id IN (SELECT id FROM _purge_obj)
