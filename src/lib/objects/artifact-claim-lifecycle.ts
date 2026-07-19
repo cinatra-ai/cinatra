@@ -42,7 +42,8 @@ import {
   type ArtifactTypeClaimRow,
 } from "@/lib/objects/artifact-claim-store";
 import {
-  beginArtifactUninstallOperation,
+  acquireArtifactRetirementOperation,
+  enumerateRetirableScopesFromStores,
   findReplayableUninstallOperation,
   replayArtifactUninstallOperation,
   runArtifactUninstallArchival,
@@ -154,34 +155,59 @@ export function activateArtifactExtensionClaims(
 }
 
 export interface UninstallClaimsResult {
-  operationId: string;
+  /** The LAST operation the fixpoint ran (resumed or freshly begun). `null`
+   *  when the acquire found nothing to archive — no empty op is minted
+   *  (cinatra#1837 R4b: never rebegin an empty op). */
+  operationId: string | null;
   archivedAssertions: number;
   processedArtifacts: number;
   retiredClaims: string[];
+  /** Operations the acquire RESUMED (an interrupted prior archival) rather than
+   *  freshly beginning — the resumption evidence (cinatra#1837 R4b). */
+  resumedOperationIds: string[];
 }
 
 /**
- * UNINSTALL: open an operation record, archive the extension's eligible
- * assertions (checkpointed, floor-rebalanced), then retire the extension's
- * live claims. Returns the operation id (a later reinstall replays it) plus
- * the archival + retirement counts. Retirement is begin → finalize per live
- * claim ('reserved' | 'active' | 'retiring'); finalizing reactivates any
- * defaults the dedicated claim dominated (registry-owned, NEW generation).
+ * UNINSTALL: RESUME-AWARE, single-writer retirement (cinatra#1837 R4a/R4b).
+ * A drain-to-fixpoint acquire loop replaces the old always-`begin`: each turn
+ * atomically (under the (scope,package) operation-key advisory lock)
+ * RESUMES any still-`running` op (an interrupted prior archival — closes the
+ * empty-op data-loss), or begins ONE fresh op iff eligible assertions remain,
+ * or reports `done`. It runs the checkpointed archival for whatever op the
+ * acquire returned, then loops — terminating only when no `running` op AND no
+ * eligible assertions remain. THEN retire the extension's live claims (begin →
+ * finalize per claim; finalize reactivates any defaults the dedicated claim
+ * dominated). Two concurrent workers crossing the acquire boundary produce at
+ * most one NEW op (the advisory lock); a mid-archival throw leaves a `running`
+ * op a retry / the next fire resumes to completion.
  */
 export function retireArtifactExtensionClaims(
   ctx: ArtifactClaimLifecycleContext,
   options?: { batchSize?: number },
 ): UninstallClaimsResult {
-  const operationId = beginArtifactUninstallOperation({
-    scope: ctx.scope,
-    extensionPackage: ctx.extensionPackage,
-    extensionVersion: ctx.extensionVersion,
-    actor: ctx.actor,
-  });
-  const archival = runArtifactUninstallArchival({
-    operationId,
-    batchSize: options?.batchSize,
-  });
+  let lastOperationId: string | null = null;
+  const resumedOperationIds: string[] = [];
+  let archivedAssertions = 0;
+  let processedArtifacts = 0;
+  // Drain-to-fixpoint: resume every stranded op + begin at most one fresh op,
+  // archiving each to completion, until the acquire reports `done`.
+  for (;;) {
+    const acquired = acquireArtifactRetirementOperation({
+      scope: ctx.scope,
+      extensionPackage: ctx.extensionPackage,
+      extensionVersion: ctx.extensionVersion,
+      actor: ctx.actor,
+    });
+    if (acquired.action === "done") break;
+    lastOperationId = acquired.operationId;
+    if (acquired.action === "resume") resumedOperationIds.push(acquired.operationId);
+    const archival = runArtifactUninstallArchival({
+      operationId: acquired.operationId,
+      batchSize: options?.batchSize,
+    });
+    archivedAssertions += archival.archivedAssertions;
+    processedArtifacts += archival.processedArtifacts;
+  }
   const retiredClaims: string[] = [];
   for (const claim of liveClaimsToRetire(ctx.scope, ctx.extensionPackage)) {
     // A 'reserved' claim never became a winner; a 'retiring' claim finished
@@ -196,10 +222,11 @@ export function retireArtifactExtensionClaims(
     if (changed) retiredClaims.push(claim.id);
   }
   return {
-    operationId,
-    archivedAssertions: archival.archivedAssertions,
-    processedArtifacts: archival.processedArtifacts,
+    operationId: lastOperationId,
+    archivedAssertions,
+    processedArtifacts,
     retiredClaims,
+    resumedOperationIds,
   };
 }
 
@@ -209,6 +236,89 @@ function liveClaimsToRetire(scope: string, extensionPackage: string): ArtifactTy
   return readArtifactTypeClaimsForExtension(scope, extensionPackage).filter(
     (c) => c.status !== "retired",
   );
+}
+
+export interface AllScopesRetirementResult {
+  /** The `org:<id>` scopes actually retired (resume-aware, idempotent). */
+  retiredScopes: string[];
+  /** Scopes DIAGNOSED but not executed: the `platform` (NULL-org) leg, whose
+   *  cross-org destructive semantics are owner-gated (cinatra#1837 R1). */
+  deferredScopes: string[];
+  totalRetiredClaims: number;
+  totalArchivedAssertions: number;
+  perScope: Array<{ scope: string; result: UninstallClaimsResult }>;
+}
+
+/**
+ * ALL-SCOPES retirement primitive (cinatra#1837 R2) — the package-global
+ * destructive paths (platform-admin hard-delete, forceDelete) retire claims +
+ * archive governed rows across EVERY org scope of a package before the backing
+ * is destroyed, leaving no live claim or governed row behind.
+ *
+ * Scope enumeration is a UNION (F5) so no scope with a live claim, a governed
+ * eligible assertion, or a stranded operation is missed: the three store-sourced
+ * legs (`enumerateRetirableScopesFromStores`) ∪ the caller-supplied canonical-row
+ * scopes (the async wiring reads `installed_extension` and passes them). Each
+ * exact `org:<id>` leg runs the resume-aware `retireArtifactExtensionClaims`
+ * (scope-exact per org — deliberately NOT a cross-org `platform` no-filter
+ * sweep); the `platform` leg is DIAGNOSED and DEFERRED (R1). Malformed scopes
+ * are rejected. FAIL-CLOSED aggregate: a throwing org leg propagates, so the
+ * destructive delete does not proceed (no orphaned live claim); partial per-org
+ * progress is resumable (each leg's op resumes on retry). Idempotent: an
+ * already-retired scope re-runs to a no-op (already-archived rows are ineligible,
+ * CAS retire is idempotent).
+ */
+export function retireArtifactExtensionClaimsAllScopes(input: {
+  extensionPackage: string;
+  extensionVersion: string;
+  actor: string;
+  /** Canonical-row scopes ('platform' | 'org:<id>') the async wiring resolved
+   *  from `installed_extension`; unioned with the store-sourced legs. */
+  canonicalScopes?: readonly string[];
+}): AllScopesRetirementResult {
+  const union = new Set<string>(enumerateRetirableScopesFromStores(input.extensionPackage));
+  for (const scope of input.canonicalScopes ?? []) union.add(scope);
+  const retiredScopes: string[] = [];
+  const deferredScopes: string[] = [];
+  const perScope: Array<{ scope: string; result: UninstallClaimsResult }> = [];
+  let totalRetiredClaims = 0;
+  let totalArchivedAssertions = 0;
+  for (const scope of union) {
+    if (scope === "platform") {
+      // R1 deferral — the cross-org "platform" sweep is owner-gated; diagnose,
+      // never execute (a diagnostic, not a silent drop).
+      console.warn(
+        `[artifact-claim-archival] "${input.extensionPackage}" platform (NULL-org) leg of the ` +
+          `all-scopes retirement DEFERRED — cross-org destructive semantics are unresolved (cinatra#1837 R1)`,
+      );
+      deferredScopes.push(scope);
+      continue;
+    }
+    if (!scope.startsWith("org:") || scope.length <= "org:".length) {
+      // Fail-closed on a malformed scope — never convert it to a no-filter sweep.
+      throw new Error(
+        `[artifact-claim-archival] "${input.extensionPackage}": malformed retirement scope ` +
+          `${JSON.stringify(scope)} — refusing the all-scopes retirement (fail-closed)`,
+      );
+    }
+    const result = retireArtifactExtensionClaims({
+      scope,
+      extensionPackage: input.extensionPackage,
+      extensionVersion: input.extensionVersion,
+      actor: input.actor,
+    });
+    perScope.push({ scope, result });
+    retiredScopes.push(scope);
+    totalRetiredClaims += result.retiredClaims.length;
+    totalArchivedAssertions += result.archivedAssertions;
+  }
+  return {
+    retiredScopes,
+    deferredScopes,
+    totalRetiredClaims,
+    totalArchivedAssertions,
+    perScope,
+  };
 }
 
 export interface ReinstallClaimsResult {

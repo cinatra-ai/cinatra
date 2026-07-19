@@ -31,6 +31,8 @@ vi.mock("@/lib/objects/artifact-claim-store", () => {
   };
 });
 vi.mock("@/lib/objects/artifact-uninstall-operations", () => ({
+  acquireArtifactRetirementOperation: vi.fn(() => ({ action: "done" })),
+  enumerateRetirableScopesFromStores: vi.fn(() => []),
   beginArtifactUninstallOperation: vi.fn(() => "op1"),
   runArtifactUninstallArchival: vi.fn(() => ({ archivedAssertions: 0, processedArtifacts: 0 })),
   findReplayableUninstallOperation: vi.fn(() => null),
@@ -46,7 +48,8 @@ import {
   reserveArtifactTypeClaim,
 } from "@/lib/objects/artifact-claim-store";
 import {
-  beginArtifactUninstallOperation,
+  acquireArtifactRetirementOperation,
+  enumerateRetirableScopesFromStores,
   findReplayableUninstallOperation,
   replayArtifactUninstallOperation,
   runArtifactUninstallArchival,
@@ -55,6 +58,7 @@ import {
   activateArtifactExtensionClaims,
   replayArtifactExtensionReinstall,
   retireArtifactExtensionClaims,
+  retireArtifactExtensionClaimsAllScopes,
 } from "@/lib/objects/artifact-claim-lifecycle";
 
 const CTX = {
@@ -71,7 +75,7 @@ beforeEach(() => {
   vi.mocked(beginArtifactTypeClaimRetirement).mockReturnValue({ changed: true });
   vi.mocked(finalizeArtifactTypeClaimRetirement).mockReturnValue({ changed: true });
   vi.mocked(readArtifactTypeClaimsForExtension).mockReturnValue([]);
-  vi.mocked(beginArtifactUninstallOperation).mockReturnValue("op1");
+  vi.mocked(acquireArtifactRetirementOperation).mockReturnValue({ action: "done" });
   vi.mocked(runArtifactUninstallArchival).mockReturnValue({ archivedAssertions: 0, processedArtifacts: 0 });
   vi.mocked(findReplayableUninstallOperation).mockReturnValue(null);
   vi.mocked(replayArtifactUninstallOperation).mockReturnValue({ insertedAssertions: 0, skipped: 0 });
@@ -118,8 +122,12 @@ describe("activateArtifactExtensionClaims (AC-1 install)", () => {
   });
 });
 
-describe("retireArtifactExtensionClaims (AC-2 uninstall)", () => {
-  it("opens an operation, archives, then retires only the not-yet-retired claims", () => {
+describe("retireArtifactExtensionClaims (AC-2 uninstall, resume-aware)", () => {
+  it("acquires ONE fresh op, archives, then retires only the not-yet-retired claims", () => {
+    // The resume-aware acquire begins one fresh op, then reports done.
+    vi.mocked(acquireArtifactRetirementOperation)
+      .mockReturnValueOnce({ action: "begin", operationId: "op1" })
+      .mockReturnValue({ action: "done" });
     vi.mocked(runArtifactUninstallArchival).mockReturnValue({ archivedAssertions: 3, processedArtifacts: 2 });
     vi.mocked(readArtifactTypeClaimsForExtension).mockReturnValue([
       { id: "c1", status: "active" } as never,
@@ -128,7 +136,7 @@ describe("retireArtifactExtensionClaims (AC-2 uninstall)", () => {
     vi.mocked(finalizeArtifactTypeClaimRetirement).mockReturnValue({ changed: true });
 
     const result = retireArtifactExtensionClaims(CTX);
-    expect(beginArtifactUninstallOperation).toHaveBeenCalledWith({
+    expect(acquireArtifactRetirementOperation).toHaveBeenCalledWith({
       scope: "org:org-1",
       extensionPackage: "@v/pkg-artifact",
       extensionVersion: "1.0.0",
@@ -143,7 +151,88 @@ describe("retireArtifactExtensionClaims (AC-2 uninstall)", () => {
       archivedAssertions: 3,
       processedArtifacts: 2,
       retiredClaims: ["c1"],
+      resumedOperationIds: [],
     });
+  });
+
+  it("RESUMES a stranded running op instead of opening a second (R4b, interrupted-archival)", () => {
+    // A prior archival crashed mid-flight → its op is still 'running'. The acquire
+    // returns {resume} for it; the fixpoint resumes it to completion, then done —
+    // NEVER a fresh empty op (the empty-op data-loss the design closes).
+    vi.mocked(acquireArtifactRetirementOperation)
+      .mockReturnValueOnce({ action: "resume", operationId: "stranded-op" })
+      .mockReturnValue({ action: "done" });
+    vi.mocked(runArtifactUninstallArchival).mockReturnValue({ archivedAssertions: 5, processedArtifacts: 3 });
+    vi.mocked(readArtifactTypeClaimsForExtension).mockReturnValue([{ id: "c1", status: "active" } as never]);
+
+    const result = retireArtifactExtensionClaims(CTX);
+    expect(runArtifactUninstallArchival).toHaveBeenCalledWith({ operationId: "stranded-op", batchSize: undefined });
+    expect(result.operationId).toBe("stranded-op");
+    expect(result.resumedOperationIds).toEqual(["stranded-op"]);
+  });
+
+  it("mints NO empty op when the acquire reports done (nothing to archive)", () => {
+    vi.mocked(acquireArtifactRetirementOperation).mockReturnValue({ action: "done" });
+    vi.mocked(readArtifactTypeClaimsForExtension).mockReturnValue([]);
+    const result = retireArtifactExtensionClaims(CTX);
+    expect(runArtifactUninstallArchival).not.toHaveBeenCalled();
+    expect(result.operationId).toBeNull();
+    expect(result.resumedOperationIds).toEqual([]);
+    expect(result.retiredClaims).toEqual([]);
+  });
+});
+
+describe("retireArtifactExtensionClaimsAllScopes (R2 all-scopes, multi-org fixture)", () => {
+  it("retires EVERY org scope of the UNION (store legs ∪ canonical rows), DEFERS platform (R1)", () => {
+    // Store legs find org-1 (a live claim) + org-3 (a stranded op); the canonical
+    // rows carry org-2 + platform. The union covers all four; platform is deferred.
+    vi.mocked(enumerateRetirableScopesFromStores).mockReturnValue(["org:org-1", "org:org-3"]);
+    vi.mocked(readArtifactTypeClaimsForExtension).mockReturnValue([{ id: "c1", status: "active" } as never]);
+
+    const result = retireArtifactExtensionClaimsAllScopes({
+      extensionPackage: "@v/pkg-artifact",
+      extensionVersion: "3.0.0",
+      actor: "admin-1",
+      canonicalScopes: ["org:org-2", "platform"],
+    });
+
+    expect(result.retiredScopes.sort()).toEqual(["org:org-1", "org:org-2", "org:org-3"]);
+    expect(result.deferredScopes).toEqual(["platform"]);
+    // Each org leg ran the resume-aware acquire scope-exactly (never a cross-org sweep).
+    const acquiredScopes = vi
+      .mocked(acquireArtifactRetirementOperation)
+      .mock.calls.map((c) => c[0].scope)
+      .sort();
+    expect(acquiredScopes).toEqual(["org:org-1", "org:org-2", "org:org-3"]);
+    // Platform NEVER acquired (deferred) — no cross-org platform leg.
+    expect(acquiredScopes).not.toContain("platform");
+  });
+
+  it("FAIL-CLOSED aggregate: a throwing org leg propagates (the destructive delete aborts)", () => {
+    vi.mocked(enumerateRetirableScopesFromStores).mockReturnValue(["org:org-1"]);
+    vi.mocked(acquireArtifactRetirementOperation).mockImplementation(() => {
+      throw new Error("leg store failure");
+    });
+    expect(() =>
+      retireArtifactExtensionClaimsAllScopes({
+        extensionPackage: "@v/pkg-artifact",
+        extensionVersion: "3.0.0",
+        actor: "admin-1",
+        canonicalScopes: [],
+      }),
+    ).toThrow("leg store failure");
+  });
+
+  it("rejects a MALFORMED scope (never converts it to a no-filter sweep)", () => {
+    vi.mocked(enumerateRetirableScopesFromStores).mockReturnValue(["org:", "bogus"]);
+    expect(() =>
+      retireArtifactExtensionClaimsAllScopes({
+        extensionPackage: "@v/pkg-artifact",
+        extensionVersion: "3.0.0",
+        actor: "admin-1",
+        canonicalScopes: [],
+      }),
+    ).toThrow(/malformed retirement scope/i);
   });
 });
 
