@@ -116,6 +116,15 @@ vi.mock("@/lib/authz", () => ({
 }));
 
 import { handlers } from "../handlers";
+import { objectTypeRegistry } from "../../registry";
+
+// Fail-closed writes (owner ruling 2026-07-18; epic cinatra#1785): objects_save persists ONLY under a type
+// an installed extension registered. The classifier mock here resolves to the
+// stand-in type "test"; register it so the authz-path save reaches the writer.
+objectTypeRegistry.register(
+  { type: "test", category: "record", description: "Test" } as never,
+  "@cinatra-ai/test",
+);
 
 const ownerActor = {
   actorType: "human",

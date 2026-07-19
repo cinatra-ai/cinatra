@@ -58,6 +58,15 @@ import {
 } from "@/lib/objects-store";
 import { shadowUpsertObject } from "@/lib/objects-dual-write";
 import { addEpisode, deleteEpisode } from "../graphiti-client";
+import { objectTypeRegistry } from "../registry";
+
+// Fail-closed writes (owner ruling 2026-07-18; epic cinatra#1785): objects_save persists ONLY under a type
+// an installed extension registered. These write-path tests classify to
+// `@cinatra-ai/entity-contacts:contact`, so register it as an installed type.
+objectTypeRegistry.register(
+  { type: "@cinatra-ai/entity-contacts:contact", category: "record", description: "Contact" } as never,
+  "@cinatra-ai/entity-contacts",
+);
 
 const mockUpsert = upsertObjectAndEnqueue as unknown as ReturnType<typeof vi.fn>;
 const mockGet = getObjectById as unknown as ReturnType<typeof vi.fn>;
