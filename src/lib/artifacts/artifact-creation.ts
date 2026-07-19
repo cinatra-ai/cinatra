@@ -368,6 +368,65 @@ export async function createSemanticArtifact(
     maxBytes,
   });
 
+  // -------------------------------------------------------------------
+  // Post-stream write-boundary validation (epic #1785, wave A3), BEFORE Tx1.
+  // Now the DETECTED MIME + size are known: (a) re-resolve the type (guards an
+  // uninstall mid-stream); (b) reject a detected MIME the declared type does not
+  // accept — accepts come from the SELF-registered definition (`isArtifact`) or,
+  // for a claim-backed HOST type that carries none, the caller-supplied
+  // `expectedAcceptMimes` (defense-in-depth against smuggling a MIME under a
+  // type); (c) enforce the type's payload schema on the envelope. Running BEFORE
+  // Tx1 means a refusal has written NO resource/artifact_blobs rows — only the
+  // content-addressed blob file, which (like the existing pre-Tx1 failure path)
+  // is best-effort deleted and otherwise reachability-backstopped by the
+  // retention verifier. Nothing leaks a representation-less resource row.
+  // (The dedupe case, where the persisted MIME is an existing resource's, gets a
+  // second accepts check AFTER Tx1 resolves `authoritative.mime`.)
+  // -------------------------------------------------------------------
+  try {
+    const preDef = objectTypeRegistry.resolve(input.objectType);
+    if (!preDef || !isArtifactWritableType(preDef)) {
+      throw new ObjectsTypeNotRegisteredError(
+        input.objectType,
+        `object type "${input.objectType}" is no longer a writable artifact type (definer uninstalled mid-write)`,
+      );
+    }
+    const declaredAccepts =
+      preDef.isArtifact?.accepts?.file?.mimeTypes ?? input.expectedAcceptMimes;
+    if (
+      Array.isArray(declaredAccepts) &&
+      declaredAccepts.length > 0 &&
+      !mimeAcceptedByAccepts(declaredAccepts, newBlob.mimeDetected)
+    ) {
+      throw new ObjectsTypeNotRegisteredError(
+        input.objectType,
+        `detected MIME "${newBlob.mimeDetected}" is not accepted by "${input.objectType}" (accepts [${declaredAccepts.join(", ")}])`,
+      );
+    }
+    const previewEnvelope: ArtifactObjectData = {
+      artifactType: "file",
+      latestRepresentationRevisionId: representationRevisionId,
+      latestDigest: newBlob.sha256,
+      mime: newBlob.mimeDetected,
+      size: newBlob.sizeBytes,
+      originKind,
+      viewerHint: "mime",
+      title: input.title,
+    };
+    const parsed = preDef.schema.safeParse(previewEnvelope);
+    if (!parsed.success) {
+      throw new ObjectsTypeNotRegisteredError(
+        input.objectType,
+        `object payload does not satisfy the declared schema for "${input.objectType}": ${parsed.error.message}`,
+      );
+    }
+  } catch (err) {
+    await blobStore
+      .deleteByStorageKey({ orgId: input.orgId, storageKey: newBlob.storageKey })
+      .catch(() => {});
+    throw err;
+  }
+
   const substanceKey = deriveSubstanceKey({
     kind: "blob",
     sha256: newBlob.sha256,
@@ -676,45 +735,33 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
   };
 
   // -------------------------------------------------------------------
-  // Post-dedupe write-boundary validation (epic #1785, wave A3), BEFORE Tx2.
-  // Uses the AUTHORITATIVE (dedupe-winner) MIME + the final object envelope —
-  // NOT the freshly-detected `newBlob.mimeDetected`, which can differ from the
-  // persisted `objects.data.mime` when a same-bytes dedupe lands on an existing
-  // resource whose MIME was recorded from a different declared MIME. Three
-  // checks: (a) re-resolve the type (guards an uninstall mid-write); (b) reject
-  // an authoritative MIME the declared type does not accept — its accepts come
-  // from the SELF-registered definition (`isArtifact.accepts`) or, for a
-  // claim-backed HOST type that carries none, the caller-supplied
-  // `expectedAcceptMimes` (defense-in-depth against smuggling a MIME under a
-  // type); (c) enforce the type's declared payload schema on the final envelope.
-  // On refusal delete the newly-written blob ONLY when it is a dedupe duplicate
-  // whose key differs from the winner's — a fresh Tx1 write left the bytes owned
-  // by an `artifact_blobs` row (a harmless orphan resource, reusable by the next
-  // same-bytes upload; deleting it would poison future dedupes), matching the
-  // Tx2-failure cleanup posture below.
+  // Dedupe-delta re-validation (epic #1785, wave A3). The pre-Tx1 validation
+  // above ran against the freshly-DETECTED MIME + a detected-MIME envelope. On a
+  // same-bytes DEDUPE the PERSISTED `objects.data.mime` is the EXISTING
+  // resource's recorded MIME (`authoritative.mime`), which — with
+  // declared-sensitive sniffing — can differ from `newBlob.mimeDetected`. Only
+  // then re-run the FULL envelope validation against the persisted values: the
+  // type must still resolve (fail CLOSED if the definer vanished mid-write), the
+  // persisted MIME must be accepted, and the final `objectData` must satisfy the
+  // schema. Cleanup deletes ONLY the dedupe-duplicate blob whose key differs from
+  // the winner's — NO fresh resource/artifact_blobs rows were written on a
+  // dedupe, so nothing leaks a representation-less resource. (A fresh, non-dedupe
+  // write already passed the equivalent checks pre-Tx1 against the identical
+  // detected MIME + envelope.)
   // -------------------------------------------------------------------
-  {
-    const refuse = async (err: ObjectsTypeNotRegisteredError): Promise<never> => {
-      if (
-        authoritative.isDedupe &&
-        newBlob.storageKey !== authoritative.storageKey
-      ) {
+  if (authoritative.isDedupe && authoritative.mime !== newBlob.mimeDetected) {
+    const refuseDedupe = async (message: string): Promise<never> => {
+      if (newBlob.storageKey !== authoritative.storageKey) {
         await blobStore
-          .deleteByStorageKey({
-            orgId: input.orgId,
-            storageKey: newBlob.storageKey,
-          })
+          .deleteByStorageKey({ orgId: input.orgId, storageKey: newBlob.storageKey })
           .catch(() => {});
       }
-      throw err;
+      throw new ObjectsTypeNotRegisteredError(input.objectType, message);
     };
     const postDef = objectTypeRegistry.resolve(input.objectType);
     if (!postDef || !isArtifactWritableType(postDef)) {
-      await refuse(
-        new ObjectsTypeNotRegisteredError(
-          input.objectType,
-          `object type "${input.objectType}" is no longer a writable artifact type (definer uninstalled mid-write)`,
-        ),
+      await refuseDedupe(
+        `object type "${input.objectType}" is no longer a writable artifact type (definer uninstalled mid-write)`,
       );
     } else {
       const declaredAccepts =
@@ -724,20 +771,14 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
         declaredAccepts.length > 0 &&
         !mimeAcceptedByAccepts(declaredAccepts, authoritative.mime)
       ) {
-        await refuse(
-          new ObjectsTypeNotRegisteredError(
-            input.objectType,
-            `MIME "${authoritative.mime}" is not accepted by "${input.objectType}" (accepts [${declaredAccepts.join(", ")}])`,
-          ),
+        await refuseDedupe(
+          `persisted (dedupe-winner) MIME "${authoritative.mime}" is not accepted by "${input.objectType}" (accepts [${declaredAccepts.join(", ")}])`,
         );
       }
       const parsed = postDef.schema.safeParse(objectData);
       if (!parsed.success) {
-        await refuse(
-          new ObjectsTypeNotRegisteredError(
-            input.objectType,
-            `object payload does not satisfy the declared schema for "${input.objectType}": ${parsed.error.message}`,
-          ),
+        await refuseDedupe(
+          `object payload does not satisfy the declared schema for "${input.objectType}": ${parsed.error.message}`,
         );
       }
     }
