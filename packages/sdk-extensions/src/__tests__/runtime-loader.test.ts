@@ -373,6 +373,81 @@ describe("discoverPackageStoreRecords", () => {
   });
 });
 
+// --- assistant declaration production-store-read touchpoint (#1874 W1) --------
+// The PURE loader reads a `kind:"agent"` package's sibling cinatra/config.json
+// (via the injected fs, passed to recordFromManifest as configJsonText) and
+// carries the raw `assistant` declaration for the host parser to validate. It
+// never imports zod, so it only CARRIES (a present-but-unparseable config counts
+// as a declaration via `invalidAssistantConfigDeclared`, never silently absent).
+describe("recordFromManifest — agent assistant declaration carry", () => {
+  const assistantConfig = JSON.stringify({
+    formatVersion: 1,
+    assistant: {
+      abiVersion: 1,
+      displayName: "Cinatra",
+      preferredTag: "cinatra",
+      persona: "You are Cinatra.",
+      skillBundle: ["chat-assistant-core"],
+      launch: { kind: "local" },
+      delivery: { kind: "host-runtime" },
+    },
+  });
+
+  it("carries assistantConfigRaw for a kind:agent config that declares an assistant block", () => {
+    const rec = recordFromManifest("/d/asst", manifest("@x/asst", { kind: "agent" }), undefined, assistantConfig);
+    expect(rec?.assistantConfigRaw).toMatchObject({ assistant: { preferredTag: "cinatra" } });
+    expect(rec?.invalidAssistantConfigDeclared).toBeUndefined();
+  });
+
+  it("does NOT carry for a kind:agent config with NO assistant block", () => {
+    const rec = recordFromManifest("/d/plain", manifest("@x/plain-agent", { kind: "agent" }), undefined, JSON.stringify({ formatVersion: 1 }));
+    expect(rec?.assistantConfigRaw).toBeUndefined();
+    expect(rec?.invalidAssistantConfigDeclared).toBeUndefined();
+  });
+
+  it("does NOT carry for a NON-agent kind even when a config declares an assistant block", () => {
+    const rec = recordFromManifest("/d/conn", manifest("@x/conn", { kind: "connector" }), undefined, assistantConfig);
+    expect(rec?.assistantConfigRaw).toBeUndefined();
+  });
+
+  it("does NOT carry when no configJsonText is provided (absent config)", () => {
+    const rec = recordFromManifest("/d/noc", manifest("@x/noc", { kind: "agent" }));
+    expect(rec?.assistantConfigRaw).toBeUndefined();
+    expect(rec?.invalidAssistantConfigDeclared).toBeUndefined();
+  });
+
+  it("marks invalidAssistantConfigDeclared (fail-closed) for a present-but-unparseable config", () => {
+    const rec = recordFromManifest("/d/bad", manifest("@x/bad-agent", { kind: "agent" }), undefined, "{not json");
+    expect(rec?.invalidAssistantConfigDeclared).toBe(true);
+    expect(rec?.assistantConfigRaw).toBeUndefined();
+  });
+
+  it("discoverPackageStoreRecords reads the sibling cinatra/config.json via the injected fs", async () => {
+    const root = "/store";
+    const fs = makeFs(
+      {
+        [`${root}/asst/package.json`]: manifest("@x/asst", { kind: "agent" }),
+        [`${root}/asst/cinatra/config.json`]: assistantConfig,
+      },
+      [root, `${root}/asst`, `${root}/asst/cinatra`],
+    );
+    const recs = await discoverPackageStoreRecords(root, fs);
+    expect(recs).toHaveLength(1);
+    expect(recs[0].assistantConfigRaw).toMatchObject({ assistant: { displayName: "Cinatra" } });
+  });
+
+  it("discovery is unaffected when an agent ships no cinatra/config.json (best-effort read)", async () => {
+    const root = "/store";
+    const fs = makeFs(
+      { [`${root}/plain/package.json`]: manifest("@x/plain-agent", { kind: "agent", serverEntry: "./register" }) },
+      [root, `${root}/plain`],
+    );
+    const recs = await discoverPackageStoreRecords(root, fs);
+    expect(recs.map((r) => r.packageName)).toEqual(["@x/plain-agent"]);
+    expect(recs[0].assistantConfigRaw).toBeUndefined();
+  });
+});
+
 // --- the activation proof -----------------------------------------------------
 describe("runRuntimePackageActivation (PNP proof: store -> activate via shared driver)", () => {
   const fakeCtx = { __ctx: true } as never;
