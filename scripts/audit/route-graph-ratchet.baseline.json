@@ -1,42 +1,42 @@
 {
-  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
+  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1525,
-    "/api/mcp": 1521,
-    "/chat": 1583,
-    "/api/a2a": 1526,
-    "/api/llm-bridge": 1533
+    "/sign-in": 1526,
+    "/api/mcp": 1522,
+    "/chat": 1584,
+    "/api/a2a": 1527,
+    "/api/llm-bridge": 1534
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1524,
-      "to": 1525,
-      "reason": "cinatra#1885 (epic #1883 slice C1) lands write-time scope-derived visibility; its owner-axis containment resolver PORT (packages/agents/src/owner-containment-port.ts) is a single net-new first-party module newly reachable from every tracked route via the child-run OBO ceiling composition path (packages/agents/src/agent-run-serde.ts) - the SAME uniform +1 on each tracked route. It is a narrow globalThis-backed resolver port (the C4 #1884 mixed-owner-tier containment handoff), NOT a widenable barrel; the route-graph analyzer follows dynamic import() too, so lazy-loading the port does NOT remove the edge from the measured graph (verified empirically) - it is not host-narrowable. Delta MEASURED +1 (lane vs origin/main, companion extensions cloned pinned, missingCount 0); absolute ceiling = origin/main ceiling + 1. Retires/replaces the carried #1854 record as a new annotated raise.",
-      "pr": 1916
-    },
-    "/api/mcp": {
-      "from": 1520,
-      "to": 1521,
-      "reason": "cinatra#1885 (epic #1883 slice C1) lands write-time scope-derived visibility; its owner-axis containment resolver PORT (packages/agents/src/owner-containment-port.ts) is a single net-new first-party module newly reachable from every tracked route via the child-run OBO ceiling composition path (packages/agents/src/agent-run-serde.ts) - the SAME uniform +1 on each tracked route. It is a narrow globalThis-backed resolver port (the C4 #1884 mixed-owner-tier containment handoff), NOT a widenable barrel; the route-graph analyzer follows dynamic import() too, so lazy-loading the port does NOT remove the edge from the measured graph (verified empirically) - it is not host-narrowable. Delta MEASURED +1 (lane vs origin/main, companion extensions cloned pinned, missingCount 0); absolute ceiling = origin/main ceiling + 1. Retires/replaces the carried #1854 record as a new annotated raise.",
-      "pr": 1916
-    },
-    "/chat": {
-      "from": 1582,
-      "to": 1583,
-      "reason": "cinatra#1885 (epic #1883 slice C1) lands write-time scope-derived visibility; its owner-axis containment resolver PORT (packages/agents/src/owner-containment-port.ts) is a single net-new first-party module newly reachable from every tracked route via the child-run OBO ceiling composition path (packages/agents/src/agent-run-serde.ts) - the SAME uniform +1 on each tracked route. It is a narrow globalThis-backed resolver port (the C4 #1884 mixed-owner-tier containment handoff), NOT a widenable barrel; the route-graph analyzer follows dynamic import() too, so lazy-loading the port does NOT remove the edge from the measured graph (verified empirically) - it is not host-narrowable. Delta MEASURED +1 (lane vs origin/main, companion extensions cloned pinned, missingCount 0); absolute ceiling = origin/main ceiling + 1. Retires/replaces the carried #1906 record as a new annotated raise.",
-      "pr": 1916
-    },
-    "/api/a2a": {
       "from": 1525,
       "to": 1526,
-      "reason": "cinatra#1885 (epic #1883 slice C1) lands write-time scope-derived visibility; its owner-axis containment resolver PORT (packages/agents/src/owner-containment-port.ts) is a single net-new first-party module newly reachable from every tracked route via the child-run OBO ceiling composition path (packages/agents/src/agent-run-serde.ts) - the SAME uniform +1 on each tracked route. It is a narrow globalThis-backed resolver port (the C4 #1884 mixed-owner-tier containment handoff), NOT a widenable barrel; the route-graph analyzer follows dynamic import() too, so lazy-loading the port does NOT remove the edge from the measured graph (verified empirically) - it is not host-narrowable. Delta MEASURED +1 (lane vs origin/main, companion extensions cloned pinned, missingCount 0); absolute ceiling = origin/main ceiling + 1. Retires/replaces the carried #1854 record as a new annotated raise.",
-      "pr": 1916
+      "reason": "cinatra#1907 single entity-id policy: the change adds ONE new first-party leaf module, src/lib/id-policy.ts (~30 lines, zero imports) — the single home of the entity-id format policy (entityId() + legacy 32-char id shape guards), consumed by src/lib/auth.ts (the better-auth advanced.database.generateId override), the five direct mint paths, and the breadcrumb shell's id floor rule. It is reachable first-party from every tracked route via the auth/session path, so each locked route grows by the SAME +1 module. The edge is the point of the fix — one policy home instead of per-consumer duplicated constants — and inlining it at each consumer to dodge the metric would trade the single source of truth for zero real dev-perf gain (precedent: the #1741 absorb, same gate, same shape, codex-converged ABSORB-OK). Delta MEASURED +1 uniform by CI run 29780553603 (missingCount 0) on the pre-rebase base; from = origin/main current ceiling, to = from + 1. Re-anchored from main current ceilings (retires the carried #1916 record as a re-raise).",
+      "pr": 1918
+    },
+    "/api/mcp": {
+      "from": 1521,
+      "to": 1522,
+      "reason": "cinatra#1907 single entity-id policy: the change adds ONE new first-party leaf module, src/lib/id-policy.ts (~30 lines, zero imports) — the single home of the entity-id format policy (entityId() + legacy 32-char id shape guards), consumed by src/lib/auth.ts (the better-auth advanced.database.generateId override), the five direct mint paths, and the breadcrumb shell's id floor rule. It is reachable first-party from every tracked route via the auth/session path, so each locked route grows by the SAME +1 module. The edge is the point of the fix — one policy home instead of per-consumer duplicated constants — and inlining it at each consumer to dodge the metric would trade the single source of truth for zero real dev-perf gain (precedent: the #1741 absorb, same gate, same shape, codex-converged ABSORB-OK). Delta MEASURED +1 uniform by CI run 29780553603 (missingCount 0) on the pre-rebase base; from = origin/main current ceiling, to = from + 1. Re-anchored from main current ceilings (retires the carried #1916 record as a re-raise).",
+      "pr": 1918
+    },
+    "/chat": {
+      "from": 1583,
+      "to": 1584,
+      "reason": "cinatra#1907 single entity-id policy: the change adds ONE new first-party leaf module, src/lib/id-policy.ts (~30 lines, zero imports) — the single home of the entity-id format policy (entityId() + legacy 32-char id shape guards), consumed by src/lib/auth.ts (the better-auth advanced.database.generateId override), the five direct mint paths, and the breadcrumb shell's id floor rule. It is reachable first-party from every tracked route via the auth/session path, so each locked route grows by the SAME +1 module. The edge is the point of the fix — one policy home instead of per-consumer duplicated constants — and inlining it at each consumer to dodge the metric would trade the single source of truth for zero real dev-perf gain (precedent: the #1741 absorb, same gate, same shape, codex-converged ABSORB-OK). Delta MEASURED +1 uniform by CI run 29780553603 (missingCount 0) on the pre-rebase base; from = origin/main current ceiling, to = from + 1. Re-anchored from main current ceilings (retires the carried #1916 record as a re-raise).",
+      "pr": 1918
+    },
+    "/api/a2a": {
+      "from": 1526,
+      "to": 1527,
+      "reason": "cinatra#1907 single entity-id policy: the change adds ONE new first-party leaf module, src/lib/id-policy.ts (~30 lines, zero imports) — the single home of the entity-id format policy (entityId() + legacy 32-char id shape guards), consumed by src/lib/auth.ts (the better-auth advanced.database.generateId override), the five direct mint paths, and the breadcrumb shell's id floor rule. It is reachable first-party from every tracked route via the auth/session path, so each locked route grows by the SAME +1 module. The edge is the point of the fix — one policy home instead of per-consumer duplicated constants — and inlining it at each consumer to dodge the metric would trade the single source of truth for zero real dev-perf gain (precedent: the #1741 absorb, same gate, same shape, codex-converged ABSORB-OK). Delta MEASURED +1 uniform by CI run 29780553603 (missingCount 0) on the pre-rebase base; from = origin/main current ceiling, to = from + 1. Re-anchored from main current ceilings (retires the carried #1916 record as a re-raise).",
+      "pr": 1918
     },
     "/api/llm-bridge": {
-      "from": 1532,
-      "to": 1533,
-      "reason": "cinatra#1885 (epic #1883 slice C1) lands write-time scope-derived visibility; its owner-axis containment resolver PORT (packages/agents/src/owner-containment-port.ts) is a single net-new first-party module newly reachable from every tracked route via the child-run OBO ceiling composition path (packages/agents/src/agent-run-serde.ts) - the SAME uniform +1 on each tracked route. It is a narrow globalThis-backed resolver port (the C4 #1884 mixed-owner-tier containment handoff), NOT a widenable barrel; the route-graph analyzer follows dynamic import() too, so lazy-loading the port does NOT remove the edge from the measured graph (verified empirically) - it is not host-narrowable. Delta MEASURED +1 (lane vs origin/main, companion extensions cloned pinned, missingCount 0); absolute ceiling = origin/main ceiling + 1. Retires/replaces the carried #1854 record as a new annotated raise.",
-      "pr": 1916
+      "from": 1533,
+      "to": 1534,
+      "reason": "cinatra#1907 single entity-id policy: the change adds ONE new first-party leaf module, src/lib/id-policy.ts (~30 lines, zero imports) — the single home of the entity-id format policy (entityId() + legacy 32-char id shape guards), consumed by src/lib/auth.ts (the better-auth advanced.database.generateId override), the five direct mint paths, and the breadcrumb shell's id floor rule. It is reachable first-party from every tracked route via the auth/session path, so each locked route grows by the SAME +1 module. The edge is the point of the fix — one policy home instead of per-consumer duplicated constants — and inlining it at each consumer to dodge the metric would trade the single source of truth for zero real dev-perf gain (precedent: the #1741 absorb, same gate, same shape, codex-converged ABSORB-OK). Delta MEASURED +1 uniform by CI run 29780553603 (missingCount 0) on the pre-rebase base; from = origin/main current ceiling, to = from + 1. Re-anchored from main current ceilings (retires the carried #1916 record as a re-raise).",
+      "pr": 1918
     }
   }
 }
