@@ -1223,11 +1223,14 @@ export function upsertChatThreadInDatabase(
   // Same-transaction projections of the payload write (builders live in
   // src/lib/project-inheritance.ts, unit-tested in isolation): (1) chat_threads
   // payload-to-column lockstep — typed project_id/created_at/updated_at as an
-  // indexable projection (sealed-room reads); (2) cinatra#1037 P2b structured
-  // mirror — assistant_threads identity + assistant_turns METADATA rows (run_id
-  // NULL, content never copied — legacy payload stays the single content home
-  // until the #1216 S2 cutover). Deterministic `legacy:`-namespaced turn ids
-  // keep it idempotent + self-backfilling.
+  // indexable projection (sealed-room reads); (2) cinatra#1037 structured
+  // mirror — assistant_threads identity + assistant_turns rows carrying METADATA
+  // + attribution AND (P5.6 drop-history PR1 EXPAND) the durable per-turn
+  // `content` jsonb (run_id stays NULL on the bespoke wire) + assistant_thread_
+  // pause_state rows. The legacy payload STAYS the authoritative read source
+  // until the #1216 S2 / P5.6 cutover — this is a write-through projection.
+  // Deterministic `legacy:`-namespaced turn ids keep it idempotent +
+  // self-backfilling.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const inheritance = require("@/lib/project-inheritance") as typeof import("@/lib/project-inheritance");
   runPostgresQueriesSync({

@@ -193,6 +193,83 @@ describe("createAgUiSinkAdapter — event mapping", () => {
   });
 });
 
+describe("createAgUiSinkAdapter — durable content accumulation (PR1 EXPAND)", () => {
+  it("accumulates the full assistant text + an ordered part trace", async () => {
+    const { adapter } = collectingAdapter();
+    adapter.start();
+    adapter.send("text", { content: "Hel" });
+    adapter.send("text", { content: "lo" });
+    adapter.send("tool_call", { id: "t1", name: "objects_list", serverLabel: "cinatra" });
+    adapter.send("tool_result", { id: "t1", name: "objects_list", serverLabel: "cinatra", resultLabel: "0 found", result: "[]" });
+    adapter.send("text", { content: "done" });
+    adapter.send("citations", { citations: [{ title: "A", url: "https://a.example" }] });
+    adapter.send("done", {});
+    await adapter.drain();
+    const durable = adapter.durableContent();
+    expect(durable).not.toBeNull();
+    // Full concatenated assistant text (more than terminal text).
+    expect(durable!.content).toBe("Hellodone");
+    expect(durable!.format).toBe("assistant-turn-v1");
+    expect(durable!.role).toBe("assistant");
+    // Ordered trace: text segment (sealed at the tool call) / tool_call /
+    // tool_result / text segment / citations. Tool parts are LOSSLESS at the
+    // sink boundary — serverLabel/resultLabel/result are retained for faithful
+    // reconstruction after Redis loss (the AG-UI wire drops them by the reducer
+    // gap, durability keeps them).
+    expect(durable!.parts).toEqual([
+      { type: "text", text: "Hello" },
+      { type: "tool_call", id: "t1", name: "objects_list", serverLabel: "cinatra" },
+      { type: "tool_result", id: "t1", name: "objects_list", serverLabel: "cinatra", resultLabel: "0 found", result: "[]" },
+      { type: "text", text: "done" },
+      { type: "citations", citations: [{ title: "A", url: "https://a.example" }] },
+    ]);
+  });
+
+  it("preserves the citation boundary in the durable part trace (text A / citations / text B)", async () => {
+    const { adapter, published } = collectingAdapter();
+    adapter.start();
+    adapter.send("text", { content: "A" });
+    adapter.send("citations", { citations: [{ title: "S", url: "https://s.example" }] });
+    adapter.send("text", { content: "B" });
+    adapter.send("done", {});
+    await adapter.drain();
+    const durable = adapter.durableContent();
+    // Ordered trace keeps the boundary; content is still the full concatenation.
+    expect(durable!.content).toBe("AB");
+    expect(durable!.parts).toEqual([
+      { type: "text", text: "A" },
+      { type: "citations", citations: [{ title: "S", url: "https://s.example" }] },
+      { type: "text", text: "B" },
+    ]);
+    // The AG-UI WIRE is unchanged: citations does NOT seal the text segment, so
+    // there is exactly ONE TEXT_MESSAGE_START/END pair around the whole text.
+    expect(published.filter((e) => e.type === "TEXT_MESSAGE_START")).toHaveLength(1);
+    expect(published.filter((e) => e.type === "TEXT_MESSAGE_END")).toHaveLength(1);
+  });
+
+  it("returns null when the turn produced nothing (immediate error)", async () => {
+    const { adapter } = collectingAdapter();
+    adapter.start();
+    adapter.send("error", { message: "boom" });
+    await adapter.drain();
+    expect(adapter.durableContent()).toBeNull();
+  });
+
+  it("captures partial text produced before a terminal error", async () => {
+    const { adapter } = collectingAdapter();
+    adapter.start();
+    adapter.send("text", { content: "partial" });
+    adapter.send("error", { message: "boom" });
+    await adapter.drain();
+    expect(adapter.durableContent()).toEqual({
+      format: "assistant-turn-v1",
+      role: "assistant",
+      content: "partial",
+      parts: [{ type: "text", text: "partial" }],
+    });
+  });
+});
+
 describe("extractAgentRunIdFromResult", () => {
   it("parses the runId out of a JSON result", () => {
     expect(extractAgentRunIdFromResult(JSON.stringify({ runId: "r1" }))).toBe("r1");

@@ -52,7 +52,7 @@ describe("pure row mappers", () => {
     });
   });
 
-  it("maps an assistant_turns row and keeps the run pointer + principal", () => {
+  it("maps an assistant_turns row and keeps the run pointer + principal + content", () => {
     const turn = mapAssistantTurnRow({
       id: "tn1",
       thread_id: "th1",
@@ -60,6 +60,8 @@ describe("pure row mappers", () => {
       assistant_user_id: "au1",
       role: "assistant",
       status: "completed",
+      // jsonb already parsed by the pg driver → a plain object.
+      content: { format: "assistant-turn-v1", role: "assistant", content: "hi", parts: [] },
       created_at: "2026-07-10T10:00:00.000Z",
       updated_at: "2026-07-10T10:05:00.000Z",
     });
@@ -67,6 +69,17 @@ describe("pure row mappers", () => {
     expect(turn.assistantUserId).toBe("au1");
     expect(turn.status).toBe("completed");
     expect(turn.role).toBe("assistant");
+    expect(turn.content).toEqual({ format: "assistant-turn-v1", role: "assistant", content: "hi", parts: [] });
+  });
+
+  it("content is null when absent, and a raw JSON string is tolerated defensively", () => {
+    expect(mapAssistantTurnRow({ id: "t", thread_id: "th", role: "user", status: "completed" }).content).toBeNull();
+    // a non-object jsonb value (array/scalar) → null
+    expect(mapAssistantTurnRow({ id: "t", thread_id: "th", content: [1, 2] }).content).toBeNull();
+    // a driver that hands back the raw text is parsed
+    expect(
+      mapAssistantTurnRow({ id: "t", thread_id: "th", content: '{"a":1}' }).content,
+    ).toEqual({ a: 1 });
   });
 
   it("falls back to schema defaults for an out-of-domain role/status", () => {
@@ -80,6 +93,7 @@ describe("pure row mappers", () => {
     expect(turn.role).toBe("assistant");
     expect(turn.status).toBe("running");
     expect(turn.runId).toBeNull();
+    expect(turn.content).toBeNull();
   });
 });
 
@@ -142,6 +156,7 @@ describe("query assembly", () => {
             assistant_user_id: "au1",
             role: "assistant",
             status: "running",
+            content: null,
             created_at: "2026-07-10T10:00:00.000Z",
             updated_at: "2026-07-10T10:00:00.000Z",
           },
@@ -155,8 +170,11 @@ describe("query assembly", () => {
       assistantUserId: "au1",
     });
     expect(turn.threadId).toBe("th1");
+    expect(turn.content).toBeNull();
     const q = runPostgresQueriesSync.mock.calls[0][0].queries[0];
-    expect(q.values).toEqual(["tn1", "th1", "run-1", "au1", "assistant", "running"]);
+    // content ($7) defaults to null when not supplied at insert.
+    expect(q.text).toContain("content");
+    expect(q.values).toEqual(["tn1", "th1", "run-1", "au1", "assistant", "running", null]);
   });
 
   it("appendAssistantTurn fail-loud rejects ids in the reserved legacy-mirror namespace (P2b)", async () => {
@@ -183,5 +201,24 @@ describe("query assembly", () => {
     expect(q.text).toContain("run_id = $2");
     // turnId is the last positional param.
     expect(q.values).toEqual(["completed", "run-1", "tn1"]);
+  });
+
+  it("updateAssistantTurn writes durable content when the key is present (PR1 EXPAND)", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [] }]);
+    const content = { format: "assistant-turn-v1", role: "assistant", content: "done", parts: [] };
+    updateAssistantTurn("tn1", { status: "completed", content });
+    const q = runPostgresQueriesSync.mock.calls[0][0].queries[0];
+    expect(q.text).toContain("status = $1");
+    expect(q.text).toContain("content = $2::jsonb");
+    // content is serialized to a JSON string for the jsonb cast; turnId last.
+    expect(q.values).toEqual(["completed", JSON.stringify(content), "tn1"]);
+  });
+
+  it("updateAssistantTurn clears content on explicit null (key present)", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [] }]);
+    updateAssistantTurn("tn1", { content: null });
+    const q = runPostgresQueriesSync.mock.calls[0][0].queries[0];
+    expect(q.text).toContain("content = $1::jsonb");
+    expect(q.values).toEqual([null, "tn1"]);
   });
 });

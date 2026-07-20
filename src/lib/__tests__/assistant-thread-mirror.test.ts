@@ -1,11 +1,15 @@
-// cinatra-ai/cinatra#1037 P2b — the legacy chat_threads → structured
+// cinatra-ai/cinatra#1037 — the legacy chat_threads → structured
 // assistant_threads/assistant_turns write-through MIRROR builders
 // (src/lib/project-inheritance.ts).
 //
 // These pin the codex-converged mirror semantics:
 //   - injective, `legacy:`-namespaced deterministic turn ids;
-//   - metadata + attribution ONLY (no content column, no fabricated run_id —
-//     the unified stream contract owns the durable event log);
+//   - metadata + attribution + (P5.6 drop-history PR1 EXPAND) durable per-turn
+//     CONTENT — the full message object, written through so the structured store
+//     holds what /chat needs for faithful reconstruction (run_id still NEVER
+//     fabricated; the unified stream contract owns the durable event log);
+//   - structured pause/resume rows projected from payload.pausedParticipants,
+//     presence-gated so a partial write never clears pause state it didn't carry;
 //   - reconcile DELETE scoped to the mirror namespace (a legacy write can
 //     never delete a runtime-minted turn row);
 //   - constant-parameter multi-row INSERT (no per-message parameters);
@@ -19,9 +23,12 @@ import {
   buildLegacyMirrorTurnId,
   extractRawStringFieldFromThread,
   extractAssistantTurnMirrorRowsFromThread,
+  extractPausedParticipantsFromThread,
   resolveAssistantMirrorOrgId,
   buildAssistantThreadMirrorUpsertQuery,
   buildAssistantTurnMirrorReconcileQueries,
+  buildAssistantPauseStateReconcileQueries,
+  buildAssistantThreadMirrorQueries,
   buildAssistantThreadMirrorDeleteQuery,
   buildAssistantThreadMirrorDeleteAllQuery,
 } from "@/lib/project-inheritance";
@@ -61,7 +68,7 @@ describe("extractAssistantTurnMirrorRowsFromThread", () => {
     id: "t1",
     messages: [
       { id: "m1", role: "user", content: "hi", createdAt: "2026-01-01T00:00:00.000Z" },
-      { id: "m2", role: "assistant", content: "yo", createdAt: "2026-01-01T00:00:01.000Z", authorUserId: "asst-9" },
+      { id: "m2", role: "assistant", content: "yo", createdAt: "2026-01-01T00:00:01.000Z", authorUserId: "asst-9", parts: [{ type: "text", text: "yo" }] },
       { id: "", role: "user", content: "no id" }, // skipped: empty id
       { role: "user", content: "missing id" }, // skipped: no id
       { id: "m3", role: "system", content: "bad role" }, // skipped: out-of-domain role
@@ -70,7 +77,7 @@ describe("extractAssistantTurnMirrorRowsFromThread", () => {
     ],
   };
 
-  it("maps valid messages to metadata rows, skipping invalid ones", () => {
+  it("maps valid messages to rows, skipping invalid ones", () => {
     const rows = extractAssistantTurnMirrorRowsFromThread(thread as never);
     expect(rows.map((r) => r.id)).toEqual([
       "legacy:2:t1:m1",
@@ -82,6 +89,7 @@ describe("extractAssistantTurnMirrorRowsFromThread", () => {
       assistantUserId: null,
       role: "user",
       createdAt: "2026-01-01T00:00:00.000Z",
+      content: JSON.stringify(thread.messages[0]),
     });
     // Attribution passthrough (I4 shadow).
     expect(rows[1].assistantUserId).toBe("asst-9");
@@ -90,11 +98,19 @@ describe("extractAssistantTurnMirrorRowsFromThread", () => {
     expect(rows[2].createdAt).toBeNull();
   });
 
-  it("NEVER extracts message content", () => {
+  it("captures the FULL message object as durable content (faithful by construction)", () => {
     const rows = extractAssistantTurnMirrorRowsFromThread(thread as never);
     for (const row of rows) {
-      expect(Object.keys(row).sort()).toEqual(["assistantUserId", "createdAt", "id", "role"]);
+      expect(Object.keys(row).sort()).toEqual([
+        "assistantUserId",
+        "content",
+        "createdAt",
+        "id",
+        "role",
+      ]);
     }
+    // parse(content) deep-equals the source message (the fidelity contract).
+    expect(JSON.parse(rows[1].content!)).toEqual(thread.messages[1]);
   });
 
   it("dedupes duplicate message ids defensively", () => {
@@ -111,6 +127,26 @@ describe("extractAssistantTurnMirrorRowsFromThread", () => {
   it("returns [] for absent/non-array messages", () => {
     expect(extractAssistantTurnMirrorRowsFromThread({ id: "t1" } as never)).toEqual([]);
     expect(extractAssistantTurnMirrorRowsFromThread({ id: "t1", messages: "x" } as never)).toEqual([]);
+  });
+});
+
+describe("extractPausedParticipantsFromThread", () => {
+  it("returns null ONLY when the field is absent (own-property) — leave rows untouched", () => {
+    expect(extractPausedParticipantsFromThread({})).toBeNull();
+    expect(extractPausedParticipantsFromThread({ title: "x" })).toBeNull();
+  });
+  it("present-but-malformed clears (fail-closed, never silently preserve stale)", () => {
+    // The field IS present, so we reconcile; a non-array value yields the empty
+    // set (clears stale rows) rather than returning null (untouched).
+    expect(extractPausedParticipantsFromThread({ pausedParticipants: "x" as never })).toEqual([]);
+    expect(extractPausedParticipantsFromThread({ pausedParticipants: null as never })).toEqual([]);
+    expect(extractPausedParticipantsFromThread({ pausedParticipants: { a: 1 } as never })).toEqual([]);
+  });
+  it("returns the deduped non-empty ids (empty array is a real 'clear all')", () => {
+    expect(extractPausedParticipantsFromThread({ pausedParticipants: [] })).toEqual([]);
+    expect(
+      extractPausedParticipantsFromThread({ pausedParticipants: ["cinatra", "asst-9", "cinatra", "", 7] as never }),
+    ).toEqual(["cinatra", "asst-9"]);
   });
 });
 
@@ -165,8 +201,8 @@ describe("buildAssistantThreadMirrorUpsertQuery", () => {
 
 describe("buildAssistantTurnMirrorReconcileQueries", () => {
   const turns = [
-    { id: "legacy:2:t1:m1", assistantUserId: null, role: "user" as const, createdAt: "2026-01-01T00:00:00.000Z" },
-    { id: "legacy:2:t1:m2", assistantUserId: "asst-9", role: "assistant" as const, createdAt: null },
+    { id: "legacy:2:t1:m1", assistantUserId: null, role: "user" as const, createdAt: "2026-01-01T00:00:00.000Z", content: '{"id":"m1","role":"user","content":"hi"}' },
+    { id: "legacy:2:t1:m2", assistantUserId: "asst-9", role: "assistant" as const, createdAt: null, content: '{"id":"m2","role":"assistant","content":"yo"}' },
   ];
 
   it("emits reconcile DELETE scoped to the mirror namespace, then one INSERT", () => {
@@ -180,16 +216,17 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
     expect(del.text).toContain("NOT (id = ANY($2::text[]))");
     expect(del.values).toEqual(["t1", ["legacy:2:t1:m1", "legacy:2:t1:m2"]]);
 
-    // Constant parameter count regardless of history length: parallel arrays.
+    // Constant parameter count regardless of history length: parallel arrays,
+    // now including the durable content array as $6.
     expect(ins.text).toContain(`INSERT INTO "${SCHEMA}"."assistant_turns"`);
-    expect(ins.text).toContain("unnest($2::text[], $3::text[], $4::text[], $5::text[])");
-    expect(ins.text).toContain("ON CONFLICT (id) DO NOTHING");
+    expect(ins.text).toContain("unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[])");
     expect(ins.values).toEqual([
       "t1",
       ["legacy:2:t1:m1", "legacy:2:t1:m2"],
       [null, "asst-9"],
       ["user", "assistant"],
       ["2026-01-01T00:00:00.000Z", null],
+      ['{"id":"m1","role":"user","content":"hi"}', '{"id":"m2","role":"assistant","content":"yo"}'],
     ]);
   });
 
@@ -199,17 +236,21 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
       threadId: "t1",
       turns,
     });
-    expect(ins.text).toContain("SELECT t.id, $1, NULL, t.assistant_user_id, t.role, 'completed'");
+    expect(ins.text).toContain("SELECT t.id, $1, NULL, t.assistant_user_id, t.role, 'completed', t.content::jsonb");
   });
 
-  it("NO content column anywhere (no double persistence)", () => {
-    const queries = buildAssistantTurnMirrorReconcileQueries({
+  it("writes durable content (PR1 EXPAND) and refreshes it on conflict", () => {
+    const [, ins] = buildAssistantTurnMirrorReconcileQueries({
       schemaName: SCHEMA,
       threadId: "t1",
       turns,
     });
-    for (const { text } of queries) {
-      expect(text.toLowerCase()).not.toContain("content");
+    // The content column is present, cast to jsonb, and refreshed on a re-write
+    // (edit/regenerate reusing the same message id).
+    expect(ins.text).toContain("content");
+    expect(ins.text).toContain("ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, updated_at = now()");
+    // Still never copies the raw legacy `payload` column name.
+    for (const { text } of [ins]) {
       expect(text.toLowerCase()).not.toContain("payload");
     }
   });
@@ -222,6 +263,52 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
     });
     expect(queries).toHaveLength(1);
     expect(queries[0].values).toEqual(["t1", []]);
+  });
+});
+
+describe("buildAssistantPauseStateReconcileQueries", () => {
+  it("clears rows not in the set, then upserts the paused participants", () => {
+    const [del, ins] = buildAssistantPauseStateReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      participantIds: ["cinatra", "asst-9"],
+    });
+    expect(del.text).toContain(`DELETE FROM "${SCHEMA}"."assistant_thread_pause_state"`);
+    expect(del.text).toContain("NOT (participant_id = ANY($2::text[]))");
+    expect(del.values).toEqual(["t1", ["cinatra", "asst-9"]]);
+    expect(ins.text).toContain(`INSERT INTO "${SCHEMA}"."assistant_thread_pause_state"`);
+    expect(ins.text).toContain("ON CONFLICT (thread_id, participant_id) DO NOTHING");
+    expect(ins.values).toEqual(["t1", ["cinatra", "asst-9"]]);
+  });
+
+  it("an empty set clears all pause rows (only the delete, no insert)", () => {
+    const queries = buildAssistantPauseStateReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      participantIds: [],
+    });
+    expect(queries).toHaveLength(1);
+    expect(queries[0].values).toEqual(["t1", []]);
+  });
+});
+
+describe("buildAssistantThreadMirrorQueries composition (pause presence-gating)", () => {
+  it("omits pause reconcile when the payload has no pausedParticipants", () => {
+    const queries = buildAssistantThreadMirrorQueries({
+      schemaName: SCHEMA,
+      thread: { id: "t1", messages: [] },
+      explicitMirrorOrgId: null,
+    });
+    expect(queries.some((q) => q.text.includes("assistant_thread_pause_state"))).toBe(false);
+  });
+
+  it("includes pause reconcile when pausedParticipants is present (even empty)", () => {
+    const queries = buildAssistantThreadMirrorQueries({
+      schemaName: SCHEMA,
+      thread: { id: "t1", messages: [], pausedParticipants: [] },
+      explicitMirrorOrgId: null,
+    });
+    expect(queries.some((q) => q.text.includes("assistant_thread_pause_state"))).toBe(true);
   });
 });
 

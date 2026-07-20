@@ -46,6 +46,12 @@ export type AssistantThread = {
   updatedAt: string;
 };
 
+/** Durable per-turn message content (cinatra#1037 P5.6 drop-history PR1 EXPAND):
+ *  a JSON object holding what /chat needs to reconstruct the turn faithfully
+ *  (role, content, parts, tool calls, …). Persisted in `assistant_turns.content`
+ *  jsonb; NULL on pre-EXPAND / content-less mirror shadow rows. */
+export type AssistantTurnContent = Record<string, unknown>;
+
 export type AssistantTurn = {
   id: string;
   threadId: string;
@@ -55,6 +61,8 @@ export type AssistantTurn = {
   assistantUserId: string | null;
   role: AssistantTurnRole;
   status: AssistantTurnStatus;
+  /** Durable per-turn message content (PR1 EXPAND); null when contentless. */
+  content: AssistantTurnContent | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -76,6 +84,9 @@ export type AppendAssistantTurnInput = {
   assistantUserId?: string | null;
   role?: AssistantTurnRole;
   status?: AssistantTurnStatus;
+  /** Optional durable content at insert (PR1 EXPAND); usually written later via
+   *  updateAssistantTurn when the turn completes. */
+  content?: AssistantTurnContent | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -95,6 +106,26 @@ export function isAssistantTurnRole(value: unknown): value is AssistantTurnRole 
 
 function toStringOrNull(v: unknown): string | null {
   return typeof v === "string" ? v : null;
+}
+
+/** Normalize a raw `content` jsonb cell to a plain object or null. The pg driver
+ *  parses jsonb to a JS value, but tolerate a raw JSON string defensively (some
+ *  drivers/paths hand back the text). Non-object → null. */
+function toContentOrNull(v: unknown): AssistantTurnContent | null {
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    return v as AssistantTurnContent;
+  }
+  if (typeof v === "string" && v.length > 0) {
+    try {
+      const parsed = JSON.parse(v);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as AssistantTurnContent;
+      }
+    } catch {
+      // not JSON — no durable content
+    }
+  }
+  return null;
 }
 
 function toIso(v: unknown): string {
@@ -128,6 +159,9 @@ export function mapAssistantTurnRow(row: Record<string, unknown>): AssistantTurn
     assistantUserId: toStringOrNull(row.assistant_user_id),
     role: isAssistantTurnRole(row.role) ? row.role : "assistant",
     status: isAssistantTurnStatus(row.status) ? row.status : "running",
+    // jsonb is already parsed to a JS value by the pg driver. Keep only a plain
+    // object (the column CHECK enforces this at rest; the mapper stays total).
+    content: toContentOrNull(row.content),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
@@ -280,9 +314,9 @@ export function appendAssistantTurn(input: AppendAssistantTurnInput): AssistantT
     queries: [
       {
         text: `INSERT INTO "${schema}"."assistant_turns"
-                 (id, thread_id, run_id, assistant_user_id, role, status)
-               VALUES ($1, $2, $3, $4, $5, $6)
-               RETURNING id, thread_id, run_id, assistant_user_id, role, status, created_at, updated_at`,
+                 (id, thread_id, run_id, assistant_user_id, role, status, content)
+               VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+               RETURNING id, thread_id, run_id, assistant_user_id, role, status, content, created_at, updated_at`,
         values: [
           id,
           input.threadId,
@@ -290,6 +324,9 @@ export function appendAssistantTurn(input: AppendAssistantTurnInput): AssistantT
           input.assistantUserId ?? null,
           input.role ?? "assistant",
           input.status ?? "running",
+          // Durable content is usually written later at completion; NULL at
+          // insert unless the caller supplied it.
+          input.content != null ? JSON.stringify(input.content) : null,
         ],
       },
     ],
@@ -300,10 +337,17 @@ export function appendAssistantTurn(input: AppendAssistantTurnInput): AssistantT
 }
 
 /** Advance a turn's lifecycle status (RUN_FINISHED → 'completed', RUN_ERROR →
- *  'error'), optionally binding the AG-UI `runId` when the run starts. */
+ *  'error'), optionally binding the AG-UI `runId` when the run starts, and
+ *  (PR1 EXPAND) writing the durable per-turn `content` when the turn completes.
+ *  `content` is written only when the key is present in the patch; pass `null`
+ *  to explicitly clear it (distinct from omitting the key = leave unchanged). */
 export function updateAssistantTurn(
   turnId: string,
-  patch: { status?: AssistantTurnStatus; runId?: string | null },
+  patch: {
+    status?: AssistantTurnStatus;
+    runId?: string | null;
+    content?: AssistantTurnContent | null;
+  },
 ): void {
   ensurePostgresSchema();
   const schema = schemaIdent();
@@ -316,6 +360,10 @@ export function updateAssistantTurn(
   if (patch.runId !== undefined) {
     values.push(patch.runId);
     sets.push(`run_id = $${values.length}`);
+  }
+  if ("content" in patch) {
+    values.push(patch.content != null ? JSON.stringify(patch.content) : null);
+    sets.push(`content = $${values.length}::jsonb`);
   }
   values.push(turnId);
   runPostgresQueriesSync({
@@ -342,7 +390,7 @@ export function findAssistantTurnByRunId(runId: string): AssistantTurn | null {
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, thread_id, run_id, assistant_user_id, role, status, created_at, updated_at
+        text: `SELECT id, thread_id, run_id, assistant_user_id, role, status, content, created_at, updated_at
                FROM "${schema}"."assistant_turns"
                WHERE run_id = $1
                ORDER BY created_at DESC, id
@@ -363,7 +411,7 @@ export function listAssistantTurns(threadId: string): AssistantTurn[] {
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, thread_id, run_id, assistant_user_id, role, status, created_at, updated_at
+        text: `SELECT id, thread_id, run_id, assistant_user_id, role, status, content, created_at, updated_at
                FROM "${schema}"."assistant_turns"
                WHERE thread_id = $1
                ORDER BY created_at, id`,

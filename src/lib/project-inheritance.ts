@@ -185,12 +185,18 @@ export function extractTimestampFieldFromThread(
 //     (id, owner_user_id, org_id set-once, title raw bytes, timestamps).
 //     `assistant_user_id` / `context_id` are NEVER touched here — those
 //     columns are owned by the AG-UI cutover (#1216 S2).
-//   • assistant_turns   — one METADATA + attribution row per legacy message.
-//     `run_id` stays NULL (no AG-UI run exists on the bespoke wire; the
-//     unified stream contract owns the durable event log and this mirror
-//     NEVER fabricates a run pointer) and message CONTENT is never copied
-//     (single content home: the legacy payload, until the S2 cutover) — so
-//     there is no double persistence model.
+//   • assistant_turns   — one METADATA + attribution + durable CONTENT row per
+//     legacy message. `run_id` stays NULL (no AG-UI run exists on the bespoke
+//     wire; the unified stream contract owns the durable event log and this
+//     mirror NEVER fabricates a run pointer). Message CONTENT is now COPIED into
+//     the `content` jsonb column (cinatra#1037 P5.6 drop-history PR1 EXPAND) —
+//     the full message object, so the structured store holds what /chat needs
+//     for faithful reconstruction. The legacy chat_threads.payload STAYS the
+//     authoritative read source until the PR2 cutover, so this is a
+//     write-through PROJECTION (dual-write), not a read swap.
+//   • assistant_thread_pause_state — structured pause/resume rows projected from
+//     payload.pausedParticipants (PR1 EXPAND), presence-gated so a partial write
+//     never clears pause state it did not carry.
 //
 // Mirror rows are IDEMPOTENT and SELF-BACKFILLING: turn ids are deterministic
 // (`legacy:`-namespaced, injective length-prefixed encoding below), inserts
@@ -243,6 +249,16 @@ export type AssistantTurnMirrorRow = {
   role: "user" | "assistant";
   /** Validated ISO timestamp, or null (SQL falls back to now()). */
   createdAt: string | null;
+  /**
+   * Durable per-turn message CONTENT (cinatra#1037 P5.6 drop-history PR1
+   * EXPAND): the FULL message object serialized to a JSON string, so /chat can
+   * reconstruct the turn faithfully (role, content, parts, thinking, toolCalls,
+   * citations, attachments, mentions — not just terminal text). Cast to jsonb at
+   * write time; the assistant_turns_content_object_check keeps it a JSON object.
+   * Legacy content home stays chat_threads.payload until the PR2 cutover — this
+   * is a write-through PROJECTION, not the read source.
+   */
+  content: string | null;
 };
 
 /**
@@ -250,7 +266,8 @@ export type AssistantTurnMirrorRow = {
  * payloads are arbitrary JSON from many writers — messages without a
  * non-empty string id or with an out-of-domain role are skipped (the turn
  * table's CHECK constraints would abort the whole transaction otherwise).
- * Content is deliberately NOT extracted.
+ * The FULL message object is captured as durable `content` (PR1 EXPAND) so the
+ * structured store holds what /chat needs for faithful reconstruction.
  */
 export function extractAssistantTurnMirrorRowsFromThread(
   thread: { id: string } & Record<string, unknown>,
@@ -274,9 +291,44 @@ export function extractAssistantTurnMirrorRowsFromThread(
           : null,
       role: msg.role,
       createdAt: extractTimestampFieldFromThread(msg, "createdAt"),
+      // The whole message object is the durable content — faithful by
+      // construction (parse(content) deep-equals payload.messages[i]). The
+      // messages came from JSON (chat_threads.payload), so they re-serialize
+      // safely. The CHECK requires a JSON object; a message is always an object.
+      content: JSON.stringify(msg),
     });
   }
   return rows;
+}
+
+/**
+ * Extract the structured pause set (cinatra#1037 P5.6 PR1 EXPAND). Presence is
+ * an OWN-PROPERTY check so ABSENCE (a partial write) is distinguished from a
+ * present-but-malformed value (codex convergence):
+ *   - field ABSENT → `null`: the mirror leaves the structural pause rows
+ *     UNTOUCHED (a partial write must not clear pause state it never saw;
+ *     lockstep "column never lags a payload write" doctrine, presence-gated like
+ *     buildChatThreadUpsertQuery's COALESCE);
+ *   - field PRESENT as an array → the de-duplicated, non-empty-string ids; an
+ *     empty array is a real "no one paused" state that CLEARS the rows;
+ *   - field PRESENT but malformed (null / object / string) → an empty set, so
+ *     the reconcile CLEARS stale rows (fail-closed: never silently PRESERVE a
+ *     stale pause set behind a corrupt payload — treat an uninterpretable
+ *     present value as "no valid paused participants").
+ */
+export function extractPausedParticipantsFromThread(
+  thread: Record<string, unknown>,
+): string[] | null {
+  if (!Object.prototype.hasOwnProperty.call(thread, "pausedParticipants")) {
+    return null; // absent → leave the structural rows untouched
+  }
+  const raw = thread.pausedParticipants;
+  const arr = Array.isArray(raw) ? raw : []; // present-but-malformed → clear
+  const seen = new Set<string>();
+  for (const v of arr) {
+    if (typeof v === "string" && v.length > 0) seen.add(v);
+  }
+  return Array.from(seen);
 }
 
 /**
@@ -345,8 +397,11 @@ ON CONFLICT (id) DO UPDATE SET
  *      legacy write can NEVER delete a runtime-minted turn row.
  *   2. Constant-parameter multi-row INSERT (parallel unnest arrays — no
  *      per-message parameters, so long histories cannot hit the parameter
- *      ceiling) ON CONFLICT (id) DO NOTHING. run_id NULL, status 'completed',
- *      NO content column.
+ *      ceiling). run_id NULL, status 'completed', plus the durable per-turn
+ *      `content` jsonb (PR1 EXPAND). ON CONFLICT (id) DO UPDATE SET content so a
+ *      re-written message (edit/regenerate reusing the same id) refreshes its
+ *      durable content; the identity metadata (role/created_at/attribution) is
+ *      immutable and left as first inserted.
  * Returns [delete] when there are no rows, else [delete, insert].
  */
 export function buildAssistantTurnMirrorReconcileQueries(args: {
@@ -367,18 +422,57 @@ WHERE thread_id = $1
   ];
   if (args.turns.length > 0) {
     queries.push({
-      text: `INSERT INTO "${schema}"."assistant_turns" (id, thread_id, run_id, assistant_user_id, role, status, created_at, updated_at)
-SELECT t.id, $1, NULL, t.assistant_user_id, t.role, 'completed',
+      text: `INSERT INTO "${schema}"."assistant_turns" (id, thread_id, run_id, assistant_user_id, role, status, content, created_at, updated_at)
+SELECT t.id, $1, NULL, t.assistant_user_id, t.role, 'completed', t.content::jsonb,
        COALESCE(t.created_at::timestamptz, now()), COALESCE(t.created_at::timestamptz, now())
-FROM unnest($2::text[], $3::text[], $4::text[], $5::text[]) AS t(id, assistant_user_id, role, created_at)
-ON CONFLICT (id) DO NOTHING`,
+FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[]) AS t(id, assistant_user_id, role, created_at, content)
+ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, updated_at = now()`,
       values: [
         args.threadId,
         ids,
         args.turns.map((t) => t.assistantUserId),
         args.turns.map((t) => t.role),
         args.turns.map((t) => t.createdAt),
+        args.turns.map((t) => t.content),
       ],
+    });
+  }
+  return queries;
+}
+
+/**
+ * Build the structured pause-state reconcile queries (cinatra#1037 P5.6 PR1
+ * EXPAND) for one thread write, given the resolved pause set from
+ * `extractPausedParticipantsFromThread` (call this ONLY when that returned
+ * non-null — a null set means the payload omitted `pausedParticipants` and the
+ * rows must be left untouched):
+ *   1. DELETE the thread's pause rows whose participant is no longer paused
+ *      (resume). An empty set clears them all.
+ *   2. Constant-parameter unnest INSERT of the paused participants ON CONFLICT
+ *      DO NOTHING (presence == paused; re-pausing is idempotent).
+ * Written ALONGSIDE the legacy payload; the payload stays authoritative until
+ * the PR2 cutover.
+ */
+export function buildAssistantPauseStateReconcileQueries(args: {
+  schemaName: string;
+  threadId: string;
+  participantIds: string[];
+}): Array<{ text: string; values: unknown[] }> {
+  const schema = args.schemaName.replaceAll('"', '""');
+  const queries: Array<{ text: string; values: unknown[] }> = [
+    {
+      text: `DELETE FROM "${schema}"."assistant_thread_pause_state"
+WHERE thread_id = $1
+  AND NOT (participant_id = ANY($2::text[]))`,
+      values: [args.threadId, args.participantIds],
+    },
+  ];
+  if (args.participantIds.length > 0) {
+    queries.push({
+      text: `INSERT INTO "${schema}"."assistant_thread_pause_state" (thread_id, participant_id)
+SELECT $1, p FROM unnest($2::text[]) AS p
+ON CONFLICT (thread_id, participant_id) DO NOTHING`,
+      values: [args.threadId, args.participantIds],
     });
   }
   return queries;
@@ -427,6 +521,9 @@ export function buildAssistantThreadMirrorQueries(args: {
   explicitMirrorOrgId: string | null;
 }): Array<{ text: string; values: unknown[] }> {
   const { schemaName, thread } = args;
+  // Structured pause set (PR1 EXPAND): null == payload omitted the field, so
+  // the rows stay untouched (presence-gated write-through, never a blind clear).
+  const pausedParticipants = extractPausedParticipantsFromThread(thread);
   return [
     buildAssistantThreadMirrorUpsertQuery({
       schemaName,
@@ -437,11 +534,20 @@ export function buildAssistantThreadMirrorQueries(args: {
       createdAt: extractTimestampFieldFromThread(thread, "createdAt"),
       updatedAt: extractTimestampFieldFromThread(thread, "updatedAt"),
     }),
-    // The thread row precedes its turn rows (FK).
+    // The thread row precedes its turn rows + pause rows (both FK → threads).
     ...buildAssistantTurnMirrorReconcileQueries({
       schemaName,
       threadId: thread.id,
       turns: extractAssistantTurnMirrorRowsFromThread(thread),
     }),
+    // Structured pause/resume write-through — only when the payload carried the
+    // field (a partial write must not clear pause state it never saw).
+    ...(pausedParticipants !== null
+      ? buildAssistantPauseStateReconcileQueries({
+          schemaName,
+          threadId: thread.id,
+          participantIds: pausedParticipants,
+        })
+      : []),
   ];
 }
