@@ -292,6 +292,43 @@ export type {
   ResolvedConnectorAccessDeclaration,
 } from "./access-config";
 
+// The typed `assistant_config` sidecar SHAPE (relocated from the app so the
+// shared assistant-declaration parser validates against it) — cinatra#1874.
+export {
+  modelPrefsSchema,
+  assistantMcpPolicySchema,
+  DEFAULT_ASSISTANT_MCP_POLICY,
+  resolveAssistantMcpPolicy,
+  assistantConfigSchema,
+} from "./assistant-config-contract";
+export type {
+  ModelPrefs,
+  AssistantMcpPolicy,
+  AssistantConfig,
+} from "./assistant-config-contract";
+
+// The shared assistant DECLARATION parser + projection (cinatra#1874 W1).
+export {
+  ASSISTANT_DECLARATION_FORMAT_VERSION,
+  ASSISTANT_DECLARATION_ABI_VERSION,
+  ASSISTANT_LAUNCH_KINDS,
+  ASSISTANT_DELIVERY_KINDS,
+  FLAT_TOKEN_RE,
+  isFlatToken,
+  AssistantDeclarationError,
+  projectAssistantDeclaration,
+  safeParseAssistantDeclaration,
+  parseAssistantDeclaration,
+  hasAssistantBlock,
+} from "./assistant-declaration";
+export type {
+  AssistantLaunchKind,
+  AssistantDeliveryKind,
+  AssistantDeclarationBlock,
+  ResolvedAssistantDeclaration,
+  ParseAssistantDeclarationResult,
+} from "./assistant-declaration";
+
 export {
   EXTENSION_KINDS,
   DEPENDENCY_EDGE_TYPES,
