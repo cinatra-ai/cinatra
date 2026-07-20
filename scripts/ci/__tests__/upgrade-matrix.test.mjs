@@ -131,6 +131,23 @@ describe("injected regressions (proves the gate is not a no-op)", () => {
     expect(joined).toMatch(/pin-drift: service 'nango-server' image nangohq\/nango-server:v999/);
   });
 
+  it("a pin whose image-embedded digest disagrees with its sibling `digest` field FAILS (4c consistency — cinatra#1863)", () => {
+    // The Renovate customManager (renovate.json) rewrites BOTH the image-embedded
+    // digest and the sibling `digest` field in lockstep. This guards the invariant
+    // so a manual edit that desyncs them fails loud (pin-drift #4 compares only image).
+    const m = clone(matrix);
+    m.services.find((s) => s.id === "platform-redis").baselinePin.digest = `sha256:${"b".repeat(64)}`;
+    const { errors } = collectProblems({ composeText, matrix: m, schema });
+    expect(errors.join("\n")).toMatch(/pin-digest-consistency: 'platform-redis'/);
+  });
+
+  it("a coupledAppImage whose sibling `digest` desyncs from its image digest FAILS (4c consistency)", () => {
+    const m = clone(matrix);
+    m.services.find((s) => s.id === "nango-postgres").coupledAppImages[0].digest = `sha256:${"c".repeat(64)}`;
+    const { errors } = collectProblems({ composeText, matrix: m, schema });
+    expect(errors.join("\n")).toMatch(/pin-digest-consistency: 'nango-postgres'/);
+  });
+
   it("a stale matrix volume (removed from compose) FAILS", () => {
     const m = clone(matrix);
     m.services.push({ ...clone(m.services[0]), id: "ghost", composeService: "postgres", volume: "ghost-volume" });
