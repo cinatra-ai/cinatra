@@ -64,9 +64,9 @@
       "migrationMechanism": "logical-dump-restore",
       "appManagedSchema": true,
       "upstreamDictated": true,
-      "baselinePin": { "image": "postgres:17-alpine@sha256:979c4379dd698aba0b890599a6104e082035f98ef31d9b9291ec22f2b13059ca", "major": "17", "digest": "sha256:979c4379dd698aba0b890599a6104e082035f98ef31d9b9291ec22f2b13059ca" },
+      "baselinePin": { "image": "postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193", "major": "17", "digest": "sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193" },
       "coupledAppImages": [
-        { "image": "nangohq/nango-server:hosted@sha256:fa3db52396f1ddba8fd7c7c0203c8226916042442a0dd782f8848354c1f95198", "major": "hosted", "digest": "sha256:fa3db52396f1ddba8fd7c7c0203c8226916042442a0dd782f8848354c1f95198" }
+        { "image": "nangohq/nango-server:hosted@sha256:1b3be71c869cd480c24b2426bbc597e0447808db878896ccaa279f98c295431e", "major": "hosted", "digest": "sha256:1b3be71c869cd480c24b2426bbc597e0447808db878896ccaa279f98c295431e" }
       ],
       "notes": "Nango's own Postgres. Nango runs its OWN schema migrations at boot; the platform ledger does not cover it. nango-server is therefore a coupled app image: it owns no volume but migrates THIS data dir at boot, so its pin is drift-checked alongside the engine. HELD at 17 (Nango upstream reference compose pins 16, so 17 is already a validated divergence; 18 is unvalidated by upstream). Keeps the legacy .../data mount while <=17. The pre-baseline pg15 nango volume is a case exception (cinatra#1417), not a widening of the general baseline.",
       "transitions": [
@@ -325,7 +325,7 @@
       "migrationMechanism": "discard-recreate",
       "appManagedSchema": false,
       "upstreamDictated": false,
-      "baselinePin": { "image": "verdaccio/verdaccio:6@sha256:e3ac7e335e69504cd0b09616aa52066399868282313c34762d2a77b8169a3575", "major": "6", "digest": "sha256:e3ac7e335e69504cd0b09616aa52066399868282313c34762d2a77b8169a3575" },
+      "baselinePin": { "image": "verdaccio/verdaccio:6@sha256:bcd0dc5f10d0b9cca5a21b1f4fb3b08c6d90978bc87b8b46402abb271e0d573a", "major": "6", "digest": "sha256:bcd0dc5f10d0b9cca5a21b1f4fb3b08c6d90978bc87b8b46402abb271e0d573a" },
       "notes": "Dev npm registry (package storage). Ephemeral dev cache of published extension tarballs; discard-recreate on any bump (re-publish repopulates it). 6.7.4 is the latest stable line; 7 is prerelease-only, so no major is offered.",
       "transitions": [
         { "from": "6", "to": "6", "supported": true, "mechanism": "discard-recreate", "skippedMajor": "n-a", "downgrade": false, "notes": "Baseline hold; digest-pinned. A future 7 major re-enters its own lane." }
