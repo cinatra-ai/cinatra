@@ -50,6 +50,15 @@ import {
   buildAssertSemanticTypeQueries,
   type AssertSemanticTypeResult,
 } from "./semantic-assertion-store";
+// Canonical binding reconcile, composed INTO Tx2 (cinatra#1868). Artifact
+// creation writes the objects row DIRECTLY (see the module header), so it never
+// rides the `binding_reconcile_enqueue` CTE the ordinary `upsertObjectAndEnqueue`
+// path carries — without this splice a run-materialized CLAIM-BACKED row is
+// minted with no binding assertion at all, and every claimed-row reader gate
+// (context-resolver `is_claimed`, `validateTripleCoherence`'s binding branch,
+// `finalizeContextSelectionPin`) keys off exactly that assertion. See the Tx2
+// splice site below.
+import { buildBindingReconcileQueries } from "@/lib/objects/binding-write-path";
 
 // Atomic creation on the semantic data model. The single artifact write path:
 // blob → resource (dedupe) →
@@ -811,6 +820,91 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
   // (archive, insert-RETURNING) — parseResult locates its
   // insert-RETURNING relative to the spliced offset.
   const PRODUCER_OPS_OFFSET = 4;
+  // ---------------------------------------------------------------------
+  // Binding reconcile, IN Tx2 (cinatra#1868).
+  //
+  // WHY HERE. The ordinary object write path (`upsertObjectAndEnqueue`) rides a
+  // `binding_reconcile_enqueue` CTE that durably records a per-artifact reconcile
+  // whenever a create could affect the row's claim-derived identity. Artifact
+  // creation writes `objects` DIRECTLY (module header), so it rides nothing: a
+  // run-materialized row whose declared type is CLAIM-BACKED was minted with NO
+  // binding assertion, and the recurring reconcile worker only DRAINS QUEUED work
+  // — it never discovers unqueued rows. A binding could then only appear via an
+  // incidental external trigger (a later claim-winner transition, an explicit
+  // backfill/type sweep, a qualifying type-changing write). In the ordinary
+  // steady state (claim already active, transition queue drained) none of those
+  // fire, so the row stayed unbound — and every claimed-row gate keys off exactly
+  // that assertion. Net: not pinnable (cinatra#1868).
+  //
+  // WHY IN-TX rather than an enqueue. Enqueuing would only yield the binding
+  // after a queue drain, so the pin would not be available at run completion.
+  // Tx2 ALREADY opens with `pg_advisory_xact_lock(hashtext(artifactId))` as its
+  // FIRST statement — exactly the composition contract
+  // `buildBindingReconcileQueries` documents — so the canonical builder drops
+  // straight in and the binding commits ATOMICALLY with the row it describes: no
+  // crash window, either the artifact and its binding both exist or neither does.
+  //
+  // WHY READ COMMITTED IS SOUND HERE. `reconcileArtifactBinding` opts into
+  // REPEATABLE READ only to defend against a winner change committed BETWEEN the
+  // archive and the insert leaving binding A retained AND binding B inserted (two
+  // active bindings). That hazard needs a PRE-EXISTING active binding. `artifactId`
+  // is a UUID minted in this call and the objects INSERT is a plain INSERT (no ON
+  // CONFLICT — a collision throws and rolls back Tx2), so the row provably carries
+  // ZERO pre-existing binding assertions: the archive can only touch rows this very
+  // transaction wrote, and the insert adds at most the one `LIMIT 1` winner, so the
+  // sa_one_active_binding_idx (one active binding per org+artifact) can NEVER be
+  // violated on this fresh row. Tx2 therefore keeps its READ COMMITTED level (and
+  // avoids the serialization-failure retry surface a REPEATABLE-READ creation path
+  // would take on across ALL of the objects/representation/audit/producer writes).
+  //
+  // The one residual READ-COMMITTED effect (codex convergence #1868) is a
+  // cross-statement WINNER SKEW: a claim-winner transition on this type committed
+  // in the microsecond gap between the two statements can make the archive act on
+  // winner A while the insert resolves winner B. This is INTEGRITY-SAFE, never a
+  // persisted invariant violation: if the fresh row's producer classic is for
+  // winner B, the archive (winner A) leaves that classic live and the binding-B
+  // INSERT hits sa_active_unique_idx (org,artifact,extension) → the WHOLE Tx2 rolls
+  // back and the caller retries against a now-stable winner (the same optimistic
+  // outcome any concurrent create would take); otherwise the row commits a
+  // winner-B binding (pinnable) with at most an over-archived foreign classic. A
+  // winner transition ALSO enqueues a per-type reconcile sweep, so any such
+  // transient is re-reconciled to the live winner on the next drain — self-healing.
+  // Winner transitions are rare administrative claim events, not a hot path.
+  //
+  // WHY AFTER THE PRODUCER OPS. The reconcile's archive statement supersedes the
+  // WINNER extension's live CLASSIC row (cinatra#1493) because that row holds the
+  // `sa_active_unique_idx` (org, artifact, extension) slot the binding INSERT
+  // needs. Running the reconcile BEFORE the producer splice would invert that:
+  // `buildAssertSemanticTypeQueries`' own archive excludes binding rows (a classic
+  // never displaces a binding) but does NOT treat one as a precedence block, so
+  // its INSERT would collide on that unique index and roll back the whole
+  // creation. After the producer ops the two compose exactly as the
+  // reconcile-queue consumer would: same-extension classic archived, winner
+  // binding inserted, both in one transaction so the artifact never transiently
+  // loses the extension's identity. A producer classic from a DIFFERENT extension
+  // than the claim winner is untouched.
+  //
+  // GATING IS IN THE SQL. `winnerCte` yields a row only when the artifact's
+  // CURRENT `objects.type` carries a live DEDICATED claim in the org's scope chain
+  // and the object is not quarantined. A non-claimed type (the pack-typed and
+  // generic cases) produces an EMPTY winner: the archive matches nothing (a fresh
+  // row has no bindings, and the classic clause requires a winner) and the insert
+  // selects nothing. Behavior for those rows is bit-for-bit unchanged — no JS-side
+  // guard SELECT is needed (unlike `reconcileArtifactBindingForWrite`, whose guard
+  // exists to avoid OPENING a locked REPEATABLE READ tx; here the lock and the tx
+  // are already paid for).
+  //
+  // PROJECTION. Tx2 already inserted the graphiti outbox row for this artifact and
+  // the projector runs POST-commit, so it observes the binding without a separate
+  // refresh tail.
+  //
+  // NOTE the raw `postgresSchema`: the builder escapes its own identifier, and the
+  // local `schema` const above is ALREADY escaped — passing it would double-escape
+  // an embedded quote.
+  const bindingOps = buildBindingReconcileQueries(postgresSchema, {
+    orgId: input.orgId,
+    artifactId,
+  });
   // `tx2Results` is hoisted OUT of the try so producer-outcome parsing
   // happens POST-COMMIT in a best-effort block. A parse/offset throw must
   // NOT be conflated with a Tx2 failure, which would create a false
@@ -930,6 +1024,13 @@ VALUES (gen_random_uuid()::text, $1::text, $2::text, $3::text, 'create', $4::tex
         // exact declared type in `objects.type`, so no default-artifact eligible
         // assertion is ever written or rebalanced at creation.
         ...producerOps,
+        // Binding reconcile spliced HERE (cinatra#1868) — AFTER the producer ops
+        // so a same-extension classic is already present for the archive to
+        // supersede (cinatra#1493), and BEFORE the authoring-ledger + caller
+        // follow-ons so those stay the tail. For a NON-claimed type the winner CTE
+        // is empty ⇒ both statements are no-ops (behavior unchanged). Result
+        // positions after the producer splice are never parsed.
+        ...bindingOps,
         // Optional authoring-ledger linkage. When the caller supplies an
         // `authoringStepId`, INSERT a row tying the just-created
         // (artifactId, representationRevisionId) to the ledger step. The
