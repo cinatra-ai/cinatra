@@ -325,7 +325,17 @@ async function saveSentEmailObject(input: {
         ...(sentThreadId ? { threadId: sentThreadId } : {}),
         // Soft-provenance correlation (cinatra#1456). Spread AFTER the transport
         // fields; each key is present only when a non-empty id was carried.
-        ...correlationFields(input.correlation, ["campaignId", "contactId", "runId"]),
+        ...correlationFields(input.correlation, [
+          "campaignId",
+          "contactId",
+          "runId",
+          // eng#548 #1625 — the run-scoped test-delivery send correlation. Both
+          // persisted onto the sent-email record so the send primitive's
+          // crash-reconciliation can query by submissionId and confirm per-draft
+          // coverage. Soft provenance; omitted on ordinary sends.
+          "submissionId",
+          "draftId",
+        ]),
       },
     });
   } catch (err) {

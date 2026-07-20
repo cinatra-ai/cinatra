@@ -71,6 +71,12 @@ type SendCorrelation = {
   campaignId?: string;
   contactId?: string;
   runId?: string;
+  // eng#548 #1625 — the run-scoped test-delivery send submission id + the
+  // specific draft id, threaded per-draft so the send primitive's crash
+  // reconciliation can query the outbound correlation store by submissionId and
+  // confirm every expected draft was delivered.
+  submissionId?: string;
+  draftId?: string;
 };
 
 export type TriggerEmailSendDeps = {
@@ -755,6 +761,65 @@ async function runInitialSend(args: {
   }
 }
 
+/**
+ * Pure phase-1 selection planner for the run-scoped test-delivery send
+ * (eng#548 #1625, DESIGN-V3 (4) two-phase). Resolves the FINAL concrete draft-id
+ * set ONCE — `random_initial` is pinned to a concrete id here and must never be
+ * rerandomized on a retry (the caller persists these ids into the ledger claim
+ * BEFORE any outbound send). Reuses the SAME selection + membership logic as
+ * `sendTestEmail`, so the pinned batch cannot drift from what the send would
+ * pick. NO side-effects. Campaign-not-found is an invariant violation here (the
+ * caller already authorized the campaign as an object) and throws.
+ */
+export async function planTestSendSelection(
+  input: {
+    campaignId: string;
+    recipientEmail: string;
+    selectionMode: "random_initial" | "specific_initial" | "all_initial";
+    specificInitialDraftIds?: string[];
+    specificFollowUpDraftIds?: string[];
+  },
+  deps: TriggerEmailSendDeps = buildLazyDefaultDeps(),
+): Promise<
+  | { ok: true; recipientEmail: string; selectedDraftIds: string[] }
+  | { ok: false; reason: "no_drafts_selected" | "invalid_recipient" }
+> {
+  const recipient = (input.recipientEmail ?? "").trim();
+  if (recipient.length === 0 || !recipient.includes("@")) {
+    return { ok: false, reason: "invalid_recipient" };
+  }
+  const campaign = await deps.getCampaign(input.campaignId);
+  if (!campaign) {
+    // Invariant: the send path authorizes the campaign as an object BEFORE
+    // planning; a missing campaign row here is a data-integrity fault, not a
+    // user-correctable state.
+    throw new Error("Campaign not found.");
+  }
+  const draftIds = campaign.draftIds ?? [];
+  const campaignDraftIdSet = new Set(draftIds);
+  const safeSpecificInitialDraftIds = input.specificInitialDraftIds?.filter((id) =>
+    campaignDraftIdSet.has(id),
+  );
+  const safeSpecificFollowUpDraftIds = (input.specificFollowUpDraftIds ?? []).filter((id) =>
+    campaignDraftIdSet.has(id),
+  );
+  const allDrafts = await deps.getDraftsByIds(draftIds);
+  const initialSelected = resolveDrafts(allDrafts, input.selectionMode, safeSpecificInitialDraftIds);
+  const idToDraft = new Map(allDrafts.map((d) => [d.id, d] as const));
+  const followUpSelected = safeSpecificFollowUpDraftIds
+    .map((id) => idToDraft.get(id))
+    .filter((d): d is Draft => d !== undefined);
+  const selectedById = new Map<string, Draft>();
+  for (const draft of [...initialSelected, ...followUpSelected]) {
+    selectedById.set(draft.id, draft);
+  }
+  const selectedDraftIds = [...selectedById.keys()];
+  if (selectedDraftIds.length === 0) {
+    return { ok: false, reason: "no_drafts_selected" };
+  }
+  return { ok: true, recipientEmail: recipient, selectedDraftIds };
+}
+
 export function createTriggerEmailSendUseCases(
   deps: TriggerEmailSendDeps = buildLazyDefaultDeps(),
 ): TriggerEmailSendUseCases {
@@ -766,6 +831,12 @@ export function createTriggerEmailSendUseCases(
         selectionMode: "random_initial" | "specific_initial" | "all_initial";
         specificInitialDraftIds?: string[];
         specificFollowUpDraftIds?: string[];
+        // eng#548 #1625 — the run-scoped test-delivery submission id. When
+        // present (the `email_test_delivery_run_send` wrapper's phase-2 send),
+        // it is threaded (with each draft's id) into the sendEmail correlation so
+        // a crashed-claim reconciliation can query the outbound store by
+        // submission and confirm per-draft coverage. Absent on the public path.
+        submissionId?: string;
       },
       actor: PrimitiveActorContext,
     ): Promise<Record<string, unknown>> {
@@ -850,6 +921,15 @@ export function createTriggerEmailSendUseCases(
       const fromName = campaign.senderName;
 
       try {
+        // eng#548 #1625 — when the run-scoped wrapper supplies a submissionId,
+        // thread it (with the specific draft id) into the sendEmail correlation
+        // so the sent-email object carries the (submissionId, draftId) pair the
+        // wrapper's crash reconciliation queries. Omitted on the public path
+        // (correlation absent → the writer adds no test-delivery fields).
+        const submissionId =
+          typeof input.submissionId === "string" && input.submissionId.trim() !== ""
+            ? input.submissionId.trim()
+            : undefined;
         let sentCount = 0;
         for (const draft of selected) {
           await deps.sendEmail(
@@ -861,7 +941,18 @@ export function createTriggerEmailSendUseCases(
               fromEmail,
               replyTo: fromEmail,
             },
-            { userId: actor.userId },
+            {
+              userId: actor.userId,
+              ...(submissionId
+                ? {
+                    correlation: {
+                      campaignId: input.campaignId,
+                      submissionId,
+                      draftId: draft.id,
+                    },
+                  }
+                : {}),
+            },
           );
           sentCount += 1;
         }

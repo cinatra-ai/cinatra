@@ -698,6 +698,16 @@
       "line": 59
     },
     {
+      "primitiveName": "email_test_delivery_parse_action",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 180
+    },
+    {
+      "primitiveName": "email_test_delivery_run_send",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 160
+    },
+    {
       "primitiveName": "extensions_archive",
       "file": "packages/extensions/src/mcp/registry.ts",
       "line": 38

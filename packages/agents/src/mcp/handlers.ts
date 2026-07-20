@@ -48,7 +48,26 @@ import {
   readRunCoOwners,
   resolveRunCoOwnerUserIds,
   readAgentRunsByTemplateRaw,
+  type AgentRunRecord,
 } from "../store";
+// Run-scoped test-delivery send (eng#548 #1625). The send capability itself is
+// injected by the host through the boot-published PORT (the app owns the
+// email/auth/objects graph); packages/agents owns the run scope, authz, ledger,
+// and seq. Read the holder at INVOCATION time (fail closed on null).
+import {
+  getTestDeliverySendPort,
+  TEST_DELIVERY_SEND_PORT_UNWIRED_ERROR,
+  type TestDeliveryPortRun,
+  type TestDeliverySelectionMode,
+} from "../test-delivery-send-port";
+import {
+  claimTestSend,
+  settleTestSend,
+  readTestSendBySubmission,
+  readSentCountForRun,
+  readMaxSeqForRun,
+  type TestSendRecord,
+} from "../agent-run-test-sends";
 import { enqueueBackgroundJob } from "@/lib/background-jobs";
 import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import {
@@ -5553,6 +5572,425 @@ async function handleAgentRunHitlPromptsExclude(
 }
 
 // ---------------------------------------------------------------------------
+// email_test_delivery_run_send / email_test_delivery_parse_action (eng#548 #1625)
+//
+// The two run-scoped primitives that turn the test-delivery gate into a REAL
+// run-performed send loop (DESIGN-V3 contracts (3)/(4)/(5)/(6)). Both derive the
+// run, the declaring agent package, the campaign, and — for the send — the
+// submission id from the run-bound invocation context, NEVER from caller input
+// (the same #1794 trust model as the HITL primitives above).
+//
+//   email_test_delivery_run_send  — performs the send under the run OWNER's
+//     authority, idempotent per (run, submission) via the agent_run_test_sends
+//     ledger. execute-tier authz. The actual email/authz/objects work is done by
+//     the host-injected send PORT; this handler owns run scope, authz, the
+//     durable ledger claim/settle, seq, and the typed discriminated return.
+//   email_test_delivery_parse_action — deterministic parse of the gate envelope
+//     into a typed branch action; `halt` when the ledger performed-send count has
+//     reached the template-trusted maxGateVisits cap. read-tier.
+//
+// CO-OWNER RESPONDER RULING (DESIGN-V3 (5)): a co-owner who passes the "execute"
+// authorization gate but is NOT run.runBy still causes the send to use the run
+// OWNER's mailbox/authority (the PORT builds the owner ActorContext from the run).
+// A test email always comes FROM the run owner's configured sender regardless of
+// which authorized co-owner clicked Send — and only after the "execute" boundary.
+// ---------------------------------------------------------------------------
+
+const EMAIL_TEST_DELIVERY_PACKAGE = "@cinatra-ai/email-test-delivery-agent";
+
+// The claim lease. A row still `sending` past this window is treated as a
+// crashed claim and reconciled against the outbound correlation store (never a
+// blind resend). Generous relative to a single Gmail round-trip.
+const TEST_SEND_LEASE_SECONDS = 120;
+
+// The default renderer-gate visit cap until the stage-B oas-compiler stamp lands
+// (DESIGN-V3 (1)/(3)). maxGateVisits counts PERFORMED sends; the terminal
+// continue/halt does not consume one. Read SERVER-SIDE from the trusted template.
+const DEFAULT_MAX_GATE_VISITS = 25;
+const MAX_GATE_VISITS_CEILING = 100;
+
+// Resolves the trusted per-gate-resume submission id for the run-scoped send
+// primitive. Stamped ONLY by a verified server-side run-bound seam
+// (`/api/agents/passthrough`, from the context-id-bound run row's a2aTaskId),
+// never from caller input. Fail closed absent — the ledger dedupe identity
+// cannot be forged into being.
+function resolveRunScopedSubmissionId(): { submissionId: string } | { error: string } {
+  const ctx = mcpRequestContextStorage.getStore();
+  const submissionId = ctx?.verifiedSubmissionId;
+  if (!submissionId || typeof submissionId !== "string" || submissionId.length === 0) {
+    return {
+      error:
+        "email_test_delivery_run_send: no verified submission id on the invocation frame " +
+        "(the run-bound pre-interrupt seam stamps it from the gate's resume task id). " +
+        "Failing closed — the idempotency identity cannot be caller-supplied.",
+    };
+  }
+  return { submissionId };
+}
+
+// Best-effort read of the template-trusted maxGateVisits (DESIGN-V3 (1)). The
+// oas-compiler stamp that persists it into the compiled approvalPolicy step is a
+// deferred forward-guard, so this reads defensively and defaults to 25, clamped
+// to [1, 100]. NEVER an OAS-carried or caller value.
+function resolveMaxGateVisits(template: AgentTemplateRecord | null): number {
+  const raw = template?.approvalPolicy as unknown as {
+    maxGateVisits?: unknown;
+    steps?: Array<{ maxGateVisits?: unknown; metadata?: { cinatra?: { maxGateVisits?: unknown } } }>;
+  } | null;
+  const candidates: unknown[] = [];
+  if (raw && typeof raw === "object") {
+    candidates.push(raw.maxGateVisits);
+    for (const step of raw.steps ?? []) {
+      candidates.push(step?.maxGateVisits);
+      candidates.push(step?.metadata?.cinatra?.maxGateVisits);
+    }
+  }
+  for (const c of candidates) {
+    if (typeof c === "number" && Number.isInteger(c) && c >= 1) {
+      return Math.min(c, MAX_GATE_VISITS_CEILING);
+    }
+  }
+  return DEFAULT_MAX_GATE_VISITS;
+}
+
+// Reads run.inputParams.campaignId as a non-empty string. The campaign is PINNED
+// from the run's dispatch params (DESIGN-V3 (5)) — a caller / gate campaignId is
+// structurally impossible to send to.
+function resolvePinnedCampaignId(run: AgentRunRecord): string | null {
+  const raw = run.inputParams?.campaignId;
+  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+}
+
+function toPortRun(run: AgentRunRecord): TestDeliveryPortRun {
+  return {
+    id: run.id,
+    runBy: run.runBy,
+    orgId: run.orgId,
+    dependentInstallId: run.dependentInstallId,
+    inputParams: run.inputParams,
+  };
+}
+
+// A ledger row's stored result_json is the typed discriminated result the port
+// returned; re-return it verbatim with the row's seq stamped. On a row that
+// somehow lacks result_json (crash before settle already handled by the caller),
+// synthesize an in-progress shape.
+function ledgerRowToResult(row: TestSendRecord): Record<string, unknown> {
+  if (row.resultJson && typeof row.resultJson === "object") {
+    return { ...row.resultJson, seq: row.seq };
+  }
+  return {
+    ok: false,
+    seq: row.seq,
+    reason: "send_in_progress",
+    message: "A test send for this submission is still in progress.",
+  };
+}
+
+async function handleEmailTestDeliveryRunSend(
+  request: PrimitiveRequest<{
+    recipientEmail?: unknown;
+    selectionMode?: unknown;
+    specificInitialDraftIds?: unknown;
+    specificFollowUpDraftIds?: unknown;
+  }>,
+): Promise<unknown> {
+  const runCtx = resolveRunScopedRunId();
+  if ("error" in runCtx) return { error: runCtx.error };
+  const subCtx = resolveRunScopedSubmissionId();
+  if ("error" in subCtx) return { error: subCtx.error };
+  const { runId } = runCtx;
+  const { submissionId } = subCtx;
+
+  // Input validation — these are the ONLY caller-supplied fields (run, campaign,
+  // submission all context-derived). The passthrough seam invokes WITHOUT the
+  // tool's Zod schema, so validate + bound here defensively.
+  const recipientEmail =
+    typeof request.input?.recipientEmail === "string" ? request.input.recipientEmail.trim() : "";
+  if (recipientEmail.length === 0) {
+    return { error: "`recipientEmail` is required." };
+  }
+  const selectionModeRaw = request.input?.selectionMode;
+  const SELECTION_MODES: TestDeliverySelectionMode[] = [
+    "random_initial",
+    "specific_initial",
+    "all_initial",
+  ];
+  if (!SELECTION_MODES.includes(selectionModeRaw as TestDeliverySelectionMode)) {
+    return {
+      error: `\`selectionMode\` must be one of: ${SELECTION_MODES.join(", ")}.`,
+    };
+  }
+  const selectionMode = selectionModeRaw as TestDeliverySelectionMode;
+  const validateIds = (value: unknown, field: string): string[] | { error: string } => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) return { error: `\`${field}\` must be an array of draft id strings.` };
+    if (value.length > 500) return { error: `\`${field}\` is bounded at 500 ids.` };
+    if (value.some((id) => typeof id !== "string" || id.length === 0)) {
+      return { error: `\`${field}\` must contain only non-empty draft id strings.` };
+    }
+    return value as string[];
+  };
+  const initialIds = validateIds(request.input?.specificInitialDraftIds, "specificInitialDraftIds");
+  if (!Array.isArray(initialIds)) return initialIds;
+  const followUpIds = validateIds(request.input?.specificFollowUpDraftIds, "specificFollowUpDraftIds");
+  if (!Array.isArray(followUpIds)) return followUpIds;
+
+  const actor = request.actor as PrimitiveActorContext;
+  const roles = await resolveRoleHintsFromSession();
+  try {
+    // read-enforced load (readAgentRunById applies enforceRunAccess("read")).
+    const run = await readAgentRunById(runId, actor, roles);
+    if (!run) return { error: `Run not found: ${runId}` };
+
+    // Declaring-package restriction — only the test-delivery agent's own run may
+    // invoke the send wrapper.
+    const template = await readAgentTemplateById(run.templateId);
+    const agentPackageName =
+      template?.packageName && template.packageName.length > 0 ? template.packageName : null;
+    if (agentPackageName !== EMAIL_TEST_DELIVERY_PACKAGE) {
+      return {
+        error:
+          "email_test_delivery_run_send is only callable by the " +
+          `${EMAIL_TEST_DELIVERY_PACKAGE} run's own workflow.`,
+      };
+    }
+
+    // EXECUTE-tier authz (DESIGN-V3 (5)): readAgentRunById only enforced "read",
+    // which is insufficient for a mutating send. Thread co-owners + effective
+    // policy exactly like agent_run_resume so co-owner / policy / token-scope
+    // gates actually evaluate. A caller who cannot execute the run is denied.
+    const coOwnerRows = await readRunCoOwners(run.id);
+    const coOwnerUserIds = coOwnerRows.map((r) => r.userId);
+    const effectivePolicy = run.authPolicy ?? template?.agentAuthPolicy ?? null;
+    await enforceRunAccess({ ...run, effectivePolicy, coOwnerUserIds }, actor, "execute", roles);
+
+    // Campaign PINNED from the run's dispatch params — a caller campaignId is
+    // never read.
+    const campaignId = resolvePinnedCampaignId(run);
+    if (!campaignId) {
+      return { error: "This run has no dispatched campaignId; nothing to send." };
+    }
+    // Fail closed on a null runBy — the run owner is the mailbox selector; there
+    // is no arbitrary-OAuth fallback (parity with the deleted route's guard).
+    if (!run.runBy) {
+      return {
+        ok: false,
+        seq: await readMaxSeqForRun(runId),
+        reason: "connector_unavailable",
+        message: "This run has no owner mailbox to send the test email from.",
+      };
+    }
+
+    const port = getTestDeliverySendPort();
+    if (!port) {
+      // Fail CLOSED — never a phantom success. A missing wiring is an operator
+      // error the primitive surfaces, not a silent no-op send.
+      return { error: TEST_DELIVERY_SEND_PORT_UNWIRED_ERROR };
+    }
+    const portRun = toPortRun(run);
+
+    // ---- Idempotency: is there already a claim for this (run, submission)? ----
+    const existing = await readTestSendBySubmission(runId, submissionId);
+    if (existing) {
+      if (existing.status === "sent" || existing.status === "failed") {
+        // Terminal — a transport retry of the same resume. Return the prior
+        // result verbatim; NEVER a second send.
+        return ledgerRowToResult(existing);
+      }
+      // status === "sending": either genuinely in-flight (lease live) or a
+      // crashed claim (lease expired → ambiguous, reconcile).
+      if (existing.leaseExpiresAt.getTime() > Date.now()) {
+        return {
+          ok: false,
+          seq: existing.seq,
+          reason: "send_in_progress",
+          message: "Your previous test send is still in progress. Please wait.",
+        };
+      }
+      // Expired lease → reconcile against the outbound correlation store for THIS
+      // submission (never a blind resend).
+      const outcome = await port.reconcile({
+        run: portRun,
+        campaignId,
+        submissionId,
+        expectedDraftIds: existing.selectedDraftIds,
+      });
+      if (outcome === "sent") {
+        const settled = await settleTestSend({
+          id: existing.id,
+          status: "sent",
+          result: {
+            ok: true,
+            sentTo: existing.recipientEmail ?? recipientEmail,
+            sentCount: existing.selectedDraftIds.length,
+            message: `Test email sent to ${existing.recipientEmail ?? recipientEmail}.`,
+          },
+        });
+        return ledgerRowToResult(settled ?? existing);
+      }
+      // Ambiguous — the earlier send's outcome is unknowable. Do NOT auto-resend.
+      return {
+        ok: false,
+        seq: existing.seq,
+        reason: "previous_send_unknown",
+        message:
+          "Your last test send's status is unknown — check the inbox before resending.",
+      };
+    }
+
+    // ---- Phase 1 (no side-effects): plan + pin the batch under owner authz. ----
+    const prepared = await port.prepareSend({
+      run: portRun,
+      campaignId,
+      recipientEmail,
+      selectionMode,
+      specificInitialDraftIds: initialIds,
+      specificFollowUpDraftIds: followUpIds,
+    });
+    if (!prepared.ok) {
+      // A pre-claim expected failure — report it as data with the current max
+      // seq (nothing was claimed, so there is no new ordinal).
+      return {
+        ok: false,
+        seq: await readMaxSeqForRun(runId),
+        reason: prepared.reason,
+        message:
+          prepared.reason === "campaign_access_denied"
+            ? "You do not have access to this campaign."
+            : prepared.reason === "invalid_recipient"
+              ? "Enter a valid recipient email address for the test send."
+              : "No test emails were selected to send.",
+      };
+    }
+
+    // ---- Claim: the atomic exactly-once fence on (run, submission). ----
+    const claim = await claimTestSend({
+      runId,
+      submissionId,
+      selectedDraftIds: prepared.selectedDraftIds,
+      recipientEmail: prepared.recipientEmail,
+      leaseSeconds: TEST_SEND_LEASE_SECONDS,
+    });
+    if (claim.kind === "existing") {
+      // A concurrent claim raced us between the read above and here. Return based
+      // on that row's state — never a second send.
+      const row = claim.row;
+      if (row.status === "sent" || row.status === "failed") return ledgerRowToResult(row);
+      return {
+        ok: false,
+        seq: row.seq,
+        reason: "send_in_progress",
+        message: "Your previous test send is still in progress. Please wait.",
+      };
+    }
+
+    // ---- Phase 2 (the outbound send) of exactly the pinned ids. ----
+    const result = await port.performSend({
+      run: portRun,
+      campaignId,
+      submissionId,
+      recipientEmail: prepared.recipientEmail,
+      selectedDraftIds: prepared.selectedDraftIds,
+    });
+    await settleTestSend({
+      id: claim.row.id,
+      status: result.ok ? "sent" : "failed",
+      result: { ...result },
+    });
+    return { ...result, seq: claim.row.seq };
+  } catch (err) {
+    if (err instanceof AuthzError) {
+      emitReadDenialAudit(actor, runId);
+      return authzErrorToResponse(err, `Run not found: ${runId}`);
+    }
+    // An UNEXPECTED fault (context/authz invariant, unknown exception) fails the
+    // node visibly — it is a bug, not a user-correctable gate state.
+    const message = err instanceof Error ? err.message : String(err);
+    return { error: `Test delivery send failed: ${message}` };
+  }
+}
+
+type ParsedGateEnvelope = {
+  action: "send" | "continue" | "halt";
+  recipientEmail?: string;
+  selectionMode?: TestDeliverySelectionMode;
+  specificInitialDraftIds?: string[];
+  specificFollowUpDraftIds?: string[];
+};
+
+// Parse the gate's userResponse envelope into a typed, branch-readable action.
+// Malformed / absent → `continue` (fail to the safe terminal path, never crash).
+function parseGateEnvelope(userResponse: unknown): ParsedGateEnvelope {
+  if (typeof userResponse !== "string" || userResponse.trim().length === 0) {
+    return { action: "continue" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(userResponse);
+  } catch {
+    return { action: "continue" };
+  }
+  if (!parsed || typeof parsed !== "object") return { action: "continue" };
+  const env = parsed as Record<string, unknown>;
+  const action = env.action;
+  if (action === "continue" || action === "halt") return { action };
+  if (action !== "send") return { action: "continue" };
+  const out: ParsedGateEnvelope = { action: "send" };
+  if (typeof env.recipientEmail === "string") out.recipientEmail = env.recipientEmail;
+  const mode = env.selectionMode;
+  if (mode === "random_initial" || mode === "specific_initial" || mode === "all_initial") {
+    out.selectionMode = mode;
+  }
+  const stringArray = (v: unknown): string[] | undefined =>
+    Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]).slice(0, 500) : undefined;
+  const inits = stringArray(env.specificInitialDraftIds);
+  if (inits) out.specificInitialDraftIds = inits;
+  const follows = stringArray(env.specificFollowUpDraftIds);
+  if (follows) out.specificFollowUpDraftIds = follows;
+  return out;
+}
+
+async function handleEmailTestDeliveryParseAction(
+  request: PrimitiveRequest<{ userResponse?: unknown }>,
+): Promise<unknown> {
+  const runCtx = resolveRunScopedRunId();
+  if ("error" in runCtx) return { error: runCtx.error };
+  const { runId } = runCtx;
+  const actor = request.actor as PrimitiveActorContext;
+  const roles = await resolveRoleHintsFromSession();
+  try {
+    // read-enforced load — this is a read-tier deterministic parse.
+    const run = await readAgentRunById(runId, actor, roles);
+    if (!run) return { error: `Run not found: ${runId}` };
+
+    const envelope = parseGateEnvelope(request.input?.userResponse);
+
+    // Halt guard: when the ledger's PERFORMED-send count has reached the
+    // template-trusted cap, force the terminal path even if the user asked to
+    // send again. Read the bound SERVER-SIDE from the run's compiled template.
+    if (envelope.action === "send") {
+      const [template, sentCount] = await Promise.all([
+        readAgentTemplateById(run.templateId),
+        readSentCountForRun(runId),
+      ]);
+      const maxGateVisits = resolveMaxGateVisits(template);
+      if (sentCount >= maxGateVisits) {
+        return { action: "halt", maxGateVisits, sentCount };
+      }
+    }
+    return { ...envelope };
+  } catch (err) {
+    if (err instanceof AuthzError) {
+      emitReadDenialAudit(actor, runId);
+      return authzErrorToResponse(err, `Run not found: ${runId}`);
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return { error: `Parse action failed: ${message}` };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
 
@@ -5600,6 +6038,12 @@ export function createAgentBuilderPrimitiveHandlers(): Record<
       handleAgentRunHitlPromptsList(req as Parameters<typeof handleAgentRunHitlPromptsList>[0]),
     agent_run_hitl_prompts_exclude: (req) =>
       handleAgentRunHitlPromptsExclude(req as Parameters<typeof handleAgentRunHitlPromptsExclude>[0]),
+    // run-scoped test-delivery send + parse primitives (eng#548 #1625) — run,
+    // declaring package, campaign, and submission id all context-derived.
+    email_test_delivery_run_send: (req) =>
+      handleEmailTestDeliveryRunSend(req as Parameters<typeof handleEmailTestDeliveryRunSend>[0]),
+    email_test_delivery_parse_action: (req) =>
+      handleEmailTestDeliveryParseAction(req as Parameters<typeof handleEmailTestDeliveryParseAction>[0]),
     agent_run_resume: (req) =>
       handleAgentBuilderRunResume(req as Parameters<typeof handleAgentBuilderRunResume>[0]),
     agent_run_stop: (req) =>

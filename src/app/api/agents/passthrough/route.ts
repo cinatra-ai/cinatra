@@ -64,6 +64,12 @@ const ALLOWED_TOOLS = new Set([
   // declaring agent package from the run-bound frame we establish below.
   "agent_run_hitl_prompts_list",
   "agent_run_hitl_prompts_exclude",
+  // Run-scoped test-delivery send + parse primitives (eng#548 #1625). The
+  // email-test-delivery agent's own workflow dispatches these as deterministic
+  // run-bound nodes; run + declaring package + submission id are derived from the
+  // run-bound frame established below (never the request body).
+  "email_test_delivery_run_send",
+  "email_test_delivery_parse_action",
   // Deterministic pre-interrupt skills resolution (cinatra#1625 S8/M3). The
   // skill-recommender agent's `prep_skills` ApiNode calls this to resolve the
   // skills assigned to its target drafting agent, wiring `{ skillIds }` into
@@ -85,6 +91,11 @@ const ALLOWED_TOOLS = new Set([
 const RUN_SCOPED_CONTEXT_TOOLS = new Set<string>([
   "agent_run_hitl_prompts_list",
   "agent_run_hitl_prompts_exclude",
+  // eng#548 #1625 — both derive their run scope from the verified frame; the send
+  // primitive additionally reads verifiedSubmissionId (stamped below from the
+  // context-id-bound run row's a2aTaskId) as its ledger dedupe identity.
+  "email_test_delivery_run_send",
+  "email_test_delivery_parse_action",
 ]);
 
 type RequestBody = {
@@ -415,6 +426,14 @@ export async function POST(req: Request): Promise<Response> {
             {
               runId: binding.runId,
               verifiedRunScopeId: binding.runId,
+              // eng#548 #1625 — the trusted per-gate-resume submission id, read
+              // SERVER-SIDE from the context-id-bound run row's a2aTaskId (a fresh
+              // task id per WayFlow input-required interrupt). The
+              // email_test_delivery_run_send primitive reads THIS as its
+              // (run_id, submission_id) ledger dedupe identity — never caller
+              // input. Undefined when the run carries no task id (a non-A2A run
+              // can never reach the run-scoped send node).
+              ...(run.a2aTaskId ? { verifiedSubmissionId: run.a2aTaskId } : {}),
               userId: run.runBy ?? undefined,
               orgId: run.orgId,
               ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),

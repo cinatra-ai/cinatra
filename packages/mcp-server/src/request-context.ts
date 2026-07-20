@@ -226,6 +226,18 @@ export type McpRequestContext = {
    * is a signed token claim — so a run-scoped primitive trusts that too.)
    */
   verifiedRunScopeId?: string;
+  /**
+   * A per-gate-resume submission id VERIFIED by a trusted server-side run-bound
+   * seam (eng#548 #1625). Stamped ONLY alongside `verifiedRunScopeId` by the
+   * same seam (`/api/agents/passthrough` after `bindBridgeRunId`), read
+   * server-side from the context-id-bound run row's `a2aTaskId` (a fresh task id
+   * per WayFlow input-required interrupt — distinct per gate re-entry, stable per
+   * transport retry of the same resume). The run-scoped test-delivery send
+   * primitive reads THIS as the `(run_id, submission_id)` ledger dedupe identity
+   * — never a caller-supplied value. The transport NEVER writes this field from
+   * request input; undefined for every ordinary request.
+   */
+  verifiedSubmissionId?: string;
 };
 
 /**
