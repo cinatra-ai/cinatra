@@ -22,8 +22,16 @@ import "server-only";
 //     make a mid-seed crash permanently skip, leaving a partial dataset).
 //   - the claim is a single atomic `INSERT … ON CONFLICT … WHERE … RETURNING`
 //     against the core-store `metadata` table, so two racing dev boots cannot
-//     both dispatch the destructive seed; the loser skips. A `failed` marker is
-//     re-claimable on a later boot (retry); a `completed` marker never is.
+//     both dispatch the destructive seed; the loser skips.
+//
+// Destructive-re-claim fix (cinatra#1238 live acceptance): a `failed` marker is
+// NOT re-claimable — it is TERMINAL like `completed`. The monolithic seed opens
+// with a `TRUNCATE` wipe, so an auto-re-claiming `failed` state made EVERY boot
+// re-run the destructive wipe → partial seed → fail, forever (a boot loop that
+// never converged and repeatedly destroyed the operator's data). A failed seed
+// now requires an EXPLICIT operator reset (`resetDemoSeedStateInDb`, which
+// CAS-clears ONLY a `failed` marker) before the next boot will re-attempt — the
+// wipe never silently re-runs. `completed` still never re-claims (exactly-once).
 
 import { spawn } from "node:child_process";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
@@ -39,9 +47,11 @@ import { isDemoProfile, isStrictDevelopmentRuntime, shouldRunDemoSeed } from "@/
 export const DEMO_SEED_STATE_KEY = "demo:monolithic-seed:state";
 
 // Raw stored forms (the metadata store JSON-encodes values, so the persisted
-// bytes are the quoted JSON strings — keep the comparisons byte-exact).
-const RUNNING_RAW = JSON.stringify("running");
-const COMPLETED_RAW = JSON.stringify("completed");
+// bytes are the quoted JSON strings — keep the comparisons byte-exact). Exported
+// for the real-Postgres claim test (byte-exact fixtures).
+export const RUNNING_RAW = JSON.stringify("running");
+export const COMPLETED_RAW = JSON.stringify("completed");
+export const FAILED_RAW = JSON.stringify("failed");
 
 /** The two runtime facts `shouldRunDemoSeed` consumes. */
 export interface DemoSeedFacts {
@@ -109,20 +119,31 @@ export async function runPendingDemoSeed(deps: DemoSeedDeps): Promise<DemoSeedOu
     return { status: "error", reason: `seed claim failed: ${err instanceof Error ? err.message : String(err)}` };
   }
   if (!claimed) {
-    return { status: "skipped", reason: "one-shot already claimed by another boot (or completed)" };
+    // Lost the race, OR the marker is terminal (`completed` = done; `failed` =
+    // needs an explicit operator reset before it re-attempts — it will NOT
+    // silently re-run the destructive wipe).
+    return { status: "skipped", reason: "one-shot not claimable (another boot won, or completed/failed)" };
   }
 
   log("human admin present + demo dataset absent → seeding monolithic ACME demo dataset");
   try {
     await deps.runMonolithicSeed();
   } catch (err) {
-    // Release the claim so a later boot retries; the marker is only ever
-    // `completed` after a clean run, so a crash never leaves a stuck skip.
+    // Latch the one-shot `failed` (TERMINAL). The next boot will NOT auto-retry
+    // — that is the fix for the destructive re-claim loop (the seed's opening
+    // TRUNCATE must not silently re-run every boot). An operator investigates,
+    // fixes the cause, then clears the marker (resetDemoSeedStateInDb) to
+    // re-arm the one attempt.
     try {
       await deps.markFailed();
     } catch {
-      /* best-effort; the claim WHERE re-admits a non-completed marker anyway */
+      /* best-effort; a `failed` marker is terminal regardless */
     }
+    log(
+      "monolithic seed FAILED — the one-shot is now latched `failed` and will NOT auto-retry " +
+        "(no destructive re-wipe on the next boot). After fixing the cause, clear the marker to re-arm it: " +
+        "DELETE FROM <schema>.metadata WHERE key = 'demo:monolithic-seed:state' AND value = '\"failed\"';",
+    );
     return { status: "error", reason: `monolithic seed failed: ${err instanceof Error ? err.message : String(err)}` };
   }
   await deps.markCompleted();
@@ -169,25 +190,36 @@ export function readDemoSeedFactsFromDb(): DemoSeedFacts {
 }
 
 /**
- * Atomically claim the one-shot. A single statement: INSERT the `running` marker,
- * or on conflict take it over ONLY when the stored marker is neither `running`
- * nor `completed` (i.e. absent-race or a prior `failed`). RETURNING yields a row
- * IFF this boot won the claim.
+ * Build the atomic one-shot claim statement for a given metadata-table
+ * identifier. A single statement: INSERT the `running` marker, or on conflict
+ * take it over ONLY when the stored marker is none of `running`, `completed`,
+ * `failed` (i.e. an absent-race). RETURNING yields a row IFF this boot won.
+ *
+ * `failed` is TERMINAL (cinatra#1238): a crashed seed does NOT auto-re-claim, so
+ * the monolithic seed's opening TRUNCATE never silently re-wipes on every boot.
+ * Retry requires an explicit `resetDemoSeedStateInDb`. Extracted as a pure
+ * builder so the exact SQL is provable against a real Postgres metadata table.
+ */
+export function buildDemoSeedClaimQuery(table: string): { text: string; values: string[] } {
+  return {
+    text: `INSERT INTO ${table} AS m (key, value)
+           VALUES ($1, $2)
+           ON CONFLICT (key) DO UPDATE SET value = excluded.value
+           WHERE m.value NOT IN ($3, $4, $5)
+           RETURNING m.value`,
+    values: [DEMO_SEED_STATE_KEY, RUNNING_RAW, RUNNING_RAW, COMPLETED_RAW, FAILED_RAW],
+  };
+}
+
+/**
+ * Atomically claim the one-shot. RETURNING yields a row IFF this boot won the
+ * claim; a `completed` OR `failed` marker is terminal and never re-claims.
  */
 export function claimDemoSeedInDb(): boolean {
   const connectionString = getPostgresConnectionString();
   const [result] = runPostgresQueriesSync({
     connectionString,
-    queries: [
-      {
-        text: `INSERT INTO ${metadataTable()} AS m (key, value)
-               VALUES ($1, $2)
-               ON CONFLICT (key) DO UPDATE SET value = excluded.value
-               WHERE m.value NOT IN ($3, $4)
-               RETURNING m.value`,
-        values: [DEMO_SEED_STATE_KEY, RUNNING_RAW, RUNNING_RAW, COMPLETED_RAW],
-      },
-    ],
+    queries: [buildDemoSeedClaimQuery(metadataTable())],
   });
   return (result?.rows.length ?? 0) > 0;
 }
@@ -197,9 +229,34 @@ export function markDemoSeedCompletedInDb(): void {
   writeMetadataValueToDatabase(DEMO_SEED_STATE_KEY, "completed");
 }
 
-/** Release the claim as `failed` so a later boot can retry. */
+/** Release the claim as `failed`. TERMINAL — a later boot will NOT auto-retry
+ *  (no destructive re-wipe); an operator must `resetDemoSeedStateInDb` first. */
 export function markDemoSeedFailedInDb(): void {
   writeMetadataValueToDatabase(DEMO_SEED_STATE_KEY, "failed");
+}
+
+/**
+ * Operator reset: CAS-clear the one-shot marker so the next demo boot re-attempts
+ * a previously `failed` seed. Deletes the marker ONLY when it is `failed` (never
+ * a `completed` or an in-flight `running` marker), so it can never re-arm a
+ * healthy exactly-once state. Returns true when a failed marker was cleared.
+ *
+ * Manual equivalent (psql):
+ *   DELETE FROM <schema>.metadata
+ *    WHERE key = 'demo:monolithic-seed:state' AND value = '"failed"';
+ */
+export function resetDemoSeedStateInDb(): boolean {
+  const connectionString = getPostgresConnectionString();
+  const [result] = runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `DELETE FROM ${metadataTable()} WHERE key = $1 AND value = $2 RETURNING key`,
+        values: [DEMO_SEED_STATE_KEY, FAILED_RAW],
+      },
+    ],
+  });
+  return (result?.rows.length ?? 0) > 0;
 }
 
 /**

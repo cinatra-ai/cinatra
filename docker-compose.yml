@@ -233,6 +233,14 @@ services:
 
   wordpress:
     profiles: ["wordpress"]
+    # Pin the container name so the connector's dev-auto-setup converges (cinatra#1238):
+    # the wordpress-mcp connector `dockerExecCapture`s a FIXED `cinatra-wordpress-1`,
+    # but without an explicit container_name Compose derives `<project>-wordpress-1`
+    # from the checkout-dir basename — so WP convergence only worked when the repo
+    # was literally named `cinatra`. Twenty/Plane already pin theirs; match that,
+    # rather than forcing a global COMPOSE_PROJECT_NAME (which would rename every
+    # project-scoped volume). Container names are host-global → one dev stack.
+    container_name: cinatra-wordpress-1
     # Custom dev image (docker/wordpress/Dockerfile) bakes git/composer/wp-cli +
     # WordPress/abilities-api + WordPress/mcp-adapter at BUILD time, so the slow
     # clone+composer work no longer runs inside the uat-gate's ~5-min readiness
@@ -617,6 +625,12 @@ services:
 
   drupal:
     profiles: ["drupal"]
+    # Pin the container name so the connector's dev-auto-setup converges (cinatra#1238):
+    # the drupal-mcp connector `dockerExecCapture`s a FIXED `cinatra-drupal-1`; without
+    # this, Compose derives `<project>-drupal-1` from the checkout-dir basename and
+    # Drupal convergence only worked when the repo was literally named `cinatra`.
+    # Matches the Twenty/Plane container_name precedent (host-global → one dev stack).
+    container_name: cinatra-drupal-1
     build:
       context: .
       dockerfile: docker/drupal/Dockerfile
