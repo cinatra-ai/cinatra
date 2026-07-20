@@ -197,6 +197,71 @@ beforeEach(() => {
   });
 });
 
+describe("materializeRunArtifacts — scope-derived ownership (#1885 C1 / D10)", () => {
+  // Route pool queries by SQL so the materializer resolves the run's anchor.
+  function anchorMock(anchor: {
+    owner_level: string | null;
+    owner_id: string | null;
+    project_id?: string | null;
+  }) {
+    poolQueryMock.mockImplementation((sql: string) => {
+      if (sql.includes("package_name")) {
+        return Promise.resolve({ rows: [{ package_name: "@test/agent" }] });
+      }
+      if (sql.includes("owner_level")) {
+        return Promise.resolve({
+          rows: [{ owner_level: anchor.owner_level, owner_id: anchor.owner_id }],
+        });
+      }
+      if (sql.includes("project_id")) {
+        return Promise.resolve({ rows: [{ project_id: anchor.project_id ?? null }] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+  }
+
+  it("team-anchored run → team-owned / team-visible row (was hard-coded organization)", async () => {
+    anchorMock({ owner_level: "team", owner_id: "team-9" });
+    await materializeRunArtifacts(BASE_INPUT);
+    expect(createSemanticArtifactMock.mock.calls[0][0]).toMatchObject({
+      ownerLevel: "team",
+      ownerId: "team-9",
+      visibility: "team",
+    });
+  });
+
+  it("user-anchored run → user-owned / private row", async () => {
+    anchorMock({ owner_level: "user", owner_id: "u-7" });
+    await materializeRunArtifacts(BASE_INPUT);
+    expect(createSemanticArtifactMock.mock.calls[0][0]).toMatchObject({
+      ownerLevel: "user",
+      ownerId: "u-7",
+      visibility: "private",
+    });
+  });
+
+  it("project-anchored run → organization-owned, PRIVATE, project-refined", async () => {
+    anchorMock({ owner_level: "project", owner_id: "proj-42" });
+    await materializeRunArtifacts(BASE_INPUT);
+    expect(createSemanticArtifactMock.mock.calls[0][0]).toMatchObject({
+      ownerLevel: "organization",
+      ownerId: "org-a",
+      visibility: "private",
+    });
+  });
+
+  it("null anchor (pre-backfill) → organization-owned / org-visible (safe default, no throw)", async () => {
+    anchorMock({ owner_level: null, owner_id: null });
+    const outcomes = await materializeRunArtifacts(BASE_INPUT);
+    expect(outcomes[0]).toMatchObject({ ok: true });
+    expect(createSemanticArtifactMock.mock.calls[0][0]).toMatchObject({
+      ownerLevel: "organization",
+      ownerId: "org-a",
+      visibility: "organization",
+    });
+  });
+});
+
 describe("materializeRunArtifacts", () => {
   it("materializes a declared binding through createSemanticArtifact with the ledger finalize op", async () => {
     const outcomes = await materializeRunArtifacts(BASE_INPUT);

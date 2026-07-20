@@ -205,6 +205,45 @@ describe("POST /api/artifacts/upload", () => {
     expect(call?.chatContextSource).toBeUndefined();
   });
 
+  it("upload lands session-user-owned + private, never organization-wide (#1885 C1 / D10, ruling 3)", async () => {
+    getAuthSession.mockResolvedValue({
+      user: { id: "u1" },
+      session: { activeOrganizationId: "org1" },
+    });
+    writeUploadedArtifact.mockResolvedValue({
+      objectId: "o1",
+      artifactId: "a1",
+      representationRevisionId: "v1",
+      ref: {
+        artifactId: "a1",
+        representationRevisionId: "v1",
+        digest: "sha",
+        mime: "text/plain",
+        originKind: "upload",
+      },
+    });
+    const res = await POST("hi", { filename: "a.txt" });
+    expect(res.status).toBe(201);
+    const call = writeUploadedArtifact.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call?.ownerLevel).toBe("user");
+    expect(call?.ownerId).toBe("u1");
+    expect(call?.visibility).toBe("private");
+    expect(call?.createdBy).toBe("u1");
+    // Org boundary still carried, never client-supplied project input.
+    expect(call?.orgId).toBe("org1");
+    expect(call?.projectId).toBeUndefined();
+  });
+
+  it("session without a user id is Unauthorized (uploader ownership requires a user)", async () => {
+    getAuthSession.mockResolvedValue({
+      user: {},
+      session: { activeOrganizationId: "org1" },
+    });
+    const res = await POST("hi", { filename: "a.txt" });
+    expect(res.status).toBe(401);
+    expect(writeUploadedArtifact).not.toHaveBeenCalled();
+  });
+
   it("header value is truncated to 256 chars (cap-floor; the leaf schema also enforces)", async () => {
     getAuthSession.mockResolvedValue({
       user: { id: "u1" },
