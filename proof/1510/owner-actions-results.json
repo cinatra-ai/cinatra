@@ -1,0 +1,22 @@
+{
+  "rename": {
+    "dbBefore": {
+      "name": "ACME Robotics",
+      "slug": "acme-robotics"
+    },
+    "dbAfterRename": {
+      "name": "ACME Robotics (renamed by owner proof)",
+      "slug": "acme-robotics"
+    },
+    "revalidatedRenderShowsNewName": true,
+    "dbAfterRevert": {
+      "name": "ACME Robotics",
+      "slug": "acme-robotics"
+    }
+  },
+  "roleChange": {
+    "dbBefore": "member",
+    "dbAfterPromote": "admin",
+    "dbAfterRevert": "member"
+  }
+}

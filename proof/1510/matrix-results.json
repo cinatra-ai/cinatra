@@ -1,0 +1,49 @@
+{
+  "owner": {
+    "userId": "usr-david-kim",
+    "httpStatus": 200,
+    "tabTexts": [
+      "Dashboards",
+      "Permissions",
+      "Manage"
+    ],
+    "hasManageTab": true,
+    "is404": false,
+    "settingsCard": true,
+    "membersCard": true
+  },
+  "admin": {
+    "userId": "usr-elena-rossi",
+    "httpStatus": 200,
+    "tabTexts": [
+      "Dashboards",
+      "Permissions",
+      "Manage"
+    ],
+    "hasManageTab": true,
+    "is404": false,
+    "settingsCard": true,
+    "membersCard": false
+  },
+  "member": {
+    "userId": "usr-fenway-park",
+    "httpStatus": 200,
+    "tabTexts": [
+      "Dashboards",
+      "Permissions"
+    ],
+    "hasManageTab": false,
+    "is404": true,
+    "settingsCard": false,
+    "membersCard": false
+  },
+  "nonmember": {
+    "userId": "usr-wade-johnson",
+    "httpStatus": 404,
+    "tabTexts": [],
+    "hasManageTab": false,
+    "is404": true,
+    "settingsCard": false,
+    "membersCard": false
+  }
+}
