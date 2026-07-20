@@ -75,14 +75,24 @@ export type OrganizationDetailTabsProps = {
   readonly overviewPortlets: readonly PortletInstanceProp[];
   /** Server-rendered Permissions access-model panel (read-only). */
   readonly permissionsSlot: ReactNode;
+  /**
+   * Server-rendered Manage panel (cinatra#1510). Present ONLY when the viewer
+   * holds at least `organization.update` in the VIEWED org (org_admin+); a
+   * read-only member gets `undefined` and the Manage tab never mounts.
+   */
+  readonly manageSlot?: ReactNode;
 };
+
+type OrgTabValue = "dashboards" | "permissions" | "manage";
 
 export function OrganizationDetailTabs({
   dataSource,
   overviewPortlets,
   permissionsSlot,
+  manageSlot,
 }: OrganizationDetailTabsProps) {
-  const [tab, setTab] = useState<"dashboards" | "permissions">("dashboards");
+  const [tab, setTab] = useState<OrgTabValue>("dashboards");
+  const showManage = manageSlot != null;
   // Rebuild the Overview-aware seam whenever the surface hands down freshly-built
   // portlets (e.g. after a `router.refresh()`), so the ephemeral Overview never
   // sticks at its first-render counts (codex convergence, #705).
@@ -94,12 +104,13 @@ export function OrganizationDetailTabs({
   return (
     <Tabs
       value={tab}
-      onValueChange={(v) => setTab(v as "dashboards" | "permissions")}
+      onValueChange={(v) => setTab(v as OrgTabValue)}
       className="gap-6"
     >
       <TabsListRow aria-label="Organization sections">
         <TabsTrigger value="dashboards">Dashboards</TabsTrigger>
         <TabsTrigger value="permissions">Permissions</TabsTrigger>
+        {showManage ? <TabsTrigger value="manage">Manage</TabsTrigger> : null}
       </TabsListRow>
 
       <TabsContent value="dashboards">
@@ -112,6 +123,10 @@ export function OrganizationDetailTabs({
       </TabsContent>
 
       <TabsContent value="permissions">{permissionsSlot}</TabsContent>
+
+      {showManage ? (
+        <TabsContent value="manage">{manageSlot}</TabsContent>
+      ) : null}
     </Tabs>
   );
 }

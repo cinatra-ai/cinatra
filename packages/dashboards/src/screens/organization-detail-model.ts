@@ -38,6 +38,13 @@ export type OrganizationMemberInput = {
   readonly name: string | null;
   readonly email: string | null;
   readonly role: string | null;
+  /**
+   * The Better-Auth `member` row id — required by `updateMemberRole` /
+   * `removeMember` (both take `memberId` / `memberIdOrEmail`, NOT the user id).
+   * Optional here because the read-only access-model view (`buildOrganizationAccessModel`)
+   * never needs it; the management view (`buildOrganizationManageMembers`) does.
+   */
+  readonly id?: string | null;
 };
 
 /** A raw team row (id + name) in the org. */
@@ -121,5 +128,70 @@ export function buildOrganizationAccessModel(
     teams,
     memberCount: members.length,
     teamCount: teams.length,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Management view (cinatra#1510) — the org_owner "Members" management console.
+// Distinct from the read-only access model above: it carries the Better-Auth
+// `member.id` (the write handle) and is scoped to actionable rows.
+// ---------------------------------------------------------------------------
+
+/** One member row for the management console (role change / remove). */
+export type OrganizationManageMember = {
+  /** Better-Auth `member` row id — the `updateMemberRole`/`removeMember` handle. */
+  readonly memberId: string;
+  readonly userId: string;
+  readonly displayName: string;
+  readonly role: OrganizationRole;
+};
+
+/**
+ * Shape the raw member rows into the management console list: same
+ * normalize + sort as the access model, but keyed by the `member.id` write
+ * handle and dropping any row without one (a row we could not act on). Rows
+ * missing an `id` are excluded rather than rendered as dead controls.
+ */
+export function buildOrganizationManageMembers(
+  members: readonly OrganizationMemberInput[],
+): readonly OrganizationManageMember[] {
+  const rows: OrganizationManageMember[] = [];
+  for (const m of members) {
+    const memberId = m.id?.trim();
+    if (!memberId) continue;
+    rows.push({
+      memberId,
+      userId: m.userId,
+      displayName: memberDisplayName(m),
+      role: normalizeOrganizationRole(m.role),
+    });
+  }
+  rows.sort((a, b) => {
+    const byRole = ROLE_RANK[a.role] - ROLE_RANK[b.role];
+    if (byRole !== 0) return byRole;
+    return a.displayName.localeCompare(b.displayName, undefined, {
+      sensitivity: "accent",
+    });
+  });
+  return rows;
+}
+
+/** A pending organization invitation row (management console). */
+export type OrganizationPendingInvitation = {
+  readonly id: string;
+  readonly email: string;
+  readonly role: OrganizationRole;
+};
+
+/** Normalize a raw invitation row (Better-Auth stores `role` as owner/admin/member). */
+export function normalizePendingInvitation(input: {
+  readonly id: string;
+  readonly email: string | null;
+  readonly role: string | null;
+}): OrganizationPendingInvitation {
+  return {
+    id: input.id,
+    email: input.email?.trim() || input.id,
+    role: normalizeOrganizationRole(input.role),
   };
 }
