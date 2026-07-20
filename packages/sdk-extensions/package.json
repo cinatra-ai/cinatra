@@ -18,6 +18,7 @@
     "./register": "./src/register.ts",
     "./manifest": "./src/manifest.ts",
     "./access-config": "./src/access-config.ts",
+    "./assistant-declaration": "./src/assistant-declaration.ts",
     "./dependencies": "./src/dependencies.ts",
     "./consumes": "./src/consumes.ts",
     "./flash-href": "./src/flash-href.ts",

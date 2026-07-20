@@ -23,6 +23,12 @@ import {
   readConnectorAccessDeclarationFromStore,
   type ConnectorAccessDeclarationInstallDeps,
 } from "@/lib/connector-access-config-host";
+import {
+  readAssistantInstallSignalsInertly,
+  assertAssistantInstallConstraints,
+  readAssistantInstallSignalsFromStore,
+  type AssistantDeclarationInstallDeps,
+} from "@/lib/assistant-declaration-host";
 import { resolveSignatureVerdict } from "@/lib/extension-signature";
 import {
   computeClosureHash,
@@ -384,7 +390,10 @@ export type InstallPipelineDeps = {
   // The access-declaration vertical slice (cinatra#951) lives in
   // connector-access-config-host.ts: readAccessDeclaration /
   // persistAccessDeclaration / readCurrentAccessDeclaration.
-} & ConnectorAccessDeclarationInstallDeps & OwnershipGrantInstallHooks;
+  // The assistant-declaration install-gate slice (cinatra#1874 W1) lives in
+  // assistant-declaration-host.ts: readAssistantInstallSignals (pre-finalize
+  // XOR + platform-scope gate).
+} & ConnectorAccessDeclarationInstallDeps & AssistantDeclarationInstallDeps & OwnershipGrantInstallHooks;
 
 /**
  * Structured operational event for a FAILED durable-restore step (cinatra#158).
@@ -626,6 +635,46 @@ export async function installExtensionFromRegistry(
     mat.storeDir,
     priorOp?.phase === "finalized" && priorOp.digest === mat.digest,
   );
+
+  // ASSISTANT PRE-FINALIZE GATE (cinatra#1874 W1) — same EARLY placement +
+  // inertness/GC contract as the access read above. Reads the assistant install
+  // signals from the materialized (SRI-verified) shared config.json through the
+  // shared parser (agent-kind only; a malformed `assistant` block throws), then
+  // enforces the two pre-journal invariants BEFORE `beginInstallOp`:
+  //   - XOR (AC#2): an `assistant` block + connector-executor content (`access`
+  //     block / compilable OAS) are mutually exclusive;
+  //   - PLATFORM-SCOPE (AC#1): an assistant installs only at platform scope
+  //     (orgId === null) — an org/team/project target is refused with a
+  //     directing error.
+  // A non-assistant package is a no-op. A refusal here is fully inert (the just-
+  // materialized dir is GC'd by the inert reader; nothing durable has mutated).
+  const assistantSignals = await readAssistantInstallSignalsInertly(
+    deps,
+    mat.storeDir,
+    priorOp?.phase === "finalized" && priorOp.digest === mat.digest,
+  );
+  if (assistantSignals.declaration !== null) {
+    try {
+      assertAssistantInstallConstraints({
+        signals: assistantSignals,
+        orgId: input.orgId,
+        packageName: input.packageName,
+      });
+    } catch (err) {
+      // A constraint refusal is a pre-journal throw; GC the just-materialized
+      // dir (unless it IS the live install's dir) so the refusal leaves nothing
+      // behind — mirroring the inert reader's own GC contract.
+      const isLiveDigest = priorOp?.phase === "finalized" && priorOp.digest === mat.digest;
+      if (deps.gcStoreDir && !isLiveDigest) {
+        try {
+          await deps.gcStoreDir(mat.storeDir);
+        } catch {
+          /* best-effort GC — a leftover dir is recovered by a later retry's gate. */
+        }
+      }
+      throw err;
+    }
+  }
 
   // Classify the in-process import trust tier (vendor-agnostic). The host
   // allowlist + bootstrap lever come from the trust-config seam (publicRegistryUrl
@@ -1451,6 +1500,10 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
     // ACCESS DECLARATION (cinatra#951): the host reader — fail-closed resolve
     // of cinatra/config.json through the single SDK validator.
     readAccessDeclaration: (storeDir) => readConnectorAccessDeclarationFromStore(storeDir),
+    // ASSISTANT PRE-FINALIZE GATE (cinatra#1874 W1): the host reader — fail-closed
+    // resolve of the agent-kind cinatra/config.json assistant block + the XOR
+    // executor signal, through the shared SDK parser.
+    readAssistantInstallSignals: (storeDir) => readAssistantInstallSignalsFromStore(storeDir),
     // FORWARD INSTALL GATE (#180 item 5): edgeType-aware closure check over the
     // canonical snapshot, scoped to the install's org.
     assertForwardInstallClosure: async (p) => {
