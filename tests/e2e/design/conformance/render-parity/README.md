@@ -128,16 +128,69 @@ exception — `code`, which `/chat` async-hydrates via shiki — is reconciled b
 **server-free in per-PR CI** by `render-parity-live-normalize.spec.ts` in this
 dir (it rides `design-conformance-functional`, no app boot).
 
-**Still out of scope — after S5 (#1221) / S4 (#1220), called out on the PR:**
+### Three-target compare engine + live targets (2)/(3) — LANDED (this lane, #1222 live-run)
 
-- Live-run targets **(2)/(3)** — the generic embedded conversation-view and the
-  WordPress / Drupal iframes — and their cross-target DOM + visual equality (the
-  full three-target compare). The async seam is here; those targets only
-  implement it, **after S5 embeds the widgets**.
-- The #1214 no-direct-egress assertion inside the **embedded** E2E (an S5
-  surface, not `/chat`).
-- The DOM/visual render-compare of the AG-UI interactive layer (tool-call chips,
-  HITL forms, `RUN_ERROR`, the change-diff component). Those components land in
-  S4 (#1220); this slice schema-locks their wire fixtures now so they cannot
-  drift from the S1 contract before the components exist.
+The three-target divergence gate now rides a target-agnostic engine:
+
+```
+render-parity/
+  cross-target-compare.ts        # PURE divergence engine: compare N targets' DOM-normalized
+                                 # renders vs the reference; report WHICH target/fixture/theme drifted
+  cross-target-compare.spec.ts   # per-PR (design-conformance-functional): proves the gate
+                                 # FAILS on any divergence — normalization robustness (no false RED),
+                                 # a real drift caught + localized, a missing render = hard failure
+tests/e2e/agents-run/
+  render-parity-live-targets.ts  # generic embedded view (target 2) as a seeded-thread AsyncRenderTarget,
+                                 # with an explicit probe() — never a silent skip
+  render-parity-cross-target.spec.ts  # gated live: embedded view vs the S3 reference via the engine
+```
+
+The compare depth (converged with Codex): **structural DOM equality is the hard
+gate**; the visual screenshot layer stays opt-in (`RENDER_PARITY_VISUAL`) so
+cross-OS anti-aliasing never blocks the deterministic gate. The per-PR engine
+spec proves the gate's core promise ("fails on ANY divergence") **without any
+live surface**, so both epics (#1216 + #1037) are gated deterministically today.
+
+**Target (2) — generic embedded conversation-view (`/embed/assistant`):** the
+async target + gated spec are implemented and wired
+(`render-parity-cross-target` project). They drive the SAME shared renderer as
+`/chat` and compare via the engine. The embed CORE (bridge protocol +
+frame-ancestors) merged **INERT in #1848 ("library-only, no route")**; until the
+`/embed/assistant` page slice lands, `probe()` reports the route unavailable and
+the spec **skips with that exact reason** — honest, never a false green. The leg
+enforces automatically the moment the route is live.
+
+**Target (3) — WordPress / Drupal CMS iframe** + the **#1214 no-direct-egress
+assertion**: the egress assertion is LANDED live inside the embedded E2E — see
+`tests/e2e/wp-drupal-uat/helpers.ts` (`trackNoDirectCmsEgress`), wired into the
+WordPress + Drupal edit round-trips. It proves the CLIENT half a browser can
+observe (the widget issues **zero** direct `/wp/v2` · `/jsonapi` content
+mutations on the agent timeline — the edit routes server-side over MCP) while
+the sanctioned cinatra `/stream` POST fires (positive control). The AUTHORITATIVE
+server-side ban is the static AST guard
+(`src/lib/__tests__/in-admin-cms-egress-guard.test.ts`). The full CMS-iframe
+render-parity leg additionally needs the docker WP/Drupal + wayflow compose
+profile (host port 3010) AND the `/embed/assistant` iframe it frames; it enforces
+once that route lands.
+
+### CI wiring
+
+- **Per-PR hard gate** (no `.github` edit): the corpus compare + the three-target
+  ENGINE conformance + the AG-UI schema locks ride `design-visual-verify.yml`
+  via this `tests/e2e/design/conformance/**` path — this is the gate for **both**
+  epics.
+- **On-demand lane**: `.github/workflows/render-parity.yml`
+  (`workflow_dispatch`-only, stock `ubuntu-latest`, no paid runner) runs the
+  deterministic leg; never a second required check.
+- **Local runner**: `node scripts/render-parity/run.mjs [static|live|all]`
+  (`pnpm test:render-parity`).
+- **Live legs**: the gated `agents-run` projects `chat-render-parity` +
+  `render-parity-cross-target`; the CMS iframe + egress legs ride the
+  `wp-drupal-uat` gate.
+
+**Still out of scope — after S4 (#1220):** the DOM/visual render-compare of the
+AG-UI interactive layer (tool-call chips, HITL forms, `RUN_ERROR`, the
+change-diff component). Those components land in S4; this corpus schema-locks
+their wire fixtures now so they cannot drift from the S1 contract before the
+components exist.
 ```

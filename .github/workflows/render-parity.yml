@@ -1,0 +1,81 @@
+# Render-parity conformance lane (cinatra#1222, epic #1216 S6).
+#
+# The three-target render-parity gate has three legs; this workflow is the
+# explicit, on-demand named lane for the deterministic one, plus a documented
+# map of where the live legs run. NO paid-runner assumption: the deterministic
+# leg is a headless browser DOM parse on stock `ubuntu-latest`.
+#
+#   1. DETERMINISTIC (this workflow + the always-on per-PR gate) — the corpus
+#      DOM-normalized compare vs the S3 reference, the three-target divergence
+#      ENGINE conformance (proves "fails on ANY divergence"), and the AG-UI
+#      wire schema locks. This ALSO rides the always-on `design-visual-verify.yml`
+#      per-PR gate via the `tests/e2e/design/conformance/**` path (no duplication
+#      of a required check here) — so it already gates BOTH epics (#1216 + #1037)
+#      exactly as the issue asks. This lane is `workflow_dispatch`-only so it is
+#      an on-demand proof, never a second required status check.
+#   2. LIVE `/chat` (target 1) + generic embedded view (target 2) — the gated
+#      `agents-run` projects `chat-render-parity` + `render-parity-cross-target`
+#      (need the real authenticated app; the embedded leg self-skips until the
+#      `/embed/assistant` route lands). Run via the e2e-app dispatch path or
+#      locally: `node scripts/render-parity/run.mjs live`.
+#   3. CMS iframe (target 3) + the #1214 no-direct-egress assertion — the
+#      `wp-drupal-uat` suite, which owns the docker WP/Drupal + wayflow compose
+#      profile (host port 3010) and the WP/Drupal UAT Gate workflow.
+
+name: Render-parity conformance (S6)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "render-parity leg to run (static leg only on this stock runner)"
+        type: choice
+        default: static
+        options:
+          - static
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-parity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Deterministic render-parity (corpus compare + three-target engine + AG-UI locks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+          cache: "pnpm"
+
+      - name: Clone companion extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: derive playwright version
+        id: playwright-version
+        run: |
+          v=$(pnpm list @playwright/test --json --depth=0 | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); const e=Array.isArray(d)?d[0]:d; const ver=(e.devDependencies?.["@playwright/test"]?.version)||(e.dependencies?.["@playwright/test"]?.version); console.log(ver);')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: cache playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      - name: install playwright chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: render-parity (static leg)
+        run: node scripts/render-parity/run.mjs static

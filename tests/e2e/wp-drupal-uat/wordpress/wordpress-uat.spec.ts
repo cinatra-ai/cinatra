@@ -8,6 +8,7 @@ import {
   readSeed,
   sendPrompt,
   trackAuthPath,
+  trackNoDirectCmsEgress,
 } from "../helpers";
 
 // WordPress: 5 launch scenarios + auth-failure.
@@ -60,13 +61,17 @@ test.describe("WordPress assistant UAT", () => {
     auth.verify();
   });
 
-  test("5. an edit prompt round-trips a content-change diff against the seeded page", async ({ page }) => {
+  test("5. an edit prompt round-trips a content-change diff against the seeded page — with NO direct-egress (cinatra#1214)", async ({ page }) => {
     const seed = readSeed();
     await page.goto(`${WP_BASE}${seed.wordpress.editUrl}`);
     await openWidget(page);
+    // cinatra#1214: the in-admin assistant edit routes server-side over MCP; the
+    // client must issue no direct /wp/v2 content-mutation on the agent timeline.
+    const egress = trackNoDirectCmsEgress(page, "wordpress");
     await sendPrompt(page, "Please rewrite the title to be punchier.");
     // The `changes` SSE frame renders a diff card in the panel.
     await expect(page.locator(SEL.diff).first()).toBeVisible({ timeout: 30_000 });
+    await egress.verify();
   });
 
   test("6. a missing/invalid API key surfaces a graceful admin-facing error (not 500)", async ({ page }) => {

@@ -246,6 +246,7 @@
     "test:e2e:wp-drupal": "playwright test -c tests/e2e/config/wp-drupal-uat.config.ts",
     "test:e2e:design": "playwright test -c tests/e2e/config/design.config.ts",
     "test:e2e:design:update": "playwright test -c tests/e2e/config/design.config.ts --update-snapshots",
+    "test:render-parity": "node scripts/render-parity/run.mjs",
     "design:scan": "node scripts/design/scan-raw-colors.mjs && node scripts/design/scan-status-render.mjs && node scripts/design/scan-chart-colors.mjs",
     "design:scan:raw": "node scripts/design/scan-raw-colors.mjs",
     "design:scan:status": "node scripts/design/scan-status-render.mjs",

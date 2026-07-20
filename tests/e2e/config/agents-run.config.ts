@@ -170,5 +170,23 @@ export default defineConfig({
       },
       dependencies: ["setup"],
     },
+    {
+      // Live three-target render-parity (cinatra#1222 S6): drives the generic
+      // embedded conversation-view (target 2) against the S3 packaged-renderer
+      // reference via the target-agnostic divergence engine. Like
+      // chat-render-parity it is seeded-thread driven (cost-free, no live turn),
+      // gated (needs the real authenticated app + persistence), and depends on
+      // `setup` (auth) ONLY. It SELF-SKIPS with a documented reason until the
+      // /embed/assistant route lands (S5 #1848 merged the embed core inert). The
+      // CMS iframe leg (target 3) rides the wp-drupal-uat suite (which owns the
+      // CMS docker stack + the #1214 no-direct-egress assertion).
+      name: "render-parity-cross-target",
+      testMatch: /render-parity-cross-target\.spec\.ts/,
+      use: {
+        ...desktopChrome,
+        storageState: suitePath("agents-run", ".auth/state.json"),
+      },
+      dependencies: ["setup"],
+    },
   ],
 });
