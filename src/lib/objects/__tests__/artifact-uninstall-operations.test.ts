@@ -12,9 +12,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 //     same-extension assertion (the type-changed-while-absent guard + the
 //     sa_active_unique_idx invariant), defaulting assertion_basis to 'classic'
 //     (never a binding);
-//   - archival checkpoints by PER-BATCH delta (not the running total), the
-//     floor extension is uninstall-protected, and reinstall replay is
-//     at-most-once (the final CAS is `replayed_at IS NULL`).
+//   - archival checkpoints by PER-BATCH delta (not the running total), and
+//     reinstall replay is at-most-once (the final CAS is `replayed_at IS NULL`).
+//   (The default-artifact floor + its uninstall-protection were retired in
+//    epic cinatra#1785 wave A5.)
 
 const runPostgresQueriesSync = vi.fn();
 vi.mock("@/lib/postgres-sync", () => ({
@@ -25,13 +26,10 @@ vi.mock("@/lib/postgres-config", () => ({
   postgresSchema: "cinatra",
   getPostgresConnectionString: () => "postgres://test",
 }));
-vi.mock("@cinatra-ai/objects", () => ({
-  isDefaultArtifactType: (ext: string) => ext === "@cinatra-ai/default-artifact",
-}));
-// The floor-rebalance + refresh tail is single-sourced from the assertion
-// service; substitute a sentinel so this test focuses on the uninstall SQL.
+// The graphiti-refresh tail is single-sourced from the assertion service;
+// substitute a sentinel so this test focuses on the uninstall SQL.
 vi.mock("@/lib/artifacts/semantic-assertion-store", () => ({
-  buildFloorRebalanceAndRefreshQueries: () => [{ text: "FLOOR_TAIL", values: [] }],
+  buildGraphitiRefreshQueries: () => [{ text: "REFRESH_TAIL", values: [] }],
 }));
 
 // The uninstall-operation lineage DDL rides the claim-system schema leaf
@@ -107,20 +105,13 @@ describe("buildReplayReplacementAssertionQuery (type-changed-while-absent guard)
 });
 
 describe("runArtifactUninstallArchival", () => {
-  it("refuses to archive the default-artifact floor extension", () => {
-    runPostgresQueriesSync.mockReturnValueOnce([
-      { rows: [{ id: "op1", scope: "platform", extension_package: "@cinatra-ai/default-artifact", extension_version: "1", actor: "system", status: "running", archived_count: 0, checkpoint: null, replayed_at: null, replayed_install_id: null, created_at: null, completed_at: null }], rowCount: 1 },
-    ]);
-    expect(() => runArtifactUninstallArchival({ operationId: "op1" })).toThrow(/floor extension/);
-  });
-
   it("checkpoints by PER-BATCH delta (not the running total) and marks completed", () => {
     const opRow = { id: "op1", scope: "org:org-1", extension_package: "@v/pkg-artifact", extension_version: "1", actor: "u1", status: "running", archived_count: 0, checkpoint: null, replayed_at: null, replayed_install_id: null, created_at: null, completed_at: null };
     runPostgresQueriesSync
       .mockReturnValueOnce([{ rows: [opRow], rowCount: 1 }]) // op read
       .mockReturnValueOnce([{ rows: [{ status: "running" }], rowCount: 1 }]) // per-batch status recheck (cinatra#1837 R4a)
       .mockReturnValueOnce([{ rows: [{ org_id: "org-1", artifact_id: "a1" }], rowCount: 1 }]) // batch select (1 < batchSize -> last)
-      .mockReturnValueOnce([{ rows: [], rowCount: 0 }, { rows: [{ assertion_id: "x" }, { assertion_id: "y" }], rowCount: 2 }, { rows: [], rowCount: 0 }]) // per-artifact tx: lock, archive(2), floor
+      .mockReturnValueOnce([{ rows: [], rowCount: 0 }, { rows: [{ assertion_id: "x" }, { assertion_id: "y" }], rowCount: 2 }, { rows: [], rowCount: 0 }]) // per-artifact tx: lock, archive(2), refresh tail
       .mockReturnValueOnce([{ rows: [], rowCount: 1 }]) // checkpoint update
       .mockReturnValueOnce([{ rows: [], rowCount: 1 }]); // completed update
 

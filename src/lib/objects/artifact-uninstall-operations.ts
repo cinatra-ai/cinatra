@@ -4,20 +4,20 @@
 //   UNINSTALL: archive the uninstalled extension's ELIGIBLE semantic
 //   assertions in CHECKPOINTED per-artifact batches under an operation
 //   record. Each artifact is one held-lock transaction — the SAME
-//   per-artifact advisory lock + floor-rebalance + Graphiti-refresh tail the
-//   assertion service uses (buildFloorRebalanceAndRefreshQueries), so an
-//   artifact never loses its last eligible identity (the floor re-asserts)
-//   and the projector stays in lock-step. The archive UPDATE and the lineage
-//   INSERT are ONE data-modifying-CTE statement, so the lineage is
-//   exactly-the-archived-set by construction.
+//   per-artifact advisory lock + Graphiti-refresh tail the assertion service
+//   uses (buildGraphitiRefreshQueries), so the projector stays in lock-step.
+//   (The default-artifact floor was retired in epic #1785 (A5); an artifact
+//   whose last eligible identity is archived simply has no primary extension —
+//   the effective-identity resolver reports no-primary.) The archive UPDATE
+//   and the lineage INSERT are ONE data-modifying-CTE statement, so the
+//   lineage is exactly-the-archived-set by construction.
 //
 //   REINSTALL: replay INSERTS replacement CLASSIC assertions for the CLASSIC
 //   subset of the archived set (archived rows are never un-archived — the
 //   semantic_assertion frozen trigger forbids resurrection; replay is always
 //   a new INSERT). Idempotent + type-changed-while-absent-safe: the insert is
 //   guarded on the artifact still existing and on NO live same-extension
-//   assertion (the sa_active_unique_idx invariant), and the floor rebalance
-//   in the same transaction archives a now-redundant default. BINDING-basis
+//   assertion (the sa_active_unique_idx invariant). BINDING-basis
 //   lineage is NEVER replayed (not as a binding, and NOT as a classic either):
 //   replaying a binding as classic would change provenance and, once it wins
 //   the sa_active_unique_idx slot, permanently suppress the authoritative
@@ -35,9 +35,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import { isDefaultArtifactType } from "@cinatra-ai/objects";
-
-import { buildFloorRebalanceAndRefreshQueries } from "@/lib/artifacts/semantic-assertion-store";
+import { buildGraphitiRefreshQueries } from "@/lib/artifacts/semantic-assertion-store";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
@@ -171,11 +169,6 @@ export function runArtifactUninstallArchival(input: {
   if (op.status !== "running") {
     return { archivedAssertions: 0, processedArtifacts: 0 };
   }
-  if (isDefaultArtifactType(op.extensionPackage)) {
-    // Defensive: the floor extension is uninstall-protected upstream; its
-    // assertions are owned exclusively by the floor rebalance.
-    throw new Error("the default-artifact floor extension's assertions are never archived by uninstall");
-  }
   const filter = scopeOrgFilter(op.scope);
   let cursor =
     op.checkpoint != null &&
@@ -230,11 +223,11 @@ export function runArtifactUninstallArchival(input: {
             artifactId,
             extension: op.extensionPackage,
           }),
-          // Floor tail: the uninstalled extension's identity is gone, so the
-          // rebalance re-asserts the default when nothing eligible remains.
-          // 'user' is a placeholder rank source for the floor INSERT's
-          // asserted_by (the floor row is system-owned either way).
-          ...buildFloorRebalanceAndRefreshQueries(orgId, artifactId, "user"),
+          // Graphiti-refresh tail: the uninstalled extension's identity is
+          // gone, so bump the objects version + enqueue a projection refresh
+          // so the graph reflects the artifact's new (possibly no-primary)
+          // identity.
+          ...buildGraphitiRefreshQueries(orgId, artifactId),
         ],
         true,
       );
@@ -515,11 +508,6 @@ export function replayArtifactUninstallOperation(input: {
         skipped += 1;
         continue;
       }
-      if (isDefaultArtifactType(extension)) {
-        // Defensive: the floor is owned by the rebalance, never replayed.
-        skipped += 1;
-        continue;
-      }
       const results = run(
         [
           { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [artifactId] },
@@ -531,7 +519,7 @@ export function replayArtifactUninstallOperation(input: {
             assertedByPrincipal:
               row.asserted_by_principal == null ? null : String(row.asserted_by_principal),
           }),
-          ...buildFloorRebalanceAndRefreshQueries(orgId, artifactId, "user"),
+          ...buildGraphitiRefreshQueries(orgId, artifactId),
         ],
         true,
       );

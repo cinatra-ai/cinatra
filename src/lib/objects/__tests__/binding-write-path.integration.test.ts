@@ -33,10 +33,7 @@ import {
   reconcileArtifactBindingForWrite,
   readActiveBinding,
 } from "@/lib/objects/binding-write-path";
-import {
-  buildAssertSemanticTypeQueries,
-  buildFloorRebalanceAndRefreshQueries,
-} from "@/lib/artifacts/semantic-assertion-store";
+import { buildAssertSemanticTypeQueries } from "@/lib/artifacts/semantic-assertion-store";
 import {
   processBindingReconcileQueue,
   reconcileTypeBindings,
@@ -197,46 +194,6 @@ describe("cinatra#1429 — binding write path (real DB)", () => {
     expect(again.inserted).toBe(0);
     expect(again.archived).toBe(0);
     expect(activeBindingCount(orgId, artifactId)).toBe(1);
-  });
-
-  it("floor scoping: the floor rebalance adds a default to a GENERIC artifact row but NOT to a typed row", () => {
-    const orgId = nextId("org");
-    // Re-qualify the real builder's SQL to the isolated test schema (vitest can
-    // give semantic-assertion-store a separately-evaluated schema binding; this
-    // still exercises the EXACT builder output against real DDL).
-    const reQualify = (t: string) =>
-      t.replace(/"[a-z_0-9]+"\.("semantic_assertion"|"objects"|"graphiti_projection_outbox"|"artifact_type_claims")/g, (_m, tbl) => `"${S()}".${tbl}`);
-    const runFloor = (artifactId: string) =>
-      runPostgresQueriesSync({
-        connectionString: getPostgresConnectionString(),
-        transaction: true,
-        queries: [
-          { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [artifactId] },
-          ...buildFloorRebalanceAndRefreshQueries(orgId, artifactId, "agent").map((qy) => ({
-            text: reQualify(qy.text),
-            values: qy.values,
-          })),
-        ],
-      });
-
-    // Generic artifact row → floor default IS inserted (unchanged behavior).
-    const generic = nextId("obj");
-    seedObject({ id: generic, type: "@cinatra-ai/artifact:object", orgId });
-    runFloor(generic);
-    expect(floorAssertionCount(orgId, generic)).toBe(1);
-
-    // Dedicated-claimed typed row → floor default is NEVER inserted.
-    const typedId = nextId("obj");
-    const type = `@vendor/${nextId("pkg")}:thing`;
-    seedObject({ id: typedId, type, orgId });
-    seedDedicatedClaim({ scope: `org:${orgId}`, type, pkg: "@vendor/y-artifact" });
-    runFloor(typedId);
-    expect(floorAssertionCount(orgId, typedId)).toBe(0);
-    reconcileArtifactBinding({ orgId, artifactId: typedId });
-    // Re-running the floor after a binding lands still adds nothing.
-    runFloor(typedId);
-    expect(floorAssertionCount(orgId, typedId)).toBe(0);
-    expect(activeBindingCount(orgId, typedId)).toBe(1);
   });
 
   it("AC-1: sa_one_active_binding_idx rejects a second active binding (≤1 under any race)", () => {

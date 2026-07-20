@@ -2,7 +2,6 @@ import "server-only";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import { addEpisode, deleteEpisode, identityHashToUuid } from "./graphiti-client";
-import { DEFAULT_ARTIFACT_EXTENSION } from "./generated/artifact-floor";
 import { objectSyncAdapterRegistry } from "./sync-adapters/registry";
 import type { ObjectSyncAdapter, StoredObject } from "./sync-adapters/adapter";
 import { claimedTypeRegisteringPackage } from "./claims";
@@ -988,11 +987,9 @@ ORDER BY asserted_at, extension`,
   });
   type Row = { extension: string; asserted_by: string; asserted_at: string };
   const rows = (res?.rows ?? []) as Row[];
-  const DEFAULT_EXT = DEFAULT_ARTIFACT_EXTENSION;
   const eligibleExtensions = rows.map((r) => String(r.extension));
-  const nonDefault = rows.filter((r) => r.extension !== DEFAULT_EXT);
-  if (nonDefault.length === 0) {
-    // No non-floor eligible assertion ⇒ no primary extension (epic #1785 — the
+  if (rows.length === 0) {
+    // No eligible assertion ⇒ no primary extension (epic #1785 — the
     // default-artifact floor is retired as an identity).
     return {
       eligibleExtensions,
@@ -1001,7 +998,7 @@ ORDER BY asserted_at, extension`,
   }
   const rank = (src: string): number =>
     src === "user" ? 3 : src === "authoring_skill" ? 2 : src === "agent" ? 1 : 0;
-  nonDefault.sort((a, b) => {
+  const sorted = [...rows].sort((a, b) => {
     const r = rank(b.asserted_by) - rank(a.asserted_by);
     if (r !== 0) return r;
     if (a.asserted_at !== b.asserted_at) {
@@ -1011,6 +1008,6 @@ ORDER BY asserted_at, extension`,
   });
   return {
     eligibleExtensions,
-    primaryExtension: String(nonDefault[0]!.extension),
+    primaryExtension: String(sorted[0]!.extension),
   };
 }

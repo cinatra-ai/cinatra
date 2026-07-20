@@ -140,33 +140,10 @@ export const semanticProducesSchema: z.ZodType<SemanticArtifactRef[]> = z.array(
     .strict(),
 );
 
-// ---------------------------------------------------------------------------
-// Built-in FLOOR semantic artifact type.
-//
-// FLOOR INVARIANT (enforced atomically by the assertion service + DB guards,
-// under an artifact-scoped advisory lock): an artifact carries a
-// `default-artifact` **eligible** assertion **iff it has NO non-default
-// eligible assertion**. Creation always writes a default-eligible assertion
-// (asserted_by = the creating source, NEVER `matcher`); a matcher adds a
-// non-default `draft`; confirming a draft INSERTs a new non-default eligible
-// assertion + archives the draft + archives the default; archiving the last
-// non-default eligible re-asserts the default. Every artifact ALWAYS has
-// >=1 eligible semantic type; never co-asserted with a confident non-default
-// eligible. It is the FLOOR, not a parallel match.
-//
-// The floor type's package NAME comes from the generated manifest data —
-// the single "artifact-default-floor" role claimant, validated at
-// generation (exactly one claimant; must be a cinatra.systemExtensions
-// member) — so core source never names the concrete extension
-// (cinatra#151 Stage 6).
-// ---------------------------------------------------------------------------
-export { DEFAULT_ARTIFACT_EXTENSION } from "./generated/artifact-floor";
-import { DEFAULT_ARTIFACT_EXTENSION } from "./generated/artifact-floor";
-
-/** True iff `extension` is the built-in floor semantic artifact type. */
-export function isDefaultArtifactType(extension: string | null | undefined): boolean {
-  return extension === DEFAULT_ARTIFACT_EXTENSION;
-}
+// The built-in default-artifact FLOOR semantic type was retired in epic #1785
+// (A5): identity is a pure function of the object type via the
+// effective-identity resolver, so there is no floor sentinel extension and no
+// `isDefaultArtifactType` predicate anymore.
 
 /**
  * Substrate-rejecting parser. Returns the manifest or a flat error list.

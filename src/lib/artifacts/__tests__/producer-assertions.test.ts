@@ -115,7 +115,7 @@ describe("resolveProducerAssertionPlan", () => {
     expect(getAgentPackageMock).not.toHaveBeenCalled();
   });
 
-  it("same-org run → resolves package, extracts produces, de-dupes + drops default-floor", async () => {
+  it("same-org run → resolves package, extracts produces, de-dupes", async () => {
     stageRunRow({
       org_id: "org-a",
       package_version: "2.3.1",
@@ -126,7 +126,6 @@ describe("resolveProducerAssertionPlan", () => {
     readProducesMock.mockReturnValue([
       { extension: "@cinatra-ai/marketing-icp-artifact" },
       { extension: "@cinatra-ai/marketing-icp-artifact" }, // dup
-      { extension: "@cinatra-ai/default-artifact" }, // floor — must drop
       { extension: "@vendor/brand-voice-artifact" },
     ]);
     const plan = await resolveProducerAssertionPlan({
