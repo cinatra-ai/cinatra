@@ -77,11 +77,19 @@ export const DEFAULT_AGENT_AUTH_POLICY: AgentAuthPolicy = Object.freeze({
 }) as unknown as AgentAuthPolicy;
 
 // ---------------------------------------------------------------------------
-// Visibility token schema — widened to a union with UUID validation on the
-// team:/project: prefix tails.
+// Visibility token schema — a union with ONE bounded-opaque id grammar on the
+// org:/team:/project: prefix tails (cinatra#1907, owner-ratified spec).
 // ---------------------------------------------------------------------------
 
-const UUID_TAIL = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Live entity ids come in at least three shapes — canonical UUIDs, legacy
+// 32-char base62 better-auth ids, and the supported seed namespace
+// (`org-*`/`team-*`/`proj-*`) — so tail validation is format-AGNOSTIC:
+// authorization and SQL parameterization are the security boundary, not id
+// shape. The grammar stays anchored and bounded (URL-safe charset, 1–64
+// chars): whitespace, colons, slashes, quotes and control/bidi characters
+// never validate. Policy home: src/lib/id-policy.ts (not importable from
+// packages/*, hence stated here too).
+const SCOPE_ID_TAIL = /^[A-Za-z0-9_-]{1,64}$/;
 
 // The runtime union (literals + refined strings) infers as `string` in zod —
 // we narrow the schema's output type to AgentAuthPolicyVisibility via an
@@ -100,20 +108,20 @@ export const AgentAuthPolicyVisibilitySchema: z.ZodType<AgentAuthPolicyVisibilit
   z
     .string()
     .regex(/^org:/)
-    .refine((s) => UUID_TAIL.test(s.slice("org:".length)), {
-      message: "org:<id> tail must be a UUID",
+    .refine((s) => SCOPE_ID_TAIL.test(s.slice("org:".length)), {
+      message: "org:<id> tail must be an organization id",
     }) as unknown as z.ZodType<`org:${string}`>,
   z
     .string()
     .regex(/^team:/)
-    .refine((s) => UUID_TAIL.test(s.slice("team:".length)), {
-      message: "team:<id> tail must be a UUID",
+    .refine((s) => SCOPE_ID_TAIL.test(s.slice("team:".length)), {
+      message: "team:<id> tail must be a team id",
     }) as unknown as z.ZodType<`team:${string}`>,
   z
     .string()
     .regex(/^project:/)
-    .refine((s) => UUID_TAIL.test(s.slice("project:".length)), {
-      message: "project:<id> tail must be a UUID",
+    .refine((s) => SCOPE_ID_TAIL.test(s.slice("project:".length)), {
+      message: "project:<id> tail must be a project id",
     }) as unknown as z.ZodType<`project:${string}`>,
 ]);
 

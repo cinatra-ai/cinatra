@@ -137,7 +137,8 @@ export type { ActorRoleHints };
 /**
  * Resource reference used by requireResourceAccess.
  * `level` mirrors SkillLevel from @cinatra-ai/skills.
- * `ownerId` is the team UUID / project UUID / user UUID depending on level.
+ * `ownerId` is the team id / project id / user id depending on level
+ * (id format varies by creation path — see src/lib/id-policy.ts, #1907).
  */
 export type SkillResourceRef = {
   resourceType: "skill" | "registry";

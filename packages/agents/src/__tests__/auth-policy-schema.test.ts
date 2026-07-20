@@ -1,9 +1,12 @@
 // Tests for the widened AgentAuthPolicySchema.
 //
 // These tests assert that `AgentAuthPolicySchema` accepts the legacy visibility
-// literals plus "workspace", `team:<uuid>`, and `project:<uuid>`. UUID-prefixed
-// values must accept valid UUID tails and reject non-UUID tails; the tests assert
-// the outcome, not a specific implementation.
+// literals plus "workspace" and the `org:`/`team:`/`project:` prefixed tokens.
+// Tails follow ONE bounded-opaque grammar (cinatra#1907, owner-ratified):
+// 1–64 URL-safe chars ([A-Za-z0-9_-]) — format-agnostic across UUIDs, legacy
+// 32-char better-auth ids, and the seeded `org-*`/`team-*`/`proj-*` namespace —
+// while whitespace, colons, slashes and control characters never validate. The
+// tests assert the outcome, not a specific implementation.
 
 import { describe, it, expect } from "vitest";
 import {
@@ -64,9 +67,9 @@ describe("AgentAuthPolicySchema visibility widening", () => {
       expect(result.success).toBe(false);
     });
 
-    it("rejects non-uuid tail \"team:not-a-uuid\"", () => {
+    it("accepts an opaque non-uuid tail \"team:not-a-uuid\" (DELIBERATE, #1907 grammar)", () => {
       const result = AgentAuthPolicySchema.safeParse(policy("team:not-a-uuid"));
-      expect(result.success).toBe(false);
+      expect(result.success).toBe(true);
     });
 
     it("rejects symbol-bearing tail \"team:abc!\"", () => {
@@ -89,6 +92,47 @@ describe("AgentAuthPolicySchema visibility widening", () => {
     it("rejects non-uuid tail \"project:abc!\"", () => {
       const result = AgentAuthPolicySchema.safeParse(policy("project:abc!"));
       expect(result.success).toBe(false);
+    });
+  });
+
+  // cinatra#1907 (owner-ratified): tails are format-agnostic behind one
+  // bounded URL-safe grammar. Live id shapes that must all validate: UUIDs,
+  // legacy 32-char base62 better-auth ids (real rejected ids from the issue),
+  // and the supported seed namespace the permissions picker offers.
+  describe("bounded-opaque tails (#1907 grammar)", () => {
+    const LEGACY_ORG_ID = "Ul5HrhxiVFOBJmghOIUWjptssxRMaRXs";
+    const LEGACY_TEAM_ID = "bgEWkNFcoODy5NtsIxvPaM1F0lww7GSR";
+
+    it("accepts legacy better-auth ids on all three prefixes", () => {
+      expect(AgentAuthPolicySchema.safeParse(policy(`org:${LEGACY_ORG_ID}`)).success).toBe(true);
+      expect(AgentAuthPolicySchema.safeParse(policy(`team:${LEGACY_TEAM_ID}`)).success).toBe(true);
+      expect(AgentAuthPolicySchema.safeParse(policy(`project:${LEGACY_ORG_ID}`)).success).toBe(true);
+    });
+
+    it("accepts the seeded id namespace (proj-*/org-*/team-*)", () => {
+      expect(AgentAuthPolicySchema.safeParse(policy("project:proj-cinatra-discovery")).success).toBe(true);
+      expect(AgentAuthPolicySchema.safeParse(policy("org:org-acme-robotics")).success).toBe(true);
+      expect(AgentAuthPolicySchema.safeParse(policy("team:team-mobility-1")).success).toBe(true);
+    });
+
+    it("accepts underscores (URL-safe charset)", () => {
+      expect(AgentAuthPolicySchema.safeParse(policy("team:some_team_id")).success).toBe(true);
+    });
+
+    it("boundary lengths: rejects 0, accepts 1 and 64, rejects 65", () => {
+      expect(AgentAuthPolicySchema.safeParse(policy("org:")).success).toBe(false);
+      expect(AgentAuthPolicySchema.safeParse(policy("org:a")).success).toBe(true);
+      expect(AgentAuthPolicySchema.safeParse(policy(`org:${"a".repeat(64)}`)).success).toBe(true);
+      expect(AgentAuthPolicySchema.safeParse(policy(`org:${"a".repeat(65)}`)).success).toBe(false);
+    });
+
+    it("rejects whitespace, colon, slash, quote, and control/bidi characters", () => {
+      for (const tail of ["a b", "a:b", "a/b", 'a"b', "a\u00a0b", "a\u202eb", " a", "a\ttab"]) {
+        expect(
+          AgentAuthPolicySchema.safeParse(policy(`team:${tail}`)).success,
+          JSON.stringify(tail),
+        ).toBe(false);
+      }
     });
   });
 

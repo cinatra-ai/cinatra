@@ -21,6 +21,7 @@ import {
 import { ensureBetterAuthMembershipRow } from "@/lib/better-auth-membership-bootstrap";
 import { ensureDefaultOrganizationRow } from "@/lib/default-organization-bootstrap";
 import { isInitialAdminBootstrapEligible } from "@/lib/initial-admin-bootstrap-policy";
+import { entityId } from "@/lib/id-policy";
 import {
   ensureBuiltInCinatraAssistantAgent,
   ensureBuiltInWordpressAssistantAgent,
@@ -301,6 +302,24 @@ export const auth = betterAuth({
   secret: authSecret,
   trustedOrigins: getDynamicTrustedOrigins,
   database: betterAuthPool,
+  advanced: {
+    database: {
+      // One entity-id format app-wide (cinatra#1907, owner-ratified spec):
+      // without this override better-auth mints 32-char base62 ids while the
+      // app's own mint paths use UUIDs, leaving interleaved shapes that
+      // UUID-gated validators reject (an agent could not be visibility-scoped
+      // to a better-auth-minted org/team at all). New rows converge on UUID
+      // via the single entityId() helper; existing legacy rows stay valid —
+      // see src/lib/id-policy.ts. Session TOKENS are generated separately by
+      // better-auth; this only shapes row ids. Do NOT switch to the "uuid"
+      // sentinel value: on the PostgreSQL adapter it stops generating ids in
+      // JS and expects gen_random_uuid() column defaults our text columns do
+      // not have. NOTE: a custom generateId flips better-auth's invitation
+      // verification default — pinned off in buildCinatraOrganizationPlugin
+      // (requireEmailVerificationOnInvitation, src/lib/better-auth-plugins.ts).
+      generateId: () => entityId(),
+    },
+  },
   user: {
     changeEmail: {
       // Enabled now that the platform mailer is wired (sendPlatformEmail

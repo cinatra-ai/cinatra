@@ -10,8 +10,8 @@
 //
 //   "owner"         → level="personal",      scope=userId
 //   "org"           → level="organization",  scope="org"
-//   "team:<uuid>"   → level="team",          scope=<uuid>  (stubbed — no live rows yet)
-//   "project:<uuid>"→ level="project",       scope=<uuid>
+//   "team:<id>"     → level="team",          scope=<id>  (stubbed — no live rows yet)
+//   "project:<id>"  → level="project",       scope=<id>
 //   "workspace"     → level="workspace",     scope=undefined
 //   "admin"         → level="system",        scope=undefined
 //

@@ -106,6 +106,18 @@ export type CinatraOrganizationPluginOptions = {
   sendInvitationEmail?: NonNullable<
     Parameters<typeof organization>[0]
   >["sendInvitationEmail"];
+  /**
+   * Invitation verification pin (cinatra#1907). BEHAVIORAL, not
+   * schema-bearing. A custom `advanced.database.generateId` (the entity-id
+   * override in src/lib/auth.ts) flips Better Auth's invitation
+   * accept/reject/get default to verified-email-only — but this app
+   * deliberately permits `emailVerified=false` accounts. Defaulted to `false`
+   * below via `??` (NEVER a truthiness-conditional spread: the value is falsy
+   * and would be silently dropped) so current invitation behavior is
+   * preserved exactly. Tightening invitation policy is a separate product
+   * decision, not a side effect of the id-format change.
+   */
+  requireEmailVerificationOnInvitation?: boolean;
 };
 
 /**
@@ -141,6 +153,8 @@ export function buildCinatraOrganizationPlugin(
     ...(opts.sendInvitationEmail
       ? { sendInvitationEmail: opts.sendInvitationEmail }
       : {}),
+    requireEmailVerificationOnInvitation:
+      opts.requireEmailVerificationOnInvitation ?? false,
   });
 }
 
