@@ -4,7 +4,7 @@
 // `assistant-thread-schema.ts`).
 //
 // Two NET-NEW tables (additive), so the fresh-install shape is born here and the
-// twin migration `core__0061` carries the SAME creates + seed onto the operator
+// twin migration `core__0063` carries the SAME creates + seed onto the operator
 // upgrade path (AC#3: fresh-install AND upgrade produce identical schema):
 //
 //   assistant_audience   — install-time audience grants. Rows

@@ -846,8 +846,8 @@ END $$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."chat_threads" ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now()` },
     { text: `CREATE INDEX IF NOT EXISTS chat_threads_project_created_idx ON "${schemaName.replaceAll('"', '""')}"."chat_threads" (project_id, created_at DESC, id) WHERE project_id IS NOT NULL` },
     ...assistantThreadSchemaQueries(schemaName), // structured assistant threads + turns (cinatra#1037 P2a), additive
-    ...assistantHandleSchemaQueries(schemaName), // assistant handle registry (cinatra#1037 P1.2/P5.1) + origin/package_name (#1874 W1), additive — mirrors core__0046/0061
-    ...assistantRegistrySchemaQueries(schemaName), // assistant audience + tag-alias registry (cinatra#1874 W1), additive — mirrors core__0061
+    ...assistantHandleSchemaQueries(schemaName), // assistant handle registry (cinatra#1037 P1.2/P5.1) + origin/package_name (#1874 W1), additive — mirrors core__0046/0063
+    ...assistantRegistrySchemaQueries(schemaName), // assistant audience + tag-alias registry (cinatra#1874 W1), additive — mirrors core__0063
     // usage_events table for @cinatra-ai/metric-cost-api
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."usage_events" (
       id text PRIMARY KEY,
@@ -2739,7 +2739,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."installed_extension" ADD COLUMN IF NOT EXISTS access_declaration jsonb` },
     // The validated assistant DECLARATION, stamped at the late install seam for
     // an assistant (agent-kind) package (cinatra#1874 W1); NULL for every other
-    // kind. Additive → bootstrap ADD COLUMN + twin migration core__0061.
+    // kind. Additive → bootstrap ADD COLUMN + twin migration core__0063.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."installed_extension" ADD COLUMN IF NOT EXISTS assistant_declaration jsonb` },
     // Identity is (organization_id, owner_level, owner_id, package_name, VERSION).
     // organization_id may be NULL for platform-wide rows (sentinel '__platform__'

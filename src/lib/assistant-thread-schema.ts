@@ -138,7 +138,7 @@ export function assistantHandleSchemaQueries(schemaName: string): { text: string
     )` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS assistant_handles_handle_key ON "${s}"."assistant_handles" (handle)` },
     // cinatra#1874 W1: origin ('extension'|'standalone') + package_name — added
-    // idempotently so an operator DB predating core__0061 converges to the same
+    // idempotently so an operator DB predating core__0063 converges to the same
     // shape (fresh installs are born with them via the CREATE above). The
     // twin migration carries the join-based backfill; the bootstrap defaults
     // fresh/unbackfilled rows to 'standalone'.
