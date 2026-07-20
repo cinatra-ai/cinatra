@@ -1,4 +1,4 @@
-// core__0061 — partial expression indexes on the email correlation keys in the
+// core__0062 — partial expression indexes on the email correlation keys in the
 // objects.data JSONB column (cinatra#1456): objects_data_thread_idx,
 // objects_data_campaign_idx, objects_data_contact_idx.
 //
