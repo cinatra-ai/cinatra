@@ -162,6 +162,56 @@ describe("deriveRunOboCeilingJson — child-run composition (W5)", () => {
     expect(json).toBeNull();
   });
 
+  it("child dispatch: MIXED owner tiers with NO verified containment (child user u1, parent team t1) → THROWS, no run", async () => {
+    // The mixed-axis gap (#1884 C4): a user-anchored child under a team-anchored
+    // parent has no single-owner-row satisfiable chain absent a verified relation.
+    queryState.rows = [{ ownerLevel: "user", ownerId: "u1" }];
+    const parent: OboCeilingChain = [
+      { tier: "team", id: "t1" },
+      { tier: "organization", id: ORG },
+    ];
+    await expect(
+      deriveRunOboCeilingJson({
+        templateId: "tmpl-child",
+        orgId: ORG,
+        projectId: null,
+        parentOboCeiling: parent,
+      }),
+    ).rejects.toMatchObject({
+      code: "AGENT_OBO_CEILING_DISJOINT",
+      denial: { reason: "unverified_owner_containment" },
+    });
+  });
+
+  it("child dispatch: MIXED owner tiers WITH a verified containment fact → satisfiable collapsed chain persisted", async () => {
+    // The acceptance case: given the dispatch-verified membership fact (u1 ∈ t1),
+    // the owner axis collapses to the narrower user tier and a satisfiable chain
+    // (user u1 + org) is persisted — the previously-denied composition now writes.
+    queryState.rows = [{ ownerLevel: "user", ownerId: "u1" }];
+    const parent: OboCeilingChain = [
+      { tier: "team", id: "t1" },
+      { tier: "organization", id: ORG },
+    ];
+    const json = await deriveRunOboCeilingJson({
+      templateId: "tmpl-child",
+      orgId: ORG,
+      projectId: null,
+      parentOboCeiling: parent,
+      ownerContainments: [
+        { narrower: { tier: "user", id: "u1" }, wider: { tier: "team", id: "t1" } },
+      ],
+    });
+    const chain = parse(json)!;
+    expect(chain).toEqual(
+      expect.arrayContaining([
+        { tier: "user", id: "u1" },
+        { tier: "organization", id: ORG },
+      ]),
+    );
+    expect(chain).toHaveLength(2);
+    expect(chain.some((c) => c.tier === "team")).toBe(false);
+  });
+
   it("child dispatch with an explicit project launch composes project + parent chain", async () => {
     queryState.rows = [{ ownerLevel: "user", ownerId: "u1" }];
     const parent: OboCeilingChain = [

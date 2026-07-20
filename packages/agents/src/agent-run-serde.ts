@@ -19,6 +19,7 @@ import {
   composeOboCeilingChain,
   OboCeilingCompositionError,
   type OboCeilingChain,
+  type OboOwnerContainment,
 } from "@cinatra-ai/mcp-server/obo-ceiling";
 import { db } from "./db";
 import { agentTemplates, agentRuns } from "./schema";
@@ -122,23 +123,33 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
 // with a missing id); the run then fails closed at mint. A null / null (pre-
 // backfill) anchor derives the organization floor — NOT the fail-closed case.
 //
-// Child-run composition (epic W5): when the caller supplies `parentOboCeiling`
-// (a genuine child dispatch — the parent RUN's persisted chain, read from the
-// dispatching run's actor frame), the child's OWN anchor is STILL freshly
-// derived here — never copied — and the parent chain is folded in on top via the
-// shared `composeOboCeilingChain` primitive (satisfy-all → never wider than the
-// parent; transitive across grandchildren). A provably-disjoint composition
-// (same-axis id conflict or cross-org) THROWS `OboCeilingCompositionError` so the
-// dispatch fails closed and no child run is inserted. Top-level and recurring-
-// clone paths pass no parent chain and derive the un-composed child anchor,
-// which is exactly the copy-trap-safe behavior (the clone re-derives, never
-// carries a stale chain).
+// Child-run composition (epic W5 / #1884 C4): when the caller supplies
+// `parentOboCeiling` (a genuine child dispatch — the parent RUN's persisted
+// chain, read from the dispatching run's actor frame), the child's OWN anchor is
+// STILL freshly derived here — never copied — and the parent chain is folded in
+// on top via the shared `composeOboCeilingChain` primitive (satisfy-all → never
+// wider than the parent; transitive across grandchildren). A non-satisfiable
+// composition — a same-axis id conflict, cross-org, OR a mixed owner-tier chain
+// with no verified containment relation — THROWS `OboCeilingCompositionError` so
+// the dispatch fails closed and no child run is inserted (a STRUCTURED error, not
+// a silently-unsatisfiable persisted chain).
+//
+// `ownerContainments` carries the VERIFIED owner-axis containment facts (a
+// narrower `user` is a member of the wider `team`, etc.) that let a legitimate
+// mixed-owner-tier child collapse to its satisfiable narrowest tier. The
+// anchor-derivation seam (#1884 C1) resolves live membership and supplies them;
+// until then the dispatch seams pass none, so mixed-owner-tier child dispatches
+// fail closed (safe). Top-level and recurring-clone paths pass no parent chain
+// and derive the un-composed child anchor — the copy-trap-safe behavior (the
+// clone re-derives, never carries a stale chain).
 // ---------------------------------------------------------------------------
 export async function deriveRunOboCeilingJson(input: {
   templateId: string;
   orgId: string;
   projectId: string | null | undefined;
   parentOboCeiling?: OboCeilingChain | null;
+  /** Verified owner-axis containment facts (#1884 C1 wiring; default none). */
+  ownerContainments?: OboOwnerContainment[];
 }): Promise<string | null> {
   const [tmpl] = await db
     .select({
@@ -160,7 +171,11 @@ export async function deriveRunOboCeilingJson(input: {
   // Genuine child dispatch → fold the parent chain in on top of the freshly
   // derived child anchor (never copy the parent as the child's own anchor).
   if (input.parentOboCeiling && input.parentOboCeiling.length > 0) {
-    const composed = composeOboCeilingChain(input.parentOboCeiling, childChain);
+    const composed = composeOboCeilingChain(
+      input.parentOboCeiling,
+      childChain,
+      input.ownerContainments ?? [],
+    );
     if (!composed.ok) throw new OboCeilingCompositionError(composed);
     return JSON.stringify(composed.chain);
   }
