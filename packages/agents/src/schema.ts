@@ -498,6 +498,42 @@ export const agentRunHitlPrompts = cinatraSchema.table("agent_run_hitl_prompts",
 }));
 
 // ---------------------------------------------------------------------------
+// agent_run_test_sends — durable per-action idempotency + crash ledger for the
+// run-scoped test-delivery send primitive (eng#548 #1625, DESIGN-V3 contract (4)).
+//
+// One row per gate-submission send action. The dedupe identity is
+// (run_id, submission_id) where submission_id is the trusted per-resume WayFlow
+// task id (a transport retry of the SAME resume reuses the row; a genuine second
+// send is a NEW gate re-entry ⇒ new task ⇒ new submission_id ⇒ new row). `seq` is
+// the monotonic-per-run ordinal parse_action reads for the maxGateVisits halt
+// guard. `selected_draft_ids` pins the phase-1 plan BEFORE any outbound send so a
+// crash between claim and update reconciles against a durable expected batch
+// (never rerandomized). NO FK-outliving churn concern here — the run FK cascades.
+// ---------------------------------------------------------------------------
+
+export const agentRunTestSends = cinatraSchema.table("agent_run_test_sends", {
+  id:              text("id").primaryKey(),
+  runId:           text("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  submissionId:    text("submission_id").notNull(),
+  seq:             integer("seq").notNull(),
+  // 'sending' (claimed, outbound in flight) | 'sent' | 'failed'
+  status:          text("status").notNull().default("sending"),
+  recipientEmail:  text("recipient_email"),
+  // The pinned concrete draft-id set resolved at phase-1 (random_initial resolved
+  // ONCE) — the authoritative expected batch for crash reconciliation.
+  selectedDraftIds: jsonb("selected_draft_ids").$type<string[]>().notNull(),
+  // The typed discriminated send result ({ok,...}); null while 'sending'.
+  resultJson:      jsonb("result_json").$type<Record<string, unknown> | null>(),
+  claimedAt:       timestamp("claimed_at", { withTimezone: true }).notNull().defaultNow(),
+  leaseExpiresAt:  timestamp("lease_expires_at", { withTimezone: true }).notNull(),
+  createdAt:       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  runSubmissionUniq: uniqueIndex("agent_run_test_sends_run_id_submission_id_uniq").on(t.runId, t.submissionId),
+  runIdIdx:          index("agent_run_test_sends_run_id_idx").on(t.runId),
+}));
+
+// ---------------------------------------------------------------------------
 // agent_registry_entries — published registry entries for team sharing
 // ---------------------------------------------------------------------------
 
