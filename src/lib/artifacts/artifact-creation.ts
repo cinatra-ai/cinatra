@@ -233,13 +233,24 @@ export class ResourceOrphanedError extends Error {
 export class ObjectsTypeNotRegisteredError extends Error {
   readonly code = "OBJECTS_TYPE_NOT_REGISTERED" as const;
   readonly retryable = false;
+  /**
+   * For an UPLOAD refusal (createUploadedArtifact), the structured reason the
+   * MIME could not be typed — `no_mime` | `no_type` | `ambiguous` (cinatra#1890,
+   * A2). The upload route's refusal-advisory channel branches on this instead of
+   * parsing the message: only `no_type` (a real MIME no installed type accepts)
+   * earns the "install a type that accepts this" marketplace deep-link advisory.
+   * Absent for non-upload type refusals (a direct createSemanticArtifact write).
+   */
+  readonly uploadRefusal?: { kind: "no_mime" | "no_type" | "ambiguous"; normalizedMime: string };
   constructor(
     readonly attemptedType: string | null,
     message: string,
     readonly suggestedExtension?: string,
+    uploadRefusal?: { kind: "no_mime" | "no_type" | "ambiguous"; normalizedMime: string },
   ) {
     super(message);
     this.name = "ObjectsTypeNotRegisteredError";
+    this.uploadRefusal = uploadRefusal;
   }
 }
 

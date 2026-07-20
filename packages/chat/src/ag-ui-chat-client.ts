@@ -627,10 +627,56 @@ export async function fetchThreadById(threadId: string): Promise<UiThread | null
 // tracked file-size bottleneck at its ceiling).
 // ---------------------------------------------------------------------------
 
-/** Upload picked files to /api/artifacts/upload, returning enriched refs.
- *  Failures per file are swallowed (the user can retry the file). */
-export async function uploadChatAttachments(files: File[]): Promise<LlmAttachmentRef[]> {
+/** One upload that the server (or transport) refused, surfaced to the user
+ *  instead of being silently dropped (cinatra#1890 — the "chat silent-drop
+ *  failure"). A `415` refusal for an unsupported MIME carries `marketplaceHref`
+ *  (the "install a type that accepts this" recourse deep link). Other failures
+ *  (413 too large, 5xx, network) carry no link — nothing to install. */
+export type ChatAttachmentRefusal = {
+  filename: string;
+  /** The refused MIME, echoed by the server when known. */
+  mime?: string;
+  /** HTTP status (0 for a network/parse failure). */
+  status: number;
+  /** Human-readable reason for the refusal surface. */
+  message: string;
+  /** Marketplace deep link for the refused MIME — present only when installing
+   *  a type is the recourse (a `no_type` 415). */
+  marketplaceHref?: string;
+};
+
+export type UploadChatAttachmentsResult = {
+  /** Successfully uploaded, enriched attachment refs. */
+  refs: LlmAttachmentRef[];
+  /** Per-file refusals to surface in the thread. Empty on full success. */
+  refusals: ChatAttachmentRefusal[];
+};
+
+export type UploadChatAttachmentsOptions = {
+  /** The active chat thread id — sent as `X-Artifact-Chat-Thread-Id` so the
+   *  server's classifier-signals composer captures the conversation context.
+   *  Omitted (or absent thread) means no thread context is captured; the upload
+   *  still succeeds. */
+  threadId?: string;
+};
+
+/** Upload picked files to /api/artifacts/upload.
+ *
+ *  Sends `X-Artifact-Chat-Thread-Id` when a thread id is supplied so the
+ *  server captures chat context into the upload's classifier signals
+ *  (cinatra#1890). Returns BOTH the enriched refs AND per-file refusals — a
+ *  refused upload is no longer swallowed silently; the caller surfaces it with
+ *  recourse. */
+export async function uploadChatAttachments(
+  files: File[],
+  options: UploadChatAttachmentsOptions = {},
+): Promise<UploadChatAttachmentsResult> {
   const refs: LlmAttachmentRef[] = [];
+  const refusals: ChatAttachmentRefusal[] = [];
+  const threadId =
+    typeof options.threadId === "string" && options.threadId.length > 0
+      ? options.threadId
+      : undefined;
   for (const file of files) {
     try {
       const r = await fetch("/api/artifacts/upload", {
@@ -640,11 +686,19 @@ export async function uploadChatAttachments(files: File[]): Promise<LlmAttachmen
           "Content-Type": file.type || "application/octet-stream",
           "X-Artifact-Filename": file.name,
           "X-Artifact-Title": file.name,
+          // Opt-in chat-context signal — only when a thread id is known.
+          ...(threadId ? { "X-Artifact-Chat-Thread-Id": threadId } : {}),
         },
         body: file,
       });
       const j = (await r.json().catch(() => null)) as
-        | { ok?: boolean; ref?: LlmAttachmentRef }
+        | {
+            ok?: boolean;
+            ref?: LlmAttachmentRef;
+            error?: string;
+            mime?: string;
+            marketplaceHref?: string;
+          }
         | null;
       if (r.ok && j?.ok && j.ref) {
         // The server's ArtifactRef is the minimal {artifactId,
@@ -661,10 +715,65 @@ export async function uploadChatAttachments(files: File[]): Promise<LlmAttachmen
           title: file.name,
           size: file.size,
         });
+      } else {
+        // A refused/failed upload is SURFACED, not swallowed (cinatra#1890).
+        // A 415 WITH a marketplaceHref is the "no installed type accepts this"
+        // recourse case; a 415 WITHOUT one (e.g. an AMBIGUOUS refusal — multiple
+        // types accept it) must NOT claim no type accepts it, so the copy falls
+        // back to the server's reason / neutral wording.
+        refusals.push({
+          filename: file.name,
+          status: r.status,
+          mime: j?.mime ?? (file.type || undefined),
+          message: refusalMessageFor(
+            r.status,
+            file.name,
+            j?.error,
+            !!j?.marketplaceHref,
+          ),
+          ...(j?.marketplaceHref ? { marketplaceHref: j.marketplaceHref } : {}),
+        });
       }
     } catch {
-      // Network/parse failures are swallowed; the user can retry the file.
+      // Network/parse failures still surface a refusal so the user knows the
+      // file did not attach (no marketplace link — nothing to install).
+      refusals.push({
+        filename: file.name,
+        status: 0,
+        mime: file.type || undefined,
+        message: `"${file.name}" could not be uploaded (network error). Try again.`,
+      });
     }
   }
-  return refs;
+  return { refs, refusals };
+}
+
+/** Human-readable refusal copy per HTTP status. Keeps the transport module the
+ *  single source of the refusal wording so the UI stays presentation-only. */
+function refusalMessageFor(
+  status: number,
+  filename: string,
+  serverError?: string,
+  hasInstallRecourse = false,
+): string {
+  if (status === 415) {
+    // Only claim "no installed type accepts it" when installing a type is the
+    // actual recourse (the server offered a marketplace link). Otherwise
+    // (ambiguous / no-MIME) prefer the server reason or neutral copy.
+    if (hasInstallRecourse) {
+      return `"${filename}" can't be attached — no installed type accepts this file format.`;
+    }
+    return serverError
+      ? `"${filename}" can't be attached: ${serverError}`
+      : `"${filename}" can't be attached — this file type isn't supported here.`;
+  }
+  if (status === 413) {
+    return `"${filename}" is too large to attach.`;
+  }
+  if (status === 401 || status === 403) {
+    return `"${filename}" could not be attached — you are not authorized to upload here.`;
+  }
+  return serverError
+    ? `"${filename}" could not be attached: ${serverError}`
+    : `"${filename}" could not be attached. Try again.`;
 }

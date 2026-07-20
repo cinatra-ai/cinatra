@@ -27,7 +27,7 @@ import {
   type CreateSemanticArtifactInput,
   type CreateSemanticArtifactResult,
 } from "./artifact-creation";
-import { resolveUploadArtifactType } from "./upload-artifact-type-map";
+import { resolveUploadArtifactType, normalizeMime } from "./upload-artifact-type-map";
 import { tombstoneArtifact as retentionTombstone } from "./artifact-retention";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
 import { listArtifactIdsForExtension } from "./semantic-assertion-store";
@@ -284,9 +284,16 @@ export async function createUploadedArtifact(
   ensureArtifactRegistry();
   const resolution = resolveUploadArtifactType(input.declaredMime);
   if (!resolution.ok) {
+    // Carry the STRUCTURED refusal class (cinatra#1890) so the upload route's
+    // advisory channel branches on `kind` rather than parsing the message —
+    // only `no_type` (a real MIME no installed type accepts) earns the
+    // marketplace "install a type" recourse. `normalizedMime` is the exact MIME
+    // the resolver refused on, so the advisory + deep link key on the same value.
     throw new ObjectsTypeNotRegisteredError(
       null,
       `upload cannot be typed to a system-base artifact pack: ${resolution.reason}`,
+      undefined,
+      { kind: resolution.kind, normalizedMime: normalizeMime(input.declaredMime ?? "") },
     );
   }
   return createSemanticArtifact({ ...input, objectType: resolution.objectTypeId });

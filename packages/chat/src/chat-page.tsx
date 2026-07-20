@@ -79,7 +79,9 @@ import {
   driveAssistantChatTurn,
   ensureAssistantChatWireNegotiated,
   uploadChatAttachments,
+  type ChatAttachmentRefusal,
 } from "./ag-ui-chat-client";
+import { ChatAttachmentRefusalNotice } from "./chat-attachment-refusal-notice";
 import { SkillBadgeCloud } from "./skill-badge-cloud";
 import { selectChatBadges, chatEmptyStateCaption, isPinnedBadgePrefill, getGreeting, DEFAULT_GREETING } from "./chat-badges";
 import { fingerprintMessages, isRealActivity } from "./thread-activity";
@@ -158,11 +160,21 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   // Pending attachments uploaded via the PromptField paperclip; consumed +
   // cleared by the next sendMessage().
   const [pendingAttachments, setPendingAttachments] = useState<LlmAttachmentRef[]>([]);
+  // Refused uploads surfaced to the user (cinatra#1890) — a refused file is no
+  // longer swallowed silently; it renders as a dismissible notice with recourse.
+  const [attachmentRefusals, setAttachmentRefusals] = useState<ChatAttachmentRefusal[]>([]);
   const handleAttachmentsSelected = useCallback(async (files: File[]) => {
     // Upload-over-fetch lives in the client transport module (cinatra#1218).
-    const refs = await uploadChatAttachments(files);
+    // Pass the active thread id so the server captures chat context into the
+    // upload's classifier signals (cinatra#1890). The ref carries the CURRENT
+    // thread id (state would be stale in this []-dep callback).
+    const threadId = activeThreadIdRef.current ?? undefined;
+    const { refs, refusals } = await uploadChatAttachments(files, { threadId });
     if (refs.length > 0) {
       setPendingAttachments((prev) => [...prev, ...refs]);
+    }
+    if (refusals.length > 0) {
+      setAttachmentRefusals((prev) => [...prev, ...refusals]);
     }
   }, []);
   const { data: session } = authClient.useSession();
@@ -1122,6 +1134,10 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
               </div>
 
               <div className="w-full">
+                <ChatAttachmentRefusalNotice
+                  refusals={attachmentRefusals}
+                  onDismiss={() => setAttachmentRefusals([])}
+                />
                 <PromptField
                   ref={promptRef}
                   editorTestId="chat-prompt-input"
@@ -1211,6 +1227,10 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
         {/* Zero-height relative anchor — constrains input bar to max-w-3xl+px-4 exactly as messages content */}
         <div className="relative mx-auto w-full max-w-3xl px-4">
           <div className="absolute bottom-0 left-4 right-4 bg-background pb-3 pt-0">
+            <ChatAttachmentRefusalNotice
+              refusals={attachmentRefusals}
+              onDismiss={() => setAttachmentRefusals([])}
+            />
             <PromptField
               ref={promptRef}
               editorTestId="chat-prompt-input"
