@@ -3,42 +3,31 @@
  * Regression coverage for local-state value synchronization in custom field
  * renderers.
  *
- * Sweep three custom field renderers for the `useState`-only local-state bug
+ * Sweep the host custom field renderers for the `useState`-only local-state bug
  * fixed in `SchemaFieldRenderer`. Add `useEffect([value])`
  * sync wherever buffered local state holds a copy of the `value` prop and the
  * parent (HITL flow) can rewrite `value` mid-edit (AI suggestions, form.reset,
  * polling).
  *
- * RED STATE EXPECTATIONS (this commit):
- *   - Test 1 (SchemaFieldRenderer regression guard for value sync):
- *     PASSES — the canonical `useEffect([value])` sync is already in place at
- *     `schema-field-renderer.tsx` lines 73-88. Included here as a pinned
- *     regression guard so the value sync can never silently regress.
- *   - Test 2 (FollowUpCadenceFieldRenderer): FAILS — current code at line 63
- *     only re-seeds when `hideSubmit && !Array.isArray(value)`; passing a new
- *     array does not re-sync the `days` state.
- *   - Test 3a (EmailDraftsReviewRenderer content change): FAILS — there is no
- *     [value] sync today; the renderer reads `preloaded` only on mount.
- *   - Test 3b (EmailDraftsReviewRenderer POLL SAFETY): PASSES TRIVIALLY in RED
- *     because no sync exists — user typing is preserved by default. The test
- *     remains MUST-PASS in GREEN because the fingerprint guard is supposed to
- *     prevent the new sync from clobbering edits when the parent's poll cycle
- *     re-references `value` with the same content. This is the critical
- *     regression guard for the line-268 comment in
- *     `email-drafts-review-renderer.tsx`. A naive `useEffect([value])` (no
- *     fingerprint) would FAIL this test, signalling the bug.
- *   - Test 4 (SendConfirmationRenderer): FAILS — there is no [value] sync for
- *     `senderEmail` today; only `aiSuggestions` is observed.
+ * MIGRATION NOTE (cinatra#1625, eng#548): the FollowUpCadence component moved
+ * into @cinatra-ai/email-artifacts; its value-sync + poll-guard coverage moved
+ * with it (email-artifacts/src/__tests__/follow-up-cadence.test.tsx). This host
+ * suite keeps the renderers that remain host-owned: SchemaFieldRenderer,
+ * EmailDraftsReviewRenderer, and SendConfirmationRenderer.
  *
- * SELECT-SHIM NOTE for Test 4:
- *   `SendConfirmationRenderer` renders `GmailSenderFieldRenderer`, which uses
- *   a shadcn `Select` (button + span text, NOT a native `<input>`). In jsdom,
- *   `screen.queryByDisplayValue("…")` cannot find the value because there is
- *   no underlying input element. We therefore mock the child renderer as a
- *   simple controlled `<input data-testid="gmail-sender">` so display-value
- *   queries are deterministic across both RED and GREEN.
+ * INLINE-FALLBACK NOTE for Test 4:
+ *   `SendConfirmationRenderer` resolves its embedded sender field through the
+ *   field-renderer REGISTRY (the gmail-sender COMPONENT migrated into
+ *   @cinatra-ai/email-artifacts, cinatra#1625). With no gmail connected
+ *   (BASE_CONTEXT), the gmail-sender condition does NOT activate, so resolve()
+ *   returns null and SendConfirmation renders its OWN eager inline email
+ *   `<input id="field-senderEmail">` fallback — a native input `queryByDisplayValue`
+ *   can read, which commits every keystroke to senderEmail immediately (codex
+ *   2026-07-21: the buffering schema floor was rejected because a typed address
+ *   could be lost on approval). These tests exercise that eager path + the
+ *   SendConfirmation senderEmail sync.
  *
- *   pnpm --filter @cinatra/agent-builder exec vitest run \
+ *   pnpm --filter @cinatra/agents exec vitest run \
  *     src/__tests__/renderer-local-state.test.tsx
  */
 import React from "react";
@@ -80,26 +69,7 @@ vi.mock("../email-outreach-stage-actions", () => ({
   fetchCampaignRecipients: vi.fn(async () => ({ items: [], total: 0 })),
 }));
 
-// Replace GmailSenderFieldRenderer with a controlled <input> shim so tests can
-// assert sender email via queryByDisplayValue (the real one is a shadcn Select).
-vi.mock("../gmail-sender-renderer", () => ({
-  GmailSenderFieldRenderer: ({
-    value,
-    onChange,
-  }: {
-    value: unknown;
-    onChange: (v: string) => void;
-  }) =>
-    React.createElement("input", {
-      "data-testid": "gmail-sender",
-      value: typeof value === "string" ? value : "",
-      onChange: (e: React.ChangeEvent<HTMLInputElement>) =>
-        onChange(e.target.value),
-    }),
-}));
-
 import { SchemaFieldRenderer } from "../schema-field-renderer";
-import { FollowUpCadenceFieldRenderer } from "../follow-up-cadence-renderer";
 import { EmailDraftsReviewRenderer } from "../email-drafts-review-renderer";
 import { SendConfirmationRenderer } from "../send-confirmation-renderer";
 
@@ -144,75 +114,7 @@ describe("SchemaFieldRenderer value-sync regression guard", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 2 — FollowUpCadenceFieldRenderer
-// ---------------------------------------------------------------------------
-
-describe("FollowUpCadenceFieldRenderer value-sync", () => {
-  afterEach(() => {
-    cleanup();
-  });
-
-  it("syncs days local state when value prop changes externally from [3] to [7, 14]", () => {
-    const { rerender } = render(
-      <FollowUpCadenceFieldRenderer
-        fieldName="cadence"
-        schema={{ type: "array" }}
-        value={[3]}
-        onChange={() => {}}
-        context={BASE_CONTEXT}
-        label="Cadence"
-      />,
-    );
-    rerender(
-      <FollowUpCadenceFieldRenderer
-        fieldName="cadence"
-        schema={{ type: "array" }}
-        value={[7, 14]}
-        onChange={() => {}}
-        context={BASE_CONTEXT}
-        label="Cadence"
-      />,
-    );
-    // After the GREEN fix, the renderer reflects the new array.
-    expect(screen.queryByDisplayValue("7")).not.toBeNull();
-    expect(screen.queryByDisplayValue("14")).not.toBeNull();
-  });
-
-  it("does not re-fire onChange on a same-value rerender when hideSubmit=true", () => {
-    const onChange = vi.fn();
-    const { rerender } = render(
-      <FollowUpCadenceFieldRenderer
-        fieldName="cadence"
-        schema={{ type: "array" }}
-        value={[3, 7]}
-        onChange={onChange}
-        context={BASE_CONTEXT}
-        hideSubmit={true}
-        label="Cadence"
-      />,
-    );
-    const baselineCalls = onChange.mock.calls.length;
-    // Simulate a parent re-emitting the same value (which is what happens
-    // after a keystroke flushes onChange → parent setValue → re-render).
-    rerender(
-      <FollowUpCadenceFieldRenderer
-        fieldName="cadence"
-        schema={{ type: "array" }}
-        value={[3, 7]}
-        onChange={onChange}
-        context={BASE_CONTEXT}
-        hideSubmit={true}
-        label="Cadence"
-      />,
-    );
-    // The structural-equality guard means setDays is NOT called → no
-    // re-render → no extra onChange.
-    expect(onChange.mock.calls.length).toBe(baselineCalls);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Test 3a / 3b — EmailDraftsReviewRenderer
+// Test 3a / 3b / 3c — EmailDraftsReviewRenderer
 // ---------------------------------------------------------------------------
 
 describe("EmailDraftsReviewRenderer value-sync", () => {
@@ -319,7 +221,7 @@ describe("EmailDraftsReviewRenderer value-sync", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 4 — SendConfirmationRenderer (with mocked GmailSenderFieldRenderer)
+// Test 4 — SendConfirmationRenderer (registry-resolved sender via input shim)
 // ---------------------------------------------------------------------------
 
 describe("SendConfirmationRenderer value-sync", () => {
@@ -327,7 +229,7 @@ describe("SendConfirmationRenderer value-sync", () => {
     cleanup();
   });
 
-  it("syncs senderEmail when value.senderEmail changes externally from a@x.com to b@x.com (via mocked GmailSenderFieldRenderer input shim)", () => {
+  it("syncs senderEmail when value.senderEmail changes externally from a@x.com to b@x.com (via registry-shim input)", () => {
     const { rerender } = render(
       <SendConfirmationRenderer
         fieldName="send"
@@ -351,8 +253,7 @@ describe("SendConfirmationRenderer value-sync", () => {
         label="Send"
       />,
     );
-    // After the GREEN fix, the senderEmail state syncs and the shim shows
-    // "b@x.com".
+    // After sync, the senderEmail state syncs and the shim shows "b@x.com".
     expect(screen.queryByDisplayValue("b@x.com")).not.toBeNull();
   });
 
@@ -388,5 +289,29 @@ describe("SendConfirmationRenderer value-sync", () => {
     // user's typed value back to "a@x.com".
     expect(screen.queryByDisplayValue("user@typed.com")).not.toBeNull();
     expect(screen.queryByDisplayValue("a@x.com")).toBeNull();
+  });
+
+  it("commits a typed fallback address to the approval payload (eager, not buffered)", () => {
+    // codex 2026-07-21 merge gate: typing into the no-gmail inline fallback must
+    // reach the approval onChange payload WITHOUT a Continue/flush (the buffering
+    // schema floor would have dropped it). SendConfirmation emits
+    // { campaignId, senderEmail } whenever senderEmail changes.
+    const onChange = vi.fn();
+    render(
+      <SendConfirmationRenderer
+        fieldName="send"
+        schema={{ type: "object" }}
+        value={{ campaignId: "c1" }}
+        onChange={onChange}
+        context={BASE_CONTEXT}
+        label="Send"
+      />,
+    );
+    const input = document.getElementById("field-senderEmail") as HTMLInputElement;
+    expect(input).not.toBeNull();
+    fireEvent.change(input, { target: { value: "typed@sender.com" } });
+    // The latest onChange emission carries the eagerly-committed address.
+    const lastCall = onChange.mock.calls.at(-1);
+    expect(lastCall?.[0]).toMatchObject({ campaignId: "c1", senderEmail: "typed@sender.com" });
   });
 });

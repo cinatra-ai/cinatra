@@ -26,10 +26,8 @@ import {
 import {
   GENERATED_FIELD_RENDERER_BINDINGS,
 } from "@/lib/generated/agent-bindings";
-import { GmailSenderFieldRenderer } from "../gmail-sender-renderer";
 import { ListPickerRenderer } from "../list-picker-renderer";
 import { ContextSelectorRenderer } from "../context-selector-renderer";
-import { FollowUpCadenceFieldRenderer } from "../follow-up-cadence-renderer";
 import { CampaignRecipientsReviewRenderer } from "../campaign-recipients-review-renderer";
 import { EmailDraftsReviewRenderer } from "../email-drafts-review-renderer";
 import { ReviewerAgentOutputRenderer } from "../reviewer-agent-output-renderer";
@@ -68,8 +66,10 @@ beforeAll(() => {
 const PARITY_TABLE: ReadonlyArray<
   [string, ComponentType<never>, number, Record<string, unknown>?]
 > = [
-  ["@cinatra-ai/email-outreach-agent:gmail-sender", GmailSenderFieldRenderer as never, 100, GMAIL_CONTEXT],
-  ["gmail-sender", GmailSenderFieldRenderer as never, 100, GMAIL_CONTEXT],
+  // gmail-sender (scoped id + bare alias) MIGRATED into @cinatra-ai/email-artifacts
+  // (cinatra#1625, eng#548) — now the ExtensionFieldRenderer wrapper at priority 100,
+  // still context-gated. Asserted in the gmail-sender migrated block below (it needs
+  // GMAIL_CONTEXT, so it is not in this context-free frozen table).
   ["@cinatra-ai/email-outreach-agent:list-picker", ListPickerRenderer as never, 90],
   ["list-picker", ListPickerRenderer as never, 90],
   ["@cinatra-ai/context-selection-agent:context-selector", ContextSelectorRenderer as never, 90],
@@ -81,9 +81,11 @@ const PARITY_TABLE: ReadonlyArray<
   // Their ids now resolve to the ExtensionFieldRenderer wrapper (still priority
   // 90, same strict-id condition) — asserted in the dedicated migrated-binding
   // block below, not in this frozen host-component table.
-  ["@cinatra-ai/email-follow-up-agent:follow-up-cadence", FollowUpCadenceFieldRenderer as never, 90],
-  ["@cinatra-ai/email-drafting-agent:follow-up-cadence", FollowUpCadenceFieldRenderer as never, 90],
-  ["follow-up-cadence", FollowUpCadenceFieldRenderer as never, 90],
+  // follow-up-cadence (2 scoped ids + bare alias) MIGRATED into
+  // @cinatra-ai/email-artifacts (cinatra#1625, eng#548) — now the
+  // ExtensionFieldRenderer wrapper at priority 90 (both scoped ids load the SAME
+  // pack component). Asserted in the migrated-binding it.each + the bare-alias
+  // block below, not in this frozen host-component table.
   ["@cinatra-ai/email-outreach-agent:setup-form", GroupedSetupFormRenderer as never, 60],
   ["@cinatra-ai/email-recipient-selection-agent:output", CampaignRecipientsReviewRenderer as never, 80],
   ["@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review", CampaignRecipientsReviewRenderer as never, 80],
@@ -175,6 +177,10 @@ describe("resolution parity with the retired hand map", () => {
     // The auditor-review component relocated into @cinatra-ai/auditor-agent
     // (cinatra#1625) at its pre-cutover priority 80.
     ["@cinatra-ai/auditor-agent:review", 80],
+    // follow-up-cadence relocated into @cinatra-ai/email-artifacts (cinatra#1625,
+    // eng#548): BOTH scoped ids load the same pack component, priority 90.
+    ["@cinatra-ai/email-follow-up-agent:follow-up-cadence", 90],
+    ["@cinatra-ai/email-drafting-agent:follow-up-cadence", 90],
   ] as const)(
     "migrated field-renderer binding %s resolves to the extension wrapper at the pre-cutover priority",
     (id, priority) => {
@@ -192,19 +198,57 @@ describe("resolution parity with the retired hand map", () => {
     },
   );
 
-  it("gmail-sender keeps its CONTEXT GATING (no gmail connection => no match)", () => {
-    expect(
-      resolveWith("@cinatra-ai/email-outreach-agent:gmail-sender", EMPTY_CONTEXT)?.renderer ?? null,
-    ).not.toBe(GmailSenderFieldRenderer);
+  it.each([
+    ["@cinatra-ai/email-outreach-agent:gmail-sender"],
+    // bare unscoped compat alias (stored interrupts) — KEPT (codex Q2).
+    ["gmail-sender"],
+  ])(
+    "migrated gmail-sender binding %s resolves to the extension wrapper at priority 100 WHEN gmail is connected",
+    (xRenderer) => {
+      const entry = resolveWith(xRenderer, GMAIL_CONTEXT);
+      expect(entry, xRenderer).toBeTruthy();
+      expect(entry!.priority, xRenderer).toBe(100);
+      const resolved = entry!.renderer as ComponentType & { displayName?: string };
+      // Both the scoped id and the bare alias resolve to the SAME migrated
+      // binding's wrapper (there is only one gmail-sender binding).
+      expect(resolved.displayName).toBe(
+        "ExtensionFieldRenderer(@cinatra-ai/email-outreach-agent:gmail-sender)",
+      );
+    },
+  );
+
+  it("migrated gmail-sender keeps its CONTEXT GATING (no gmail connection => no match)", () => {
+    // The host-owned condition (makeGmailSenderCondition, now in
+    // ./gmail-sender-condition) still gates on gmail connected + aliases, so with
+    // no gmail the binding does not match and nothing else claims the id.
+    expect(resolveWith("@cinatra-ai/email-outreach-agent:gmail-sender", EMPTY_CONTEXT)).toBeNull();
+    expect(resolveWith("gmail-sender", EMPTY_CONTEXT)).toBeNull();
   });
 
-  it("gmail-sender keeps the field-name whitelist heuristic (no x-renderer needed)", () => {
+  it("migrated gmail-sender keeps the field-name whitelist heuristic (no x-renderer needed)", () => {
     const entry = fieldRendererRegistry.resolve(
       "senderEmail",
       { type: "string" },
       GMAIL_CONTEXT as never,
     );
-    expect(entry?.renderer).toBe(GmailSenderFieldRenderer);
+    expect(entry).toBeTruthy();
+    const resolved = entry!.renderer as ComponentType & { displayName?: string };
+    expect(resolved.displayName).toBe(
+      "ExtensionFieldRenderer(@cinatra-ai/email-outreach-agent:gmail-sender)",
+    );
+  });
+
+  it("migrated follow-up-cadence bare alias still resolves (stored-interrupt compat, KEPT — codex Q2)", () => {
+    // Both cadence bindings load the same pack component, so the bare alias
+    // resolving to whichever registered first is harmless. Assert it resolves to
+    // an ExtensionFieldRenderer wrapper (not null, not a host component) at 90.
+    const entry = resolveWith("follow-up-cadence");
+    expect(entry).toBeTruthy();
+    expect(entry!.priority).toBe(90);
+    const resolved = entry!.renderer as ComponentType & { displayName?: string };
+    expect(resolved.displayName).toMatch(
+      /^ExtensionFieldRenderer\(@cinatra-ai\/email-(follow-up|drafting)-agent:follow-up-cadence\)$/,
+    );
   });
 
   it("an unknown namespaced id resolves to NO custom entry (schema-fallback path)", () => {

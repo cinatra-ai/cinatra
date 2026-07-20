@@ -30,7 +30,7 @@ import {
   SchemaFieldRenderer,
   SchemaOnlyFloorRenderer,
 } from "../schema-field-renderer";
-import { makeGmailSenderCondition } from "../gmail-sender-renderer";
+import { makeGmailSenderCondition } from "../gmail-sender-condition";
 import { makeExtensionFieldRenderer } from "../extension-field-renderer";
 import {
   __setFieldRendererComponentMapForTests,

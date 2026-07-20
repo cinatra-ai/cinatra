@@ -30,13 +30,9 @@ import {
 import {
   GENERATED_FIELD_RENDERER_BINDINGS,
 } from "@/lib/generated/agent-bindings";
-import {
-  GmailSenderFieldRenderer,
-  makeGmailSenderCondition,
-} from "./gmail-sender-renderer";
+import { makeGmailSenderCondition } from "./gmail-sender-condition";
 import { ListPickerRenderer } from "./list-picker-renderer";
 import { ContextSelectorRenderer } from "./context-selector-renderer";
-import { FollowUpCadenceFieldRenderer } from "./follow-up-cadence-renderer";
 import { CampaignRecipientsReviewRenderer } from "./campaign-recipients-review-renderer";
 import { EmailDraftsReviewRenderer } from "./email-drafts-review-renderer";
 import { ReviewerAgentOutputRenderer } from "./reviewer-agent-output-renderer";
@@ -133,12 +129,31 @@ const RENDERER_KIND_TABLE: Record<
   // binding of this kind (runtime-installed absent from the map) degrades to the
   // SchemaFieldRenderer floor here (AC4 never-blank), which is exactly this entry.
   "final-list-review": { renderer: SchemaOnlyFloorRenderer },
+  // MIGRATED (cinatra#1625 eng#548): the follow-up-cadence component moved into
+  // @cinatra-ai/email-artifacts (the pack now declares BOTH cadence bindings —
+  // email-drafting-agent + email-follow-up-agent — with declaredBy=email-artifacts).
+  // The KIND stays (the manifest still declares it — kind-vocabulary set-equality),
+  // but the host ships no component: a bundled binding resolves map-first to the
+  // extension wrapper (hasFieldRendererComponent -> makeExtensionFieldRenderer),
+  // and a not-in-build binding of this kind degrades to the SchemaFieldRenderer
+  // floor here (AC4 never-blank). KEEP bareAliases: unlike final-list-review,
+  // "follow-up-cadence" is a historical UNSCOPED compat string stored interrupts
+  // may carry (it is in the frozen parity contract). BOTH cadence bindings load
+  // the SAME pack component, so the first-registration arbitration of the bare
+  // alias between them is harmless and preserves stored-interrupt compat
+  // (cinatra#1625, codex-converged 2026-07-21).
   "follow-up-cadence": {
-    renderer: FollowUpCadenceFieldRenderer,
+    renderer: SchemaOnlyFloorRenderer,
     bareAliases: ["follow-up-cadence"],
   },
+  // MIGRATED (cinatra#1625 eng#548): the gmail-sender COMPONENT moved into
+  // @cinatra-ai/email-artifacts (src/renderers/gmail-sender.tsx). The host still
+  // OWNS the activation — the bareAlias + the makeGmailSenderCondition factory
+  // (now in ./gmail-sender-condition) — so the migrated binding registers as the
+  // extension wrapper yet keeps its context gating + field-name whitelist
+  // heuristic. A not-in-build binding of this kind degrades to the floor here.
   "gmail-sender": {
-    renderer: GmailSenderFieldRenderer,
+    renderer: SchemaOnlyFloorRenderer,
     bareAliases: ["gmail-sender"],
     makeCondition: makeGmailSenderCondition,
   },

@@ -17,9 +17,9 @@
 import "server-only";
 import type { EmailConnector } from "@cinatra-ai/sdk-extensions";
 import {
-  GMAIL_SENDER_FIELD_WHITELIST,
-  normalizeGmailSenderFieldName,
-} from "./gmail-sender-field-whitelist";
+  EMAIL_SENDER_FIELD_WHITELIST,
+  normalizeEmailSenderFieldName,
+} from "./email-sender-field-whitelist";
 
 export type EnrichmentContext = {
   /** The run owner whose connector state is consulted. `null` for system runs. */
@@ -49,10 +49,10 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** Match the predicate in gmail-sender-renderer.tsx::isGmailSenderField (lines 31-44). */
+/** Match the sender-field heuristic the migrated pack gmail-sender renderer uses. */
 function isWhitelistedSenderProperty(name: string, prop: Record<string, unknown>): boolean {
-  const normalized = normalizeGmailSenderFieldName(name);
-  if (!GMAIL_SENDER_FIELD_WHITELIST.has(normalized)) return false;
+  const normalized = normalizeEmailSenderFieldName(name);
+  if (!EMAIL_SENDER_FIELD_WHITELIST.has(normalized)) return false;
   const type = prop.type;
   if (type !== "string") return false;
   const format = prop.format;

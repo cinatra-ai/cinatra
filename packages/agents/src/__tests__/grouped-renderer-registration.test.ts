@@ -92,7 +92,7 @@ describe("grouped renderer registration", () => {
   it("gmail-sender (priority 100) still wins when its x-renderer is set, not the grouped entry (no regression)", () => {
     // gmail-sender's condition matches when the field is named `senderEmail`
     // with x-renderer `@cinatra-ai/email-outreach-agent:gmail-sender` (see
-    // packages/agent-builder/src/gmail-sender-renderer.ts `isGmailSenderField`).
+    // packages/agents/src/gmail-sender-condition.ts `makeGmailSenderCondition`).
     // This test asserts that priority 100 wins over the priority-50
     // grouped entry so registration preserves the existing priority ladder.
     const entry = fieldRendererRegistry.resolve(
