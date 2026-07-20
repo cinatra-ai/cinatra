@@ -5,6 +5,7 @@
 // the client component so it can be asserted without a full DOM render.)
 
 import type { CrumbContribution } from "./breadcrumb-contributions";
+import { LEGACY_NANOID_RE } from "./id-policy";
 
 export type BreadcrumbCrumb = {
   label: string;
@@ -21,7 +22,8 @@ export function humanizePathSegment(segment: string): string {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-// An id-like path segment (cinatra#1737): a UUID or a long bare-hex token.
+// An id-like path segment (cinatra#1737): a UUID, a long bare-hex token, or a
+// 32-char legacy better-auth id (cinatra#1907 — see src/lib/id-policy.ts).
 // These must NEVER pass through `humanizePathSegment` — stripping the hyphens
 // and Title-Casing the hex produces text that reads like a mangled name
 // ("9c0dfce6 B2cb 4dab …"). Without a resolved contribution they render as an
@@ -43,7 +45,11 @@ function safelyDecodePathSegment(segment: string): string {
 
 export function isIdLikeSegment(segment: string): boolean {
   const decoded = safelyDecodePathSegment(segment);
-  return UUID_RE.test(decoded) || LONG_HEX_RE.test(decoded);
+  return (
+    UUID_RE.test(decoded) ||
+    LONG_HEX_RE.test(decoded) ||
+    LEGACY_NANOID_RE.test(decoded)
+  );
 }
 
 /** The obvious short-id placeholder for an unresolved id crumb — never

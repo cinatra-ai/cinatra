@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 
 import { betterAuthDb, betterAuthMembers } from "@/lib/better-auth-db";
+import { generateEntityId } from "@/lib/id-policy";
 
 export type EnsureMembershipResult = {
   /** id of the surviving membership row for (organizationId, userId). */
@@ -37,7 +38,7 @@ export async function ensureBetterAuthMembershipRow(
   const inserted = await betterAuthDb
     .insert(betterAuthMembers)
     .values({
-      id: crypto.randomUUID(),
+      id: generateEntityId(),
       organizationId,
       userId,
       role: insertRole,

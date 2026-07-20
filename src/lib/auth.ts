@@ -21,6 +21,7 @@ import {
 import { ensureBetterAuthMembershipRow } from "@/lib/better-auth-membership-bootstrap";
 import { ensureDefaultOrganizationRow } from "@/lib/default-organization-bootstrap";
 import { isInitialAdminBootstrapEligible } from "@/lib/initial-admin-bootstrap-policy";
+import { generateEntityId } from "@/lib/id-policy";
 import {
   ensureBuiltInCinatraAssistantAgent,
   ensureBuiltInWordpressAssistantAgent,
@@ -301,6 +302,18 @@ export const auth = betterAuth({
   secret: authSecret,
   trustedOrigins: getDynamicTrustedOrigins,
   database: betterAuthPool,
+  advanced: {
+    database: {
+      // One entity-id format app-wide (cinatra#1907): without this override
+      // better-auth mints 32-char base62 ids while the bootstrap code mints
+      // UUIDs, leaving two interleaved shapes that UUID-gated validators
+      // reject (an agent could not be visibility-scoped to a better-auth-
+      // minted org/team at all). New rows converge on UUID; existing legacy
+      // rows stay valid — see src/lib/id-policy.ts. Session TOKENS are
+      // generated separately by better-auth; this only shapes row ids.
+      generateId: () => generateEntityId(),
+    },
+  },
   user: {
     changeEmail: {
       // Enabled now that the platform mailer is wired (sendPlatformEmail

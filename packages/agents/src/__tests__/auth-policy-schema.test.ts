@@ -92,6 +92,45 @@ describe("AgentAuthPolicySchema visibility widening", () => {
     });
   });
 
+  // cinatra#1907: rows minted by better-auth's pre-override default generator
+  // carry 32-char base62 ids. org:/team: must accept them (real orgs/teams
+  // were unscopeable); project: must NOT — no legacy-id project rows exist.
+  describe("legacy 32-char better-auth id tails (#1907)", () => {
+    const LEGACY_ORG_ID = "Ul5HrhxiVFOBJmghOIUWjptssxRMaRXs";
+    const LEGACY_TEAM_ID = "bgEWkNFcoODy5NtsIxvPaM1F0lww7GSR";
+
+    it(`accepts "org:${LEGACY_ORG_ID}"`, () => {
+      const result = AgentAuthPolicySchema.safeParse(policy(`org:${LEGACY_ORG_ID}`));
+      expect(result.success).toBe(true);
+    });
+
+    it(`accepts "team:${LEGACY_TEAM_ID}"`, () => {
+      const result = AgentAuthPolicySchema.safeParse(policy(`team:${LEGACY_TEAM_ID}`));
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a legacy-id tail on project: (never better-auth-minted)", () => {
+      const result = AgentAuthPolicySchema.safeParse(policy(`project:${LEGACY_ORG_ID}`));
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects 31- and 33-char tails", () => {
+      expect(
+        AgentAuthPolicySchema.safeParse(policy(`org:${LEGACY_ORG_ID.slice(1)}`)).success,
+      ).toBe(false);
+      expect(
+        AgentAuthPolicySchema.safeParse(policy(`team:${LEGACY_TEAM_ID}X`)).success,
+      ).toBe(false);
+    });
+
+    it("rejects punctuation-bearing 32-char tails", () => {
+      const result = AgentAuthPolicySchema.safeParse(
+        policy("org:Ul5Hrhxi-FOBJmghOIUWjptssxRMaRX"),
+      );
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe("symmetry across the three visibility fields", () => {
     it("applies the same widened union to runDataVisibility", () => {
       const result = AgentAuthPolicySchema.safeParse({

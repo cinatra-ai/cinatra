@@ -390,9 +390,19 @@ describe("isIdLikeSegment / idSegmentPlaceholder (#1737)", () => {
     expect(isIdLikeSegment("deadbeef")).toBe(false); // short hex = plausible word
   });
 
+  it("matches 32-char legacy better-auth ids (#1907); not near-misses", () => {
+    expect(isIdLikeSegment("Ul5HrhxiVFOBJmghOIUWjptssxRMaRXs")).toBe(true);
+    expect(isIdLikeSegment("bgEWkNFcoODy5NtsIxvPaM1F0lww7GSR")).toBe(true);
+    expect(isIdLikeSegment("Ul5HrhxiVFOBJmghOIUWjptssxRMaRX")).toBe(false); // 31 chars
+    expect(isIdLikeSegment("legacy-id-looking-segment-with-dash1")).toBe(false);
+  });
+
   it("builds the obvious short-id placeholder", () => {
     expect(idSegmentPlaceholder("9c0dfce6-b2cb-4dab-8a01-661ca3288b9a")).toBe(
       "9c0dfce6…",
+    );
+    expect(idSegmentPlaceholder("Ul5HrhxiVFOBJmghOIUWjptssxRMaRXs")).toBe(
+      "Ul5Hrhxi…",
     );
   });
 });

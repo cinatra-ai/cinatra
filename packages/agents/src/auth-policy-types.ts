@@ -77,11 +77,25 @@ export const DEFAULT_AGENT_AUTH_POLICY: AgentAuthPolicy = Object.freeze({
 }) as unknown as AgentAuthPolicy;
 
 // ---------------------------------------------------------------------------
-// Visibility token schema — widened to a union with UUID validation on the
-// team:/project: prefix tails.
+// Visibility token schema — widened to a union with id-shape validation on
+// the org:/team:/project: prefix tails.
 // ---------------------------------------------------------------------------
 
 const UUID_TAIL = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Legacy better-auth row ids (cinatra#1907): before src/lib/auth.ts overrode
+// `advanced.database.generateId`, better-auth minted 32-char base62 ids for
+// orgs/teams/users/members — and those rows are live, interleaved with UUID
+// rows. org: and team: tails must accept BOTH shapes or real entities are
+// unscopeable. project: stays UUID-only: projects are never better-auth-
+// minted, so no legacy-id project rows exist. Duplicated from
+// src/lib/id-policy.ts LEGACY_NANOID_RE (packages/* must not import src/lib);
+// keep the two in sync.
+const LEGACY_BETTER_AUTH_ID_TAIL = /^[a-zA-Z0-9]{32}$/;
+
+function isOrgOrTeamIdTail(tail: string): boolean {
+  return UUID_TAIL.test(tail) || LEGACY_BETTER_AUTH_ID_TAIL.test(tail);
+}
 
 // The runtime union (literals + refined strings) infers as `string` in zod —
 // we narrow the schema's output type to AgentAuthPolicyVisibility via an
@@ -100,14 +114,14 @@ export const AgentAuthPolicyVisibilitySchema: z.ZodType<AgentAuthPolicyVisibilit
   z
     .string()
     .regex(/^org:/)
-    .refine((s) => UUID_TAIL.test(s.slice("org:".length)), {
-      message: "org:<id> tail must be a UUID",
+    .refine((s) => isOrgOrTeamIdTail(s.slice("org:".length)), {
+      message: "org:<id> tail must be a UUID or 32-char legacy id",
     }) as unknown as z.ZodType<`org:${string}`>,
   z
     .string()
     .regex(/^team:/)
-    .refine((s) => UUID_TAIL.test(s.slice("team:".length)), {
-      message: "team:<id> tail must be a UUID",
+    .refine((s) => isOrgOrTeamIdTail(s.slice("team:".length)), {
+      message: "team:<id> tail must be a UUID or 32-char legacy id",
     }) as unknown as z.ZodType<`team:${string}`>,
   z
     .string()
