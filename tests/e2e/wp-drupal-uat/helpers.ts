@@ -133,6 +133,89 @@ export async function sendPrompt(page: Page, text: string): Promise<void> {
 }
 
 /**
+ * cinatra#1214 no-direct-egress assertion, LIVE inside the embedded E2E
+ * (cinatra#1222 S6 acceptance criterion). The house rule: the in-admin CMS
+ * assistant reaches the CMS ONLY through that CMS's MCP integration — never a
+ * direct content-REST call. The AUTHORITATIVE, exhaustive guard is the
+ * server-side static one (src/lib/__tests__/in-admin-cms-egress-guard.test.ts) —
+ * the banned egress is server→CMS (cinatra backend → CMS content REST), which a
+ * browser cannot observe. This live watcher proves the CLIENT half the embedded
+ * surface CAN observe and that the static guard cannot: during the agent EDIT
+ * round-trip the widget/iframe client itself issues ZERO direct CMS
+ * content-MUTATION calls — the edit is applied server-side over the sanctioned
+ * MCP path, so no `POST/PUT/PATCH/DELETE` to `/wp/v2/*` (WordPress) or
+ * `/jsonapi/*` (Drupal) may leave the browser on the agent timeline — WHILE the
+ * sanctioned cinatra agent `/stream` POST must fire (positive control, so the
+ * assertion cannot pass by the round-trip simply not happening).
+ *
+ * Scope discipline (no false RED): only WRITE methods are counted, and the
+ * watcher is installed immediately BEFORE the prompt is sent — the CMS editor's
+ * own page-load `GET /wp/v2/*` reads happen earlier and are never in the window;
+ * the widget edit round-trip never types into the native editor, so no autosave
+ * write fires. `verify()` is ASYNC: it first awaits the sanctioned `/stream`
+ * response body to FULLY DRAIN, so a direct write issued LATE in the round-trip
+ * (mid- or post-stream, after the first terminal UI frame renders) is still
+ * observed before the assertion — checking only at first-diff would let a late
+ * write escape. It throws if any direct-write egress was seen or the sanctioned
+ * stream never fired. Call BEFORE sendPrompt(); `await` it after the round-trip.
+ */
+export function trackNoDirectCmsEgress(
+  page: Page,
+  cms: "wordpress" | "drupal",
+): { verify: () => Promise<void> } {
+  // The exact direct content-REST surfaces #1214 rerouted onto MCP. `/wp/v2` is
+  // WordPress core REST; `/jsonapi` is Drupal's JSON:API. The sanctioned MCP
+  // routes (`/wp-json/mcp/...`, `/_mcp_tools`, `/mcp_jsonapi_*`) do NOT match
+  // these — they carry `mcp` and `_jsonapi` (underscore), not `/jsonapi`.
+  const DIRECT_CMS_CONTENT = cms === "wordpress" ? /\/wp\/v2\//i : /\/jsonapi\//i;
+  const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+  const violations: string[] = [];
+  // The sanctioned agent /stream POST response, captured so verify() can await
+  // its body draining (SSE close) before asserting — the precise "round-trip
+  // done" signal, no arbitrary sleep and no widget terminal-state selector.
+  let streamResponse: import("@playwright/test").Response | null = null;
+
+  page.on("request", (req) => {
+    const url = req.url();
+    const method = req.method().toUpperCase();
+    if (WRITE_METHODS.has(method) && DIRECT_CMS_CONTENT.test(url)) {
+      violations.push(`${method} ${url}`);
+    }
+  });
+  page.on("response", (resp) => {
+    const req = resp.request();
+    if (
+      /\/agents\/[^/]+\/stream\b/.test(resp.url()) &&
+      req.method().toUpperCase() === "POST"
+    ) {
+      streamResponse = resp;
+    }
+  });
+
+  return {
+    async verify(): Promise<void> {
+      expect(
+        streamResponse,
+        "the sanctioned cinatra agent /stream POST must have fired (positive control — " +
+          "the no-egress assertion must not pass merely because the round-trip did not happen)",
+      ).not.toBeNull();
+      // Drain the SSE body so any late direct write on the agent timeline is
+      // observed. `.finished()` resolves on stream close; guarded so an errored
+      // stream cannot wedge the assertion (the outer test timeout still bounds it).
+      await streamResponse!.finished().catch(() => {});
+      expect(
+        violations,
+        `cinatra#1214 no-direct-egress VIOLATION — the ${cms} in-admin assistant client ` +
+          `issued a direct CMS content-mutation call on the agent round-trip; the edit must ` +
+          `route server-side over MCP, never a direct content REST write from the browser:\n` +
+          violations.map((v) => `  · ${v}`).join("\n"),
+      ).toEqual([]);
+    },
+  };
+}
+
+/**
  * cinatra#410 — install network listeners that assert the REAL dual-
  * token auth path is healthy, so the suite fails LOUD on a genuine auth
  * regression instead of timing out silently on "Thinking…"/(no response):
