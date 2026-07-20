@@ -120,6 +120,47 @@ describe("OrganizationDetailTabs — tablist", () => {
     fireEvent.click(permissionsTab);
     expect(screen.getByTestId("perm-slot")).toBeTruthy();
   });
+
+  // cinatra#1510 — the Manage tab exists ONLY when a manageSlot is handed down
+  // (i.e. the viewer holds organization.update in the viewed org). A read-only
+  // member gets no slot and therefore no Manage tab.
+  test("omits the Manage tab when no manageSlot is provided (read-only member)", () => {
+    render(
+      <OrganizationDetailTabs
+        dataSource={makeDataSource()}
+        overviewPortlets={OVERVIEW_PORTLETS}
+        permissionsSlot={<div data-testid="perm-slot">permissions</div>}
+      />,
+    );
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
+      "Dashboards",
+      "Permissions",
+    ]);
+    expect(screen.queryByRole("tab", { name: "Manage" })).toBeNull();
+  });
+
+  test("renders the Manage tab when a manageSlot is provided (org_admin+) and reveals it on activation", () => {
+    render(
+      <OrganizationDetailTabs
+        dataSource={makeDataSource()}
+        overviewPortlets={OVERVIEW_PORTLETS}
+        permissionsSlot={<div data-testid="perm-slot">permissions</div>}
+        manageSlot={<div data-testid="manage-slot">manage</div>}
+      />,
+    );
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
+      "Dashboards",
+      "Permissions",
+      "Manage",
+    ]);
+    // Inactive panel is not mounted until its tab is active.
+    expect(screen.queryByTestId("manage-slot")).toBeNull();
+    const manageTab = screen.getByRole("tab", { name: "Manage" });
+    fireEvent.mouseDown(manageTab);
+    manageTab.focus();
+    fireEvent.click(manageTab);
+    expect(screen.getByTestId("manage-slot")).toBeTruthy();
+  });
 });
 
 describe("makeRenderOrganizationDashboard — Overview-aware render seam", () => {

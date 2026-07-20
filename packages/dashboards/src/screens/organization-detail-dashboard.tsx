@@ -19,7 +19,7 @@
  */
 import "server-only";
 import { notFound, redirect } from "next/navigation";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
@@ -35,9 +35,12 @@ import {
   readUserIsOrgMember,
 } from "@/lib/better-auth-db";
 
+import { resolveOrganizationManageCapabilities } from "@/lib/authz/organization-manage-gate";
+
 import { buildSecurityContextFromSession } from "../auth/security-context";
 import { OrganizationDetailTabs } from "../components/organization-detail-tabs";
 import { OrganizationPermissionsPanel } from "../components/organization-permissions-panel";
+import { OrganizationManagePanel } from "../components/organization-manage-panel";
 import { buildOrganizationOverviewConfig } from "../components/seed-configs/overview-config";
 import type { EntityDashboardsDataSource } from "../entity-dashboards-contract";
 import {
@@ -51,6 +54,9 @@ import {
 import {
   buildOrganizationAccessModel,
   buildOrganizationDetailRef,
+  buildOrganizationManageMembers,
+  normalizePendingInvitation,
+  type OrganizationPendingInvitation,
 } from "./organization-detail-model";
 
 export async function OrganizationDetailDashboardPage({
@@ -85,6 +91,7 @@ export async function OrganizationDetailDashboardPage({
       .limit(1),
     betterAuthDb
       .select({
+        id: betterAuthMembers.id,
         userId: betterAuthMembers.userId,
         role: betterAuthMembers.role,
         name: betterAuthUsers.name,
@@ -104,6 +111,47 @@ export async function OrganizationDetailDashboardPage({
 
   const orgName = org.name ?? "";
   const accessModel = buildOrganizationAccessModel(memberRows, teams);
+
+  // Viewed-org management capabilities (cinatra#1510): resolve the caller's
+  // role in THIS org and map it through the real catalog. A read-only member
+  // (or a platform admin who is not a member here) gets no capabilities and no
+  // Manage tab. `canManageSettings` (org_admin+) gates the tab; the member
+  // console inside is further gated on `canManageMembers` (org_owner).
+  const manage = await resolveOrganizationManageCapabilities(session, id);
+
+  // Pending invitations are only read for an owner who can act on them; keep
+  // fail-closed (a read error degrades to an empty list, never a broken tab).
+  let pendingInvitations: readonly OrganizationPendingInvitation[] = [];
+  if (manage.canManageMembers) {
+    try {
+      const invitationRows = await betterAuthDb.execute<{
+        id: string;
+        email: string | null;
+        role: string | null;
+      }>(sql`
+        SELECT id, email, role
+        FROM public."invitation"
+        WHERE "organizationId" = ${id} AND status = 'pending'
+        ORDER BY email ASC
+      `);
+      pendingInvitations = invitationRows.rows.map(normalizePendingInvitation);
+    } catch {
+      pendingInvitations = [];
+    }
+  }
+
+  const manageSlot = manage.canManageSettings ? (
+    <OrganizationManagePanel
+      organizationId={id}
+      orgName={orgName}
+      currentSlug={org.slug ?? ""}
+      currentUserId={userId}
+      canManageSettings={manage.canManageSettings}
+      canManageMembers={manage.canManageMembers}
+      members={buildOrganizationManageMembers(memberRows)}
+      invitations={pendingInvitations}
+    />
+  ) : undefined;
 
   // The Overview is EPHEMERAL: built fresh here from the just-fetched counts and
   // handed to the shell's render seam, never persisted (render-only portlets).
@@ -155,6 +203,7 @@ export async function OrganizationDetailDashboardPage({
               accessModel={accessModel}
             />
           }
+          manageSlot={manageSlot}
         />
       </PageContent>
     </Main>
