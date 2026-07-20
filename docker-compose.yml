@@ -79,7 +79,7 @@ services:
     # newer major offered). Dev registry only, ephemeral storage. Re-resolve at
     # bump time: `docker buildx imagetools inspect verdaccio/verdaccio:6`.
     # See docs/internals/workflows/upgrade-track.md §8.
-    image: verdaccio/verdaccio:6@sha256:e3ac7e335e69504cd0b09616aa52066399868282313c34762d2a77b8169a3575
+    image: verdaccio/verdaccio:6@sha256:bcd0dc5f10d0b9cca5a21b1f4fb3b08c6d90978bc87b8b46402abb271e0d573a
     ports:
       - "4873:4873"
     volumes:
@@ -96,7 +96,7 @@ services:
       retries: 20
 
   nango-db:
-    image: postgres:17-alpine@sha256:979c4379dd698aba0b890599a6104e082035f98ef31d9b9291ec22f2b13059ca
+    image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
     # Upgrade track: HELD at postgres 17-alpine as a CURRENT VALIDATED HOLD
     # while the platform DB moved to 18 (see docs/internals/workflows/upgrade-track.md §3): this
     # store is app-coupled to Nango, whose upstream reference compose still
@@ -142,7 +142,7 @@ services:
     # moving tag. The works-after nango arm (CI) proves the synthetic
     # connection-store round-trip on the candidate; the OAuth smoke is a
     # deploy-time gate. Converged 2026-07-11. See docs/internals/workflows/upgrade-track.md.
-    image: nangohq/nango-server:hosted@sha256:fa3db52396f1ddba8fd7c7c0203c8226916042442a0dd782f8848354c1f95198
+    image: nangohq/nango-server:hosted@sha256:1b3be71c869cd480c24b2426bbc597e0447808db878896ccaa279f98c295431e
     # Keep the connector backend alive across the intermittent qemu SIGSEGVs the
     # amd64-only image hits on arm64 dev hosts. `unless-stopped` (NOT
     # `on-failure:N`, which exhausts its retry budget and returns to
