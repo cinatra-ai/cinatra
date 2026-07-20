@@ -35,6 +35,43 @@ function registerPackType(): void {
   );
 }
 
+// Claim-typed HOST types (cinatra#1867): a type can be artifact-safe by
+// DISPOSITION without shipping an `isArtifact` DESCRIPTOR. `email:body` is
+// artifact-safe (must be library-visible); `email:recipient` is a
+// `projection: "none"` sensitive type (must stay INVISIBLE). A `raw`-projection
+// governed type and an ungoverned data type are both excluded too.
+const CLAIM_SAFE_TYPE = "@cinatra-ai/email:body";
+const CLAIM_NONE_TYPE = "@cinatra-ai/email:recipient";
+const CLAIM_RAW_TYPE = "@cinatra-ai/email:raw-thing";
+const UNGOVERNED_TYPE = "@cinatra-ai/entity-contacts:contact";
+
+/** Register a claim-typed HOST type carrying a disposition but NO `isArtifact`
+ *  descriptor — the #1867 shape. `projection` decides library admissibility. */
+function registerClaimType(
+  type: string,
+  projection: "artifact-safe" | "none" | "raw",
+): void {
+  objectTypeRegistry.register({
+    type,
+    category: "content",
+    schema: z.record(z.string(), z.unknown()),
+    lifecycle: { sources: ["agent"], mutableBy: ["agent"] },
+    renderers: { listRow: null, card: null, detail: null },
+    dispositions: { projection },
+  } as never);
+}
+
+/** Register a plain data object with NO disposition — ungoverned; never admitted. */
+function registerUngovernedType(type: string): void {
+  objectTypeRegistry.register({
+    type,
+    category: "report",
+    schema: z.record(z.string(), z.unknown()),
+    lifecycle: { sources: ["agent"], mutableBy: ["agent"] },
+    renderers: { listRow: null, card: null, detail: null },
+  } as never);
+}
+
 const listObjectsByFilter = vi.fn();
 const getObjectById = vi.fn();
 const retentionTombstone = vi.fn();
@@ -132,6 +169,85 @@ describe("artifact-service semantic artifact object filtering", () => {
       (c) => (c[0] as { type: string }).type,
     );
     expect(filteredTypes.sort()).toEqual([GENERIC_ARTIFACT_TYPE, PACK_TYPE].sort());
+  });
+
+  it("admits a claim-typed artifact-safe HOST row (disposition, no isArtifact descriptor) and EXCLUDES none/raw/ungoverned types (cinatra#1867)", async () => {
+    // The #1867 shape: `email:body` is artifact-safe by DISPOSITION with no
+    // `isArtifact` descriptor; `email:recipient` is a sensitive `none`
+    // projection; a `raw` governed type and an ungoverned data object are both
+    // non-artifact-safe. Only the artifact-safe row must surface.
+    registerPackType(); // an isArtifact descriptor type — behavior unchanged
+    registerClaimType(CLAIM_SAFE_TYPE, "artifact-safe");
+    registerClaimType(CLAIM_NONE_TYPE, "none");
+    registerClaimType(CLAIM_RAW_TYPE, "raw");
+    registerUngovernedType(UNGOVERNED_TYPE);
+    const { listArtifacts } = await import("../artifact-service");
+    const rowFor = (type: string, id: string) => ({
+      id,
+      type,
+      data: {
+        artifactType: "file",
+        title: id,
+        mime: "x/y",
+        size: 3,
+        originKind: "upload",
+        latestRepresentationRevisionId: `${id}-v9`,
+      },
+      createdAt: "2026-01-02",
+      updatedAt: "2026-01-02",
+    });
+    listObjectsByFilter.mockImplementation((f: { type: string }) => {
+      if (f.type === CLAIM_SAFE_TYPE) return [rowFor(CLAIM_SAFE_TYPE, "body1")];
+      if (f.type === PACK_TYPE) return [rowFor(PACK_TYPE, "p1")];
+      return [];
+    });
+    const out = listArtifacts({ orgId: "org1" });
+    // The materialized artifact-safe claim-typed row IS listed.
+    expect(out.map((o) => o.artifactId).sort()).toEqual(["body1", "p1"]);
+    // The fan-out admits the generic base + isArtifact pack + the artifact-safe
+    // claim type — and NOT the none/raw/ungoverned types.
+    const filteredTypes = listObjectsByFilter.mock.calls.map(
+      (c) => (c[0] as { type: string }).type,
+    );
+    expect(filteredTypes.sort()).toEqual(
+      [GENERIC_ARTIFACT_TYPE, PACK_TYPE, CLAIM_SAFE_TYPE].sort(),
+    );
+    expect(filteredTypes).not.toContain(CLAIM_NONE_TYPE);
+    expect(filteredTypes).not.toContain(CLAIM_RAW_TYPE);
+    expect(filteredTypes).not.toContain(UNGOVERNED_TYPE);
+  });
+
+  it("getArtifact returns a claim-typed artifact-safe HOST row but 404-hides a none-projection sensitive row (cinatra#1867)", async () => {
+    registerClaimType(CLAIM_SAFE_TYPE, "artifact-safe");
+    registerClaimType(CLAIM_NONE_TYPE, "none");
+    const { getArtifact } = await import("../artifact-service");
+    const bodyRow = {
+      id: "body1",
+      type: CLAIM_SAFE_TYPE,
+      data: {
+        artifactType: "file",
+        title: "body",
+        mime: "text/markdown",
+        size: 7,
+        originKind: "agent",
+        latestRepresentationRevisionId: "body1-v1",
+      },
+      ownerLevel: "organization",
+      ownerId: "org1",
+      visibility: "organization",
+    };
+    getObjectById.mockReturnValue(bodyRow);
+    expect(getArtifact({ artifactId: "body1", orgId: "org1" })).toMatchObject({
+      artifactId: "body1",
+      objectType: CLAIM_SAFE_TYPE,
+    });
+    // A `none`-projection sensitive row is NOT an admissible artifact type.
+    getObjectById.mockReturnValue({
+      id: "rec1",
+      type: CLAIM_NONE_TYPE,
+      data: {},
+    });
+    expect(getArtifact({ artifactId: "rec1", orgId: "org1" })).toBeNull();
   });
 
   it("getArtifact returns null when the object type is NOT a registered artifact type", async () => {
