@@ -300,12 +300,86 @@ describe("composeOboCeilingChain — child = child anchor ∪ parent chain", () 
     ]);
   });
 
-  it("INCOMPARABLE owner-axis pair (parent team T, child user U) → BOTH carried un-collapsed", () => {
+  it("MIXED owner tiers with NO verified containment (parent team T, child user U) → fail closed", () => {
+    // user/team are tiers of the ONE owner slot; no single-owner row satisfies
+    // both. Absent a verified containment relation the composition fails CLOSED
+    // (a structured error, never a silently-unsatisfiable persisted chain).
     const parent: OboCeilingChain = [{ tier: "team", id: "t1" }, orgFloor];
     const child: OboCeilingChain = [{ tier: "user", id: "u1" }, orgFloor];
-    expectChainMembers(composeOboCeilingChain(parent, child), [
-      { tier: "user", id: "u1" },
+    const result = composeOboCeilingChain(parent, child);
+    expect(result.ok).toBe(false);
+    if (result.ok || result.reason !== "unverified_owner_containment") {
+      throw new Error("expected unverified_owner_containment denial");
+    }
+    expect(result.ceilings).toEqual(
+      expect.arrayContaining([
+        { tier: "user", id: "u1" },
+        { tier: "team", id: "t1" },
+      ]),
+    );
+  });
+
+  it("MIXED owner tiers WITH a verified containment fact (user U ∈ team T) → collapse to the narrowest (user U), satisfiable", () => {
+    // The acceptance case: a team-anchored parent dispatching a user-scoped child.
+    // Given the dispatch-verified membership fact, the owner axis collapses to the
+    // narrower user tier; a user-U-owned row then satisfies the composed chain.
+    const parent: OboCeilingChain = [{ tier: "team", id: "t1" }, orgFloor];
+    const child: OboCeilingChain = [{ tier: "user", id: "u1" }, orgFloor];
+    const result = composeOboCeilingChain(parent, child, [
+      { narrower: { tier: "user", id: "u1" }, wider: { tier: "team", id: "t1" } },
+    ]);
+    expectChainMembers(result, [{ tier: "user", id: "u1" }, orgFloor]);
+    if (!result.ok) return;
+    // A user-U row in the org is WITHIN the collapsed chain (previously denied).
+    expect(
+      resourceWithinCeiling(
+        { orgId: ORG, owner: { tier: "user", id: "u1" } },
+        result.chain,
+      ),
+    ).toBe(true);
+    // A team-T row is NOT within (the collapse narrowed to the user tier).
+    expect(
+      resourceWithinCeiling(
+        { orgId: ORG, owner: { tier: "team", id: "t1" } },
+        result.chain,
+      ),
+    ).toBe(false);
+  });
+
+  it("MIXED owner tiers, collapse keeps the PARENT's narrower tier (parent user U ∈ child team T) → user U", () => {
+    // Reverse anchoring: a user-anchored parent, a team-anchored child. The
+    // verified-narrowest is still the user; collapse drops the wider team element.
+    const parent: OboCeilingChain = [{ tier: "user", id: "u1" }, orgFloor];
+    const child: OboCeilingChain = [{ tier: "team", id: "t1" }, orgFloor];
+    const result = composeOboCeilingChain(parent, child, [
+      { narrower: { tier: "user", id: "u1" }, wider: { tier: "team", id: "t1" } },
+    ]);
+    expectChainMembers(result, [{ tier: "user", id: "u1" }, orgFloor]);
+  });
+
+  it("MIXED workspace+team with a verified fact (team T ∈ workspace W) → collapse to team T", () => {
+    const parent: OboCeilingChain = [{ tier: "workspace", id: "w1" }, orgFloor];
+    const child: OboCeilingChain = [{ tier: "team", id: "t1" }, orgFloor];
+    const result = composeOboCeilingChain(parent, child, [
+      { narrower: { tier: "team", id: "t1" }, wider: { tier: "workspace", id: "w1" } },
+    ]);
+    expectChainMembers(result, [{ tier: "team", id: "t1" }, orgFloor]);
+  });
+
+  it("MIXED owner tiers keep the org floor + project when collapsing (parent project P, mixed owners)", () => {
+    // The collapse touches ONLY the owner axis; org floor + project pass through.
+    const parent: OboCeilingChain = [
       { tier: "team", id: "t1" },
+      { tier: "project", id: "p1" },
+      orgFloor,
+    ];
+    const child: OboCeilingChain = [{ tier: "user", id: "u1" }, orgFloor];
+    const result = composeOboCeilingChain(parent, child, [
+      { narrower: { tier: "user", id: "u1" }, wider: { tier: "team", id: "t1" } },
+    ]);
+    expectChainMembers(result, [
+      { tier: "user", id: "u1" },
+      { tier: "project", id: "p1" },
       orgFloor,
     ]);
   });
@@ -325,7 +399,9 @@ describe("composeOboCeilingChain — child = child anchor ∪ parent chain", () 
     const child: OboCeilingChain = [{ tier: "team", id: "t2" }, orgFloor];
     const result = composeOboCeilingChain(parent, child);
     expect(result.ok).toBe(false);
-    if (result.ok) return;
+    if (result.ok || result.reason === "unverified_owner_containment") {
+      throw new Error("expected disjoint_axis denial");
+    }
     expect(result.reason).toBe("disjoint_axis");
     expect(result.tier).toBe("team");
     expect(result.ids).toEqual(["t2", "t1"]);
@@ -336,7 +412,9 @@ describe("composeOboCeilingChain — child = child anchor ∪ parent chain", () 
     const child: OboCeilingChain = [{ tier: "project", id: "p2" }, orgFloor];
     const result = composeOboCeilingChain(parent, child);
     expect(result.ok).toBe(false);
-    if (result.ok) return;
+    if (result.ok || result.reason === "unverified_owner_containment") {
+      throw new Error("expected disjoint_axis denial");
+    }
     expect(result.reason).toBe("disjoint_axis");
     expect(result.tier).toBe("project");
   });
@@ -346,7 +424,9 @@ describe("composeOboCeilingChain — child = child anchor ∪ parent chain", () 
     const child: OboCeilingChain = [{ tier: "user", id: "u1" }, { tier: "organization", id: "org-B" }];
     const result = composeOboCeilingChain(parent, child);
     expect(result.ok).toBe(false);
-    if (result.ok) return;
+    if (result.ok || result.reason === "unverified_owner_containment") {
+      throw new Error("expected cross_org denial");
+    }
     expect(result.reason).toBe("cross_org");
     expect(result.tier).toBe("organization");
   });
@@ -363,29 +443,70 @@ describe("composeOboCeilingChain — child = child anchor ∪ parent chain", () 
     expect(composeOboCeilingChain(parent, child).ok).toBe(false);
   });
 
-  it("TRANSITIVE grandchild: compose(compose(gp,parent),child) ⊇ every ancestor element (never widens)", () => {
+  it("TRANSITIVE grandchild: cross-axis ancestors carried, owner axis collapsed to the verified-narrowest", () => {
+    // gp anchors a project (independent axis), parent a team, child a user. With
+    // the verified user ∈ team fact the owner axis collapses to the user tier; the
+    // project + org floor (different facets) are carried un-collapsed.
     const grandparent: OboCeilingChain = [{ tier: "project", id: "pj" }, orgFloor];
     const parent: OboCeilingChain = [{ tier: "team", id: "t1" }, orgFloor];
     const child: OboCeilingChain = [{ tier: "user", id: "u1" }, orgFloor];
+    const membership = [
+      { narrower: { tier: "user" as const, id: "u1" }, wider: { tier: "team" as const, id: "t1" } },
+    ];
 
-    const gpParent = composeOboCeilingChain(grandparent, parent);
+    // gp ∪ parent: only ONE owner tier (team) → no collapse yet.
+    const gpParent = composeOboCeilingChain(grandparent, parent, membership);
     expect(gpParent.ok).toBe(true);
     if (!gpParent.ok) return;
 
-    const grand = composeOboCeilingChain(gpParent.chain, child);
+    const grand = composeOboCeilingChain(gpParent.chain, child, membership);
     expect(grand.ok).toBe(true);
     if (!grand.ok) return;
 
-    // Grandchild chain carries every ancestor ceiling (satisfy-all → ⊇ parent chain).
+    // Owner axis collapsed to user u1; team t1 dropped (subsumed under the fact).
     expect(grand.chain).toEqual(
       expect.arrayContaining([
         { tier: "user", id: "u1" },
-        { tier: "team", id: "t1" },
         { tier: "project", id: "pj" },
         orgFloor,
       ]),
     );
-    expect(grand.chain).toHaveLength(4);
+    expect(grand.chain).toHaveLength(3);
+    expect(grand.chain.some((c) => c.tier === "team")).toBe(false);
+  });
+
+  it("TRANSITIVE containment (user ∈ team ∈ workspace) collapses all three owner tiers to the user", () => {
+    // Only user⊆team and team⊆workspace are supplied; the closure yields user⊆workspace.
+    const parent: OboCeilingChain = [{ tier: "workspace", id: "w1" }, orgFloor];
+    const mid = composeOboCeilingChain(
+      parent,
+      [{ tier: "team", id: "t1" }, orgFloor],
+      [{ narrower: { tier: "team", id: "t1" }, wider: { tier: "workspace", id: "w1" } }],
+    );
+    expect(mid.ok).toBe(true);
+    if (!mid.ok) return;
+    const result = composeOboCeilingChain(
+      mid.chain,
+      [{ tier: "user", id: "u1" }, orgFloor],
+      [
+        { narrower: { tier: "user", id: "u1" }, wider: { tier: "team", id: "t1" } },
+        { narrower: { tier: "team", id: "t1" }, wider: { tier: "workspace", id: "w1" } },
+      ],
+    );
+    expectChainMembers(result, [{ tier: "user", id: "u1" }, orgFloor]);
+  });
+
+  it("MIXED owner tiers, INCOMPLETE facts (no single global-narrowest) → fail closed", () => {
+    // Two owner elements, only an unrelated fact supplied → neither ⊆ the other.
+    const parent: OboCeilingChain = [{ tier: "team", id: "t1" }, orgFloor];
+    const child: OboCeilingChain = [{ tier: "user", id: "u1" }, orgFloor];
+    const result = composeOboCeilingChain(parent, child, [
+      // A fact about a DIFFERENT team — irrelevant to (user u1, team t1).
+      { narrower: { tier: "user", id: "u1" }, wider: { tier: "team", id: "t-other" } },
+    ]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("unverified_owner_containment");
   });
 
   it("composed child chain PASSES mint containment; a tampered chain (missing a child element) FAILS closed", () => {
@@ -421,5 +542,19 @@ describe("composeOboCeilingChain — child = child anchor ∪ parent chain", () 
     expect(err.denial.reason).toBe("disjoint_axis");
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toContain("disjoint");
+  });
+
+  it("OboCeilingCompositionError message branches for the unverified-containment denial", () => {
+    const parent: OboCeilingChain = [{ tier: "team", id: "t1" }, orgFloor];
+    const child: OboCeilingChain = [{ tier: "user", id: "u1" }, orgFloor];
+    const result = composeOboCeilingChain(parent, child);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const err = new OboCeilingCompositionError(result);
+    expect(err.code).toBe("AGENT_OBO_CEILING_DISJOINT");
+    expect(err.denial.reason).toBe("unverified_owner_containment");
+    expect(err.message).toContain("no verified containment");
+    expect(err.message).toContain("user:u1");
+    expect(err.message).toContain("team:t1");
   });
 });
