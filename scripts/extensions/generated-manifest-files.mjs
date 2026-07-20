@@ -27,16 +27,9 @@ export const GENERATED_MANIFEST_FILES = Object.freeze([
   // present extension's `cinatra.fieldRenderers` / `cinatra.roles` manifest
   // metadata, validated fail-closed (agent-binding-kinds.mjs).
   "src/lib/generated/agent-bindings.ts",
-  // The semantic-floor artifact binding (cinatra#151 Stage 6): the single
-  // "artifact-default-floor" role claimant, emitted INTO packages/objects
-  // (a package-local generated file — the one emitted path outside
-  // src/lib/generated/) because packages/objects is consumed from graphs
-  // where the host `@/` alias does not resolve (sdk-extensions /
-  // extension-repo typechecks). Same owner-ruled exempt class as the rest
-  // of this list: the exemption is THIS explicit list, never a directory,
-  // and `--check` byte-pins the file (policy note in
-  // scripts/audit/extension-coupling-gates.md).
-  "packages/objects/src/generated/artifact-floor.ts",
+  // (The former packages/objects/src/generated/artifact-floor.ts — the
+  // "artifact-default-floor" role claimant constant — was retired with
+  // @cinatra-ai/default-artifact, epic cinatra#1785 wave A5.)
   "src/lib/generated/widget-stream-public-paths.ts",
   // Inbound-webhook facility (cinatra#340): the host-owned generated maps for
   // the generic /webhook route. webhooks.server.ts carries the dispatch

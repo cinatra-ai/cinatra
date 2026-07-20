@@ -43,6 +43,9 @@ vi.mock("@/lib/database", () => ({
 }));
 
 const TEST_SCHEMA = "cinatra_test_artifact_blob_926";
+// Fixture artifact type the REQUIRED-objectType writer validates against
+// (epic #1785 wave A3).
+const FIXTURE_OBJECT_TYPE = "@cinatra-ai/test-fixture-artifact:doc";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 // vitest.config.ts sets the placeholder `unused:unused@` URL when the host
 // shell did not export a real value — skip on it (zero CI noise).
@@ -100,6 +103,22 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#926 content-addressed blob store (real DB
       }
     }
     (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
+
+    // Register the fixture artifact type the writer requires (epic #1785 wave
+    // A3: createSemanticArtifact validates a REQUIRED, installed, accepts-
+    // matching objectType before any blob IO). A disk/fixture type with no
+    // install row is ungoverned → write-eligible; its accepts admit text/plain.
+    const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
+    const { z } = await import("zod");
+    objectTypeRegistry.register({
+      type: FIXTURE_OBJECT_TYPE,
+      category: "report",
+      schema: z.record(z.string(), z.unknown()),
+      lifecycle: { sources: ["agent", "user", "import"], mutableBy: ["agent", "user"] },
+      renderers: { listRow: null, card: null, detail: null },
+      isArtifact: { accepts: { file: { mimeTypes: ["text/plain"] } } },
+      dispositions: { projection: "artifact-safe" },
+    });
   });
 
   afterAll(async () => {
@@ -136,6 +155,7 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#926 content-addressed blob store (real DB
       ownerLevel: "organization",
       ownerId: ORG,
       title: "926 integration one",
+      objectType: FIXTURE_OBJECT_TYPE,
       declaredMime: "text/plain",
       originKind: "agent_generated",
       skipFallbackClassification: true, // no BullMQ in the integration sandbox
@@ -184,6 +204,7 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#926 content-addressed blob store (real DB
       ownerLevel: "organization",
       ownerId: ORG,
       title: "926 integration two (dedupe)",
+      objectType: FIXTURE_OBJECT_TYPE,
       declaredMime: "text/plain",
       originKind: "agent_generated",
       skipFallbackClassification: true,
@@ -235,6 +256,7 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#926 content-addressed blob store (real DB
       ownerLevel: "organization",
       ownerId: ORG,
       title: "926 integration three (recreate)",
+      objectType: FIXTURE_OBJECT_TYPE,
       declaredMime: "text/plain",
       originKind: "agent_generated",
       skipFallbackClassification: true,

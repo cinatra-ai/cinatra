@@ -6,6 +6,8 @@ import {
   postgresSchema,
 } from "@/lib/database";
 import { SEMANTIC_ARTIFACT_OBJECT_TYPE } from "@cinatra-ai/artifacts";
+import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
 
 // Serve-side resolver. Tenant isolation is enforced HERE: a representation is
 // only resolvable when org_id + artifact_id + representation.id all match. Blob
@@ -37,6 +39,14 @@ export function resolveArtifactVersionForServe(input: {
 }): ServeResolution | null {
   ensurePostgresSchema();
   const schema = postgresSchema.replaceAll('"', '""');
+  // The registered isArtifact pack types (read at CALL time — never a frozen
+  // module-load snapshot). A pack-typed row's DIRECT (uploaded/latest,
+  // non-snapshot) representation must serve; the generic-literal gate alone
+  // 404s it (epic #1785 wave A4). Warm the registry first: the serve routes do
+  // not transitively trigger boot registration, so a cold process would see an
+  // empty artifact-type set and strand every pack row.
+  ensureArtifactTypesRegistered();
+  const artifactTypeIds = objectTypeRegistry.listArtifacts().map((d) => d.type);
   const [res] = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     queries: [
@@ -76,6 +86,21 @@ WHERE rep.id = $1 AND rep.artifact_id = $2 AND rep.org_id = $3
       WHERE snap.org_id = rep.org_id AND snap.object_id = rep.artifact_id
         AND snap.representation_revision_id = rep.id
     )
+    -- epic #1785 wave A4: a registered isArtifact PACK-typed row serves its
+    -- DIRECT (uploaded/latest, non-snapshot) representation — the A3 writer
+    -- stamps the exact pack type into objects.type instead of the retired
+    -- generic base. Guarded by NOT-claimed: a CLAIMED row (any eligible
+    -- binding) keeps serving ONLY through its content snapshot above
+    -- (cinatra#1430 claimant-isolation/redaction preserved), never its
+    -- latest representation.
+    OR (
+      o.type = ANY($5::text[])
+      AND NOT EXISTS (
+        SELECT 1 FROM "${schema}"."semantic_assertion" bnd
+        WHERE bnd.org_id = rep.org_id AND bnd.artifact_id = rep.artifact_id
+          AND bnd.assertion_basis = 'binding' AND bnd.eligibility = 'eligible'
+      )
+    )
   )
   AND (
     o.deleted_at IS NULL
@@ -92,6 +117,7 @@ LIMIT 1`,
           input.artifactId,
           input.orgId,
           SEMANTIC_ARTIFACT_OBJECT_TYPE,
+          artifactTypeIds,
         ],
       },
     ],

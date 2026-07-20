@@ -23,7 +23,7 @@ function fakeArtifact(id: string): ArtifactSummary {
   return {
     artifactId: id,
     objectType: "@cinatra-ai/artifact:object",
-    effectiveIdentity: { kind: "extension", extension: "@x/ext", basis: "binding", selectable: true },
+    effectiveIdentity: { kind: "extension", extension: "@x/ext" },
   } as unknown as ArtifactSummary;
 }
 
@@ -44,7 +44,7 @@ function fakeProps(): ArtifactRendererProps {
     },
     representation: { revisionId: "rev", mime: "application/json" },
     urls: { preview: "/p", download: "/d" },
-    identity: { kind: "extension", extension: "@x/ext", basis: "binding", selectable: true },
+    identity: { kind: "extension", extension: "@x/ext" },
     actions: { download: "/d", openInSource: null },
   };
 }

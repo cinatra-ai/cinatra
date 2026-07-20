@@ -1,5 +1,15 @@
-import type { ObjectCategory, ObjectTypeDefinition } from "./types";
+import type { ObjectCategory, ObjectTypeDefinition, TypeProjectionDisposition } from "./types";
 import { OBJECT_TYPE_NAMESPACE_RE, isTombstonedObjectTypeId } from "./namespace";
+
+/** The valid projection dispositions — the runtime guard the type-driven
+ *  resolver fails-closed against (an unknown/invalid declared value gates DOWN
+ *  to `artifact-safe`, never UP to `raw`). Kept in step with
+ *  `TypeProjectionDisposition` in ./types. */
+const VALID_PROJECTION_DISPOSITIONS: ReadonlySet<TypeProjectionDisposition> = new Set([
+  "raw",
+  "artifact-safe",
+  "none",
+]);
 
 // ---------------------------------------------------------------------------
 // Object type registry
@@ -135,6 +145,15 @@ class ObjectTypeRegistryImpl {
     }
   }
 
+  /** The package that registered `typeId`, or `null` for a host / built-in
+   *  (provenance-less) registration or an unregistered type. The type-driven
+   *  disposition seam (epic #1785) uses this to name the faceted projection's
+   *  registering (single-definer) extension from the registry instead of a DB
+   *  claim winner. */
+  getRegisteringPackage(typeId: string): string | null {
+    return this.packageByType.get(typeId) ?? null;
+  }
+
   /** The type ids a package registered (empty when the package registered none
    *  or registered without provenance). */
   getTypesForPackage(packageName: string): readonly string[] {
@@ -230,3 +249,61 @@ const _objectTypeRegistryHolder = globalThis as unknown as ObjectTypeRegistryHol
 export const objectTypeRegistry: ObjectTypeRegistryImpl =
   _objectTypeRegistryHolder[OBJECT_TYPE_REGISTRY_KEY] ??
   (_objectTypeRegistryHolder[OBJECT_TYPE_REGISTRY_KEY] = new ObjectTypeRegistryImpl());
+
+// ---------------------------------------------------------------------------
+// Type-driven projection-disposition seam (epic #1785)
+//
+// THE single shared resolver for "how does a row of this type project", read
+// from the in-process registry (the installed types) instead of the per-org DB
+// claim registry (`artifact_type_claims`) it replaces. The retirement cuts the
+// four disposition consumers — graphiti-projector, graphiti-rebuild, the MCP
+// artifact-scoped recall detection, and the effective-type-catalog — over to
+// THIS resolver so they never disagree and never depend on a live claim row.
+//
+// The dead projection-arbitration wrapper in ./claims
+// (`resolveClaimProjectionDisposition`) is deleted in wave A5 now that these
+// four disposition consumers read THIS resolver; the fail-closed mapping below
+// is the SAME "invalid → artifact-safe DOWN, never raw UP" semantics it encoded,
+// plus the new "uninstalled definer → none" backstop (a claim row survived an
+// uninstall and kept resolving; a registry lookup does not — an uninstalled
+// type's rows must fail closed to unprojected). `resolveClaimWinner` +
+// `claimWinnerProjectionDisposition` are RETAINED: A3's host-type claim binding
+// (resolve-bound-artifact-type), the access-provenance catalog, and the
+// draftable mutability lock still consume them.
+// ---------------------------------------------------------------------------
+
+/**
+ * THE type-driven projection disposition for `typeId`. Contract (epic #1785):
+ *  - the defining extension is NOT installed (`resolve` == null) → `"none"` —
+ *    fail closed, NEVER `raw`: an uninstalled type's rows are never projected.
+ *  - installed and the type DECLARES a valid disposition → that projection.
+ *  - installed but the declared projection is absent OR invalid → `"artifact-safe"`
+ *    (the default; an invalid value gates DOWN to metadata-only, never UP to raw).
+ *
+ * This function answers the DISPOSITION only. Whether a row is disposition-
+ * GOVERNED at all (vs a plain data object that keeps the generic projection
+ * path) is the separate `isDispositionGovernedType` predicate the projector and
+ * recall gate on first — an installed data type with no declared disposition is
+ * `artifact-safe` HERE but ungoverned THERE.
+ */
+export function resolveTypeProjectionDisposition(typeId: string): TypeProjectionDisposition {
+  const def = objectTypeRegistry.resolve(typeId);
+  if (def == null) return "none";
+  const declared = def.dispositions?.projection;
+  if (declared != null && VALID_PROJECTION_DISPOSITIONS.has(declared)) return declared;
+  return "artifact-safe";
+}
+
+/**
+ * Whether `typeId` is DISPOSITION-GOVERNED: installed AND its registration
+ * declares a disposition. A governed type routes through the type-driven
+ * disposition (skip / raw / faceted); an installed data object that declares no
+ * disposition is UNGOVERNED and keeps the generic projection / non-artifact
+ * path (mirrors today's "no winning claim → keep the existing path"). An
+ * uninstalled definer is ungoverned here — its fail-closed `none` is enforced by
+ * the recall/write surfaces, not by re-routing every unregistered row through
+ * the projector's skip.
+ */
+export function isDispositionGovernedType(typeId: string): boolean {
+  return objectTypeRegistry.resolve(typeId)?.dispositions != null;
+}

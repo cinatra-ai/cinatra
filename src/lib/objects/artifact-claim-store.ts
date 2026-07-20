@@ -179,9 +179,12 @@ export function reserveArtifactTypeClaim(input: ReserveArtifactTypeClaimInput): 
  * 'reserved' + DEDICATED (the CAS precondition — re-checked here so a failed
  * CAS never dormants anything), transition every default claim it TOTALLY
  * dominates to 'dormant' and write each one's winner-change event + queue
- * rows. Domination (mirrors `isDefaultClaimDominated` in the policy leaf):
- * a platform dedicated claim dominates defaults at EVERY scope; an org
- * dedicated claim dominates defaults at ITS scope only.
+ * rows. Domination rule (the default-claim dormancy rule, previously also
+ * mirrored by the `isDefaultClaimDominated` policy leaf, deleted in epic#1785
+ * wave A5 as dead — the live SQL implementations here and in
+ * `buildActivateClaimQuery` now carry it): a platform dedicated claim dominates
+ * defaults at EVERY scope; an org dedicated claim dominates defaults at ITS
+ * scope only.
  */
 export function buildActivateDormancyQuery(schemaName: string, claimId: string, actor: string): QueryInput {
   const s = schemaName.replaceAll('"', '""');

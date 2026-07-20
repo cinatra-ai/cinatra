@@ -24,29 +24,16 @@
 //     projects them via the #1427 epoch rebuild). A thin wrapper over
 //     reconcileTypeBindings.
 //
-// Each swept/drained row ALSO gets a guarded DEFAULT-COVERAGE FLOOR reconcile
-// (cinatra#1433): a winner transition that installs/retires a DEFAULT claim
-// changes whether the row is owed a floor assertion, and bindings alone cannot
-// express that (a default winner means NO binding — the row's identity is the
-// floor). The floor mutation itself is the EXACT rebalance tail the assertion
-// store exports (`buildFloorRebalanceAndRefreshQueries` — the single-sourced
-// floor mechanic; the uninstall-archival store composes it the same way), run
-// under the same per-artifact advisory lock, and only when a cheap guard
-// SELECT says the floor set is actually stale (the tail unconditionally bumps
-// objects.version + enqueues a projection refresh, so a blind per-row run
-// would churn versions on converged rows).
+// The default-artifact FLOOR was retired in epic #1785 (A5): identity is now a
+// pure function of the object type via the effective-identity resolver, so a
+// winner transition no longer changes any floor-assertion entitlement and the
+// per-row default-coverage floor reconcile that used to run here is gone.
 //
-// Writes the checkpoint + queue tables, the reconcile's semantic_assertion
-// writes, and — through the assertion store's floor tail only — the floor
-// assertion + its objects version-bump/outbox refresh. Reads `objects` to page
-// the sweep; never mutates `objects` outside that composed tail.
+// Writes the checkpoint + queue tables and the reconcile's semantic_assertion
+// writes. Reads `objects` to page the sweep; never mutates `objects`.
 
 import "server-only";
 
-import { GENERIC_ARTIFACT_OBJECT_TYPE } from "@cinatra-ai/objects/effective-identity";
-import { DEFAULT_ARTIFACT_EXTENSION } from "@cinatra-ai/objects/artifact-floor";
-
-import { buildFloorRebalanceAndRefreshQueries } from "@/lib/artifacts/semantic-assertion-store";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
@@ -193,79 +180,11 @@ LIMIT $4`,
   }));
 }
 
-/**
- * Guarded default-coverage floor reconcile for ONE artifact (cinatra#1433).
- * One cheap guard SELECT decides whether the row's floor set is stale:
- *
- *   - INSERT owed — the row's type is floor-covered (the generic artifact type
- *     or an active/retiring DEFAULT claim in the org scope chain — the same
- *     predicate as floorRebalanceSql's EXISTS branch) and the row has neither
- *     a live floor assertion nor any other eligible assertion;
- *   - ARCHIVE owed — a live floor assertion coexists with a non-default
- *     eligible assertion (e.g. a freshly landed dedicated binding).
- *
- * Only then does it open the advisory-locked transaction and run the REAL
- * rebalance tail (whose statements re-check state — a raced transition
- * converges; at worst one redundant projection refresh). Converged rows pay
- * exactly one indexed guard SELECT.
- */
-export function reconcileDefaultCoverageFloor(input: {
-  orgId: string;
-  artifactId: string;
-}): { changed: boolean } {
-  const guard = runPostgresQueriesSync({
-    connectionString: conn(),
-    queries: [
-      {
-        text: `SELECT
-  EXISTS (
-    SELECT 1 FROM "${q()}"."semantic_assertion" sa
-    WHERE sa.org_id = $1 AND sa.artifact_id = $2
-      AND sa.extension = $3 AND sa.eligibility = 'eligible') AS has_floor,
-  EXISTS (
-    SELECT 1 FROM "${q()}"."semantic_assertion" sa
-    WHERE sa.org_id = $1 AND sa.artifact_id = $2
-      AND sa.extension <> $3 AND sa.eligibility = 'eligible') AS has_other,
-  EXISTS (
-    SELECT 1 FROM "${q()}"."objects" o
-    WHERE o.id = $2 AND o.org_id = $1 AND o.deleted_at IS NULL
-      AND (o.type = '${GENERIC_ARTIFACT_OBJECT_TYPE}'
-           OR EXISTS (
-             SELECT 1 FROM "${q()}"."artifact_type_claims" c
-             WHERE c.object_type_id = o.type AND c.claim_kind = 'default'
-               AND c.status IN ('active','retiring')
-               AND (c.scope = 'platform' OR c.scope = 'org:' || $1)))) AS floor_due`,
-        values: [input.orgId, input.artifactId, DEFAULT_ARTIFACT_EXTENSION],
-      },
-    ],
-  });
-  const row = (guard?.[0]?.rows?.[0] ?? {}) as Record<string, unknown>;
-  const hasFloor = row.has_floor === true;
-  const hasOther = row.has_other === true;
-  const floorDue = row.floor_due === true;
-  const insertOwed = floorDue && !hasFloor && !hasOther;
-  const archiveOwed = hasFloor && hasOther;
-  if (!insertOwed && !archiveOwed) return { changed: false };
-  runPostgresQueriesSync({
-    connectionString: conn(),
-    transaction: true,
-    queries: [
-      { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.artifactId] },
-      // Pass THIS module's schema binding explicitly so the composed tail and
-      // the guard above speak one schema (the sibling-builder convention).
-      ...buildFloorRebalanceAndRefreshQueries(input.orgId, input.artifactId, "agent", postgresSchema),
-    ],
-  });
-  return { changed: true };
-}
-
 export interface SweepResult {
   processed: number;
   inserted: number;
   archived: number;
   quarantinedSkipped: number;
-  /** Rows whose default-coverage floor set was rebalanced (cinatra#1433). */
-  floorsRebalanced: number;
   done: boolean;
   cursor: string | null;
   batches: number;
@@ -302,7 +221,6 @@ export function reconcileTypeBindings(input: {
   let inserted = 0;
   let archived = 0;
   let quarantinedSkipped = 0;
-  let floorsRebalanced = 0;
   let batches = 0;
   let done = false;
 
@@ -325,12 +243,6 @@ export function reconcileTypeBindings(input: {
       const res = reconcileArtifactBinding({ orgId: obj.orgId, artifactId: obj.id });
       batchInserted += res.inserted;
       batchArchived += res.archived;
-      // Default-coverage floor convergence (cinatra#1433): a winner transition
-      // over a DEFAULT claim changes floor entitlement, which the binding
-      // reconcile cannot express. Guarded — converged rows pay one SELECT.
-      if (reconcileDefaultCoverageFloor({ orgId: obj.orgId, artifactId: obj.id }).changed) {
-        floorsRebalanced += 1;
-      }
       if (obj.quarantined) batchQuarantined += 1;
       cursor = obj.id;
     }
@@ -353,7 +265,7 @@ export function reconcileTypeBindings(input: {
     }
   }
 
-  return { processed, inserted, archived, quarantinedSkipped, floorsRebalanced, done, cursor, batches };
+  return { processed, inserted, archived, quarantinedSkipped, done, cursor, batches };
 }
 
 /**
@@ -443,19 +355,13 @@ FOR UPDATE OF rq SKIP LOCKED`,
       if (kind === "binding-reconcile-write") {
         // Object-side: reconcile exactly this artifact. The row's presence is
         // itself the has_claim/has_binding gate (it was only enqueued when the
-        // write could affect a binding OR floor coverage); the guarded entry
-        // re-resolves the LIVE winner, so a type since changed further, or a
-        // claim since retired, still converges. The floor reconcile gives a
-        // create/type-change into a DEFAULT-claimed type its owed floor
-        // assertion (cinatra#1433) — the binding half is a no-op there.
+        // write could affect a binding); the guarded entry re-resolves the LIVE
+        // winner, so a type since changed further, or a claim since retired,
+        // still converges.
         reconcileArtifactBindingForWrite({
           orgId: String(row.org_id),
           artifactId: String(row.object_id),
           type: objectTypeId,
-        });
-        reconcileDefaultCoverageFloor({
-          orgId: String(row.org_id),
-          artifactId: String(row.object_id),
         });
       } else {
         reconcileTypeBindings({ scope, objectTypeId, generation, restart: true });

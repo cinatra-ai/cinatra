@@ -1,12 +1,14 @@
-// Claimed-row faceted projection (cinatra#1427 AC-3) + projection-policy
-// stale-epoch fencing (AC-4) in the projector / outbox worker.
+// Claimed-row faceted projection (cinatra#1427 AC-3; epic #1785 type-driven
+// cutover) + projection-policy stale-epoch fencing (AC-4) in the projector /
+// outbox worker.
 //
-// AC-3: a row whose objects.type carries a WINNING artifact-type claim leaves
-// the raw-data projection path — the episode body is the artifact-safe faceted
-// shape (base type + claiming extension + effective identity + a capped,
-// whitelist-only excerpt), NEVER a spread of row.data. The claim winner comes
-// from the pure claims leaf; identity from the effective-identity service —
-// both mocked here (the host reads have their own suites).
+// AC-3: a row whose objects.type is a DISPOSITION-GOVERNED type leaves the
+// raw-data projection path — the episode body is the artifact-safe faceted shape
+// (base type + registering extension + effective identity + a capped,
+// whitelist-only excerpt), NEVER a spread of row.data. The disposition now comes
+// from the type-driven registry resolver (epic #1785), not a DB claim winner;
+// identity from the effective-identity service (mocked here — the host reads
+// have their own suites).
 //
 // AC-4 (worker half): an outbox item STAMPED with an epoch older than the
 // group's current projection-policy epoch is discarded terminally (settled
@@ -30,10 +32,12 @@ vi.mock("@/lib/objects/artifact-claim-store", () => ({
 }));
 vi.mock("@/lib/objects/effective-identity", () => ({
   resolveArtifactEffectiveIdentity: vi.fn(() => ({
-    identity: { kind: "default-artifact", selectable: false, assertionId: null },
+    identity: { kind: "no-primary" },
     eligibleExtensions: [],
   })),
 }));
+
+import { z } from "zod";
 
 import {
   projectObjectToGraphiti,
@@ -44,33 +48,36 @@ import {
 } from "../graphiti-projector";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { addEpisode } from "../graphiti-client";
-import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
 import { resolveArtifactEffectiveIdentity } from "@/lib/objects/effective-identity";
+import { objectTypeRegistry } from "../registry";
+import type { TypeProjectionDisposition } from "../types";
 
 const runPg = runPostgresQueriesSync as unknown as ReturnType<typeof vi.fn>;
 const addEp = addEpisode as unknown as ReturnType<typeof vi.fn>;
-const readClaims = readArtifactTypeClaimsForOrg as unknown as ReturnType<typeof vi.fn>;
 const resolveIdentity = resolveArtifactEffectiveIdentity as unknown as ReturnType<typeof vi.fn>;
 
 const CLAIMED_TYPE = "@cinatra-ai/email:message";
 const EMAIL_EXT = "@cinatra-ai/email-artifact";
 
-function claim(over: Record<string, unknown> = {}) {
-  return {
-    id: "claim-1",
-    scope: "platform",
-    objectTypeId: CLAIMED_TYPE,
-    claimKind: "dedicated",
-    status: "active",
-    extensionPackage: EMAIL_EXT,
-    extensionVersion: "1.0.0",
-    generation: 1,
-    dispositions: null,
-    installId: null,
-    createdAt: null,
-    updatedAt: null,
-    ...over,
-  };
+// Register CLAIMED_TYPE as a disposition-GOVERNED type in the type-driven
+// registry (the authority the retirement replaced the DB claim with). `pkg` is
+// the registering (single-definer) extension the faceted body names.
+function registerClaimed(
+  projection: TypeProjectionDisposition,
+  pkg: string | null = EMAIL_EXT,
+  type = CLAIMED_TYPE,
+) {
+  objectTypeRegistry.register(
+    {
+      type,
+      category: "report",
+      schema: z.record(z.string(), z.unknown()),
+      lifecycle: { sources: ["agent"], mutableBy: ["agent"] },
+      renderers: { listRow: null, card: null, detail: null },
+      dispositions: { projection },
+    },
+    pkg ?? undefined,
+  );
 }
 
 function claimedRow(over: Record<string, unknown> = {}) {
@@ -101,13 +108,12 @@ function claimedRow(over: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  objectTypeRegistry._clearForTests();
   runPg.mockReset();
   addEp.mockReset();
-  readClaims.mockReset();
   resolveIdentity.mockReset();
-  readClaims.mockReturnValue([]);
   resolveIdentity.mockReturnValue({
-    identity: { kind: "default-artifact", selectable: false, assertionId: null },
+    identity: { kind: "no-primary" },
     eligibleExtensions: [],
   });
 });
@@ -149,8 +155,6 @@ describe("projectClaimedRowFaceted — whitelist-only shape", () => {
         claimKind: "dedicated",
         claimGeneration: 2,
         effectiveExtension: EMAIL_EXT,
-        identityBasis: "binding",
-        selectable: true,
         eligibleExtensions: [EMAIL_EXT],
       },
     );
@@ -160,8 +164,6 @@ describe("projectClaimedRowFaceted — whitelist-only shape", () => {
       claimKind: "dedicated",
       claimGeneration: 2,
       primaryExtension: EMAIL_EXT,
-      identityBasis: "binding",
-      selectable: true,
       eligibleExtensions: [EMAIL_EXT],
       title: "T",
       excerpt: "Hi",
@@ -181,13 +183,10 @@ describe("projectClaimedRowFaceted — whitelist-only shape", () => {
         claimKind: "dedicated",
         claimGeneration: 1,
         effectiveExtension: null,
-        identityBasis: "catalog",
-        selectable: false,
         eligibleExtensions: [],
       },
     );
     expect(body.primaryExtension).toBe(EMAIL_EXT);
-    expect(body.selectable).toBe(false);
   });
 });
 
@@ -195,11 +194,11 @@ describe("projectClaimedRowFaceted — whitelist-only shape", () => {
 // projectObjectToGraphiti — claimed rows leave the raw path.
 // ---------------------------------------------------------------------------
 
-describe("projectObjectToGraphiti — claimed typed row (AC-3)", () => {
+describe("projectObjectToGraphiti — governed typed row (AC-3, type-driven)", () => {
   it("projects the FACETED shape (identity from the effective-identity service), never raw bytes", async () => {
-    readClaims.mockReturnValue([claim()]);
+    registerClaimed("artifact-safe");
     resolveIdentity.mockReturnValue({
-      identity: { kind: "extension", extension: EMAIL_EXT, basis: "binding", selectable: true, assertionId: "sa-1" },
+      identity: { kind: "extension", extension: EMAIL_EXT },
       eligibleExtensions: [EMAIL_EXT],
     });
     // readCanonicalRow returns the claimed row; every write mock returns ok.
@@ -211,17 +210,17 @@ describe("projectObjectToGraphiti — claimed typed row (AC-3)", () => {
     const result = await projectObjectToGraphiti({ objectId: "obj-claimed", objectVersion: 1, orgId: "org-1" });
 
     expect(result.skipped).toBeUndefined();
-    // The claim registry + identity service were consulted (no re-derivation).
-    expect(readClaims).toHaveBeenCalledWith("org-1");
+    // The identity service was consulted (no re-derivation).
     expect(resolveIdentity).toHaveBeenCalledWith({ orgId: "org-1", artifactId: "obj-claimed", baseType: CLAIMED_TYPE });
     expect(addEp).toHaveBeenCalledTimes(1);
 
     const body = JSON.parse(addEp.mock.calls[0][0].episode_body);
     expect(body.baseType).toBe(CLAIMED_TYPE);
+    // claimedBy is the type's REGISTERING (single-definer) extension from the
+    // registry (no DB claim winner under the type-driven model).
     expect(body.claimedBy).toBe(EMAIL_EXT);
+    expect(body.claimKind).toBe("dedicated");
     expect(body.primaryExtension).toBe(EMAIL_EXT);
-    expect(body.identityBasis).toBe("binding");
-    expect(body.selectable).toBe(true);
     expect(body.excerpt).toBe("Quarterly update");
     // The raw-data fields are absent — no bytes / storage keys reach Graphiti.
     expect(body.rawBlob).toBeUndefined();
@@ -229,8 +228,24 @@ describe("projectObjectToGraphiti — claimed typed row (AC-3)", () => {
     expect(addEp.mock.calls[0][0].episode_body).not.toContain("s3://bucket/secret");
   });
 
+  it("a host-registered type (no package provenance) names its NAMESPACE package as claimedBy", async () => {
+    // Registered without a package arg — the faceted body falls back to the id's
+    // namespace-defining package.
+    registerClaimed("artifact-safe", null);
+    resolveIdentity.mockReturnValue({
+      identity: { kind: "extension", extension: "@cinatra-ai/email" },
+      eligibleExtensions: ["@cinatra-ai/email"],
+    });
+    runPg.mockReturnValue([{ rows: [], rowCount: 1 }]);
+    runPg.mockReturnValueOnce([{ rows: [claimedRow()] }]);
+
+    await projectObjectToGraphiti({ objectId: "obj-claimed", objectVersion: 1, orgId: "org-1" });
+    const body = JSON.parse(addEp.mock.calls[0][0].episode_body);
+    expect(body.claimedBy).toBe("@cinatra-ai/email");
+  });
+
   it("disposition projection='none' → terminal skip (no episode, outbox settles)", async () => {
-    readClaims.mockReturnValue([claim({ dispositions: { projection: "none" } })]);
+    registerClaimed("none");
     runPg.mockReturnValue([{ rows: [], rowCount: 1 }]);
     runPg.mockReturnValueOnce([{ rows: [claimedRow()] }]);
 
@@ -244,7 +259,7 @@ describe("projectObjectToGraphiti — claimed typed row (AC-3)", () => {
   });
 
   it("disposition projection='raw' → explicit raw opt-in keeps the raw-data body", async () => {
-    readClaims.mockReturnValue([claim({ dispositions: { projection: "raw" } })]);
+    registerClaimed("raw");
     runPg.mockReturnValue([{ rows: [], rowCount: 1 }]);
     runPg.mockReturnValueOnce([{ rows: [claimedRow({ data: { subject: "S", customField: "kept" } })] }]);
 
@@ -257,10 +272,10 @@ describe("projectObjectToGraphiti — claimed typed row (AC-3)", () => {
     expect(body.baseType).toBeUndefined(); // not faceted
   });
 
-  it("invalid dispositions fail CLOSED to the faceted (metadata-only) shape, never up to raw", async () => {
-    readClaims.mockReturnValue([claim({ dispositions: { projection: "totally-invalid" } })]);
+  it("an invalid declared projection fails CLOSED to the faceted (metadata-only) shape, never up to raw", async () => {
+    registerClaimed("totally-invalid" as unknown as TypeProjectionDisposition);
     resolveIdentity.mockReturnValue({
-      identity: { kind: "extension", extension: EMAIL_EXT, basis: "catalog", selectable: false, assertionId: null },
+      identity: { kind: "extension", extension: EMAIL_EXT },
       eligibleExtensions: [],
     });
     runPg.mockReturnValue([{ rows: [], rowCount: 1 }]);
@@ -273,8 +288,15 @@ describe("projectObjectToGraphiti — claimed typed row (AC-3)", () => {
     expect(body.secretBytes).toBeUndefined();
   });
 
-  it("no winning claim → keeps the existing (raw / generic) path, identity service untouched", async () => {
-    readClaims.mockReturnValue([]); // no claim for this type
+  it("an UNGOVERNED type (no declared disposition) keeps the existing (raw / generic) path, identity service untouched", async () => {
+    // Registered, but declares NO disposition — ungoverned, keeps the raw path.
+    objectTypeRegistry.register({
+      type: CLAIMED_TYPE,
+      category: "report",
+      schema: z.record(z.string(), z.unknown()),
+      lifecycle: { sources: ["agent"], mutableBy: ["agent"] },
+      renderers: { listRow: null, card: null, detail: null },
+    });
     runPg.mockReturnValue([{ rows: [], rowCount: 1 }]);
     runPg.mockReturnValueOnce([{ rows: [claimedRow({ data: { subject: "S", customField: "kept" } })] }]);
 
@@ -282,15 +304,17 @@ describe("projectObjectToGraphiti — claimed typed row (AC-3)", () => {
 
     expect(resolveIdentity).not.toHaveBeenCalled();
     const body = JSON.parse(addEp.mock.calls[0][0].episode_body);
-    expect(body.customField).toBe("kept"); // raw path (unclaimed non-artifact row)
+    expect(body.customField).toBe("kept"); // raw path (ungoverned data row)
   });
 
-  it("generic artifact rows are never treated as claimed (claim registry not consulted)", async () => {
+  it("generic artifact rows are never treated as governed (own artifact-safe branch)", async () => {
     runPg.mockReturnValue([{ rows: [], rowCount: 1 }]); // semantic_assertion read + markProjected
     runPg.mockReturnValueOnce([{ rows: [claimedRow({ type: "@cinatra-ai/artifact:object", data: {} })] }]); // readCanonicalRow
 
     await projectObjectToGraphiti({ objectId: "obj-claimed", objectVersion: 1, orgId: "org-1" });
-    expect(readClaims).not.toHaveBeenCalled();
+    // The generic type has its own projectArtifactSafe branch; the identity
+    // service is not consulted via the governed-row path.
+    expect(resolveIdentity).not.toHaveBeenCalled();
   });
 });
 

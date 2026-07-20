@@ -1,10 +1,4 @@
 import "server-only";
-// The floor type's package name comes from the generated manifest data
-// (the single "artifact-default-floor" role claimant) via the PURE-DATA
-// @cinatra-ai/objects/artifact-floor subpath — no heavy objects barrel in
-// the import graph (the old leaf-mirror rationale holds; the mirror
-// itself is retired, cinatra#151 Stage 6).
-import { DEFAULT_ARTIFACT_EXTENSION } from "@cinatra-ai/objects/artifact-floor";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import {
   getPostgresConnectionString,
@@ -45,8 +39,8 @@ export type ProducerAssertionPlan = {
    *  `null` when the run is missing or cross-org -- never persist an
    *  unvalidated / cross-tenant run id. */
   validatedRunId: string | null;
-  /** Distinct, default-floor-filtered semantic extension ids the
-   *  producing agent declared. Empty when no trusted producer. */
+  /** Distinct semantic extension ids the producing agent declared.
+   *  Empty when no trusted producer. */
   produces: string[];
 };
 
@@ -162,15 +156,12 @@ FROM "${schema}"."agent_templates" WHERE id = $1 LIMIT 1`,
     const refs = producesReader.readAgentProducesFromPackageManifest(
       pkg.manifest,
     );
-    // De-dupe + drop the default-floor type (the floor is owned by the
-    // rebalance). `buildAssertSemanticTypeQueries` throws synchronously
-    // on it, which must NEVER fail artifact creation.
+    // De-dupe the declared extension ids.
     const seen = new Set<string>();
     const candidateProduces: string[] = [];
     for (const r of refs) {
       const ext = r.extension;
       if (!ext || seen.has(ext)) continue;
-      if (ext === DEFAULT_ARTIFACT_EXTENSION) continue;
       seen.add(ext);
       candidateProduces.push(ext);
     }

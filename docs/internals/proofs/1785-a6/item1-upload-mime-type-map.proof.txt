@@ -1,0 +1,16 @@
+# ITEM 1 (Stage-3 re-prove) — upload MIME->typed pack via the REGISTRY/required set (not hardcoded packs)
+# Re-run at the FINAL branch tip 3e247bb492c2dbe667af60d3858d859e812138d5 (retirement complete).
+# (a) unit suite: src/lib/artifacts/__tests__/upload-artifact-type-map.test.ts
+#     (resolveUploadArtifactType + mimeAcceptedByAccepts + selectRequiredArtifactUploadCandidates w/ injected registry snapshot)
+# (b) core-extension-instance-coupling-ban gate (the IoC invariant the registry-route satisfies)
+# NOTE: item 4's live lane-DB harness (item4-clean-boot.proof.txt, Part C) ADDITIONALLY exercises the SAME
+#       resolver against the registry warmed from the REAL extensions/ tree — application/pdf -> the one typed
+#       pack, text/markdown + empty MIME refused, the '*/*' floor never a candidate.
+
+===== (a) npx vitest run src/lib/artifacts/__tests__/upload-artifact-type-map.test.ts =====
+ Test Files  1 passed (1)
+      Tests  16 passed (16)
+
+===== (b) node scripts/audit/core-extension-instance-coupling-ban.mjs =====
+[core-extension-instance-coupling-ban] OK — zero hardcoded extension-instance references (baseline PINNED EMPTY since the zero-floor flip, cinatra#151 Stage 7) [data-contract allowlisted (sanctioned, not counted): 0] (exempt set: generated manifest tree + documented data-contract-ID allowlist ONLY — see scripts/audit/extension-coupling-gates.md).
+exit=0

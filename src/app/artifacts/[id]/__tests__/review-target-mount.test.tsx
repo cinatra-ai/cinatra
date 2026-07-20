@@ -34,7 +34,7 @@ function props(): ArtifactRendererProps {
     },
     representation: { revisionId: "rev_1", mime: "application/json" },
     urls: { preview: "/p", download: "/d" },
-    identity: { kind: "extension", extension: "@x/ext", basis: "binding", selectable: true },
+    identity: { kind: "extension", extension: "@x/ext" },
     actions: { download: "/d", openInSource: null },
   };
 }

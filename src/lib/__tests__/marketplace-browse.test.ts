@@ -86,7 +86,7 @@ describe("loadMarketplaceBrowse", () => {
     // resolve a human name from the static manifest — so the loader injects the
     // manifest displayName by EXACT package identity. Asserted against the real
     // manifest value (no hardcoded string that could drift).
-    const pkg = "@cinatra-ai/default-artifact";
+    const pkg = "@cinatra-ai/chart-artifact";
     const expected = STATIC_EXTENSION_MANIFEST[pkg]?.displayName;
     expect(expected).toBeTruthy(); // guards the fixture package still ships
     publicListMock.mockResolvedValue({
@@ -106,12 +106,12 @@ describe("loadMarketplaceBrowse", () => {
     // A package_name that is a prefix/suffix neighbour of a real bundled key
     // must NOT fuzzy-match it. Proves the lookup is `MANIFEST[name]` (exact key)
     // and can never leak one extension's human name onto a look-alike identity.
-    const bundled = "@cinatra-ai/default-artifact";
+    const bundled = "@cinatra-ai/chart-artifact";
     expect(STATIC_EXTENSION_MANIFEST[bundled]?.displayName).toBeTruthy();
     for (const nearMiss of [
-      "@cinatra-ai/default-artifactx", // suffix neighbour
-      "@cinatra-ai/default-artifac", // truncated neighbour
-      "@cinatra-ai/default", // scope-prefix neighbour
+      "@cinatra-ai/chart-artifactx", // suffix neighbour
+      "@cinatra-ai/chart-artifac", // truncated neighbour
+      "@cinatra-ai/chart", // scope-prefix neighbour
     ]) {
       expect(STATIC_EXTENSION_MANIFEST[nearMiss]).toBeUndefined(); // guard: truly absent
       publicListMock.mockReset();

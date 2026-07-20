@@ -1,9 +1,31 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { z } from "zod";
+import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 
 import {
+  loadStoredArtifactObjects,
   projectStoredObjectRows,
   type ScopeNameResolver,
 } from "../stored-objects-inventory";
+
+// The loader's dynamic dependencies (lazily imported inside
+// loadStoredArtifactObjects) — mocked so the fan-out logic is testable without
+// a DB. The pure-projection tests below never invoke these paths.
+const listObjectsByFilter = vi.fn();
+vi.mock("@/lib/objects-store", () => ({
+  listObjectsByFilter: (...a: unknown[]) => listObjectsByFilter(...a),
+}));
+vi.mock("@/lib/register-all-object-types", () => ({
+  registerAllObjectTypes: () => {},
+}));
+vi.mock("@/lib/better-auth-db", () => {
+  const q = { from: () => q, where: () => Promise.resolve([]) };
+  return {
+    betterAuthDb: { select: () => q },
+    betterAuthOrganizations: { id: {}, name: {} },
+    betterAuthTeams: { id: {}, name: {} },
+  };
+});
 
 const names: ScopeNameResolver = (level, ownerId) => {
   const table: Record<string, string> = {
@@ -24,6 +46,57 @@ function rec(over: Partial<Parameters<typeof projectStoredObjectRows>[0][number]
     ...over,
   };
 }
+
+describe("loadStoredArtifactObjects — type-driven fan-out (epic #1785 A4)", () => {
+  const GENERIC = "@cinatra-ai/artifact:object";
+  const PACK_TYPE = "@cinatra-ai/pdf-artifact:document";
+  const PACK_EXT = "@cinatra-ai/pdf-artifact";
+
+  afterEach(() => {
+    listObjectsByFilter.mockReset();
+    objectTypeRegistry._clearForTests();
+  });
+
+  it("reads the generic base AND every registered isArtifact pack type (pack rows are not stranded)", async () => {
+    objectTypeRegistry.register(
+      {
+        type: PACK_TYPE,
+        category: "report",
+        schema: z.record(z.string(), z.unknown()),
+        lifecycle: { sources: ["agent"], mutableBy: ["agent"] },
+        renderers: { listRow: null, card: null, detail: null },
+        isArtifact: { accepts: { file: { mimeTypes: ["application/pdf"] } } },
+        dispositions: { projection: "artifact-safe" },
+      } as never,
+      PACK_EXT,
+    );
+    const row = (id: string, type: string) => ({
+      id,
+      type,
+      data: { artifactType: type, title: id },
+      version: 1,
+      updatedAt: `2026-07-1${id === "g1" ? "8" : "9"}T10:00:00.000Z`,
+      ownerLevel: "organization" as const,
+      ownerId: "org_acme",
+    });
+    listObjectsByFilter.mockImplementation((f: { type: string }) =>
+      f.type === GENERIC ? [row("g1", GENERIC)] : f.type === PACK_TYPE ? [row("p1", PACK_TYPE)] : [],
+    );
+
+    const rows = await loadStoredArtifactObjects({ orgId: "org_acme" });
+    expect(rows.map((r) => r.objectId).sort()).toEqual(["g1", "p1"]);
+    const queriedTypes = listObjectsByFilter.mock.calls
+      .map((c) => (c[0] as { type: string }).type)
+      .sort();
+    expect(queriedTypes).toEqual([GENERIC, PACK_TYPE].sort());
+  });
+
+  it("returns [] for a null org without querying", async () => {
+    const rows = await loadStoredArtifactObjects({ orgId: null });
+    expect(rows).toEqual([]);
+    expect(listObjectsByFilter).not.toHaveBeenCalled();
+  });
+});
 
 describe("projectStoredObjectRows", () => {
   it("projects display name, type id, version, updated, and an entity-named scope", () => {

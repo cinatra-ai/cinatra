@@ -57,7 +57,7 @@ import {
   buildArchiveArtifactAssertionsWithLineageQuery,
 } from "@/lib/objects/artifact-uninstall-operations";
 import { runInstallAnchorClaimActivation } from "@/lib/objects/artifact-claim-install-anchor";
-import { buildFloorRebalanceAndRefreshQueries } from "@/lib/artifacts/semantic-assertion-store";
+import { buildGraphitiRefreshQueries } from "@/lib/artifacts/semantic-assertion-store";
 
 const EVIDENCE = process.env.E2E_EVIDENCE_FILE;
 function evidence(tag: string, value: unknown) {
@@ -474,7 +474,7 @@ describe("cinatra#1837 W3 — R3/R4/R2 claim lifecycle (real DB)", () => {
           artifactId: seeded[0].artifactId,
           extension: f.pkg,
         }),
-        ...buildFloorRebalanceAndRefreshQueries(f.orgId, seeded[0].artifactId, "user"),
+        ...buildGraphitiRefreshQueries(f.orgId, seeded[0].artifactId),
       ],
     });
     const batchArchived = batchTx[1].rowCount; // the archive CTE's real rowCount

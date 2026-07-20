@@ -50,7 +50,7 @@ function tuple(over: Partial<AdmittedClientBundleTuple> = {}): AdmittedClientBun
 const okActivate = { materialize: async () => {}, verify: async () => true };
 
 function winner(extension: string): EffectiveIdentity {
-  return { kind: "extension", extension, basis: "binding", selectable: true, assertionId: "sa_1" };
+  return { kind: "extension", extension };
 }
 
 function dispatchFor(args: { baseType: string; identity: EffectiveIdentity; mime: string }) {
@@ -137,7 +137,7 @@ describe("AC-1 — a runtime-registered representation provider loads with zero 
       ...okActivate,
     });
     const key = runtimeAssetRegistry.keyFor(PKG, "detail");
-    const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
+    const floor: EffectiveIdentity = { kind: "no-primary" };
 
     expect(dispatchFor({ baseType: "@cinatra-ai/artifact:object", identity: floor, mime: "application/json" })).toEqual({
       kind: "representation",

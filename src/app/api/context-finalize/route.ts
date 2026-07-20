@@ -24,6 +24,7 @@ import {
   MissingRepresentationError,
   SelectionCoherenceError,
 } from "@/lib/artifacts/context-selection-finalize";
+import { ensureArtifactTypesRegistered } from "@/lib/artifacts/ensure-artifact-registry";
 
 // ---------------------------------------------------------------------------
 // POST /api/context-finalize
@@ -133,6 +134,12 @@ export async function POST(req: Request): Promise<Response> {
       selectionMode,
       trusted,
     });
+    // epic #1785 wave A4: warm the object-type registry before finalize. The
+    // finalizer is a sync store-leaf (it cannot import the heavy registrar), so
+    // its coherence gate reads the in-process artifact-type set as-is; warming
+    // HERE guarantees a NON-CLAIMED pack-typed selection is admitted even on a
+    // cold process that never ran a resolve first.
+    ensureArtifactTypesRegistered();
     let wroteAny = false;
     try {
       const results = finalizeContextSelectionPinsAtomic(

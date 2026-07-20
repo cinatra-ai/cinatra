@@ -44,12 +44,11 @@ export const CLASSIFICATIONS = Object.freeze([
 // are generator output — the legitimate data-driven install list — not
 // hand-coupling. The owner ruling on cinatra-ai/cinatra#36 made the
 // generator-emitted set the ONE permanent-exempt class (the sibling generated
-// maps are part of it, not a separate concession). The set lives mostly under
-// src/lib/generated/ plus the ONE package-local emission
-// packages/objects/src/generated/artifact-floor.ts (cinatra#151 Stage 6 — the
-// semantic-floor binding consumed from graphs where the host `@/` alias does
-// not resolve; same generator, same `--check` byte pin, same explicit-list
-// discipline). Two integrity guards keep the exemption honest:
+// maps are part of it, not a separate concession). The set lives under
+// src/lib/generated/ (the former package-local emission
+// packages/objects/src/generated/artifact-floor.ts was retired with
+// @cinatra-ai/default-artifact, epic cinatra#1785 wave A5). Two integrity
+// guards keep the exemption honest:
 //   - it is an EXPLICIT file list, never a directory prefix — a hand-added
 //     extra file under src/lib/generated/ (or any generated/ dir) is counted
 //     (default class runtime-coupling → NEW key → hard fail);

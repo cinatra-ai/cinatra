@@ -274,6 +274,16 @@ function registerEmailObjectTypes(): void {
   // a successful provider.send(). Identity = audit row idempotency_key.
   objectTypeRegistry.register({
     type: "@cinatra-ai/email:sent-email",
+    // Type-driven disposition (epic #1785): relocated from the
+    // @cinatra-ai/email-artifacts pack claim so the registry is the single
+    // disposition authority. Parity is pinned by the inventory-parity test.
+    dispositions: {
+      projection: "artifact-safe",
+      pinnable: false,
+      snapshotPolicy: "metadata",
+      sensitivity: "normal",
+      mutability: "record",
+    },
     category: "report",
     schema: z.object({
       auditId: z.string().min(1),
@@ -311,6 +321,15 @@ function registerEmailObjectTypes(): void {
   // internetMessageId (unique per email globally).
   objectTypeRegistry.register({
     type: "@cinatra-ai/email:received-reply",
+    // Type-driven disposition (epic #1785): relocated from the
+    // @cinatra-ai/email-artifacts pack claim (parity pinned by test).
+    dispositions: {
+      projection: "artifact-safe",
+      pinnable: false,
+      snapshotPolicy: "metadata",
+      sensitivity: "normal",
+      mutability: "record",
+    },
     category: "report",
     schema: z.object({
       connectorId: z.string().min(1),
@@ -398,6 +417,15 @@ function registerEmailObjectTypes(): void {
   // (identityKey → null), preserving existing artifact ids.
   objectTypeRegistry.register({
     type: "@cinatra-ai/email:body",
+    // Type-driven disposition (epic #1785): relocated from the
+    // @cinatra-ai/email-artifacts pack claim (parity pinned by test).
+    dispositions: {
+      projection: "artifact-safe",
+      pinnable: true,
+      snapshotPolicy: "content",
+      sensitivity: "normal",
+      mutability: "draftable",
+    },
     category: "content",
     schema: z.object({
       subject: z.string().optional(),
@@ -437,6 +465,19 @@ function registerEmailObjectTypes(): void {
   // in place; no run frame yields no identity (HITL rather than a global merge).
   objectTypeRegistry.register({
     type: "@cinatra-ai/email:recipient",
+    // Type-driven disposition (epic #1785) — SECURITY-CRITICAL. Relocated from
+    // the @cinatra-ai/email-artifacts pack claim: projection MUST stay 'none' so
+    // recipient email addresses (sensitivity: 'sensitive') are NEVER projected
+    // into the derived Graphiti index. The type-driven projector regression test
+    // pins recipient rows to a terminal skip; the inventory-parity test pins this
+    // payload equal to the pack manifest.
+    dispositions: {
+      projection: "none",
+      pinnable: false,
+      snapshotPolicy: "none",
+      sensitivity: "sensitive",
+      mutability: "record",
+    },
     category: "report",
     schema: z.object({
       runId: z.string().min(1),
@@ -516,6 +557,15 @@ function registerEmailObjectTypes(): void {
 function registerLinkedinObjectTypes(): void {
   objectTypeRegistry.register({
     type: "@cinatra-ai/linkedin:post-draft",
+    // Type-driven disposition (epic #1785): relocated from the
+    // @cinatra-ai/linkedin-artifacts pack claim (parity pinned by test).
+    dispositions: {
+      projection: "artifact-safe",
+      pinnable: true,
+      snapshotPolicy: "content",
+      sensitivity: "normal",
+      mutability: "draftable",
+    },
     category: "content",
     schema: z.object({
       content: z.string().optional(),
@@ -619,6 +669,15 @@ function registerLinkedinObjectTypes(): void {
 function registerDrupalObjectTypes(): void {
   objectTypeRegistry.register({
     type: "@cinatra-ai/drupal:node",
+    // Type-driven disposition (epic #1785): relocated from the
+    // @cinatra-ai/drupal-artifacts pack claim (parity pinned by test).
+    dispositions: {
+      projection: "artifact-safe",
+      pinnable: false,
+      snapshotPolicy: "none",
+      sensitivity: "normal",
+      mutability: "external",
+    },
     category: "content",
     schema: z
       .object({

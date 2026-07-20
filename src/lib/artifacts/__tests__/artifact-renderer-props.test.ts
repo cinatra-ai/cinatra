@@ -46,9 +46,6 @@ type _HostSdkExact = AssertTrue<Equals<ArtifactRendererProps, SdkArtifactRendere
 const identity: EffectiveIdentity = {
   kind: "extension",
   extension: "@cinatra-ai/contract-artifact",
-  basis: "binding",
-  selectable: true,
-  assertionId: "sa_1",
 };
 
 const artifact: ArtifactSummary = {
@@ -95,8 +92,6 @@ describe("buildArtifactRendererProps", () => {
     expect(props.identity).toEqual({
       kind: "extension",
       extension: "@cinatra-ai/contract-artifact",
-      basis: "binding",
-      selectable: true,
     });
     expect(props.actions).toEqual({
       download: "/api/artifacts/art_1/versions/rev_1/content",
@@ -105,14 +100,14 @@ describe("buildArtifactRendererProps", () => {
   });
 
   it("flattens a non-extension identity to null extension/basis", () => {
-    const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
+    const floor: EffectiveIdentity = { kind: "no-primary" };
     const props = buildArtifactRendererProps({
       artifact: { ...artifact, effectiveIdentity: floor },
       representation: null,
       previewHref: null,
       downloadHref: null,
     });
-    expect(props.identity).toEqual({ kind: "default-artifact", extension: null, basis: null, selectable: true });
+    expect(props.identity).toEqual({ kind: "no-primary", extension: null });
     expect(props.representation).toBeNull();
   });
 

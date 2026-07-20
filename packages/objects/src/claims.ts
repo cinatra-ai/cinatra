@@ -452,16 +452,22 @@ export function resolveClaimWinner<T extends ArbitrableClaim>(
 
 /**
  * Map a resolved WINNING claim to its projection disposition, with the
- * fail-closed semantics the graphiti projector applies (cinatra#1427/#1436) —
- * the SINGLE statement of "how does a winning claim project", so the projector's
- * per-row write path and resolveClaimProjectionDisposition (which the rebuild
- * driver and recall handler compose) can never encode a different fail-closed
+ * fail-closed semantics for claim-backed binding (cinatra#1427/#1436) — the
+ * single statement of "how does a winning CLAIM project" for the claim-based
+ * host-type binding path, so that path can never encode a different fail-closed
  * default:
  *   - dispositions == null  -> 'artifact-safe' (the default)
  *   - VALID dispositions     -> the parsed `projection`
  *   - INVALID dispositions   -> 'artifact-safe' (fail closed DOWN to the
  *     metadata-only projection, never UP to raw)
  * Pure — no winner resolution, no I/O.
+ *
+ * Retained past the epic#1785 wave-A5 retirement: still consumed live by the
+ * host-type claim binding path (resolve-bound-artifact-type) — see the deviation
+ * note. The four graphiti/recall disposition consumers no longer compose this;
+ * they read the type-driven registry resolver (A1). The now-dead
+ * projection-arbitration wrapper that composed this with resolveClaimWinner
+ * (`resolveClaimProjectionDisposition`) was deleted in A5.
  */
 export function claimWinnerProjectionDisposition(
   winner: Pick<ArbitrableClaim, "dispositions">,
@@ -469,53 +475,4 @@ export function claimWinnerProjectionDisposition(
   if (winner.dispositions == null) return "artifact-safe";
   const parsed = parseClaimDispositions(winner.dispositions);
   return parsed.ok ? parsed.dispositions.projection : "artifact-safe";
-}
-
-/**
- * The winning claim's PROJECTION disposition for one org+type view — winner
- * arbitration composed with the shared claimWinnerProjectionDisposition rule,
- * reused by the rebuild driver's lane-eligible / policy-excluded type reads and
- * the recall handler's artifact-scoped detection. The projector resolves the
- * winner itself (it needs the winner for the facet body) then applies the SAME
- * shared rule, so the four surfaces can never disagree:
- *   - no winning claim -> null (caller keeps the non-claimed path)
- *   - a winner         -> its claimWinnerProjectionDisposition
- * Pure — the caller supplies the claim set (read live per-org by each surface).
- */
-export function resolveClaimProjectionDisposition(
-  claims: readonly ArbitrableClaim[],
-  input: { orgId: string; objectTypeId: string },
-): "raw" | "artifact-safe" | "none" | null {
-  const winner = resolveClaimWinner(claims, input);
-  if (!winner) return null;
-  return claimWinnerProjectionDisposition(winner);
-}
-
-/**
- * The domination rule behind default-claim dormancy (the SQL in the claim
- * store mirrors this — kept here as the single documented statement):
- *
- *   - a DEFAULT claim at `platform` is totally dominated only by a live
- *     dedicated claim at `platform` (an org-scoped dedicated claim shadows it
- *     for that org only — the platform default still serves every other org);
- *   - a DEFAULT claim at `org:X` is totally dominated by a live dedicated
- *     claim at `org:X` OR at `platform`.
- *
- * "Live" here = winner-eligible ('active' | 'retiring'). Only a TOTALLY
- * dominated default claim transitions to 'dormant'; it reactivates (new
- * generation) when the dominating dedicated claim retires.
- */
-export function isDefaultClaimDominated(
-  defaultClaim: Pick<ArbitrableClaim, "scope" | "objectTypeId" | "claimKind">,
-  claims: readonly ArbitrableClaim[],
-): boolean {
-  if (defaultClaim.claimKind !== "default") return false;
-  return claims.some(
-    (c) =>
-      c.objectTypeId === defaultClaim.objectTypeId &&
-      c.claimKind === "dedicated" &&
-      isWinnerEligible(c.status) &&
-      (c.scope === defaultClaim.scope ||
-        (defaultClaim.scope !== PLATFORM_CLAIM_SCOPE && c.scope === PLATFORM_CLAIM_SCOPE)),
-  );
 }

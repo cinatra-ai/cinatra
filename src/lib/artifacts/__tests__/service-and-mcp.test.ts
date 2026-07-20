@@ -1,17 +1,39 @@
 import { execSync } from "node:child_process";
 import path from "node:path";
+import { z } from "zod";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 
-// Object store mocked (no DB). Proves the service queries the generic
-// SEMANTIC_ARTIFACT_OBJECT_TYPE. Every artifact row carries the same
-// object type; semantic identity is the `semantic_assertion` set. The
-// MCP layer wraps ONLY the service, and the /assets/media surface is
-// purged.
-//
-// The service filters directly on SEMANTIC_ARTIFACT_OBJECT_TYPE instead
-// of per-type fan-out across `objectTypeRegistry.listArtifacts()`. The
-// single-write-path invariant test asserts `artifact-creation.ts` is the
-// SOLE writer entry point.
+// Object store mocked (no DB). Proves the service's type-driven read filter
+// (epic #1785 wave A4): the library / get / tombstone gates admit the generic
+// base (legacy rows, until the A6 purge) PLUS every registered isArtifact PACK
+// type read from `objectTypeRegistry.listArtifacts()` — the A3 writer stamps a
+// row's EXACT declared pack type into objects.type, so a generic-only filter
+// would strand every pack-typed row. Semantic identity is still the
+// `semantic_assertion` set. The MCP layer wraps ONLY the service, and the
+// /assets/media surface is purged. The single-write-path invariant test
+// asserts `artifact-creation.ts` is the SOLE writer entry point.
+const GENERIC_ARTIFACT_TYPE = "@cinatra-ai/artifact:object";
+const PACK_TYPE = "@cinatra-ai/pdf-artifact:document";
+const PACK_EXT = "@cinatra-ai/pdf-artifact";
+
+/** Register a synthetic isArtifact PACK type so `artifactObjectTypeIds()`
+ *  admits it (the A3 base-pack shape). registerAllObjectTypes is mocked no-op,
+ *  so the registry carries only what a test registers. */
+function registerPackType(): void {
+  objectTypeRegistry.register(
+    {
+      type: PACK_TYPE,
+      category: "report",
+      schema: z.record(z.string(), z.unknown()),
+      lifecycle: { sources: ["agent"], mutableBy: ["agent"] },
+      renderers: { listRow: null, card: null, detail: null },
+      isArtifact: { accepts: { file: { mimeTypes: ["application/pdf"] } } },
+      dispositions: { projection: "artifact-safe" },
+    } as never,
+    PACK_EXT,
+  );
+}
 
 const listObjectsByFilter = vi.fn();
 const getObjectById = vi.fn();
@@ -71,51 +93,75 @@ describe("artifact-service semantic artifact object filtering", () => {
     listObjectsByFilter.mockReset();
     getObjectById.mockReset();
     retentionTombstone.mockReset();
+    objectTypeRegistry._clearForTests();
   });
-  afterEach(() => vi.resetModules());
+  afterEach(() => {
+    objectTypeRegistry._clearForTests();
+    vi.resetModules();
+  });
 
-  it("lists by filtering on the generic SEMANTIC_ARTIFACT_OBJECT_TYPE (one query, not per-extension)", async () => {
+  it("lists by fanning out over the generic base AND every registered isArtifact pack type (type-driven; epic #1785 A4)", async () => {
+    registerPackType();
     const { listArtifacts } = await import("../artifact-service");
+    const rowFor = (type: string, id: string) => ({
+      id,
+      type,
+      data: {
+        artifactType: "file",
+        title: id,
+        mime: "x/y",
+        size: 3,
+        originKind: "upload",
+        latestRepresentationRevisionId: `${id}-v9`,
+      },
+      createdAt: "2026-01-02",
+      updatedAt: "2026-01-02",
+    });
     listObjectsByFilter.mockImplementation((f: { type: string }) =>
-      f.type === "@cinatra-ai/artifact:object"
-        ? [
-            {
-              id: "n1",
-              type: f.type,
-              data: {
-                artifactType: "file",
-                title: "N",
-                mime: "x/y",
-                size: 3,
-                originKind: "upload",
-                latestRepresentationRevisionId: "v9",
-              },
-              createdAt: "2026-01-02",
-              updatedAt: "2026-01-02",
-            },
-          ]
-        : [],
+      f.type === GENERIC_ARTIFACT_TYPE
+        ? [rowFor(GENERIC_ARTIFACT_TYPE, "n1")]
+        : f.type === PACK_TYPE
+          ? [rowFor(PACK_TYPE, "p1")]
+          : [],
     );
     const out = listArtifacts({ orgId: "org1" });
-    expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({
-      artifactId: "n1",
-      artifactType: "file",
-      latestRepresentationRevisionId: "v9",
-    });
-    // EXACTLY ONE objects.type filter: the generic
-    // `@cinatra-ai/artifact:object`; no per-extension fan-out.
-    expect(listObjectsByFilter).toHaveBeenCalledTimes(1);
-    expect(listObjectsByFilter).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "@cinatra-ai/artifact:object" }),
-      undefined,
+    // Both the legacy generic row AND the pack-typed row surface.
+    expect(out.map((o) => o.artifactId).sort()).toEqual(["n1", "p1"]);
+    // Fan-out over the type-driven set: the generic base + the registered pack.
+    const filteredTypes = listObjectsByFilter.mock.calls.map(
+      (c) => (c[0] as { type: string }).type,
     );
+    expect(filteredTypes.sort()).toEqual([GENERIC_ARTIFACT_TYPE, PACK_TYPE].sort());
   });
 
-  it("getArtifact returns null when the object type is NOT the semantic artifact type", async () => {
+  it("getArtifact returns null when the object type is NOT a registered artifact type", async () => {
+    registerPackType();
     const { getArtifact } = await import("../artifact-service");
     getObjectById.mockReturnValue({ id: "c1", type: "@cinatra-ai/entity-contacts:contact", data: {} });
     expect(getArtifact({ artifactId: "c1", orgId: "o" })).toBeNull();
+  });
+
+  it("getArtifact returns the summary for a registered isArtifact PACK-typed row (library-visible; epic #1785 A4)", async () => {
+    registerPackType();
+    const { getArtifact } = await import("../artifact-service");
+    getObjectById.mockReturnValue({
+      id: "p1",
+      type: PACK_TYPE,
+      data: {
+        artifactType: "file",
+        title: "doc",
+        mime: "application/pdf",
+        size: 12,
+        originKind: "upload",
+        latestRepresentationRevisionId: "p1-v1",
+      },
+      ownerLevel: "organization",
+      ownerId: "org1",
+      visibility: "organization",
+    });
+    const got = getArtifact({ artifactId: "p1", orgId: "org1" });
+    expect(got).not.toBeNull();
+    expect(got).toMatchObject({ artifactId: "p1", objectType: PACK_TYPE });
   });
 
   it("tombstone delegates to the retention path (single delete path)", async () => {

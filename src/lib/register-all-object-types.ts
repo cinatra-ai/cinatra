@@ -63,14 +63,11 @@ export function registerAllObjectTypes(): void {
   // passing `extensions/cinatra-ai` here silently skipped every other vendor
   // root). Ids keep their vendor scope (`@<vendor>/<pkg>:artifact`).
   registerArtifactExtensions(path.join(process.cwd(), "extensions"));
-  // Artifact rows carry `objects.type = "@cinatra-ai/artifact:object"`.
-  // Artifact-service.ts filters directly on the constant, bypassing the
-  // registry, so functional reads work — but generic object tooling (e.g.,
-  // `objectTypeRegistry.listArtifacts()` consumers, navigation routes, the
-  // data/new wizard) needs this type registered. Register a minimal definition
-  // with `isArtifact` set to the generic any-form manifest so the type appears
-  // in `listArtifacts()`.
-  registerSemanticArtifactObjectType();
+  // The generic `@cinatra-ai/artifact:object` catch-all type registration is
+  // RETIRED (epic #1785, wave A3): every artifact row now carries its exact
+  // declared pack type in `objects.type`, validated at the writer. There is no
+  // generic any-form type to register — an upload maps its MIME to a concrete
+  // system-base pack (pdf/audio/video/image) or is refused.
   registerArtifactRefObjectType();
 }
 
@@ -115,37 +112,3 @@ function registerArtifactRefObjectType(): void {
   });
 }
 
-function registerSemanticArtifactObjectType(): void {
-  // Top-level imports for the objects barrel + zod: the barrel cost
-  // is paid once per process either way, and the import discipline is
-  // worth more than a deferred load.
-  // Renderers are React-free `unknown` slots at the type layer — the
-  // bridge's per-extension entries fill them with generic renderers
-  // imported from the objects package's internal subpath. The generic
-  // SEMANTIC_ARTIFACT_OBJECT_TYPE row never reaches a list/card/detail
-  // surface yet; use null placeholders until the semantic library provides
-  // real renderers.
-  objectTypeRegistry.register({
-    type: "@cinatra-ai/artifact:object",
-    category: "report",
-    schema: z.record(z.string(), z.unknown()),
-    lifecycle: {
-      sources: ["agent", "user", "import"],
-      mutableBy: ["agent", "user"],
-    },
-    renderers: {
-      listRow: null,
-      card: null,
-      detail: null,
-    },
-    isArtifact: {
-      // Generic any-form manifest. The semantic identity of each row comes
-      // from `semantic_assertion`, not from this descriptor.
-      accepts: {
-        file: { mimeTypes: ["*/*"] },
-        connectorRef: { resolvedMimeTypes: ["*/*"] },
-        dashboard: true,
-      },
-    },
-  });
-}

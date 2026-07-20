@@ -1,31 +1,26 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-// The floor type id comes from the generated manifest data (the single
-// "artifact-default-floor" role claimant) via the PURE-DATA
-// @cinatra-ai/objects/artifact-floor subpath — keeps the server-heavy
-// objects barrel out of this lib's unit-test collection (the old
-// leaf-mirror rationale holds; the mirror itself is retired,
-// cinatra#151 Stage 6).
-import { DEFAULT_ARTIFACT_EXTENSION } from "@cinatra-ai/objects/artifact-floor";
-// Pure-data leaf (zero server imports) — the generic artifact base type id, the
-// ONE type the default-artifact FLOOR covers besides default-claimed types
-// (cinatra#1429 floor scoping).
-import { GENERIC_ARTIFACT_OBJECT_TYPE } from "@cinatra-ai/objects/effective-identity";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, ensurePostgresSchema, postgresSchema } from "@/lib/database";
 
 // ---------------------------------------------------------------------------
-// Semantic assertion + eligibility lifecycle and the default-FLOOR
-// invariant. Read-decide-write MUST be one held lock/tx; non-matcher
-// precedence and DB eligibility-transition guards are required.
+// Semantic assertion + eligibility lifecycle. Read-decide-write MUST be one
+// held lock/tx; non-matcher precedence and DB eligibility-transition guards
+// are required.
 //
 // DESIGN: every lifecycle mutation is ONE transaction that (1) takes the
 // per-artifact advisory xact lock, (2) performs the op-specific
 // archive/insert as PURE SQL with precedence guards in the WHERE clause
 // (NO JS read-then-decide — the decision is recomputed in SQL against the
-// live, locked state), (3) appends the SQL floor-rebalance. The lock is
-// held for the whole tx (auto-released at COMMIT), so concurrent ops on the
-// same artifact fully serialize — no stale-decision window.
+// live, locked state), (3) appends the Graphiti projection refresh. The lock
+// is held for the whole tx (auto-released at COMMIT), so concurrent ops on
+// the same artifact fully serialize — no stale-decision window.
+//
+// The default-artifact FLOOR was retired in epic #1785 (A5): identity is now
+// a pure function of the object type via the effective-identity resolver, so
+// there is no floor-rebalance INSERT/UPDATE and no floor sentinel extension.
+// The Graphiti-refresh tail (objects.version bump + outbox row) is preserved
+// as the single-sourced `buildGraphitiRefreshQueries` tail.
 //
 // The pure helpers below are the documented + unit-tested CONTRACT; the SQL
 // statements mirror them. DB CHECK/trigger guards (drizzle-store.ts) are the
@@ -48,16 +43,6 @@ export function initialEligibility(source: AssertionSource): Exclude<Eligibility
 export function sourceOutranks(a: AssertionSource, b: AssertionSource): boolean {
   return SOURCE_RANK[a] > SOURCE_RANK[b];
 }
-export function shouldDefaultBeEligible(
-  active: ReadonlyArray<{ extension: string; eligibility: Eligibility }>,
-): boolean {
-  return !active.some(
-    (a) => !isDefaultArtifactType(a.extension) && a.eligibility === "eligible",
-  );
-}
-
-const isDefaultArtifactType = (ext: string | null | undefined): boolean =>
-  ext === DEFAULT_ARTIFACT_EXTENSION;
 
 export type AssertionRecord = {
   id: string;
@@ -102,63 +87,14 @@ const toRec = (r: Row): AssertionRecord => ({
 // SQL fragment: integer precedence rank of the asserted_by column.
 const RANK_SQL = `CASE asserted_by WHEN 'user' THEN 3 WHEN 'authoring_skill' THEN 2 WHEN 'agent' THEN 1 ELSE 0 END`;
 
-/**
- * The SQL floor-rebalance: a default `eligible` assertion exists IFF there
- * is NO non-default `eligible` assertion. Two idempotent statements,
- * evaluated against the LIVE (post-op) state inside the held-lock tx:
- *  - INSERT default-eligible when none non-default eligible AND no active default;
- *  - ARCHIVE the active default when a non-default eligible exists.
- * `$1=org $2=artifact $3=default-ext $4=newDefaultId $5=floorSource`.
- */
-function floorRebalanceSql(schemaName?: string): { text: string; argIdx: { id: number; src: number } }[] {
-  const S = schemaName ? schemaName.replaceAll('"', '""') : q();
-  return [
-    {
-      text: `INSERT INTO "${S}"."semantic_assertion"
-  (id, org_id, artifact_id, extension, asserted_by, eligibility)
-SELECT $4::text,$1::text,$2::text,$3::text,$5::text,'eligible'
-WHERE NOT EXISTS (
-  SELECT 1 FROM "${S}"."semantic_assertion"
-   WHERE org_id=$1::text AND artifact_id=$2::text AND eligibility='eligible' AND extension <> $3::text)
-AND NOT EXISTS (
-  SELECT 1 FROM "${S}"."semantic_assertion"
-   WHERE org_id=$1::text AND artifact_id=$2::text AND extension=$3::text AND eligibility <> 'archived')
-AND EXISTS (
-  -- Floor scoping (cinatra#1429): the default-artifact floor covers ONLY the
-  -- generic artifact type and types carrying an active DEFAULT claim
-  -- (objects:object / approved dynamic). A dedicated-claimed typed row or a
-  -- plain typed object NEVER receives a floor default assertion.
-  SELECT 1 FROM "${S}"."objects" o
-   WHERE o.id=$2::text AND o.org_id=$1::text
-     AND (o.type = '${GENERIC_ARTIFACT_OBJECT_TYPE}'
-          OR EXISTS (
-            SELECT 1 FROM "${S}"."artifact_type_claims" c
-             WHERE c.object_type_id = o.type AND c.claim_kind='default'
-               AND c.status IN ('active','retiring')
-               AND (c.scope='platform' OR c.scope='org:'||$1::text))))`,
-      argIdx: { id: 4, src: 5 },
-    },
-    {
-      text: `UPDATE "${S}"."semantic_assertion" SET eligibility='archived', archived_at=now()
-WHERE org_id=$1 AND artifact_id=$2 AND extension=$3 AND eligibility <> 'archived'
-AND EXISTS (
-  SELECT 1 FROM "${S}"."semantic_assertion"
-   WHERE org_id=$1 AND artifact_id=$2 AND eligibility='eligible' AND extension <> $3)`,
-      argIdx: { id: 4, src: 5 },
-    },
-  ];
-}
-
 type Query = { text: string; values: unknown[] };
 
-/** Run [lock, ...ops, ...floorRebalance, ...graphitiRefresh] as ONE
- *  held-lock transaction.
+/** Run [lock, ...ops, ...graphitiRefresh] as ONE held-lock transaction.
  *
  *  Every assertion mutation must enqueue a Graphiti projection refresh so the
  *  downstream graph identity stays in lock-step with the canonical
- *  semantic_assertion state. Without this, an artifact created with
- *  default-floor identity, then reclassified by a matcher/agent/
- *  authoring_skill/user, would leave Graphiti stuck at the default
+ *  semantic_assertion state. Without this, an artifact reclassified by a
+ *  matcher/agent/authoring_skill/user would leave Graphiti stuck at its prior
  *  identity until the next objects-store UPDATE bumped the version.
  *
  *  Refresh shape: bump objects.version (so the version-guard in
@@ -170,22 +106,21 @@ type Query = { text: string; values: unknown[] };
  *  The query layout is:
  *    [0] advisory_lock        (always 1 row)
  *    [1..opsCount]            (caller-supplied assertion ops)
- *    [opsCount+1..]           (floor rebalance + outbox refresh)
+ *    [opsCount+1..]           (graphiti refresh)
  *  Callers locate their RETURNING-bearing op via the `opsCount`
  *  passed in. */
 /**
- * TX-COMPOSABLE floor-rebalance + Graphiti-refresh tail. EXPORTED for callers
- * that run their own held-lock transaction over an artifact's assertions
- * (the uninstall archival / reinstall replay store, cinatra#1432) so the
- * floor mechanics stay single-sourced — the queries are EXACTLY the tail
- * `runOneLockedTx` appends after the caller-supplied ops. The caller's outer
- * transaction MUST already hold the per-artifact advisory lock
+ * TX-COMPOSABLE Graphiti-refresh tail. EXPORTED for callers that run their own
+ * held-lock transaction over an artifact's assertions (the uninstall archival
+ * / reinstall replay store, cinatra#1432) so the refresh mechanics stay
+ * single-sourced — the queries are EXACTLY the tail `runOneLockedTx` appends
+ * after the caller-supplied ops. The caller's outer transaction MUST already
+ * hold the per-artifact advisory lock
  * (`pg_advisory_xact_lock(hashtext(artifactId))`).
  */
-export function buildFloorRebalanceAndRefreshQueries(
+export function buildGraphitiRefreshQueries(
   orgId: string,
   artifactId: string,
-  floorSource: AssertionSource,
   // Optional EXPLICIT schema, matching every sibling builder's
   // `schemaName`-first convention (buildReserveClaimQueries,
   // buildBindingReconcileQueries, …): a composing caller that runs the tail
@@ -193,29 +128,8 @@ export function buildFloorRebalanceAndRefreshQueries(
   // set speaks one schema. Absent ⇒ this module's binding (unchanged callers).
   schemaName?: string,
 ): Query[] {
-  // floor assertion is never asserted_by 'matcher'
-  const fSrc: AssertionSource = floorSource === "matcher" ? "agent" : floorSource;
   const S = schemaName ? schemaName.replaceAll('"', '""') : q();
-  // CRITICAL: each floor-rebalance query gets ONLY the parameters its SQL
-  // references. The first query (INSERT default-eligible) uses $1-$5;
-  // the second (archive active default) uses $1-$3 only.
-  //
-  // Bundling 5 values into both queries even though the second references
-  // only 3 makes PG return `bind message supplies 5 parameters, but prepared
-  // statement "" requires 3` on every artifact_authoring_emit call. This
-  // mirrors the `buildAssertionOps` split-values handling.
-  const rebQueries = floorRebalanceSql(schemaName);
-  const reb: Query[] = [
-    {
-      text: rebQueries[0].text,
-      values: [orgId, artifactId, DEFAULT_ARTIFACT_EXTENSION, randomUUID(), fSrc],
-    },
-    {
-      text: rebQueries[1].text,
-      values: [orgId, artifactId, DEFAULT_ARTIFACT_EXTENSION],
-    },
-  ];
-  const refresh: Query[] = [
+  return [
     {
       // Bump version + pending status. Skips silently if the row
       // doesn't exist or belongs to a different tenant — the
@@ -236,13 +150,11 @@ WHERE o.id=$1 AND o.org_id=$2`,
       values: [artifactId, orgId],
     },
   ];
-  return [...reb, ...refresh];
 }
 
 function runOneLockedTx(
   orgId: string,
   artifactId: string,
-  floorSource: AssertionSource,
   ops: Query[],
 ): Array<{ rows: Array<Record<string, unknown>>; rowCount: number }> {
   ensurePostgresSchema();
@@ -252,7 +164,7 @@ function runOneLockedTx(
     queries: [
       { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [artifactId] },
       ...ops,
-      ...buildFloorRebalanceAndRefreshQueries(orgId, artifactId, floorSource),
+      ...buildGraphitiRefreshQueries(orgId, artifactId),
     ],
   });
 }
@@ -265,24 +177,6 @@ function runOneLockedTx(
  * source never overwrites a higher one — generalizes "matchers never
  * overwrite user"). All as SQL guards under the lock.
  */
-/**
- * The default/floor type is OWNED EXCLUSIVELY by the SQL floor-rebalance.
- * It is NEVER asserted directly — not by a matcher (doctrine: default is the
- * creation-source fallback, never matched), nor by a user/agent/skill (you
- * archive the confident type to fall back to the floor; you don't assert the
- * floor). Direct assertion would also let a default `draft` exist and defeat
- * the floor INSERT guard → typeless.
- */
-export class DefaultArtifactNotDirectlyAssertableError extends Error {
-  constructor() {
-    super(
-      `${DEFAULT_ARTIFACT_EXTENSION} is the floor type — it is managed ONLY by ` +
-        "the floor rebalance, never asserted/confirmed directly.",
-    );
-    this.name = "DefaultArtifactNotDirectlyAssertableError";
-  }
-}
-
 /** Outcome of an assertion attempt. `inserted=true` means the new
  *  (extension, asserted_by, eligibility) row landed; the archive
  *  UPDATE may also have archived lower-rank same-extension rows on the
@@ -298,17 +192,15 @@ export type AssertSemanticTypeResult = {
 
 /** Build the assertion-ops query pair (archive + insert-returning) for
  *  the given assertion attempt. PURE — does not execute. Used by
- *  `assertSemanticType` (which wraps with the advisory lock + floor
- *  rebalance + outbox refresh) AND by callers that want to compose the
- *  assertion into an outer transaction they already control (typically
- *  artifact-creation's Tx2). Throws on the default-floor extension —
- *  the floor is managed only by the rebalance.
+ *  `assertSemanticType` (which wraps with the advisory lock + graphiti
+ *  refresh) AND by callers that want to compose the assertion into an outer
+ *  transaction they already control (typically artifact-creation's Tx2).
  *
  *  The caller is responsible for: (a) holding a same-artifactId
- *  advisory lock around the queries, (b) running the floor rebalance
- *  + outbox refresh in the same transaction (or accepting that the
- *  rebalance/projector won't run), (c) inspecting the second query's
- *  result via `parseResult` to detect inserted vs blocked. */
+ *  advisory lock around the queries, (b) running the graphiti refresh
+ *  in the same transaction (or accepting that the projector won't run),
+ *  (c) inspecting the second query's result via `parseResult` to detect
+ *  inserted vs blocked. */
 function buildAssertionOps(input: {
   orgId: string;
   artifactId: string;
@@ -317,9 +209,6 @@ function buildAssertionOps(input: {
   confidence?: number | null;
   principal?: string | null;
 }): { ops: Query[]; insertOpIndex: number } {
-  if (isDefaultArtifactType(input.extension)) {
-    throw new DefaultArtifactNotDirectlyAssertableError();
-  }
   const S = q();
   const elig = initialEligibility(input.assertedBy);
   const newRank = SOURCE_RANK[input.assertedBy];
@@ -405,12 +294,11 @@ export function assertSemanticType(input: {
   const results = runOneLockedTx(
     input.orgId,
     input.artifactId,
-    input.assertedBy,
     ops,
   );
   // runOneLockedTx prepends the advisory_lock at index 0, then the
-  // ops, then the floor rebalance + outbox refresh. Our insert-
-  // returning sits at `1 + insertOpIndex` in the result array.
+  // ops, then the graphiti refresh. Our insert-returning sits at
+  // `1 + insertOpIndex` in the result array.
   return interpretInsertResult(results, 1 + insertOpIndex);
 }
 
@@ -445,20 +333,16 @@ function interpretInsertResult(
  *  writes.
  *
  *  Unlike `assertSemanticType`, this builder DOES NOT include the
- *  advisory_lock, the floor rebalance, or the graphiti outbox refresh —
- *  the caller's outer transaction is responsible for those. (For
- *  artifact-creation's path, the lock is already on the artifactId at
- *  Tx2 open and the floor + outbox refresh run as part of creation.)
+ *  advisory_lock or the graphiti outbox refresh — the caller's outer
+ *  transaction is responsible for those. (For artifact-creation's path,
+ *  the lock is already on the artifactId at Tx2 open and the outbox
+ *  refresh runs as part of creation.)
  *
  *  Return:
  *    `queries`: assertion ops to splice into the caller's `queries[]`.
  *    `parseResult(results, offset)`: given the caller's result array
  *       and the offset where these ops were spliced in, returns
  *       `{inserted, blockedByPrecedence}`.
- *
- *  Throws (synchronously, before any DB call) on the default-floor
- *  extension — the floor is owned by the rebalance, never asserted
- *  directly.
  */
 export function buildAssertSemanticTypeQueries(input: {
   orgId: string;
@@ -485,8 +369,7 @@ export function buildAssertSemanticTypeQueries(input: {
 /**
  * Confirm an extension as a NON-matcher eligible assertion: archive any
  * matcher drafts of that ext, INSERT a NEW eligible assertion. The draft is
- * NEVER mutated to eligible. Floor rebalance archives the now-redundant
- * default.
+ * NEVER mutated to eligible.
  */
 export function confirmAssertion(input: {
   orgId: string;
@@ -495,9 +378,6 @@ export function confirmAssertion(input: {
   confirmedBy: Exclude<AssertionSource, "matcher">;
   principal?: string | null;
 }): void {
-  if (isDefaultArtifactType(input.extension)) {
-    throw new DefaultArtifactNotDirectlyAssertableError();
-  }
   const S = q();
   const cRank = SOURCE_RANK[input.confirmedBy];
   const newId = randomUUID();
@@ -549,10 +429,10 @@ WHERE NOT EXISTS (
       ],
     },
   ];
-  runOneLockedTx(input.orgId, input.artifactId, input.confirmedBy, ops);
+  runOneLockedTx(input.orgId, input.artifactId, ops);
 }
 
-/** Archive every active assertion of an extension; floor rebalance re-asserts default if it was the last non-default eligible. */
+/** Archive every active assertion of an extension. */
 export function archiveAssertion(input: {
   orgId: string;
   artifactId: string;
@@ -567,7 +447,7 @@ WHERE org_id=$1 AND artifact_id=$2 AND extension=$3 AND eligibility <> 'archived
       values: [input.orgId, input.artifactId, input.extension],
     },
   ];
-  runOneLockedTx(input.orgId, input.artifactId, input.archivedBy ?? "user", ops);
+  runOneLockedTx(input.orgId, input.artifactId, ops);
 }
 
 export function listEligibleAssertions(orgId: string, artifactId: string): AssertionRecord[] {
@@ -661,23 +541,23 @@ WHERE org_id=$1 AND extension=$2 AND eligibility='eligible'`,
   return out;
 }
 
-/** Derive the PRIMARY extension for an artifact: the highest-precedence
- *  non-default eligible assertion, or the floor default if no non-default
- *  eligible exists. Falls back to the default extension if the list is empty
- *  (no rows ⇒ no creation ever happened on this artifact id, which is a
- *  caller bug).
+/** Derive the PRIMARY extension for an artifact from its eligible assertions:
+ *  the highest-precedence eligible assertion's extension, or `null` when there
+ *  is none (no-primary). The default-artifact floor was retired (epic #1785,
+ *  A5): there is no floor sentinel to fall back to, so an artifact with no
+ *  eligible assertion has no primary extension — mirroring the
+ *  effective-identity resolver's `no-primary` outcome.
  *
  *  NOTE (cinatra#1426): the artifact surfaces (service enrichment + MCP
- *  outputs) now resolve identity through the effective-identity service
- *  (src/lib/objects/effective-identity.ts), which additionally requires an
- *  INSTALLED extension and understands bindings/claims. This helper remains
- *  the raw assertion-precedence contract (no install/claim axis) — its
- *  ordering is mirrored by the pure leaf's classic ranking. */
-export function primaryExtensionFor(eligible: AssertionRecord[]): string {
-  if (eligible.length === 0) return DEFAULT_ARTIFACT_EXTENSION;
+ *  outputs) resolve identity through the effective-identity resolver
+ *  (packages/objects/src/effective-identity.ts), which is now a pure function
+ *  of the object TYPE (its installed namespace-definer) — no assertion/claim
+ *  axis. This helper remains the raw assertion-precedence contract for the
+ *  legacy semantic_assertion state that survives until the A6 purge. */
+export function primaryExtensionFor(eligible: AssertionRecord[]): string | null {
+  if (eligible.length === 0) return null;
   // Same precedence ranking as RANK_SQL: user(3) > authoring_skill(2) >
-  // agent(1) > matcher(0). Default-artifact is excluded from "primary"
-  // when ANY non-default eligible exists.
+  // agent(1) > matcher(0).
   //
   // Same-rank tie-breaker is deterministic. Primary tie-break = newest
   // asserted_at (latest wins); secondary
@@ -685,11 +565,7 @@ export function primaryExtensionFor(eligible: AssertionRecord[]): string {
   // result is total-ordered even under same-rank, same-timestamp).
   const rank = (src: AssertionSource): number =>
     src === "user" ? 3 : src === "authoring_skill" ? 2 : src === "agent" ? 1 : 0;
-  const nonDefault = eligible.filter(
-    (a) => a.extension !== DEFAULT_ARTIFACT_EXTENSION,
-  );
-  if (nonDefault.length === 0) return DEFAULT_ARTIFACT_EXTENSION;
-  nonDefault.sort((a, b) => {
+  const sorted = [...eligible].sort((a, b) => {
     const r = rank(b.assertedBy) - rank(a.assertedBy);
     if (r !== 0) return r;
     if (a.assertedAt !== b.assertedAt) {
@@ -697,7 +573,7 @@ export function primaryExtensionFor(eligible: AssertionRecord[]): string {
     }
     return a.extension < b.extension ? -1 : a.extension > b.extension ? 1 : 0;
   });
-  return nonDefault[0]!.extension;
+  return sorted[0]!.extension;
 }
 
 /** Replay: a pinned assertion id, returned regardless of CURRENT eligibility. */

@@ -32,7 +32,7 @@ import { evaluateArtifactDetailArmCutover } from "../artifact-detail-cutover-pro
 import type { HandlerKind } from "../../pick-handler";
 
 const ORG = "org_g2_cutover";
-const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
+const floor: EffectiveIdentity = { kind: "no-primary" };
 
 function dispatchFor(mime: string) {
   return pickArtifactRenderer(

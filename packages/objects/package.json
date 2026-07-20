@@ -23,7 +23,6 @@
     "./graphiti-projector": "./src/graphiti-projector.ts",
     "./graphiti-rebuild": "./src/graphiti-rebuild.ts",
     "./graphiti-projection-policy": "./src/graphiti-projection-policy.ts",
-    "./artifact-floor": "./src/generated/artifact-floor.ts",
     "./mcp-handlers": "./src/mcp/handlers.ts",
     "./classifier-signals": "./src/classifier-signals.ts"
   },
