@@ -17,18 +17,17 @@ import "server-only";
  *     LIFECYCLE (`approveDynamicObjectType` / `archiveDynamicObjectType`),
  *     which is a different axis from artifact visibility below;
  *   - DYNAMIC (active) — every ACTIVE dynamic type with its ORG-SCOPED
- *     artifact-visibility approval state (the landed #1433 machinery). A
- *     dynamic type reaches an active registration through promotion here, or
- *     through MCP registration / an install path WITHOUT any approval
- *     (`objects_type_register` mints `status='active'` directly) — that alone
- *     does NOT make its rows artifacts. Artifact visibility is granted only by
- *     the admin Approve action here, which writes the org-scoped approval
- *     RECORD (an org-scoped default claim held by the floor extension —
- *     explicitly NOT a status flip). A row therefore reads Approved (carries
- *     the approval record; joins default-artifact coverage) or Proposed
- *     (active + mintable, but its rows are plain objects). A dedicated claim
- *     makes default coverage dormant while the record persists. Archive here
- *     retires the active type via the same lifecycle action.
+ *     artifact-visibility approval state (the #1433 read machinery). A dynamic
+ *     type reaches an active registration through promotion here, or through
+ *     MCP registration / an install path (`objects_type_register` mints
+ *     `status='active'` directly) — that alone does NOT make its rows
+ *     artifacts. A row reads Approved (carries an org-scoped approval record —
+ *     a non-retired DEFAULT-kind artifact_type_claims row) or Proposed (active
+ *     + mintable, but its rows are plain objects). The default-artifact floor
+ *     that once WROTE these records is retired (epic #1785); this register is
+ *     now read-only for artifact visibility, so the former admin Approve action
+ *     is gone. Archive here still retires the active type via the type
+ *     lifecycle action (a distinct axis from artifact visibility).
  */
 import { Braces, FileText, Rows, Sparkles } from "lucide-react";
 
@@ -46,7 +45,6 @@ import {
   type DynamicTypeVisibilityReviewRow,
 } from "@/lib/objects/artifact-visibility-approval";
 
-import { TypesApprovalsApproveButton } from "./types-approvals-approve-button";
 import { ArchiveTypeButton } from "./archive-type-button";
 
 export async function TypesApprovalsMode({ orgId }: { orgId: string | null }) {
@@ -171,9 +169,9 @@ export async function TypesApprovalsMode({ orgId }: { orgId: string | null }) {
         </h2>
         <p className="mb-4 text-sm text-muted-foreground">
           Types registered at runtime (classifier / MCP / install). A type can
-          reach an active registration WITHOUT approval — that alone does not
-          make its rows artifacts. Approve to write the org-scoped artifact-
-          visibility approval record.
+          reach an active registration WITHOUT an artifact-visibility approval
+          record — that alone does not make its rows artifacts. Each row shows
+          whether an org-scoped approval record is present.
         </p>
         {sorted.length === 0 ? (
           <div
@@ -235,13 +233,9 @@ function DynamicTypeRow({
         </p>
       </div>
       <div className="flex flex-none items-center gap-2">
-        {approved ? (
-          <span className="font-mono text-badge-xs text-muted-foreground">
-            approval record set
-          </span>
-        ) : (
-          <TypesApprovalsApproveButton objectTypeId={row.objectTypeId} />
-        )}
+        <span className="font-mono text-badge-xs text-muted-foreground">
+          {approved ? "approval record set" : "no approval record"}
+        </span>
         {/* Type-lifecycle archive (distinct from artifact visibility): retires
             the active dynamic type, preserved from the former /data/types.
             Confirmed — there is no in-app un-archive. */}
