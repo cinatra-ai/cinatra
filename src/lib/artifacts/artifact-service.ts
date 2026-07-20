@@ -42,6 +42,16 @@ import {
   type EffectiveIdentity,
 } from "@/lib/objects/effective-identity";
 
+// Presentation-identity service (epic #1883 slice A6): the assertion-aware
+// identity the renderer dispatch, the library Type facet, and row labeling
+// present. DISTINCT from the effective identity above — that stays the shared,
+// type-driven identity context selection / replay / Graphiti consume.
+import {
+  resolveArtifactPresentationIdentities,
+  resolveArtifactPresentationIdentity,
+  type PresentationIdentity,
+} from "@/lib/objects/presentation-identity";
+
 // The artifact object-types registry is populated only by
 // registerAllObjectTypes() through the artifact extension registration
 // bridge. The UI/MCP read paths don't transitively trigger it, so list/get
@@ -99,6 +109,15 @@ export type ArtifactSummary = {
   eligibleExtensions: string[];
   primaryExtension: string | null;
   effectiveIdentity: EffectiveIdentity;
+  // Presentation identity (epic #1883 A6): the assertion-aware identity the
+  // renderer dispatch, the library Type facet, and row labeling PRESENT — the
+  // highest-ranked live classic assertion, else a threshold-passing matcher
+  // draft, else the row's claim-backed / type-namespace identity. Diverges from
+  // `effectiveIdentity` (the shared, type-driven identity) BY DESIGN; for a row
+  // with no assertions it equals `effectiveIdentity`. `presentationSuggestions`
+  // are the matcher-draft extensions offered as suggestion chips (A4 UI).
+  presentationIdentity: EffectiveIdentity;
+  presentationSuggestions: string[];
   // Validated "Open in source application" URL for connector-ref artifacts,
   // projected from `objects.data.connectorRef.url` via
   // `connectorRefSourceUrl` (http/https only). Null for every artifact
@@ -241,8 +260,13 @@ function toSummary(
     visibility?: "private" | "team" | "organization" | "public" | null;
   },
   semanticIdentity?: ArtifactIdentityEnrichment,
+  presentation?: PresentationIdentity,
 ): ArtifactSummary {
   const d = (rec.data ?? {}) as Partial<ArtifactObjectData>;
+  // Behavior-preserving default: with no presentation resolution (unit tests /
+  // orgless callers), presentation identity IS the effective identity and there
+  // are no suggestion chips — the same output as a row with no assertions.
+  const effective = semanticIdentity?.identity ?? NO_PRIMARY_IDENTITY_FALLBACK;
   return {
     artifactId: rec.id,
     latestRepresentationRevisionId: d.latestRepresentationRevisionId ?? null,
@@ -262,7 +286,9 @@ function toSummary(
     primaryExtension: semanticIdentity
       ? primaryExtensionOf(semanticIdentity.identity)
       : null,
-    effectiveIdentity: semanticIdentity?.identity ?? NO_PRIMARY_IDENTITY_FALLBACK,
+    effectiveIdentity: effective,
+    presentationIdentity: presentation?.identity ?? effective,
+    presentationSuggestions: presentation?.suggestions ?? [],
     sourceUrl: connectorRefSourceUrl(rec.data),
   };
 }
@@ -364,8 +390,18 @@ export function listArtifacts(input: {
           rows: rawRecs.map((r) => ({ id: r.id, type: r.type })),
         })
       : new Map<string, ArtifactIdentityEnrichment>();
+  // Presentation identity (A6) — a second batched pass (active assertions ×
+  // install/live × thresholds × the org toggle). Separate from the shared
+  // effective-identity resolution above so that path stays untouched.
+  const presentationByArtifact =
+    input.orgId !== null
+      ? resolveArtifactPresentationIdentities({
+          orgId: input.orgId,
+          rows: rawRecs.map((r) => ({ id: r.id, type: r.type })),
+        })
+      : new Map<string, PresentationIdentity>();
   const out: ArtifactSummary[] = rawRecs.map((r) =>
-    toSummary(r, identityByArtifact.get(r.id)),
+    toSummary(r, identityByArtifact.get(r.id), presentationByArtifact.get(r.id)),
   );
   out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   return typeof input.limit === "number" ? out.slice(0, input.limit) : out;
@@ -407,7 +443,15 @@ export function getArtifact(input: {
           baseType: rec.type,
         })
       : undefined;
-  return toSummary(rec, enrichment);
+  const presentation =
+    input.orgId !== null
+      ? resolveArtifactPresentationIdentity({
+          orgId: input.orgId,
+          artifactId: rec.id,
+          baseType: rec.type,
+        })
+      : undefined;
+  return toSummary(rec, enrichment, presentation);
 }
 
 /**
@@ -456,7 +500,15 @@ export function readArtifactForDetail(input: {
           baseType: rec.type,
         })
       : undefined;
-  return { kind: "ok", artifact: toSummary(rec, enrichment) };
+  const presentation =
+    input.orgId !== null
+      ? resolveArtifactPresentationIdentity({
+          orgId: input.orgId,
+          artifactId: rec.id,
+          baseType: rec.type,
+        })
+      : undefined;
+  return { kind: "ok", artifact: toSummary(rec, enrichment, presentation) };
 }
 
 /**

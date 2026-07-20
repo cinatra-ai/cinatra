@@ -206,6 +206,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Effective-identity resolver host half (cinatra#1426): batched semantic_assertion + installed_extension reads feeding the pure truth-table leaf, consumed by the artifact service's sync list/get enrichment. Built as a sync leaf mirroring artifact-claim-store.ts's pattern so it composes into the synchronous store graph; migrates to async typed reads with the objects subsystem.",
   },
+  "src/lib/objects/presentation-identity.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Presentation-identity resolver host half (cinatra#1888, epic #1883 A6): one batched semantic_assertion read (active eligible + drafts, archived excluded) feeding the pure tier machine, consumed by the artifact service's SAME sync list/get/detail enrichment as effective-identity.ts (listArtifacts/getArtifact/readArtifactForDetail are synchronous). Built as a sync leaf mirroring effective-identity.ts's synchronous sync-table access pattern so it composes into the synchronous store graph, and fails closed to base identity on read error; migrates to async typed reads together with its effective-identity twin when the objects subsystem is converted.",
+  },
   "src/lib/objects/artifact-claim-store.ts": {
     class: "migratable-request-path",
     justification:

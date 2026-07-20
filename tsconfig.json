@@ -439,6 +439,7 @@
       "@cinatra-ai/objects/claims": ["./packages/objects/src/claims.ts"],
       "@cinatra-ai/objects/connector-ref": ["./packages/objects/src/connector-ref.ts"],
       "@cinatra-ai/objects/effective-identity": ["./packages/objects/src/effective-identity.ts"],
+      "@cinatra-ai/objects/presentation-identity": ["./packages/objects/src/presentation-identity.ts"],
       "@cinatra-ai/objects/artifact-renderer-registry": ["./packages/objects/src/artifact-renderer-registry.ts"],
       "@cinatra-ai/objects/artifact-ui-cutover-matrix": ["./packages/objects/src/artifact-ui-cutover-matrix.ts"],
       "@cinatra-ai/objects/registry": ["./packages/objects/src/registry.ts"],

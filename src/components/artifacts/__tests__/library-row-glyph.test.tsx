@@ -106,7 +106,7 @@ const floorIdentity: EffectiveIdentity = { kind: "no-primary" };
 const plainIdentity: EffectiveIdentity = { kind: "no-primary" };
 
 function summaryOf(overrides: Partial<ArtifactSummary> = {}): ArtifactSummary {
-  return {
+  const base: ArtifactSummary = {
     artifactId: "art_1",
     latestRepresentationRevisionId: null,
     objectType: TYPE,
@@ -122,8 +122,18 @@ function summaryOf(overrides: Partial<ArtifactSummary> = {}): ArtifactSummary {
     eligibleExtensions: [],
     primaryExtension: "@fixture/row-ext",
     effectiveIdentity: winner("@fixture/row-ext"),
+    presentationIdentity: winner("@fixture/row-ext"),
+    presentationSuggestions: [],
     sourceUrl: null,
     ...overrides,
+  };
+  // The glyph reads PRESENTATION identity (epic #1883 A6); a case that drives
+  // only `effectiveIdentity` presents the same identity (behavior-preserving
+  // for assertion-free rows) unless it overrides presentation explicitly.
+  return {
+    ...base,
+    presentationIdentity:
+      overrides.presentationIdentity ?? overrides.effectiveIdentity ?? base.presentationIdentity,
   };
 }
 
@@ -345,5 +355,38 @@ describe("LibraryRowGlyph — extension glyph + host floors", () => {
     const html = await renderGlyph(summaryOf());
     expect(html).toContain("text-primary");
     expect(html).toContain('data-glyph-source="generic"');
+  });
+});
+
+// Consumer-wiring proof (epic #1883 A6): the glyph reads PRESENTATION identity,
+// not effective identity. A row whose shared effective identity is no-primary
+// but whose presentation identity is an extension (a classic assertion the
+// effective resolver ignores) must resolve the extension's listRow capability
+// and take the claimed (extension) tint.
+describe("glyph presents the PRESENTATION identity (A6)", () => {
+  it("resolves the presentation extension's glyph even when effectiveIdentity is no-primary", async () => {
+    semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@fixture/row-ext", slot: "listRow" });
+    const html = await renderGlyph(
+      summaryOf({
+        // The shared (type-driven) identity says no-primary…
+        effectiveIdentity: { kind: "no-primary" },
+        // …but the presentation identity is the claimed extension.
+        presentationIdentity: winner("@fixture/row-ext"),
+      }),
+    );
+    expect(html).toContain('data-glyph-source="extension"');
+    expect(html).toContain("text-primary"); // claimed tint from the PRESENTATION identity
+  });
+
+  it("floors to the generic tier when presentation identity is no-primary despite an extension effectiveIdentity", async () => {
+    semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@fixture/row-ext", slot: "listRow" });
+    const html = await renderGlyph(
+      summaryOf({
+        effectiveIdentity: winner("@fixture/row-ext"),
+        presentationIdentity: { kind: "no-primary" },
+      }),
+    );
+    expect(html).toContain('data-glyph-source="generic"');
+    expect(execCounts().row).toBe(0); // the extension listRow module never executes
   });
 });

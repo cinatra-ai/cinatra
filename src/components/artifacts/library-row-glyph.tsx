@@ -44,7 +44,7 @@ function glyphTier(summary: ArtifactSummary): {
   className: string;
   Fallback: typeof FileText;
 } {
-  if (summary.effectiveIdentity.kind === "extension") {
+  if (summary.presentationIdentity.kind === "extension") {
     return { className: "bg-primary/10 text-primary", Fallback: Boxes };
   }
   if (isFileMime(summary.mime)) {
@@ -68,7 +68,9 @@ export async function LibraryRowGlyph({
   summary: ArtifactSummary;
 }): Promise<ReactNode> {
   const { className, Fallback } = glyphTier(summary);
-  const identity = summary.effectiveIdentity;
+  // Row labeling presents the assertion-aware PRESENTATION identity (epic
+  // #1883 A6): the winner's `listRow` glyph resolves for the presented type.
+  const identity = summary.presentationIdentity;
 
   let extensionGlyph: ReactNode = null;
   if (identity.kind === "extension") {

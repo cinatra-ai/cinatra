@@ -427,6 +427,7 @@
     { "alias": "@cinatra-ai/objects/claims", "target": "./packages/objects/src/claims.ts" },
     { "alias": "@cinatra-ai/objects/connector-ref", "target": "./packages/objects/src/connector-ref.ts" },
     { "alias": "@cinatra-ai/objects/effective-identity", "target": "./packages/objects/src/effective-identity.ts" },
+    { "alias": "@cinatra-ai/objects/presentation-identity", "target": "./packages/objects/src/presentation-identity.ts" },
     { "alias": "@cinatra-ai/objects/artifact-renderer-registry", "target": "./packages/objects/src/artifact-renderer-registry.ts" },
     { "alias": "@cinatra-ai/objects/artifact-ui-cutover-matrix", "target": "./packages/objects/src/artifact-ui-cutover-matrix.ts" },
     { "alias": "@cinatra-ai/objects/registry", "target": "./packages/objects/src/registry.ts" },
