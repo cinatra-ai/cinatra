@@ -132,6 +132,37 @@ function isDevOnlyPublicPath(pathname: string) {
   return process.env.CINATRA_E2E_SETUP_BYPASS === "true";
 }
 
+// cinatra#1881 — the assistant AG-UI resume/tail route
+// (GET /api/assistants/runs/<runId>/stream). A cookieless caller resuming a
+// dropped run (the S5 public-site CMS widget, #1221, under its run-bound resume
+// token) holds no Better-Auth cookie, so the middleware must NOT 307 it to
+// /sign-in before the handler's own fail-closed auth can run — matching the
+// posture /api/assistants/chat already has. The handler
+// (src/app/api/assistants/runs/[runId]/stream/route.ts) is the authoritative
+// gate: MODE 1 a Better-Auth SESSION, else MODE 2 a DISTINCT, short-lived,
+// RUN-BOUND resume token (`cinatra.widget.chat-resume`, #1855) verified against
+// THIS exact runId + its own audience; any missing/invalid/expired/cross-run/
+// cross-type token — and a sessionless caller with no token — is an EXPLICIT
+// 401. NARROW dynamic matcher: the runId segment is a UUID (minted via
+// randomUUID(), see src/lib/assistant-runtime/ag-ui-stream-route.ts) and the
+// path must TERMINATE at /stream, so a sibling /api/assistants/runs/<id>/<other>
+// or a non-UUID segment stays session-guarded. A too-narrow match only 307s a
+// legit resume (self-healing → client degrades to a fresh mount); it can never
+// open a protected route. Structural match ONLY — never an /api/assistants
+// prefix (that would expose every sibling assistant API route).
+//
+// SCOPE (#1881, DEFERRED): this opens the SAME-ORIGIN cookieless resume path
+// only. The cross-origin half stays deferred — the shared CORS builder still
+// permits only POST/OPTIONS and does not expose/reflect the resume-token header,
+// Authorization, or Last-Event-ID on a GET, so a real cross-origin resume
+// additionally needs that header exposure + OPTIONS/GET origin reflection, which
+// rides the embed wave. The CORS builder is intentionally UNTOUCHED here.
+const ASSISTANT_RUN_STREAM_PATH =
+  /^\/api\/assistants\/runs\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/stream$/;
+function isAssistantRunStreamPath(pathname: string) {
+  return ASSISTANT_RUN_STREAM_PATH.test(pathname);
+}
+
 const SETUP_PATH_PREFIXES = [
   "/setup",
   "/configuration/llm/initial-setup",
@@ -186,6 +217,13 @@ function isPublicPath(pathname: string) {
   // a protected one, and never an /api/agents wildcard. Valid because in Next 16
   // the proxy always runs on the Node.js runtime (see src/proxy.ts).
   if (isRuntimeApprovedWidgetStreamPublicPath(pathname)) {
+    return true;
+  }
+
+  // cinatra#1881 — the assistant AG-UI resume/tail stream. NARROW UUID-shaped
+  // dynamic matcher (not an /api/assistants prefix); the handler's own session-
+  // OR-resume-token fail-closed auth is the gate. See ASSISTANT_RUN_STREAM_PATH.
+  if (isAssistantRunStreamPath(pathname)) {
     return true;
   }
 
