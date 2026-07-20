@@ -12,3 +12,9 @@
 // constant). Individual tests vi.mock() the specifier with their own factory
 // when they need a different shape.
 export { objectTypeRegistry } from "../../../objects/src/registry";
+// The app registry-init module (src/lib/register-all-object-types.ts, pulled in
+// transitively via artifact-read → ensure-artifact-registry) also reads the
+// family→type-id taxonomy from the barrel. Re-export it from the light taxonomy
+// module (deps: a type-only authz alias, erased at runtime, plus the `./namespace`
+// constants) so the barrel stub stays boot-graph-free.
+export { objectTypeIdsForFamily } from "../../../objects/src/taxonomy";

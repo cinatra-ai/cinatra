@@ -46,12 +46,13 @@ export interface ArtifactRendererProps {
     preview: string | null;
     download: string | null;
   };
-  /** The resolved effective identity, flattened to plain data. */
+  /** The resolved effective identity, flattened to plain data (epic #1785):
+   * the type's defining `extension`, or `no-primary` with a null extension.
+   * The retired binding/classic `basis` + the `selectable` activation barrier
+   * are gone — a type-driven identity is either an installed extension or not. */
   identity: {
     kind: EffectiveIdentity["kind"];
     extension: string | null;
-    basis: string | null;
-    selectable: boolean;
   };
   /** Sanctioned action handles — SERIALIZABLE navigational hrefs only. v1
    * renderers request no ports, so actions are host-authorized links, never
@@ -64,10 +65,6 @@ export interface ArtifactRendererProps {
 
 function identityExtension(identity: EffectiveIdentity): string | null {
   return identity.kind === "extension" ? identity.extension : null;
-}
-
-function identityBasis(identity: EffectiveIdentity): string | null {
-  return identity.kind === "extension" ? identity.basis : null;
 }
 
 /**
@@ -105,8 +102,6 @@ export function buildArtifactRendererProps(input: {
     identity: {
       kind: artifact.effectiveIdentity.kind,
       extension: identityExtension(artifact.effectiveIdentity),
-      basis: identityBasis(artifact.effectiveIdentity),
-      selectable: artifact.effectiveIdentity.selectable,
     },
     actions: {
       download: input.downloadHref,

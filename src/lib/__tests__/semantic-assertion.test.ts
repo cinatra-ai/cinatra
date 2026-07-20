@@ -1,34 +1,15 @@
-// Semantic assertion write-policy, precedence, and default-floor
-// pure-decision contract. These pure helpers are the unit contract; the
-// DB CHECK/trigger guards in drizzle-store.ts are the defense-in-depth
-// backstop.
+// Semantic assertion write-policy + precedence pure-decision contract. These
+// pure helpers are the unit contract; the DB CHECK/trigger guards in
+// drizzle-store.ts are the defense-in-depth backstop. The default-artifact
+// floor — and its "never directly assertable" / shouldDefaultBeEligible
+// invariants — was retired with the extension (epic cinatra#1785 wave A5).
 import { describe, it, expect } from "vitest";
 import {
   initialEligibility,
   sourceOutranks,
-  shouldDefaultBeEligible,
-  assertSemanticType,
-  confirmAssertion,
-  DefaultArtifactNotDirectlyAssertableError,
 } from "@/lib/artifacts/semantic-assertion-store";
 
-const DEF = "@cinatra-ai/default-artifact";
 const ICP = "@cinatra-ai/marketing-icp-artifact";
-
-describe("default/floor type is NEVER directly assertable", () => {
-  it("assertSemanticType + confirmAssertion reject the default extension before any DB call", () => {
-    const base = { orgId: "o", artifactId: "a", extension: DEF };
-    expect(() => assertSemanticType({ ...base, assertedBy: "matcher" })).toThrow(
-      DefaultArtifactNotDirectlyAssertableError,
-    );
-    expect(() => assertSemanticType({ ...base, assertedBy: "user" })).toThrow(
-      DefaultArtifactNotDirectlyAssertableError,
-    );
-    expect(() => confirmAssertion({ ...base, confirmedBy: "agent" })).toThrow(
-      DefaultArtifactNotDirectlyAssertableError,
-    );
-  });
-});
 
 describe("initialEligibility — write policy", () => {
   it("matcher ⇒ draft; everyone else ⇒ eligible (never archived as an initial state)", () => {
@@ -53,53 +34,12 @@ describe("sourceOutranks — precedence user>authoring_skill>agent>matcher", () 
   });
 });
 
-describe("shouldDefaultBeEligible — floor invariant: never typeless, never co-asserted", () => {
-  it("TRUE when there is NO non-default eligible assertion (floor must hold the type)", () => {
-    expect(shouldDefaultBeEligible([])).toBe(true);
-    expect(shouldDefaultBeEligible([{ extension: ICP, eligibility: "draft" }])).toBe(true);
-    expect(shouldDefaultBeEligible([{ extension: ICP, eligibility: "archived" }])).toBe(true);
-    // a default-eligible already present still "should be eligible" (idempotent)
-    expect(shouldDefaultBeEligible([{ extension: DEF, eligibility: "eligible" }])).toBe(true);
-  });
-  it("FALSE when a non-default eligible exists (default must NOT be co-asserted — confident match wins)", () => {
-    expect(shouldDefaultBeEligible([{ extension: ICP, eligibility: "eligible" }])).toBe(false);
-    expect(
-      shouldDefaultBeEligible([
-        { extension: ICP, eligibility: "eligible" },
-        { extension: DEF, eligibility: "eligible" },
-      ]),
-    ).toBe(false); // ⇒ caller archives the now-redundant default
-  });
-  it("a matcher DRAFT alone never suppresses the floor (no typeless window while a draft is pending)", () => {
-    expect(
-      shouldDefaultBeEligible([
-        { extension: ICP, eligibility: "draft" },
-        { extension: DEF, eligibility: "eligible" },
-      ]),
-    ).toBe(true);
-  });
-});
-
 // Tx-composable assertion builder and result shape. These are PURE (no
 // DB): the builder produces the query pair and a parser; we drive the
 // parser with synthetic result arrays to pin the inserted-vs-blocked
 // detection contract.
 describe("buildAssertSemanticTypeQueries — tx-composable builder", () => {
-  it("throws on the default-floor extension BEFORE producing any query", async () => {
-    const { buildAssertSemanticTypeQueries } = await import(
-      "@/lib/artifacts/semantic-assertion-store"
-    );
-    expect(() =>
-      buildAssertSemanticTypeQueries({
-        orgId: "o",
-        artifactId: "a",
-        extension: DEF,
-        assertedBy: "agent",
-      }),
-    ).toThrow(DefaultArtifactNotDirectlyAssertableError);
-  });
-
-  it("produces exactly the archive + insert-RETURNING op pair (no advisory lock / no floor rebalance)", async () => {
+  it("produces exactly the archive + insert-RETURNING op pair (no advisory lock / no refresh tail)", async () => {
     const { buildAssertSemanticTypeQueries } = await import(
       "@/lib/artifacts/semantic-assertion-store"
     );
@@ -113,7 +53,7 @@ describe("buildAssertSemanticTypeQueries — tx-composable builder", () => {
     expect(queries[0].text).toMatch(/UPDATE[\s\S]*semantic_assertion[\s\S]*SET eligibility='archived'/);
     expect(queries[1].text).toMatch(/INSERT INTO[\s\S]*semantic_assertion[\s\S]*RETURNING id/);
     // The composable builder must NOT smuggle the advisory lock or the
-    // floor rebalance — the caller's outer tx owns those.
+    // graphiti-refresh tail — the caller's outer tx owns those.
     expect(queries.some((q) => /pg_advisory_xact_lock/.test(q.text))).toBe(false);
     expect(queries.some((q) => /graphiti_projection_outbox/.test(q.text))).toBe(false);
   });

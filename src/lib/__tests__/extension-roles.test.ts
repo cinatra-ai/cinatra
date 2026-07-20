@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { resolveExtensionRole, requireExtensionRole } from "@/lib/extension-roles";
-import { GENERATED_AGENT_ROLE_BINDINGS } from "@/lib/generated/agent-bindings";
 
 // Optional-surface role resolution pins (cinatra#151 Stage 6). The committed
 // generated bindings are the FULL-universe emission, so the present-case pins
@@ -31,11 +30,5 @@ describe("extension-roles — optional-surface role resolution", () => {
     expect(() =>
       requireExtensionRole("artifact-fixture-unclaimed" as Parameters<typeof requireExtensionRole>[0]),
     ).toThrowError(/generate-extension-manifest\.mjs/);
-  });
-
-  it("the semantic-floor role is claimed by a systemExtension (generation guard holds on the committed map)", () => {
-    // The generator fail-closes on this; the pin here catches a hand-edited
-    // or stale committed map before the gate does.
-    expect(GENERATED_AGENT_ROLE_BINDINGS["artifact-default-floor"]).toBeTruthy();
   });
 });

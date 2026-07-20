@@ -1,0 +1,72 @@
+# ITEM 4 — CLEAN BOOT WITHOUT @cinatra-ai/default-artifact — PROVEN LIVE against a lane DB.
+# Branch lane/1785-deep-slice head 3e247bb492c2dbe667af60d3858d859e812138d5 (default-artifact retirement LANDED: absent from the
+# systemExtensions+requiredExtensions+lock triple, extensions/cinatra-ai/default-artifact deleted,
+# packages/objects/src/generated/artifact-floor.ts deleted). The retired lock IS the branch's real state.
+#
+# Vehicle: the REAL boot-path modules driven against a freshly-created lane DB (prove_1785_boot on the
+# verify Postgres 127.0.0.1:5634), same proof class as item 3 — a full Next HTTP dev server was NOT the
+# vehicle (the .env template is guardrail-blocked from reads and the local extension universe is degraded
+# to the 18 workspace packages, so the boot MODULES were exercised directly rather than wrapped in Next):
+#   Part A  enforceExtensionClosureAtBoot / verifyRequiredInProdInstalled reading the canonical
+#           installed_extension store from the lane DB, PROD posture (mode!=development => fail-CLOSED).
+#           + counterfactual: dropping a required row makes the SAME gate THROW (teeth, not vacuous).
+#   Part B  the equality triple computed live from the branch's real files (13==13==13, no default-artifact).
+#   Part C  objectTypeRegistry warmed from the REAL extensions/ tree + the REAL registry-routed upload
+#           resolver (src/lib/artifacts/upload-artifact-type-map.ts).
+#   Part D  a typed objects row of an upload-RESOLVED pack type seeded into the lane DB + read back through
+#           the registry's artifact type-id set (the library's serve predicate).
+#
+# Reproduce (cwd = worktree root):
+#   docker exec verify-cinatra-postgres-1 psql -U postgres -c "CREATE DATABASE prove_1785_boot;"
+#   node --conditions=react-server --import tsx docs/internals/proofs/1785-a6/reproduce-boot-schema.mts
+#   node --conditions=react-server --import tsx docs/internals/proofs/1785-a6/reproduce-clean-boot.mts
+#
+# The '[artifacts:bridge] ... declares no objectTypes' lines are EXPECTED: derived/umbrella artifacts
+# (chart, blog-*, brand-voice, ...) mint no object type (entry 95, cinatra#1785) — only the four file-upload
+# base packs (pdf/audio/video/image) register a typed object type, which is exactly the upload/library surface.
+
+[extension-closure] required-extension contract violated at boot:
+  - Required-in-prod packages missing from installed_extension manifest: @cinatra-ai/audio-artifact
+  Remediation: the prod acquisition path owns this set — re-run `cinatra instance setup prod` (or `cinatra extensions acquire-prod`) against the committed cinatra-required-extensions.lock.json, or restore the archived/missing required rows. Emergency bypass: CINATRA_DISABLE_REQUIRED_CLOSURE_ASSERT=true.
+[artifacts:bridge] @cinatra-ai/blog-idea-artifact declares no objectTypes — umbrella/derived-type minting is retired (entry 95, cinatra#1785); no object type registered
+[artifacts:bridge] @cinatra-ai/blog-image-artifact declares no objectTypes — umbrella/derived-type minting is retired (entry 95, cinatra#1785); no object type registered
+[artifacts:bridge] @cinatra-ai/blog-post-artifact declares no objectTypes — umbrella/derived-type minting is retired (entry 95, cinatra#1785); no object type registered
+[artifacts:bridge] @cinatra-ai/brand-voice-artifact declares no objectTypes — umbrella/derived-type minting is retired (entry 95, cinatra#1785); no object type registered
+[artifacts:bridge] @cinatra-ai/chart-artifact declares no objectTypes — umbrella/derived-type minting is retired (entry 95, cinatra#1785); no object type registered
+[artifacts:bridge] @cinatra-ai/competitive-analysis-artifact declares no objectTypes — umbrella/derived-type minting is retired (entry 95, cinatra#1785); no object type registered
+[artifacts:bridge] @cinatra-ai/contract-artifact declares no objectTypes — umbrella/derived-type minting is retired (entry 95, cinatra#1785); no object type registered
+[artifacts:bridge] @cinatra-ai/marketing-icp-artifact declares no objectTypes — umbrella/derived-type minting is retired (entry 95, cinatra#1785); no object type registered
+[artifacts:bridge] @cinatra-ai/marketing-strategy-artifact declares no objectTypes — umbrella/derived-type minting is retired (entry 95, cinatra#1785); no object type registered
+[artifacts:bridge] @cinatra-ai/product-portfolio-artifact declares no objectTypes — umbrella/derived-type minting is retired (entry 95, cinatra#1785); no object type registered
+[artifacts:bridge] @cinatra-ai/sales-playbook-artifact declares no objectTypes — umbrella/derived-type minting is retired (entry 95, cinatra#1785); no object type registered
+[artifacts:bridge] @cinatra-ai/screenshot-artifact declares no objectTypes — umbrella/derived-type minting is retired (entry 95, cinatra#1785); no object type registered
+[artifacts:bridge] @cinatra-ai/slide-deck-artifact declares no objectTypes — umbrella/derived-type minting is retired (entry 95, cinatra#1785); no object type registered
+================ ITEM 4 — CLEAN BOOT WITHOUT default-artifact ================
+PASS  [A] canonical store read from lane DB returns the 13 required rows  [rows=13]
+PASS  [A] manifest required set = 13, WITHOUT default-artifact  [required=13]
+PASS  [A] isPackageRequiredInProd('@cinatra-ai/default-artifact') === false
+PASS  [A] verifyRequiredInProdInstalled: ok (no missing / no version-mismatch)  [installed=13]
+PASS  [A] default-artifact absent from the required verification set
+PASS  [A] enforceExtensionClosureAtBoot() clean boot: NO throw (prod posture)  [no throw]
+PASS  [A] closure report: zero broken REQUIRED dependency closures  [broken=0]
+PASS  [A] closure report: required-in-prod verification ok
+PASS  [A] counterfactual: dropping a required row fails verification (names it missing)  [Required-in-prod packages missing from installed_extension manifest: @cinatra-ai/audio-artifact]
+PASS  [A] counterfactual: assertClosureBootReport THROWS in prod on the violation
+PASS  [B] cinatra.extensions == cinatra.systemExtensions (13 each)  [ext=13 sys=13]
+PASS  [B] cinatra.systemExtensions == required-lock packages (the triple)  [sys=13 lock=13]
+PASS  [B] default-artifact absent from ALL THREE legs of the triple
+PASS  [B] extensions/cinatra-ai/default-artifact directory is GONE
+PASS  [B] generated packages/objects/src/generated/artifact-floor.ts is GONE
+PASS  [C] registry warmed: the four typed upload base packs registered (pdf/audio/video/image)  [artifactTypes=4: @cinatra-ai/audio-artifact:recording, @cinatra-ai/image-artifact:image, @cinatra-ai/pdf-artifact:document, @cinatra-ai/video-artifact:video]
+PASS  [C] generic '@cinatra-ai/artifact:object' catch-all NOT registered
+PASS  [C] no default-artifact-defined type registered
+PASS  [C] upload candidates are registry-routed & required-filtered (non-empty)  [candidates=@cinatra-ai/audio-artifact:recording, @cinatra-ai/image-artifact:image, @cinatra-ai/pdf-artifact:document, @cinatra-ai/video-artifact:video]
+PASS  [C] the retired '*/*' floor is NEVER an upload candidate
+PASS  [C] application/pdf resolves to exactly one typed pack  [@cinatra-ai/pdf-artifact:document]
+PASS  [C] text/markdown REFUSED (no required type accepts it — fail closed)
+PASS  [C] empty MIME REFUSED (fail closed)
+PASS  [D] library type-scoped read serves the seeded TYPED rows  [obj_img:@cinatra-ai/image-artifact:image, obj_pdf:@cinatra-ai/pdf-artifact:document]
+PASS  [D] zero generic '@cinatra-ai/artifact:object' rows exist to serve  [generic rows=0]
+PASS  [D] generic type is not in the served artifact type-id set
+
+26/26 assertions passed

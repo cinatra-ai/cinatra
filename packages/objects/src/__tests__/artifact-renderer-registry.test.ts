@@ -20,9 +20,6 @@ import {
 const winner = (extension: string): EffectiveIdentity => ({
   kind: "extension",
   extension,
-  basis: "classic",
-  selectable: true,
-  assertionId: "sa_1",
 });
 
 afterEach(() => {
@@ -76,7 +73,7 @@ describe("semantic-type renderer registry — per-claimant winner binding", () =
 
   it("returns null for a non-extension identity", () => {
     semanticRendererRegistry.register({ objectTypeId: "@cinatra-ai/x:artifact", packageName: "@cinatra-ai/x" });
-    const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
+    const floor: EffectiveIdentity = { kind: "no-primary" };
     expect(semanticRendererRegistry.resolve("@cinatra-ai/x:artifact", floor)).toBeNull();
   });
 

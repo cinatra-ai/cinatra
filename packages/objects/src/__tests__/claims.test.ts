@@ -5,12 +5,10 @@ import {
   claimPrecedenceRank,
   claimWinnerProjectionDisposition,
   effectiveMutableBy,
-  isDefaultClaimDominated,
   isValidClaimScope,
   isWinnerEligible,
   orgClaimScope,
   parseClaimDispositions,
-  resolveClaimProjectionDisposition,
   resolveClaimWinner,
   validateMutabilityNarrowsBaseline,
   type ArbitrableClaim,
@@ -115,46 +113,6 @@ describe("resolveClaimWinner", () => {
     expect(
       resolveClaimWinner([], { orgId: "org-1", objectTypeId: "@vendor/pkg:thing" }),
     ).toBeNull();
-  });
-});
-
-describe("isDefaultClaimDominated (the dormancy rule)", () => {
-  const type = "@vendor/pkg:thing";
-
-  it("an org default is dominated by a dedicated claim at its org OR at platform", () => {
-    const orgDefault = { scope: "org:org-1", objectTypeId: type, claimKind: "default" as const };
-    expect(
-      isDefaultClaimDominated(orgDefault, [claim({ id: "d", scope: "org:org-1", claimKind: "dedicated" })]),
-    ).toBe(true);
-    expect(
-      isDefaultClaimDominated(orgDefault, [claim({ id: "d", scope: "platform", claimKind: "dedicated" })]),
-    ).toBe(true);
-    // A dedicated claim in ANOTHER org never dominates this org's default.
-    expect(
-      isDefaultClaimDominated(orgDefault, [claim({ id: "d", scope: "org:other", claimKind: "dedicated" })]),
-    ).toBe(false);
-  });
-
-  it("a platform default is dominated ONLY by a platform dedicated claim (an org dedicated claim shadows it for that org alone)", () => {
-    const platformDefault = { scope: "platform", objectTypeId: type, claimKind: "default" as const };
-    expect(
-      isDefaultClaimDominated(platformDefault, [claim({ id: "d", scope: "platform", claimKind: "dedicated" })]),
-    ).toBe(true);
-    expect(
-      isDefaultClaimDominated(platformDefault, [claim({ id: "d", scope: "org:org-1", claimKind: "dedicated" })]),
-    ).toBe(false);
-  });
-
-  it("a retired dedicated claim dominates nothing; another DEFAULT claim dominates nothing", () => {
-    const orgDefault = { scope: "org:org-1", objectTypeId: type, claimKind: "default" as const };
-    expect(
-      isDefaultClaimDominated(orgDefault, [
-        claim({ id: "d", scope: "platform", claimKind: "dedicated", status: "retired" }),
-      ]),
-    ).toBe(false);
-    expect(
-      isDefaultClaimDominated(orgDefault, [claim({ id: "d", scope: "platform", claimKind: "default" })]),
-    ).toBe(false);
   });
 });
 
@@ -315,29 +273,3 @@ describe("claimWinnerProjectionDisposition (the shared fail-closed rule)", () =>
   });
 });
 
-describe("resolveClaimProjectionDisposition (winner arbitration + the shared rule)", () => {
-  const input = { orgId: "org-1", objectTypeId: "@vendor/pkg:thing" };
-
-  it("returns null when nothing claims the type", () => {
-    expect(resolveClaimProjectionDisposition([], input)).toBeNull();
-  });
-
-  it("applies the winner's disposition via the shared rule (org winner over platform)", () => {
-    const claims = [
-      claim({ id: "p", scope: "platform", claimKind: "dedicated", dispositions: { projection: "raw" } }),
-      claim({ id: "o", scope: "org:org-1", claimKind: "dedicated", dispositions: { projection: "none" } }),
-    ];
-    // The org winner ('o') decides; equals claimWinnerProjectionDisposition of that winner.
-    expect(resolveClaimProjectionDisposition(claims, input)).toBe("none");
-    expect(resolveClaimProjectionDisposition(claims, input)).toBe(
-      claimWinnerProjectionDisposition(claims[1]),
-    );
-  });
-
-  it("a winner with invalid dispositions fails closed to artifact-safe (same leaf)", () => {
-    const claims = [
-      claim({ id: "w", scope: "platform", claimKind: "dedicated", dispositions: { projection: "full" } }),
-    ];
-    expect(resolveClaimProjectionDisposition(claims, input)).toBe("artifact-safe");
-  });
-});

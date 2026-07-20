@@ -3,15 +3,31 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // Effective type catalog resolver (cinatra#1425) — AC-4: catalog resolution
 // honors the claiming install's access grants PER ACTOR (an actor outside the
 // grant sees no claim) and exposes entry kinds + dispositions. Arbitration is
-// the REAL pure policy leaf (only the stores/access gate are mocked).
+// the REAL pure policy leaf (only the stores/access gate are mocked). The
+// type-driven DECLARED disposition (epic #1785) is read from the registry via
+// the shared resolver, mirrored here against the fixture defs.
 
 vi.mock("server-only", () => ({}));
 
-const listTypes = vi.fn();
+type FixtureDef = {
+  type: string;
+  category: string;
+  isArtifact?: unknown;
+  dispositions?: { projection: "raw" | "artifact-safe" | "none" };
+};
+const listTypes = vi.fn<(...a: unknown[]) => FixtureDef[]>();
 const readActiveDynamicObjectTypes = vi.fn();
 vi.mock("@cinatra-ai/objects", () => ({
   objectTypeRegistry: { list: (...a: unknown[]) => listTypes(...a) },
   readActiveDynamicObjectTypes: (...a: unknown[]) => readActiveDynamicObjectTypes(...a),
+  // The shared type-driven resolver, mirrored against the fixture defs: an
+  // unregistered type fails closed to 'none'; a registered type declares its
+  // projection or defaults to artifact-safe.
+  resolveTypeProjectionDisposition: (typeId: string) => {
+    const def = listTypes().find((d) => d.type === typeId);
+    if (!def) return "none";
+    return def.dispositions?.projection ?? "artifact-safe";
+  },
 }));
 
 const readArtifactTypeClaimsForOrg = vi.fn();
@@ -51,7 +67,12 @@ function claimRow(partial: Record<string, unknown>) {
 beforeEach(() => {
   listTypes.mockReset().mockReturnValue([
     { type: "@cinatra-ai/campaigns:campaign", category: "campaign" },
-    { type: "@vendor/report-artifact:artifact", category: "report", isArtifact: { accepts: {} } },
+    {
+      type: "@vendor/report-artifact:artifact",
+      category: "report",
+      isArtifact: { accepts: {} },
+      dispositions: { projection: "artifact-safe" },
+    },
   ]);
   readActiveDynamicObjectTypes.mockReset().mockResolvedValue([
     { type: "@dynamic/types:competitor-profile", inferredName: "Competitor profile", inferredCategory: "profile" },
@@ -141,5 +162,31 @@ describe("resolveEffectiveTypeCatalog", () => {
     const entry = catalog.find((e) => e.typeId === "@cinatra-ai/campaigns:campaign");
     expect(entry?.claim?.claimId).toBe("c1");
     expect(entry?.claim?.dispositions).toBeNull();
+  });
+
+  it("epic #1785: a static entry surfaces its type-driven DECLARED disposition (registry authority)", async () => {
+    canActorAccessClaimedArtifactExtension.mockResolvedValue(true);
+    const catalog = await resolveEffectiveTypeCatalog({ orgId: "org-1", actor: grantedActor });
+    // The artifact-extension def declares an artifact-safe disposition — surfaced
+    // from the registry (not the DB claim).
+    const artifactEntry = catalog.find((e) => e.typeId === "@vendor/report-artifact:artifact");
+    expect(artifactEntry?.declaredDispositions).toEqual({ projection: "artifact-safe" });
+    expect(artifactEntry?.projectionDisposition).toBe("artifact-safe");
+    // The campaign def declares NO disposition — ungoverned, so no declared
+    // payload, and the resolver defaults it to artifact-safe.
+    const campaignEntry = catalog.find((e) => e.typeId === "@cinatra-ai/campaigns:campaign");
+    expect(campaignEntry?.declaredDispositions).toBeNull();
+    expect(campaignEntry?.projectionDisposition).toBe("artifact-safe");
+  });
+
+  it("epic #1785: a claim-only type (no local registration) fails the type-driven resolver closed to 'none'", async () => {
+    canActorAccessClaimedArtifactExtension.mockResolvedValue(true);
+    readArtifactTypeClaimsForOrg.mockReturnValue([
+      claimRow({ id: "c9", objectTypeId: "@other/unregistered:thing" }),
+    ]);
+    const catalog = await resolveEffectiveTypeCatalog({ orgId: "org-1", actor: grantedActor });
+    const entry = catalog.find((e) => e.typeId === "@other/unregistered:thing");
+    expect(entry?.declaredDispositions).toBeNull();
+    expect(entry?.projectionDisposition).toBe("none");
   });
 });

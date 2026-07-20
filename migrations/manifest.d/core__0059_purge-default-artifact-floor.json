@@ -1,0 +1,29 @@
+{
+  "seq": "0059",
+  "file": "core/core__0059_purge-default-artifact-floor.mjs",
+  "summary": "One-time transactional purge of the RETIRED generic Default Artifact floor object rows '@cinatra-ai/artifact:object' PLUS a DB-level write guard rejecting any NEW row of that type (owner ruling 2026-07-18; epic cinatra#1785 wave A6; sibling of the shipped core__0056). The type model is the dependency model: an object type exists ONLY as an explicit definition by an installed kind:artifact extension. Wave A3 cut createSemanticArtifact over to the EXACT declared pack/host objectType and retired the generic registration, so NO live path writes the generic type — the surviving '@cinatra-ai/artifact:object' rows are LEGACY RESIDUE (pre-A3), deleted outright with everything that references them so nothing dangles. DISTINCT FROM core__0056 (which purged the separate '@cinatra-ai/objects:object' floor + tombstoned dynamic namespaces and DELIBERATELY left '@cinatra-ai/artifact:object' for this Default-Artifact wave): these rows carry the FULL artifact sub-graph keyed by artifact_id (== objects.id). CASCADE (~20 tables): artifact_id children (artifact_audit, artifact_refs, artifact_provider_cache, artifact_materializations, authoring_step_artifacts, artifact_publication_operations, semantic_assertion, run_context_selections, representation, artifact_uninstall_operation_assertions + orphan artifact_uninstall_operations parents); object_id children (object_content_snapshots, graphiti_projection_outbox, merge_proposal, artifact_promotion_request, artifact_binding_reconcile_queue, object_binding_quarantine); history (remote_effect_attempts -> object_change_event -> orphan-swept change_set via NOT EXISTS); dangling parent refs NULLed on surviving objects; objects LAST. TRIGGER-AWARE: representation, run_context_selections and artifact_uninstall_operation_assertions carry append-only BEFORE UPDATE OR DELETE guards (trg_*_append_only) that RAISE on DELETE; the purge DISABLEs each named trigger (existence-guarded via pg_trigger; needs only table ownership, no superuser session_replication_role) for the transaction and RE-ENABLEs it. BLOBS BY REACHABILITY ONLY: resource + artifact_blobs (and on-disk bytes) are content-addressed + shared and are NEVER deleted here; deleting the representations/refs makes a resource unreachable IFF no surviving artifact references it, and the existing reachability-guarded GC (artifact-retention.ts#runResourceBlobGc, gated by NOT EXISTS over surviving representation/artifact_refs) reclaims the resource + blob + bytes atomically on its cycle. WRITE GUARD: a BEFORE INSERT OR UPDATE trigger on objects RAISEs on NEW.type = '@cinatra-ai/artifact:object' (survives a mixed-version deploy: an old pre-A3 image's generic write fail-closes; post-cutover a pure backstop) — applied by this migration (the boot runner reaches production); the fresh-install drizzle-store bootstrap mirror + the generic-seeding fixture sweep + the A5-remainder floor-writer retirement/default-artifact triple removal are the COUPLED follow-up. Metadata-light DELETEs + two ON COMMIT DROP temp tables + trigger toggles + guard DDL in node-pg-migrate's default single transaction (all-or-nothing). Idempotent/lineage-tolerant: on a second run or the fresh-bootstrap shape no residual rows match (every DELETE a no-op) and the guard DDL is CREATE OR REPLACE + DROP TRIGGER IF EXISTS + CREATE TRIGGER. down() THROWS: irreversible clean-break purge (0033/0048/0056 precedent); roll back by restoring from a backup. SEQ IS PROVISIONAL: assigned at merge — shipped max on origin/main at build time is core__0058 (auditor-review-companion), so this is 0059; a concurrent lane may claim 0059 first, in which case renumber-at-merge is normal. migrations/** is HIGH-RISK: owner approval required; the lane never merges.",
+  "destructive": true,
+  "tables": [
+    "objects",
+    "artifact_audit",
+    "artifact_refs",
+    "artifact_provider_cache",
+    "artifact_materializations",
+    "authoring_step_artifacts",
+    "artifact_publication_operations",
+    "semantic_assertion",
+    "run_context_selections",
+    "representation",
+    "artifact_uninstall_operation_assertions",
+    "artifact_uninstall_operations",
+    "object_content_snapshots",
+    "graphiti_projection_outbox",
+    "merge_proposal",
+    "artifact_promotion_request",
+    "artifact_binding_reconcile_queue",
+    "object_binding_quarantine",
+    "remote_effect_attempts",
+    "object_change_event",
+    "change_set"
+  ]
+}

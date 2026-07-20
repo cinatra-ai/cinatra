@@ -22,7 +22,7 @@ export function resolveArtifactEffectiveIdentity(_input: {
   baseType: string;
 }): ArtifactIdentityEnrichment {
   return {
-    identity: { kind: "default-artifact", selectable: false, assertionId: null },
+    identity: { kind: "no-primary" },
     eligibleExtensions: [],
   };
 }

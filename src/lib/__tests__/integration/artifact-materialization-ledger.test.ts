@@ -51,6 +51,10 @@ const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
 const ORG = "org-int-923";
 const RUN = "run-int-923";
 const EXT = "@cinatra-ai/blog-post-artifact";
+// Fixture artifact type (namespaced under EXT so the writer's definer/write-
+// eligibility check passes) the REQUIRED-objectType writer validates against
+// (epic #1785 wave A3).
+const FIXTURE_OBJECT_TYPE = `${EXT}:body`;
 
 async function* bytes(s: string): AsyncIterable<Uint8Array> {
   yield new TextEncoder().encode(s);
@@ -88,6 +92,19 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#923 materialization ledger (real DB)", ()
       }
     }
     (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
+
+    // Register the fixture artifact type the writer requires (epic #1785 wave A3).
+    const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
+    const { z: zfix } = await import("zod");
+    objectTypeRegistry.register({
+      type: FIXTURE_OBJECT_TYPE,
+      category: "report",
+      schema: zfix.record(zfix.string(), zfix.unknown()),
+      lifecycle: { sources: ["agent", "user", "import"], mutableBy: ["agent", "user"] },
+      renderers: { listRow: null, card: null, detail: null },
+      isArtifact: { accepts: { file: { mimeTypes: ["text/plain"] } } },
+      dispositions: { projection: "artifact-safe" },
+    });
   });
 
   afterAll(async () => {
@@ -139,6 +156,7 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#923 materialization ledger (real DB)", ()
       ownerLevel: "organization",
       ownerId: ORG,
       title: "923 declarative one",
+      objectType: FIXTURE_OBJECT_TYPE,
       declaredMime: "text/plain",
       originKind: "agent_generated",
       skipFallbackClassification: true,
@@ -219,6 +237,7 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#923 materialization ledger (real DB)", ()
       ownerLevel: "organization",
       ownerId: ORG,
       title: "925 mid-flow one",
+      objectType: FIXTURE_OBJECT_TYPE,
       declaredMime: "text/plain",
       originKind: "agent_generated",
       skipFallbackClassification: true,
@@ -331,6 +350,7 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#923 materialization ledger (real DB)", ()
         ownerLevel: "organization",
         ownerId: ORG,
         title: "923 loser drive",
+        objectType: FIXTURE_OBJECT_TYPE,
         declaredMime: "text/plain",
         originKind: "agent_generated",
         skipFallbackClassification: true,

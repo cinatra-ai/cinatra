@@ -2,8 +2,12 @@ import "server-only";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import { clearGraph, getEpisodes } from "./graphiti-client";
-import { resolveClaimProjectionDisposition, type ArbitrableClaim } from "./claims";
 import { GENERIC_ARTIFACT_OBJECT_TYPE } from "./effective-identity";
+import {
+  objectTypeRegistry,
+  isDispositionGovernedType,
+  resolveTypeProjectionDisposition,
+} from "./registry";
 import {
   deriveProjectionGroupId,
   orgIdFromProjectionGroupId,
@@ -191,57 +195,43 @@ function nonAmbientLaneReplaySql(a: string, laneTypesParam: string): string {
       ))`;
 }
 
-/** The dynamic per-org claim-disposition sets the ambient rebuild needs. */
+/** The type-driven disposition sets the ambient rebuild needs. */
 type ClaimedTypeDispositions = {
-  /** Claimed types whose WINNER disposition is 'none' — policy-skipped by the
+  /** Governed types whose disposition is 'none' — policy-skipped by the
    * projector (never projected, never counted): excluded from the ambient
    * expected/projected counts + the recall sample. */
   excludedTypes: string[];
-  /** Claimed types whose WINNER disposition is 'artifact-safe' / faceted —
+  /** Governed types whose disposition is 'artifact-safe' / faceted —
    * LANE-ELIGIBLE exactly like the generic artifact type (nested under
    * per-scope lanes), so they join the non-ambient exclusion set. */
   artifactSafeTypes: string[];
 };
 
 /**
- * One org-scoped claim read → both dynamic type sets the ambient rebuild needs.
- * Winner arbitration + disposition run through resolveClaimProjectionDisposition,
- * whose fail-closed disposition leaf (`claimWinnerProjectionDisposition`) is the
- * SAME rule the projector applies per-row on the write path, so the
+ * The registered governed types → both disposition sets the ambient rebuild
+ * needs (epic #1785 type-driven seam). Reads the in-process registry via the
+ * SAME shared `resolveTypeProjectionDisposition` resolver the projector applies
+ * per-row on the write path and the recall handler uses, so the
  * counted/replayed/excluded set can never disagree with what the projector
- * actually writes. Read FRESH each phase: a claimed type whose winning
- * disposition later flips (e.g. artifact-safe → raw/none) is itself a
- * claim-change that enqueues a re-projection row, bumps the group epoch, and
- * FOLDS this journal back to 'clearing' at the higher epoch — so the next phase
- * re-reads the new set and verify converges (no stale nested-lane episodes stay
- * uncounted forever). Claim-set/dispositions parsing via the pure claims leaf. */
+ * actually writes. Dispositions are now a GLOBAL property of the installed type
+ * (not per-org claim state), so the set is the same for every org; the `orgId`
+ * argument is retained only for the null-journal fast-exit (a null-org journal
+ * has no ambient org lane to nest under). Read FRESH each phase: a type whose
+ * disposition changes (an install/uninstall, or a manifest change on redeploy)
+ * enqueues re-projection rows, bumps the group epoch, and FOLDS this journal
+ * back to 'clearing' at the higher epoch — so the next phase re-reads the new
+ * set and verify converges (no stale nested-lane episodes stay uncounted
+ * forever). An uninstalled definer resolves to 'none' (fail closed) — its type
+ * simply drops out of the governed set here. */
 export function readClaimedTypeDispositions(orgId: string | null): ClaimedTypeDispositions {
   const excludedTypes: string[] = [];
   const artifactSafeTypes: string[] = [];
   if (orgId == null) return { excludedTypes, artifactSafeTypes };
-  const [result] = run([
-    {
-      text: `SELECT id, scope, object_type_id, claim_kind, status, extension_package, extension_version, generation, dispositions
-             FROM "${s()}"."artifact_type_claims"
-             WHERE scope = 'platform' OR scope = $1`,
-      values: [`org:${orgId}`],
-    },
-  ]);
-  const claims: ArbitrableClaim[] = ((result?.rows ?? []) as Array<Record<string, unknown>>).map((r) => ({
-    id: String(r.id),
-    scope: String(r.scope),
-    objectTypeId: String(r.object_type_id),
-    claimKind: String(r.claim_kind) as ArbitrableClaim["claimKind"],
-    status: String(r.status) as ArbitrableClaim["status"],
-    extensionPackage: String(r.extension_package),
-    extensionVersion: String(r.extension_version),
-    generation: Number(r.generation),
-    dispositions: r.dispositions ?? null,
-  }));
-  for (const typeId of new Set(claims.map((c) => c.objectTypeId))) {
-    const disposition = resolveClaimProjectionDisposition(claims, { orgId, objectTypeId: typeId });
-    if (disposition === "none") excludedTypes.push(typeId);
-    else if (disposition === "artifact-safe") artifactSafeTypes.push(typeId);
+  for (const def of objectTypeRegistry.list()) {
+    if (!isDispositionGovernedType(def.type)) continue;
+    const disposition = resolveTypeProjectionDisposition(def.type);
+    if (disposition === "none") excludedTypes.push(def.type);
+    else if (disposition === "artifact-safe") artifactSafeTypes.push(def.type);
   }
   return { excludedTypes, artifactSafeTypes };
 }

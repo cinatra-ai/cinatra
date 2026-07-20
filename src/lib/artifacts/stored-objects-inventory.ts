@@ -20,6 +20,7 @@ import "server-only";
  * a DB; the server loader wires the real object-store read + name lookup.
  */
 import { SEMANTIC_ARTIFACT_OBJECT_TYPE } from "@cinatra-ai/artifacts";
+import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { ObjectRecord } from "@/lib/objects-store";
@@ -182,10 +183,33 @@ export async function loadStoredArtifactObjects(input: {
 }): Promise<StoredObjectRow[]> {
   if (input.orgId === null) return [];
   const { listObjectsByFilter } = await import("@/lib/objects-store");
-  const records = listObjectsByFilter(
-    { orgId: input.orgId, type: SEMANTIC_ARTIFACT_OBJECT_TYPE, limit: INVENTORY_LIMIT },
-    input.actor,
-  );
+  // Fan out over the type-driven artifact set (epic #1785 wave A4): the generic
+  // base (legacy rows, until the A6 purge) PLUS every registered isArtifact PACK
+  // type — the A3 writer stamps a row's EXACT declared pack type into
+  // objects.type, so a generic-only query would silently omit every pack-typed
+  // row from the inventory. Warm the registry first (idempotent) so the set is
+  // complete in a fresh process.
+  const { ensureArtifactTypesRegistered } = await import("./ensure-artifact-registry");
+  ensureArtifactTypesRegistered();
+  const typeIds = new Set<string>([SEMANTIC_ARTIFACT_OBJECT_TYPE]);
+  for (const def of objectTypeRegistry.listArtifacts()) typeIds.add(def.type);
+  const records: ObjectRecord[] = [];
+  for (const type of typeIds) {
+    records.push(
+      ...listObjectsByFilter(
+        { orgId: input.orgId, type, limit: INVENTORY_LIMIT },
+        input.actor,
+      ),
+    );
+  }
   const resolveName = await buildScopeNameResolver(records);
-  return projectStoredObjectRows(records, resolveName);
+  // `projectStoredObjectRows` sorts most-recently-UPDATED first; cap the merged,
+  // sorted set to the inventory limit so the fan-out never exceeds the
+  // single-query render budget. NOTE: each per-type fetch is itself capped at
+  // INVENTORY_LIMIT by the store's created_at-DESC order, so — as with the
+  // pre-A4 generic-only query — a type with more than INVENTORY_LIMIT rows can
+  // omit a recently-UPDATED-but-old-created row. Acceptable for this admin
+  // record-inspection surface; the fan-out is a strict superset of the prior
+  // (generic-only) result.
+  return projectStoredObjectRows(records, resolveName).slice(0, INVENTORY_LIMIT);
 }

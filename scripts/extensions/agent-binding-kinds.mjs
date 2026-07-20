@@ -67,12 +67,10 @@ export const ROLE_NAME_RE = /^[a-z][a-z0-9-]*$/;
 // cinatra.artifact.ui renderer-entry resolution.
 export const COMPONENT_ENTRY_RE = /^(\.\/)?[A-Za-z0-9_][A-Za-z0-9_./-]*$/;
 
-// The semantic-floor artifact role (cinatra#151 Stage 6): the single role the
-// generator REQUIRES a claimant for (and requires that claimant to be a
-// cinatra.systemExtensions member) — the floor artifact type is structural,
-// present in every universe. Emitted as a dedicated pure-data constant into
-// packages/objects/src/generated/artifact-floor.ts.
-export const ARTIFACT_DEFAULT_FLOOR_ROLE = "artifact-default-floor";
+// The semantic-floor artifact role ("artifact-default-floor") and its dedicated
+// pure-data constant were retired with @cinatra-ai/default-artifact (epic
+// cinatra#1785 wave A5): there is no longer a structural fallback artifact type,
+// so the generator requires no role claimant and emits no floor constant.
 
 // `params` is public renderer metadata (it crosses a "use server" boundary to
 // the client and is registered into the client-side renderer registry). It

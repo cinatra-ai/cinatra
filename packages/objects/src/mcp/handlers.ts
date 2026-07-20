@@ -32,22 +32,24 @@ import type { EntityNode } from "../graphiti-client";
 // `readTeamsForUser` resolves the actor's org-scoped team memberships. Both
 // modules are already reachable from every locked route that reaches these
 // handlers (measured: route-graph unchanged) — no new graph pressure.
-// Artifact-scoped recall detection composes resolveClaimProjectionDisposition,
-// whose fail-closed disposition leaf (claimWinnerProjectionDisposition) is the
-// SAME rule the projector applies per-row and the rebuild driver uses, so a
-// claimed artifact-safe type surfaces its nested lanes on search.
+// Artifact-scoped recall detection reads the type-driven disposition resolver
+// (epic #1785), the SAME registry-backed rule the projector applies per-row and
+// the rebuild driver uses, so a governed artifact-safe type surfaces its nested
+// lanes on search and an uninstalled/ungoverned type never does.
 import { deriveEntitledLanes } from "../graphiti-projection-policy";
 import { readTeamsForUser } from "@/lib/better-auth-db";
 import { GENERIC_ARTIFACT_OBJECT_TYPE } from "../effective-identity";
-import { resolveClaimProjectionDisposition } from "../claims";
-import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
 // Connector dispatch is intentionally not active in this handler.
 import {
   isDynamicObjectTypeId,
   isTombstonedObjectTypeId,
   OBJECT_TYPE_NAMESPACE_RE,
 } from "../namespace";
-import { objectTypeRegistry } from "../registry";
+import {
+  objectTypeRegistry,
+  isDispositionGovernedType,
+  resolveTypeProjectionDisposition,
+} from "../registry";
 // Write paths go through Postgres-primary CRUD; the legacy
 // shadowUpsertObject (kept in src/lib/objects-dual-write.ts because asset-blog
 // and agent-builder still depend on it) is no longer called from this file.
@@ -490,22 +492,26 @@ async function enforceDraftableLock(
 const MEMORY_CONCEPT_TYPE_ID = "@cinatra-ai/memory:concept";
 
 /**
- * Is `type` an ARTIFACT-scoped recall type for `orgId` (cinatra#1436 AC3)?
- * True for the generic artifact object type, and for any CLAIMED type whose
- * winning disposition resolves to 'artifact-safe' / faceted — the same
- * lane-eligible set the projector nests into per-scope lanes, so a recall must
- * search the caller's entitled lane set (not the ambient lane alone) or it
+ * Is `type` an ARTIFACT-scoped recall type (cinatra#1436 AC3)?
+ * True for the generic artifact object type, and for any DISPOSITION-GOVERNED
+ * type whose type-driven disposition resolves to 'artifact-safe' / faceted — the
+ * same lane-eligible set the projector nests into per-scope lanes, so a recall
+ * must search the caller's entitled lane set (not the ambient lane alone) or it
  * would miss the caller's own user-/team-lane artifacts. Memory is handled by
  * its own branch (never reaches here). The disposition is resolved through the
- * SAME shared resolver the projector/rebuild use, so the four surfaces agree.
- * The lane is relevance scoping only — every candidate is still Postgres
- * ownership-filtered + object.read-gated after search.
+ * SAME shared registry-backed resolver the projector/rebuild use (epic #1785),
+ * so the four surfaces agree. An ungoverned data type, or an uninstalled definer
+ * (resolver → 'none'), is NOT artifact-scoped. The lane is relevance scoping
+ * only — every candidate is still Postgres ownership-filtered + object.read-gated
+ * after search.
  */
-function isArtifactScopedRecallType(orgId: string, type: string): boolean {
+function isArtifactScopedRecallType(type: string): boolean {
   if (type === GENERIC_ARTIFACT_OBJECT_TYPE) return true;
   if (type === MEMORY_CONCEPT_TYPE_ID) return false;
-  const claims = readArtifactTypeClaimsForOrg(orgId);
-  return resolveClaimProjectionDisposition(claims, { orgId, objectTypeId: type }) === "artifact-safe";
+  return (
+    isDispositionGovernedType(type) &&
+    resolveTypeProjectionDisposition(type) === "artifact-safe"
+  );
 }
 
 /**
@@ -1019,7 +1025,7 @@ export function createObjectsPrimitiveHandlers() {
       const wantsEntitledLanes =
         input.type != null &&
         orgId != null &&
-        (input.type === MEMORY_CONCEPT_TYPE_ID || isArtifactScopedRecallType(orgId, input.type));
+        (input.type === MEMORY_CONCEPT_TYPE_ID || isArtifactScopedRecallType(input.type));
       if (wantsEntitledLanes) {
         const actorUserId = actorExt.userId;
         let teamIds: string[] = [];

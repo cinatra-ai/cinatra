@@ -224,6 +224,35 @@ export type ArtifactDescriptor = SemanticArtifactManifest;
 
 // ---------------------------------------------------------------------------
 
+/**
+ * The projection disposition vocabulary (epic #1785 type-driven seam) —
+ * structural twin of the claim dispositions `projection` union in `./claims`
+ * (`claimDispositionsSchema`); the claims test pins them equal. `raw` projects
+ * the row's raw data, `artifact-safe` the metadata-only faceted shape, `none`
+ * is a terminal skip (never projected).
+ */
+export type TypeProjectionDisposition = "raw" | "artifact-safe" | "none";
+
+/**
+ * The disposition payload a type DECLARES at registration (epic #1785). Structural
+ * twin of `ArtifactObjectTypeClaim["dispositions"]` (and the claim registry's
+ * strict union in `./claims`) — this file stays type-only, so the shape is
+ * restated structurally; `claimDispositionsSchema` is the validator of record.
+ * The type-driven disposition resolver (`resolveTypeProjectionDisposition` in
+ * `./registry`) reads only `projection`; the remaining fields are carried so the
+ * registry is the single authority the retirement (epic #1785) cuts the
+ * projector / rebuild / recall / effective-type-catalog over to, replacing the
+ * DB-claim arbitration.
+ */
+export type TypeDispositions = {
+  projection: TypeProjectionDisposition;
+  pinnable?: boolean;
+  snapshotPolicy?: "content" | "metadata" | "none";
+  redactionPolicyVersion?: string;
+  sensitivity?: "normal" | "sensitive";
+  mutability?: "draftable" | "record" | "external";
+};
+
 export type ObjectTypeDefinition<T = unknown> = {
   type: string;
   category: ObjectCategory;
@@ -237,6 +266,19 @@ export type ObjectTypeDefinition<T = unknown> = {
    * object, not an artifact. Per-object-TYPE flag — never per-instance.
    */
   isArtifact?: ArtifactDescriptor;
+  /**
+   * The projection disposition this type DECLARES (epic #1785 type-driven seam).
+   * Populated at registration from the extension's manifest `objectTypes`
+   * self-claim (via the artifact bridge) or declared directly on a host
+   * registration. Absent ⇒ the type is NOT disposition-governed (a plain data
+   * object) and keeps the generic projection path — the registry-backed
+   * resolver (`resolveTypeProjectionDisposition`) distinguishes this from an
+   * installed-but-undeclared governed type. This field makes the in-process
+   * registry the single disposition authority the retirement cuts the
+   * projector / rebuild / recall / effective-type-catalog over to, replacing the
+   * per-org DB-claim arbitration.
+   */
+  dispositions?: TypeDispositions;
   /**
    * Optional function returning a stable identity key for dedup lookup before
    * Graphiti writes. Return `null` when the data has no natural identifier

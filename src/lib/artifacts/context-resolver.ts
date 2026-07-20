@@ -6,6 +6,8 @@ import {
   postgresSchema,
 } from "@/lib/database";
 import { buildOwnershipFilter } from "@/lib/derived-store-ownership";
+import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { AgentContextSlot } from "@cinatra-ai/extensions/agent-context-slots-reader";
 
@@ -241,6 +243,23 @@ export function resolveContextSlot(
   // remain the real gate on WHICH extensions resolve.
   const artifactTypePh = ph(SEMANTIC_ARTIFACT_OBJECT_TYPE);
 
+  // epic #1785 wave A4: the registered isArtifact PACK types (read at query-
+  // build time — never a frozen module-load snapshot). A pack-typed row created
+  // by the A3 writer carries its exact declared type in objects.type (not the
+  // retired generic base). A RUN-PRODUCED pack row also carries a producer
+  // CLASSIC assertion (extension = the producing ext), so the assertion JOIN +
+  // accepted-extension filter + the (assertionId, extension) triple below stay
+  // the real gate on WHICH extensions resolve — this predicate only admits the
+  // row into the visible set. An UPLOADED (assertion-less) pack row is admitted
+  // here but produces no candidate (no eligible assertion an accepted extension
+  // matches) — identical to an assertion-less generic row, not a regression.
+  // Warm the registry first: the context read paths do not transitively trigger
+  // boot registration, so a cold process would see an empty artifact-type set.
+  ensureArtifactTypesRegistered();
+  const artifactTypeIdsPh = ph(
+    objectTypeRegistry.listArtifacts().map((d) => d.type),
+  );
+
   // The project-narrowing clause. When projectId is set, we ADDITIONALLY
   // require the row to be tagged for THIS project (canonical `project_id`
   // column — cinatra#1428). Combined with the ownership filter (which already
@@ -287,6 +306,7 @@ export function resolveContextSlot(
       WHERE o.org_id = ${orgIdPh}
         AND (
           o.type = ${artifactTypePh}
+          OR o.type = ANY(${artifactTypeIdsPh}::text[])
           OR EXISTS (
             SELECT 1 FROM "${schema}"."semantic_assertion" b
             WHERE b.org_id = o.org_id AND b.artifact_id = o.id

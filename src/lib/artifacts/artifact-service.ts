@@ -16,22 +16,21 @@ import {
 } from "@/lib/objects-store";
 import type { ArtifactObjectData } from "@cinatra-ai/artifacts";
 import { SEMANTIC_ARTIFACT_OBJECT_TYPE } from "@cinatra-ai/artifacts";
+import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import {
   createSemanticArtifact,
+  ObjectsTypeNotRegisteredError,
   type CreateSemanticArtifactInput,
   type CreateSemanticArtifactResult,
 } from "./artifact-creation";
+import { resolveUploadArtifactType } from "./upload-artifact-type-map";
 import { tombstoneArtifact as retentionTombstone } from "./artifact-retention";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
-// Generated pure-data floor constant (cinatra#151 Stage 6) — core source
-// never names the floor extension package.
-import { DEFAULT_ARTIFACT_EXTENSION } from "@cinatra-ai/objects/artifact-floor";
 import { listArtifactIdsForExtension } from "./semantic-assertion-store";
-// Effective-identity service (cinatra#1426): the ONE resolution point for
-// artifact identity — total over base type × claim × binding × classic
-// assertions × install status. The enrichment below resolves THROUGH it
-// (identity requires an INSTALLED extension; a claim without a landed
-// binding is browse-only).
+// Effective-identity service (epic #1785): the ONE resolution point for
+// artifact identity — now TYPE-DRIVEN (the type's installed namespace-defining
+// extension, else no primary). The enrichment below resolves THROUGH it and
+// carries the raw eligible-extension summary set.
 import {
   resolveArtifactEffectiveIdentities,
   resolveArtifactEffectiveIdentity,
@@ -45,10 +44,15 @@ import {
 // would see an empty registry in a fresh process. Idempotent (registry is
 // replace-by-id); guarded so it runs at most once per process.
 //
-// list/get filter on the generic SEMANTIC_ARTIFACT_OBJECT_TYPE directly.
-// The registry is still warmed because other paths (cross-kind dep graph,
-// manifest validation) consume it; the artifact service no longer reads
-// `objectTypeRegistry.listArtifacts()`.
+// list/get filter on the generic SEMANTIC_ARTIFACT_OBJECT_TYPE (legacy rows,
+// until the #1785 A6 purge) PLUS every registered isArtifact pack type read
+// from the in-process registry — the A3 writer now stamps a row's EXACT
+// declared pack type (`pdf-artifact:document`, …) into `objects.type` instead
+// of the retired generic base, so a read filter pinned to the generic literal
+// alone would strand every pack-typed row (invisible in the library, 404 in
+// get/detail). Reading `objectTypeRegistry.listArtifacts()` keeps the surface
+// pluggable: a newly-installed artifact pack appears with zero per-type
+// branches here.
 let _artifactRegistryReady = false;
 function ensureArtifactRegistry(): void {
   if (_artifactRegistryReady) return;
@@ -82,14 +86,14 @@ export type ArtifactSummary = {
   ownerLevel: "user" | "team" | "organization" | "workspace";
   visibility: "private" | "team" | "organization" | "public";
   // Semantic identity resolves through the effective-identity service
-  // (cinatra#1426): `effectiveIdentity` is the full resolution (extension
-  // identity with its basis + selectability, the default-artifact floor, or
-  // plain object); `primaryExtension` is the summary string derived from it
-  // (the identity's extension, or the floor). Identity requires an INSTALLED
-  // extension — an uninstalled extension's assertions are INACTIVE here.
-  // `eligibleExtensions` stays the raw active eligible set (not drafts).
+  // (epic #1785): `effectiveIdentity` is the type-driven resolution (the
+  // installed namespace-defining extension, or no-primary); `primaryExtension`
+  // is the summary string derived from it — the identity's extension, or NULL
+  // when the row has no defining extension (the retired generic catch-all, an
+  // uninstalled extension's type). `eligibleExtensions` stays the raw active
+  // eligible set (not drafts).
   eligibleExtensions: string[];
-  primaryExtension: string;
+  primaryExtension: string | null;
   effectiveIdentity: EffectiveIdentity;
   // Validated "Open in source application" URL for connector-ref artifacts,
   // projected from `objects.data.connectorRef.url` via
@@ -123,9 +127,16 @@ export function connectorRefSourceUrl(data: unknown): string | null {
   return parsed.href;
 }
 
-// Every artifact row carries the same SEMANTIC_ARTIFACT_OBJECT_TYPE.
+// The admissible artifact object-type id set: the generic base (legacy rows,
+// retired by the A6 purge) plus every registered isArtifact pack type. Warms
+// the registry first (idempotent) so the set is complete in a fresh process,
+// and reads it at CALL time (never a frozen module-load snapshot) so a
+// hot-installed pack is admitted immediately.
 function artifactObjectTypeIds(): Set<string> {
-  return new Set([SEMANTIC_ARTIFACT_OBJECT_TYPE]);
+  ensureArtifactRegistry();
+  const ids = new Set<string>([SEMANTIC_ARTIFACT_OBJECT_TYPE]);
+  for (const def of objectTypeRegistry.listArtifacts()) ids.add(def.type);
+  return ids;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,20 +185,15 @@ function actorPassesObjectAuthz(
   );
 }
 
-/** The summary `primaryExtension` string for a resolved identity: the
- *  identity's extension when it names one (binding/classic/catalog), else the
- *  floor. A `plain-object` identity cannot occur for the generic artifact
- *  base type this surface lists (the floor always covers it) — it maps to the
- *  floor string defensively; the honest signal is `effectiveIdentity.kind`. */
-function primaryExtensionOf(identity: EffectiveIdentity): string {
-  return identity.kind === "extension" ? identity.extension : DEFAULT_ARTIFACT_EXTENSION;
+/** The summary `primaryExtension` string for a resolved identity: the type's
+ *  defining extension when the identity names one, else NULL (no-primary — the
+ *  retired generic catch-all or an uninstalled extension's type). The honest
+ *  signal is `effectiveIdentity.kind`. */
+function primaryExtensionOf(identity: EffectiveIdentity): string | null {
+  return identity.kind === "extension" ? identity.extension : null;
 }
 
-const FLOOR_IDENTITY_FALLBACK: EffectiveIdentity = {
-  kind: "default-artifact",
-  selectable: false,
-  assertionId: null,
-};
+const NO_PRIMARY_IDENTITY_FALLBACK: EffectiveIdentity = { kind: "no-primary" };
 
 function toSummary(
   rec: {
@@ -215,24 +221,40 @@ function toSummary(
     updatedAt: rec.updatedAt ?? "",
     ownerLevel: rec.ownerLevel ?? "organization",
     visibility: rec.visibility ?? "organization",
-    // Default to the floor if the caller didn't enrich (e.g., from a
-    // unit test that doesn't drive the assertion store).
+    // Default to no-primary if the caller didn't enrich (e.g., from a
+    // unit test that doesn't drive the resolver).
     eligibleExtensions: semanticIdentity?.eligibleExtensions ?? [],
     primaryExtension: semanticIdentity
       ? primaryExtensionOf(semanticIdentity.identity)
-      : DEFAULT_ARTIFACT_EXTENSION,
-    effectiveIdentity: semanticIdentity?.identity ?? FLOOR_IDENTITY_FALLBACK,
+      : null,
+    effectiveIdentity: semanticIdentity?.identity ?? NO_PRIMARY_IDENTITY_FALLBACK,
     sourceUrl: connectorRefSourceUrl(rec.data),
   };
 }
 
 /** Canonical creation entry: the single semantic write path. The upload
  *  route's required ownership is `organization`/orgId; other callers
- *  (MCP / agent-emit) supply their own ownership. */
+ *  (MCP / agent-emit) supply their own ownership.
+ *
+ *  The upload path only knows a MIME, so this entry MAPS `declaredMime` to the
+ *  exactly-one installed system-base artifact type (pdf/audio/video/image) and
+ *  injects it as the writer's REQUIRED `objectType` (epic #1785, wave A3). A MIME
+ *  no base pack accepts (or one accepted ambiguously) is REFUSED via
+ *  `OBJECTS_TYPE_NOT_REGISTERED` before any blob IO — the generic catch-all is
+ *  retired, so an untypable upload fails closed. Callers that already know their
+ *  exact type call `createSemanticArtifact` directly. */
 export async function createUploadedArtifact(
-  input: CreateSemanticArtifactInput,
+  input: Omit<CreateSemanticArtifactInput, "objectType">,
 ): Promise<CreateSemanticArtifactResult> {
-  return createSemanticArtifact(input);
+  ensureArtifactRegistry();
+  const resolution = resolveUploadArtifactType(input.declaredMime);
+  if (!resolution.ok) {
+    throw new ObjectsTypeNotRegisteredError(
+      null,
+      `upload cannot be typed to a system-base artifact pack: ${resolution.reason}`,
+    );
+  }
+  return createSemanticArtifact({ ...input, objectType: resolution.objectTypeId });
 }
 
 // Compatibility aliases for WriteUploadedArtifact* type names.

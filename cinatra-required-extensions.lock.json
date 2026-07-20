@@ -38,13 +38,6 @@
       "treeSha256": "1459be627e5c7e9b1ff1c3d5beecebb19456dc5fdb59567c16584e2999884401"
     },
     {
-      "packageName": "@cinatra-ai/default-artifact",
-      "repo": "cinatra-ai/default-artifact",
-      "resolvedSha": "1668d29011dcfc60710bcf703964babab9ceb9d7",
-      "packageVersion": "0.1.0",
-      "treeSha256": "a51fb665eb325bbc8252a6fe1b79c9b71bb77cd9ed616f6994af17e7e93661df"
-    },
-    {
       "packageName": "@cinatra-ai/image-artifact",
       "repo": "cinatra-ai/image-artifact",
       "resolvedSha": "f17a4f9fbe2e85ca47f43bae0c77934d75148695",
