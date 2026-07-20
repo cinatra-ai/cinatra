@@ -8,7 +8,7 @@ import * as schemas from "./schemas";
 const TOOL_META: Record<string, { description: string; inputSchema: z.ZodTypeAny }> = {
   "objects_save": {
     description:
-      "Save a structured data object. REQUIRED: rawData must contain the actual data as a JSON object (e.g. {\"confirmedRecipients\":[...], \"drafts\":[...]}). typeHint must be a namespaced type identifier like '@cinatra-ai/campaigns:recipients' or '@dynamic/types:email-drafts-bundle' — it is NOT a description of the data. Never put data inside typeHint.",
+      "Save a structured data object. REQUIRED: rawData must contain the actual data as a JSON object (e.g. {\"confirmedRecipients\":[...], \"drafts\":[...]}). typeHint must be a namespaced type identifier defined by an installed artifact extension, like '@cinatra-ai/campaigns:recipients' — it is NOT a description of the data. Never put data inside typeHint.",
     inputSchema: schemas.objectsSaveSchema,
   },
   "objects_list": {

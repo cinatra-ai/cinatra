@@ -2,29 +2,10 @@ import { pgSchema, text, timestamp, jsonb, boolean, integer, uniqueIndex, index 
 
 const cinatraSchema = pgSchema(process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra");
 
-export const dynamicObjectTypes = cinatraSchema.table("dynamic_object_types", {
-  type: text("type").primaryKey(),
-  /** DDL column: display_name — human-readable label for this dynamic type. */
-  displayName: text("display_name").notNull(),
-  inferredCategory: text("inferred_category").notNull(),
-  slug: text("slug"),
-  jsonSchema: jsonb("json_schema"),
-  source: text("source"),
-  confidence: text("confidence"),
-  /** 'proposed' = needs admin review; 'active' = trusted/high-confidence. Default: 'proposed'. */
-  status: text("status").notNull().default("proposed"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  createdBy: text("created_by"),
-  promotedToType: text("promoted_to_type"),
-  // Extensible provenance (agentId, runId, clientId, ...).
-  // Nullable JSONB; populated by ensureDynamicObjectType() when the caller has
-  // a run context; otherwise null.
-  originContext: jsonb("origin_context"),
-  // Data field name to extract as Graphiti dedup key (e.g. "cinatra_agent_run_id").
-  // When set, objects_save synthesizes an identityKey for this dynamic type without
-  // requiring a static objectTypeRegistry entry.
-  identityKey: text("identity_key"),
-});
+// The `dynamic_object_types` Drizzle binding was removed with the dynamic-types
+// ENGINE teardown (epic cinatra#1785 entry 95; #1793 → migration core__0060
+// drops the table): types now exist ONLY as explicit installed-extension
+// definitions, so there is no dynamic-type registry table to bind.
 
 // Object sync adapter configs disambiguate object synchronization adapters
 // from transport "connector" packages. Existing DBs are migrated to this

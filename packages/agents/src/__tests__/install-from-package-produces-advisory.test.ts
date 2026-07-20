@@ -6,8 +6,9 @@
 // artifact-kind dependency (or to a claimed objectTypeId of one) has its
 // install REFUSED with a precise error naming the missing claimant/claim; a
 // conforming agent installs. The retired #1059 advisory (`missingProducedArtifacts`)
-// and install-time dynamic-type minting (`ensureDynamicObjectType`) are gone —
-// asserted here too (AC2: dynamic_object_types untouched). The real contract
+// and install-time dynamic-type minting are gone — the dynamic-types engine was
+// torn down end-to-end (epic #1785 entry 95; #1793), so there is nothing left to
+// mint through (the invariant is now STRUCTURAL). The real contract
 // (resolveTypedProducesContract) runs via importOriginal; only the schema-parse
 // stub is overridden so the compact fixture manifest reaches the preflight.
 import { describe, expect, it, vi, beforeEach } from "vitest";
@@ -158,12 +159,11 @@ vi.mock("../oas-compiler", () => ({
   }),
 }));
 
-// AC2 guard: install-path dynamic-type minting is retired. This mutator must
-// NEVER be called (install-from-package no longer imports it either).
-const ensureDynamicObjectType = vi.fn(async () => ({}));
-vi.mock("@cinatra-ai/objects/auto-registrar", () => ({
-  ensureDynamicObjectType: (...a: unknown[]) => ensureDynamicObjectType(...(a as [])),
-}));
+// AC2: install-path dynamic-type minting is retired end-to-end — the
+// dynamic-types engine (auto-registrar + dynamic_object_types) was torn down
+// (epic cinatra#1785 entry 95; #1793), so install-from-package has no
+// dynamic-type mutator to import or call. The invariant is now STRUCTURAL (there
+// is nothing left to mint through), not a mock-observed not-called assertion.
 vi.mock("@cinatra-ai/objects/registry", () => ({ objectTypeRegistry: { resolve: () => null } }));
 vi.mock("../agent-runtime-mount", () => ({
   resolveAgentRuntimeMountDir: () => "/tmp/agents-fixture",
@@ -199,7 +199,6 @@ describe("installAgentFromPackage — cinatra#1788 typed-production preflight", 
     ARTIFACT_MANIFESTS = { [ART]: artifactManifest(ART, [TYPE]) };
     const res = await install();
     expect(res.templateId).toBeTruthy();
-    expect(ensureDynamicObjectType).not.toHaveBeenCalled();
   });
 
   it("conforming coarse: produces without objectTypeId, extension is a required artifact dep → installs", async () => {
@@ -217,7 +216,6 @@ describe("installAgentFromPackage — cinatra#1788 typed-production preflight", 
     await expect(install()).rejects.toThrow(/typed-production contract failed/);
     await expect(install()).rejects.toThrow(TYPE);
     expect(createLocal).not.toHaveBeenCalled();
-    expect(ensureDynamicObjectType).not.toHaveBeenCalled();
   });
 
   it("BLOCKS: produces names an extension that is NOT a required artifact dependency → refused", async () => {

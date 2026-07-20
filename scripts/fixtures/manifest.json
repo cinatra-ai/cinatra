@@ -50,7 +50,6 @@
     { "name": "dashboard_revisions", "category": "fixture-driven", "minRows": 5, "seededBy": "seedDashboards", "surface": "Dashboard history" },
     { "name": "dashboards", "category": "fixture-driven", "minRows": 5, "seededBy": "seedDashboards", "surface": "/dashboards" },
     { "name": "drafts", "category": "user-created", "reason": "Email-send + workflow drafts; generic JSONL payload. Created at runtime by the drafting flow." },
-    { "name": "dynamic_object_types", "category": "boot-registered", "reason": "Registered on Next.js boot via registerObjectType()." },
     { "name": "email_send_events", "category": "runtime-event", "reason": "Append-only delivery-attempt ledger; FK to agent_runs (wiped by seed)." },
     { "name": "extension_accent_color", "category": "runtime-dependent", "reason": "Per-extension UI accent; set via the extension settings page." },
     { "name": "extension_access_policy", "category": "credential-sensitive", "reason": "Access policy rows are written by the install flow alongside the credential set." },

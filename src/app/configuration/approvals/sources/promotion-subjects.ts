@@ -26,8 +26,9 @@ import "server-only";
 // React client, the agents runtime) so the sidebar-badge nav graph that reaches
 // the light `promotion-requests.contract.ts` → here stays pure
 // (nav-registry-import-purity.test.ts). A subject BACKEND is a plain data-layer
-// module (DB read/CAS-write helpers), exactly like the dynamic-type source's
-// `artifact-visibility-approval` backend — NEVER a decision component.
+// module (DB read/CAS-write helpers) — NEVER a decision component. (The former
+// dynamic-type `artifact-visibility-approval` backend that once modeled this
+// pattern was removed with the engine teardown — epic #1785 entry 95, #1793.)
 // ---------------------------------------------------------------------------
 
 import { artifactPromotionBackend } from "./artifact-promotion";

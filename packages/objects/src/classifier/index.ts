@@ -5,7 +5,6 @@ import {
   parseStructuredJson,
 } from "@cinatra-ai/llm";
 import { objectTypeRegistry } from "../registry";
-import { readActiveDynamicObjectTypes } from "../auto-registrar";
 import { buildClassifierOutputSchema, type ClassifierOutput } from "./schema";
 import { buildClassifierSystemPrompt, summarizeZodSchema } from "./prompt";
 
@@ -48,8 +47,9 @@ const CLASSIFIER_OUTPUT_JSON_SCHEMA: Record<string, unknown> = {
  * - Confidence ≥ 0.8 → matched type, caller writes to Graphiti with that type.
  * - Confidence 0.4–0.8 → matched with low-confidence flag; caller writes but
  *   stores the flag.
- * - Confidence < 0.4 OR isNewType=true → caller invokes
- *   `ensureDynamicObjectType()` before write.
+ * - Confidence < 0.4 OR isNewType=true → the save is REFUSED at the write
+ *   boundary (there is no dynamic-type mint any more — engine teardown, epic
+ *   cinatra#1785 entry 95, #1793; types exist only by installation).
  *
  * Short-circuit: when typeHint exactly matches a statically registered type,
  * skip the LLM call entirely and return high-confidence (1.0). This avoids
@@ -65,7 +65,7 @@ export async function classifyObject(
   // Fast-path: typeHint exactly matches a registered static type.
   // Skip LLM classification — the caller already knows the type. Normalise the
   // rawData as-is (LLM normalisation is optional for known types) and return
-  // confidence=1.0 so objects_save never invokes ensureDynamicObjectType.
+  // confidence=1.0 (a matched, registered type — objects_save persists it).
   // ---------------------------------------------------------------------------
   if (typeHint) {
     const staticEntry = objectTypeRegistry.resolve(typeHint);
@@ -92,20 +92,17 @@ export async function classifyObject(
     );
   }
 
+  // Catalog is the STATIC registry only. The former ACTIVE-dynamic-types axis
+  // was removed with the engine teardown (epic cinatra#1785 entry 95; #1793):
+  // types exist only as explicit installed-extension definitions, so a dynamic
+  // candidate could never be saved anyway — the write path fail-closes on
+  // dynamic/tombstoned/unregistered ids (packages/objects/src/mcp/handlers.ts).
   const staticTypes = objectTypeRegistry.list();
-  const dynamicTypes = await readActiveDynamicObjectTypes();
-  const catalog = [
-    ...staticTypes.map((t) => ({
-      type: t.type,
-      category: t.category,
-      schemaSummary: summarizeZodSchema(t.schema),
-    })),
-    ...dynamicTypes.map((t) => ({
-      type: t.type,
-      category: t.inferredCategory,
-      schemaSummary: "dynamic — free-form object",
-    })),
-  ];
+  const catalog = staticTypes.map((t) => ({
+    type: t.type,
+    category: t.category,
+    schemaSummary: summarizeZodSchema(t.schema),
+  }));
 
   const knownTypeIds = catalog.map((c) => c.type);
   const zodOutputSchema = buildClassifierOutputSchema(knownTypeIds);

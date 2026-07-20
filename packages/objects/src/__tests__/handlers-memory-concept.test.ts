@@ -38,13 +38,6 @@ vi.mock("@cinatra-ai/llm", () => ({
   parseStructuredJson: vi.fn(),
 }));
 
-vi.mock("../auto-registrar", () => ({
-  ensureDynamicObjectType: vi.fn(),
-  readActiveDynamicObjectTypes: vi.fn(async () => []),
-  readAllDynamicObjectTypes: vi.fn(async () => []),
-  readDynamicObjectTypeByType: vi.fn(async () => null),
-}));
-
 vi.mock("../graphiti-client", () => ({
   addEpisode: vi.fn(async () => ({ uuid: "ep-1", episode_id: "ep-1" })),
   deleteEpisode: vi.fn(async () => ({ ok: true })),
@@ -56,7 +49,6 @@ vi.mock("../graphiti-client", () => ({
 import { createObjectsPrimitiveHandlers } from "../mcp/handlers";
 import { upsertObjectAndEnqueue, getObjectById } from "@/lib/objects-store";
 import { resolveConfiguredLlmRuntime } from "@cinatra-ai/llm";
-import { ensureDynamicObjectType } from "../auto-registrar";
 import { objectTypeRegistry } from "../registry";
 import {
   registerAllObjectTypes,
@@ -68,7 +60,6 @@ import {
 const mockUpsert = upsertObjectAndEnqueue as unknown as ReturnType<typeof vi.fn>;
 const mockGet = getObjectById as unknown as ReturnType<typeof vi.fn>;
 const mockLlmResolve = resolveConfiguredLlmRuntime as unknown as ReturnType<typeof vi.fn>;
-const mockEnsureDynamic = ensureDynamicObjectType as unknown as ReturnType<typeof vi.fn>;
 
 const ACTOR = {
   actorType: "model",
@@ -124,7 +115,6 @@ beforeEach(() => {
   mockUpsert.mockReset();
   mockGet.mockReset();
   mockLlmResolve.mockClear();
-  mockEnsureDynamic.mockReset();
   mockUpsert.mockReturnValue(makeMemoryRecord());
   objectTypeRegistry._clearForTests();
   registerAllObjectTypes();
@@ -144,7 +134,6 @@ describe("objects_save — memory concept static path (AC1)", () => {
   it("saves a valid envelope with NO classifier LLM call and no dynamic-type mint", async () => {
     const res = await save(makeEnvelope());
     expect(mockLlmResolve).not.toHaveBeenCalled();
-    expect(mockEnsureDynamic).not.toHaveBeenCalled();
     expect(mockUpsert).toHaveBeenCalledOnce();
     const upsertInput = mockUpsert.mock.calls[0][0].upsertInput;
     expect(upsertInput.type).toBe(MEMORY_CONCEPT_TYPE_ID);
@@ -217,7 +206,6 @@ describe("objects_save — memory envelope rejection paths (AC2, fail-closed)", 
     // unregistered static id) and the payload could be misclassified or
     // minted as a dynamic type and persisted with no envelope validation.
     expect(mockLlmResolve).not.toHaveBeenCalled();
-    expect(mockEnsureDynamic).not.toHaveBeenCalled();
   });
 
   it("does NOT gate other static types (memory-scoped enforcement)", async () => {

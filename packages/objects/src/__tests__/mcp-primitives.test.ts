@@ -74,13 +74,6 @@ vi.mock("../classifier", () => ({
   })),
 }));
 
-vi.mock("../auto-registrar", () => ({
-  ensureDynamicObjectType: vi.fn(),
-  readActiveDynamicObjectTypes: vi.fn(async () => []),
-  readAllDynamicObjectTypes: vi.fn(async () => []),
-  readDynamicObjectTypeByType: vi.fn(async () => null),
-}));
-
 // Fail-closed writes (owner ruling 2026-07-18; epic cinatra#1785): objects_save persists ONLY under a type
 // an installed extension registered. The classifier mock resolves to
 // `@cinatra-ai/entity-contacts:contact`, so register it as an installed type.

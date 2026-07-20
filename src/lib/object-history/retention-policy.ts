@@ -99,9 +99,10 @@ export function hasRetentionDeclaration(objectType: string): boolean {
   return Object.prototype.hasOwnProperty.call(RETENTION_POLICIES, objectType);
 }
 
-// Used by the retention-completeness gate to cross-check that every dynamic
-// object type observed in the running schema also has a declared retention policy.
-// Missing types fail CI.
+// Used by the retention-completeness gate to cross-check that every object type
+// observed in the running schema also has a declared retention policy. Missing
+// types fail CI. (The dynamic-types engine was torn down — epic #1785 entry 95,
+// #1793 — so every observed type is now a statically declared / installed type.)
 export function listRegisteredObjectTypes(): readonly string[] {
   return Object.keys(RETENTION_POLICIES);
 }

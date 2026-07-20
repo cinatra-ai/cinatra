@@ -8,7 +8,6 @@ export {
   DYNAMIC_TYPE_ID_RE,
   LEGACY_DYNAMIC_TYPE_ID_RE,
   isDynamicObjectTypeId,
-  mintDynamicObjectTypeId,
 } from "./namespace";
 
 // Single code-owned taxonomy.
@@ -96,15 +95,11 @@ export type * from "./graphiti-types";
 export { resolveIdentity, hashIdentity } from "./identity";
 export { classifyObject } from "./classifier";
 export type { ClassifierOutput } from "./classifier/schema";
-export {
-  ensureDynamicObjectType,
-  readDynamicObjectTypes,
-  readActiveDynamicObjectTypes,
-  readAllDynamicObjectTypes,
-  approveDynamicObjectType,
-  archiveDynamicObjectType,
-} from "./auto-registrar";
-export type { DynamicObjectTypeRecord } from "./auto-registrar";
+// The dynamic-types ENGINE (auto-registrar + the dynamic_object_types table)
+// was torn down (epic cinatra#1785 entry 95; #1793): every type now exists ONLY
+// as an explicit installed-extension definition, the write path fail-closes, and
+// the two dynamic namespaces survive solely as the read/tombstone predicate
+// (isDynamicObjectTypeId / isTombstonedObjectTypeId, exported above).
 
 // Object sync adapter interface + registry.
 // "sync-adapter" disambiguates these adapters from transport connector
@@ -159,12 +154,7 @@ export { DEFAULT_HITL_CONFIDENCE_THRESHOLD } from "./automap/policy";
 export type { DispatchDecision, ExistingObject, DecideDispatchInput } from "./automap/dispatcher";
 export { decideDispatch } from "./automap/dispatcher";
 
-// Object Type Registry admin actions. The registry screen, the raw objects
-// browser and the raw object-detail screen were consolidated into the
-// `/artifacts` surface (Types & approvals / Raw objects modes) and their route
-// trees retired (cinatra#1431 §IV/§V/§VII); the lifecycle actions remain and
-// are now driven from the Types & approvals mode.
-export {
-  approveDynamicObjectTypeAction,
-  archiveDynamicObjectTypeAction,
-} from "./screens/object-type-actions";
+// The dynamic-type lifecycle admin actions (approve/archive) and the Types &
+// approvals UI they drove were removed with the engine teardown (epic
+// cinatra#1785 entry 95; #1793): there is no dynamic-type lifecycle to admin
+// once types exist only by installation.

@@ -1,0 +1,43 @@
+# PROOF 1 — core__0060 DB-gated integration suite, LIVE on the REAL store schema.
+# Branch lane/1793-engine-teardown head 5741a758999676faa810d933b8e76e76a8a4c649; captured 2026-07-20T05:26:05Z.
+# Fresh lane DB verify_1793 on the verify Postgres 127.0.0.1:5634, public.user/organization
+# provisioned via scripts/apply-public-schema.mjs (the store DDL carries cross-schema FKs).
+# NOTE: the vitest startup banner's absolute worktree path is normalized to <worktree> and its
+#       tool-version token to (vitest) — machine noise, no proof value; PASS/summary lines verbatim.
+#
+# Vehicle: the COMMITTED suite src/lib/__tests__/integration/drop-dynamic-object-types.test.ts,
+# which builds the REAL store schema (buildCreateStoreSchemaQueries from src/lib/drizzle-store.ts),
+# seeds engine-table fixtures, and runs the REAL migration up() through an owned-connection pgm shim
+# in ONE transaction (BEGIN; queued stmts; COMMIT | ROLLBACK). Covers AC#4 (no-op on a DB that never
+# had the table; drop on a populated table; idempotent re-run), the legacy id/payload shape, and AC#1
+# (REFUSES on each unmet precondition a/b/c individually; completed history never blocks; all-clean runs).
+#
+# Reproduce (cwd = worktree root):
+#   docker exec verify-cinatra-postgres-1 psql -U postgres -c "CREATE DATABASE verify_1793;"
+#   SUPABASE_DB_URL=postgres://postgres:postgres@127.0.0.1:5634/verify_1793 node scripts/apply-public-schema.mjs
+#   CINATRA_DB_INTEGRATION_TESTS=1 SUPABASE_DB_URL=postgres://postgres:postgres@127.0.0.1:5634/verify_1793 \
+#     pnpm exec vitest run --config vitest.config.ts --no-coverage \
+#     src/lib/__tests__/integration/drop-dynamic-object-types.test.ts --reporter=verbose
+#
+======================================================================================================
+
+ RUN  (vitest) <worktree>
+
+ ✓ src/lib/__tests__/integration/drop-dynamic-object-types.test.ts > core__0060 — teardown shape (no DB) > exports up() + a refusing down() (one-shot clean-break teardown) 1ms
+ ✓ src/lib/__tests__/integration/drop-dynamic-object-types.test.ts > core__0060 — teardown shape (no DB) > ships its append-only ledger fragment (union ledger seq 0060, destructive) 4ms
+ ✓ src/lib/__tests__/integration/drop-dynamic-object-types.test.ts > core__0060 — real Postgres (DB-gated) > AC#4: a DB that NEVER had the table — up() is a clean no-op 16ms
+ ✓ src/lib/__tests__/integration/drop-dynamic-object-types.test.ts > core__0060 — real Postgres (DB-gated) > legacy id/payload-shaped table (no `type` column) — dropped without the by-type guards erroring 21ms
+ ✓ src/lib/__tests__/integration/drop-dynamic-object-types.test.ts > core__0060 — real Postgres (DB-gated) > AC#4: a populated table with all preconditions clear — dropped; re-run idempotent 18ms
+ ✓ src/lib/__tests__/integration/drop-dynamic-object-types.test.ts > core__0060 — real Postgres (DB-gated) > AC#1(a): a NON-retired claim over a dynamic type REFUSES; the table survives 7ms
+ ✓ src/lib/__tests__/integration/drop-dynamic-object-types.test.ts > core__0060 — real Postgres (DB-gated) > AC#1(a): a RETIRED claim does NOT block — the table drops 11ms
+ ✓ src/lib/__tests__/integration/drop-dynamic-object-types.test.ts > core__0060 — real Postgres (DB-gated) > AC#1(b): a PENDING reconcile-queue row for a dynamic type REFUSES 8ms
+ ✓ src/lib/__tests__/integration/drop-dynamic-object-types.test.ts > core__0060 — real Postgres (DB-gated) > AC#1(b): a DONE queue row does NOT block — the table drops 11ms
+ ✓ src/lib/__tests__/integration/drop-dynamic-object-types.test.ts > core__0060 — real Postgres (DB-gated) > AC#1(c): a PROCESSING (in-flight) outbox row for a dynamic-typed object REFUSES 10ms
+ ✓ src/lib/__tests__/integration/drop-dynamic-object-types.test.ts > core__0060 — real Postgres (DB-gated) > AC#1(c): a DONE outbox row does NOT block — the table drops 12ms
+ ✓ src/lib/__tests__/integration/drop-dynamic-object-types.test.ts > core__0060 — real Postgres (DB-gated) > AC#1: all preconditions satisfiable together (completed history only) — runs CLEAN 10ms
+
+ Test Files  1 passed (1)
+      Tests  12 passed (12)
+   Start at  07:26:07
+   Duration  1.86s (transform 132ms, setup 0ms, import 360ms, tests 1.41s, environment 0ms)
+

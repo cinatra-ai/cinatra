@@ -111,9 +111,6 @@ vi.mock("@cinatra-ai/extensions/destination-resolver", () => ({
 vi.mock("@/lib/instance-identity-store", () => ({
   readInstanceIdentity: () => null,
 }));
-vi.mock("@cinatra-ai/objects/auto-registrar", () => ({
-  ensureDynamicObjectType: vi.fn(async () => undefined),
-}));
 vi.mock("@cinatra-ai/objects/registry", () => ({
   objectTypeRegistry: { resolve: () => null },
 }));

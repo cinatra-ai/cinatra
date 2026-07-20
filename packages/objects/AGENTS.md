@@ -32,7 +32,6 @@ Read:  objects_get / objects_list (no query) → Postgres only
 | `src/classifier.ts` | LLM-based object type classification. |
 | `src/identity.ts` | Derives stable identity hash from object data. |
 | `src/registry.ts` | Static object type registry. |
-| `src/auto-registrar.ts` | Registers dynamic types discovered at runtime. |
 | `src/objects-client.ts` | `createSessionObjectsClient(actor: ActorContext)` factory for screen use — carries the FULL actor context. RSC pages pass `await requireActorContext()`; system paths build a role-less org-scoped `System` actor. Translation logic lives in `src/objects-actor-envelope.ts`. The bare `objectsClient` singleton remains for sessionless/ALS callers. |
 
 ## Episode identity
@@ -128,82 +127,45 @@ result. Shape:
 }
 ```
 
-## Dynamic object type registry
+## Dynamic object type registry — REMOVED (engine teardown, epic #1785 entry 95, #1793)
 
-`auto-registrar.ts` manages the `dynamic_object_types` Postgres table. The
-classifier / `objects_save` write path **no longer mints** here (retired in
-#1787; the write path now fail-closes — see the FAIL-CLOSED section above), and the explicit
-`objects_type_register` MCP primitive was **removed** (retired in #1790, epic
-#1785 slice E — a deliberate external-contract removal), and agent install no
-longer mints types (retired in #1788); no live writer remains. The table itself
-is torn down later in epic #1785.
+The dynamic-types **engine is gone**. `auto-registrar.ts` (the module that
+managed the `dynamic_object_types` Postgres table and the ensure/approve/archive
+mutators), the table itself (dropped by migration `core__0060`), the
+`objects_type_register` MCP primitive (retired #1790), the Types & approvals
+admin UI, and the object-type lifecycle server actions were all removed. There is
+no runtime-discovered / minted type any longer: **a type exists ONLY as an
+explicit definition by an installed `kind:artifact` extension.**
 
-### Write model
+The `objects_save` write path **fail-closes** — an unclassifiable, dynamic,
+tombstoned, generic, low-confidence, or unregistered save is REFUSED with the
+stable `OBJECTS_TYPE_NOT_REGISTERED` error (see the FAIL-CLOSED section above),
+never minted or fallback-persisted. Typed agent output is the fail-closed
+`cinatra.produces` manifest contract backed by required artifact-kind claims (see
+`@cinatra-ai/agents` AGENTS.md).
 
-| Source | Status on insert | Trigger |
-|---|---|---|
-| ~~`classifier`~~ | ~~`proposed`~~ | **Retired (#1787; fail-closed per entry 95)** — unclassifiable saves are refused at the write boundary, never minted or fallback-persisted |
-| ~~`mcp`~~ | ~~`active`~~ | **Retired (#1790)** — the `objects_type_register` primitive was removed (deliberate external-contract removal, epic #1785 slice E) |
-| `install` | — | **RETIRED (cinatra#1788, epic #1785):** agent install no longer mints types. Typed agent output is now the fail-closed `cinatra.produces` manifest contract backed by required artifact-kind claims (see `@cinatra-ai/agents` AGENTS.md); there is no `output_object_types` / `producesObjectTypes` path. |
-
-### `ensureDynamicObjectType` — INSERT-ONLY semantics
-
-`ensureDynamicObjectType` always uses `onConflictDoNothing`. It **never upgrades status** on repeated calls. A `proposed` row stays `proposed` even if the same type arrives again via the `install` path. Status transitions are admin-only (approve / archive actions).
-
-```typescript
-await ensureDynamicObjectType({
-  type: "@cinatra-ai/email-outreach-agent:campaign",
-  inferredName: "Campaign",
-  inferredCategory: "project",
-  canonicalKeys: ["campaignId"],
-  source: "install",          // "classifier" | "mcp" | "install" | "admin"
-  status: "active",           // "proposed" | "active" | "archived"
-  confidence: null,           // "high" | "low" | null  (text, not numeric)
-  createdBy: null,            // userId or null for install/system paths
-  originContext: {            // arbitrary JSON blob
-    agentId: "@cinatra-ai/email-outreach-agent",
-  },
-});
-```
-
-### `approveDynamicObjectType` / `archiveDynamicObjectType`
-
-Admin-only status transitions called from server actions in `screens/object-type-actions.ts`:
-
-```typescript
-await approveDynamicObjectType(type);  // proposed → active
-await archiveDynamicObjectType(type);  // proposed|active → archived
-```
-
-Archive is **display-only** — the DB row is retained for audit history. The classifier may re-propose an archived type; the admin must re-archive if that is undesired.
-
-### `originContext` shape
-
-`originContext` is a free-form `jsonb` column. Callers fill it with whatever provenance is available at the insertion site:
-
-```json
-// classifier path
-{ "runId": "<uuid>", "objectId": "<uuid>", "source": "classifier" }
-
-// install path (import-agent-core.ts / install-from-package.ts)
-{ "agentId": "@cinatra/<slug>" }
-
-// MCP caller path
-{ "source": "mcp" }
-```
+The two dynamic namespaces (`@dynamic/types:` and the legacy
+`@cinatra-ai/dynamic:`) survive **only** as the READ / tombstone-rejection
+predicate `isDynamicObjectTypeId` (`namespace.ts`) — existing rows keep their ids
+and both prefixes still classify/read, while every forward WRITE surface rejects
+them (see the tombstone section below). The `mintDynamicObjectTypeId` helper was
+deleted with the engine — no path can create a new dynamic-type id.
 
 ### Sub-path import requirement
 
-> **Critical:** Do NOT import `ensureDynamicObjectType` or `objectTypeRegistry` from the `@cinatra-ai/objects` barrel. The barrel re-exports from `./mcp/handlers` which imports `@cinatra-ai/mcp-server` → `@/lib/mcp-logging` (a host-only Next.js alias). This breaks any non-host consumer (agent-builder vitest, instrumentation.ts, etc.)
+> **Critical:** Do NOT import `objectTypeRegistry` from the `@cinatra-ai/objects`
+> barrel. The barrel re-exports from `./mcp/handlers` which imports
+> `@cinatra-ai/mcp-server` → `@/lib/mcp-logging` (a host-only Next.js alias). This
+> breaks any non-host consumer (agent-builder vitest, instrumentation.ts, etc.)
 
-Always use the declared sub-path aliases:
+Always use the declared sub-path alias:
 
 ```typescript
-import { ensureDynamicObjectType } from "@cinatra-ai/objects/auto-registrar";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 ```
 
-These aliases are declared in both `tsconfig.json` paths and `packages/agent-builder/vitest.config.ts` aliases.
+This alias is declared in both `tsconfig.json` paths and
+`packages/agent-builder/vitest.config.ts` aliases.
 
 ## Permanent namespace tombstones (cinatra#1789, epic #1785)
 
