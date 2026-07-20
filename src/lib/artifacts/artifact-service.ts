@@ -16,7 +16,11 @@ import {
 } from "@/lib/objects-store";
 import type { ArtifactObjectData } from "@cinatra-ai/artifacts";
 import { SEMANTIC_ARTIFACT_OBJECT_TYPE } from "@cinatra-ai/artifacts";
-import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import {
+  objectTypeRegistry,
+  isDispositionGovernedType,
+  resolveTypeProjectionDisposition,
+} from "@cinatra-ai/objects/registry";
 import {
   createSemanticArtifact,
   ObjectsTypeNotRegisteredError,
@@ -127,15 +131,46 @@ export function connectorRefSourceUrl(data: unknown): string | null {
   return parsed.href;
 }
 
-// The admissible artifact object-type id set: the generic base (legacy rows,
-// retired by the A6 purge) plus every registered isArtifact pack type. Warms
-// the registry first (idempotent) so the set is complete in a fresh process,
-// and reads it at CALL time (never a frozen module-load snapshot) so a
-// hot-installed pack is admitted immediately.
+// The admissible artifact object-type id set. Three sources, unioned:
+//   1. the generic base (legacy rows, retired by the A6 purge);
+//   2. every registered `isArtifact` pack type (the descriptor path — a
+//      `kind:"artifact"` extension's first-class type);
+//   3. every DISPOSITION-GOVERNED type whose type-driven projection resolves to
+//      `artifact-safe` — a claim-backed HOST type (e.g. `@cinatra-ai/email:body`)
+//      that ships an artifact-safe disposition WITHOUT an `isArtifact` descriptor
+//      (cinatra#1867). Under the #1854/#1785 claim-based model a type can be
+//      artifact-safe by DISPOSITION without being an artifact by DESCRIPTOR; the
+//      library keyed only on the descriptor, so a fully-materialized
+//      `email:body` row was library-invisible ("No artifacts yet"). This admits
+//      it through the SAME #1785 A1 seam (`isDispositionGovernedType` +
+//      `resolveTypeProjectionDisposition`) the projector / rebuild / recall use,
+//      so the library agrees with those four surfaces on exactly which types are
+//      artifact-safe/faceted. THIS disposition lane admits nothing more: a
+//      `none`-projection sensitive type (e.g. `email:recipient`) and a
+//      `raw`-projection data type are both excluded (only `"artifact-safe"`
+//      passes), and an ungoverned data object (no declared disposition) never
+//      enters. (Source 2 is independent: an `isArtifact` descriptor type stays
+//      admitted regardless of any disposition it also declares.) Admissibility
+//      is a TYPE filter only: every row it lets through still passes the
+//      unchanged per-row SQL ownership filter AND the canonical `object.read`
+//      kernel decision below, so the surface denies exactly what the objects
+//      surface denies.
+//
+// Warms the registry first (idempotent) so the set is complete in a fresh
+// process, and reads it at CALL time (never a frozen module-load snapshot) so a
+// hot-installed pack/claim is admitted immediately.
 function artifactObjectTypeIds(): Set<string> {
   ensureArtifactRegistry();
   const ids = new Set<string>([SEMANTIC_ARTIFACT_OBJECT_TYPE]);
   for (const def of objectTypeRegistry.listArtifacts()) ids.add(def.type);
+  for (const def of objectTypeRegistry.list()) {
+    if (
+      isDispositionGovernedType(def.type) &&
+      resolveTypeProjectionDisposition(def.type) === "artifact-safe"
+    ) {
+      ids.add(def.type);
+    }
+  }
   return ids;
 }
 
