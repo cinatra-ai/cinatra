@@ -209,6 +209,23 @@ function addConstraintIfAbsentSql(schemaName: string, table: string, constraint:
         END IF;`;
 }
 
+/**
+ * cinatra#1456: the partial expression indexes on the email correlation keys in
+ * `objects.data`, shared between the bootstrap DDL (buildCreateStoreSchemaQueries)
+ * and the operator-upgrade migration (core__0062). Exported as data so the
+ * migration + its contract test build the EXACT same DDL. `objects_data_contact_idx`
+ * leads with connectorId because a provider-native contactId is only meaningful
+ * within its connector (the contact view filters connectorId AND contactId).
+ */
+export function buildEmailCorrelationIndexQueries(schemaName: string): QueryInput[] {
+  const t = `"${schemaName.replaceAll('"', '""')}"."objects"`;
+  return [
+    { text: `CREATE INDEX IF NOT EXISTS objects_data_thread_idx ON ${t} (org_id, (data->>'threadId')) WHERE data->>'threadId' IS NOT NULL` },
+    { text: `CREATE INDEX IF NOT EXISTS objects_data_campaign_idx ON ${t} (org_id, (data->>'campaignId')) WHERE data->>'campaignId' IS NOT NULL` },
+    { text: `CREATE INDEX IF NOT EXISTS objects_data_contact_idx ON ${t} (org_id, (data->>'connectorId'), (data->>'contactId')) WHERE data->>'contactId' IS NOT NULL` },
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // public."member" dedup ranking
 // ---------------------------------------------------------------------------
@@ -2087,6 +2104,14 @@ $body$` },
     // (WHERE … IS NOT NULL) keeps storage tight for non-agent rows.
     { text: `CREATE INDEX IF NOT EXISTS objects_run_id_idx ON "${schemaName.replaceAll('"', '""')}"."objects" (run_id) WHERE run_id IS NOT NULL` },
     { text: `CREATE INDEX IF NOT EXISTS objects_agent_id_idx ON "${schemaName.replaceAll('"', '""')}"."objects" (agent_id) WHERE agent_id IS NOT NULL` },
+    // cinatra#1456: partial expression indexes on the email correlation keys in
+    // the JSONB `data` column, backing the indexed thread / campaign / contact
+    // query seam (email-correlation-queries.ts → listObjectsByFilter dataEquals).
+    // Partial (WHERE key IS NOT NULL) → only correlation-carrying rows enter, so
+    // each index is tiny + selective. Mirrored onto the operator upgrade path by
+    // migrations/core/core__0062_email-correlation-data-indexes.mjs (core__0050
+    // convention: bootstrap ledger-fakes the migration on a fresh install).
+    ...buildEmailCorrelationIndexQueries(schemaName),
     // Postgres-primary projection metadata + outbox.
     // The version column is required by the version-guard SQL in the projector
     // the 5 graphiti_* columns are the projection state machine the

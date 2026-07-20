@@ -296,6 +296,11 @@ function registerEmailObjectTypes(): void {
       providerThreadId: z.string().optional(),
       internetMessageId: z.string().optional(),
       sentAt: z.string().min(1),
+      // Standardized thread correlation key "<connectorId>:<providerThreadId>"
+      // (cinatra#1456) — a DERIVED key, never an artifact id. Written on BOTH
+      // sent-email and received-reply so the thread query seam resolves a whole
+      // thread with one indexed `data->>'threadId'` lookup.
+      threadId: z.string().optional(),
       campaignId: z.string().optional(),
       contactId: z.string().optional(),
       runId: z.string().optional(),
@@ -367,9 +372,25 @@ function registerEmailObjectTypes(): void {
     },
   });
 
-  // 4. thread — groups sends + replies by providerThreadId. Identity =
-  // "<connectorId>:<providerThreadId>" so cross-provider threads with the
-  // same provider thread id don't collide.
+  // 4. thread — a correlation VIEW over sends + replies sharing the identity
+  // "<connectorId>:<providerThreadId>" (so cross-provider threads with the same
+  // provider thread id don't collide).
+  //
+  // cinatra#1456 — RETIRED FROM THE ARTIFACT PATH. A thread is a relationship,
+  // not an artifact (epic #1448 atomicity rule 2). The former
+  // `sentEmailObjectIds` / `receivedReplyObjectIds` id-array soft-relations are
+  // DROPPED: they were never written or read, and materializing a thread as an
+  // id-array container is exactly the artifact-path coupling this issue retires.
+  // Sends + replies are now correlated by the derived `threadId` key and read
+  // through the indexed query seam (src/lib/email-correlation-queries.ts →
+  // getEmailThreadView), never by resolving id arrays. The type stays
+  // REGISTERED (read-compatible) because it is a declared usable artifact type
+  // in agent manifests (Inbox Zero Agent, Sequences — pinned by the
+  // type-definitions-inventory test); full type removal is a follow-up gated on
+  // those manifests dropping the reference. This retires the FIRST-PARTY
+  // MATERIALIZATION of thread rows (no host path writes an email:thread row); it
+  // does not make the type unwritable — the registration still admits writes for
+  // the declared consumers.
   objectTypeRegistry.register({
     type: "@cinatra-ai/email:thread",
     category: "report",
@@ -379,11 +400,6 @@ function registerEmailObjectTypes(): void {
       subject: z.string().optional(),
       lastActivityAt: z.string().optional(),
       participantEmails: z.array(z.string()).optional(),
-      // Soft-relation to sent + reply objects via id arrays. Object-relations
-      // model is declarative-only in v1; these strings are object IDs the
-      // notifications layer can resolve to objects_get fetches.
-      sentEmailObjectIds: z.array(z.string()).optional(),
-      receivedReplyObjectIds: z.array(z.string()).optional(),
     }),
     lifecycle: {
       sources: ["agent", "import"],
