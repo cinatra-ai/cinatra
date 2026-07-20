@@ -95,7 +95,7 @@ describe("runPendingDemoSeed — atomic one-shot claim", () => {
     const out = await runPendingDemoSeed(deps({
       claim: () => false, runMonolithicSeed, markCompleted,
     }));
-    expect(out).toEqual({ status: "skipped", reason: "one-shot already claimed by another boot (or completed)" });
+    expect(out).toEqual({ status: "skipped", reason: "one-shot not claimable (another boot won, or completed/failed)" });
     expect(runMonolithicSeed).not.toHaveBeenCalled();
     expect(markCompleted).not.toHaveBeenCalled();
   });

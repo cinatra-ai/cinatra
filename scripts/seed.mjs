@@ -56,6 +56,7 @@
 import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { seedV64CanonicalDemo } from "./lib/seed-v64-canonical-demo.mjs";
 
 const { Pool } = pg;
 
@@ -1443,178 +1444,6 @@ async function seedChatThreads() {
 }
 
 // ---------------------------------------------------------------------------
-async function seedV64CanonicalDemo(orgMap) {
-  console.log("Seeding canonical-extension demo fixtures (cinatra.installed_extension)…");
-
-  // Idempotent wipe by seed marker (manifest_hash prefix).
-  await q(`DELETE FROM cinatra.installed_extension WHERE manifest_hash LIKE 'seed-v64-%'`);
-
-  const orgAcme = orgMap["acme-group"] ?? "org-acme-group";
-  const PLATFORM_SENTINEL = "__platform__";
-
-  // Helper to build canonical row tuples.
-  const rows = [
-    {
-      id: "iext_seed-v64-01",
-      pkg: "@cinatra-ai/code-reviewer-agent",
-      ownerLevel: "platform",
-      ownerId: PLATFORM_SENTINEL,
-      orgId: null,
-      kind: "agent",
-      status: "locked",
-      source: { type: "verdaccio", registryUrl: "http://localhost:4873", packageName: "@cinatra-ai/code-reviewer-agent", version: "1.2.3", integrity: "sha512-seed-v64-01" },
-      requiredInProd: true,
-      deps: [],
-    },
-    {
-      id: "iext_seed-v64-02",
-      pkg: "@cinatra-ai/demo-research-skill",
-      ownerLevel: "organization",
-      ownerId: orgAcme,
-      orgId: orgAcme,
-      kind: "skill",
-      status: "active",
-      source: { type: "github", repo: "acme-demo.invalid/demo-research-skill", ref: "v0.3.1", resolvedSha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678" },
-      requiredInProd: false,
-      deps: [],
-    },
-    {
-      id: "iext_seed-v64-03",
-      pkg: "@cinatra-ai/demo-legacy-connector",
-      ownerLevel: "organization",
-      ownerId: orgAcme,
-      orgId: orgAcme,
-      kind: "connector",
-      status: "archived",
-      source: { type: "verdaccio", registryUrl: "http://localhost:4873", packageName: "@cinatra-ai/demo-legacy-connector", version: "0.9.0", integrity: "sha512-seed-v64-03" },
-      requiredInProd: false,
-      deps: [],
-    },
-    {
-      id: "iext_seed-v64-04",
-      pkg: "@cinatra-ai/demo-local-artifact",
-      ownerLevel: "organization",
-      ownerId: orgAcme,
-      orgId: orgAcme,
-      kind: "artifact",
-      status: "active",
-      source: { type: "local", path: "/opt/cinatra/extensions/demo-local-artifact", resolvedCommitOrTreeHash: "f0e1d2c3b4a5968778695a4b3c2d1e0f12345678" },
-      requiredInProd: false,
-      deps: [],
-    },
-    {
-      id: "iext_seed-v64-06",
-      pkg: "@cinatra-ai/demo-dependent-agent",
-      ownerLevel: "organization",
-      ownerId: orgAcme,
-      orgId: orgAcme,
-      kind: "agent",
-      status: "active",
-      source: { type: "verdaccio", registryUrl: "http://localhost:4873", packageName: "@cinatra-ai/demo-dependent-agent", version: "0.4.0", integrity: "sha512-seed-v64-06" },
-      requiredInProd: false,
-      // Declares a REQUIRED runtime dep on row 1 — exercises the
-      // assertCanonicalArchiveClosure block when an admin tries to archive
-      // the code-reviewer-agent: this dependent makes that archive refuse.
-      deps: [{ packageName: "@cinatra-ai/code-reviewer-agent", edgeType: "runtime", versionConstraint: { kind: "semver-range", range: "^1.0.0" }, requirement: "required" }],
-    },
-    {
-      id: "iext_seed-v64-07",
-      pkg: "@cinatra-ai/assistant-skills",
-      ownerLevel: "platform",
-      ownerId: PLATFORM_SENTINEL,
-      orgId: null,
-      kind: "skill",
-      status: "locked",
-      source: { type: "verdaccio", registryUrl: "http://localhost:4873", packageName: "@cinatra-ai/assistant-skills", version: "0.2.1", integrity: "sha512-seed-v64-07" },
-      requiredInProd: true,
-      deps: [],
-    },
-    {
-      id: "iext_seed-v64-08",
-      pkg: "@cinatra-ai/demo-archived-from-github",
-      ownerLevel: "organization",
-      ownerId: orgAcme,
-      orgId: orgAcme,
-      kind: "agent",
-      status: "archived",
-      source: { type: "github", repo: "acme-demo.invalid/demo-archived", ref: "v0.1.0", resolvedSha: "1122334455667788990011223344556677889900" },
-      requiredInProd: false,
-      deps: [],
-    },
-  ];
-
-  let inserted = 0;
-  for (const r of rows) {
-    await q(
-      `INSERT INTO cinatra.installed_extension
-         (id, package_name, owner_level, owner_id, organization_id, kind, status,
-          source, required_in_prod, manifest_hash, version)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
-       ON CONFLICT DO NOTHING`,
-      [
-        r.id,
-        r.pkg,
-        r.ownerLevel,
-        r.ownerId,
-        r.orgId,
-        r.kind,
-        r.status,
-        JSON.stringify(r.source),
-        r.requiredInProd,
-        `seed-v64-${r.id.split("-").pop()}`,
-        // version is NOT NULL since cinatra#1040 S1 (version identity) and has
-        // no DB default. Mirror the backfill floor: a source's own version
-        // (verdaccio rows carry one) else '0.0.0' (github/local sources).
-        r.source?.version ?? "0.0.0",
-      ],
-    );
-    inserted++;
-  }
-  // Dependency edges are FIRST-CLASS ROWS since cinatra#1040 S2
-  // (extension_dependency_edge; the row jsonb column is gone). Seed each
-  // declared edge with the same write-time resolution rule the store uses:
-  // the declaring row's own-org live row first, then platform. The dependent
-  // rows above all resolve within this seed set, so a name-scan is enough.
-  for (const r of rows) {
-    for (const [index, dep] of r.deps.entries()) {
-      const target =
-        rows.find(
-          (t) =>
-            t.pkg === dep.packageName &&
-            ["active", "locked"].includes(t.status) &&
-            t.orgId === r.orgId,
-        ) ??
-        rows.find(
-          (t) =>
-            t.pkg === dep.packageName &&
-            ["active", "locked"].includes(t.status) &&
-            t.orgId === null,
-        );
-      await q(
-        `INSERT INTO cinatra.extension_dependency_edge
-           (id, dependent_install_id, declared_package_name, declared_kind, edge_type,
-            requirement, version_constraint, declared_index, resolved_install_id, resolution_reason)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
-         ON CONFLICT DO NOTHING`,
-        [
-          `iede_${r.id.replace(/^iext_/, "")}-${index}`,
-          r.id,
-          dep.packageName,
-          dep.kind ?? null,
-          dep.edgeType,
-          dep.requirement,
-          JSON.stringify(dep.versionConstraint),
-          index,
-          target?.id ?? null,
-          target ? (target.orgId != null ? "seed:org" : "seed:platform") : null,
-        ],
-      );
-    }
-  }
-  console.log(`  installed_extension demo rows: ${inserted} (3 statuses × 3 source types × 5 kinds + 1 dep edge)`);
-}
-
-// ---------------------------------------------------------------------------
 // User 1 active-org default. /workflows + /teams (and other surfaces) scope by
 // exact `session.activeOrganizationId` match. Better Auth auto-provisions a
 // "Default" org on first signup (the user's first membership / home org).
@@ -1662,12 +1491,12 @@ async function seedUser1ActiveOrg(adminUserId) {
 async function reportFixtureDistribution(adminUserId) {
   console.log("");
   console.log("=== Fixture distribution (what User 1 sees per org) ===");
-  const wf = await q(
-    `SELECT org_id, COUNT(*)::int AS c FROM cinatra.workflow
-       WHERE id LIKE 'wf-seed-v65-%' GROUP BY org_id ORDER BY c DESC`,
-  );
-  console.log("workflows by org:");
-  for (const row of wf.rows) console.log(`  ${row.org_id}: ${row.c}`);
+  // NOTE: the workflow subsystem was DROPPED (epic cinatra#1035; migration
+  // core__0048 + the fresh-schema DDL strip in drizzle-store.ts), so fresh demo
+  // installs are born without `cinatra.workflow`. The seed no longer creates any
+  // workflows; the stale per-org workflow tally that used to live here queried
+  // the dropped table and 42P01-aborted the seed on EVERY fresh demo install
+  // (surfaced once the seedV64 FK crash ahead of it was fixed — cinatra#1238).
   const sess = await q(
     `SELECT DISTINCT "activeOrganizationId" FROM public.session WHERE "userId" = $1`,
     [adminUserId],
@@ -1700,7 +1529,7 @@ async function main() {
   await seedCrmData();
   await seedCampaignTypes();
   await seedCanonicalBlogFixtures();
-  await seedV64CanonicalDemo(orgMap);
+  await seedV64CanonicalDemo({ q, schema: "cinatra", orgAcmeId: orgMap["acme-group"] ?? "org-acme-group" });
   await seedDashboards(orgMap, admin.id);
   await seedLists(orgMap, admin.id);
   await seedChatThreads();
@@ -1716,7 +1545,7 @@ async function main() {
   console.log("boot; restart `pnpm dev` to populate them. The seed wires two fictional");
   console.log("demo `chat_threads` so `/chat` is non-empty; User 1's own chat history");
   console.log("is left untouched. User 1's active org is set to `Default` (their home");
-  console.log("org); use the org switcher for the org-acme-* /workflows + /teams demo.");
+  console.log("org); use the org switcher for the org-acme-* /teams demo.");
 }
 
 main().catch(err => {
