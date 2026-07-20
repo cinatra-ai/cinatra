@@ -179,7 +179,10 @@ describe("EmailTestDeliveryFormRenderer — single string-output contract", () =
     vi.restoreAllMocks();
   });
 
-  it("Continue emits a single `testResult` JSON-string keyed payload", () => {
+  // DESIGN-V3 contract (2) — the ENVELOPE FIX. The renderer now emits the SAME
+  // encoded envelope at BOTH `userResponse` (consumed by the WayFlow resume
+  // bridge as the resume message) and `testResult` (the declared node output).
+  it("Continue emits the encoded envelope at BOTH `userResponse` and `testResult`", () => {
     const { onChange } = renderField();
     fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     expect(onChange).toHaveBeenCalledTimes(1);
@@ -188,11 +191,13 @@ describe("EmailTestDeliveryFormRenderer — single string-output contract", () =
       unknown
     >;
 
-    // Exactly one key, named `testResult`, value is a JSON string.
-    expect(Object.keys(payload)).toEqual(["testResult"]);
+    // Exactly the two expected keys, both JSON strings carrying the SAME envelope.
+    expect(new Set(Object.keys(payload))).toEqual(new Set(["userResponse", "testResult"]));
+    expect(typeof payload.userResponse).toBe("string");
     expect(typeof payload.testResult).toBe("string");
+    expect(payload.userResponse).toBe(payload.testResult);
 
-    // Old multi-output keys MUST NOT leak.
+    // Old multi-output keys MUST NOT leak as top-level structured fields.
     expect((payload as { continueRequested?: unknown }).continueRequested).toBeUndefined();
     expect((payload as { lastSendResult?: unknown }).lastSendResult).toBeUndefined();
 

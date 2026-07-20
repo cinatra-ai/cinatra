@@ -769,56 +769,122 @@ export function createTriggerEmailSendUseCases(
       },
       actor: PrimitiveActorContext,
     ): Promise<Record<string, unknown>> {
+      // Campaign-not-found is an INVARIANT violation for the wrapped send path
+      // (the run-scoped wrapper resolves the campaign under authz BEFORE calling
+      // this use-case; the public route pre-checks it). It is NOT a
+      // user-correctable expected-failure state, so it still THROWS — the
+      // enumerated `reason` failure space (contract (6)) covers only the states a
+      // user can fix at the gate and re-submit.
       const campaign = await deps.getCampaign(input.campaignId);
       if (!campaign) {
         throw new Error("Campaign not found.");
       }
 
+      // FAILURE-AS-DATA (DESIGN-V3 contract (6)): an EXPECTED send failure must
+      // be a resolved value the workflow can route back into the gate as
+      // `lastSendResult` — never a thrown error that fails the whole run. This
+      // use-case therefore returns a DISCRIMINATED result. Only UNEXPECTED faults
+      // (a genuinely unknown exception, an invariant violation) propagate.
+      //
+      // Reason coverage note: `no_drafts_selected`, `invalid_recipient`, and
+      // `send_failed` are the states this shared use-case can determine on its
+      // own. The finer connector taxonomy (`connector_unavailable`,
+      // `dev_mode_recipient_required`) and the ledger/crash reasons
+      // (`previous_send_unknown`, `send_in_progress`) are refined by the
+      // run-scoped `email_test_delivery_run_send` wrapper primitive, which owns
+      // the send ledger and the connector-availability signal.
+      const recipient = (input.recipientEmail ?? "").trim();
+      if (recipient.length === 0 || !recipient.includes("@")) {
+        return {
+          ok: false,
+          reason: "invalid_recipient",
+          message: "Enter a valid recipient email address for the test send.",
+        };
+      }
+
       const draftIds = campaign.draftIds ?? [];
-      // Defensively intersect any client-supplied draft id list with
-      // the campaign's own draftIds before they reach `getDraftsByIds`. Today
-      // `resolveDrafts` already filters against `allDrafts` (which is sourced
-      // from `campaign.draftIds`), so this is belt-and-braces against a
-      // future refactor that loosens `getDraftsByIds`'s input set and would
-      // otherwise open a cross-campaign exfiltration vector.
+      // Defensively intersect any client-supplied draft id list with the
+      // campaign's own draftIds before they reach `getDraftsByIds`. This is the
+      // membership predicate that prevents cross-campaign draft exfiltration:
+      // any id NOT in `campaign.draftIds` is dropped (applies equally to initial
+      // and follow-up selections).
       const campaignDraftIdSet = new Set(draftIds);
       const safeSpecificInitialDraftIds = input.specificInitialDraftIds?.filter((id) =>
         campaignDraftIdSet.has(id),
       );
+      // FOLLOW-UP DRAFT-ID FIX (contract (6)): `specificFollowUpDraftIds` was
+      // accepted but never read, so selected follow-ups were silently dropped.
+      // Follow-up drafts live in the SAME `campaign.draftIds` set as initial
+      // drafts; the renderer marks which ids are follow-ups (followUpDraftOptions)
+      // and passes them here. Membership-check them against the campaign draft set
+      // (same cross-campaign guard) and add the surviving drafts to the send set.
+      const safeSpecificFollowUpDraftIds = (input.specificFollowUpDraftIds ?? []).filter(
+        (id) => campaignDraftIdSet.has(id),
+      );
       const allDrafts = await deps.getDraftsByIds(draftIds);
-      const selected = resolveDrafts(
+      const initialSelected = resolveDrafts(
         allDrafts,
         input.selectionMode,
         safeSpecificInitialDraftIds,
       );
+      const idToDraft = new Map(allDrafts.map((d) => [d.id, d] as const));
+      const followUpSelected = safeSpecificFollowUpDraftIds
+        .map((id) => idToDraft.get(id))
+        .filter((d): d is Draft => d !== undefined);
+      // Union initial + follow-up, deduped by draft id (a follow-up id that also
+      // matched an initial selection must not double-send).
+      const selectedById = new Map<string, Draft>();
+      for (const draft of [...initialSelected, ...followUpSelected]) {
+        selectedById.set(draft.id, draft);
+      }
+      const selected = [...selectedById.values()];
       if (selected.length === 0) {
-        throw new Error("No test emails were selected to send.");
+        return {
+          ok: false,
+          reason: "no_drafts_selected",
+          message: "No test emails were selected to send.",
+        };
       }
 
       const fromEmail = campaign.senderEmail;
       const fromName = campaign.senderName;
 
-      let sentCount = 0;
-      for (const draft of selected) {
-        await deps.sendEmail(
-          {
-            to: [input.recipientEmail],
-            subject: `[Test] ${draft.subject}`,
-            textBody: applyTokenReplacements(draft.body),
-            fromName,
-            fromEmail,
-            replyTo: fromEmail,
-          },
-          { userId: actor.userId },
-        );
-        sentCount += 1;
-      }
+      try {
+        let sentCount = 0;
+        for (const draft of selected) {
+          await deps.sendEmail(
+            {
+              to: [recipient],
+              subject: `[Test] ${draft.subject}`,
+              textBody: applyTokenReplacements(draft.body),
+              fromName,
+              fromEmail,
+              replyTo: fromEmail,
+            },
+            { userId: actor.userId },
+          );
+          sentCount += 1;
+        }
 
-      return {
-        ok: true,
-        recipientEmail: input.recipientEmail,
-        sentCount,
-      };
+        return {
+          ok: true,
+          recipientEmail: recipient,
+          sentTo: recipient,
+          sentCount,
+          message: `Test email sent to ${recipient}.`,
+        };
+      } catch (err) {
+        // A transport-layer send failure is an EXPECTED, user-correctable state
+        // (bad recipient, transient connector error): surface it as data so the
+        // gate can show an honest banner and let the user retry — do not fail the
+        // run. The wrapper primitive refines this into the finer connector
+        // reasons + records the ledger `failed` row.
+        return {
+          ok: false,
+          reason: "send_failed",
+          message: err instanceof Error ? err.message : "The test send failed.",
+        };
+      }
     },
 
     // Initial-send loop adapted for the cinatra-objects paradigm

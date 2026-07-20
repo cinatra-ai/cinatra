@@ -151,6 +151,33 @@ describe("POST /api/test-delivery/send", () => {
     expect(sendTestEmail).toHaveBeenCalledTimes(1);
   });
 
+  // DESIGN-V3 contract (6): the use-case now returns FAILURE AS DATA (a resolved
+  // { ok:false, reason } rather than throwing) for expected send failures. The
+  // route must still surface that as a 500 so its caller sees the failure.
+  it("returns 500 when the use-case resolves failure-as-data { ok:false }", async () => {
+    (getAuthSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      user: { id: "u1" },
+      session: { id: "s1", activeOrganizationId: "org1" },
+    });
+    (getCampaignFromDatabase as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "c1" });
+    const sendTestEmail = vi
+      .fn()
+      .mockResolvedValue({ ok: false, reason: "send_failed", message: "transport boom" });
+    (createTriggerEmailSendUseCases as ReturnType<typeof vi.fn>).mockReturnValue({
+      sendTestEmail,
+      startInitialSend: vi.fn(),
+      getInitialSendStatus: vi.fn(),
+      cancelInitialSend: vi.fn(),
+      runInitialSendWorker: vi.fn(),
+      processDueFollowUps: vi.fn(),
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await POST(buildRequest(validBody));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ ok: false, error: "Send failed" });
+    warnSpy.mockRestore();
+  });
+
   it("returns 500 with sanitized 'Send failed' when use-cases throws", async () => {
     (getAuthSession as ReturnType<typeof vi.fn>).mockResolvedValue({
       user: { id: "u1" },

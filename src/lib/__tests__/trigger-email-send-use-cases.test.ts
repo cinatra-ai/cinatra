@@ -74,15 +74,26 @@ describe("createTriggerEmailSendUseCases.sendTestEmail", () => {
     ).rejects.toThrow("Campaign not found.");
   });
 
-  it("throws 'No test emails were selected to send.' when no drafts resolve", async () => {
+  it("returns failure-as-data { ok:false, reason:'no_drafts_selected' } when no drafts resolve", async () => {
     const { deps } = makeDeps({ drafts: [] });
     const uc = createTriggerEmailSendUseCases(deps);
-    await expect(
-      uc.sendTestEmail(
-        { campaignId: "c1", recipientEmail: "x@y.com", selectionMode: "all_initial" },
-        actor,
-      ),
-    ).rejects.toThrow("No test emails were selected to send.");
+    const result = await uc.sendTestEmail(
+      { campaignId: "c1", recipientEmail: "x@y.com", selectionMode: "all_initial" },
+      actor,
+    );
+    expect(result).toMatchObject({ ok: false, reason: "no_drafts_selected" });
+  });
+
+  it("returns failure-as-data { ok:false, reason:'invalid_recipient' } for a bad recipient", async () => {
+    const drafts: Draft[] = [{ id: "d1", subject: "One", body: "B1" }];
+    const { deps, sendEmail } = makeDeps({ drafts });
+    const uc = createTriggerEmailSendUseCases(deps);
+    const result = await uc.sendTestEmail(
+      { campaignId: "c1", recipientEmail: "not-an-email", selectionMode: "all_initial" },
+      actor,
+    );
+    expect(result).toMatchObject({ ok: false, reason: "invalid_recipient" });
+    expect(sendEmail).not.toHaveBeenCalled();
   });
 
   it("random_initial picks exactly one draft and calls sendEmail with [Test] prefix", async () => {
@@ -148,17 +159,65 @@ describe("createTriggerEmailSendUseCases.sendTestEmail", () => {
     expect(result).toMatchObject({ ok: true, sentCount: 2 });
   });
 
-  it("bubbles transport errors when sendEmail rejects", async () => {
+  it("returns failure-as-data { ok:false, reason:'send_failed' } when sendEmail rejects (never throws)", async () => {
     const drafts: Draft[] = [{ id: "d1", subject: "One", body: "B" }];
     const sendEmail = vi.fn().mockRejectedValue(new Error("boom"));
     const { deps } = makeDeps({ drafts, sendEmail });
     const uc = createTriggerEmailSendUseCases(deps);
-    await expect(
-      uc.sendTestEmail(
-        { campaignId: "c1", recipientEmail: "to@y.com", selectionMode: "all_initial" },
-        actor,
-      ),
-    ).rejects.toThrow("boom");
+    const result = await uc.sendTestEmail(
+      { campaignId: "c1", recipientEmail: "to@y.com", selectionMode: "all_initial" },
+      actor,
+    );
+    expect(result).toMatchObject({ ok: false, reason: "send_failed", message: "boom" });
+  });
+
+  // FOLLOW-UP DRAFT-ID FIX (contract (6)): specificFollowUpDraftIds was accepted
+  // but never read. In-campaign follow-ups must now actually send; an
+  // out-of-campaign follow-up id is dropped by the membership predicate.
+  it("sends membership-checked follow-up drafts and drops out-of-campaign follow-up ids", async () => {
+    const drafts: Draft[] = [
+      { id: "d1", subject: "Initial", body: "B1" },
+      { id: "f1", subject: "FollowUp1", body: "FB1" },
+      { id: "f2", subject: "FollowUp2", body: "FB2" },
+    ];
+    const { deps, sendEmail } = makeDeps({ drafts });
+    const uc = createTriggerEmailSendUseCases(deps);
+    const result = await uc.sendTestEmail(
+      {
+        campaignId: "c1",
+        recipientEmail: "to@y.com",
+        selectionMode: "specific_initial",
+        specificInitialDraftIds: ["d1"],
+        // f1 is in the campaign; "f-foreign" is not → dropped.
+        specificFollowUpDraftIds: ["f1", "f-foreign"],
+      },
+      actor,
+    );
+    expect(sendEmail).toHaveBeenCalledTimes(2);
+    const subjects = sendEmail.mock.calls.map((c) => c[0].subject).sort();
+    expect(subjects).toEqual(["[Test] FollowUp1", "[Test] Initial"]);
+    expect(result).toMatchObject({ ok: true, sentCount: 2 });
+  });
+
+  it("dedupes a follow-up id that also matches an initial selection (no double-send)", async () => {
+    const drafts: Draft[] = [
+      { id: "d1", subject: "One", body: "B1" },
+      { id: "d2", subject: "Two", body: "B2" },
+    ];
+    const { deps, sendEmail } = makeDeps({ drafts });
+    const uc = createTriggerEmailSendUseCases(deps);
+    const result = await uc.sendTestEmail(
+      {
+        campaignId: "c1",
+        recipientEmail: "to@y.com",
+        selectionMode: "specific_initial",
+        specificInitialDraftIds: ["d1"],
+        specificFollowUpDraftIds: ["d1"],
+      },
+      actor,
+    );
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ ok: true, sentCount: 1 });
   });
 
   it("replaces {{contact_full_name_or_company}} token with 'there'", async () => {
@@ -222,21 +281,20 @@ describe("createTriggerEmailSendUseCases.sendTestEmail", () => {
     expect(result).toMatchObject({ ok: true, sentCount: 1 });
   });
 
-  it("rejects when every specificInitialDraftId is foreign to the campaign", async () => {
+  it("returns { ok:false, reason:'no_drafts_selected' } when every specificInitialDraftId is foreign", async () => {
     const drafts: Draft[] = [{ id: "d1", subject: "One", body: "B1" }];
     const { deps } = makeDeps({ drafts });
     const uc = createTriggerEmailSendUseCases(deps);
-    await expect(
-      uc.sendTestEmail(
-        {
-          campaignId: "c1",
-          recipientEmail: "to@y.com",
-          selectionMode: "specific_initial",
-          specificInitialDraftIds: ["d-foreign-1", "d-foreign-2"],
-        },
-        actor,
-      ),
-    ).rejects.toThrow("No test emails were selected to send.");
+    const result = await uc.sendTestEmail(
+      {
+        campaignId: "c1",
+        recipientEmail: "to@y.com",
+        selectionMode: "specific_initial",
+        specificInitialDraftIds: ["d-foreign-1", "d-foreign-2"],
+      },
+      actor,
+    );
+    expect(result).toMatchObject({ ok: false, reason: "no_drafts_selected" });
   });
 });
 

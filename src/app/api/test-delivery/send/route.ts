@@ -132,12 +132,21 @@ export async function POST(request: Request): Promise<Response> {
       (req: PrimitiveInvocationRequest<unknown>) => Promise<unknown>
     > = createTriggerEmailSendHandlers(createTriggerEmailSendUseCases());
     const transport = createInProcessPrimitiveTransport(handlers);
-    await invokePrimitive(transport, {
+    const result = (await invokePrimitive(transport, {
       primitiveName: "email_outreach_send_test_start",
       input: parsed.data,
       actor,
       mode: "deterministic",
-    });
+    })) as { ok?: boolean; reason?: string; message?: string } | undefined;
+    // The underlying send use-case now returns FAILURE AS DATA (a resolved
+    // `{ ok:false, reason, message }`) for expected send failures rather than
+    // throwing (DESIGN-V3 contract (6)). This route must still surface a failed
+    // send to its caller — a resolved `ok:false` maps to a 500 with the same
+    // sanitized message, exactly as a thrown error did before.
+    if (result && result.ok === false) {
+      console.warn("test-delivery send returned failure", result.reason, result.message);
+      return Response.json({ ok: false, error: "Send failed" }, { status: 500 });
+    }
     return Response.json({ ok: true, sentTo: parsed.data.recipientEmail });
   } catch (err) {
     // Log the real error server-side and return a sanitized message.

@@ -187,16 +187,22 @@ export function EmailTestDeliveryFormRenderer({
     }
   }
 
-  // Emit a single string output `testResult` per the InputMessageNode contract.
-  // The envelope { userResponse, lastSendResult } is JSON-encoded; downstream
-  // consumers JSON.parse on entry.
+  // Resolve the gate. The InputMessageNode declares a single string output
+  // `testResult`, but the WayFlow resume bridge (review-task-actions.ts) takes
+  // the resume message from TOP-LEVEL `values.userResponse` — a payload keyed
+  // only `testResult` leaves it on the `[Approved by operator]` fallback and the
+  // run never receives the real envelope (DESIGN-V3 contract (2), the ENVELOPE
+  // FIX). Emit the SAME JSON-encoded envelope at BOTH keys: `userResponse` drives
+  // the resume message; `testResult` keeps the declared node output populated for
+  // the End-node DataFlowEdge and backward-compat. Downstream consumers
+  // JSON.parse either on entry.
   // See https://docs.cinatra.ai/references/platform/wayflow-input-message-node-contract/.
   function handleContinue() {
-    const envelope = {
+    const envelope = JSON.stringify({
       userResponse: "continue",
       lastSendResult: lastSendResultRef.current,
-    };
-    onChange({ testResult: JSON.stringify(envelope) });
+    });
+    onChange({ userResponse: envelope, testResult: envelope });
   }
 
   return (
