@@ -49,7 +49,6 @@ import {
 // Chat persistence/replay must carry artifact refs alongside text. Adding to
 // the Message shape lets the bridge resolve them without the chat path
 // importing @/lib directly.
-import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import type { UiMessage as Message, UiThread as Thread, UiThreadSummary as ThreadSummary } from "./types";
 import type { ChatViewComponents } from "./chat-messages-view";
 import type { ChatPageProps } from "./chat-page-props";
@@ -78,8 +77,8 @@ import {
 import {
   driveAssistantChatTurn,
   ensureAssistantChatWireNegotiated,
-  uploadChatAttachments,
 } from "./ag-ui-chat-client";
+import { useChatAttachments } from "./use-chat-attachments";
 import { SkillBadgeCloud } from "./skill-badge-cloud";
 import { selectChatBadges, chatEmptyStateCaption, isPinnedBadgePrefill, getGreeting, DEFAULT_GREETING } from "./chat-badges";
 import { fingerprintMessages, isRealActivity } from "./thread-activity";
@@ -155,16 +154,6 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   const promptRef = useRef<PromptFieldHandle>(null);
   const [promptValue, setPromptValue] = useState<string>("");
   const [mentionables, setMentionables] = useState<Mentionable[]>([]);
-  // Pending attachments uploaded via the PromptField paperclip; consumed +
-  // cleared by the next sendMessage().
-  const [pendingAttachments, setPendingAttachments] = useState<LlmAttachmentRef[]>([]);
-  const handleAttachmentsSelected = useCallback(async (files: File[]) => {
-    // Upload-over-fetch lives in the client transport module (cinatra#1218).
-    const refs = await uploadChatAttachments(files);
-    if (refs.length > 0) {
-      setPendingAttachments((prev) => [...prev, ...refs]);
-    }
-  }, []);
   const { data: session } = authClient.useSession();
   const [isSlackMode, setIsSlackMode] = useState(false);
   const isSlackModeRef = useRef(false);
@@ -240,6 +229,9 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   // Latest-value ref for the active thread id so in-flight streamResponse coroutines
   // can detect thread switches after an await and no-op their patches.
   const activeThreadIdRef = useRef<string | null>(null);
+  // Paperclip upload + cinatra#1890 visible-refusal surface (see use-chat-attachments).
+  const { pendingAttachments, clearPendingAttachments, handleAttachmentsSelected, refusalNotice } =
+    useChatAttachments(activeThreadIdRef);
   const externalReplyTimerRef = useRef<number | null>(null);
   // Tracks whether the user has manually renamed the active thread — prevents auto-title from overriding.
   const titleUserEditedRef = useRef(false);
@@ -846,7 +838,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
     // Snapshot + clear pending attachments so this message owns the refs and
     // the next prompt starts empty.
     const attachmentsForThisMessage = pendingAttachments;
-    if (attachmentsForThisMessage.length > 0) setPendingAttachments([]);
+    if (attachmentsForThisMessage.length > 0) clearPendingAttachments();
     const userMessage: Message = {
       id: generateId(),
       role: "user",
@@ -1122,6 +1114,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
               </div>
 
               <div className="w-full">
+                {refusalNotice}
                 <PromptField
                   ref={promptRef}
                   editorTestId="chat-prompt-input"
@@ -1211,6 +1204,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
         {/* Zero-height relative anchor — constrains input bar to max-w-3xl+px-4 exactly as messages content */}
         <div className="relative mx-auto w-full max-w-3xl px-4">
           <div className="absolute bottom-0 left-4 right-4 bg-background pb-3 pt-0">
+            {refusalNotice}
             <PromptField
               ref={promptRef}
               editorTestId="chat-prompt-input"
