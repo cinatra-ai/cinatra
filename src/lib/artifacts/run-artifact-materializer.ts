@@ -121,14 +121,27 @@ async function loadRunPackageBindings(input: {
   }
   // Dynamic imports keep the registries surface out of this module's static
   // graph (same posture as resolveProducerAssertionPlan).
-  const [{ getAgentPackage }, producesReader] = await Promise.all([
-    import("@cinatra-ai/registries"),
-    import("@cinatra-ai/extensions/agent-produces-reader"),
-  ]);
-  const pkg = await getAgentPackage({
-    packageName: input.packageName,
-    packageVersion: input.packageVersion ?? undefined,
-  });
+  const [{ getAgentPackage }, producesReader, { loadVerdaccioConfigForReads }] =
+    await Promise.all([
+      import("@cinatra-ai/registries"),
+      import("@cinatra-ai/extensions/agent-produces-reader"),
+      import("@/lib/verdaccio-config"),
+    ]);
+  // getAgentPackage's fail-fast DI guard requires an explicit VerdaccioConfig
+  // (cinatra#1454). This is a package-manifest READ, so use the READ-side
+  // wrapper: it routes the consumer read token on consumer-attached instances
+  // (where run completion happens) and falls through to the vendor loader
+  // otherwise — the server-write loader would fail-closed on a consumer-only
+  // instance lacking publish creds. Loaded only on a cache miss
+  // (pinnedBindingsCache wraps the whole resolution above).
+  const config = await loadVerdaccioConfigForReads();
+  const pkg = await getAgentPackage(
+    {
+      packageName: input.packageName,
+      packageVersion: input.packageVersion ?? undefined,
+    },
+    config,
+  );
   // Defensive re-validation of binding↔produces parity at run time (the
   // compile/install gate already enforced it for fresh publishes). The
   // reader's quietly-[] result for an absent/malformed manifest block is
