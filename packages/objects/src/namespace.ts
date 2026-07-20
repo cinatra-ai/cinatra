@@ -40,14 +40,14 @@ export const DYNAMIC_TYPE_ID_RE = /^@dynamic\/types:[a-z0-9-]+$/;
 export const LEGACY_DYNAMIC_TYPE_ID_RE = /^@cinatra-ai\/dynamic:[a-z0-9-]+$/;
 
 /** True for ANY dynamic-type id — the reserved `@dynamic` scope or the legacy
- * first-party prefix. */
+ * first-party prefix. Survives the engine teardown (epic cinatra#1785 entry 95;
+ * #1793) as the READ / tombstone-rejection predicate ONLY: existing rows keep
+ * their ids and both prefixes still classify/read, while the forward-looking
+ * write surfaces reject. The `mintDynamicObjectTypeId` helper that once minted
+ * NEW ids under this scope was DELETED with the teardown — no path may mint a
+ * new dynamic-type id (the tombstone below makes that permanent). */
 export function isDynamicObjectTypeId(id: string): boolean {
   return DYNAMIC_TYPE_ID_RE.test(id) || LEGACY_DYNAMIC_TYPE_ID_RE.test(id);
-}
-
-/** Mint a new dynamic-type id under the reserved scope. */
-export function mintDynamicObjectTypeId(slug: string): string {
-  return `${DYNAMIC_TYPE_ID_PREFIX}${slug}`;
 }
 
 // ---------------------------------------------------------------------------

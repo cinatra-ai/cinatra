@@ -429,7 +429,6 @@
     { "alias": "@cinatra-ai/objects/effective-identity", "target": "./packages/objects/src/effective-identity.ts" },
     { "alias": "@cinatra-ai/objects/artifact-renderer-registry", "target": "./packages/objects/src/artifact-renderer-registry.ts" },
     { "alias": "@cinatra-ai/objects/artifact-ui-cutover-matrix", "target": "./packages/objects/src/artifact-ui-cutover-matrix.ts" },
-    { "alias": "@cinatra-ai/objects/auto-registrar", "target": "./packages/objects/src/auto-registrar.ts" },
     { "alias": "@cinatra-ai/objects/registry", "target": "./packages/objects/src/registry.ts" },
     { "alias": "@cinatra-ai/objects/sync-adapters/registry", "target": "./packages/objects/src/sync-adapters/registry.ts" },
     { "alias": "@cinatra-ai/objects/graphiti-client", "target": "./packages/objects/src/graphiti-client.ts" },

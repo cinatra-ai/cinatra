@@ -76,13 +76,6 @@ vi.mock("../../classifier", () => ({
   })),
 }));
 
-vi.mock("../../auto-registrar", () => ({
-  ensureDynamicObjectType: vi.fn(),
-  readActiveDynamicObjectTypes: vi.fn(async () => []),
-  readAllDynamicObjectTypes: vi.fn(async () => []),
-  readDynamicObjectTypeByType: vi.fn(async () => null),
-}));
-
 vi.mock("../../graphiti-client", () => ({
   searchNodes: vi.fn(async () => ({ nodes: [] })),
   identityHashToUuid: (h: string) => h,

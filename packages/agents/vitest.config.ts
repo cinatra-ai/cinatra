@@ -85,7 +85,7 @@ export default defineConfig({
         "packages/skills/src/skills-store.ts",
       ),
       // Point to src directory (not index.ts) so subpath imports whose basename DOES match the file
-      // (auto-registrar -> auto-registrar.ts, llm-matching/* etc.) resolve
+      // (graphiti-projector -> graphiti-projector.ts, llm-matching/* etc.) resolve
       // via vite's natural extension resolution. Pointing at index.ts
       // caused ENOTDIR because vite tried to traverse into a file.
       // Different-basename subpaths need their own alias above (see /store).
@@ -208,8 +208,8 @@ export default defineConfig({
       // @cinatra-ai/objects/register-artifact-extensions. Its package.json
       // export + tsconfig path both map to src/integration/..., but vitest
       // does NOT read tsconfig paths, and the bare @cinatra-ai/objects dir
-      // alias below only resolves FLAT subpaths (auto-registrar,
-      // graphiti-projector at src/*.ts). NESTED-target subpaths
+      // alias below only resolves FLAT subpaths (graphiti-projector,
+      // sync-adapters siblings at src/*.ts). NESTED-target subpaths
       // (register-artifact-extensions, module, mcp-handlers under
       // src/integration|mcp/) need an explicit alias — mirrors /namespace.
       "@cinatra-ai/objects/register-artifact-extensions": path.join(
@@ -225,8 +225,8 @@ export default defineConfig({
         root,
         "packages/objects/src/mcp/handlers.ts",
       ),
-      // Use src dir so FLAT subpath imports (auto-registrar,
-      // graphiti-projector, etc.) resolve via vite's natural extension
+      // Use src dir so FLAT subpath imports (graphiti-projector,
+      // etc.) resolve via vite's natural extension
       // resolution. NESTED-target subpaths need their own alias above.
       "@cinatra-ai/objects": path.join(
         root,

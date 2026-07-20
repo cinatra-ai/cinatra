@@ -10,9 +10,12 @@ import "server-only";
 //     surface and later sub-issues cut consumers over), split by entry
 //     kind: plain `row-type` vs `artifact-extension-descriptor` (an entry
 //     carrying `isArtifact`),
-//   - ACTIVE dynamic types (`dynamic_object_types`, admin-approved only),
 //   - the DB claim registry's winning claim per type for the org
 //     (kind-over-scope arbitration in the pure policy leaf),
+// The former ACTIVE-dynamic-types axis (`dynamic_object_types`) was removed
+// with the dynamic-types engine teardown (epic cinatra#1785 entry 95; #1793):
+// types now exist only as an explicit installed-extension definition (static
+// registry) or a DB claim, never as an admin-approved dynamic row.
 // resolved per ORG and per ACTOR: a claim is visible to an actor only when
 // the claiming extension install's access grants admit that actor (standard
 // install-time access scope; dev-install default = workspace) — an actor
@@ -26,7 +29,6 @@ import "server-only";
 
 import {
   objectTypeRegistry,
-  readActiveDynamicObjectTypes,
   resolveTypeProjectionDisposition,
   type TypeDispositions,
   type TypeProjectionDisposition,
@@ -60,11 +62,10 @@ export interface EffectiveClaimInfo {
 export interface EffectiveTypeCatalogEntry {
   typeId: string;
   entryKind: EffectiveTypeEntryKind;
-  /** Where the entry came from: the static registry cache, the approved
-   * dynamic-type table, or a claim on a type this process has no local
-   * definition for (claims are DB state — a claimed type exists even when the
-   * local registry never registered it). */
-  source: "static" | "dynamic" | "claim";
+  /** Where the entry came from: the static registry cache, or a claim on a
+   * type this process has no local definition for (claims are DB state — a
+   * claimed type exists even when the local registry never registered it). */
+  source: "static" | "claim";
   category: string | null;
   displayName: string | null;
   /** The org's winning claim for this type, iff the ACTOR is inside the
@@ -141,26 +142,9 @@ export async function resolveEffectiveTypeCatalog(input: {
     });
   }
 
-  // 2. ACTIVE (admin-approved) dynamic types. A dynamic id already present in
-  // the static cache keeps its static entry (promotion path).
-  for (const dyn of await readActiveDynamicObjectTypes()) {
-    if (entries.has(dyn.type)) continue;
-    entries.set(dyn.type, {
-      typeId: dyn.type,
-      entryKind: "row-type",
-      source: "dynamic",
-      category: dyn.inferredCategory ?? null,
-      displayName: dyn.inferredName ?? null,
-      claim: null,
-      // A dynamic (non-statically-registered) type declares no type-driven
-      // disposition; the resolver fails it closed to 'none'.
-      declaredDispositions: null,
-      projectionDisposition: resolveTypeProjectionDisposition(dyn.type),
-    });
-  }
-
-  // 3. Winning claim per type for this org, gated per actor by the claiming
-  // install's access grants.
+  // 2. Winning claim per type for this org, gated per actor by the claiming
+  // install's access grants. (The former ACTIVE-dynamic-types axis was removed
+  // with the engine teardown — epic cinatra#1785 entry 95, #1793.)
   //
   // WINNER-BEFORE-AUTHORIZATION is deliberate: arbitration is ORG-level truth
   // — the winner is the claim that governs the org's rows and drives binding

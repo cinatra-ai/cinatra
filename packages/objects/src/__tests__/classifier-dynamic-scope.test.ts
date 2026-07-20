@@ -1,17 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { buildClassifierOutputSchema } from "../classifier/schema";
-import {
-  DYNAMIC_TYPE_ID_PREFIX,
-  isDynamicObjectTypeId,
-  mintDynamicObjectTypeId,
-} from "../namespace";
+import { isDynamicObjectTypeId } from "../namespace";
 
-// The namespace helpers still classify BOTH dynamic prefixes as dynamic (they
-// are used for READ back-compat on existing rows). But the classifier no
-// longer MINTS: `buildClassifierOutputSchema` accepts only ids the caller's
-// catalog already knows, so a NEW dynamic id is rejected at parse time —
-// "types exist only by installation" (epic #1785 slice C, cinatra#1787).
+// The namespace helper still classifies BOTH dynamic prefixes as dynamic (used
+// for READ back-compat / tombstone rejection on existing rows). The MINT helper
+// was DELETED with the dynamic-types engine teardown (epic cinatra#1785 entry
+// 95; #1793) — no code path can create a new dynamic-type id. The classifier
+// already never minted: `buildClassifierOutputSchema` accepts only ids the
+// caller's catalog already knows, so a NEW dynamic id is rejected at parse time.
 
 const base = {
   confidence: 0.9,
@@ -22,12 +19,7 @@ const base = {
 };
 
 describe("dynamic-type id scope", () => {
-  it("both prefixes still READ as dynamic (namespace helper unchanged)", () => {
-    // The mint helper still exists (used by the retired-but-not-yet-removed
-    // registrar); the point of this slice is that the CLASSIFIER never calls it.
-    expect(mintDynamicObjectTypeId("competitor-profile")).toBe(
-      `${DYNAMIC_TYPE_ID_PREFIX}competitor-profile`,
-    );
+  it("both prefixes still READ as dynamic (tombstone/read predicate survives)", () => {
     expect(isDynamicObjectTypeId("@dynamic/types:competitor-profile")).toBe(true);
     expect(isDynamicObjectTypeId("@cinatra-ai/dynamic:competitor-profile")).toBe(true);
     expect(isDynamicObjectTypeId("@vendor/pkg:thing")).toBe(false);

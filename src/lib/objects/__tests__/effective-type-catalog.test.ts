@@ -16,10 +16,8 @@ type FixtureDef = {
   dispositions?: { projection: "raw" | "artifact-safe" | "none" };
 };
 const listTypes = vi.fn<(...a: unknown[]) => FixtureDef[]>();
-const readActiveDynamicObjectTypes = vi.fn();
 vi.mock("@cinatra-ai/objects", () => ({
   objectTypeRegistry: { list: (...a: unknown[]) => listTypes(...a) },
-  readActiveDynamicObjectTypes: (...a: unknown[]) => readActiveDynamicObjectTypes(...a),
   // The shared type-driven resolver, mirrored against the fixture defs: an
   // unregistered type fails closed to 'none'; a registered type declares its
   // projection or defaults to artifact-safe.
@@ -74,24 +72,21 @@ beforeEach(() => {
       dispositions: { projection: "artifact-safe" },
     },
   ]);
-  readActiveDynamicObjectTypes.mockReset().mockResolvedValue([
-    { type: "@dynamic/types:competitor-profile", inferredName: "Competitor profile", inferredCategory: "profile" },
-  ]);
   readArtifactTypeClaimsForOrg.mockReset().mockReturnValue([claimRow({})]);
   canActorAccessClaimedArtifactExtension.mockReset();
 });
 
 describe("resolveEffectiveTypeCatalog", () => {
-  it("exposes entry kinds: row-type vs artifact-extension-descriptor, plus ACTIVE dynamic types", async () => {
+  it("exposes entry kinds: row-type vs artifact-extension-descriptor", async () => {
     canActorAccessClaimedArtifactExtension.mockResolvedValue(true);
     const catalog = await resolveEffectiveTypeCatalog({ orgId: "org-1", actor: grantedActor });
     const byId = new Map(catalog.map((e) => [e.typeId, e]));
     expect(byId.get("@cinatra-ai/campaigns:campaign")?.entryKind).toBe("row-type");
     expect(byId.get("@vendor/report-artifact:artifact")?.entryKind).toBe("artifact-extension-descriptor");
-    const dyn = byId.get("@dynamic/types:competitor-profile");
-    expect(dyn?.entryKind).toBe("row-type");
-    expect(dyn?.source).toBe("dynamic");
-    expect(dyn?.displayName).toBe("Competitor profile");
+    // The former ACTIVE-dynamic-types axis was removed with the engine teardown
+    // (epic cinatra#1785 entry 95; #1793): every entry is now static- or
+    // claim-sourced (the `"dynamic"` source was dropped from the union).
+    expect(catalog.every((e) => e.source === "static" || e.source === "claim")).toBe(true);
   });
 
   it("AC-4: an actor inside the install's grant sees the winning claim WITH validated dispositions", async () => {

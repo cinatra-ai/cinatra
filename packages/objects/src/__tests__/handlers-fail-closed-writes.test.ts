@@ -36,11 +36,6 @@ vi.mock("@/lib/database", () => ({
 // Classifier is controlled per test.
 vi.mock("../classifier", () => ({ classifyObject: vi.fn() }));
 
-vi.mock("../auto-registrar", () => ({
-  ensureDynamicObjectType: vi.fn(),
-  readAllDynamicObjectTypes: vi.fn(async () => []),
-}));
-
 vi.mock("../graphiti-client", () => ({
   addEpisode: vi.fn(async () => ({ uuid: "ep-1", episode_id: "ep-1" })),
   deleteEpisode: vi.fn(async () => ({ ok: true })),
@@ -51,12 +46,10 @@ vi.mock("../graphiti-client", () => ({
 
 import { createObjectsPrimitiveHandlers } from "../mcp/handlers";
 import { upsertObjectAndEnqueue } from "@/lib/objects-store";
-import { ensureDynamicObjectType } from "../auto-registrar";
 import { classifyObject } from "../classifier";
 import { objectTypeRegistry } from "../registry";
 
 const mockUpsert = upsertObjectAndEnqueue as unknown as ReturnType<typeof vi.fn>;
-const mockEnsureDynamic = ensureDynamicObjectType as unknown as ReturnType<typeof vi.fn>;
 const mockClassify = classifyObject as unknown as ReturnType<typeof vi.fn>;
 
 const GENERIC = "@cinatra-ai/objects:object";
@@ -146,7 +139,6 @@ beforeEach(() => {
   mockUpsert.mockImplementation((call: { upsertInput: { id: string; type: string } }) =>
     recordFor(call),
   );
-  mockEnsureDynamic.mockReset();
   mockClassify.mockReset();
   // Only the installed type is defined by an installed extension; the generic /
   // dynamic ids are not.
@@ -173,8 +165,6 @@ describe("unknown type → refused at the write boundary", () => {
     expect(err.code).toBe("OBJECTS_TYPE_NOT_REGISTERED");
     // The refused payload never reaches the store.
     expect(mockUpsert).not.toHaveBeenCalled();
-    // No approval/queue/dead-letter writer is touched.
-    expect(mockEnsureDynamic).not.toHaveBeenCalled();
   });
 
   it("the error message states no installed extension defines the type", async () => {
@@ -271,7 +261,6 @@ describe("all non-matching outcomes refuse", () => {
     );
     await saveExpectingRefusal({ rawData: { name: "Test" } });
     expect(mockUpsert).not.toHaveBeenCalled();
-    expect(mockEnsureDynamic).not.toHaveBeenCalled();
   });
 
   it("a legacy dynamic-id classification refuses", async () => {

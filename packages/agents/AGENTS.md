@@ -83,8 +83,9 @@ satisfiable semver range.
 
 RETIRED — do not reintroduce: runtime dynamic-type minting. There is no
 `producesObjectTypes`, no `outputs[*].cinatra.object_type` OAS annotation, and no
-install-time `ensureDynamicObjectType` call. Typed output exists ONLY by
-installing the artifact-kind extension that CLAIMS the type.
+install-time dynamic-type mint — the dynamic-types engine was torn down
+end-to-end (epic #1785 entry 95; #1793). Typed output exists ONLY by installing
+the artifact-kind extension that CLAIMS the type.
 
 ## Removed features (do not reintroduce)
 

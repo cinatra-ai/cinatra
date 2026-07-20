@@ -36,13 +36,6 @@ vi.mock("../classifier", () => ({
   })),
 }));
 
-vi.mock("../auto-registrar", () => ({
-  ensureDynamicObjectType: vi.fn(),
-  readActiveDynamicObjectTypes: vi.fn(async () => []),
-  readAllDynamicObjectTypes: vi.fn(async () => []),
-  readDynamicObjectTypeByType: vi.fn(async () => null),
-}));
-
 vi.mock("../graphiti-client", () => ({
   addEpisode: vi.fn(async () => ({ uuid: "ep-1", episode_id: "ep-1" })),
   deleteEpisode: vi.fn(async () => ({ ok: true })),

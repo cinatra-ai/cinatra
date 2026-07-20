@@ -2048,20 +2048,11 @@ $body$` },
     // the deterministic/agentic distinction is vestigial. IF EXISTS makes this
     // idempotent on repeated boots after the column is gone.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" DROP COLUMN IF EXISTS execution_mode` },
-    // Objects-layer: generic typed-object store fronted by Graphiti
-    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."dynamic_object_types" (
-  type              text PRIMARY KEY,
-  display_name      text NOT NULL,
-  inferred_category text NOT NULL,
-  slug              text,
-  json_schema       jsonb,
-  source            text,
-  confidence        text,
-  status            text NOT NULL DEFAULT 'proposed',
-  created_at        timestamptz NOT NULL DEFAULT now(),
-  created_by        text,
-  promoted_to_type  text
-)` },
+    // The `dynamic_object_types` fresh-install bootstrap was removed with the
+    // dynamic-types ENGINE teardown (epic cinatra#1785 entry 95; #1793 →
+    // migration core__0060 drops the table): a fresh install never recreates it,
+    // so the destructive drop is never re-seeded on the next boot. Types now
+    // exist ONLY as explicit installed-extension definitions.
     // object_sync_adapter_configs disambiguates from transport "connector" packages.
     // Existing DBs are migrated separately; ensurePostgresSchema below uses
     // the current name on fresh DBs.
@@ -2144,25 +2135,9 @@ $body$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."object_sync_adapter_configs" ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."object_sync_adapter_configs" ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()` },
     { text: `CREATE INDEX IF NOT EXISTS object_sync_adapter_configs_type_idx ON "${schemaName.replaceAll('"', '""')}"."object_sync_adapter_configs" (object_type) WHERE is_active = true` },
-    // dynamic_object_types backfill — columns added after the initial id/payload schema.
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dynamic_object_types" ADD COLUMN IF NOT EXISTS type text` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dynamic_object_types" ADD COLUMN IF NOT EXISTS display_name text` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dynamic_object_types" ADD COLUMN IF NOT EXISTS inferred_category text` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dynamic_object_types" ADD COLUMN IF NOT EXISTS slug text` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dynamic_object_types" ADD COLUMN IF NOT EXISTS json_schema jsonb` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dynamic_object_types" ADD COLUMN IF NOT EXISTS source text` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dynamic_object_types" ADD COLUMN IF NOT EXISTS confidence text` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dynamic_object_types" ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'proposed'` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dynamic_object_types" ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dynamic_object_types" ADD COLUMN IF NOT EXISTS created_by text` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dynamic_object_types" ADD COLUMN IF NOT EXISTS promoted_to_type text` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dynamic_object_types" ADD COLUMN IF NOT EXISTS identity_key text` },
-    // Reconcile confidence column type (real → text) and add origin_context.
-    // The cast is safe because no production rows have written to confidence — this column
-    // was declared earlier but never populated by any caller.
-    // Both entries are idempotent: ALTER COLUMN ... USING ::text is a no-op once already text.
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dynamic_object_types" ALTER COLUMN confidence TYPE text USING confidence::text` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dynamic_object_types" ADD COLUMN IF NOT EXISTS origin_context jsonb` },
+    // The `dynamic_object_types` backfill block was removed with the engine
+    // teardown (epic cinatra#1785 entry 95; #1793 → migration core__0060 drops
+    // the table): no fresh-install re-seed, no self-heal ALTERs.
     // streamed_text: accumulated external A2A peer text output,
     // persisted on clean RUN_FINISHED by external-sse-proxy. Nullable;
     // legacy rows + internal runs + incomplete externals remain NULL.

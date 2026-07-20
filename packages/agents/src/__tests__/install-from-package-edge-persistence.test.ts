@@ -139,7 +139,6 @@ vi.mock("../oas-compiler", () => ({
     },
   }),
 }));
-vi.mock("@cinatra-ai/objects/auto-registrar", () => ({ ensureDynamicObjectType: async () => ({}) }));
 vi.mock("@cinatra-ai/objects/registry", () => ({ objectTypeRegistry: { has: () => false } }));
 vi.mock("../agent-runtime-mount", () => ({ resolveAgentRuntimeMountDir: () => "/tmp/agents-fixture", resolveDevExtensionSourceRoot: () => "/tmp/agents-fixture" }));
 

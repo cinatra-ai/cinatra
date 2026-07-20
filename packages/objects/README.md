@@ -14,7 +14,6 @@ used for semantic and relationship retrieval.
 - `OBJECT_TYPE_NAMESPACE_RE`, `isNamespacedObjectTypeId`, `isKnownObjectTypeId` — type-id validators.
 - `classifyObject`, `ClassifierOutput` — LLM-based object type classification.
 - `resolveIdentity`, `hashIdentity` — derive a stable identity hash from object data.
-- `ensureDynamicObjectType`, `approveDynamicObjectType`, `archiveDynamicObjectType` — manage runtime-discovered types.
 - `canCompose`, `findCompositionMatches` — agent input/output composability checks.
 - `agentIOSpecSchema`, `AgentIOSpec`, `AgentIOPort` — agent I/O port schema and types.
 - `semanticArtifactManifestSchema`, `parseSemanticArtifactManifest` — semantic artifact manifest parsing.
@@ -26,17 +25,21 @@ used for semantic and relationship retrieval.
 - `ObjectsBrowserScreen`, `ObjectDetailPage`, `ObjectTypesScreen` — admin screens.
 
 Named sub-entry points (see `package.json` `exports`): `@cinatra-ai/objects/registry`,
-`/auto-registrar`, `/namespace`, `/renderer-types`, `/module`, `/mcp-handlers`,
+`/namespace`, `/renderer-types`, `/module`, `/mcp-handlers`,
 `/graphiti-client`, `/graphiti-projector`, `/sync-adapters/registry`,
 `/classifier-signals`, `/register-artifact-extensions`.
 
-Import registry and registrar helpers from their sub-paths, not the barrel, to avoid
+Import the registry from its sub-path, not the barrel, to avoid
 host-only transitive dependencies:
 
 ```typescript
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
-import { ensureDynamicObjectType } from "@cinatra-ai/objects/auto-registrar";
 ```
+
+> The dynamic-types engine (`auto-registrar`, the `dynamic_object_types` table,
+> and the ensure/approve/archive mutators) was removed in the engine teardown
+> (epic #1785 entry 95; #1793). Types exist only as explicit installed-extension
+> definitions; the write path fail-closes.
 
 ## Docs
 
