@@ -97,6 +97,10 @@ describe("host safe-transport format set (the registrar's system-base wildcard b
       "text/markdown",
       "text/x-markdown",
       "text/plain",
+      // Required text/JSON bases (epic #1883 A1) — inline-previewable, added to
+      // the host safe-transport bound alongside the existing text floor.
+      "text/csv",
+      "application/json",
       "application/pdf",
       "image/png",
       "image/jpeg",

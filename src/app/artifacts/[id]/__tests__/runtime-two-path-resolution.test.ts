@@ -7,8 +7,12 @@
  * dynamic client seam. Archiving the extension (owner ruling 8 revocation) drops
  * the binding and the row degrades to the never-blank `requires-rebuild` floor.
  *
- * GENERATED_ARTIFACT_RENDERERS is the REAL (empty `{}`) map — so a runtime-only
- * key is genuinely absent from the build map, proving the zero-rebuild path.
+ * The fixture package (`@acme/runtime-only-artifact`) is a NON-enrolled,
+ * non-system-base name whose `::detail` key is genuinely absent from the REAL
+ * GENERATED_ARTIFACT_RENDERERS build map — proving the zero-rebuild runtime path.
+ * (It deliberately is NOT one of the required `-artifact` bases, whose keys ARE
+ * in the build map; the representation fixture likewise uses a novel media type
+ * no system base claims.)
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -30,7 +34,7 @@ import {
 import { pickArtifactRenderer } from "../renderer-dispatch";
 
 const ORG = "org_dynamic";
-const PKG = "@cinatra-ai/json-artifact";
+const PKG = "@acme/runtime-only-artifact";
 
 function tuple(over: Partial<AdmittedClientBundleTuple> = {}): AdmittedClientBundleTuple {
   return {
@@ -79,7 +83,7 @@ describe("AC-1 — a runtime-registered semantic renderer loads with ZERO host r
     const key = runtimeAssetRegistry.keyFor(PKG, "detail");
 
     // Before activation: no build entry, no runtime binding → requires-rebuild.
-    expect(dispatchFor({ baseType: TYPE, identity: winner(PKG), mime: "application/json" })).toEqual({
+    expect(dispatchFor({ baseType: TYPE, identity: winner(PKG), mime: "application/vnd.acme-runtime" })).toEqual({
       kind: "requires-rebuild",
       packageName: PKG,
       slot: "detail",
@@ -89,7 +93,7 @@ describe("AC-1 — a runtime-registered semantic renderer loads with ZERO host r
     expect((await runtimeAssetRegistry.admitAndActivate({ tuple: tuple(), generation: 1, ...okActivate })).ok).toBe(true);
 
     // Now loadable → dispatch routes to semantic (the byte-unchanged leaf).
-    expect(dispatchFor({ baseType: TYPE, identity: winner(PKG), mime: "application/json" })).toEqual({
+    expect(dispatchFor({ baseType: TYPE, identity: winner(PKG), mime: "application/vnd.acme-runtime" })).toEqual({
       kind: "semantic",
       packageName: PKG,
       generatedKey: key,
@@ -106,12 +110,12 @@ describe("AC-1 — a runtime-registered semantic renderer loads with ZERO host r
   it("archive-position (ruling 8): retiring the extension drops the binding → requires-rebuild floor", async () => {
     semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: PKG });
     await runtimeAssetRegistry.admitAndActivate({ tuple: tuple(), generation: 1, ...okActivate });
-    expect(dispatchFor({ baseType: TYPE, identity: winner(PKG), mime: "application/json" }).kind).toBe("semantic");
+    expect(dispatchFor({ baseType: TYPE, identity: winner(PKG), mime: "application/vnd.acme-runtime" }).kind).toBe("semantic");
 
     // Archive/delete lifecycle teardown = revocation (no separate kill-switch).
     runtimeAssetRegistry.retireByPackage(PKG);
 
-    expect(dispatchFor({ baseType: TYPE, identity: winner(PKG), mime: "application/json" })).toEqual({
+    expect(dispatchFor({ baseType: TYPE, identity: winner(PKG), mime: "application/vnd.acme-runtime" })).toEqual({
       kind: "requires-rebuild",
       packageName: PKG,
       slot: "detail",
@@ -127,7 +131,7 @@ describe("AC-1 — a runtime-registered representation provider loads with zero 
     // dynamic representation provider binds + activates at `detail`.
     representationProviderRegistry.registerProvider(ORG, {
       packageName: PKG,
-      pattern: "application/json",
+      pattern: "application/vnd.acme-runtime",
       slot: "detail",
       generation: 1,
     });
@@ -139,11 +143,11 @@ describe("AC-1 — a runtime-registered representation provider loads with zero 
     const key = runtimeAssetRegistry.keyFor(PKG, "detail");
     const floor: EffectiveIdentity = { kind: "no-primary" };
 
-    expect(dispatchFor({ baseType: "@cinatra-ai/artifact:object", identity: floor, mime: "application/json" })).toEqual({
+    expect(dispatchFor({ baseType: "@cinatra-ai/artifact:object", identity: floor, mime: "application/vnd.acme-runtime" })).toEqual({
       kind: "representation",
       packageName: PKG,
       generatedKey: key,
-      pattern: "application/json",
+      pattern: "application/vnd.acme-runtime",
     });
     expect(classifyLoadablePath(key)).toBe("runtime");
   });

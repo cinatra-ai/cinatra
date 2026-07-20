@@ -164,11 +164,16 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "wordpress-mcp-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "youtube-connector", resolution: "guardedOptional" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/audio-artifact::detail", resolution: "required" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/document-artifact::detail", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/image-artifact::detail", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/image-artifact::preview", resolution: "required" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/json-artifact::detail", resolution: "required" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/json-artifact::preview", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/pdf-artifact::detail", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/pdf-artifact::preview", resolution: "required" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/text-artifact::detail", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/video-artifact::detail", resolution: "required" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/zip-artifact::detail", resolution: "required" },
   { map: "GENERATED_CHAT_VIEWS", key: "chart", resolution: "required" },
 ];
 
