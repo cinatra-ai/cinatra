@@ -98,7 +98,7 @@ export function LibraryMode({
 
   const q = (query ?? "").trim().toLowerCase();
   const filtered = all.filter((a) => {
-    if (facet && facet !== "__all__" && facetKeyOf(a.effectiveIdentity) !== facet) {
+    if (facet && facet !== "__all__" && facetKeyOf(a.presentationIdentity) !== facet) {
       return false;
     }
     if (q) {
@@ -137,7 +137,7 @@ function buildFacetOptions(
   const exts = new Set<string>();
   let hasDefault = false;
   for (const a of items) {
-    const id = a.effectiveIdentity;
+    const id = a.presentationIdentity;
     if (id.kind === "extension") exts.add(id.extension);
     else hasDefault = true;
   }
@@ -161,7 +161,7 @@ function LibraryRow({
   summary: ArtifactSummary;
   isLast: boolean;
 }) {
-  const id = summary.effectiveIdentity;
+  const id = summary.presentationIdentity;
   const name = summary.title ?? summary.artifactId;
   const preparing = isSelectionPreparing(id);
   const rel = summary.updatedAt

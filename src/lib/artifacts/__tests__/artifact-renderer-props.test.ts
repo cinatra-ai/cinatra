@@ -64,6 +64,8 @@ const artifact: ArtifactSummary = {
   eligibleExtensions: ["@cinatra-ai/contract-artifact"],
   primaryExtension: "@cinatra-ai/contract-artifact",
   effectiveIdentity: identity,
+  presentationIdentity: identity,
+  presentationSuggestions: [],
   sourceUrl: "https://example.com/source",
 };
 

@@ -119,7 +119,11 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
         resolveArtifactDispatchInputs({
           orgId,
           baseType: artifact.objectType,
-          identity: artifact.effectiveIdentity,
+          // Renderer dispatch presents the assertion-aware PRESENTATION identity
+          // (epic #1883 A6) — a row filed as "Marketing strategy" renders as
+          // that. The shared effective identity is untouched (context selection
+          // / replay / Graphiti still read it); they diverge by design.
+          identity: artifact.presentationIdentity,
           mime,
         }),
       );
