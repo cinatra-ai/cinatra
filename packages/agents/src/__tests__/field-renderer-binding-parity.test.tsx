@@ -35,7 +35,7 @@ import { EmailDraftsReviewRenderer } from "../email-drafts-review-renderer";
 import { ReviewerAgentOutputRenderer } from "../reviewer-agent-output-renderer";
 import { SendConfirmationRenderer } from "../send-confirmation-renderer";
 import { CtaRenderer } from "../cta-renderer";
-import { SchemaFieldRenderer } from "../schema-field-renderer";
+import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 import { GroupedSetupFormRenderer } from "../grouped-setup-form-renderer";
 import { EmailTestDeliveryFormRenderer } from "../email-test-delivery-form-renderer";
 import { classifyMidRunHitl, hasMidRunHitlBinding } from "../orchestrator-mid-run-hitl";
@@ -111,7 +111,11 @@ const PARITY_TABLE: ReadonlyArray<
   ["@cinatra-ai/email-test-delivery-agent:input", EmailTestDeliveryFormRenderer as never, 80],
   ["@cinatra-ai/email-outreach-agent:cta", CtaRenderer as never, 90],
   ["cta", CtaRenderer as never, 90],
-  ["@cinatra-ai/agent-builder:schema-field-fallback", SchemaFieldRenderer as never, 1],
+  // The terminal schema-field-fallback is the TRUE registry-bypass floor
+  // (cinatra#1625, codex 2026-07-20): SchemaOnlyFloorRenderer renders the same
+  // schema-driven UI as the raw SchemaFieldRenderer but never re-enters the
+  // registry (a floor that re-resolved its own fallback xRenderer would recurse).
+  ["@cinatra-ai/agent-builder:schema-field-fallback", SchemaOnlyFloorRenderer as never, 1],
   ["@cinatra-ai/agent-builder:grouped-setup-form", GroupedSetupFormRenderer as never, 50],
   // NOTE: @cinatra-ai/auditor-agent:review MIGRATED into its extension
   // (cinatra#1625) — it now resolves to the ExtensionFieldRenderer wrapper at

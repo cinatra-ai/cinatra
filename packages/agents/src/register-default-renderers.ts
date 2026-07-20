@@ -50,7 +50,7 @@ import {
   SkillSelectorRenderer,
   isSkillSelectorField,
 } from "./skill-selector-renderer";
-import { SchemaFieldRenderer } from "./schema-field-renderer";
+import { SchemaOnlyFloorRenderer } from "./schema-field-renderer";
 import {
   GroupedSetupFormRenderer,
   isGroupedSetupFormField,
@@ -110,7 +110,7 @@ const RENDERER_KIND_TABLE: Record<
   // and a not-in-build binding of this kind degrades to the SchemaFieldRenderer
   // floor here (AC4 never-blank). Same shape as final-list-review /
   // linkedin-draft-review / wordpress-draft-confirm below.
-  "auditor-review": { renderer: SchemaFieldRenderer },
+  "auditor-review": { renderer: SchemaOnlyFloorRenderer },
   "campaign-recipients-review": {
     renderer: CampaignRecipientsReviewRenderer,
     bareAliases: ["campaign-recipients-review"],
@@ -132,7 +132,7 @@ const RENDERER_KIND_TABLE: Record<
   // (hasFieldRendererComponent → makeExtensionFieldRenderer), and a NOT-in-build
   // binding of this kind (runtime-installed absent from the map) degrades to the
   // SchemaFieldRenderer floor here (AC4 never-blank), which is exactly this entry.
-  "final-list-review": { renderer: SchemaFieldRenderer },
+  "final-list-review": { renderer: SchemaOnlyFloorRenderer },
   "follow-up-cadence": {
     renderer: FollowUpCadenceFieldRenderer,
     bareAliases: ["follow-up-cadence"],
@@ -149,12 +149,12 @@ const RENDERER_KIND_TABLE: Record<
   // resolves map-first to the extension wrapper, and a not-in-build binding of
   // this kind degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
   // Same shape as final-list-review / scrape-schema-review above.
-  "linkedin-draft-review": { renderer: SchemaFieldRenderer },
+  "linkedin-draft-review": { renderer: SchemaOnlyFloorRenderer },
   "list-picker": { renderer: ListPickerRenderer, bareAliases: ["list-picker"] },
   "reviewer-output": { renderer: ReviewerAgentOutputRenderer },
   // See the final-list-review note above — the component migrated; the kind + its
   // floor stay host so the vocabulary holds and a not-in-build binding never blanks.
-  "scrape-schema-review": { renderer: SchemaFieldRenderer },
+  "scrape-schema-review": { renderer: SchemaOnlyFloorRenderer },
   "send-confirmation": {
     renderer: SendConfirmationRenderer,
     bareAliases: ["send-confirmation"],
@@ -168,7 +168,7 @@ const RENDERER_KIND_TABLE: Record<
   // to the SchemaFieldRenderer floor here (AC4 never-blank). Same shape as
   // final-list-review / scrape-schema-review / linkedin-draft-review /
   // wordpress-draft-confirm above.
-  "skill-recommend": { renderer: SchemaFieldRenderer },
+  "skill-recommend": { renderer: SchemaOnlyFloorRenderer },
   "test-delivery-input": { renderer: EmailTestDeliveryFormRenderer },
   "wayflow-setup-form": { renderer: GroupedSetupFormRenderer },
   // MIGRATED (cinatra#1625 S8/M3): the blog-wordpress draft-confirm component
@@ -178,7 +178,7 @@ const RENDERER_KIND_TABLE: Record<
   // resolves map-first to the extension wrapper, and a not-in-build binding of
   // this kind degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
   // Same shape as final-list-review / scrape-schema-review / linkedin-draft-review above.
-  "wordpress-draft-confirm": { renderer: SchemaFieldRenderer },
+  "wordpress-draft-confirm": { renderer: SchemaOnlyFloorRenderer },
 };
 
 /** Pinned by the kind-vocabulary set-equality test. */
@@ -319,7 +319,11 @@ export function ensureDefaultFieldRenderersRegistered(): void {
     priority: 1,
     condition: (_fieldName, schema) =>
       xRendererOf(schema) === SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-    renderer: SchemaFieldRenderer,
+    // Bypass floor: a registered renderer that resolves back through the registry
+    // must NOT be the registry-first SchemaFieldRenderer, or matching its own
+    // fallback xRenderer re-resolves this entry forever. SchemaOnlyFloorRenderer
+    // renders the schema-driven fallback directly (cinatra#1625, codex 2026-07-20).
+    renderer: SchemaOnlyFloorRenderer,
   });
 
   // -------------------------------------------------------------------------

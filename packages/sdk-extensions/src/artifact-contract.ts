@@ -175,6 +175,38 @@ export type SemanticArtifactRef = { extension: string; objectTypeId?: string };
  * exactly the cross-kind top-level pattern `cinatra.streams`/`cinatra.webhooks`
  * use (the host loader carries it through UNVALIDATED; host RENDERING dispatch
  * rides the S9 host slice). Narrowly additive — unknown keys stay rejected.
+ *
+ * `fieldRenderers` (cinatra#151 Stage 5 binding shape; admitted for the artifact
+ * kind under eng#548 ruling 133-1 + epic #1620 "artifact extensions own their
+ * UI" / #1625 field-renderer spine) is the TOP-LEVEL HITL field-renderer binding
+ * array (`[{ id, kind, priority, midRunHitl?, params?, a2uiTranslator?,
+ * component? }]`). It began as an AGENT-package key, but the 133-1 ruling
+ * relocates the email HITL field-renderer REGISTRATIONS (gmail-sender,
+ * follow-up-cadence) INTO `@cinatra-ai/email-artifacts` — an artifact pack —
+ * with the persisted binding ids UNCHANGED (e.g.
+ * `@cinatra-ai/email-outreach-agent:gmail-sender`). The build map is the
+ * LOAD-BEARING resolution path and is already KIND-AGNOSTIC: the generator
+ * (`scripts/extensions/generate-extension-manifest.mjs`) collects
+ * `cinatra.fieldRenderers` from EVERY present record regardless of kind and
+ * resolves each `component.entry` relative to the DECLARING package's dir
+ * (`declaredBy`), so declaring the binding on the artifact pack populates
+ * `GENERATED_FIELD_RENDERER_BINDINGS` + `GENERATED_FIELD_RENDERER_COMPONENTS`
+ * keyed by the unchanged id (exactly like the `blog-wordpress-publish-agent`
+ * `wordpress-draft-confirm` component precedent, only declared by an artifact
+ * pack). The one host-contract gap the ruling predates was THIS allowlist:
+ * without admitting the key the artifact bridge (`registerArtifactExtensions`)
+ * rejects the whole manifest as extraneous and drops the pack's `artifact`
+ * descriptor AND its `objectTypes` claims at boot. Admitting it here is purely
+ * so the bridge carries it through UNVALIDATED (same discipline as `views` /
+ * `vendor` / `displayName`); the block's CONTENT is validated FAIL-CLOSED by the
+ * shared agent-binding validator (`scripts/extensions/agent-binding-kinds.mjs`)
+ * at GENERATION (the build map) and by the companion repo's publish/conformance
+ * gate. NOTE: the in-host installed-package collector
+ * (`packages/agents/src/field-renderer-bindings.server.ts`) scans the AGENT
+ * runtime mount only, so it does NOT re-validate an artifact pack's declaration
+ * at runtime — which is why the build map (generation-time, fail-closed) is the
+ * load-bearing path for this build-time devExtension. Narrowly additive —
+ * unknown keys stay rejected.
  */
 export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "kind",
@@ -185,6 +217,7 @@ export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "displayName",
   "vendor",
   "views",
+  "fieldRenderers",
 ]);
 
 // ===========================================================================

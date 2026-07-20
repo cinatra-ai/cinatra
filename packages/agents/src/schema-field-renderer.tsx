@@ -40,6 +40,20 @@ type Props = {
   registerFlush?: (fn: () => Promise<void>) => void;
   /** When true, skip the internal Continue button. See FieldRendererProps. */
   hideSubmit?: boolean;
+  /**
+   * TRUE REGISTRY-BYPASS FLOOR (cinatra#1625, codex convergence 2026-07-20). When
+   * set, this renderer does NOT re-enter `fieldRendererRegistry` — it renders the
+   * schema-driven fallback directly. This is the ONLY safe way to use
+   * SchemaFieldRenderer AS A FLOOR: the registry-first path (below) re-resolves
+   * `fieldName`+`schema`, and a HEURISTIC condition (e.g. the gmail-sender
+   * sender-name whitelist) matches on the FIELD NAME, so it survives x-renderer
+   * stripping and would re-resolve THIS renderer (or the extension wrapper that
+   * degrades to it) forever. Stripping `x-renderer` only defeats STRICT-ID
+   * conditions; the bypass defeats both. Use `SchemaOnlyFloorRenderer` (below) or
+   * pass this flag wherever the floor is rendered (the ExtensionFieldRenderer
+   * wrapper + the migrated host KIND-table floors).
+   */
+  bypassRegistry?: boolean;
 };
 
 function isLikelyMultiline(schema: Record<string, unknown>): boolean {
@@ -74,7 +88,7 @@ function isValidEmail(value: string): boolean {
 }
 
 export function SchemaFieldRenderer(props: Props) {
-  const { fieldName, schema, value, onChange, disabled, required, error: callerError, context, onBusyChange, saveNow, assistResponseKey, mode, registerFlush, hideSubmit } = props;
+  const { fieldName, schema, value, onChange, disabled, required, error: callerError, context, onBusyChange, saveNow, assistResponseKey, mode, registerFlush, hideSubmit, bypassRegistry } = props;
 
   const title = (schema as { title?: string }).title;
   const description = (schema as { description?: string }).description;
@@ -115,7 +129,11 @@ export function SchemaFieldRenderer(props: Props) {
   // directly and need no flush.
   useEffect(() => {
     if (!registerFlush) return;
-    if (fieldRendererRegistry.resolve(fieldName, schema, context)) return;
+    // Bypass floors own their flush directly — they never delegate to a
+    // registry-matched renderer, so the "a matched renderer registers its own
+    // flush" guard must not consult the registry (which would re-match a
+    // heuristic condition and mis-skip this floor's flush).
+    if (!bypassRegistry && fieldRendererRegistry.resolve(fieldName, schema, context)) return;
     const t = (schema as { type?: string }).type;
     const enumVals = (schema as { enum?: unknown[] }).enum;
     if (t === "boolean" || (Array.isArray(enumVals) && enumVals.length > 0)) return;
@@ -167,8 +185,14 @@ export function SchemaFieldRenderer(props: Props) {
     hideSubmit,
   };
 
-  // 1) Registry-first
-  const matched = fieldRendererRegistry.resolve(fieldName, schema, context);
+  // 1) Registry-first — SKIPPED for a bypass floor. A floor that re-entered the
+  // registry could re-resolve the very binding whose degrade rendered it (a
+  // heuristic condition matches on fieldName and survives x-renderer stripping),
+  // recursing until crash — the opposite of the AC4 never-blank/never-crash
+  // floor. `bypassRegistry` renders the schema-driven fallback directly.
+  const matched = bypassRegistry
+    ? null
+    : fieldRendererRegistry.resolve(fieldName, schema, context);
   if (matched) {
     const Renderer = matched.renderer;
     return <Renderer {...normalized} />;
@@ -416,4 +440,19 @@ export function SchemaFieldRenderer(props: Props) {
       )}
     </div>
   );
+}
+
+/**
+ * The canonical TRUE registry-bypass floor (cinatra#1625, codex convergence
+ * 2026-07-20). `SchemaFieldRenderer` with `bypassRegistry` forced on: it renders
+ * the schema-driven fallback WITHOUT re-entering `fieldRendererRegistry`, so no
+ * condition — strict-id OR the sender-name HEURISTIC — can re-resolve the binding
+ * whose degrade produced this floor. Register THIS (never the raw
+ * `SchemaFieldRenderer`) as a migrated host KIND-table floor, and render it as
+ * the ExtensionFieldRenderer wrapper's degrade fallback. Behaviour-preserving vs
+ * the raw floor's OUTPUT (same schema-driven UI); it only removes the recursion
+ * hazard and the reliance on every caller stripping `x-renderer` first.
+ */
+export function SchemaOnlyFloorRenderer(props: Omit<Props, "bypassRegistry">) {
+  return <SchemaFieldRenderer {...props} bypassRegistry />;
 }
