@@ -49,6 +49,15 @@ vi.mock("@/lib/postgres-schema-init", () => ({
 vi.mock("@cinatra-ai/registries", () => ({
   getAgentPackage: getAgentPackageMock,
 }));
+// getAgentPackage now requires an explicit VerdaccioConfig (cinatra#1454); the
+// materializer loads it via this host wrapper. The mocked getAgentPackage
+// ignores the value, so a stub config suffices.
+vi.mock("@/lib/verdaccio-config", () => ({
+  loadVerdaccioConfigForReads: vi.fn(async () => ({
+    registryUrl: "http://registry.test",
+    token: "test-token",
+  })),
+}));
 vi.mock("@cinatra-ai/objects/registry", () => ({
   objectTypeRegistry: { listArtifacts: listArtifactsMock },
 }));

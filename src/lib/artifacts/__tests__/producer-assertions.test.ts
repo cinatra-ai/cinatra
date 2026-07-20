@@ -27,6 +27,16 @@ vi.mock("@cinatra-ai/registries", () => ({
   getAgentPackage: getAgentPackageMock,
 }));
 
+// getAgentPackage now requires an explicit VerdaccioConfig (cinatra#1454);
+// resolveProducerAssertionPlan loads it via this host wrapper. The mocked
+// getAgentPackage ignores the value, so a stub config suffices.
+vi.mock("@/lib/verdaccio-config", () => ({
+  loadVerdaccioConfigForReads: vi.fn(async () => ({
+    registryUrl: "http://registry.test",
+    token: "test-token",
+  })),
+}));
+
 vi.mock("@cinatra-ai/extensions/agent-produces-reader", () => ({
   readAgentProducesFromPackageManifest: readProducesMock,
 }));
@@ -137,10 +147,14 @@ describe("resolveProducerAssertionPlan", () => {
       "@cinatra-ai/marketing-icp-artifact",
       "@vendor/brand-voice-artifact",
     ]);
-    expect(getAgentPackageMock).toHaveBeenCalledWith({
-      packageName: "@vendor/the-agent",
-      packageVersion: "2.3.1",
-    });
+    // cinatra#1454: the resolved VerdaccioConfig is threaded as the 2nd arg.
+    expect(getAgentPackageMock).toHaveBeenCalledWith(
+      {
+        packageName: "@vendor/the-agent",
+        packageVersion: "2.3.1",
+      },
+      expect.objectContaining({ registryUrl: expect.any(String) }),
+    );
   });
 
   it("CG-4: drops a produces entry whose artifact extension is archived (install-active gate)", async () => {
@@ -175,10 +189,14 @@ describe("resolveProducerAssertionPlan", () => {
       createdByRunId: "run-x",
       orgId: "org-a",
     });
-    expect(getAgentPackageMock).toHaveBeenCalledWith({
-      packageName: "@vendor/the-agent",
-      packageVersion: undefined,
-    });
+    // cinatra#1454: the resolved VerdaccioConfig is threaded as the 2nd arg.
+    expect(getAgentPackageMock).toHaveBeenCalledWith(
+      {
+        packageName: "@vendor/the-agent",
+        packageVersion: undefined,
+      },
+      expect.objectContaining({ registryUrl: expect.any(String) }),
+    );
     expect(plan.produces).toEqual(["@vendor/x-artifact"]);
   });
 

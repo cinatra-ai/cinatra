@@ -143,16 +143,27 @@ FROM "${schema}"."agent_templates" WHERE id = $1 LIMIT 1`,
 
   // 3) Read the pinned package manifest + extract `produces`.
   try {
-    const [{ getAgentPackage }, producesReader] = await Promise.all([
-      import("@cinatra-ai/registries"),
-      import("@cinatra-ai/extensions/agent-produces-reader"),
-    ]);
-    const pkg = await getAgentPackage({
-      packageName,
-      // package_version is nullable (a draft run may not pin one);
-      // getAgentPackage resolves the dist-tag default when undefined.
-      packageVersion: runRow.package_version ?? undefined,
-    });
+    const [{ getAgentPackage }, producesReader, { loadVerdaccioConfigForReads }] =
+      await Promise.all([
+        import("@cinatra-ai/registries"),
+        import("@cinatra-ai/extensions/agent-produces-reader"),
+        import("@/lib/verdaccio-config"),
+      ]);
+    // getAgentPackage's fail-fast DI guard requires an explicit VerdaccioConfig
+    // (cinatra#1454). This is a package-manifest READ, so use the READ-side
+    // wrapper: it routes the consumer read token on consumer-attached instances
+    // and falls through to the vendor loader otherwise — the server-write
+    // loader would fail-closed on a consumer-only instance lacking publish creds.
+    const config = await loadVerdaccioConfigForReads();
+    const pkg = await getAgentPackage(
+      {
+        packageName,
+        // package_version is nullable (a draft run may not pin one);
+        // getAgentPackage resolves the dist-tag default when undefined.
+        packageVersion: runRow.package_version ?? undefined,
+      },
+      config,
+    );
     const refs = producesReader.readAgentProducesFromPackageManifest(
       pkg.manifest,
     );
