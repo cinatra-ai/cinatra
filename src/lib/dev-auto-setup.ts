@@ -47,6 +47,7 @@ import type {
 } from "@cinatra-ai/sdk-extensions";
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
+import { setDevActorForExternalMcp } from "@/lib/external-mcp-registry";
 import { GENERATED_DEV_SETUP_MODULES } from "@/lib/generated/extensions.server";
 import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
 import { listConnectorDescriptors } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
@@ -812,6 +813,12 @@ export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
     // Non-fatal: the mint still works; the suite just won't find the handoff.
   }
   cachedDevActor = actor;
+  // Push the seeded owner into the external-MCP registry's dev-actor holder so
+  // the Twenty dev-attach writer can seed the connection identity WITHOUT that
+  // registry importing this wide dev-boot graph (cinatra#1238 — keeps the
+  // production route-graph pressure flat). Seeded here, BEFORE the connector
+  // devSetup hooks run in `runDevAutoSetup`.
+  setDevActorForExternalMcp({ userId: actor.userId, organizationId: actor.orgId });
   return actor;
 }
 
