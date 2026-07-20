@@ -1,134 +1,100 @@
-# Wave PROVE — deep-slice verify-stack proof battery (epic cinatra#1785, A6 branch)
+# Wave PROVE — deep-slice verify-stack proof battery (epic cinatra#1785, A1–A6 + retirement)
 
-Verification evidence for the `lane/1785-deep-slice` bot PR. Captured against the
-verify Postgres (`127.0.0.1:5634`) on the REAL store schema. Reproduction scripts
-and captured console output are committed alongside this note.
+Verification evidence for the `lane/1785-deep-slice` bot PR (#1854). Captured against the
+verify Postgres (`127.0.0.1:5634`) on the REAL store schema. Reproduction scripts and
+captured console output are committed alongside this note. All four items are now proven
+at the final branch tip.
 
 ## Scope reality of this branch (READ FIRST)
 
-`lane/1785-deep-slice` carries the deep slice **A1–A6**: the type-driven
-disposition seam (A1), the effective-identity resolver rework (A2), the writer
-cutover to a REQUIRED validated `objectType` + MIME→pack map (A3), the type-driven
-readers (A4), the dead claim-arbitration deletion (A5-safe-slice), and the
-`core__0059` purge migration + DB write-guard (A6).
-
-The **default-artifact EXTENSION retirement** (removing `@cinatra-ai/default-artifact`
-from the equality triple, deleting the generated `artifact-floor.ts`, and sweeping
-the ~7 live floor writers + ~24 importers) is **DEFERRED by design** to a coupled
-follow-up — see the `core__0059` header comment ("the fresh-install bootstrap
-mirror + the generic-seeding fixture sweep are the COUPLED A5-remainder follow-up")
-and `.planning/A5-OUTCOME.md`. This branch therefore still boots WITH
-`@cinatra-ai/default-artifact` (`"resolution":"required"` in `extensions.server.ts`
-and present in `cinatra-required-extensions.lock.json`). This directly bounds
-proof item 4 below.
+`lane/1785-deep-slice` carries the deep slice **A1–A6** — the type-driven disposition
+seam (A1), the effective-identity resolver rework (A2), the writer cutover to a REQUIRED
+validated `objectType` + MIME→pack map (A3), the type-driven readers (A4), the dead
+claim-arbitration deletion (A5-safe-slice), the `core__0059` purge migration + DB
+write-guard (A6) — **and the completing `@cinatra-ai/default-artifact` EXTENSION
+retirement**: the extension is removed from the equality **triple** (`cinatra.systemExtensions`
++ `cinatra.extensions`/requiredExtensions + `cinatra-required-extensions.lock.json`, now
+13 entries each), `extensions/cinatra-ai/default-artifact/` is deleted, the generated
+`packages/objects/src/generated/artifact-floor.ts` const is deleted, and the ~7 live floor
+writers + importers are swept. This branch therefore **boots WITHOUT** `@cinatra-ai/default-artifact`
+— which is what proof item 4 below demonstrates live.
 
 ## Per-item status
 
 | # | Proof item | Status | Evidence |
 |---|------------|--------|----------|
-| 1 | Upload MIME→typed pack; uncovered/ambiguous/empty MIME refused fail-closed | PROVEN (integration/unit), **re-proven Stage 2** | `item1-upload-mime-type-map.proof.txt` (16/16 now REGISTRY-ROUTED + coupling-ban gate OK) |
-| 2 | `/artifacts` library lists typed rows; chat context + recall resolve typed artifacts | PROVEN (integration/unit) | `item2-library-recall.proof.txt` (41/41 readers/serve/dispatch + 74/74 recall/disposition/identity/projector) |
-| 3 | Purge dry-run + real run on a seeded fixture DB; DB write-guard rejection | **PROVEN LIVE** on the real schema, **re-proven Stage 2** | `item3-purge-cascade-guard.proof.txt` (38/38 fresh post-merge) + shape unit test 19/19 |
-| 4 | Clean boot WITHOUT default-artifact | **NOT PROVABLE on this branch** (unchanged Stage 2) | retirement deferred (see below); app still boots WITH default-artifact |
+| 1 | Upload MIME→typed pack; uncovered/ambiguous/empty MIME refused fail-closed | **PROVEN**, re-proven Stage 3 | `item1-upload-mime-type-map.proof.txt` (16/16 registry-routed + coupling-ban gate OK) + live in `item4-clean-boot.proof.txt` Part C |
+| 2 | `/artifacts` library lists typed rows; chat context + recall resolve typed artifacts | **PROVEN**, re-confirmed Stage 3 | `item2-library-recall.proof.txt` (41/41 readers/serve/dispatch + 74/74 recall/identity/projector; green in full `test:root` at final tip) + live serve in `item4-clean-boot.proof.txt` Part D |
+| 3 | Purge dry-run + real run on a seeded fixture DB; DB write-guard rejection | **PROVEN LIVE**, re-proven Stage 3 | `item3-purge-cascade-guard.proof.txt` (38/38 fresh at final tip) |
+| 4 | Clean boot WITHOUT default-artifact | **PROVEN LIVE (Stage 3)** | `item4-clean-boot.proof.txt` (26/26 on a lane DB) |
 
-## Stage 2 re-prove (branch head `851139ca7`, after the clean `origin/main` merge `4d36cdb36`)
+## Item 4 — clean-boot methodology (the retirement's boot-safety proof)
 
-The completing wave changed three things that bear on the battery; each was re-proven
-against the merged tip:
+The retirement is complete, so "clean boot WITHOUT default-artifact" is now demonstrable.
+`reproduce-boot-schema.mts` builds the REAL store schema (`buildCreateStoreSchemaQueries`)
+— including the canonical `installed_extension` store and the `objects` table — into a
+throwaway lane DB (`prove_1785_boot`). `reproduce-clean-boot.mts` then drives the REAL
+boot-path modules and asserts 26/26:
 
-- **Item 1 — mime-map now REGISTRY-ROUTED (commit `420598c40`).** The upload
-  MIME→type resolver was re-routed OFF the hardcoded `SYSTEM_BASE_ARTIFACT_PACKS`
-  pack-name literal (which tripped the `core-extension-instance-coupling-ban` gate)
-  ONTO the data-driven required set — the installed `isArtifact` object types whose
-  defining package is `isPackageRequiredInProd`, read from the in-process registry by
-  provenance, minus the retired `*/*` floor. Re-proven: the unit suite is **16/16**
-  (adds `selectRequiredArtifactUploadCandidates` with an injected registry snapshot:
-  required / non-required / host / floor / no-accepts exclusion paths) and the
-  `core-extension-instance-coupling-ban` gate is **OK (exit 0)**. Evidence:
-  `item1-upload-mime-type-map.proof.txt`.
-- **Item 3 — purge migration unchanged by the merge.** The `core__0059` live
-  fixture proof was re-run FRESH on a newly-created lane DB (`prove_1785_purge` on the
-  verify Postgres `127.0.0.1:5634`) via the COMMITTED scripts verbatim after the merge:
-  still **38/38** (full generic-lineage cascade, precise orphan sweeps, living history
-  intact, nothing dangling, shared storage untouched, guard rejects generic
-  INSERT/UPDATE + allows a typed insert, idempotent). Evidence:
-  `item3-purge-cascade-guard.proof.txt`.
-- **Item 4 — STILL NOT PROVABLE, precisely.** "Clean boot WITHOUT default-artifact"
-  requires the `@cinatra-ai/default-artifact` EXTENSION retirement (removing it from
-  the equality **triple** `systemExtensions` + `requiredExtensions` +
-  `cinatra-required-extensions.lock.json`). That is the deliberately-DEFERRED
-  A5-remainder (couple-with-A6) and was **not started** — it is the mapped-but-not-begun
-  completing wave. On this branch `default-artifact` is still `"resolution":"required"`
-  in `src/lib/generated/extensions.server.ts` and present in the lock, so the app boots
-  WITH it; removing it from the lock alone would fail the `required-extensions-lock`
-  invariant test and the boot-time equality assertion. There is no "retired lock" on
-  this branch. `registerAllObjectTypes()` (`src/lib/register-all-object-types.ts`)
-  does confirm the generic `@cinatra-ai/artifact:object` catch-all TYPE is no longer
-  registered at boot (A3 retirement) — but that is the type retirement, not the
-  extension retirement, and does not make "boot WITHOUT the extension" demonstrable
-  here. A live app boot was therefore not run; doing so would only demonstrate boot
-  WITH `default-artifact`, a different claim. This is reported honestly rather than
-  fabricated.
+- **Part A — the REAL extension-closure BOOT GATE against the lane DB, PROD posture.**
+  The lane `installed_extension` store is seeded with the branch's real required set (the
+  13 lock packages, active + required-in-prod). `enforceExtensionClosureAtBoot()` reads
+  that store and, with `CINATRA_RUNTIME_MODE` unset (fail-CLOSED prod posture), does **not
+  throw**; `verifyRequiredInProdInstalled()` is ok with no missing/mismatched packages;
+  `default-artifact` is absent from the required set and `isPackageRequiredInProd` returns
+  false. A **counterfactual** (deleting one required row) makes the SAME gate fail
+  verification and THROW — proving the green boot is not vacuous.
+- **Part B — the equality triple, computed live from the branch files.** `cinatra.extensions`
+  == `cinatra.systemExtensions` == the required-lock (13 each), with `default-artifact`
+  absent from all three legs; the extension dir and the generated floor const are gone.
+- **Part C — the object-type registry warmed from the REAL `extensions/` tree.** Only the
+  four file-upload base packs (pdf/audio/video/image) register a typed object type; the
+  generic `@cinatra-ai/artifact:object` catch-all is NOT registered; the REAL registry-routed
+  upload resolver maps `application/pdf` to the one typed pack, refuses `text/markdown` and
+  the empty MIME, and never admits the `*/*` floor as a candidate. (The `[artifacts:bridge]
+  … declares no objectTypes` lines are expected — derived/umbrella artifacts mint no object
+  type, entry 95.)
+- **Part D — the library serves typed rows.** Two upload-RESOLVED typed rows (pdf/image)
+  seeded into the lane DB `objects` table are served through the registry's artifact
+  type-id set (the library's serve predicate); zero generic rows exist to serve.
 
-### Route-graph ratchet re-anchor (`851139ca7`)
+Vehicle note: a full Next.js HTTP dev server was NOT the vehicle — the `.env` template is
+guardrail-blocked from reads and the local extension universe is degraded to the 18
+workspace packages, so the boot MODULES were exercised directly against the lane DB (the
+same proof class as item 3, which runs the real migration SQL against the real schema rather
+than through a full app boot). This is reported honestly rather than substituting a
+different claim.
 
-The item-1 registry re-route adds exactly one narrowed subpath import
-(`@cinatra-ai/extensions/required-in-prod` → `isPackageRequiredInProd`). That single
-module is the SAME +1 newly-reachable first-party module on every tracked route
-(uniform +1, MEASURED by CI with the companion extensions cloned pinned, missingCount
-0). It is a required consequence of the IoC de-coupling and is not host-narrowable
-short of lazy-loading a pure predicate, so the five tracked ceilings were re-anchored
-+1 with annotated `#1854` absorb records (`from` = `origin/main` current ceiling,
-`to` = +1), retiring the carried `#1848` records as a re-raise per the baseline's
-documented pattern. The gate's own `validateAbsorbRecords` + `classifyRaises` pure
-functions accept all five raises vs `origin/main` with zero violations. The file-size
-ratchet is unaffected (10 files tracked, none over ceiling).
+### Reproduce (cwd = worktree root)
 
-Items 1 and 2 are proven at the integration/unit boundary (the landed A3 writer +
-A4 reader suites), NOT via a live Playwright chat-flyout browser walk — the app
-dev server + browser were not brought up in this wave. The writer suite
-`packages/objects/.../handlers-fail-closed-writes.test.ts` shows 12/13 under the
-package-local vitest; the single miss is a package-isolation alias artifact
-(`@/lib/objects/draftable-lock-gate`, an app-src dynamic import byte-identical to
-`origin/main`, resolved under the app config) — not a lane regression.
+```
+docker exec verify-cinatra-postgres-1 psql -U postgres -c "CREATE DATABASE prove_1785_boot;"
+node --conditions=react-server --import tsx docs/internals/proofs/1785-a6/reproduce-boot-schema.mts
+node --conditions=react-server --import tsx docs/internals/proofs/1785-a6/reproduce-clean-boot.mts
+```
 
 ## Item 3 — live cascade + guard methodology (the crown-jewel destructive change)
 
 `reproduce-build-schema.mts` builds the **REAL** store schema via
-`buildCreateStoreSchemaQueries` (the exact boot-path DDL) into a throwaway DB, so
-every one of the ~20 cascade tables and all three append-only delete-rejection
-triggers (`trg_representation_append_only`,
-`trg_run_context_selections_append_only`,
+`buildCreateStoreSchemaQueries` (the exact boot-path DDL) into a throwaway DB, so every
+one of the ~20 cascade tables and all three append-only delete-rejection triggers
+(`trg_representation_append_only`, `trg_run_context_selections_append_only`,
 `trg_artifact_uninstall_op_assertions_append_only`) exist exactly as production.
 
 `reproduce-purge-cascade-guard.mts` then seeds a fixture — a RETIRED generic floor
-artifact `@cinatra-ai/artifact:object` with full lineage across every cascade
-table + change-event/remote-effect history, a LIVING pack-typed
-`@cinatra-ai/pdf:document` artifact with its own lineage sharing a resource, an
-uninstall op shared by both, change_sets that are retired-only / mixed /
-living-only, and a surviving child object parented at the retired row — and
-executes the migration's OWN exported `buildPurgeSql()` + `buildGenericWriteGuardSql()`
-in a single transaction (as `up()` does). 38/38 assertions confirm:
-
-- legacy generic rows + their FULL lineage gone (every artifact_id/object_id child,
-  representation, run_context_selections, uninstall assertions, change events,
-  remote-effect attempts);
-- orphan sweeps precise — the retired-only uninstall op and the retired-only
-  change_set are swept; the shared uninstall op and the mixed/living-only
-  change_sets SURVIVE;
-- living rows + their history intact;
-- nothing dangles (the surviving child's `parent_id`/`parent_type` NULLed; zero
-  dangling child references anywhere);
-- shared content-addressed storage (`resource` / `artifact_blobs`) never touched
-  (reachability-delegated);
-- the DB write-guard REJECTS a hand INSERT and an UPDATE to the retired generic
-  type and ALLOWS a valid pack-typed INSERT;
-- a second purge run is a clean no-op (idempotent).
+artifact `@cinatra-ai/artifact:object` with full lineage across every cascade table +
+change-event/remote-effect history, a LIVING pack-typed `@cinatra-ai/pdf:document`
+artifact with its own lineage sharing a resource, an uninstall op shared by both,
+change_sets that are retired-only / mixed / living-only, and a surviving child object
+parented at the retired row — and executes the migration's OWN exported `buildPurgeSql()`
++ `buildGenericWriteGuardSql()` in a single transaction (as `up()` does). 38/38 assertions
+confirm the full generic-lineage cascade, precise orphan sweeps, living history intact,
+nothing dangling, shared storage untouched, the guard rejects generic INSERT/UPDATE +
+allows a typed insert, and idempotency.
 
 ### Reproduce
 
 ```
-SUPABASE stack up (pg 127.0.0.1:5634). Then from the repo root:
 docker exec verify-cinatra-postgres-1 psql -U postgres -c "CREATE DATABASE prove_1785_purge;"
 npx tsx docs/internals/proofs/1785-a6/reproduce-build-schema.mts
 npx tsx docs/internals/proofs/1785-a6/reproduce-purge-cascade-guard.mts
@@ -136,15 +102,13 @@ npx tsx docs/internals/proofs/1785-a6/reproduce-purge-cascade-guard.mts
 
 The build script stubs the two Better-Auth tables the store FKs reference
 (`public."user"`, `public."organization"`) and the cascade script drops the single
-`authoring_step_artifacts` convenience FK (the object graph is app-integrity, not
-DB-FK; the purge SQL is FK-agnostic) — both are throwaway-DB conveniences that do
-not alter the migration's behavior.
+`authoring_step_artifacts` convenience FK — both are throwaway-DB conveniences that do not
+alter the migration's behavior. (The 12 skipped `public.team`/`member` DDL statements in
+the schema build are unrelated auth-side tables, not part of the object/extension store.)
 
 ## Merge prerequisite (coordinator)
 
-`origin/main` (`7706bcf1f`) has been merged into the branch (`4d36cdb36`), so
-`core__0058_auditor-review-companion` is now present alongside this lane's
-`core__0059_purge-default-artifact-floor`; the tree carries both. `0059 > 0058` so
-the sequence is valid and the branch is up to date with the merged `origin/main`.
-If a concurrent lane claims `0059` on `main` before this PR merges, renumber-at-merge
-to the next free seq is the standard remedy (not a defect in the migration).
+Migration `core__0059_purge-default-artifact-floor` sits above the shipped `core__0058`
+(`0059 > 0058`). If a concurrent lane claims `0059` on `main` before this PR merges,
+renumber-at-merge to the next free seq is the standard remedy (not a defect in the
+migration).

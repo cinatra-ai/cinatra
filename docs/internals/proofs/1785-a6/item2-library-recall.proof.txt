@@ -16,3 +16,10 @@
    Start at  22:53:02
    Duration  305ms (transform 546ms, setup 0ms, import 1.00s, tests 35ms, environment 0ms)
 
+# ---- Stage-3 re-prove (final tip 3e247bb492c2dbe667af60d3858d859e812138d5) ----
+# The reader/library/dispatch + recall/disposition/identity/projector suites above remain green within the
+# full wholesale `pnpm test:root` at the final branch tip (992 files / 11488 tests passed, 0 failures — the
+# GATE OF RECORD; see .planning/REFACTOR-STATE.md). The item-4 lane-DB harness Part D ADDITIONALLY serves the
+# library surface live: two upload-RESOLVED typed rows (pdf/image) seeded into the lane DB are served through
+# the registry's artifact type-id set, and zero generic '@cinatra-ai/artifact:object' rows exist to serve
+# (see item4-clean-boot.proof.txt, Part D).
