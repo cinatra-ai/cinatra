@@ -264,6 +264,97 @@ describe("auth-route-guard - cinatra#1221 S5 /api/assistants/chat broker-auth wi
   });
 });
 
+describe("auth-route-guard - cinatra#1881 assistant run-stream resume matcher", () => {
+  // OPTION 1: a NARROW UUID-shaped dynamic matcher for
+  // GET /api/assistants/runs/<runId>/stream so a cookieless resume caller
+  // reaches the handler, whose OWN fail-closed auth (session OR run-bound
+  // resume token, audience-checked) is the authoritative gate — the same
+  // posture /api/assistants/chat has. It must NOT over-match: a sibling
+  // assistants sub-route, a non-UUID segment, a longer suffix, or the bare
+  // /runs collection all stay session-guarded (307→/sign-in).
+  function isNext(res: { status?: number; headers?: Headers }): boolean {
+    const status = res.status ?? 200;
+    const location = res.headers?.get?.("location") ?? null;
+    return status !== 307 && location === null;
+  }
+  // A representative v4 UUID (the shape randomUUID() mints for a runId).
+  const RUN = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+  it("a cookieless GET to /api/assistants/runs/<uuid>/stream passes the guard (no 307)", async () => {
+    const res = await guardAppRoute(fakeRequest(`/api/assistants/runs/${RUN}/stream`));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("accepts an upper-case-hex UUID (case-insensitive shape; handler still governs run binding)", async () => {
+    const res = await guardAppRoute(
+      fakeRequest(`/api/assistants/runs/${RUN.toUpperCase()}/stream`),
+    );
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("OVER-MATCH CONTROL: a NON-UUID run segment still 307s (fail-closed to the session gate)", async () => {
+    for (const seg of ["not-a-uuid", "..", "run-broker-xyz", "12345"]) {
+      const res = await guardAppRoute(fakeRequest(`/api/assistants/runs/${seg}/stream`));
+      expect(res.status, `${seg} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("OVER-MATCH CONTROL: a sibling sub-route under the same run still 307s (must END at /stream)", async () => {
+    for (const suffix of ["", "/", "/cancel", "/stream/extra", "/stream/"]) {
+      const res = await guardAppRoute(
+        fakeRequest(`/api/assistants/runs/${RUN}${suffix}`),
+      );
+      expect(res.status, `suffix "${suffix}" must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("OVER-MATCH CONTROL: the bare /runs collection and other assistants siblings stay guarded", async () => {
+    for (const p of [
+      "/api/assistants/runs",
+      "/api/assistants/runs/stream",
+      "/api/assistants/threads/" + RUN,
+      "/api/assistants/list",
+    ]) {
+      const res = await guardAppRoute(fakeRequest(p));
+      expect(res.status, `${p} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("SOURCE PIN: the matcher is a UUID-shaped structural regex, never an /api/assistants prefix, with an in-handler-auth comment", () => {
+    // The dynamic matcher must be present (defense against silent removal)...
+    expect(guardSource).toMatch(/ASSISTANT_RUN_STREAM_PATH/);
+    expect(guardSource).toMatch(
+      /\/\^\\\/api\\\/assistants\\\/runs\\\/\[0-9a-fA-F\]\{8\}/,
+    );
+    // ...it must be a STRUCTURAL match terminating at /stream (never a broad
+    // /api/assistants prefix that would expose every sibling assistant route)...
+    expect(guardSource).not.toMatch(/"\/api\/assistants"\s*,/);
+    // ...and it must carry the in-handler-auth rationale (session OR run-bound
+    // resume token is the gate).
+    const block = guardSource.slice(
+      guardSource.indexOf("cinatra#1881"),
+      guardSource.indexOf("ASSISTANT_RUN_STREAM_PATH ="),
+    );
+    expect(block.toLowerCase()).toMatch(/resume token/);
+    expect(block.toLowerCase()).toMatch(/fail-closed/);
+  });
+
+  it("SOURCE PIN: the CORS half is documented as DEFERRED (the shared CORS builder is untouched)", () => {
+    // #1881 lands the same-origin allowlist only; the cross-origin CORS half
+    // (header exposure + OPTIONS/GET origin reflection) rides the embed wave.
+    // The scope note keeps a later reader from assuming cross-origin resume works.
+    const block = guardSource.slice(
+      guardSource.indexOf("cinatra#1881"),
+      guardSource.indexOf("ASSISTANT_RUN_STREAM_PATH ="),
+    );
+    expect(block.toUpperCase()).toMatch(/DEFERRED/);
+    expect(block.toLowerCase()).toMatch(/cors builder is intentionally untouched/);
+  });
+});
+
 describe("auth-route-guard - cinatra#340 generic /webhook namespace (behavioral)", () => {
   // The whole /webhook namespace skips the sign-in redirect (a webhook arrives
   // from an unauthenticated connected site). Both a DECLARED hook path and an
