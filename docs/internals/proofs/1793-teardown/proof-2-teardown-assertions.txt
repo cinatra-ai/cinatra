@@ -1,0 +1,42 @@
+# PROOF 2 — core__0060 supplemental teardown assertions, LIVE via the migration's OWN exported SQL.
+# Branch lane/1793-engine-teardown head 5741a758999676faa810d933b8e76e76a8a4c649; captured 2026-07-20T05:28:53Z. Fresh lane DB verify_1793 (:5634).
+# Vehicle: the COMMITTED reproduce-teardown-assertions.mjs — imports the REAL migration module
+# (buildGuardSql / buildDropSql / up), runs up() in ONE transaction, and asserts, in two parts:
+#   (i) success path: engine table + its type rows GONE; LIVING registered-type rows UNTOUCHED
+#       (byte-identical); no dangling refs (zero inbound FKs; string-keyed history intact); idempotent.
+#  (ii) guard teeth: each precondition (a/b/c) REFUSES on blocking work — up() rejects with the exact
+#       'precondition (x)' message, the transaction ROLLS BACK, and dynamic_object_types SURVIVES
+#       (so a dropped/weakened guard cannot slip past this proof alone).
+#
+# Reproduce (cwd = worktree root):
+#   SUPABASE_DB_URL=postgres://postgres:postgres@127.0.0.1:5634/verify_1793 \
+#     node docs/internals/proofs/1793-teardown/reproduce-teardown-assertions.mjs
+#
+======================================================================================================
+# core__0060 supplemental live proof — schema verify_1793_supp on the verify stack
+# migration module: migrations/core/core__0060_drop-dynamic-object-types.mjs (real artifact)
+
+## Preconditions (owner-ratified entry-95 guard set), exposed as data by the migration:
+  guard: DO $core0060a$ …
+  guard: DO $core0060b$ …
+  guard: DO $core0060c$ …
+## Drop statement: DROP TABLE IF EXISTS "verify_1793_supp"."dynamic_object_types"
+
+### Assertions
+  PASS  engine table present before migration
+  PASS  no inbound FK targets dynamic_object_types (found 0) → drop orphans nothing structurally
+  RUN   migration up() committed (guards a/b/c passed on completed-history-only coupling)
+  PASS  dynamic_object_types (engine table + its type rows) DROPPED
+  PASS  living registered-type objects untouched (2/2, byte-identical)
+  PASS  living registered-type claim untouched (status=active)
+  PASS  living registered-type reconcile-queue row untouched (status=pending — a LIVE non-dynamic row the guards never inspect)
+  PASS  dynamic-typed object row remains (object rows are not the engine table; string keys → no DB-level dangling ref)
+  PASS  completed-history coupling rows (retired claim / done queue / done outbox) intact — harmless history, no dangling FK
+  PASS  idempotent: second up() is a clean no-op (to_regclass NULL → DROP IF EXISTS no-op)
+
+### Guard teeth (each guard REFUSES + rolls back on blocking work — table survives)
+  PASS  guard (a) REFUSES on a non-retired (active) claim over a dynamic type → up() rejects with "precondition (a)", tx rolled back, table SURVIVES
+  PASS  guard (b) REFUSES on a pending reconcile-queue row for a dynamic type → up() rejects with "precondition (b)", tx rolled back, table SURVIVES
+  PASS  guard (c) REFUSES on a processing (in-flight) outbox row for a dynamic-typed object → up() rejects with "precondition (c)", tx rolled back, table SURVIVES
+
+RESULT: ALL 12 SUPPLEMENTAL ASSERTIONS PASSED
