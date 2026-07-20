@@ -17,6 +17,9 @@
 //   4. pin drift — every services[].baselinePin.image and every
 //      coupledAppImages[].image equals the RESOLVED image string in compose
 //      (${VAR:-default} resolved to its default).
+//   4c. pin/digest internal consistency — each pin's image-embedded @sha256
+//      digest equals its sibling `digest` field (the Renovate customManager in
+//      renovate.json keeps both in lockstep; cinatra#1863).
 //   5. no floating tags — no image in compose ends in a bare :latest/:stable.
 //   6. family coverage — every REQUIRED_FAMILIES entry appears.
 //   7. fail-closed default — failClosed.default === "unsupported".
@@ -192,6 +195,25 @@ export function collectProblems({ composeText, matrix, schema }) {
     const allowed = allowedByRepo.get(repoOf(s.image));
     if (allowed && !allowed.has(s.image))
       fail(`pin-drift: service '${name}' image ${s.image} is on a matrix-tracked repo but matches no matrix pin (tracked: ${[...allowed].join(", ")})`);
+  }
+
+  // 4c. pin/digest internal consistency (cinatra#1863). Each pin records its
+  //     digest twice: embedded in `image` (…@sha256:…) and in the sibling
+  //     `digest` field. The Renovate customManager (renovate.json) rewrites BOTH
+  //     in lockstep on a digest bump; this check makes the invariant machine-
+  //     enforced so a manual edit that desyncs them fails loud — pin-drift #4
+  //     compares only `image` and would NOT catch a stale sibling.
+  for (const s of matrix.services) {
+    for (const pin of [s.baselinePin, ...(s.coupledAppImages ?? [])]) {
+      if (!pin?.image || /^built:/.test(pin.image)) continue;
+      const m = pin.image.match(/@(sha256:[0-9a-f]{64})$/);
+      const embedded = m ? m[1] : null;
+      const sibling = pin.digest ?? null;
+      if (embedded !== sibling)
+        fail(
+          `pin-digest-consistency: '${s.id}' image-embedded digest and sibling digest field disagree\n    image:  ${embedded ?? "(none)"}\n    digest: ${sibling ?? "(none)"}`,
+        );
+    }
   }
 
   // 5. no floating tags

@@ -714,3 +714,60 @@ stays parked on the typescript-eslint gate (§8.1), `@types/node` is already at
 `^24`, and `actions/checkout` v7 is CI-workflow currency on its managed backlog.
 The disruptive datastore / stack majors remain owned by their own staged lanes,
 each gated by the per-service works-after proof (§6, §7, §9).
+
+---
+
+## 12. Renovate ↔ upgrade-matrix digest pairing (cinatra#1863)
+
+The pin-drift check (§ "pin-drift", `scripts/check-upgrade-matrix.mjs` check #4,
+run live via `scripts/ci/__tests__/upgrade-matrix.test.mjs`) asserts every
+`services[].baselinePin.image` and every `coupledAppImages[].image` in
+`config/upgrade/upgrade-matrix.json` equals the resolved image string in
+`docker-compose.yml`. Renovate's docker manager bumps the compose
+`@sha256:` digests every weekly wave but does **not** know about the matrix, so
+before this pairing each matrix-tracked digest bump was **born red** and the
+weekly digest batch stalled until a human hand-authored the matching matrix
+digests in a paired sync PR (the toil §2/§8/§9 kept re-doing by hand).
+
+**Mechanism (repo-root `renovate.json`, `customManagers[0]`).** A regex custom
+manager registers each matrix pin under the **same** docker datasource +
+`depName` + `currentValue` + `currentDigest` that the compose docker manager
+derives from the same image. Renovate treats it as the same dependency in a
+second file, so the digest update rides the **same branch/PR** as the
+`docker-compose.yml` bump — the matrix pin is refreshed in lockstep, atomically,
+with no manual sync and no bot commit onto the Renovate branch. The pairing
+lives in the **repo-root** config (not the shared org preset
+`local>cinatra-ai/.github:renovate-config`) because the upgrade-matrix file is
+repo-local — only this repo carries it.
+
+Details that make it robust:
+
+- **The sibling `digest` field stays in sync.** Each pin records the digest
+  twice — inside `image` (`…@sha256:X`) and in the redundant `"digest": "sha256:X"`
+  field. The `matchStrings` regex spans the image string **through** that sibling
+  `digest`, so Renovate's default global auto-replace (`autoReplaceGlobalMatch`)
+  rewrites **both** occurrences of the old digest in one update. This relies on
+  the object field order `image`, `major`, `digest` (the current, consistent
+  shape); a reordered object simply fails to match and the gate trips loud on the
+  next bump rather than silently half-updating.
+- **Digest-only coupling.** A `packageRules` entry scoped to the matrix file
+  disables non-`digest` update types there, so a stateful **tag/major** change is
+  deliberately **not** auto-paired: the gate still trips and forces a human to
+  curate the matrix `major` + `transitions[]` + the works-after proof in one
+  reviewable diff (majors ride staged lanes — §6/§7/§9). Only the routine digest
+  wave is automated. The rule is scoped to the matrix file, so `docker-compose.yml`
+  version currency is untouched.
+- **Plane is excluded.** The Plane app images are release-pinned as
+  `makeplane/plane-*:${PLANE_TAG:-…@sha256:…}`. Renovate's compose manager
+  treats a value with a mid-string `${VAR:-…}` as `contains-variable` and does
+  **not** manage it, so the compose plane digests never move via Renovate (they
+  are human-curated). A `packageRules` entry excludes `makeplane/**` from the
+  matrix manager so a matrix plane pin can never move alone (which would create
+  matrix-only reverse drift).
+
+**End-to-end proof arrives on the next digest wave.** The config validates
+(`renovate-config-validator`) and a faithful local extract + global-replace
+simulation over the real matrix shows every matrix pin pairing to its compose
+image with the sibling digest kept in sync and the gate green on a paired bump
+(and red on an unpaired one, the old status quo). The definitive proof is the
+first Renovate digest PR that lands green without a manual matrix sync.

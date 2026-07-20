@@ -8,6 +8,29 @@
       "description": "GitHub Actions are owned by Dependabot here (.github/dependabot.yml), which understands this repo's SHA-pin + version-comment shape and keeps both halves in lockstep; the actions-pinned-gate enforces it. The org Renovate preset (config:recommended) would otherwise enable Renovate's github-actions manager too, double-managing actions. Disable it so Dependabot stays the sole owner; Renovate owns npm currency (dependency dashboard).",
       "matchManagers": ["github-actions"],
       "enabled": false
+    },
+    {
+      "description": "upgrade-matrix pairing scope (cinatra#1863). Restrict the config/upgrade/upgrade-matrix.json custom manager below to DIGEST updates only. Routine weekly digest re-resolution rides the compose bump automatically (the toil this issue removes); a stateful-service TAG/MAJOR change is deliberately NOT auto-paired so the pin-drift check still trips and forces a human to curate the matrix major + transitions[] + works-after proof in the same reviewable diff (the upgrade-track philosophy: majors ride staged lanes). Scoped to the matrix file so docker-compose.yml version currency is unaffected.",
+      "matchFileNames": ["config/upgrade/upgrade-matrix.json"],
+      "matchUpdateTypes": ["major", "minor", "patch", "pin", "pinDigest", "rollback", "bump", "replacement"],
+      "enabled": false
+    },
+    {
+      "description": "Plane app images are release-pinned in docker-compose.yml as makeplane/plane-*:${PLANE_TAG:-...@sha256:...} (an immutable release tag + digest behind the tag variable). Renovate's compose manager treats a value with a mid-string ${VAR:-...} as contains-variable and does NOT manage it, so the compose plane digests never move via Renovate; they are human-curated in a reviewable diff. Exclude them from the matrix custom manager too, so the matrix plane pins can never move alone (which would create matrix-only reverse drift). Scoped to the matrix file.",
+      "matchFileNames": ["config/upgrade/upgrade-matrix.json"],
+      "matchPackageNames": ["makeplane/**"],
+      "enabled": false
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Pair the upgrade-matrix digests with the docker-compose digests Renovate bumps (cinatra#1863). config/upgrade/upgrade-matrix.json independently records each stateful service's pinned image as baselinePin.image / coupledAppImages[].image PLUS a redundant sibling `digest` field, a hand-authored parallel source of truth. The pin-drift check (scripts/check-upgrade-matrix.mjs check #4, run live via scripts/ci/__tests__/upgrade-matrix.test.mjs) asserts every matrix image string equals the resolved docker-compose.yml image, so an unpaired compose digest bump is born red. This regex manager registers each matrix pin under the SAME docker datasource + depName + currentValue + currentDigest the compose docker manager derives, so Renovate's digest update rides the SAME branch/PR as the compose bump. The matchString spans the image string AND the sibling `digest` field, so Renovate's default global auto-replace (autoReplaceGlobalMatch) rewrites BOTH occurrences of the old digest in lockstep — no stale sibling. Requires the object field order image, major, digest (the current, consistent shape); a reordered object simply fails to match and the gate trips loud on the next bump. Only already-digested pins match (@sha256 is mandatory), so digestless pins and build markers are untouched. Scoped to digest updates and Plane-excluded by the packageRules above. See docs/internals/workflows/upgrade-track.md.",
+      "managerFilePatterns": ["config/upgrade/upgrade-matrix.json"],
+      "matchStrings": [
+        "\"image\":\\s*\"(?<depName>[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*):(?<currentValue>[^\"@]+)@(?<currentDigest>sha256:[0-9a-f]{64})\",\\s*\"major\":\\s*\"[^\"]*\",\\s*\"digest\":\\s*\"sha256:[0-9a-f]{64}\""
+      ],
+      "datasourceTemplate": "docker"
     }
   ]
 }
