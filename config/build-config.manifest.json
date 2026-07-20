@@ -60,6 +60,7 @@
     { "alias": "@cinatra-ai/agents/wayflow-url", "target": "./packages/agents/src/wayflow-url.ts" },
     { "alias": "@cinatra-ai/agents/readme-render", "target": "./packages/agents/src/readme-render.ts" },
     { "alias": "@cinatra-ai/agents/schema", "target": "./packages/agents/src/schema.ts" },
+    { "alias": "@cinatra-ai/agents/owner-containment-port", "target": "./packages/agents/src/owner-containment-port.ts" },
     { "alias": "@cinatra-ai/agents/mcp-client", "target": "./packages/agents/src/mcp/client/deterministic-client.ts" },
     { "alias": "@cinatra-ai/agents/db", "target": "./packages/agents/src/db.ts" },
     { "alias": "@cinatra-ai/agents/pm-link-store", "target": "./packages/agents/src/pm-link-store.ts" },

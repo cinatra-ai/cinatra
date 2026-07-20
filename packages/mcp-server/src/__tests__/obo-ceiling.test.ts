@@ -8,10 +8,136 @@ import {
   isOboCeiling,
   isOboCeilingChain,
   parseOboCeilingChain,
+  deriveScopeOwnership,
+  scopeOwnershipFromCeilingChain,
   type OboCeilingChain,
 } from "../obo-ceiling";
 
 const ORG = "org-1";
+
+describe("deriveScopeOwnership — write-time scope-derived visibility (#1885 C1 / D10)", () => {
+  it("user anchor → user-owned / private", () => {
+    expect(
+      deriveScopeOwnership({ ownerLevel: "user", ownerId: "u1", orgId: ORG, projectId: null }),
+    ).toEqual({ ownerLevel: "user", ownerId: "u1", visibility: "private", projectId: null });
+  });
+
+  it("team anchor → team-owned / team-visible", () => {
+    expect(
+      deriveScopeOwnership({ ownerLevel: "team", ownerId: "t1", orgId: ORG, projectId: null }),
+    ).toEqual({ ownerLevel: "team", ownerId: "t1", visibility: "team", projectId: null });
+  });
+
+  it("workspace anchor → workspace-owned / public (org-local public)", () => {
+    expect(
+      deriveScopeOwnership({ ownerLevel: "workspace", ownerId: "w1", orgId: ORG, projectId: null }),
+    ).toEqual({ ownerLevel: "workspace", ownerId: "w1", visibility: "public", projectId: null });
+  });
+
+  it("organization anchor → org-owned / org-visible", () => {
+    expect(
+      deriveScopeOwnership({ ownerLevel: "organization", ownerId: null, orgId: ORG, projectId: null }),
+    ).toEqual({ ownerLevel: "organization", ownerId: ORG, visibility: "organization", projectId: null });
+  });
+
+  it("project anchor → organization-owned, PRIVATE, project-refined", () => {
+    expect(
+      deriveScopeOwnership({ ownerLevel: "project", ownerId: "proj-9", orgId: ORG, projectId: null }),
+    ).toEqual({ ownerLevel: "organization", ownerId: ORG, visibility: "private", projectId: "proj-9" });
+  });
+
+  it("null / unrecognized owner tier (pre-backfill) → org-owned / org-visible, never a throw", () => {
+    expect(
+      deriveScopeOwnership({ ownerLevel: null, ownerId: null, orgId: ORG, projectId: null }),
+    ).toEqual({ ownerLevel: "organization", ownerId: ORG, visibility: "organization", projectId: null });
+    expect(
+      deriveScopeOwnership({ ownerLevel: "garbage", ownerId: null, orgId: ORG, projectId: null }),
+    ).toEqual({ ownerLevel: "organization", ownerId: ORG, visibility: "organization", projectId: null });
+  });
+
+  it("explicit project launch refines a non-project anchor via the independent project axis", () => {
+    expect(
+      deriveScopeOwnership({ ownerLevel: "user", ownerId: "u1", orgId: ORG, projectId: "proj-2" }),
+    ).toEqual({ ownerLevel: "user", ownerId: "u1", visibility: "private", projectId: "proj-2" });
+  });
+
+  it("corrupt partial anchor (owner tier with a missing id) fails closed → null, never widened", () => {
+    expect(
+      deriveScopeOwnership({ ownerLevel: "user", ownerId: null, orgId: ORG, projectId: null }),
+    ).toBeNull();
+    expect(
+      deriveScopeOwnership({ ownerLevel: "team", ownerId: "", orgId: ORG, projectId: null }),
+    ).toBeNull();
+    expect(
+      deriveScopeOwnership({ ownerLevel: "project", ownerId: null, orgId: ORG, projectId: null }),
+    ).toBeNull();
+  });
+});
+
+describe("scopeOwnershipFromCeilingChain — reduce a carried chain to the row tuple", () => {
+  it("user-anchored chain → user / private", () => {
+    const chain: OboCeilingChain = [
+      { tier: "user", id: "u1" },
+      { tier: "organization", id: ORG },
+    ];
+    expect(scopeOwnershipFromCeilingChain(chain, ORG)).toEqual({
+      ownerLevel: "user",
+      ownerId: "u1",
+      visibility: "private",
+      projectId: null,
+    });
+  });
+
+  it("team-anchored chain → team / team-visible", () => {
+    const chain: OboCeilingChain = [
+      { tier: "team", id: "t1" },
+      { tier: "organization", id: ORG },
+    ];
+    expect(scopeOwnershipFromCeilingChain(chain, ORG)).toEqual({
+      ownerLevel: "team",
+      ownerId: "t1",
+      visibility: "team",
+      projectId: null,
+    });
+  });
+
+  it("org-floor-only chain → organization / org-visible", () => {
+    const chain: OboCeilingChain = [{ tier: "organization", id: ORG }];
+    expect(scopeOwnershipFromCeilingChain(chain, ORG)).toEqual({
+      ownerLevel: "organization",
+      ownerId: ORG,
+      visibility: "organization",
+      projectId: null,
+    });
+  });
+
+  it("project-only chain (no owner axis) → org-owned, PRIVATE, project-refined", () => {
+    const chain: OboCeilingChain = [
+      { tier: "project", id: "proj-9" },
+      { tier: "organization", id: ORG },
+    ];
+    expect(scopeOwnershipFromCeilingChain(chain, ORG)).toEqual({
+      ownerLevel: "organization",
+      ownerId: ORG,
+      visibility: "private",
+      projectId: "proj-9",
+    });
+  });
+
+  it("user anchor + explicit project launch → user / private / project-refined", () => {
+    const chain: OboCeilingChain = [
+      { tier: "user", id: "u1" },
+      { tier: "organization", id: ORG },
+      { tier: "project", id: "proj-2" },
+    ];
+    expect(scopeOwnershipFromCeilingChain(chain, ORG)).toEqual({
+      ownerLevel: "user",
+      ownerId: "u1",
+      visibility: "private",
+      projectId: "proj-2",
+    });
+  });
+});
 
 describe("deriveOboCeilingChain", () => {
   it("user anchor → owner element + mandatory org floor", () => {

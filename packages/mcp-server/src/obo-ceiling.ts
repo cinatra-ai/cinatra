@@ -140,6 +140,139 @@ export function deriveOboCeilingChain(input: {
   return chain;
 }
 
+// ---------------------------------------------------------------------------
+// Write-time scope-derived visibility (epic #1883 D10 / #1885 C1).
+//
+// The SIBLING PROJECTION of `deriveOboCeilingChain`, from the SAME anchor input:
+// the ceiling chain confines what a run may SEE; this tuple stamps what its
+// outputs are visible AS. One derivation, one anchor source of truth — so an
+// agent's outputs never land wider than the agent's own reach.
+// ---------------------------------------------------------------------------
+
+/** Row ownership + share-axis tuple derived from a creation-scope anchor. */
+export type ScopeDerivedOwnership = {
+  ownerLevel: "user" | "team" | "organization" | "workspace";
+  ownerId: string;
+  visibility: "private" | "team" | "organization" | "public";
+  /** Project refinement carried onto the row (from a project anchor). Null for
+   *  a non-project anchor — an explicit project LAUNCH refines the row through
+   *  the independent project frame, not this owner-axis derivation. */
+  projectId: string | null;
+};
+
+/** Canonical default share (visibility) per owner level (cinatra#1428): the
+ *  owner axis lives in owner_level+owner_id; visibility is the SHARE axis. Kept
+ *  in lockstep with the per-owner-level share-default helper in
+ *  artifact-creation.ts (cinatra#955 legacy-token ratchet: name it, do not
+ *  spell the retired connector-scope identifier). */
+const OWNER_LEVEL_VISIBILITY = {
+  user: "private",
+  team: "team",
+  workspace: "public",
+} as const;
+
+/**
+ * Map a run's LOCKED template anchor (+ org + optional project launch) to the
+ * row ownership tuple written at the agent-run write seams (#1885 C1 / D10).
+ *
+ * Mapping (owner axis + canonical share axis):
+ *   user       → user / private
+ *   team       → team / team
+ *   workspace  → workspace / public          (org-local public)
+ *   organization / null-or-unrecognized (documented pre-backfill state)
+ *              → organization / organization
+ *   project anchor (owner_level='project')
+ *              → organization-owned, PRIVATE, project-refined (projectId = anchor id)
+ *
+ * Returns null ONLY for a corrupt partial anchor — a known non-org owner tier
+ * (user/team/workspace/project) with a MISSING id — so the seam fails closed
+ * rather than WIDENING a partial anchor to the org floor. This mirrors
+ * `deriveOboCeilingChain`'s corrupt-anchor posture exactly (never widen).
+ */
+export function deriveScopeOwnership(input: {
+  ownerLevel: string | null | undefined;
+  ownerId: string | null | undefined;
+  orgId: string;
+  projectId?: string | null;
+}): ScopeDerivedOwnership | null {
+  const lvl = input.ownerLevel;
+  const oid = input.ownerId && input.ownerId.length > 0 ? input.ownerId : null;
+  const launchProject =
+    input.projectId && input.projectId.length > 0 ? input.projectId : null;
+
+  if (lvl === "user" || lvl === "team" || lvl === "workspace") {
+    if (!oid) return null; // corrupt partial anchor — fail closed, never widen
+    return {
+      ownerLevel: lvl,
+      ownerId: oid,
+      visibility: OWNER_LEVEL_VISIBILITY[lvl],
+      projectId: launchProject,
+    };
+  }
+  if (lvl === "project") {
+    if (!oid) return null; // corrupt project anchor — fail closed
+    return {
+      ownerLevel: "organization",
+      ownerId: input.orgId,
+      visibility: "private",
+      projectId: oid,
+    };
+  }
+  // organization / null / unrecognized (pre-backfill) → org-owned, org-visible.
+  return {
+    ownerLevel: "organization",
+    ownerId: oid ?? input.orgId,
+    visibility: "organization",
+    projectId: launchProject,
+  };
+}
+
+/**
+ * Reduce a run's carried (composed, verified) OBO ceiling chain back to the
+ * scope-derived row ownership tuple, for the objects_save write seam where the
+ * anchor is not re-resolved but READ off the actor's `oboCeiling` (present ONLY
+ * for `delegation === "agent_run"`; the sole authoritative anchor carrier at
+ * that seam). For a top-level run the chain is exactly the template anchor; for
+ * a COMPOSED child run the owner axis was already collapsed to the verified-
+ * narrowest tier (#1884 C4) — reducing the chain writes at that narrowest tier,
+ * which is correct (a wider tier would be denied by the ceiling anyway).
+ *
+ * The reduction: an owner-axis element (user/team/workspace) is the anchor owner;
+ * otherwise a project element is a project anchor; otherwise the org floor is an
+ * organization anchor. The chain is well-formed and non-empty (always carries
+ * its org floor), so this never returns null.
+ */
+export function scopeOwnershipFromCeilingChain(
+  chain: OboCeilingChain,
+  orgId: string,
+): ScopeDerivedOwnership {
+  const ownerEl = chain.find((c) => OWNER_AXIS_TIERS.has(c.tier));
+  const projectEl = chain.find((c) => c.tier === "project");
+  if (ownerEl) {
+    return deriveScopeOwnership({
+      ownerLevel: ownerEl.tier,
+      ownerId: ownerEl.id,
+      orgId,
+      projectId: projectEl?.id ?? null,
+    }) as ScopeDerivedOwnership;
+  }
+  if (projectEl) {
+    return deriveScopeOwnership({
+      ownerLevel: "project",
+      ownerId: projectEl.id,
+      orgId,
+      projectId: projectEl.id,
+    }) as ScopeDerivedOwnership;
+  }
+  const orgEl = chain.find((c) => c.tier === "organization");
+  return deriveScopeOwnership({
+    ownerLevel: "organization",
+    ownerId: orgEl?.id ?? orgId,
+    orgId,
+    projectId: null,
+  }) as ScopeDerivedOwnership;
+}
+
 /**
  * Mint-time containment check. The PERSISTED dispatch chain is valid iff it
  * CONTAINS every freshly re-derived element (superset OK — a composed child

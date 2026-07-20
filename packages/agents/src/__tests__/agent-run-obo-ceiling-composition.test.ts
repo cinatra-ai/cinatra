@@ -53,6 +53,10 @@ vi.mock("../db", () => ({
 
 // Import AFTER vi.mock so the db mock is installed first.
 import { deriveRunOboCeilingJson } from "../agent-run-serde";
+import {
+  publishOwnerContainmentResolver,
+  type OwnerContainmentResolver,
+} from "../owner-containment-port";
 
 function parse(json: string | null): OboCeilingChain | null {
   return json ? (JSON.parse(json) as OboCeilingChain) : null;
@@ -210,6 +214,100 @@ describe("deriveRunOboCeilingJson — child-run composition (W5)", () => {
     );
     expect(chain).toHaveLength(2);
     expect(chain.some((c) => c.tier === "team")).toBe(false);
+  });
+
+  it("C1 handoff: the PUBLISHED containment resolver supplies live facts → previously-denied mixed dispatch now writes", async () => {
+    // No explicit ownerContainments; the globalThis-published resolver (the C1
+    // wiring point that the app resolver fills at boot) returns the verified fact
+    // u1 ∈ t1, so the composition collapses to the user tier and persists.
+    queryState.rows = [{ ownerLevel: "user", ownerId: "u1" }];
+    const resolver = vi.fn<OwnerContainmentResolver>(async ({ orgId, ownerElements }) => {
+      expect(orgId).toBe(ORG);
+      // Both distinct owner tiers are handed to the resolver.
+      expect(ownerElements).toEqual(
+        expect.arrayContaining([
+          { tier: "user", id: "u1" },
+          { tier: "team", id: "t1" },
+        ]),
+      );
+      return [{ narrower: { tier: "user", id: "u1" }, wider: { tier: "team", id: "t1" } }];
+    });
+    publishOwnerContainmentResolver(resolver);
+    try {
+      const parent: OboCeilingChain = [
+        { tier: "team", id: "t1" },
+        { tier: "organization", id: ORG },
+      ];
+      const json = await deriveRunOboCeilingJson({
+        templateId: "tmpl-child",
+        orgId: ORG,
+        projectId: null,
+        parentOboCeiling: parent,
+      });
+      const chain = parse(json)!;
+      expect(resolver).toHaveBeenCalledOnce();
+      expect(chain).toEqual(
+        expect.arrayContaining([
+          { tier: "user", id: "u1" },
+          { tier: "organization", id: ORG },
+        ]),
+      );
+      expect(chain).toHaveLength(2);
+      expect(chain.some((c) => c.tier === "team")).toBe(false);
+    } finally {
+      publishOwnerContainmentResolver(undefined);
+    }
+  });
+
+  it("C1 handoff: the published resolver is NOT consulted when the chain has ≤1 owner tier (byte-stable)", async () => {
+    // Same-owner-tier (user u1 parent + user u1 child) → single owner tier → the
+    // resolver must never be called (no membership work on the common path).
+    queryState.rows = [{ ownerLevel: "user", ownerId: "u1" }];
+    const resolver = vi.fn<OwnerContainmentResolver>(async () => []);
+    publishOwnerContainmentResolver(resolver);
+    try {
+      const parent: OboCeilingChain = [
+        { tier: "user", id: "u1" },
+        { tier: "organization", id: ORG },
+      ];
+      await deriveRunOboCeilingJson({
+        templateId: "tmpl-child",
+        orgId: ORG,
+        projectId: null,
+        parentOboCeiling: parent,
+      });
+      expect(resolver).not.toHaveBeenCalled();
+    } finally {
+      publishOwnerContainmentResolver(undefined);
+    }
+  });
+
+  it("C1 handoff: a resolver returning INSUFFICIENT facts still fails closed (no silent widening)", async () => {
+    // The resolver could not verify u1 ∈ t1 (e.g. revoked) → returns [] → C4's
+    // structured denial stands. The dispatch fails closed, never a guessed collapse.
+    queryState.rows = [{ ownerLevel: "user", ownerId: "u1" }];
+    const resolver = vi.fn<OwnerContainmentResolver>(async () => []);
+    publishOwnerContainmentResolver(resolver);
+    try {
+      const parent: OboCeilingChain = [
+        { tier: "team", id: "t1" },
+        { tier: "organization", id: ORG },
+      ];
+      await expect(
+        deriveRunOboCeilingJson({
+          templateId: "tmpl-child",
+          orgId: ORG,
+          projectId: null,
+          parentOboCeiling: parent,
+        }),
+      ).rejects.toMatchObject({
+        code: "AGENT_OBO_CEILING_DISJOINT",
+        denial: { reason: "unverified_owner_containment" },
+      });
+      expect(resolver).toHaveBeenCalledOnce();
+    } finally {
+      publishOwnerContainmentResolver(undefined);
+    }
   });
 
   it("child dispatch with an explicit project launch composes project + parent chain", async () => {

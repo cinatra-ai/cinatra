@@ -83,6 +83,14 @@ import {
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { AuthzError } from "@/lib/authz/errors";
 import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
+// Write-time scope-derived visibility (#1885 C1 / D10). The pure derivation is
+// the sibling projection of the OBO ceiling chain — imported via the same
+// pure-leaf subpath the kernel already uses, so no runtime graph pressure.
+import {
+  scopeOwnershipFromCeilingChain,
+  type ScopeDerivedOwnership,
+  type OboCeilingChain,
+} from "@cinatra-ai/mcp-server/obo-ceiling";
 // Sealed-room read filter. `assertProjectReadAccess` 404-hides when the actor
 // has no read+ grant on the supplied projectId; `listObjectsByFilter` then
 // takes the projectId straight through and the SQL AND-clause enforces the
@@ -388,6 +396,25 @@ type SaveOwnership = {
   visibility: "private" | "team" | "organization" | "public";
 };
 
+/**
+ * Write-time scope-derived ownership default for an `agent_run`-delegated save
+ * (#1885 C1 / D10). Keyed STRICTLY on the actor's OBO ceiling chain, which the
+ * MCP registries stamp ONLY for `delegation === "agent_run"` (undefined for
+ * chat-delegated / session / machine callers — those keep the human-user
+ * defaults below). Reduces the run's carried (composed, verified) chain to the
+ * row tuple via the single shared derivation, so an agent's outputs land no
+ * wider than the agent's own anchored reach. Returns null for a non-agent-run
+ * actor (no chain) → caller falls back to the human-user defaults.
+ */
+function deriveAgentRunScopeOwnership(
+  actor: PrimitiveActorContext,
+  orgId: string | null,
+): ScopeDerivedOwnership | null {
+  const chain = actor.oboCeiling;
+  if (!chain || chain.length === 0 || !orgId) return null;
+  return scopeOwnershipFromCeilingChain(chain as OboCeilingChain, orgId);
+}
+
 function deriveSaveDefaults(
   actor: PrimitiveActorContext,
   orgId: string | null,
@@ -396,15 +423,17 @@ function deriveSaveDefaults(
     ownerId?: string;
     visibility?: "private" | "team" | "organization" | "public";
   },
+  // When present (agent_run delegation), the scope-derived tuple is the write
+  // DEFAULT in place of the human-user defaults; explicit tool-input overrides
+  // still win (within the ceiling, enforced by the create probe below).
+  scopeDefault?: ScopeDerivedOwnership | null,
 ): SaveOwnership {
   const userId = actor.userId ?? null;
-  const defaultLevel: SaveOwnership["ownerLevel"] = userId
-    ? "user"
-    : "organization";
-  const defaultOwnerId = userId ?? orgId ?? "";
-  const defaultVisibility: SaveOwnership["visibility"] = userId
-    ? "private"
-    : "organization";
+  const defaultLevel: SaveOwnership["ownerLevel"] =
+    scopeDefault?.ownerLevel ?? (userId ? "user" : "organization");
+  const defaultOwnerId = scopeDefault?.ownerId ?? userId ?? orgId ?? "";
+  const defaultVisibility: SaveOwnership["visibility"] =
+    scopeDefault?.visibility ?? (userId ? "private" : "organization");
 
   return {
     ownerLevel: override?.ownerLevel ?? defaultLevel,
@@ -691,11 +720,28 @@ export function createObjectsPrimitiveHandlers() {
       // `object.create` against the soon-to-be-written row's scope so the
       // kernel can deny scope ratchet attempts the actor can't satisfy (e.g.
       // user trying to write a workspace-owned object).
-      const ownership = deriveSaveDefaults(request.actor, orgId, {
-        ownerLevel: input.ownerLevel,
-        ownerId: input.ownerId,
-        visibility: input.visibility,
-      });
+      // Write-time scope-derived visibility (#1885 C1 / D10): for an agent_run
+      // delegation the ownership DEFAULT is derived from the run's anchor (the
+      // carried OBO ceiling chain), not the human-user default. Null for every
+      // other caller (chat/session/machine) → human-user defaults preserved.
+      const scopeDefault = deriveAgentRunScopeOwnership(request.actor, orgId);
+      const ownership = deriveSaveDefaults(
+        request.actor,
+        orgId,
+        {
+          ownerLevel: input.ownerLevel,
+          ownerId: input.ownerId,
+          visibility: input.visibility,
+        },
+        scopeDefault,
+      );
+      // Project refinement the row will carry (frame-resolved, never client
+      // input), threaded into the create probe so the OBO project-axis ceiling
+      // evaluates against the REAL project this row lands in (#1885 C1: "the
+      // create probe carries real ownership + projectId"). The authoritative
+      // project_id write still happens in the store from the same frame.
+      const probeProjectId =
+        mcpRequestContextStorage.getStore()?.projectContext?.projectId ?? null;
       // Dev bypass: when A2A_DEV_BYPASS is active and the actor is
       // a sessionless model caller (no userId — i.e. an LLM bridge call coming
       // from OpenAI's relay which has no user session), skip the authz gate.
@@ -712,6 +758,7 @@ export function createObjectsPrimitiveHandlers() {
             ownerLevel: normalizeOwnerLevel(ownership.ownerLevel),
             ownerId: ownership.ownerId,
             visibility: ownership.visibility,
+            projectId: probeProjectId,
           },
           request.actor,
           "object.create",
