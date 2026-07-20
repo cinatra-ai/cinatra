@@ -14,6 +14,12 @@ import path from "node:path";
 // and registers each as a generic artifact-bearing object type, consumed
 // generically via objectTypeRegistry.listArtifacts().
 import { registerArtifactExtensions } from "@cinatra-ai/objects/register-artifact-extensions";
+// Host CLAIM object types shipped by the objects package (@cinatra-ai/email:body,
+// campaign/linkedin/drupal/wordpress/memory, and the generic objects:object
+// catch-all). Imported through the NARROW registration subpath — NOT
+// `@cinatra-ai/objects/module`, whose createObjectsModule() barrel also drags in
+// the deterministic MCP client + the MCP primitive registry (cinatra#1866).
+import { registerAllObjectTypes as registerObjectsPackageObjectTypes } from "@cinatra-ai/objects/register-object-types";
 import { objectTypeRegistry, objectTypeIdsForFamily } from "@cinatra-ai/objects";
 import { z } from "zod";
 
@@ -52,6 +58,29 @@ export const OBJECT_TYPE_NEW_URLS: Record<string, string> = {
 // ---------------------------------------------------------------------------
 
 export function registerAllObjectTypes(): void {
+  // Objects-package CLAIM types FIRST (cinatra#1866). Before this, they were
+  // registered ONLY as a module-top-level side effect of importing
+  // `@/lib/mcp-server` (createObjectsModule()), so a process that never served
+  // an MCP HTTP request — the production worker / run-completion path — had
+  // `@cinatra-ai/email:body` UNREGISTERED. `resolveBoundArtifactTarget`
+  // intersects each winning org claim with a currently-registered host type
+  // (readEffectiveArtifactSafeTypeIdsForExtension), so the intersection was
+  // empty and run-completion materialization failed CLOSED (`declares: [none]`,
+  // zero artifacts). Registering here makes claim-type availability an INVARIANT
+  // of every registry warm — the materializer's two call sites,
+  // `ensureArtifactTypesRegistered`, artifact-service, context-mcp, authoring,
+  // template, url-import, matcher-runtime — instead of incidental HTTP import
+  // ordering. Runs FIRST to establish the foundational package built-ins before
+  // the host/extension registrars run; the ids are DISJOINT from the host
+  // registrars below (email/campaign/… vs blog/agent-builder/artifact-ref), so
+  // ordering is not a correctness lever here. All of these register as
+  // null-definer built-ins, so the registry's guard treats a same-id repeat as
+  // an idempotent replace and throws `ObjectTypeDefinitionConflictError` only on
+  // a genuine cross-definer collision (registry.ts) — this call cannot silently
+  // clobber, nor be clobbered by, an extension-owned type. `createObjectsModule()`
+  // keeps its own call — the registrar is idempotent, so the MCP path is
+  // byte-for-byte unchanged.
+  registerObjectsPackageObjectTypes();
   runExtensionObjectTypeRegistrars();
   registerBlogObjectTypes();
   registerAgentBuilderObjectTypes();

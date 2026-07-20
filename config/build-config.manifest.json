@@ -433,6 +433,7 @@
     { "alias": "@cinatra-ai/objects/sync-adapters/registry", "target": "./packages/objects/src/sync-adapters/registry.ts" },
     { "alias": "@cinatra-ai/objects/graphiti-client", "target": "./packages/objects/src/graphiti-client.ts" },
     { "alias": "@cinatra-ai/objects/register-artifact-extensions", "target": "./packages/objects/src/integration/register-artifact-extensions.ts" },
+    { "alias": "@cinatra-ai/objects/register-object-types", "target": "./packages/objects/src/integration/register-types.ts" },
     { "alias": "@cinatra-ai/objects/graphiti-projector", "target": "./packages/objects/src/graphiti-projector.ts" },
     { "alias": "@cinatra-ai/objects/graphiti-rebuild", "target": "./packages/objects/src/graphiti-rebuild.ts" },
     { "alias": "@cinatra-ai/objects/graphiti-projection-policy", "target": "./packages/objects/src/graphiti-projection-policy.ts" },

@@ -19,6 +19,7 @@
     "./sync-adapters/registry": "./src/sync-adapters/registry.ts",
     "./graphiti-client": "./src/graphiti-client.ts",
     "./register-artifact-extensions": "./src/integration/register-artifact-extensions.ts",
+    "./register-object-types": "./src/integration/register-types.ts",
     "./graphiti-projector": "./src/graphiti-projector.ts",
     "./graphiti-rebuild": "./src/graphiti-rebuild.ts",
     "./graphiti-projection-policy": "./src/graphiti-projection-policy.ts",

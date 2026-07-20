@@ -445,6 +445,7 @@
       "@cinatra-ai/objects/sync-adapters/registry": ["./packages/objects/src/sync-adapters/registry.ts"],
       "@cinatra-ai/objects/graphiti-client": ["./packages/objects/src/graphiti-client.ts"],
       "@cinatra-ai/objects/register-artifact-extensions": ["./packages/objects/src/integration/register-artifact-extensions.ts"],
+      "@cinatra-ai/objects/register-object-types": ["./packages/objects/src/integration/register-types.ts"],
       "@cinatra-ai/objects/graphiti-projector": ["./packages/objects/src/graphiti-projector.ts"],
       "@cinatra-ai/objects/graphiti-rebuild": ["./packages/objects/src/graphiti-rebuild.ts"],
       "@cinatra-ai/objects/graphiti-projection-policy": ["./packages/objects/src/graphiti-projection-policy.ts"],

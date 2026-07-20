@@ -249,6 +249,26 @@ describe("materializeRunArtifacts", () => {
     });
   });
 
+  it("warms the object-type registry BEFORE resolving the bound target (cinatra#1866)", async () => {
+    // Pins the materializer callsite (run-artifact-materializer.ts L387/L615):
+    // the host `registerAllObjectTypes` warm — which since #1866 also registers
+    // the host CLAIM types (@cinatra-ai/email:body) — MUST run before
+    // `resolveBoundArtifactTarget` intersects the winning claim with the
+    // registry. Without the warm-first order a cold worker resolves
+    // `declares: [none]` and materializes zero artifacts. This assertion fails
+    // if either registration callsite is dropped.
+    await materializeRunArtifacts(BASE_INPUT);
+    expect(registerAllObjectTypesMock).toHaveBeenCalled();
+    expect(resolveBoundArtifactTargetMock).toHaveBeenCalled();
+    const registeredAt = Math.min(
+      ...registerAllObjectTypesMock.mock.invocationCallOrder,
+    );
+    const resolvedAt = Math.min(
+      ...resolveBoundArtifactTargetMock.mock.invocationCallOrder,
+    );
+    expect(registeredAt).toBeLessThan(resolvedAt);
+  });
+
   it("returns the finalized refs without writing when the ledger dedupes (re-drive)", async () => {
     claimMaterializationMock.mockResolvedValue({
       kind: "finalized",
