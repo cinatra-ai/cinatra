@@ -30,7 +30,6 @@
 //     provisioned yet.
 // ---------------------------------------------------------------------------
 
-import { randomUUID } from "crypto";
 import { sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
@@ -45,6 +44,7 @@ import {
   teamMemberRoleColumnExistsStrict,
 } from "@/lib/better-auth-db";
 import { AuthzError } from "@/lib/authz/errors";
+import { entityId } from "@/lib/id-policy";
 
 import { canManageTeamMembers } from "./team-member-authority";
 
@@ -232,7 +232,7 @@ export async function addTeamMemberAction(
       }
       const inserted = await tx.execute<{ id: string }>(sql`
         INSERT INTO public."teamMember" (id, "teamId", "userId", "createdAt")
-        SELECT ${randomUUID()}, ${team.id}, ${targetUserId}, ${new Date()}
+        SELECT ${entityId()}, ${team.id}, ${targetUserId}, ${new Date()}
         WHERE NOT EXISTS (
           SELECT 1 FROM public."teamMember"
            WHERE "teamId" = ${team.id} AND "userId" = ${targetUserId}

@@ -12,7 +12,7 @@ import {
   insertOAuthClientWithTx,
   insertOAuthClient,
 } from "@/lib/better-auth-oauth-client";
-import { generateEntityId } from "@/lib/id-policy";
+import { entityId } from "@/lib/id-policy";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -97,7 +97,7 @@ export async function createAssistantUserWithTx(
   const clientSecret = crypto.randomUUID();
   // The user row is an ENTITY id (policy: src/lib/id-policy.ts, cinatra#1907);
   // clientId/clientSecret above are OAuth credentials, not entity ids.
-  const userId = generateEntityId();
+  const userId = entityId();
   const email = params.email ?? `${params.username}@system.local`;
   const now = new Date();
 

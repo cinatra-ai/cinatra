@@ -1,6 +1,5 @@
 "use server";
 
-import { randomUUID } from "crypto";
 import { sql } from "drizzle-orm";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
@@ -11,6 +10,7 @@ import {
   readTeamCreatableOrganizationsForUser,
   teamMemberRoleColumnExists,
 } from "@/lib/better-auth-db";
+import { entityId } from "@/lib/id-policy";
 import { toTeamSlugBase } from "./team-slug";
 
 /** Max slug-allocation attempts within an org before giving up (matches the
@@ -36,8 +36,8 @@ export async function createTeamAction(formData: FormData) {
     redirect("/not-authorized");
   }
 
-  const teamId = randomUUID();
-  const teamMemberId = randomUUID();
+  const teamId = entityId();
+  const teamMemberId = entityId();
   const now = new Date();
   const slugBase = toTeamSlugBase(name);
 

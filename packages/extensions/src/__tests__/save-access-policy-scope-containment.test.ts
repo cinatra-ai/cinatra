@@ -18,9 +18,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 
-// Lenient-UUID tails (match AgentAuthPolicyVisibilitySchema's UUID_TAIL) so the
-// crafted tokens are zod-VALID and reach the containment check rather than
-// bouncing at the schema as "invalid".
+// UUID-shaped tails (valid under AgentAuthPolicyVisibilitySchema's bounded
+// opaque grammar, #1907) so the crafted tokens are zod-VALID and reach the
+// containment check rather than bouncing at the schema as "invalid".
 const ORG_A = "aaaaaaaa-0000-4000-8000-0000000000a1";
 const ORG_B = "bbbbbbbb-0000-4000-8000-0000000000b1";
 const TEAM_T = "cccccccc-0000-4000-8000-0000000000c1";

@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 
 import { betterAuthDb, betterAuthOrganizations } from "@/lib/better-auth-db";
-import { generateEntityId } from "@/lib/id-policy";
+import { entityId } from "@/lib/id-policy";
 
 const DEFAULT_ORGANIZATION_SLUG = "default";
 const DEFAULT_ORGANIZATION_NAME = "Default";
@@ -16,7 +16,7 @@ const DEFAULT_ORGANIZATION_NAME = "Default";
 // concurrent root-layout renders on a fresh DB both reached the
 // INSERT step.
 export async function ensureDefaultOrganizationRow(): Promise<string> {
-  const candidateId = generateEntityId();
+  const candidateId = entityId();
 
   const inserted = await betterAuthDb
     .insert(betterAuthOrganizations)

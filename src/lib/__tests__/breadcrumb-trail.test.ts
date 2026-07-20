@@ -295,6 +295,13 @@ describe("buildBreadcrumbTrail — crumb contributions (#1737)", () => {
     const mid = buildBreadcrumbTrail(`/teams/${TEAM_ID}/settings`);
     expect(mid[1].label).toBe("9c0dfce6…");
     expect(mid[1].label).not.toMatch(/ /);
+    // A legacy 32-char better-auth org id gets the same floor on
+    // /organizations/[id] (#1907 acceptance: never a raw 32-char id).
+    const legacyOrg = buildBreadcrumbTrail(
+      "/organizations/Ul5HrhxiVFOBJmghOIUWjptssxRMaRXs",
+    );
+    expect(legacyOrg[1].label).toBe("Ul5Hrhxi…");
+    expect(legacyOrg[1].label).not.toContain("Ul5HrhxiVFOBJmghOIUWjptssxRMaRXs");
     // users + artifacts id routes get the same floor (generic mechanism).
     expect(buildBreadcrumbTrail(`/users/${ORG_ID}`)[1].label).toBe("faada9fe…");
     expect(buildBreadcrumbTrail("/artifacts/abcdef0123456789ab")[1].label).toBe(
