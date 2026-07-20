@@ -38,11 +38,25 @@
       "treeSha256": "1459be627e5c7e9b1ff1c3d5beecebb19456dc5fdb59567c16584e2999884401"
     },
     {
+      "packageName": "@cinatra-ai/document-artifact",
+      "repo": "cinatra-ai/document-artifact",
+      "resolvedSha": "0e6df2c8197fe9b5b70d97c80fa2e8fcf5ef1c36",
+      "packageVersion": "0.1.0",
+      "treeSha256": "cf280c21d6f727bdf07152129457aa11cbdda59b055715f9f93857bc2065f168"
+    },
+    {
       "packageName": "@cinatra-ai/image-artifact",
       "repo": "cinatra-ai/image-artifact",
       "resolvedSha": "f17a4f9fbe2e85ca47f43bae0c77934d75148695",
       "packageVersion": "0.1.1",
       "treeSha256": "55f20e69d600369d539ef17cea5cd7630a76c958a31d7e779e49d4a8bf487ba0"
+    },
+    {
+      "packageName": "@cinatra-ai/json-artifact",
+      "repo": "cinatra-ai/json-artifact",
+      "resolvedSha": "35096026d3849be7e0ca6a3faf64802900cfcfd0",
+      "packageVersion": "0.1.0",
+      "treeSha256": "ff0123eaf17fdc6964cc0d6f7a257d5aaecbe1138ab3539542ada4c958b2d7ab"
     },
     {
       "packageName": "@cinatra-ai/lint-policy-agent",
@@ -87,11 +101,25 @@
       "treeSha256": "c1174b488fbfc260dec80bbe8a1a33774920f042e03e830abc7b496815f16ada"
     },
     {
+      "packageName": "@cinatra-ai/text-artifact",
+      "repo": "cinatra-ai/text-artifact",
+      "resolvedSha": "98ff137995671a2211c09f42705c92212481bed8",
+      "packageVersion": "0.1.0",
+      "treeSha256": "a1d5ac7764d4cd79a42ef4a92280943adba3c5ef0ae4959d9e5837d4708a86b4"
+    },
+    {
       "packageName": "@cinatra-ai/video-artifact",
       "repo": "cinatra-ai/video-artifact",
       "resolvedSha": "6051244596aa0f256ebedf7d37c8a1e30c2500fc",
       "packageVersion": "0.1.1",
       "treeSha256": "8236946e0d85a8dc5627fc29069d8699a459ce45cbf9e7a9e8c67489547394b6"
+    },
+    {
+      "packageName": "@cinatra-ai/zip-artifact",
+      "repo": "cinatra-ai/zip-artifact",
+      "resolvedSha": "1d7aadacde9fdbdf34d87f4e646d18719497586b",
+      "packageVersion": "0.1.0",
+      "treeSha256": "48361b33eced8a8a07f73c83532b9d8d280d586e886ebf097a359f288ce3c762"
     }
   ]
 }

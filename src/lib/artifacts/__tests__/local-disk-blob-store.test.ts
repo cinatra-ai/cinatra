@@ -492,6 +492,70 @@ describe("createLocalDiskBlobStore", () => {
     expect(await sniffOf(webpHead, "image/webp")).toBe("image/webp");
   });
 
+  it("sniffs a PK/ZIP container, honouring a declared OOXML/ODF office type (the docx-as-zip trap, #1883 A1)", async () => {
+    // `PK\x03\x04` — the ZIP local-file-header magic shared by a raw archive AND
+    // every OOXML/ODF office document (which are ZIP containers on disk).
+    const zipHead = [0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x06, 0x00];
+    // No declaration / a non-office declaration → the raw archive type.
+    expect(await sniffOf(zipHead)).toBe("application/zip");
+    expect(await sniffOf(zipHead, "application/octet-stream")).toBe("application/zip");
+    expect(await sniffOf(zipHead, "application/zip")).toBe("application/zip");
+    // A declared office media type is a SAFE refinement of the ZIP signature and
+    // wins — otherwise the writer would reject a real .docx against
+    // document-artifact's office-only accepts. The DECLARED mime decides.
+    expect(
+      await sniffOf(
+        zipHead,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ),
+    ).toBe("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    expect(
+      await sniffOf(
+        zipHead,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ),
+    ).toBe("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    expect(
+      await sniffOf(
+        zipHead,
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      ),
+    ).toBe("application/vnd.openxmlformats-officedocument.presentationml.presentation");
+    expect(await sniffOf(zipHead, "application/vnd.oasis.opendocument.text")).toBe(
+      "application/vnd.oasis.opendocument.text",
+    );
+    // The office refinement requires the bytes to ACTUALLY be a ZIP container:
+    // a plain-text head declared as docx does NOT ride the office branch.
+    const textHead = [0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x77, 0x6f]; // "hello wo"
+    expect(
+      await sniffOf(
+        textHead,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ),
+    ).not.toBe("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+  });
+
+  it("CANONICALIZES a parameterized declared MIME (strips `; charset=…`, lowercases) so preview eligibility matches", async () => {
+    // A parameterized declaration must be stored UNPARAMETERIZED — the preview
+    // eligibility gate + the representation registrar match EXACTLY against the
+    // allowlist, so `application/json; charset=utf-8` stored verbatim would 415.
+    const jsonHead = [0x7b, 0x22, 0x6b, 0x22, 0x3a, 0x31, 0x7d]; // {"k":1}
+    expect(await sniffOf(jsonHead, "application/json; charset=utf-8")).toBe("application/json");
+    expect(await sniffOf(jsonHead, "APPLICATION/JSON")).toBe("application/json");
+    const csvHead = [0x61, 0x2c, 0x62, 0x2c, 0x63]; // a,b,c
+    expect(await sniffOf(csvHead, "text/csv; charset=utf-8")).toBe("text/csv");
+    const mdHead = [0x23, 0x20, 0x54, 0x69, 0x74, 0x6c, 0x65]; // "# Title"
+    expect(await sniffOf(mdHead, "text/markdown; charset=UTF-8")).toBe("text/markdown");
+    // A parameterized OFFICE declaration over a real ZIP head still canonicalizes.
+    const zipHead = [0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x06, 0x00];
+    expect(
+      await sniffOf(
+        zipHead,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document; foo=bar",
+      ),
+    ).toBe("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+  });
+
   it("sniffs ID3 + declared-confirmed bare-frame MP3 as audio/mpeg", async () => {
     const id3Head = [0x49, 0x44, 0x33, 0x04, 0x01, 0x20, 0x20, 0x20];
     expect(await sniffOf(id3Head, "text/plain")).toBe("audio/mpeg");

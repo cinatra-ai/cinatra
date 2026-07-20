@@ -117,4 +117,37 @@ describe("isInlineTransportEligible — capability-resolved byte-route eligibili
     expect(isInlineTransportEligible(ORG, "application/acme")).toBe(true);
     expect(isInlineTransportEligible(OTHER_ORG, "application/acme")).toBe(false);
   });
+
+  // Required MIME-base expansion (epic #1883 A1). The four new system bases are
+  // in the real generated map. text-artifact + json-artifact are INLINE (their
+  // detail renderers fetch urls.preview), so their MIMEs must be added to the
+  // safe-transport allowlist to be byte-eligible. zip-artifact + document-artifact
+  // are DOWNLOAD SHELLS (their detail renderers never touch urls.preview), so
+  // their MIMEs stay OUT of the allowlist and remain byte-INELIGIBLE — a system
+  // base shipping a detail renderer does NOT auto-open the byte route unless the
+  // type is in the safe-transport bound.
+  it("admits the inline text/JSON bases (text/csv, application/json) via the allowlist", () => {
+    expect(isInlineTransportEligible(ORG, "text/csv")).toBe(true);
+    expect(isInlineTransportEligible(ORG, "application/json")).toBe(true);
+    // The pre-existing text floor stays eligible; text-artifact now also backs them.
+    expect(isInlineTransportEligible(ORG, "text/plain")).toBe(true);
+    expect(isInlineTransportEligible(ORG, "text/markdown")).toBe(true);
+  });
+
+  it("keeps the download-shell bases (zip, office documents) byte-INELIGIBLE (not allowlisted)", () => {
+    // zip-artifact is now a system base declaring `application/zip`, yet the type
+    // is NOT in the safe-transport allowlist, so no provider binds ⇒ 415. This is
+    // the download-shell contract (the renderer serves `actions.download`, never
+    // `urls.preview`).
+    expect(isInlineTransportEligible(ORG, "application/zip")).toBe(false);
+    expect(isInlineTransportEligible(ORG, "application/x-zip-compressed")).toBe(false);
+    for (const office of [
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "application/vnd.oasis.opendocument.text",
+    ]) {
+      expect(isInlineTransportEligible(ORG, office), office).toBe(false);
+    }
+  });
 });
