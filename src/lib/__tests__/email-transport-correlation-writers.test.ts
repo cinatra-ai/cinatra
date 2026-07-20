@@ -94,10 +94,29 @@ describe("saveSentEmailObject — correlation population", () => {
       idempotencyKey: "email-send:gmailish:msg-1",
       connectorId: "gmailish",
       providerThreadId: "thread-9",
+      // cinatra#1456: standardized derived thread key on the SEND record too —
+      // the same (connectorId, providerThreadId) bucket the reply carries.
+      threadId: "gmailish:thread-9",
       campaignId: "camp-1",
       contactId: "c-77",
       runId: "run-42",
     });
+  });
+
+  it("derives the sent-email threadId from the RESOLVED connector, omits it with no thread id", async () => {
+    await routing().saveSentEmailObject!({
+      msg: MSG,
+      receipt: RECEIPT,
+      routing: { connectorId: "resendish" },
+    });
+    expect(saveCalls[0].rawData.threadId).toBe("resendish:thread-9");
+    saveCalls.length = 0;
+    await routing().saveSentEmailObject!({
+      msg: MSG,
+      receipt: { ...RECEIPT, providerThreadId: undefined },
+      routing: { connectorId: "gmailish" },
+    });
+    expect("threadId" in saveCalls[0].rawData).toBe(false);
   });
 
   it("omits blank / whitespace-only correlation ids (no phantom '' bucket)", async () => {

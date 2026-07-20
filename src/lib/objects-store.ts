@@ -519,8 +519,72 @@ export type ListObjectsFilter = {
   // Candidates from project Q or ambient are dropped. This intersection is
   // the non-bypassable canonical filter.
   projectId?: string | null;
+  // cinatra#1456: indexed equality filters over the JSONB `data` column, used
+  // by the email correlation query seam (thread / campaign / contact views) so
+  // those reads are a server-side indexed lookup, never a client-side scan.
+  // Each entry compiles to `data->>'<key>' = $n`. Because the KEY is
+  // interpolated into SQL (jsonb `->>` needs a literal key), every key is
+  // validated against DATA_EQUALS_ALLOWED_KEYS + a strict identifier pattern in
+  // `compileDataEqualsClause`; the VALUE is always parameterized. Multiple
+  // entries AND together (e.g. contact view = connectorId AND contactId).
+  dataEquals?: ReadonlyArray<{ key: string; value: string }>;
   // cursor pagination not yet implemented — omitted intentionally
 };
+
+/**
+ * Allow-list of `data.<key>` fields the indexed `dataEquals` filter may target
+ * (cinatra#1456). The key is interpolated into the SQL `data->>'<key>'`
+ * expression, so it is NOT free-form: only these correlation keys are permitted,
+ * each served by a partial expression index on the `objects` table (see
+ * `buildEmailCorrelationIndexQueries`):
+ *   - `threadId`   → objects_data_thread_idx
+ *   - `campaignId` → objects_data_campaign_idx
+ *   - `contactId`  → objects_data_contact_idx (composite, so a contactId filter
+ *                    MUST be paired with `connectorId`)
+ *   - `connectorId`→ the LEADING column of objects_data_contact_idx; index-served
+ *                    only when paired with `contactId` (the contact view's pair).
+ * `runId` is intentionally ABSENT — run-scoped reads use the dedicated indexed
+ * `run_id` provenance column (`filter.runId`), not a `data->>` scan.
+ */
+export const DATA_EQUALS_ALLOWED_KEYS: ReadonlySet<string> = new Set([
+  "threadId",
+  "campaignId",
+  "contactId",
+  "connectorId",
+]);
+
+const DATA_EQUALS_KEY_PATTERN = /^[a-zA-Z][a-zA-Z0-9]*$/;
+
+/**
+ * Compile a `dataEquals` filter into `data->>'<key>' = $n` SQL fragments,
+ * appending each value to `values` at the caller's running parameter index.
+ * Defense-in-depth against SQL injection through the interpolated key:
+ *   1. the key must be in DATA_EQUALS_ALLOWED_KEYS (closed set), AND
+ *   2. it must match a strict identifier pattern (no quotes / whitespace).
+ * A key failing either check THROWS — a mis-typed correlation filter is a
+ * programming error, never a silently-dropped clause that would widen the read.
+ */
+export function compileDataEqualsClause(
+  dataEquals: ReadonlyArray<{ key: string; value: string }> | undefined,
+  values: unknown[],
+  startIndex: number,
+): { clauses: string[]; nextIndex: number } {
+  const clauses: string[] = [];
+  let pIdx = startIndex;
+  if (!dataEquals || dataEquals.length === 0) return { clauses, nextIndex: pIdx };
+  for (const { key, value } of dataEquals) {
+    if (!DATA_EQUALS_ALLOWED_KEYS.has(key) || !DATA_EQUALS_KEY_PATTERN.test(key)) {
+      throw new Error(
+        `listObjectsByFilter: dataEquals key "${key}" is not an allow-listed indexed correlation key ` +
+          `(${[...DATA_EQUALS_ALLOWED_KEYS].join(", ")})`,
+      );
+    }
+    clauses.push(`data->>'${key}' = $${pIdx}`);
+    values.push(value);
+    pIdx += 1;
+  }
+  return { clauses, nextIndex: pIdx };
+}
 
 export function listObjectsByFilter(
   filter: ListObjectsFilter,
@@ -561,6 +625,16 @@ export function listObjectsByFilter(
     where.push(`project_id = $${pIdx}`);
     values.push(effectiveProjectId);
     pIdx += 1;
+  }
+
+  // cinatra#1456: indexed `data->>'<key>' = $n` correlation filters. Runs
+  // BEFORE the per-actor ownership filter so it intersects with org/type/
+  // sealed-room and cannot widen the read. Keys are allow-listed + pattern-
+  // validated in compileDataEqualsClause (the interpolated-key injection guard).
+  {
+    const { clauses, nextIndex } = compileDataEqualsClause(filter.dataEquals, values, pIdx);
+    for (const clause of clauses) where.push(clause);
+    pIdx = nextIndex;
   }
 
   // Splice buildOwnershipFilter into WHERE when actor present.

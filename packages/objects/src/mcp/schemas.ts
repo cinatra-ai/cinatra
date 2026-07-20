@@ -34,6 +34,22 @@ export const objectsListSchema = z.object({
   // re-filtered to project-only inside `listObjectsByFilter`.
   // Null is interpreted as ambient (no project filter), same as omission.
   projectId: z.string().nullish(),
+  // cinatra#1456: indexed equality filters over the JSONB `data` column, backing
+  // the email thread / campaign / contact query seam. Keys are a CLOSED enum
+  // (each backed by a partial expression index on `objects.data`); values are
+  // parameterized in the SQL layer. Entries AND together. Per-row `object.read`
+  // authorization still applies to every returned row — this is a filter, never
+  // an authorization bypass. `runId` is deliberately NOT here (use `runId`, the
+  // indexed provenance column). A `contactId` entry must be paired with a
+  // `connectorId` entry (the composite index leads with connectorId).
+  dataEquals: z
+    .array(
+      z.object({
+        key: z.enum(["threadId", "campaignId", "contactId", "connectorId"]),
+        value: z.string().min(1),
+      }),
+    )
+    .optional(),
 });
 
 export const objectsGetSchema = z.object({

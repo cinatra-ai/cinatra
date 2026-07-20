@@ -987,6 +987,9 @@ export function createObjectsPrimitiveHandlers() {
             orgId,
             type: input.type,
             runId: input.runId,
+            // cinatra#1456: indexed data.* correlation filter (thread/campaign/
+            // contact seam). Pushed into SQL; per-row object.read still gates below.
+            dataEquals: input.dataEquals,
             limit: input.limit,
             // Pass projectId straight through; the store appends
             // `AND project_id = $projectId` when the per-table feature flag is
@@ -1064,6 +1067,7 @@ export function createObjectsPrimitiveHandlers() {
             orgId,
             type: input.type,
             runId: input.runId,
+            dataEquals: input.dataEquals, // cinatra#1456 (Graphiti-fallback path)
             limit: input.limit,
             // Sealed-room filter applies on the Graphiti-fallback path too. The
             // user supplied a projectId; the result must stay inside the project
@@ -1105,6 +1109,7 @@ export function createObjectsPrimitiveHandlers() {
           ids: objectIds,
           type: input.type,
           runId: input.runId,
+          dataEquals: input.dataEquals, // cinatra#1456 (Graphiti-ranked path)
           projectId,
         },
         scopeActor,

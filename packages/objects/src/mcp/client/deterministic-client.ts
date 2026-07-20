@@ -45,6 +45,13 @@ export function createDeterministicObjectsClient(input: {
         // longer need raw SQL.
         runId?: string;
         projectId?: string | null;
+        // cinatra#1456: indexed data.* correlation filters (objectsListSchema
+        // .dataEquals) — the thread/campaign/contact query seam reads through
+        // this so the canonical per-row object.read authz still applies.
+        dataEquals?: ReadonlyArray<{
+          key: "threadId" | "campaignId" | "contactId" | "connectorId";
+          value: string;
+        }>;
       } = {},
     ) => invoke<{ items: unknown[]; nextCursor: string | null }>("objects_list", inp),
     get: (objectId: string) => invoke<unknown | null>("objects_get", { objectId }),

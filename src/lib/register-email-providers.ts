@@ -27,6 +27,7 @@ import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
 import { HOST_CONNECTOR_SERVICE_CAPABILITIES } from "@cinatra-ai/sdk-extensions/internal";
 import type { EmailTransportCorrelation } from "@cinatra-ai/sdk-extensions";
+import { deriveThreadId } from "@/lib/email-thread-key";
 
 /**
  * These sender-identity reads run on a system/registration path with no user
@@ -301,6 +302,13 @@ async function saveSentEmailObject(input: {
     const { objectsClient } = await import("@cinatra-ai/objects");
     const idempotencyKey =
       `email-send:${receipt.providerId}:${receipt.providerMessageId}`;
+    // Standardized thread correlation key (connectorId, providerThreadId) —
+    // cinatra#1456. Derived on the sent-email record too (received-reply already
+    // carries it) so a thread bucket is a single indexed `data->>'threadId'`
+    // lookup across sends + replies. DERIVED correlation key, never an artifact
+    // id. Omitted when the provider surfaced no thread id. Uses the SHARED
+    // derivation (email-thread-key.ts) so writer + query seam never drift.
+    const sentThreadId = deriveThreadId(input.routing.connectorId, receipt.providerThreadId);
     await objectsClient.save({
       typeHint: "@cinatra-ai/email:sent-email",
       rawData: {
@@ -314,6 +322,7 @@ async function saveSentEmailObject(input: {
         providerThreadId: receipt.providerThreadId,
         internetMessageId: receipt.internetMessageId,
         sentAt: receipt.sentAt,
+        ...(sentThreadId ? { threadId: sentThreadId } : {}),
         // Soft-provenance correlation (cinatra#1456). Spread AFTER the transport
         // fields; each key is present only when a non-empty id was carried.
         ...correlationFields(input.correlation, ["campaignId", "contactId", "runId"]),
@@ -373,15 +382,15 @@ async function saveReceivedReplyObject(input: {
     const match = input.match as ReceivedReplyMatchLike;
     const { objectsClient } = await import("@cinatra-ai/objects");
     const connectorId = input.routing.connectorId;
-    // Derived thread correlation key: (connectorId, providerThreadId). Matches
-    // the email:thread identity so sends + replies share one bucket. Omitted
-    // when the provider surfaced no thread id (a bare reply still persists,
-    // just uncorrelated to a thread).
+    // Derived thread correlation key: (connectorId, providerThreadId). The SHARED
+    // derivation (email-thread-key.ts) — identical to the sent-email writer + the
+    // query seam — so sends + replies share one bucket. Omitted when the provider
+    // surfaced no thread id (a bare reply still persists, just uncorrelated).
     const providerThreadId =
       typeof match.providerThreadId === "string" && match.providerThreadId.trim() !== ""
         ? match.providerThreadId.trim()
         : undefined;
-    const threadId = providerThreadId ? `${connectorId}:${providerThreadId}` : undefined;
+    const threadId = deriveThreadId(connectorId, match.providerThreadId);
     await objectsClient.save({
       typeHint: "@cinatra-ai/email:received-reply",
       rawData: {
