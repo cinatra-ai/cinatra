@@ -57,6 +57,20 @@ import type { AgUiEvent } from "@cinatra-ai/agent-ui-protocol";
 
 export type AgUiPublish = (event: AgUiEvent) => Promise<void>;
 
+/** Durable per-turn content the adapter accumulates from the bespoke sink for
+ *  structured persistence (cinatra#1037 P5.6 drop-history PR1 EXPAND). Written
+ *  to `assistant_turns.content` by the route at terminal so a NEW conversation's
+ *  assistant turn survives in Postgres, not only in the bounded/lossy Redis log.
+ *  `content` is the concatenated assistant text; `parts` is the ordered render
+ *  trace (text / tool-call / tool-result / citations) — more than terminal text,
+ *  as the design requires. */
+export type AgUiTurnDurableContent = {
+  format: "assistant-turn-v1";
+  role: "assistant";
+  content: string;
+  parts: Array<Record<string, unknown>>;
+};
+
 export type AgUiSinkAdapter = {
   /** ChatStreamSink-shaped sink to hand to `runAssistantTurn`. */
   send: (event: string, data: unknown) => void;
@@ -78,6 +92,13 @@ export type AgUiSinkAdapter = {
   readonly terminal: boolean;
   /** "error" | "completed" once terminal; null while running. */
   readonly outcome: "completed" | "error" | null;
+  /**
+   * The durable content accumulated from the sink (PR1 EXPAND), or null when the
+   * turn produced nothing (no text, no tool calls) — the route persists this to
+   * `assistant_turns.content` at completion. Independent of the AG-UI segment
+   * mapping: it captures the full assistant text + the ordered part trace.
+   */
+  durableContent(): AgUiTurnDurableContent | null;
 };
 
 /** Parse an `agent_run` tool result for the runId to pin on the run card.
@@ -111,6 +132,13 @@ export function createAgUiSinkAdapter(params: {
   let terminal = false;
   let outcome: "completed" | "error" | null = null;
   let chain: Promise<void> = Promise.resolve();
+  // Durable-content accumulation (PR1 EXPAND). Independent of the AG-UI segment
+  // machinery: `contentText` is every text delta concatenated; `contentParts` is
+  // the ordered render trace; `openContentTextPart` is the in-progress text part
+  // (a new one starts after each seal, mirroring the AG-UI segment sealing).
+  let contentText = "";
+  const contentParts: Array<Record<string, unknown>> = [];
+  let openContentTextPart: { type: "text"; text: string } | null = null;
   // Separate broken flag: a thrown `null`/`undefined` must still trip the
   // sentinel (never keyed on the error VALUE).
   let broken = false;
@@ -134,6 +162,9 @@ export function createAgUiSinkAdapter(params: {
   }
 
   function sealOpenText(): void {
+    // Seal the durable-content text part too (a new one starts on the next
+    // delta) — independent of the AG-UI segment below.
+    openContentTextPart = null;
     if (openMessageId === null) return;
     emit({ type: "TEXT_MESSAGE_END", messageId: openMessageId, timestamp: Date.now() });
     openMessageId = null;
@@ -171,6 +202,13 @@ export function createAgUiSinkAdapter(params: {
       case "text": {
         const delta = typeof d.content === "string" ? d.content : "";
         if (!delta) return;
+        // Durable-content accumulation (PR1 EXPAND).
+        contentText += delta;
+        if (openContentTextPart === null) {
+          openContentTextPart = { type: "text", text: "" };
+          contentParts.push(openContentTextPart);
+        }
+        openContentTextPart.text += delta;
         if (openMessageId === null) {
           segmentCounter += 1;
           openMessageId = `${runId}#t${segmentCounter}`;
@@ -189,6 +227,17 @@ export function createAgUiSinkAdapter(params: {
         const name = typeof d.name === "string" ? d.name : String(d.name ?? "");
         if (!id || !name) return;
         sealOpenText();
+        // Durable part is LOSSLESS at the sink boundary: capture every field the
+        // sink delivers (id/name/serverLabel). Tool-call ARGUMENTS are not in the
+        // bespoke sink vocabulary — the runtime's onToolCall never emits them —
+        // so they cannot be captured here; that is a sink-contract limit, not a
+        // persistence gap this leg introduces.
+        contentParts.push({
+          type: "tool_call",
+          id,
+          name,
+          ...(d.serverLabel !== undefined ? { serverLabel: d.serverLabel } : {}),
+        });
         emit({ type: "TOOL_CALL_START", toolCallId: id, toolCallName: name, timestamp: Date.now() });
         return;
       }
@@ -196,6 +245,18 @@ export function createAgUiSinkAdapter(params: {
         const id = typeof d.id === "string" ? d.id : String(d.id ?? "");
         if (!id) return;
         sealOpenText();
+        // Durable part keeps the FULL result payload the sink carries
+        // (name/serverLabel/resultLabel/result) — the AG-UI wire drops these by
+        // the ratified reducer gap, but faithful reconstruction after Redis loss
+        // needs them, so durability captures them.
+        contentParts.push({
+          type: "tool_result",
+          id,
+          ...(d.name !== undefined ? { name: d.name } : {}),
+          ...(d.serverLabel !== undefined ? { serverLabel: d.serverLabel } : {}),
+          ...(d.resultLabel !== undefined ? { resultLabel: d.resultLabel } : {}),
+          ...(d.result !== undefined ? { result: d.result } : {}),
+        });
         emit({ type: "TOOL_CALL_END", toolCallId: id, timestamp: Date.now() });
         // agent_run results carry the spawned run's id — pinned client-side on
         // the tool_call part via DATA_PART (the reducer contract's only
@@ -213,6 +274,15 @@ export function createAgUiSinkAdapter(params: {
         return;
       }
       case "citations": {
+        // Seal ONLY the durable-content text part (not the AG-UI segment) so the
+        // ordered part trace preserves the citation boundary: text A / citations
+        // / text B → [text "A", citations, text "B"], not [text "AB", citations].
+        // The AG-UI wire deliberately does NOT seal the text segment on citations
+        // (the reducer contract keeps one open message), so we must NOT call
+        // sealOpenText() here — that would emit a TEXT_MESSAGE_END and change the
+        // wire. `content` (the concatenated full text) is unaffected either way.
+        openContentTextPart = null;
+        contentParts.push({ type: "citations", citations: d.citations ?? [] });
         emit({
           type: "DATA_PART",
           data: { kind: "citations", citations: d.citations ?? [] },
@@ -262,6 +332,17 @@ export function createAgUiSinkAdapter(params: {
     },
     get outcome(): "completed" | "error" | null {
       return outcome;
+    },
+    durableContent(): AgUiTurnDurableContent | null {
+      // Nothing produced (e.g. an immediate error before any text/tool) → no
+      // durable content to persist; the turn row keeps content NULL.
+      if (contentText.length === 0 && contentParts.length === 0) return null;
+      return {
+        format: "assistant-turn-v1",
+        role: "assistant",
+        content: contentText,
+        parts: contentParts,
+      };
     },
   };
 }

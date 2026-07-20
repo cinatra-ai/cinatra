@@ -59,6 +59,14 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
+    // `content` (cinatra#1037 P5.6 drop-history PR1 EXPAND, core__0061): the
+    // durable per-turn message content the legacy chat_threads.payload has held
+    // — the FULL message object for faithful /chat reconstruction (not just
+    // terminal text). NULLABLE (pre-existing content-less mirror shadows are
+    // undisturbed) with a JSON-object CHECK when present. A fresh install is
+    // born WITH the column; the ADD COLUMN IF NOT EXISTS in the DO block below
+    // carries it onto a DB bootstrapped before this change (bootstrap-upgrade
+    // parity), and core__0061 carries it onto the operator migration path.
     { text: `CREATE TABLE IF NOT EXISTS "${s}"."assistant_turns" (
       id text PRIMARY KEY,
       thread_id text NOT NULL,
@@ -66,14 +74,17 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
       assistant_user_id text,
       role text NOT NULL DEFAULT 'assistant',
       status text NOT NULL DEFAULT 'running',
+      content jsonb,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
+    { text: `ALTER TABLE "${s}"."assistant_turns" ADD COLUMN IF NOT EXISTS content jsonb` },
     { text: `DO $$
       BEGIN
         ${addConstraintIfAbsentSql(schemaName, "assistant_turns", "assistant_turns_thread_id_fkey", `FOREIGN KEY (thread_id) REFERENCES "${s}"."assistant_threads" (id) ON DELETE CASCADE`)}
         ${addConstraintIfAbsentSql(schemaName, "assistant_turns", "assistant_turns_status_check", `CHECK (status IN ('running', 'completed', 'error'))`)}
         ${addConstraintIfAbsentSql(schemaName, "assistant_turns", "assistant_turns_role_check", `CHECK (role IN ('user', 'assistant'))`)}
+        ${addConstraintIfAbsentSql(schemaName, "assistant_turns", "assistant_turns_content_object_check", `CHECK (content IS NULL OR jsonb_typeof(content) = 'object')`)}
       END $$` },
     { text: `CREATE INDEX IF NOT EXISTS assistant_threads_org_updated_idx ON "${s}"."assistant_threads" (org_id, updated_at DESC, id)` },
     { text: `CREATE INDEX IF NOT EXISTS assistant_turns_thread_created_idx ON "${s}"."assistant_turns" (thread_id, created_at, id)` },
@@ -81,6 +92,24 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
     // (cinatra#1216 S2). PARTIAL: legacy-mirror rows carry run_id NULL and
     // dominate the table — only runtime-minted turn rows enter the index.
     { text: `CREATE INDEX IF NOT EXISTS assistant_turns_run_id_idx ON "${s}"."assistant_turns" (run_id) WHERE run_id IS NOT NULL` },
+    // `assistant_thread_pause_state` (cinatra#1037 P5.6 PR1 EXPAND, core__0061):
+    // structured pause/resume storage. Today `pausedParticipants` lives inside
+    // chat_threads.payload; this holds one row per (thread, paused participant)
+    // — presence == paused, resume deletes the row. Written ALONGSIDE the legacy
+    // payload (still the authoritative read source until the PR2 cutover). FK →
+    // assistant_threads ON DELETE CASCADE; per-thread read index.
+    { text: `CREATE TABLE IF NOT EXISTS "${s}"."assistant_thread_pause_state" (
+      thread_id text NOT NULL,
+      participant_id text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (thread_id, participant_id)
+    )` },
+    { text: `DO $$
+      BEGIN
+        ${addConstraintIfAbsentSql(schemaName, "assistant_thread_pause_state", "assistant_thread_pause_state_thread_id_fkey", `FOREIGN KEY (thread_id) REFERENCES "${s}"."assistant_threads" (id) ON DELETE CASCADE`)}
+      END $$` },
+    { text: `CREATE INDEX IF NOT EXISTS assistant_thread_pause_state_thread_idx ON "${s}"."assistant_thread_pause_state" (thread_id)` },
   ];
 }
 

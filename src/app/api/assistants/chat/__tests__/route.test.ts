@@ -275,7 +275,12 @@ describe("POST /api/assistants/chat — the SSE turn lifecycle", () => {
     expect(appendAssistantTurn).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: "th1", role: "assistant", status: "running", runId: expect.any(String) }),
     );
-    expect(updateAssistantTurn).toHaveBeenCalledWith("turn-1", { status: "completed" });
+    // Terminal finalize now ALSO persists the durable per-turn content
+    // (cinatra#1037 P5.6 drop-history PR1 EXPAND) alongside the status.
+    expect(updateAssistantTurn).toHaveBeenCalledWith("turn-1", {
+      status: "completed",
+      content: expect.objectContaining({ format: "assistant-turn-v1", role: "assistant", content: "Hi there" }),
+    });
     expect(expireRunStream).toHaveBeenCalledTimes(1);
   });
 
@@ -287,7 +292,10 @@ describe("POST /api/assistants/chat — the SSE turn lifecycle", () => {
     const res = await POST(chatReq({ threadId: "th1", messages: [{ role: "user", content: "hi" }] }));
     const body = await readSse(res);
     expect(body.match(/"type":"RUN_FINISHED"/g)).toHaveLength(1);
-    expect(updateAssistantTurn).toHaveBeenCalledWith("turn-1", { status: "completed" });
+    expect(updateAssistantTurn).toHaveBeenCalledWith("turn-1", {
+      status: "completed",
+      content: expect.objectContaining({ format: "assistant-turn-v1", content: "explicit dispatch path" }),
+    });
   });
 
   it("a throwing runtime yields RUN_ERROR and an 'error' turn status", async () => {
@@ -328,6 +336,12 @@ describe("POST /api/assistants/chat — the SSE turn lifecycle", () => {
     const res = await POST(chatReq({ threadId: "th1", messages: [{ role: "user", content: "hi" }] }));
     const body = await readSse(res);
     expect(body).toContain('"type":"RUN_ERROR"');
-    expect(updateAssistantTurn).toHaveBeenCalledWith("turn-1", { status: "error" });
+    // An error terminal after partial content still persists the durable content
+    // produced so far (PR1 EXPAND) — the wire did NOT fail, so the else-branch
+    // writes both status and content.
+    expect(updateAssistantTurn).toHaveBeenCalledWith("turn-1", {
+      status: "error",
+      content: expect.objectContaining({ format: "assistant-turn-v1", content: "partial" }),
+    });
   });
 });

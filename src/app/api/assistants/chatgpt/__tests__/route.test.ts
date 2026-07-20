@@ -195,7 +195,11 @@ describe("POST /api/assistants/chatgpt — the Codex reply on the AG-UI wire", (
     expect(body).toContain("Codex says hello.");
     expect(body).toContain('"type":"RUN_FINISHED"');
     expect(body).not.toContain("event: text");
-    expect(updateAssistantTurn).toHaveBeenCalledWith("turn-1", { status: "completed" });
+    // Terminal finalize also persists the durable per-turn content (PR1 EXPAND).
+    expect(updateAssistantTurn).toHaveBeenCalledWith("turn-1", {
+      status: "completed",
+      content: expect.objectContaining({ format: "assistant-turn-v1", role: "assistant" }),
+    });
     // The bridge saw the last user message.
     expect(callCodexCliAssistant).toHaveBeenCalledWith(
       expect.objectContaining({ messages: expect.any(Array) }),

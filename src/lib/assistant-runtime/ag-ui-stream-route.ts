@@ -347,8 +347,14 @@ export async function streamAgUiChatTurn(params: {
             /* consumer already gone */
           }
         } else {
+          // Persist the durable per-turn content (cinatra#1037 P5.6 drop-history
+          // PR1 EXPAND) alongside the terminal status, so a NEW conversation's
+          // assistant turn survives in Postgres — not only in the bounded/lossy
+          // Redis AG-UI log. `null` (an empty turn) leaves content untouched.
+          const durable = adapter.durableContent();
           updateAssistantTurn(turn.id, {
             status: adapter.outcome === "error" ? "error" : "completed",
+            ...(durable !== null ? { content: durable } : {}),
           });
         }
       } finally {
