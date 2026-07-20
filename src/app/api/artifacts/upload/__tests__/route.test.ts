@@ -6,6 +6,7 @@ import { BlobTooLargeError } from "@cinatra-ai/artifacts";
 
 const getAuthSession = vi.fn();
 const writeUploadedArtifact = vi.fn();
+const notifyUploadRefusal = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
@@ -13,6 +14,30 @@ vi.mock("@/lib/auth-session", () => ({
 vi.mock("@/lib/artifacts/artifact-service", () => ({
   createUploadedArtifact: (i: unknown) => writeUploadedArtifact(i),
 }));
+// cinatra#1890 — the route dynamically imports the refusal-advisory module in
+// the 415 branch. Mock it so the advisory + deep link are observable without a
+// DB/notifications host.
+vi.mock("@/lib/artifacts/upload-refusal-advisory", () => ({
+  notifyUploadRefusal: (a: unknown) => notifyUploadRefusal(a),
+  buildUploadRefusalMarketplaceHref: (mime: string) =>
+    `/configuration/marketplace?accepts=${encodeURIComponent(mime)}`,
+}));
+
+/** Build the structured upload type-refusal the service throws (cinatra#1785 /
+ *  #1890): an ObjectsTypeNotRegisteredError-shaped Error carrying the refusal
+ *  classification the route branches on. */
+function typeRefusal(
+  kind: "no_type" | "ambiguous" | "no_mime",
+  normalizedMime: string,
+): Error {
+  const e = new Error(`upload cannot be typed to a system-base artifact pack: ${kind}`);
+  e.name = "ObjectsTypeNotRegisteredError";
+  Object.assign(e, {
+    code: "OBJECTS_TYPE_NOT_REGISTERED",
+    uploadRefusal: { kind, normalizedMime },
+  });
+  return e;
+}
 
 // Raw-body upload: never multipart formData.
 async function POST(
@@ -46,6 +71,8 @@ describe("POST /api/artifacts/upload", () => {
   beforeEach(() => {
     getAuthSession.mockReset();
     writeUploadedArtifact.mockReset();
+    notifyUploadRefusal.mockReset();
+    notifyUploadRefusal.mockResolvedValue(undefined);
   });
   afterEach(() => vi.resetModules());
 
@@ -199,5 +226,66 @@ describe("POST /api/artifacts/upload", () => {
     await POST("hi", { filename: "a.txt", chatThreadId: longId });
     const call = writeUploadedArtifact.mock.calls[0]?.[0] as Record<string, unknown>;
     expect((call?.chatContextSource as { threadId: string }).threadId).toHaveLength(256);
+  });
+
+  // ---------------------------------------------------------------------------
+  // cinatra#1890 — 415 refusal surfacing + advisory (D6).
+  // ---------------------------------------------------------------------------
+
+  it("415 no_type refusal → visible body (mime + marketplaceHref) + advisory fired", async () => {
+    getAuthSession.mockResolvedValue({
+      user: { id: "u1" },
+      session: { activeOrganizationId: "org1" },
+    });
+    writeUploadedArtifact.mockRejectedValue(typeRefusal("no_type", "application/zip"));
+    const res = await POST("PK", { filename: "bundle.zip" });
+    expect(res.status).toBe(415);
+    const json = (await res.json()) as {
+      ok: boolean;
+      mime?: string;
+      marketplaceHref?: string;
+    };
+    expect(json.ok).toBe(false);
+    expect(json.mime).toBe("application/zip");
+    expect(json.marketplaceHref).toBe(
+      "/configuration/marketplace?accepts=application%2Fzip",
+    );
+    // Advisory fired to the uploader with the refused MIME + filename.
+    expect(notifyUploadRefusal).toHaveBeenCalledTimes(1);
+    expect(notifyUploadRefusal.mock.calls[0]?.[0]).toEqual({
+      userId: "u1",
+      normalizedMime: "application/zip",
+      filename: "bundle.zip",
+    });
+  });
+
+  it("415 ambiguous refusal → visible 415 but NO marketplace link + NO advisory", async () => {
+    getAuthSession.mockResolvedValue({
+      user: { id: "u1" },
+      session: { activeOrganizationId: "org1" },
+    });
+    writeUploadedArtifact.mockRejectedValue(typeRefusal("ambiguous", "image/png"));
+    const res = await POST("x", { filename: "amb.png" });
+    expect(res.status).toBe(415);
+    const json = (await res.json()) as { marketplaceHref?: string; mime?: string };
+    expect(json.marketplaceHref).toBeUndefined();
+    // The refused MIME is still echoed for the visible surface.
+    expect(json.mime).toBe("image/png");
+    expect(notifyUploadRefusal).not.toHaveBeenCalled();
+  });
+
+  it("advisory throw never turns the 415 into a 500", async () => {
+    getAuthSession.mockResolvedValue({
+      user: { id: "u1" },
+      session: { activeOrganizationId: "org1" },
+    });
+    writeUploadedArtifact.mockRejectedValue(typeRefusal("no_type", "application/zip"));
+    notifyUploadRefusal.mockRejectedValue(new Error("bell down"));
+    const res = await POST("x", { filename: "bundle.zip" });
+    expect(res.status).toBe(415);
+    const json = (await res.json()) as { marketplaceHref?: string };
+    expect(json.marketplaceHref).toBe(
+      "/configuration/marketplace?accepts=application%2Fzip",
+    );
   });
 });

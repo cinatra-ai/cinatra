@@ -40,13 +40,30 @@ export type UploadArtifactTypeCandidate = {
   acceptMimes: readonly string[];
 };
 
+/**
+ * The structured refusal class for an unresolvable upload MIME (cinatra#1890,
+ * A2). Consumers (the upload route's advisory channel) must NOT parse the
+ * human-readable `reason` string to decide recourse — they branch on `kind`:
+ *   - `no_mime`    — the upload declared no MIME at all; "install a type" is
+ *                    NOT the recourse (there is nothing to match on).
+ *   - `no_type`    — a real MIME that no installed required-base type accepts;
+ *                    THIS is the "install a type that accepts this" recourse
+ *                    case that earns the marketplace deep-link advisory.
+ *   - `ambiguous`  — more than one required-base type accepts the MIME; the
+ *                    refusal is a fail-closed "refusing to guess", and installing
+ *                    MORE types would make it worse — no install advisory.
+ */
+export type UploadTypeRefusalKind = "no_mime" | "no_type" | "ambiguous";
+
 export type ResolveUploadArtifactTypeResult =
   | { ok: true; objectTypeId: string }
-  | { ok: false; reason: string; matched: string[] };
+  | { ok: false; kind: UploadTypeRefusalKind; reason: string; matched: string[] };
 
 /** Normalize a MIME for matching: drop parameters (`; charset=...`), trim, and
- *  lowercase. An empty/whitespace MIME normalizes to "". */
-function normalizeMime(mime: string): string {
+ *  lowercase. An empty/whitespace MIME normalizes to "". Exported so the
+ *  refusal-advisory channel (cinatra#1890) keys its notification + deep link on
+ *  the SAME normalized MIME the resolver refused on. */
+export function normalizeMime(mime: string): string {
   const base = mime.split(";", 1)[0] ?? "";
   return base.trim().toLowerCase();
 }
@@ -95,6 +112,7 @@ export function resolveUploadArtifactTypeFromCandidates(
   if (normalized.length === 0) {
     return {
       ok: false,
+      kind: "no_mime",
       reason:
         "no MIME on the upload — cannot map to a required-base artifact type",
       matched: [],
@@ -115,6 +133,7 @@ export function resolveUploadArtifactTypeFromCandidates(
   if (distinct.length === 0) {
     return {
       ok: false,
+      kind: "no_type",
       reason:
         `no installed required-base artifact type accepts "${normalized}"`,
       matched: [],
@@ -122,6 +141,7 @@ export function resolveUploadArtifactTypeFromCandidates(
   }
   return {
     ok: false,
+    kind: "ambiguous",
     reason:
       `MIME "${normalized}" is ambiguously accepted by more than one system-base ` +
       `artifact type [${distinct.join(", ")}] — refusing to guess`,

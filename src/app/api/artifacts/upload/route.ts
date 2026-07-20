@@ -56,6 +56,8 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
   const orgId = session.session?.activeOrganizationId;
+  // The uploading user — the recipient of the refusal advisory (cinatra#1890).
+  const userId = session.user?.id ?? undefined;
   if (!orgId) {
     return Response.json(
       { ok: false, error: "No active organization" },
@@ -99,7 +101,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const result = await createUploadedArtifact({
       orgId,
-      createdBy: session.user?.id ?? null,
+      createdBy: userId ?? null,
       // Ownership is required by the semantic creation contract. Web uploads
       // are organization-owned and org-visible — canonical vocabulary only
       // (cinatra#1428): visibility 'organization', never the retired 'org'
@@ -143,8 +145,51 @@ export async function POST(request: Request): Promise<Response> {
       (err.name === "ObjectsTypeNotRegisteredError" ||
         (err as { code?: unknown }).code === "OBJECTS_TYPE_NOT_REGISTERED")
     ) {
+      // Make the refusal VISIBLE with recourse (cinatra#1890 / D6): surface the
+      // refused MIME + a marketplace deep link so chat can render an honest,
+      // actionable refusal instead of silently dropping the file. The structured
+      // `uploadRefusal.kind` decides whether "install a type that accepts this"
+      // is the right recourse — only a real MIME no installed type accepts
+      // (`no_type`) earns the deep link + advisory notification. An `ambiguous`
+      // or `no_mime` refusal is still surfaced (visible 415) but WITHOUT a
+      // marketplace link, since installing more types is not the fix.
+      const refusal = (err as { uploadRefusal?: { kind?: string; normalizedMime?: string } })
+        .uploadRefusal;
+      const refusedMime =
+        typeof refusal?.normalizedMime === "string" && refusal.normalizedMime.length > 0
+          ? refusal.normalizedMime
+          : undefined;
+      const offerInstall = refusal?.kind === "no_type" && !!refusedMime;
+      // Build the deep link AND fire the advisory inside ONE guarded block: a
+      // failed dynamic import or a bell-write throw must NEVER turn the intended
+      // 415 into a 500. The href is computed BEFORE the notify so a notify throw
+      // still leaves the recourse link in the response.
+      let marketplaceHref: string | undefined;
+      if (offerInstall && refusedMime) {
+        try {
+          const advisory = await import("@/lib/artifacts/upload-refusal-advisory");
+          marketplaceHref = advisory.buildUploadRefusalMarketplaceHref(refusedMime);
+          if (userId) {
+            await advisory.notifyUploadRefusal({
+              userId,
+              normalizedMime: refusedMime,
+              filename,
+            });
+          }
+        } catch (advisoryErr) {
+          console.warn(
+            "[artifacts:upload] refusal advisory failed:",
+            advisoryErr instanceof Error ? advisoryErr.message : advisoryErr,
+          );
+        }
+      }
       return Response.json(
-        { ok: false, error: err.message },
+        {
+          ok: false,
+          error: err.message,
+          ...(refusedMime ? { mime: refusedMime } : {}),
+          ...(marketplaceHref ? { marketplaceHref } : {}),
+        },
         { status: 415 },
       );
     }
