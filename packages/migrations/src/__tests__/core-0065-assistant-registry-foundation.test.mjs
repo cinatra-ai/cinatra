@@ -1,4 +1,4 @@
-// core__0063 assistant registry-foundation (cinatra#1874 Epic #1873 W1) —
+// core__0065 assistant registry-foundation (cinatra#1874 Epic #1873 W1) —
 // SQL-builder shape + idempotency/existence-guard/parity assertions (no live DB;
 // the live apply + backfill are exercised by the DB-gated integration test).
 import path from "node:path";
@@ -10,13 +10,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..", "..");
 
 const mod = await import(
-  path.join(REPO_ROOT, "migrations", "core", "core__0063_assistant-registry-foundation.mjs")
+  path.join(REPO_ROOT, "migrations", "core", "core__0065_assistant-registry-foundation.mjs")
 );
 const { readManifestUnion } = await import(
   path.join(REPO_ROOT, "migrations", "manifest-reader.mjs")
 );
 
-describe("core__0063 — module shape", () => {
+describe("core__0065 — module shape", () => {
   it("exports up/down + the SQL builders + the vocabulary data", () => {
     for (const fn of [
       "up",
@@ -45,12 +45,12 @@ describe("core__0063 — module shape", () => {
     });
   });
 
-  it("ships its append-only ledger fragment (union ledger seq 0063, non-destructive)", () => {
+  it("ships its append-only ledger fragment (union ledger seq 0065, non-destructive)", () => {
     const { entries, errors } = readManifestUnion(path.join(REPO_ROOT, "migrations"));
     expect(errors).toEqual([]);
-    const entry = entries.find((m) => m.seq === "0063");
+    const entry = entries.find((m) => m.seq === "0065");
     expect(entry).toBeDefined();
-    expect(entry?.file).toBe("core/core__0063_assistant-registry-foundation.mjs");
+    expect(entry?.file).toBe("core/core__0065_assistant-registry-foundation.mjs");
     expect(entry?.destructive).toBe(false);
     expect(entry?.tables).toEqual([
       "installed_extension",
@@ -61,7 +61,7 @@ describe("core__0063 — module shape", () => {
   });
 });
 
-describe("core__0063 — up SQL shape", () => {
+describe("core__0065 — up SQL shape", () => {
   const up = mod.buildUpSql().join("\n;;\n");
 
   it("adds installed_extension.assistant_declaration FIRST (backfill reads it)", () => {
@@ -84,7 +84,7 @@ describe("core__0063 — up SQL shape", () => {
   });
 
   it("existence-guards the backfill on all three referenced tables", () => {
-    const bf = mod.buildAssistantHandlesOriginSql().find((s) => s.includes("core0063bf"));
+    const bf = mod.buildAssistantHandlesOriginSql().find((s) => s.includes("core0065bf"));
     expect(bf).toBeDefined();
     expect(bf).toMatch(/to_regclass\('assistant_handles'\) IS NULL/);
     expect(bf).toMatch(/to_regclass\('agent_templates'\) IS NULL/);
@@ -93,7 +93,7 @@ describe("core__0063 — up SQL shape", () => {
   });
 
   it("backfills origin='extension' only for active|locked installs with a declaration", () => {
-    const bf = mod.buildAssistantHandlesOriginSql().find((s) => s.includes("core0063bf"));
+    const bf = mod.buildAssistantHandlesOriginSql().find((s) => s.includes("core0065bf"));
     expect(bf).toMatch(/ie\.assistant_declaration IS NOT NULL/);
     expect(bf).toMatch(/ie\.status IN \('active', 'locked'\)/);
     expect(bf).toMatch(/THEN 'extension'/);
@@ -119,7 +119,7 @@ describe("core__0063 — up SQL shape", () => {
   });
 });
 
-describe("core__0063 — down SQL", () => {
+describe("core__0065 — down SQL", () => {
   it("drops the two NET-NEW tables and the added columns/constraints", () => {
     const down = mod.buildDownSql().join("\n");
     expect(down).toMatch(/DROP TABLE IF EXISTS assistant_tag_alias/);

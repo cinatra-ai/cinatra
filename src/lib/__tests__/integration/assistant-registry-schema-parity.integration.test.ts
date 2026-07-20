@@ -7,7 +7,7 @@
  *           directly (assistant_handles WITH origin/package_name inline; the
  *           audience + alias tables; installed_extension WITH assistant_declaration).
  *   UPGRADE schema: a pre-1874 base (assistant_handles WITHOUT origin/package_name;
- *           installed_extension WITHOUT assistant_declaration) + the core__0063
+ *           installed_extension WITHOUT assistant_declaration) + the core__0065
  *           migration's `buildUpSql`.
  *
  * The two schemas must present identical columns (name, type, nullability,
@@ -19,7 +19,7 @@ import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { assistantHandleSchemaQueries } from "@/lib/assistant-thread-schema";
 import { assistantRegistrySchemaQueries } from "@/lib/assistant-registry-schema";
-import { buildUpSql } from "../../../../migrations/core/core__0063_assistant-registry-foundation.mjs";
+import { buildUpSql } from "../../../../migrations/core/core__0065_assistant-registry-foundation.mjs";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =

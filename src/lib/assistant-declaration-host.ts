@@ -158,6 +158,54 @@ export function assertAssistantInstallConstraints(input: {
 }
 
 /**
+ * PRE-FINALIZE assistant install GATE (cinatra#1874 W1) — the pipeline seam.
+ * Runs the EARLY fail-closed read then the XOR + platform-scope constraints in
+ * the install pipeline's inert window (BEFORE `beginInstallOp`), so a refused
+ * assistant install is fully inert and leaves nothing on disk. Extracted from
+ * `extension-install-pipeline.ts` (file-size ratchet) as behaviour-preserving
+ * motion:
+ *   - the reader runs OUTSIDE the constraint `try` (its own GC-on-throw is the
+ *     ONLY GC for a read failure — the constraint catch never double-GCs);
+ *   - a non-assistant package (`declaration === null`) is a no-op;
+ *   - a constraint violation GCs the just-materialized dir best-effort UNLESS it
+ *     IS the live install's dir, then rethrows the directing error.
+ * `isLiveDigest` is a THUNK evaluated at EACH original point (once for the
+ * reader, again in the constraint catch) — the pipeline's `priorOp`/`mat.digest`
+ * are immutable across the await, so this reproduces the inlined block exactly.
+ */
+export async function enforceAssistantInstallGateInertly(
+  deps: AssistantSignalsReadDeps,
+  input: {
+    storeDir: string;
+    orgId: string | null;
+    packageName: string;
+    isLiveDigest: () => boolean;
+  },
+): Promise<void> {
+  const signals = await readAssistantInstallSignalsInertly(deps, input.storeDir, input.isLiveDigest());
+  if (signals.declaration === null) return; // not an assistant — no gate.
+  try {
+    assertAssistantInstallConstraints({
+      signals,
+      orgId: input.orgId,
+      packageName: input.packageName,
+    });
+  } catch (err) {
+    // A constraint refusal is a pre-journal throw; GC the just-materialized dir
+    // (unless it IS the live install's dir) so the refusal leaves nothing behind
+    // — mirroring the inert reader's own GC contract.
+    if (deps.gcStoreDir && !input.isLiveDigest()) {
+      try {
+        await deps.gcStoreDir(input.storeDir);
+      } catch {
+        /* best-effort GC — a leftover dir is recovered by a later retry's gate. */
+      }
+    }
+    throw err;
+  }
+}
+
+/**
  * Resolve the assistant install signals for a materialized package dir (the
  * host reader wired into `makeDefaultInstallPipelineDeps`). Returns the neutral
  * (no-assistant) signal for a non-agent kind, an absent config, or an

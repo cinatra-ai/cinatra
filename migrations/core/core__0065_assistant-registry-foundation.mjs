@@ -1,4 +1,4 @@
-// core__0063 — assistant REGISTRY-FOUNDATION schema (cinatra#1874, Epic #1873
+// core__0065 — assistant REGISTRY-FOUNDATION schema (cinatra#1874, Epic #1873
 // W1). The operator-upgrade twin of the fresh-install bootstrap DDL
 // (`assistant-registry-schema.ts` + the assistant_handles origin/package_name
 // columns in `assistant-thread-schema.ts` + the installed_extension
@@ -84,7 +84,7 @@ export function buildAssistantAudienceSql(schema) {
       subject_id text,
       created_at timestamptz NOT NULL DEFAULT now()
     )`,
-    `DO $core0063aud$
+    `DO $core0065aud$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
@@ -94,7 +94,7 @@ BEGIN
   ) THEN
     ALTER TABLE ${t(ASSISTANT_AUDIENCE_TABLE)} ADD CONSTRAINT assistant_audience_subject_kind_check CHECK (subject_kind IN (${kinds}));
   END IF;
-END $core0063aud$`,
+END $core0065aud$`,
     `CREATE UNIQUE INDEX IF NOT EXISTS assistant_audience_grant_uniq ON ${t(ASSISTANT_AUDIENCE_TABLE)} (package_name, subject_kind, COALESCE(subject_id, ''))`,
     `CREATE INDEX IF NOT EXISTS assistant_audience_package_idx ON ${t(ASSISTANT_AUDIENCE_TABLE)} (package_name)`,
   ];
@@ -110,7 +110,7 @@ export function buildAssistantHandlesOriginSql(schema) {
     `ALTER TABLE ${t(ASSISTANT_HANDLES_TABLE)} ADD COLUMN IF NOT EXISTS package_name text`,
     // Existence-guarded backfill: derive package_name + origin from the ACTUAL
     // installed-extension ownership. RETURNs early on a partial/fresh DB.
-    `DO $core0063bf$
+    `DO $core0065bf$
 BEGIN
   IF ${toReg(ASSISTANT_HANDLES_TABLE)} IS NULL
      OR ${toReg("agent_templates")} IS NULL
@@ -140,12 +140,12 @@ BEGIN
        ELSE 'standalone'
      END
    WHERE h.origin IS NULL;
-END $core0063bf$`,
+END $core0065bf$`,
     // Any row without a linked template stays NULL above → default it standalone.
     `UPDATE ${t(ASSISTANT_HANDLES_TABLE)} SET origin = 'standalone' WHERE origin IS NULL`,
     `ALTER TABLE ${t(ASSISTANT_HANDLES_TABLE)} ALTER COLUMN origin SET DEFAULT 'standalone'`,
     `ALTER TABLE ${t(ASSISTANT_HANDLES_TABLE)} ALTER COLUMN origin SET NOT NULL`,
-    `DO $core0063oc$
+    `DO $core0065oc$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
@@ -155,7 +155,7 @@ BEGIN
   ) THEN
     ALTER TABLE ${t(ASSISTANT_HANDLES_TABLE)} ADD CONSTRAINT assistant_handles_origin_check CHECK (origin IN ('extension', 'standalone'));
   END IF;
-END $core0063oc$`,
+END $core0065oc$`,
     `CREATE INDEX IF NOT EXISTS assistant_handles_package_name_idx ON ${t(ASSISTANT_HANDLES_TABLE)} (package_name) WHERE package_name IS NOT NULL`,
   ];
 }
@@ -174,7 +174,7 @@ export function buildAssistantTagAliasSql(schema) {
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )`,
-    `DO $core0063src$
+    `DO $core0065src$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.table_constraints
@@ -184,7 +184,7 @@ BEGIN
   ) THEN
     ALTER TABLE ${t(ASSISTANT_TAG_ALIAS_TABLE)} ADD CONSTRAINT assistant_tag_alias_source_check CHECK (source IN (${sources}));
   END IF;
-END $core0063src$`,
+END $core0065src$`,
     `CREATE INDEX IF NOT EXISTS assistant_tag_alias_package_idx ON ${t(ASSISTANT_TAG_ALIAS_TABLE)} (package_name)`,
     `INSERT INTO ${t(ASSISTANT_TAG_ALIAS_TABLE)} (alias, package_name, source)
       VALUES ('${seed.alias}', '${seed.packageName}', '${seed.source}')
