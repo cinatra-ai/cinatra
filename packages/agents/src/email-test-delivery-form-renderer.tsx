@@ -3,16 +3,32 @@
 /**
  * EmailTestDeliveryFormRenderer
  *
- * HITL renderer for `@cinatra-ai/email-test-delivery-agent:input`. Implements the
- * test-email form fields (recipientEmail, selectionMode,
- * specificInitialDraftIds, specificFollowUpDraftIds, dev-mode banner).
+ * HITL renderer for `@cinatra-ai/email-test-delivery-agent:input`. A PURE
+ * snapshot → onChange surface (DESIGN-V3 contract (8), the #1794 action-boundary
+ * doctrine): the renderer COLLECTS input and RESOLVES the gate; the RUN performs
+ * the send. The renderer NEVER performs a send itself — there is no client
+ * fetch, no `/api/test-delivery/send` call (that route is deleted).
  *
- * Multi-action HITL contract:
- *   - "Send test email" button POSTs to /api/test-delivery/send and updates
- *     a local banner. It does NOT call onChange — the gate must remain
- *     unresolved so the user can re-send.
- *   - "Continue" button calls onChange({ continueRequested: true, lastSendResult })
- *     to resolve the InputMessageNode interrupt and advance the flow.
+ * Two actions both resolve the InputMessageNode gate by emitting a JSON-encoded
+ * envelope at TOP-LEVEL `userResponse` (consumed by the WayFlow resume bridge,
+ * `review-task-actions.ts:406`) AND `testResult` (the declared node output,
+ * DESIGN-V3 contract (2)):
+ *   - "Send test email" → `{ action:"send", recipientEmail, selectionMode,
+ *      specificInitialDraftIds?, specificFollowUpDraftIds? }`. The workflow's
+ *      `parse_action` → `perform_test_send` primitives perform the real
+ *      server-side send under the run owner's authority, then RE-ENTER this gate
+ *      feeding `lastSendResult` + prior selections + a fresh `gateCycle`.
+ *   - "Continue" → `{ action:"continue" }` → the flow reaches End.
+ *
+ * Latency is honest (DESIGN-V3 contract (8)): clicking Send immediately disables
+ * both buttons and shows a pending state; the REAL result returns on gate
+ * re-entry as inbound `value.lastSendResult`. Rehydration is driven by the
+ * server-produced `value.gateCycle` (the ledger send ordinal wired back via a
+ * DataFlowEdge) — a monotonic token, so stale pending/selection state cannot
+ * survive a re-entry, remount or not. The banner reflects ONLY the inbound
+ * server-observed result (absent/null on first entry → no banner).
+ *
+ * See https://docs.cinatra.ai/references/platform/wayflow-input-message-node-contract/.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -20,7 +36,7 @@ import { Button } from "@/components/ui/button";
 import { MailIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -41,6 +57,10 @@ type SelectionMode = "random_initial" | "specific_initial" | "all_initial";
 type InitialDraftOption = { id: string; label: string; subject: string };
 type FollowUpDraftOption = { id: string; stepNumber: number; subject: string; label?: string };
 
+// The REAL server-side send result the run observed, fed back into the gate
+// value on re-entry (DESIGN-V3 contract (8)). Absent/null on first entry.
+type SendResult = { ok: boolean; message: string; sentTo?: string };
+
 type TestDeliveryValue = {
   campaignId?: string;
   defaultRecipientEmail?: string;
@@ -51,9 +71,10 @@ type TestDeliveryValue = {
   followUpDraftOptions?: FollowUpDraftOption[];
   developmentModeEnabled?: boolean;
   developmentRecipientEmail?: string;
+  // Inbound, workflow-supplied on gate re-entry (DESIGN-V3 contract (8)):
+  lastSendResult?: SendResult | null; // the REAL result of the run's last send
+  gateCycle?: number; // server-produced ledger send ordinal; rehydration token
 };
-
-type SendResult = { ok: boolean; message: string; sentTo?: string };
 
 // ---------------------------------------------------------------------------
 // Renderer
@@ -74,6 +95,11 @@ export function EmailTestDeliveryFormRenderer({
     developmentModeEnabled && developmentRecipientEmail
       ? developmentRecipientEmail
       : v.defaultRecipientEmail ?? "";
+  // Banner is driven SOLELY by the inbound server-observed result — never a
+  // client fetch. Absent/null on first entry → no banner.
+  const lastSendResult = v.lastSendResult ?? null;
+  // Server-produced rehydration token; first entry (no send yet) → 0.
+  const gateCycle = typeof v.gateCycle === "number" ? v.gateCycle : 0;
 
   // Form state
   const [recipientEmail, setRecipientEmail] = useState<string>(effectiveDefaultRecipient);
@@ -88,28 +114,29 @@ export function EmailTestDeliveryFormRenderer({
     v.defaultSpecificFollowUpDraftIds ?? [],
   );
 
-  // Banner / send state
-  const [lastSendResult, setLastSendResult] = useState<SendResult | null>(null);
-  const lastSendResultRef = useRef<SendResult | null>(null);
-  lastSendResultRef.current = lastSendResult;
-  const [sending, setSending] = useState(false);
+  // Submit state. `submittingAction` drives the disabled/pending UI (both
+  // buttons disable the moment either action resolves the gate); `submitRef` is
+  // the SYNCHRONOUS double-click dedupe guard that blocks a second `onChange`
+  // before the gate resolves (DESIGN-V3 contract (8); the primitive's durable
+  // idempotency ledger is the authoritative backstop if one still slips through).
+  const [submittingAction, setSubmittingAction] = useState<"send" | "continue" | null>(null);
+  const submitRef = useRef(false);
 
-  // Reset form + banner state if the parent supplies a different
-  // campaignId (e.g., the HITL surface re-mounts within the same React tree
-  // for a different campaign). Without this, the `useState` initializer's
-  // first-mount values would leak across campaign switches.
-  // Also re-syncs `recipientEmail` to the effective default whenever the
-  // dev-mode toggle or development recipient changes, so toggling dev-mode
-  // off mid-session does not leave a stale value the user has not seen.
+  // Re-hydrate on a fresh gate entry. Keyed on the server-produced `gateCycle`
+  // (contract (8)) so a re-entry after a send ALWAYS clears the local pending
+  // state and re-syncs the form to the workflow-fed prior selections (the user
+  // does not re-pick to send again) — remount or not, a stale token cannot
+  // survive. Also re-syncs on a campaign switch / dev-mode toggle so the
+  // first-mount initializer values never leak across those changes.
   useEffect(() => {
-    setLastSendResult(null);
-    setSending(false);
+    submitRef.current = false;
+    setSubmittingAction(null);
     setRecipientEmail(effectiveDefaultRecipient);
     setSelectionMode(v.defaultSelectionMode ?? "random_initial");
     setSelectedInitialIds(v.defaultSpecificInitialDraftIds ?? []);
     setSelectedFollowUpIds(v.defaultSpecificFollowUpDraftIds ?? []);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaignId, developmentModeEnabled, developmentRecipientEmail]);
+  }, [campaignId, developmentModeEnabled, developmentRecipientEmail, gateCycle]);
 
   const filteredInitialDrafts = useMemo(() => {
     const query = searchValue.trim().toLowerCase();
@@ -123,6 +150,9 @@ export function EmailTestDeliveryFormRenderer({
     followUpDraftOptions.length > 0 &&
     selectedFollowUpIds.length === followUpDraftOptions.length;
 
+  const isSubmitting = submittingAction !== null;
+  const controlsDisabled = disabled || isSubmitting;
+
   function toggleInitial(id: string) {
     setSelectedInitialIds((cur) =>
       cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
@@ -135,73 +165,39 @@ export function EmailTestDeliveryFormRenderer({
     );
   }
 
-  async function handleSend() {
-    if (sending) return;
-    setSending(true);
-    setLastSendResult(null);
+  // "Send test email" — resolve the gate with the send envelope. The RUN
+  // performs the send (via parse_action → perform_test_send); the real result
+  // returns on re-entry as `value.lastSendResult`. Immediately disable both
+  // buttons + show a pending state (DESIGN-V3 contract (8)).
+  function handleSend() {
+    if (submitRef.current || disabled) return;
+    submitRef.current = true;
+    setSubmittingAction("send");
     const recipient =
       developmentModeEnabled && developmentRecipientEmail
         ? developmentRecipientEmail
         : recipientEmail;
-    try {
-      const body = {
-        campaignId,
-        recipientEmail: recipient,
-        selectionMode,
-        ...(selectionMode === "specific_initial"
-          ? { specificInitialDraftIds: selectedInitialIds }
-          : {}),
-        ...(selectedFollowUpIds.length > 0
-          ? { specificFollowUpDraftIds: selectedFollowUpIds }
-          : {}),
-      };
-      const res = await fetch("/api/test-delivery/send", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const json = (await res.json().catch(() => ({}))) as {
-        ok?: boolean;
-        sentTo?: string;
-        error?: string;
-      };
-      if (res.ok && json.ok) {
-        setLastSendResult({
-          ok: true,
-          message: `Test email sent to ${json.sentTo ?? recipient}.`,
-          sentTo: json.sentTo ?? recipient,
-        });
-      } else {
-        setLastSendResult({
-          ok: false,
-          message: json.error ?? `Send failed (HTTP ${res.status})`,
-        });
-      }
-    } catch (err) {
-      setLastSendResult({
-        ok: false,
-        message: err instanceof Error ? err.message : "Send failed",
-      });
-    } finally {
-      setSending(false);
-    }
+    const envelope = JSON.stringify({
+      action: "send",
+      recipientEmail: recipient,
+      selectionMode,
+      ...(selectionMode === "specific_initial"
+        ? { specificInitialDraftIds: selectedInitialIds }
+        : {}),
+      ...(selectedFollowUpIds.length > 0
+        ? { specificFollowUpDraftIds: selectedFollowUpIds }
+        : {}),
+    });
+    onChange({ userResponse: envelope, testResult: envelope });
   }
 
-  // Resolve the gate. The InputMessageNode declares a single string output
-  // `testResult`, but the WayFlow resume bridge (review-task-actions.ts) takes
-  // the resume message from TOP-LEVEL `values.userResponse` — a payload keyed
-  // only `testResult` leaves it on the `[Approved by operator]` fallback and the
-  // run never receives the real envelope (DESIGN-V3 contract (2), the ENVELOPE
-  // FIX). Emit the SAME JSON-encoded envelope at BOTH keys: `userResponse` drives
-  // the resume message; `testResult` keeps the declared node output populated for
-  // the End-node DataFlowEdge and backward-compat. Downstream consumers
-  // JSON.parse either on entry.
-  // See https://docs.cinatra.ai/references/platform/wayflow-input-message-node-contract/.
+  // "Continue" — resolve the gate with the continue envelope; the flow reaches
+  // End. Guarded by the same synchronous dedupe ref.
   function handleContinue() {
-    const envelope = JSON.stringify({
-      userResponse: "continue",
-      lastSendResult: lastSendResultRef.current,
-    });
+    if (submitRef.current || disabled) return;
+    submitRef.current = true;
+    setSubmittingAction("continue");
+    const envelope = JSON.stringify({ action: "continue" });
     onChange({ userResponse: envelope, testResult: envelope });
   }
 
@@ -240,7 +236,9 @@ export function EmailTestDeliveryFormRenderer({
               onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                 setRecipientEmail(e.target.value)
               }
-              disabled={disabled || (developmentModeEnabled && Boolean(developmentRecipientEmail))}
+              disabled={
+                controlsDisabled || (developmentModeEnabled && Boolean(developmentRecipientEmail))
+              }
             />
           </InputGroup>
         </Field>
@@ -250,7 +248,7 @@ export function EmailTestDeliveryFormRenderer({
           <Select
             value={selectionMode}
             onValueChange={(value: string) => setSelectionMode(value as SelectionMode)}
-            disabled={disabled}
+            disabled={controlsDisabled}
           >
             <SelectTrigger className="rounded-control border-line bg-surface-strong disabled:bg-surface-muted disabled:text-muted-foreground">
               <SelectValue />
@@ -274,7 +272,7 @@ export function EmailTestDeliveryFormRenderer({
                   setSearchValue(e.target.value)
                 }
                 placeholder="Search recipient or subject"
-                disabled={disabled}
+                disabled={controlsDisabled}
                 className="rounded-control border-line bg-surface-strong disabled:bg-surface-muted disabled:text-muted-foreground"
               />
               <div className="rounded-control max-h-72 overflow-y-auto border border-line">
@@ -289,7 +287,7 @@ export function EmailTestDeliveryFormRenderer({
                         value={draft.id}
                         checked={selectedInitialIds.includes(draft.id)}
                         onCheckedChange={() => toggleInitial(draft.id)}
-                        disabled={disabled}
+                        disabled={controlsDisabled}
                         className="mt-1"
                       />
                       <span>
@@ -320,7 +318,7 @@ export function EmailTestDeliveryFormRenderer({
                       allFollowUpsSelected ? [] : followUpDraftOptions.map((d) => d.id),
                     )
                   }
-                  disabled={disabled || followUpDraftOptions.length === 0}
+                  disabled={controlsDisabled || followUpDraftOptions.length === 0}
                   className="text-sm font-medium text-foreground underline-offset-4 hover:underline disabled:text-muted-foreground"
                 >
                   {allFollowUpsSelected ? "Deselect all" : "Select all"}
@@ -339,7 +337,7 @@ export function EmailTestDeliveryFormRenderer({
                         value={draft.id}
                         checked={checked}
                         onCheckedChange={() => toggleFollowUp(draft.id)}
-                        disabled={disabled}
+                        disabled={controlsDisabled}
                         className="mt-1"
                       />
                       <span>
@@ -357,7 +355,8 @@ export function EmailTestDeliveryFormRenderer({
           </fieldset>
         ) : null}
 
-        {/* Inline status banner */}
+        {/* Inline status banner — driven SOLELY by the inbound server-observed
+            result the run supplied on re-entry (never a client fetch). */}
         {lastSendResult ? (
           <div
             data-testid="test-delivery-banner"
@@ -372,15 +371,25 @@ export function EmailTestDeliveryFormRenderer({
           </div>
         ) : null}
 
+        {/* Pending indicator — honest latency while the run performs the send. */}
+        {submittingAction === "send" ? (
+          <div
+            data-testid="test-delivery-pending"
+            className="rounded-control border border-line bg-surface-muted px-4 py-3 text-sm text-muted-foreground"
+          >
+            Sending test…
+          </div>
+        ) : null}
+
         <div className="flex flex-wrap items-center gap-3 pt-2">
-          <Button type="button" onClick={handleSend} disabled={disabled || sending}>
-            {sending ? "Sending…" : "Send test email"}
+          <Button type="button" onClick={handleSend} disabled={controlsDisabled}>
+            {submittingAction === "send" ? "Sending test…" : "Send test email"}
           </Button>
           <Button
             type="button"
             variant="secondary"
             onClick={handleContinue}
-            disabled={disabled}
+            disabled={controlsDisabled}
           >
             Continue
           </Button>
