@@ -24,7 +24,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // The bridge is `import "server-only"` (fs); neutralise the RSC guard for node.
 vi.mock("server-only", () => ({}));
 
-const runPgMock = vi.fn();
+// `vi.mock` factories are hoisted above these declarations, so the mock fns
+// they close over must be created via `vi.hoisted` (vitest only exempts names
+// literally prefixed with `mock`; these are `…Mock`-suffixed) — mirrors the
+// sibling matcher-runtime.test.ts.
+const {
+  runPgMock,
+  resolveRuntimeMock,
+  runLlmMock,
+  listSkillsMock,
+  parseFrontmatterMock,
+  buildPortsMock,
+  assertSemanticTypeMock,
+  lazyRegisterMock,
+  writeAllowedMock,
+} = vi.hoisted(() => ({
+  runPgMock: vi.fn(),
+  resolveRuntimeMock: vi.fn(),
+  runLlmMock: vi.fn(),
+  listSkillsMock: vi.fn(),
+  parseFrontmatterMock: vi.fn(),
+  buildPortsMock: vi.fn(),
+  assertSemanticTypeMock: vi.fn(),
+  lazyRegisterMock: vi.fn(),
+  writeAllowedMock: vi.fn(async (): Promise<boolean> => true),
+}));
 vi.mock("@/lib/postgres-sync", () => ({ runPostgresQueriesSync: runPgMock }));
 // The matcher runtime reads pg config from `@/lib/database`; the presentation
 // host reads it from `@/lib/postgres-config` + `@/lib/postgres-schema-init`.
@@ -47,15 +71,8 @@ vi.mock("@/lib/register-all-object-types", () => ({
 }));
 
 // Leaf side-effects the runtime reaches AFTER candidate discovery — faked so the
-// test is hermetic. Candidate DISCOVERY (the thing under proof) is NOT mocked.
-const resolveRuntimeMock = vi.fn();
-const runLlmMock = vi.fn();
-const listSkillsMock = vi.fn();
-const parseFrontmatterMock = vi.fn();
-const buildPortsMock = vi.fn();
-const assertSemanticTypeMock = vi.fn();
-const lazyRegisterMock = vi.fn();
-const writeAllowedMock = vi.fn(async () => true);
+// test is hermetic (mock fns hoisted above). Candidate DISCOVERY (the thing
+// under proof) is NOT mocked.
 vi.mock("@cinatra-ai/llm", () => ({
   resolveConfiguredLlmRuntime: resolveRuntimeMock,
   runResolvedDeterministicLlmTask: runLlmMock,
