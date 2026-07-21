@@ -342,11 +342,26 @@ export async function createDashboard(
   const id = input.id ?? randomUUID();
   const visibility: Visibility = input.visibility ?? "private";
 
+  // cinatra#1738 (owner ruling D1): the required ownerLevel/ownerId IS the
+  // dashboard's single scope — record the entity anchor at creation so
+  // ancestry (canonical nested routes, breadcrumbs) has data to render.
+  // user/workspace scopes have no entity detail route to be anchored under;
+  // their anchor stays NULL and the flat route remains canonical.
+  const anchor =
+    input.ownerLevel === "team" || input.ownerLevel === "organization"
+      ? { entityType: input.ownerLevel, entityId: input.ownerId }
+      : { entityType: null, entityId: null };
+  // Anchored rows join the per-entity name machinery (the reserved "Overview"
+  // name, dashboards_entity_name_uniq) that NULL-anchor rows never touched —
+  // apply the same reserved-name rule createEntityDashboard applies.
+  const name =
+    anchor.entityType != null ? assertCreatableName(input.name) : input.name;
+
   // Build a pseudo-row for the permission check — the row "doesn't exist
   // yet," so we use the input shape.
   const pseudo: DashboardRow = {
     id,
-    name: input.name,
+    name,
     description: input.description ?? null,
     configJson: config as never,
     configVersion,
@@ -367,8 +382,8 @@ export async function createDashboard(
     extensionId: null,
     isTemplate: false,
     templateScope: null,
-    entityType: null,
-    entityId: null,
+    entityType: anchor.entityType,
+    entityId: anchor.entityId,
     isDefault: false,
     contributionId: null,
     appliedContributionVersion: null,
@@ -382,31 +397,45 @@ export async function createDashboard(
   }
 
   const db = getDashboardsDb();
-  return db.transaction(async (tx) => {
-    const insertRow: NewDashboardRow = {
-      id,
-      name: input.name,
-      description: input.description ?? null,
-      configJson: config as never,
-      configVersion,
-      dashboardVersion: 1,
-      publishedRevisionNumber: null,
-      ownerLevel: input.ownerLevel,
-      ownerId: input.ownerId,
-      organizationId: actor.organizationId,
-      visibility,
-      status: input.status ?? "draft",
-      createdBy: actor.userId,
-    };
-    const [row] = await tx.insert(dashboards).values(insertRow).returning();
-    await writeAudit(tx as unknown as DashboardsDb, {
-      operation: "dashboards.create",
-      actor,
-      row,
-      metadata: { initialStatus: row.status, ownerLevel: row.ownerLevel },
+  try {
+    return await db.transaction(async (tx) => {
+      const insertRow: NewDashboardRow = {
+        id,
+        name,
+        description: input.description ?? null,
+        configJson: config as never,
+        configVersion,
+        dashboardVersion: 1,
+        publishedRevisionNumber: null,
+        ownerLevel: input.ownerLevel,
+        ownerId: input.ownerId,
+        organizationId: actor.organizationId,
+        visibility,
+        status: input.status ?? "draft",
+        createdBy: actor.userId,
+        entityType: anchor.entityType,
+        entityId: anchor.entityId,
+      };
+      const [row] = await tx.insert(dashboards).values(insertRow).returning();
+      await writeAudit(tx as unknown as DashboardsDb, {
+        operation: "dashboards.create",
+        actor,
+        row,
+        metadata: { initialStatus: row.status, ownerLevel: row.ownerLevel },
+      });
+      return row;
     });
-    return row;
-  });
+  } catch (e) {
+    // Writing anchors activates dashboards_entity_name_uniq for this path
+    // (NULL entity buckets never collided — Postgres NULLs are distinct).
+    // Key on the CONSTRAINT, not just 23505: a client-supplied dashboardId
+    // makes a primary-key collision reachable here, and it must not
+    // masquerade as a name conflict.
+    if (uniqueViolationConstraint(e) === "dashboards_entity_name_uniq") {
+      throw new DashboardNameConflictError(name);
+    }
+    throw e;
+  }
 }
 
 export async function updateDashboard(
@@ -838,6 +867,20 @@ function isUniqueViolation(e: unknown): boolean {
     cur = (cur as { cause?: unknown }).cause;
   }
   return false;
+}
+
+/** The violated constraint's name when `e` (or its `cause` chain) is a
+ *  Postgres unique-violation (23505), else null — for callers that must
+ *  distinguish WHICH unique index fired (cinatra#1738: a name conflict vs a
+ *  client-supplied-id primary-key collision). */
+function uniqueViolationConstraint(e: unknown): string | null {
+  let cur: unknown = e;
+  for (let depth = 0; depth < 6 && cur != null; depth += 1) {
+    const err = cur as { code?: string; constraint?: string };
+    if (err.code === "23505") return err.constraint ?? null;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return null;
 }
 
 function assertValidEntityRef(ref: DashboardEntityRef): void {

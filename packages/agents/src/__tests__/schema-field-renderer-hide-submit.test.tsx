@@ -2,9 +2,10 @@
 /**
  * Regression coverage for the `hideSubmit` field renderer prop.
  *
- * `SchemaFieldRenderer` and `FollowUpCadenceFieldRenderer` must omit their
- * per-field "Continue" button when `hideSubmit` is true. The grouped form owns
- * the sole "Save & start run" button for the full form.
+ * `SchemaFieldRenderer` must omit its per-field "Continue" button when
+ * `hideSubmit` is true. The grouped form owns the sole "Save & start run"
+ * button for the full form. (The FollowUpCadence hideSubmit coverage moved with
+ * the migrated component into @cinatra-ai/email-artifacts, cinatra#1625.)
  *
  *   pnpm --filter @cinatra/agent-builder exec vitest run \
  *     src/__tests__/schema-field-renderer-hide-submit.test.tsx
@@ -31,7 +32,6 @@ vi.mock("lucide-react", () => ({
 }));
 
 import { SchemaFieldRenderer } from "../schema-field-renderer";
-import { FollowUpCadenceFieldRenderer } from "../follow-up-cadence-renderer";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -83,49 +83,6 @@ describe("SchemaFieldRenderer hideSubmit", () => {
     );
 
     // SchemaFieldRenderer must skip the Continue button when hideSubmit is true.
-    const btn = screen.queryByRole("button", { name: /Continue/i });
-    expect(btn).toBeNull();
-  });
-});
-
-describe("FollowUpCadenceFieldRenderer hideSubmit", () => {
-  afterEach(() => {
-    cleanup();
-  });
-
-  it("shows the Continue button by default (hideSubmit !== true) in FollowUpCadenceFieldRenderer", () => {
-    render(
-      <FollowUpCadenceFieldRenderer
-        fieldName="followUpDays"
-        schema={{ type: "array" }}
-        value={[4, 11, 25]}
-        onChange={() => {}}
-        label="Follow-up cadence"
-        context={BASE_CONTEXT}
-      />,
-    );
-
-    const btn = screen.queryByRole("button", { name: /Continue/i });
-    expect(btn).not.toBeNull();
-  });
-
-  it("hides the Continue button when hideSubmit={true} in FollowUpCadenceFieldRenderer", () => {
-    // TODO: remove the `as any` cast once FieldRendererProps.hideSubmit lands.
-    const extraProps = { hideSubmit: true } as any;
-
-    render(
-      <FollowUpCadenceFieldRenderer
-        fieldName="followUpDays"
-        schema={{ type: "array" }}
-        value={[4, 11, 25]}
-        onChange={() => {}}
-        label="Follow-up cadence"
-        context={BASE_CONTEXT}
-        {...extraProps}
-      />,
-    );
-
-    // FollowUpCadenceFieldRenderer must gate the Continue button on hideSubmit.
     const btn = screen.queryByRole("button", { name: /Continue/i });
     expect(btn).toBeNull();
   });

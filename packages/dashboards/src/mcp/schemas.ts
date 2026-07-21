@@ -99,8 +99,19 @@ export const dashboardsCreateSchema = z.object({
    *  mutation service wraps + deep-validates downstream. */
   config: dashboardConfigInputSchema,
   configVersion: z.string().min(1).optional(),
-  ownerLevel: ownerLevelSchema,
-  ownerId: z.string().min(1),
+  ownerLevel: ownerLevelSchema.describe(
+    "The dashboard's SINGLE scope (cinatra#1738): every dashboard belongs to " +
+      "exactly one scope, recorded at creation. team/organization dashboards " +
+      "are anchored to that entity and live at canonical nested URLs " +
+      "(/teams/{ownerId}/dashboards/{id}, /organizations/{ownerId}/dashboards/{id}).",
+  ),
+  ownerId: z
+    .string()
+    .min(1)
+    .describe(
+      "The scope entity's id — the team or organization the dashboard is " +
+        "about (or the user id for a personal dashboard).",
+    ),
   visibility: visibilitySchema.optional(),
 });
 

@@ -89,6 +89,15 @@ jobs:
               - 'src/app/api/wordpress/**'
               - 'src/app/api/drupal/**'
               - 'src/lib/wordpress-mcp-connection.ts'
+              # cinatra#1919 — the hosted-LLM MCP path the suite's boot exercises
+              # runs through the external-MCP registry (host-connector service
+              # publication + the /api/mcp tools the WP/Drupal widget reaches). A
+              # PR touching ONLY this module previously skipped the suite
+              # (misleading green); it is a real boot-dependency and must trigger
+              # the gate. The filter-coverage regression test
+              # (src/lib/__tests__/wp-drupal-uat-paths-filter-coverage.test.ts)
+              # keeps this list covering the suite's boot-dependency modules.
+              - 'src/lib/external-mcp-registry.ts'
               - 'src/lib/dev-auto-setup.ts'
               - 'packages/llm/src/scripted-test-provider.ts'
               - 'tests/e2e/wp-drupal-uat/**'
