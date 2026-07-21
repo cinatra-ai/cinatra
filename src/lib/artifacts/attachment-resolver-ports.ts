@@ -3,6 +3,13 @@ import type {
   LlmAttachmentRef,
 } from "@cinatra-ai/llm";
 import { uploadFile } from "@cinatra-ai/llm";
+// Dependency-free capability leaf (real in tests, no mock) — the same
+// ingestible-mime → extension authority the matcher uses (cinatra#1891
+// DEFECT-3 boundary defense).
+import {
+  extensionForIngestibleMime,
+  filenameExtensionMatchesMime,
+} from "@cinatra-ai/llm/attachment-capability";
 import {
   getCachedProviderFile,
   putCachedProviderFile,
@@ -115,10 +122,29 @@ export function buildAttachmentResolverPorts(input: {
       // 5) Upload with the AUTHORITATIVE mime (NOT ref.mime — already
       // proven equal above, but using `resolved.mime` makes the data flow
       // explicit and survives future relaxations).
+      //
+      // cinatra#1891 DEFECT-3 boundary defense: providers (OpenAI's `input_file`
+      // path especially) derive the file FORMAT from the filename's TRAILING
+      // extension — an extensionless name is rejected, and an extension for a
+      // DIFFERENT mime makes the file parsed under the wrong format (a `.pdf`
+      // name on text/markdown bytes → PDF parsing of markdown). The caller
+      // SHOULD pass a well-formed `ref.filename`, but the fallbacks
+      // (`ref.title`, `ref.artifactId`) can be extensionless and a caller may
+      // pass a filename whose extension disagrees with the AUTHORITATIVE mime.
+      // When the authoritative mime IS ingestible yet the chosen name's
+      // extension does not MATCH it, append the mime-derived extension so the
+      // trailing extension always matches the bytes. Unknown/non-ingestible
+      // mimes are left untouched (the capability decision already gates them).
+      const baseFilename = ref.filename ?? ref.title ?? ref.artifactId;
+      const mimeExt = extensionForIngestibleMime(resolved.mime);
+      const uploadFilename =
+        mimeExt && !filenameExtensionMatchesMime(baseFilename, resolved.mime)
+          ? `${baseFilename}${mimeExt}`
+          : baseFilename;
       const fileRef = await uploadFile({
         provider,
         content,
-        filename: ref.filename ?? ref.title ?? ref.artifactId,
+        filename: uploadFilename,
         mimeType: resolved.mime,
       });
       // Return the AUTHORITATIVE metadata so the resolver can store it in

@@ -95,6 +95,26 @@ import {
   MatcherRetryableError,
   __test,
 } from "../matcher-runtime";
+// The REAL capability authority (dependency-free leaf, resolved via the vitest
+// alias — NOT mocked). The matcher's filename resolution is exercised against
+// the same ingestible-mime → extension map the provider ingestion rules use.
+import {
+  extensionForIngestibleMime,
+  filenameExtensionMatchesMime,
+} from "@cinatra-ai/llm/attachment-capability";
+
+const resolveFilename = (
+  artifactId: string,
+  mime: string,
+  persistedFilename?: string,
+) =>
+  __test.resolveMatcherAttachmentFilename({
+    artifactId,
+    mime,
+    persistedFilename,
+    extensionForMime: extensionForIngestibleMime,
+    extensionMatchesMime: filenameExtensionMatchesMime,
+  });
 
 const PAYLOAD = {
   orgId: "org-a",
@@ -188,6 +208,63 @@ describe("matcher-runtime pure helpers", () => {
         "@v/icp-artifact",
       ),
     ).toBe(false);
+  });
+});
+
+// cinatra#1891 DEFECT-3: the matcher attachment MUST carry a filename with a
+// provider-recognized extension (OpenAI's `input_file` path 400s on an
+// extensionless name — the exact live-walk failure). Drives the REAL capability
+// helpers (no mock), so a regression in the ingestible-set → extension mapping
+// re-breaks this instead of shipping a silent no-op.
+describe("resolveMatcherAttachmentFilename (DEFECT-3 filename synthesis)", () => {
+  it("no persisted filename → synthesizes <artifactId><ext> from the authoritative mime", () => {
+    expect(resolveFilename("art-uuid", "text/markdown")).toBe("art-uuid.md");
+    expect(resolveFilename("art-uuid", "application/pdf")).toBe("art-uuid.pdf");
+    expect(resolveFilename("art-uuid", "text/plain; charset=utf-8")).toBe("art-uuid.txt");
+  });
+
+  it("persisted filename whose extension MATCHES the mime → used verbatim (a real signal)", () => {
+    expect(resolveFilename("art-uuid", "text/markdown", "q3-strategy.md")).toBe("q3-strategy.md");
+    expect(resolveFilename("art-uuid", "text/markdown", "q3-strategy.markdown")).toBe("q3-strategy.markdown");
+    expect(resolveFilename("art-uuid", "application/pdf", "contract.pdf")).toBe("contract.pdf");
+    // No double extension when the name already ends in a matching one.
+    expect(resolveFilename("art-uuid", "text/markdown", "notes.md")).not.toContain(".md.md");
+  });
+
+  it("persisted extension for a DIFFERENT mime → mime extension appended (codex r2: no .pdf on markdown bytes)", () => {
+    // The bug codex caught: a persisted `report.pdf` on text/markdown bytes must
+    // NOT reach OpenAI as `.pdf` (markdown parsed as PDF). Append the correct
+    // mime extension so the TRAILING extension matches the bytes.
+    expect(resolveFilename("art-uuid", "text/markdown", "report.pdf")).toBe("report.pdf.md");
+    expect(resolveFilename("art-uuid", "application/json", "data.csv")).toBe("data.csv.json");
+  });
+
+  it("persisted filename WITHOUT an extension → mime extension appended (keeps the name)", () => {
+    expect(resolveFilename("art-uuid", "text/markdown", "strategy")).toBe("strategy.md");
+    expect(resolveFilename("art-uuid", "text/csv", "export")).toBe("export.csv");
+  });
+
+  it("unknown / non-ingestible mime → never invents an extension", () => {
+    // No persisted name → bare id unchanged (that attachment degrades to the
+    // not-readable manifest at the resolver anyway).
+    expect(resolveFilename("art-uuid", "application/zip")).toBe("art-uuid");
+    expect(resolveFilename("art-uuid", "application/zip", "bundle")).toBe("bundle");
+  });
+
+  it("EVERY produced filename's extension MATCHES the authoritative mime (the invariant that fixes DEFECT-3)", () => {
+    const cases: Array<[string, string | undefined]> = [
+      ["text/markdown", undefined],
+      ["text/plain", undefined],
+      ["application/pdf", undefined],
+      ["text/csv", "raw-name-no-ext"],
+      ["application/json", "already.json"],
+      ["text/markdown", "wrong-ext.pdf"], // cross-mime — must be corrected
+      ["image/png", undefined],
+    ];
+    for (const [mime, persisted] of cases) {
+      const name = resolveFilename("art-uuid", mime, persisted);
+      expect(filenameExtensionMatchesMime(name, mime)).toBe(true);
+    }
   });
 });
 
@@ -398,6 +475,53 @@ describe("runArtifactMatch", () => {
     expect(user).toContain("filename: strategy.md");
     expect(user).toContain("producer declared it produces: @acme/strategy-artifact");
     expect(user).toContain("our marketing strategy");
+  });
+
+  it("DEFECT-3: the LLM attachment carries a provider-recognized filename (no persisted → synthesized)", async () => {
+    // The exact live-walk condition: a text/markdown upload with NO persisted
+    // upload filename. Pre-fix the matcher sent no `filename`, the resolver fell
+    // back to the bare artifact UUID, and OpenAI 400'd. Assert the attachment
+    // handed to the LLM task now carries `art-1.md`.
+    stageAuthoritative({
+      digest: "sha", mime: "text/markdown", storage_key: "k", origin_kind: "upload",
+      object_type: OWN_TYPE,
+      classifier_signals: null, // no persisted upload filename
+    });
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/md-artifact", matcherSkillId: "s1", mimeTypes: ["text/markdown"] }),
+    ]);
+    resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
+    listSkillsMock.mockResolvedValue([
+      { id: "s1", packageName: "@v/md-artifact", packageSlug: "v-md-artifact", content: "b" },
+    ]);
+    parseFrontmatterMock.mockReturnValue({ body: "b" });
+    runLlmMock.mockResolvedValue({ text: JSON.stringify({ matches: false, confidence: 0.1, rationale: "n" }) });
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    expect(runLlmMock).toHaveBeenCalledTimes(1);
+    const attachments = runLlmMock.mock.calls[0][0].attachments as Array<{ filename?: string; mime: string }>;
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0].filename).toBe("art-1.md");
+    expect(filenameExtensionMatchesMime(attachments[0].filename!, "text/markdown")).toBe(true);
+  });
+
+  it("DEFECT-3: a persisted upload filename with a good extension reaches the LLM attachment verbatim", async () => {
+    stageAuthoritative({
+      digest: "sha", mime: "text/markdown", storage_key: "k", origin_kind: "upload",
+      object_type: OWN_TYPE,
+      classifier_signals: { upload: { filename: "marketing-strategy.md", originKind: "upload" } },
+    });
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/md-artifact", matcherSkillId: "s1", mimeTypes: ["text/markdown"] }),
+    ]);
+    resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
+    listSkillsMock.mockResolvedValue([
+      { id: "s1", packageName: "@v/md-artifact", packageSlug: "v-md-artifact", content: "b" },
+    ]);
+    parseFrontmatterMock.mockReturnValue({ body: "b" });
+    runLlmMock.mockResolvedValue({ text: JSON.stringify({ matches: false, confidence: 0.1, rationale: "n" }) });
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    const attachments = runLlmMock.mock.calls[0][0].attachments as Array<{ filename?: string }>;
+    expect(attachments[0].filename).toBe("marketing-strategy.md");
   });
 
   it("foreign-package matcher skill is REJECTED (trust anchor)", async () => {
@@ -647,6 +771,51 @@ describe("runArtifactMatch", () => {
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
     expect(runLlmMock).toHaveBeenCalledTimes(1);
     expect(assertSemanticTypeMock).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // REGRESSION (cinatra#1891 walk-2 DEFECT-2): the OpenAI Responses API strict
+  // structured-output contract requires `required` to include EVERY key in
+  // `properties`; the adapter forwards `outputSchema` verbatim into
+  // `text.format.json_schema`, so an under-specified `required` is a
+  // deterministic 400 at the real provider — invisible to a mocked LLM boundary.
+  // This asserts against the ACTUAL schema object the runtime hands the LLM task
+  // (captured off the mock call), so a property added without a matching
+  // `required` entry re-breaks this test instead of shipping a silent no-op.
+  // -------------------------------------------------------------------------
+  it("matcher outputSchema: `required` covers EVERY key in `properties` (strict structured-output contract)", async () => {
+    stageAuthoritative({
+      digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
+    });
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    ]);
+    resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
+    listSkillsMock.mockResolvedValue([
+      { id: "s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
+    ]);
+    parseFrontmatterMock.mockReturnValue({ body: "b" });
+    runLlmMock.mockResolvedValue({
+      text: JSON.stringify({ matches: false, confidence: 0.1, rationale: "n/a" }),
+    });
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+
+    expect(runLlmMock).toHaveBeenCalledTimes(1);
+    const outputSchema = runLlmMock.mock.calls[0][0].outputSchema as {
+      type: string;
+      required?: string[];
+      properties?: Record<string, unknown>;
+    };
+    expect(outputSchema).toBeDefined();
+    expect(outputSchema.type).toBe("object");
+    const propertyKeys = Object.keys(outputSchema.properties ?? {});
+    const requiredKeys = new Set(outputSchema.required ?? []);
+    // Every declared property MUST be listed in `required` — the OpenAI strict
+    // json_schema rule the walk caught. `rationale` is the one that regressed.
+    expect(propertyKeys.length).toBeGreaterThan(0);
+    const missingFromRequired = propertyKeys.filter((k) => !requiredKeys.has(k));
+    expect(missingFromRequired).toEqual([]);
+    expect(requiredKeys.has("rationale")).toBe(true);
   });
 
   it("actor context is a System principal anchored to the org", () => {

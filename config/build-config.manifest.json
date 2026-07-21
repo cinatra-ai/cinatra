@@ -311,6 +311,7 @@
     { "alias": "@cinatra-ai/metric-cost-api/mcp-module", "target": "./packages/metric-cost-api/src/mcp/module.ts" },
     { "alias": "@cinatra-ai/metric-usage-api/mcp-module", "target": "./packages/metric-usage-api/src/mcp/module.ts" },
     { "alias": "@cinatra-ai/llm", "target": "./packages/llm/src/index.ts" },
+    { "alias": "@cinatra-ai/llm/attachment-capability", "target": "./packages/llm/src/attachments/capability-registry.ts" },
     { "alias": "@cinatra-ai/llm/anthropic-log-directory", "target": "./packages/llm/src/anthropic-log-directory.ts" },
     { "alias": "@cinatra-ai/llm/anthropic-logging-state", "target": "./packages/llm/src/anthropic-logging-state.ts" },
     { "alias": "@cinatra-ai/llm/actor-context", "target": "./packages/llm/src/actor-context.ts" },

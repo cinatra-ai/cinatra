@@ -1,5 +1,13 @@
 import "server-only";
 import { z } from "zod";
+// cinatra#1891 DEFECT-3: the mime→extension helpers come from the dependency-free
+// capability leaf (NOT the heavy @cinatra-ai/llm index) so they are cheap to load
+// here and resolve to the REAL implementation in tests (no mock) — the same
+// authority the provider's ingestion rules use.
+import {
+  extensionForIngestibleMime,
+  filenameExtensionMatchesMime,
+} from "@cinatra-ai/llm/attachment-capability";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import {
   getPostgresConnectionString,
@@ -137,6 +145,47 @@ type ClassifierSignalsForPrompt = {
   };
 };
 
+/** Resolve the `filename` for the matcher's LLM attachment so it carries a
+ *  provider-recognized extension. OpenAI's Responses `input_file`
+ *  (context-stuffing) path derives the file FORMAT from the filename extension;
+ *  an extensionless name (the matcher previously sent none → the resolver fell
+ *  back to the bare artifact UUID) is a deterministic 400 (cinatra#1891
+ *  DEFECT-3). Preference order:
+ *    1. the persisted upload filename when its extension MATCHES the
+ *       authoritative mime (a genuine classifier signal — keep it verbatim);
+ *    2. that persisted name with the mime-derived extension APPENDED — used when
+ *       the persisted name is extensionless OR carries an extension for a
+ *       DIFFERENT mime (a `report.pdf` on text/markdown bytes must NOT reach the
+ *       provider as `.pdf`, or markdown is parsed under PDF format detection;
+ *       appending `.md` makes the TRAILING extension match the bytes);
+ *    3. a synthesized `<artifactId><ext>` from the authoritative mime.
+ *  When the authoritative mime is not one the provider ingests (`ext === null`)
+ *  we do NOT invent an extension — fall back to the persisted name or bare id
+ *  unchanged (that attachment would degrade to the not-readable manifest at the
+ *  resolver anyway). `extensionForMime` / `extensionMatchesMime` are injected
+ *  (the real `@cinatra-ai/llm` capability helpers at the call site) so the
+ *  contract test drives the SAME ingestible-set authority, not a local copy. */
+function resolveMatcherAttachmentFilename(args: {
+  artifactId: string;
+  mime: string;
+  persistedFilename: string | undefined;
+  extensionForMime: (mime: string) => string | null;
+  extensionMatchesMime: (filename: string, mime: string) => boolean;
+}): string {
+  const persisted = args.persistedFilename?.trim();
+  if (persisted && args.extensionMatchesMime(persisted, args.mime)) {
+    return persisted.slice(0, 200);
+  }
+  const ext = args.extensionForMime(args.mime);
+  if (persisted && ext) {
+    return `${persisted.slice(0, 180)}${ext}`;
+  }
+  if (ext) {
+    return `${args.artifactId}${ext}`;
+  }
+  return persisted ? persisted.slice(0, 200) : args.artifactId;
+}
+
 // Test-only exports of the pure matching helpers (mime normalization /
 // wildcard / package-owned trust). Not part of the production surface.
 export const __test = {
@@ -146,6 +195,7 @@ export const __test = {
   renderClassifierSignalsForPrompt: (s: ClassifierSignalsForPrompt | null) =>
     renderClassifierSignalsForPrompt(s),
   parseClassifierSignals: (raw: unknown) => parseClassifierSignals(raw),
+  resolveMatcherAttachmentFilename,
 };
 
 /** Slugify mirroring `@cinatra-ai/agents` store.slugify — inlined (3
@@ -511,6 +561,13 @@ async function runArtifactMatchImpl(
   );
   const { assertSemanticType } = await import("./semantic-assertion-store");
 
+  // cinatra#1891 DEFECT-3: the attachment MUST carry a filename with a
+  // provider-recognized extension. OpenAI's `input_file` path derives the file
+  // format from the extension; the matcher previously sent no `filename`, so the
+  // resolver fell back to the bare artifact UUID and EVERY classification call
+  // 400'd ("context stuffing file type … but got none"). Prefer the persisted
+  // upload filename (a real signal); synthesize from the authoritative mime
+  // otherwise.
   const attachmentRef = {
     artifactId: payload.artifactId,
     representationRevisionId: payload.representationRevisionId,
@@ -518,6 +575,13 @@ async function runArtifactMatchImpl(
     mime: authoritative.mime,
     originKind:
       authoritative.originKind as "upload" | "email_attachment" | "agent_generated" | "external_link" | "live_generator",
+    filename: resolveMatcherAttachmentFilename({
+      artifactId: payload.artifactId,
+      mime: authoritative.mime,
+      persistedFilename: authoritative.classifierSignals?.upload?.filename,
+      extensionForMime: extensionForIngestibleMime,
+      extensionMatchesMime: filenameExtensionMatchesMime,
+    }),
   };
   const ports = buildAttachmentResolverPorts({ orgId: payload.orgId });
 
@@ -583,7 +647,7 @@ async function runArtifactMatchImpl(
         outputSchema: {
           type: "object",
           additionalProperties: false,
-          required: ["matches", "confidence"],
+          required: ["matches", "confidence", "rationale"],
           properties: {
             matches: { type: "boolean" },
             confidence: { type: "number", minimum: 0, maximum: 1 },
