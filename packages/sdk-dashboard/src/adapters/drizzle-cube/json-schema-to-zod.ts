@@ -4,7 +4,7 @@
  * into the `ZodObject` shape that Cinatra's MCP server registry expects.
  *
  * Scope is intentionally tight — we only need to handle the shapes that
- * `drizzle-cube/mcp` 0.5.6 emits for the `discover`, `validate`, and
+ * `drizzle-cube/mcp` 0.6.4 emits for the `discover`, `validate`, and
  * `load` tools. Empty / description-only / properties-less schemas
  * collapse to `z.unknown()` so drizzle-cube's downstream validation can
  * do the strict work; Cinatra's MCP layer is just a pass-through for
