@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 1547,
     "/api/mcp": 1543,
-    "/chat": 1605,
+    "/chat": 1608,
     "/api/a2a": 1548,
     "/api/llm-bridge": 1555
   },
@@ -21,10 +21,10 @@
       "pr": 1946
     },
     "/chat": {
-      "from": 1598,
-      "to": 1605,
-      "reason": "#1625 (PR #1946): the run-scoped test-delivery send PORT is wired FAIL-CLOSED at boot per the converged design — the host send impl (test-delivery-send-port-impl.ts, which imports the email-send/auth/objects send graph the email_test_delivery_run_send primitive needs) must be registered present-or-error before any send so a run-scoped test send never silently no-ops. Reached via BOTH boot chains that hit the agents primitive handlers: the native MCP transport (src/lib/mcp-server.ts) and the deterministic /api/agents/passthrough primitive-handlers path. CI-measured +7 per tracked route (the +6 send graph plus the extracted test-delivery-handlers.ts primitive module split out of handlers.ts for the file-size ratchet) — delta re-measured UNIFORM +7 on the merged tree with the companion extensions cloned pinned (origin/main actual 1532/1528/1592/1533/1540 -> PR 1539/1535/1599/1540/1547); eager by the ratified fail-closed design, not deferred. RE-ANCHORED onto origin/main current ceilings during the FINAL reconcile rebase (post #1935 drop-history + #1949 meaning-matcher): from = origin/main current ceiling, to = from + 7; the +7 test-delivery delta is disjoint from and additive to the assistant-registry / meaning-matcher modules already in the base, and the CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned. Retires/replaces the base branch's carried #1949 record via this annotated re-raise. codex-converged MERGE-SAFE.",
-      "pr": 1946
+      "from": 1605,
+      "to": 1608,
+      "reason": "#1875 W2 (PR #1963): the declaration-driven /chat dispatch rewire (Epic #1873 AC#2) adds the pure routing seams reachable from /chat via actions.ts resolveMessageRouting — route-decision.ts (decideMessageRouting), server-audience-resolver.ts (the audience-scoped resolver + delivery lookup + Cinatra host id from the W1 reader), dispatch-planner.ts (planAssistantDispatch), classify-mentions.ts (two-phase classification) and mention-tokenizer.ts — replacing the retired hardcoded BUILT_IN_HANDLES/BUILT_IN_ENDPOINTS routing tables. CI-measured net +3 on /chat vs origin/main after the reconcile rebase (1605 -> 1608), disjoint from and additive to the assistant-registry / test-delivery modules already in the base; the growth is confined to /chat (the other tracked routes do not import the chat routing seams and are unchanged). Retires/replaces the base branch's carried #1946 test-delivery record for /chat via this annotated re-raise (from = the base ceiling that record established, to = from + 3). The CI route-graph-ratchet gate re-verifies the reachable count with the companion extension repos cloned pinned. codex-converged CLEAN on the fix delta.",
+      "pr": 1963
     },
     "/api/a2a": {
       "from": 1541,
