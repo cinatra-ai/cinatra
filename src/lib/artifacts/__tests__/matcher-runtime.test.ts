@@ -231,7 +231,7 @@ describe("resolveMatcherAttachmentFilename (DEFECT-3 filename synthesis)", () =>
     expect(resolveFilename("art-uuid", "text/markdown", "notes.md")).not.toContain(".md.md");
   });
 
-  it("persisted extension for a DIFFERENT mime → mime extension appended (codex r2: no .pdf on markdown bytes)", () => {
+  it("persisted extension for a DIFFERENT mime → mime extension appended (peer-review r2: no .pdf on markdown bytes)", () => {
     // The bug codex caught: a persisted `report.pdf` on text/markdown bytes must
     // NOT reach OpenAI as `.pdf` (markdown parsed as PDF). Append the correct
     // mime extension so the TRAILING extension matches the bytes.

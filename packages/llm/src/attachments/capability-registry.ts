@@ -110,7 +110,7 @@ export function extensionForIngestibleMime(mime: string): string | null {
   // set), so an ingestible image subtype the explicit table does not list
   // (image/gif, image/svg+xml, …) must still get an extension — otherwise a
   // synthesized filename is extensionless and OpenAI's input_file path 400s
-  // (codex r3). Derive it from the subtype (strip a `+suffix`; normalize
+  // (peer-review r3). Derive it from the subtype (strip a `+suffix`; normalize
   // jpeg→jpg). This is OpenAI-specific: Gemini/Anthropic pass the mime
   // explicitly and need no extension, and OpenAI's ingestible image set IS the
   // image/* family. (Split on `/` and compare the bare type — a literal
@@ -125,7 +125,7 @@ export function extensionForIngestibleMime(mime: string): string | null {
     // `extensionOf` (last dot) cannot round-trip → a false mime-match → the guard
     // re-appending it. Those exotic types are not in OpenAI's ingestible image
     // set anyway; return null (degrade to the honest structural/not-readable
-    // path) rather than guess a malformed extension (codex r4).
+    // path) rather than guess a malformed extension (peer-review r4).
     if (/^[a-z0-9]+$/.test(sub)) {
       return sub === "jpeg" ? ".jpg" : `.${sub}`;
     }

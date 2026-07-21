@@ -82,7 +82,7 @@ describe("OpenAI provider builds the input_file File with a provider-recognized 
 
     // The DEFECT-3 contract: the File the provider built carries an extension
     // that MATCHES its mime (an extensionless — or mismatched — name is the 400
-    // / mis-parse the walk + codex r2 caught).
+    // / mis-parse the walk + peer-review r2 caught).
     expect(filenameExtensionMatchesMime(arg.file.name, "text/markdown")).toBe(true);
 
     // Bytes are preserved intact through the File construction.

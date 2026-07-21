@@ -116,7 +116,7 @@ describe("extensionForIngestibleMime (cinatra#1891 DEFECT-3)", () => {
     expect(extensionForIngestibleMime("image/webp")).toBe(".webp");
   });
 
-  it("derives an extension for ANY admitted image/* subtype not in the table (codex r3: image/gif)", () => {
+  it("derives an extension for ANY admitted image/* subtype not in the table (peer-review r3: image/gif)", () => {
     // The capability rule admits image/* by prefix, so a subtype the explicit
     // table omits must still get an extension (never an extensionless upload).
     expect(extensionForIngestibleMime("image/gif")).toBe(".gif");
@@ -126,7 +126,7 @@ describe("extensionForIngestibleMime (cinatra#1891 DEFECT-3)", () => {
     expect(filenameExtensionMatchesMime("anim.png", "image/gif")).toBe(false); // wrong subtype
   });
 
-  it("does NOT derive a malformed extension for dotted/vendor image subtypes (codex r4)", () => {
+  it("does NOT derive a malformed extension for dotted/vendor image subtypes (peer-review r4)", () => {
     // `.vnd.microsoft.icon` cannot round-trip through extensionOf (last dot) →
     // would drive a re-append. Return null instead of guessing.
     expect(extensionForIngestibleMime("image/vnd.microsoft.icon")).toBeNull();
@@ -156,7 +156,7 @@ describe("extensionForIngestibleMime (cinatra#1891 DEFECT-3)", () => {
   });
 
   // Cross-check against the capability registry's OWN ingestible decision so
-  // this is not a duplicated literal list (codex r2): every COMMON_DOC mime the
+  // this is not a duplicated literal list (peer-review r2): every COMMON_DOC mime the
   // OpenAI rule ingests must have a canonical extension, and every mime WITH an
   // extension must be ingestible — the two authorities cannot drift apart.
   it("the extension map agrees with resolveAttachmentCapability's ingestible set", () => {
@@ -185,7 +185,7 @@ describe("extensionForIngestibleMime (cinatra#1891 DEFECT-3)", () => {
   });
 });
 
-describe("filenameExtensionMatchesMime (cinatra#1891 DEFECT-3, MIME-AWARE — codex r2)", () => {
+describe("filenameExtensionMatchesMime (cinatra#1891 DEFECT-3, MIME-AWARE — peer-review r2)", () => {
   it("true only when the filename extension matches the AUTHORITATIVE mime (canonical + aliases)", () => {
     expect(filenameExtensionMatchesMime("q3-plan.md", "text/markdown")).toBe(true);
     expect(filenameExtensionMatchesMime("q3-plan.markdown", "text/markdown")).toBe(true);

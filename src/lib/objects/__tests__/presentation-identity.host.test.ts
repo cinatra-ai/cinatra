@@ -3,9 +3,9 @@
 // seam binds the pure resolver to:
 //   - classic/binding liveness  → object-type-registry membership;
 //   - matcher thresholds         → the meaning-surface channel, AUTHORITATIVELY
-//     (the retired `<ext>:artifact` fallback is gone — codex R1 #4);
+//     (the retired `<ext>:artifact` fallback is gone — peer-review R1 #4);
 //   - matcher liveness           → channel membership AND the org-scoped
-//     active-install gate mirroring the matcher runtime (codex R1 #5);
+//     active-install gate mirroring the matcher runtime (peer-review R1 #5);
 //   - the org auto-surface toggle.
 // These prove:
 //   - the batched read is a SINGLE org-scoped ACTIVE-assertion query;
@@ -171,7 +171,7 @@ describe("policy binding — matcher threshold from the meaning-surface channel"
     expect(out.suggestions).toEqual([X]);
   });
 
-  it("a STRUCTURAL pack NOT in the channel never threshold-passes a draft (codex R1 #4: no unsafe fallback)", () => {
+  it("a STRUCTURAL pack NOT in the channel never threshold-passes a draft (peer-review R1 #4: no unsafe fallback)", () => {
     // X registers a structural object type (so it is classic-live) but declared
     // NO matchers ⇒ it is NOT in the channel. A forced/legacy draft on X must
     // NOT auto-surface at the old default 0.7 — the threshold is null.
@@ -187,7 +187,7 @@ describe("policy binding — matcher threshold from the meaning-surface channel"
   });
 });
 
-describe("policy binding — matcher liveness mirrors the org-scoped install gate (codex R1 #5)", () => {
+describe("policy binding — matcher liveness mirrors the org-scoped install gate (peer-review R1 #5)", () => {
   it("an UNGOVERNED matcher pack (no install row) surfaces a passing draft", () => {
     registerMatcherPack(X, 0.5);
     prime(

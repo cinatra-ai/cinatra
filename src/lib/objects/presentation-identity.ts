@@ -68,7 +68,7 @@ function buildLiveExtensionSet(): Set<string> {
 }
 
 /** The pack's matcher confidence threshold — CHANNEL-AUTHORITATIVE (cinatra#1891
- * A3, codex R1 #4). Read from the SAME meaning-surface channel entry the matcher
+ * A3, peer-review R1 #4). Read from the SAME meaning-surface channel entry the matcher
  * runtime built the candidate + asserted the draft from (already resolved to the
  * manifest value or the pack default), so a draft can auto-surface only for a
  * pack that is actually in the channel — and reconcile removing the entry
@@ -84,7 +84,7 @@ function matcherThresholdFor(extension: string): number | null {
 /**
  * Matcher-pack liveness — the org-scoped active-install gate, mirroring the
  * matcher runtime's own `isArtifactExtensionWriteAllowed(pkg, orgId)` decision
- * (cinatra#1891 A3, codex R1 #5) EXACTLY, but as a SYNC read (matching the
+ * (cinatra#1891 A3, peer-review R1 #5) EXACTLY, but as a SYNC read (matching the
  * presentation host's other sync reads). A matcher pack is presentation-live iff
  * it is BOTH in the channel AND its canonical install status admits a write for
  * this org — otherwise a draft would keep surfacing in an org that soft-archived
