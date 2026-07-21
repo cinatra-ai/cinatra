@@ -197,6 +197,19 @@ jobs:
       # widget-stream relay 404s on the agent card ("(no response)" in tests
       # 4/5) even with a healthy, tokened wayflow.
       WAYFLOW_BASE_URL: http://localhost:3010
+      # cinatra#1919 — provide the public MCP URL the hosted-LLM write path needs.
+      # `setup dev`'s self-establish cannot bring up a Tailscale Funnel in CI (no
+      # sidecar, no TS_AUTHKEY), so without an operator-supplied URL the MCP
+      # settings row stays URL-less, `hasLlmMcpAccess` is false, and the widget
+      # answers "No LLM provider configured" — the 4 previously-red assertions.
+      # This is the container-reachable app origin the WP/Drupal + wayflow
+      # containers already target (CINATRA_BASE_URL=http://host.docker.internal:3000
+      # via the compose host-gateway mapping), so the agent's MCP tool-call write
+      # path resolves it. Being an EXPLICIT operator URL it also makes the CLI's
+      # self-establish stand down at its first gate (no hostname prediction, so no
+      # dependence on the extensions-tree declarer) — green here does not wait on
+      # the CLI release wave. Non-localhost, so it is accepted (localhost is refused).
+      MCP_PUBLIC_BASE_URL: http://host.docker.internal:3000
       # next.config.ts REQUIRED_ENV asserts presence of OPENAI_API_KEY at
       # dev-server startup (next.config.ts:6-13). The UAT boots `pnpm dev` with
       # the deterministic SCRIPTED provider (no real OpenAI call), but the
@@ -338,6 +351,19 @@ jobs:
       # no-op without it and the widget-stream relay then 404s on the agent
       # card (wayflow scanned the just-cloned, markerless tree at startup).
       WAYFLOW_BASE_URL: http://localhost:3010
+      # cinatra#1919 — provide the public MCP URL the hosted-LLM write path needs.
+      # `setup dev`'s self-establish cannot bring up a Tailscale Funnel in CI (no
+      # sidecar, no TS_AUTHKEY), so without an operator-supplied URL the MCP
+      # settings row stays URL-less, `hasLlmMcpAccess` is false, and the widget
+      # answers "No LLM provider configured" — the 4 previously-red assertions.
+      # This is the container-reachable app origin the WP/Drupal + wayflow
+      # containers already target (CINATRA_BASE_URL=http://host.docker.internal:3000
+      # via the compose host-gateway mapping), so the agent's MCP tool-call write
+      # path resolves it. Being an EXPLICIT operator URL it also makes the CLI's
+      # self-establish stand down at its first gate (no hostname prediction, so no
+      # dependence on the extensions-tree declarer) — green here does not wait on
+      # the CLI release wave. Non-localhost, so it is accepted (localhost is refused).
+      MCP_PUBLIC_BASE_URL: http://host.docker.internal:3000
       # Presence-only — next.config.ts REQUIRED_ENV asserts it at dev-server
       # startup; the UAT uses the deterministic scripted provider, never a real
       # OpenAI call. Zero-secret placeholder (mirrors dashboard-live-verify.yml).
