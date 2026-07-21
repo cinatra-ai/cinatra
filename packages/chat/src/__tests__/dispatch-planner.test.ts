@@ -15,7 +15,7 @@ import { classifyMentions, type AudienceScopedAssistantResolver } from "../class
 /** A resolver over in-audience fixtures (anything else → null, i.e. not visible). */
 function resolver(opts: {
   byRef?: Record<string, { assistantUserId: string; handle: string; packageName: string }>;
-  byHandle?: Record<string, { assistantUserId: string; packageName: string | null }>;
+  byHandle?: Record<string, { assistantUserId: string; handle: string; packageName: string | null }>;
 }): AudienceScopedAssistantResolver {
   return {
     byPackageRef: async (ref) => opts.byRef?.[ref] ?? null,
@@ -60,7 +60,7 @@ describe("planAssistantDispatch — declared delivery drives the plan", () => {
   it("routes a declared webhook assistant to an out-of-band push directive (no endpoint)", async () => {
     const classified = await classifyMentions(
       "@acme summarize",
-      resolver({ byHandle: { acme: { assistantUserId: "u-acme", packageName: "@acme/assistant" } } }),
+      resolver({ byHandle: { acme: { assistantUserId: "u-acme", handle: "acme", packageName: "@acme/assistant" } } }),
     );
     const plan = planAssistantDispatch(classified, deliveryFor({ "@acme/assistant": "webhook" }));
     expect(plan.push).toHaveLength(1);
@@ -72,7 +72,7 @@ describe("planAssistantDispatch — declared delivery drives the plan", () => {
   it("routes a declared mcp-poll assistant to a push directive (no endpoint)", async () => {
     const classified = await classifyMentions(
       "@poller go",
-      resolver({ byHandle: { poller: { assistantUserId: "u-poll", packageName: "@x/poller" } } }),
+      resolver({ byHandle: { poller: { assistantUserId: "u-poll", handle: "poller", packageName: "@x/poller" } } }),
     );
     const plan = planAssistantDispatch(classified, deliveryFor({ "@x/poller": "mcp-poll" }));
     expect(plan.push).toHaveLength(1);
@@ -107,7 +107,7 @@ describe("planAssistantDispatch — declared delivery drives the plan", () => {
             packageName: "@cinatra-ai/openai-assistant",
           },
         },
-        byHandle: { openai: { assistantUserId: "u-oai", packageName: "@cinatra-ai/openai-assistant" } },
+        byHandle: { openai: { assistantUserId: "u-oai", handle: "openai", packageName: "@cinatra-ai/openai-assistant" } },
       }),
     );
     const plan = planAssistantDispatch(
@@ -123,8 +123,8 @@ describe("planAssistantDispatch — declared delivery drives the plan", () => {
       "@host then @hook",
       resolver({
         byHandle: {
-          host: { assistantUserId: "u-host", packageName: "@p/host" },
-          hook: { assistantUserId: "u-hook", packageName: "@p/hook" },
+          host: { assistantUserId: "u-host", handle: "host", packageName: "@p/host" },
+          hook: { assistantUserId: "u-hook", handle: "hook", packageName: "@p/hook" },
         },
       }),
     );
@@ -140,7 +140,7 @@ describe("planAssistantDispatch — declared delivery drives the plan", () => {
   it("fails SAFE to host-runtime when the delivery lookup misses for a classified assistant", async () => {
     const classified = await classifyMentions(
       "@drifted go",
-      resolver({ byHandle: { drifted: { assistantUserId: "u-d", packageName: "@p/drifted" } } }),
+      resolver({ byHandle: { drifted: { assistantUserId: "u-d", handle: "drifted", packageName: "@p/drifted" } } }),
     );
     // Lookup returns undefined (registry drift) → planner defaults to host-runtime,
     // NEVER an external push.

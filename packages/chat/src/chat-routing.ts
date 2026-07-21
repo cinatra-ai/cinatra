@@ -55,16 +55,17 @@ export function applyExternalMentionsToMessages(
 }
 
 /**
- * Attach the mention for a built-in assistant so assistantHandleMap resolves
- * its handle → name. Pure (prev) => next transform.
+ * Attach the mention for a host-runtime assistant (a declared assistant whose
+ * reply streams in-band, attributed to its own principal) so assistantHandleMap
+ * resolves its handle → name. Pure (prev) => next transform.
  */
-export function applyBuiltInMentionToMessages(
+export function applyHostRuntimeMentionToMessages(
   prev: UiMessage[],
   userMessageId: string,
-  builtInMention: Mention,
+  hostRuntimeMention: Mention,
 ): UiMessage[] {
   return prev.map((m) =>
-    m.id === userMessageId ? { ...m, mentions: [builtInMention] } : m,
+    m.id === userMessageId ? { ...m, mentions: [hostRuntimeMention] } : m,
   );
 }
 
@@ -82,7 +83,10 @@ export type MessageRoutingResult = {
   externalMentions?: Mention[];
   isBroadcast?: boolean;
   chatEndpoint?: string;
-  builtInMention?: Mention;
+  /** A DECLARED host-runtime assistant whose reply STREAMS in-band (the
+   *  generalized former built-in path, cinatra#1875 W2 AC#2). Its turn is
+   *  attributed to the assistant's OWN principal (not Cinatra). */
+  hostRuntimeMention?: Mention;
   /** cinatra#1037 P2.4 (attribution, I4): the HOST Cinatra assistant's own
    *  principal id, set on every branch where Cinatra itself produces the reply
    *  (default / @cinatra / broadcast-with-Cinatra). Threaded onto the reply
@@ -122,9 +126,10 @@ export function resolveDispatchPlan(
     return {
       kind: "stream",
       endpoint: routing.chatEndpoint ?? "/api/assistants/chat",
-      // A built-in @-mention (@chatgpt) attributes to that assistant; otherwise
-      // the HOST Cinatra reply carries the Cinatra principal (P2.4 attribution).
-      authorUserId: routing.builtInMention?.assistantUserId ?? routing.hostAssistantUserId,
+      // A declared host-runtime assistant streams attributed to its own
+      // principal; otherwise the HOST Cinatra reply carries the Cinatra principal
+      // (P2.4 attribution).
+      authorUserId: routing.hostRuntimeMention?.assistantUserId ?? routing.hostAssistantUserId,
     };
   }
   // shouldCallLlm=false + isBroadcast=true is covered by the first branch;

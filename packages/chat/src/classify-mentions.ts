@@ -36,10 +36,13 @@ export type AudienceScopedAssistantResolver = {
   byPackageRef(
     packageRef: string,
   ): Promise<{ assistantUserId: string; handle: string; packageName: string } | null>;
-  /** A flat `@handle` (or alias) → an in-audience assistant, or null. */
+  /** A flat `@handle` (or alias) → an in-audience assistant, or null. Returns the
+   *  assistant's CANONICAL handle (the primary `assistant_handles` handle, which
+   *  may differ from an alias token the user typed) so downstream selection /
+   *  attribution keys on the principal's canonical handle, not the alias. */
   byHandle(
     handle: string,
-  ): Promise<{ assistantUserId: string; packageName: string | null } | null>;
+  ): Promise<{ assistantUserId: string; handle: string; packageName: string | null } | null>;
 };
 
 /** The classification of a single mention token. */
@@ -107,7 +110,10 @@ async function classifyToken(
       kind: "assistant",
       token,
       assistantUserId: hit.assistantUserId,
-      handle: token.handle,
+      // The CANONICAL handle from the registry (an alias token resolves to its
+      // principal's primary handle) — so the unified endpoint selector and
+      // attribution never key on a non-canonical alias.
+      handle: hit.handle,
       packageName: hit.packageName,
     };
   }

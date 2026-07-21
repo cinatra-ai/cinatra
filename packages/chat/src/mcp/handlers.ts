@@ -3,12 +3,14 @@ import "server-only";
 // cinatra#1037 P5.6 PR2 CUTOVER — final teardown (owner ruling 2026-07-21).
 //
 // The broad public chat-thread primitives (chat_thread_list/get/send/update and
-// chat_thread_pause/resume) are RETIRED. The in-process @chatgpt/@gemini host-CLI
-// bridge that lived inside chat_thread_send is deleted with it: @chatgpt keeps
-// working through its own independent route (/api/assistants/chatgpt), and
-// @gemini is deliberately retired from /chat — it returns as a connector-API
-// extension package under the assistants epic (#1873), not via an interim
-// in-process bridge. No backward-compat alias.
+// chat_thread_pause/resume) are RETIRED, and the in-process host-CLI bridge that
+// lived inside chat_thread_send is deleted with them. Per the Epic #1873
+// plan-of-record (2026-07-21), /chat routing is now DECLARATION-DRIVEN with no
+// built-in assistant class and no hardcoded handle table (cinatra#1875 W2 AC#2):
+// the former built-in routes are retired from /chat, and each assistant returns
+// as a connector-API extension package under the assistants epic (the OpenAI
+// assistant as @openai in W6), not via an interim in-process bridge. No
+// backward-compat alias.
 //
 // Only the TWO narrow external-assistant reply primitives survive, both reading
 // the AUTHORITATIVE structured store (never the legacy chat_threads table):

@@ -15,7 +15,7 @@ import {
  *  (models the audience filter: out-of-audience / unregistered → not visible). */
 function resolver(opts: {
   byRef?: Record<string, { assistantUserId: string; handle: string; packageName: string }>;
-  byHandle?: Record<string, { assistantUserId: string; packageName: string | null }>;
+  byHandle?: Record<string, { assistantUserId: string; handle: string; packageName: string | null }>;
 }): AudienceScopedAssistantResolver {
   return {
     byPackageRef: async (ref) => opts.byRef?.[ref] ?? null,
@@ -58,7 +58,7 @@ describe("classifyMentions — flat handles", () => {
   it("classifies an in-audience flat handle as an assistant mention", async () => {
     const out = await classifyMentions(
       "@cinatra please help",
-      resolver({ byHandle: { cinatra: { assistantUserId: "u-cin", packageName: "@cinatra-ai/cinatra-assistant" } } }),
+      resolver({ byHandle: { cinatra: { assistantUserId: "u-cin", handle: "cinatra", packageName: "@cinatra-ai/cinatra-assistant" } } }),
     );
     expect(out[0]).toMatchObject({ kind: "assistant", assistantUserId: "u-cin", handle: "cinatra" });
   });
@@ -68,6 +68,18 @@ describe("classifyMentions — flat handles", () => {
     expect(out[0].kind).toBe("unresolved");
     expect(assistantMentions(out)).toEqual([]);
   });
+
+  it("resolves an ALIAS token to the principal's CANONICAL handle (not the alias)", async () => {
+    // The user types an alias (`@gpt`); the registry resolves it to the
+    // principal whose canonical handle is `openai` — the classification carries
+    // the canonical handle so the unified endpoint selector never 404s on an
+    // alias.
+    const out = await classifyMentions(
+      "@gpt draft a reply",
+      resolver({ byHandle: { gpt: { assistantUserId: "u-oa", handle: "openai", packageName: "@cinatra-ai/openai-assistant" } } }),
+    );
+    expect(out[0]).toMatchObject({ kind: "assistant", assistantUserId: "u-oa", handle: "openai" });
+  });
 });
 
 describe("classifyMentions — mixed + audience isolation", () => {
@@ -75,7 +87,7 @@ describe("classifyMentions — mixed + audience isolation", () => {
     const out = await classifyMentions(
       "@cinatra and @other-vendor/secret-assistant",
       resolver({
-        byHandle: { cinatra: { assistantUserId: "u-cin", packageName: "@cinatra-ai/cinatra-assistant" } },
+        byHandle: { cinatra: { assistantUserId: "u-cin", handle: "cinatra", packageName: "@cinatra-ai/cinatra-assistant" } },
         // @other-vendor/secret-assistant is NOT in this actor's audience → null.
         byRef: {},
       }),
