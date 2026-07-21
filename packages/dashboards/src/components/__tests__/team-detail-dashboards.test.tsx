@@ -100,7 +100,7 @@ function makeDataSource(
       dashboard: { id, name, isDefault: false, canWrite: true },
     })),
     deleteDashboard: vi.fn(async () => ({ ok: true as const })),
-    saveDashboard: vi.fn(async () => {}),
+    saveDashboard: vi.fn(async () => ({ ok: true as const })),
     ...overrides,
   };
 }

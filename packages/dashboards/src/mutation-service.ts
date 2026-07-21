@@ -302,8 +302,40 @@ async function normalizeConfigForWrite(opts: {
       fallbackScope,
     );
   }
-  await validateConfig(resolved, DASHBOARD_CONFIG_V12_VERSION);
+  // cinatra#1913 — "no NET NEW validator errors": on an UPDATE of an existing
+  // apiVersion 1.2 row, a save is rejected only when it would GROW the row's
+  // validator-error multiset. An untouched legacy-invalid card contributes the
+  // same error string the stored row already carries, so unrelated edits (and
+  // removing the bad card) proceed; editing the bad card, or adding a new bad
+  // card (including a duplicate of the legacy one — count-sensitive), throws
+  // with ONLY the delta errors. Creates (no existing row) stay fully strict.
+  const evaluated = evaluateConfigV12(resolved);
+  if (evaluated.errors.length > 0) {
+    const netNew = existingIsV12
+      ? multisetDelta(evaluated.errors, evaluateConfigV12(opts.existingConfig).errors)
+      : evaluated.errors;
+    if (netNew.length > 0) {
+      throw new DashboardConfigInvalidError(netNew.join("; "));
+    }
+  }
   return { config: resolved, configVersion: DASHBOARD_CONFIG_V12_VERSION };
+}
+
+/** Errors in `current` not covered by `prior`, respecting multiplicity: each
+ *  prior occurrence of a string cancels at most one current occurrence. */
+function multisetDelta(
+  current: readonly string[],
+  prior: readonly string[],
+): string[] {
+  const budget = new Map<string, number>();
+  for (const e of prior) budget.set(e, (budget.get(e) ?? 0) + 1);
+  const delta: string[] = [];
+  for (const e of current) {
+    const remaining = budget.get(e) ?? 0;
+    if (remaining > 0) budget.set(e, remaining - 1);
+    else delta.push(e);
+  }
+  return delta;
 }
 
 async function selectForUpdate(
@@ -1324,7 +1356,23 @@ export type MaterializeTemplateInput = {
   readonly getPortletKind?: PortletKindLookup;
 };
 
-function assertConfigV12(config: unknown, getPortletKind?: PortletKindLookup) {
+/**
+ * Run EVERY persistence-validation stage over a candidate config and return
+ * the full error list (empty = valid) plus the parsed config when the envelope
+ * itself parsed. Extracted from `assertConfigV12` (cinatra#1913) so the update
+ * path can COMPARE the candidate's errors against the stored row's errors
+ * (grandfathering) instead of only pass/fail — the stages and their error
+ * strings are unchanged.
+ */
+type ValidatedDashboardConfigV12 = Extract<
+  ReturnType<typeof validateDashboardConfigV12>,
+  { ok: true }
+>["config"];
+
+function evaluateConfigV12(
+  config: unknown,
+  getPortletKind?: PortletKindLookup,
+): { errors: string[]; config?: ValidatedDashboardConfigV12 } {
   // Self-wire the typed portlet registry (idempotent) so install validates
   // kind/version + per-kind config against the SAME registry the PortletHost
   // renders. A caller may still inject a custom lookup (tests); otherwise the
@@ -1332,41 +1380,40 @@ function assertConfigV12(config: unknown, getPortletKind?: PortletKindLookup) {
   registerCorePortletKinds();
   const lookup = getPortletKind ?? getPortletKindDescriptor;
   const res = validateDashboardConfigV12(config, { getPortletKind: lookup });
-  if (!res.ok) throw new DashboardConfigInvalidError(res.errors.join("; "));
+  if (!res.ok) return { errors: [...res.errors] };
+  const errors: string[] = [];
   // Render-only kinds (cinatra#702) are EPHEMERAL presentation built fresh per
   // render (the entity-summary Overview blocks) and may NEVER be persisted — a
   // saved row must not serve a stale / authorization-obsolete summary. Checked
   // unconditionally against the real registry (registered above) so NO write
   // path — including an extension materialize injecting its own lookup — can
   // slip one into a dashboard row.
-  const renderOnly = res.config.portlets.filter((p) => isRenderOnlyPortletKind(p.kind, p.version));
-  if (renderOnly.length > 0) {
-    throw new DashboardConfigInvalidError(
-      renderOnly
-        .map((p) => `portlet "${p.instanceId}": kind "${p.kind}" is render-only and cannot be persisted to a dashboard`)
-        .join("; "),
-    );
+  for (const p of res.config.portlets.filter((p) => isRenderOnlyPortletKind(p.kind, p.version))) {
+    errors.push(`portlet "${p.instanceId}": kind "${p.kind}" is render-only and cannot be persisted to a dashboard`);
   }
   // Link/URL safety (cinatra#1628, S11c / AC4): reject a portlet config carrying
   // an unsafe-scheme URL (javascript:/data:/vbscript:/… — stored-XSS + local-file
   // vectors), fail-closed on EVERY write/install path. Runs against the validated
   // config so materialize + operator/agent writes all pass through it.
-  const linkErrors = collectUnsafeDashboardLinks(res.config);
-  if (linkErrors.length > 0) {
-    throw new DashboardConfigInvalidError(linkErrors.join("; "));
-  }
+  errors.push(...collectUnsafeDashboardLinks(res.config));
   // Per-kind structured config validation (incl. unknown-kind). Only
   // run against the real registry (when no custom lookup was injected).
   if (!getPortletKind) {
-    const configErrors: string[] = [];
     for (const p of res.config.portlets) {
       for (const e of validatePortletConfig(p.kind, p.version, { config: p.config, inputs: p.inputs, outputs: p.outputs })) {
-        configErrors.push(`portlet "${p.instanceId}": ${e.message}`);
+        errors.push(`portlet "${p.instanceId}": ${e.message}`);
       }
     }
-    if (configErrors.length > 0) throw new DashboardConfigInvalidError(configErrors.join("; "));
   }
-  return res.config;
+  return { errors, config: res.config };
+}
+
+function assertConfigV12(config: unknown, getPortletKind?: PortletKindLookup) {
+  const evaluated = evaluateConfigV12(config, getPortletKind);
+  if (evaluated.errors.length > 0 || evaluated.config === undefined) {
+    throw new DashboardConfigInvalidError(evaluated.errors.join("; "));
+  }
+  return evaluated.config;
 }
 
 /**
