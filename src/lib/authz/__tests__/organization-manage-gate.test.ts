@@ -20,6 +20,10 @@ vi.mock("@/lib/auth-session", () => ({
 const isSingleOrgMode = vi.fn();
 vi.mock("@/lib/authz/instance-mode", () => ({
   isSingleOrgMode: (...a: unknown[]) => isSingleOrgMode(...a),
+  // cinatra#1937: the gate's structural check now flows through the shared
+  // lifecycle primitive, whose STRICT read this same fn drives (a rejection
+  // here = mode-unavailable = ineligible, asserted below).
+  readSingleOrgModeStrict: (...a: unknown[]) => isSingleOrgMode(...a),
 }));
 
 // The org-row slug read: a REAL minimal pgTable (so the gate's `eq()` builds a
@@ -69,6 +73,7 @@ describe("resolveOrganizationManageCapabilities — RBAC matrix (catalog truth)"
       canManageSettings: true,
       canManageMembers: true,
       canDelete: true,
+      canArchive: true,
     });
     // Resolved against the VIEWED org, not the active org.
     expect(resolveOrgRoleForUser).toHaveBeenCalledWith(ORG, "user_1");
@@ -82,6 +87,7 @@ describe("resolveOrganizationManageCapabilities — RBAC matrix (catalog truth)"
       canManageSettings: true,
       canManageMembers: false,
       canDelete: false,
+      canArchive: false,
     });
     // Only a role holding organization.delete pays the structural lookups.
     expect(isSingleOrgMode).not.toHaveBeenCalled();
@@ -96,6 +102,7 @@ describe("resolveOrganizationManageCapabilities — RBAC matrix (catalog truth)"
       canManageSettings: false,
       canManageMembers: false,
       canDelete: false,
+      canArchive: false,
     });
   });
 
@@ -110,6 +117,7 @@ describe("resolveOrganizationManageCapabilities — RBAC matrix (catalog truth)"
       canManageSettings: false,
       canManageMembers: false,
       canDelete: false,
+      canArchive: false,
     });
   });
 
@@ -120,6 +128,7 @@ describe("resolveOrganizationManageCapabilities — RBAC matrix (catalog truth)"
       canManageSettings: false,
       canManageMembers: false,
       canDelete: false,
+      canArchive: false,
     });
     expect(resolveOrgRoleForUser).not.toHaveBeenCalled();
   });
@@ -131,6 +140,7 @@ describe("resolveOrganizationManageCapabilities — RBAC matrix (catalog truth)"
       canManageSettings: false,
       canManageMembers: false,
       canDelete: false,
+      canArchive: false,
     });
     expect(resolveOrgRoleForUser).not.toHaveBeenCalled();
   });
@@ -143,6 +153,7 @@ describe("resolveOrganizationManageCapabilities — RBAC matrix (catalog truth)"
       canManageSettings: false,
       canManageMembers: false,
       canDelete: false,
+      canArchive: false,
     });
   });
 });

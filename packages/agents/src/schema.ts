@@ -257,6 +257,16 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // this value. NULL = no timeout (default behavior preserved).
   // Migration: ALTER TABLE cinatra.agent_runs ADD COLUMN IF NOT EXISTS timeout_seconds integer;
   timeoutSeconds: integer("timeout_seconds"),
+  // cinatra#1937 (archive S1): per-dispatch execution bookkeeping, written
+  // ATOMICALLY with every queued→running status CAS (store.ts). The deadline
+  // is DB-clock (`now() + COALESCE(timeout_seconds, 24h-max)`); the attempt id
+  // is minted fresh per dispatch — re-dispatches of the same run get a new
+  // one. The archive program's lease math (S4) binds to these; until then
+  // they are persisted bookkeeping (the 24h A2A transport abort structurally
+  // bounds every dispatch at the default horizon).
+  // Migration: see src/lib/drizzle-store.ts (ADD COLUMN IF NOT EXISTS pair).
+  executionDeadlineAt: timestamp("execution_deadline_at", { withTimezone: true }),
+  executionAttemptId:  text("execution_attempt_id"),
   // streamed_text: accumulated external A2A peer text output persisted
   // on clean RUN_FINISHED by startExternalSseProxyFromStream (see packages/a2a/src/
   // external-sse-proxy.ts). NULL for: (a) internal LangGraph runs (never emit
@@ -485,6 +495,42 @@ export const agentRunHitlPrompts = cinatraSchema.table("agent_run_hitl_prompts",
   schemaSnapshot: jsonb("schema_snapshot").$type<Record<string, unknown> | null>(),
 }, (t) => ({
   runIdAgentIdx: index("agent_run_hitl_prompts_run_id_agent_idx").on(t.runId, t.agentId),
+}));
+
+// ---------------------------------------------------------------------------
+// agent_run_test_sends — durable per-action idempotency + crash ledger for the
+// run-scoped test-delivery send primitive (#1625, DESIGN-V3 contract (4)).
+//
+// One row per gate-submission send action. The dedupe identity is
+// (run_id, submission_id) where submission_id is the trusted per-resume WayFlow
+// task id (a transport retry of the SAME resume reuses the row; a genuine second
+// send is a NEW gate re-entry ⇒ new task ⇒ new submission_id ⇒ new row). `seq` is
+// the monotonic-per-run ordinal parse_action reads for the maxGateVisits halt
+// guard. `selected_draft_ids` pins the phase-1 plan BEFORE any outbound send so a
+// crash between claim and update reconciles against a durable expected batch
+// (never rerandomized). NO FK-outliving churn concern here — the run FK cascades.
+// ---------------------------------------------------------------------------
+
+export const agentRunTestSends = cinatraSchema.table("agent_run_test_sends", {
+  id:              text("id").primaryKey(),
+  runId:           text("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  submissionId:    text("submission_id").notNull(),
+  seq:             integer("seq").notNull(),
+  // 'sending' (claimed, outbound in flight) | 'sent' | 'failed'
+  status:          text("status").notNull().default("sending"),
+  recipientEmail:  text("recipient_email"),
+  // The pinned concrete draft-id set resolved at phase-1 (random_initial resolved
+  // ONCE) — the authoritative expected batch for crash reconciliation.
+  selectedDraftIds: jsonb("selected_draft_ids").$type<string[]>().notNull(),
+  // The typed discriminated send result ({ok,...}); null while 'sending'.
+  resultJson:      jsonb("result_json").$type<Record<string, unknown> | null>(),
+  claimedAt:       timestamp("claimed_at", { withTimezone: true }).notNull().defaultNow(),
+  leaseExpiresAt:  timestamp("lease_expires_at", { withTimezone: true }).notNull(),
+  createdAt:       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  runSubmissionUniq: uniqueIndex("agent_run_test_sends_run_id_submission_id_uniq").on(t.runId, t.submissionId),
+  runIdIdx:          index("agent_run_test_sends_run_id_idx").on(t.runId),
 }));
 
 // ---------------------------------------------------------------------------

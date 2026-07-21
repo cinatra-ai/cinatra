@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const getAuthSession = vi.fn();
 const isPlatformAdmin = vi.fn();
 const loadChatThreadForActorAccess = vi.fn();
+const reconstructThreadPayload = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
@@ -21,6 +22,14 @@ vi.mock("@/lib/chat-thread-store", () => ({
   loadChatThreadForActorAccess: (i: unknown) => loadChatThreadForActorAccess(i),
   readChatThreadOwnershipById: () => null,
   isActorTeamMemberForChat: () => false,
+}));
+// PR2 CUTOVER (cinatra#1037): the handler no longer returns info.payload verbatim
+// — once access is granted it reconstructs the body from the structured store.
+// The access matrix (the point of this test) is unchanged; this seam is stubbed
+// to ECHO the granted thread's payload so a granted read still yields that body,
+// while a pre-cutover (content-less) thread reconstructs to null → 404.
+vi.mock("@/lib/assistant-thread-store", () => ({
+  reconstructThreadPayload: (id: string) => reconstructThreadPayload(id),
 }));
 
 import { GET } from "../route";
@@ -36,6 +45,12 @@ describe("GET /api/assistants/threads/[threadId]", () => {
   beforeEach(() => {
     isPlatformAdmin.mockReturnValue(false);
     getAuthSession.mockResolvedValue({ user: { id: "user-self" } });
+    // A granted read reconstructs the body from the structured store; echo the
+    // granted thread's payload so each case's expected body is unchanged. Denied
+    // /missing reads 404 before this runs.
+    reconstructThreadPayload.mockImplementation(
+      () => loadChatThreadForActorAccess.mock.results.at(-1)?.value?.payload ?? null,
+    );
   });
   afterEach(() => vi.clearAllMocks());
 

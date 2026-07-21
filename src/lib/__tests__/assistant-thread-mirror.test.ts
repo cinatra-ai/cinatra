@@ -24,13 +24,13 @@ import {
   extractRawStringFieldFromThread,
   extractAssistantTurnMirrorRowsFromThread,
   extractPausedParticipantsFromThread,
+  extractThreadScalarsFromThread,
   resolveAssistantMirrorOrgId,
   buildAssistantThreadMirrorUpsertQuery,
   buildAssistantTurnMirrorReconcileQueries,
   buildAssistantPauseStateReconcileQueries,
   buildAssistantThreadMirrorQueries,
   buildAssistantThreadMirrorDeleteQuery,
-  buildAssistantThreadMirrorDeleteAllQuery,
 } from "@/lib/project-inheritance";
 
 const SCHEMA = "cinatra";
@@ -89,11 +89,16 @@ describe("extractAssistantTurnMirrorRowsFromThread", () => {
       assistantUserId: null,
       role: "user",
       createdAt: "2026-01-01T00:00:00.000Z",
+      ordinal: 0,
       content: JSON.stringify(thread.messages[0]),
     });
     // Attribution passthrough (I4 shadow).
     expect(rows[1].assistantUserId).toBe("asst-9");
     expect(rows[1].role).toBe("assistant");
+    // ordinal is the EMITTED-row index: the skipped invalid messages between m2
+    // and m4 leave NO gap, so m4 is ordinal 2 (faithful array order of survivors).
+    expect(rows[1].ordinal).toBe(1);
+    expect(rows[2].ordinal).toBe(2);
     // Invalid timestamp degrades to null (SQL falls back to now()).
     expect(rows[2].createdAt).toBeNull();
   });
@@ -106,6 +111,7 @@ describe("extractAssistantTurnMirrorRowsFromThread", () => {
         "content",
         "createdAt",
         "id",
+        "ordinal",
         "role",
       ]);
     }
@@ -150,6 +156,31 @@ describe("extractPausedParticipantsFromThread", () => {
   });
 });
 
+describe("extractThreadScalarsFromThread (durable render-state, PR2)", () => {
+  it("captures the present, well-typed render-state scalars", () => {
+    expect(
+      extractThreadScalarsFromThread({
+        activeAssistantHandle: "alpha",
+        taggedAssistantUserIds: ["asst-a", "asst-b"],
+        slackMode: true,
+      }),
+    ).toEqual({ activeAssistantHandle: "alpha", taggedAssistantUserIds: ["asst-a", "asst-b"], slackMode: true });
+  });
+  it("filters malformed tagged ids and drops absent/blank fields", () => {
+    expect(
+      extractThreadScalarsFromThread({ taggedAssistantUserIds: ["asst-a", "", 7, null] as never, activeAssistantHandle: "" }),
+    ).toEqual({ taggedAssistantUserIds: ["asst-a"] });
+  });
+  it("returns null when NO render-state scalar is present (column stays NULL)", () => {
+    expect(extractThreadScalarsFromThread({ id: "t1", title: "x" })).toBeNull();
+    expect(extractThreadScalarsFromThread({})).toBeNull();
+  });
+  it("slackMode must be a real boolean (ignores truthy non-booleans)", () => {
+    expect(extractThreadScalarsFromThread({ slackMode: "yes" as never })).toBeNull();
+    expect(extractThreadScalarsFromThread({ slackMode: false })).toEqual({ slackMode: false });
+  });
+});
+
 describe("resolveAssistantMirrorOrgId", () => {
   it("team-owned threads mirror with NULL org (S2 decides team→org anchoring)", () => {
     expect(resolveAssistantMirrorOrgId({ teamId: "team-1" }, "org-1")).toBeNull();
@@ -166,25 +197,61 @@ describe("buildAssistantThreadMirrorUpsertQuery", () => {
     threadId: "t1",
     ownerUserId: "u1",
     orgId: "org-1",
+    projectId: "proj-1",
+    teamId: "team-1",
+    scalars: { slackMode: true, taggedAssistantUserIds: ["asst-a"] },
     title: "  Title ",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-02T00:00:00.000Z",
   });
 
-  it("targets assistant_threads with the expected parameter order", () => {
+  it("targets assistant_threads with the expected parameter order (incl. project_id + team_id + origin + scalars)", () => {
     expect(q.text).toContain(`INSERT INTO "${SCHEMA}"."assistant_threads"`);
+    expect(q.text).toContain("(id, owner_user_id, org_id, project_id, team_id, origin, scalars, title, created_at, updated_at)");
+    // origin is a SQL LITERAL ('legacy-chat'), not a bound parameter, so the
+    // scalars/title/timestamp param positions are UNSHIFTED ($6::jsonb).
+    expect(q.text).toContain("$5, 'legacy-chat', $6::jsonb");
+    expect(q.text).toContain("$6::jsonb"); // scalars cast to jsonb (shifted by team_id)
     expect(q.values).toEqual([
       "t1",
       "u1",
       "org-1",
+      "proj-1",
+      "team-1",
+      JSON.stringify({ slackMode: true, taggedAssistantUserIds: ["asst-a"] }),
       "  Title ",
       "2026-01-01T00:00:00.000Z",
       "2026-01-02T00:00:00.000Z",
     ]);
   });
 
+  it("scalars is null → the jsonb param is null (not the string 'null')", () => {
+    const qn = buildAssistantThreadMirrorUpsertQuery({
+      schemaName: SCHEMA, threadId: "t1", ownerUserId: null, orgId: null, projectId: null,
+      teamId: null, scalars: null, title: null, createdAt: null, updatedAt: null,
+    });
+    expect(qn.values[5]).toBeNull(); // scalars param (shifted by team_id)
+  });
+
   it("org_id is SET-ONCE on conflict (existing anchor wins over EXCLUDED)", () => {
     expect(q.text).toContain("org_id        = COALESCE(assistant_threads.org_id, EXCLUDED.org_id)");
+  });
+
+  it("owner_user_id + team_id are SET-ONCE authz axes on conflict (codex: never wholesale-clear ownership)", () => {
+    expect(q.text).toContain("owner_user_id = COALESCE(assistant_threads.owner_user_id, EXCLUDED.owner_user_id)");
+    expect(q.text).toContain("team_id       = COALESCE(assistant_threads.team_id, EXCLUDED.team_id)");
+  });
+
+  it("origin is SET-ONCE PROVENANCE (mirror always projects 'legacy-chat' but never overwrites an established origin)", () => {
+    // The mirror is the 'legacy-chat' writer; the conflict clause COALESCE-preserves
+    // any established origin so a legacy write can never re-brand an
+    // 'assistant-native' thread (which would let the delegate-all wipe reach it).
+    expect(q.text).toContain("origin        = COALESCE(assistant_threads.origin, EXCLUDED.origin)");
+  });
+
+  it("project_id + scalars mirror the payload wholesale on conflict (mutable projection, matches chat_threads)", () => {
+    expect(q.text).toContain("project_id    = EXCLUDED.project_id");
+    expect(q.text).toContain("scalars       = EXCLUDED.scalars");
   });
 
   it("created_at is immutable post-INSERT; updated_at mirrors the payload", () => {
@@ -201,8 +268,8 @@ describe("buildAssistantThreadMirrorUpsertQuery", () => {
 
 describe("buildAssistantTurnMirrorReconcileQueries", () => {
   const turns = [
-    { id: "legacy:2:t1:m1", assistantUserId: null, role: "user" as const, createdAt: "2026-01-01T00:00:00.000Z", content: '{"id":"m1","role":"user","content":"hi"}' },
-    { id: "legacy:2:t1:m2", assistantUserId: "asst-9", role: "assistant" as const, createdAt: null, content: '{"id":"m2","role":"assistant","content":"yo"}' },
+    { id: "legacy:2:t1:m1", assistantUserId: null, role: "user" as const, createdAt: "2026-01-01T00:00:00.000Z", ordinal: 0, content: '{"id":"m1","role":"user","content":"hi"}' },
+    { id: "legacy:2:t1:m2", assistantUserId: "asst-9", role: "assistant" as const, createdAt: null, ordinal: 1, content: '{"id":"m2","role":"assistant","content":"yo"}' },
   ];
 
   it("emits reconcile DELETE scoped to the mirror namespace, then one INSERT", () => {
@@ -217,9 +284,9 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
     expect(del.values).toEqual(["t1", ["legacy:2:t1:m1", "legacy:2:t1:m2"]]);
 
     // Constant parameter count regardless of history length: parallel arrays,
-    // now including the durable content array as $6.
+    // the durable content array as $6 and the faithful-order ordinal as $7.
     expect(ins.text).toContain(`INSERT INTO "${SCHEMA}"."assistant_turns"`);
-    expect(ins.text).toContain("unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[])");
+    expect(ins.text).toContain("unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::int[])");
     expect(ins.values).toEqual([
       "t1",
       ["legacy:2:t1:m1", "legacy:2:t1:m2"],
@@ -227,28 +294,29 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
       ["user", "assistant"],
       ["2026-01-01T00:00:00.000Z", null],
       ['{"id":"m1","role":"user","content":"hi"}', '{"id":"m2","role":"assistant","content":"yo"}'],
+      [0, 1],
     ]);
   });
 
-  it("run_id is NULL (never fabricated) and status is 'completed'", () => {
+  it("run_id is NULL (never fabricated), status 'completed', ordinal projected", () => {
     const [, ins] = buildAssistantTurnMirrorReconcileQueries({
       schemaName: SCHEMA,
       threadId: "t1",
       turns,
     });
-    expect(ins.text).toContain("SELECT t.id, $1, NULL, t.assistant_user_id, t.role, 'completed', t.content::jsonb");
+    expect(ins.text).toContain("SELECT t.id, $1, NULL, t.assistant_user_id, t.role, 'completed', t.content::jsonb, t.ordinal::int");
   });
 
-  it("writes durable content (PR1 EXPAND) and refreshes it on conflict", () => {
+  it("writes durable content + ordinal (PR1/PR2) and refreshes them on conflict", () => {
     const [, ins] = buildAssistantTurnMirrorReconcileQueries({
       schemaName: SCHEMA,
       threadId: "t1",
       turns,
     });
-    // The content column is present, cast to jsonb, and refreshed on a re-write
+    // content + ordinal columns present, cast, and refreshed on a re-write
     // (edit/regenerate reusing the same message id).
     expect(ins.text).toContain("content");
-    expect(ins.text).toContain("ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, updated_at = now()");
+    expect(ins.text).toContain("ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, ordinal = EXCLUDED.ordinal, updated_at = now()");
     // Still never copies the raw legacy `payload` column name.
     for (const { text } of [ins]) {
       expect(text.toLowerCase()).not.toContain("payload");
@@ -312,17 +380,21 @@ describe("buildAssistantThreadMirrorQueries composition (pause presence-gating)"
   });
 });
 
-describe("guarded mirror deletes", () => {
-  it("single delete only fires when a matching LEGACY row exists", () => {
+describe("structured-authoritative mirror deletes", () => {
+  it("single delete targets the structured row directly (no EXISTS(chat_threads) guard)", () => {
+    // PR2 CUTOVER: the EXISTS(chat_threads) guard was DROPPED — a post-cutover
+    // structured-only thread has NO chat_threads row, so the guard would make
+    // the structured delete a silent no-op. The delete is now
+    // structured-authoritative; assistant_turns FK-cascade cleans the turns.
     const q = buildAssistantThreadMirrorDeleteQuery(SCHEMA, "t1");
     expect(q.text).toContain(`DELETE FROM "${SCHEMA}"."assistant_threads"`);
-    expect(q.text).toContain(`EXISTS (SELECT 1 FROM "${SCHEMA}"."chat_threads" WHERE id = $1)`);
+    expect(q.text).toContain("WHERE id = $1");
+    expect(q.text).not.toContain("chat_threads");
     expect(q.values).toEqual(["t1"]);
   });
 
-  it("delete-all is scoped to ids present in chat_threads (set form of the guard)", () => {
-    const q = buildAssistantThreadMirrorDeleteAllQuery(SCHEMA);
-    expect(q.text).toContain(`WHERE id IN (SELECT id FROM "${SCHEMA}"."chat_threads")`);
-    expect(q.values).toEqual([]);
-  });
+  // The GLOBAL set-form mirror-delete-all builder was RETIRED in the PR2 CUTOVER
+  // (its wipe of the full chat_threads set was the cross-tenant vuln). The
+  // delete-all path is now OWNER + 'legacy-chat' scoped inside
+  // deleteAllChatThreadsFromDatabase — covered in the database delete tests.
 });

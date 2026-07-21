@@ -3,12 +3,15 @@
  *
  * The helper is auth-neutral by contract, but caller-class-only authenticated
  * entry points (the /api/a2a/resume route) now pass their verified
- * `actorContext` so the helper enforces `run.approveHitl` against the resolved
- * run BEFORE any state change, on BOTH the setup-* (#323) and wayflow-* (#322)
- * branches. This pins:
- *   - when actorContext is supplied and enforceRunAccess THROWS, no mutation /
- *     enqueue happens (deny propagates) — both setup-* and wayflow-* paths;
- *   - enforceRunAccess is called with the resolved run + the actor + approveHitl;
+ * `actorContext` so the helper MIRRORS agent_run_resume — enforcing `execute`
+ * THEN `approveHitl` against the resolved run BEFORE any state change, on BOTH
+ * the setup-* (#323) and wayflow-* (#322) branches (#1625 F2: resuming a
+ * gate drives an execute-tier action, so an approveHitl-only responder is no
+ * longer sufficient). This pins:
+ *   - when actorContext is supplied and enforceRunAccess THROWS on `execute`
+ *     (the FIRST check), no mutation / enqueue happens (deny propagates) — both
+ *     setup-* and wayflow-* paths;
+ *   - enforceRunAccess is called with the resolved run + the actor + execute;
  *   - when actorContext is omitted, the gate is a no-op (back-compat for the
  *     server-action / MCP callers that already authorized).
  */
@@ -62,7 +65,10 @@ const ACTOR = {
   source: "a2a" as const,
   userId: "svc-1",
   orgId: "org-1",
-  tokenScopes: ["run.approveHitl"],
+  // F2: driving a gate resume is an execute-tier action, so a legitimate A2A
+  // responder must carry BOTH run.resume (execute) and run.approveHitl — the
+  // exact contract agent_run_resume already enforces.
+  tokenScopes: ["run.resume", "run.approveHitl"],
 };
 
 describe("approveReviewTaskInternal — actorContext gate", () => {
@@ -104,15 +110,16 @@ describe("approveReviewTaskInternal — actorContext gate", () => {
       approveReviewTaskInternal("setup-missing", "svc-1", { x: 1 }, undefined, null, ACTOR),
     ).rejects.toThrow(/Not found\./);
     expect(authPolicyMock.enforceRunAccess).toHaveBeenCalledTimes(1);
+    // execute is the FIRST check (mirrors agent_run_resume) and throws here.
     expect(authPolicyMock.enforceRunAccess).toHaveBeenCalledWith(
       null,
       ACTOR,
-      "approveHitl",
+      "execute",
       undefined,
     );
   });
 
-  it("setup-*: allows when enforceRunAccess resolves — mutates + enqueues with approveHitl gate", async () => {
+  it("setup-*: allows when enforceRunAccess resolves — mutates + enqueues with execute+approveHitl gate", async () => {
     storeMock.readAgentRunById.mockResolvedValue({
       id: "run-ok",
       templateId: "tpl-ok",
@@ -125,6 +132,13 @@ describe("approveReviewTaskInternal — actorContext gate", () => {
 
     await approveReviewTaskInternal("setup-run-ok", "svc-1", { name: "x" }, "name", null, ACTOR);
 
+    // BOTH tiers are enforced against the resolved run (execute + approveHitl).
+    expect(authPolicyMock.enforceRunAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "run-ok", runBy: "svc-1", orgId: "org-1" }),
+      ACTOR,
+      "execute",
+      undefined,
+    );
     expect(authPolicyMock.enforceRunAccess).toHaveBeenCalledWith(
       expect.objectContaining({ id: "run-ok", runBy: "svc-1", orgId: "org-1" }),
       ACTOR,
@@ -151,12 +165,13 @@ describe("approveReviewTaskInternal — actorContext gate", () => {
       approveReviewTaskInternal("wayflow-task-w", "svc-1", undefined, undefined, null, ACTOR),
     ).rejects.toThrow(/Run access denied/);
     // The gate fired against the resolved run before the sourceType guard / any
-    // sendTask. (readAgentTemplateById is called at most once — by the gate's
-    // policy resolution — never a second time for the sourceType branch.)
+    // sendTask. execute is the FIRST check and throws here. (readAgentTemplateById
+    // is called at most once — by the gate's policy resolution — never a second
+    // time for the sourceType branch.)
     expect(authPolicyMock.enforceRunAccess).toHaveBeenCalledWith(
       expect.objectContaining({ id: "run-w", runBy: "victim", orgId: "org-victim" }),
       ACTOR,
-      "approveHitl",
+      "execute",
       undefined,
     );
     expect(storeMock.readAgentTemplateById.mock.calls.length).toBeLessThanOrEqual(1);

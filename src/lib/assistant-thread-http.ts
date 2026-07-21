@@ -1,6 +1,12 @@
 import "server-only";
 
-import { upsertChatThreadInDatabase, readChatThreadsFromDatabase } from "@/lib/database";
+import { upsertChatThreadInDatabase } from "@/lib/database";
+import {
+  reconstructThreadPayload,
+  listAssistantThreadIdsWithDurableContent,
+  listAssistantThreadSummariesForOwnerInOrg,
+  getAssistantThread,
+} from "@/lib/assistant-thread-store";
 import {
   isActorTeamMemberForChat,
   readChatThreadOwnershipById,
@@ -114,9 +120,30 @@ export async function handleSaveAssistantThread(request: Request): Promise<Respo
   return Response.json({ ok: true });
 }
 
-/** GET /api/assistants/threads — the caller's own + legacy-unowned thread list.
+/** GET /api/assistants/threads — the caller's own, ORG-SCOPED thread list.
  * Mirrors the deleted legacy GET /api/chat/threads. Team threads belong in the
- * team panel, not this list. */
+ * team panel, not this list.
+ *
+ * ─── THE #134 LISTING CONTRACT (cinatra#1037 P5.6 PR2 CUTOVER) ───────────────
+ * Owner ruling relayed on cinatra#1037 (2026-07-20, "#134" listing contract):
+ * "The per-assistant conversation history list is bound to the access scope of
+ * the assistant."
+ * DURABLE per-assistant contract for #1873 W3: each thread list is scoped to the
+ * AUDIENCE of the assistant whose history it is — the assistant's audience
+ * binding (workspace / org / team / user) is the tenancy boundary of its list.
+ *
+ * INTERIM (this flat, single-built-in-assistant list): the built-in Cinatra
+ * assistant is a WORKSPACE-audience assistant, so its audience is the acting
+ * ORG. The list is therefore ORG-SCOPED to `activeOrganizationId` via the
+ * structured mirror's `org_id` anchor (chat_threads has no org column). When
+ * #1873 W3 lands per-assistant audiences, replace the org-scope here with the
+ * acting assistant's resolved audience predicate — the seam is this function.
+ *
+ * OWNERLESS QUARANTINE: legacy rows with NO owner and NO team predate per-thread
+ * ownership and carry no tenancy anchor; they were previously shown to EVERY
+ * caller cross-org (codex: a latent tenant leak). They are now ADMIN-QUARANTINED
+ * — visible only to a platform admin, never to a regular member.
+ */
 export async function handleListAssistantThreads(): Promise<Response> {
   const session = await getAuthSession();
   if (!session) {
@@ -124,55 +151,75 @@ export async function handleListAssistantThreads(): Promise<Response> {
   }
 
   const userId = session.user.id;
-  const threads = readChatThreadsFromDatabase();
+  const isAdmin = isPlatformAdmin(session);
+  const activeOrgId = session.session?.activeOrganizationId ?? null;
 
-  const result: ThreadSummary[] = threads
-    .filter((t) => {
-      const ownerUserId = t.ownerUserId as string | undefined;
-      const teamId = t.teamId as string | undefined;
-      if (!ownerUserId && !teamId) return true; // legacy unowned — always show
-      if (ownerUserId === userId) return true; // user's own thread
-      if (teamId) return false; // team threads live in the team panel
-      return false;
-    })
-    .map((t) => ({
-      id: t.id as string,
-      title: t.title as string,
-      createdAt: t.createdAt as string,
-      updatedAt: t.updatedAt as string,
-    }))
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // PR2 CUTOVER (cinatra#1037 P5.6): served ENTIRELY from the structured store —
+  // ZERO chat_threads reads. The durable-content gate, the #134 org+owner
+  // scoping, the ownerless-quarantine and the team exclusion are all resolved
+  // against the structured mirror.
+  let result: ThreadSummary[];
+  if (isAdmin) {
+    // Platform admin bypasses the org scope AND additionally sees the
+    // ownerless-quarantined legacy rows; team threads still live in the team
+    // panel. Enumerate the durable-content threads and resolve the ownership
+    // axes from the structured mirror row.
+    const admin: ThreadSummary[] = [];
+    for (const id of listAssistantThreadIdsWithDurableContent()) {
+      const t = getAssistantThread(id);
+      if (!t) continue;
+      const isOwn = !!t.ownerUserId && t.ownerUserId === userId;
+      const isOwnerless = !t.ownerUserId && !t.teamId;
+      if (!isOwn && !isOwnerless) continue; // another user's or a team thread — excluded
+      admin.push({ id: t.id, title: t.title ?? "", createdAt: t.createdAt, updatedAt: t.updatedAt });
+    }
+    result = admin;
+  } else if (activeOrgId) {
+    // Non-admin: the caller's own durable-content threads anchored to the acting
+    // org (team + ownerless + cross-org rows are excluded by the store op's
+    // owner+org predicate + durable-content EXISTS gate).
+    result = listAssistantThreadSummariesForOwnerInOrg(activeOrgId, userId).map((t) => ({
+      id: t.id,
+      title: t.title ?? "",
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+    }));
+  } else {
+    // No active org — fail-closed to an empty list.
+    result = [];
+  }
+
+  // Sidebar ordering PINNED createdAt DESC (cinatra#1037 PR2 hardening) — the
+  // legacy sidebar sorts by creation, never updated_at (that would be drift).
+  result.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
   return Response.json(result);
 }
 
 // ---------------------------------------------------------------------------
-// READ-SOURCE SEAM (cinatra#1218 delete stage, Residual-3 — owner-routed).
+// READ-SOURCE SEAM — PR2 CUTOVER (cinatra#1037 P5.6 drop-history).
 //
-// The historical legacy-content read decision — read-shim over the legacy
-// thread payload vs a structured assistant_turns content migration — is
-// deliberately NOT taken here (routed to the owner). This route reads the SAME
-// legacy payload store the legacy GET /api/chat/thread/[id] reads, so NEW
-// threads (written through handleSaveAssistantThread) and pre-cutover threads
-// both resolve identically today — compatible with EITHER future ruling. When
-// the ruling lands, ONLY this resolver body changes: a read-shim keeps it as
-// the identity over the legacy payload; a migration swaps it to reconstruct
-// content from the structured assistant_turns keyed by run_id. No CALLER and no
-// SIGNATURE changes either way — the seam already receives the trusted,
-// authorized `threadId` (the only key a structured reconstruction needs) and is
-// async so an event-log read can be awaited in place. The `info` also carries
-// the resolved ownership axes should a migration path need them.
+// The structured store is now the AUTHORITATIVE read AND write source: the
+// payload is reconstructed from `assistant_threads` + the durable
+// `assistant_turns.content` + `assistant_thread_pause_state`
+// (reconstructThreadPayload), NOT the legacy `chat_threads.payload`. The final
+// teardown DROPPED the legacy chat_threads INSERT (the structured mirror is the
+// SOLE writer) and ARMED the DB fence (any stray chat_threads INSERT/UPDATE
+// fail-closes), so the reconstruction is faithful for every post-cutover thread.
+//
+// PRE-CUTOVER EXCLUSION: a thread with no durable turn content (a content-less
+// mirror shadow minted before PR1 EXPAND, or an empty thread) reconstructs to
+// null and is treated as NOT FOUND — the caller 404s, matching the list-path
+// exclusion. `info` is unused now (access is already decided by the caller); the
+// signature is retained so the caller is unchanged.
 // ---------------------------------------------------------------------------
 async function resolveThreadReadPayload(
   threadId: string,
-  info: { payload: unknown; ownerUserId: string | null; teamId: string | null },
+  info: { ownerUserId: string | null; teamId: string | null },
 ): Promise<unknown> {
-  // read-shim (current ruling-agnostic default): the legacy payload as-is. The
-  // trusted `threadId` is intentionally unused today — it is the seam contract
-  // a future content-migration reconstruction keys on (reads assistant_turns by
-  // run_id), so wiring it now keeps the ruling a one-function change.
-  void threadId;
-  return info.payload;
+  void info;
+  // null == absent-from-structured-store OR pre-cutover (content-less) → 404.
+  return reconstructThreadPayload(threadId);
 }
 
 /** GET /api/assistants/threads/[threadId] — tenant-scoped single-thread read.
@@ -202,5 +249,12 @@ export async function handleGetAssistantThreadById(threadId: string): Promise<Re
     return Response.json({ error: "Not found" }, { status: 404 });
   }
 
-  return Response.json(await resolveThreadReadPayload(threadId, info));
+  // PR2 CUTOVER: reconstruct from the structured store. A pre-cutover thread
+  // (no durable content) reconstructs to null → 404 (existence not disclosed,
+  // same as a denied/missing read).
+  const payload = await resolveThreadReadPayload(threadId, info);
+  if (payload === null) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  return Response.json(payload);
 }

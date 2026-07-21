@@ -112,6 +112,8 @@ const DIRECT_GRANTS: Record<Role, ReadonlySet<Permission>> = {
     "team.manageMembers",
     "organization.manageMembers",
     "organization.delete",
+    // cinatra#1937: archive AND unarchive (one permission covers both).
+    "organization.archive",
     "skill.manageVisibility",
     "agent.managePermissions",
     "object.promoteScope",

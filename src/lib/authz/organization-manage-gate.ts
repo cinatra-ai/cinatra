@@ -1,11 +1,8 @@
 import "server-only";
 
-import { eq } from "drizzle-orm";
-
 import { resolveOrgRoleForUser, type AuthzOrgRole } from "@/lib/auth-session";
 import { roleHasPermission } from "@/lib/authz/policies";
-import { isSingleOrgMode } from "@/lib/authz/instance-mode";
-import { betterAuthDb, betterAuthOrganizations } from "@/lib/better-auth-db";
+import { resolveOrganizationLifecycleEligibility } from "@/lib/organization-lifecycle";
 
 /**
  * Shared VIEWED-org management gate for `/organizations/[id]` (cinatra#1510).
@@ -63,6 +60,14 @@ export type OrganizationManageCapabilities = {
    * not a capability.
    */
   readonly canDelete: boolean;
+  /**
+   * `organization.archive` (org_owner; covers unarchive) AND the same
+   * structural eligibility as delete (Default org / single-org refuse).
+   * DARK (cinatra#1937 S1): no UI consumes this yet — the archive action
+   * itself additionally refuses behind the default-off activation gate until
+   * the activation slice flips it.
+   */
+  readonly canArchive: boolean;
 };
 
 const NO_CAPABILITIES: OrganizationManageCapabilities = {
@@ -70,6 +75,7 @@ const NO_CAPABILITIES: OrganizationManageCapabilities = {
   canManageSettings: false,
   canManageMembers: false,
   canDelete: false,
+  canArchive: false,
 };
 
 /**
@@ -78,15 +84,14 @@ const NO_CAPABILITIES: OrganizationManageCapabilities = {
  * Fail-closed: an unreadable org row or mode toggle yields NOT deletable.
  */
 async function isStructurallyDeletable(organizationId: string): Promise<boolean> {
+  // Delegates to the shared lifecycle primitive (cinatra#1937): same
+  // Default-org / single-org semantics as before, now with the STRICT mode
+  // read — a failing config read renders the org ineligible (fail closed)
+  // instead of assuming multi-org.
   try {
-    if (await isSingleOrgMode()) return false;
-    const rows = await betterAuthDb
-      .select({ slug: betterAuthOrganizations.slug })
-      .from(betterAuthOrganizations)
-      .where(eq(betterAuthOrganizations.id, organizationId))
-      .limit(1);
-    if (rows.length === 0) return false;
-    return rows[0].slug !== "default";
+    const eligibility =
+      await resolveOrganizationLifecycleEligibility(organizationId);
+    return eligibility.eligible;
   } catch {
     return false;
   }
@@ -110,11 +115,17 @@ export async function resolveOrganizationManageCapabilities(
   if (!role) return NO_CAPABILITIES;
 
   const holdsDelete = roleHasPermission(role, "organization.delete");
+  const holdsArchive = roleHasPermission(role, "organization.archive");
+  // ONE structural read serves both lifecycle capabilities (only computed
+  // when some lifecycle permission is actually held — non-owners stay free).
+  const structurallyEligible =
+    (holdsDelete || holdsArchive) && (await isStructurallyDeletable(organizationId));
   return {
     role,
     canManageSettings: roleHasPermission(role, "organization.update"),
     canManageMembers: roleHasPermission(role, "organization.manageMembers"),
-    canDelete: holdsDelete && (await isStructurallyDeletable(organizationId)),
+    canDelete: holdsDelete && structurallyEligible,
+    canArchive: holdsArchive && structurallyEligible,
   };
 }
 

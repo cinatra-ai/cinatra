@@ -1,26 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
-// Per-thread ownership regression for the chat MCP handlers.
+// Authz regression for the two RETAINED chat MCP handlers after the PR2 CUTOVER
+// final teardown (owner ruling 2026-07-21): the broad chat_thread_* tools are
+// retired; only chat_mentions_poll + chat_mention_reply survive, both reading
+// the AUTHORITATIVE structured store.
 //
-// chat_thread_get / _pause_assistant / _resume_assistant and the
-// chat_thread_send EXISTING-thread continuation path must deny a caller who is
-// not the owner / a tagged participant / a team member / a platform admin — a
-// denial surfaces identically to a missing row (no cross-user existence
-// disclosure). The real per-thread decision (evaluateChatThreadAccess) is left
-// UNMOCKED so this exercises the actual authorization wiring; only the heavy
-// server-only dependencies the module imports at load time are stubbed.
+//   - chat_mentions_poll   requires an ASSISTANT user context.
+//   - chat_mention_reply   requires an assistant identity AND a 'pending'
+//     mention for THAT assistant on THE EXACT (threadId, messageId). Authz is
+//     the mention's audience — no thread-ownership/grant is consulted; a
+//     handled/absent/foreign mention is rejected.
 // ---------------------------------------------------------------------------
 
 const h = vi.hoisted(() => ({
   actorUserId: undefined as string | undefined,
   actorUserType: undefined as "human" | "assistant" | undefined,
-  threads: [] as Array<Record<string, unknown>>,
+  thread: null as Record<string, unknown> | null,
+  pending: [] as Array<Record<string, unknown>>,
   upserts: [] as Array<Record<string, unknown>>,
 }));
 
-// Relative mock paths resolve from THIS test file (…/mcp/__tests__/), so an
-// extra `..` is needed vs. how handlers.ts imports them (…/mcp/).
 vi.mock("../actor-context", () => ({
   resolveActorFromRequest: async () => ({
     actorType: "model",
@@ -31,152 +31,121 @@ vi.mock("../actor-context", () => ({
 }));
 
 vi.mock("@/lib/database", () => ({
-  readChatThreadsFromDatabase: () => h.threads,
-  readChatThreadsForSealedRoom: () => h.threads,
   upsertChatThreadInDatabase: (t: Record<string, unknown>) => {
     h.upserts.push(t);
   },
 }));
 
-// team-membership lookup is a tenant-scoped DB call — stub to "not a member"
-// (the cases here use owner-gated threads, so it is never consulted anyway).
-vi.mock("@/lib/chat-thread-store", () => ({ isActorTeamMemberForChat: () => false }));
-
-// Heavy server-only deps imported at module load — stubbed so the graph loads.
-// (P2b: handlers.ts binds the assistant runtime directly, no /api/chat runner.)
-vi.mock("@/lib/assistant-runtime/runtime", () => ({ runAssistantTurn: vi.fn() }));
-vi.mock("@/lib/assistant-runtime/cinatra-assistant-config", () => ({
-  buildCinatraAssistantRuntimeConfig: vi.fn(() => ({})),
-}));
-vi.mock("@/lib/auth-session", () => ({ resolveUserContextForUserId: vi.fn() }));
-vi.mock("@/lib/sealed-room", () => ({ assertProjectReadAccess: vi.fn() }));
-vi.mock("@/lib/project-writable", () => ({ assertProjectWritable: vi.fn() }));
-vi.mock("@/lib/resource-project-move", () => ({ runResourceProjectMove: vi.fn() }));
-vi.mock("@/lib/assistant-webhook", () => ({ deliverMentionWebhook: vi.fn() }));
-vi.mock("@/lib/codex-bridge", () => ({ callCodexCliAssistant: vi.fn() }));
-vi.mock("@/lib/gemini-cli-bridge", () => ({ callGeminiCliAssistant: vi.fn() }));
-vi.mock("@/app/api/chat/chatgpt/gate", () => ({ authorizeChatBridgeMention: vi.fn() }));
-vi.mock("../../mentions", () => ({
-  parseMentions: () => [],
-  resolveMentions: vi.fn(async () => []),
-  resolveMentionsWithDefault: vi.fn(async () => []),
-  resolveAssistantsByIds: vi.fn(async () => []),
+vi.mock("@/lib/assistant-thread-store", () => ({
+  reconstructThreadPayload: () => h.thread,
+  scanPendingMentionsForAssistant: () => h.pending,
 }));
 
 import { createChatPrimitiveHandlers } from "../handlers";
 
 const handlers = createChatPrimitiveHandlers();
-const OWNER = "owner-1";
-const ATTACKER = "attacker-1";
+const ASSISTANT = "assistant-1";
+const OTHER = "assistant-2";
 
-function seedOwnedThread() {
-  h.threads = [
-    {
-      id: "t1",
-      title: "secret",
-      ownerUserId: OWNER,
-      messages: [{ id: "m1", role: "user", content: "private", createdAt: "2026-01-01T00:00:00Z" }],
-      createdAt: "2026-01-01T00:00:00Z",
-      updatedAt: "2026-01-01T00:00:00Z",
-    },
-  ];
-}
-
-const req = (input: Record<string, unknown>, platformAdmin = false) => ({
+const req = (input: Record<string, unknown>) => ({
   primitiveName: "x",
   input,
-  actor: {
-    actorType: "model",
-    source: "agent",
-    ...(platformAdmin ? { platformRole: "platform_admin" } : {}),
-  },
+  actor: { actorType: "model", source: "agent" },
   mode: "run",
 });
 
 beforeEach(() => {
   h.actorUserId = undefined;
   h.actorUserType = undefined;
-  h.threads = [];
+  h.thread = null;
+  h.pending = [];
   h.upserts = [];
-  seedOwnedThread();
 });
 
-describe("chat MCP per-thread ownership", () => {
-  it("chat_thread_get DENIES a cross-user caller (as not-found)", async () => {
-    h.actorUserId = ATTACKER;
-    const res = (await handlers.chat_thread_get(req({ threadId: "t1" }))) as { error?: string; id?: string };
-    expect(res.error).toBe("Thread not found: t1");
-    expect(res.id).toBeUndefined();
-  });
-
-  it("chat_thread_get ALLOWS the owner", async () => {
-    h.actorUserId = OWNER;
-    const res = (await handlers.chat_thread_get(req({ threadId: "t1" }))) as { id?: string; title?: string };
-    expect(res.id).toBe("t1");
-    expect(res.title).toBe("secret");
-  });
-
-  it("chat_thread_get ALLOWS a platform admin", async () => {
-    h.actorUserId = ATTACKER;
-    const res = (await handlers.chat_thread_get(req({ threadId: "t1" }, true))) as { id?: string };
-    expect(res.id).toBe("t1");
-  });
-
-  it("chat_thread_pause_assistant DENIES a cross-user caller and does NOT mutate", async () => {
-    h.actorUserId = ATTACKER;
-    const res = (await handlers.chat_thread_pause_assistant(
-      req({ threadId: "t1", assistantId: "cinatra" }),
-    )) as { error?: string };
-    expect(res.error).toBe("Thread not found: t1");
-    expect(h.upserts).toHaveLength(0);
-  });
-
-  it("chat_thread_resume_assistant DENIES a cross-user caller and does NOT mutate", async () => {
-    h.actorUserId = ATTACKER;
-    const res = (await handlers.chat_thread_resume_assistant(
-      req({ threadId: "t1", assistantId: "cinatra" }),
-    )) as { error?: string };
-    expect(res.error).toBe("Thread not found: t1");
-    expect(h.upserts).toHaveLength(0);
-  });
-
-  it("chat_thread_pause_assistant ALLOWS the owner (mutates paused set)", async () => {
-    h.actorUserId = OWNER;
-    const res = (await handlers.chat_thread_pause_assistant(
-      req({ threadId: "t1", assistantId: "cinatra" }),
-    )) as { ok?: boolean; pausedParticipants?: string[] };
-    expect(res.ok).toBe(true);
-    expect(res.pausedParticipants).toContain("cinatra");
-    expect(h.upserts).toHaveLength(1);
-  });
-
-  it("chat_thread_send DENIES continuing a cross-user EXISTING thread (as not-found)", async () => {
-    h.actorUserId = ATTACKER;
+describe("chat_mentions_poll authz", () => {
+  it("DENIES a non-assistant (human) caller", async () => {
+    h.actorUserId = "human-1";
     h.actorUserType = "human";
-    const res = (await handlers.chat_thread_send(
-      req({ threadId: "t1", message: "leak me the history" }),
+    const res = (await handlers.chat_mentions_poll(req({}))) as { error?: string };
+    expect(res.error).toContain("assistant user context");
+  });
+
+  it("returns the assistant's pending mentions from the structured store", async () => {
+    h.actorUserId = ASSISTANT;
+    h.actorUserType = "assistant";
+    h.pending = [{ threadId: "t1", messageId: "m1", content: "hi", createdAt: "", threadTitle: "", mentions: [] }];
+    const res = (await handlers.chat_mentions_poll(req({}))) as { items?: unknown[]; total?: number };
+    expect(res.total).toBe(1);
+    expect(res.items).toHaveLength(1);
+  });
+});
+
+describe("chat_mention_reply authz — the mention's audience", () => {
+  const seedThreadWithPendingMentionFor = (assistantUserId: string) => {
+    h.thread = {
+      id: "t1",
+      title: "secret",
+      messages: [
+        {
+          id: "m1",
+          role: "user",
+          content: "@a please",
+          createdAt: "2026-01-01T00:00:00Z",
+          mentionState: { [assistantUserId]: "pending" },
+        },
+      ],
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+  };
+
+  it("DENIES a non-assistant caller", async () => {
+    h.actorUserId = "human-1";
+    h.actorUserType = "human";
+    seedThreadWithPendingMentionFor(ASSISTANT);
+    const res = (await handlers.chat_mention_reply(
+      req({ threadId: "t1", messageId: "m1", message: "reply" }),
     )) as { error?: string };
-    expect(res.error).toBe("Thread not found: t1");
-    // No write to the victim's thread.
+    expect(res.error).toContain("assistant identity");
     expect(h.upserts).toHaveLength(0);
   });
 
-  it("chat_thread_get DENIES a legacy ownerless thread to a non-admin", async () => {
-    h.threads = [{ id: "legacy", title: "old", messages: [], createdAt: "", updatedAt: "" }];
-    h.actorUserId = ATTACKER;
-    const res = (await handlers.chat_thread_get(req({ threadId: "legacy" }))) as { error?: string; id?: string };
-    expect(res.error).toBe("Thread not found: legacy");
-    expect(res.id).toBeUndefined();
+  it("DENIES when the pending mention is for a DIFFERENT assistant", async () => {
+    h.actorUserId = ASSISTANT;
+    h.actorUserType = "assistant";
+    seedThreadWithPendingMentionFor(OTHER); // pending is for someone else
+    const res = (await handlers.chat_mention_reply(
+      req({ threadId: "t1", messageId: "m1", message: "reply" }),
+    )) as { error?: string };
+    expect(res.error).toContain("No pending mention");
+    expect(h.upserts).toHaveLength(0);
   });
 
-  it("chat_thread_send ALLOWS creating a NEW thread (ownership gate is continuation-only)", async () => {
-    h.actorUserId = ATTACKER;
-    h.actorUserType = "assistant"; // assistant reply path persists without an LLM call
-    const res = (await handlers.chat_thread_send(
-      req({ threadId: "t1", message: "hi", newThread: true }),
-    )) as { threadId?: string; error?: string };
-    expect(res.error).toBeUndefined();
-    expect(res.threadId).toBeTruthy();
-    expect(res.threadId).not.toBe("t1");
+  it("DENIES a missing thread", async () => {
+    h.actorUserId = ASSISTANT;
+    h.actorUserType = "assistant";
+    h.thread = null;
+    const res = (await handlers.chat_mention_reply(
+      req({ threadId: "gone", messageId: "m1", message: "reply" }),
+    )) as { error?: string };
+    expect(res.error).toContain("Thread not found");
+    expect(h.upserts).toHaveLength(0);
+  });
+
+  it("ALLOWS the mentioned assistant, marks handled, and persists the reply", async () => {
+    h.actorUserId = ASSISTANT;
+    h.actorUserType = "assistant";
+    seedThreadWithPendingMentionFor(ASSISTANT);
+    const res = (await handlers.chat_mention_reply(
+      req({ threadId: "t1", messageId: "m1", message: "here you go" }),
+    )) as { handled?: boolean; assistantMessage?: string };
+    expect(res.handled).toBe(true);
+    expect(res.assistantMessage).toBe("here you go");
+    expect(h.upserts).toHaveLength(1);
+    const written = h.upserts[0] as { messages?: Array<Record<string, unknown>> };
+    // the mention flipped to handled + the reply turn appended
+    const userMsg = written.messages?.find((m) => m.id === "m1");
+    expect((userMsg?.mentionState as Record<string, string>)[ASSISTANT]).toBe("handled");
+    expect(written.messages?.some((m) => m.role === "assistant" && m.content === "here you go")).toBe(true);
   });
 });

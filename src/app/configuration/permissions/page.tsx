@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 import {
+  Archive,
   CheckCircle2,
   CircleX,
   Database,
@@ -284,6 +285,7 @@ const PERMISSION_ICONS: Record<Permission, React.ComponentType<{ className?: str
   "organization.create": Plus,
   "organization.update": Pencil,
   "organization.delete": Trash2,
+  "organization.archive": Archive,
   "organization.manageMembers": Users,
   "skill.read": Eye,
   "skill.list": List,

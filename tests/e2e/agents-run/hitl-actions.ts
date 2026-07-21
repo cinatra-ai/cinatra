@@ -506,10 +506,12 @@ async function advanceReviewerContactsOutput(
  * Advancement for `@cinatra-ai/email-test-delivery-agent:input`.
  *
  * Renderer source: packages/agents/src/email-test-delivery-form-renderer.tsx
- * Has two buttons: "Send test email" (POSTs to /api/test-delivery/send and
- * updates lastSendResult locally — does NOT advance the run) and "Continue"
- * (emits the `testResult` envelope via onChange, lets the outer panel
- * Continue submit the gate).
+ * A pure snapshot -> onChange surface (DESIGN-V3 contract (8)): the renderer
+ * performs NO client send. Both buttons RESOLVE the gate by emitting a
+ * top-level `userResponse` (+ mirrored `testResult`) envelope via onChange —
+ * "Send test email" emits `{ action:"send", ... }` (the RUN performs the send
+ * and re-enters the gate) and "Continue" emits `{ action:"continue" }` (the
+ * flow reaches End).
  *
  * For the e2e fixture, we click "Continue" directly without sending a test
  * email — avoids real outbound mail and exercises the gate-exit contract.

@@ -1038,63 +1038,6 @@ export function readChatThreadsFromDatabase(): Array<Record<string, unknown>> {
 }
 
 /**
- * Sealed-room chat-thread reader.
- *
- * `readChatThreadsFromDatabase` returns ALL threads from the legacy
- * payload-only SELECT (the global helper used by every legacy caller).
- * This variant filters via the typed `project_id` column. When the supplied
- * `projectId` is non-null, the SQL `WHERE project_id = $projectId` clause runs
- * over the typed indexable column, never a JSON payload parse.
- *
- * Subject to the `CINATRA_SEALED_ROOM_CHAT_THREADS` feature flag — when
- * OFF this function falls through to the legacy reader (every thread,
- * ambient behavior).
- *
- * Callers: `chat_thread_list` MCP handler (sealed-room mode). Handler-
- * side `assertProjectReadAccess` gates the 404-hidden authz; this is
- * the SQL-data-layer half.
- */
-export function readChatThreadsForSealedRoom(input: {
-  projectId: string | null;
-}): Array<Record<string, unknown>> {
-  // Lazy require to avoid a load-order cycle (sealed-room imports
-  // server-only and AuthzError, both fine; the lazy require mirrors
-  // the artifact-refs-store pattern used by upsertChatThreadInDatabase).
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const sealedRoom = require("@/lib/sealed-room") as typeof import("@/lib/sealed-room");
-  const effectiveProjectId = sealedRoom.sealedRoomFilterValue(
-    "chat_threads",
-    input.projectId,
-  );
-  if (effectiveProjectId === null) {
-    // Ambient OR feature flag OFF — fall through to the legacy reader.
-    return readChatThreadsFromDatabase();
-  }
-  ensurePostgresSchema();
-  const schema = postgresSchema.replaceAll('"', '""');
-  const [result] = runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    queries: [
-      {
-        // Sort by typed created_at DESC. The typed column is the canonical
-        // creation-order key; payload createdAt is mirrored to this column at
-        // write time by upsertChatThreadInDatabase /
-        // buildChatThreadUpsertQuery. The partial index
-        // chat_threads_project_created_idx covers this exact predicate.
-        text: `SELECT id, payload
-               FROM "${schema}"."chat_threads"
-               WHERE project_id = $1
-               ORDER BY created_at DESC, id`,
-        values: [effectiveProjectId],
-      },
-    ],
-  });
-  return ((result?.rows ?? []) as Array<{ id: string; payload: string }>)
-    .map((row) => safeParseJson<Record<string, unknown> | null>(row.payload, null))
-    .filter(Boolean) as Array<Record<string, unknown>>;
-}
-
-/**
  * Tenant-safe chat-thread reader for the classifier signal capture path.
  *
  * The `chat_threads` table is keyed only by `(id, payload)` with NO
@@ -1126,53 +1069,68 @@ export function readChatThreadForClassifier(input: {
   activeOrgId: string;
 }): { threadId: string; messages: Array<{ role: "user" | "assistant"; content: string }> } | null {
   ensurePostgresSchema();
-  // 1) Look up the thread row by id.
   const schema = postgresSchema.replaceAll('"', '""');
+  // SINGLE-SNAPSHOT authz read (cinatra#1037 P5.6 PR2 CUTOVER, codex hardening):
+  // the ownership axes, the org anchor, AND the team-membership decision are
+  // resolved in ONE statement against the AUTHORITATIVE structured mirror
+  // (assistant_threads) so they cannot straddle two concurrent revisions (a
+  // tenant-sensitive TOCTOU between "read ownership" and "check membership").
+  // The team-membership EXISTS keys on the mirror's OWN team_id column, evaluated
+  // on the same snapshot as the ownership fields. chat_threads is NO LONGER read:
+  // the messages are reconstructed from the durable assistant_turns.content below
+  // (a message-only TOCTOU is harmless — messages are not an authz input).
   const [threadRes] = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT payload FROM "${schema}"."chat_threads" WHERE id = $1 LIMIT 1`,
-        values: [input.threadId],
+        text: `SELECT
+                 at.owner_user_id AS owner_user_id,
+                 at.team_id       AS team_id,
+                 at.org_id        AS mirror_org_id,
+                 EXISTS (
+                   SELECT 1
+                   FROM public."team" t
+                   JOIN public."teamMember" tm ON tm."teamId" = t.id
+                   WHERE t.id = at.team_id
+                     AND tm."userId" = $2
+                     AND t."organizationId" = $3
+                 ) AS team_member_ok
+               FROM "${schema}"."assistant_threads" at
+               WHERE at.id = $1
+               LIMIT 1`,
+        values: [input.threadId, input.actorUserId, input.activeOrgId],
       },
     ],
   });
-  const row = threadRes?.rows?.[0] as { payload?: string } | undefined;
-  if (!row?.payload) return null;
-  const payload = safeParseJson<Record<string, unknown> | null>(row.payload, null);
-  if (!payload) return null;
+  const row = threadRes?.rows?.[0] as
+    | {
+        owner_user_id?: string | null;
+        team_id?: string | null;
+        mirror_org_id?: string | null;
+        team_member_ok?: boolean;
+      }
+    | undefined;
+  if (!row) return null; // no structured row → thread absent → refuse capture.
   const ownerUserId =
-    typeof payload.ownerUserId === "string" ? payload.ownerUserId : undefined;
-  const teamId = typeof payload.teamId === "string" ? payload.teamId : undefined;
+    typeof row.owner_user_id === "string" ? row.owner_user_id : undefined;
+  const teamId = typeof row.team_id === "string" ? row.team_id : undefined;
 
-  // 2) Legacy global row — refuse classifier capture.
+  // 1) Legacy global row — refuse classifier capture.
   if (!ownerUserId && !teamId) return null;
 
-  // 3) Owner path — must match actorUserId.
-  if (ownerUserId && ownerUserId !== input.actorUserId) return null;
-
-  // 4) Team path — actor must be a member of the team AND the team must
-  //    belong to activeOrgId. Better Auth shape: `public."team"
-  //    (id, organizationId)` + `public."teamMember" (teamId, userId)`.
-  //    `teamMember` has NO organizationId; we MUST go through `team`.
-  if (teamId) {
-    const [memberRes] = runPostgresQueriesSync({
-      connectionString: getPostgresConnectionString(),
-      queries: [
-        {
-          text: `SELECT 1
-                 FROM public."team" t
-                 JOIN public."teamMember" tm ON tm."teamId" = t.id
-                 WHERE t.id = $1
-                   AND tm."userId" = $2
-                   AND t."organizationId" = $3
-                 LIMIT 1`,
-          values: [teamId, input.actorUserId, input.activeOrgId],
-        },
-      ],
-    });
-    if (!memberRes?.rows || memberRes.rows.length === 0) return null;
+  // 2) Owner (personal) path — must match actorUserId AND be an ACTIVE-ORG
+  //    thread. The org predicate (codex hardening) prevents an Org-A chat from
+  //    influencing an Org-B upload: the mirror's org anchor MUST equal the
+  //    caller's activeOrgId. Fail-closed — a personal thread whose mirror org is
+  //    NULL / mismatched is refused (best-effort intake; null just skips capture).
+  if (ownerUserId) {
+    if (ownerUserId !== input.actorUserId) return null;
+    if ((row.mirror_org_id ?? null) !== input.activeOrgId) return null;
   }
+
+  // 3) Team path — actor must be a member of the team AND the team must belong
+  //    to activeOrgId (the EXISTS above enforces both, on the same snapshot).
+  if (teamId && !row.team_member_ok) return null;
 
   // 5) Authorized — strip the messages payload to {role, content}, cap
   //    last-3, content cap 1000 (matches the leaf module's defaults).
@@ -1180,7 +1138,14 @@ export function readChatThreadForClassifier(input: {
   //    file out of `@cinatra-ai/objects`'s import-time graph (which
   //    would pull in heavy mcp/registries surface). The dynamic require
   //    is the same pattern used for `artifact-refs-store` above.
-  const rawMessages = Array.isArray(payload.messages) ? payload.messages : [];
+  // Reconstruct the messages from the durable structured turns (NOT
+  // chat_threads.payload). Lazy require matches this module's cross-store
+  // convention (project-inheritance / artifact-refs-store) and keeps the
+  // sync-leaf assistant-thread-store out of the import-time graph.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const threadStore = require("@/lib/assistant-thread-store") as typeof import("@/lib/assistant-thread-store");
+  const reconstructed = threadStore.reconstructThreadPayload(input.threadId);
+  const rawMessages = Array.isArray(reconstructed?.messages) ? reconstructed.messages : [];
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const leaf = require("@cinatra-ai/objects/classifier-signals") as typeof import("@cinatra-ai/objects/classifier-signals");
   const stripped = leaf.stripChatMessagesForClassifier(
@@ -1200,9 +1165,9 @@ export function upsertChatThreadInDatabase(
   },
 ) {
   ensurePostgresSchema();
-  // Combine pin-sync + thread JSON upsert into ONE transaction (BOTH commit or
-  // NEITHER) — a split would let a later thread-upsert failure orphan pin rows
-  // (referrer_id points at a never-persisted thread).
+  // Combine pin-sync + the structured-mirror thread upsert into ONE transaction
+  // (BOTH commit or NEITHER) — a split would let a later thread-upsert failure
+  // orphan pin rows (referrer_id points at a never-persisted thread).
   const orgId = options?.orgId ?? null;
   let pinQueries: Array<{ text: string; values: unknown[] }> = [];
   if (orgId) {
@@ -1220,17 +1185,23 @@ export function upsertChatThreadInDatabase(
       refs: mod.extractAttachmentRefsFromThreadPayload(thread),
     });
   }
-  // Same-transaction projections of the payload write (builders live in
-  // src/lib/project-inheritance.ts, unit-tested in isolation): (1) chat_threads
-  // payload-to-column lockstep — typed project_id/created_at/updated_at as an
-  // indexable projection (sealed-room reads); (2) cinatra#1037 structured
-  // mirror — assistant_threads identity + assistant_turns rows carrying METADATA
-  // + attribution AND (P5.6 drop-history PR1 EXPAND) the durable per-turn
+  // Same-transaction projection of the payload write (builders live in
+  // src/lib/project-inheritance.ts, unit-tested in isolation): the cinatra#1037
+  // P5.6 drop-history structured mirror — assistant_threads identity +
+  // assistant_turns rows carrying METADATA + attribution AND the durable per-turn
   // `content` jsonb (run_id stays NULL on the bespoke wire) + assistant_thread_
-  // pause_state rows. The legacy payload STAYS the authoritative read source
-  // until the #1216 S2 / P5.6 cutover — this is a write-through projection.
-  // Deterministic `legacy:`-namespaced turn ids keep it idempotent +
-  // self-backfilling.
+  // pause_state rows.
+  //
+  // SOLE WRITER (cinatra#1037 P5.6 PR2 CUTOVER, final teardown): the legacy
+  // chat_threads INSERT is DROPPED — the structured mirror is now the ONE
+  // authoritative write. The prior dual-write projected an indexable chat_threads
+  // payload-to-column twin; every reader is now re-pointed onto the structured
+  // store, and the marker/fence rejects any stray legacy write, so the legacy row
+  // would be write-only dead weight. `buildChatThreadUpsertQuery` stays EXPORTED
+  // for its SQL-shape unit test but has NO remaining product call site (the
+  // chat_thread_update project-move that once used it is retired); it is removed
+  // with chat_threads in PR3. Deterministic `legacy:`-namespaced turn ids keep the
+  // mirror idempotent + self-backfilling.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const inheritance = require("@/lib/project-inheritance") as typeof import("@/lib/project-inheritance");
   runPostgresQueriesSync({
@@ -1238,14 +1209,6 @@ export function upsertChatThreadInDatabase(
     transaction: true,
     queries: [
       ...pinQueries,
-      inheritance.buildChatThreadUpsertQuery({
-        schemaName: postgresSchema,
-        threadId: thread.id,
-        payloadJson: JSON.stringify(thread),
-        projectId: inheritance.extractStringFieldFromThread(thread, "projectId"),
-        createdAt: inheritance.extractTimestampFieldFromThread(thread, "createdAt"),
-        updatedAt: inheritance.extractTimestampFieldFromThread(thread, "updatedAt"),
-      }),
       ...inheritance.buildAssistantThreadMirrorQueries({
         schemaName: postgresSchema,
         thread,
@@ -1284,10 +1247,13 @@ export function deleteChatThreadFromDatabase(
   // kind=chat_thread) is the only coherent semantic. Both in ONE tx (atomic).
   const schema = postgresSchema.replaceAll('"', '""');
   const delThread = buildDeleteJsonRowQuery(postgresSchema, "chat_threads", threadId);
-  // Structured-store mirror delete (cinatra#1037 P2b): guarded by EXISTS on
-  // the legacy row and ordered BEFORE the legacy delete, so a post-cutover
-  // structured-only thread can never be deleted by this legacy path.
-  // assistant_turns cascade via the FK.
+  // Structured-store delete (cinatra#1037 P5.6 PR2 CUTOVER step 4): AUTHORITATIVE
+  // — the mirror row (and its assistant_turns via FK cascade) is deleted
+  // UNCONDITIONALLY by id. The prior EXISTS(chat_threads) guard is GONE: a
+  // post-cutover thread has no chat_threads row, so the guard would make the
+  // delete a silent no-op. The legacy chat_threads DELETE below is now pure
+  // best-effort cleanup of any residual dual-written row. The safety batch's
+  // OWNER-or-org-admin authz (actions.ts::deleteChatThread) is unchanged.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const inheritance = require("@/lib/project-inheritance") as typeof import("@/lib/project-inheritance");
   const mirrorDelete = inheritance.buildAssistantThreadMirrorDeleteQuery(
@@ -1309,32 +1275,54 @@ WHERE referrer_kind = 'chat_thread' AND referrer_id = $1`,
   });
 }
 
-export function deleteAllChatThreadsFromDatabase() {
+/**
+ * Delete the caller's OWN legacy-chat threads (cinatra#1037 P5.6 PR2 CUTOVER).
+ *
+ * The previous form was an UNAMBIGUOUSLY GLOBAL wipe of every chat_thread across
+ * every org (codex flagged the ungated caller as a cross-tenant delete vuln).
+ * It is now SCOPED, in two axes, via the structured mirror (which — unlike
+ * chat_threads — carries `owner_user_id` + `origin`):
+ *   - OWNERSHIP: only rows the caller owns (`owner_user_id = $1`);
+ *   - PROVENANCE: only 'legacy-chat' rows — a runtime-native ('assistant-native')
+ *     thread is NEVER erased by the legacy "clear all" (the drop-history
+ *     invariant is scoped, not global).
+ * The id set is computed from `assistant_threads` because `chat_threads` has no
+ * owner/origin columns. artifact_refs pins and the chat_threads JSON rows for
+ * exactly that id set are deleted, then the mirror rows themselves (their
+ * assistant_turns cascade via the FK). All in ONE transaction (atomic).
+ *
+ * NB rows written before the `origin` column existed carry NULL origin and are
+ * therefore NOT swept — fail-safe (an ambiguous row is preserved, never
+ * mis-deleted); the self-backfilling mirror re-stamps 'legacy-chat' on the
+ * thread's next save, after which it is sweepable.
+ */
+export function deleteAllChatThreadsFromDatabase(ownerUserId: string) {
   ensurePostgresSchema();
-  // `chat_threads` has NO `org_id` column; an org-scoped delete is structurally
-  // impossible without a schema migration. To avoid incoherent behavior (clear
-  // pins for one org but delete threads globally, leaving orphan pins for other
-  // orgs), this helper is UNAMBIGUOUSLY GLOBAL: wipes ALL chat_thread pins
-  // across every org, then deletes all thread JSON rows. Authorization gating
-  // (admin only) is the CALLER's responsibility (the server action layer).
+  if (!ownerUserId) return; // fail-closed: an ownerless caller sweeps nothing.
   const schema = postgresSchema.replaceAll('"', '""');
-  // Mirror arm (cinatra#1037 P2b): same guard in set form, ordered before the
-  // legacy wipe — structured-only (post-cutover) threads survive.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const inheritance = require("@/lib/project-inheritance") as typeof import("@/lib/project-inheritance");
+  const ownedLegacyIds = `SELECT id FROM "${schema}"."assistant_threads"
+WHERE owner_user_id = $1 AND origin = 'legacy-chat'`;
   runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     transaction: true,
     queries: [
       {
         text: `DELETE FROM "${schema}"."artifact_refs"
-WHERE referrer_kind = 'chat_thread'`,
-        values: [],
+WHERE referrer_kind = 'chat_thread' AND referrer_id IN (${ownedLegacyIds})`,
+        values: [ownerUserId],
       },
-      inheritance.buildAssistantThreadMirrorDeleteAllQuery(postgresSchema),
+      // chat_threads rows for exactly the caller's owned legacy-chat id set
+      // (computed from the mirror, which is the only owner/origin authority).
       {
-        text: `DELETE FROM "${schema}"."chat_threads"`,
-        values: [],
+        text: `DELETE FROM "${schema}"."chat_threads" WHERE id IN (${ownedLegacyIds})`,
+        values: [ownerUserId],
+      },
+      // Finally the mirror rows themselves (assistant_turns cascade via FK).
+      // Ordered LAST so the id-set subqueries above still see them.
+      {
+        text: `DELETE FROM "${schema}"."assistant_threads"
+WHERE owner_user_id = $1 AND origin = 'legacy-chat'`,
+        values: [ownerUserId],
       },
     ],
   });

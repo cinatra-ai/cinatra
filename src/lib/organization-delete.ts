@@ -3,7 +3,7 @@ import "server-only";
 import { sql } from "drizzle-orm";
 
 import { betterAuthDb } from "@/lib/better-auth-db";
-import { isSingleOrgMode } from "@/lib/authz/instance-mode";
+import { resolveOrganizationLifecycleEligibility } from "@/lib/organization-lifecycle";
 
 /**
  * Organization DELETE — the reference-guarded transactional core (cinatra#1510).
@@ -165,10 +165,29 @@ export async function deleteOrganizationReferenceGuarded(
 ): Promise<OrganizationDeleteResult> {
   const schema = appSchema();
   try {
-    // Structural re-check at delete time (hazard 3): the single-org toggle is a
-    // config row, not lockable state — read it fresh, fail closed.
-    if (await isSingleOrgMode()) {
-      return { ok: false, reason: "single-org-mode" };
+    // Structural re-check at delete time (hazard 3) via the shared lifecycle
+    // primitive (cinatra#1937). HARDENED over the pre-#1937 shape: a failing
+    // single-org config read now REFUSES the delete (fail closed) instead of
+    // assuming multi-org. The in-tx row-locked slug/owner re-checks below stay
+    // authoritative — this is the pre-transaction fence.
+    const eligibility =
+      await resolveOrganizationLifecycleEligibility(organizationId);
+    if (!eligibility.eligible) {
+      switch (eligibility.reason) {
+        case "single-org-mode":
+          return { ok: false, reason: "single-org-mode" };
+        case "default-org":
+          return { ok: false, reason: "default-org" };
+        case "not-found":
+          return { ok: false, reason: "not-found" };
+        case "mode-unavailable":
+        case "lookup-failed":
+          return {
+            ok: false,
+            reason: "error",
+            error: `lifecycle eligibility unavailable (${eligibility.reason}); refusing fail-closed`,
+          };
+      }
     }
     await betterAuthDb.transaction(
       async (tx) => {

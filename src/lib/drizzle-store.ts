@@ -845,6 +845,50 @@ END $$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."chat_threads" ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now()` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."chat_threads" ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now()` },
     { text: `CREATE INDEX IF NOT EXISTS chat_threads_project_created_idx ON "${schemaName.replaceAll('"', '""')}"."chat_threads" (project_id, created_at DESC, id) WHERE project_id IS NOT NULL` },
+    // drop-history cutover MARKER + legacy-write FENCE (cinatra#1037 P5.6 PR2
+    // CUTOVER final teardown, owner ruling 2026-07-21). Fresh-install half of
+    // core__0066; the operator-upgrade half rides that migration. The marker is a
+    // singleton table (its presence == the cutover has happened / the legacy
+    // chat_threads write path is retired) and is SET here so a fresh install is
+    // born-cutover: the write path no longer writes chat_threads (the legacy INSERT
+    // was dropped, the broad chat_thread_* MCP tools + the chat_thread_update
+    // project-move UPDATE are retired, readers reconstruct from the structured
+    // store), so activation is safe. chat_threads itself is dropped in PR3. The
+    // fence trigger RAISEs on any chat_threads INSERT/UPDATE while the marker exists
+    // — the DB-enforced proof (Postgres cannot prove app code stopped writing) that
+    // no legacy write occurs post-cutover. The fence function looks the marker up in
+    // the SAME schema as the fenced table via TG_TABLE_SCHEMA (the app qualifies
+    // chat_threads writes and sets no session search_path), so the body is identical
+    // to the core__0066 copy.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."assistant_cutover_marker" (
+      id boolean PRIMARY KEY DEFAULT true,
+      cutover_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT assistant_cutover_marker_singleton CHECK (id)
+    )` },
+    { text: `CREATE OR REPLACE FUNCTION "${schemaName.replaceAll('"', '""')}"."fn_chat_threads_legacy_write_fence"() RETURNS trigger
+       LANGUAGE plpgsql
+       SECURITY DEFINER
+       SET search_path = pg_catalog, pg_temp
+       AS $body$
+DECLARE
+  marker_present boolean;
+BEGIN
+  EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.assistant_cutover_marker)', TG_TABLE_SCHEMA) INTO marker_present;
+  IF marker_present THEN
+    RAISE EXCEPTION 'chat_threads is fenced: the drop-history cutover marker is set — legacy chat_threads % is rejected (cinatra#1037 PR2 CUTOVER)', TG_OP
+      USING ERRCODE = 'raise_exception';
+  END IF;
+  RETURN NEW;
+END;
+$body$` },
+    { text: `DROP TRIGGER IF EXISTS trg_chat_threads_legacy_write_fence ON "${schemaName.replaceAll('"', '""')}"."chat_threads"` },
+    { text: `CREATE TRIGGER trg_chat_threads_legacy_write_fence
+       BEFORE INSERT OR UPDATE ON "${schemaName.replaceAll('"', '""')}"."chat_threads"
+       FOR EACH ROW EXECUTE FUNCTION "${schemaName.replaceAll('"', '""')}"."fn_chat_threads_legacy_write_fence"()` },
+    // ACTIVATE the marker — arms the fence so a fresh install is born-cutover.
+    // Idempotent (singleton PK). Not a chat_threads write, so the fence never
+    // blocks it.
+    { text: `INSERT INTO "${schemaName.replaceAll('"', '""')}"."assistant_cutover_marker" (id) VALUES (true) ON CONFLICT (id) DO NOTHING` },
     ...assistantThreadSchemaQueries(schemaName), // structured assistant threads + turns (cinatra#1037 P2a), additive
     ...assistantHandleSchemaQueries(schemaName), // assistant handle registry (cinatra#1037 P1.2/P5.1) + origin/package_name (#1874 W1), additive — mirrors core__0046/0065
     ...assistantRegistrySchemaQueries(schemaName), // assistant audience + tag-alias registry (cinatra#1874 W1), additive — mirrors core__0065
@@ -1327,6 +1371,25 @@ END $$` },
     // submitted_values jsonb: structured renderer payload for HITL submission trail
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_run_hitl_prompts" ADD COLUMN IF NOT EXISTS submitted_values jsonb` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_run_hitl_prompts" ADD COLUMN IF NOT EXISTS schema_snapshot jsonb` },
+    // agent_run_test_sends: per-action idempotency + crash ledger for the run-scoped
+    // test-delivery send primitive (#1625, DESIGN-V3 contract (4)). TWIN of
+    // migrations/core/core__0067 — the two DDLs MUST stay identical.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_test_sends" (
+      id text PRIMARY KEY,
+      run_id text NOT NULL REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,
+      submission_id text NOT NULL,
+      seq integer NOT NULL,
+      status text NOT NULL DEFAULT 'sending',
+      recipient_email text,
+      selected_draft_ids jsonb NOT NULL,
+      result_json jsonb,
+      claimed_at timestamptz NOT NULL DEFAULT now(),
+      lease_expires_at timestamptz NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_run_test_sends_run_id_submission_id_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_run_test_sends" (run_id, submission_id)` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_run_test_sends_run_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_test_sends" (run_id)` },
     // agent_run_triggers: per-run trigger gate (immediate/scheduled/recurring)
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_triggers" (
       run_id text PRIMARY KEY REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,
@@ -1684,6 +1747,10 @@ END $$` },
     // timeout_seconds: server-side run timeout.
     // When set, the execution worker self-terminates the run with error 'timed_out' if elapsed time exceeds this value.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS timeout_seconds integer` },
+    // cinatra#1937 (archive S1): per-dispatch bookkeeping, written atomically
+    // with every queued→running CAS (packages/agents/src/store.ts).
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS execution_deadline_at timestamptz` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS execution_attempt_id text` },
     // traces table: Postgres SpanExporter storage.
     // Composite PK (trace_id, span_id). attributes/events stored as jsonb.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."traces" (

@@ -26,7 +26,7 @@ export type TriggerEmailSendNotSupported = {
 };
 
 export type TriggerEmailSendUseCases = {
-  sendTestEmail(input: { campaignId: string; recipientEmail: string; selectionMode: "random_initial" | "specific_initial" | "all_initial"; specificInitialDraftIds?: string[]; specificFollowUpDraftIds?: string[] }, actor: PrimitiveActorContext): Promise<Record<string, unknown>>;
+  sendTestEmail(input: { campaignId: string; recipientEmail: string; selectionMode: "random_initial" | "specific_initial" | "all_initial"; specificInitialDraftIds?: string[]; specificFollowUpDraftIds?: string[]; submissionId?: string }, actor: PrimitiveActorContext): Promise<Record<string, unknown>>;
   startInitialSend(input: { serviceId: string; campaignId: string }, actor: PrimitiveActorContext): Promise<AsyncOperationState>;
   getInitialSendStatus(input: { campaignId: string }, actor: PrimitiveActorContext): Promise<AsyncOperationState>;
   cancelInitialSend(input: { campaignId: string }, actor: PrimitiveActorContext): Promise<AsyncOperationState>;

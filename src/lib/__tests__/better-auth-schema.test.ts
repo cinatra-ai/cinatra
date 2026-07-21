@@ -150,6 +150,21 @@ describe("Better Auth schema parity (runtime ↔ migration)", () => {
     expect(normalizedRuntime.team.slug).toEqual({ type: "string", required: true });
   });
 
+  it("declares the organization.archivedAt additionalField (archive S1, cinatra#1937)", () => {
+    // `input: false` is behavioral (never client-settable) and not part of the
+    // normalized column shape; the schema-bearing facts are type + optionality.
+    // Both runtime AND migration schemas must carry it — getMigrations() owns
+    // the column precisely because cinatraOrganizationOptions is shared.
+    expect(normalizedRuntime.organization.archivedAt).toEqual({
+      type: "date",
+      required: false,
+    });
+    expect(normalize(migrationSchema).organization.archivedAt).toEqual({
+      type: "date",
+      required: false,
+    });
+  });
+
   it("wires the username / twoFactor / admin / organization plugin columns", () => {
     expect(normalizedRuntime.user).toHaveProperty("username"); // username()
     expect(normalizedRuntime.user).toHaveProperty("twoFactorEnabled"); // twoFactor()

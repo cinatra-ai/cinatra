@@ -92,6 +92,146 @@ export interface TeamMemberRoleProvisionResult {
 }
 
 /**
+ * Result of the app-owned session activation-guard trigger provisioning step
+ * (cinatra#1937, archive program S1).
+ */
+export interface SessionActivationGuardResult {
+  /** true when the function + trigger were (re)defined this run. */
+  provisioned: boolean;
+  /** Set when nothing could be done: a referenced table does not exist. */
+  skipped?: "table-missing";
+}
+
+/**
+ * The session activation-guard function + trigger DDL (cinatra#1937).
+ *
+ * WHY a trigger and not app code: Better Auth's own transactions (set-active,
+ * session create) cannot be wrapped externally — per the #1510 archive
+ * program spec, its managed `session` table gets a table-level guard so NO
+ * writer (HTTP route, auth.api.*, future code path) can point a session at an
+ * archived organization, directly or via a team.
+ *
+ * Semantics (independently per field, codex-converged):
+ *  - Fires BEFORE INSERT, and BEFORE UPDATE OF "activeOrganizationId" /
+ *    "activeTeamId" (the OF list restricts UPDATE only; INSERT always fires
+ *    and validates whatever non-null values it carries).
+ *  - For EACH of the two fields that is non-null and (on UPDATE) changed:
+ *    resolve its organization — "activeOrganizationId" directly,
+ *    "activeTeamId" via public.team."organizationId" — lock that org row
+ *    `FOR SHARE ... NOWAIT`, and refuse when the row is missing (dangling id,
+ *    fail closed) or `"archivedAt" IS NOT NULL`.
+ *  - Clearing a field to NULL never blocks, and never suppresses the OTHER
+ *    field's validation. Lock contention (55P03) propagates as a refusal per
+ *    the program spec.
+ *  - DARK: until an organization row actually carries a non-null
+ *    "archivedAt" (S6 flips the production gate), the refusal paths are
+ *    unreachable in production — the guard is provisioned but inert.
+ *
+ * Identifiers are the exact quoted camelCase column names Better Auth
+ * provisions; the SQL-shape test pins them.
+ */
+export const SESSION_ACTIVATION_GUARD_FUNCTION_SQL = `
+CREATE OR REPLACE FUNCTION public.cinatra_session_activation_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $cinatra_guard$
+DECLARE
+  org_archived_at timestamptz;
+BEGIN
+  IF NEW."activeOrganizationId" IS NOT NULL
+     AND (TG_OP = 'INSERT'
+          OR NEW."activeOrganizationId" IS DISTINCT FROM OLD."activeOrganizationId") THEN
+    SELECT o."archivedAt" INTO org_archived_at
+      FROM public.organization o
+     WHERE o.id = NEW."activeOrganizationId"
+       FOR SHARE OF o NOWAIT;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'cinatra-session-activation-guard: activation-target-missing (organization %)',
+        NEW."activeOrganizationId";
+    END IF;
+    IF org_archived_at IS NOT NULL THEN
+      RAISE EXCEPTION 'cinatra-session-activation-guard: organization-archived (%)',
+        NEW."activeOrganizationId";
+    END IF;
+  END IF;
+
+  IF NEW."activeTeamId" IS NOT NULL
+     AND (TG_OP = 'INSERT'
+          OR NEW."activeTeamId" IS DISTINCT FROM OLD."activeTeamId") THEN
+    SELECT o."archivedAt" INTO org_archived_at
+      FROM public.team t
+      JOIN public.organization o ON o.id = t."organizationId"
+     WHERE t.id = NEW."activeTeamId"
+       FOR SHARE OF o NOWAIT;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'cinatra-session-activation-guard: activation-target-missing (team %)',
+        NEW."activeTeamId";
+    END IF;
+    IF org_archived_at IS NOT NULL THEN
+      RAISE EXCEPTION 'cinatra-session-activation-guard: team-organization-archived (%)',
+        NEW."activeTeamId";
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$cinatra_guard$;
+`.trim();
+
+export const SESSION_ACTIVATION_GUARD_TRIGGER_SQL = `
+CREATE OR REPLACE TRIGGER cinatra_session_activation_guard
+BEFORE INSERT OR UPDATE OF "activeOrganizationId", "activeTeamId" ON public.session
+FOR EACH ROW EXECUTE FUNCTION public.cinatra_session_activation_guard()
+`.trim();
+
+/**
+ * Provision (or repair) the session activation-guard trigger. Idempotent by
+ * construction: `CREATE OR REPLACE FUNCTION` + `CREATE OR REPLACE TRIGGER`
+ * (PG floor is 18; OR-REPLACE-TRIGGER needs 14+) redefine in place, and BOTH
+ * run inside ONE transaction serialized by a constant-key advisory xact-lock —
+ * a live repair run never leaves a window without the guard, and concurrent
+ * runners cannot interleave definitions. Any failure rolls back and rethrows
+ * (a session table without the guard must not be silently enabled once
+ * archive activates — same fail-loud contract as ensureTeamMemberRoleColumn).
+ */
+export async function ensureSessionActivationGuardTrigger(
+  pool: Pool,
+): Promise<SessionActivationGuardResult> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext('cinatra-migrations'), hashtext('session.activationGuard'))`,
+    );
+
+    const tables = await client.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name IN ('session', 'organization', 'team')`,
+    );
+    const present = new Set(tables.rows.map((r) => r.table_name));
+    if (!present.has("session") || !present.has("organization") || !present.has("team")) {
+      await client.query("ROLLBACK");
+      return { provisioned: false, skipped: "table-missing" };
+    }
+
+    await client.query(SESSION_ACTIVATION_GUARD_FUNCTION_SQL);
+    await client.query(SESSION_ACTIVATION_GUARD_TRIGGER_SQL);
+    await client.query("COMMIT");
+    return { provisioned: true };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw new Error(
+      `better-auth-migrate: provisioning public.session activation guard failed: ${
+        err instanceof Error ? err.message : String(err)
+      }. Fix the session/organization/team tables, then re-run \`pnpm auth:migrate\`.`,
+      { cause: err },
+    );
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Canonical spellings of the expected CHECK expression. Postgres rewrites
  * `CHECK ("role" IN ('member', 'admin'))` into the `= ANY (ARRAY[...])` form
  * on modern servers; the raw IN-list spelling is kept as a defensive
@@ -296,6 +436,7 @@ export async function runBetterAuthMigration(
   created: string[];
   columnSetsAdded: number;
   teamMemberRole: TeamMemberRoleProvisionResult;
+  sessionActivationGuard: SessionActivationGuardResult;
 }> {
   if (!config.connectionString) {
     throw new Error("runBetterAuthMigration: `connectionString` is required.");
@@ -323,10 +464,15 @@ export async function runBetterAuthMigration(
     // invocation, AFTER getMigrations() has had its chance to create the
     // teamMember table on fresh installs.
     const teamMemberRole = await ensureTeamMemberRoleColumn(pool);
+    // cinatra#1937: the session activation guard is definition-repaired on
+    // every invocation (single tx, OR-REPLACE) — fresh installs, upgrades,
+    // and drifted definitions all converge on the canonical guard.
+    const sessionActivationGuard = await ensureSessionActivationGuardTrigger(pool);
     return {
       created: toBeCreated.map((entry) => entry.table),
       columnSetsAdded: toBeAdded.length,
       teamMemberRole,
+      sessionActivationGuard,
     };
   } finally {
     await pool.end();
@@ -353,9 +499,12 @@ if (
     : result.teamMemberRole.provisioned
       ? `provisioned (${result.teamMemberRole.backfilledAdmins} team admin(s) backfilled)`
       : "present";
+  const guardNote = result.sessionActivationGuard.skipped
+    ? `skipped (${result.sessionActivationGuard.skipped})`
+    : "provisioned";
   console.log(
     `Better Auth migration: created [${
       result.created.join(", ") || "none"
-    }], column-sets added ${result.columnSetsAdded}, teamMember.role ${roleNote}.`,
+    }], column-sets added ${result.columnSetsAdded}, teamMember.role ${roleNote}, session activation guard ${guardNote}.`,
   );
 }

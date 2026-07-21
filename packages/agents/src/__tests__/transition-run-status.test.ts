@@ -112,7 +112,9 @@ describe("transitionRunStatus", () => {
   it("throws RunTransitionError(stale_from_status) when CAS returns 0 rows", async () => {
     shared.returningRows = [[]]; // CAS loses: zero rows updated
     await expect(
-      transitionRunStatus("run-1", "queued", "running"),
+      transitionRunStatus("run-1", "queued", "running", {
+        dispatch: { attemptId: "attempt-1" },
+      }),
     ).rejects.toMatchObject({
       name: "RunTransitionError",
       code: "stale_from_status",
@@ -166,5 +168,100 @@ describe("transitionRunStatus", () => {
       stepResults: JSON.stringify([{ ok: true, step: "final" }]),
     });
     expect(expireRunStream).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#1937 (archive S1): every queued→running CAS IS a dispatch and must
+// stamp per-dispatch bookkeeping ATOMICALLY with the status flip.
+// ---------------------------------------------------------------------------
+describe("queued→running dispatch fields (cinatra#1937)", () => {
+  it("queued→running WITHOUT dispatch fields throws BEFORE any DB write", async () => {
+    await expect(
+      transitionRunStatus("run-1", "queued", "running"),
+    ).rejects.toThrow(/requires dispatch fields/);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("queued→running stamps attempt id + DB-clock deadline IN the CAS UPDATE itself", async () => {
+    await transitionRunStatus("run-1", "queued", "running", {
+      dispatch: { attemptId: "attempt-xyz" },
+    });
+    // ONE set() call: the CAS — no separate meta write for a non-terminal
+    // transition, so atomicity holds by construction.
+    expect(shared.setPayloads).toHaveLength(1);
+    const cas = shared.setPayloads[0] as Record<string, unknown>;
+    expect(cas.status).toBe("running");
+    expect(cas.executionAttemptId).toBe("attempt-xyz");
+    // The deadline is a raw SQL expression (now() + the row's own
+    // COALESCE'd timeout) — presence is the contract; the DB clock does the rest.
+    expect(cas.executionDeadlineAt).toBeDefined();
+  });
+
+  it("non-dispatch transitions never stamp dispatch fields", async () => {
+    await transitionRunStatus("run-1", "running", "completed");
+    const cas = shared.setPayloads[0] as Record<string, unknown>;
+    expect(cas.executionAttemptId).toBeUndefined();
+    expect(cas.executionDeadlineAt).toBeUndefined();
+  });
+
+  it("REFUSES dispatch fields on a non-dispatch transition (inverse guard)", async () => {
+    await expect(
+      transitionRunStatus("run-1", "running", "completed", {
+        dispatch: { attemptId: "attempt-misuse" },
+      }),
+    ).rejects.toThrow(/non-dispatch transition/);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("strips control keys from the delegated meta write (dispatch never reaches the DB layer)", async () => {
+    // startedAt forces the delegated second write (the host content-editor
+    // dispatch shape); the payload it receives must carry ONLY DB meta.
+    await transitionRunStatus("run-1", "queued", "running", {
+      startedAt: new Date("2026-07-21T00:00:00Z"),
+      dispatch: { attemptId: "attempt-abc" },
+    });
+    expect(shared.setPayloads).toHaveLength(2);
+    const delegated = shared.setPayloads[1] as Record<string, unknown>;
+    expect(delegated.startedAt).toBeInstanceOf(Date);
+    expect("dispatch" in delegated).toBe(false);
+    expect("humanWaitGate" in delegated).toBe(false);
+  });
+
+  it("EVERY queued→running caller in the tree supplies dispatch fields (source scan)", async () => {
+    // Codex-adopted guard: an optional param must not quietly produce
+    // `running` rows without bookkeeping. The runtime throw above is the hard
+    // stop; this scan keeps callers honest at review time. Scans the two
+    // roots that host run-dispatch code.
+    const { readdirSync, readFileSync, statSync } = await import("node:fs");
+    const { join, resolve } = await import("node:path");
+    const repoRoot = resolve(__dirname, "../../../..");
+    const roots = [join(repoRoot, "packages/agents/src"), join(repoRoot, "src/lib")];
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        if (name === "__tests__" || name === "node_modules") continue;
+        const p = join(dir, name);
+        if (statSync(p).isDirectory()) {
+          walk(p);
+          continue;
+        }
+        if (!/\.(ts|tsx)$/.test(name)) continue;
+        const text = readFileSync(p, "utf-8");
+        let idx = 0;
+        while ((idx = text.indexOf('"queued", "running"', idx)) !== -1) {
+          // Only transition CALLS matter (skip comments/enums): require the
+          // call prefix on the same line region and `dispatch` in the args.
+          const windowText = text.slice(Math.max(0, idx - 200), idx + 300);
+          const isCall = /transitionRunStatus\(|updateAgentRunStatusConditional\(/.test(windowText);
+          if (isCall && !windowText.includes("dispatch")) {
+            offenders.push(p.slice(repoRoot.length + 1));
+          }
+          idx += 1;
+        }
+      }
+    };
+    for (const root of roots) walk(root);
+    expect(offenders).toEqual([]);
   });
 });
