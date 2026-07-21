@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Test-delivery send PORT (eng#548 #1625, DESIGN-V3 part-2 stage A).
+// Test-delivery send PORT (#1625, DESIGN-V3 part-2 stage A).
 //
 // The run-scoped test-delivery send primitive (email_test_delivery_run_send)
 // lives in packages/agents/src/mcp/handlers.ts, but two capabilities it needs

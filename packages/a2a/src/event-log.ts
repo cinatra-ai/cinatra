@@ -428,7 +428,7 @@ export async function getOrAddWayflowRendererGateIndex(
 }
 
 /**
- * eng#548 #1625 (F1) — the AUTHORITATIVE, non-racing source of the CURRENT gate
+ * #1625 (F1) — the AUTHORITATIVE, non-racing source of the CURRENT gate
  * visit's a2a task id for a run. Written UNCONDITIONALLY at each input-required
  * interrupt (execution.ts) BEFORE the interrupt is published, so the run-scoped
  * test-delivery send resolves a fresh-guaranteed submission identity that CANNOT
@@ -453,7 +453,7 @@ export async function rememberLatestWayflowGateTask(
 }
 
 /**
- * eng#548 #1625 (F1) — read the current gate visit's a2a task id for a run,
+ * #1625 (F1) — read the current gate visit's a2a task id for a run,
  * written by `rememberLatestWayflowGateTask` at interrupt-emit. The passthrough
  * seam stamps this as the run-scoped send's `verifiedSubmissionId`. Returns null
  * when absent/expired; the seam then fails CLOSED (omits the id) rather than

@@ -152,7 +152,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
       excluded: z.boolean().optional().describe("Target exclusion state. Defaults true (exclude). Pass false to re-include. Idempotent."),
     }),
   },
-  // Run-scoped test-delivery send + parse primitives (eng#548 #1625). Both are
+  // Run-scoped test-delivery send + parse primitives (#1625). Both are
   // invoked as deterministic run-bound nodes from the email-test-delivery agent's
   // OWN workflow via the #1794 pre-interrupt seam; the run + declaring package +
   // submission id are derived from the run-bound invocation context, never from

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// #1625 / eng#548 (DESIGN-V3 contract (1)) — REPEAT-GATE-SAFETY.
+// #1625 (DESIGN-V3 contract (1)) — REPEAT-GATE-SAFETY.
 //
 // A single re-entrant InputMessageNode gate (the test-delivery agent's
 // `test_form_gate`) is visited MORE THAN ONCE per run: the workflow loops

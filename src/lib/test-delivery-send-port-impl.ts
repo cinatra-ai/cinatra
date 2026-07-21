@@ -1,7 +1,7 @@
 import "server-only";
 
 // ---------------------------------------------------------------------------
-// Test-delivery send PORT — host implementation (eng#548 #1625, DESIGN-V3
+// Test-delivery send PORT — host implementation (#1625, DESIGN-V3
 // "Module boundary resolution", part-2 stage 1).
 //
 // packages/agents owns the run scope, execute-tier authz, the durable

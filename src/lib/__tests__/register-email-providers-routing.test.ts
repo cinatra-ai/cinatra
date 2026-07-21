@@ -1,4 +1,4 @@
-// D3 (eng#548 #1625) — the send-routing resolver read actor.
+// D3 (#1625) — the send-routing resolver read actor.
 //
 // Root cause: `resolveConnectorId`'s sender-identity reads ran through a
 // ROLE-LESS System actor that the authz kernel denies `object.read` — so
@@ -8,7 +8,7 @@
 // (default-private) mailbox identity + the org-default identity are readable.
 //
 // Two test groups, split deliberately so neither can false-green (per the codex
-// convergence, .planning/codex-verdict-d3.md):
+// convergence, the captured codex D3 verdict):
 //   A) the REAL authz gate (`enforceResourceAccess`) — proves the axis: a
 //      role-less System envelope is DENIED (the silent-drop cause), while a
 //      HumanUser owner envelope is ALLOWED, and the owner short-circuit reads a

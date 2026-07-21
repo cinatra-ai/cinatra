@@ -121,7 +121,7 @@ describe("createTriggerEmailSendUseCases.sendTestEmail", () => {
     expect(result).toMatchObject({ ok: true, recipientEmail: "to@y.com", sentCount: 1 });
   });
 
-  // eng#548 #1625 (D1): the run OWNER's org must reach the routing chain so the
+  // #1625 (D1): the run OWNER's org must reach the routing chain so the
   // owner's USER-level sender-identity resolves from the org-partitioned objects
   // store (otherwise the send falls through to the first-registered connector).
   it("threads the actor's orgId into sendEmail options (owner-mailbox routing)", async () => {
@@ -143,7 +143,7 @@ describe("createTriggerEmailSendUseCases.sendTestEmail", () => {
     expect(options.orgId).toBe("org-xyz");
   });
 
-  // eng#548 #1625 (D1): a submission-scoped test send threads BOTH orgId and the
+  // #1625 (D1): a submission-scoped test send threads BOTH orgId and the
   // (submissionId, draftId) correlation into the send OPTIONS the use-case emits.
   // This asserts the use-case→deps.sendEmail boundary only; end-to-end
   // persistence of the correlation onto the sent-email record additionally

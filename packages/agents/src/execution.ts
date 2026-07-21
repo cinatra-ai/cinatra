@@ -491,7 +491,7 @@ async function resolveWayflowXRenderer(
   const childSteps = approvalPolicySteps.filter(stepFiresRendererGate);
   if (childSteps.length === 0) return { xRenderer: fallback, stepNumber: null, schema: null };
 
-  // #1625 / eng#548 — SINGLE-RENDERER-GATE SHORT-CIRCUIT (contract (1)).
+  // #1625 — SINGLE-RENDERER-GATE SHORT-CIRCUIT (contract (1)).
   // When the flow has EXACTLY ONE xRenderer-bearing gate, resolution is
   // unambiguous: there is only one renderer any gate interrupt can possibly
   // resolve to, so we SHORT-CIRCUIT past the positional renderer-gate index
@@ -655,7 +655,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   );
 
   if (taskState === "input-required") {
-    // eng#548 #1625 (F1) — record THIS gate visit's a2a task id to the
+    // #1625 (F1) — record THIS gate visit's a2a task id to the
     // authoritative Redis latest-task map BEFORE the interrupt is published.
     // This is the fresh-guaranteed submission identity the run-scoped
     // test-delivery send resolves at the passthrough seam. AWAITED and
@@ -756,7 +756,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     let wayflowXRenderer: string = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
     let wayflowStepNumber: number | null = null;
     let wayflowSchema: Record<string, unknown> | null = null;
-    // #1625 / eng#548 (contract (1)) — SAFE CATCH: the sole renderer gate (when
+    // #1625 (contract (1)) — SAFE CATCH: the sole renderer gate (when
     // the flow has exactly one xRenderer-bearing gate) is the unambiguous
     // resolution under ANY resolver fault. Computed up-front from the template so
     // the catch below never falls to the schema-field fallback for a

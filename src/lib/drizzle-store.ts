@@ -1372,7 +1372,7 @@ END $$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_run_hitl_prompts" ADD COLUMN IF NOT EXISTS submitted_values jsonb` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_run_hitl_prompts" ADD COLUMN IF NOT EXISTS schema_snapshot jsonb` },
     // agent_run_test_sends: per-action idempotency + crash ledger for the run-scoped
-    // test-delivery send primitive (eng#548 #1625, DESIGN-V3 contract (4)). TWIN of
+    // test-delivery send primitive (#1625, DESIGN-V3 contract (4)). TWIN of
     // migrations/core/core__0067 — the two DDLs MUST stay identical.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_test_sends" (
       id text PRIMARY KEY,

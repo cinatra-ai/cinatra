@@ -293,7 +293,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
     expect(values.contentBundle).toBeUndefined();
   });
 
-  // #1625 / eng#548 (D2): on the pinned runtime the a2a worker never writes
+  // #1625 (D2): on the pinned runtime the a2a worker never writes
   // task.metadata (pendingApproval is empty {}), so the test-delivery gate
   // surfaces its DFE input VALUES to the renderer ONLY as a whole-object JSON
   // agent message (the opt-in `surfaceGateInputs` template). This host-side

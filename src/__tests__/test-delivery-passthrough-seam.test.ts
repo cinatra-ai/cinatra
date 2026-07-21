@@ -1,5 +1,5 @@
 /**
- * email-test-delivery passthrough seam shapers (eng#548 #1625).
+ * email-test-delivery passthrough seam shapers (#1625).
  *
  * The perform_test_send ApiNode cannot pass native id arrays through its body
  * (wayflowcore stringifies json_body templates) nor extract the gate renderer's

@@ -228,7 +228,7 @@ export type McpRequestContext = {
   verifiedRunScopeId?: string;
   /**
    * A per-gate-resume submission id VERIFIED by a trusted server-side run-bound
-   * seam (eng#548 #1625). Stamped ONLY alongside `verifiedRunScopeId` by the
+   * seam (#1625). Stamped ONLY alongside `verifiedRunScopeId` by the
    * same seam (`/api/agents/passthrough` after `bindBridgeRunId`), resolved
    * server-side from the AUTHORITATIVE Redis latest-task map
    * (`resolveLatestWayflowGateTaskId`), written unconditionally at each WayFlow

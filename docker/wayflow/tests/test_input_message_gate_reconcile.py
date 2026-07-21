@@ -177,7 +177,7 @@ def test_gate_without_declared_inputs_is_untouched():
 
 
 # ---------------------------------------------------------------------------
-# #1625 / eng#548 (D2) — OPT-IN value-surfacing gate template.
+# #1625 (D2) — OPT-IN value-surfacing gate template.
 #
 # On the pinned runtime (wayflowcore 26.1.2) the a2a worker never writes
 # task.metadata on an interrupt, so a gate's DFE input VALUES reach the host

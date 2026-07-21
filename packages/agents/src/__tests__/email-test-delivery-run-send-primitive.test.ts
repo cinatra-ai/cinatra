@@ -1,5 +1,5 @@
 /**
- * Unit tests for the run-scoped test-delivery primitives (eng#548 #1625):
+ * Unit tests for the run-scoped test-delivery primitives (#1625):
  *   email_test_delivery_run_send
  *   email_test_delivery_parse_action
  *
@@ -608,7 +608,7 @@ describe("email_test_delivery_run_send — idempotency matrix", () => {
 });
 
 // ===========================================================================
-// Partial-batch-retry regression (eng#548 #1625) — a partial delivery must not
+// Partial-batch-retry regression (#1625) — a partial delivery must not
 // re-send its already-delivered prefix on a fresh-submission retry.
 // ===========================================================================
 describe("email_test_delivery_run_send — partial-batch retry", () => {

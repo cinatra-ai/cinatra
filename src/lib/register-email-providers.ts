@@ -33,7 +33,7 @@ import { deriveThreadId } from "@/lib/email-thread-key";
  * Build the objects-read actor the routing resolver uses to surface the run
  * owner's sender-identity objects.
  *
- * D3 (eng#548 #1625): a ROLE-LESS `System` actor is DENIED `object.read` by the
+ * D3 (#1625): a ROLE-LESS `System` actor is DENIED `object.read` by the
  * authz kernel — `System` principals carry NO synthetic role (enforce.ts:48-60),
  * `object.read` is granted only to platform_admin/org_admin/member
  * (policies.ts), so `filterByAuthz` silently drops EVERY sender-identity row and
@@ -398,7 +398,7 @@ async function saveSentEmailObject(input: {
           "campaignId",
           "contactId",
           "runId",
-          // eng#548 #1625 — the run-scoped test-delivery send correlation. Both
+          // #1625 — the run-scoped test-delivery send correlation. Both
           // persisted onto the sent-email record so the send primitive's
           // crash-reconciliation can query by submissionId and confirm per-draft
           // coverage. Soft provenance; omitted on ordinary sends.

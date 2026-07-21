@@ -68,7 +68,7 @@ const ALLOWED_TOOLS = new Set([
   // declaring agent package from the run-bound frame we establish below.
   "agent_run_hitl_prompts_list",
   "agent_run_hitl_prompts_exclude",
-  // Run-scoped test-delivery send + parse primitives (eng#548 #1625). The
+  // Run-scoped test-delivery send + parse primitives (#1625). The
   // email-test-delivery agent's own workflow dispatches these as deterministic
   // run-bound nodes; run + declaring package + submission id are derived from the
   // run-bound frame established below (never the request body).
@@ -95,7 +95,7 @@ const ALLOWED_TOOLS = new Set([
 const RUN_SCOPED_CONTEXT_TOOLS = new Set<string>([
   "agent_run_hitl_prompts_list",
   "agent_run_hitl_prompts_exclude",
-  // eng#548 #1625 — both derive their run scope from the verified frame; the send
+  // #1625 — both derive their run scope from the verified frame; the send
   // primitive additionally reads verifiedSubmissionId (stamped below from the
   // context-id-bound run row's a2aTaskId) as its ledger dedupe identity.
   "email_test_delivery_run_send",
@@ -118,7 +118,7 @@ type RequestBody = {
    *  do NOT match the primitive's flat return shape and cannot be bridged by
    *  the by-key ApiNode output extraction (wayflowcore maps each declared
    *  output `X` to the jq query `.X`, so a nested object output or a renamed
-   *  field is unreachable from a flat result). eng#548 #1625: the
+   *  field is unreachable from a flat result). #1625: the
    *  email_test_delivery_run_send primitive returns
    *  `{ok, sentTo, message, seq, ...}` but perform_test_send declares
    *  `[lastSendResult (object), gateCycle (int), ...]` for its re-entrant gate
@@ -258,7 +258,7 @@ TOOL_INPUT_SHAPERS.objects_save = (raw, agentRunId) => {
   return baseObjectsSaveShaper ? baseObjectsSaveShaper(raw, agentRunId) : raw;
 };
 
-// email-test-delivery run_send input shaping (eng#548 #1625) — the pure shaper
+// email-test-delivery run_send input shaping (#1625) — the pure shaper
 // lives in ./test-delivery-seam (zero-dep, unit-tested). It JSON-parses the
 // gate's `envelopeJson` (the ApiNode cannot pass native id arrays — wayflowcore
 // stringifies json_body templates) and projects the send fields the handler reads.
@@ -443,7 +443,7 @@ export async function POST(req: Request): Promise<Response> {
       // Nesting the two ALS frames is safe — they are distinct AsyncLocalStorage
       // instances. Carry the run's org + owner so the frame is a coherent
       // identity tuple with the run id.
-      // eng#548 #1625 (F1) — the trusted per-gate-resume submission id, resolved
+      // #1625 (F1) — the trusted per-gate-resume submission id, resolved
       // from the AUTHORITATIVE Redis latest-task map (written UNCONDITIONALLY at
       // each interrupt in execution.ts, BEFORE the interrupt is published), NOT
       // from the racy `agent_runs.a2a_task_id` column which a lost "tuple
@@ -542,7 +542,7 @@ export async function POST(req: Request): Promise<Response> {
       });
     }
 
-    // email-test-delivery run_send output shaping (eng#548 #1625) — the pure
+    // email-test-delivery run_send output shaping (#1625) — the pure
     // shaper lives in ./test-delivery-seam (zero-dep, unit-tested). wayflowcore
     // extracts each ApiNode output `X` via the fixed jq query `.X`, so the gate
     // renderer's nested `{lastSendResult(object), gateCycle(int)}` contract is

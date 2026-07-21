@@ -1,5 +1,5 @@
 import "@/lib/extensions"; // initialises extensionRegistry side effects
-import "@/lib/register-test-delivery-send-port"; // wires the run-scoped test-delivery send PORT (eng#548 #1625)
+import "@/lib/register-test-delivery-send-port"; // wires the run-scoped test-delivery send PORT (#1625)
 import { createMcpServerAuthPlugins, createMcpServerMount, type McpServerSettings, type McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import { CINATRA_MCP_INSTRUCTIONS, CINATRA_MCP_EXPERIMENTAL } from "./mcp-instructions";
 import { getRunContext } from "./agent-run-context-registry";

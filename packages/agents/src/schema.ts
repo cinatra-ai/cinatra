@@ -499,7 +499,7 @@ export const agentRunHitlPrompts = cinatraSchema.table("agent_run_hitl_prompts",
 
 // ---------------------------------------------------------------------------
 // agent_run_test_sends — durable per-action idempotency + crash ledger for the
-// run-scoped test-delivery send primitive (eng#548 #1625, DESIGN-V3 contract (4)).
+// run-scoped test-delivery send primitive (#1625, DESIGN-V3 contract (4)).
 //
 // One row per gate-submission send action. The dedupe identity is
 // (run_id, submission_id) where submission_id is the trusted per-resume WayFlow

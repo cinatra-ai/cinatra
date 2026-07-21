@@ -50,7 +50,7 @@ import {
   readAgentRunsByTemplateRaw,
   type AgentRunRecord,
 } from "../store";
-// Run-scoped test-delivery send (eng#548 #1625). The send capability itself is
+// Run-scoped test-delivery send (#1625). The send capability itself is
 // injected by the host through the boot-published PORT (the app owns the
 // email/auth/objects graph); packages/agents owns the run scope, authz, ledger,
 // and seq. Read the holder at INVOCATION time (fail closed on null).
@@ -5573,7 +5573,7 @@ async function handleAgentRunHitlPromptsExclude(
 }
 
 // ---------------------------------------------------------------------------
-// email_test_delivery_run_send / email_test_delivery_parse_action (eng#548 #1625)
+// email_test_delivery_run_send / email_test_delivery_parse_action (#1625)
 //
 // The two run-scoped primitives that turn the test-delivery gate into a REAL
 // run-performed send loop (DESIGN-V3 contracts (3)/(4)/(5)/(6)). Both derive the
@@ -5734,7 +5734,7 @@ async function handleEmailTestDeliveryRunSend(
   // are validated + bounded defensively — but the validation runs AFTER the run is
   // loaded + authorized (below), so EVERY user-correctable failure resolves to a
   // gateCycle-advancing ledger row (never a bare `{error}` that strands the HITL
-  // screen — eng#548 #1625 F3). Captured raw here; validated post-authz.
+  // screen — #1625 F3). Captured raw here; validated post-authz.
   const recipientEmail =
     typeof request.input?.recipientEmail === "string" ? request.input.recipientEmail.trim() : "";
   const selectionModeRaw = request.input?.selectionMode;
@@ -5756,7 +5756,7 @@ async function handleEmailTestDeliveryRunSend(
   const actor = request.actor as PrimitiveActorContext;
   const roles = await resolveRoleHintsFromSession();
   try {
-    // eng#548 #1625 (F3): record a pre-claim failure as a terminal `failed` ledger
+    // #1625 (F3): record a pre-claim failure as a terminal `failed` ledger
     // row that ALLOCATES the next per-run seq so `seq`→`gateCycle` ADVANCES and the
     // renderer clears its pending state (never strands). ON CONFLICT reads back the
     // winning row, so a same-submission transport retry returns the authoritative
@@ -5785,7 +5785,7 @@ async function handleEmailTestDeliveryRunSend(
     // record ALLOCATES a seq (advances gateCycle), which is an execute-tier side
     // effect on the run's HITL state; gating it behind `execute` ensures a merely
     // read-authorized actor can never advance the gate cycle (codex convergence).
-    // OWNER-CONTEXT defense-in-depth, NOT responder authz (eng#548 #1625 F2): the
+    // OWNER-CONTEXT defense-in-depth, NOT responder authz (#1625 F2): the
     // passthrough seam reconstructs the actor from run.runBy for this server-side
     // back-edge node, so this check is evaluated against the owner and is
     // effectively tautological here. The RESPONDER-side execute gate lives at the
@@ -5954,7 +5954,7 @@ async function handleEmailTestDeliveryRunSend(
       });
     }
 
-    // ---- Partial-batch-retry guard (eng#548 #1625 regression). ----
+    // ---- Partial-batch-retry guard (#1625 regression). ----
     // A PRIOR gate visit may have PARTIALLY delivered drafts TO THIS RECIPIENT (a
     // mid-batch send failure settled `failed` but the prefix went out). The user
     // saw "failed" and retries on a fresh submission — re-sending those already-
@@ -6154,7 +6154,7 @@ export function createAgentBuilderPrimitiveHandlers(): Record<
       handleAgentRunHitlPromptsList(req as Parameters<typeof handleAgentRunHitlPromptsList>[0]),
     agent_run_hitl_prompts_exclude: (req) =>
       handleAgentRunHitlPromptsExclude(req as Parameters<typeof handleAgentRunHitlPromptsExclude>[0]),
-    // run-scoped test-delivery send + parse primitives (eng#548 #1625) — run,
+    // run-scoped test-delivery send + parse primitives (#1625) — run,
     // declaring package, campaign, and submission id all context-derived.
     email_test_delivery_run_send: (req) =>
       handleEmailTestDeliveryRunSend(req as Parameters<typeof handleEmailTestDeliveryRunSend>[0]),

@@ -2801,7 +2801,7 @@ def _reconcile_input_message_gates(
     conversation / renderer surface. The declared ``inputs`` descriptor is then
     dropped (the runtime rebuilds it from the template).
 
-    OPT-IN VALUE SURFACING (#1625 / eng#548, D2): a gate that sets
+    OPT-IN VALUE SURFACING (#1625, D2): a gate that sets
     ``metadata.cinatra.surfaceGateInputs == True`` (strict identity) instead
     gets a JSON-object ``message_template`` that RENDERS each declared input's
     value (``"<name>": {% if <name> %}{{ <name> | tojson }}{% else %}null{%
@@ -2851,7 +2851,7 @@ def _reconcile_input_message_gates(
                     )
                     and len(set(titles)) == len(titles)  # no duplicate titles
                 )
-                # #1625 / eng#548 (D2) — OPT-IN value-surfacing gate template.
+                # #1625 (D2) — OPT-IN value-surfacing gate template.
                 # wayflowcore 26.1.2's a2a worker
                 # (agentserver/a2a/_worker.py:run_task) surfaces an
                 # input-required interrupt to the host SOLELY via the assistant

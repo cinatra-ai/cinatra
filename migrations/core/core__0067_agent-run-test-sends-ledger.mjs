@@ -1,4 +1,4 @@
-// core__0067 — agent_run_test_sends ledger (eng#548 #1625, DESIGN-V3 contract (4)).
+// core__0067 — agent_run_test_sends ledger (#1625, DESIGN-V3 contract (4)).
 //
 // One brand-new table backing the run-scoped test-delivery send primitive's
 // per-action idempotency + crash recovery:

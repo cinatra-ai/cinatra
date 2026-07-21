@@ -5,7 +5,7 @@ import { db } from "./db";
 import { agentRunTestSends } from "./schema";
 
 // ---------------------------------------------------------------------------
-// agent_run_test_sends store (eng#548 #1625, DESIGN-V3 contract (4)).
+// agent_run_test_sends store (#1625, DESIGN-V3 contract (4)).
 //
 // The durable per-action idempotency + crash ledger for the run-scoped
 // test-delivery send primitive. Dedupe identity is (run_id, submission_id): a
@@ -107,7 +107,7 @@ export type RecordPreClaimFailureResult =
   | { kind: "existing"; row: TestSendRecord };
 
 /**
- * eng#548 #1625 (F3) — record a PRE-CLAIM failure (invalid recipient, no
+ * #1625 (F3) — record a PRE-CLAIM failure (invalid recipient, no
  * selection, campaign-access-denied, null-owner) as a terminal `failed` ledger
  * row that ALLOCATES the next per-run `seq`. The gate wires `seq` → `gateCycle`
  * (the renderer's rehydration token), so advancing it on a pre-claim failure is
@@ -199,7 +199,7 @@ export async function readTestSendBySubmission(
  * The authoritative PERFORMED-send count for a run — every gate visit that
  * delivered at least one real email. A fully-successful (`sent`) row counts; a
  * `failed` row counts IFF it partially delivered (`result_json.deliveredDraftIds`
- * non-empty — a mid-batch failure that still put mail on the wire, eng#548 #1625
+ * non-empty — a mid-batch failure that still put mail on the wire, #1625
  * partial-batch-retry regression), so a partial send is never undercounted against
  * the cap. A pre-claim `failed` row (no delivery) and a `sending` row do not count.
  * parse_action compares this against the template-trusted `maxGateVisits` for the
@@ -226,7 +226,7 @@ export async function readSentCountForRun(runId: string): Promise<number> {
 
 /**
  * Draft ids that a prior PARTIAL failure already delivered TO THE SAME RECIPIENT
- * and that a fresh gate re-entry must not re-send (eng#548 #1625 partial-batch-
+ * and that a fresh gate re-entry must not re-send (#1625 partial-batch-
  * retry regression): the user saw "failed" and retries, unaware the prefix landed,
  * so re-sending the delivered prefix would double-deliver. Deliberately NARROW so
  * it never over-suppresses a legitimate send:

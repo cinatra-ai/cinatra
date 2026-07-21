@@ -71,7 +71,7 @@ type SendCorrelation = {
   campaignId?: string;
   contactId?: string;
   runId?: string;
-  // eng#548 #1625 — the run-scoped test-delivery send submission id + the
+  // #1625 — the run-scoped test-delivery send submission id + the
   // specific draft id, threaded per-draft so the send primitive's crash
   // reconciliation can query the outbound correlation store by submissionId and
   // confirm every expected draft was delivered.
@@ -763,7 +763,7 @@ async function runInitialSend(args: {
 
 /**
  * Pure phase-1 selection planner for the run-scoped test-delivery send
- * (eng#548 #1625, DESIGN-V3 (4) two-phase). Resolves the FINAL concrete draft-id
+ * (#1625, DESIGN-V3 (4) two-phase). Resolves the FINAL concrete draft-id
  * set ONCE — `random_initial` is pinned to a concrete id here and must never be
  * rerandomized on a retry (the caller persists these ids into the ledger claim
  * BEFORE any outbound send). Reuses the SAME selection + membership logic as
@@ -831,7 +831,7 @@ export function createTriggerEmailSendUseCases(
         selectionMode: "random_initial" | "specific_initial" | "all_initial";
         specificInitialDraftIds?: string[];
         specificFollowUpDraftIds?: string[];
-        // eng#548 #1625 — the run-scoped test-delivery submission id. When
+        // #1625 — the run-scoped test-delivery submission id. When
         // present (the `email_test_delivery_run_send` wrapper's phase-2 send),
         // it is threaded (with each draft's id) into the sendEmail correlation so
         // a crashed-claim reconciliation can query the outbound store by
@@ -920,14 +920,14 @@ export function createTriggerEmailSendUseCases(
       const fromEmail = campaign.senderEmail;
       const fromName = campaign.senderName;
 
-      // eng#548 #1625 (partial-batch-retry regression): track the ids ACTUALLY
+      // #1625 (partial-batch-retry regression): track the ids ACTUALLY
       // delivered draft-by-draft. Declared OUTSIDE the try so the catch branch can
       // return the partial prefix that went out before a mid-batch throw. Returning
       // it (even on the failure branch) lets the wrapper persist it so a later retry
       // never re-sends those drafts and the maxGateVisits cap counts the partial.
       const deliveredDraftIds: string[] = [];
       try {
-        // eng#548 #1625 — when the run-scoped wrapper supplies a submissionId,
+        // #1625 — when the run-scoped wrapper supplies a submissionId,
         // thread it (with the specific draft id) into the sendEmail correlation
         // so the sent-email object carries the (submissionId, draftId) pair the
         // wrapper's crash reconciliation queries. Omitted on the public path
@@ -948,7 +948,7 @@ export function createTriggerEmailSendUseCases(
             },
             {
               userId: actor.userId,
-              // eng#548 #1625 (D1) — thread the run OWNER's org (== run.orgId,
+              // #1625 (D1) — thread the run OWNER's org (== run.orgId,
               // coherent per DESIGN-V3 §334-337) so the routing chain
               // (register-email-providers.resolveConnectorId step-3) can resolve
               // the owner's USER-level sender-identity from the ORG-partitioned

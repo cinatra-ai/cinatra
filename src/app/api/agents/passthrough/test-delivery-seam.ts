@@ -1,7 +1,7 @@
 import "server-only";
 
 /**
- * email-test-delivery passthrough seam shapers (eng#548 #1625).
+ * email-test-delivery passthrough seam shapers (#1625).
  *
  * Pure, zero-dependency, unit-tested (mirrors ./blog-pipeline-seam and
  * ./artifact-materialize-shaper). The passthrough route wires these into its

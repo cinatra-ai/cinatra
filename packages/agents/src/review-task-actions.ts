@@ -109,7 +109,7 @@ export async function approveReviewTaskInternal(
   // responder actorContext BEFORE any state-changing write (the setup-field
   // merge or the WayFlow resume that drives a send).
   //
-  // Why execute, not just approveHitl (eng#548 #1625 F2): resuming a gate DRIVES
+  // Why execute, not just approveHitl (#1625 F2): resuming a gate DRIVES
   // execution — for the test-delivery agent the WayFlow resume reaches
   // `perform_test_send`, an EXECUTE-tier mutation. The send primitive runs under
   // the run OWNER's borrowed authority (a server-side back-edge node with no

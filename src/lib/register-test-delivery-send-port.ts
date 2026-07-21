@@ -1,7 +1,7 @@
 import "server-only";
 
 // ---------------------------------------------------------------------------
-// Boot wiring for the test-delivery send PORT (eng#548 #1625).
+// Boot wiring for the test-delivery send PORT (#1625).
 //
 // Side-effect import: injects the host send implementation into the
 // packages/agents LEAF port holder so the run-scoped

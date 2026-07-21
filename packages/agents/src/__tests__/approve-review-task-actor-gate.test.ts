@@ -5,7 +5,7 @@
  * entry points (the /api/a2a/resume route) now pass their verified
  * `actorContext` so the helper MIRRORS agent_run_resume — enforcing `execute`
  * THEN `approveHitl` against the resolved run BEFORE any state change, on BOTH
- * the setup-* (#323) and wayflow-* (#322) branches (eng#548 #1625 F2: resuming a
+ * the setup-* (#323) and wayflow-* (#322) branches (#1625 F2: resuming a
  * gate drives an execute-tier action, so an approveHitl-only responder is no
  * longer sufficient). This pins:
  *   - when actorContext is supplied and enforceRunAccess THROWS on `execute`
