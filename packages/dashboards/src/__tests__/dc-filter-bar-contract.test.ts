@@ -79,14 +79,23 @@ describe("drizzle-cube filter-bar restyle contract (dashboard-theme.css)", () =>
   });
 
   it("separators stay on the dc:w-px / dc:border-t hooks the hairline rules target", () => {
-    const bar = get("CompactFilterBar.tsx");
-    expect(bar).toMatch(/dc:w-px/);
-    expect(bar).toMatch(/dc:border-t/);
+    // drizzle-cube 0.6.4 split CompactFilterBar into a layout shell +
+    // CompactFilterBarParts (cinatra#1929): the separators moved WITH the
+    // layouts — desktop hairline div + mobile bordered rows — behavior intact.
+    const parts = get("CompactFilterBarParts.tsx");
+    expect(parts).toMatch(/className="dc:h-5 dc:w-px dc:mx-1"/);
+    expect(parts).toMatch(/dc:border-t/);
   });
 
   it("hover keeps flowing through --dc-surface-hover", () => {
-    const bar = get("CompactFilterBar.tsx");
-    expect(bar).toContain("var(--dc-surface-hover)");
+    // Post-0.6.4 the hover handlers live on the MOUNTED consumers (the preset
+    // chips in both layouts + the filter chips), not the shell (cinatra#1929).
+    // Deliberately NOT pinned: the add-filter button's new `withHoverHandlers`
+    // gate — DashboardFilterPanel mounts view-mode-only (isEditMode={false}),
+    // so those instances never render; the pin would be vacuous.
+    for (const file of ["DatePresetChips.tsx", "FilterChip.tsx"]) {
+      expect(get(file)).toContain("var(--dc-surface-hover)");
+    }
   });
 
   it("popovers render in-place (dc:absolute, unportaled) so the var-restore scope reaches them", () => {

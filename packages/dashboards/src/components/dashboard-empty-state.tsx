@@ -3,7 +3,7 @@
  * DashboardEmptyState — the app-consistent zero-portlet empty state for the
  * embedded drizzle-cube grid.
  *
- * drizzle-cube `0.5.7`'s `<DashboardGridSurface>` renders its OWN built-in
+ * drizzle-cube `0.6.4`'s `<DashboardGridSurface>` renders its OWN built-in
  * empty screen when a dashboard has no portlets ("No Portlets" + an
  * off-column, library-styled pair of Add buttons floating in the grid area).
  * Every SEEDED entity dashboard (projects / teams / organizations / agents /

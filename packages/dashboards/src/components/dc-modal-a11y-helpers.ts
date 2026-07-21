@@ -28,7 +28,7 @@ export interface DcModalEscapeState {
  * Returns the close action for the single open drizzle-cube dashboard
  * modal, or `null` when none is open.
  *
- * drizzle-cube `0.5.7`'s modals are mutually exclusive — each open action
+ * drizzle-cube `0.6.4`'s modals are mutually exclusive — each open action
  * is gated on the dashboard being idle — so at most one flag is ever
  * truthy. We still pick deterministically (portlet → text → filter →
  * delete) so a hypothetical double-open can never leave ESC inert.
