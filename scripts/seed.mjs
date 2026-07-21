@@ -1432,15 +1432,45 @@ async function seedChatThreads() {
     },
   ];
 
+  // cinatra#1037 P5.6 PR2 CUTOVER (owner ruling 2026-07-21): the legacy
+  // chat_threads table is FENCED once the drop-history cutover marker is set, and
+  // /chat now reconstructs from the AUTHORITATIVE structured store. Seed the
+  // structured mirror directly — assistant_threads (origin='legacy-chat') + one
+  // `legacy:`-prefixed assistant_turns row per message — matching the exact shape
+  // buildAssistantThreadMirrorQueries writes (turn id
+  // `legacy:<threadId.length>:<threadId>:<messageId>`, content = the full message
+  // object JSON, ordinal = payload order). reconstructThreadPayload rebuilds the
+  // /chat payload from these rows.
+  const legacyMirrorTurnId = (threadId, messageId) =>
+    `legacy:${threadId.length}:${threadId}:${messageId}`;
+
   for (const t of threads) {
+    const p = t.payload;
+    // Idempotent: drop the structured thread (assistant_turns FK-cascade) then
+    // re-insert. A raw ON CONFLICT would leave stale turns from a longer prior run.
+    await q(`DELETE FROM cinatra.assistant_threads WHERE id = $1`, [t.id]);
     await q(
-      `INSERT INTO cinatra.chat_threads (id, payload)
-       VALUES ($1, $2)
-       ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload`,
-      [t.id, JSON.stringify(t.payload)],
+      `INSERT INTO cinatra.assistant_threads
+         (id, owner_user_id, org_id, project_id, team_id, origin, scalars, title, created_at, updated_at)
+       VALUES ($1, $2, $3, NULL, NULL, 'legacy-chat', NULL, $4, COALESCE($5::timestamptz, now()), COALESCE($6::timestamptz, now()))`,
+      [t.id, p.ownerUserId ?? null, p.orgId ?? null, p.title ?? "", p.createdAt ?? null, p.updatedAt ?? null],
     );
+    let ordinal = 0;
+    for (const m of p.messages ?? []) {
+      const messageId = `${t.id}-m${ordinal}`;
+      // The durable turn content is the FULL message object (faithful by
+      // construction — reconstruction deep-equals payload.messages[i]).
+      const message = { id: messageId, role: m.role, content: m.content, createdAt: p.createdAt };
+      await q(
+        `INSERT INTO cinatra.assistant_turns
+           (id, thread_id, run_id, assistant_user_id, role, status, content, ordinal, created_at, updated_at)
+         VALUES ($1, $2, NULL, NULL, $3, 'completed', $4::jsonb, $5, COALESCE($6::timestamptz, now()), COALESCE($6::timestamptz, now()))`,
+        [legacyMirrorTurnId(t.id, messageId), t.id, m.role, JSON.stringify(message), ordinal, p.createdAt ?? null],
+      );
+      ordinal += 1;
+    }
   }
-  console.log(`  seeded ${threads.length} chat threads`);
+  console.log(`  seeded ${threads.length} chat threads (structured store)`);
 }
 
 // ---------------------------------------------------------------------------

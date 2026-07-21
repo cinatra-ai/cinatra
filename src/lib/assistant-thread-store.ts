@@ -32,6 +32,16 @@ import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 export type AssistantTurnStatus = "running" | "completed" | "error";
 export type AssistantTurnRole = "user" | "assistant";
 
+/** Thread-origin discriminator (cinatra#1037 P5.6 PR2 CUTOVER): the PROVENANCE
+ *  of a structured thread, stamped by whichever writer minted it.
+ *   - 'legacy-chat'      — minted through the legacy chat_threads write path
+ *     (the assistant_threads mirror write-through stamps this).
+ *   - 'assistant-native' — minted directly on the structured store by the
+ *     assistant runtime (createAssistantThread stamps this).
+ *  The legacy delete-all wipe restricts to the caller's OWN 'legacy-chat'
+ *  threads, so runtime-native threads survive it. */
+export type AssistantThreadOrigin = "legacy-chat" | "assistant-native";
+
 export type AssistantThread = {
   id: string;
   /** The bound assistant PRINCIPAL (assistant-user id) for this thread. */
@@ -39,6 +49,18 @@ export type AssistantThread = {
   /** The human owner who created/owns the thread. */
   ownerUserId: string | null;
   orgId: string | null;
+  /** Project scope (cinatra#1037 P5.6 PR2): the structured twin of
+   *  chat_threads.project_id. NULL for ambient/legacy threads. */
+  projectId: string | null;
+  /** Team ownership (cinatra#1037 P5.6 PR2, coordinator-authorized Fork-B
+   *  extension): the structured twin of the legacy payload's teamId. NULL for
+   *  personal/legacy threads. The axis the list/http/classifier visibility
+   *  consumers distinguish team-owned threads by once re-pointed off chat_threads. */
+  teamId: string | null;
+  /** Thread-origin discriminator (cinatra#1037 P5.6 PR2 CUTOVER): 'legacy-chat'
+   *  vs 'assistant-native' provenance. NULL for rows written before the column
+   *  existed (until their writer re-stamps them). */
+  origin: AssistantThreadOrigin | null;
   title: string | null;
   /** A2A `contextId` continuity handle (epic #1037 §4/§5). */
   contextId: string | null;
@@ -73,6 +95,7 @@ export type CreateAssistantThreadInput = {
   assistantUserId?: string | null;
   ownerUserId?: string | null;
   orgId?: string | null;
+  projectId?: string | null;
   title?: string | null;
   contextId?: string | null;
 };
@@ -108,6 +131,17 @@ function toStringOrNull(v: unknown): string | null {
   return typeof v === "string" ? v : null;
 }
 
+const VALID_THREAD_ORIGINS: readonly AssistantThreadOrigin[] = ["legacy-chat", "assistant-native"];
+
+/** Narrow a raw `origin` cell to the discriminator domain, or null. A stray
+ *  out-of-domain value (the column CHECK forbids one at rest) maps to null so
+ *  the mapper stays total and never over-classifies. */
+function toOriginOrNull(v: unknown): AssistantThreadOrigin | null {
+  return typeof v === "string" && (VALID_THREAD_ORIGINS as readonly string[]).includes(v)
+    ? (v as AssistantThreadOrigin)
+    : null;
+}
+
 /** Normalize a raw `content` jsonb cell to a plain object or null. The pg driver
  *  parses jsonb to a JS value, but tolerate a raw JSON string defensively (some
  *  drivers/paths hand back the text). Non-object → null. */
@@ -141,6 +175,9 @@ export function mapAssistantThreadRow(row: Record<string, unknown>): AssistantTh
     assistantUserId: toStringOrNull(row.assistant_user_id),
     ownerUserId: toStringOrNull(row.owner_user_id),
     orgId: toStringOrNull(row.org_id),
+    projectId: toStringOrNull(row.project_id),
+    teamId: toStringOrNull(row.team_id),
+    origin: toOriginOrNull(row.origin),
     title: toStringOrNull(row.title),
     contextId: toStringOrNull(row.context_id),
     createdAt: toIso(row.created_at),
@@ -184,15 +221,19 @@ export function createAssistantThread(input: CreateAssistantThreadInput): Assist
     connectionString: getPostgresConnectionString(),
     queries: [
       {
+        // origin is stamped 'assistant-native' — createAssistantThread is the
+        // structured-native writer (assistant runtime). The legacy delete-all
+        // wipe restricts to 'legacy-chat' rows, so a thread born here survives it.
         text: `INSERT INTO "${schema}"."assistant_threads"
-                 (id, assistant_user_id, owner_user_id, org_id, title, context_id)
-               VALUES ($1, $2, $3, $4, $5, $6)
-               RETURNING id, assistant_user_id, owner_user_id, org_id, title, context_id, created_at, updated_at`,
+                 (id, assistant_user_id, owner_user_id, org_id, project_id, origin, title, context_id)
+               VALUES ($1, $2, $3, $4, $5, 'assistant-native', $6, $7)
+               RETURNING id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, created_at, updated_at`,
         values: [
           id,
           input.assistantUserId ?? null,
           input.ownerUserId ?? null,
           input.orgId ?? null,
+          input.projectId ?? null,
           input.title ?? null,
           input.contextId ?? null,
         ],
@@ -213,7 +254,7 @@ export function getAssistantThread(threadId: string): AssistantThread | null {
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, assistant_user_id, owner_user_id, org_id, title, context_id, created_at, updated_at
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, created_at, updated_at
                FROM "${schema}"."assistant_threads" WHERE id = $1 LIMIT 1`,
         values: [threadId],
       },
@@ -231,7 +272,7 @@ export function listAssistantThreadsForOrg(orgId: string, limit = 50): Assistant
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, assistant_user_id, owner_user_id, org_id, title, context_id, created_at, updated_at
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, created_at, updated_at
                FROM "${schema}"."assistant_threads"
                WHERE org_id = $1
                ORDER BY updated_at DESC, id
@@ -262,7 +303,7 @@ export function listAssistantThreadsForOrgVisibleTo(
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, assistant_user_id, owner_user_id, org_id, title, context_id, created_at, updated_at
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, created_at, updated_at
                FROM "${schema}"."assistant_threads"
                WHERE org_id = $1
                  AND (owner_user_id = $2 OR assistant_user_id = $2)
@@ -273,6 +314,35 @@ export function listAssistantThreadsForOrgVisibleTo(
     ],
   });
   return (res?.rows ?? []).map((r) => mapAssistantThreadRow(r as Record<string, unknown>));
+}
+
+/** Load the team-owned thread for a team (cinatra#1037 P5.6 PR2 CUTOVER) — the
+ *  structured lookup twin of `ensureTeamThread`'s legacy `chat_threads` scan for
+ *  the row whose `teamId` matches. A team has at most one thread (ensureTeamThread
+ *  creates one if absent); the most-recently-updated match is returned defensively
+ *  via the partial team index (`assistant_threads_team_updated_idx`, team_id +
+ *  updated_at DESC WHERE team_id IS NOT NULL). NO durable-content filter — this is
+ *  an EXISTENCE/ownership probe, so a freshly-minted (empty) team thread is found;
+ *  NO authorization — callers apply their own active-org membership policy. Returns
+ *  null when the team has no thread. */
+export function getAssistantThreadByTeamId(teamId: string): AssistantThread | null {
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, created_at, updated_at
+               FROM "${schema}"."assistant_threads"
+               WHERE team_id = $1
+               ORDER BY updated_at DESC, id
+               LIMIT 1`,
+        values: [teamId],
+      },
+    ],
+  });
+  const row = res?.rows?.[0] as Record<string, unknown> | undefined;
+  return row ? mapAssistantThreadRow(row) : null;
 }
 
 /** Bump a thread's `updated_at` (e.g. on a new turn) so it sorts to the top. */
@@ -420,4 +490,347 @@ export function listAssistantTurns(threadId: string): AssistantTurn[] {
     ],
   });
   return (res?.rows ?? []).map((r) => mapAssistantTurnRow(r as Record<string, unknown>));
+}
+
+/** List a thread's paused participants (cinatra#1037 P5.6 PR2 CUTOVER). The
+ *  structured read twin of the legacy payload's `pausedParticipants` array:
+ *  presence in `assistant_thread_pause_state` == paused. Empty when none. */
+export function listPausedParticipants(threadId: string): string[] {
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT participant_id FROM "${schema}"."assistant_thread_pause_state"
+               WHERE thread_id = $1 ORDER BY participant_id`,
+        values: [threadId],
+      },
+    ],
+  });
+  return (res?.rows ?? []).map((r) => String((r as Record<string, unknown>).participant_id));
+}
+
+/** Pause or resume ONE participant in a thread (cinatra#1037 P5.6 PR2 CUTOVER),
+ *  writing DIRECTLY to the structured `assistant_thread_pause_state` table — the
+ *  ATOMIC replacement for setAssistantPauseState's read-chat_threads +
+ *  whole-payload re-upsert (which last-writer-wins under concurrency). Presence
+ *  == paused: `paused=true` INSERTs the row (idempotent ON CONFLICT DO NOTHING),
+ *  `paused=false` DELETEs it. Deliberately does NOT bump the thread's updated_at
+ *  — pausing is not conversational activity, so it must not reorder the
+ *  activity-sorted sidebar (#283). The `listPausedParticipants` read is its twin. */
+export function setAssistantThreadPauseParticipant(
+  threadId: string,
+  participantId: string,
+  paused: boolean,
+): void {
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  const query = paused
+    ? {
+        text: `INSERT INTO "${schema}"."assistant_thread_pause_state" (thread_id, participant_id)
+               VALUES ($1, $2)
+               ON CONFLICT (thread_id, participant_id) DO NOTHING`,
+        values: [threadId, participantId],
+      }
+    : {
+        text: `DELETE FROM "${schema}"."assistant_thread_pause_state"
+               WHERE thread_id = $1 AND participant_id = $2`,
+        values: [threadId, participantId],
+      };
+  runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [query],
+  });
+}
+
+/** The set of thread ids that hold DURABLE /chat content (cinatra#1037 P5.6 PR2
+ *  CUTOVER). A thread is POST-cutover (readable/listable) iff it has >=1
+ *  LEGACY-MIRROR turn (deterministic `legacy:` id, run_id NULL) with non-NULL
+ *  `content` — the DB-observable exclusion predicate (codex-converged). The
+ *  legacy-mirror scope is load-bearing: a runtime-native turn (bare UUID, run_id
+ *  set) also carries content but is a DIFFERENT representation and must never
+ *  false-include a pre-EXPAND shadow. Pre-cutover threads (content-less shadows
+ *  minted before PR1 EXPAND, or empty threads) are absent and excluded. One
+ *  scan; the caller intersects it with the thread rows it is listing. */
+export function listAssistantThreadIdsWithDurableContent(): Set<string> {
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT DISTINCT thread_id FROM "${schema}"."assistant_turns"
+               WHERE content IS NOT NULL
+                 AND run_id IS NULL
+                 AND id LIKE '${RESERVED_LEGACY_MIRROR_TURN_ID_PREFIX}%'`,
+        values: [],
+      },
+    ],
+  });
+  return new Set((res?.rows ?? []).map((r) => String((r as Record<string, unknown>).thread_id)));
+}
+
+/** The set of thread ids ANCHORED to one org (cinatra#1037 P5.6 PR2 CUTOVER —
+ *  the "#134" listing contract). The structured mirror carries the
+ *  `org_id` tenancy anchor that the legacy `chat_threads` table lacks, so this
+ *  is how the flat /chat list is org-scoped to the acting org: a personal thread
+ *  is listable only when its mirror `org_id` equals the caller's active org (the
+ *  built-in assistant's workspace audience, interim per the #1873 W3 binding).
+ *  Unbounded id-only scan (no LIMIT) — the caller intersects it with the rows it
+ *  is listing. Team-owned threads mirror with org_id NULL and never enter this
+ *  set (they belong to the team panel, not the flat list). */
+export function listAssistantThreadIdsForOrg(orgId: string): Set<string> {
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT id FROM "${schema}"."assistant_threads" WHERE org_id = $1`,
+        values: [orgId],
+      },
+    ],
+  });
+  return new Set((res?.rows ?? []).map((r) => String((r as Record<string, unknown>).id)));
+}
+
+/** A lightweight thread SUMMARY for the flat /chat list (cinatra#1037 P5.6 PR2
+ *  CUTOVER): identity + title + timestamps + the ownership axes the list-visibility
+ *  consumers distinguish, WITHOUT reconstructing the full message payload. */
+export type AssistantThreadSummary = {
+  id: string;
+  title: string | null;
+  ownerUserId: string | null;
+  teamId: string | null;
+  origin: AssistantThreadOrigin | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** List the durable-content thread SUMMARIES owned by one user within one org
+ *  (cinatra#1037 P5.6 PR2 CUTOVER) — the structured replacement for the flat
+ *  /chat list's `readChatThreadsFromDatabase()` scan on the #134 org+owner
+ *  audience seam (handleListAssistantThreads / users/[userId] / fetchChatThreads).
+ *  Scoped in BOTH axes via the structured mirror's `org_id` + `owner_user_id`
+ *  anchors (chat_threads carries neither): only rows the caller OWNS AND anchored
+ *  to the acting org. Excludes PRE-CUTOVER threads — a thread is listable iff it
+ *  has >=1 legacy-mirror content turn (the SAME durable-content predicate as
+ *  listAssistantThreadIdsWithDurableContent, applied as a correlated EXISTS so the
+ *  scope + content gate + ordering are one indexed scan). Team threads
+ *  (owner_user_id NULL / team_id set) never enter an owner-scoped list. Ordered
+ *  createdAt DESC to match the PINNED legacy sidebar ordering (#1037 PR2). */
+export function listAssistantThreadSummariesForOwnerInOrg(
+  orgId: string,
+  ownerUserId: string,
+  limit = 200,
+): AssistantThreadSummary[] {
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  const prefix = RESERVED_LEGACY_MIRROR_TURN_ID_PREFIX;
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT at.id, at.owner_user_id, at.team_id, at.origin, at.title, at.created_at, at.updated_at
+               FROM "${schema}"."assistant_threads" at
+               WHERE at.org_id = $1
+                 AND at.owner_user_id = $2
+                 AND EXISTS (
+                   SELECT 1 FROM "${schema}"."assistant_turns" tt
+                   WHERE tt.thread_id = at.id
+                     AND tt.content IS NOT NULL
+                     AND tt.run_id IS NULL
+                     AND tt.id LIKE '${prefix}%'
+                 )
+               ORDER BY at.created_at DESC, at.id
+               LIMIT $3`,
+        values: [orgId, ownerUserId, limit],
+      },
+    ],
+  });
+  return (res?.rows ?? []).map((r) => {
+    const row = r as Record<string, unknown>;
+    return {
+      id: String(row.id),
+      title: toStringOrNull(row.title),
+      ownerUserId: toStringOrNull(row.owner_user_id),
+      teamId: toStringOrNull(row.team_id),
+      origin: toOriginOrNull(row.origin),
+      createdAt: toIso(row.created_at),
+      updatedAt: toIso(row.updated_at),
+    };
+  });
+}
+
+/**
+ * PURE reconstruction of the /chat thread payload from the structured parts —
+ * unit-testable without a database (the DB reads live in
+ * `reconstructThreadPayload`). Returns null when the thread is PRE-CUTOVER.
+ *
+ * EXCLUSION + FAITHFUL CONTENT (codex-converged): the /chat message content
+ * lives EXCLUSIVELY in the LEGACY-MIRROR projection turns (deterministic
+ * `legacy:` ids, run_id NULL, non-NULL `content`). Runtime-native turns (bare
+ * UUID, run_id set) are a DIFFERENT representation and are NEVER mixed into the
+ * reconstruction. A thread is readable iff it has >=1 such turn; a content-less
+ * shadow or an empty thread reconstructs to null (404 / absent-from-list). Each
+ * surviving turn's `content` IS the full persisted message object (PR1 EXPAND:
+ * `parse(content)` deep-equals `payload.messages[i]`); `turns` MUST already be in
+ * `ordinal` order (the caller's query orders by it), so `messages` is a faithful,
+ * lossless, correctly-ordered reconstruction.
+ *
+ * The durable thread-level render-state scalars (`activeAssistantHandle`,
+ * `taggedAssistantUserIds`, `slackMode`) are read back DIRECTLY from the persisted
+ * `scalars` object (they are state, not losslessly derivable from the messages —
+ * codex convergence), spread first so the modeled fields always win.
+ */
+export function assembleThreadPayloadFromParts(
+  thread: AssistantThread,
+  turns: AssistantTurn[],
+  pausedParticipants: string[],
+  scalars: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  const contentTurns = turns.filter(
+    (t) =>
+      t.content !== null &&
+      t.runId === null &&
+      t.id.startsWith(RESERVED_LEGACY_MIRROR_TURN_ID_PREFIX),
+  );
+  if (contentTurns.length === 0) return null; // pre-cutover: no durable /chat content
+
+  const messages = contentTurns.map((t) => t.content as Record<string, unknown>);
+
+  const payload: Record<string, unknown> = {
+    // Durable render-state scalars, reconstructed directly; modeled fields below
+    // deliberately overwrite any stale duplicate.
+    ...(scalars ?? {}),
+    id: thread.id,
+    title: thread.title ?? "",
+    messages,
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+    pausedParticipants,
+  };
+  if (thread.ownerUserId) payload.ownerUserId = thread.ownerUserId;
+  if (thread.projectId) payload.projectId = thread.projectId;
+  // teamId round-trips faithfully (cinatra#1037 P5.6 PR2): any full-payload
+  // re-saver (rename, pause, MCP send) spreads the reconstructed payload back
+  // through the mirror's WHOLESALE-overwrite of team_id, so team ownership must
+  // survive the round-trip — the same reason ownerUserId/projectId are emitted.
+  if (thread.teamId) payload.teamId = thread.teamId;
+  return payload;
+}
+
+/**
+ * Reconstruct the full /chat thread payload for a thread from the STRUCTURED
+ * store (cinatra#1037 P5.6 PR2 CUTOVER) — the authoritative read source
+ * replacing the legacy `chat_threads.payload`. Reads the thread row (incl. the
+ * durable `scalars`), the legacy-mirror content turns ORDERED BY `ordinal` (then
+ * created_at/id for pre-PR2 rows without an ordinal), and the structured pause
+ * set — ALL in ONE `REPEATABLE READ` transaction so the assembled payload is a
+ * single consistent snapshot (never metadata/turns/pause from different
+ * concurrent revisions; codex convergence). Returns null when the thread is
+ * absent OR pre-cutover (content-less) — callers 404 / exclude.
+ */
+export function reconstructThreadPayload(threadId: string): Record<string, unknown> | null {
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  const prefix = RESERVED_LEGACY_MIRROR_TURN_ID_PREFIX;
+  const [, threadRes, turnsRes, pauseRes] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    transaction: true,
+    queries: [
+      // Snapshot isolation for the multi-statement read (BEGIN was issued by the
+      // runner; SET TRANSACTION must precede the first query in the tx).
+      { text: `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ`, values: [] },
+      {
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, scalars, title, context_id, created_at, updated_at
+               FROM "${schema}"."assistant_threads" WHERE id = $1 LIMIT 1`,
+        values: [threadId],
+      },
+      {
+        text: `SELECT id, thread_id, run_id, assistant_user_id, role, status, content, created_at, updated_at
+               FROM "${schema}"."assistant_turns"
+               WHERE thread_id = $1
+                 AND content IS NOT NULL
+                 AND run_id IS NULL
+                 AND id LIKE '${prefix}%'
+               ORDER BY ordinal NULLS LAST, created_at, id`,
+        values: [threadId],
+      },
+      {
+        text: `SELECT participant_id FROM "${schema}"."assistant_thread_pause_state"
+               WHERE thread_id = $1 ORDER BY participant_id`,
+        values: [threadId],
+      },
+    ],
+  });
+
+  const threadRow = threadRes?.rows?.[0] as Record<string, unknown> | undefined;
+  if (!threadRow) return null;
+  const thread = mapAssistantThreadRow(threadRow);
+  const scalars = toContentOrNull(threadRow.scalars);
+  const turns = (turnsRes?.rows ?? []).map((r) => mapAssistantTurnRow(r as Record<string, unknown>));
+  const pausedParticipants = (pauseRes?.rows ?? []).map(
+    (r) => String((r as Record<string, unknown>).participant_id),
+  );
+  return assembleThreadPayloadFromParts(thread, turns, pausedParticipants, scalars);
+}
+
+/** One pending @mention of an assistant on a user message (cinatra#1037 P5.6 PR2
+ *  CUTOVER) — the structured-store item shape returned to chat_mentions_poll. */
+export type PendingMentionItem = {
+  threadId: string;
+  threadTitle: string;
+  messageId: string;
+  content: string;
+  createdAt: string;
+  mentions: unknown[];
+};
+
+/** Scan every durable-content thread for user messages carrying a PENDING mention
+ *  of `assistantUserId` (cinatra#1037 P5.6 PR2 CUTOVER) — the structured
+ *  replacement for chat_mentions_poll's `readChatThreadsFromDatabase()` full-table
+ *  scan. Enumerates the readable threads via `listAssistantThreadIdsWithDurableContent`,
+ *  reconstructs each faithful payload from the structured store
+ *  (`reconstructThreadPayload`), and collects the user messages whose
+ *  `mentionState[assistantUserId] === 'pending'`. Pre-cutover / content-less
+ *  threads hold no durable messages and are never scanned. Optionally bounded by
+ *  `since` (EXCLUSIVE, on a message's createdAt — matches the legacy poll's
+ *  `<=` skip) and `limit` (clamped 1..100, default 20; matches the legacy poll).
+ *  Message order within a thread follows the ordinal-ordered reconstruction. */
+export function scanPendingMentionsForAssistant(
+  assistantUserId: string,
+  opts?: { since?: string; limit?: number },
+): PendingMentionItem[] {
+  ensurePostgresSchema();
+  const since = opts?.since;
+  const limit = Math.min(Math.max(opts?.limit ?? 20, 1), 100);
+  const items: PendingMentionItem[] = [];
+  const threadIds = listAssistantThreadIdsWithDurableContent();
+  for (const threadId of threadIds) {
+    const payload = reconstructThreadPayload(threadId);
+    if (!payload) continue;
+    const title = typeof payload.title === "string" ? payload.title : "";
+    const messages = Array.isArray(payload.messages) ? payload.messages : [];
+    for (const raw of messages) {
+      const msg = raw as Record<string, unknown>;
+      if (msg.role !== "user") continue;
+      // Legacy messages with no mentionState are treated as handled (skip).
+      const mentionState = msg.mentionState as Record<string, unknown> | undefined;
+      if (!mentionState || mentionState[assistantUserId] !== "pending") continue;
+      const createdAt = typeof msg.createdAt === "string" ? msg.createdAt : "";
+      if (since && createdAt && createdAt <= since) continue;
+      items.push({
+        threadId,
+        threadTitle: title,
+        messageId: typeof msg.id === "string" ? msg.id : "",
+        content: typeof msg.content === "string" ? msg.content : "",
+        createdAt,
+        mentions: Array.isArray(msg.mentions) ? (msg.mentions as unknown[]) : [],
+      });
+      if (items.length >= limit) return items;
+    }
+  }
+  return items;
 }

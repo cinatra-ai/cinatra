@@ -1,13 +1,13 @@
 ---
 name: assistant-mention-poll
-description: Use when a local Claude Code instance runs as the @claude-code assistant identity and should continuously poll Cinatra's chat_mentions_poll MCP tool for pending @mentions, perform the requested work, and reply via chat_thread_send in a loop.
+description: Use when a local Claude Code instance runs as the @claude-code assistant identity and should continuously poll Cinatra's chat_mentions_poll MCP tool for pending @mentions, perform the requested work, and reply via chat_mention_reply in a loop.
 ---
 
 # assistant-mention-poll
 
 ## Purpose
 
-Poll Cinatra's `chat_mentions_poll` MCP tool for pending @mentions directed at this assistant, respond via `chat_thread_send`, and loop.
+Poll Cinatra's `chat_mentions_poll` MCP tool for pending @mentions directed at this assistant, respond via `chat_mention_reply`, and loop.
 
 ## When to use
 
@@ -39,7 +39,7 @@ Store the returned `access_token` and use it as a Bearer token on all subsequent
 2. For each item in `result.items`:
    a. Read `content`, `threadId`, `messageId`
    b. Perform the requested work using any available MCP tools
-   c. Call `chat_thread_send` with `{ threadId, message: <your reply> }` — this automatically marks the mention as handled
+   c. Call `chat_mention_reply` with `{ threadId, messageId, message: <your reply> }` — this appends your reply into the mentioned thread and automatically marks that exact mention as handled
 3. Record the maximum `createdAt` seen across all items as the new `since` value
 4. Sleep 5 seconds
 5. Go to step 1
@@ -58,11 +58,11 @@ Exit the loop when the user cancels (Ctrl+C) or when `chat_mentions_poll` return
 
 - Do NOT poll faster than every 5 seconds
 - Do NOT re-reply to the same `messageId` (maintain a local set of handled IDs as a safety net against duplicate processing)
-- `chat_thread_send` from an assistant does NOT re-invoke the Cinatra LLM — it persists the message directly into the thread
+- `chat_mention_reply` does NOT re-invoke the Cinatra LLM — it persists your reply directly into the mentioned thread
 
 ## Notes
 
 - `chat_mentions_poll` returns `{ items, total, hasMore }` — iterate `items`
 - Each item has: `threadId`, `threadTitle`, `messageId`, `content`, `createdAt`, `mentions`
-- Replying via `chat_thread_send` flips `mentionState[yourUserId]` from `"pending"` to `"handled"` automatically
+- Replying via `chat_mention_reply` flips `mentionState[yourUserId]` from `"pending"` to `"handled"` for that exact `messageId` automatically
 - The `since` filter uses lexicographic ISO timestamp comparison — always pass the last seen `createdAt`

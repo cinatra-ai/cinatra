@@ -161,15 +161,15 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Tenant-scoped by-id reads of the legacy chat_threads JSON sync table (thread payload + team-org membership) that gate the authenticated chat read/write routes. Follows the same synchronous sync-table access pattern as the other chat_threads readers in database.ts; migrates to async typed reads when the legacy JSON sync tables are converted.",
   },
-  "src/lib/assistant-thread-mirror-backfill.ts": {
+  "src/lib/assistant-thread-dormant-content-purge.ts": {
     class: "migratable-request-path",
     justification:
-      "One-shot boot backfill (cinatra#1218, #1216 S2): mirrors DORMANT legacy chat_threads rows into the structured assistant_threads/assistant_turns shadow via the P2b pure builders. Runs from a retryable boot phase (never request-time); uses the sync leaf primitives because it composes the same per-thread transactional mirror queries the legacy write path spreads into its transaction. Deleted with the legacy tables at the S2 delete stage.",
+      "Retroactive dormant-content purge (cinatra#1037 P5.6 PR2 CUTOVER): NULLs the durable content of backfilled DORMANT mirror turns older than the cutover-marker cutoff, so the structured store retains content only for post-cutover-active threads. Runs from the Migrate+Verify cutover cleanup (never request-time); uses the sync leaf primitives because it composes a single cutoff-bounded transactional statement against the assistant_turns mirror. Migratable to async pooled access when the sync-table access pattern is converted.",
   },
   "src/lib/assistant-thread-store.ts": {
     class: "migratable-request-path",
     justification:
-      "Structured assistant_threads / assistant_turns store (cinatra#1037 P2a). Built as a sync leaf mirroring chat-thread-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf primitives) so it composes into the synchronous store graph. It is the forward replacement for chat-thread-store and, like it, migrates to async typed reads when the sync-table access pattern is converted; the request-path wiring (the /api/chat persistence subroutes + chat_thread_send) lands in P2b. P5.5 adds one call site: the per-actor visibility-predicate list read (listAssistantThreadsForOrgVisibleTo) backing the assistant_thread_list MCP tool — same class, same table, same migration path.",
+      "Structured assistant_threads / assistant_turns store (cinatra#1037 P2a). Built as a sync leaf mirroring chat-thread-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf primitives) so it composes into the synchronous store graph. It is the forward replacement for chat-thread-store and, like it, migrates to async typed reads when the sync-table access pattern is converted; the request-path wiring (the /api/chat persistence subroutes + chat_thread_send) lands in P2b. P5.5 adds one call site: the per-actor visibility-predicate list read (listAssistantThreadsForOrgVisibleTo) backing the assistant_thread_list MCP tool — same class, same table, same migration path. P5.6 drop-history PR2 CUTOVER adds three read-cutover call sites — the single-thread payload reconstruction (reconstructThreadPayload, a single REPEATABLE READ snapshot over the thread + its durable turns), the list content-presence gate (listAssistantThreadIdsWithDurableContent), and the structured pause-set read (listPausedParticipants) — the reads that now serve /chat from the structured store instead of chat_threads.payload; same class, same tables, same migration path.",
   },
   "src/lib/chat-capture/ledger.ts": {
     class: "migratable-request-path",

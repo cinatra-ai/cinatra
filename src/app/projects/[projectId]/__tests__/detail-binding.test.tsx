@@ -52,12 +52,17 @@ describe("/projects/[projectId] detail page DB binding", () => {
     expect(SOURCE).not.toMatch(/Promote to next level/);
   });
 
-  it("queries the sealed-room counts (objects / agent_runs / chat_threads)", () => {
+  it("queries the sealed-room counts (objects / agent_runs / chat threads)", () => {
     // Sealed-room columns live on the same physical tables; the page reads
     // counts directly so they match what the list handlers expose through MCP.
+    // PR2 CUTOVER (cinatra#1037): the chat-thread count reads the structured
+    // assistant_threads mirror (origin='legacy-chat'), never the retired
+    // chat_threads table.
     expect(SOURCE).toMatch(/"objects"/);
     expect(SOURCE).toMatch(/"agent_runs"/);
-    expect(SOURCE).toMatch(/"chat_threads"/);
+    expect(SOURCE).toMatch(/"assistant_threads"/);
+    expect(SOURCE).toMatch(/origin\s*=\s*'legacy-chat'/);
+    expect(SOURCE).not.toMatch(/"chat_threads"/);
     expect(SOURCE).toMatch(/project_id\s*=\s*\$\{project\.id\}/);
   });
 
