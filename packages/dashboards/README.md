@@ -17,3 +17,5 @@ This package is **not** structured for extraction. Cinatra concepts (better-auth
 ## Storage envelope history
 
 Existing analytics dashboards (legacy `apiVersion` rows, revisions, and seeds) were normalized to the current dashboards storage envelope by a single one-time, no-backward-compat data migration. The migration rewrites every legacy row into a registry-valid analytics envelope and aborts the transaction if any row would land invalid. See `#327` for the rationale and the proof record.
+
+<!-- diagnostic bisect probe 2026-07-21 (probe-base-pre-s1): no-op touch to run the real smoke at this commit; branch is deleted after the probe. -->
