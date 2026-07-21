@@ -174,3 +174,129 @@ def test_gate_without_declared_inputs_is_untouched():
     assert report == []
     assert doc["$referenced_components"]["gate"]["component_type"] == "InputMessageNode"
     _load(doc)  # still mounts
+
+
+# ---------------------------------------------------------------------------
+# #1625 / eng#548 (D2) — OPT-IN value-surfacing gate template.
+#
+# On the pinned runtime (wayflowcore 26.1.2) the a2a worker never writes
+# task.metadata on an interrupt, so a gate's DFE input VALUES reach the host
+# ONLY when the gate's message text carries them. A gate that opts in with
+# metadata.cinatra.surfaceGateInputs == True gets a JSON-object template
+# rendering each input as `"<name>": <value|null>`; every other gate keeps the
+# byte-identical empty-guard template. These tests lock BOTH sides + prove the
+# JSON is parseable in the real runtime render on first entry AND re-entry.
+# ---------------------------------------------------------------------------
+
+def _surfacing_oas(gate_inputs):
+    doc = _hitl_oas(gate_inputs)
+    doc["$referenced_components"]["gate"]["metadata"]["cinatra"]["surfaceGateInputs"] = True
+    return doc
+
+
+def _expected_value_template(titles):
+    return (
+        "{"
+        + ", ".join(
+            '"' + t + '": {% if ' + t + " %}{{ " + t + " | tojson }}{% else %}null{% endif %}"
+            for t in titles
+        )
+        + "}"
+    )
+
+
+def test_non_surfacing_gate_stays_byte_identical_empty_guards():
+    """SHARED-LAYER REGRESSION GUARD: a gate WITHOUT the opt-in flag must get the
+    EXACT pre-D2 empty-guard template — no other gate-bearing agent changes."""
+    titles = ["prompts", "preview"]
+    doc = _hitl_oas(titles)  # fixture sets no surfaceGateInputs flag
+    agent_loader._reconcile_input_message_gates(doc, "hitl-fixture")
+    gate = doc["$referenced_components"]["gate"]
+    assert gate["component_type"] == "PluginInputMessageNode"
+    assert gate["message_template"] == "".join(f"{{% if {t} %}}{{% endif %}}" for t in titles)
+
+
+@pytest.mark.parametrize("flag", ["yes", 1, "true", {}, ["x"]])
+def test_surface_flag_must_be_strict_true(flag):
+    """A truthy-but-not-True surfaceGateInputs must NOT surface values — strict
+    `is True` identity, so a stray/misparsed flag can never leak gate text."""
+    titles = ["skillIds"]
+    doc = _hitl_oas(titles)
+    doc["$referenced_components"]["gate"]["metadata"]["cinatra"]["surfaceGateInputs"] = flag
+    agent_loader._reconcile_input_message_gates(doc, "hitl-fixture")
+    gate = doc["$referenced_components"]["gate"]
+    assert gate["message_template"] == "".join(f"{{% if {t} %}}{{% endif %}}" for t in titles)
+
+
+@pytest.mark.skipif(AgentSpecLoader is None, reason="wayflowcore not installed")
+@pytest.mark.parametrize("gate_inputs", [["lastSendResult"], ["lastSendResult", "gateCycle", "defaultRecipientEmail"]])
+def test_surfacing_gate_synthesizes_value_template_and_mounts(gate_inputs):
+    """The opt-in gate is rewritten to a JSON value-surfacing template, drops its
+    declared `inputs`, and still mounts on the pin with EXACTLY those inputs (the
+    DFEs keep feeding them)."""
+    doc = copy.deepcopy(_surfacing_oas(gate_inputs))
+    report = agent_loader._reconcile_input_message_gates(doc, "hitl-fixture")
+    assert report and report[0]["node"] == "gate" and report[0]["surfaceGateInputs"] is True
+    gate = doc["$referenced_components"]["gate"]
+    assert gate["component_type"] == "PluginInputMessageNode"
+    assert "inputs" not in gate
+    assert gate["message_template"] == _expected_value_template(gate_inputs)
+
+    flow = _load(doc)
+    steps = flow.steps if hasattr(flow, "steps") else {}
+    imn = [s for s in steps.values() if "Input" in type(s).__name__]
+    assert len(imn) == 1
+    assert sorted(d.name for d in imn[0].input_descriptors) == sorted(gate_inputs)
+
+
+@pytest.mark.skipif(AgentSpecLoader is None, reason="wayflowcore not installed")
+def test_surfacing_template_renders_parseable_json_on_the_pin():
+    """PINNED-RUNTIME re-entry proof: the synthesized template, rendered by the
+    REAL wayflowcore render (not a bare Jinja env), yields parseable JSON on the
+    FIRST (all-None) visit AND on re-entry with a real send result — so the JSON
+    reaches task.history and the host's spreadFromOutput surfaces lastSendResult /
+    gateCycle to the renderer."""
+    import json as _json
+    from wayflowcore._utils._templating_helpers import render_template
+
+    titles = [
+        "lastSendResult", "gateCycle", "defaultRecipientEmail",
+        "defaultSelectionMode", "defaultSpecificInitialDraftIds",
+        "defaultSpecificFollowUpDraftIds",
+    ]
+    doc = _surfacing_oas(titles)
+    agent_loader._reconcile_input_message_gates(doc, "hitl-fixture")
+    tpl = doc["$referenced_components"]["gate"]["message_template"]
+
+    # First entry: every DFE-fed input is optional → bound to None. Renders all
+    # nulls; the renderer shows no banner.
+    first = render_template(tpl, {t: None for t in titles})
+    assert _json.loads(first) == {t: None for t in titles}
+
+    # Re-entry after a failed send: lastSendResult is a real object, gateCycle=1.
+    reentry = render_template(tpl, {
+        "lastSendResult": {"ok": False, "message": "Google OAuth is not connected."},
+        "gateCycle": 1,
+        "defaultRecipientEmail": "owner@example.com",
+        "defaultSelectionMode": "random_initial",
+        "defaultSpecificInitialDraftIds": ["d1"],
+        "defaultSpecificFollowUpDraftIds": [],
+    })
+    parsed = _json.loads(reentry)
+    assert parsed["lastSendResult"] == {"ok": False, "message": "Google OAuth is not connected."}
+    assert parsed["gateCycle"] == 1
+    assert parsed["defaultRecipientEmail"] == "owner@example.com"
+    assert parsed["defaultSpecificInitialDraftIds"] == ["d1"]
+    # empty array is falsy → null; the renderer's `?? []` restores []
+    assert parsed["defaultSpecificFollowUpDraftIds"] is None
+
+    # Re-entry after a SUCCESSFUL send: banner-driving ok:true object surfaces.
+    success = render_template(tpl, {
+        "lastSendResult": {"ok": True, "message": "Test email sent to owner@example.com."},
+        "gateCycle": 2, "defaultRecipientEmail": "owner@example.com",
+        "defaultSelectionMode": "random_initial",
+        "defaultSpecificInitialDraftIds": [], "defaultSpecificFollowUpDraftIds": [],
+    })
+    ps = _json.loads(success)
+    assert ps["lastSendResult"] == {"ok": True, "message": "Test email sent to owner@example.com."}
+    assert ps["gateCycle"] == 2

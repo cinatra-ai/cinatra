@@ -84,7 +84,7 @@ export type TriggerEmailSendDeps = {
   getDraftsByIds: (draftIds: string[]) => Promise<Draft[]>;
   sendEmail: (
     message: EmailMessage,
-    options?: { userId?: string; correlation?: SendCorrelation },
+    options?: { userId?: string; orgId?: string; correlation?: SendCorrelation },
   ) => Promise<EmailSendReceipt>;
   // Fetch a bundle envelope by ref. Defaults to the deterministic objects
   // client (`fetchObjectsByRef`). Injectable so the initial-send fan-out is
@@ -948,6 +948,15 @@ export function createTriggerEmailSendUseCases(
             },
             {
               userId: actor.userId,
+              // eng#548 #1625 (D1) — thread the run OWNER's org (== run.orgId,
+              // coherent per DESIGN-V3 §334-337) so the routing chain
+              // (register-email-providers.resolveConnectorId step-3) can resolve
+              // the owner's USER-level sender-identity from the ORG-partitioned
+              // objects store. Dropping it made the objects read org-less, so the
+              // owner's own mailbox was invisible and the send fell through to the
+              // first-registered connector (gmail) → "Google OAuth is not
+              // connected". Undefined on the public path preserves prior behavior.
+              orgId: actor.orgId ?? undefined,
               ...(submissionId
                 ? {
                     correlation: {

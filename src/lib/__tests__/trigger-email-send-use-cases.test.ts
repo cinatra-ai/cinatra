@@ -121,6 +121,53 @@ describe("createTriggerEmailSendUseCases.sendTestEmail", () => {
     expect(result).toMatchObject({ ok: true, recipientEmail: "to@y.com", sentCount: 1 });
   });
 
+  // eng#548 #1625 (D1): the run OWNER's org must reach the routing chain so the
+  // owner's USER-level sender-identity resolves from the org-partitioned objects
+  // store (otherwise the send falls through to the first-registered connector).
+  it("threads the actor's orgId into sendEmail options (owner-mailbox routing)", async () => {
+    const drafts: Draft[] = [{ id: "d1", subject: "Hello", body: "Hi" }];
+    const { deps, sendEmail } = makeDeps({ drafts });
+    const uc = createTriggerEmailSendUseCases(deps);
+    const ownerActor: PrimitiveActorContext = {
+      actorType: "human",
+      source: "a2a",
+      userId: "owner-1",
+      orgId: "org-xyz",
+    };
+    await uc.sendTestEmail(
+      { campaignId: "c1", recipientEmail: "to@y.com", selectionMode: "random_initial" },
+      ownerActor,
+    );
+    const [, options] = sendEmail.mock.calls[0];
+    expect(options.userId).toBe("owner-1");
+    expect(options.orgId).toBe("org-xyz");
+  });
+
+  // eng#548 #1625 (D1): a submission-scoped test send threads BOTH orgId and the
+  // (submissionId, draftId) correlation into the send OPTIONS the use-case emits.
+  // This asserts the use-case→deps.sendEmail boundary only; end-to-end
+  // persistence of the correlation onto the sent-email record additionally
+  // depends on the email-connector facade forwarding it (tracked follow-up —
+  // the released facade currently drops `correlation`).
+  it("threads orgId alongside the submissionId/draftId correlation on a wrapped send", async () => {
+    const drafts: Draft[] = [{ id: "d1", subject: "Hello", body: "Hi" }];
+    const { deps, sendEmail } = makeDeps({ drafts });
+    const uc = createTriggerEmailSendUseCases(deps);
+    const ownerActor: PrimitiveActorContext = {
+      actorType: "human", source: "a2a", userId: "owner-1", orgId: "org-xyz",
+    };
+    await uc.sendTestEmail(
+      {
+        campaignId: "c1", recipientEmail: "to@y.com", selectionMode: "random_initial",
+        submissionId: "sub-1",
+      },
+      ownerActor,
+    );
+    const [, options] = sendEmail.mock.calls[0];
+    expect(options.orgId).toBe("org-xyz");
+    expect(options.correlation).toEqual({ campaignId: "c1", submissionId: "sub-1", draftId: "d1" });
+  });
+
   it("specific_initial filters drafts by specificInitialDraftIds", async () => {
     const drafts: Draft[] = [
       { id: "d1", subject: "One", body: "B1" },
