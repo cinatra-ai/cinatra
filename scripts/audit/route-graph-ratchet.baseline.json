@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1532,
-    "/api/mcp": 1528,
-    "/chat": 1590,
-    "/api/a2a": 1533,
-    "/api/llm-bridge": 1540
+    "/sign-in": 1533,
+    "/api/mcp": 1529,
+    "/chat": 1591,
+    "/api/a2a": 1534,
+    "/api/llm-bridge": 1541
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1526,
-      "pr": 1923,
-      "reason": "cinatra#1625 email field-renderer relocation: the follow-up-cadence + gmail-sender renderer host halves move from core packages/agents into the @cinatra-ai/email-artifacts devExtension pack. The pack ships the real renderer components, resolved through the kind-agnostic build map; its 2 relocated renderer entries and their vendored UI primitive/util modules become net-new reachable FIRST-PARTY modules from every tracked route via the generated src/lib/generated/field-renderer-components.ts guardedOptional loaders (the ratchet analyzer follows the dynamic import()). Uniform +6 modules per tracked route, MEASURED with the companion extension repos cloned pinned (missingCount 0); from = origin/main current ceiling, to = from + 6. The edge is intrinsic to the relocation (one shared pack component instead of core-duplicated renderers) and inlining to dodge the metric would defeat the relocation. codex-converged MERGE-SAFE.",
-      "to": 1532
+      "from": 1532,
+      "to": 1533,
+      "reason": "C2 #1886 (PR #1920): the extracted promotion-visibility-lattice module (one source of truth for the never-narrow promotion ranks, shared by #1437 and the new collection-add contract) joins the canonical ownership-predicate import chain in derived-store-ownership.ts, which every tracked route reaches via the auth/db bootstrap. CI-measured +1 per route; required feature wiring, not lazy-loadable (the SQL filter builder imports it synchronously).",
+      "pr": 1920
     },
     "/api/mcp": {
-      "from": 1522,
-      "pr": 1923,
-      "reason": "cinatra#1625 email field-renderer relocation: the follow-up-cadence + gmail-sender renderer host halves move from core packages/agents into the @cinatra-ai/email-artifacts devExtension pack. The pack ships the real renderer components, resolved through the kind-agnostic build map; its 2 relocated renderer entries and their vendored UI primitive/util modules become net-new reachable FIRST-PARTY modules from every tracked route via the generated src/lib/generated/field-renderer-components.ts guardedOptional loaders (the ratchet analyzer follows the dynamic import()). Uniform +6 modules per tracked route, MEASURED with the companion extension repos cloned pinned (missingCount 0); from = origin/main current ceiling, to = from + 6. The edge is intrinsic to the relocation (one shared pack component instead of core-duplicated renderers) and inlining to dodge the metric would defeat the relocation. codex-converged MERGE-SAFE.",
-      "to": 1528
+      "from": 1528,
+      "to": 1529,
+      "reason": "C2 #1886 (PR #1920): the extracted promotion-visibility-lattice module (one source of truth for the never-narrow promotion ranks, shared by #1437 and the new collection-add contract) joins the canonical ownership-predicate import chain in derived-store-ownership.ts, which every tracked route reaches via the auth/db bootstrap. CI-measured +1 per route; required feature wiring, not lazy-loadable (the SQL filter builder imports it synchronously).",
+      "pr": 1920
     },
     "/chat": {
-      "from": 1584,
-      "pr": 1923,
-      "reason": "cinatra#1625 email field-renderer relocation: the follow-up-cadence + gmail-sender renderer host halves move from core packages/agents into the @cinatra-ai/email-artifacts devExtension pack. The pack ships the real renderer components, resolved through the kind-agnostic build map; its 2 relocated renderer entries and their vendored UI primitive/util modules become net-new reachable FIRST-PARTY modules from every tracked route via the generated src/lib/generated/field-renderer-components.ts guardedOptional loaders (the ratchet analyzer follows the dynamic import()). Uniform +6 modules per tracked route, MEASURED with the companion extension repos cloned pinned (missingCount 0); from = origin/main current ceiling, to = from + 6. The edge is intrinsic to the relocation (one shared pack component instead of core-duplicated renderers) and inlining to dodge the metric would defeat the relocation. codex-converged MERGE-SAFE.",
-      "to": 1590
+      "from": 1590,
+      "to": 1591,
+      "reason": "C2 #1886 (PR #1920): the extracted promotion-visibility-lattice module (one source of truth for the never-narrow promotion ranks, shared by #1437 and the new collection-add contract) joins the canonical ownership-predicate import chain in derived-store-ownership.ts, which every tracked route reaches via the auth/db bootstrap. CI-measured +1 per route; required feature wiring, not lazy-loadable (the SQL filter builder imports it synchronously).",
+      "pr": 1920
     },
     "/api/a2a": {
-      "from": 1527,
-      "pr": 1923,
-      "reason": "cinatra#1625 email field-renderer relocation: the follow-up-cadence + gmail-sender renderer host halves move from core packages/agents into the @cinatra-ai/email-artifacts devExtension pack. The pack ships the real renderer components, resolved through the kind-agnostic build map; its 2 relocated renderer entries and their vendored UI primitive/util modules become net-new reachable FIRST-PARTY modules from every tracked route via the generated src/lib/generated/field-renderer-components.ts guardedOptional loaders (the ratchet analyzer follows the dynamic import()). Uniform +6 modules per tracked route, MEASURED with the companion extension repos cloned pinned (missingCount 0); from = origin/main current ceiling, to = from + 6. The edge is intrinsic to the relocation (one shared pack component instead of core-duplicated renderers) and inlining to dodge the metric would defeat the relocation. codex-converged MERGE-SAFE.",
-      "to": 1533
+      "from": 1533,
+      "to": 1534,
+      "reason": "C2 #1886 (PR #1920): the extracted promotion-visibility-lattice module (one source of truth for the never-narrow promotion ranks, shared by #1437 and the new collection-add contract) joins the canonical ownership-predicate import chain in derived-store-ownership.ts, which every tracked route reaches via the auth/db bootstrap. CI-measured +1 per route; required feature wiring, not lazy-loadable (the SQL filter builder imports it synchronously).",
+      "pr": 1920
     },
     "/api/llm-bridge": {
-      "from": 1534,
-      "pr": 1923,
-      "reason": "cinatra#1625 email field-renderer relocation: the follow-up-cadence + gmail-sender renderer host halves move from core packages/agents into the @cinatra-ai/email-artifacts devExtension pack. The pack ships the real renderer components, resolved through the kind-agnostic build map; its 2 relocated renderer entries and their vendored UI primitive/util modules become net-new reachable FIRST-PARTY modules from every tracked route via the generated src/lib/generated/field-renderer-components.ts guardedOptional loaders (the ratchet analyzer follows the dynamic import()). Uniform +6 modules per tracked route, MEASURED with the companion extension repos cloned pinned (missingCount 0); from = origin/main current ceiling, to = from + 6. The edge is intrinsic to the relocation (one shared pack component instead of core-duplicated renderers) and inlining to dodge the metric would defeat the relocation. codex-converged MERGE-SAFE.",
-      "to": 1540
+      "from": 1540,
+      "to": 1541,
+      "reason": "C2 #1886 (PR #1920): the extracted promotion-visibility-lattice module (one source of truth for the never-narrow promotion ranks, shared by #1437 and the new collection-add contract) joins the canonical ownership-predicate import chain in derived-store-ownership.ts, which every tracked route reaches via the auth/db bootstrap. CI-measured +1 per route; required feature wiring, not lazy-loadable (the SQL filter builder imports it synchronously).",
+      "pr": 1920
     }
   }
 }
