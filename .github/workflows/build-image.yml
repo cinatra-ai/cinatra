@@ -631,7 +631,7 @@ jobs:
     # path is unchanged.
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
     steps:
       # Hard-fail (definitive RED, never a non-failing "skip") when detect did
       # not pass. No-ops on the success path; its failure short-circuits every
