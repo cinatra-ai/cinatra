@@ -56,6 +56,19 @@ import {
   mergeRoleDeclarations,
 } from "./agent-binding-kinds.mjs";
 import { validateArtifactObjectTypeClaims } from "./artifact-objecttypes-claims.mjs";
+// Assistant declaration (`cinatra/config.json` `assistant` block) build-time
+// validator (cinatra#1874, Epic #1873 W1). The generator is plain .mjs and
+// cannot import the zod TS parser (packages/sdk-extensions/src/assistant-
+// declaration.ts); it consumes the SAME rules through the already-pinned .mjs
+// MIRROR the connector gate exports (`validateAssistantConfig`/`hasAssistantBlock`),
+// which `scripts/audit/__tests__/assistant-declaration-gate.test.mjs` keeps in
+// agreement with the authoritative parser. This is the manifest-generator
+// touchpoint: a malformed agent assistant block is a generation error (the
+// earliest honest failure point), fail-closed like the artifact-objectTypes gate.
+import {
+  validateAssistantConfig,
+  hasAssistantBlock,
+} from "../audit/connector-access-config-gate.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
@@ -237,6 +250,27 @@ export function readConnectorAccessConfigRaw(dir) {
     );
   }
   return parsed;
+}
+
+/**
+ * Validate a `kind:"agent"` package's assistant DECLARATION at generation
+ * (cinatra#1874 W1). An agent need not ship a `cinatra/config.json`; one that
+ * declares an `assistant` block MUST be well-formed. Returns an array of error
+ * strings (empty = valid, absent, or block-less) — the caller pushes them into
+ * the fail-closed `bindingErrors` set so nothing malformed can become byte-
+ * pinned generated data. Reuses {@link readConnectorAccessConfigRaw} for the
+ * file read (absent → null; malformed JSON → throw, the earliest honest failure)
+ * and the connector gate's pinned mirror for the schema. `dir` is repo-relative.
+ * @param {string} dir source dir (relative to REPO_ROOT), e.g. `extensions/cinatra-ai/x`
+ * @param {string} packageName
+ * @returns {string[]}
+ */
+export function validateAgentAssistantDeclaration(dir, packageName) {
+  const parsed = readConnectorAccessConfigRaw(dir);
+  if (parsed === null || !hasAssistantBlock(parsed)) return [];
+  return validateAssistantConfig(parsed, packageName).map(
+    (e) => `${packageName} cinatra/config.json assistant block — ${e}`,
+  );
 }
 
 export function sanitizeLogoDataUri(dir, logoRel) {
@@ -2242,6 +2276,14 @@ export async function buildManifest() {
     // canonical TS rules (see artifact-objecttypes-claims.mjs header).
     if (cin.kind === "artifact") {
       bindingErrors.push(...validateArtifactObjectTypeClaims(r.packageName, cin));
+    }
+    // Assistant declaration gate (cinatra#1874 W1): a present `kind:"agent"`
+    // extension whose `cinatra/config.json` declares an `assistant` block is
+    // validated FAIL-CLOSED at generation via the connector gate's pinned .mjs
+    // mirror of the shared parser (AC#6, defense-in-depth alongside the audit
+    // gate). A block-less / config-less agent contributes nothing.
+    if (cin.kind === "agent") {
+      bindingErrors.push(...validateAgentAssistantDeclaration(r.sourceDir, r.packageName));
     }
   }
   const { merged: agentFieldRendererBindings, errors: mergeErrors } =

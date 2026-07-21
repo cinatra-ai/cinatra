@@ -17,7 +17,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   runPgMock,
   registerAllObjectTypesMock,
-  listArtifactsMock,
+  matcherListMock,
   resolveRuntimeMock,
   runLlmMock,
   listSkillsMock,
@@ -28,7 +28,7 @@ const {
 } = vi.hoisted(() => ({
   runPgMock: vi.fn(),
   registerAllObjectTypesMock: vi.fn(),
-  listArtifactsMock: vi.fn(),
+  matcherListMock: vi.fn(),
   resolveRuntimeMock: vi.fn(),
   runLlmMock: vi.fn(),
   listSkillsMock: vi.fn(),
@@ -48,7 +48,15 @@ vi.mock("@/lib/register-all-object-types", () => ({
   registerAllObjectTypes: registerAllObjectTypesMock,
 }));
 vi.mock("@cinatra-ai/objects/registry", () => ({
-  objectTypeRegistry: { listArtifacts: listArtifactsMock },
+  objectTypeRegistry: {
+    // cinatra#1891: the runtime validates the row's own type is a registered
+    // artifact type.
+    resolve: () => ({ isArtifact: {} }),
+  },
+  // cinatra#1891 A3: candidate discovery reads the MEANING-SURFACE channel.
+  matcherManifestRegistry: {
+    list: matcherListMock,
+  },
 }));
 vi.mock("@cinatra-ai/llm", () => ({
   resolveConfiguredLlmRuntime: resolveRuntimeMock,
@@ -108,17 +116,25 @@ const PACK_DEFS: PackDef[] = [
 function stageAuthoritative(mime: string) {
   runPgMock.mockReturnValueOnce([
     {
-      rows: [{ digest: "sha", mime, storage_key: "k", origin_kind: "upload" }],
+      rows: [{ digest: "sha", mime, storage_key: "k", origin_kind: "upload", object_type: "@cinatra-ai/marketing-icp-artifact:artifact", classifier_signals: null }],
       rowCount: 1,
     },
   ]);
   runPgMock.mockReturnValue([{ rows: [{ "?column?": 1 }], rowCount: 1 }]);
 }
 function registerAllAsArtifactDefs() {
-  listArtifactsMock.mockReturnValue(
+  // cinatra#1891 A3: the packs are candidates via the meaning-surface channel —
+  // the channel key IS the owning package, and the threshold is resolved (the
+  // real manifest value or the pack default 0.7).
+  matcherListMock.mockReturnValue(
     PACK_DEFS.map((p) => ({
-      type: `${p.pkgName}:artifact`,
-      isArtifact: p.manifest,
+      packageName: p.pkgName,
+      matcherSkillIds: p.manifest.skills!.matchers!,
+      matcherConfidenceThreshold:
+        typeof p.manifest.matcherConfidenceThreshold === "number"
+          ? p.manifest.matcherConfidenceThreshold
+          : 0.7,
+      fileMimeTypes: p.manifest.accepts.file!.mimeTypes,
     })),
   );
 }
@@ -157,7 +173,7 @@ describe("GTM pack — target-aware matcher integration", () => {
   beforeEach(() => {
     runPgMock.mockReset();
     registerAllObjectTypesMock.mockReset();
-    listArtifactsMock.mockReset();
+    matcherListMock.mockReset();
     resolveRuntimeMock.mockReset();
     runLlmMock.mockReset();
     listSkillsMock.mockReset();

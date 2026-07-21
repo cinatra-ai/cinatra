@@ -93,6 +93,27 @@ export type PackageStoreRecord = LoaderRecord & {
    * before any build.
    */
   executionEnvironment?: Record<string, unknown> | null;
+  /**
+   * RAW `cinatra/config.json` pass-through for a `kind:"agent"` package that
+   * declares an `assistant` block (cinatra#1874, Epic #1873 W1) — the assistant
+   * DECLARATION the materialized (production) store surfaces at discovery. Carried
+   * ONLY for agent kind that declares an assistant block; absent otherwise. This
+   * loader is PURE (no zod), so it carries the raw JSON UNVALIDATED — the host
+   * consumer resolves + validates it fail-closed through the shared parser
+   * (`@cinatra-ai/sdk-extensions/assistant-declaration`), mirroring how the
+   * connector `accessConfig` raw pass-through is parsed host-side. The
+   * agent-kind config read at the production store read (touchpoint of the
+   * shared parser).
+   */
+  assistantConfigRaw?: unknown;
+  /**
+   * True when a `kind:"agent"` package ships a `cinatra/config.json` that is
+   * PRESENT but not valid JSON. Carried so a broken declaration still COUNTS as
+   * a declaration (fail-closed) — the host refuses it with a precise error
+   * instead of the package silently reading as "no assistant" (mirrors
+   * `invalidMigrationsDirDeclared`).
+   */
+  invalidAssistantConfigDeclared?: boolean;
 };
 
 /**
@@ -237,6 +258,7 @@ export function recordFromManifest(
   storeDir: string,
   pkgJsonText: string,
   declaredDigest?: string,
+  configJsonText?: string | null,
 ): PackageStoreRecord | null {
   let pkg: Record<string, unknown>;
   try {
@@ -296,6 +318,32 @@ export function recordFromManifest(
     cinatra.kind,
     cinatra,
   );
+  // RAW assistant declaration pass-through (cinatra#1874, Epic #1873 W1),
+  // AGENT-KIND GATED: for a `kind:"agent"` package whose sibling
+  // `cinatra/config.json` (passed in as `configJsonText` by the store-discovery
+  // caller — this pure module never touches the fs) declares an `assistant`
+  // block, carry the raw parsed config so the host consumer can validate it
+  // fail-closed via the shared parser (this module is zero-dep, so it never
+  // imports zod — it only carries). A PRESENT-but-unparseable config still
+  // COUNTS as a declaration (`invalidAssistantConfigDeclared`), never silently
+  // "no assistant". A non-agent, an absent config, or an agent config WITHOUT an
+  // assistant block carries nothing.
+  let assistantConfigRaw: unknown = undefined;
+  let invalidAssistantConfigDeclared = false;
+  if (cinatra.kind === "agent" && typeof configJsonText === "string") {
+    let parsedConfig: unknown;
+    let configParsed = true;
+    try {
+      parsedConfig = JSON.parse(configJsonText);
+    } catch {
+      configParsed = false;
+    }
+    if (!configParsed) {
+      invalidAssistantConfigDeclared = true;
+    } else if (declaresAssistantBlock(parsedConfig)) {
+      assistantConfigRaw = parsedConfig;
+    }
+  }
   return {
     packageName: name,
     serverEntry,
@@ -312,7 +360,26 @@ export function recordFromManifest(
     ...(legacyMigrationsDeclared ? { legacyMigrationsDeclared } : {}),
     ...(envOverrides ? { envOverrides } : {}),
     ...(executionEnvironment ? { executionEnvironment } : {}),
+    ...(assistantConfigRaw !== undefined ? { assistantConfigRaw } : {}),
+    ...(invalidAssistantConfigDeclared ? { invalidAssistantConfigDeclared } : {}),
   };
+}
+
+/**
+ * Cheap presence probe (byte-mirror of the shared parser's `hasAssistantBlock`)
+ * — does a parsed `cinatra/config.json` declare an `assistant` block? Inlined
+ * here so this PURE, zero-dep loader never imports the zod parser module. Does
+ * NOT validate the block (the host parser owns validation).
+ */
+function declaresAssistantBlock(raw: unknown): boolean {
+  return (
+    typeof raw === "object" &&
+    raw !== null &&
+    !Array.isArray(raw) &&
+    "assistant" in raw &&
+    (raw as { assistant?: unknown }).assistant !== undefined &&
+    (raw as { assistant?: unknown }).assistant !== null
+  );
 }
 
 /**
@@ -334,7 +401,12 @@ export async function discoverPackageStoreRecords(
 
     const directManifest = joinPath(dir, "package.json");
     if (await fs.exists(directManifest)) {
-      const rec = recordFromManifest(dir, await fs.readFile(directManifest));
+      const rec = recordFromManifest(
+        dir,
+        await fs.readFile(directManifest),
+        undefined,
+        await readSiblingCinatraConfig(fs, dir),
+      );
       if (rec) out.push(rec);
       continue;
     }
@@ -345,12 +417,37 @@ export async function discoverPackageStoreRecords(
       if (!(await fs.isDirectory(subdir))) continue;
       const manifest = joinPath(subdir, "package.json");
       if (await fs.exists(manifest)) {
-        const rec = recordFromManifest(subdir, await fs.readFile(manifest), sub);
+        const rec = recordFromManifest(
+          subdir,
+          await fs.readFile(manifest),
+          sub,
+          await readSiblingCinatraConfig(fs, subdir),
+        );
         if (rec) out.push(rec);
       }
     }
   }
   return out;
+}
+
+/**
+ * Best-effort read of a package's sibling `cinatra/config.json` text through the
+ * INJECTED fs (this module never touches a real fs). Returns the raw text, or
+ * `null` when absent OR unreadable — a missing/unreadable file is never fatal to
+ * discovery (recordFromManifest only consumes it for a `kind:"agent"` package's
+ * assistant declaration, and only when the text is a string). cinatra#1874 W1.
+ */
+async function readSiblingCinatraConfig(
+  fs: PackageStoreFs,
+  packageDir: string,
+): Promise<string | null> {
+  const configPath = joinPath(packageDir, "cinatra", "config.json");
+  try {
+    if (!(await fs.exists(configPath))) return null;
+    return await fs.readFile(configPath);
+  } catch {
+    return null;
+  }
 }
 
 /**

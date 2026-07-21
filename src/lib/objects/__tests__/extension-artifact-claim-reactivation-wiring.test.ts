@@ -52,6 +52,9 @@ vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
 }));
 vi.mock("@cinatra-ai/objects", () => ({
   objectTypeRegistry: { removeByPackage: vi.fn() },
+  // cinatra#1891 A3: the restore-abort compensation reaps the matcher-manifest
+  // channel entry at parity with the object types (deregisterIfOwned).
+  matcherManifestRegistry: { removeByPackage: vi.fn() },
 }));
 
 type ReactivationHook = (input: {

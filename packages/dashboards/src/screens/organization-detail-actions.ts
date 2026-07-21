@@ -28,6 +28,7 @@ import { requireAuthSession } from "@/lib/auth-session";
 import { readUserIsOrgMember } from "@/lib/better-auth-db";
 
 import {
+  DashboardConfigInvalidError,
   DashboardForbiddenError,
   DashboardInvalidEntityError,
   DashboardNameConflictError,
@@ -48,6 +49,7 @@ import type {
   EntityDashboardSummary,
   EntityDashboardsList,
   MutatedEntityDashboard,
+  SavedEntityDashboard,
 } from "../entity-dashboards-contract";
 import type { DashboardConfigV1_1 } from "../store/dashboard-config";
 import type { DashboardEntityRef } from "../store/entity-identity";
@@ -129,6 +131,7 @@ function classifyMutationError(e: unknown): EntityDashboardMutationReason | null
   if (e instanceof DashboardOverviewProtectedError) return "protected";
   if (e instanceof DashboardForbiddenError) return "denied";
   if (e instanceof DashboardNotFoundError) return "not-found";
+  if (e instanceof DashboardConfigInvalidError) return "invalid-config";
   if (e instanceof DashboardInvalidEntityError) {
     return /reserved/i.test(String(e.message)) ? "name-reserved" : "name-required";
   }
@@ -233,15 +236,29 @@ export async function deleteOrganizationDashboardAction(
 }
 
 /** Persist the selected dashboard's edited config (config-only patch is
- *  Overview-safe; the service re-envelopes against the existing row). */
+ *  Overview-safe; the service re-envelopes against the existing row).
+ *  cinatra#1913: typed result — a validation failure carries the validator's
+ *  card-naming copy in `message`, never a raw server error. */
 export async function saveOrganizationDashboardConfigAction(
   ref: DashboardEntityRef,
   id: string,
   config: unknown,
-): Promise<void> {
+): Promise<SavedEntityDashboard> {
   assertOrgDetailRef(ref);
   const actor = await requireOrgMemberActor(ref.entityId);
   const existing = await getEntityDashboard(id, actor);
-  if (!existing || !rowMatchesRef(existing, ref)) throw new DashboardNotFoundError(id);
-  await updateDashboard(id, { config }, actor);
+  if (!existing || !rowMatchesRef(existing, ref)) {
+    return { ok: false, reason: "not-found" };
+  }
+  try {
+    await updateDashboard(id, { config }, actor);
+    return { ok: true };
+  } catch (e) {
+    const reason = classifyMutationError(e);
+    if (!reason) throw e;
+    if (reason === "invalid-config" && e instanceof Error && e.message) {
+      return { ok: false, reason, message: e.message };
+    }
+    return { ok: false, reason };
+  }
 }

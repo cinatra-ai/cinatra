@@ -58,6 +58,7 @@
       "@cinatra-ai/context-selection-agent": "https://github.com/cinatra-ai/context-selection-agent.git",
       "@cinatra-ai/contract-artifact": "https://github.com/cinatra-ai/contract-artifact.git",
       "@cinatra-ai/crm-connector": "https://github.com/cinatra-ai/crm-connector.git",
+      "@cinatra-ai/dashboard-artifact": "https://github.com/cinatra-ai/dashboard-artifact.git",
       "@cinatra-ai/document-artifact": "https://github.com/cinatra-ai/document-artifact.git",
       "@cinatra-ai/drupal-agent": "https://github.com/cinatra-ai/drupal-agent.git",
       "@cinatra-ai/drupal-artifacts": "https://github.com/cinatra-ai/drupal-artifacts.git",
@@ -135,7 +136,8 @@
       "@cinatra-ai/zip-artifact",
       "@cinatra-ai/text-artifact",
       "@cinatra-ai/document-artifact",
-      "@cinatra-ai/json-artifact"
+      "@cinatra-ai/json-artifact",
+      "@cinatra-ai/dashboard-artifact"
     ],
     "extensions": [
       "@cinatra-ai/nango-connector@^0.1.0",
@@ -154,7 +156,8 @@
       "@cinatra-ai/zip-artifact@^0.1.0",
       "@cinatra-ai/text-artifact@^0.1.0",
       "@cinatra-ai/document-artifact@^0.1.0",
-      "@cinatra-ai/json-artifact@^0.1.0"
+      "@cinatra-ai/json-artifact@^0.1.0",
+      "@cinatra-ai/dashboard-artifact@^0.1.0"
     ],
     "registryPolicy": {
       "temporary": false,

@@ -118,6 +118,18 @@ export type CinatraOrganizationPluginOptions = {
    * decision, not a side effect of the id-format change.
    */
   requireEmailVerificationOnInvitation?: boolean;
+  /**
+   * Native organization-deletion kill switch (cinatra#1936). BEHAVIORAL, not
+   * schema-bearing: it only makes `POST /organization/delete` refuse with 404
+   * `ORGANIZATION_DELETION_DISABLED` (the check is the endpoint's FIRST gate,
+   * before session lookup), identically on raw HTTP and `auth.api.*`. The
+   * runtime sets `true` so the reference-guarded Danger-zone action
+   * (src/lib/organization-delete.ts, cinatra#1928) is the ONLY deletion door —
+   * Better Auth's native path is an unguarded cascade delete. Threaded with an
+   * explicit `!== undefined` check (NEVER a truthiness-conditional spread: an
+   * explicit `false` is falsy and would be silently dropped).
+   */
+  disableOrganizationDeletion?: boolean;
 };
 
 /**
@@ -155,6 +167,9 @@ export function buildCinatraOrganizationPlugin(
       : {}),
     requireEmailVerificationOnInvitation:
       opts.requireEmailVerificationOnInvitation ?? false,
+    ...(opts.disableOrganizationDeletion !== undefined
+      ? { disableOrganizationDeletion: opts.disableOrganizationDeletion }
+      : {}),
   });
 }
 

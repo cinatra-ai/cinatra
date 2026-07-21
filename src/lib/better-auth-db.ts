@@ -1,4 +1,8 @@
 import { and, eq, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm";
+import {
+  withAssistantNamespaceLock,
+  nextFreeSuffixedCandidate,
+} from "@/lib/assistant-namespace-lock";
 import { toPgTextArrayLiteral } from "@/lib/pg-array";
 import { projectsDb, projects } from "@/lib/projects-store";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -117,8 +121,35 @@ export const assistantHandles = coreStoreSchema.table("assistant_handles", {
   assistantUserId: text("assistant_user_id").primaryKey(),
   handle: text("handle").notNull(),
   isOverride: boolean("is_override").notNull().default(false),
+  // cinatra#1874 W1: origin ('extension'|'standalone') distinguishes an
+  // extension-adopted principal from a boot-seeded/standalone one;
+  // packageName links the handle to the owning package (nullable).
+  origin: text("origin").notNull().default("standalone"),
+  packageName: text("package_name"),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }),
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }),
+});
+
+/** Platform-global flat-token alias registry (cinatra#1874 W1). `alias` is the
+ *  PK (normalized flat token); every write flows through the namespace primitive
+ *  under the advisory lock. */
+export const assistantTagAlias = coreStoreSchema.table("assistant_tag_alias", {
+  alias: text("alias").primaryKey(),
+  packageName: text("package_name").notNull(),
+  source: text("source").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }),
+});
+
+/** Install-time audience grants (cinatra#1874 W1). One row per granted subject;
+ *  subject_kind ∈ CONNECTOR_ACCESS_SCOPES∖user; subject_id NULL for the global
+ *  kinds (workspace/admin). */
+export const assistantAudience = coreStoreSchema.table("assistant_audience", {
+  id: text("id"),
+  packageName: text("package_name").notNull(),
+  subjectKind: text("subject_kind").notNull(),
+  subjectId: text("subject_id"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }),
 });
 
 /**
@@ -140,58 +171,191 @@ export function normalizeAssistantHandle(raw: string | null | undefined): string
   return h.length > 0 ? h : null;
 }
 
+export type AssistantHandleOrigin = "extension" | "standalone";
+
+/** Collision error thrown by the exact-token claim paths (aliases /
+ *  preferredTag): the requested token is already owned in the namespace. The
+ *  standalone-mint path suffixes instead of throwing. */
+export class AssistantNamespaceCollisionError extends Error {
+  constructor(
+    public readonly token: string,
+    public readonly ownedBy: "handle" | "alias",
+  ) {
+    super(`[assistant-namespace] token "${token}" is already claimed as a ${ownedBy}`);
+    this.name = "AssistantNamespaceCollisionError";
+  }
+}
+
+// A structural view of the drizzle tx we need for the namespace reads/writes —
+// avoids naming the heavy drizzle transaction type.
+type NamespaceTx = Pick<typeof betterAuthDb, "select" | "insert" | "update" | "delete">;
+
+/** Is `token` free across BOTH namespace tables? Must run inside the advisory
+ *  lock (the caller holds it) so the read is race-free. Returns the owning table
+ *  when taken, else null. */
+async function tokenOwner(tx: NamespaceTx, token: string): Promise<"handle" | "alias" | null> {
+  const handleHit = await tx
+    .select({ token: assistantHandles.handle })
+    .from(assistantHandles)
+    .where(eq(assistantHandles.handle, token))
+    .limit(1);
+  if (handleHit[0]) return "handle";
+  const aliasHit = await tx
+    .select({ token: assistantTagAlias.alias })
+    .from(assistantTagAlias)
+    .where(eq(assistantTagAlias.alias, token))
+    .limit(1);
+  if (aliasHit[0]) return "alias";
+  return null;
+}
+
 /**
  * Register (mint) a platform-unique handle for an assistant principal, idempotent
- * and collision-safe. If the principal already has a handle, returns it unchanged.
- * Otherwise normalizes `desired` (or `override`) into a base and claims the first
- * free candidate in the deterministic sequence `base`, `base-2`, `base-3`, …,
- * skipping any candidate already taken by another principal (cross-base-correct).
- * Returns the claimed handle, or `null` when `desired` normalizes to nothing.
- * `override:true` marks an owner-chosen handle (still normalized + suffixed).
+ * and collision-safe — routed through the ONE advisory-locked namespace primitive
+ * (cinatra#1874 W1) so the mint checks BOTH the handles and the alias tables and
+ * serializes against every other flat-token write. If the principal already has a
+ * handle, returns it unchanged. Otherwise normalizes `desired` (or `override`)
+ * into a base and claims the first free candidate in the deterministic sequence
+ * `base`, `base-2`, `base-3`, …, skipping any candidate taken by another handle
+ * OR an alias (cross-table-correct). Returns the claimed handle, or `null` when
+ * `desired` normalizes to nothing. `origin` (default 'standalone') + `packageName`
+ * are persisted on the row.
  */
 export async function registerAssistantHandle(
   assistantUserId: string,
-  opts: { desired: string | null | undefined; override?: boolean },
+  opts: {
+    desired: string | null | undefined;
+    override?: boolean;
+    origin?: AssistantHandleOrigin;
+    packageName?: string | null;
+  },
 ): Promise<string | null> {
-  // Idempotent: a principal keeps its first handle.
-  const existing = await betterAuthDb
-    .select({ handle: assistantHandles.handle })
-    .from(assistantHandles)
-    .where(eq(assistantHandles.assistantUserId, assistantUserId))
-    .limit(1);
-  if (existing[0]) return existing[0].handle;
-
   const base = normalizeAssistantHandle(opts.desired);
-  if (!base) return null;
   const override = opts.override ?? false;
+  const origin: AssistantHandleOrigin = opts.origin ?? "standalone";
+  const packageName = opts.packageName ?? null;
 
-  // Bounded collision loop. The UNIQUE(handle) constraint is the arbiter; a lost
-  // race on our own principal (PK conflict) is resolved by re-reading the row.
-  for (let i = 0; i < 1000; i++) {
-    const candidate = i === 0 ? base : `${base}-${i + 1}`;
-    const inserted = await betterAuthDb
-      .insert(assistantHandles)
-      .values({
-        assistantUserId,
-        handle: candidate,
-        isOverride: override,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .onConflictDoNothing()
-      .returning({ handle: assistantHandles.handle });
-    if (inserted[0]) return inserted[0].handle;
-
-    // Nothing inserted: either another principal owns `candidate` (try the next
-    // suffix) or a concurrent caller just minted OURS (re-read and return it).
-    const raced = await betterAuthDb
+  return withAssistantNamespaceLock(betterAuthDb, async (tx) => {
+    // Idempotent: a principal keeps its first handle.
+    const existing = await tx
       .select({ handle: assistantHandles.handle })
       .from(assistantHandles)
       .where(eq(assistantHandles.assistantUserId, assistantUserId))
       .limit(1);
-    if (raced[0]) return raced[0].handle;
-  }
-  return null;
+    if (existing[0]) return existing[0].handle;
+    if (!base) return null;
+
+    // Gather the taken tokens in the candidate space (base, base-2 … base-1000)
+    // across BOTH tables, then pick the first free suffix (pure).
+    const candidates: string[] = [base];
+    for (let i = 1; i < 1000; i++) candidates.push(`${base}-${i + 1}`);
+    const takenHandles = await tx
+      .select({ token: assistantHandles.handle })
+      .from(assistantHandles)
+      .where(inArray(assistantHandles.handle, candidates));
+    const takenAliases = await tx
+      .select({ token: assistantTagAlias.alias })
+      .from(assistantTagAlias)
+      .where(inArray(assistantTagAlias.alias, candidates));
+    const taken = new Set<string>([...takenHandles, ...takenAliases].map((r) => r.token));
+
+    const candidate = nextFreeSuffixedCandidate(base, taken);
+    if (!candidate) return null;
+
+    await tx.insert(assistantHandles).values({
+      assistantUserId,
+      handle: candidate,
+      isOverride: override,
+      origin,
+      packageName,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    return candidate;
+  });
+}
+
+/**
+ * Rename a principal's handle by its STABLE primary key (assistant_user_id) —
+ * `UPDATE … WHERE assistant_user_id=` under the namespace lock, collision-checked
+ * against BOTH tables (cinatra#1874 W1: the handle is mutable, the PK stable;
+ * `registerAssistantHandle` cannot rename). The desired handle is normalized;
+ * a collision (another handle OR an alias owns it) throws
+ * {@link AssistantNamespaceCollisionError}. Returns the new handle, or `null`
+ * when the principal has no row or `desired` normalizes to nothing.
+ */
+export async function renameAssistantHandleByPrincipal(
+  assistantUserId: string,
+  desired: string | null | undefined,
+): Promise<string | null> {
+  const normalized = normalizeAssistantHandle(desired);
+  if (!normalized) return null;
+  return withAssistantNamespaceLock(betterAuthDb, async (tx) => {
+    const current = await tx
+      .select({ handle: assistantHandles.handle })
+      .from(assistantHandles)
+      .where(eq(assistantHandles.assistantUserId, assistantUserId))
+      .limit(1);
+    if (!current[0]) return null;
+    if (current[0].handle === normalized) return normalized; // no-op rename
+    const owner = await tokenOwner(tx, normalized);
+    if (owner) throw new AssistantNamespaceCollisionError(normalized, owner);
+    await tx
+      .update(assistantHandles)
+      .set({ handle: normalized, isOverride: true, updatedAt: new Date() })
+      .where(eq(assistantHandles.assistantUserId, assistantUserId));
+    return normalized;
+  });
+}
+
+/**
+ * Claim / relocate a platform-global tag alias (cinatra#1874 W1) under the
+ * namespace lock, checking BOTH tables. Inline-fails on a collision with a
+ * handle or a DIFFERENT-package alias; a builtin alias is immutable (never
+ * relocated). `alias` must already be a normalized flat token.
+ */
+export async function claimAssistantAlias(
+  alias: string,
+  packageName: string,
+  source: "manifest" | "admin",
+): Promise<void> {
+  return withAssistantNamespaceLock(betterAuthDb, async (tx) => {
+    const existing = await tx
+      .select({ packageName: assistantTagAlias.packageName, source: assistantTagAlias.source })
+      .from(assistantTagAlias)
+      .where(eq(assistantTagAlias.alias, alias))
+      .limit(1);
+    if (existing[0]) {
+      if (existing[0].source === "builtin") {
+        throw new AssistantNamespaceCollisionError(alias, "alias");
+      }
+      // Re-point an existing (non-builtin) alias to the requested package.
+      await tx
+        .update(assistantTagAlias)
+        .set({ packageName, source, updatedAt: new Date() })
+        .where(eq(assistantTagAlias.alias, alias));
+      return;
+    }
+    // Free in the alias table — but must also be free of any handle.
+    const handleRow = await tx
+      .select({ handle: assistantHandles.handle })
+      .from(assistantHandles)
+      .where(eq(assistantHandles.handle, alias))
+      .limit(1);
+    if (handleRow[0]) throw new AssistantNamespaceCollisionError(alias, "handle");
+    await tx
+      .insert(assistantTagAlias)
+      .values({ alias, packageName, source, createdAt: new Date(), updatedAt: new Date() });
+  });
+}
+
+/** Remove a non-builtin alias under the lock. A builtin alias is immutable. */
+export async function removeAssistantAlias(alias: string): Promise<void> {
+  return withAssistantNamespaceLock(betterAuthDb, async (tx) => {
+    await tx
+      .delete(assistantTagAlias)
+      .where(and(eq(assistantTagAlias.alias, alias), ne(assistantTagAlias.source, "builtin")));
+  });
 }
 
 /**

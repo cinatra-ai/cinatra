@@ -42,6 +42,7 @@ import {
   type EntityDashboardSummary,
   type EntityDashboardsDataSource,
   type EntityDashboardsList,
+  type SavedEntityDashboard,
 } from "../entity-dashboards-contract";
 import { EmbeddedDrizzleCubeDashboardGrid } from "./embedded-drizzle-cube-dashboard-grid";
 import { EntityDashboardNameDialog } from "./entity-dashboard-name-dialog";
@@ -59,8 +60,11 @@ export type EntityDashboardRenderArgs = {
   readonly config: DashboardConfigV1_1;
   /** Server-derived per-dashboard write capability. */
   readonly editable: boolean;
-  /** Persist the edited config. Only wired when `editable`. */
-  readonly onSave: (next: DashboardConfigV1_1) => Promise<void>;
+  /** Persist the edited config. Only wired when `editable`. Resolves the typed
+   *  save result (cinatra#1913) — the grid container interprets failures. */
+  readonly onSave: (
+    next: DashboardConfigV1_1,
+  ) => Promise<void | SavedEntityDashboard>;
   readonly pageAnchor: DashboardPageAnchor;
   readonly dashboardModes: readonly DashboardMode[];
 };
@@ -329,8 +333,11 @@ export function EntityDashboardsShell({
     [deleteDashboard, list, view, loadConfigInto],
   );
 
+  // cinatra#1913: the typed save result flows through to the grid container,
+  // which interprets it at the single third-party seam (toast + no commit on
+  // failure). This callback stays a pass-through.
   const onSaveSelected = useCallback(
-    (next: DashboardConfigV1_1) => {
+    (next: DashboardConfigV1_1): Promise<void | SavedEntityDashboard> => {
       if (!view) return Promise.resolve();
       return saveDashboard(view.id, next);
     },

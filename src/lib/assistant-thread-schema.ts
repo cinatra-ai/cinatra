@@ -131,9 +131,30 @@ export function assistantHandleSchemaQueries(schemaName: string): { text: string
       assistant_user_id text PRIMARY KEY,
       handle text NOT NULL,
       is_override boolean NOT NULL DEFAULT false,
+      origin text NOT NULL DEFAULT 'standalone',
+      package_name text,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS assistant_handles_handle_key ON "${s}"."assistant_handles" (handle)` },
+    // cinatra#1874 W1: origin ('extension'|'standalone') + package_name — added
+    // idempotently so an operator DB predating core__0065 converges to the same
+    // shape (fresh installs are born with them via the CREATE above). The
+    // twin migration carries the join-based backfill; the bootstrap defaults
+    // fresh/unbackfilled rows to 'standalone'.
+    { text: `ALTER TABLE "${s}"."assistant_handles" ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT 'standalone'` },
+    { text: `ALTER TABLE "${s}"."assistant_handles" ADD COLUMN IF NOT EXISTS package_name text` },
+    { text: `DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
+            AND table_name = 'assistant_handles'
+            AND constraint_name = 'assistant_handles_origin_check'
+        ) THEN
+          ALTER TABLE "${s}"."assistant_handles" ADD CONSTRAINT assistant_handles_origin_check CHECK (origin IN ('extension', 'standalone'));
+        END IF;
+      END $$` },
+    { text: `CREATE INDEX IF NOT EXISTS assistant_handles_package_name_idx ON "${s}"."assistant_handles" (package_name) WHERE package_name IS NOT NULL` },
   ];
 }

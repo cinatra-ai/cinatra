@@ -100,7 +100,7 @@ function makeActions(
       dashboard: { id, name, isDefault: false, canWrite: true },
     })),
     deleteEntityDashboardAction: vi.fn(async () => ({ ok: true as const })),
-    saveEntityDashboardConfigAction: vi.fn(async () => {}),
+    saveEntityDashboardConfigAction: vi.fn(async () => ({ ok: true as const })),
     ...overrides,
   };
 }

@@ -1,5 +1,9 @@
 import type { Metadata } from "next";
-import { OrganizationSwitcher, OrganizationView } from "@daveyplate/better-auth-ui";
+import {
+  OrganizationNameCard,
+  OrganizationSlugCard,
+  OrganizationSwitcher,
+} from "@daveyplate/better-auth-ui";
 import { requireAdminSession } from "@/lib/auth-session";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
@@ -12,6 +16,13 @@ const navItems = [
   { href: "/configuration/workspace", title: "Administration" },
   { href: "/configuration/workspace/members", title: "Members" },
 ];
+
+const workspaceCardClassNames = {
+  base: "border border-line bg-surface backdrop-blur-none rounded-card",
+  header: "px-6 pt-6",
+  content: "px-6",
+  footer: "px-6 pb-6",
+};
 
 export default async function WorkspaceSettingsPage() {
   await requireAdminSession();
@@ -49,19 +60,17 @@ export default async function WorkspaceSettingsPage() {
             <SidebarNav items={navItems} />
           </aside>
           <div className="min-w-0 flex-1">
-            <OrganizationView
-              path="settings"
-              hideNav
-              classNames={{
-                cards: "grid grid-cols-1 gap-4 md:grid-cols-2 [&>*:last-child]:md:col-span-2",
-                card: {
-                  base: "border border-line bg-surface backdrop-blur-none rounded-card",
-                  header: "px-6 pt-6",
-                  content: "px-6",
-                  footer: "px-6 pb-6",
-                },
-              }}
-            />
+            {/* Name + slug cards composed directly instead of
+                `OrganizationView path="settings"`: that view unconditionally
+                appends the vendored DeleteOrganizationCard, whose endpoint is
+                disabled (cinatra#1936 — deletion's only door is the guarded
+                Danger-zone action on the organization detail page), so the
+                card would be a dead control. Auth stays server-side via
+                `requireAdminSession()` above. */}
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <OrganizationNameCard classNames={workspaceCardClassNames} />
+              <OrganizationSlugCard classNames={workspaceCardClassNames} />
+            </div>
           </div>
         </div>
       </PageContent>

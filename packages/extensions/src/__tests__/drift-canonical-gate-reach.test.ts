@@ -211,6 +211,15 @@ describe("canonical lifecycle status reachability guard", () => {
         // resource/representation/artifact_blobs/object_content_snapshots —
         // never installed_extension.
         "src/lib/artifacts/__tests__/context-mcp-resolve-capture.integration.test.ts",
+        // Assistant-registry reader integration test (cinatra#1874 W1): its
+        // FIXTURE builds a minimal isolated per-test schema (installed_extension +
+        // agent_templates + assistant_handles/audience/tag_alias) and seeds live
+        // install rows with raw INSERTs so the audience-filtered registry READER
+        // (readAssistantRegistryForActor) resolves its join against real SQL —
+        // same fixture class as the entries above. Confined to its own per-test
+        // schema; the code under test is READ-ONLY (it never writes
+        // installed_extension — the raw INSERTs are fixture seeding only).
+        "src/lib/__tests__/integration/assistant-registry-reader.integration.test.ts",
       ]);
       const offenders = hits.filter((f) => !allowed.has(f));
       expect(
