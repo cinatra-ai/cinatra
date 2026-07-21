@@ -92,6 +92,7 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "organization.create": "Create organizations",
   "organization.update": "Update organizations",
   "organization.delete": "Delete organizations",
+  "organization.archive": "Archive organizations",
   "organization.manageMembers": "Manage organization members",
   "skill.read": "View skills",
   "skill.list": "List skills",
@@ -217,6 +218,7 @@ export const PERMISSION_SHORT_LABELS: Record<Permission, string> = {
   "organization.create": "Create",
   "organization.update": "Edit",
   "organization.delete": "Del",
+  "organization.archive": "Arch",
   "organization.manageMembers": "Members",
   "skill.read": "View",
   "skill.list": "List",
@@ -442,6 +444,7 @@ export const PERMISSIONS_BY_CATEGORY: Record<PermissionCategory, ReadonlyArray<P
     "organization.create",
     "organization.update",
     "organization.delete",
+    "organization.archive",
     "organization.manageMembers",
   ],
   skills: [

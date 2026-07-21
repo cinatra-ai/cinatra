@@ -1547,14 +1547,50 @@ export async function updateAgentRunStatusConditional(
   id: string,
   expectedStatus: string,
   nextStatus: string,
+  dispatch?: AgentRunDispatchFields,
 ): Promise<boolean> {
+  // cinatra#1937: a queued→running CAS IS a dispatch — it must stamp the
+  // per-dispatch bookkeeping ATOMICALLY with the status flip (every
+  // re-dispatch path funnels through here, so `running` rows can never exist
+  // with stale/absent attempt ids). Enforced at the deepest layer so no
+  // caller — present or future — can bypass it.
+  const isDispatchTransition = expectedStatus === "queued" && nextStatus === "running";
+  if (isDispatchTransition && !dispatch) {
+    throw new Error(
+      `updateAgentRunStatusConditional: queued→running for run ${id} requires dispatch fields (executionAttemptId; the deadline is computed in SQL)`,
+    );
+  }
+  // Inverse guard: dispatch bookkeeping belongs ONLY to the dispatch edge — a
+  // caller stamping it on any other transition is a bug, not a request.
+  if (!isDispatchTransition && dispatch) {
+    throw new Error(
+      `updateAgentRunStatusConditional: dispatch fields supplied for non-dispatch transition ${expectedStatus}→${nextStatus} on run ${id}`,
+    );
+  }
   const result = await db
     .update(agentRuns)
-    .set({ status: nextStatus })
+    .set({
+      status: nextStatus,
+      ...(dispatch
+        ? {
+            executionAttemptId: dispatch.attemptId,
+            // DB clock by construction: the row's own timeout (capped default
+            // 24h — AGENT_RUN_TIMEOUT_MAX_SECONDS) from now(), evaluated
+            // inside the same UPDATE.
+            executionDeadlineAt: sql`now() + make_interval(secs => COALESCE(${agentRuns.timeoutSeconds}, 86400))`,
+          }
+        : {}),
+    })
     .where(and(eq(agentRuns.id, id), eq(agentRuns.status, expectedStatus)))
     .returning({ id: agentRuns.id });
   return result.length === 1;
 }
+
+/** Per-dispatch bookkeeping stamped by the queued→running CAS (cinatra#1937). */
+export type AgentRunDispatchFields = {
+  /** Fresh per-dispatch id — mint with crypto.randomUUID() at each dispatch. */
+  attemptId: string;
+};
 
 // ---------------------------------------------------------------------------
 // canonical run-status transition primitive
@@ -1589,12 +1625,14 @@ export async function transitionRunStatus(
     stepResults?: unknown[];
     /** Flags the ONE genuine human-wait `→pending_input` (stop-run-hitl, #1058) so it notifies; every other `pending_input` reason leaves it unset. Not a DB column — only feeds the run-wait-notifier classification below. */
     humanWaitGate?: boolean;
+    /** REQUIRED on queued→running (cinatra#1937): per-dispatch bookkeeping stamped atomically with the CAS. The primitive below throws without it. */
+    dispatch?: AgentRunDispatchFields;
   },
 ): Promise<void> {
   if (!LEGAL_TRANSITIONS.has(`${from}->${to}` as const)) {
     throw new RunTransitionError({ code: "illegal_transition", runId, from, to });
   }
-  const won = await updateAgentRunStatusConditional(runId, from, to);
+  const won = await updateAgentRunStatusConditional(runId, from, to, meta?.dispatch);
   if (!won) {
     throw new RunTransitionError({ code: "stale_from_status", runId, from, to });
   }
@@ -1602,10 +1640,18 @@ export async function transitionRunStatus(
     // Delegate terminal-state side-effects + meta patching to
     // updateAgentRunStatus. The CAS already wrote the status column; re-writing
     // it here is a no-op that still runs the terminal-detection branch
-    // (expireRunStream) and meta-patch logic. Skip the call for non-terminal
-    // transitions with no meta (the CAS's single UPDATE was enough).
-    if (meta || TERMINAL_RUN_STATUSES.has(to)) {
-      await updateAgentRunStatus(runId, to, meta as Partial<AgentRunRecord> | undefined);
+    // (expireRunStream) and meta-patch logic. The CONTROL keys (`dispatch` —
+    // written BY the CAS — and `humanWaitGate` — not a DB column) are stripped
+    // first: only genuine DB meta reaches the delegated write, and a
+    // control-keys-only meta skips the second write entirely.
+    const { dispatch: _dispatch, humanWaitGate: _humanWaitGate, ...dbMeta } = meta ?? {};
+    const hasDelegatedMeta =
+      dbMeta.error !== undefined ||
+      dbMeta.startedAt !== undefined ||
+      dbMeta.completedAt !== undefined ||
+      dbMeta.stepResults !== undefined;
+    if (hasDelegatedMeta || TERMINAL_RUN_STATUSES.has(to)) {
+      await updateAgentRunStatus(runId, to, dbMeta as Partial<AgentRunRecord>);
     }
   } finally {
     // Run human-wait notify (#1559/E9) in `finally` so a terminal clear still fires

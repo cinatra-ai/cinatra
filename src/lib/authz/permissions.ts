@@ -72,6 +72,9 @@ export type Permission =
   | "organization.create"
   | "organization.update"
   | "organization.delete"
+  // Archive/unarchive lifecycle (cinatra#1937, archive program S1 — feature
+  // is dark behind the activation gate; the permission wiring lands first).
+  | "organization.archive"
   | "organization.manageMembers"
   // Skills
   | "skill.read"

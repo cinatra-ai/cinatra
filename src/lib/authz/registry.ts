@@ -31,7 +31,8 @@ export type Action =
   | "uninstall"
   | "publish"
   | "fire"
-  | "share";
+  | "share"
+  | "archive";
 
 /**
  * Effect class - domain risk tier. Used by the audit envelope and the
@@ -216,6 +217,7 @@ export const CLASSIFICATION_ENTRIES: readonly ClassificationEntry[] = [
   { resourceType: "organization", action: "create", effect: "write", requiredAccess: { requiredPermission: "organization.create" } },
   { resourceType: "organization", action: "update", effect: "write", requiredAccess: { requiredPermission: "organization.update" } },
   { resourceType: "organization", action: "delete", effect: "admin", requiredAccess: { requiredPermission: "organization.delete" } },
+  { resourceType: "organization", action: "archive", effect: "admin", requiredAccess: { requiredPermission: "organization.archive" } },
   { resourceType: "team",         action: "read",   effect: "read",  requiredAccess: { requiredPermission: "team.read" } },
   { resourceType: "team",         action: "list",   effect: "read",  requiredAccess: { requiredPermission: "team.list" } },
   { resourceType: "team",         action: "create", effect: "write", requiredAccess: { requiredPermission: "team.create" } },

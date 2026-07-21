@@ -446,6 +446,9 @@ export const betterAuthSessions = pgTable("session", {
   id: text("id").primaryKey(),
   userId: text("userId"),
   activeOrganizationId: text("activeOrganizationId"),
+  // Better Auth teams mode has always provisioned this column; the mirror
+  // catches up for cinatra#1937 (the session guard trigger validates it).
+  activeTeamId: text("activeTeamId"),
 });
 
 export const betterAuthOrganizations = pgTable("organization", {
@@ -455,6 +458,10 @@ export const betterAuthOrganizations = pgTable("organization", {
   name: text("name").notNull(),
   slug: text("slug"),
   createdAt: timestamp("createdAt", { withTimezone: true, mode: "date" }),
+  // cinatra#1937 (archive S1): NULL = active. Written only by the (gate-off
+  // until S6) archive transaction; declared in cinatraOrganizationOptions
+  // additionalFields so getMigrations() owns the column.
+  archivedAt: timestamp("archivedAt", { withTimezone: true, mode: "date" }),
 });
 
 // The live Better Auth `member` table has organizationId and userId declared

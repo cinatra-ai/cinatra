@@ -255,7 +255,9 @@ export async function resumeStoppedOrchestratorAction(
   }
 
   // sendTask succeeded — best-effort transition only, never revert.
-  await transitionRunStatus(runId, "queued", "running").catch((e) => {
+  await transitionRunStatus(runId, "queued", "running", {
+    dispatch: { attemptId: randomUUID() },
+  }).catch((e) => {
     if (!(e instanceof RunTransitionError && e.code === "stale_from_status")) {
       console.error("[resumeStoppedOrchestratorAction] post-send transition failed", runId, e);
     }

@@ -1684,6 +1684,10 @@ END $$` },
     // timeout_seconds: server-side run timeout.
     // When set, the execution worker self-terminates the run with error 'timed_out' if elapsed time exceeds this value.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS timeout_seconds integer` },
+    // cinatra#1937 (archive S1): per-dispatch bookkeeping, written atomically
+    // with every queued→running CAS (packages/agents/src/store.ts).
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS execution_deadline_at timestamptz` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS execution_attempt_id text` },
     // traces table: Postgres SpanExporter storage.
     // Composite PK (trace_id, span_id). attributes/events stored as jsonb.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."traces" (
