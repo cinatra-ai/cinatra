@@ -1,15 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Async LLM artifact matcher.
-// Covers: pure mime/trust helpers; orphan-guard exit; no-candidate
-// exit; runtime-unconfigured skip; package-owned trust (foreign
-// rejected); boot-order lazy-register-then-retry; frontmatter-strip;
-// strict response parse; threshold gate; assert + blockedByPrecedence.
+// Async LLM MEANING-matcher (cinatra#1891, epic #1883 A3).
+// Covers: pure mime/trust helpers; classifier-signals prompt rendering;
+// re-keyed authoritative read (file-form + registered type, NOT the retired
+// generic); orphan-guard exit; unregistered-own-type skip; no-candidate exit;
+// runtime-unconfigured skip; provenance-based ownership; run-ALL-matchers;
+// package-owned trust; boot-order lazy-register-then-retry; frontmatter-strip;
+// strict response parse; threshold gate; assert + blockedByPrecedence; and the
+// HONEST RETRY paths (DB read throw, LLM call throw, assert throw all rethrow
+// as retryable; a malformed response does NOT).
 
 const {
   runPgMock,
   registerAllObjectTypesMock,
   listArtifactsMock,
+  resolveMock,
+  definerOfMock,
   resolveRuntimeMock,
   runLlmMock,
   listSkillsMock,
@@ -18,10 +24,13 @@ const {
   assertSemanticTypeMock,
   lazyRegisterMock,
   writeAllowedMock,
+  ensureSchemaMock,
 } = vi.hoisted(() => ({
   runPgMock: vi.fn(),
   registerAllObjectTypesMock: vi.fn(),
   listArtifactsMock: vi.fn(),
+  resolveMock: vi.fn(),
+  definerOfMock: vi.fn(),
   resolveRuntimeMock: vi.fn(),
   runLlmMock: vi.fn(),
   listSkillsMock: vi.fn(),
@@ -30,6 +39,7 @@ const {
   assertSemanticTypeMock: vi.fn(),
   lazyRegisterMock: vi.fn(),
   writeAllowedMock: vi.fn(async (): Promise<boolean> => true),
+  ensureSchemaMock: vi.fn(),
 }));
 
 vi.mock("@/lib/postgres-sync", () => ({
@@ -37,14 +47,18 @@ vi.mock("@/lib/postgres-sync", () => ({
 }));
 vi.mock("@/lib/database", () => ({
   getPostgresConnectionString: () => "postgres://test",
-  ensurePostgresSchema: () => {},
+  ensurePostgresSchema: ensureSchemaMock,
   postgresSchema: "cinatra",
 }));
 vi.mock("@/lib/register-all-object-types", () => ({
   registerAllObjectTypes: registerAllObjectTypesMock,
 }));
 vi.mock("@cinatra-ai/objects/registry", () => ({
-  objectTypeRegistry: { listArtifacts: listArtifactsMock },
+  objectTypeRegistry: {
+    listArtifacts: listArtifactsMock,
+    resolve: resolveMock,
+    definerOf: definerOfMock,
+  },
 }));
 vi.mock("@cinatra-ai/llm", () => ({
   resolveConfiguredLlmRuntime: resolveRuntimeMock,
@@ -72,6 +86,7 @@ vi.mock("../artifact-extension-access", () => ({
 import {
   runArtifactMatch,
   buildArtifactMatcherActorContext,
+  MatcherRetryableError,
   __test,
 } from "../matcher-runtime";
 
@@ -82,14 +97,29 @@ const PAYLOAD = {
 };
 const ACTOR = buildArtifactMatcherActorContext({ orgId: "org-a" });
 
+// The row's OWN declared (structural) type — a registered artifact type.
+const OWN_TYPE = "@v/pdf-artifact:artifact";
+
 function stageAuthoritative(
   row:
-    | { digest: string; mime: string; storage_key: string; origin_kind: string }
+    | {
+        digest: string;
+        mime: string;
+        storage_key: string;
+        origin_kind: string;
+        object_type?: string;
+        classifier_signals?: unknown;
+      }
     | undefined,
 ) {
   // 1st pg call = authoritative read.
   runPgMock.mockReturnValueOnce([
-    { rows: row ? [row] : [], rowCount: row ? 1 : 0 },
+    {
+      rows: row
+        ? [{ object_type: OWN_TYPE, classifier_signals: null, ...row }]
+        : [],
+      rowCount: row ? 1 : 0,
+    },
   ]);
   // Subsequent pg calls = the pre-assert `objectStillLive` re-check.
   // Default: object still live.
@@ -97,17 +127,19 @@ function stageAuthoritative(
 }
 function artifactDef(opts: {
   pkg: string;
+  matcherSkillIds?: string[];
   matcherSkillId?: string;
   mimeTypes?: string[];
   threshold?: number;
 }) {
+  const matchers =
+    opts.matcherSkillIds ??
+    (opts.matcherSkillId ? [opts.matcherSkillId] : undefined);
   return {
     type: `${opts.pkg}:artifact`,
     isArtifact: {
       accepts: { file: { mimeTypes: opts.mimeTypes ?? ["application/pdf"] } },
-      skills: opts.matcherSkillId
-        ? { matchers: [opts.matcherSkillId] }
-        : undefined,
+      skills: matchers ? { matchers } : undefined,
       matcherConfidenceThreshold: opts.threshold,
     },
   };
@@ -151,11 +183,69 @@ describe("matcher-runtime pure helpers", () => {
   });
 });
 
+describe("classifier-signals prompt renderer (scope 2)", () => {
+  it("empty / null signals → empty block", () => {
+    expect(__test.renderClassifierSignalsForPrompt(null)).toBe("");
+    expect(__test.renderClassifierSignalsForPrompt({})).toBe("");
+  });
+  it("renders upload metadata, producer produces, and chat context", () => {
+    const block = __test.renderClassifierSignalsForPrompt({
+      upload: { filename: "q3-plan.md", declaredMime: "text/markdown", parentType: "thread", originKind: "upload" },
+      produces: [{ extension: "@acme/marketing-strategy-artifact" }],
+      chatContext: {
+        messages: [
+          { role: "user", content: "here is our marketing strategy for Q3" },
+          { role: "assistant", content: "got it" },
+        ],
+      },
+    });
+    expect(block).toContain("filename: q3-plan.md");
+    expect(block).toContain("declared type: text/markdown");
+    expect(block).toContain("attached to: thread");
+    expect(block).toContain("producer declared it produces: @acme/marketing-strategy-artifact");
+    expect(block).toContain("recent conversation context:");
+    expect(block).toContain("user: here is our marketing strategy for Q3");
+  });
+  it("clamps EACH producer `produces` extension (defensive bound, not just the count)", () => {
+    // A hand-edited / legacy jsonb row with a multi-megabyte extension string
+    // must not balloon the prompt: the renderer is the DEFENSIVE reader (the
+    // write path byte-caps a normal row). Per-string clamp = 200 chars (codex
+    // round finding 4).
+    const huge = "@acme/" + "x".repeat(5000);
+    const block = __test.renderClassifierSignalsForPrompt({
+      produces: [{ extension: huge }],
+    });
+    const line = block
+      .split("\n")
+      .find((l) => l.startsWith("producer declared it produces:"))!;
+    expect(line).toBeDefined();
+    // "producer declared it produces: " prefix (31) + at most 200 clamped chars.
+    expect(line.length).toBeLessThanOrEqual("producer declared it produces: ".length + 200);
+    expect(block.length).toBeLessThan(5000);
+  });
+  it("parseClassifierSignals tolerates string, object, and junk", () => {
+    expect(__test.parseClassifierSignals(null)).toBeNull();
+    expect(__test.parseClassifierSignals("not json{")).toBeNull();
+    expect(__test.parseClassifierSignals('{"upload":{"filename":"a"}}')).toEqual({
+      upload: { filename: "a" },
+    });
+    expect(__test.parseClassifierSignals({ produces: [{ extension: "@x/y" }] })).toEqual({
+      produces: [{ extension: "@x/y" }],
+    });
+  });
+});
+
 describe("runArtifactMatch", () => {
   beforeEach(() => {
     runPgMock.mockReset();
     registerAllObjectTypesMock.mockReset();
     listArtifactsMock.mockReset();
+    resolveMock.mockReset().mockReturnValue({ isArtifact: {} });
+    definerOfMock
+      .mockReset()
+      .mockImplementation((t: string) =>
+        t.endsWith(":artifact") ? t.slice(0, -":artifact".length) : null,
+      );
     resolveRuntimeMock.mockReset();
     runLlmMock.mockReset();
     listSkillsMock.mockReset();
@@ -164,6 +254,7 @@ describe("runArtifactMatch", () => {
     assertSemanticTypeMock.mockReset();
     lazyRegisterMock.mockReset();
     writeAllowedMock.mockReset().mockResolvedValue(true);
+    ensureSchemaMock.mockReset();
     buildPortsMock.mockReturnValue({});
     parseFrontmatterMock.mockImplementation((c: string) => ({ body: c }));
   });
@@ -173,6 +264,37 @@ describe("runArtifactMatch", () => {
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
     expect(listArtifactsMock).not.toHaveBeenCalled();
     expect(runLlmMock).not.toHaveBeenCalled();
+    expect(assertSemanticTypeMock).not.toHaveBeenCalled();
+  });
+
+  it("scope 1: authoritative read keys on file-form + NOT the retired generic type", async () => {
+    stageAuthoritative({
+      digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
+    });
+    listArtifactsMock.mockReturnValue([]);
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    // The SQL keys on `data->>'artifactType' = 'file'` and excludes the retired
+    // generic — asserted against the query text + values of the first pg call.
+    const firstCall = runPgMock.mock.calls[0][0];
+    const query = firstCall.queries[0];
+    expect(query.text).toContain("(o.data->>'artifactType') = 'file'");
+    expect(query.text).toContain("o.type <> $4");
+    expect(query.values).toContain("@cinatra-ai/artifact:object");
+    expect(query.text).toContain("classifier_signals");
+  });
+
+  it("scope 1: own type not a registered artifact type → skip (no candidates)", async () => {
+    stageAuthoritative({
+      digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
+      object_type: "@gone/pkg:artifact",
+    });
+    // Definer uninstalled after the row was minted → resolve returns null.
+    resolveMock.mockReturnValue(null);
+    listArtifactsMock.mockReturnValue([
+      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    ]);
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    expect(resolveRuntimeMock).not.toHaveBeenCalled();
     expect(assertSemanticTypeMock).not.toHaveBeenCalled();
   });
 
@@ -188,7 +310,7 @@ describe("runArtifactMatch", () => {
     expect(assertSemanticTypeMock).not.toHaveBeenCalled();
   });
 
-  it("runtime unconfigured → skip (no assert, no crash)", async () => {
+  it("runtime unconfigured (null) → skip (no assert, no crash, NO retry)", async () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
@@ -196,9 +318,96 @@ describe("runArtifactMatch", () => {
       artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue(null);
+    await expect(
+      runArtifactMatch(PAYLOAD, { actorContext: ACTOR }),
+    ).resolves.toBeUndefined();
+    expect(runLlmMock).not.toHaveBeenCalled();
+    expect(assertSemanticTypeMock).not.toHaveBeenCalled();
+  });
+
+  it("scope 4: candidate ownership derives from registry provenance (definerOf)", async () => {
+    stageAuthoritative({
+      digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
+    });
+    listArtifactsMock.mockReturnValue([
+      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    ]);
+    // Provenance says a DIFFERENT package owns this type than the string-slice
+    // would suggest — the matcher must trust provenance.
+    definerOfMock.mockReturnValue("@provenance/owner");
+    resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
+    listSkillsMock.mockResolvedValue([
+      { id: "s1", packageName: "@provenance/owner", packageSlug: "provenance-owner", content: "b" },
+    ]);
+    parseFrontmatterMock.mockReturnValue({ body: "b" });
+    runLlmMock.mockResolvedValue({ text: JSON.stringify({ matches: true, confidence: 0.9 }) });
+    assertSemanticTypeMock.mockReturnValue({ inserted: true, blockedByPrecedence: false });
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    expect(assertSemanticTypeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ extension: "@provenance/owner", assertedBy: "matcher" }),
+    );
+  });
+
+  it("scope 4: provenance-less (host) type is skipped (definerOf null)", async () => {
+    stageAuthoritative({
+      digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
+    });
+    listArtifactsMock.mockReturnValue([
+      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    ]);
+    definerOfMock.mockReturnValue(null); // host/built-in registration
+    resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
     expect(runLlmMock).not.toHaveBeenCalled();
     expect(assertSemanticTypeMock).not.toHaveBeenCalled();
+  });
+
+  it("scope 5: ALL declared matchers run, not just the first", async () => {
+    stageAuthoritative({
+      digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
+    });
+    listArtifactsMock.mockReturnValue([
+      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillIds: ["s1", "s2", "s3"] }),
+    ]);
+    resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
+    listSkillsMock.mockResolvedValue([
+      { id: "s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "m1" },
+      { id: "s2", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "m2" },
+      { id: "s3", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "m3" },
+    ]);
+    parseFrontmatterMock.mockImplementation((c: string) => ({ body: c }));
+    runLlmMock.mockResolvedValue({ text: JSON.stringify({ matches: false, confidence: 0.1 }) });
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    // Three declared matchers ⇒ three LLM classification calls.
+    expect(runLlmMock).toHaveBeenCalledTimes(3);
+    const systems = runLlmMock.mock.calls.map((c) => c[0].system);
+    expect(systems).toEqual(["m1", "m2", "m3"]);
+  });
+
+  it("scope 2: persisted classifier signals are rendered into the matcher user prompt", async () => {
+    stageAuthoritative({
+      digest: "sha", mime: "text/markdown", storage_key: "k", origin_kind: "upload",
+      object_type: OWN_TYPE,
+      classifier_signals: {
+        upload: { filename: "strategy.md", originKind: "upload" },
+        produces: [{ extension: "@acme/strategy-artifact" }],
+        chatContext: { messages: [{ role: "user", content: "our marketing strategy" }] },
+      },
+    });
+    listArtifactsMock.mockReturnValue([
+      artifactDef({ pkg: "@v/md-artifact", matcherSkillId: "s1", mimeTypes: ["text/markdown"] }),
+    ]);
+    resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
+    listSkillsMock.mockResolvedValue([
+      { id: "s1", packageName: "@v/md-artifact", packageSlug: "v-md-artifact", content: "b" },
+    ]);
+    parseFrontmatterMock.mockReturnValue({ body: "b" });
+    runLlmMock.mockResolvedValue({ text: JSON.stringify({ matches: false, confidence: 0.1 }) });
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    const user = runLlmMock.mock.calls[0][0].user as string;
+    expect(user).toContain("filename: strategy.md");
+    expect(user).toContain("producer declared it produces: @acme/strategy-artifact");
+    expect(user).toContain("our marketing strategy");
   });
 
   it("foreign-package matcher skill is REJECTED (trust anchor)", async () => {
@@ -226,7 +435,6 @@ describe("runArtifactMatch", () => {
       artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
-    // First listInstalledSkills: empty (miss). After lazy register: present.
     listSkillsMock
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
@@ -241,7 +449,6 @@ describe("runArtifactMatch", () => {
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
     expect(lazyRegisterMock).toHaveBeenCalledWith("@v/pdf-artifact");
     expect(runLlmMock).toHaveBeenCalledTimes(1);
-    // declaredToolboxIds:[] + system is frontmatter-stripped body.
     const llmArg = runLlmMock.mock.calls[0][0];
     expect(llmArg.declaredToolboxIds).toEqual([]);
     expect(llmArg.system).toBe("Classify it.");
@@ -262,15 +469,13 @@ describe("runArtifactMatch", () => {
       artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
-    // The candidate's canonical install row is archived → write not allowed.
     writeAllowedMock.mockResolvedValue(false);
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
-    // Gated out BEFORE any LLM scoring or assertion.
     expect(runLlmMock).not.toHaveBeenCalled();
     expect(assertSemanticTypeMock).not.toHaveBeenCalled();
   });
 
-  it("malformed / out-of-range LLM response → skip (strict parse)", async () => {
+  it("malformed / out-of-range LLM response → skip candidate (NO retry)", async () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
@@ -285,7 +490,9 @@ describe("runArtifactMatch", () => {
     runLlmMock.mockResolvedValue({
       text: JSON.stringify({ matches: true, confidence: 1.5 }), // out of range
     });
-    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    await expect(
+      runArtifactMatch(PAYLOAD, { actorContext: ACTOR }),
+    ).resolves.toBeUndefined();
     expect(assertSemanticTypeMock).not.toHaveBeenCalled();
   });
 
@@ -333,12 +540,90 @@ describe("runArtifactMatch", () => {
     expect(assertSemanticTypeMock).toHaveBeenCalledTimes(1);
   });
 
-  it("boundary guard: a setup-path throw is caught (job NOT failed/retried)", async () => {
+  // -------------------------------------------------------------------------
+  // HONEST RETRY (scope 6): transient failures RETHROW so BullMQ retries; a
+  // non-retryable setup throw is swallowed; a malformed response is per-candidate.
+  // -------------------------------------------------------------------------
+  it("scope 6: DB read throw → MatcherRetryableError rethrown (job retries)", async () => {
+    runPgMock.mockImplementationOnce(() => {
+      throw new Error("connection reset");
+    });
+    await expect(
+      runArtifactMatch(PAYLOAD, { actorContext: ACTOR }),
+    ).rejects.toBeInstanceOf(MatcherRetryableError);
+  });
+
+  it("scope 6: cold-worker schema-ensure DB outage → MatcherRetryableError rethrown (job retries)", async () => {
+    // `ensurePostgresSchema()` runs inside `readAuthoritative`'s retryable try:
+    // a DB-unreachable cold worker throws HERE (before the authoritative query),
+    // and that transient failure must retry — NOT fall through to the top-level
+    // non-retryable catch and silently complete the job (codex round finding 2).
+    ensureSchemaMock.mockImplementationOnce(() => {
+      throw new Error("schema bootstrap DDL failed — db unreachable");
+    });
+    await expect(
+      runArtifactMatch(PAYLOAD, { actorContext: ACTOR }),
+    ).rejects.toBeInstanceOf(MatcherRetryableError);
+  });
+
+  it("scope 6: LLM call throw → MatcherRetryableError rethrown (job retries)", async () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
-    // registerAllObjectTypes throws BEFORE the per-candidate loop —
-    // must be swallowed by the top-level boundary guard.
+    listArtifactsMock.mockReturnValue([
+      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    ]);
+    resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
+    listSkillsMock.mockResolvedValue([
+      { id: "s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
+    ]);
+    parseFrontmatterMock.mockReturnValue({ body: "b" });
+    runLlmMock.mockRejectedValue(new Error("provider 503"));
+    await expect(
+      runArtifactMatch(PAYLOAD, { actorContext: ACTOR }),
+    ).rejects.toBeInstanceOf(MatcherRetryableError);
+  });
+
+  it("scope 6: resolveConfiguredLlmRuntime throw → MatcherRetryableError rethrown", async () => {
+    stageAuthoritative({
+      digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
+    });
+    listArtifactsMock.mockReturnValue([
+      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    ]);
+    resolveRuntimeMock.mockRejectedValue(new Error("nango down"));
+    await expect(
+      runArtifactMatch(PAYLOAD, { actorContext: ACTOR }),
+    ).rejects.toBeInstanceOf(MatcherRetryableError);
+  });
+
+  it("scope 6: assertSemanticType throw → MatcherRetryableError rethrown", async () => {
+    stageAuthoritative({
+      digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
+    });
+    listArtifactsMock.mockReturnValue([
+      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    ]);
+    resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
+    listSkillsMock.mockResolvedValue([
+      { id: "s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
+    ]);
+    parseFrontmatterMock.mockReturnValue({ body: "b" });
+    runLlmMock.mockResolvedValue({ text: JSON.stringify({ matches: true, confidence: 0.95 }) });
+    assertSemanticTypeMock.mockImplementation(() => {
+      throw new Error("deadlock detected");
+    });
+    await expect(
+      runArtifactMatch(PAYLOAD, { actorContext: ACTOR }),
+    ).rejects.toBeInstanceOf(MatcherRetryableError);
+  });
+
+  it("scope 6: a NON-retryable setup throw is swallowed (job NOT failed/retried)", async () => {
+    stageAuthoritative({
+      digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
+    });
+    // registerAllObjectTypes throws BEFORE the per-candidate loop — a
+    // non-retryable setup error, swallowed by the top-level boundary guard.
     registerAllObjectTypesMock.mockImplementation(() => {
       throw new Error("registry boom");
     });
@@ -349,12 +634,10 @@ describe("runArtifactMatch", () => {
   });
 
   it("tombstoned DURING classification → liveness re-check skips the assert", async () => {
-    // 1st pg = authoritative (live). 2nd pg = objectStillLive → empty
-    // (tombstoned during the LLM call).
     runPgMock.mockReturnValueOnce([
       {
         rows: [
-          { digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload" },
+          { digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload", object_type: OWN_TYPE, classifier_signals: null },
         ],
         rowCount: 1,
       },
@@ -382,26 +665,14 @@ describe("runArtifactMatch", () => {
     expect(ACTOR.authSource).toBe("worker");
   });
 
-  // -------------------------------------------------------------------------
-  // MAX_CANDIDATES is 24 so broad same-MIME families can all run while still
-  // bounding LLM calls. The 25-candidate regression pins cap behavior, and the
-  // 12-candidate test pins the pack-level invariant that ordinary same-MIME
-  // overlap stays below the cap.
-  // -------------------------------------------------------------------------
   it("12 same-MIME candidates ALL reach LLM classification (fits under cap=24)", async () => {
     stageAuthoritative({
       digest: "sha",
       mime: "text/markdown",
       storage_key: "k",
       origin_kind: "upload",
+      object_type: "@cinatra-ai/seed-0-artifact:artifact",
     });
-    // 12 mock artifact extensions, all matching text/markdown — a
-    // generous over-bound on expected same-MIME overlap (real same-MIME
-    // count for text/markdown is ~10: GTM 6 + Content 2 [blog-post,
-    // blog-idea] + Email/Legal 2 [email-body, contract]; slide-deck is
-    // application/pdf and screenshot is image/* — both excluded). The
-    // 12 chosen here exercises the same-MIME overlap envelope with a
-    // 2-extension safety margin: still well under cap=24.
     const defs = Array.from({ length: 12 }, (_, i) =>
       artifactDef({
         pkg: `@cinatra-ai/seed-${i}-artifact`,
@@ -423,7 +694,6 @@ describe("runArtifactMatch", () => {
       text: JSON.stringify({ matches: false, confidence: 0.1 }),
     });
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
-    // All 12 candidates classified — none skipped by the cap.
     expect(runLlmMock).toHaveBeenCalledTimes(12);
   });
 
@@ -433,6 +703,7 @@ describe("runArtifactMatch", () => {
       mime: "text/markdown",
       storage_key: "k",
       origin_kind: "upload",
+      object_type: "@cinatra-ai/over-0-artifact:artifact",
     });
     const defs = Array.from({ length: 25 }, (_, i) =>
       artifactDef({
@@ -457,10 +728,7 @@ describe("runArtifactMatch", () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     try {
       await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
-      // Cap=24: only 24 candidates classified, 1 skipped.
       expect(runLlmMock).toHaveBeenCalledTimes(24);
-      // The cap log fires with the literal cap value (regression: a future
-      // bump must update this assertion too).
       const sawCapLog = infoSpy.mock.calls.some((args) =>
         String(args[0]).includes("candidate cap (24) reached"),
       );

@@ -384,6 +384,23 @@ async function writeClaimedArtifact(input: {
     }
     throw err;
   }
+
+  // cinatra#1891 scope 7: enqueue the MEANING-matcher after agent-emit
+  // materialization. The create above set `skipFallbackClassification: true` so
+  // the matcher did NOT race the producer assertion — that assertion is now
+  // committed (atomic in the create's Tx2), so we enqueue EXPLICITLY here,
+  // post-commit. The matcher layers a meaning DRAFT on top of the producer's
+  // structural type (a suggestion chip below the producer's classic assertion,
+  // or an auto-surface if it out-confidences at/above threshold on a DIFFERENT
+  // meaning extension). Best-effort — never fails the materialized write.
+  const { enqueueArtifactMatchRun } = await import("./matcher-enqueue");
+  await enqueueArtifactMatchRun({
+    orgId: input.orgId,
+    artifactId: created.artifactId,
+    representationRevisionId: created.representationRevisionId,
+    createdByRunId: input.runId,
+  });
+
   return {
     ok: true,
     artifactId: created.artifactId,

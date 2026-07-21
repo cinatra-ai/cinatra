@@ -48,7 +48,14 @@ vi.mock("@/lib/register-all-object-types", () => ({
   registerAllObjectTypes: registerAllObjectTypesMock,
 }));
 vi.mock("@cinatra-ai/objects/registry", () => ({
-  objectTypeRegistry: { listArtifacts: listArtifactsMock },
+  objectTypeRegistry: {
+    listArtifacts: listArtifactsMock,
+    // cinatra#1891: the runtime validates the row's own type is a registered
+    // artifact type, and derives candidate ownership via provenance (definerOf).
+    resolve: () => ({ isArtifact: {} }),
+    definerOf: (t: string) =>
+      t.endsWith(":artifact") ? t.slice(0, -":artifact".length) : null,
+  },
 }));
 vi.mock("@cinatra-ai/llm", () => ({
   resolveConfiguredLlmRuntime: resolveRuntimeMock,
@@ -108,7 +115,7 @@ const PACK_DEFS: PackDef[] = [
 function stageAuthoritative(mime: string) {
   runPgMock.mockReturnValueOnce([
     {
-      rows: [{ digest: "sha", mime, storage_key: "k", origin_kind: "upload" }],
+      rows: [{ digest: "sha", mime, storage_key: "k", origin_kind: "upload", object_type: "@cinatra-ai/marketing-icp-artifact:artifact", classifier_signals: null }],
       rowCount: 1,
     },
   ]);
