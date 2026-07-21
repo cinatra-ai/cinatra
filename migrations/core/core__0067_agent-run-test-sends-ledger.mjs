@@ -1,4 +1,4 @@
-// core__0063 — agent_run_test_sends ledger (eng#548 #1625, DESIGN-V3 contract (4)).
+// core__0067 — agent_run_test_sends ledger (eng#548 #1625, DESIGN-V3 contract (4)).
 //
 // One brand-new table backing the run-scoped test-delivery send primitive's
 // per-action idempotency + crash recovery:
@@ -22,12 +22,13 @@
 // runner's search_path (the app schema); metadata-only DDL on an empty table, no
 // noTransaction().
 //
-// SEQ assigned at MERGE-time reconcile: shipped max on origin/main is core__0062
-// (email-correlation-data-indexes). This migration takes the next free seq
-// core__0063 PROVISIONALLY — sibling lanes (W1/PR2) may hold 0063; re-verify vs a
-// fresh origin/main immediately before push and rename-only renumber if a
-// concurrent lane landed 0063 first (that is normal). migrations/** is HIGH-RISK
-// (owner approval); the lane never merges.
+// SEQ assigned at ROUTE-time reconcile vs a fresh origin/main: shipped max is
+// core__0064 (restamp-upload-rows-uploader-owned); the two OPEN sibling lanes hold
+// core__0065 (#1915 assistant-registry-foundation) and core__0065→0066 (#1935
+// chat-threads-cutover, pending its own renumber). This migration therefore takes
+// the next GENUINELY FREE seq core__0067 (rename-only renumber from the provisional
+// 0063, which now precedes the shipped 0064 — the runner tolerates the 0063/0066
+// gaps). migrations/** is HIGH-RISK (owner approval); the lane never merges.
 
 /** Idempotent DDL mirroring the bootstrap leaf — safe to run after it. */
 export const agentRunTestSendsDdlSql = `
@@ -58,7 +59,7 @@ export function up(pgm) {
 
 /** @param {import("node-pg-migrate").MigrationBuilder} pgm */
 export function down(pgm) {
-  // Reversible: a fresh addition, so dropping it restores the exact pre-0063
+  // Reversible: a fresh addition, so dropping it restores the exact pre-0067
   // shape on any lineage (indexes ride the table drop). HONEST COST: any in-flight
   // test-send ledger rows are lost — an operator-initiated `--down` accepts that
   // (the table carries no data on a fresh install and an interrupted test send is
