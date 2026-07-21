@@ -113,3 +113,76 @@ describe("§IV — targeted-restore entry affordances deep-link to the console's
     expect(CHIP_ACTION).toMatch(/eligible \? \{ changeSetId: cs\.id \} : null/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// §VI Upload & typing + §VII inline marketplace (epic #1883 slice A4, spec
+// design@16efd8d2 `specs/app-artifacts.html`). Source-text conformance in the
+// established repo pattern (node vitest, no @testing-library/react); the LIVE
+// bidirectional Playwright walk is the proof-at-close on the PR.
+// ---------------------------------------------------------------------------
+
+describe("§VI — the library ingests: Upload control + drop target are wired in (spec→render)", () => {
+  const LIB = read("src/components/artifacts/library-mode.tsx");
+  const UP = read("src/components/artifacts/library-upload.tsx");
+
+  it("the toolbar mounts the Upload affordance and the list is a drop target", () => {
+    expect(LIB).toMatch(/LibraryUploadProvider/);
+    expect(LIB).toMatch(/<LibraryUploadButton \/>/);
+    expect(LIB).toMatch(/<LibraryUploadDropZone>/);
+  });
+
+  it("carries every §VI/§VII conformance surface the successor spec shows", () => {
+    for (const id of [
+      "artifacts-upload-affordance",
+      "artifacts-upload-dragover",
+      "artifacts-upload-progress",
+      "artifacts-upload-typed",
+      "artifacts-type-picker",
+      "artifacts-upload-refused",
+      "artifacts-marketplace-tab",
+      "artifacts-marketplace-request",
+    ]) {
+      expect(UP).toContain('data-conformance-id="' + id + '"');
+    }
+  });
+
+  it("the upload posts to the existing MIME-base typing route (§VI, A1/A2)", () => {
+    expect(UP).toMatch(/\/api\/artifacts\/upload/);
+    expect(UP).toMatch(/data-action="upload-file -> typed"/);
+  });
+
+  it("a refused upload offers marketplace recourse only when a base link is present (§VI.3)", () => {
+    expect(UP).toMatch(/state\.marketplaceHref \?/);
+    expect(UP).toMatch(/Find a base in the marketplace/);
+    expect(UP).toMatch(/data-action="open-marketplace -> marketplace-open"/);
+  });
+});
+
+describe("§VI.1 — the picker asserts a USER meaning, never a re-type; §VII admin-only install (render→spec)", () => {
+  const ACT = read("src/app/artifacts/upload-typing-actions.ts");
+  const UP = read("src/components/artifacts/library-upload.tsx");
+
+  it("confirm writes a user-sourced assertion (the rank ceiling), gated on the artifact read", () => {
+    expect(ACT).toMatch(/assertedBy: "user"/);
+    expect(ACT).toMatch(/readArtifactForDetail/);
+  });
+
+  it("the picker's None-of-these opens the inline marketplace tab (§VI.1 → §VII)", () => {
+    expect(UP).toMatch(/data-action="open-marketplace-tab -> marketplace-open"/);
+    expect(UP).toMatch(/None of these/);
+    expect(UP).toMatch(/data-action="return-to-picker -> picker-open"/);
+  });
+
+  it("install is platform-admin-gated; a non-admin requests, which notifies admins deduped (ruling 4)", () => {
+    expect(ACT).toMatch(/isPlatformAdmin/);
+    expect(ACT).toMatch(/kind: "admins"/);
+    expect(ACT).toMatch(/buildTypeInstallRequestNotificationInput/);
+    expect(UP).toMatch(/data-action="request-install -> request-sent"/);
+    expect(UP).toMatch(/data-action="install-type -> installed"/);
+  });
+
+  it("the admin inline install re-warms the object-type registry so the type is selectable (§VII)", () => {
+    expect(ACT).toMatch(/registerAllObjectTypes/);
+    expect(ACT).toMatch(/installExtensionPackageFormAction/);
+  });
+});
