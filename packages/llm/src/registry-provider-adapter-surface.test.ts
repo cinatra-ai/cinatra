@@ -54,8 +54,9 @@ vi.mock("@/lib/external-mcp-toolbox-loader.server", () => ({
 import { getLlmProviderAdapterSurface } from "@/lib/llm-provider-surfaces";
 import { getConfiguredOpenAIConnection, createOpenAIProviderAdapter } from "./providers/openai";
 import { resolveProviderAdapter } from "./registry";
+import type { LlmProviderAdapter } from "./types";
 
-function surface(createAdapter: () => Promise<unknown | null>) {
+function surface(createAdapter: () => Promise<LlmProviderAdapter | null>) {
   return { abiVersion: 1 as const, providerId: "openai", createAdapter };
 }
 
@@ -66,7 +67,9 @@ beforeEach(() => {
 
 describe("resolveProviderAdapter — llm-provider-adapter surface (S4)", () => {
   it("uses the connector-registered adapter and does NOT consult the in-core factory", async () => {
-    const adapter = { provider: "openai", via: "surface" };
+    // Deliberate partial stub — this test proves reference identity + null
+    // authority, not adapter shape; cast to the firmed ABI type (S4.0).
+    const adapter = { provider: "openai", via: "surface" } as unknown as LlmProviderAdapter;
     vi.mocked(getLlmProviderAdapterSurface).mockReturnValue(surface(async () => adapter));
 
     const result = await resolveProviderAdapter("openai");
