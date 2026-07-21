@@ -84,7 +84,9 @@ describe("drizzle-cube filter-bar restyle contract (dashboard-theme.css)", () =>
     // layouts — desktop hairline div + mobile bordered rows — behavior intact.
     const parts = get("CompactFilterBarParts.tsx");
     expect(parts).toMatch(/className="dc:h-5 dc:w-px dc:mx-1"/);
-    expect(parts).toMatch(/dc:border-t/);
+    // The mobile rows carry dc:border-t on their OWN className (a bare token
+    // match could hit any unrelated border) — both rows end with this stack.
+    expect(parts).toMatch(/className="[^"]*dc:px-3 dc:py-2 dc:border-t"/);
   });
 
   it("hover keeps flowing through --dc-surface-hover", () => {

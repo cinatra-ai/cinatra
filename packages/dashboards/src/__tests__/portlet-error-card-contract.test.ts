@@ -116,9 +116,11 @@ describe("drizzle-cube portlet error-card contract (cinatra#1512)", () => {
     // every React hop componentwise proves the DOM relationship; an upstream
     // re-nest at ANY hop must fail here loudly (cinatra#1929).
     const card = getFrom(editModalSources, "DashboardPortletCard.tsx");
-    // Hop 1: the chart-body wrapper's direct element child is <AnalyticsPortlet>.
+    // Hop 1: the chart-body wrapper is an INTRINSIC <div> (a component
+    // carrying the class could nest DOM internally) whose direct element
+    // child is <AnalyticsPortlet>.
     expect(card).toMatch(
-      /dc:flex-1 dc:min-h-0 dc:flex dc:flex-col\$\{[^}]*\}`\}\s*>\s*<AnalyticsPortlet/,
+      /<div[^>]*className=\{`dc:flex-1 dc:min-h-0 dc:flex dc:flex-col\$\{[^}]*\}`\}\s*>\s*<AnalyticsPortlet/,
     );
     // Hop 2: AnalyticsPortlet's non-chart branch RETURNS the state view
     // unwrapped (no intervening element).
