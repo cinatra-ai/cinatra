@@ -17,9 +17,13 @@
  *   - member role / remove   → `organization.manageMembers` → org_owner
  *   - invitation cancel      → `organization.manageMembers` → org_owner
  *
- * DEFERRED (owner-gated follow-ups, deliberately NOT here): organization
- * delete (default-org recreation, stale active-org sessions, single-org mode)
- * and archive (no schema/catalog basis). Invitation CREATE is the client
+ * DELETE ships here too (cinatra#1510 remainder): gated on
+ * `organization.delete` (org_owner) via the same viewed-org gate, structurally
+ * blocked for the default org and single-org mode, name-confirmed server-side,
+ * and executed by the reference-guarded transactional core in
+ * `@/lib/organization-delete` (block-if-referenced, never cascade).
+ * DEFERRED: archive (no schema/catalog basis — owner proposal pending).
+ * Invitation CREATE is the client
  * `InviteMemberDialog` (org-id-parameterized `authClient.organization.inviteMember`),
  * rendered only when `canManageMembers`.
  *
@@ -32,16 +36,34 @@
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 
+import { eq } from "drizzle-orm";
+
 import { auth } from "@/lib/auth";
 import { getAuthSession } from "@/lib/auth-session";
+import { betterAuthDb, betterAuthOrganizations } from "@/lib/better-auth-db";
 import {
+  resolveOrganizationManageCapabilities,
   userCanManageOrganization,
   userCanManageOrganizationMembers,
 } from "@/lib/authz/organization-manage-gate";
+import { logAuditEvent } from "@/lib/authz/audit";
+import {
+  deleteOrganizationReferenceGuarded,
+  type OrganizationDeleteBlockers,
+} from "@/lib/organization-delete";
 
 export type OrgManageActionResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly error: string };
+
+export type OrgDeleteActionResult =
+  | { readonly ok: true; readonly redirectTo: string }
+  | {
+      readonly ok: false;
+      readonly error: string;
+      /** Present when referenced records block the delete — per-kind counts. */
+      readonly blockers?: OrganizationDeleteBlockers;
+    };
 
 type OrgWorkspaceRole = "member" | "admin" | "owner";
 
@@ -154,6 +176,126 @@ export async function removeOrganizationMemberAction(
     return { ok: true };
   } catch (err) {
     return { ok: false, error: toErrorMessage(err, "Could not remove the member.") };
+  }
+}
+
+function describeBlockers(blockers: OrganizationDeleteBlockers): string {
+  const parts: string[] = [];
+  if (blockers.teams > 0) parts.push(`${blockers.teams} team(s)`);
+  if (blockers.activeProjects > 0)
+    parts.push(`${blockers.activeProjects} active project(s)`);
+  if (blockers.connectors > 0) parts.push(`${blockers.connectors} connector(s)`);
+  if (blockers.dashboards > 0) parts.push(`${blockers.dashboards} dashboard(s)`);
+  if (blockers.agents > 0) parts.push(`${blockers.agents} agent(s)`);
+  return parts.join(", ");
+}
+
+/**
+ * Delete the organization. Gated on `organization.delete` (org_owner) in the
+ * VIEWED org via the shared capabilities gate — which also re-checks the two
+ * structural hazards (default org, single-org mode) fail-closed. The typed
+ * organization name is verified SERVER-side against the live row (the client
+ * gating is UX only), then the reference-guarded transactional core runs:
+ * anything with its own lifecycle blocks with per-kind counts; on success the
+ * client is sent to `/organizations` (the viewed page no longer exists, and
+ * every session's dangling active-org pointer was cleared in-transaction).
+ */
+export async function deleteOrganizationAction(
+  formData: FormData,
+): Promise<OrgDeleteActionResult> {
+  try {
+    const organizationId = readRequiredString(formData, "organizationId");
+    const session = await getAuthSession();
+    if (!session) {
+      return {
+        ok: false,
+        error: "You do not have permission to delete this organization.",
+      };
+    }
+    const capabilities = await resolveOrganizationManageCapabilities(
+      session,
+      organizationId,
+    );
+    if (!capabilities.canDelete) {
+      return {
+        ok: false,
+        error: "You do not have permission to delete this organization.",
+      };
+    }
+
+    const confirmName = readRequiredString(formData, "confirmName");
+    const orgRows = await betterAuthDb
+      .select({ name: betterAuthOrganizations.name })
+      .from(betterAuthOrganizations)
+      .where(eq(betterAuthOrganizations.id, organizationId))
+      .limit(1);
+    const org = orgRows[0];
+    if (!org) {
+      return { ok: false, error: "This organization no longer exists." };
+    }
+    if (confirmName !== org.name) {
+      return {
+        ok: false,
+        error: "The name you typed does not match the organization's name.",
+      };
+    }
+
+    const result = await deleteOrganizationReferenceGuarded(
+      organizationId,
+      session.user.id,
+    );
+    if (!result.ok) {
+      if (result.reason === "blocked") {
+        return {
+          ok: false,
+          error: `Cannot delete: this organization still contains ${describeBlockers(result.blockers)}. Remove or re-home them first.`,
+          blockers: result.blockers,
+        };
+      }
+      if (result.reason === "not-found") {
+        return { ok: false, error: "This organization no longer exists." };
+      }
+      if (result.reason === "default-org") {
+        return {
+          ok: false,
+          error: "The default organization cannot be deleted.",
+        };
+      }
+      if (result.reason === "single-org-mode") {
+        return {
+          ok: false,
+          error: "Organizations cannot be deleted in single-organization mode.",
+        };
+      }
+      if (result.reason === "denied") {
+        return {
+          ok: false,
+          error: "You do not have permission to delete this organization.",
+        };
+      }
+      return { ok: false, error: "Could not delete the organization." };
+    }
+
+    // logAuditEvent is fire-and-forget by contract (silent swallow on insert
+    // failure) — it can never turn the committed delete into a failure result.
+    await logAuditEvent({
+      organizationId,
+      actorPrincipalId: session.user.id,
+      actorPrincipalType: "human",
+      authSource: "ui",
+      resourceType: "organization",
+      resourceId: organizationId,
+      operation: "organization.delete",
+      decision: "allowed",
+      metadata: { organizationName: org.name },
+    });
+    revalidatePath("/organizations");
+    return { ok: true, redirectTo: "/organizations" };
+  } catch (err) {
+    return {
+      ok: false,
+      error: toErrorMessage(err, "Could not delete the organization."),
+    };
   }
 }
 

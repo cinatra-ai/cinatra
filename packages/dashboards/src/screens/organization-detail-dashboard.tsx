@@ -36,6 +36,10 @@ import {
 } from "@/lib/better-auth-db";
 
 import { resolveOrganizationManageCapabilities } from "@/lib/authz/organization-manage-gate";
+import {
+  countOrganizationDeleteBlockers,
+  type OrganizationDeleteBlockers,
+} from "@/lib/organization-delete";
 
 import { buildSecurityContextFromSession } from "../auth/security-context";
 import { OrganizationDetailTabs } from "../components/organization-detail-tabs";
@@ -140,6 +144,19 @@ export async function OrganizationDetailDashboardPage({
     }
   }
 
+  // Danger-zone pre-count (cinatra#1510 remainder): only a viewer whose
+  // capabilities carry `canDelete` pays the count query. Advisory for the UI —
+  // the delete transaction re-counts under the org-row lock. Fail-closed: an
+  // unreadable count hides the card rather than rendering an unverified one.
+  let deleteBlockers: OrganizationDeleteBlockers | undefined;
+  if (manage.canDelete) {
+    try {
+      deleteBlockers = await countOrganizationDeleteBlockers(id);
+    } catch {
+      deleteBlockers = undefined;
+    }
+  }
+
   const manageSlot = manage.canManageSettings ? (
     <OrganizationManagePanel
       organizationId={id}
@@ -148,6 +165,8 @@ export async function OrganizationDetailDashboardPage({
       currentUserId={userId}
       canManageSettings={manage.canManageSettings}
       canManageMembers={manage.canManageMembers}
+      canDelete={manage.canDelete && deleteBlockers !== undefined}
+      deleteBlockers={deleteBlockers}
       members={buildOrganizationManageMembers(memberRows)}
       invitations={pendingInvitations}
     />
