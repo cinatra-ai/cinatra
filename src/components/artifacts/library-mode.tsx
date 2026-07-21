@@ -30,6 +30,11 @@ import type { EffectiveIdentity } from "@cinatra-ai/objects/effective-identity";
 import { isSelectionPreparing } from "@/app/artifacts/[id]/renderer-dispatch";
 import { LibraryFacetControl } from "./library-facet-control";
 import { isFileMime, LibraryRowGlyph } from "./library-row-glyph";
+import {
+  LibraryUploadButton,
+  LibraryUploadDropZone,
+  LibraryUploadProvider,
+} from "./library-upload";
 
 // ---------------------------------------------------------------------------
 // Presentation helpers (pure)
@@ -248,33 +253,41 @@ function LibraryToolbarShell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-3.5">
-      {/* Toolbar: search · facet · scope. GET form keeps mode = library
-          (default), so submitting stays on this page. */}
-      <form
-        method="get"
-        className="flex flex-wrap items-center gap-2 rounded-lg bg-toolbar p-2"
-      >
-        <label className="flex h-[34px] flex-1 items-center gap-2 rounded-md bg-surface-strong px-3">
-          <Search aria-hidden className="size-4 flex-none text-muted-foreground" />
-          <Input
-            type="search"
-            name="q"
-            defaultValue={query ?? ""}
-            placeholder="Search artifacts"
-            className="h-full border-0 bg-transparent p-0 text-xs shadow-none focus-visible:ring-0"
-          />
-        </label>
-        <LibraryFacetControl options={facet} selected={selectedFacet} />
-        <span className="inline-flex h-[34px] items-center gap-1.5 rounded-md border border-line bg-surface-strong px-3 text-xs text-foreground">
-          <span className="text-muted-foreground">Scope:</span> Workspace
-        </span>
-        <Button type="submit" size="sm" variant="secondary">
-          Apply
-        </Button>
-      </form>
-      {children}
-    </div>
+    <LibraryUploadProvider>
+      <div className="flex flex-col gap-3.5">
+        {/* Toolbar: search · facet · scope · Upload. GET form keeps mode =
+            library (default), so submitting stays on this page. The Upload
+            control (§VI) sits at the toolbar's right edge — a plain type=button,
+            so it never submits the GET form; the whole list below is a drop
+            target (LibraryUploadDropZone). */}
+        <form
+          method="get"
+          className="flex flex-wrap items-center gap-2 rounded-lg bg-toolbar p-2"
+        >
+          <label className="flex h-[34px] flex-1 items-center gap-2 rounded-md bg-surface-strong px-3">
+            <Search aria-hidden className="size-4 flex-none text-muted-foreground" />
+            <Input
+              type="search"
+              name="q"
+              defaultValue={query ?? ""}
+              placeholder="Search artifacts"
+              className="h-full border-0 bg-transparent p-0 text-xs shadow-none focus-visible:ring-0"
+            />
+          </label>
+          <LibraryFacetControl options={facet} selected={selectedFacet} />
+          <span className="inline-flex h-[34px] items-center gap-1.5 rounded-md border border-line bg-surface-strong px-3 text-xs text-foreground">
+            <span className="text-muted-foreground">Scope:</span> Workspace
+          </span>
+          <Button type="submit" size="sm" variant="secondary">
+            Apply
+          </Button>
+          <div className="ml-auto flex items-center">
+            <LibraryUploadButton />
+          </div>
+        </form>
+        <LibraryUploadDropZone>{children}</LibraryUploadDropZone>
+      </div>
+    </LibraryUploadProvider>
   );
 }
 

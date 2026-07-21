@@ -14,14 +14,14 @@ import "server-only";
  * `src/lib/__tests__/resource-project-move.test.ts`).
  *
  * Physical/provenance rows do NOT carry project_id (membership lives on the
- * logical row), so the cascade is JUST the visible row + audit for `objects`,
- * `agent_runs`, `chat_threads`. The search projection (Graphiti) layer does
+ * logical row), so the cascade is JUST the visible row + audit for `objects`
+ * and `agent_runs`. The search projection (Graphiti) layer does
  * not carry project_id today either; if it ever does, this helper's signature
  * stays the same and the projector consumes the audit row.
  *
  * The helper is deliberately ORM-free: it composes raw SQL with the
  * caller-supplied schema-qualified table name so the same helper serves
- * every resource type (objects, agent_runs, chat_threads). Each table's
+ * every resource type (objects, agent_runs). Each table's
  * primary-key column is also caller-supplied (`idColumn`) — defaults to
  * `id` (current tables use `id`).
  *
@@ -34,11 +34,11 @@ import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { ensurePostgresSchema, postgresSchema, getPostgresConnectionString } from "@/lib/database";
 import { randomUUID } from "node:crypto";
 
-export type ResourceKind = "object" | "agent_run" | "chat_thread" | "project";
+export type ResourceKind = "object" | "agent_run" | "project";
 
 export type ResourceProjectMoveArgs = {
   /** Resource row's table (no schema prefix). */
-  table: "objects" | "agent_runs" | "chat_threads" | "projects";
+  table: "objects" | "agent_runs" | "projects";
   /** Resource row's primary-key column. Defaults to `id`. */
   idColumn?: string;
   /** Resource row's primary-key value. */

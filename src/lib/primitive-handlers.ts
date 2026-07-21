@@ -16,6 +16,11 @@ import { createObjectsPrimitiveHandlers } from "@cinatra-ai/objects/mcp-handlers
 // independent of whether the runtime loader's activation ran or was skipped — so
 // an edge-bound caller is served fail-closed rather than silently defaulting.
 import "@/lib/extension-version-keyed-serving";
+// #1625 — wire the run-scoped test-delivery send PORT on the passthrough
+// path too (this registry is the mount point for the non-MCP dispatch paths that
+// do NOT transitively load @/lib/mcp-server). Fail-closed: the send primitive
+// surfaces a clear error if the port was never wired, never a phantom send.
+import "@/lib/register-test-delivery-send-port";
 import { createSkillsPrimitiveHandlers } from "@cinatra-ai/skills/mcp-handlers";
 // Connector primitive handlers are NOT imported here. They are captured from
 // the generated extension manifest (a connector opts in by exporting a

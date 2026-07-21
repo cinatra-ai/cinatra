@@ -667,3 +667,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_ttl_thread_strategy ON public.threa
 CREATE INDEX IF NOT EXISTS user_client_id_idx ON public."user" USING btree ("clientId") WHERE ("clientId" IS NOT NULL);
 CREATE INDEX IF NOT EXISTS verification_identifier_idx ON public.verification USING btree (identifier);
 
+
+-- ---------------------------------------------------------------------------
+-- Manual idempotent patch (cinatra#1957): the archive substrate (#1950)
+-- declares organization.archivedAt in cinatraOrganizationOptions
+-- additionalFields, so the RUNTIME Better Auth organization model expects the
+-- column. Real installs get it from the auth migration (getMigrations owns
+-- it); this committed snapshot predates #1950, and without the column a fresh
+-- smoke database breaks the first-user org bootstrap (organization/list comes
+-- back empty — dashboard-live-verify reds of 2026-07-21). Fold into the
+-- generated DDL on the next scripts/dump-public-schema.mjs refresh and drop
+-- this patch block.
+ALTER TABLE public."organization" ADD COLUMN IF NOT EXISTS "archivedAt" timestamp with time zone;

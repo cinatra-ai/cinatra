@@ -2801,6 +2801,18 @@ def _reconcile_input_message_gates(
     conversation / renderer surface. The declared ``inputs`` descriptor is then
     dropped (the runtime rebuilds it from the template).
 
+    OPT-IN VALUE SURFACING (#1625, D2): a gate that sets
+    ``metadata.cinatra.surfaceGateInputs == True`` (strict identity) instead
+    gets a JSON-object ``message_template`` that RENDERS each declared input's
+    value (``"<name>": {% if <name> %}{{ <name> | tojson }}{% else %}null{%
+    endif %}``). This is the ONLY channel that reaches the host on the pinned
+    runtime: wayflowcore 26.1.2's a2a worker never writes ``task.metadata`` on
+    an interrupt (so the host's ``pendingApproval`` path is dead) — the gate's
+    input values reach the renderer only as the assistant-message JSON the host
+    parses via its generic ``historyText → spreadFromOutput`` merge. Every gate
+    WITHOUT the flag keeps the byte-identical empty-guard template, so no other
+    gate-bearing agent's behavior changes.
+
     Idempotent (skips a node already at ``PluginInputMessageNode`` or one that
     already carries a ``message_template``) and conservative (a node whose
     declared input titles are not all plain identifiers is left untouched, so it
@@ -2839,14 +2851,59 @@ def _reconcile_input_message_gates(
                     )
                     and len(set(titles)) == len(titles)  # no duplicate titles
                 )
+                # #1625 (D2) — OPT-IN value-surfacing gate template.
+                # wayflowcore 26.1.2's a2a worker
+                # (agentserver/a2a/_worker.py:run_task) surfaces an
+                # input-required interrupt to the host SOLELY via the assistant
+                # message(s) it appends (``update_task(new_messages=…)``) — it
+                # NEVER writes ``task.metadata``. So the host's
+                # ``task.metadata.pendingApproval`` channel (execution.ts) is
+                # structurally always empty on the pin, and the ONLY way a gate's
+                # DFE input VALUES reach the renderer is by RENDERING them into
+                # the gate's own message text (the host's generic
+                # ``historyText → spreadFromOutput`` path parses a whole-object
+                # JSON agent message and spreads its keys into the renderer
+                # values). The default empty ``{% if x %}{% endif %}`` guards
+                # render to "" and thus surface NOTHING.
+                #
+                # A gate node that sets ``metadata.cinatra.surfaceGateInputs ==
+                # True`` (STRICT identity — never a truthy coercion) opts into a
+                # JSON-object template that renders each declared input as
+                # ``"<t>": <t|null>`` via ``| tojson`` — grounded to compile,
+                # stay optional, and produce parseable JSON both on the first
+                # (all-None) visit and on re-entry in the pinned runtime. Every
+                # other gate (the flag absent / not True) keeps the
+                # BYTE-IDENTICAL empty-guard template — no other gate-bearing
+                # agent's behavior changes.
+                node_meta = obj.get("metadata")
+                surface_gate_inputs = (
+                    isinstance(node_meta, dict)
+                    and isinstance(node_meta.get("cinatra"), dict)
+                    and node_meta["cinatra"].get("surfaceGateInputs") is True
+                )
                 if all_ok and not already_templated:
                     obj["component_type"] = "PluginInputMessageNode"
-                    obj["message_template"] = "".join(
-                        "{% if " + t + " %}{% endif %}" for t in titles
-                    )
+                    if surface_gate_inputs:
+                        obj["message_template"] = (
+                            "{"
+                            + ", ".join(
+                                '"' + t + '": {% if ' + t + " %}{{ " + t
+                                + " | tojson }}{% else %}null{% endif %}"
+                                for t in titles
+                            )
+                            + "}"
+                        )
+                    else:
+                        obj["message_template"] = "".join(
+                            "{% if " + t + " %}{% endif %}" for t in titles
+                        )
                     obj.pop("inputs", None)
                     report.append(
-                        {"node": obj.get("id") or obj.get("name"), "inputs": titles}
+                        {
+                            "node": obj.get("id") or obj.get("name"),
+                            "inputs": titles,
+                            "surfaceGateInputs": surface_gate_inputs,
+                        }
                     )
                 elif not already_templated:
                     print(

@@ -33,6 +33,41 @@ describe("project-scoped schema migration", () => {
     expect(has('chat_threads_project_created_idx ON "cinatra_test"."chat_threads" (project_id, created_at DESC, id) WHERE project_id IS NOT NULL')).toBe(true);
   });
 
+  // ---- T3b: assistant_threads/turns PR2 bootstrap halves (cinatra#1037 P5.6) ----
+  it("T3b assistant_threads.project_id column + ordered partial index (bootstrap)", () => {
+    expect(has('ALTER TABLE "cinatra_test"."assistant_threads" ADD COLUMN IF NOT EXISTS project_id text')).toBe(true);
+    expect(has('assistant_threads_project_updated_idx ON "cinatra_test"."assistant_threads" (project_id, updated_at DESC, id) WHERE project_id IS NOT NULL')).toBe(true);
+    // the ALTER must follow the base CREATE (idempotent bootstrap-upgrade parity)
+    const create = idxOf('CREATE TABLE IF NOT EXISTS "cinatra_test"."assistant_threads"');
+    const alter = idxOf('ALTER TABLE "cinatra_test"."assistant_threads" ADD COLUMN IF NOT EXISTS project_id text');
+    expect(create).toBeGreaterThan(-1);
+    expect(alter).toBeGreaterThan(create);
+  });
+
+  it("T3b-team assistant_threads.team_id column + ordered partial index (bootstrap)", () => {
+    expect(has('ALTER TABLE "cinatra_test"."assistant_threads" ADD COLUMN IF NOT EXISTS team_id text')).toBe(true);
+    expect(has('assistant_threads_team_updated_idx ON "cinatra_test"."assistant_threads" (team_id, updated_at DESC, id) WHERE team_id IS NOT NULL')).toBe(true);
+    // the ALTER must follow the base CREATE (idempotent bootstrap-upgrade parity)
+    const create = idxOf('CREATE TABLE IF NOT EXISTS "cinatra_test"."assistant_threads"');
+    const alter = idxOf('ALTER TABLE "cinatra_test"."assistant_threads" ADD COLUMN IF NOT EXISTS team_id text');
+    expect(create).toBeGreaterThan(-1);
+    expect(alter).toBeGreaterThan(create);
+  });
+
+  it("T3c assistant_threads.scalars jsonb (durable render-state) + object CHECK", () => {
+    expect(has('ALTER TABLE "cinatra_test"."assistant_threads" ADD COLUMN IF NOT EXISTS scalars jsonb')).toBe(true);
+    expect(has("assistant_threads_scalars_object_check")).toBe(true);
+    expect(has("jsonb_typeof(scalars) = 'object'")).toBe(true);
+  });
+
+  it("T3d assistant_turns.ordinal integer (faithful message order)", () => {
+    expect(has('ALTER TABLE "cinatra_test"."assistant_turns" ADD COLUMN IF NOT EXISTS ordinal integer')).toBe(true);
+    const create = idxOf('CREATE TABLE IF NOT EXISTS "cinatra_test"."assistant_turns"');
+    const alter = idxOf('ALTER TABLE "cinatra_test"."assistant_turns" ADD COLUMN IF NOT EXISTS ordinal integer');
+    expect(create).toBeGreaterThan(-1);
+    expect(alter).toBeGreaterThan(create);
+  });
+
   // ---- T4: projects.archived_at ----
   it("T4 projects.archived_at column (nullable, no backfill)", () => {
     expect(has('ALTER TABLE "cinatra_test"."projects" ADD COLUMN IF NOT EXISTS archived_at timestamptz')).toBe(true);

@@ -102,14 +102,26 @@ export async function approveReviewTaskInternal(
   actorContext?: PrimitiveActorContext,
   roleHints?: ActorRoleHints,
 ): Promise<void> {
-  // When an `actorContext` is supplied the helper
-  // is reached from a caller-class-only authenticated entry point (the A2A
-  // resume route), so it OWNS the run-access gate. Resolve the run's co-owners +
-  // effective policy and enforce `approveHitl`, denying cross-actor / no-row
-  // BEFORE any state-changing write. A null run becomes a 404-shaped AuthzError
-  // so a caller cannot probe foreign run/task ids via the error text. No-op when
-  // `actorContext` is undefined (the caller already authorized).
-  const enforceApproveAccess = async (run: {
+  // When an `actorContext` is supplied the helper is reached from a
+  // caller-class-only authenticated entry point (the A2A resume route), so it
+  // OWNS the run-access gate. It MIRRORS agent_run_resume (mcp/handlers.ts:1967,
+  // 1977): both `execute` AND `approveHitl` are enforced against the ACTUAL
+  // responder actorContext BEFORE any state-changing write (the setup-field
+  // merge or the WayFlow resume that drives a send).
+  //
+  // Why execute, not just approveHitl (#1625 F2): resuming a gate DRIVES
+  // execution — for the test-delivery agent the WayFlow resume reaches
+  // `perform_test_send`, an EXECUTE-tier mutation. The send primitive runs under
+  // the run OWNER's borrowed authority (a server-side back-edge node with no
+  // responder session), so its own `execute` check is tautological owner-context
+  // defense-in-depth, NOT responder authorization. The responder-side execute
+  // gate therefore lives HERE, at the resume seam, exactly as agent_run_resume
+  // requires it for every resume. An A2A responder holding only `run.approveHitl`
+  // (not `run.resume`) can no longer drive a send. A null run becomes a
+  // 404-shaped AuthzError so a caller cannot probe foreign run/task ids via the
+  // error text. No-op when `actorContext` is undefined (the UI path already
+  // authorized via requireAdminSession; a platform_admin bypasses both gates).
+  const enforceResumeAccess = async (run: {
     id: string;
     runBy: string | null;
     orgId: string | null;
@@ -122,20 +134,18 @@ export async function approveReviewTaskInternal(
       ? await readAgentTemplateById(run.templateId)
       : null;
     const effectivePolicy = run?.authPolicy ?? template?.agentAuthPolicy ?? null;
-    await enforceRunAccess(
-      run
-        ? {
-            id: run.id,
-            runBy: run.runBy,
-            orgId: run.orgId,
-            effectivePolicy,
-            coOwnerUserIds: coOwnerRows.map((r) => r.userId),
-          }
-        : null,
-      actorContext,
-      "approveHitl",
-      roleHints,
-    );
+    const runForCheck = run
+      ? {
+          id: run.id,
+          runBy: run.runBy,
+          orgId: run.orgId,
+          effectivePolicy,
+          coOwnerUserIds: coOwnerRows.map((r) => r.userId),
+        }
+      : null;
+    // execute FIRST, then approveHitl — the exact order agent_run_resume uses.
+    await enforceRunAccess(runForCheck, actorContext, "execute", roleHints);
+    await enforceRunAccess(runForCheck, actorContext, "approveHitl", roleHints);
   };
 
   // ---------------------------------------------------------------------------
@@ -160,7 +170,7 @@ export async function approveReviewTaskInternal(
     // inputParams CAS / status->queued /
     // enqueue. A null run throws a 404-shaped AuthzError so a caller-class
     // principal cannot probe foreign setup-<runId> ids via the error text.
-    await enforceApproveAccess(run);
+    await enforceResumeAccess(run);
     if (!run) {
       throw new Error(`[approveReviewTaskInternal] run ${runId} not found (setup path)`);
     }
@@ -338,7 +348,7 @@ export async function approveReviewTaskInternal(
     // caller-class principal cannot borrow another run's authority by selecting
     // its wayflow-<taskId>. A null run throws a 404-shaped AuthzError (no
     // existence leak).
-    await enforceApproveAccess(run);
+    await enforceResumeAccess(run);
     if (!run) {
       throw new Error(`[approveReviewTaskInternal] no agent_run found for a2aTaskId=${taskId}`);
     }

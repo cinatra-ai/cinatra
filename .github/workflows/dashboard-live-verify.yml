@@ -92,6 +92,14 @@ jobs:
               - 'tests/e2e/config/dashboards.config.ts'
               - 'tests/e2e/config/base.ts'
               - 'tests/e2e/config/hydration.ts'
+              # cinatra#1957: the smoke DB is provisioned from this committed
+              # snapshot (apply-public-schema step) and the Better Auth runtime
+              # model is defined by better-auth-schema.ts — drift in either IS a
+              # smoke-behavior change and must run the real smoke, never the stub
+              # (the archivedAt regression green-stubbed straight onto main).
+              - 'tests/e2e/rbac/fixtures/public-schema.sql'
+              - 'scripts/apply-public-schema.mjs'
+              - 'src/lib/better-auth-schema.ts'
               - '.github/workflows/dashboard-live-verify.yml'
               # High-signal shared-runtime files whose breakage reaches the
               # /agents DC render even though they sit outside the dashboard

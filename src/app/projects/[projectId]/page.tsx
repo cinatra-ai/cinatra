@@ -197,8 +197,8 @@ export default async function ProjectDetailPage({ params }: Props) {
        WHERE project_id = ${project.id}
     `),
     projectsDb.execute<{ c: string }>(sql`
-      SELECT COUNT(*)::text AS c FROM "${sql.raw(schema)}"."chat_threads"
-       WHERE project_id = ${project.id}
+      SELECT COUNT(*)::text AS c FROM "${sql.raw(schema)}"."assistant_threads"
+       WHERE project_id = ${project.id} AND origin = 'legacy-chat'
     `),
   ]);
   const objectsCount = Number(objectsCountRes.rows[0]?.c ?? "0");

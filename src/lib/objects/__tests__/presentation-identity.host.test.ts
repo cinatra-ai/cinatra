@@ -199,6 +199,35 @@ describe("policy binding — matcher liveness mirrors the org-scoped install gat
     expect(out.tier).toBe("matcher");
   });
 
+  it("A4-seam: a USER (classic) assertion on a MATCHER-ONLY pack serves at tier-1 'classic' when org-live", () => {
+    // The exact A4 picker Confirm: the pack registers NO object type (matcher-only,
+    // like brand-voice); the human asserts it (assertedBy:"user", classic). Its
+    // liveness is decided SOLELY by the org-scoped install gate (it is not in the
+    // type-registry base set). An active org install ⇒ the classic user assertion
+    // WINS tier-1 (rank 3), presenting as the pack — the picker's write and the
+    // resolver's read agree (no dead pick).
+    registerMatcherPack(X, 0.7); // channel-only; NO registerTypePack
+    prime(
+      [sa({ artifact_id: "a1", extension: X, asserted_by: "user" })],
+      [{ package_name: X, status: "active", organization_id: ORG }],
+    );
+    const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
+    expect(out.identity).toEqual({ kind: "extension", extension: X });
+    expect(out.tier).toBe("classic");
+  });
+
+  it("A4-seam: the SAME user assertion does NOT surface when the matcher-only pack is archived for the org (no dead pick)", () => {
+    registerMatcherPack(X, 0.7);
+    prime(
+      [sa({ artifact_id: "a1", extension: X, asserted_by: "user" })],
+      [{ package_name: X, status: "archived", organization_id: ORG }],
+    );
+    const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
+    // Not live ⇒ the classic user assertion cannot win tier-1; falls to base.
+    expect(out.identity).toEqual({ kind: "no-primary" });
+    expect(out.tier).toBe("claim-backed");
+  });
+
   it("a live org-owned install surfaces the draft", () => {
     registerMatcherPack(X, 0.5);
     prime(

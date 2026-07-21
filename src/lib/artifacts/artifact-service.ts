@@ -227,7 +227,7 @@ function artifactRowResourceCheck(rec: ObjectRecord): ResourceForAccessCheck {
 function actorPassesObjectAuthz(
   rec: ObjectRecord,
   actor: ActorContext | undefined,
-  op: "object.read" | "object.delete",
+  op: "object.read" | "object.update" | "object.delete",
 ): boolean {
   if (!actor) return true;
   return (
@@ -497,6 +497,61 @@ export function readArtifactForDetail(input: {
   // Ownership filter passed (the actor CAN list this row); a canonical
   // `object.read` refusal here is the spec's "may list but not read" case.
   if (!actorPassesObjectAuthz(rec, input.actor, "object.read")) {
+    return { kind: "denied" };
+  }
+  const enrichment =
+    input.orgId !== null
+      ? resolveArtifactEffectiveIdentity({
+          orgId: input.orgId,
+          artifactId: rec.id,
+          baseType: rec.type,
+        })
+      : undefined;
+  const presentation =
+    input.orgId !== null
+      ? resolveArtifactPresentationIdentity({
+          orgId: input.orgId,
+          artifactId: rec.id,
+          baseType: rec.type,
+        })
+      : undefined;
+  return { kind: "ok", artifact: toSummary(rec, enrichment, presentation) };
+}
+
+/**
+ * Resolve one artifact for a MEANING-WRITE mutation (the §VI.1 user meaning
+ * assertion), enforcing WRITE authority — not merely read. Mirrors
+ * {@link readArtifactForDetail} but layers the canonical `object.update` gate
+ * on top of `object.read` (cinatra#1428 RBAC matrix): asserting a user meaning
+ * MUTATES the artifact's identity, so it is a WRITE and must pass the SAME
+ * decision `objects_save` enforces — never a mere read.
+ *
+ * The two nulls are distinguished exactly as the detail route requires:
+ *   - `not-found` — absent / not-an-artifact / ownership-filtered (404-hidden).
+ *   - `denied`    — the row lists + reads, but the actor lacks WRITE authority.
+ *
+ * With uploads uploader-owned (cinatra#1930), the user-owner short-circuit
+ * grants the UPLOADER `object.update` on their own row, and org_admins pass via
+ * the admin-tier grant; a mere READER of a shared (org-visible) artifact — who
+ * can `object.read` but is neither owner nor admin — is DENIED, so a reader can
+ * never write a user meaning assertion on someone else's artifact.
+ */
+export function readArtifactForMeaningWrite(input: {
+  artifactId: string;
+  orgId: string | null;
+  actor?: ActorContext;
+}): ArtifactDetailAccess {
+  const rec = getObjectById(input.artifactId, { orgId: input.orgId }, input.actor);
+  if (!rec) return { kind: "not-found" };
+  ensureArtifactRegistry();
+  if (!artifactObjectTypeIds().has(rec.type)) return { kind: "not-found" };
+  // Read gate first (existence-hiding parity with the detail route), THEN the
+  // canonical WRITE gate. Both must pass; `object.update` is the load-bearing
+  // authority check the read-only surface never enforced.
+  if (!actorPassesObjectAuthz(rec, input.actor, "object.read")) {
+    return { kind: "denied" };
+  }
+  if (!actorPassesObjectAuthz(rec, input.actor, "object.update")) {
     return { kind: "denied" };
   }
   const enrichment =

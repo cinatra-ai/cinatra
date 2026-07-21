@@ -100,7 +100,10 @@ export function resolveProjectInheritanceForType(
  * Build the parameterised INSERT...ON CONFLICT statement for chat_threads
  * that mirrors the payload's project_id/created_at/updated_at fields into
  * typed columns. Pure — takes the resolved scalar values + the JSON payload
- * string + the SQL schema identifier; emits the query the writer executes
+ * string + the SQL schema identifier. RETAINED for its SQL-shape unit test
+ * ONLY: the final teardown dropped the legacy chat_threads INSERT, so this
+ * builder has NO product call site and is fenced at the DB; it is removed with
+ * chat_threads in PR3. Historically emitted the query the writer executed
  * verbatim.
  *
  * The COALESCE on UPDATE preserves established column values when a
@@ -176,10 +179,11 @@ export function extractTimestampFieldFromThread(
 // Legacy chat_threads -> structured assistant_threads/assistant_turns MIRROR
 // (cinatra-ai/cinatra#1037 P2b — the persistence rewiring deferred from P2a).
 //
-// Every legacy chat-thread write (all writers funnel through
-// `upsertChatThreadInDatabase`) composes these builders into its EXISTING
-// single transaction, so the structured store is a lockstep write-through
-// projection of the legacy JSON payload:
+// Every chat-thread write (all writers funnel through
+// `upsertChatThreadInDatabase`) composes these builders into its single
+// transaction. Post-cutover (final teardown) the legacy chat_threads INSERT is
+// DROPPED, so these builders are the SOLE authoritative write of a thread — no
+// longer a projection alongside a legacy payload:
 //
 //   • assistant_threads — thread identity/ordering/ownership shadow
 //     (id, owner_user_id, org_id set-once, title raw bytes, timestamps).
@@ -191,9 +195,10 @@ export function extractTimestampFieldFromThread(
 //     mirror NEVER fabricates a run pointer). Message CONTENT is now COPIED into
 //     the `content` jsonb column (cinatra#1037 P5.6 drop-history PR1 EXPAND) —
 //     the full message object, so the structured store holds what /chat needs
-//     for faithful reconstruction. The legacy chat_threads.payload STAYS the
-//     authoritative read source until the PR2 cutover, so this is a
-//     write-through PROJECTION (dual-write), not a read swap.
+//     for faithful reconstruction. Post-cutover the structured store is the
+//     AUTHORITATIVE source for BOTH read (reconstructThreadPayload) and write
+//     (the legacy chat_threads INSERT is dropped) — the read swap and the
+//     write cutover have both landed.
 //   • assistant_thread_pause_state — structured pause/resume rows projected from
 //     payload.pausedParticipants (PR1 EXPAND), presence-gated so a partial write
 //     never clears pause state it did not carry.
@@ -250,6 +255,15 @@ export type AssistantTurnMirrorRow = {
   /** Validated ISO timestamp, or null (SQL falls back to now()). */
   createdAt: string | null;
   /**
+   * The message's position in payload.messages[] (cinatra#1037 P5.6 drop-history
+   * PR2 CUTOVER): the durable, faithful message ORDER the read reconstruction
+   * orders by, because created_at/id do not preserve array order when message
+   * timestamps are absent/equal (codex convergence). This is the index among the
+   * EMITTED (valid) rows, so skipped invalid messages never leave gaps that
+   * reorder the survivors. Refreshed on conflict (edit/regenerate).
+   */
+  ordinal: number;
+  /**
    * Durable per-turn message CONTENT (cinatra#1037 P5.6 drop-history PR1
    * EXPAND): the FULL message object serialized to a JSON string, so /chat can
    * reconstruct the turn faithfully (role, content, parts, thinking, toolCalls,
@@ -291,6 +305,8 @@ export function extractAssistantTurnMirrorRowsFromThread(
           : null,
       role: msg.role,
       createdAt: extractTimestampFieldFromThread(msg, "createdAt"),
+      // Position among the EMITTED rows == faithful payload.messages[] order.
+      ordinal: rows.length,
       // The whole message object is the durable content — faithful by
       // construction (parse(content) deep-equals payload.messages[i]). The
       // messages came from JSON (chat_threads.payload), so they re-serialize
@@ -332,6 +348,38 @@ export function extractPausedParticipantsFromThread(
 }
 
 /**
+ * Extract the durable thread-level render-state scalars (cinatra#1037 P5.6 PR2
+ * CUTOVER) the /chat client restores on load — `activeAssistantHandle`,
+ * `taggedAssistantUserIds`, `slackMode`. These are STATE, not losslessly
+ * derivable from the messages (codex convergence: the tagged set is cumulative,
+ * the active handle can be set without retained mention metadata, and slackMode
+ * can be true with a single re-mentioned assistant), so the write path persists
+ * the EXACT values and the read reconstruction reads them back directly.
+ *
+ * Only present, well-typed fields are captured (defensive against payload drift);
+ * returns null when NONE are present so the column stays NULL for a plain thread.
+ * The full-snapshot /chat POST always carries the current values, so the mirror's
+ * wholesale-overwrite keeps the column a lockstep twin of the payload.
+ */
+export function extractThreadScalarsFromThread(
+  thread: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const out: Record<string, unknown> = {};
+  if (typeof thread.activeAssistantHandle === "string" && thread.activeAssistantHandle.length > 0) {
+    out.activeAssistantHandle = thread.activeAssistantHandle;
+  }
+  if (Array.isArray(thread.taggedAssistantUserIds)) {
+    out.taggedAssistantUserIds = thread.taggedAssistantUserIds.filter(
+      (x): x is string => typeof x === "string" && x.length > 0,
+    );
+  }
+  if (typeof thread.slackMode === "boolean") {
+    out.slackMode = thread.slackMode;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
  * Resolve the org tenancy anchor the mirror persists for this write.
  * Central, payload-derived policy (codex-converged):
  *   - team-owned threads (payload.teamId set) mirror with org NULL — the
@@ -352,9 +400,23 @@ export function resolveAssistantMirrorOrgId(
 
 /**
  * Build the assistant_threads mirror upsert. Semantics (codex-converged):
- *   - owner_user_id / title mirror the server-sanitized payload wholesale
- *     (the payload is the full truth on every legacy write);
- *   - org_id is SET-ONCE (an existing non-null anchor is never reassigned);
+ *   - title mirrors the server-sanitized payload wholesale (the payload is the
+ *     full truth on every legacy write);
+ *   - owner_user_id / team_id / org_id are the OWNERSHIP/AUTHORIZATION axes and
+ *     are SET-ONCE (an established non-null value is never reassigned or cleared
+ *     by a later write). Codex convergence (PR2 team-axis extension): team_id is
+ *     an authz axis, NOT a mutable projection like project_id — a wholesale
+ *     overwrite would let ANY partial-shaped writer (saveChatThread, an internal
+ *     send path) that omits teamId silently NULL a team thread's ownership. The
+ *     same reasoning applies to owner_user_id. A distinct trusted
+ *     ownership-transition operation is the only way an established owner/team
+ *     axis changes (there is none today — thread ownership is immutable
+ *     per-thread in this model);
+ *   - project_id (cinatra#1037 P5.6 PR2 CUTOVER) mirrors the payload's projectId
+ *     wholesale on every write — it is a MUTABLE SCOPE (a thread moves between
+ *     projects; the MCP chat_thread_update project-move that once drove this is
+ *     retired in the final teardown), the SAME source + overwrite semantics as the
+ *     (now product-callerless) buildChatThreadUpsertQuery's chat_threads.project_id;
  *   - created_at is immutable post-INSERT; updated_at mirrors the payload
  *     (falling back to now()) so activity ordering matches the legacy table;
  *   - assistant_user_id / context_id are never listed (S2-owned columns).
@@ -364,18 +426,38 @@ export function buildAssistantThreadMirrorUpsertQuery(args: {
   threadId: string;
   ownerUserId: string | null;
   orgId: string | null;
+  projectId: string | null;
+  /** Team ownership axis (cinatra#1037 P5.6 PR2, coordinator-authorized Fork-B
+   *  extension). SET-ONCE on conflict (authz axis, never wholesale-cleared). */
+  teamId: string | null;
+  /** Durable thread-level render-state scalars (extractThreadScalarsFromThread);
+   *  null → the column is NULL. Mirrored WHOLESALE (matches project_id). */
+  scalars: Record<string, unknown> | null;
   title: string | null;
   createdAt: string | null;
   updatedAt: string | null;
 }): { text: string; values: unknown[] } {
   const schema = args.schemaName.replaceAll('"', '""');
   return {
-    text: `INSERT INTO "${schema}"."assistant_threads" (id, owner_user_id, org_id, title, created_at, updated_at)
-VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()), COALESCE($6::timestamptz, now()))
+    text: `INSERT INTO "${schema}"."assistant_threads" (id, owner_user_id, org_id, project_id, team_id, origin, scalars, title, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, 'legacy-chat', $6::jsonb, $7, COALESCE($8::timestamptz, now()), COALESCE($9::timestamptz, now()))
 ON CONFLICT (id) DO UPDATE SET
-  owner_user_id = EXCLUDED.owner_user_id,
+  -- ownership axis is SET-ONCE: never reassign/clear an established owner
+  owner_user_id = COALESCE(assistant_threads.owner_user_id, EXCLUDED.owner_user_id),
   -- org tenancy anchor is SET-ONCE: never reassign an established org
   org_id        = COALESCE(assistant_threads.org_id, EXCLUDED.org_id),
+  -- project scope is a MUTABLE projection (thread moves between projects)
+  project_id    = EXCLUDED.project_id,
+  -- team ownership axis is SET-ONCE: an omitting writer can never NULL a team
+  -- thread's ownership (codex-converged — team_id is authz, not a projection)
+  team_id       = COALESCE(assistant_threads.team_id, EXCLUDED.team_id),
+  -- thread-origin DISCRIMINATOR is SET-ONCE PROVENANCE (cinatra#1037 PR2): the
+  -- mirror always projects 'legacy-chat', but never overwrites an established
+  -- origin — an assistant-native thread that a legacy write ever touches keeps
+  -- its provenance, so the delete-all legacy-scope can never mis-erase it.
+  origin        = COALESCE(assistant_threads.origin, EXCLUDED.origin),
+  -- durable render-state scalars mirror the payload wholesale (lockstep twin)
+  scalars       = EXCLUDED.scalars,
   title         = EXCLUDED.title,
   -- created_at is immutable post-INSERT
   updated_at    = EXCLUDED.updated_at`,
@@ -383,6 +465,9 @@ ON CONFLICT (id) DO UPDATE SET
       args.threadId,
       args.ownerUserId,
       args.orgId,
+      args.projectId,
+      args.teamId,
+      args.scalars != null ? JSON.stringify(args.scalars) : null,
       args.title,
       args.createdAt,
       args.updatedAt,
@@ -422,11 +507,11 @@ WHERE thread_id = $1
   ];
   if (args.turns.length > 0) {
     queries.push({
-      text: `INSERT INTO "${schema}"."assistant_turns" (id, thread_id, run_id, assistant_user_id, role, status, content, created_at, updated_at)
-SELECT t.id, $1, NULL, t.assistant_user_id, t.role, 'completed', t.content::jsonb,
+      text: `INSERT INTO "${schema}"."assistant_turns" (id, thread_id, run_id, assistant_user_id, role, status, content, ordinal, created_at, updated_at)
+SELECT t.id, $1, NULL, t.assistant_user_id, t.role, 'completed', t.content::jsonb, t.ordinal::int,
        COALESCE(t.created_at::timestamptz, now()), COALESCE(t.created_at::timestamptz, now())
-FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[]) AS t(id, assistant_user_id, role, created_at, content)
-ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, updated_at = now()`,
+FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::int[]) AS t(id, assistant_user_id, role, created_at, content, ordinal)
+ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, ordinal = EXCLUDED.ordinal, updated_at = now()`,
       values: [
         args.threadId,
         ids,
@@ -434,6 +519,7 @@ ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, updated_at = now()`,
         args.turns.map((t) => t.role),
         args.turns.map((t) => t.createdAt),
         args.turns.map((t) => t.content),
+        args.turns.map((t) => t.ordinal),
       ],
     });
   }
@@ -479,10 +565,12 @@ ON CONFLICT (thread_id, participant_id) DO NOTHING`,
 }
 
 /**
- * Guarded single-thread mirror delete: only removes the structured row when a
- * matching LEGACY row exists (ordered BEFORE the legacy delete in the same
- * transaction), so a post-cutover structured-only thread is untouchable by
- * the legacy delete path. assistant_turns cascade via the FK.
+ * AUTHORITATIVE single-thread structured delete (cinatra#1037 P5.6 PR2 CUTOVER
+ * step 4): removes the structured row (and its assistant_turns via FK cascade)
+ * UNCONDITIONALLY by id. The prior EXISTS(chat_threads) guard is GONE — a
+ * post-cutover thread has NO chat_threads row, so the guard would have made the
+ * delete a silent no-op. The legacy chat_threads DELETE that runs alongside this
+ * in deleteChatThreadFromDatabase is now pure best-effort cleanup.
  */
 export function buildAssistantThreadMirrorDeleteQuery(
   schemaName: string,
@@ -491,22 +579,16 @@ export function buildAssistantThreadMirrorDeleteQuery(
   const schema = schemaName.replaceAll('"', '""');
   return {
     text: `DELETE FROM "${schema}"."assistant_threads"
-WHERE id = $1 AND EXISTS (SELECT 1 FROM "${schema}"."chat_threads" WHERE id = $1)`,
+WHERE id = $1`,
     values: [threadId],
   };
 }
 
-/** Mirror arm of deleteAllChatThreadsFromDatabase — same guard, set form. */
-export function buildAssistantThreadMirrorDeleteAllQuery(
-  schemaName: string,
-): { text: string; values: unknown[] } {
-  const schema = schemaName.replaceAll('"', '""');
-  return {
-    text: `DELETE FROM "${schema}"."assistant_threads"
-WHERE id IN (SELECT id FROM "${schema}"."chat_threads")`,
-    values: [],
-  };
-}
+// buildAssistantThreadMirrorDeleteAllQuery (a GLOBAL mirror wipe keyed on the
+// full chat_threads set) was RETIRED in the PR2 CUTOVER: the delete-all path is
+// now OWNER + 'legacy-chat' scoped (deleteAllChatThreadsFromDatabase computes the
+// id set directly from the mirror's owner_user_id + origin axes), closing the
+// cross-tenant global-wipe vuln — a set-form mirror arm is no longer meaningful.
 
 /**
  * One-call composition of the full P2b mirror for a legacy thread write: the
@@ -524,12 +606,27 @@ export function buildAssistantThreadMirrorQueries(args: {
   // Structured pause set (PR1 EXPAND): null == payload omitted the field, so
   // the rows stay untouched (presence-gated write-through, never a blind clear).
   const pausedParticipants = extractPausedParticipantsFromThread(thread);
+  // The structured mirror is now the SOLE writer (PR2 CUTOVER — the legacy
+  // chat_threads INSERT is dropped), so it always projects full durable per-turn
+  // content. The dormant-backfill `stripTurnContent` identity-only shadow path
+  // was retired with the boot backfill it existed for.
+  const turns = extractAssistantTurnMirrorRowsFromThread(thread);
   return [
     buildAssistantThreadMirrorUpsertQuery({
       schemaName,
       threadId: thread.id,
       ownerUserId: extractRawStringFieldFromThread(thread, "ownerUserId"),
       orgId: resolveAssistantMirrorOrgId(thread, args.explicitMirrorOrgId),
+      // Same source + trimming as buildChatThreadUpsertQuery's project_id.
+      projectId: extractStringFieldFromThread(thread, "projectId"),
+      // Team ownership axis (cinatra#1037 P5.6 PR2 team-axis extension): same
+      // trimmed source as the org-null resolution above (resolveAssistantMirrorOrgId
+      // reads payload.teamId). SET-ONCE at the SQL layer, so a write that omits
+      // teamId (a personal thread, a partial writer) never NULLs an established
+      // team thread's ownership.
+      teamId: extractStringFieldFromThread(thread, "teamId"),
+      // Durable render-state scalars (activeAssistantHandle/tagged/slackMode).
+      scalars: extractThreadScalarsFromThread(thread),
       title: extractRawStringFieldFromThread(thread, "title"),
       createdAt: extractTimestampFieldFromThread(thread, "createdAt"),
       updatedAt: extractTimestampFieldFromThread(thread, "updatedAt"),
@@ -538,7 +635,7 @@ export function buildAssistantThreadMirrorQueries(args: {
     ...buildAssistantTurnMirrorReconcileQueries({
       schemaName,
       threadId: thread.id,
-      turns: extractAssistantTurnMirrorRowsFromThread(thread),
+      turns,
     }),
     // Structured pause/resume write-through — only when the payload carried the
     // field (a partial write must not clear pause state it never saw).

@@ -28,6 +28,7 @@
     "./artifact-contract": "./src/artifact-contract.ts",
     "./chat-views-contract": "./src/chat-views-contract.ts",
     "./llm-provider-contract": "./src/llm-provider-contract.ts",
+    "./llm-provider-adapter-contract": "./src/llm-provider-adapter-contract.ts",
     "./dashboard-contribution-contract": "./src/dashboard-contribution-contract.ts",
     "./registry-contract": "./src/registry-contract.ts",
     "./artifact-client-bundle": "./src/artifact-client-bundle.ts",

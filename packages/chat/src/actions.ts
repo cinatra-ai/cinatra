@@ -1,12 +1,26 @@
 "use server";
 
 import {
-  readChatThreadsFromDatabase,
   upsertChatThreadInDatabase,
   deleteChatThreadFromDatabase,
   deleteAllChatThreadsFromDatabase,
 } from "@/lib/database";
-import { requireActorContext, requireAuthSession } from "@/lib/auth-session";
+import {
+  requireActorContext,
+  requireAuthSession,
+  resolveOrgRoleForSession,
+  resolveOrgRoleForUser,
+  isPlatformAdmin,
+} from "@/lib/auth-session";
+import { canDo } from "@/lib/authz/enforce";
+import { readChatThreadOwnershipById } from "@/lib/chat-thread-store";
+import {
+  getAssistantThread,
+  getAssistantThreadByTeamId,
+  setAssistantThreadPauseParticipant,
+  listAssistantThreadSummariesForOwnerInOrg,
+  reconstructThreadPayload,
+} from "@/lib/assistant-thread-store";
 import { betterAuthDb } from "@/lib/better-auth-db";
 import { sql } from "drizzle-orm";
 import { runDeterministicLlmTask } from "@cinatra-ai/llm";
@@ -130,35 +144,25 @@ export type TeamSummary = { id: string; name: string; orgName: string };
 export async function fetchChatThreads(userId?: string): Promise<ThreadSummary[]> {
   const session = await requireAuthSession();
   const effectiveUserId = userId ?? session.user.id;
+  const activeOrgId =
+    (session.session as { activeOrganizationId?: string | null } | undefined)
+      ?.activeOrganizationId ?? null;
 
-  // Fetch user's team memberships for team thread visibility
-  const rows = await betterAuthDb.execute(sql`
-    SELECT tm."teamId"
-    FROM public."teamMember" tm
-    WHERE tm."userId" = ${effectiveUserId}
-  `);
-  const memberTeamIds = new Set((rows.rows as Array<{ teamId: string }>).map((r) => r.teamId));
-
-  const threads = readChatThreadsFromDatabase();
-  return threads
-    .filter((t) => {
-      const ownerUserId = t.ownerUserId as string | undefined;
-      const teamId = t.teamId as string | undefined;
-      // Legacy thread (no ownerUserId, no teamId) — always show
-      if (!ownerUserId && !teamId) return true;
-      // User's own thread
-      if (ownerUserId === effectiveUserId) return true;
-      // Team threads belong in the team panel, not the thread list
-      if (teamId) return false;
-      return false;
-    })
-    .map((t) => ({
-      id: t.id as string,
-      title: t.title as string,
-      createdAt: t.createdAt as string,
-      updatedAt: t.updatedAt as string,
-    }))
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // PR2 CUTOVER (cinatra#1037 P5.6): the flat /chat list is served from the
+  // structured store, scoped in BOTH the org and owner axes (#134 audience
+  // contract: the built-in assistant's list is org-scoped to the acting org).
+  // Only the caller's own durable-content threads anchored to the acting org are
+  // returned — team threads live in the team panel (owner axis excludes them),
+  // and pre-cutover content-less shadows + ownerless legacy rows are excluded
+  // (the ownerless-quarantine seam). Ordered createdAt DESC by the store op.
+  // Fail-closed with an empty list when there is no active org.
+  if (!activeOrgId) return [];
+  return listAssistantThreadSummariesForOwnerInOrg(activeOrgId, effectiveUserId).map((t) => ({
+    id: t.id,
+    title: t.title ?? "",
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt,
+  }));
 }
 
 export async function fetchUserTeams(): Promise<TeamSummary[]> {
@@ -186,9 +190,37 @@ export async function fetchUserTeams(): Promise<TeamSummary[]> {
 }
 
 export async function ensureTeamThread(teamId: string, teamName: string): Promise<string> {
-  const threads = readChatThreadsFromDatabase();
-  const existing = threads.find((t) => (t as Record<string, unknown>).teamId === teamId);
-  if (existing) return existing.id as string;
+  // Hardening (cinatra#1037 P5.6 PR2 CUTOVER) — verify ACTIVE-ORG team
+  // membership before touching a team thread. Without this a caller could
+  // probe/pre-create another tenant's team thread by id. Fail-closed: the team
+  // must belong to the caller's active org AND the caller must be a member of
+  // that org.
+  const session = await requireAuthSession();
+  const callerId = session.user.id;
+  const activeOrgId =
+    (session.session as { activeOrganizationId?: string | null } | undefined)
+      ?.activeOrganizationId ?? null;
+  if (!activeOrgId) {
+    throw new Error("Forbidden: an active organization is required to open a team thread.");
+  }
+  const authRows = await betterAuthDb.execute(sql`
+    SELECT 1
+    FROM public.team t
+    JOIN public.member m ON m."organizationId" = t."organizationId"
+    WHERE t.id = ${teamId}
+      AND t."organizationId" = ${activeOrgId}
+      AND m."userId" = ${callerId}
+    LIMIT 1
+  `);
+  if (!authRows.rows || authRows.rows.length === 0) {
+    throw new Error("Forbidden: not an active-org member of this team.");
+  }
+
+  // PR2 CUTOVER (cinatra#1037 P5.6): probe the structured store for the team's
+  // existing thread (existence/ownership probe — no durable-content filter, so a
+  // freshly-minted empty team thread is found) instead of scanning chat_threads.
+  const existing = getAssistantThreadByTeamId(teamId);
+  if (existing) return existing.id;
 
   const { randomUUID } = await import("node:crypto");
   const now = new Date().toISOString();
@@ -206,9 +238,11 @@ export async function ensureTeamThread(teamId: string, teamName: string): Promis
 }
 
 export async function fetchChatThread(threadId: string): Promise<Thread | null> {
-  const threads = readChatThreadsFromDatabase();
-  const thread = threads.find((t) => t.id === threadId);
-  return (thread as Thread) ?? null;
+  // PR2 CUTOVER (cinatra#1037 P5.6): reconstruct from the structured store
+  // (assistant_threads + durable assistant_turns.content), NOT the legacy
+  // chat_threads.payload. A pre-cutover / content-less thread reconstructs to
+  // null → treated as absent (same as the HTTP single-read seam).
+  return (reconstructThreadPayload(threadId) as Thread | null) ?? null;
 }
 
 export async function saveChatThread(thread: Thread): Promise<void> {
@@ -227,37 +261,87 @@ export async function saveChatThread(thread: Thread): Promise<void> {
 }
 
 export async function deleteChatThread(threadId: string): Promise<void> {
-  // Clear artifact_refs pins atomically with the thread row. The pin delete is
-  // GLOBAL (no `org_id` filter) because chat_threads has no org_id column and
-  // the threadId is globally unique. The `orgId` is still threaded through as a
-  // compatibility option for callers that pass it; the helper's signature
-  // accepts it but ignores it for the pin-side WHERE clause.
   const session = await requireAuthSession();
+  const callerId = session.user.id;
   const orgId =
     (session.session as { activeOrganizationId?: string | null } | undefined)
       ?.activeOrganizationId ?? null;
+
+  // Permission gate (cinatra#1037 P5.6 PR2 CUTOVER) — OWNER-or-ORG-ADMIN,
+  // FAIL-CLOSED. The prior form let ANY authenticated user delete ANY thread by
+  // id (codex flagged this as a cross-tenant delete vuln). Ownership is read
+  // from the PERSISTED row (never caller input); admin power is mapped through
+  // the REAL permission catalog — `object.delete` is granted to org_admin /
+  // org_owner + platform_admin, NOT to a plain member.
+  const ownership = readChatThreadOwnershipById(threadId);
+  if (!ownership) return; // absent → idempotent no-op (nothing to delete; no cross-tenant probe signal)
+
+  const isOwner = !!ownership.ownerUserId && ownership.ownerUserId === callerId;
+  if (!isOwner) {
+    let adminAllowed = isPlatformAdmin(session);
+    if (!adminAllowed && ownership.ownerUserId) {
+      // Personal thread owned by ANOTHER user → an org_admin/org_owner of the
+      // thread's OWN org (the structured mirror anchor). A non-null org lets the
+      // kernel's cross-org guard deny a foreign-org admin; a NULL/legacy anchor
+      // is fail-closed (only the owner or a platform admin can delete it).
+      const threadOrgId = getAssistantThread(threadId)?.orgId ?? undefined;
+      const orgRole = await resolveOrgRoleForSession(session);
+      adminAllowed =
+        threadOrgId !== undefined &&
+        canDo(
+          session,
+          "object.delete",
+          { resourceType: "object", resourceId: threadId, organizationId: threadOrgId },
+          orgRole ? { orgRole } : {},
+        );
+    } else if (!adminAllowed && ownership.teamId) {
+      // Team thread — the mirror org is NULL by policy, so canDo's org guard
+      // cannot scope it (codex convergence). Authorize an org_admin/org_owner of
+      // the TEAM'S OWN org: resolve the team's org, then the caller's role IN
+      // that org. A plain member (even of the team's org) is NOT authorized to
+      // delete — "owner-or-org-admin" per the ruling.
+      const teamOrgRows = await betterAuthDb.execute(sql`
+        SELECT "organizationId" FROM public.team WHERE id = ${ownership.teamId} LIMIT 1
+      `);
+      const teamOrgId =
+        (teamOrgRows.rows?.[0] as { organizationId?: string } | undefined)?.organizationId ?? null;
+      if (teamOrgId) {
+        const roleInTeamOrg = await resolveOrgRoleForUser(teamOrgId, callerId);
+        adminAllowed = roleInTeamOrg === "org_admin" || roleInTeamOrg === "org_owner";
+      }
+    }
+    if (!adminAllowed) {
+      throw new Error("Forbidden: not authorized to delete this chat thread.");
+    }
+  }
+
   deleteChatThreadFromDatabase(threadId, { orgId });
 }
 
 export async function deleteAllChatThreads(): Promise<void> {
-  // `deleteAllChatThreadsFromDatabase` is UNAMBIGUOUSLY GLOBAL (chat_threads
-  // has no org_id column; an org-scoped delete is structurally impossible).
-  // The session check below ensures only an authenticated user can trigger the
-  // wipe; a proper admin-role gate is the natural follow-up.
-  await requireAuthSession();
-  deleteAllChatThreadsFromDatabase();
+  // Scoped to the caller's OWN 'legacy-chat' threads (cinatra#1037 P5.6 PR2
+  // CUTOVER) — no longer a global cross-tenant wipe. The DB helper restricts by
+  // the structured mirror's owner_user_id + origin axes, so a runtime-native
+  // thread and every other user's/team's thread are untouched. Ownership scope
+  // IS the permission gate here (an authenticated caller may clear only rows it
+  // owns); an org-wide admin wipe is intentionally NOT this action's semantic.
+  const session = await requireAuthSession();
+  deleteAllChatThreadsFromDatabase(session.user.id);
 }
 
 export async function renameChatThread(threadId: string, newTitle: string): Promise<void> {
-  const threads = readChatThreadsFromDatabase();
-  const thread = threads.find((t) => t.id === threadId);
+  // PR2 CUTOVER (cinatra#1037 P5.6): reconstruct the thread from the structured
+  // store, re-title, and re-persist through the promoted structured writer
+  // (chat_threads is no longer read or written).
+  const thread = reconstructThreadPayload(threadId);
   if (!thread) return;
   // A title-only rename is not conversational activity — preserve the existing
-  // updatedAt (spread from `thread`) so renaming does NOT bump the thread to the
-  // top of the activity-sorted sidebar (#283). createdAt is likewise preserved.
+  // updatedAt (carried in the reconstructed payload) so renaming does NOT bump
+  // the thread to the top of the activity-sorted sidebar (#283). createdAt is
+  // likewise preserved.
   upsertChatThreadInDatabase({
     ...thread,
-    id: thread.id as string,
+    id: threadId,
     title: newTitle,
   });
 }
@@ -375,22 +459,11 @@ export async function setAssistantPauseState(
   assistantId: string,
   paused: boolean,
 ): Promise<void> {
-  const threads = readChatThreadsFromDatabase();
-  const thread = threads.find((t) => t.id === threadId) as ChatThread | undefined;
-  if (!thread) return;
-
-  const current = new Set(thread.pausedParticipants ?? []);
-  if (paused) {
-    current.add(assistantId);
-  } else {
-    current.delete(assistantId);
-  }
-
-  // Pausing/resuming a participant is not conversational activity — preserve the
-  // existing updatedAt (spread from `thread`) so it does NOT bump the thread to
-  // the top of the activity-sorted sidebar (#283).
-  upsertChatThreadInDatabase({
-    ...thread,
-    pausedParticipants: Array.from(current),
-  } as unknown as { id: string } & Record<string, unknown>);
+  // PR2 CUTOVER (cinatra#1037 P5.6): write the pause DIRECTLY to the structured
+  // assistant_thread_pause_state table (atomic INSERT-or-DELETE) instead of the
+  // read-chat_threads + whole-payload re-upsert (which last-writer-wins under
+  // concurrency). Guard on structured existence first (idempotent no-op for an
+  // absent thread). The store op deliberately does not bump updated_at (#283).
+  if (!getAssistantThread(threadId)) return;
+  setAssistantThreadPauseParticipant(threadId, assistantId, paused);
 }
