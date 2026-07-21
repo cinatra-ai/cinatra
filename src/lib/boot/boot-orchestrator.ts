@@ -25,7 +25,6 @@ import { requiredExtensionMaterializePhases } from "@/lib/boot/phases/required-e
 import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfill";
 import { skillsCatalogRebuildPhases } from "@/lib/boot/phases/skills-catalog-rebuild";
 import { agentRuntimeDepBackfillPhases } from "@/lib/boot/phases/agent-runtime-dep-backfill";
-import { assistantThreadMirrorBackfillPhases } from "@/lib/boot/phases/assistant-thread-mirror-backfill";
 import { dashboardContributionReconcilePhases } from "@/lib/boot/phases/dashboard-contribution-reconcile";
 import { agentMountProjectionPhases } from "@/lib/boot/phases/agent-mount-projection";
 import { requiredEnvNotePhases } from "@/lib/boot/phases/required-env-note";
@@ -156,14 +155,12 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // failure logs and boot continues (the legacy read path still self-heals).
   await run(skillsCatalogRebuildPhases());
 
-  // ── dormant assistant-thread mirror backfill (cinatra#1218, #1216 S2) ─────────
-  // Mirror the DORMANT legacy chat_threads (rows the P2b write-through never
-  // touched) into assistant_threads/assistant_turns via the P2b builders, so
-  // the structured store covers the whole legacy corpus before the S2 delete
-  // stage retires the legacy write path. AFTER core boot (DB + schema up).
-  // `retryable`: idempotent (the dormancy predicate converges), soft-failing
-  // per thread, retries next boot; kill switch in the phase body.
-  await run(assistantThreadMirrorBackfillPhases());
+  // (The dormant assistant-thread mirror backfill boot phase was RETIRED in the
+  // cinatra#1037 PR2 write cutover: the structured mirror is now the sole writer
+  // and the legacy chat_threads INSERT is dropped, so there is no dormant legacy
+  // corpus left to shadow at boot. The one-time production cleanup of any
+  // pre-guard backfilled durable content is the cutover-marker-cutoff purge in
+  // src/lib/assistant-thread-dormant-content-purge.ts, run out-of-band.)
 
   // -- dashboardContribution adoption reconcile (cinatra#1628, S11c) ------------
   // The LIVE TRIGGER for the S11b adoption reconciler. AFTER extension activation

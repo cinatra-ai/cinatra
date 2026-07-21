@@ -508,29 +508,14 @@
       "line": 40
     },
     {
+      "primitiveName": "chat_mention_reply",
+      "file": "packages/chat/src/mcp/registry.ts",
+      "line": 36
+    },
+    {
       "primitiveName": "chat_mentions_poll",
       "file": "packages/chat/src/mcp/registry.ts",
-      "line": 58
-    },
-    {
-      "primitiveName": "chat_thread_get",
-      "file": "packages/chat/src/mcp/registry.ts",
-      "line": 24
-    },
-    {
-      "primitiveName": "chat_thread_list",
-      "file": "packages/chat/src/mcp/registry.ts",
-      "line": 11
-    },
-    {
-      "primitiveName": "chat_thread_send",
-      "file": "packages/chat/src/mcp/registry.ts",
-      "line": 30
-    },
-    {
-      "primitiveName": "chat_thread_update",
-      "file": "packages/chat/src/mcp/registry.ts",
-      "line": 47
+      "line": 12
     },
     {
       "primitiveName": "context_list_eligible_assertions",

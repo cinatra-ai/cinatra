@@ -196,11 +196,17 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   blog_wordpress_content_convert:            { resourceType: "artifact",           action: "update",  status: "enforced" },
 
   // ───── chat ─────
+  // cinatra#1037 P5.6 PR2 CUTOVER final teardown (owner ruling 2026-07-21): the
+  // broad chat_thread_* primitives are RETIRED; only the two narrow external-
+  // assistant reply primitives remain.
+  // chat_mention_reply: the NARROW mention-reply primitive — append a reply into
+  // the mentioned thread + mark the mention handled. Coarse Posture-B class
+  // (object::create — a content-write turn), but the REAL authorization is the
+  // handler's own mention-audience gate (a transport-verified assistant must hold
+  // a 'pending' mention on the exact threadId+messageId; no self-asserted
+  // identity).
+  chat_mention_reply:   { resourceType: "object",       action: "create", status: "enforced" },
   chat_mentions_poll:   { resourceType: "notification", action: "list",   status: "enforced" },
-  chat_thread_get:      { resourceType: "object",       action: "read",   status: "enforced" },
-  chat_thread_list:     { resourceType: "object",       action: "list",   status: "enforced" },
-  chat_thread_send:     { resourceType: "object",       action: "create", status: "enforced" },
-  chat_thread_update:   { resourceType: "object",       action: "update", status: "enforced" },
 
   // ───── dashboard ─────
   dashboards_archive:         { resourceType: "dashboard", action: "delete", status: "enforced" },

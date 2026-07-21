@@ -54,11 +54,70 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
       assistant_user_id text,
       owner_user_id text,
       org_id text,
+      project_id text,
+      team_id text,
+      origin text,
+      scalars jsonb,
       title text,
       context_id text,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
+    // `project_id` (cinatra#1037 P5.6 drop-history PR2 CUTOVER): the project the
+    // thread is scoped to — the structured twin of chat_threads.project_id, the
+    // scoping key sealed-room / resource-project-move / project thread counts
+    // move onto when the legacy table is retired. NULLABLE (ambient/legacy
+    // threads carry NULL). A fresh install is born WITH the column; the ADD
+    // COLUMN IF NOT EXISTS carries it onto a DB bootstrapped before this change
+    // (bootstrap-upgrade parity). The OPERATOR migration half ships in the
+    // core__0066 marker/fence migration — this is the bootstrap + code half.
+    { text: `ALTER TABLE "${s}"."assistant_threads" ADD COLUMN IF NOT EXISTS project_id text` },
+    // `team_id` (cinatra#1037 P5.6 drop-history PR2 CUTOVER, coordinator-authorized
+    // Fork-B extension): the team the thread is owned by — the structured twin of
+    // chat_threads' payload.teamId, the axis the list/http/classifier visibility
+    // consumers move onto so team-owned threads SURVIVE the chat_threads write drop
+    // (assistant_threads previously had NO team axis, so a team thread was
+    // indistinguishable from a legacy-unowned one). NULLABLE (personal/legacy
+    // threads carry NULL). Team threads mirror with org_id NULL
+    // (resolveAssistantMirrorOrgId), so the team axis is org-agnostic by
+    // construction. A fresh install is born WITH the column; the ADD COLUMN IF NOT
+    // EXISTS carries it onto a DB bootstrapped before this change (bootstrap-upgrade
+    // parity). The OPERATOR migration half rides the later PR2/PR3 marker/fence
+    // migration — this is the bootstrap + code half only.
+    { text: `ALTER TABLE "${s}"."assistant_threads" ADD COLUMN IF NOT EXISTS team_id text` },
+    // `origin` (cinatra#1037 P5.6 drop-history PR2 CUTOVER — thread-origin
+    // DISCRIMINATOR): the PROVENANCE of the thread, stamped by BOTH writers:
+    //   - 'legacy-chat'      — a thread minted through the legacy chat_threads
+    //     write path (the assistant_threads MIRROR write-through stamps it).
+    //   - 'assistant-native' — a thread minted directly on the structured store
+    //     by the assistant runtime (createAssistantThread stamps it).
+    // The delete-all path (deleteAllChatThreadsFromDatabase) uses this axis to
+    // restrict the wipe to the caller's OWN 'legacy-chat' threads, so a
+    // runtime-native ('assistant-native') thread can never be erased by the
+    // legacy "clear all" — the drop-history invariant is scoped, not global.
+    // NULLABLE (rows written before this column existed carry NULL until their
+    // writer re-stamps them; the mirror is self-backfilling). The CHECK below
+    // pins the domain. A fresh install is born WITH the column; the ADD COLUMN
+    // IF NOT EXISTS carries it onto a DB bootstrapped before this change. The
+    // OPERATOR migration half rides core__0066.
+    { text: `ALTER TABLE "${s}"."assistant_threads" ADD COLUMN IF NOT EXISTS origin text` },
+    { text: `DO $$
+      BEGIN
+        ${addConstraintIfAbsentSql(schemaName, "assistant_threads", "assistant_threads_origin_domain_check", `CHECK (origin IS NULL OR origin IN ('legacy-chat', 'assistant-native'))`)}
+      END $$` },
+    // `scalars` (cinatra#1037 P5.6 drop-history PR2 CUTOVER): the durable
+    // thread-level render-state the /chat client restores on load —
+    // activeAssistantHandle / taggedAssistantUserIds / slackMode. These are STATE
+    // (a cumulative tagged set, an explicitly-set active handle, a mode that can
+    // be on with a single re-mentioned assistant), NOT losslessly derivable from
+    // the messages (codex convergence), so the write path PROJECTS them here and
+    // the read reconstruction reads them back directly. NULLABLE, JSON-object
+    // CHECK when present. Operator-migration half rides the later PR2/PR3 migration.
+    { text: `ALTER TABLE "${s}"."assistant_threads" ADD COLUMN IF NOT EXISTS scalars jsonb` },
+    { text: `DO $$
+      BEGIN
+        ${addConstraintIfAbsentSql(schemaName, "assistant_threads", "assistant_threads_scalars_object_check", `CHECK (scalars IS NULL OR jsonb_typeof(scalars) = 'object')`)}
+      END $$` },
     // `content` (cinatra#1037 P5.6 drop-history PR1 EXPAND, core__0061): the
     // durable per-turn message content the legacy chat_threads.payload has held
     // — the FULL message object for faithful /chat reconstruction (not just
@@ -75,10 +134,19 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
       role text NOT NULL DEFAULT 'assistant',
       status text NOT NULL DEFAULT 'running',
       content jsonb,
+      ordinal integer,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `ALTER TABLE "${s}"."assistant_turns" ADD COLUMN IF NOT EXISTS content jsonb` },
+    // `ordinal` (cinatra#1037 P5.6 drop-history PR2 CUTOVER): the legacy-mirror
+    // turn's position in payload.messages[]. The structured read reconstruction
+    // is now authoritative, so message ORDER must be faithful; created_at/id
+    // alone do not preserve array order when message timestamps are absent/equal
+    // (codex convergence). The mirror projects the array index; reconstruction
+    // orders by it. NULLABLE (pre-PR2 mirror rows carry NULL → fall back to
+    // created_at, id). Operator-migration half rides the later PR2/PR3 migration.
+    { text: `ALTER TABLE "${s}"."assistant_turns" ADD COLUMN IF NOT EXISTS ordinal integer` },
     { text: `DO $$
       BEGIN
         ${addConstraintIfAbsentSql(schemaName, "assistant_turns", "assistant_turns_thread_id_fkey", `FOREIGN KEY (thread_id) REFERENCES "${s}"."assistant_threads" (id) ON DELETE CASCADE`)}
@@ -87,17 +155,27 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
         ${addConstraintIfAbsentSql(schemaName, "assistant_turns", "assistant_turns_content_object_check", `CHECK (content IS NULL OR jsonb_typeof(content) = 'object')`)}
       END $$` },
     { text: `CREATE INDEX IF NOT EXISTS assistant_threads_org_updated_idx ON "${s}"."assistant_threads" (org_id, updated_at DESC, id)` },
+    // Project-scoped read/count index (the structured twin of
+    // chat_threads_project_created_idx). PARTIAL over non-null project_id so only
+    // project-scoped threads enter it (ambient threads carry NULL); covers the
+    // sealed-room / project-thread-count predicates re-pointed off chat_threads.
+    { text: `CREATE INDEX IF NOT EXISTS assistant_threads_project_updated_idx ON "${s}"."assistant_threads" (project_id, updated_at DESC, id) WHERE project_id IS NOT NULL` },
+    // Team-scoped read/lookup index (the structured twin the ensureTeamThread /
+    // team-visibility consumers use once re-pointed off chat_threads). PARTIAL over
+    // non-null team_id so only team-owned threads enter it (personal/legacy threads
+    // carry NULL).
+    { text: `CREATE INDEX IF NOT EXISTS assistant_threads_team_updated_idx ON "${s}"."assistant_threads" (team_id, updated_at DESC, id) WHERE team_id IS NOT NULL` },
     { text: `CREATE INDEX IF NOT EXISTS assistant_turns_thread_created_idx ON "${s}"."assistant_turns" (thread_id, created_at, id)` },
     // run_id → turn lookup for the AG-UI run-stream authorization path
     // (cinatra#1216 S2). PARTIAL: legacy-mirror rows carry run_id NULL and
     // dominate the table — only runtime-minted turn rows enter the index.
     { text: `CREATE INDEX IF NOT EXISTS assistant_turns_run_id_idx ON "${s}"."assistant_turns" (run_id) WHERE run_id IS NOT NULL` },
     // `assistant_thread_pause_state` (cinatra#1037 P5.6 PR1 EXPAND, core__0061):
-    // structured pause/resume storage. Today `pausedParticipants` lives inside
-    // chat_threads.payload; this holds one row per (thread, paused participant)
-    // — presence == paused, resume deletes the row. Written ALONGSIDE the legacy
-    // payload (still the authoritative read source until the PR2 cutover). FK →
-    // assistant_threads ON DELETE CASCADE; per-thread read index.
+    // structured pause/resume storage — one row per (thread, paused participant),
+    // presence == paused, resume deletes the row. Post-cutover this is the
+    // AUTHORITATIVE pause source: reconstructThreadPayload reads it (the legacy
+    // chat_threads.payload is fenced/no-longer-written). FK → assistant_threads
+    // ON DELETE CASCADE; per-thread read index.
     { text: `CREATE TABLE IF NOT EXISTS "${s}"."assistant_thread_pause_state" (
       thread_id text NOT NULL,
       participant_id text NOT NULL,

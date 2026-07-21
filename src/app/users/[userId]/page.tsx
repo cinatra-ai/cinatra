@@ -1,6 +1,6 @@
 import { requireAuthSession } from "@/lib/auth-session";
 import { betterAuthDb, betterAuthUsers } from "@/lib/better-auth-db";
-import { readChatThreadsFromDatabase } from "@/lib/database";
+import { listAssistantThreadSummariesForOwnerInOrg } from "@/lib/assistant-thread-store";
 import { eq } from "drizzle-orm";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
@@ -24,13 +24,16 @@ export default async function UserProfilePage({ params }: Props) {
 
   if (!profileUser) notFound();
 
-  const allThreads = readChatThreadsFromDatabase();
-  const sharedThreads = allThreads
-    .filter((t) => {
-      const owner = t.ownerUserId as string | undefined;
-      return owner === userId;
-    })
-    .slice(0, 5);
+  // PR2 CUTOVER (cinatra#1037 P5.6): the profile's shared-thread list is served
+  // from the structured store, scoped to the VIEWER's active org + the profile
+  // user as owner (#134 org-scoped audience — a cross-org thread is never
+  // surfaced). Durable-content only, createdAt DESC, top 5.
+  const activeOrgId =
+    (session.session as { activeOrganizationId?: string | null } | undefined)
+      ?.activeOrganizationId ?? null;
+  const sharedThreads = activeOrgId
+    ? listAssistantThreadSummariesForOwnerInOrg(activeOrgId, userId, 5)
+    : [];
 
   const initials = (profileUser.name ?? profileUser.email ?? "?")
     .split(" ")

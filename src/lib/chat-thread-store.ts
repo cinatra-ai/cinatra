@@ -10,16 +10,9 @@
 // postgres-schema-init) and inlines a local JSON parse, so it never reaches an
 // async-root module.
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
-import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
+import { getPostgresConnectionString } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
-
-function safeParseJson<T>(raw: string, fallback: T): T {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
+import { getAssistantThread, reconstructThreadPayload } from "@/lib/assistant-thread-store";
 
 /**
  * May `actorUserId` access team `teamId`'s chat thread? A team chat is visible
@@ -53,7 +46,6 @@ function isActorMemberOfTeamOrg(teamId: string, actorUserId: string): boolean {
 }
 
 export type ChatThreadAccessInputs = {
-  payload: Record<string, unknown>;
   ownerUserId: string | null;
   teamId: string | null;
   isActorTeamMember: boolean;
@@ -77,25 +69,13 @@ export function loadChatThreadForActorAccess(input: {
   actorUserId: string;
   isPlatformAdmin: boolean;
 }): ChatThreadAccessInputs | null {
-  ensurePostgresSchema();
-  const schema = postgresSchema.replaceAll('"', '""');
-  const [threadRes] = runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    queries: [
-      {
-        text: `SELECT payload FROM "${schema}"."chat_threads" WHERE id = $1 LIMIT 1`,
-        values: [input.threadId],
-      },
-    ],
-  });
-  const row = threadRes?.rows?.[0] as { payload?: string } | undefined;
-  if (!row?.payload) return null;
-  const payload = safeParseJson<Record<string, unknown> | null>(row.payload, null);
-  if (!payload) return null;
-
-  const ownerUserId =
-    typeof payload.ownerUserId === "string" ? payload.ownerUserId : null;
-  const teamId = typeof payload.teamId === "string" ? payload.teamId : null;
+  // PR2 CUTOVER (cinatra#1037 P5.6): the ownership axes come from the structured
+  // mirror (getAssistantThread), NOT the legacy chat_threads.payload. A missing
+  // mirror row is "absent" (caller surfaces a 404, existence not disclosed).
+  const thread = getAssistantThread(input.threadId);
+  if (!thread) return null;
+  const ownerUserId = thread.ownerUserId;
+  const teamId = thread.teamId;
 
   // Resolve team membership only on the branch that consults it (team-owned,
   // non-admin, non-owner), so the DB round-trip is avoided everywhere else. The
@@ -105,7 +85,7 @@ export function loadChatThreadForActorAccess(input: {
     isActorTeamMember = isActorMemberOfTeamOrg(teamId, input.actorUserId);
   }
 
-  return { payload, ownerUserId, teamId, isActorTeamMember };
+  return { ownerUserId, teamId, isActorTeamMember };
 }
 
 /**
@@ -118,20 +98,12 @@ export function loadChatThreadForActorAccess(input: {
 export function readChatThreadPayloadById(
   threadId: string,
 ): ({ id: string } & Record<string, unknown>) | null {
-  ensurePostgresSchema();
-  const schema = postgresSchema.replaceAll('"', '""');
-  const [threadRes] = runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    queries: [
-      {
-        text: `SELECT payload FROM "${schema}"."chat_threads" WHERE id = $1 LIMIT 1`,
-        values: [threadId],
-      },
-    ],
-  });
-  const row = threadRes?.rows?.[0] as { payload?: string } | undefined;
-  if (!row?.payload) return null;
-  const payload = safeParseJson<Record<string, unknown> | null>(row.payload, null);
+  // PR2 CUTOVER (cinatra#1037 P5.6): reconstruct the payload from the structured
+  // store (assistant_threads + durable assistant_turns.content) instead of the
+  // legacy chat_threads.payload. A pre-cutover / content-less thread
+  // reconstructs to null. Still authorization-free — server-internal callers
+  // (chat-capture) already hold a verified (thread, turn) identity.
+  const payload = reconstructThreadPayload(threadId);
   if (!payload || typeof payload.id !== "string") return null;
   return payload as { id: string } & Record<string, unknown>;
 }
@@ -148,26 +120,13 @@ export function readChatThreadPayloadById(
 export function readChatThreadOwnershipById(
   threadId: string,
 ): { ownerUserId: string | null; teamId: string | null } | null {
-  ensurePostgresSchema();
-  const schema = postgresSchema.replaceAll('"', '""');
-  const [threadRes] = runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    queries: [
-      {
-        text: `SELECT payload FROM "${schema}"."chat_threads" WHERE id = $1 LIMIT 1`,
-        values: [threadId],
-      },
-    ],
-  });
-  const row = threadRes?.rows?.[0] as { payload?: string } | undefined;
-  if (!row?.payload) return null;
-  const payload = safeParseJson<Record<string, unknown> | null>(row.payload, null);
-  if (!payload) return null;
-  return {
-    ownerUserId:
-      typeof payload.ownerUserId === "string" ? payload.ownerUserId : null,
-    teamId: typeof payload.teamId === "string" ? payload.teamId : null,
-  };
+  // PR2 CUTOVER (cinatra#1037 P5.6): ownership axes from the structured mirror,
+  // NOT chat_threads.payload. A missing mirror row is null == "create" for the
+  // write path (POST /api/assistants/threads decides overwrite authz from the
+  // EXISTING row; a null result means there is nothing to overwrite yet).
+  const thread = getAssistantThread(threadId);
+  if (!thread) return null;
+  return { ownerUserId: thread.ownerUserId, teamId: thread.teamId };
 }
 
 /**

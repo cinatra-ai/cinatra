@@ -21,6 +21,10 @@ const isActorTeamMemberForChat = vi.fn();
 const loadChatThreadForActorAccess = vi.fn();
 const upsertChatThreadInDatabase = vi.fn();
 const readChatThreadsFromDatabase = vi.fn();
+const listAssistantThreadIdsWithDurableContent = vi.fn();
+const listAssistantThreadSummariesForOwnerInOrg = vi.fn();
+const getAssistantThread = vi.fn();
+const reconstructThreadPayload = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
@@ -29,6 +33,16 @@ vi.mock("@/lib/auth-session", () => ({
 vi.mock("@/lib/database", () => ({
   upsertChatThreadInDatabase: (...a: unknown[]) => upsertChatThreadInDatabase(...a),
   readChatThreadsFromDatabase: () => readChatThreadsFromDatabase(),
+}));
+// PR2 CUTOVER (cinatra#1037): the list handler now intersects the legacy
+// visibility axes with the structured durable-content gate, so this seam must be
+// stubbed alongside the legacy read.
+vi.mock("@/lib/assistant-thread-store", () => ({
+  listAssistantThreadIdsWithDurableContent: () => listAssistantThreadIdsWithDurableContent(),
+  listAssistantThreadSummariesForOwnerInOrg: (o: string, u: string) =>
+    listAssistantThreadSummariesForOwnerInOrg(o, u),
+  getAssistantThread: (id: string) => getAssistantThread(id),
+  reconstructThreadPayload: (...a: unknown[]) => reconstructThreadPayload(...a),
 }));
 vi.mock("@/lib/chat-thread-store", () => ({
   readChatThreadOwnershipById: (id: string) => readChatThreadOwnershipById(id),
@@ -152,7 +166,7 @@ describe("POST /api/assistants/threads (save)", () => {
   });
 });
 
-describe("GET /api/assistants/threads (list)", () => {
+describe("GET /api/assistants/threads (list) — #134 org-scoped listing contract", () => {
   beforeEach(() => {
     isPlatformAdmin.mockReturnValue(false);
   });
@@ -162,20 +176,55 @@ describe("GET /api/assistants/threads (list)", () => {
     getAuthSession.mockResolvedValue(null);
     const res = await GET();
     expect(res.status).toBe(401);
-    expect(readChatThreadsFromDatabase).not.toHaveBeenCalled();
+    expect(listAssistantThreadSummariesForOwnerInOrg).not.toHaveBeenCalled();
   });
 
-  it("returns only the caller's own + legacy-unowned threads, newest first", async () => {
+  it("returns the caller's own IN-ORG durable-content threads (the store op resolves org+owner+content)", async () => {
     getAuthSession.mockResolvedValue(sessionFor("user-self", "org-1"));
-    readChatThreadsFromDatabase.mockReturnValue([
-      { id: "mine-old", title: "A", createdAt: "2026-01-01", updatedAt: "2026-01-01", ownerUserId: "user-self" },
-      { id: "theirs", title: "B", createdAt: "2026-01-03", updatedAt: "2026-01-03", ownerUserId: "user-other" },
-      { id: "team", title: "C", createdAt: "2026-01-04", updatedAt: "2026-01-04", teamId: "team-1" },
-      { id: "legacy", title: "D", createdAt: "2026-01-02", updatedAt: "2026-01-02" },
+    // PR2 CUTOVER: the non-admin list is served entirely by the structured store
+    // op, which already applies the #134 org+owner scope, the ownerless
+    // quarantine, the team exclusion and the durable-content EXISTS gate (covered
+    // exhaustively by assistant-thread-store tests). The route handler just maps +
+    // sorts what the op returns and passes (activeOrgId, userId).
+    listAssistantThreadSummariesForOwnerInOrg.mockReturnValue([
+      { id: "mine-old", title: "A", createdAt: "2026-01-01", updatedAt: "2026-01-01" },
     ]);
     const res = await GET();
     expect(res.status).toBe(200);
     const list = (await res.json()) as Array<{ id: string }>;
-    expect(list.map((t) => t.id)).toEqual(["legacy", "mine-old"]);
+    expect(list.map((t) => t.id)).toEqual(["mine-old"]);
+    expect(listAssistantThreadSummariesForOwnerInOrg).toHaveBeenCalledWith("org-1", "user-self");
+  });
+
+  it("a platform admin bypasses org scope and sees ownerless legacy rows (quarantine visibility), newest first", async () => {
+    getAuthSession.mockResolvedValue(sessionFor("admin-1", "org-1"));
+    isPlatformAdmin.mockReturnValue(true);
+    // Admin path enumerates the durable-content threads and resolves ownership
+    // from the structured mirror row via getAssistantThread.
+    listAssistantThreadIdsWithDurableContent.mockReturnValue(new Set(["mine-otherorg", "legacy", "team"]));
+    const rows: Record<string, Record<string, unknown>> = {
+      "mine-otherorg": { id: "mine-otherorg", title: "E", createdAt: "2026-01-05", updatedAt: "2026-01-05", ownerUserId: "admin-1", teamId: null },
+      "legacy": { id: "legacy", title: "D", createdAt: "2026-01-02", updatedAt: "2026-01-02", ownerUserId: null, teamId: null },
+      "team": { id: "team", title: "C", createdAt: "2026-01-04", updatedAt: "2026-01-04", ownerUserId: null, teamId: "team-1" },
+    };
+    getAssistantThread.mockImplementation((id: string) => rows[id] ?? null);
+    const res = await GET();
+    expect(res.status).toBe(200);
+    const list = (await res.json()) as Array<{ id: string }>;
+    // team still hidden (team panel); own + ownerless-legacy shown, newest first.
+    expect(list.map((t) => t.id)).toEqual(["mine-otherorg", "legacy"]);
+  });
+
+  it("PR2 CUTOVER: a pre-cutover thread with no durable content is excluded (the store op's content gate)", async () => {
+    getAuthSession.mockResolvedValue(sessionFor("user-self", "org-1"));
+    // mine-new is a pre-cutover shadow (no durable content) → the store op's
+    // durable-content EXISTS gate drops it; only mine-old comes back.
+    listAssistantThreadSummariesForOwnerInOrg.mockReturnValue([
+      { id: "mine-old", title: "A", createdAt: "2026-01-01", updatedAt: "2026-01-01" },
+    ]);
+    const res = await GET();
+    expect(res.status).toBe(200);
+    const list = (await res.json()) as Array<{ id: string }>;
+    expect(list.map((t) => t.id)).toEqual(["mine-old"]);
   });
 });
