@@ -295,11 +295,51 @@ describe("buildBreadcrumbTrail — crumb contributions (#1737)", () => {
     const mid = buildBreadcrumbTrail(`/teams/${TEAM_ID}/settings`);
     expect(mid[1].label).toBe("9c0dfce6…");
     expect(mid[1].label).not.toMatch(/ /);
+    // A legacy 32-char better-auth org id gets the same floor on
+    // /organizations/[id] (#1907 acceptance: never a raw 32-char id).
+    const legacyOrg = buildBreadcrumbTrail(
+      "/organizations/Ul5HrhxiVFOBJmghOIUWjptssxRMaRXs",
+    );
+    expect(legacyOrg[1].label).toBe("Ul5Hrhxi…");
+    expect(legacyOrg[1].label).not.toContain("Ul5HrhxiVFOBJmghOIUWjptssxRMaRXs");
     // users + artifacts id routes get the same floor (generic mechanism).
     expect(buildBreadcrumbTrail(`/users/${ORG_ID}`)[1].label).toBe("faada9fe…");
     expect(buildBreadcrumbTrail("/artifacts/abcdef0123456789ab")[1].label).toBe(
       "abcdef01…",
     );
+  });
+
+  it("a nested canonical dashboard URL (#1738) yields real ancestry with NO special case", () => {
+    // With contributions (the team page + dashboard screen publish post-gate):
+    const resolved = buildBreadcrumbTrail(
+      `/teams/${TEAM_ID}/dashboards/${DASH_ID}`,
+      {
+        contributions: [
+          { prefix: `/teams/${TEAM_ID}`, label: "Best Team Ever" },
+          {
+            prefix: `/teams/${TEAM_ID}/dashboards/${DASH_ID}`,
+            label: "Team Agent Operations",
+          },
+        ],
+      },
+    );
+    expect(resolved.map((c) => c.label)).toEqual([
+      "Teams",
+      "Best Team Ever",
+      "Dashboards",
+      "Team Agent Operations",
+    ]);
+    // The Dashboards segment is a real, navigable address (its page redirects
+    // to the team detail — never a 404 crumb).
+    expect(resolved[2].href).toBe(`/teams/${TEAM_ID}/dashboards`);
+    expect(resolved[2].nonNavigable).toBeFalsy();
+
+    // Without contributions the id floor still holds at both id positions.
+    const unresolved = buildBreadcrumbTrail(
+      `/teams/${TEAM_ID}/dashboards/${DASH_ID}`,
+    );
+    expect(unresolved[1].label).toBe("9c0dfce6…");
+    expect(unresolved[3].label).toBe("c9b24648…");
   });
 
   it("a leaf CONTRIBUTION beats the broadcast page title; the page title still wins when no contribution matches", () => {
@@ -390,9 +430,19 @@ describe("isIdLikeSegment / idSegmentPlaceholder (#1737)", () => {
     expect(isIdLikeSegment("deadbeef")).toBe(false); // short hex = plausible word
   });
 
+  it("matches 32-char legacy better-auth ids (#1907); not near-misses", () => {
+    expect(isIdLikeSegment("Ul5HrhxiVFOBJmghOIUWjptssxRMaRXs")).toBe(true);
+    expect(isIdLikeSegment("bgEWkNFcoODy5NtsIxvPaM1F0lww7GSR")).toBe(true);
+    expect(isIdLikeSegment("Ul5HrhxiVFOBJmghOIUWjptssxRMaRX")).toBe(false); // 31 chars
+    expect(isIdLikeSegment("legacy-id-looking-segment-with-dash1")).toBe(false);
+  });
+
   it("builds the obvious short-id placeholder", () => {
     expect(idSegmentPlaceholder("9c0dfce6-b2cb-4dab-8a01-661ca3288b9a")).toBe(
       "9c0dfce6…",
+    );
+    expect(idSegmentPlaceholder("Ul5HrhxiVFOBJmghOIUWjptssxRMaRXs")).toBe(
+      "Ul5Hrhxi…",
     );
   });
 });

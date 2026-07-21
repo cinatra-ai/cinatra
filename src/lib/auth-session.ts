@@ -323,7 +323,7 @@ function toKernelTeamRoles(
  *  - `orgRole`  — via `resolveOrgRoleForSession` (active-org-scoped).
  *  - `teamIds`  — via `readTeamsForUser` (active-org-scoped). Needed for
  *    Source 2's `principal_team_id = ANY(teamIds)` UNION branch AND for the
- *    actor's own `teamIds` axis so a #1069 `team:<uuid>` visibility token can
+ *    actor's own `teamIds` axis so a #1069 `team:<id>` visibility token can
  *    match in `requireResourceAccess` (#1486; fences #1416 AC7). The SAME
  *    `readTeamsForUser` result feeds both — a session actor resolution
  *    performs exactly ONE team read, no duplicate query.

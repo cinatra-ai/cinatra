@@ -43,6 +43,27 @@ const MIGRATED_ENTRIES = [
     propsApiVersion: 1,
   },
   {
+    bindingId: "@cinatra-ai/email-drafting-agent:follow-up-cadence",
+    packageName: "@cinatra-ai/email-artifacts",
+    specifier: "@cinatra-ai/email-artifacts/src/renderers/follow-up-cadence",
+    resolution: "guardedOptional",
+    propsApiVersion: 1,
+  },
+  {
+    bindingId: "@cinatra-ai/email-follow-up-agent:follow-up-cadence",
+    packageName: "@cinatra-ai/email-artifacts",
+    specifier: "@cinatra-ai/email-artifacts/src/renderers/follow-up-cadence",
+    resolution: "guardedOptional",
+    propsApiVersion: 1,
+  },
+  {
+    bindingId: "@cinatra-ai/email-outreach-agent:gmail-sender",
+    packageName: "@cinatra-ai/email-artifacts",
+    specifier: "@cinatra-ai/email-artifacts/src/renderers/gmail-sender",
+    resolution: "guardedOptional",
+    propsApiVersion: 1,
+  },
+  {
     bindingId: "@cinatra-ai/list-curator-agent:final-list-review",
     packageName: "@cinatra-ai/list-curator-agent",
     specifier: "@cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer",
