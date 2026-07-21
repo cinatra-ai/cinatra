@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1526,
-    "/api/mcp": 1522,
-    "/chat": 1584,
-    "/api/a2a": 1527,
-    "/api/llm-bridge": 1534
+    "/sign-in": 1532,
+    "/api/mcp": 1528,
+    "/chat": 1590,
+    "/api/a2a": 1533,
+    "/api/llm-bridge": 1540
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1525,
-      "to": 1526,
-      "reason": "cinatra#1907 single entity-id policy: the change adds ONE new first-party leaf module, src/lib/id-policy.ts (~30 lines, zero imports) — the single home of the entity-id format policy (entityId() + legacy 32-char id shape guards), consumed by src/lib/auth.ts (the better-auth advanced.database.generateId override), the five direct mint paths, and the breadcrumb shell's id floor rule. It is reachable first-party from every tracked route via the auth/session path, so each locked route grows by the SAME +1 module. The edge is the point of the fix — one policy home instead of per-consumer duplicated constants — and inlining it at each consumer to dodge the metric would trade the single source of truth for zero real dev-perf gain (precedent: the #1741 absorb, same gate, same shape, codex-converged ABSORB-OK). Delta MEASURED +1 uniform by CI run 29780553603 (missingCount 0) on the pre-rebase base; from = origin/main current ceiling, to = from + 1. Re-anchored from main current ceilings (retires the carried #1916 record as a re-raise).",
-      "pr": 1918
+      "from": 1526,
+      "pr": 1923,
+      "reason": "cinatra#1625 email field-renderer relocation: the follow-up-cadence + gmail-sender renderer host halves move from core packages/agents into the @cinatra-ai/email-artifacts devExtension pack. The pack ships the real renderer components, resolved through the kind-agnostic build map; its 2 relocated renderer entries and their vendored UI primitive/util modules become net-new reachable FIRST-PARTY modules from every tracked route via the generated src/lib/generated/field-renderer-components.ts guardedOptional loaders (the ratchet analyzer follows the dynamic import()). Uniform +6 modules per tracked route, MEASURED with the companion extension repos cloned pinned (missingCount 0); from = origin/main current ceiling, to = from + 6. The edge is intrinsic to the relocation (one shared pack component instead of core-duplicated renderers) and inlining to dodge the metric would defeat the relocation. codex-converged MERGE-SAFE.",
+      "to": 1532
     },
     "/api/mcp": {
-      "from": 1521,
-      "to": 1522,
-      "reason": "cinatra#1907 single entity-id policy: the change adds ONE new first-party leaf module, src/lib/id-policy.ts (~30 lines, zero imports) — the single home of the entity-id format policy (entityId() + legacy 32-char id shape guards), consumed by src/lib/auth.ts (the better-auth advanced.database.generateId override), the five direct mint paths, and the breadcrumb shell's id floor rule. It is reachable first-party from every tracked route via the auth/session path, so each locked route grows by the SAME +1 module. The edge is the point of the fix — one policy home instead of per-consumer duplicated constants — and inlining it at each consumer to dodge the metric would trade the single source of truth for zero real dev-perf gain (precedent: the #1741 absorb, same gate, same shape, codex-converged ABSORB-OK). Delta MEASURED +1 uniform by CI run 29780553603 (missingCount 0) on the pre-rebase base; from = origin/main current ceiling, to = from + 1. Re-anchored from main current ceilings (retires the carried #1916 record as a re-raise).",
-      "pr": 1918
+      "from": 1522,
+      "pr": 1923,
+      "reason": "cinatra#1625 email field-renderer relocation: the follow-up-cadence + gmail-sender renderer host halves move from core packages/agents into the @cinatra-ai/email-artifacts devExtension pack. The pack ships the real renderer components, resolved through the kind-agnostic build map; its 2 relocated renderer entries and their vendored UI primitive/util modules become net-new reachable FIRST-PARTY modules from every tracked route via the generated src/lib/generated/field-renderer-components.ts guardedOptional loaders (the ratchet analyzer follows the dynamic import()). Uniform +6 modules per tracked route, MEASURED with the companion extension repos cloned pinned (missingCount 0); from = origin/main current ceiling, to = from + 6. The edge is intrinsic to the relocation (one shared pack component instead of core-duplicated renderers) and inlining to dodge the metric would defeat the relocation. codex-converged MERGE-SAFE.",
+      "to": 1528
     },
     "/chat": {
-      "from": 1583,
-      "to": 1584,
-      "reason": "cinatra#1907 single entity-id policy: the change adds ONE new first-party leaf module, src/lib/id-policy.ts (~30 lines, zero imports) — the single home of the entity-id format policy (entityId() + legacy 32-char id shape guards), consumed by src/lib/auth.ts (the better-auth advanced.database.generateId override), the five direct mint paths, and the breadcrumb shell's id floor rule. It is reachable first-party from every tracked route via the auth/session path, so each locked route grows by the SAME +1 module. The edge is the point of the fix — one policy home instead of per-consumer duplicated constants — and inlining it at each consumer to dodge the metric would trade the single source of truth for zero real dev-perf gain (precedent: the #1741 absorb, same gate, same shape, codex-converged ABSORB-OK). Delta MEASURED +1 uniform by CI run 29780553603 (missingCount 0) on the pre-rebase base; from = origin/main current ceiling, to = from + 1. Re-anchored from main current ceilings (retires the carried #1916 record as a re-raise).",
-      "pr": 1918
+      "from": 1584,
+      "pr": 1923,
+      "reason": "cinatra#1625 email field-renderer relocation: the follow-up-cadence + gmail-sender renderer host halves move from core packages/agents into the @cinatra-ai/email-artifacts devExtension pack. The pack ships the real renderer components, resolved through the kind-agnostic build map; its 2 relocated renderer entries and their vendored UI primitive/util modules become net-new reachable FIRST-PARTY modules from every tracked route via the generated src/lib/generated/field-renderer-components.ts guardedOptional loaders (the ratchet analyzer follows the dynamic import()). Uniform +6 modules per tracked route, MEASURED with the companion extension repos cloned pinned (missingCount 0); from = origin/main current ceiling, to = from + 6. The edge is intrinsic to the relocation (one shared pack component instead of core-duplicated renderers) and inlining to dodge the metric would defeat the relocation. codex-converged MERGE-SAFE.",
+      "to": 1590
     },
     "/api/a2a": {
-      "from": 1526,
-      "to": 1527,
-      "reason": "cinatra#1907 single entity-id policy: the change adds ONE new first-party leaf module, src/lib/id-policy.ts (~30 lines, zero imports) — the single home of the entity-id format policy (entityId() + legacy 32-char id shape guards), consumed by src/lib/auth.ts (the better-auth advanced.database.generateId override), the five direct mint paths, and the breadcrumb shell's id floor rule. It is reachable first-party from every tracked route via the auth/session path, so each locked route grows by the SAME +1 module. The edge is the point of the fix — one policy home instead of per-consumer duplicated constants — and inlining it at each consumer to dodge the metric would trade the single source of truth for zero real dev-perf gain (precedent: the #1741 absorb, same gate, same shape, codex-converged ABSORB-OK). Delta MEASURED +1 uniform by CI run 29780553603 (missingCount 0) on the pre-rebase base; from = origin/main current ceiling, to = from + 1. Re-anchored from main current ceilings (retires the carried #1916 record as a re-raise).",
-      "pr": 1918
+      "from": 1527,
+      "pr": 1923,
+      "reason": "cinatra#1625 email field-renderer relocation: the follow-up-cadence + gmail-sender renderer host halves move from core packages/agents into the @cinatra-ai/email-artifacts devExtension pack. The pack ships the real renderer components, resolved through the kind-agnostic build map; its 2 relocated renderer entries and their vendored UI primitive/util modules become net-new reachable FIRST-PARTY modules from every tracked route via the generated src/lib/generated/field-renderer-components.ts guardedOptional loaders (the ratchet analyzer follows the dynamic import()). Uniform +6 modules per tracked route, MEASURED with the companion extension repos cloned pinned (missingCount 0); from = origin/main current ceiling, to = from + 6. The edge is intrinsic to the relocation (one shared pack component instead of core-duplicated renderers) and inlining to dodge the metric would defeat the relocation. codex-converged MERGE-SAFE.",
+      "to": 1533
     },
     "/api/llm-bridge": {
-      "from": 1533,
-      "to": 1534,
-      "reason": "cinatra#1907 single entity-id policy: the change adds ONE new first-party leaf module, src/lib/id-policy.ts (~30 lines, zero imports) — the single home of the entity-id format policy (entityId() + legacy 32-char id shape guards), consumed by src/lib/auth.ts (the better-auth advanced.database.generateId override), the five direct mint paths, and the breadcrumb shell's id floor rule. It is reachable first-party from every tracked route via the auth/session path, so each locked route grows by the SAME +1 module. The edge is the point of the fix — one policy home instead of per-consumer duplicated constants — and inlining it at each consumer to dodge the metric would trade the single source of truth for zero real dev-perf gain (precedent: the #1741 absorb, same gate, same shape, codex-converged ABSORB-OK). Delta MEASURED +1 uniform by CI run 29780553603 (missingCount 0) on the pre-rebase base; from = origin/main current ceiling, to = from + 1. Re-anchored from main current ceilings (retires the carried #1916 record as a re-raise).",
-      "pr": 1918
+      "from": 1534,
+      "pr": 1923,
+      "reason": "cinatra#1625 email field-renderer relocation: the follow-up-cadence + gmail-sender renderer host halves move from core packages/agents into the @cinatra-ai/email-artifacts devExtension pack. The pack ships the real renderer components, resolved through the kind-agnostic build map; its 2 relocated renderer entries and their vendored UI primitive/util modules become net-new reachable FIRST-PARTY modules from every tracked route via the generated src/lib/generated/field-renderer-components.ts guardedOptional loaders (the ratchet analyzer follows the dynamic import()). Uniform +6 modules per tracked route, MEASURED with the companion extension repos cloned pinned (missingCount 0); from = origin/main current ceiling, to = from + 6. The edge is intrinsic to the relocation (one shared pack component instead of core-duplicated renderers) and inlining to dodge the metric would defeat the relocation. codex-converged MERGE-SAFE.",
+      "to": 1540
     }
   }
 }

@@ -22,7 +22,7 @@ import {
   type ReactNode,
 } from "react";
 import type { FieldRendererProps } from "./field-renderer-registry";
-import { SchemaFieldRenderer } from "./schema-field-renderer";
+import { SchemaOnlyFloorRenderer } from "./schema-field-renderer";
 import { loadFieldRendererComponent } from "./field-renderer-components";
 
 /** Render-time containment: an extension renderer that throws while rendering is
@@ -86,14 +86,17 @@ export function makeExtensionFieldRenderer(
     }, [bindingId]);
 
     // Never blank: the floor covers both the loading window and every degrade.
-    // CRITICAL — strip `x-renderer` from the schema handed to the floor. The
-    // SchemaFieldRenderer floor is REGISTRY-FIRST (it re-resolves via
-    // fieldRendererRegistry), so an unstripped `x-renderer` would re-resolve THIS
-    // same extension wrapper and recurse until crash — the opposite of the AC4
-    // never-blank/never-crash floor. The active x-renderer is preserved on
+    // The floor is `SchemaOnlyFloorRenderer` — a TRUE registry-bypass floor that
+    // does NOT re-enter fieldRendererRegistry, so it cannot re-resolve THIS same
+    // wrapper and recurse (cinatra#1625, codex 2026-07-20). Stripping `x-renderer`
+    // alone was insufficient: it defeats only STRICT-ID conditions, while a
+    // sender-name HEURISTIC (gmail-sender) matches on the field name and survives
+    // the strip. We STILL strip `x-renderer` and preserve the active one on
     // context.xRenderer (the established convention — see FieldRendererContext),
     // matching every other floor-render site (agentic-run-panel,
-    // orchestrator-stepper-panel, reviewer-agent-output-renderer).
+    // orchestrator-stepper-panel, reviewer-agent-output-renderer); the bypass is
+    // the load-bearing recursion guard, the strip keeps the floor's own schema
+    // clean and context.xRenderer available.
     const { "x-renderer": strippedXRenderer, ...floorSchema } =
       props.schema as { "x-renderer"?: unknown } & Record<string, unknown>;
     const floorProps: FieldRendererProps = {
@@ -107,7 +110,7 @@ export function makeExtensionFieldRenderer(
             : props.context.xRenderer,
       },
     };
-    const floor = createElement(SchemaFieldRenderer, floorProps);
+    const floor = createElement(SchemaOnlyFloorRenderer, floorProps);
     if (degraded || resolved === null) return floor;
     return createElement(
       FieldRendererErrorBoundary,

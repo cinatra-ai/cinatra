@@ -39,7 +39,7 @@ barrel so it does not inflate routes that import the package):
 - `A2UiMessage`, `A2UiMessageType`, `ComponentDefinition` — A2UI surface message types
 - `CreateSurfaceMessage`, `UpdateComponentsMessage`, `UpdateDataModelMessage`, `DeleteSurfaceMessage` — A2UI message variants
 - `A2UI_MESSAGE_TYPES` — frozen array of A2UI message type names
-- `GMAIL_SENDER_FIELD_WHITELIST`, `normalizeGmailSenderFieldName` — allowed Gmail sender fields
+- `EMAIL_SENDER_FIELD_WHITELIST`, `normalizeEmailSenderFieldName` — allowed email sender fields
 
 Server-only (`@cinatra-ai/agent-ui-protocol/server`):
 

@@ -1,15 +1,18 @@
 // ---------------------------------------------------------------------------
-// gmail-sender-field-whitelist — tier-neutral export.
+// email-sender-field-whitelist — tier-neutral, provider-NEUTRAL export
+// (cinatra#1625: the mechanism is a
+// generic email-sender field heuristic; the gmail-specific ACTIVATION lives in
+// the host condition module + the migrated pack renderer).
 //
 // Imported by:
-//   - packages/agent-builder/src/gmail-sender-renderer.tsx (browser, "use client")
+//   - the host gmail-sender condition module (packages/agents/src/gmail-sender-condition.ts)
 //     via the @cinatra-ai/agent-ui-protocol public re-export
 //   - packages/agent-ui-protocol/src/schema-enricher.ts (server, "server-only")
-//     via the local relative import "./gmail-sender-field-whitelist"
+//     via the local relative import "./email-sender-field-whitelist"
 //
 // Single source of truth for which HITL field names should be treated as
-// Gmail sender pickers when Gmail is connected. This file MUST stay free
-// of "use client" / "server-only" so both tiers can consume it.
+// email sender pickers when a sender provider is connected. This file MUST stay
+// free of "use client" / "server-only" so both tiers can consume it.
 //
 // Placed in agent-ui-protocol (not agent-builder) to avoid a circular
 // dependency: the enricher in agent-ui-protocol must import this; if it
@@ -18,12 +21,13 @@
 // ---------------------------------------------------------------------------
 
 /**
- * Tight whitelist of field names that should be treated as Gmail sender
- * fields ONLY if Gmail is connected AND aliases are available. Anything
+ * Tight whitelist of field names that should be treated as email sender
+ * fields ONLY if a sender provider is connected AND aliases are available.
+ * Anything
  * outside this list MUST use the explicit "x-renderer": "gmail-sender" /
  * "@cinatra-ai/email-outreach-agent:gmail-sender" annotation instead.
  */
-export const GMAIL_SENDER_FIELD_WHITELIST: ReadonlySet<string> = new Set([
+export const EMAIL_SENDER_FIELD_WHITELIST: ReadonlySet<string> = new Set([
   "sender",
   "senderemail",
   "senderaddress",
@@ -36,8 +40,8 @@ export const GMAIL_SENDER_FIELD_WHITELIST: ReadonlySet<string> = new Set([
 /**
  * Normalize a raw HITL field name to the canonical lookup key:
  * lowercase + strip underscores, hyphens, and whitespace. Mirrors
- * the in-renderer normalization at gmail-sender-renderer.tsx line 38.
+ * the in-renderer normalization the migrated pack gmail-sender renderer uses.
  */
-export function normalizeGmailSenderFieldName(name: string): string {
+export function normalizeEmailSenderFieldName(name: string): string {
   return name.toLowerCase().replace(/[_\-\s]/g, "");
 }

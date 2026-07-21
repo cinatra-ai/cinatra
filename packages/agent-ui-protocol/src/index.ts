@@ -45,10 +45,11 @@ export type {
 export { A2UI_MESSAGE_TYPES } from "./a2ui-messages";
 
 // ---------------------------------------------------------------------------
-// Gmail sender field whitelist (tier-neutral)
-// Consumed by both the client renderer and the server-only schema enricher.
+// Email sender field whitelist (tier-neutral, provider-neutral)
+// Consumed by both the host gmail-sender condition module and the server-only
+// schema enricher.
 // ---------------------------------------------------------------------------
 export {
-  GMAIL_SENDER_FIELD_WHITELIST,
-  normalizeGmailSenderFieldName,
-} from "./gmail-sender-field-whitelist";
+  EMAIL_SENDER_FIELD_WHITELIST,
+  normalizeEmailSenderFieldName,
+} from "./email-sender-field-whitelist";
