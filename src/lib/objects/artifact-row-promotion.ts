@@ -100,25 +100,17 @@ export type WidenOutcome =
 
 // ── never-narrow scope ranking ──────────────────────────────────────────────
 
-/** Visibility widening lattice — a promotion may only move UP this rank. */
-export const PROMOTION_SCOPE_RANK: Readonly<Record<string, number>> = {
-  private: 0,
-  team: 1,
-  organization: 2,
-  public: 3,
-};
-
-export function promotionScopeRank(scope: string): number {
-  return PROMOTION_SCOPE_RANK[scope] ?? -1;
-}
-
-/** True iff `to` is STRICTLY wider than `from` (a real widen — never-narrow,
- *  never a no-op). An unknown scope ranks -1 and never widens. */
-export function isWiden(from: string, to: string): boolean {
-  const f = promotionScopeRank(from);
-  const t = promotionScopeRank(to);
-  return f >= 0 && t >= 0 && t > f;
-}
+// The never-narrow lattice lives in a pure, dependency-free module so the
+// collection-add authorization contract (cinatra#1886) evaluates the SAME
+// widen predicate this service enforces (a promotion offer can never name a
+// target this flow would reject). Re-exported here so existing consumers /
+// tests keep importing it from this module unchanged.
+export {
+  PROMOTION_SCOPE_RANK,
+  promotionScopeRank,
+  isWiden,
+} from "./promotion-visibility-lattice";
+import { isWiden } from "./promotion-visibility-lattice";
 
 // ── fail-closed secret/PII scan ─────────────────────────────────────────────
 

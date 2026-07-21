@@ -7,6 +7,7 @@ import {
   buildScriptedContentEditorReplyText,
   isScriptedTestProviderEnabled,
   runScriptedStream,
+  runScriptedWidgetAssistantTurn,
 } from "../scripted-test-provider";
 
 type Captured = {
@@ -103,6 +104,63 @@ describe("scripted-test-provider", () => {
     expect(captured.toolResults[0].name).toBe("drupal_content_editor_run");
     const parsed = JSON.parse(captured.toolResults[0].result);
     expect(parsed.nodeId).toBe("7");
+  });
+});
+
+describe("runScriptedWidgetAssistantTurn (unified /api/assistants/chat widget seam)", () => {
+  type WCaptured = {
+    text: string;
+    toolCalls: Array<{ id: string; name: string }>;
+    toolResults: Array<{ id: string; name: string; result: string }>;
+    order: string[];
+  };
+  function makeSink(): { sink: Parameters<typeof runScriptedWidgetAssistantTurn>[0]; captured: WCaptured } {
+    const captured: WCaptured = { text: "", toolCalls: [], toolResults: [], order: [] };
+    const sink = {
+      instructions: "",
+      assistantHandle: "wordpress",
+      onText: (c: string) => { captured.text += c; captured.order.push("text"); },
+      onToolCall: (call: { id: string; name: string }) => { captured.toolCalls.push(call); captured.order.push("tool_call"); },
+      onToolResult: (r: { id: string; name: string; result: string }) => { captured.toolResults.push(r); captured.order.push("tool_result"); },
+    };
+    return { sink, captured };
+  }
+
+  it("streams a sentinel-bearing WordPress reply with NO tool call on a plain prompt", async () => {
+    const { sink, captured } = makeSink();
+    await runScriptedWidgetAssistantTurn({ ...sink, instructions: "Hello, what can you do here?" });
+    expect(captured.text).toContain(UAT_SENTINEL);
+    expect(captured.text).toContain("WordPress");
+    expect(captured.toolCalls).toHaveLength(0);
+    expect(captured.toolResults).toHaveLength(0);
+  });
+
+  it("emits a wordpress_content_editor_run tool_call BEFORE its tool_result on an edit intent (widget content-edit key)", async () => {
+    const { sink, captured } = makeSink();
+    await runScriptedWidgetAssistantTurn({ ...sink, instructions: "Please rewrite the title to be punchier." });
+    expect(captured.text).toContain(UAT_SENTINEL);
+    expect(captured.toolCalls).toHaveLength(1);
+    expect(captured.toolCalls[0].name).toBe("wordpress_content_editor_run");
+    expect(captured.toolCalls[0].name).toMatch(/_content_editor_run$/);
+    expect(captured.toolResults).toHaveLength(1);
+    // The tool_call and tool_result share one id, and the call precedes the result.
+    expect(captured.toolResults[0].id).toBe(captured.toolCalls[0].id);
+    expect(captured.order.indexOf("tool_call")).toBeLessThan(captured.order.indexOf("tool_result"));
+    // Text streams before the tool call (so the widget renders the reply, then keys the edit).
+    expect(captured.order.indexOf("text")).toBeLessThan(captured.order.indexOf("tool_call"));
+    const parsed = JSON.parse(captured.toolResults[0].result);
+    expect(Array.isArray(parsed.changes)).toBe(true);
+    expect(parsed.changes[0]).toMatchObject({ field: "title" });
+    expect("postId" in parsed).toBe(true);
+  });
+
+  it("selects the Drupal tool + nodeId key from the bound assistant handle", async () => {
+    const { sink, captured } = makeSink();
+    await runScriptedWidgetAssistantTurn({ ...sink, assistantHandle: "Drupal", instructions: "Add a short summary." });
+    expect(captured.text).toContain("Drupal");
+    expect(captured.toolCalls[0].name).toBe("drupal_content_editor_run");
+    const parsed = JSON.parse(captured.toolResults[0].result);
+    expect("nodeId" in parsed).toBe(true);
   });
 });
 

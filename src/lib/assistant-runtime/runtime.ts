@@ -55,6 +55,11 @@ import {
   checkPublicMcpReachability,
 } from "@cinatra-ai/llm";
 import type { LlmTool } from "@cinatra-ai/llm";
+import {
+  assertScriptedProviderNotProduction,
+  isScriptedTestProviderEnabled,
+  runScriptedWidgetAssistantTurn,
+} from "@cinatra-ai/llm/scripted-test-provider";
 import { issueChatMcpActorToken } from "@/lib/chat-mcp-actor-token";
 import { issueWidgetMcpActorToken } from "@/lib/widget-mcp-actor-token";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
@@ -377,6 +382,47 @@ export async function runAssistantTurn(
   // USER against the pinned instance, floored to `member`. `null` = the
   // cookie-session `@cinatra` chat path, byte-identical to before.
   const widgetPrincipal = args.widgetPrincipal ?? null;
+
+  // Scripted-test-provider short-circuit for the public-site widget path
+  // (cinatra#1919 AC3). The deterministic WP/Drupal Playwright UAT app carries
+  // NO real provider creds, so `resolveDefaultAdapter()` below resolves null and
+  // the turn dies with "No LLM provider configured." before the scripted stream
+  // can answer (the `hasConfiguredLlmRuntime` broker gate shares the blind spot;
+  // fixed in registry.ts). When the deterministic provider is enabled, stream
+  // the deterministic content-editor reply directly through the SAME `send` sink
+  // the real turn uses — text → sentinel; an edit intent → a
+  // `*_content_editor_run` tool_call + tool_result — then finish.
+  //
+  // SCOPE: gated to the widget path (`widgetPrincipal` present) so the
+  // cookie-session `@cinatra` chat-mcp e2e — which DOES configure a provider and
+  // relies on the host `stream()`'s own scripted seam for tool orchestration —
+  // is UNAFFECTED (its adapter resolves; `stream()` short-circuits there). And
+  // fail-loud outside an explicit development runtime
+  // (assertScriptedProviderNotProduction): a no-op unless the env flag is set,
+  // so PRODUCTION is byte-identical — the scripted branch is never reachable
+  // there.
+  if (widgetPrincipal && isScriptedTestProviderEnabled()) {
+    assertScriptedProviderNotProduction();
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    const instructions =
+      typeof lastUser?.content === "string" ? lastUser.content : "";
+    await runScriptedWidgetAssistantTurn({
+      instructions,
+      assistantHandle: widgetPrincipal.assistantHandle,
+      onText: (content) => send("text", { content }),
+      onToolCall: (call) =>
+        send("tool_call", { id: call.id, name: call.name, status: "running" }),
+      onToolResult: (result) =>
+        send("tool_result", {
+          id: result.id,
+          name: result.name,
+          status: "completed",
+          resultLabel: deriveResultLabel(result.name, result.result),
+          result: result.result,
+        }),
+    });
+    return;
+  }
 
   // Assistant-owned native MCP injection with a delegated human actor token.
   //

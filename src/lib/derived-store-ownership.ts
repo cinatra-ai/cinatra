@@ -59,6 +59,163 @@ export type OwnershipFilterFragment = {
 };
 
 // ---------------------------------------------------------------------------
+// Canonical ownership predicate — ONE source of truth, TWO projections
+// (cinatra#1886 C2 / epic #1883 D11).
+//
+// The visibility rule that decides "does this ownership vantage admit this
+// row" is expressed ONCE as an ordered list of CLAUSE descriptors
+// (`OWNERSHIP_VISIBILITY_CLAUSES`). Each clause carries BOTH projections of
+// the SAME rule:
+//
+//   - `sql(vantage, ph)`   → the parameterised SQL fragment the read filter
+//                            (`buildOwnershipFilter`) OR-joins into a WHERE.
+//   - `matches(vantage, row)` → the pure in-memory row predicate the
+//                            row evaluator (`evaluateOwnershipVisibility`,
+//                            and through it `scopeMaySeeRow`/`actorMaySeeRow`)
+//                            OR-joins over.
+//
+// Neither projection can gain or lose a clause without the other: they iterate
+// the identical array. A conformance test pins that the two stay in lockstep
+// by running the SAME (vantage, row) corpus through BOTH the compiled SQL
+// (against real Postgres) and the row predicate and asserting identical
+// verdicts.
+// ---------------------------------------------------------------------------
+
+/**
+ * The ownership AXES a canonical visibility decision reads — the shared
+ * projection surface both `buildOwnershipFilter` and the row evaluator narrow
+ * to. `buildOwnershipFilter` derives this from a full `ActorContext`
+ * (`vantageFromActor`); `scopeMaySeeRow` derives it from an explicit
+ * collection scope (`vantageFromScope`) — NEVER a synthesized fake actor: only
+ * the axis the scope structurally represents is populated, and `isPlatformAdmin`
+ * is never set from a scope (fail-closed — a scope is never a platform admin).
+ */
+export type OwnershipVantage = {
+  /** User owner axis — the owning principal id (user-owned rows). */
+  principalId?: string | null;
+  /** Team owner axis — team ids whose team-owned rows are admitted. */
+  teamIds: string[];
+  /** Tenancy — admits organization- and (non-admin) public-visible rows. */
+  organizationId?: string | null;
+  /** Project axis — project ids whose project-refined rows are admitted. */
+  projectIds: string[];
+  /** Platform admin widens the public clause across orgs (read filter only). */
+  isPlatformAdmin: boolean;
+};
+
+/**
+ * A row projected onto the canonical ownership columns, the input the row
+ * predicate evaluates. Mirrors the `objects` columns the SQL filter reads
+ * (owner_level, owner_id, visibility, project_id, org_id).
+ */
+export type OwnershipEvalRow = {
+  ownerLevel: string | null;
+  ownerId: string | null;
+  visibility: string | null;
+  projectId: string | null;
+  orgId: string | null;
+};
+
+/** Canonical clause ids — the fixed set both projections enumerate. */
+export const OWNERSHIP_CLAUSE_IDS = [
+  "user",
+  "team",
+  "organization",
+  "public",
+  "project",
+] as const;
+export type OwnershipClauseId = (typeof OWNERSHIP_CLAUSE_IDS)[number];
+
+type OwnershipClause = {
+  id: OwnershipClauseId;
+  /** SQL projection — appends positional params via `ph`, returns the fragment. */
+  sql: (vantage: OwnershipVantage, ph: (v: unknown) => string) => string;
+  /** Row projection — the exact same rule as a pure predicate. */
+  matches: (vantage: OwnershipVantage, row: OwnershipEvalRow) => boolean;
+};
+
+/**
+ * SQL `=` semantics for a single scalar comparison: a NULL on EITHER side
+ * never matches (Postgres `col = NULL` / `NULL = val` → NULL → false). The
+ * row predicate uses this so it can never admit a row the SQL filter's
+ * `= $param` would reject on a null operand.
+ */
+function sqlEq(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  return a != null && b != null && a === b;
+}
+
+/**
+ * The canonical visibility clause list — see the block comment above. Order
+ * is load-bearing for the SQL projection: it fixes the positional-parameter
+ * sequence ($1 user, then team, org, public[member-only], project) that the
+ * existing read-filter tests and callers depend on.
+ */
+const OWNERSHIP_VISIBILITY_CLAUSES: readonly OwnershipClause[] = [
+  {
+    // User owner axis — direct principal match on user-owned rows.
+    id: "user",
+    sql: (v, ph) =>
+      `(owner_level = 'user' AND owner_id = ${ph(v.principalId ?? null)})`,
+    matches: (v, r) => r.ownerLevel === "user" && sqlEq(r.ownerId, v.principalId),
+  },
+  {
+    // Team owner axis — team-owned rows of any team the vantage belongs to.
+    id: "team",
+    sql: (v, ph) =>
+      `(owner_level = 'team' AND owner_id = ANY(${ph(v.teamIds)}::text[]))`,
+    matches: (v, r) =>
+      r.ownerLevel === "team" && r.ownerId != null && v.teamIds.includes(r.ownerId),
+  },
+  {
+    // Organization visibility — members see org-visible rows in their org.
+    id: "organization",
+    sql: (v, ph) =>
+      `(visibility = 'organization' AND org_id = ${ph(v.organizationId ?? null)})`,
+    matches: (v, r) =>
+      r.visibility === "organization" && sqlEq(r.orgId, v.organizationId),
+  },
+  {
+    // Public visibility — scoped to the owning org (multi-tenant fail-closed);
+    // a platform_admin vantage reads public rows across orgs (read filter
+    // only — `vantageFromScope` never sets isPlatformAdmin).
+    id: "public",
+    sql: (v, ph) =>
+      v.isPlatformAdmin
+        ? `visibility = 'public'`
+        : `(visibility = 'public' AND org_id = ${ph(v.organizationId ?? null)})`,
+    matches: (v, r) =>
+      r.visibility === "public" &&
+      (v.isPlatformAdmin || sqlEq(r.orgId, v.organizationId)),
+  },
+  {
+    // Project axis — sealed-room membership admits project-tagged rows.
+    id: "project",
+    sql: (v, ph) =>
+      `(project_id IS NOT NULL AND project_id = ANY(${ph(v.projectIds)}::text[]))`,
+    matches: (v, r) => r.projectId != null && v.projectIds.includes(r.projectId),
+  },
+];
+
+/**
+ * Project a full `ActorContext` onto the shared ownership vantage — the read
+ * filter's view. Every axis the SQL filter consults is carried through
+ * verbatim (undefined team/project arrays collapse to empty, matching the
+ * `?? []` the SQL builder used).
+ */
+export function vantageFromActor(actor: ActorContext): OwnershipVantage {
+  return {
+    principalId: actor.principalId,
+    teamIds: actor.teamIds ?? [],
+    organizationId: actor.organizationId,
+    projectIds: actor.projectIds ?? [],
+    isPlatformAdmin: actor.platformRole === "platform_admin",
+  };
+}
+
+// ---------------------------------------------------------------------------
 // buildOwnershipFilter
 // ---------------------------------------------------------------------------
 
@@ -86,59 +243,22 @@ export type OwnershipFilterFragment = {
  */
 export function buildOwnershipFilter(actor: ActorContext): OwnershipFilterFragment {
   const params: unknown[] = [];
-  const clauses: string[] = [];
   const ph = (v: unknown) => {
     params.push(v);
     return `$${params.length}`;
   };
 
-  // User owner axis — direct principal match on user-owned rows.
-  clauses.push(
-    `(owner_level = 'user' AND owner_id = ${ph(actor.principalId)})`,
-  );
-
-  // Team owner axis — team-owned rows of any team the actor belongs to.
-  const teamIds = actor.teamIds ?? [];
-  clauses.push(
-    `(owner_level = 'team' AND owner_id = ANY(${ph(teamIds)}::text[]))`,
-  );
-
-  // Organization visibility — org members see org-visible rows. Always emit
-  // the param even when actor.organizationId is undefined so the positional
-  // sequence stays predictable; pg treats `= NULL` as never-match.
-  clauses.push(
-    `(visibility = 'organization' AND org_id = ${ph(actor.organizationId ?? null)})`,
-  );
-
-  // Public visibility must be scoped to the owning org. Matching every row
-  // regardless of actor org/membership would let synthesized loopback
-  // contexts or undefined-org contexts leak public-visibility rows across
-  // orgs. Require either (a) the row's org_id matches the actor's
-  // organizationId, or (b) the actor is a platform admin. This makes 'public'
-  // mean "visible to anyone in the OWNING org" — multi-tenant safe (the same
-  // load-bearing invariant the retired 'workspace' composite value carried).
-  if (actor.platformRole === "platform_admin") {
-    clauses.push(`visibility = 'public'`);
-  } else {
-    // Load-bearing fail-closed invariant: when actor.organizationId is
-    // undefined this becomes `org_id = NULL`, which never matches in
-    // Postgres SQL — a non-admin actor with no org claim sees zero rows.
-    // Do NOT swap `=` for `IS NOT DISTINCT FROM` here; that would let
-    // null-org actors read every public-visible row across all orgs.
-    clauses.push(
-      `(visibility = 'public' AND org_id = ${ph(actor.organizationId ?? null)})`,
-    );
-  }
-
-  // Project axis — sealed-room membership. project_id is a refinement, not a
-  // tier: a project-tagged row is shared with its room's members regardless
-  // of the visibility axis (exactly what the retired 'project:<id>' composite
-  // granted). Non-members reach a project-tagged row only through the owner
-  // axes above.
-  const projectIds = actor.projectIds ?? [];
-  clauses.push(
-    `(project_id IS NOT NULL AND project_id = ANY(${ph(projectIds)}::text[]))`,
-  );
+  // Emit the SQL projection of EVERY canonical clause, in list order. The
+  // clause list (`OWNERSHIP_VISIBILITY_CLAUSES`) is the single source of truth
+  // shared with the row evaluator (`evaluateOwnershipVisibility`); iterating it
+  // here fixes the positional-parameter sequence ($1 user, team, org,
+  // public[member-only], project) callers depend on. Load-bearing invariants
+  // preserved from the hand-written form: the org/public clauses bind
+  // `actor.organizationId ?? null` (a null-org non-admin sees zero rows —
+  // `org_id = NULL` never matches; do NOT relax to `IS NOT DISTINCT FROM`),
+  // and platform_admin widens `public` across orgs (its clause binds no param).
+  const vantage = vantageFromActor(actor);
+  const clauses = OWNERSHIP_VISIBILITY_CLAUSES.map((c) => c.sql(vantage, ph));
 
   const visibilitySql = `(${clauses.join(" OR ")})`;
 
@@ -194,6 +314,168 @@ function buildCeilingClause(
     }
   }
   return parts.length > 0 ? `(${parts.join(" AND ")})` : null;
+}
+
+/**
+ * Row-predicate MIRROR of `buildCeilingClause` — the same satisfy-ALL OBO
+ * ceiling semantics as a pure boolean over an evaluated row. Element-for-element
+ * identical to the SQL projection (organization → org_id; project → project_id;
+ * user/team/workspace → owner_level+owner_id). Empty/absent chain ⇒ no
+ * narrowing (true), mirroring the SQL builder returning null (clause omitted).
+ */
+function matchesCeiling(
+  chain: ActorContext["oboCeiling"],
+  row: OwnershipEvalRow,
+): boolean {
+  if (!chain || chain.length === 0) return true;
+  for (const c of chain) {
+    if (c.tier === "organization") {
+      if (!sqlEq(row.orgId, c.id)) return false;
+    } else if (c.tier === "project") {
+      if (!sqlEq(row.projectId, c.id)) return false;
+    } else {
+      // user | team | workspace — owner-axis anchor.
+      if (!(row.ownerLevel === c.tier && sqlEq(row.ownerId, c.id))) return false;
+    }
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// evaluateOwnershipVisibility — the ROW projection of the canonical predicate
+// ---------------------------------------------------------------------------
+
+/**
+ * Pure in-memory answer to "does this ownership vantage admit this row?" — the
+ * row projection of the EXACT predicate `buildOwnershipFilter` compiles to SQL
+ * (cinatra#1886 C2 / D11). A row is admitted iff it satisfies the OR-set of the
+ * shared `OWNERSHIP_VISIBILITY_CLAUSES` AND (when the vantage carries one) every
+ * element of the OBO ceiling chain — the same `(visibilitySql AND ceilingSql)`
+ * composition `buildOwnershipFilter` emits.
+ *
+ * This is the single evaluator behind BOTH `actorMaySeeRow` (actor vantage +
+ * the actor's ceiling) and `scopeMaySeeRow` (scope vantage, no ceiling). The
+ * lockstep conformance test runs the same corpus through this and the compiled
+ * SQL and asserts identical verdicts.
+ */
+export function evaluateOwnershipVisibility(
+  vantage: OwnershipVantage,
+  row: OwnershipEvalRow,
+  ceiling?: ActorContext["oboCeiling"],
+): boolean {
+  const visible = OWNERSHIP_VISIBILITY_CLAUSES.some((c) => c.matches(vantage, row));
+  if (!visible) return false;
+  return matchesCeiling(ceiling, row);
+}
+
+/**
+ * Does the ACTOR's own read vantage admit this row — the in-memory equivalent
+ * of "would `buildOwnershipFilter(actor)` return this row". Carries the actor's
+ * OBO ceiling so a delegated agent-run actor stays ceiling-bounded, exactly as
+ * the SQL filter does. This is the `actor-may-see(row)` conjunct of the
+ * collection-add contract (cinatra#1886).
+ */
+export function actorMaySeeRow(
+  actor: ActorContext,
+  row: OwnershipEvalRow,
+): boolean {
+  return evaluateOwnershipVisibility(
+    vantageFromActor(actor),
+    row,
+    actor.oboCeiling,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// scopeMaySeeRow — the SCOPE-vantage guard (cinatra#1886 C2 / D11)
+// ---------------------------------------------------------------------------
+
+/**
+ * A collection SCOPE — the owning vantage of a scope's collection listing
+ * (user/team/organization/workspace/project). `scopeMaySeeRow` answers "may a
+ * GENERIC member positioned at exactly this scope already open this row" —
+ * so a row can only be listed in a scope's collection when everyone in that
+ * scope can see it (never silently widening; the promotion flow is the
+ * recourse). The projection carries ONLY the axis the scope structurally
+ * represents (see `vantageFromScope`), never a synthesized fake actor.
+ */
+export type CollectionScope =
+  | { kind: "user"; userId: string; orgId?: string | null }
+  | { kind: "team"; teamId: string; orgId: string }
+  | { kind: "organization"; orgId: string }
+  | { kind: "workspace"; orgId: string }
+  | { kind: "project"; projectId: string; orgId: string };
+
+/** The scope kinds — fixed roster, drives the per-kind test matrix. */
+export const COLLECTION_SCOPE_KINDS = [
+  "user",
+  "team",
+  "organization",
+  "workspace",
+  "project",
+] as const;
+
+/**
+ * Project an explicit collection scope onto the shared ownership vantage —
+ * NOT a synthesized actor (D11: "no synthesized fake actor"). Only the axis the
+ * scope structurally represents is populated, plus the org tenancy floor so the
+ * scope inherits org- and public-visible rows every member can open:
+ *
+ *   - user      → principalId = userId          (+ orgId when known)
+ *   - team      → teamIds = [teamId]            (+ orgId, required)
+ *   - project   → projectIds = [projectId]      (+ orgId, required)
+ *   - organization / workspace → organizationId only (org-wide readers)
+ *
+ * `isPlatformAdmin` is NEVER set from a scope — a scope has no platform-admin
+ * standing, so the public-across-orgs widening can never leak through this
+ * path. Returns `null` for a structurally-invalid scope (missing required id)
+ * so `scopeMaySeeRow` fails closed.
+ */
+export function vantageFromScope(scope: CollectionScope): OwnershipVantage | null {
+  const base = {
+    principalId: undefined as string | undefined,
+    teamIds: [] as string[],
+    organizationId: undefined as string | undefined,
+    projectIds: [] as string[],
+    isPlatformAdmin: false,
+  };
+  switch (scope.kind) {
+    case "user":
+      if (!scope.userId) return null;
+      return { ...base, principalId: scope.userId, organizationId: scope.orgId ?? undefined };
+    case "team":
+      if (!scope.teamId || !scope.orgId) return null;
+      return { ...base, teamIds: [scope.teamId], organizationId: scope.orgId };
+    case "organization":
+      if (!scope.orgId) return null;
+      return { ...base, organizationId: scope.orgId };
+    case "workspace":
+      if (!scope.orgId) return null;
+      return { ...base, organizationId: scope.orgId };
+    case "project":
+      if (!scope.projectId || !scope.orgId) return null;
+      return { ...base, projectIds: [scope.projectId], organizationId: scope.orgId };
+    default:
+      // Exhaustiveness fail-closed: an unknown scope kind sees nothing.
+      return null;
+  }
+}
+
+/**
+ * The SCOPE-VANTAGE GUARD (cinatra#1886 C2 / D11): may a generic member of
+ * `scope` already see `row`? A pure row evaluator factored from the SAME
+ * canonical predicate the SQL read filter compiles from — one source of truth
+ * (`OWNERSHIP_VISIBILITY_CLAUSES`), two projections. Fail-closed: a malformed
+ * scope, or a row that satisfies no clause at the scope's vantage, returns
+ * false. Scopes carry no OBO ceiling.
+ */
+export function scopeMaySeeRow(
+  scope: CollectionScope,
+  row: OwnershipEvalRow,
+): boolean {
+  const vantage = vantageFromScope(scope);
+  if (!vantage) return false;
+  return evaluateOwnershipVisibility(vantage, row);
 }
 
 // ---------------------------------------------------------------------------
