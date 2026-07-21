@@ -239,6 +239,80 @@ describe("cinatra#1428 artifact-surface canonical object authorization", () => {
     expect(res.kind === "ok" && res.artifact.artifactId).toBe("a1");
   });
 
+  // cinatra#1892 B2 — a USER meaning assertion MUTATES the artifact identity,
+  // so `readArtifactForMeaningWrite` must enforce canonical `object.update`
+  // (WRITE authority), not merely `object.read`. A reader of a shared artifact
+  // must NOT be able to write a meaning on it.
+  it("readArtifactForMeaningWrite: DENIES a read-only member on a row they do NOT own (object.update is admin-tier)", async () => {
+    const { readArtifactForMeaningWrite } = await import("../artifact-service");
+    // Org-owned row: the member can object.read (member policy) + LIST it, but
+    // object.update is an org_admin-tier grant — a mere reader is denied WRITE.
+    getObjectById.mockReturnValue(row());
+    expect(
+      readArtifactForMeaningWrite({ artifactId: "a1", orgId: ORG, actor: member() }),
+    ).toEqual({ kind: "denied" });
+  });
+
+  it("readArtifactForMeaningWrite: DENIES a member who can read someone ELSE'S user-owned artifact (shared reader, not owner)", async () => {
+    const { readArtifactForMeaningWrite } = await import("../artifact-service");
+    // Row owned by user u-other; the acting member (u1) can list/read a shared
+    // row but is neither owner nor admin ⇒ no object.update ⇒ WRITE denied.
+    getObjectById.mockReturnValue(row({ ownerLevel: "user", ownerId: "u-other" }));
+    expect(
+      readArtifactForMeaningWrite({ artifactId: "a1", orgId: ORG, actor: member() }),
+    ).toEqual({ kind: "denied" });
+  });
+
+  it("readArtifactForMeaningWrite: owner short-circuit lets the UPLOADER write a meaning on their OWN user-owned artifact", async () => {
+    const { readArtifactForMeaningWrite } = await import("../artifact-service");
+    // Uploader-owned (cinatra#1930): the user-owner short-circuit grants
+    // object.update on their own row.
+    getObjectById.mockReturnValue(row({ ownerLevel: "user", ownerId: "u1" }));
+    const res = readArtifactForMeaningWrite({ artifactId: "a1", orgId: ORG, actor: member() });
+    expect(res.kind).toBe("ok");
+    expect(res.kind === "ok" && res.artifact.artifactId).toBe("a1");
+  });
+
+  it("readArtifactForMeaningWrite: org_admin passes object.update on an org-owned row (admin-tier grant)", async () => {
+    const { readArtifactForMeaningWrite } = await import("../artifact-service");
+    getObjectById.mockReturnValue(row());
+    const res = readArtifactForMeaningWrite({
+      artifactId: "a1",
+      orgId: ORG,
+      actor: member({ principalId: "admin", orgRole: "org_admin" } as Partial<ActorContext>),
+    });
+    expect(res.kind).toBe("ok");
+  });
+
+  it("readArtifactForMeaningWrite: not-found when the store omits the row (ownership filter → null)", async () => {
+    const { readArtifactForMeaningWrite } = await import("../artifact-service");
+    getObjectById.mockReturnValue(null);
+    expect(
+      readArtifactForMeaningWrite({ artifactId: "gone", orgId: ORG, actor: member() }),
+    ).toEqual({ kind: "not-found" });
+  });
+
+  it("readArtifactForMeaningWrite: not-found when the row is not an artifact type", async () => {
+    const { readArtifactForMeaningWrite } = await import("../artifact-service");
+    getObjectById.mockReturnValue(row({ type: "@cinatra-ai/email:send-attempt" }));
+    expect(
+      readArtifactForMeaningWrite({ artifactId: "a1", orgId: ORG, actor: member() }),
+    ).toEqual({ kind: "not-found" });
+  });
+
+  it("readArtifactForMeaningWrite: DENIED when the row lists but object.read refuses (read gate precedes the write gate)", async () => {
+    const { readArtifactForMeaningWrite } = await import("../artifact-service");
+    getObjectById.mockReturnValue(row());
+    const svc = member({
+      principalType: "ServiceAccount",
+      principalId: "svc-1",
+      orgRole: undefined,
+    } as Partial<ActorContext>);
+    expect(
+      readArtifactForMeaningWrite({ artifactId: "a1", orgId: ORG, actor: svc }),
+    ).toEqual({ kind: "denied" });
+  });
+
   it("internal callers (no actor) keep the trusted path: no kernel gate, system attribution", async () => {
     const { tombstoneArtifact } = await import("../artifact-service");
     retentionTombstone.mockReturnValue({

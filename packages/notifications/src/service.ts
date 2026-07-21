@@ -304,6 +304,16 @@ export function countUnreadForUser(userId: string): number {
  */
 export type CreateNotificationOptions = {
   autoMarkRead?: boolean;
+  /**
+   * Pre-resolved recipient user ids. When provided, recipient EXPANSION is
+   * SKIPPED and these exact ids are used verbatim. This lets a caller that
+   * already resolved the roster (e.g. to gate distinctly on "no recipients")
+   * derive the created-row count from the SAME expansion it gated on — closing
+   * a resolve-twice TOCTOU where a second independent `resolveRecipientToUserIds`
+   * could return a DIFFERENT (or defensively empty) set and misclassify the
+   * result. Empty array ⇒ no rows written (same as an empty expansion).
+   */
+  recipientUserIds?: readonly string[];
 };
 
 /**
@@ -319,7 +329,11 @@ export async function createNotificationForRecipient(
   input: NotificationInput,
   options: CreateNotificationOptions = {},
 ): Promise<NotificationRecord[]> {
-  const userIds = await resolveRecipientToUserIds(recipient);
+  // A caller-supplied roster bypasses expansion so the created-row count comes
+  // from the SAME set the caller already resolved (no resolve-twice race).
+  const userIds = options.recipientUserIds
+    ? [...options.recipientUserIds]
+    : await resolveRecipientToUserIds(recipient);
   if (userIds.length === 0) return [];
   getNotificationsHostAdapters().ensurePostgresSchema();
   const topic = topicForRecipient(recipient);

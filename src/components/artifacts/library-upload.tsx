@@ -42,6 +42,7 @@ import { toast } from "@/lib/cinatra-toast";
 import {
   ArrowLeft,
   ChevronLeft,
+  ExternalLink,
   FileText,
   Sparkles,
   TriangleAlert,
@@ -90,8 +91,11 @@ type UploadState =
       message: string;
     };
 
-/** Which affordance opened the marketplace tab — narrows the catalog to a BASE
- *  (refusal, §VI.3) or a MEANING type (picker, §VI.1) and labels it. */
+/** Which affordance opened the marketplace tab — the refusal recourse (§VI.3)
+ *  or the meaning picker (§VI.1). Both open the SAME catalog: the kind-filtered
+ *  set of artifact-type packs (kind: artifact). The public browse card carries
+ *  NO per-type `accepts`, so the catalog is NOT narrowed to the specific base or
+ *  MIME — `reach` only labels the entry point and threads the return path. */
 type MarketplaceReach = "picker" | "refusal";
 
 type UploadContextValue = {
@@ -443,8 +447,11 @@ function UploadRefusedPanel() {
         </p>
         <div className="flex items-center gap-2">
           {/* Recourse: a real MIME no installed base accepts (marketplaceHref
-              present) opens the inline marketplace narrowed to a base. An
-              ambiguous / no-mime refusal has no install link (§VI.3). */}
+              present) opens the inline marketplace tab — the kind-filtered
+              artifact-type catalog (kind: artifact), NOT narrowed to the
+              specific base/MIME (the public browse card carries no per-type
+              accepts). An ambiguous / no-mime refusal has no install link
+              (§VI.3). */}
           {state.marketplaceHref ? (
             <Button
               type="button"
@@ -452,7 +459,7 @@ function UploadRefusedPanel() {
               onClick={() => openMarketplace("refusal")}
               data-testid="artifacts-refused-find-base"
             >
-              Find a base in the marketplace
+              Browse artifact types in the marketplace
             </Button>
           ) : null}
           <Button type="button" variant="ghost" size="sm" onClick={reset}>
@@ -689,6 +696,12 @@ function MarketplaceTabPanel() {
   const [scopeFor, setScopeFor] = useState<ArtifactMarketplacePack | null>(null);
 
   const contextName = state.phase === "typed" ? state.filename : state.phase === "refused" ? state.filename : "";
+  // The server-provided refusal deep link (the refused-MIME advisory pointer,
+  // `?accepts=<mime>`), when this tab was reached from a refusal that carried
+  // one. Only surfaced to admins below — the full `/configuration/marketplace`
+  // page requires an admin session, so it would be a dead end for a non-admin.
+  const refusalMarketplaceHref =
+    marketplaceReach === "refusal" && state.phase === "refused" ? state.marketplaceHref : undefined;
 
   useEffect(() => {
     let live = true;
@@ -731,8 +744,14 @@ function MarketplaceTabPanel() {
       return;
     }
     if (r.ok) {
-      toast.success("Request sent — admins notified.");
+      toast.success(
+        r.alreadyRequested
+          ? "Already requested — admins were notified."
+          : "Request sent — admins notified.",
+      );
     } else {
+      // Distinct honest failures: `no-admins` (nobody to receive it) and
+      // `auth-required` both carry a message; roll the optimistic row back.
       rollback();
       toast.error(r.message);
     }
@@ -830,13 +849,30 @@ function MarketplaceTabPanel() {
         ) : (
           <span className="inline-flex items-center gap-1 text-badge-xs text-muted-foreground">
             <ArrowLeft aria-hidden className="size-3" />
-            {marketplaceReach === "refusal" ? "find a base type" : ""}
+            {marketplaceReach === "refusal" ? "browse artifact types" : ""}
           </span>
         )}
         {contextName ? (
           <span className="font-mono text-badge-2xs text-muted-foreground">
             typing {contextName}
           </span>
+        ) : null}
+        {/* Consume the server-provided refusal deep link (not a dead boolean):
+            an ADMIN-only escape hatch to the full marketplace, keyed by the
+            refused MIME (`?accepts=`). Admin-gated because the marketplace page
+            requires an admin session — a non-admin uses the inline tab + the
+            Request path instead. */}
+        {refusalMarketplaceHref && canInstall ? (
+          <Button
+            type="button"
+            variant="link"
+            className="ml-auto h-auto gap-1 p-0 text-badge-xs"
+            onClick={() => router.push(refusalMarketplaceHref)}
+            data-testid="artifacts-marketplace-open-full"
+          >
+            Open full marketplace
+            <ExternalLink aria-hidden className="size-3" />
+          </Button>
         ) : null}
       </div>
 

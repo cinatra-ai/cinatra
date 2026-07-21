@@ -41,10 +41,13 @@ export const UPLOAD_REFUSAL_CATEGORY = "upload-refusal";
 /**
  * Marketplace deep link for the refused MIME — the "install a type that accepts
  * this" recourse pointer. Same-origin, relative path; the MIME rides an
- * `accepts` query param (URL-encoded) that the A4 picker will consume to
- * pre-filter kind:"artifact" packs. Until A4 lands the link still lands the user
- * on the marketplace — an honest recourse, never a dead end. The MIME is bounded
- * before encoding so a pathological Content-Type cannot bloat the href.
+ * `accepts` query param (URL-encoded) that NAMES the refused format for a future
+ * pre-filter. The link lands the user on the marketplace — an honest recourse,
+ * never a dead end. NOTE (cinatra#1892 B3): A4 did NOT wire `accepts`-based
+ * pre-filtering — the public marketplace browse card carries no per-type
+ * `accepts`, so the catalog cannot be narrowed to the specific MIME; the param
+ * is a forward-ready hint the marketplace surface does not consume yet. The MIME
+ * is bounded before encoding so a pathological Content-Type cannot bloat the href.
  */
 export function buildUploadRefusalMarketplaceHref(normalizedMime: string): string {
   const bounded = normalizedMime.slice(0, 255);

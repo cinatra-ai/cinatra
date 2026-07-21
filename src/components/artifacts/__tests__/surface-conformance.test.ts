@@ -153,8 +153,16 @@ describe("§VI — the library ingests: Upload control + drop target are wired i
 
   it("a refused upload offers marketplace recourse only when a base link is present (§VI.3)", () => {
     expect(UP).toMatch(/state\.marketplaceHref \?/);
-    expect(UP).toMatch(/Find a base in the marketplace/);
+    // Copy reconciled to what the server delivers (cinatra#1892 B3): the inline
+    // catalog is kind-filtered (kind: artifact), NOT narrowed to a base/MIME —
+    // the public browse card carries no per-type accepts.
+    expect(UP).toMatch(/Browse artifact types in the marketplace/);
+    expect(UP).not.toMatch(/Find a base in the marketplace/);
     expect(UP).toMatch(/data-action="open-marketplace -> marketplace-open"/);
+    // The server-provided refusal deep link is CONSUMED (not a dead boolean):
+    // the MIME-keyed (?accepts=<mime>) escape hatch to the full marketplace,
+    // admin-gated (the marketplace page requires an admin session).
+    expect(UP).toMatch(/data-testid="artifacts-marketplace-open-full"/);
   });
 });
 
@@ -162,9 +170,15 @@ describe("§VI.1 — the picker asserts a USER meaning, never a re-type; §VII a
   const ACT = read("src/app/artifacts/upload-typing-actions.ts");
   const UP = read("src/components/artifacts/library-upload.tsx");
 
-  it("confirm writes a user-sourced assertion (the rank ceiling), gated on the artifact read", () => {
+  it("confirm writes a user-sourced assertion (the rank ceiling), gated on WRITE authority (cinatra#1892 B2)", () => {
     expect(ACT).toMatch(/assertedBy: "user"/);
-    expect(ACT).toMatch(/readArtifactForDetail/);
+    // The CONFIRM mutation gates on canonical object.update via the write gate,
+    // not merely object.read — a reader of a shared artifact cannot write.
+    expect(ACT).toMatch(/readArtifactForMeaningWrite/);
+    // Candidates are filtered by the per-actor extension-ACCESS gate so a
+    // foreign-scope / unavailable extension cannot be asserted.
+    expect(ACT).toMatch(/filterCandidatesByActorAccess/);
+    expect(ACT).toMatch(/resolveActiveInstallForActor/);
   });
 
   it("the picker's None-of-these opens the inline marketplace tab (§VI.1 → §VII)", () => {

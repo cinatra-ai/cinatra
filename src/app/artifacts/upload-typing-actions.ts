@@ -32,18 +32,62 @@ import {
   getActorContext,
   isPlatformAdmin,
 } from "@/lib/auth-session";
+import type { ActorContext } from "@/lib/authz/actor-context";
 import {
   listInstalledMeaningTypesAcceptingMime,
   type InstalledMeaningType,
 } from "@/lib/artifacts/installed-type-picker";
+import { resolveActiveInstallForActor } from "@/lib/extension-install-resolution";
 import { assertSemanticType } from "@/lib/artifacts/semantic-assertion-store";
-import { readArtifactForDetail } from "@/lib/artifacts/artifact-service";
+import {
+  readArtifactForDetail,
+  readArtifactForMeaningWrite,
+} from "@/lib/artifacts/artifact-service";
 import { buildTypeInstallRequestNotificationInput } from "@/lib/artifacts/type-install-request";
 import {
   createNotificationForRecipient,
   type NotificationRecipient,
 } from "@/lib/notifications";
+import { resolveRecipientToUserIds } from "@cinatra-ai/notifications/server";
 import { loadMarketplaceBrowse } from "@/lib/marketplace-browse";
+
+/**
+ * Apply the per-actor extension-ACCESS gate to raw §VI.1 picker candidates.
+ *
+ * The pure candidate list (`listInstalledMeaningTypesAcceptingMime`) reads the
+ * PROCESS-GLOBAL object-type registry, so a type registered by an extension the
+ * acting user cannot address — another org's install, a team/project-scoped
+ * install the actor is not a member of, a torn-down row still lingering in the
+ * process — would otherwise pass validation. Mirror the canonical
+ * addressable-by-actor resolver (`resolveActiveInstallForActor`, the same gate
+ * the connector-UI / installed-extension read-model surfaces enforce): a
+ * candidate survives ONLY if its DEFINING extension is a host-declared SYSTEM
+ * extension (available to every org by construction) OR has an addressable
+ * ACTIVE install for THIS actor's scope. Registry membership alone is not org
+ * access.
+ */
+async function filterCandidatesByActorAccess(
+  candidates: InstalledMeaningType[],
+  actor: ActorContext,
+): Promise<InstalledMeaningType[]> {
+  if (candidates.length === 0) return [];
+  const { isSystemExtension } = await import(
+    "@cinatra-ai/extensions/system-extension-inventory"
+  );
+  const uniqueExtensions = [...new Set(candidates.map((c) => c.extension))];
+  const accessible = new Set<string>();
+  await Promise.all(
+    uniqueExtensions.map(async (extension) => {
+      if (isSystemExtension(extension)) {
+        accessible.add(extension);
+        return;
+      }
+      const install = await resolveActiveInstallForActor(extension, actor);
+      if (install !== null) accessible.add(extension);
+    }),
+  );
+  return candidates.filter((c) => accessible.has(c.extension));
+}
 
 export type ArtifactMarketplacePack = {
   packageName: string;
@@ -76,10 +120,13 @@ export async function listInstalledTypesForArtifact(
   if (read.kind === "not-found") return { ok: false, reason: "not-found" };
   if (read.kind === "denied") return { ok: false, reason: "denied" };
   const { mime, objectType } = read.artifact;
-  const types = listInstalledMeaningTypesAcceptingMime(
+  const raw = listInstalledMeaningTypesAcceptingMime(
     mime,
     objectType ? { excludeTypeId: objectType } : undefined,
   );
+  // Per-actor extension-access gate: drop candidates whose defining extension
+  // is not addressable by THIS actor (foreign-org / foreign-scope / torn-down).
+  const types = await filterCandidatesByActorAccess(raw, actor);
   return { ok: true, types, mime };
 }
 
@@ -111,8 +158,13 @@ export async function assertUploadMeaning(input: {
       message: "Asserting a meaning requires an authenticated session.",
     };
   }
-  // Access gate: the acting user must be able to READ the artifact.
-  const read = readArtifactForDetail({ orgId, actor, artifactId: input.artifactId });
+  // WRITE-authority gate: asserting a user meaning MUTATES the artifact's
+  // identity, so the acting user must pass canonical `object.update` — not
+  // merely `object.read`. `readArtifactForMeaningWrite` layers the write gate
+  // on the read gate (cinatra#1428): the uploader (user-owner short-circuit)
+  // and org_admins pass; a mere READER of a shared org-visible artifact is
+  // DENIED and can never write a meaning on someone else's upload.
+  const read = readArtifactForMeaningWrite({ orgId, actor, artifactId: input.artifactId });
   if (read.kind === "not-found") {
     return { ok: false, reason: "not-found", message: "Artifact not found." };
   }
@@ -120,20 +172,22 @@ export async function assertUploadMeaning(input: {
     return {
       ok: false,
       reason: "denied",
-      message: "You do not have access to this artifact.",
+      message: "You do not have permission to change this artifact.",
     };
   }
   // Candidate validation (fail-closed): the chosen extension MUST be one of the
   // installed file-accepting types whose `accepts` admit the artifact's
-  // SERVER-DERIVED MIME — never a raw client-supplied string. This closes an
-  // arbitrary / uninstalled / wrong-MIME / cross-org extension being asserted
-  // through a crafted server-action call; the MIME + base type are re-derived
-  // from the stored artifact, not trusted from the client.
+  // SERVER-DERIVED MIME AND that are ADDRESSABLE by this actor — never a raw
+  // client-supplied string. This closes an arbitrary / uninstalled / wrong-MIME
+  // / foreign-scope extension being asserted through a crafted server-action
+  // call; the MIME + base type are re-derived from the stored artifact, and the
+  // per-actor extension-access gate drops types the actor cannot address.
   const { mime, objectType } = read.artifact;
-  const candidates = listInstalledMeaningTypesAcceptingMime(
+  const raw = listInstalledMeaningTypesAcceptingMime(
     mime,
     objectType ? { excludeTypeId: objectType } : undefined,
   );
+  const candidates = await filterCandidatesByActorAccess(raw, actor);
   if (!candidates.some((c) => c.extension === input.extension)) {
     return {
       ok: false,
@@ -196,14 +250,25 @@ export async function listArtifactMarketplacePacks(): Promise<{
 }
 
 export type RequestInstallResult =
-  | { ok: true }
-  | { ok: false; reason: "auth-required"; message: string };
+  | { ok: true; alreadyRequested: boolean }
+  | { ok: false; reason: "auth-required" | "no-admins"; message: string };
 
 /**
  * The §VII NON-admin one-click Request install (ruling 4). Notifies the platform
  * admins — pack, requester, marketplace deep link — and coalesces repeat clicks
- * onto one request per (requester, pack) via the occurrence dedupe key. Real,
- * not a placeholder; the admin completes the install from the notification.
+ * onto one request per (org, requester, pack) via the occurrence dedupe key.
+ * Real, not a placeholder; the admin completes the install from the notification.
+ *
+ * Honest outcomes:
+ *   - `no-admins` — there is literally NO platform admin to receive the request,
+ *     so the click leads nowhere. Surfaced DISTINCTLY (never a false ok:true):
+ *     an empty `createNotificationForRecipient` result is AMBIGUOUS (it also
+ *     means the occurrence dedupe coalesced a repeat request), so the admin
+ *     roster is resolved independently UP FRONT to tell the two apart.
+ *   - `ok, alreadyRequested:false` — a fresh admin bell row was written.
+ *   - `ok, alreadyRequested:true`  — admins DID exist but the request was a
+ *     repeat that coalesced onto the standing occurrence (still an honest
+ *     success: the admins were already notified).
  */
 export async function requestTypeInstall(input: {
   packageName: string;
@@ -219,6 +284,21 @@ export async function requestTypeInstall(input: {
       message: "Requesting an install requires an authenticated session.",
     };
   }
+  // Resolve the admin roster ONCE. Zero admins ⇒ the click leads nowhere:
+  // surface that distinctly. The SAME resolved roster is then threaded into the
+  // create call (`recipientUserIds`) so the created-row count is derived from
+  // this exact expansion — never a second, independent resolution that a
+  // vanishing last-admin (or a defensive empty read) could turn into a false
+  // "already requested" success (TOCTOU).
+  const adminUserIds = await resolveRecipientToUserIds({ kind: "admins" });
+  if (adminUserIds.length === 0) {
+    return {
+      ok: false,
+      reason: "no-admins",
+      message:
+        "No platform administrators are available to receive this request. Contact your workspace owner to install the type.",
+    };
+  }
   const notification = buildTypeInstallRequestNotificationInput({
     orgId,
     requesterId,
@@ -226,11 +306,15 @@ export async function requestTypeInstall(input: {
     displayName: input.displayName,
     requesterLabel: session.user?.name ?? session.user?.email ?? undefined,
   });
-  await createNotificationForRecipient(
+  const created = await createNotificationForRecipient(
     { kind: "admins" } satisfies NotificationRecipient,
     notification,
+    { recipientUserIds: adminUserIds },
   );
-  return { ok: true };
+  // The roster was non-empty and used verbatim, so an empty result here can
+  // ONLY mean the occurrence dedupe coalesced this repeat onto the standing
+  // request — an honest success, not a vanished-recipient false positive.
+  return { ok: true, alreadyRequested: created.length === 0 };
 }
 
 export type InstallPackResult =

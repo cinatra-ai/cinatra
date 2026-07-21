@@ -17,10 +17,25 @@ describe("type-install request: marketplace deep link", () => {
       "/configuration/marketplace?q=%40acme%2Flegal-artifact",
     );
   });
-  it("bounds a pathological package name before encoding", () => {
-    const href = buildTypeInstallMarketplaceHref("x".repeat(500));
+  it("carries the requester org in the href when supplied (org-qualified pointer)", () => {
+    expect(buildTypeInstallMarketplaceHref("@acme/legal-artifact", "org-1")).toBe(
+      "/configuration/marketplace?q=%40acme%2Flegal-artifact&org=org-1",
+    );
+  });
+  it("omits the org param entirely when no org is given (or blank)", () => {
+    expect(buildTypeInstallMarketplaceHref("@acme/legal-artifact", "")).toBe(
+      "/configuration/marketplace?q=%40acme%2Flegal-artifact",
+    );
+    expect(buildTypeInstallMarketplaceHref("@acme/legal-artifact", "   ")).not.toContain(
+      "org=",
+    );
+  });
+  it("bounds a pathological package name AND org before encoding", () => {
+    const href = buildTypeInstallMarketplaceHref("x".repeat(500), "o".repeat(500));
     expect(href.startsWith("/configuration/marketplace?q=")).toBe(true);
-    expect(href.length).toBeLessThan(320);
+    expect(href).toContain("&org=");
+    // q bounded to 255 + org bounded to 128 (+ fixed path/params) stays small.
+    expect(href.length).toBeLessThan(460);
   });
 });
 
@@ -64,7 +79,9 @@ describe("type-install request: notification composition", () => {
     expect(input.body).toContain("Contract");
     expect(input.body).toContain("@acme/legal-artifact");
     expect(input.body).toContain("Dana");
-    expect(input.href).toBe("/configuration/marketplace?q=%40acme%2Flegal-artifact");
+    expect(input.href).toBe(
+      "/configuration/marketplace?q=%40acme%2Flegal-artifact&org=org-1",
+    );
     expect(input.dedupeKey).toBe(
       typeInstallRequestDedupeKey("org-1", "user-1", "@acme/legal-artifact"),
     );

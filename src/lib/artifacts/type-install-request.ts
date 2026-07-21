@@ -39,12 +39,24 @@ export const TYPE_INSTALL_REQUEST_CATEGORY = "type-install-request";
 /**
  * Marketplace deep link for the requested pack — the admin's "complete the
  * install" pointer. Same-origin, relative path; the package rides a `q` search
- * param (URL-encoded) that lands the admin on the marketplace filtered to the
- * pack. Bounded before encoding so a pathological name cannot bloat the href.
+ * param and the REQUESTER's org rides an `org` param (both URL-encoded), so the
+ * admin's pointer is org-QUALIFIED: it names the tenant the install was
+ * requested for rather than leaving the admin's own active org implicit (a
+ * cross-tenant install hazard). Both values are bounded before encoding so a
+ * pathological name cannot bloat the href.
+ *
+ * Scope note: the marketplace surface consuming `q`/`org` to pre-filter the
+ * catalog AND anchor the install target to the requester's org is a follow-up
+ * (the page does not read these params yet). Carrying them here makes the deep
+ * link honest and forward-ready; it does not, on its own, switch active org.
  */
-export function buildTypeInstallMarketplaceHref(packageName: string): string {
-  const bounded = packageName.slice(0, 255);
-  return `/configuration/marketplace?q=${encodeURIComponent(bounded)}`;
+export function buildTypeInstallMarketplaceHref(
+  packageName: string,
+  orgId?: string,
+): string {
+  const params = new URLSearchParams({ q: packageName.slice(0, 255) });
+  if (orgId && orgId.trim()) params.set("org", orgId.slice(0, 128));
+  return `/configuration/marketplace?${params.toString()}`;
 }
 
 /** Stable per-(org, requester, package) occurrence key. All three axes are in
@@ -84,7 +96,7 @@ export function buildTypeInstallRequestNotificationInput(args: {
       `A user asked to install ${named} (${packageName}) so they can type an uploaded file${by}. ` +
       `Review it in the marketplace and install it if appropriate.`,
     kind: "info",
-    href: buildTypeInstallMarketplaceHref(packageName),
+    href: buildTypeInstallMarketplaceHref(packageName, orgId),
     dedupeKey: typeInstallRequestDedupeKey(orgId, requesterId, packageName),
     metadata: {
       category: TYPE_INSTALL_REQUEST_CATEGORY,
