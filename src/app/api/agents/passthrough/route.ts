@@ -15,6 +15,10 @@ import {
   shapeArtifactMaterializeInput,
   type ShapedArtifactMaterializeInput,
 } from "./artifact-materialize-shaper";
+import {
+  shapeTestDeliverySendInput,
+  shapeTestDeliverySendResult,
+} from "./test-delivery-seam";
 
 /**
  * Deterministic MCP-call passthrough for WayFlow.
@@ -110,6 +114,18 @@ type RequestBody = {
    *  shape the LLM-based persist node returned. */
   result_input_passthrough?: unknown;
   result_id_field?: unknown;
+  /** Optional: opt-in response reshaping for a node whose OAS-declared outputs
+   *  do NOT match the primitive's flat return shape and cannot be bridged by
+   *  the by-key ApiNode output extraction (wayflowcore maps each declared
+   *  output `X` to the jq query `.X`, so a nested object output or a renamed
+   *  field is unreachable from a flat result). eng#548 #1625: the
+   *  email_test_delivery_run_send primitive returns
+   *  `{ok, sentTo, message, seq, ...}` but perform_test_send declares
+   *  `[lastSendResult (object), gateCycle (int), ...]` for its re-entrant gate
+   *  renderer. `result_shape: "test_delivery_send"` reshapes the flat result to
+   *  the declared output contract at this seam (the established shaping layer —
+   *  the certified primitive handler stays untouched). */
+  result_shape?: unknown;
 };
 
 /**
@@ -241,6 +257,12 @@ TOOL_INPUT_SHAPERS.objects_save = (raw, agentRunId) => {
   if (blog) return blog;
   return baseObjectsSaveShaper ? baseObjectsSaveShaper(raw, agentRunId) : raw;
 };
+
+// email-test-delivery run_send input shaping (eng#548 #1625) — the pure shaper
+// lives in ./test-delivery-seam (zero-dep, unit-tested). It JSON-parses the
+// gate's `envelopeJson` (the ApiNode cannot pass native id arrays — wayflowcore
+// stringifies json_body templates) and projects the send fields the handler reads.
+TOOL_INPUT_SHAPERS.email_test_delivery_run_send = (raw) => shapeTestDeliverySendInput(raw);
 
 export async function POST(req: Request): Promise<Response> {
   if (!isAuthorizedBridgeRequest(req)) {
@@ -518,6 +540,24 @@ export async function POST(req: Request): Promise<Response> {
         timezone,
         enabled,
       });
+    }
+
+    // email-test-delivery run_send output shaping (eng#548 #1625) — the pure
+    // shaper lives in ./test-delivery-seam (zero-dep, unit-tested). wayflowcore
+    // extracts each ApiNode output `X` via the fixed jq query `.X`, so the gate
+    // renderer's nested `{lastSendResult(object), gateCycle(int)}` contract is
+    // UNREACHABLE from the primitive's flat `{ok, sentTo, message, seq, ...}`
+    // return. Reshape at this seam (same layer as trigger_config_set /
+    // result_input_passthrough) so the CERTIFIED handler stays byte-identical.
+    // Opt-in via the OAS `result_shape` flag AND scoped to the send tool; a
+    // malformed / `{error}` result returns null and passes through UNSHAPED so
+    // the node fails visibly.
+    if (
+      body.result_shape === "test_delivery_send" &&
+      tool === "email_test_delivery_run_send"
+    ) {
+      const shaped = shapeTestDeliverySendResult(input, result);
+      if (shaped) return NextResponse.json(shaped);
     }
 
     return NextResponse.json(result);
