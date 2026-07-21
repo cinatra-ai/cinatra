@@ -197,12 +197,26 @@ export function AppShell({
     pathname === "/sign-up" ||
     isMcpHandshakePath;
   const isSetupWizardPath = pathname === "/setup" || pathname.startsWith("/setup/");
+  // cinatra#1221 S5 Lane B (§2/§3) — the Cinatra-served embed page is framed by a
+  // cross-origin CMS as the SOLE AG-UI session owner. It MUST render CHROMELESS:
+  // no sidebar/topbar, no user-derived shell state, and NOT the legacy
+  // `cinatra:embed:submit` EmbedMessageListener (that only mounts under the
+  // distinct `?embed=1` section-embed mode). Its own hardened postMessage bridge
+  // (embed-bridge.client) is the ONLY parent<->iframe channel. Bypassing the
+  // shell keeps the page dataless before its bootstrap (identical posture to the
+  // other bypassed public pages).
+  const isEmbedAssistantPath = pathname === "/embed/assistant";
   const [isEmbedMode] = useState(() => {
     if (typeof window !== "undefined") {
       return new URLSearchParams(window.location.search).get("embed") === "1";
     }
     return false;
   });
+  // Harden against a caller appending `?embed=1` to the embed URL: the LEGACY
+  // section-embed mode + its `cinatra:embed:submit` message listener must NEVER
+  // activate on /embed/assistant (its own hardened bridge is the only channel).
+  // The path still bypasses the shell (below) via isEmbedAssistantPath regardless.
+  const legacyEmbedMode = isEmbedMode && !isEmbedAssistantPath;
   // The notifications bell (badge + link) reads the E6 store via
   // <NotificationsProvider>.
   const [devToolsOpen, setDevToolsOpen] = useState(false);
@@ -239,7 +253,7 @@ export function AppShell({
   const requiresSetupRedirect = !connectionReady && !isSetupPath;
   const activeHeader = pageHeaders.find((entry) => entry.match(pathname));
   const hideShellPageHeader = pathname === "/chat" || pathname.startsWith("/chat/");
-  const shouldBypassShell = isAuthPath || isSetupWizardPath || isEmbedMode;
+  const shouldBypassShell = isAuthPath || isSetupWizardPath || isEmbedMode || isEmbedAssistantPath;
 
   useEffect(() => {
     const onScroll = () => setScrollOffset(document.body.scrollTop || document.documentElement.scrollTop);
@@ -375,7 +389,7 @@ export function AppShell({
     // The raw param is only interpolated into the <style> selector below after
     // sanitizeEmbedSection() confirms it is a plain identifier — otherwise a
     // crafted value could break out of the selector and inject style rules.
-    const rawEmbedSection = isEmbedMode && typeof window !== "undefined"
+    const rawEmbedSection = legacyEmbedMode && typeof window !== "undefined"
       ? new URLSearchParams(window.location.search).get("section")
       : null;
     const embedSection = sanitizeEmbedSection(rawEmbedSection);
@@ -386,7 +400,7 @@ export function AppShell({
 
     return (
       <>
-        {isEmbedMode && (
+        {legacyEmbedMode && (
           <>
             <style>{`
               body { background: white !important; overflow-x: hidden !important; }

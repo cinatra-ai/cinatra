@@ -14,6 +14,7 @@ export {
 } from "./registry";
 
 export { ContentChangeProposalCard } from "./content-change-proposal-card";
+export type { ApplyIntentRef } from "./content-change-proposal-card";
 export { ArtifactPreviewCard } from "./artifact-preview-card";
 export { CitationGroupCard } from "./citation-group-card";
 export { ChangeHistoryCard } from "./change-history-card";

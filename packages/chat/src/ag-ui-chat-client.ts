@@ -199,6 +199,34 @@ export type StreamAssistantTurnOptions = {
   onEvent?: (event: AgUiEvent, state: ConversationViewState) => void;
   endpoint?: string;
   resumeEndpointFor?: (runId: string) => string;
+  // ----- S5 Lane B embed seams (cinatra#1221 §9.1) — ADDITIVE; every field is
+  // optional and defaults to today's session behaviour so `/chat` is
+  // byte-unchanged when the token-broker seams are unused. -----
+  /** The registered assistant mention handle ("wordpress"|"drupal"); included in
+   *  the POST body so the broker-auth branch resolves the closed widget binding.
+   *  ABSENT = the built-in @cinatra binding (historical behaviour). */
+  assistant?: "wordpress" | "drupal";
+  /** A `token-broker` provider returning `{ Authorization: "Bearer <citToken>",
+   *  "X-Cinatra-Widget-User-Token": "<cwuToken>" }`. Applied to the TURN POST and
+   *  the CAPABILITY fetch. NOT applied to the resume GET — the resume endpoint has
+   *  its OWN audience (§9.3(A) OWNER RULING option A: the `cit_`/`cwu_` broker
+   *  pair is REJECTED there), and the resume CORS preflight deliberately does not
+   *  allow `X-Cinatra-Widget-User-Token`; use `resumeAuthHeaders` for the resume.
+   *  ABSENT = no extra headers (session path). */
+  authHeaders?: () => Record<string, string>;
+  /** In `token-broker` mode ALL requests use `credentials: "omit"` so ambient
+   *  Cinatra cookies cannot create an auth-confusion / silent session fallback
+   *  (§B11). ABSENT/`"include"` = today's cookie-session behaviour. */
+  credentialsMode?: "include" | "omit";
+  /** Resume-ONLY: the DISTINCT run-bound resume token provider (§9.3(A)) — its
+   *  OWN audience (`Authorization: Bearer <resume-token>` only, NEVER the
+   *  `cwu_` pair). The resume GET carries THESE headers and nothing else. ABSENT
+   *  (this core slice: §9.3 delivery seam is Lane-A/owner-gated) = the resume GET
+   *  carries NO broker auth, so the run-bound-token route 401s and the turn
+   *  degrades to a FRESH MOUNT — the shipped, honest gated behaviour. It is
+   *  never defaulted to `authHeaders` (that would present the wrong audience and
+   *  a CORS-disallowed header). */
+  resumeAuthHeaders?: () => Record<string, string>;
 };
 
 function defaultResumeEndpoint(runId: string): string {
@@ -258,6 +286,14 @@ export async function streamAssistantTurn(
 ): Promise<ConversationViewState> {
   const endpoint = options.endpoint ?? "/api/assistants/chat";
   const resumeFor = options.resumeEndpointFor ?? defaultResumeEndpoint;
+  // §9.1 embed seams (additive; default to today's session behaviour).
+  const credentials = options.credentialsMode ?? "include";
+  const brokerHeaders = options.authHeaders?.() ?? {};
+  // §9.3(A): the resume audience is DISTINCT — carry ONLY the run-bound resume
+  // token when provided, NEVER the turn's cit_/cwu_ pair (rejected there + the
+  // cwu_ header is CORS-disallowed on the resume route). Absent → no resume auth
+  // → the route 401s → the caller degrades to a fresh mount (the shipped degrade).
+  const resumeHeaders = options.resumeAuthHeaders?.() ?? {};
 
   let state = initialConversationState();
   const emit = (event: AgUiEvent, next: ConversationViewState): void => {
@@ -267,11 +303,14 @@ export async function streamAssistantTurn(
 
   const response = await fetch(endpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
+    headers: { "Content-Type": "application/json", ...brokerHeaders },
+    credentials,
     body: JSON.stringify({
       threadId: options.threadId,
       messages: options.messages,
+      // Included ONLY when set (the broker-auth branch needs it; the built-in
+      // @cinatra session path omits it — body byte-parity when unused).
+      ...(options.assistant ? { assistant: options.assistant } : {}),
     }),
     signal: options.signal,
   });
@@ -283,7 +322,8 @@ export async function streamAssistantTurn(
   // completed-segment idempotence covers the overlap).
   const resumeOnce = async (runId: string): Promise<ConversationViewState> => {
     const resume = await fetch(resumeFor(runId), {
-      credentials: "include",
+      headers: resumeHeaders,
+      credentials,
       signal: options.signal,
     });
     if (!resume.ok || !resume.body) throw new Error("Chat request failed.");
