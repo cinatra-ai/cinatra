@@ -1114,6 +1114,20 @@ export type EmailTransportCorrelation = {
    * ignores it.
    */
   runId?: string;
+  /**
+   * The run-scoped test-delivery send submission id (#1625) — the
+   * trusted per-gate-resume WayFlow task id the `email_test_delivery_run_send`
+   * primitive threads through so a crashed-claim reconciliation can query the
+   * outbound correlation store for THIS submission. Soft provenance; absent on
+   * every non-test-delivery send.
+   */
+  submissionId?: string;
+  /**
+   * The specific draft id this sent-email object materializes (#1625).
+   * Paired with `submissionId` so reconciliation can confirm EVERY expected
+   * draft of a multi-draft test send was delivered (else `previous_send_unknown`).
+   */
+  draftId?: string;
 };
 
 /**

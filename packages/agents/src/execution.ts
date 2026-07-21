@@ -275,7 +275,7 @@ import {
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
 import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
-import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask } from "@cinatra-ai/a2a";
+import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLatestWayflowGateTask } from "@cinatra-ai/a2a";
 // Host capability resolution for the HITL schema enricher: the enricher itself
 // is provider-agnostic (agent-ui-protocol imports no provider package); THIS
 // host-side caller injects the live `email-send` providers so sender-alias
@@ -491,6 +491,41 @@ async function resolveWayflowXRenderer(
   const childSteps = approvalPolicySteps.filter(stepFiresRendererGate);
   if (childSteps.length === 0) return { xRenderer: fallback, stepNumber: null, schema: null };
 
+  // #1625 — SINGLE-RENDERER-GATE SHORT-CIRCUIT (contract (1)).
+  // When the flow has EXACTLY ONE xRenderer-bearing gate, resolution is
+  // unambiguous: there is only one renderer any gate interrupt can possibly
+  // resolve to, so we SHORT-CIRCUIT past the positional renderer-gate index
+  // entirely. This is what makes a REPEAT visit of a re-entrant gate resolve to
+  // the SAME renderer (the exact regression this contract exists for): a fresh
+  // taskId per interrupt would otherwise append and grow the positional index
+  // (getOrAddWayflowRendererGateIndex) past `childSteps.length`, exhausting the
+  // walk below and falling to the schema-field fallback on the 2nd+ visit. The
+  // short-circuit also closes two further holes for this agent class:
+  //   • the 7-day renderer-gate-list TTL (GATE_SEQUENCE_TTL_S): a post-expiry
+  //     repeat can no longer re-key to index 0 and mis-select, because the index
+  //     is not consulted at all;
+  //   • a Redis fault: the reverse-map write below is best-effort, so the sole
+  //     renderer resolves even when Redis is unavailable (never `fallback`).
+  // Soundness for MULTI-gate flows is preserved by the compile-time reachability
+  // invariant (validate-oas-runtime-invariants.ts): a re-entrant gate MUST be the
+  // sole renderer gate, so every re-entrant gate that reaches runtime lands here.
+  if (childSteps.length === 1) {
+    const step = childSteps[0]!;
+    // Keep the task→run reverse-map current so the resume lookup still resolves
+    // this interrupt's run — but a Redis fault must NOT block resolving the sole
+    // renderer (the whole point of the short-circuit is Redis-independence).
+    try {
+      await rememberWayflowGateTask(runId, taskId);
+    } catch {
+      /* best-effort: the sole-gate resolution below is independent of Redis. */
+    }
+    return {
+      xRenderer: typeof step.xRenderer === "string" ? step.xRenderer : fallback,
+      stepNumber: typeof step.stepNumber === "number" ? step.stepNumber : null,
+      schema: step.schema ?? step.inputMessageSchema ?? null,
+    };
+  }
+
   // Redis-backed index: survives hot-reloads and restarts unlike a module-level
   // Map that can reset between the BullMQ dispatch and server-action approval.
   // #824: index into the RENDERER-gate sequence (excludes context-selection
@@ -620,6 +655,18 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   );
 
   if (taskState === "input-required") {
+    // #1625 (F1) — record THIS gate visit's a2a task id to the
+    // authoritative Redis latest-task map BEFORE the interrupt is published.
+    // This is the fresh-guaranteed submission identity the run-scoped
+    // test-delivery send resolves at the passthrough seam. AWAITED and
+    // correctness-critical (NOT best-effort, NOT inside the xRenderer catch
+    // below): a Redis failure THROWS here and prevents the interrupt from being
+    // published, so a send can never resolve a stale identity from the racy
+    // `agent_runs.a2a_task_id` column (the defensive resync above persists that
+    // column best-effort and may leave it stale under a "tuple concurrently
+    // updated" race). Redis is already load-bearing for gate resume (the
+    // reverse-map fallback), so this is no new hard dependency.
+    await rememberLatestWayflowGateTask(runId, task.id);
     const adapter = new DualAdapterDispatch(
       new AgUiAdapter(runId, run.templateId, (event) => publishAgUiEvent(runId, event)),
       new A2UiAdapter(
@@ -709,6 +756,13 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     let wayflowXRenderer: string = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
     let wayflowStepNumber: number | null = null;
     let wayflowSchema: Record<string, unknown> | null = null;
+    // #1625 (contract (1)) — SAFE CATCH: the sole renderer gate (when
+    // the flow has exactly one xRenderer-bearing gate) is the unambiguous
+    // resolution under ANY resolver fault. Computed up-front from the template so
+    // the catch below never falls to the schema-field fallback for a
+    // single-renderer-gate agent — the "never fallback for a sole-renderer gate"
+    // guarantee holds even when the positional resolve throws (e.g. Redis fault).
+    let soleRendererGate: { xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null } | null = null;
     try {
       if (isContextSelectorInterruptPayload(spreadFromOutput)) {
         wayflowXRenderer =
@@ -719,11 +773,27 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         const policySteps = (tmpl?.approvalPolicy?.steps ?? []) as Array<{
           stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; firesRendererGate?: boolean;
         }>;
+        const rendererGateSteps = policySteps.filter(stepFiresRendererGate);
+        if (rendererGateSteps.length === 1) {
+          const s = rendererGateSteps[0]!;
+          soleRendererGate = {
+            xRenderer: typeof s.xRenderer === "string" ? s.xRenderer : SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+            stepNumber: typeof s.stepNumber === "number" ? s.stepNumber : null,
+            schema: s.schema ?? s.inputMessageSchema ?? null,
+          };
+        }
         ({ xRenderer: wayflowXRenderer, stepNumber: wayflowStepNumber, schema: wayflowSchema } =
           await resolveWayflowXRenderer(runId, task.id, policySteps));
       }
     } catch {
-      // non-fatal — fallback renderer is acceptable
+      // non-fatal. For a single-renderer-gate agent, resolve to that one gate
+      // (never the schema-field fallback) — contract (1). Multi-gate / context
+      // flows keep the acceptable schema-field fallback.
+      if (soleRendererGate) {
+        wayflowXRenderer = soleRendererGate.xRenderer;
+        wayflowStepNumber = soleRendererGate.stepNumber;
+        wayflowSchema = soleRendererGate.schema;
+      }
     }
     // #839: Surface an InputMessageNode gate's declared DFE inputs — which the
     // WayFlow runtime propagates through task.metadata.pendingApproval

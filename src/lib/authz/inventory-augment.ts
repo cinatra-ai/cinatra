@@ -268,6 +268,11 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
 
   // ───── email ─────
   email_send: { resourceType: "connector_instance", action: "execute", status: "enforced" },
+  // Run-scoped test-delivery primitives (#1625). The send performs a
+  // mutating outbound send under execute-tier run authz; parse_action is a
+  // read-tier deterministic parse of the gate envelope + ledger send-count.
+  email_test_delivery_parse_action: { resourceType: "agent_run", action: "read",    status: "enforced" },
+  email_test_delivery_run_send:      { resourceType: "agent_run", action: "execute", status: "enforced" },
 
   // ───── extensions ─────
   extensions_archive:             { resourceType: "extension_registry", action: "uninstall", status: "enforced" },

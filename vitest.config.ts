@@ -74,10 +74,11 @@ export default defineConfig({
         find: /^@cinatra-ai\/skills$/,
         replacement: path.join(__dirname, "tests/__stubs__/cinatra-skills.ts"),
       },
-      // src/app/api/test-delivery/send/__tests__/route.test.ts imports
-      // route.ts, which depends on @cinatra-ai/mcp-client and
-      // @cinatra-ai/trigger-email-send. Both barrels are light leaves with no
-      // heavy transitive deps, so map them straight to source.
+      // @cinatra-ai/mcp-client and @cinatra-ai/trigger-email-send are light
+      // barrel leaves (no heavy transitive deps) imported by several
+      // root-vitest-covered modules (e.g. src/app/api/chat, src/app/api/agents,
+      // src/lib/trigger-email-send-use-cases). Map them straight to source so
+      // the barrels resolve without the tsconfig/vitest path gap.
       {
         find: "@cinatra-ai/mcp-client",
         replacement: path.join(

@@ -57,6 +57,14 @@ vi.mock("../wayflow-url", () => ({
   AGENT_RUN_TIMEOUT_MAX_SECONDS: 86_400,
 }));
 
+// Hermetic: the F1 latest-task write (execution.ts) is fail-closed real Redis
+// at every interrupt-emit — stub it so this unit test never opens a real
+// connection. All other a2a exports keep their real behavior.
+vi.mock("@cinatra-ai/a2a", async (orig) => {
+  const actual = (await orig()) as Record<string, unknown>;
+  return { ...actual, rememberLatestWayflowGateTask: vi.fn(async () => undefined) };
+});
+
 import { handleWayflowTaskState } from "../execution";
 import type { AgentRunRecord } from "../store";
 
@@ -291,5 +299,60 @@ describe("execution.ts — generic interrupt-output spread", () => {
     expect(values.contentType).not.toBe("evil");
     expect(values.summary).not.toBe("evil");
     expect(values.contentBundle).toBeUndefined();
+  });
+
+  // #1625 (D2): on the pinned runtime the a2a worker never writes
+  // task.metadata (pendingApproval is empty {}), so the test-delivery gate
+  // surfaces its DFE input VALUES to the renderer ONLY as a whole-object JSON
+  // agent message (the opt-in `surfaceGateInputs` template). This host-side
+  // regression proves that exact shape — task.metadata={} + JSON history — flows
+  // through the generic spreadFromOutput path so the renderer receives
+  // lastSendResult/gateCycle/defaults and the banner can render. execution.ts is
+  // UNCHANGED; this locks the contract the D2 loader template depends on.
+  it("D2: surfaces test-delivery gate values (lastSendResult/gateCycle/defaults) from a JSON agent message with empty metadata", async () => {
+    const run = makeRun({ campaignId: "camp-1625" });
+    const envelope = {
+      lastSendResult: { ok: false, message: "Google OAuth is not connected." },
+      gateCycle: 1,
+      defaultRecipientEmail: "owner@example.com",
+      defaultSelectionMode: "random_initial",
+      defaultSpecificInitialDraftIds: ["d1"],
+      defaultSpecificFollowUpDraftIds: [],
+    };
+    await handleWayflowTaskState({
+      runId: run.id,
+      run,
+      fromStatus: "running",
+      task: taskWithAgentJson(envelope), // metadata:{} (pin reality)
+    });
+    const values = onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>;
+    expect(values.lastSendResult).toEqual({ ok: false, message: "Google OAuth is not connected." });
+    expect(values.gateCycle).toBe(1);
+    expect(values.defaultRecipientEmail).toBe("owner@example.com");
+    expect(values.defaultSpecificInitialDraftIds).toEqual(["d1"]);
+    // run.inputParams still merges underneath the spread gate values.
+    expect(values.campaignId).toBe("camp-1625");
+  });
+
+  it("D2: first-entry all-null envelope surfaces lastSendResult=null (renderer shows no banner)", async () => {
+    const run = makeRun({ campaignId: "camp-1625" });
+    const firstVisit = {
+      lastSendResult: null,
+      gateCycle: null,
+      defaultRecipientEmail: null,
+      defaultSelectionMode: null,
+      defaultSpecificInitialDraftIds: null,
+      defaultSpecificFollowUpDraftIds: null,
+    };
+    await handleWayflowTaskState({
+      runId: run.id,
+      run,
+      fromStatus: "running",
+      task: taskWithAgentJson(firstVisit),
+    });
+    const values = onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>;
+    expect(values.lastSendResult).toBeNull();
+    expect(values.gateCycle).toBeNull();
+    expect(values.campaignId).toBe("camp-1625");
   });
 });

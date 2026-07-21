@@ -15,6 +15,10 @@ import {
   shapeArtifactMaterializeInput,
   type ShapedArtifactMaterializeInput,
 } from "./artifact-materialize-shaper";
+import {
+  shapeTestDeliverySendInput,
+  shapeTestDeliverySendResult,
+} from "./test-delivery-seam";
 
 /**
  * Deterministic MCP-call passthrough for WayFlow.
@@ -64,6 +68,12 @@ const ALLOWED_TOOLS = new Set([
   // declaring agent package from the run-bound frame we establish below.
   "agent_run_hitl_prompts_list",
   "agent_run_hitl_prompts_exclude",
+  // Run-scoped test-delivery send + parse primitives (#1625). The
+  // email-test-delivery agent's own workflow dispatches these as deterministic
+  // run-bound nodes; run + declaring package + submission id are derived from the
+  // run-bound frame established below (never the request body).
+  "email_test_delivery_run_send",
+  "email_test_delivery_parse_action",
   // Deterministic pre-interrupt skills resolution (cinatra#1625 S8/M3). The
   // skill-recommender agent's `prep_skills` ApiNode calls this to resolve the
   // skills assigned to its target drafting agent, wiring `{ skillIds }` into
@@ -85,6 +95,11 @@ const ALLOWED_TOOLS = new Set([
 const RUN_SCOPED_CONTEXT_TOOLS = new Set<string>([
   "agent_run_hitl_prompts_list",
   "agent_run_hitl_prompts_exclude",
+  // #1625 — both derive their run scope from the verified frame; the send
+  // primitive additionally reads verifiedSubmissionId (stamped below from the
+  // context-id-bound run row's a2aTaskId) as its ledger dedupe identity.
+  "email_test_delivery_run_send",
+  "email_test_delivery_parse_action",
 ]);
 
 type RequestBody = {
@@ -99,6 +114,18 @@ type RequestBody = {
    *  shape the LLM-based persist node returned. */
   result_input_passthrough?: unknown;
   result_id_field?: unknown;
+  /** Optional: opt-in response reshaping for a node whose OAS-declared outputs
+   *  do NOT match the primitive's flat return shape and cannot be bridged by
+   *  the by-key ApiNode output extraction (wayflowcore maps each declared
+   *  output `X` to the jq query `.X`, so a nested object output or a renamed
+   *  field is unreachable from a flat result). #1625: the
+   *  email_test_delivery_run_send primitive returns
+   *  `{ok, sentTo, message, seq, ...}` but perform_test_send declares
+   *  `[lastSendResult (object), gateCycle (int), ...]` for its re-entrant gate
+   *  renderer. `result_shape: "test_delivery_send"` reshapes the flat result to
+   *  the declared output contract at this seam (the established shaping layer —
+   *  the certified primitive handler stays untouched). */
+  result_shape?: unknown;
 };
 
 /**
@@ -230,6 +257,12 @@ TOOL_INPUT_SHAPERS.objects_save = (raw, agentRunId) => {
   if (blog) return blog;
   return baseObjectsSaveShaper ? baseObjectsSaveShaper(raw, agentRunId) : raw;
 };
+
+// email-test-delivery run_send input shaping (#1625) — the pure shaper
+// lives in ./test-delivery-seam (zero-dep, unit-tested). It JSON-parses the
+// gate's `envelopeJson` (the ApiNode cannot pass native id arrays — wayflowcore
+// stringifies json_body templates) and projects the send fields the handler reads.
+TOOL_INPUT_SHAPERS.email_test_delivery_run_send = (raw) => shapeTestDeliverySendInput(raw);
 
 export async function POST(req: Request): Promise<Response> {
   if (!isAuthorizedBridgeRequest(req)) {
@@ -410,11 +443,31 @@ export async function POST(req: Request): Promise<Response> {
       // Nesting the two ALS frames is safe — they are distinct AsyncLocalStorage
       // instances. Carry the run's org + owner so the frame is a coherent
       // identity tuple with the run id.
+      // #1625 (F1) — the trusted per-gate-resume submission id, resolved
+      // from the AUTHORITATIVE Redis latest-task map (written UNCONDITIONALLY at
+      // each interrupt in execution.ts, BEFORE the interrupt is published), NOT
+      // from the racy `agent_runs.a2a_task_id` column which a lost "tuple
+      // concurrently updated" race can leave pointing at a PREVIOUS visit's id.
+      // Fresh-guaranteed: a plain Redis SET, never a Postgres CAS. Fails CLOSED —
+      // a null/absent value OR a Redis read error OMITS verifiedSubmissionId and
+      // the send handler then denies (resolveRunScopedSubmissionId). NEVER falls
+      // back to run.a2aTaskId (a surviving stale value would reintroduce the
+      // false-dedup hole that suppresses a legitimate distinct send).
+      let verifiedSubmissionId: string | undefined;
+      if (RUN_SCOPED_CONTEXT_TOOLS.has(tool)) {
+        try {
+          const { resolveLatestWayflowGateTaskId } = await import("@cinatra-ai/a2a");
+          verifiedSubmissionId = (await resolveLatestWayflowGateTaskId(run.id)) ?? undefined;
+        } catch {
+          verifiedSubmissionId = undefined; // fail closed on a Redis read error
+        }
+      }
       result = RUN_SCOPED_CONTEXT_TOOLS.has(tool)
         ? await mcpRequestContextStorage.run(
             {
               runId: binding.runId,
               verifiedRunScopeId: binding.runId,
+              ...(verifiedSubmissionId ? { verifiedSubmissionId } : {}),
               userId: run.runBy ?? undefined,
               orgId: run.orgId,
               ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
@@ -487,6 +540,24 @@ export async function POST(req: Request): Promise<Response> {
         timezone,
         enabled,
       });
+    }
+
+    // email-test-delivery run_send output shaping (#1625) — the pure
+    // shaper lives in ./test-delivery-seam (zero-dep, unit-tested). wayflowcore
+    // extracts each ApiNode output `X` via the fixed jq query `.X`, so the gate
+    // renderer's nested `{lastSendResult(object), gateCycle(int)}` contract is
+    // UNREACHABLE from the primitive's flat `{ok, sentTo, message, seq, ...}`
+    // return. Reshape at this seam (same layer as trigger_config_set /
+    // result_input_passthrough) so the CERTIFIED handler stays byte-identical.
+    // Opt-in via the OAS `result_shape` flag AND scoped to the send tool; a
+    // malformed / `{error}` result returns null and passes through UNSHAPED so
+    // the node fails visibly.
+    if (
+      body.result_shape === "test_delivery_send" &&
+      tool === "email_test_delivery_run_send"
+    ) {
+      const shaped = shapeTestDeliverySendResult(input, result);
+      if (shaped) return NextResponse.json(shaped);
     }
 
     return NextResponse.json(result);

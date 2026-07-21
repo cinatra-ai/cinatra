@@ -1371,6 +1371,25 @@ END $$` },
     // submitted_values jsonb: structured renderer payload for HITL submission trail
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_run_hitl_prompts" ADD COLUMN IF NOT EXISTS submitted_values jsonb` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_run_hitl_prompts" ADD COLUMN IF NOT EXISTS schema_snapshot jsonb` },
+    // agent_run_test_sends: per-action idempotency + crash ledger for the run-scoped
+    // test-delivery send primitive (#1625, DESIGN-V3 contract (4)). TWIN of
+    // migrations/core/core__0067 — the two DDLs MUST stay identical.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_test_sends" (
+      id text PRIMARY KEY,
+      run_id text NOT NULL REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,
+      submission_id text NOT NULL,
+      seq integer NOT NULL,
+      status text NOT NULL DEFAULT 'sending',
+      recipient_email text,
+      selected_draft_ids jsonb NOT NULL,
+      result_json jsonb,
+      claimed_at timestamptz NOT NULL DEFAULT now(),
+      lease_expires_at timestamptz NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_run_test_sends_run_id_submission_id_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_run_test_sends" (run_id, submission_id)` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_run_test_sends_run_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_test_sends" (run_id)` },
     // agent_run_triggers: per-run trigger gate (immediate/scheduled/recurring)
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_triggers" (
       run_id text PRIMARY KEY REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,

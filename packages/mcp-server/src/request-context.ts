@@ -226,6 +226,23 @@ export type McpRequestContext = {
    * is a signed token claim — so a run-scoped primitive trusts that too.)
    */
   verifiedRunScopeId?: string;
+  /**
+   * A per-gate-resume submission id VERIFIED by a trusted server-side run-bound
+   * seam (#1625). Stamped ONLY alongside `verifiedRunScopeId` by the
+   * same seam (`/api/agents/passthrough` after `bindBridgeRunId`), resolved
+   * server-side from the AUTHORITATIVE Redis latest-task map
+   * (`resolveLatestWayflowGateTaskId`), written unconditionally at each WayFlow
+   * input-required interrupt BEFORE the interrupt is published — a fresh task id
+   * distinct per gate re-entry (F1). This is NOT read from `agent_runs.a2aTaskId`:
+   * that column's best-effort persist can lose a "tuple concurrently updated"
+   * race and go stale, whereas the Redis SET never races a Postgres row. The
+   * run-scoped test-delivery send primitive reads THIS as the
+   * `(run_id, submission_id)` ledger dedupe identity — never a caller-supplied
+   * value. The seam fails CLOSED (omits this field) when the Redis value is
+   * absent or unreadable. The transport NEVER writes this field from request
+   * input; undefined for every ordinary request.
+   */
+  verifiedSubmissionId?: string;
 };
 
 /**

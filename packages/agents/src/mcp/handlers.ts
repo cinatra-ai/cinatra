@@ -48,7 +48,13 @@ import {
   readRunCoOwners,
   resolveRunCoOwnerUserIds,
   readAgentRunsByTemplateRaw,
+  type AgentRunRecord,
 } from "../store";
+// Run-scoped test-delivery send + parse primitives (#1625): the two handlers
+// live in ./test-delivery-handlers (extracted to keep this primitive hub under
+// the file-size ratchet). The send PORT, ledger store, and port types are
+// imported by that module, not here.
+import { handleEmailTestDeliveryRunSend, handleEmailTestDeliveryParseAction } from "./test-delivery-handlers";
 import { enqueueBackgroundJob } from "@/lib/background-jobs";
 import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import {
@@ -322,7 +328,7 @@ import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 //   reason==="hidden" → "{hiddenLabel}" (does not leak existence)
 //   reason!=="hidden" → "Run access denied."
 // ---------------------------------------------------------------------------
-function authzErrorToResponse(err: AuthzError, hiddenLabel: string): { error: string } {
+export function authzErrorToResponse(err: AuthzError, hiddenLabel: string): { error: string } {
   return { error: err.reason === "hidden" ? hiddenLabel : "Run access denied." };
 }
 
@@ -332,7 +338,7 @@ function authzErrorToResponse(err: AuthzError, hiddenLabel: string): { error: st
 // run_list per-row, run_messages_list) so every access denial produces an
 // audit_events row with decision:"denied" and operation:"read".
 // ---------------------------------------------------------------------------
-function emitReadDenialAudit(actor: PrimitiveActorContext, resourceId: string | undefined): void {
+export function emitReadDenialAudit(actor: PrimitiveActorContext, resourceId: string | undefined): void {
   void logAuditEvent({
     actorPrincipalId: actor.userId,
     actorPrincipalType: (actor.actorType as AuditEventInput["actorPrincipalType"]) ?? "human",
@@ -359,7 +365,7 @@ function emitReadDenialAudit(actor: PrimitiveActorContext, resourceId: string | 
 // user row?" probe is no longer needed.
 
 // ---------------------------------------------------------------------------
-async function resolveRoleHintsFromSession(): Promise<ActorRoleHints | undefined> {
+export async function resolveRoleHintsFromSession(): Promise<ActorRoleHints | undefined> {
   try {
     const session = await getAuthSession();
     if (!session) return undefined;
@@ -484,7 +490,7 @@ async function resolveIsPlatformAdminFromSession(
 // Request envelope type — matches the pattern used by all cinatra MCP handlers
 // ---------------------------------------------------------------------------
 
-type PrimitiveRequest<T = Record<string, unknown>> = {
+export type PrimitiveRequest<T = Record<string, unknown>> = {
   primitiveName: string;
   input: T;
   actor: { actorType: string; source: string; userId?: string; clientId?: string; oboCeiling?: Array<{ tier: "user" | "team" | "organization" | "workspace" | "project"; id: string }> }; // oboCeiling: agent-run-OBO only (W2/#1051); inline union == OboCeilingChain (keeps this frozen leaf import-free)
@@ -5365,7 +5371,7 @@ function toHitlPromptSnapshot(row: HitlPromptRecord): {
 //      seam (`/api/agents/passthrough` after `bindBridgeRunId`), never from input.
 // Returns an error envelope (never throws) when no verified run context exists so
 // the handler surfaces the same `{ error }` contract as its siblings.
-function resolveRunScopedRunId(): { runId: string } | { error: string } {
+export function resolveRunScopedRunId(): { runId: string } | { error: string } {
   const ctx = mcpRequestContextStorage.getStore();
   const oboRunId =
     ctx?.delegatedActor?.delegation === "agent_run" ? ctx.delegatedActor.runId : undefined;
@@ -5552,6 +5558,7 @@ async function handleAgentRunHitlPromptsExclude(
   }
 }
 
+
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
@@ -5600,6 +5607,12 @@ export function createAgentBuilderPrimitiveHandlers(): Record<
       handleAgentRunHitlPromptsList(req as Parameters<typeof handleAgentRunHitlPromptsList>[0]),
     agent_run_hitl_prompts_exclude: (req) =>
       handleAgentRunHitlPromptsExclude(req as Parameters<typeof handleAgentRunHitlPromptsExclude>[0]),
+    // run-scoped test-delivery send + parse primitives (#1625) — run,
+    // declaring package, campaign, and submission id all context-derived.
+    email_test_delivery_run_send: (req) =>
+      handleEmailTestDeliveryRunSend(req as Parameters<typeof handleEmailTestDeliveryRunSend>[0]),
+    email_test_delivery_parse_action: (req) =>
+      handleEmailTestDeliveryParseAction(req as Parameters<typeof handleEmailTestDeliveryParseAction>[0]),
     agent_run_resume: (req) =>
       handleAgentBuilderRunResume(req as Parameters<typeof handleAgentBuilderRunResume>[0]),
     agent_run_stop: (req) =>
@@ -6021,3 +6034,4 @@ export function createAgentsPrimitiveHandlers() {
     },
   } as const;
 }
+

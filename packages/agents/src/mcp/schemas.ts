@@ -152,6 +152,42 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
       excluded: z.boolean().optional().describe("Target exclusion state. Defaults true (exclude). Pass false to re-include. Idempotent."),
     }),
   },
+  // Run-scoped test-delivery send + parse primitives (#1625). Both are
+  // invoked as deterministic run-bound nodes from the email-test-delivery agent's
+  // OWN workflow via the #1794 pre-interrupt seam; the run + declaring package +
+  // submission id are derived from the run-bound invocation context, never from
+  // caller input. A bare chat/session call fails closed.
+  "email_test_delivery_run_send": {
+    description:
+      "Run-scoped test-delivery send. Performs a REAL server-side test email send under the run OWNER's authority (the run round-trip pattern, epic #1620) and returns a typed discriminated result the workflow routes back into the gate as an honest banner. The run, its declaring agent package, the campaign (pinned from run.inputParams — a caller campaign is IGNORED), and the submission id (the ledger dedupe identity) all come from the run-bound context. Idempotent per (run, submission): a transport retry of the same gate resume returns the prior result; a genuine second send is a new gate re-entry with a new submission id. Only the send input (recipientEmail, selectionMode, specific draft ids) crosses in. Returns { ok, seq, ... } | { ok:false, seq, reason, message }.",
+    inputSchema: z.object({
+      recipientEmail: z.string().min(1).max(320).describe("Recipient address for the test send."),
+      selectionMode: z
+        .enum(["random_initial", "specific_initial", "all_initial"])
+        .describe("Which campaign drafts to send: one random initial, an explicit set, or all initials."),
+      specificInitialDraftIds: z
+        .array(z.string().min(1))
+        .max(500)
+        .optional()
+        .describe("Explicit initial draft ids (specific_initial mode). Membership-checked against the campaign; unknown ids dropped. Bounded at 500."),
+      specificFollowUpDraftIds: z
+        .array(z.string().min(1))
+        .max(500)
+        .optional()
+        .describe("Explicit follow-up draft ids. Membership-checked against the campaign; unknown ids dropped. Bounded at 500."),
+    }),
+  },
+  "email_test_delivery_parse_action": {
+    description:
+      "Deterministic parse of the test-delivery gate's userResponse envelope into a typed, branch-readable action. Returns { action: 'send' | 'continue' | 'halt', recipientEmail?, selectionMode?, specificInitialDraftIds?, specificFollowUpDraftIds? }. `halt` when the run's ledger performed-send count has reached the template-trusted maxGateVisits cap (server-read, never caller input); a malformed/absent envelope defaults to `continue` (never crashes the run). The run comes from the run-bound context; the only caller input is the userResponse string.",
+    inputSchema: z.object({
+      userResponse: z
+        .string()
+        .max(20000)
+        .optional()
+        .describe("The gate's resolved userResponse envelope (a JSON string). Malformed/absent → action:'continue'."),
+    }),
+  },
   "agent_run_stop": {
     description: "Stop a running agent run by ID. Marks the run as stopped in the database; the background job halts after its current step completes.",
     inputSchema: z.object({
