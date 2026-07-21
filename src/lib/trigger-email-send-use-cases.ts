@@ -920,6 +920,12 @@ export function createTriggerEmailSendUseCases(
       const fromEmail = campaign.senderEmail;
       const fromName = campaign.senderName;
 
+      // eng#548 #1625 (partial-batch-retry regression): track the ids ACTUALLY
+      // delivered draft-by-draft. Declared OUTSIDE the try so the catch branch can
+      // return the partial prefix that went out before a mid-batch throw. Returning
+      // it (even on the failure branch) lets the wrapper persist it so a later retry
+      // never re-sends those drafts and the maxGateVisits cap counts the partial.
+      const deliveredDraftIds: string[] = [];
       try {
         // eng#548 #1625 — when the run-scoped wrapper supplies a submissionId,
         // thread it (with the specific draft id) into the sendEmail correlation
@@ -930,7 +936,6 @@ export function createTriggerEmailSendUseCases(
           typeof input.submissionId === "string" && input.submissionId.trim() !== ""
             ? input.submissionId.trim()
             : undefined;
-        let sentCount = 0;
         for (const draft of selected) {
           await deps.sendEmail(
             {
@@ -954,14 +959,15 @@ export function createTriggerEmailSendUseCases(
                 : {}),
             },
           );
-          sentCount += 1;
+          deliveredDraftIds.push(draft.id);
         }
 
         return {
           ok: true,
           recipientEmail: recipient,
           sentTo: recipient,
-          sentCount,
+          sentCount: deliveredDraftIds.length,
+          deliveredDraftIds,
           message: `Test email sent to ${recipient}.`,
         };
       } catch (err) {
@@ -969,10 +975,13 @@ export function createTriggerEmailSendUseCases(
         // (bad recipient, transient connector error): surface it as data so the
         // gate can show an honest banner and let the user retry — do not fail the
         // run. The wrapper primitive refines this into the finer connector
-        // reasons + records the ledger `failed` row.
+        // reasons + records the ledger `failed` row. `deliveredDraftIds` carries
+        // the partial prefix that DID go out (the drafts sent before the throw) so
+        // the wrapper never re-sends them on a retry.
         return {
           ok: false,
           reason: "send_failed",
+          deliveredDraftIds,
           message: err instanceof Error ? err.message : "The test send failed.",
         };
       }

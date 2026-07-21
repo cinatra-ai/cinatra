@@ -196,10 +196,14 @@ export async function readTestSendBySubmission(
 }
 
 /**
- * The authoritative PERFORMED-send count for a run — rows the ledger considers a
- * completed outbound send (`sent`). A `failed` row is user-correctable (does not
- * count toward the cap); a `sending` row is in-flight. parse_action compares this
- * against the template-trusted `maxGateVisits` for the halt guard (contract (3)).
+ * The authoritative PERFORMED-send count for a run — every gate visit that
+ * delivered at least one real email. A fully-successful (`sent`) row counts; a
+ * `failed` row counts IFF it partially delivered (`result_json.deliveredDraftIds`
+ * non-empty — a mid-batch failure that still put mail on the wire, eng#548 #1625
+ * partial-batch-retry regression), so a partial send is never undercounted against
+ * the cap. A pre-claim `failed` row (no delivery) and a `sending` row do not count.
+ * parse_action compares this against the template-trusted `maxGateVisits` for the
+ * halt guard (contract (3)).
  */
 export async function readSentCountForRun(runId: string): Promise<number> {
   const [row] = await db
@@ -208,10 +212,51 @@ export async function readSentCountForRun(runId: string): Promise<number> {
     .where(
       and(
         eq(agentRunTestSends.runId, runId),
-        eq(agentRunTestSends.status, "sent"),
+        sql`(
+          ${agentRunTestSends.status} = 'sent'
+          OR (
+            jsonb_typeof(${agentRunTestSends.resultJson} -> 'deliveredDraftIds') = 'array'
+            AND jsonb_array_length(${agentRunTestSends.resultJson} -> 'deliveredDraftIds') > 0
+          )
+        )`,
       ),
     );
   return row?.n ?? 0;
+}
+
+/**
+ * Draft ids that a prior PARTIAL failure already delivered TO THE SAME RECIPIENT
+ * and that a fresh gate re-entry must not re-send (eng#548 #1625 partial-batch-
+ * retry regression): the user saw "failed" and retries, unaware the prefix landed,
+ * so re-sending the delivered prefix would double-deliver. Deliberately NARROW so
+ * it never over-suppresses a legitimate send:
+ *   - SCOPED TO `recipientEmail` — a partial delivery to one test address never
+ *     suppresses sending the same draft to a DIFFERENT test recipient.
+ *   - EXPIRES ON SUCCESS — walking most-recent-first (desc seq), a `sent`
+ *     (fully-successful) row to this recipient STOPS the walk: once a send to the
+ *     recipient succeeds the user is doing a fresh test, so an earlier failed
+ *     partial no longer blocks a retest of those drafts.
+ * The union across the consecutive same-recipient `failed` rows since that success
+ * covers a multi-retry partial chain (each retry excludes what earlier retries
+ * already delivered, so no attempt re-sends a previously-delivered draft).
+ */
+export async function readUnacknowledgedDeliveredDraftIds(
+  runId: string,
+  recipientEmail: string,
+): Promise<string[]> {
+  const rows = await readTestSendsForRun(runId); // most-recent-first (desc seq)
+  const out = new Set<string>();
+  for (const r of rows) {
+    // Only rows for THIS recipient participate in this recipient's suppression.
+    if ((r.recipientEmail ?? "") !== recipientEmail) continue;
+    if (r.status === "sent") break; // most-recent success to this recipient acknowledges
+    if (r.status !== "failed") continue;
+    const delivered = r.resultJson?.deliveredDraftIds;
+    if (Array.isArray(delivered)) {
+      for (const id of delivered) if (typeof id === "string") out.add(id);
+    }
+  }
+  return [...out];
 }
 
 /** The highest per-run seq assigned so far (0 when no send claimed). */

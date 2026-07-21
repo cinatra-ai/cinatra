@@ -66,6 +66,7 @@ import {
   recordPreClaimFailure,
   readTestSendBySubmission,
   readSentCountForRun,
+  readUnacknowledgedDeliveredDraftIds,
   type TestSendRecord,
 } from "../agent-run-test-sends";
 import { enqueueBackgroundJob } from "@/lib/background-jobs";
@@ -5596,7 +5597,33 @@ async function handleAgentRunHitlPromptsExclude(
 // which authorized co-owner clicked Send — and only after the "execute" boundary.
 // ---------------------------------------------------------------------------
 
-const EMAIL_TEST_DELIVERY_PACKAGE = "@cinatra-ai/email-test-delivery-agent";
+// REGISTRY-ROUTED declaring-package restriction (core-extension-instance-
+// coupling-ban: core source names NO extension package). This send wrapper exists
+// solely to drive the test-delivery HITL renderer gate; the manifest/registry —
+// the generated field-renderer bindings + the runtime installed-package collector
+// (getMergedFieldRendererBindings) — is the source of truth for which package
+// DECLARES that renderer. Core matches the run's own declaring package against the
+// registry's `declaredBy` for this renderer KIND, so the restriction is derived
+// from the manifest, never hardcoded. `test-delivery-input` is a renderer-KIND
+// contract id (not a package name/path), the #1854 A3 registry-routed precedent.
+// (Adjudication: the coupling-ban gate WINS over DESIGN-V3 212-213's named-package
+// restriction — the standing ratified principle is no pack names in core.)
+const TEST_DELIVERY_RENDERER_KIND = "test-delivery-input";
+
+/** The set of packages that DECLARE the test-delivery renderer gate (per the
+ *  manifest/registry). A run may invoke the send wrapper only if its own declaring
+ *  package is in this set — resolved from the registry, never a hardcoded name.
+ *  The field-renderer-bindings.server module is imported LAZILY (dynamic) so its
+ *  filesystem-scanning graph is not pulled onto handlers.ts's eager import cycle
+ *  (the extension-edge-bound-agent precedent). */
+async function resolveTestDeliveryDeclaringPackages(): Promise<Set<string>> {
+  const { getMergedFieldRendererBindings } = await import("../field-renderer-bindings.server");
+  return new Set(
+    getMergedFieldRendererBindings()
+      .filter((b) => b.kind === TEST_DELIVERY_RENDERER_KIND)
+      .map((b) => b.declaredBy),
+  );
+}
 
 // The claim lease. A row still `sending` past this window is treated as a
 // crashed claim and reconciled against the outbound correlation store (never a
@@ -5702,26 +5729,20 @@ async function handleEmailTestDeliveryRunSend(
   const { runId } = runCtx;
   const { submissionId } = subCtx;
 
-  // Input validation — these are the ONLY caller-supplied fields (run, campaign,
-  // submission all context-derived). The passthrough seam invokes WITHOUT the
-  // tool's Zod schema, so validate + bound here defensively.
+  // The ONLY caller-supplied fields (run, campaign, submission are all context-
+  // derived). The passthrough seam invokes WITHOUT the tool's Zod schema, so these
+  // are validated + bounded defensively — but the validation runs AFTER the run is
+  // loaded + authorized (below), so EVERY user-correctable failure resolves to a
+  // gateCycle-advancing ledger row (never a bare `{error}` that strands the HITL
+  // screen — eng#548 #1625 F3). Captured raw here; validated post-authz.
   const recipientEmail =
     typeof request.input?.recipientEmail === "string" ? request.input.recipientEmail.trim() : "";
-  if (recipientEmail.length === 0) {
-    return { error: "`recipientEmail` is required." };
-  }
   const selectionModeRaw = request.input?.selectionMode;
   const SELECTION_MODES: TestDeliverySelectionMode[] = [
     "random_initial",
     "specific_initial",
     "all_initial",
   ];
-  if (!SELECTION_MODES.includes(selectionModeRaw as TestDeliverySelectionMode)) {
-    return {
-      error: `\`selectionMode\` must be one of: ${SELECTION_MODES.join(", ")}.`,
-    };
-  }
-  const selectionMode = selectionModeRaw as TestDeliverySelectionMode;
   const validateIds = (value: unknown, field: string): string[] | { error: string } => {
     if (value === undefined) return [];
     if (!Array.isArray(value)) return { error: `\`${field}\` must be an array of draft id strings.` };
@@ -5731,78 +5752,128 @@ async function handleEmailTestDeliveryRunSend(
     }
     return value as string[];
   };
-  const initialIds = validateIds(request.input?.specificInitialDraftIds, "specificInitialDraftIds");
-  if (!Array.isArray(initialIds)) return initialIds;
-  const followUpIds = validateIds(request.input?.specificFollowUpDraftIds, "specificFollowUpDraftIds");
-  if (!Array.isArray(followUpIds)) return followUpIds;
 
   const actor = request.actor as PrimitiveActorContext;
   const roles = await resolveRoleHintsFromSession();
   try {
+    // eng#548 #1625 (F3): record a pre-claim failure as a terminal `failed` ledger
+    // row that ALLOCATES the next per-run seq so `seq`→`gateCycle` ADVANCES and the
+    // renderer clears its pending state (never strands). ON CONFLICT reads back the
+    // winning row, so a same-submission transport retry returns the authoritative
+    // prior result verbatim — never a second attempt. Used for EVERY user-visible
+    // pre-claim failure below (invalid input, unauthorized package, missing
+    // campaign/owner mailbox, unwired port, campaign-access denial, empty plan).
+    const preClaimFail = async (
+      result: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> => {
+      const rec = await recordPreClaimFailure({
+        runId,
+        submissionId,
+        recipientEmail: recipientEmail || null,
+        result,
+      });
+      return ledgerRowToResult(rec.row);
+    };
+
     // read-enforced load (readAgentRunById applies enforceRunAccess("read")).
     const run = await readAgentRunById(runId, actor, roles);
     if (!run) return { error: `Run not found: ${runId}` };
 
-    // Declaring-package restriction — only the test-delivery agent's own run may
-    // invoke the send wrapper.
     const template = await readAgentTemplateById(run.templateId);
-    const agentPackageName =
-      template?.packageName && template.packageName.length > 0 ? template.packageName : null;
-    if (agentPackageName !== EMAIL_TEST_DELIVERY_PACKAGE) {
-      return {
-        error:
-          "email_test_delivery_run_send is only callable by the " +
-          `${EMAIL_TEST_DELIVERY_PACKAGE} run's own workflow.`,
-      };
-    }
 
-    // EXECUTE-tier authz — OWNER-CONTEXT defense-in-depth, NOT responder authz
-    // (eng#548 #1625 F2). This send runs under the run OWNER's borrowed authority
-    // (the passthrough seam reconstructs the actor from run.runBy for this
-    // server-side back-edge node), so this `execute` check is evaluated against
-    // the owner and is effectively tautological here. The RESPONDER-side execute
-    // gate lives at the resume seam (review-task-actions.ts enforceResumeAccess /
-    // agent_run_resume), which enforces `execute` + `approveHitl` against the
-    // actual responder BEFORE the WayFlow resume ever reaches this node. This
-    // check is retained as belt-and-suspenders alongside the declaring-package
-    // and campaign-pin guards. Thread co-owners + effective policy exactly like
-    // agent_run_resume so the shape matches.
+    // EXECUTE-tier authz FIRST — before ANY ledger write. A pre-claim failure
+    // record ALLOCATES a seq (advances gateCycle), which is an execute-tier side
+    // effect on the run's HITL state; gating it behind `execute` ensures a merely
+    // read-authorized actor can never advance the gate cycle (codex convergence).
+    // OWNER-CONTEXT defense-in-depth, NOT responder authz (eng#548 #1625 F2): the
+    // passthrough seam reconstructs the actor from run.runBy for this server-side
+    // back-edge node, so this check is evaluated against the owner and is
+    // effectively tautological here. The RESPONDER-side execute gate lives at the
+    // resume seam (review-task-actions.ts enforceResumeAccess / agent_run_resume),
+    // which enforces `execute` + `approveHitl` against the actual responder BEFORE
+    // the WayFlow resume ever reaches this node. Thread co-owners + effective
+    // policy exactly like agent_run_resume so the shape matches.
     const coOwnerRows = await readRunCoOwners(run.id);
     const coOwnerUserIds = coOwnerRows.map((r) => r.userId);
     const effectivePolicy = run.authPolicy ?? template?.agentAuthPolicy ?? null;
     await enforceRunAccess({ ...run, effectivePolicy, coOwnerUserIds }, actor, "execute", roles);
 
+    // Declaring-package restriction — REGISTRY-ROUTED (see
+    // resolveTestDeliveryDeclaringPackages / TEST_DELIVERY_RENDERER_KIND: core
+    // names NO extension package; the manifest/registry declares who owns the
+    // test-delivery renderer gate). Enforced AFTER execute-authz above, so
+    // recording a pre-claim failure here cannot be driven by a read-only actor.
+    const agentPackageName =
+      template?.packageName && template.packageName.length > 0 ? template.packageName : null;
+    const declaringPackages = await resolveTestDeliveryDeclaringPackages();
+    if (!agentPackageName || !declaringPackages.has(agentPackageName)) {
+      // Fail-as-data (no send), F3-recorded so the gate never strands. This run's
+      // agent does not declare the test-delivery renderer this primitive drives.
+      return preClaimFail({
+        ok: false,
+        reason: "not_authorized",
+        message: "This run is not authorized to perform a test-delivery send.",
+      });
+    }
+
     // Campaign PINNED from the run's dispatch params — a caller campaignId is
-    // never read.
+    // never read. F3: a missing campaign is recorded (advances gateCycle) not
+    // stranded.
     const campaignId = resolvePinnedCampaignId(run);
     if (!campaignId) {
-      return { error: "This run has no dispatched campaignId; nothing to send." };
+      return preClaimFail({
+        ok: false,
+        reason: "connector_unavailable",
+        message: "This run has no dispatched campaign to send from.",
+      });
     }
     // Fail closed on a null runBy — the run owner is the mailbox selector; there
-    // is no arbitrary-OAuth fallback (parity with the deleted route's guard).
-    // eng#548 #1625 (F3): record the pre-claim failure so `seq`→`gateCycle`
-    // ADVANCES and the renderer clears its pending state (never strands). The
-    // helper reads back the winning row (ON CONFLICT), so a same-submission
-    // retry returns the authoritative prior result verbatim.
+    // is no arbitrary-OAuth fallback (parity with the deleted route's guard). F3:
+    // recorded so gateCycle advances (never strands).
     if (!run.runBy) {
-      const rec = await recordPreClaimFailure({
-        runId,
-        submissionId,
-        recipientEmail: recipientEmail || null,
-        result: {
-          ok: false,
-          reason: "connector_unavailable",
-          message: "This run has no owner mailbox to send the test email from.",
-        },
+      return preClaimFail({
+        ok: false,
+        reason: "connector_unavailable",
+        message: "This run has no owner mailbox to send the test email from.",
       });
-      return ledgerRowToResult(rec.row);
+    }
+
+    // Input validation — post-authz so a malformed envelope resolves to a
+    // gateCycle-advancing failed row, never a stranded screen (F3).
+    if (recipientEmail.length === 0) {
+      return preClaimFail({
+        ok: false,
+        reason: "invalid_recipient",
+        message: "Enter a valid recipient email address for the test send.",
+      });
+    }
+    if (!SELECTION_MODES.includes(selectionModeRaw as TestDeliverySelectionMode)) {
+      return preClaimFail({
+        ok: false,
+        reason: "no_drafts_selected",
+        message: "Choose a valid selection mode for the test send.",
+      });
+    }
+    const selectionMode = selectionModeRaw as TestDeliverySelectionMode;
+    const initialIds = validateIds(request.input?.specificInitialDraftIds, "specificInitialDraftIds");
+    if (!Array.isArray(initialIds)) {
+      return preClaimFail({ ok: false, reason: "no_drafts_selected", message: initialIds.error });
+    }
+    const followUpIds = validateIds(request.input?.specificFollowUpDraftIds, "specificFollowUpDraftIds");
+    if (!Array.isArray(followUpIds)) {
+      return preClaimFail({ ok: false, reason: "no_drafts_selected", message: followUpIds.error });
     }
 
     const port = getTestDeliverySendPort();
     if (!port) {
       // Fail CLOSED — never a phantom success. A missing wiring is an operator
-      // error the primitive surfaces, not a silent no-op send.
-      return { error: TEST_DELIVERY_SEND_PORT_UNWIRED_ERROR };
+      // error; F3-recorded (advances gateCycle) so the gate never strands while
+      // still surfacing the wiring gap as the failure reason/message.
+      return preClaimFail({
+        ok: false,
+        reason: "connector_unavailable",
+        message: TEST_DELIVERY_SEND_PORT_UNWIRED_ERROR,
+      });
     }
     const portRun = toPortRun(run);
 
@@ -5840,6 +5911,8 @@ async function handleEmailTestDeliveryRunSend(
             ok: true,
             sentTo: existing.recipientEmail ?? recipientEmail,
             sentCount: existing.selectedDraftIds.length,
+            // reconcile confirmed EVERY expected draft was delivered.
+            deliveredDraftIds: existing.selectedDraftIds,
             message: `Test email sent to ${existing.recipientEmail ?? recipientEmail}.`,
           },
         });
@@ -5865,37 +5938,51 @@ async function handleEmailTestDeliveryRunSend(
       specificFollowUpDraftIds: followUpIds,
     });
     if (!prepared.ok) {
-      // A pre-claim expected failure — report it as data. eng#548 #1625 (F3):
-      // record it as a terminal `failed` ledger row that ALLOCATES the next
-      // `seq`, so `gateCycle` advances and the renderer clears its pending state
-      // (the previous unchanged max-seq return stranded the screen). Fresh
-      // submission id per visit (F1) ⇒ distinct row ⇒ distinct seq, even for a
-      // repeated identical failure reason. The helper reads back the winning row
-      // (ON CONFLICT), so a same-submission transport retry returns the
-      // authoritative prior result verbatim — never a second attempt.
-      const rec = await recordPreClaimFailure({
-        runId,
-        submissionId,
-        recipientEmail: recipientEmail || null,
-        result: {
-          ok: false,
-          reason: prepared.reason,
-          message:
-            prepared.reason === "campaign_access_denied"
-              ? "You do not have access to this campaign."
-              : prepared.reason === "invalid_recipient"
-                ? "Enter a valid recipient email address for the test send."
-                : "No test emails were selected to send.",
-        },
+      // A pre-claim expected failure — report it as data, F3-recorded so
+      // `seq`→`gateCycle` advances (a fresh submission id per visit ⇒ a distinct
+      // row/seq even for a repeated identical reason). ON CONFLICT returns the
+      // winning row so a same-submission transport retry replays verbatim.
+      return preClaimFail({
+        ok: false,
+        reason: prepared.reason,
+        message:
+          prepared.reason === "campaign_access_denied"
+            ? "You do not have access to this campaign."
+            : prepared.reason === "invalid_recipient"
+              ? "Enter a valid recipient email address for the test send."
+              : "No test emails were selected to send.",
       });
-      return ledgerRowToResult(rec.row);
     }
 
-    // ---- Claim: the atomic exactly-once fence on (run, submission). ----
+    // ---- Partial-batch-retry guard (eng#548 #1625 regression). ----
+    // A PRIOR gate visit may have PARTIALLY delivered drafts TO THIS RECIPIENT (a
+    // mid-batch send failure settled `failed` but the prefix went out). The user
+    // saw "failed" and retries on a fresh submission — re-sending those already-
+    // delivered drafts would double-deliver. Subtract them (same-recipient, since
+    // the last success) from the pinned plan before the claim. Keyed on the SAME
+    // recipient the row is claimed/stored under (prepared.recipientEmail).
+    const alreadyDelivered = new Set(
+      await readUnacknowledgedDeliveredDraftIds(runId, prepared.recipientEmail),
+    );
+    const selectedDraftIds = prepared.selectedDraftIds.filter((id) => !alreadyDelivered.has(id));
+    if (selectedDraftIds.length === 0) {
+      // Every planned draft was already delivered by a prior partial send — there
+      // is nothing new to send; resending would double-deliver. Record (advances
+      // gateCycle) with an honest banner instead of a phantom re-send.
+      return preClaimFail({
+        ok: false,
+        reason: "no_drafts_selected",
+        message:
+          "The selected drafts were already delivered by a previous test send; nothing new to send.",
+      });
+    }
+
+    // ---- Claim: the atomic exactly-once fence on (run, submission). Pins EXACTLY
+    // the not-yet-delivered ids as the durable expected batch. ----
     const claim = await claimTestSend({
       runId,
       submissionId,
-      selectedDraftIds: prepared.selectedDraftIds,
+      selectedDraftIds,
       recipientEmail: prepared.recipientEmail,
       leaseSeconds: TEST_SEND_LEASE_SECONDS,
     });
@@ -5912,13 +5999,15 @@ async function handleEmailTestDeliveryRunSend(
       };
     }
 
-    // ---- Phase 2 (the outbound send) of exactly the pinned ids. ----
+    // ---- Phase 2 (the outbound send) of exactly the pinned not-yet-delivered
+    // ids. `result.deliveredDraftIds` is persisted in the settle so a later retry
+    // excludes them + the cap counts a partial delivery. ----
     const result = await port.performSend({
       run: portRun,
       campaignId,
       submissionId,
       recipientEmail: prepared.recipientEmail,
-      selectedDraftIds: prepared.selectedDraftIds,
+      selectedDraftIds,
     });
     await settleTestSend({
       id: claim.row.id,

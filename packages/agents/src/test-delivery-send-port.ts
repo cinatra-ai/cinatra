@@ -42,10 +42,16 @@ export type TestDeliverySendFailureReason =
 
 /** The port's phase-2 result. The package-side handler adds the ledger `seq`
  *  before returning to the workflow. Written as an EXPLICIT discriminated union
- *  (never `Omit<…,'seq'>`, which does not preserve per-branch fields). */
+ *  (never `Omit<…,'seq'>`, which does not preserve per-branch fields).
+ *
+ *  `deliveredDraftIds` is the set of draft ids the send actually delivered — ALL
+ *  the pinned ids on a full success, and the PARTIAL PREFIX that went out before a
+ *  mid-batch failure on `ok:false`. The package persists it on the ledger row so a
+ *  later gate re-entry never re-sends an already-delivered draft (the partial-
+ *  batch-retry regression) and the maxGateVisits cap counts a partial delivery. */
 export type TestDeliveryPerformResult =
-  | { ok: true; sentTo: string; sentCount: number; message: string }
-  | { ok: false; reason: TestDeliverySendFailureReason; message: string };
+  | { ok: true; sentTo: string; sentCount: number; message: string; deliveredDraftIds: string[] }
+  | { ok: false; reason: TestDeliverySendFailureReason; message: string; deliveredDraftIds: string[] };
 
 /** The phase-1 (no side-effect) planning result. On success the pinned draft-id
  *  set the package persists into the ledger claim BEFORE any send; on failure a

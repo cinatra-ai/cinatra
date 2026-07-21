@@ -171,6 +171,40 @@ describe("createTriggerEmailSendUseCases.sendTestEmail", () => {
     expect(result).toMatchObject({ ok: false, reason: "send_failed", message: "boom" });
   });
 
+  it("reports the delivered PREFIX on a mid-batch failure (partial-batch-retry regression)", async () => {
+    const drafts: Draft[] = [
+      { id: "d1", subject: "One", body: "B1" },
+      { id: "d2", subject: "Two", body: "B2" },
+      { id: "d3", subject: "Three", body: "B3" },
+    ];
+    // d1 sends, d2 throws → d1 is the delivered prefix; d3 never attempted.
+    const sendEmail = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("boom on d2"));
+    const { deps } = makeDeps({ drafts, sendEmail });
+    const uc = createTriggerEmailSendUseCases(deps);
+    const result = await uc.sendTestEmail(
+      { campaignId: "c1", recipientEmail: "to@y.com", selectionMode: "all_initial" },
+      actor,
+    );
+    expect(result).toMatchObject({ ok: false, reason: "send_failed", deliveredDraftIds: ["d1"] });
+  });
+
+  it("reports every delivered id on a full success (deliveredDraftIds == sent set)", async () => {
+    const drafts: Draft[] = [
+      { id: "d1", subject: "One", body: "B1" },
+      { id: "d2", subject: "Two", body: "B2" },
+    ];
+    const { deps } = makeDeps({ drafts });
+    const uc = createTriggerEmailSendUseCases(deps);
+    const result = await uc.sendTestEmail(
+      { campaignId: "c1", recipientEmail: "to@y.com", selectionMode: "all_initial" },
+      actor,
+    );
+    expect(result).toMatchObject({ ok: true, sentCount: 2, deliveredDraftIds: ["d1", "d2"] });
+  });
+
   // FOLLOW-UP DRAFT-ID FIX (contract (6)): specificFollowUpDraftIds was accepted
   // but never read. In-campaign follow-ups must now actually send; an
   // out-of-campaign follow-up id is dropped by the membership predicate.

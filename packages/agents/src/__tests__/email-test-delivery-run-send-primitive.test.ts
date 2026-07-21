@@ -81,8 +81,25 @@ const ledgerMock = vi.hoisted(() => ({
   readTestSendBySubmission: vi.fn(),
   readSentCountForRun: vi.fn(async () => 0),
   readMaxSeqForRun: vi.fn(async () => 0),
+  readUnacknowledgedDeliveredDraftIds: vi.fn(async (): Promise<string[]> => []),
 }));
 vi.mock("../agent-run-test-sends", () => ledgerMock);
+
+// --- field-renderer bindings (registry-routed declaring-package restriction) --
+// The send wrapper resolves the packages that DECLARE the test-delivery renderer
+// KIND from the manifest/registry (core names NO extension package). The default
+// registry declares `test-delivery-input` for the test-delivery agent.
+const bindingsMock = vi.hoisted(() => ({
+  getMergedFieldRendererBindings: vi.fn(() => [
+    {
+      id: "@cinatra-ai/email-test-delivery-agent:input",
+      kind: "test-delivery-input",
+      priority: 80,
+      declaredBy: "@cinatra-ai/email-test-delivery-agent",
+    },
+  ]),
+}));
+vi.mock("../field-renderer-bindings.server", () => bindingsMock);
 
 // --- auth-policy ------------------------------------------------------------
 const authPolicyMock = vi.hoisted(() => ({
@@ -241,6 +258,15 @@ beforeEach(() => {
   ledgerMock.readTestSendBySubmission.mockResolvedValue(null);
   ledgerMock.readSentCountForRun.mockResolvedValue(0);
   ledgerMock.readMaxSeqForRun.mockResolvedValue(0);
+  ledgerMock.readUnacknowledgedDeliveredDraftIds.mockResolvedValue([]);
+  bindingsMock.getMergedFieldRendererBindings.mockReturnValue([
+    {
+      id: "@cinatra-ai/email-test-delivery-agent:input",
+      kind: "test-delivery-input",
+      priority: 80,
+      declaredBy: "@cinatra-ai/email-test-delivery-agent",
+    },
+  ]);
   ledgerMock.claimTestSend.mockResolvedValue({ kind: "claimed", row: makeRow() });
   // F3: a pre-claim failure ALLOCATES a fresh seq via a terminal `failed` row so
   // gateCycle advances. The default mock echoes the failure result + a fresh seq.
@@ -261,7 +287,7 @@ beforeEach(() => {
   );
   fakePort = {
     prepareSend: vi.fn(async () => ({ ok: true, recipientEmail: "to@example.com", selectedDraftIds: ["d1"] })),
-    performSend: vi.fn(async () => ({ ok: true, sentTo: "to@example.com", sentCount: 1, message: "Test email sent to to@example.com." })),
+    performSend: vi.fn(async () => ({ ok: true, sentTo: "to@example.com", sentCount: 1, deliveredDraftIds: ["d1"], message: "Test email sent to to@example.com." })),
     reconcile: vi.fn(async () => "unknown"),
   };
   setTestDeliverySendPort(fakePort as unknown as TestDeliverySendPort);
@@ -325,15 +351,36 @@ describe("email_test_delivery_run_send — send flow", () => {
 // authz / scope denials
 // ===========================================================================
 describe("email_test_delivery_run_send — authz & scope", () => {
-  it("denies a run whose declaring package is not the test-delivery agent", async () => {
+  it("denies a run whose declaring package does not declare the test-delivery renderer (registry-routed), F3-recorded", async () => {
     const handlers = await getHandlers();
+    // A run whose package is NOT in the registry's declaredBy set for the
+    // test-delivery renderer kind — no hardcoded package name in core.
     storeMock.readAgentTemplateById.mockResolvedValueOnce({ id: "tpl-1", packageName: "@evil/other-agent" });
     const result = (await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_A }, () =>
       callSend(handlers, VALID_SEND_INPUT),
-    )) as { error?: string };
-    expect(result.error).toMatch(/only callable by the @cinatra-ai\/email-test-delivery-agent/i);
+    )) as Record<string, unknown>;
+    // Fail-as-data + recorded (advances seq) so the gate never strands; NO send.
+    expect(result).toMatchObject({ ok: false, reason: "not_authorized", seq: 7 });
+    expect(ledgerMock.recordPreClaimFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: RUN_ID, submissionId: SUBMISSION_A }),
+    );
     expect(fakePort.prepareSend).not.toHaveBeenCalled();
     expect(ledgerMock.claimTestSend).not.toHaveBeenCalled();
+  });
+
+  it("ADMITS a run whose package declares the test-delivery renderer via the runtime registry (no hardcoded name)", async () => {
+    const handlers = await getHandlers();
+    // Registry declares the kind for a DIFFERENT (runtime-installed) package; the
+    // run's own package matches it — resolution is purely registry-driven.
+    bindingsMock.getMergedFieldRendererBindings.mockReturnValueOnce([
+      { id: "@acme/td:input", kind: "test-delivery-input", priority: 80, declaredBy: "@acme/td-agent" },
+    ]);
+    storeMock.readAgentTemplateById.mockResolvedValueOnce({ id: "tpl-1", packageName: "@acme/td-agent", approvalPolicy: { steps: [] } });
+    const result = (await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_A }, () =>
+      callSend(handlers, VALID_SEND_INPUT),
+    )) as Record<string, unknown>;
+    expect(result).toMatchObject({ ok: true, seq: 1 });
+    expect(fakePort.performSend).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces an execute-tier denial (safe error + denial audit), no claim/send", async () => {
@@ -369,13 +416,17 @@ describe("email_test_delivery_run_send — authz & scope", () => {
     expect(fakePort.performSend).not.toHaveBeenCalled();
   });
 
-  it("fails closed on an unwired send port (never a phantom success)", async () => {
+  it("fails closed on an unwired send port (never a phantom success), F3-recorded", async () => {
     const handlers = await getHandlers();
     setTestDeliverySendPort(null);
     const result = (await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_A }, () =>
       callSend(handlers, VALID_SEND_INPUT),
-    )) as { error?: string };
-    expect(result.error).toMatch(/send port is not wired/i);
+    )) as Record<string, unknown>;
+    // Fail-as-data (advances seq so the gate never strands) but the wiring gap is
+    // still surfaced as the failure message; NEVER a phantom success + NO claim.
+    expect(result).toMatchObject({ ok: false, reason: "connector_unavailable", seq: 7 });
+    expect(String(result.message)).toMatch(/send port is not wired/i);
+    expect(ledgerMock.recordPreClaimFailure).toHaveBeenCalled();
     expect(ledgerMock.claimTestSend).not.toHaveBeenCalled();
   });
 
@@ -430,12 +481,37 @@ describe("email_test_delivery_run_send — authz & scope", () => {
     expect(storeMock.readAgentRunById).not.toHaveBeenCalled();
   });
 
-  it("rejects an invalid selectionMode without any send", async () => {
+  it("rejects an invalid selectionMode without any send, F3-recorded (advances seq)", async () => {
     const handlers = await getHandlers();
     const result = (await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_A }, () =>
       callSend(handlers, { recipientEmail: "to@example.com", selectionMode: "bogus" }),
-    )) as { error?: string };
-    expect(result.error).toMatch(/selectionMode/i);
+    )) as Record<string, unknown>;
+    // Malformed input is now fail-as-data (recorded) so the gate never strands.
+    expect(result).toMatchObject({ ok: false, seq: 7 });
+    expect(ledgerMock.recordPreClaimFailure).toHaveBeenCalled();
+    expect(fakePort.prepareSend).not.toHaveBeenCalled();
+  });
+
+  it("empty recipient is fail-as-data (recorded, advances seq) — never a bare error that strands (F3)", async () => {
+    const handlers = await getHandlers();
+    const result = (await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_A }, () =>
+      callSend(handlers, { recipientEmail: "   ", selectionMode: "random_initial" }),
+    )) as Record<string, unknown>;
+    expect(result).toMatchObject({ ok: false, reason: "invalid_recipient", seq: 7 });
+    expect(ledgerMock.recordPreClaimFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: RUN_ID, submissionId: SUBMISSION_A }),
+    );
+    expect(fakePort.prepareSend).not.toHaveBeenCalled();
+  });
+
+  it("a missing pinned campaign is fail-as-data (recorded, advances seq) — never strands (F3)", async () => {
+    const handlers = await getHandlers();
+    storeMock.readAgentRunById.mockResolvedValueOnce({ ...RUN, inputParams: {} });
+    const result = (await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_A }, () =>
+      callSend(handlers, VALID_SEND_INPUT),
+    )) as Record<string, unknown>;
+    expect(result).toMatchObject({ ok: false, reason: "connector_unavailable", seq: 7 });
+    expect(ledgerMock.recordPreClaimFailure).toHaveBeenCalled();
     expect(fakePort.prepareSend).not.toHaveBeenCalled();
   });
 });
@@ -528,6 +604,85 @@ describe("email_test_delivery_run_send — idempotency matrix", () => {
     expect(result).toMatchObject({ ok: false, reason: "previous_send_unknown", seq: 5 });
     expect(fakePort.performSend).not.toHaveBeenCalled();
     expect(ledgerMock.settleTestSend).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// Partial-batch-retry regression (eng#548 #1625) — a partial delivery must not
+// re-send its already-delivered prefix on a fresh-submission retry.
+// ===========================================================================
+describe("email_test_delivery_run_send — partial-batch retry", () => {
+  it("persists deliveredDraftIds on a partial (mid-batch) failure so a later retry can exclude them", async () => {
+    const handlers = await getHandlers();
+    fakePort.prepareSend.mockResolvedValueOnce({
+      ok: true,
+      recipientEmail: "to@example.com",
+      selectedDraftIds: ["d1", "d2"],
+    });
+    // d1 went out, d2 threw → ok:false but deliveredDraftIds carries the prefix.
+    fakePort.performSend.mockResolvedValueOnce({
+      ok: false,
+      reason: "send_failed",
+      deliveredDraftIds: ["d1"],
+      message: "boom on d2",
+    });
+    const result = (await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_A }, () =>
+      callSend(handlers, { ...VALID_SEND_INPUT, selectionMode: "all_initial" }),
+    )) as Record<string, unknown>;
+    expect(result).toMatchObject({ ok: false, reason: "send_failed", seq: 1 });
+    // The failed settle records the delivered prefix (for later exclusion + cap).
+    expect(ledgerMock.settleTestSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        result: expect.objectContaining({ deliveredDraftIds: ["d1"] }),
+      }),
+    );
+  });
+
+  it("a fresh-submission retry NEVER re-sends a draft a prior partial failure already delivered", async () => {
+    const handlers = await getHandlers();
+    // The prior partial failure delivered d1.
+    ledgerMock.readUnacknowledgedDeliveredDraftIds.mockResolvedValueOnce(["d1"]);
+    fakePort.prepareSend.mockResolvedValueOnce({
+      ok: true,
+      recipientEmail: "to@example.com",
+      selectedDraftIds: ["d1", "d2"],
+    });
+    fakePort.performSend.mockResolvedValueOnce({
+      ok: true, sentTo: "to@example.com", sentCount: 1, deliveredDraftIds: ["d2"], message: "sent d2",
+    });
+    await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_B }, () =>
+      callSend(handlers, { ...VALID_SEND_INPUT, selectionMode: "all_initial" }),
+    );
+    // Suppression is scoped to THIS recipient (a partial to another address must
+    // not block it) — the store is queried with the resolved recipient.
+    expect(ledgerMock.readUnacknowledgedDeliveredDraftIds).toHaveBeenCalledWith(
+      RUN_ID,
+      "to@example.com",
+    );
+    // Only the not-yet-delivered d2 is claimed + sent — d1 is excluded.
+    expect(ledgerMock.claimTestSend).toHaveBeenCalledWith(
+      expect.objectContaining({ selectedDraftIds: ["d2"] }),
+    );
+    expect(fakePort.performSend).toHaveBeenCalledWith(
+      expect.objectContaining({ selectedDraftIds: ["d2"] }),
+    );
+  });
+
+  it("records no_drafts_selected (no send) when EVERY planned draft was already delivered by a prior partial", async () => {
+    const handlers = await getHandlers();
+    ledgerMock.readUnacknowledgedDeliveredDraftIds.mockResolvedValueOnce(["d1"]);
+    fakePort.prepareSend.mockResolvedValueOnce({
+      ok: true,
+      recipientEmail: "to@example.com",
+      selectedDraftIds: ["d1"],
+    });
+    const result = (await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_B }, () =>
+      callSend(handlers, VALID_SEND_INPUT),
+    )) as Record<string, unknown>;
+    expect(result).toMatchObject({ ok: false, reason: "no_drafts_selected", seq: 7 });
+    expect(ledgerMock.claimTestSend).not.toHaveBeenCalled();
+    expect(fakePort.performSend).not.toHaveBeenCalled();
   });
 });
 

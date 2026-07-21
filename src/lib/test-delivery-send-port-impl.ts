@@ -110,11 +110,21 @@ export const testDeliverySendPortImpl: TestDeliverySendPort = {
       },
       actor,
     );
+    // The delivered-id set the use-case reports (all pinned ids on full success,
+    // the partial prefix on a mid-batch failure). Fall back defensively: a full
+    // success without an explicit list delivered every pinned id; a failure without
+    // one delivered nothing observable.
+    const deliveredDraftIds = Array.isArray(result.deliveredDraftIds)
+      ? (result.deliveredDraftIds as unknown[]).filter((id): id is string => typeof id === "string")
+      : result.ok === true
+        ? selectedDraftIds
+        : [];
     if (result.ok === true) {
       return {
         ok: true,
         sentTo: typeof result.sentTo === "string" ? result.sentTo : recipientEmail,
         sentCount: typeof result.sentCount === "number" ? result.sentCount : selectedDraftIds.length,
+        deliveredDraftIds,
         message: typeof result.message === "string" ? result.message : `Test email sent to ${recipientEmail}.`,
       };
     }
@@ -124,6 +134,7 @@ export const testDeliverySendPortImpl: TestDeliverySendPort = {
     return {
       ok: false,
       reason,
+      deliveredDraftIds,
       message: typeof result.message === "string" ? result.message : "The test send failed.",
     };
   },
