@@ -69,6 +69,28 @@ export function applyHostRuntimeMentionToMessages(
   );
 }
 
+/**
+ * Attach a routing result's mention chips to the user message: the pending
+ * external (webhook/mcp-poll) mentions the connector polls, then the in-band
+ * host-runtime assistant's mention. These are mutually exclusive in practice (the
+ * routing decision returns at most one), so order is immaterial. Pure transform —
+ * shared by the send and edit paths.
+ */
+export function attachRoutingMentionsToMessage(
+  prev: UiMessage[],
+  userMessageId: string,
+  routing: MessageRoutingResult,
+): UiMessage[] {
+  let next = prev;
+  if (routing.externalMentions && routing.externalMentions.length > 0) {
+    next = applyExternalMentionsToMessages(next, userMessageId, routing.externalMentions);
+  }
+  if (routing.hostRuntimeMention) {
+    next = applyHostRuntimeMentionToMessages(next, userMessageId, routing.hostRuntimeMention);
+  }
+  return next;
+}
+
 /** Newly-tagged external assistant ids from a routing result's mentions. */
 export function collectNewlyTaggedIds(externalMentions: Mention[] | undefined): string[] {
   return (externalMentions ?? [])

@@ -816,10 +816,9 @@ async function _updateAgentTemplateImpl(
   // A2A-publication invariant (cinatra#1875 W2, AC#7). An assistant template is a
   // conversational principal, never an A2A-addressable agent — refuse to move one
   // to status='published'. `serializeTemplate` never writes agent_kind (create is
-  // always executor; assistant kind is set by the install seam), so the ONLY way
-  // an assistant reaches 'published' is a status patch here — guard exactly that,
-  // reading the persisted agent_kind (never a caller-supplied value) so a forged
-  // patch cannot bypass it. Only the publish transition pays the extra read.
+  // always executor; assistant kind is set by the install seam), so the ONLY way an
+  // assistant reaches 'published' is a status patch here — guard exactly that, reading
+  // the PERSISTED agent_kind (never a caller value) so a forged patch cannot bypass it.
   if (patch.status === "published") {
     const [existing] = await db
       .select({ agentKind: agentTemplates.agentKind })
