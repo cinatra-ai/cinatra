@@ -309,6 +309,39 @@ describe("buildBreadcrumbTrail — crumb contributions (#1737)", () => {
     );
   });
 
+  it("a nested canonical dashboard URL (#1738) yields real ancestry with NO special case", () => {
+    // With contributions (the team page + dashboard screen publish post-gate):
+    const resolved = buildBreadcrumbTrail(
+      `/teams/${TEAM_ID}/dashboards/${DASH_ID}`,
+      {
+        contributions: [
+          { prefix: `/teams/${TEAM_ID}`, label: "Best Team Ever" },
+          {
+            prefix: `/teams/${TEAM_ID}/dashboards/${DASH_ID}`,
+            label: "Team Agent Operations",
+          },
+        ],
+      },
+    );
+    expect(resolved.map((c) => c.label)).toEqual([
+      "Teams",
+      "Best Team Ever",
+      "Dashboards",
+      "Team Agent Operations",
+    ]);
+    // The Dashboards segment is a real, navigable address (its page redirects
+    // to the team detail — never a 404 crumb).
+    expect(resolved[2].href).toBe(`/teams/${TEAM_ID}/dashboards`);
+    expect(resolved[2].nonNavigable).toBeFalsy();
+
+    // Without contributions the id floor still holds at both id positions.
+    const unresolved = buildBreadcrumbTrail(
+      `/teams/${TEAM_ID}/dashboards/${DASH_ID}`,
+    );
+    expect(unresolved[1].label).toBe("9c0dfce6…");
+    expect(unresolved[3].label).toBe("c9b24648…");
+  });
+
   it("a leaf CONTRIBUTION beats the broadcast page title; the page title still wins when no contribution matches", () => {
     const withBoth = buildBreadcrumbTrail(`/teams/${TEAM_ID}/settings`, {
       pageTitle: {
