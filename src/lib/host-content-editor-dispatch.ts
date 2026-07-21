@@ -443,7 +443,10 @@ export async function dispatchContentEditorViaA2A(
   // are non-fatal — the run row is auxiliary to the actual dispatch.
   if (runId) {
     try {
-      await transitionRunStatus(runId, "queued", "running", { startedAt: new Date() });
+      await transitionRunStatus(runId, "queued", "running", {
+        startedAt: new Date(),
+        dispatch: { attemptId: randomUUID() },
+      });
     } catch (err) {
       console.warn(`[content-editor-dispatch] run ${runId} queued→running failed:`, err);
     }

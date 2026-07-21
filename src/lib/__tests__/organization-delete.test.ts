@@ -55,20 +55,41 @@ function fakeExecute(query: unknown): Promise<{ rows: FakeRow[]; rowCount: numbe
 const isSingleOrgMode = vi.fn();
 vi.mock("@/lib/authz/instance-mode", () => ({
   isSingleOrgMode: (...a: unknown[]) => isSingleOrgMode(...a),
+  // cinatra#1937: the pre-tx fence now uses the lifecycle primitive's STRICT
+  // read; the same fn drives it so existing single-org scenarios keep working.
+  readSingleOrgModeStrict: (...a: unknown[]) => isSingleOrgMode(...a),
 }));
 
-vi.mock("@/lib/better-auth-db", () => ({
-  betterAuthDb: {
-    execute: (q: unknown) => fakeExecute(q),
-    transaction: async (
-      cb: (tx: { execute: typeof fakeExecute }) => Promise<void>,
-      config?: { isolationLevel?: string },
-    ) => {
-      capturedIsolation = config?.isolationLevel;
-      return cb({ execute: fakeExecute });
+vi.mock("@/lib/better-auth-db", async () => {
+  const { pgTable, text } = await import("drizzle-orm/pg-core");
+  return {
+    // cinatra#1937: the pre-tx lifecycle fence reads the org row via a select
+    // chain (not execute); a REAL minimal pgTable keeps eq() building genuine
+    // drizzle expressions. Backed by the SAME `orgRow` state as the tx path so
+    // scenarios (missing row, default slug) apply to both fences at once.
+    betterAuthOrganizations: pgTable("organization", {
+      id: text("id").primaryKey(),
+      slug: text("slug"),
+    }),
+    betterAuthDb: {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => (orgRow ? [{ slug: orgRow.slug }] : []),
+          }),
+        }),
+      }),
+      execute: (q: unknown) => fakeExecute(q),
+      transaction: async (
+        cb: (tx: { execute: typeof fakeExecute }) => Promise<void>,
+        config?: { isolationLevel?: string },
+      ) => {
+        capturedIsolation = config?.isolationLevel;
+        return cb({ execute: fakeExecute });
+      },
     },
-  },
-}));
+  };
+});
 
 import {
   countOrganizationDeleteBlockers,
@@ -196,7 +217,10 @@ describe("deleteOrganizationReferenceGuarded — the transactional statement set
     orgRow = null;
     const result = await deleteOrganizationReferenceGuarded(ORG, ACTOR);
     expect(result).toEqual({ ok: false, reason: "not-found" });
-    expect(issued).toHaveLength(1);
+    // cinatra#1937: the pre-tx lifecycle fence catches the missing row before
+    // any transaction opens — ZERO statements (was 1: the in-tx lock probe).
+    // The in-tx not-found branch remains as the race backstop.
+    expect(issued).toHaveLength(0);
   });
 
   it("default org (in-tx re-check, hazard 1): refused even if the caller's gate raced", async () => {

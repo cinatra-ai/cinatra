@@ -38,12 +38,24 @@ async function updateInstanceIdentityConfig(patch: Record<string, unknown>): Pro
 /** Read the single-org toggle. Defaults to false (multi-org). */
 export async function isSingleOrgMode(): Promise<boolean> {
   try {
-    const { readConnectorConfigFromDatabase } = await import("@/lib/database");
-    const cfg = readConnectorConfigFromDatabase<{ singleOrg?: boolean } | null>("instance_identity", null);
-    return cfg?.singleOrg === true;
+    return await readSingleOrgModeStrict();
   } catch {
     return false;
   }
+}
+
+/**
+ * STRICT single-org read: a failing config read THROWS instead of defaulting
+ * to multi-org. Consumers are org LIFECYCLE guards (delete, archive —
+ * cinatra#1937), where "can't read the mode" must mean "refuse the operation"
+ * (fail closed), not "assume multi-org and proceed". The fail-open
+ * `isSingleOrgMode` above keeps its behavior for the CREATION gate and nav
+ * visibility (documented rationale at isRegistrationClosed).
+ */
+export async function readSingleOrgModeStrict(): Promise<boolean> {
+  const { readConnectorConfigFromDatabase } = await import("@/lib/database");
+  const cfg = readConnectorConfigFromDatabase<{ singleOrg?: boolean } | null>("instance_identity", null);
+  return cfg?.singleOrg === true;
 }
 
 /** Admin knob — set the single-org toggle. Preserves other instance_identity keys. */

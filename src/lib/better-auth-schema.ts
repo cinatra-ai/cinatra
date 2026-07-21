@@ -71,6 +71,22 @@ export const cinatraOrganizationOptions = {
     allowRemovingAllTeams: true,
   },
   schema: {
+    organization: {
+      additionalFields: {
+        // cinatra#1937 (archive program S1): lifecycle marker for archived
+        // organizations. `input: false` — never client-settable; only the
+        // (gate-off until S6) first-party archive transaction writes it.
+        // Column owned by `getMigrations()` since this object is shared by
+        // runtime and scripts/better-auth-migrate.mts. Dark: nothing reads it
+        // in product paths yet; the session guard trigger (provisioned by the
+        // auth-migrate post-step) refuses activating archived orgs.
+        archivedAt: {
+          type: "date",
+          required: false,
+          input: false,
+        },
+      },
+    },
     team: {
       additionalFields: {
         slug: {

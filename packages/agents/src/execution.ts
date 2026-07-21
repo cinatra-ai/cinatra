@@ -1543,7 +1543,9 @@ async function runAgentBuilderExecutionJobInner(
     }
 
     try {
-      await transitionRunStatus(runId, "queued", "running");
+      await transitionRunStatus(runId, "queued", "running", {
+        dispatch: { attemptId: randomUUID() },
+      });
     } catch (err) {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
         console.log(`[external-a2a] run ${runId} status no longer "queued" — skipping stale transition`);
@@ -1680,7 +1682,9 @@ async function runAgentBuilderExecutionJobInner(
     }
 
     try {
-      await transitionRunStatus(runId, "queued", "running");
+      await transitionRunStatus(runId, "queued", "running", {
+        dispatch: { attemptId: randomUUID() },
+      });
     } catch (err) {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
         console.log(`[wayflow] run ${runId} no longer queued — skipping stale transition`);

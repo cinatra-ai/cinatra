@@ -257,6 +257,16 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // this value. NULL = no timeout (default behavior preserved).
   // Migration: ALTER TABLE cinatra.agent_runs ADD COLUMN IF NOT EXISTS timeout_seconds integer;
   timeoutSeconds: integer("timeout_seconds"),
+  // cinatra#1937 (archive S1): per-dispatch execution bookkeeping, written
+  // ATOMICALLY with every queued→running status CAS (store.ts). The deadline
+  // is DB-clock (`now() + COALESCE(timeout_seconds, 24h-max)`); the attempt id
+  // is minted fresh per dispatch — re-dispatches of the same run get a new
+  // one. The archive program's lease math (S4) binds to these; until then
+  // they are persisted bookkeeping (the 24h A2A transport abort structurally
+  // bounds every dispatch at the default horizon).
+  // Migration: see src/lib/drizzle-store.ts (ADD COLUMN IF NOT EXISTS pair).
+  executionDeadlineAt: timestamp("execution_deadline_at", { withTimezone: true }),
+  executionAttemptId:  text("execution_attempt_id"),
   // streamed_text: accumulated external A2A peer text output persisted
   // on clean RUN_FINISHED by startExternalSseProxyFromStream (see packages/a2a/src/
   // external-sse-proxy.ts). NULL for: (a) internal LangGraph runs (never emit
