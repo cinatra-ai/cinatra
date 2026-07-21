@@ -322,20 +322,44 @@ async function normalizeConfigForWrite(opts: {
 }
 
 /** Errors in `current` not covered by `prior`, respecting multiplicity: each
- *  prior occurrence of a string cancels at most one current occurrence. */
+ *  prior occurrence cancels at most one current occurrence. Occurrences are
+ *  matched under `deltaKey` (position-independent), but net-new errors are
+ *  reported VERBATIM so the message carries the real path. */
 function multisetDelta(
   current: readonly string[],
   prior: readonly string[],
 ): string[] {
   const budget = new Map<string, number>();
-  for (const e of prior) budget.set(e, (budget.get(e) ?? 0) + 1);
+  for (const e of prior) {
+    const k = deltaKey(e);
+    budget.set(k, (budget.get(k) ?? 0) + 1);
+  }
   const delta: string[] = [];
   for (const e of current) {
-    const remaining = budget.get(e) ?? 0;
-    if (remaining > 0) budget.set(e, remaining - 1);
+    const k = deltaKey(e);
+    const remaining = budget.get(k) ?? 0;
+    if (remaining > 0) budget.set(k, remaining - 1);
     else delta.push(e);
   }
   return delta;
+}
+
+/** Position-independent identity for a validator error. Zod schema-level
+ *  errors are formatted `path.to.field: message` with ARRAY INDICES in the
+ *  path (`portlets.3.version: Required`) — so an insert/reorder/delete AHEAD
+ *  of a schema-invalid legacy card would shift its index and re-freeze the
+ *  dashboard for an unrelated edit. Numeric path segments are wildcarded for
+ *  COMPARISON only (graph-level errors embed the stable instanceId and never
+ *  match the bare-path shape). Trade-off, accepted deliberately: fixing one
+ *  card's schema error while introducing the SAME-shaped error on another
+ *  card nets to zero — preferred over churning the shared extension validator
+ *  into per-portlet identity-keyed output. */
+function deltaKey(error: string): string {
+  const sep = error.indexOf(": ");
+  if (sep === -1) return error;
+  const path = error.slice(0, sep);
+  if (!/^[\w$]+(?:\.[\w$]+)*$/.test(path)) return error;
+  return path.replace(/(^|\.)\d+(?=\.|$)/g, "$1*") + error.slice(sep);
 }
 
 async function selectForUpdate(

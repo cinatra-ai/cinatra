@@ -161,6 +161,35 @@ describe("updateDashboard — legacy invalid card no longer freezes the dashboar
     expect(state.updates).toHaveLength(0);
   });
 
+  it("POSITION-INDEPENDENT grandfathering: reordering/removing cards AHEAD of a schema-broken card does not re-freeze", async () => {
+    // Zod schema errors embed the ARRAY INDEX (`portlets.1.version: …`), not
+    // the instanceId — a save that only MOVES the broken card must not turn
+    // the index-shifted strings into "net new" errors (#1931 review finding).
+    const broken = { instanceId: "old-broken", kind: "legacy-bad" }; // no version/slot
+    const mover = badPortlet("mover"); // structurally valid; unknown kind
+    state.row = rowWith(envelope([mover, broken]));
+
+    // Pure reorder: same cards, broken shifts index 1 → 0.
+    await updateDashboard("dash-1", { config: envelope([broken, mover]) }, ACTOR);
+    expect(state.updates).toHaveLength(1);
+
+    // Removing the card ahead of it (index shift by deletion) also passes.
+    state.updates.length = 0;
+    await updateDashboard("dash-1", { config: envelope([broken]) }, ACTOR);
+    expect(state.updates).toHaveLength(1);
+  });
+
+  it("position-independence does NOT weaken growth detection: a shifted same-shape duplicate still throws", async () => {
+    const broken = { instanceId: "old-broken", kind: "legacy-bad" };
+    state.row = rowWith(envelope([broken]));
+    // Same missing fields, inserted AHEAD — normalized counts grow 1 → 2.
+    const broken2 = { instanceId: "new-broken", kind: "also-bad" };
+    await expect(
+      updateDashboard("dash-1", { config: envelope([broken2, broken]) }, ACTOR),
+    ).rejects.toBeInstanceOf(DashboardConfigInvalidError);
+    expect(state.updates).toHaveLength(0);
+  });
+
   it("a VALID save on a valid row stays strict end-to-end (no behavior change)", async () => {
     state.row = rowWith(envelope([]));
     await updateDashboard("dash-1", { config: envelope([]) }, ACTOR);
