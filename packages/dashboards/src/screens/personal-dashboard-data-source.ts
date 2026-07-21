@@ -34,6 +34,7 @@ import type {
   EntityDashboardsDataSource,
   EntityDashboardsList,
   MutatedEntityDashboard,
+  SavedEntityDashboard,
 } from "../entity-dashboards-contract";
 
 /**
@@ -82,7 +83,7 @@ export type PersonalDashboardsActions = {
     ref: DashboardEntityRef,
     id: string,
     config: unknown,
-  ) => Promise<void>;
+  ) => Promise<SavedEntityDashboard>;
 };
 
 /**

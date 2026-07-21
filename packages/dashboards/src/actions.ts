@@ -37,6 +37,7 @@ import {
   DashboardForbiddenError,
   DashboardNotFoundError,
   DashboardInvalidEntityError,
+  DashboardConfigInvalidError,
 } from "./mutation-service";
 import { DASHBOARD_CONFIG_V12_VERSION } from "./extension/dashboard-config-v12";
 import { buildAgentsDashboardId } from "./components/seed-configs/agents-default";
@@ -59,9 +60,12 @@ import type {
   EntityDashboardSummary,
   EntityDashboardsList,
   MutatedEntityDashboard,
+  SavedEntityDashboard,
 } from "./entity-dashboards-contract";
 
-export async function saveAgentsDashboardAction(config: unknown): Promise<void> {
+export async function saveAgentsDashboardAction(
+  config: unknown,
+): Promise<SavedEntityDashboard> {
   const session = await getAuthSession();
   const ctx = buildSecurityContextFromSession(session);
   if (!ctx) {
@@ -72,21 +76,31 @@ export async function saveAgentsDashboardAction(config: unknown): Promise<void> 
     organizationId: ctx.organizationId,
     teamIds: ctx.teamIds,
   };
-  await upsertDashboardConfig(
-    buildAgentsDashboardId(ctx.organizationId, ctx.userId),
-    {
-      // The grid hands back a bare drizzle-cube config; the mutation service
-      // wraps it into the apiVersion 1.2 analytics envelope (cinatra#326 §3b),
-      // re-enveloping against the existing row so a re-save preserves scope.
-      config,
-      configVersion: DASHBOARD_CONFIG_V12_VERSION,
-      name: "Agents",
-      ownerLevel: "user",
-      ownerId: ctx.userId,
-      visibility: "private",
-    },
-    actor,
-  );
+  try {
+    await upsertDashboardConfig(
+      buildAgentsDashboardId(ctx.organizationId, ctx.userId),
+      {
+        // The grid hands back a bare drizzle-cube config; the mutation service
+        // wraps it into the apiVersion 1.2 analytics envelope (cinatra#326 §3b),
+        // re-enveloping against the existing row so a re-save preserves scope.
+        config,
+        configVersion: DASHBOARD_CONFIG_V12_VERSION,
+        name: "Agents",
+        ownerLevel: "user",
+        ownerId: ctx.userId,
+        visibility: "private",
+      },
+      actor,
+    );
+    return { ok: true };
+  } catch (e) {
+    const reason = classifyMutationError(e);
+    if (!reason) throw e;
+    if (reason === "invalid-config" && e instanceof Error && e.message) {
+      return { ok: false, reason, message: e.message };
+    }
+    return { ok: false, reason };
+  }
 }
 
 /**
@@ -100,7 +114,7 @@ async function saveCinatraDashboardAction(
   buildDashboardId: (organizationId: string, userId: string) => string,
   name: string,
   config: unknown,
-): Promise<void> {
+): Promise<SavedEntityDashboard> {
   const session = await getAuthSession();
   const ctx = buildSecurityContextFromSession(session);
   if (!ctx) {
@@ -111,32 +125,48 @@ async function saveCinatraDashboardAction(
     organizationId: ctx.organizationId,
     teamIds: ctx.teamIds,
   };
-  await upsertDashboardConfig(
-    buildDashboardId(ctx.organizationId, ctx.userId),
-    {
-      // Bare drizzle-cube config in; the mutation service wraps it into the
-      // apiVersion 1.2 analytics envelope (cinatra#326 §3b).
-      config,
-      configVersion: DASHBOARD_CONFIG_V12_VERSION,
-      name,
-      ownerLevel: "user",
-      ownerId: ctx.userId,
-      visibility: "private",
-    },
-    actor,
-  );
+  try {
+    await upsertDashboardConfig(
+      buildDashboardId(ctx.organizationId, ctx.userId),
+      {
+        // Bare drizzle-cube config in; the mutation service wraps it into the
+        // apiVersion 1.2 analytics envelope (cinatra#326 §3b).
+        config,
+        configVersion: DASHBOARD_CONFIG_V12_VERSION,
+        name,
+        ownerLevel: "user",
+        ownerId: ctx.userId,
+        visibility: "private",
+      },
+      actor,
+    );
+    return { ok: true };
+  } catch (e) {
+    const reason = classifyMutationError(e);
+    if (!reason) throw e;
+    if (reason === "invalid-config" && e instanceof Error && e.message) {
+      return { ok: false, reason, message: e.message };
+    }
+    return { ok: false, reason };
+  }
 }
 
-export async function saveProjectsDashboardAction(config: unknown): Promise<void> {
-  await saveCinatraDashboardAction(buildProjectsDashboardId, "Projects", config);
+export async function saveProjectsDashboardAction(
+  config: unknown,
+): Promise<SavedEntityDashboard> {
+  return saveCinatraDashboardAction(buildProjectsDashboardId, "Projects", config);
 }
 
-export async function saveTeamsDashboardAction(config: unknown): Promise<void> {
-  await saveCinatraDashboardAction(buildTeamsDashboardId, "Teams", config);
+export async function saveTeamsDashboardAction(
+  config: unknown,
+): Promise<SavedEntityDashboard> {
+  return saveCinatraDashboardAction(buildTeamsDashboardId, "Teams", config);
 }
 
-export async function saveOrganizationsDashboardAction(config: unknown): Promise<void> {
-  await saveCinatraDashboardAction(
+export async function saveOrganizationsDashboardAction(
+  config: unknown,
+): Promise<SavedEntityDashboard> {
+  return saveCinatraDashboardAction(
     buildOrganizationsDashboardId,
     "Organizations",
     config,
@@ -250,6 +280,7 @@ function classifyMutationError(e: unknown): EntityDashboardMutationReason | null
   if (e instanceof DashboardOverviewProtectedError) return "protected";
   if (e instanceof DashboardForbiddenError) return "denied";
   if (e instanceof DashboardNotFoundError) return "not-found";
+  if (e instanceof DashboardConfigInvalidError) return "invalid-config";
   if (e instanceof DashboardInvalidEntityError) {
     return /reserved/i.test(String(e.message)) ? "name-reserved" : "name-required";
   }
@@ -357,15 +388,30 @@ export async function deleteEntityDashboardAction(
 }
 
 /** Persist the selected dashboard's edited config (config-only patch is
- *  Overview-safe; the service re-envelopes against the existing row). */
+ *  Overview-safe; the service re-envelopes against the existing row).
+ *  cinatra#1913: returns a typed result like every other mutation — a
+ *  validation failure carries the validator's card-naming copy in `message`
+ *  and never escapes as a raw server error. */
 export async function saveEntityDashboardConfigAction(
   ref: DashboardEntityRef,
   id: string,
   config: unknown,
-): Promise<void> {
+): Promise<SavedEntityDashboard> {
   assertValidRef(ref);
   const actor = await requireEntityDashboardActor();
   const existing = await getEntityDashboard(id, actor);
-  if (!existing || !rowMatchesRef(existing, ref)) throw new DashboardNotFoundError(id);
-  await updateDashboard(id, { config }, actor);
+  if (!existing || !rowMatchesRef(existing, ref)) {
+    return { ok: false, reason: "not-found" };
+  }
+  try {
+    await updateDashboard(id, { config }, actor);
+    return { ok: true };
+  } catch (e) {
+    const reason = classifyMutationError(e);
+    if (!reason) throw e;
+    if (reason === "invalid-config" && e instanceof Error && e.message) {
+      return { ok: false, reason, message: e.message };
+    }
+    return { ok: false, reason };
+  }
 }
