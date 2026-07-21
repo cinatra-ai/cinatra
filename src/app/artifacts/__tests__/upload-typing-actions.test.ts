@@ -13,6 +13,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { matcherManifestRegistry } from "@cinatra-ai/objects/registry";
+
 const getAuthSession = vi.fn();
 const getActorContext = vi.fn();
 const isPlatformAdmin = vi.fn();
@@ -60,10 +62,19 @@ vi.mock("@/lib/marketplace-browse", () => ({
   loadMarketplaceBrowse: (...a: unknown[]) => loadMarketplaceBrowse(...a),
 }));
 
-// The dynamic import inside filterCandidatesByActorAccess.
+// The dynamic imports inside filterCandidatesByActorAccess.
 const isSystemExtension = vi.fn();
 vi.mock("@cinatra-ai/extensions/system-extension-inventory", () => ({
   isSystemExtension: (...a: unknown[]) => isSystemExtension(...a),
+}));
+// The A4-seam org-scoped write gate for matcher-channel members. Dynamic-imported
+// (not top-level), so a mock here intercepts it without pulling the server-only
+// canonical-store module. `matcherManifestRegistry` uses the REAL singleton
+// (registered per-test + cleared) — the channel membership signal the gate reads.
+const isArtifactExtensionWriteAllowed = vi.fn();
+vi.mock("@/lib/artifacts/artifact-extension-access", () => ({
+  isArtifactExtensionWriteAllowed: (...a: unknown[]) =>
+    isArtifactExtensionWriteAllowed(...a),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -162,6 +173,84 @@ describe("assertUploadMeaning — B2 extension-access gate", () => {
     expect(res).toEqual({ ok: true });
     // A system extension never needs the install-store lookup.
     expect(resolveActiveInstallForActor).not.toHaveBeenCalled();
+  });
+});
+
+describe("assertUploadMeaning — A4-seam matcher-channel candidate (package target)", () => {
+  // A matcher-only pack: no object type, present ONLY in the matcher-manifest
+  // channel, keyed by package name — the exact brand-voice shape.
+  const MATCHER_PACK = "@cinatra-ai/brand-voice";
+  const MATCHER_CANDIDATE = {
+    objectTypeId: null,
+    extension: MATCHER_PACK,
+    displayName: "Brand Voice",
+    extensionLabel: "Brand Voice",
+  };
+
+  beforeEach(() => {
+    matcherManifestRegistry._clearForTests();
+    matcherManifestRegistry.register({
+      packageName: MATCHER_PACK,
+      matcherSkillIds: ["@cinatra-ai/brand-voice:match"],
+      matcherConfidenceThreshold: 0.7,
+      fileMimeTypes: ["text/markdown", "text/plain", "application/pdf"],
+    });
+    readArtifactForMeaningWrite.mockReturnValue({
+      kind: "ok",
+      artifact: { mime: "application/pdf", objectType: "@cinatra-ai/pdf:object" },
+    });
+    listInstalledMeaningTypesAcceptingMime.mockReturnValue([MATCHER_CANDIDATE]);
+    isSystemExtension.mockReturnValue(false);
+    resolveActiveInstallForActor.mockResolvedValue({
+      id: "inst-bv",
+      isDefault: true,
+      version: "0.1.0",
+    });
+  });
+  afterEach(() => matcherManifestRegistry._clearForTests());
+
+  it("REJECTS a matcher-channel pack NOT org-writable (== the A6 resolver's gate) — no dead pick", async () => {
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    isArtifactExtensionWriteAllowed.mockResolvedValue(false); // cross-org-only / archived for org
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: MATCHER_PACK });
+    expect(res).toMatchObject({ ok: false, reason: "invalid-type" });
+    expect(isArtifactExtensionWriteAllowed).toHaveBeenCalledWith(MATCHER_PACK, "org-1");
+    expect(assertSemanticType).not.toHaveBeenCalled();
+  });
+
+  it("ADMITS an org-writable matcher pack and writes the USER assertion against the PACKAGE target", async () => {
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    isArtifactExtensionWriteAllowed.mockResolvedValue(true);
+    assertSemanticType.mockReturnValue({ blockedByPrecedence: false });
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: MATCHER_PACK });
+    expect(res).toEqual({ ok: true });
+    expect(assertSemanticType).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orgId: "org-1",
+        artifactId: "a1",
+        extension: MATCHER_PACK, // the package name IS the assertion target
+        assertedBy: "user", // classic, rank-3 — the A6 resolver serves it at tier-1
+      }),
+    );
+  });
+
+  it("ADMITS an org-writable matcher pack the actor cannot separately ADDRESS — the org write gate is the SOLE authority (== A6), no phantom under-offer", async () => {
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    // A6-live (ungoverned / owner-scoped): org write gate says yes, but the
+    // actor-scoped install resolver returns null. The matcher pack must STILL be
+    // admitted — requiring addressability here would reject a pack the resolver
+    // presents (codex final finding 1). System-extension is also false.
+    isArtifactExtensionWriteAllowed.mockResolvedValue(true);
+    resolveActiveInstallForActor.mockResolvedValue(null);
+    isSystemExtension.mockReturnValue(false);
+    assertSemanticType.mockReturnValue({ blockedByPrecedence: false });
+    const res = await assertUploadMeaning({ artifactId: "a1", extension: MATCHER_PACK });
+    expect(res).toEqual({ ok: true });
+    // The matcher-channel gate never consulted the actor-scoped install resolver.
+    expect(resolveActiveInstallForActor).not.toHaveBeenCalledWith(MATCHER_PACK, ACTOR);
+    expect(assertSemanticType).toHaveBeenCalledWith(
+      expect.objectContaining({ extension: MATCHER_PACK, assertedBy: "user" }),
+    );
   });
 });
 

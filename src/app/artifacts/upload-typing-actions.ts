@@ -52,38 +52,70 @@ import { resolveRecipientToUserIds } from "@cinatra-ai/notifications/server";
 import { loadMarketplaceBrowse } from "@/lib/marketplace-browse";
 
 /**
- * Apply the per-actor extension-ACCESS gate to raw §VI.1 picker candidates.
+ * Apply the per-actor extension-ACCESS gate to raw §VI.1 picker candidates. The
+ * pure candidate list reads the PROCESS-GLOBAL registries (object-type +
+ * matcher-manifest channel), so an extension the acting user cannot address
+ * would otherwise pass validation. The gate is CHANNEL-SPLIT so the picker's
+ * "offered" set equals the surface that will actually PRESENT the meaning — no
+ * dead picks, no phantom under-offers:
  *
- * The pure candidate list (`listInstalledMeaningTypesAcceptingMime`) reads the
- * PROCESS-GLOBAL object-type registry, so a type registered by an extension the
- * acting user cannot address — another org's install, a team/project-scoped
- * install the actor is not a member of, a torn-down row still lingering in the
- * process — would otherwise pass validation. Mirror the canonical
- * addressable-by-actor resolver (`resolveActiveInstallForActor`, the same gate
- * the connector-UI / installed-extension read-model surfaces enforce): a
- * candidate survives ONLY if its DEFINING extension is a host-declared SYSTEM
- * extension (available to every org by construction) OR has an addressable
- * ACTIVE install for THIS actor's scope. Registry membership alone is not org
- * access.
+ *   MATCHER-MANIFEST channel members (incl. hybrids that also define an
+ *   own-namespace type) → gated SOLELY by `isArtifactExtensionWriteAllowed(pkg,
+ *   orgId)`, the EXACT org-scoped gate the A6 presentation host resolves
+ *   matcher-pack liveness through (`buildMatcherLiveExtensionSet`): org-owned or
+ *   ambient LIVE `kind:"artifact"` install, or NO install row (ungoverned
+ *   bundled/disk → live), cross-org-only → DENY. `resolveActiveInstallForActor`
+ *   is deliberately NOT applied here — it is actor-scoped and not
+ *   artifact-kind-filtered, so ANDing it in would REJECT A6-live packs the
+ *   resolver will present (an ungoverned non-system pack, an owner-scoped org
+ *   install), a phantom under-offer (codex seam-verdict finding 3). Matching the
+ *   resolver's org gate EXACTLY makes offered == will-present.
+ *
+ *   NON-channel OBJECT-TYPE candidates → the A4 addressability gate, UNCHANGED:
+ *   a host-declared SYSTEM extension OR an addressable ACTIVE install for this
+ *   actor's scope (`resolveActiveInstallForActor`).
  */
 async function filterCandidatesByActorAccess(
   candidates: InstalledMeaningType[],
   actor: ActorContext,
+  orgId: string,
 ): Promise<InstalledMeaningType[]> {
   if (candidates.length === 0) return [];
   const { isSystemExtension } = await import(
     "@cinatra-ai/extensions/system-extension-inventory"
   );
+  const { matcherManifestRegistry } = await import("@cinatra-ai/objects/registry");
+  const channelPackages = new Set(
+    matcherManifestRegistry.list().map((e) => e.packageName),
+  );
+  // The org-scoped write gate (== the A6 resolver) is loaded ONLY when a
+  // candidate is actually a matcher-channel member, so the common object-type
+  // path never pulls the server-only artifact-extension-access module.
+  const orgWriteAllowed = candidates.some((c) => channelPackages.has(c.extension))
+    ? (
+        await import("@/lib/artifacts/artifact-extension-access")
+      ).isArtifactExtensionWriteAllowed
+    : null;
   const uniqueExtensions = [...new Set(candidates.map((c) => c.extension))];
   const accessible = new Set<string>();
   await Promise.all(
     uniqueExtensions.map(async (extension) => {
-      if (isSystemExtension(extension)) {
-        accessible.add(extension);
+      if (channelPackages.has(extension)) {
+        // Matcher-channel member: the A6 org-scoped write gate ALONE (offered ==
+        // will-present). `orgWriteAllowed` is guaranteed non-null here (some
+        // candidate is a channel member ⇒ the module was loaded).
+        if (orgWriteAllowed && (await orgWriteAllowed(extension, orgId))) {
+          accessible.add(extension);
+        }
         return;
       }
-      const install = await resolveActiveInstallForActor(extension, actor);
-      if (install !== null) accessible.add(extension);
+      // Non-channel object-type candidate: the A4 addressability gate (unchanged).
+      if (
+        isSystemExtension(extension) ||
+        (await resolveActiveInstallForActor(extension, actor)) !== null
+      ) {
+        accessible.add(extension);
+      }
     }),
   );
   return candidates.filter((c) => accessible.has(c.extension));
@@ -125,8 +157,9 @@ export async function listInstalledTypesForArtifact(
     objectType ? { excludeTypeId: objectType } : undefined,
   );
   // Per-actor extension-access gate: drop candidates whose defining extension
-  // is not addressable by THIS actor (foreign-org / foreign-scope / torn-down).
-  const types = await filterCandidatesByActorAccess(raw, actor);
+  // is not addressable by THIS actor (foreign-org / foreign-scope / torn-down),
+  // and matcher-channel members not org-writable (== the A6 resolver's gate).
+  const types = await filterCandidatesByActorAccess(raw, actor, orgId);
   return { ok: true, types, mime };
 }
 
@@ -187,7 +220,7 @@ export async function assertUploadMeaning(input: {
     mime,
     objectType ? { excludeTypeId: objectType } : undefined,
   );
-  const candidates = await filterCandidatesByActorAccess(raw, actor);
+  const candidates = await filterCandidatesByActorAccess(raw, actor, orgId);
   if (!candidates.some((c) => c.extension === input.extension)) {
     return {
       ok: false,

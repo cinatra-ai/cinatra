@@ -595,7 +595,7 @@ function TypePickerPanel() {
           <ul className="overflow-hidden rounded-lg border border-line">
             {types.map((t, i) => (
               <li
-                key={t.objectTypeId}
+                key={t.objectTypeId ?? t.extension}
                 className={
                   "flex cursor-pointer items-center gap-2.5 px-3 py-2.5 " +
                   (i === types.length - 1 ? "" : "border-b border-line ") +
@@ -608,7 +608,7 @@ function TypePickerPanel() {
                 <span className="flex-1 font-sans text-xs text-foreground">
                   {t.displayName}{" "}
                   <span className="font-mono text-badge-2xs text-muted-foreground">
-                    {t.objectTypeId}
+                    {t.objectTypeId ?? t.extension}
                   </span>
                 </span>
                 <span className="rounded border border-line bg-surface-muted px-1.5 py-0.5 text-badge-2xs text-muted-foreground">
