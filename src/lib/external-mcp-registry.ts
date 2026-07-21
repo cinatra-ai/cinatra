@@ -1239,6 +1239,76 @@ export async function saveTwentyConnection(input: {
   }
 }
 
+// DEV-ONLY seeded-actor holder (cinatra#1238). The dev-boot shell
+// (`dev-auto-setup.ts`) resolves the deterministic dev user+org and PUSHES it
+// here via `setDevActorForExternalMcp` BEFORE invoking any connector devSetup
+// hook. `devAttachTwentyBearerFromMintedKey` reads it instead of importing the
+// wide dev-auto-setup module graph — that edge would grow the production
+// route-graph of every route reachable through this broadly-imported registry.
+// Null off dev boot; the writer fails closed when unset.
+let seededDevActorForExternalMcp: { userId: string; organizationId: string } | null = null;
+
+/** DEV-ONLY: the dev-boot shell pushes (or clears) the seeded dev-actor owner. */
+export function setDevActorForExternalMcp(
+  actor: { userId: string; organizationId: string } | null,
+): void {
+  seededDevActorForExternalMcp = actor;
+}
+
+/**
+ * DEV-ONLY (cinatra#1238): attach a freshly dev-minted Twenty workspace API key
+ * through the SAME sanctioned path the setup-page connect flow uses
+ * (`saveTwentyConnection`), then VERIFY the gated bearer resolver actually mints
+ * it. This closes the demo-boot credential gap: the twenty-connector's dev-mint
+ * used to import the raw Nango credential directly, which leaves
+ * `resolveExternalMcpServerBearer` failing CLOSED because
+ * `gateExternalMcpConnectionUse` requires an `externalMcp` connection-identity
+ * row + workspace grant that ONLY the sanctioned save seeds (a raw
+ * `getNangoCredentials` readback passes — a false positive — while the gated
+ * resolver returns null → the agent 401s). `saveTwentyConnection` runs the live
+ * key probe, the foreign-identity preflight, the Nango import + readback, the
+ * `twenty-workspace` row upsert, the identity + `seed:"workspace"` grant, and
+ * the prior-key cleanup — all bound to the seeded dev actor.
+ *
+ * The seeded dev actor's organization MUST be non-null: `seed:"workspace"`
+ * downgrades to owner-only under a null org (the InternalWorker mint would stay
+ * denied), so this fails CLOSED (`resolved:false`) when no dev actor / org
+ * resolves. Never throws. SECRET BOUNDARY: the key is never logged or returned;
+ * any thrown message (a generic `TwentyConnectionError`) is swallowed to a
+ * boolean result.
+ */
+export async function devAttachTwentyBearerFromMintedKey(input: {
+  instanceUrl: string;
+  apiKey: string;
+}): Promise<{ resolved: boolean; connectionId: string | null }> {
+  try {
+    // The seeded dev-actor owner is PUSHED here by the dev-boot shell
+    // (`dev-auto-setup.ts` -> `setDevActorForExternalMcp`, seeded BEFORE any
+    // connector devSetup hook runs). Reading it from a module-local holder —
+    // rather than importing the dev-auto-setup module — keeps that wide dev-boot
+    // graph OUT of the production route-graph pressure (this registry is broadly
+    // reachable from /api/mcp, /chat, etc.; the edge would grow every route).
+    const actor = seededDevActorForExternalMcp;
+    if (!actor?.userId || !actor?.organizationId) {
+      return { resolved: false, connectionId: null };
+    }
+    await saveTwentyConnection({
+      instanceUrl: input.instanceUrl,
+      apiKey: input.apiKey,
+      owner: { userId: actor.userId, organizationId: actor.organizationId },
+    });
+    // Verify the GATED resolver — not just the raw Nango readback — now mints a
+    // bearer, so the returned `resolved` is honest end-to-end (the row is upserted
+    // inside saveTwentyConnection, so it exists here on the first boot).
+    const row = getExternalMcpServerByIdFresh(TWENTY_WORKSPACE_ROW_ID);
+    if (!row) return { resolved: false, connectionId: null };
+    const bearer = await resolveExternalMcpServerBearer(row);
+    return { resolved: bearer != null, connectionId: row.nangoConnectionId };
+  } catch {
+    return { resolved: false, connectionId: null };
+  }
+}
+
 /**
  * Disconnect the Twenty workspace: remove the row, then best-effort delete the
  * Nango connection. The row is read FRESH (bypassing the TTL cache) so a stale

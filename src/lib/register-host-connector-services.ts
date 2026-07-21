@@ -41,6 +41,7 @@ import {
   getExternalMcpServerById,
   listExternalMcpServers,
   resolveExternalMcpServerBearer,
+  devAttachTwentyBearerFromMintedKey,
   EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
 } from "@/lib/external-mcp-registry";
 // Connector setup-page server actions for @cinatra-ai/mcp-server-connector
@@ -253,6 +254,19 @@ type HostExternalMcpRegistrySetupSurface = HostExternalMcpRegistryService & {
   isConnectionServiceReady(): boolean;
   /** Is the given server URL private/non-public (not LLM-reachable)? */
   isPrivateUrl(serverUrl: string): boolean;
+  /** DEV-ONLY (cinatra#1238): attach a freshly dev-minted Twenty workspace API
+   * key through the SANCTIONED save so the bearer RESOLVER can mint it. The
+   * twenty-connector's raw Nango import alone leaves `resolveBearer` failing
+   * closed (`gateExternalMcpConnectionUse` needs an `externalMcp` connection
+   * identity + grant that only the sanctioned path seeds). Runs
+   * `saveTwentyConnection` bound to the seeded dev actor, then verifies the gated
+   * resolver returns a bearer. Never throws; `resolved:false` on any failure.
+   * Dev-gated host-side (`assertDevSetupHostOnly`). SECRET BOUNDARY: the key is
+   * never logged/returned. */
+  devAttachTwentyBearer(input: {
+    instanceUrl: string;
+    apiKey: string;
+  }): Promise<{ resolved: boolean; connectionId: string | null }>;
 };
 
 // ---------------------------------------------------------------------------
@@ -474,6 +488,14 @@ export function registerHostConnectorServices(): void {
     // the SAME key the row's `resolveBearer` reads — never hardcoded
     // connector-side (cinatra#976, epic #978 W-D).
     nangoProviderConfigKey: EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
+    // DEV-ONLY sanctioned Twenty bearer attach (cinatra#1238). The dev-MODE
+    // guard is host-side defense-in-depth (the dev-gated `dev-auto-setup` shell
+    // is the only caller); the sanctioned save it delegates to seeds the
+    // `externalMcp` connection identity + grant the resolver's use-gate requires.
+    devAttachTwentyBearer: async (input: { instanceUrl: string; apiKey: string }) => {
+      assertDevSetupHostOnly("external-mcp-registry.devAttachTwentyBearer");
+      return devAttachTwentyBearerFromMintedKey(input);
+    },
   } satisfies HostExternalMcpRegistrySetupSurface);
 
   register(svc.mcpSelfClient, { buildHeaders: buildAppMcpSelfClientHeaders });
