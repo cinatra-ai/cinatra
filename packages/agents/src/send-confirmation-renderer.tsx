@@ -139,8 +139,8 @@ export function SendConfirmationRenderer({
     );
   }
 
-  // Sender picker — resolved through the field-renderer REGISTRY (cinatra#1625,
-  // eng#548): the gmail-sender COMPONENT migrated into @cinatra-ai/email-artifacts,
+  // Sender picker — resolved through the field-renderer REGISTRY
+  // (cinatra#1625): the gmail-sender COMPONENT migrated into @cinatra-ai/email-artifacts,
   // so it can no longer be imported directly here. resolve() returns the migrated
   // binding's ExtensionFieldRenderer wrapper when the host-owned gmail-sender
   // condition activates (gmail connected + aliases present) — the wrapper mounts

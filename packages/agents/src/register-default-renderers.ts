@@ -129,7 +129,7 @@ const RENDERER_KIND_TABLE: Record<
   // binding of this kind (runtime-installed absent from the map) degrades to the
   // SchemaFieldRenderer floor here (AC4 never-blank), which is exactly this entry.
   "final-list-review": { renderer: SchemaOnlyFloorRenderer },
-  // MIGRATED (cinatra#1625 eng#548): the follow-up-cadence component moved into
+  // MIGRATED (cinatra#1625): the follow-up-cadence component moved into
   // @cinatra-ai/email-artifacts (the pack now declares BOTH cadence bindings —
   // email-drafting-agent + email-follow-up-agent — with declaredBy=email-artifacts).
   // The KIND stays (the manifest still declares it — kind-vocabulary set-equality),
@@ -146,7 +146,7 @@ const RENDERER_KIND_TABLE: Record<
     renderer: SchemaOnlyFloorRenderer,
     bareAliases: ["follow-up-cadence"],
   },
-  // MIGRATED (cinatra#1625 eng#548): the gmail-sender COMPONENT moved into
+  // MIGRATED (cinatra#1625): the gmail-sender COMPONENT moved into
   // @cinatra-ai/email-artifacts (src/renderers/gmail-sender.tsx). The host still
   // OWNS the activation — the bareAlias + the makeGmailSenderCondition factory
   // (now in ./gmail-sender-condition) — so the migrated binding registers as the

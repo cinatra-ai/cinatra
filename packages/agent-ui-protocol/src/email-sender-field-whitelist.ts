@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // email-sender-field-whitelist — tier-neutral, provider-NEUTRAL export
-// (renamed from gmail-sender-field-whitelist, cinatra#1625: the mechanism is a
+// (cinatra#1625: the mechanism is a
 // generic email-sender field heuristic; the gmail-specific ACTIVATION lives in
 // the host condition module + the migrated pack renderer).
 //

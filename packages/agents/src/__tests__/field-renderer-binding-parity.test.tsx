@@ -67,7 +67,7 @@ const PARITY_TABLE: ReadonlyArray<
   [string, ComponentType<never>, number, Record<string, unknown>?]
 > = [
   // gmail-sender (scoped id + bare alias) MIGRATED into @cinatra-ai/email-artifacts
-  // (cinatra#1625, eng#548) — now the ExtensionFieldRenderer wrapper at priority 100,
+  // (cinatra#1625) — now the ExtensionFieldRenderer wrapper at priority 100,
   // still context-gated. Asserted in the gmail-sender migrated block below (it needs
   // GMAIL_CONTEXT, so it is not in this context-free frozen table).
   ["@cinatra-ai/email-outreach-agent:list-picker", ListPickerRenderer as never, 90],
@@ -82,7 +82,7 @@ const PARITY_TABLE: ReadonlyArray<
   // 90, same strict-id condition) — asserted in the dedicated migrated-binding
   // block below, not in this frozen host-component table.
   // follow-up-cadence (2 scoped ids + bare alias) MIGRATED into
-  // @cinatra-ai/email-artifacts (cinatra#1625, eng#548) — now the
+  // @cinatra-ai/email-artifacts (cinatra#1625) — now the
   // ExtensionFieldRenderer wrapper at priority 90 (both scoped ids load the SAME
   // pack component). Asserted in the migrated-binding it.each + the bare-alias
   // block below, not in this frozen host-component table.
@@ -177,8 +177,8 @@ describe("resolution parity with the retired hand map", () => {
     // The auditor-review component relocated into @cinatra-ai/auditor-agent
     // (cinatra#1625) at its pre-cutover priority 80.
     ["@cinatra-ai/auditor-agent:review", 80],
-    // follow-up-cadence relocated into @cinatra-ai/email-artifacts (cinatra#1625,
-    // eng#548): BOTH scoped ids load the same pack component, priority 90.
+    // follow-up-cadence relocated into @cinatra-ai/email-artifacts
+    // (cinatra#1625): BOTH scoped ids load the same pack component, priority 90.
     ["@cinatra-ai/email-follow-up-agent:follow-up-cadence", 90],
     ["@cinatra-ai/email-drafting-agent:follow-up-cadence", 90],
   ] as const)(

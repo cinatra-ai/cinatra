@@ -9,7 +9,7 @@
  * parent (HITL flow) can rewrite `value` mid-edit (AI suggestions, form.reset,
  * polling).
  *
- * MIGRATION NOTE (cinatra#1625, eng#548): the FollowUpCadence component moved
+ * MIGRATION NOTE (cinatra#1625): the FollowUpCadence component moved
  * into @cinatra-ai/email-artifacts; its value-sync + poll-guard coverage moved
  * with it (email-artifacts/src/__tests__/follow-up-cadence.test.tsx). This host
  * suite keeps the renderers that remain host-owned: SchemaFieldRenderer,

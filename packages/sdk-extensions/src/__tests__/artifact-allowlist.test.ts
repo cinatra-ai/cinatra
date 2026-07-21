@@ -17,7 +17,7 @@ describe("ARTIFACT_ALLOWED_CINATRA_KEYS", () => {
     expect(ARTIFACT_ALLOWED_CINATRA_KEYS.has("views")).toBe(true);
   });
 
-  it("admits the field-renderer binding carrier key (eng#548 ruling 133-1 / epic #1620 / #1625 — the artifact pack hosts the relocated email HITL field-renderer bindings)", () => {
+  it("admits the field-renderer binding carrier key (ruling 133-1 / epic #1620 / #1625 — the artifact pack hosts the relocated email HITL field-renderer bindings)", () => {
     expect(ARTIFACT_ALLOWED_CINATRA_KEYS.has("fieldRenderers")).toBe(true);
   });
 

@@ -177,7 +177,7 @@ export type SemanticArtifactRef = { extension: string; objectTypeId?: string };
  * rides the S9 host slice). Narrowly additive — unknown keys stay rejected.
  *
  * `fieldRenderers` (cinatra#151 Stage 5 binding shape; admitted for the artifact
- * kind under eng#548 ruling 133-1 + epic #1620 "artifact extensions own their
+ * kind under ruling 133-1 + epic #1620 "artifact extensions own their
  * UI" / #1625 field-renderer spine) is the TOP-LEVEL HITL field-renderer binding
  * array (`[{ id, kind, priority, midRunHitl?, params?, a2uiTranslator?,
  * component? }]`). It began as an AGENT-package key, but the 133-1 ruling
