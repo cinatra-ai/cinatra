@@ -43,6 +43,7 @@ function depsWithVisible(visibleIds: string[]): AudienceClosureDeps {
         origin: "extension" as const,
         aliases: [],
         isBuiltin: false,
+        delivery: "host-runtime" as const,
       })),
   };
 }
