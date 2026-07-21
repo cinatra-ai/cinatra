@@ -57,6 +57,14 @@ vi.mock("../wayflow-url", () => ({
   AGENT_RUN_TIMEOUT_MAX_SECONDS: 86_400,
 }));
 
+// Hermetic: the F1 latest-task write (execution.ts) is fail-closed real Redis
+// at every interrupt-emit — stub it so this unit test never opens a real
+// connection. All other a2a exports keep their real behavior.
+vi.mock("@cinatra-ai/a2a", async (orig) => {
+  const actual = (await orig()) as Record<string, unknown>;
+  return { ...actual, rememberLatestWayflowGateTask: vi.fn(async () => undefined) };
+});
+
 import { handleWayflowTaskState } from "../execution";
 import type { AgentRunRecord } from "../store";
 

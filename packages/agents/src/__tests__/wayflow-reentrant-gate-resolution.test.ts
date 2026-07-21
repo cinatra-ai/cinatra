@@ -87,6 +87,11 @@ vi.mock("@cinatra-ai/a2a", async (orig) => {
     ...actual,
     rememberWayflowGateTask: a2aMock.rememberWayflowGateTask,
     getOrAddWayflowRendererGateIndex: a2aMock.getOrAddWayflowRendererGateIndex,
+    // Hermetic: the F1 latest-task write is fail-closed real Redis at
+    // interrupt-emit (execution.ts) — stub it so the unit test never opens a
+    // real connection (it succeeds; the "Redis fault" cases fault only the
+    // best-effort reverse-map write above).
+    rememberLatestWayflowGateTask: vi.fn(async () => undefined),
   };
 });
 
