@@ -206,10 +206,17 @@ export async function deleteOrganizationAction(
   try {
     const organizationId = readRequiredString(formData, "organizationId");
     const session = await getAuthSession();
-    const capabilities = session
-      ? await resolveOrganizationManageCapabilities(session, organizationId)
-      : null;
-    if (!capabilities?.canDelete) {
+    if (!session) {
+      return {
+        ok: false,
+        error: "You do not have permission to delete this organization.",
+      };
+    }
+    const capabilities = await resolveOrganizationManageCapabilities(
+      session,
+      organizationId,
+    );
+    if (!capabilities.canDelete) {
       return {
         ok: false,
         error: "You do not have permission to delete this organization.",
@@ -233,7 +240,10 @@ export async function deleteOrganizationAction(
       };
     }
 
-    const result = await deleteOrganizationReferenceGuarded(organizationId);
+    const result = await deleteOrganizationReferenceGuarded(
+      organizationId,
+      session.user.id,
+    );
     if (!result.ok) {
       if (result.reason === "blocked") {
         return {
@@ -251,12 +261,26 @@ export async function deleteOrganizationAction(
           error: "The default organization cannot be deleted.",
         };
       }
+      if (result.reason === "single-org-mode") {
+        return {
+          ok: false,
+          error: "Organizations cannot be deleted in single-organization mode.",
+        };
+      }
+      if (result.reason === "denied") {
+        return {
+          ok: false,
+          error: "You do not have permission to delete this organization.",
+        };
+      }
       return { ok: false, error: "Could not delete the organization." };
     }
 
+    // logAuditEvent is fire-and-forget by contract (silent swallow on insert
+    // failure) — it can never turn the committed delete into a failure result.
     await logAuditEvent({
       organizationId,
-      actorPrincipalId: session?.user?.id,
+      actorPrincipalId: session.user.id,
       actorPrincipalType: "human",
       authSource: "ui",
       resourceType: "organization",

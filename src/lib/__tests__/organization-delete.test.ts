@@ -21,6 +21,7 @@ type FakeRow = Record<string, unknown>;
 
 const issued: Issued[] = [];
 let orgRow: { id: string; slug: string | null } | null;
+let actorIsOwner: boolean;
 let counts: FakeRow;
 let orgDeleteRowCount: number;
 let capturedIsolation: string | undefined;
@@ -36,6 +37,12 @@ function fakeExecute(query: unknown): Promise<{ rows: FakeRow[]; rowCount: numbe
   if (text.includes("FOR UPDATE")) {
     return Promise.resolve({ rows: orgRow ? [orgRow] : [], rowCount: orgRow ? 1 : 0 });
   }
+  if (text.includes("AS is_owner")) {
+    return Promise.resolve({
+      rows: actorIsOwner ? [{ is_owner: 1 }] : [],
+      rowCount: actorIsOwner ? 1 : 0,
+    });
+  }
   if (text.includes('AS "teams"') || text.includes("AS teams")) {
     return Promise.resolve({ rows: [counts], rowCount: 1 });
   }
@@ -44,6 +51,11 @@ function fakeExecute(query: unknown): Promise<{ rows: FakeRow[]; rowCount: numbe
   }
   return Promise.resolve({ rows: [], rowCount: 0 });
 }
+
+const isSingleOrgMode = vi.fn();
+vi.mock("@/lib/authz/instance-mode", () => ({
+  isSingleOrgMode: (...a: unknown[]) => isSingleOrgMode(...a),
+}));
 
 vi.mock("@/lib/better-auth-db", () => ({
   betterAuthDb: {
@@ -75,12 +87,17 @@ const ZERO_COUNTS: FakeRow = {
   agents: "0",
 };
 
+const ACTOR = "user_owner";
+
 beforeEach(() => {
   issued.length = 0;
   orgRow = { id: ORG, slug: "acme" };
+  actorIsOwner = true;
   counts = { ...ZERO_COUNTS };
   orgDeleteRowCount = 1;
   capturedIsolation = undefined;
+  isSingleOrgMode.mockReset();
+  isSingleOrgMode.mockResolvedValue(false);
 });
 
 describe("countOrganizationDeleteBlockers — the five own-lifecycle kinds", () => {
@@ -123,7 +140,7 @@ describe("countOrganizationDeleteBlockers — the five own-lifecycle kinds", () 
 
 describe("deleteOrganizationReferenceGuarded — the transactional statement set", () => {
   it("clean delete: lock → in-tx recount → furniture + session + org row, all in ONE serializable tx", async () => {
-    const result = await deleteOrganizationReferenceGuarded(ORG);
+    const result = await deleteOrganizationReferenceGuarded(ORG, ACTOR);
     expect(result).toEqual({ ok: true });
     expect(capturedIsolation).toBe("serializable");
 
@@ -131,20 +148,24 @@ describe("deleteOrganizationReferenceGuarded — the transactional statement set
     // 1. Org-row lock first (also the in-tx default-org re-check source).
     expect(texts[0]).toContain('FROM public."organization"');
     expect(texts[0]).toContain("FOR UPDATE");
-    // 2. Blockers re-counted UNDER the lock.
-    expect(texts[1]).toContain('FROM public."team"');
-    // 3. Furniture: ONLY the default (entity-anchored Overview) dashboard rows.
+    // 2. Actor's owner membership re-verified UNDER the lock.
+    expect(texts[1]).toContain("AS is_owner");
+    expect(texts[1]).toContain("role = 'owner'");
+    expect(issued[1].params).toContain(ACTOR);
+    // 3. Blockers re-counted UNDER the lock.
+    expect(texts[2]).toContain('FROM public."team"');
+    // 4. Furniture: ONLY the default (entity-anchored Overview) dashboard rows.
     const dashboardsDelete = texts.find((t) =>
       t.includes(`DELETE FROM "${SCHEMA}"."dashboards"`),
     );
     expect(dashboardsDelete).toContain("is_default = true");
-    // 4. Better-Auth furniture rows.
+    // 5. Better-Auth furniture rows.
     expect(texts.some((t) => t.includes('DELETE FROM public."invitation"'))).toBe(true);
     expect(texts.some((t) => t.includes('DELETE FROM public."member"'))).toBe(true);
-    // 5. Hazard 2: dangling active-org sessions cleared IN the same tx.
+    // 6. Hazard 2: dangling active-org sessions cleared IN the same tx.
     const sessionUpdate = texts.find((t) => t.includes('UPDATE public."session"'));
     expect(sessionUpdate).toContain('"activeOrganizationId" = NULL');
-    // 6. The org row goes LAST (its FK cascades clean role_grant /
+    // 7. The org row goes LAST (its FK cascades clean role_grant /
     //    connector_access_policy / project_access).
     expect(texts[texts.length - 1]).toContain('DELETE FROM public."organization"');
     // Every statement is bound to the target org.
@@ -161,7 +182,7 @@ describe("deleteOrganizationReferenceGuarded — the transactional statement set
 
   it("in-tx blocker hit: rolls back with per-kind counts — NO write statement issues", async () => {
     counts = { ...ZERO_COUNTS, teams: "1", dashboards: "2" };
-    const result = await deleteOrganizationReferenceGuarded(ORG);
+    const result = await deleteOrganizationReferenceGuarded(ORG, ACTOR);
     expect(result).toEqual({
       ok: false,
       reason: "blocked",
@@ -173,21 +194,36 @@ describe("deleteOrganizationReferenceGuarded — the transactional statement set
 
   it("org row missing: not-found, nothing written", async () => {
     orgRow = null;
-    const result = await deleteOrganizationReferenceGuarded(ORG);
+    const result = await deleteOrganizationReferenceGuarded(ORG, ACTOR);
     expect(result).toEqual({ ok: false, reason: "not-found" });
     expect(issued).toHaveLength(1);
   });
 
   it("default org (in-tx re-check, hazard 1): refused even if the caller's gate raced", async () => {
     orgRow = { id: ORG, slug: "default" };
-    const result = await deleteOrganizationReferenceGuarded(ORG);
+    const result = await deleteOrganizationReferenceGuarded(ORG, ACTOR);
     expect(result).toEqual({ ok: false, reason: "default-org" });
     expect(issued.some((s) => s.text.startsWith("DELETE"))).toBe(false);
   });
 
+  it("single-org mode re-checked at delete time (hazard 3): refused BEFORE any statement", async () => {
+    isSingleOrgMode.mockResolvedValue(true);
+    const result = await deleteOrganizationReferenceGuarded(ORG, ACTOR);
+    expect(result).toEqual({ ok: false, reason: "single-org-mode" });
+    expect(issued).toHaveLength(0);
+  });
+
+  it("actor no longer an owner (demoted/removed mid-flight): denied under the lock, nothing written", async () => {
+    actorIsOwner = false;
+    const result = await deleteOrganizationReferenceGuarded(ORG, ACTOR);
+    expect(result).toEqual({ ok: false, reason: "denied" });
+    expect(issued.some((s) => s.text.startsWith("DELETE"))).toBe(false);
+    expect(issued.some((s) => s.text.startsWith("UPDATE"))).toBe(false);
+  });
+
   it("org-row delete affecting != 1 rows: assertion failure → error result (tx rolled back)", async () => {
     orgDeleteRowCount = 0;
-    const result = await deleteOrganizationReferenceGuarded(ORG);
+    const result = await deleteOrganizationReferenceGuarded(ORG, ACTOR);
     expect(result).toEqual({
       ok: false,
       reason: "error",

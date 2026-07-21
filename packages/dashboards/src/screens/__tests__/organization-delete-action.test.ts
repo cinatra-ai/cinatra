@@ -139,7 +139,7 @@ describe("deleteOrganizationAction — fail-closed write gate", () => {
       form({ organizationId: ORG, confirmName: "Acme" }),
     );
     expect(result).toEqual({ ok: true, redirectTo: "/organizations" });
-    expect(deleteOrganizationReferenceGuarded).toHaveBeenCalledWith(ORG);
+    expect(deleteOrganizationReferenceGuarded).toHaveBeenCalledWith(ORG, "user_1");
     expect(logAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         organizationId: ORG,
@@ -163,5 +163,34 @@ describe("deleteOrganizationAction — fail-closed write gate", () => {
       ok: false,
       error: "The default organization cannot be deleted.",
     });
+  });
+
+  it("single-org-mode re-check refusal surfaces as a clear error", async () => {
+    deleteOrganizationReferenceGuarded.mockResolvedValue({
+      ok: false,
+      reason: "single-org-mode",
+    });
+    const result = await deleteOrganizationAction(
+      form({ organizationId: ORG, confirmName: "Acme" }),
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: "Organizations cannot be deleted in single-organization mode.",
+    });
+  });
+
+  it("in-tx ownership denial (actor demoted mid-flight) surfaces as permission error", async () => {
+    deleteOrganizationReferenceGuarded.mockResolvedValue({
+      ok: false,
+      reason: "denied",
+    });
+    const result = await deleteOrganizationAction(
+      form({ organizationId: ORG, confirmName: "Acme" }),
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: "You do not have permission to delete this organization.",
+    });
+    expect(logAuditEvent).not.toHaveBeenCalled();
   });
 });

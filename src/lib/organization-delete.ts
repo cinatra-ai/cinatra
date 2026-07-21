@@ -3,6 +3,7 @@ import "server-only";
 import { sql } from "drizzle-orm";
 
 import { betterAuthDb } from "@/lib/better-auth-db";
+import { isSingleOrgMode } from "@/lib/authz/instance-mode";
 
 /**
  * Organization DELETE — the reference-guarded transactional core (cinatra#1510).
@@ -71,6 +72,8 @@ export type OrganizationDeleteResult =
     }
   | { readonly ok: false; readonly reason: "not-found" }
   | { readonly ok: false; readonly reason: "default-org" }
+  | { readonly ok: false; readonly reason: "single-org-mode" }
+  | { readonly ok: false; readonly reason: "denied" }
   | { readonly ok: false; readonly reason: "error"; readonly error: string };
 
 type SqlExecutor = Pick<typeof betterAuthDb, "execute">;
@@ -139,6 +142,7 @@ class DeleteBlockedError extends Error {
 }
 class DeleteNotFoundError extends Error {}
 class DeleteDefaultOrgError extends Error {}
+class DeleteDeniedError extends Error {}
 
 /**
  * Delete the organization if — and only if — nothing blocks it, in one
@@ -148,15 +152,24 @@ class DeleteDefaultOrgError extends Error {}
  * assertion. Any blocker, missing row, or assertion failure rolls the whole
  * transaction back — partial state is structurally impossible.
  *
- * The caller (the server action) owns the AUTHORIZATION check (viewed-org
+ * The caller (the server action) owns the first AUTHORIZATION check (viewed-org
  * catalog gate) and the name-confirmation; this module owns the data-integrity
- * guards, including the in-tx default-org re-check.
+ * guards AND re-verifies both structural hazards and the actor's owner
+ * membership at delete time, so a gate result that went stale between the
+ * capability read and the commit (mode toggled, actor demoted/removed) still
+ * fails closed.
  */
 export async function deleteOrganizationReferenceGuarded(
   organizationId: string,
+  actorUserId: string,
 ): Promise<OrganizationDeleteResult> {
   const schema = appSchema();
   try {
+    // Structural re-check at delete time (hazard 3): the single-org toggle is a
+    // config row, not lockable state — read it fresh, fail closed.
+    if (await isSingleOrgMode()) {
+      return { ok: false, reason: "single-org-mode" };
+    }
     await betterAuthDb.transaction(
       async (tx) => {
         const locked = await tx.execute<{ id: string; slug: string | null }>(sql`
@@ -169,6 +182,19 @@ export async function deleteOrganizationReferenceGuarded(
         // In-tx structural re-check: the bootstrap recreates slug='default' on
         // boot, so deleting it is a no-op treadmill — refuse (hazard 1).
         if (org.slug === "default") throw new DeleteDefaultOrgError();
+
+        // In-tx authz re-verify: the actor must STILL be an owner of this org
+        // (member.role='owner' is exactly what the gate maps to org_owner, the
+        // only role holding organization.delete). A demotion/removal racing the
+        // capability read rolls the delete back.
+        const ownerRow = await tx.execute(sql`
+          SELECT 1 AS is_owner FROM public."member"
+          WHERE "organizationId" = ${organizationId}
+            AND "userId" = ${actorUserId}
+            AND role = 'owner'
+          LIMIT 1
+        `);
+        if (ownerRow.rows.length === 0) throw new DeleteDeniedError();
 
         const blockers = await countBlockers(tx, organizationId);
         if (hasOrganizationDeleteBlockers(blockers)) {
@@ -214,6 +240,9 @@ export async function deleteOrganizationReferenceGuarded(
     }
     if (err instanceof DeleteDefaultOrgError) {
       return { ok: false, reason: "default-org" };
+    }
+    if (err instanceof DeleteDeniedError) {
+      return { ok: false, reason: "denied" };
     }
     const message =
       err instanceof Error && err.message ? err.message : "delete failed";
