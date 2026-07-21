@@ -157,7 +157,3 @@ export function filterRenderableDashboards<
 >(rows: T[], isPackageLive: ExtensionLivenessOracle): T[] {
   return rows.filter((r) => isDashboardRowRenderable(r, isPackageLive));
 }
-
-// Canonical-URL derivation (cinatra#1738) — re-exported through this reads
-// subpath so route code needs no new package alias.
-export { canonicalDashboardPath } from "../canonical-path";

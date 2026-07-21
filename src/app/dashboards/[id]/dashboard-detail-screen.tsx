@@ -10,8 +10,12 @@ import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import { buildDashboardActorFromSession } from "@/lib/dashboards/dashboard-actor";
 import { requireDashboardAccess, DashboardAccessError } from "@/lib/dashboards/authz";
 import { resolveLiveExtensionPredicate } from "@/lib/dashboards/live-extension-oracle";
+// canonical-path has its OWN alias (not re-exported through the reads module):
+// the reads module rides the MCP handlers into the locked API-route graphs,
+// and the route-graph ratchet rightly rejects growing them with a module those
+// routes never use.
+import { canonicalDashboardPath } from "@cinatra-ai/dashboards/canonical-path";
 import {
-  canonicalDashboardPath,
   readDashboardRowById,
   isProjectTemplate,
   isDashboardRowRenderable,
