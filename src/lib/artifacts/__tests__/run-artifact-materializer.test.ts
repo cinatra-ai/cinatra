@@ -16,6 +16,7 @@ const {
   readFinalizedMaterializationMock,
   isWriteAllowedMock,
   resolveBoundArtifactTargetMock,
+  enqueueArtifactMatchRunMock,
 } = vi.hoisted(() => ({
   poolQueryMock: vi.fn(),
   getAgentPackageMock: vi.fn(),
@@ -30,6 +31,7 @@ const {
   })),
   readFinalizedMaterializationMock: vi.fn(async (): Promise<unknown> => null),
   isWriteAllowedMock: vi.fn(async () => true),
+  enqueueArtifactMatchRunMock: vi.fn(async (): Promise<void> => {}),
 }));
 
 vi.mock("@/lib/db/pooled", () => ({
@@ -82,6 +84,17 @@ vi.mock("../materialization-ledger", () => ({
 }));
 vi.mock("../artifact-extension-access", () => ({
   isArtifactExtensionWriteAllowed: isWriteAllowedMock,
+}));
+// cinatra#1891 A3: the write core POST-COMMIT enqueues the meaning-matcher via
+// `./matcher-enqueue` (a dynamic import). Stub it so these UNIT tests stay
+// hermetic — the real seam opens a live BullMQ/Redis connection (and hangs on an
+// unreachable broker), which is proven separately by the enqueue seam's own
+// suite and the live walk, not by the materializer unit tests.
+vi.mock("../matcher-enqueue", () => ({
+  enqueueArtifactMatchRun: enqueueArtifactMatchRunMock,
+  artifactMatchJobId: (p: { orgId: string; artifactId: string; representationRevisionId: string }) =>
+    `artifact-match__${p.orgId}__${p.artifactId}__${p.representationRevisionId}`,
+  ARTIFACT_MATCH_RETRY_POLICY: { attempts: 3, backoff: { type: "exponential", delay: 5_000 } },
 }));
 // artifact-authoring pulls the full authoring stack; the materializer needs
 // only its two exported constants. Values mirror the real module; the
@@ -284,6 +297,17 @@ describe("materializeRunArtifacts", () => {
         nodeId: "endNode",
         path: "end_node_binding",
         extension: EXT,
+      }),
+    );
+    // cinatra#1891 A3: the meaning-matcher is enqueued POST-COMMIT with the
+    // freshly-committed artifact/representation ids (best-effort, off the
+    // committed write). The seam is stubbed above so this stays hermetic.
+    expect(enqueueArtifactMatchRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orgId: "org-a",
+        artifactId: "art-1",
+        representationRevisionId: "rep-1",
+        createdByRunId: "run-1",
       }),
     );
     const createInput = createSemanticArtifactMock.mock.calls[0][0];

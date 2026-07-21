@@ -251,6 +251,111 @@ export const objectTypeRegistry: ObjectTypeRegistryImpl =
   (_objectTypeRegistryHolder[OBJECT_TYPE_REGISTRY_KEY] = new ObjectTypeRegistryImpl());
 
 // ---------------------------------------------------------------------------
+// Matcher-manifest registry (the MEANING-SURFACE channel, cinatra#1891 A3)
+//
+// A SECOND process-global registry, DISTINCT from the object-type registry,
+// that holds the pack-wide MEANING SURFACE — which packs classify uploaded
+// content, with what matcher skills, at what confidence threshold, over what
+// file MIME forms — keyed by the extension package name. It mints NO object
+// type and touches NO `objects.type`.
+//
+// WHY it exists: post-#1785 the umbrella (`${pkg}:artifact`) that once carried
+// `skills.matchers` + `matcherConfidenceThreshold` on a listable descriptor is
+// RETIRED, and `declaredTypeArtifactDescriptor` deliberately strips the matcher
+// surface off every per-type descriptor (entry 95). So the matcher runtime's
+// old candidate source (`objectTypeRegistry.listArtifacts()` filtered by
+// `isArtifact.skills.matchers`) is ALWAYS EMPTY for the 13 matcher-declaring
+// packs (12 declare no objectTypes; the one that does declares only
+// cross-namespace types). This channel restores the meaning surface the
+// umbrella retirement removed WITHOUT re-minting a type: the bridge populates
+// it on the SAME registration pass (orthogonal to object-type registration),
+// the matcher runtime discovers candidates from it, and the presentation host
+// resolves thresholds + matcher liveness from it — so the asserted `extension`
+// and the surfacing policy read the SAME record and can never disagree.
+//
+// The channel IS the provenance record: only a pack that DECLARED matchers is
+// in it, keyed by its own package name (the matcher assertion target string).
+// ---------------------------------------------------------------------------
+
+/** The confidence floor a matcher pack falls back to when its manifest declares
+ *  no `matcherConfidenceThreshold`. The bridge RESOLVES this default into every
+ *  channel entry, so consumers (matcher runtime, presentation host) read a
+ *  ready threshold and never re-apply the default. */
+export const DEFAULT_MATCHER_CONFIDENCE_THRESHOLD = 0.7;
+
+/** One pack's meaning surface, keyed by package name. All fields are resolved
+ *  at registration time: `matcherConfidenceThreshold` is never undefined (the
+ *  manifest value or {@link DEFAULT_MATCHER_CONFIDENCE_THRESHOLD}). */
+export interface MatcherManifestEntry {
+  /** The extension package name — the matcher assertion target string, and the
+   *  provenance key. */
+  packageName: string;
+  /** The pack's declared matcher skill catalog ids (`manifest.skills.matchers`),
+   *  guaranteed non-empty (the bridge only registers a pack that declares ≥1). */
+  matcherSkillIds: readonly string[];
+  /** The RESOLVED confidence floor in [0,1] (manifest value or the default). */
+  matcherConfidenceThreshold: number;
+  /** The file-form MIME types this pack classifies over
+   *  (`manifest.accepts.file.mimeTypes`), guaranteed non-empty. */
+  fileMimeTypes: readonly string[];
+}
+
+/**
+ * Process-global registry of pack-wide matcher manifests — the meaning-surface
+ * channel. Replace-by-packageName (a rescan re-emits the current surface), with
+ * a `removeByPackage` reconcile wired into every object-type teardown seam at
+ * parity (a leaked matcher entry would keep a draft auto-surfacing after
+ * uninstall). Zero React / DB / server-only imports (SSR-safe, same constraint
+ * as the object-type registry).
+ */
+class MatcherManifestRegistryImpl {
+  private entries: Map<string, MatcherManifestEntry> = new Map();
+
+  /** Register (or idempotently replace) a pack's meaning surface. Keyed by
+   *  `entry.packageName`. */
+  register(entry: MatcherManifestEntry): void {
+    this.entries.set(entry.packageName, entry);
+  }
+
+  /** Remove a pack's meaning surface (archive / uninstall / rescan reconcile).
+   *  Returns true iff an entry was removed. Safe no-op for an unregistered
+   *  package. */
+  removeByPackage(packageName: string): boolean {
+    return this.entries.delete(packageName);
+  }
+
+  /** The pack's meaning surface, or null when it declared none / was removed. */
+  get(packageName: string): MatcherManifestEntry | null {
+    return this.entries.get(packageName) ?? null;
+  }
+
+  /** Every registered meaning surface — the matcher runtime's candidate source. */
+  list(): readonly MatcherManifestEntry[] {
+    return Array.from(this.entries.values());
+  }
+
+  /** @internal Only call this from test `beforeEach` blocks — not in production code. */
+  _clearForTests(): void {
+    this.entries.clear();
+  }
+}
+
+// CROSS-COMPILATION SINGLETON — same per-process anchor pattern + rationale as
+// `objectTypeRegistry` above (instrumentation registers; route / RSC read).
+const MATCHER_MANIFEST_REGISTRY_KEY = Symbol.for(
+  "@cinatra-ai/objects:matcher-manifest-registry/v1",
+);
+type MatcherManifestRegistryHolder = {
+  [k: symbol]: MatcherManifestRegistryImpl | undefined;
+};
+const _matcherManifestRegistryHolder =
+  globalThis as unknown as MatcherManifestRegistryHolder;
+export const matcherManifestRegistry: MatcherManifestRegistryImpl =
+  _matcherManifestRegistryHolder[MATCHER_MANIFEST_REGISTRY_KEY] ??
+  (_matcherManifestRegistryHolder[MATCHER_MANIFEST_REGISTRY_KEY] =
+    new MatcherManifestRegistryImpl());
+
+// ---------------------------------------------------------------------------
 // Type-driven projection-disposition seam (epic #1785)
 //
 // THE single shared resolver for "how does a row of this type project", read

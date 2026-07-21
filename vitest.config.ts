@@ -130,6 +130,19 @@ export default defineConfig({
           "packages/llm/src/actor-context.ts",
         ),
       },
+      // Dependency-free attachment capability leaf (the ingestible-mime set +
+      // its canonical file extensions — no imports at all). Imported directly by
+      // the matcher runtime + the attachment resolver ports (and their tests)
+      // for the mime→extension helpers; like /actor-context it must be aliased
+      // BEFORE the bare entry so the prefix matcher does not rewrite it into the
+      // actor-context leaf.
+      {
+        find: "@cinatra-ai/llm/attachment-capability",
+        replacement: path.join(
+          __dirname,
+          "packages/llm/src/attachments/capability-registry.ts",
+        ),
+      },
       {
         find: "@cinatra-ai/llm/anthropic-log-directory",
         replacement: path.join(

@@ -1005,11 +1005,14 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
       })
       .passthrough(),
     async handle(job) {
-      // Async LLM artifact matcher.
-      // One-shot per artifact (NOT self-rescheduling). The worker is fully
-      // best-effort: every failure path inside `runArtifactMatch` leaves the
-      // artifact at its default-floor type (no throw past the boundary).
-      // attempts/backoff on the enqueue cover transient LLM failures.
+      // Async LLM MEANING-matcher (cinatra#1891, epic #1883 A3).
+      // One-shot per artifact (NOT self-rescheduling). Honest-retry semantics:
+      // a TRANSIENT failure inside `runArtifactMatch` (a DB read/write blip, an
+      // LLM provider hiccup) throws `MatcherRetryableError` PAST this boundary,
+      // so BullMQ retries the job per the enqueue's `ARTIFACT_MATCH_RETRY_POLICY`
+      // (attempts/backoff). TERMINAL conditions (no runtime configured, orphan
+      // row, a malformed LLM response for one candidate) resolve cleanly and are
+      // NOT retried; the row simply stays at its structural identity.
       const p = job.data as {
         orgId?: string;
         artifactId?: string;

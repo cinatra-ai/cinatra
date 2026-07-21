@@ -12,7 +12,7 @@ import { z } from "zod";
 import { ARTIFACT_UI_SDK_ABI_RANGE } from "@cinatra-ai/sdk-extensions/artifact-contract";
 import type { EffectiveIdentity } from "../effective-identity";
 import type { ObjectTypeDefinition, SemanticArtifactManifest } from "../types";
-import { objectTypeRegistry } from "../registry";
+import { objectTypeRegistry, matcherManifestRegistry } from "../registry";
 import { semanticRendererRegistry } from "../artifact-renderer-registry";
 import { claimedTypeRegisteringPackage } from "../claims";
 import {
@@ -46,10 +46,12 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
   beforeEach(() => {
     root = mkdtempSync(path.join(tmpdir(), "artifact-bridge-"));
     objectTypeRegistry._clearForTests();
+    matcherManifestRegistry._clearForTests();
   });
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
     objectTypeRegistry._clearForTests();
+    matcherManifestRegistry._clearForTests();
   });
 
   it("registers a NOVEL declared artifact type discovered purely from the extension dir", () => {
@@ -88,6 +90,14 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
     ]);
     // The package-wide matcher/authoring surface is NOT inherited onto the type.
     expect(entry?.isArtifact?.skills).toBeUndefined();
+    // …but it DOES land in the meaning-surface channel (cinatra#1891 A3), keyed
+    // by package — the matcher runtime's candidate source and the presentation
+    // host's threshold read exactly this record.
+    const meaning = matcherManifestRegistry.get("@cinatra-ai/fixture-thing-artifact");
+    expect(meaning).not.toBeNull();
+    expect(meaning!.matcherSkillIds).toEqual(["@cinatra-ai/fixture-matcher:skill"]);
+    expect(meaning!.fileMimeTypes).toEqual(["text/markdown"]);
+    expect(meaning!.matcherConfidenceThreshold).toBe(0.7); // resolved default
     // NO derived umbrella is ever minted.
     expect(
       objectTypeRegistry.resolve("@cinatra-ai/fixture-thing-artifact:artifact"),
@@ -361,6 +371,7 @@ describe("registerArtifactExtensions — live extensions tree", () => {
       }
     }
     objectTypeRegistry._clearForTests();
+    matcherManifestRegistry._clearForTests();
     let threw: unknown = null;
     try {
       registerArtifactExtensions(EXT_ROOT);
@@ -376,7 +387,13 @@ describe("registerArtifactExtensions — live extensions tree", () => {
     for (const t of registered) {
       expect(t.endsWith(":artifact"), `umbrella-shaped id leaked: ${t}`).toBe(false);
     }
+    // cinatra#1891 A3: the bundled matcher packs land REAL channel entries (the
+    // candidate source the matcher runtime reads) — the marketing-strategy pack
+    // that registers no object type is now discoverable.
+    const channelPkgs = new Set(matcherManifestRegistry.list().map((e) => e.packageName));
+    expect(channelPkgs.has("@cinatra-ai/marketing-strategy-artifact")).toBe(true);
     objectTypeRegistry._clearForTests();
+    matcherManifestRegistry._clearForTests();
   });
 });
 
@@ -594,9 +611,38 @@ describe("registerArtifactExtensions — semantic slot registration (S7 listRow)
 describe("registerParsedArtifactManifest — explicit declared types (entry 95, cinatra#1785)", () => {
   beforeEach(() => {
     objectTypeRegistry._clearForTests();
+    matcherManifestRegistry._clearForTests();
   });
   afterEach(() => {
     objectTypeRegistry._clearForTests();
+    matcherManifestRegistry._clearForTests();
+  });
+
+  // cinatra#1891 A3 — the CORE fix at the registration seam: a MATCHER-ONLY pack
+  // (declares matchers + accepts.file, NO objectTypes) mints no object type
+  // (returns false) yet lands its meaning surface in the channel. Pre-fix this
+  // pack was invisible to the matcher runtime — the silent-no-op root cause.
+  it("a matcher-only (no objectTypes) manifest registers a channel entry even though it mints no type", () => {
+    const registered = registerParsedArtifactManifest(
+      {
+        accepts: { file: { mimeTypes: ["text/markdown"] } },
+        skills: { matchers: ["@cinatra-ai/marketing-strategy-artifact:marketing-strategy-matcher"] },
+        matcherConfidenceThreshold: 0.7,
+      } as unknown as SemanticArtifactManifest,
+      "@cinatra-ai/marketing-strategy-artifact",
+    );
+    // No object type minted (the no-objectTypes deprecation path).
+    expect(registered).toBe(false);
+    expect(objectTypeRegistry.listArtifacts()).toHaveLength(0);
+    // …but the meaning surface IS in the channel — the matcher runtime can now
+    // discover it.
+    const meaning = matcherManifestRegistry.get("@cinatra-ai/marketing-strategy-artifact");
+    expect(meaning).not.toBeNull();
+    expect(meaning!.matcherSkillIds).toEqual([
+      "@cinatra-ai/marketing-strategy-artifact:marketing-strategy-matcher",
+    ]);
+    expect(meaning!.matcherConfidenceThreshold).toBe(0.7);
+    expect(meaning!.fileMimeTypes).toEqual(["text/markdown"]);
   });
 
   it("mints NO umbrella and registers each declared type as its own surfaced artifact type", () => {
@@ -660,6 +706,14 @@ describe("registerParsedArtifactManifest — explicit declared types (entry 95, 
     expect(postDraft!.isArtifact!.matcherConfidenceThreshold).toBeUndefined();
     expect(postDraft!.isArtifact!.templates).toBeUndefined();
     expect(postDraft!.isArtifact!.objectTypes).toBeUndefined();
+
+    // The package-wide matcher surface stripped off the TYPE lives in the
+    // channel instead (cinatra#1891 A3) — a declared-type pack is in BOTH the
+    // object-type registry AND the meaning-surface channel.
+    const meaning = matcherManifestRegistry.get("@cinatra-ai/linkedin-artifacts");
+    expect(meaning).not.toBeNull();
+    expect(meaning!.matcherSkillIds).toEqual(["@cinatra-ai/pkg-matcher:skill"]);
+    expect(meaning!.matcherConfidenceThreshold).toBe(0.9);
 
     // Provenance reaps every declared type on teardown.
     const removed = objectTypeRegistry.removeByPackage(

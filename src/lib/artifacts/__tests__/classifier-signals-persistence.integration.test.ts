@@ -156,5 +156,10 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1890 classifier-signals persistence (real
     expect(signals).not.toBeNull();
     expect(signals?.chatContext).toBeUndefined();
     expect((signals?.upload as { originKind?: string })?.originKind).toBe("upload");
+    // cinatra#1891 scope 3: a plain upload has NO producing run, so the composed
+    // signals carry no `produces` (the producer-plan reorder must not fabricate
+    // one). The positive produces path is exercised by the agent-emit
+    // materializer + the matcher prompt-render unit test.
+    expect(signals?.produces).toBeUndefined();
   });
 });
