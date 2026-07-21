@@ -38,7 +38,7 @@ import {
   resolveEffectiveIdentity,
   type EffectiveIdentity,
 } from "@cinatra-ai/objects/effective-identity";
-import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { objectTypeRegistry, matcherManifestRegistry } from "@cinatra-ai/objects/registry";
 import { claimedTypeRegisteringPackage } from "@cinatra-ai/objects/claims";
 
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
@@ -49,19 +49,15 @@ import { isArtifactAutoSurfaceDisabled } from "./artifact-autosurface-toggle";
 
 export type { PresentationIdentity } from "@cinatra-ai/objects/presentation-identity";
 
-// Mirror of the matcher runtime's `DEFAULT_MATCHER_CONFIDENCE_THRESHOLD`
-// (src/lib/artifacts/matcher-runtime.ts) — the value a pack falls back to when
-// its manifest declares no `matcherConfidenceThreshold`. Kept in lock-step: the
-// presentation surface must threshold a draft at exactly the value the matcher
-// runtime asserted it against.
-const DEFAULT_MATCHER_CONFIDENCE_THRESHOLD = 0.7;
-
 type Row = Record<string, unknown>;
 const q = (): string => postgresSchema.replaceAll('"', '""');
 
-/** The live-extension predicate source: every extension package that DEFINES a
- * currently-registered object type (its namespace). Built once per resolution
- * so the per-assertion check is a Set lookup. */
+/** The live-extension predicate source for TYPE-registering packs: every
+ * extension package that DEFINES a currently-registered object type (its
+ * namespace). Built once per resolution so the per-assertion check is a Set
+ * lookup. A matcher-ONLY pack (no own-namespace object type) is NOT here — its
+ * liveness is resolved separately through the org-scoped active-install gate
+ * (cinatra#1891 A3), unioned into the set by `buildPolicy`. */
 function buildLiveExtensionSet(): Set<string> {
   const set = new Set<string>();
   for (const def of objectTypeRegistry.list()) {
@@ -71,31 +67,111 @@ function buildLiveExtensionSet(): Set<string> {
   return set;
 }
 
-/** The pack's matcher confidence threshold from its artifact manifest, or the
- * default when the pack declares none; null when the extension ships no
- * registered artifact type (⇒ its drafts never auto-surface). Resolves via the
- * `<ext>:artifact` umbrella every artifact pack registers today (the same key
- * the matcher runtime keys drafts on), then falls back to ANY registered
- * artifact type in the extension's namespace so the lookup does not hard-depend
- * on the umbrella id. */
+/** The pack's matcher confidence threshold — CHANNEL-AUTHORITATIVE (cinatra#1891
+ * A3, codex R1 #4). Read from the SAME meaning-surface channel entry the matcher
+ * runtime built the candidate + asserted the draft from (already resolved to the
+ * manifest value or the pack default), so a draft can auto-surface only for a
+ * pack that is actually in the channel — and reconcile removing the entry
+ * simultaneously removes the threshold, so a dropped-matchers pack stops
+ * surfacing. `null` when the pack declares no matcher surface. The old broad
+ * object-type fallback ("any registered artifact type → default 0.7") is REMOVED
+ * — it was unsafe: a purely structural pack that never declared matchers would
+ * otherwise threshold-pass a forced/legacy draft at 0.7. */
 function matcherThresholdFor(extension: string): number | null {
-  let manifest = objectTypeRegistry.resolve(`${extension}:artifact`)?.isArtifact;
-  if (!manifest) {
-    for (const def of objectTypeRegistry.list()) {
-      if (def.isArtifact && claimedTypeRegisteringPackage(def.type) === extension) {
-        manifest = def.isArtifact;
-        break;
-      }
-    }
-  }
-  if (!manifest) return null;
-  return typeof manifest.matcherConfidenceThreshold === "number"
-    ? manifest.matcherConfidenceThreshold
-    : DEFAULT_MATCHER_CONFIDENCE_THRESHOLD;
+  return matcherManifestRegistry.get(extension)?.matcherConfidenceThreshold ?? null;
 }
 
-function buildPolicy(orgId: string): PresentationIdentityPolicy {
+/**
+ * Matcher-pack liveness — the org-scoped active-install gate, mirroring the
+ * matcher runtime's own `isArtifactExtensionWriteAllowed(pkg, orgId)` decision
+ * (cinatra#1891 A3, codex R1 #5) EXACTLY, but as a SYNC read (matching the
+ * presentation host's other sync reads). A matcher pack is presentation-live iff
+ * it is BOTH in the channel AND its canonical install status admits a write for
+ * this org — otherwise a draft would keep surfacing in an org that soft-archived
+ * the pack (org-admin soft archive does no process-global registry teardown, and
+ * uninstall archival archives only `eligible` assertions, not matcher drafts).
+ *
+ *   - NO `kind:"artifact"` install rows                 → LIVE (ungoverned
+ *     bundled/disk artifact; CG-1 parity with the write gate).
+ *   - a LIVE (`active|locked`) row governs this org      → LIVE.
+ *   - rows exist but none live for this scope            → NOT live (DENY).
+ *   - read error                                         → NOT live (fail-closed:
+ *     an unreadable gate never auto-surfaces a draft).
+ *
+ * `packageNames` is the channel-registered subset actually referenced by this
+ * batch's assertions — an empty list skips the read entirely (no per-page cost
+ * when no assertion targets a matcher pack).
+ */
+function buildMatcherLiveExtensionSet(
+  orgId: string,
+  packageNames: readonly string[],
+): Set<string> {
+  const live = new Set<string>();
+  if (packageNames.length === 0) return live;
+  const rowsByPkg = new Map<string, { status: string; organizationId: string | null }[]>();
+  try {
+    const r = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      queries: [
+        {
+          text: `SELECT package_name, status, organization_id
+FROM "${q()}"."installed_extension"
+WHERE kind = 'artifact' AND package_name = ANY($1::text[])`,
+          values: [[...packageNames]],
+        },
+      ],
+    });
+    for (const row of (r?.[0]?.rows ?? []) as Row[]) {
+      const pkg = String(row.package_name);
+      const list = rowsByPkg.get(pkg) ?? [];
+      list.push({
+        status: String(row.status),
+        organizationId: row.organization_id == null ? null : String(row.organization_id),
+      });
+      rowsByPkg.set(pkg, list);
+    }
+  } catch {
+    // fail-closed: cannot read install status ⇒ no matcher pack is live (a draft
+    // never auto-surfaces on an unreadable gate).
+    return live;
+  }
+  for (const pkg of packageNames) {
+    const rows = rowsByPkg.get(pkg);
+    if (!rows || rows.length === 0) {
+      live.add(pkg); // ungoverned (no install row) — CG-1 parity with the write gate.
+      continue;
+    }
+    const liveRows = rows.filter((row) => row.status === "active" || row.status === "locked");
+    if (liveRows.length === 0) continue; // deliberately taken down → not live.
+    // Org-owned live row first, then an ambient (platform/workspace) install —
+    // identical row pick to `isArtifactExtensionWriteAllowed`'s org-scoped path.
+    const governing =
+      liveRows.find((row) => row.organizationId === orgId) ||
+      liveRows.find((row) => row.organizationId == null) ||
+      null;
+    if (governing) live.add(pkg);
+  }
+  return live;
+}
+
+function buildPolicy(
+  orgId: string,
+  matcherPackagesInBatch: readonly string[],
+): PresentationIdentityPolicy {
   const liveExtensions = buildLiveExtensionSet();
+  // Matcher-pack liveness is decided SOLELY by the org-scoped install gate, so it
+  // == the matcher runtime's own two-gate decision (channel membership + org
+  // active-install). A channel pack that ALSO registers an own-namespace object
+  // type would otherwise stay live through the type-registry base set even after
+  // an org-scoped archive — bypassing the gate and surfacing a draft the runtime
+  // would refuse to (re)assert. So DROP the batch's channel packs from the
+  // type-derived base FIRST, then re-add only the gate-approved ones (codex
+  // implementation-round #1). For a matcher-ONLY pack the delete is a no-op (it
+  // registers no type), so the gate is the sole authority regardless.
+  for (const pkg of matcherPackagesInBatch) liveExtensions.delete(pkg);
+  for (const pkg of buildMatcherLiveExtensionSet(orgId, matcherPackagesInBatch)) {
+    liveExtensions.add(pkg);
+  }
   const autoSurfaceDisabled = isArtifactAutoSurfaceDisabled(orgId);
   return {
     isExtensionLive: (extension) => liveExtensions.has(extension),
@@ -155,7 +231,18 @@ ORDER BY artifact_id, asserted_at, extension`,
     // fail-closed: no assertions ⇒ every row falls through to base identity.
   }
 
-  const policy = buildPolicy(input.orgId);
+  // The channel-registered matcher packs ACTUALLY referenced by this batch's
+  // assertions — the only ones whose org-scoped install gate we need to read
+  // (bounds the extra sync read to pages that carry a matcher-pack assertion).
+  const channelPackages = new Set(matcherManifestRegistry.list().map((e) => e.packageName));
+  const matcherPackagesInBatch = new Set<string>();
+  for (const list of assertionsByArtifact.values()) {
+    for (const a of list) {
+      if (channelPackages.has(a.extension)) matcherPackagesInBatch.add(a.extension);
+    }
+  }
+
+  const policy = buildPolicy(input.orgId, [...matcherPackagesInBatch]);
   for (const row of input.rows) {
     out.set(
       row.id,

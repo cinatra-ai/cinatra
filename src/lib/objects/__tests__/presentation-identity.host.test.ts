@@ -1,17 +1,22 @@
-// Host-seam tests for the presentation-identity resolver (epic #1883 slice A6).
-// The postgres runner is mocked; the seam binds the pure resolver to the
-// in-process object-type registry (install/live + per-pack thresholds) and the
-// org auto-surface toggle. These prove:
-//   - the batched read is a SINGLE org-scoped ACTIVE-assertion query (eligible +
-//     drafts, archived excluded);
-//   - live status is registry membership; an uninstalled extension never wins;
-//   - the pack's `matcherConfidenceThreshold` drives auto-surface;
+// Host-seam tests for the presentation-identity resolver (epic #1883 slice A6,
+// meaning-surface channel cinatra#1891 A3). The postgres runner is mocked; the
+// seam binds the pure resolver to:
+//   - classic/binding liveness  → object-type-registry membership;
+//   - matcher thresholds         → the meaning-surface channel, AUTHORITATIVELY
+//     (the retired `<ext>:artifact` fallback is gone — codex R1 #4);
+//   - matcher liveness           → channel membership AND the org-scoped
+//     active-install gate mirroring the matcher runtime (codex R1 #5);
+//   - the org auto-surface toggle.
+// These prove:
+//   - the batched read is a SINGLE org-scoped ACTIVE-assertion query;
+//   - the pack's channel `matcherConfidenceThreshold` drives auto-surface;
+//   - a structural pack NOT in the channel never threshold-passes a draft;
+//   - a matcher pack archived for the org does not surface a draft;
 //   - the org toggle disables tier 2;
 //   - a read error fails CLOSED to the base (type-driven) identity.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import type { ArtifactDescriptor } from "@cinatra-ai/objects";
 
 const runPostgresQueriesSync = vi.fn();
 vi.mock("@/lib/postgres-sync", () => ({
@@ -23,7 +28,7 @@ vi.mock("@/lib/postgres-config", () => ({
   getPostgresConnectionString: () => "postgres://test",
 }));
 
-import { objectTypeRegistry } from "@cinatra-ai/objects";
+import { objectTypeRegistry, matcherManifestRegistry } from "@cinatra-ai/objects";
 import {
   resolveArtifactPresentationIdentities,
   resolveArtifactPresentationIdentity,
@@ -40,33 +45,47 @@ const Y = "@acme/y-artifact";
 
 type Row = Record<string, unknown>;
 
-/** Register the `<ext>:artifact` umbrella type so the extension is LIVE and its
- * manifest threshold resolves. */
-function registerArtifactExt(ext: string, threshold?: number): void {
-  const isArtifact = {
-    accepts: { file: { mimeTypes: ["text/plain"] } },
-    ...(threshold !== undefined ? { matcherConfidenceThreshold: threshold } : {}),
-  } as unknown as ArtifactDescriptor;
+/** Register a declared object type in `ext`'s namespace so the extension is LIVE
+ * for CLASSIC/BINDING assertions (object-type-registry membership). This is NOT
+ * the meaning surface — a matcher threshold comes from the channel only. */
+function registerTypePack(ext: string): void {
   objectTypeRegistry.register(
     {
-      type: `${ext}:artifact`,
+      type: `${ext}:doc`,
       category: "report",
       schema: z.record(z.string(), z.unknown()),
       lifecycle: { sources: ["agent"], mutableBy: ["agent"] },
       renderers: { listRow: null, card: null, detail: null },
-      isArtifact,
     },
     ext,
   );
 }
 
-/** Prime the single active-assertion read (or an error). */
-function primeAssertions(rows: Row[] | Error): void {
+/** Register a pack's MEANING SURFACE in the channel (cinatra#1891 A3) — the
+ * matcher runtime's candidate source AND the presentation host's threshold +
+ * matcher-liveness source. The threshold is ALREADY RESOLVED here (the bridge
+ * applies the pack default at registration), matching the runtime entry. */
+function registerMatcherPack(ext: string, threshold = 0.7): void {
+  matcherManifestRegistry.register({
+    packageName: ext,
+    matcherSkillIds: [`${ext}:matcher`],
+    matcherConfidenceThreshold: threshold,
+    fileMimeTypes: ["text/plain"],
+  });
+}
+
+/** Prime the mocked sync runner: routes the semantic-assertion read to `rows`
+ * (or throws `rows` when an Error), and the org-scoped install-status read
+ * (cinatra#1891 A3) to `installRows` (default [] ⇒ ungoverned ⇒ live). */
+function prime(rows: Row[] | Error, installRows: Row[] = []): void {
   runPostgresQueriesSync.mockImplementation((input: { queries: Array<{ text: string }> }) => {
     const text = input.queries[0]?.text ?? "";
     if (text.includes("semantic_assertion")) {
       if (rows instanceof Error) throw rows;
       return [{ rows, rowCount: rows.length }];
+    }
+    if (text.includes("installed_extension")) {
+      return [{ rows: installRows, rowCount: installRows.length }];
     }
     throw new Error(`unexpected query: ${text}`);
   });
@@ -86,12 +105,13 @@ function sa(part: Partial<Row> & { artifact_id: string; extension: string }): Ro
 beforeEach(() => {
   runPostgresQueriesSync.mockReset();
   objectTypeRegistry._clearForTests();
+  matcherManifestRegistry._clearForTests();
   _resetArtifactAutoSurfaceToggleForTests();
 });
 
 describe("active-assertion read: SQL shape + scoping", () => {
-  it("is a SINGLE batched, org-scoped, NON-archived query", () => {
-    primeAssertions([]);
+  it("is a SINGLE batched, org-scoped, NON-archived query (no matcher-pack assertion ⇒ no install read)", () => {
+    prime([]);
     resolveArtifactPresentationIdentities({ orgId: ORG, rows: [{ id: "a1", type: GENERIC }] });
     const calls = runPostgresQueriesSync.mock.calls.map(
       (c) => (c[0] as { queries: Array<{ text: string; values: unknown[] }> }).queries[0],
@@ -105,35 +125,35 @@ describe("active-assertion read: SQL shape + scoping", () => {
   });
 
   it("a read error fails CLOSED to the base type-driven identity", () => {
-    primeAssertions(new Error("connection refused"));
-    registerArtifactExt(X); // X live, but the assertion read fails
+    prime(new Error("connection refused"));
+    registerTypePack(X); // X live, but the assertion read fails
     const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
     expect(out.identity).toEqual({ kind: "no-primary" });
     expect(out.suggestions).toEqual([]);
   });
 });
 
-describe("policy binding — install/live via registry membership", () => {
+describe("policy binding — classic liveness via object-type registry membership", () => {
   it("a live classic user assertion surfaces as the presentation identity", () => {
-    registerArtifactExt(X);
-    primeAssertions([sa({ artifact_id: "a1", extension: X, asserted_by: "user" })]);
+    registerTypePack(X);
+    prime([sa({ artifact_id: "a1", extension: X, asserted_by: "user" })]);
     const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
     expect(out.identity).toEqual({ kind: "extension", extension: X });
     expect(out.tier).toBe("classic");
   });
 
-  it("an UNINSTALLED extension's assertion never wins (registry has no such type)", () => {
+  it("an UNINSTALLED extension's assertion never wins (registry + channel both empty)", () => {
     // X is NOT registered ⇒ not live.
-    primeAssertions([sa({ artifact_id: "a1", extension: X, asserted_by: "user" })]);
+    prime([sa({ artifact_id: "a1", extension: X, asserted_by: "user" })]);
     const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
     expect(out.identity).toEqual({ kind: "no-primary" });
   });
 });
 
-describe("policy binding — matcher threshold from the manifest", () => {
+describe("policy binding — matcher threshold from the meaning-surface channel", () => {
   it("honors the pack's declared matcherConfidenceThreshold", () => {
-    registerArtifactExt(X, 0.5);
-    primeAssertions([
+    registerMatcherPack(X, 0.5);
+    prime([
       sa({ artifact_id: "a1", extension: X, asserted_by: "matcher", eligibility: "draft", confidence: 0.6 }),
     ]);
     const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
@@ -141,22 +161,120 @@ describe("policy binding — matcher threshold from the manifest", () => {
     expect(out.tier).toBe("matcher");
   });
 
-  it("defaults to 0.7 when the pack declares no threshold — a 0.6 draft stays a chip", () => {
-    registerArtifactExt(X); // no threshold ⇒ default 0.7
-    primeAssertions([
+  it("a channel entry resolved to the default 0.7 keeps a 0.6 draft a chip", () => {
+    registerMatcherPack(X); // resolved default 0.7 (the bridge applies it)
+    prime([
       sa({ artifact_id: "a1", extension: X, asserted_by: "matcher", eligibility: "draft", confidence: 0.6 }),
     ]);
     const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
     expect(out.identity).toEqual({ kind: "no-primary" });
     expect(out.suggestions).toEqual([X]);
   });
+
+  it("a STRUCTURAL pack NOT in the channel never threshold-passes a draft (codex R1 #4: no unsafe fallback)", () => {
+    // X registers a structural object type (so it is classic-live) but declared
+    // NO matchers ⇒ it is NOT in the channel. A forced/legacy draft on X must
+    // NOT auto-surface at the old default 0.7 — the threshold is null.
+    registerTypePack(X);
+    prime([
+      sa({ artifact_id: "a1", extension: X, asserted_by: "matcher", eligibility: "draft", confidence: 0.9 }),
+    ]);
+    const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
+    expect(out.identity).toEqual({ kind: "no-primary" });
+    // Still a live draft (X is a live extension), so it stays a suggestion chip —
+    // it just never auto-surfaces.
+    expect(out.suggestions).toEqual([X]);
+  });
+});
+
+describe("policy binding — matcher liveness mirrors the org-scoped install gate (codex R1 #5)", () => {
+  it("an UNGOVERNED matcher pack (no install row) surfaces a passing draft", () => {
+    registerMatcherPack(X, 0.5);
+    prime(
+      [sa({ artifact_id: "a1", extension: X, asserted_by: "matcher", eligibility: "draft", confidence: 0.9 })],
+      [], // no install rows ⇒ ungoverned ⇒ live (CG-1 parity)
+    );
+    const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
+    expect(out.identity).toEqual({ kind: "extension", extension: X });
+    expect(out.tier).toBe("matcher");
+  });
+
+  it("a live org-owned install surfaces the draft", () => {
+    registerMatcherPack(X, 0.5);
+    prime(
+      [sa({ artifact_id: "a1", extension: X, asserted_by: "matcher", eligibility: "draft", confidence: 0.9 })],
+      [{ package_name: X, status: "active", organization_id: ORG }],
+    );
+    const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
+    expect(out.identity).toEqual({ kind: "extension", extension: X });
+  });
+
+  it("a pack ARCHIVED for this org is NOT live — the draft neither surfaces nor chips", () => {
+    registerMatcherPack(X, 0.5);
+    prime(
+      [sa({ artifact_id: "a1", extension: X, asserted_by: "matcher", eligibility: "draft", confidence: 0.9 })],
+      [{ package_name: X, status: "archived", organization_id: ORG }],
+    );
+    const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
+    expect(out.identity).toEqual({ kind: "no-primary" });
+    expect(out.suggestions).toEqual([]); // filtered out of liveDrafts (not live)
+  });
+
+  it("a pack live ONLY for another org does not surface here (no cross-org bleed)", () => {
+    registerMatcherPack(X, 0.5);
+    prime(
+      [sa({ artifact_id: "a1", extension: X, asserted_by: "matcher", eligibility: "draft", confidence: 0.9 })],
+      [{ package_name: X, status: "active", organization_id: "org-other" }],
+    );
+    const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
+    expect(out.identity).toEqual({ kind: "no-primary" });
+    expect(out.suggestions).toEqual([]);
+  });
+
+  it("an ambient (platform) live install governs the org", () => {
+    registerMatcherPack(X, 0.5);
+    prime(
+      [sa({ artifact_id: "a1", extension: X, asserted_by: "matcher", eligibility: "draft", confidence: 0.9 })],
+      [{ package_name: X, status: "active", organization_id: null }],
+    );
+    const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
+    expect(out.identity).toEqual({ kind: "extension", extension: X });
+  });
+
+  it("a DUAL-registry pack (object type AND channel) archived for the org does NOT bypass the gate via type membership", () => {
+    // X registers an own-namespace object type (⇒ it is in the type-registry base
+    // live set) AND declares matchers (⇒ it is a channel pack). Archived for this
+    // org, the org-scoped gate must WIN — the type-registry membership must not
+    // keep the matcher draft surfacing (codex implementation-round #1).
+    registerTypePack(X);
+    registerMatcherPack(X, 0.5);
+    prime(
+      [sa({ artifact_id: "a1", extension: X, asserted_by: "matcher", eligibility: "draft", confidence: 0.9 })],
+      [{ package_name: X, status: "archived", organization_id: ORG }],
+    );
+    const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
+    expect(out.identity).toEqual({ kind: "no-primary" });
+    expect(out.suggestions).toEqual([]); // not live ⇒ not even a chip
+  });
+
+  it("a DUAL-registry pack ACTIVE for the org surfaces (gate approves; parity with type membership)", () => {
+    registerTypePack(X);
+    registerMatcherPack(X, 0.5);
+    prime(
+      [sa({ artifact_id: "a1", extension: X, asserted_by: "matcher", eligibility: "draft", confidence: 0.9 })],
+      [{ package_name: X, status: "active", organization_id: ORG }],
+    );
+    const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
+    expect(out.identity).toEqual({ kind: "extension", extension: X });
+    expect(out.tier).toBe("matcher");
+  });
 });
 
 describe("policy binding — org auto-surface toggle", () => {
   it("the org toggle disables matcher auto-surface (draft stays a chip)", () => {
-    registerArtifactExt(X, 0.5);
+    registerMatcherPack(X, 0.5);
     setArtifactAutoSurfaceDisabled(ORG, true);
-    primeAssertions([
+    prime([
       sa({ artifact_id: "a1", extension: X, asserted_by: "matcher", eligibility: "draft", confidence: 0.9 }),
     ]);
     const out = resolveArtifactPresentationIdentity({ orgId: ORG, artifactId: "a1", baseType: GENERIC });
@@ -168,9 +286,9 @@ describe("policy binding — org auto-surface toggle", () => {
 
 describe("batched multi-row resolution", () => {
   it("resolves each row independently from its own assertions", () => {
-    registerArtifactExt(X);
-    registerArtifactExt(Y);
-    primeAssertions([
+    registerTypePack(X);
+    registerTypePack(Y);
+    prime([
       sa({ artifact_id: "a1", extension: X, asserted_by: "user" }),
       sa({ artifact_id: "a2", extension: Y, asserted_by: "agent" }),
     ]);

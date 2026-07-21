@@ -44,7 +44,6 @@ const q = (): string => postgresSchema.replaceAll('"', '""');
 // so a stray legacy row can never be classified. cinatra#1891 re-keys the read
 // to `data->>'artifactType' = 'file'` on any REGISTERED artifact type.
 const RETIRED_GENERIC_ARTIFACT_TYPE = "@cinatra-ai/artifact:object";
-const DEFAULT_MATCHER_CONFIDENCE_THRESHOLD = 0.7;
 
 /**
  * A TRANSIENT failure inside the matcher worker (LLM provider hiccup, a DB
@@ -376,11 +375,13 @@ async function runArtifactMatchImpl(
     return;
   }
 
-  // 2) Candidate discovery via the object registry.
+  // 2) Candidate discovery via the meaning-surface channel (cinatra#1891 A3).
   const { registerAllObjectTypes } = await import(
     "@/lib/register-all-object-types"
   );
-  const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
+  const { objectTypeRegistry, matcherManifestRegistry } = await import(
+    "@cinatra-ai/objects/registry"
+  );
   registerAllObjectTypes();
 
   // cinatra#1891 scope 1 (registration half): the authoritative read keys on any
@@ -402,33 +403,27 @@ async function runArtifactMatchImpl(
   };
   const candidates: Candidate[] = [];
   let capReached = false;
-  for (const def of objectTypeRegistry.listArtifacts()) {
+  // cinatra#1891 A3: candidates come from the MEANING-SURFACE channel, NOT
+  // `objectTypeRegistry.listArtifacts()`. Post-#1785 the umbrella that once
+  // carried `skills.matchers` on a listable descriptor is retired and
+  // `declaredTypeArtifactDescriptor` strips the matcher surface off every
+  // per-type descriptor, so the old list-source was ALWAYS empty for the 13
+  // matcher-declaring packs (silent no-op). The channel is populated on the
+  // same bridge pass keyed by package name and IS the provenance record — only
+  // a pack that DECLARED matchers is in it — so `definerOf` is no longer needed
+  // (the channel key IS the owning package). The threshold is already RESOLVED
+  // on the entry (manifest value or the pack default).
+  for (const entry of matcherManifestRegistry.list()) {
     if (capReached) break;
-    const manifest = def.isArtifact;
-    if (!manifest) continue;
-    // cinatra#1891 scope 5: run ALL declared matchers, not just the first —
-    // one candidate PER matcher skill the extension declares.
-    const matcherSkillIds = manifest.skills?.matchers;
-    if (!matcherSkillIds || matcherSkillIds.length === 0) continue;
-    const fileForms = manifest.accepts?.file?.mimeTypes;
-    if (!fileForms || fileForms.length === 0) continue; // file-form only (MVP)
-    const mimeOk = fileForms.some((acc) =>
+    const mimeOk = entry.fileMimeTypes.some((acc) =>
       mimeMatches(authoritative.mime, acc),
     );
-    if (!mimeOk) continue;
-    // cinatra#1891 scope 4: candidate ownership via REGISTRY PROVENANCE
-    // (`definerOf`) — the package that actually registered the type — instead of
-    // string-slicing a `:artifact` suffix. This is the same provenance the
-    // presentation resolver's live/threshold policy keys on, so the asserted
-    // `extension` and the surfacing policy agree. A provenance-less (host /
-    // built-in) registration cannot own a matcher — skip it.
-    const extPackageName = objectTypeRegistry.definerOf(def.type);
-    if (!extPackageName) continue;
-    const threshold =
-      typeof manifest.matcherConfidenceThreshold === "number"
-        ? manifest.matcherConfidenceThreshold
-        : DEFAULT_MATCHER_CONFIDENCE_THRESHOLD;
-    for (const matcherSkillId of matcherSkillIds) {
+    if (!mimeOk) continue; // file-form only (MVP)
+    const extPackageName = entry.packageName;
+    const threshold = entry.matcherConfidenceThreshold;
+    // cinatra#1891 scope 5: run ALL declared matchers, not just the first —
+    // one candidate PER matcher skill the extension declares.
+    for (const matcherSkillId of entry.matcherSkillIds) {
       if (candidates.length >= MAX_CANDIDATES) {
         console.info(
           `[artifact-matcher] candidate cap (${MAX_CANDIDATES}) reached — remaining matcher candidates skipped this run`,
@@ -441,9 +436,9 @@ async function runArtifactMatchImpl(
   }
 
   // CG-4 (cinatra#661) — install-active write gate on the ACTOR-LESS matcher.
-  // The candidate set above is built purely from `objectTypeRegistry
-  // .listArtifacts()` (in-memory registry membership). The registry is NOT the
-  // only authz: a registered-but-archived type (a stale process whose teardown
+  // The candidate set above is built purely from `matcherManifestRegistry
+  // .list()` (in-memory channel membership). The channel is NOT the
+  // only authz: a registered-but-archived pack (a stale process whose teardown
   // never fired, or a disk descriptor lingering past an archive) could otherwise
   // receive a `matcher`-asserted semantic type. Drop any candidate whose
   // canonical install row is archived/absent-and-governed — DB-status-driven, so

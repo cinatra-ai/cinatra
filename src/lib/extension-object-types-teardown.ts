@@ -10,7 +10,7 @@ import "server-only";
 // of `invalidateProvidersForPackage` / `invalidateExtensionUiForPackage` — rather
 // than reaching into the objects registry directly.
 
-import { objectTypeRegistry } from "@cinatra-ai/objects";
+import { objectTypeRegistry, matcherManifestRegistry } from "@cinatra-ai/objects";
 
 /**
  * Remove every object type the package registered (across all categories),
@@ -21,6 +21,20 @@ import { objectTypeRegistry } from "@cinatra-ai/objects";
  */
 export function invalidateObjectTypesForPackage(packageName: string): string[] {
   return objectTypeRegistry.removeByPackage(packageName);
+}
+
+/**
+ * Remove the package's MEANING-SURFACE channel entry (cinatra#1891 A3) — the
+ * pack-wide matcher manifest the matcher runtime discovers candidates from and
+ * the presentation host resolves thresholds + matcher liveness from. Returns
+ * true iff an entry was removed. Wired into the central capability teardown at
+ * PARITY with the object-type reap: a matcher-ONLY pack (no own object type)
+ * registers nothing in the object-type registry, so WITHOUT this a leaked
+ * channel entry would keep its matcher draft auto-surfacing after uninstall. In-
+ * memory only; the org-scoped install-status gate is the durable backstop.
+ */
+export function invalidateMatcherManifestForPackage(packageName: string): boolean {
+  return matcherManifestRegistry.removeByPackage(packageName);
 }
 
 /**

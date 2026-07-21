@@ -4,18 +4,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // Covers: pure mime/trust helpers; classifier-signals prompt rendering;
 // re-keyed authoritative read (file-form + registered type, NOT the retired
 // generic); orphan-guard exit; unregistered-own-type skip; no-candidate exit;
-// runtime-unconfigured skip; provenance-based ownership; run-ALL-matchers;
+// runtime-unconfigured skip; channel-keyed candidate ownership; run-ALL-matchers;
 // package-owned trust; boot-order lazy-register-then-retry; frontmatter-strip;
 // strict response parse; threshold gate; assert + blockedByPrecedence; and the
 // HONEST RETRY paths (DB read throw, LLM call throw, assert throw all rethrow
 // as retryable; a malformed response does NOT).
+//
+// cinatra#1891 A3: candidate discovery reads the MEANING-SURFACE channel
+// (`matcherManifestRegistry.list()`), NOT `objectTypeRegistry.listArtifacts()`
+// (which is always empty for matcher packs post-#1785). This suite mocks the
+// channel to exercise the matcher LOGIC in isolation; the REAL registration
+// path (the discovery proof the brief mandates) is driven end-to-end by the
+// integration test in packages/objects (matcher-manifest-channel.test.ts).
 
 const {
   runPgMock,
   registerAllObjectTypesMock,
-  listArtifactsMock,
+  matcherListMock,
   resolveMock,
-  definerOfMock,
   resolveRuntimeMock,
   runLlmMock,
   listSkillsMock,
@@ -28,9 +34,8 @@ const {
 } = vi.hoisted(() => ({
   runPgMock: vi.fn(),
   registerAllObjectTypesMock: vi.fn(),
-  listArtifactsMock: vi.fn(),
+  matcherListMock: vi.fn(),
   resolveMock: vi.fn(),
-  definerOfMock: vi.fn(),
   resolveRuntimeMock: vi.fn(),
   runLlmMock: vi.fn(),
   listSkillsMock: vi.fn(),
@@ -55,9 +60,10 @@ vi.mock("@/lib/register-all-object-types", () => ({
 }));
 vi.mock("@cinatra-ai/objects/registry", () => ({
   objectTypeRegistry: {
-    listArtifacts: listArtifactsMock,
     resolve: resolveMock,
-    definerOf: definerOfMock,
+  },
+  matcherManifestRegistry: {
+    list: matcherListMock,
   },
 }));
 vi.mock("@cinatra-ai/llm", () => ({
@@ -125,7 +131,12 @@ function stageAuthoritative(
   // Default: object still live.
   runPgMock.mockReturnValue([{ rows: [{ "?column?": 1 }], rowCount: 1 }]);
 }
-function artifactDef(opts: {
+
+// A MEANING-SURFACE channel entry (cinatra#1891 A3): the shape the matcher
+// runtime now discovers candidates from. The channel key IS the owning package
+// (provenance), and the threshold is already RESOLVED (default 0.7 here,
+// mirroring the bridge's resolve-at-registration).
+function matcherEntry(opts: {
   pkg: string;
   matcherSkillIds?: string[];
   matcherSkillId?: string;
@@ -133,15 +144,12 @@ function artifactDef(opts: {
   threshold?: number;
 }) {
   const matchers =
-    opts.matcherSkillIds ??
-    (opts.matcherSkillId ? [opts.matcherSkillId] : undefined);
+    opts.matcherSkillIds ?? (opts.matcherSkillId ? [opts.matcherSkillId] : ["s1"]);
   return {
-    type: `${opts.pkg}:artifact`,
-    isArtifact: {
-      accepts: { file: { mimeTypes: opts.mimeTypes ?? ["application/pdf"] } },
-      skills: matchers ? { matchers } : undefined,
-      matcherConfidenceThreshold: opts.threshold,
-    },
+    packageName: opts.pkg,
+    matcherSkillIds: matchers,
+    matcherConfidenceThreshold: opts.threshold ?? 0.7,
+    fileMimeTypes: opts.mimeTypes ?? ["application/pdf"],
   };
 }
 
@@ -239,13 +247,8 @@ describe("runArtifactMatch", () => {
   beforeEach(() => {
     runPgMock.mockReset();
     registerAllObjectTypesMock.mockReset();
-    listArtifactsMock.mockReset();
+    matcherListMock.mockReset().mockReturnValue([]);
     resolveMock.mockReset().mockReturnValue({ isArtifact: {} });
-    definerOfMock
-      .mockReset()
-      .mockImplementation((t: string) =>
-        t.endsWith(":artifact") ? t.slice(0, -":artifact".length) : null,
-      );
     resolveRuntimeMock.mockReset();
     runLlmMock.mockReset();
     listSkillsMock.mockReset();
@@ -262,7 +265,7 @@ describe("runArtifactMatch", () => {
   it("orphan guard: authoritative read empty → no LLM, no assert", async () => {
     stageAuthoritative(undefined);
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
-    expect(listArtifactsMock).not.toHaveBeenCalled();
+    expect(matcherListMock).not.toHaveBeenCalled();
     expect(runLlmMock).not.toHaveBeenCalled();
     expect(assertSemanticTypeMock).not.toHaveBeenCalled();
   });
@@ -271,7 +274,7 @@ describe("runArtifactMatch", () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
-    listArtifactsMock.mockReturnValue([]);
+    matcherListMock.mockReturnValue([]);
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
     // The SQL keys on `data->>'artifactType' = 'file'` and excludes the retired
     // generic — asserted against the query text + values of the first pg call.
@@ -290,8 +293,8 @@ describe("runArtifactMatch", () => {
     });
     // Definer uninstalled after the row was minted → resolve returns null.
     resolveMock.mockReturnValue(null);
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
     ]);
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
     expect(resolveRuntimeMock).not.toHaveBeenCalled();
@@ -302,8 +305,8 @@ describe("runArtifactMatch", () => {
     stageAuthoritative({
       digest: "sha", mime: "text/csv", storage_key: "k", origin_kind: "upload",
     });
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1", mimeTypes: ["application/pdf"] }),
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1", mimeTypes: ["application/pdf"] }),
     ]);
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
     expect(resolveRuntimeMock).not.toHaveBeenCalled();
@@ -314,8 +317,8 @@ describe("runArtifactMatch", () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue(null);
     await expect(
@@ -325,16 +328,17 @@ describe("runArtifactMatch", () => {
     expect(assertSemanticTypeMock).not.toHaveBeenCalled();
   });
 
-  it("scope 4: candidate ownership derives from registry provenance (definerOf)", async () => {
+  it("scope 4: candidate ownership is the channel packageName (assertion target)", async () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    // The channel key IS the owning package — the matcher asserts against it
+    // directly (no `:artifact` string-slice, no `definerOf` lookup). This is the
+    // same provenance the presentation resolver's live/threshold policy keys on,
+    // so the asserted `extension` and the surfacing policy agree.
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@provenance/owner", matcherSkillId: "s1" }),
     ]);
-    // Provenance says a DIFFERENT package owns this type than the string-slice
-    // would suggest — the matcher must trust provenance.
-    definerOfMock.mockReturnValue("@provenance/owner");
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
       { id: "s1", packageName: "@provenance/owner", packageSlug: "provenance-owner", content: "b" },
@@ -348,26 +352,12 @@ describe("runArtifactMatch", () => {
     );
   });
 
-  it("scope 4: provenance-less (host) type is skipped (definerOf null)", async () => {
-    stageAuthoritative({
-      digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
-    });
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
-    ]);
-    definerOfMock.mockReturnValue(null); // host/built-in registration
-    resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
-    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
-    expect(runLlmMock).not.toHaveBeenCalled();
-    expect(assertSemanticTypeMock).not.toHaveBeenCalled();
-  });
-
   it("scope 5: ALL declared matchers run, not just the first", async () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillIds: ["s1", "s2", "s3"] }),
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillIds: ["s1", "s2", "s3"] }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
@@ -394,8 +384,8 @@ describe("runArtifactMatch", () => {
         chatContext: { messages: [{ role: "user", content: "our marketing strategy" }] },
       },
     });
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/md-artifact", matcherSkillId: "s1", mimeTypes: ["text/markdown"] }),
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/md-artifact", matcherSkillId: "s1", mimeTypes: ["text/markdown"] }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
@@ -414,8 +404,8 @@ describe("runArtifactMatch", () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
@@ -431,8 +421,8 @@ describe("runArtifactMatch", () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock
@@ -465,8 +455,8 @@ describe("runArtifactMatch", () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     writeAllowedMock.mockResolvedValue(false);
@@ -479,8 +469,8 @@ describe("runArtifactMatch", () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
@@ -500,8 +490,8 @@ describe("runArtifactMatch", () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1", threshold: 0.8 }),
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1", threshold: 0.8 }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
@@ -519,8 +509,8 @@ describe("runArtifactMatch", () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
@@ -570,8 +560,8 @@ describe("runArtifactMatch", () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
@@ -588,8 +578,8 @@ describe("runArtifactMatch", () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
     ]);
     resolveRuntimeMock.mockRejectedValue(new Error("nango down"));
     await expect(
@@ -601,8 +591,8 @@ describe("runArtifactMatch", () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
@@ -643,8 +633,8 @@ describe("runArtifactMatch", () => {
       },
     ]);
     runPgMock.mockReturnValue([{ rows: [], rowCount: 0 }]); // re-check: gone
-    listArtifactsMock.mockReturnValue([
-      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
@@ -673,20 +663,20 @@ describe("runArtifactMatch", () => {
       origin_kind: "upload",
       object_type: "@cinatra-ai/seed-0-artifact:artifact",
     });
-    const defs = Array.from({ length: 12 }, (_, i) =>
-      artifactDef({
+    const entries = Array.from({ length: 12 }, (_, i) =>
+      matcherEntry({
         pkg: `@cinatra-ai/seed-${i}-artifact`,
         matcherSkillId: `@cinatra-ai/seed-${i}-artifact:seed-${i}-matcher`,
         mimeTypes: ["text/markdown"],
       }),
     );
-    listArtifactsMock.mockReturnValue(defs);
+    matcherListMock.mockReturnValue(entries);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue(
-      defs.map((d) => ({
-        id: d.isArtifact.skills!.matchers![0],
-        packageName: d.type.replace(":artifact", ""),
-        packageSlug: d.type.replace(":artifact", "").replace("/", "-"),
+      entries.map((e) => ({
+        id: e.matcherSkillIds[0],
+        packageName: e.packageName,
+        packageSlug: e.packageName.replace("/", "-"),
         content: "Classify.",
       })),
     );
@@ -705,20 +695,20 @@ describe("runArtifactMatch", () => {
       origin_kind: "upload",
       object_type: "@cinatra-ai/over-0-artifact:artifact",
     });
-    const defs = Array.from({ length: 25 }, (_, i) =>
-      artifactDef({
+    const entries = Array.from({ length: 25 }, (_, i) =>
+      matcherEntry({
         pkg: `@cinatra-ai/over-${i}-artifact`,
         matcherSkillId: `@cinatra-ai/over-${i}-artifact:over-${i}-matcher`,
         mimeTypes: ["text/markdown"],
       }),
     );
-    listArtifactsMock.mockReturnValue(defs);
+    matcherListMock.mockReturnValue(entries);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue(
-      defs.map((d) => ({
-        id: d.isArtifact.skills!.matchers![0],
-        packageName: d.type.replace(":artifact", ""),
-        packageSlug: d.type.replace(":artifact", "").replace("/", "-"),
+      entries.map((e) => ({
+        id: e.matcherSkillIds[0],
+        packageName: e.packageName,
+        packageSlug: e.packageName.replace("/", "-"),
         content: "Classify.",
       })),
     );

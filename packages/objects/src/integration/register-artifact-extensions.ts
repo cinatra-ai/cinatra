@@ -4,7 +4,11 @@ import path from "node:path";
 import { z } from "zod";
 import { Validator } from "@cfworker/json-schema";
 import { ARTIFACT_ALLOWED_CINATRA_KEYS as ALLOWED_CINATRA_KEYS } from "@cinatra-ai/sdk-extensions/artifact-contract";
-import { objectTypeRegistry } from "../registry";
+import {
+  objectTypeRegistry,
+  matcherManifestRegistry,
+  DEFAULT_MATCHER_CONFIDENCE_THRESHOLD,
+} from "../registry";
 import type { SemanticArtifactManifest } from "../types";
 import { validateObjectTypeClaimSchemaSources, claimedTypeRegisteringPackage } from "../claims";
 import { isTombstonedObjectTypeId } from "../namespace";
@@ -196,6 +200,35 @@ export function registerParsedArtifactManifest(
   // without provenance and are therefore never touched.
   objectTypeRegistry.removeByPackage(packageName);
   semanticRendererRegistry.removeByPackage(packageName);
+  // MEANING-SURFACE channel (cinatra#1891 A3): register this pack's pack-wide
+  // matcher surface iff it declares one — ORTHOGONAL to object-type
+  // registration, and BEFORE the no-objectTypes early-return below, so it
+  // reaches BOTH the 12 no-objectTypes matcher packs (marketing-strategy,
+  // brand-voice, …) AND a declared-type pack (email-artifacts). The umbrella
+  // that used to carry `skills.matchers` on a listable descriptor is retired
+  // (entry 95) and `declaredTypeArtifactDescriptor` strips the matcher surface
+  // off every per-type descriptor, so this channel is the ONLY runtime home for
+  // the meaning surface — the matcher runtime's candidate source and the
+  // presentation host's threshold + matcher liveness read exactly this record.
+  // Reconcile-on-rescan: a manifest that DROPPED its matchers clears the entry
+  // (parity with the object-type `removeByPackage` above), so a stale meaning
+  // surface never lingers. The tombstone guard already returned above, so a
+  // retired dynamic namespace never registers a matcher manifest either.
+  const matcherSkillIds = descriptor.skills?.matchers ?? [];
+  const fileMimeTypes = descriptor.accepts?.file?.mimeTypes ?? [];
+  if (matcherSkillIds.length > 0 && fileMimeTypes.length > 0) {
+    matcherManifestRegistry.register({
+      packageName,
+      matcherSkillIds: [...matcherSkillIds],
+      matcherConfidenceThreshold:
+        typeof descriptor.matcherConfidenceThreshold === "number"
+          ? descriptor.matcherConfidenceThreshold
+          : DEFAULT_MATCHER_CONFIDENCE_THRESHOLD,
+      fileMimeTypes: [...fileMimeTypes],
+    });
+  } else {
+    matcherManifestRegistry.removeByPackage(packageName);
+  }
   // A manifest with no explicitly declared types mints NO type. Umbrella
   // derivation is RETIRED (entry 95, epic #1785) — resolution reads declared
   // types only, so a type-less manifest is a no-op here (a pure-representation

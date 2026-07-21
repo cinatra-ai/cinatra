@@ -49,7 +49,10 @@ function clearVersionKeyedServingForPackage(packageName: string): string[] {
   return typeof fn === "function" ? fn(packageName) : [];
 }
 import { invalidateExtensionUiForPackage, hasExtensionUiForPackage } from "@/lib/extension-ui-registry";
-import { invalidateObjectTypesForPackage } from "@/lib/extension-object-types-teardown";
+import {
+  invalidateObjectTypesForPackage,
+  invalidateMatcherManifestForPackage,
+} from "@/lib/extension-object-types-teardown";
 import { invalidateArtifactRenderersForPackage } from "@/lib/extension-artifact-renderers-teardown";
 import { bumpActivationGeneration } from "@/lib/extension-activation-generation";
 // Runtime dashboard-cube + portlet-kind registries (cinatra#660). These are pure
@@ -88,6 +91,7 @@ export function teardownExtensionCapabilities(packageName: string): {
   removedCubes: string[];
   removedPortletKinds: string[];
   removedVersionKeyedServing: string[];
+  removedMatcherManifest: boolean;
 } {
   // Capture the void-delete kinds' presence BEFORE invalidating (those
   // `invalidate*` calls return no count of their own, so probe up front).
@@ -107,6 +111,13 @@ export function teardownExtensionCapabilities(packageName: string): {
   // Deregister the package's object types so an archived/uninstalled extension's
   // types stop resolving/listing in the running process without a restart.
   const removedTypes = invalidateObjectTypesForPackage(packageName);
+  // Meaning-surface channel (cinatra#1891 A3): reap the package's matcher
+  // manifest at PARITY with its object types. A matcher-ONLY pack registers no
+  // object type, so this is the ONLY in-memory de-listing that stops its matcher
+  // draft from auto-surfacing after uninstall — it therefore counts toward the
+  // guarded control-plane generation bump below (a matcher-only package that
+  // shipped ONLY matchers, no types, still reports a real teardown).
+  const removedMatcherManifest = invalidateMatcherManifestForPackage(packageName);
   // Renderer dispatch spine (cinatra#1629): retire the package's semantic detail
   // renderers + representation providers from the two arbitration registries so
   // a torn-down extension stops resolving to a renderer (the floor covers a
@@ -146,7 +157,8 @@ export function teardownExtensionCapabilities(packageName: string): {
     hadUi ||
     hadProviders ||
     removedCubes.length > 0 ||
-    removedPortletKinds.length > 0
+    removedPortletKinds.length > 0 ||
+    removedMatcherManifest
   ) {
     bumpActivationGeneration("teardown", packageName);
   }
@@ -159,5 +171,6 @@ export function teardownExtensionCapabilities(packageName: string): {
     removedCubes,
     removedPortletKinds,
     removedVersionKeyedServing,
+    removedMatcherManifest,
   };
 }
