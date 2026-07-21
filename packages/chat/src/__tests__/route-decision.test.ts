@@ -8,9 +8,18 @@
 
 import { describe, expect, it } from "vitest";
 import { decideMessageRouting } from "../route-decision";
-import type { MentionClassification } from "../classify-mentions";
+import { classifyMentions, type MentionClassification, type AudienceScopedAssistantResolver } from "../classify-mentions";
 import type { AssistantDeliveryKind, AssistantDeliveryLookup } from "../dispatch-planner";
 import type { MentionToken } from "../mention-tokenizer";
+
+// The builtin host as the REAL registry mints it: the PRIMARY handle is
+// `cinatra-2` (collision-suffixed) and the bare `cinatra` is only a reserved
+// ALIAS. So a `@cinatra` mention classifies with the CANONICAL handle `cinatra-2`
+// and the host PRINCIPAL id — the host is NEVER identified by `handle === "cinatra"`.
+// Using this shape here means the fixture can no longer mask an identify-by-handle
+// regression the way a `handle: "cinatra"` mock did.
+const CINATRA_HOST_ID = "cin-host";
+const CINATRA_CANONICAL = "cinatra-2";
 
 const flatTok = (handle: string): MentionToken => ({
   raw: `@${handle}`,
@@ -63,26 +72,93 @@ const deliveryFrom =
 const NO_DELIVERY: AssistantDeliveryLookup = () => undefined;
 
 describe("decideMessageRouting — @cinatra host default (byte-parity)", () => {
-  it("@cinatra only → host reply attributed to the Cinatra principal, no external/endpoint", () => {
+  it("@cinatra (canonical cinatra-2 + host principal) → host reply, no external/endpoint/chip", () => {
+    // The classification carries the CANONICAL handle `cinatra-2` and the host
+    // principal (== cinatraHostId) — exactly what the audience resolver produces
+    // for a `@cinatra` alias mention. The host is split out by PRINCIPAL, never by
+    // handle string, so it must NOT reach the planner / host-runtime dispatch.
     const r = decideMessageRouting({
-      classified: [assistant("cinatra", "cin-1", "@cinatra-ai/cinatra-assistant")],
+      classified: [assistant(CINATRA_CANONICAL, CINATRA_HOST_ID, "@cinatra-ai/cinatra-assistant")],
       deliveryFor: NO_DELIVERY,
-      cinatraHostId: "cin-host",
+      cinatraHostId: CINATRA_HOST_ID,
     });
     expect(r).toEqual({
       shouldCallLlm: true,
       activeHandle: "cinatra",
-      hostAssistantUserId: "cin-1",
+      hostAssistantUserId: CINATRA_HOST_ID,
     });
     expect(r.chatEndpoint).toBeUndefined();
     expect(r.externalMentions).toBeUndefined();
     expect(r.hostRuntimeMention).toBeUndefined();
   });
 
+  it("REGRESSION — a builtin declared host-runtime does NOT dispatch the host as a directive", () => {
+    // The defect: with the builtin projected as a host-runtime delivery, a
+    // handle-string ("cinatra") host check missed the canonical `cinatra-2`
+    // mention, so it fell through to the planner and came back as a host-runtime
+    // DISPATCH (chatEndpoint + hostRuntimeMention). Identifying the host by
+    // principal keeps it the selector-less host default even when its delivery
+    // projects host-runtime.
+    const r = decideMessageRouting({
+      classified: [assistant(CINATRA_CANONICAL, CINATRA_HOST_ID, "@cinatra-ai/cinatra-assistant")],
+      deliveryFor: deliveryFrom({ [CINATRA_HOST_ID]: "host-runtime" }),
+      cinatraHostId: CINATRA_HOST_ID,
+    });
+    expect(r.chatEndpoint).toBeUndefined();
+    expect(r.hostRuntimeMention).toBeUndefined();
+    expect(r.hostAssistantUserId).toBe(CINATRA_HOST_ID);
+    expect(r.activeHandle).toBe("cinatra");
+  });
+
   it("no @-mention at all → default host Cinatra reply", () => {
     expect(
-      decideMessageRouting({ classified: [], deliveryFor: NO_DELIVERY, cinatraHostId: "cin-host" }),
-    ).toEqual({ shouldCallLlm: true, hostAssistantUserId: "cin-host" });
+      decideMessageRouting({ classified: [], deliveryFor: NO_DELIVERY, cinatraHostId: CINATRA_HOST_ID }),
+    ).toEqual({ shouldCallLlm: true, hostAssistantUserId: CINATRA_HOST_ID });
+  });
+});
+
+describe("decideMessageRouting — @cinatra via ALIAS through the REAL classifier (end-to-end regression)", () => {
+  // Mint the builtin the way the registry actually does: PRIMARY handle
+  // `cinatra-2`, reserved ALIAS `cinatra`, both keyed to the host principal — and
+  // `byHandle` returns the CANONICAL handle for either token (alias-safe). This is
+  // the shape the fake resolver used to fabricate as `handle: "cinatra"`, which
+  // masked the identify-by-handle defect. Driving classify→decide proves the whole
+  // seam: `@cinatra` typed as the bare alias lands on the selector-less host
+  // default — no chatEndpoint, no hostRuntimeMention, no mention chip.
+  const mintedResolver: AudienceScopedAssistantResolver = {
+    byPackageRef: async (ref) =>
+      ref.toLowerCase() === "@cinatra-ai/cinatra-assistant"
+        ? { assistantUserId: CINATRA_HOST_ID, handle: CINATRA_CANONICAL, packageName: "@cinatra-ai/cinatra-assistant" }
+        : null,
+    byHandle: async (h) =>
+      h.toLowerCase() === "cinatra" || h.toLowerCase() === CINATRA_CANONICAL
+        ? { assistantUserId: CINATRA_HOST_ID, handle: CINATRA_CANONICAL, packageName: "@cinatra-ai/cinatra-assistant" }
+        : null,
+  };
+
+  it("@cinatra (bare alias) → canonical cinatra-2 classification → selector-less host default", async () => {
+    const classified = await classifyMentions("@cinatra hi", mintedResolver);
+    // The classifier resolved the alias to the canonical handle + host principal.
+    expect(classified).toHaveLength(1);
+    expect(classified[0]).toMatchObject({
+      kind: "assistant",
+      handle: CINATRA_CANONICAL,
+      assistantUserId: CINATRA_HOST_ID,
+    });
+
+    const r = decideMessageRouting({
+      classified,
+      deliveryFor: deliveryFrom({ [CINATRA_HOST_ID]: "host-runtime" }),
+      cinatraHostId: CINATRA_HOST_ID,
+    });
+    expect(r).toEqual({
+      shouldCallLlm: true,
+      activeHandle: "cinatra",
+      hostAssistantUserId: CINATRA_HOST_ID,
+    });
+    expect(r.chatEndpoint).toBeUndefined();
+    expect(r.hostRuntimeMention).toBeUndefined();
+    expect(r.externalMentions).toBeUndefined();
   });
 });
 
@@ -143,14 +219,14 @@ describe("decideMessageRouting — declared webhook / mcp-poll assistant (pendin
   it("@cinatra + a webhook assistant → Cinatra replies AND the webhook persists pending", () => {
     const r = decideMessageRouting({
       classified: [
-        assistant("cinatra", "cin-1", "@cinatra-ai/cinatra-assistant"),
+        assistant(CINATRA_CANONICAL, CINATRA_HOST_ID, "@cinatra-ai/cinatra-assistant"),
         assistant("slackbot", "sb-1", "@acme/slackbot-assistant"),
       ],
       deliveryFor: deliveryFrom({ "sb-1": "webhook" }),
-      cinatraHostId: "cin-host",
+      cinatraHostId: CINATRA_HOST_ID,
     });
     expect(r.shouldCallLlm).toBe(true);
-    expect(r.hostAssistantUserId).toBe("cin-1");
+    expect(r.hostAssistantUserId).toBe(CINATRA_HOST_ID);
     expect(r.activeHandle).toBe("slackbot");
     expect(r.externalMentions).toEqual([
       { handle: "slackbot", assistantUserId: "sb-1", offset: 0, length: 0 },
@@ -213,19 +289,40 @@ describe("decideMessageRouting — honest no-responder (the retired @chatgpt rou
 });
 
 describe("decideMessageRouting — broadcast branch (unchanged)", () => {
-  it("tagged participants, Cinatra paused → external fire only, no host reply", () => {
+  it("tagged participants, Cinatra paused by the legacy sentinel → external fire only, no host reply", () => {
     const r = decideMessageRouting({
       classified: [],
       deliveryFor: NO_DELIVERY,
-      cinatraHostId: "cin-host",
+      cinatraHostId: CINATRA_HOST_ID,
       broadcastContext: {
         taggedAssistantUserIds: ["sb-1"],
-        pausedParticipants: ["cinatra"],
+        pausedParticipants: ["cinatra"], // unattributed host reply → literal sentinel
         handleMap: { "sb-1": "slackbot" },
       },
     });
     expect(r.shouldCallLlm).toBe(false);
     expect(r.isBroadcast).toBe(true);
+    expect(r.hostAssistantUserId).toBeUndefined();
+    expect(r.externalMentions).toEqual([
+      { handle: "slackbot", assistantUserId: "sb-1", offset: 0, length: 0 },
+    ]);
+  });
+
+  it("REGRESSION — Cinatra paused by its PRINCIPAL id (attributed host reply) → no host reply", () => {
+    // An attributed host message is paused under its principal (cinatraHostId), not
+    // the "cinatra" sentinel. A sentinel-only check would let the paused host reply
+    // anyway — the same identify-the-host-by-principal class as the mention split.
+    const r = decideMessageRouting({
+      classified: [],
+      deliveryFor: NO_DELIVERY,
+      cinatraHostId: CINATRA_HOST_ID,
+      broadcastContext: {
+        taggedAssistantUserIds: ["sb-1"],
+        pausedParticipants: [CINATRA_HOST_ID],
+        handleMap: { "sb-1": "slackbot" },
+      },
+    });
+    expect(r.shouldCallLlm).toBe(false);
     expect(r.hostAssistantUserId).toBeUndefined();
     expect(r.externalMentions).toEqual([
       { handle: "slackbot", assistantUserId: "sb-1", offset: 0, length: 0 },

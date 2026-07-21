@@ -55,12 +55,18 @@ describe("classifyMentions — registry lookup wins for scoped refs", () => {
 });
 
 describe("classifyMentions — flat handles", () => {
-  it("classifies an in-audience flat handle as an assistant mention", async () => {
+  it("resolves the builtin @cinatra ALIAS to its canonical handle (cinatra-2) + host principal", async () => {
+    // The registry mints the builtin's PRIMARY handle as `cinatra-2`; the bare
+    // `cinatra` is a reserved ALIAS. `byHandle` returns the CANONICAL handle for
+    // the alias token, so the classification carries `cinatra-2` + the host
+    // principal — NOT the literal `cinatra`. (Minting the fixture as
+    // `handle: "cinatra"` is exactly what masked the identify-by-handle routing
+    // defect in cinatra#1875 W2.)
     const out = await classifyMentions(
       "@cinatra please help",
-      resolver({ byHandle: { cinatra: { assistantUserId: "u-cin", handle: "cinatra", packageName: "@cinatra-ai/cinatra-assistant" } } }),
+      resolver({ byHandle: { cinatra: { assistantUserId: "u-cin", handle: "cinatra-2", packageName: "@cinatra-ai/cinatra-assistant" } } }),
     );
-    expect(out[0]).toMatchObject({ kind: "assistant", assistantUserId: "u-cin", handle: "cinatra" });
+    expect(out[0]).toMatchObject({ kind: "assistant", assistantUserId: "u-cin", handle: "cinatra-2" });
   });
 
   it("classifies an out-of-audience / unknown flat handle as unresolved (routing fall-through)", async () => {
@@ -87,7 +93,7 @@ describe("classifyMentions — mixed + audience isolation", () => {
     const out = await classifyMentions(
       "@cinatra and @other-vendor/secret-assistant",
       resolver({
-        byHandle: { cinatra: { assistantUserId: "u-cin", handle: "cinatra", packageName: "@cinatra-ai/cinatra-assistant" } },
+        byHandle: { cinatra: { assistantUserId: "u-cin", handle: "cinatra-2", packageName: "@cinatra-ai/cinatra-assistant" } },
         // @other-vendor/secret-assistant is NOT in this actor's audience → null.
         byRef: {},
       }),

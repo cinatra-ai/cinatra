@@ -37,8 +37,21 @@ import {
 import type { MessageRoutingResult } from "./chat-routing";
 import type { Mention } from "./types";
 
-/** The implicit host-default handle. @cinatra is never routed through the planner
- *  (it carries no external delivery) — it is the platform host reply. */
+/** The builtin host's RESERVED display/alias token ("cinatra").
+ *
+ *  CRITICAL — this is NOT how the host is IDENTIFIED for routing. The registry
+ *  mints the builtin's PRIMARY handle as `cinatra-2` (the bare `cinatra` is only a
+ *  reserved ALIAS), so the audience resolver's `byHandle` returns the CANONICAL
+ *  handle `cinatra-2` for a `@cinatra` mention. Identifying the host by
+ *  `handle === "cinatra"` therefore MISSES the real host (cinatra#1875 W2 defect).
+ *  The host is identified by PRINCIPAL — `assistantUserId === cinatraHostId` — the
+ *  id `buildAudienceRoutingContext` supplies from the W1 reader's `isBuiltin` row.
+ *
+ *  This constant survives only as (a) the host-reply attribution/display handle
+ *  (branded "Cinatra" by `assistant-display-name`), and (b) the legacy client
+ *  pause SENTINEL — the pause UI keys an UNATTRIBUTED host message as the literal
+ *  `"cinatra"` (`message.authorUserId ?? "cinatra"` in chat-messages-view), so the
+ *  pause check accepts it IN ADDITION TO the principal id. */
 export const CINATRA_HANDLE = "cinatra";
 
 /** The broadcast context the `/chat` client passes from React state (tagged +
@@ -78,11 +91,18 @@ export function decideMessageRouting(input: RouteDecisionInput): MessageRoutingR
 
   if (assistants.length > 0) {
     // @cinatra is the host default, NOT a planner directive — split it out so the
-    // planner sees only the DECLARED (external-capable) assistants.
-    const cinatra = assistants.find((a) => a.handle === CINATRA_HANDLE);
-    const declaredClassified = classified.filter(
-      (c) => !(c.kind === "assistant" && c.handle === CINATRA_HANDLE),
-    );
+    // planner sees only the DECLARED (external-capable) assistants. The host is
+    // identified by its PRINCIPAL (`assistantUserId === cinatraHostId`), NEVER by
+    // handle-string equality with "cinatra": the registry mints the builtin's
+    // primary handle as `cinatra-2` and the bare `cinatra` is only a reserved
+    // alias, so a `@cinatra` mention classifies with the CANONICAL handle
+    // `cinatra-2` — a handle-string match would miss it and mis-route the host
+    // default through the planner as a declared host-runtime dispatch
+    // (cinatra#1875 W2 defect).
+    const isHost = (c: MentionClassification): boolean =>
+      c.kind === "assistant" && cinatraHostId != null && c.assistantUserId === cinatraHostId;
+    const cinatra = assistants.find((a) => cinatraHostId != null && a.assistantUserId === cinatraHostId);
+    const declaredClassified = classified.filter((c) => !isHost(c));
     const plan = planAssistantDispatch(declaredClassified, deliveryFor);
     const pushMentions = plan.push.map(pushToMention);
 
@@ -157,7 +177,13 @@ export function decideMessageRouting(input: RouteDecisionInput): MessageRoutingR
         return handle ? { handle, assistantUserId: id, offset: 0, length: 0 } : null;
       })
       .filter((m): m is Mention => m !== null);
-    const cinatraPaused = paused.includes(CINATRA_HANDLE);
+    // The host is paused when the client listed EITHER its principal id (an
+    // attributed host reply: `message.authorUserId` = cinatraHostId) OR the legacy
+    // literal sentinel (an unattributed host reply falls back to "cinatra"). A
+    // sentinel-only check would miss the principal-keyed pause — the same
+    // identify-the-host-by-principal class as the mention split above.
+    const cinatraPaused =
+      paused.includes(CINATRA_HANDLE) || (cinatraHostId != null && paused.includes(cinatraHostId));
     const hostId = cinatraPaused ? null : cinatraHostId;
     return {
       shouldCallLlm: !cinatraPaused,
