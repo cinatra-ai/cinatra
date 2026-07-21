@@ -20,6 +20,7 @@ const {
   readFinalizedMaterializationMock,
   isWriteAllowedMock,
   resolveBoundArtifactTargetMock,
+  enqueueArtifactMatchRunMock,
 } = vi.hoisted(() => ({
   poolQueryMock: vi.fn(),
   getAgentPackageMock: vi.fn(),
@@ -34,6 +35,7 @@ const {
   readFinalizedMaterializationMock: vi.fn(async (): Promise<unknown> => null),
   isWriteAllowedMock: vi.fn(async () => true),
   resolveBoundArtifactTargetMock: vi.fn(),
+  enqueueArtifactMatchRunMock: vi.fn(async (): Promise<void> => {}),
 }));
 
 vi.mock("@/lib/db/pooled", () => ({
@@ -81,6 +83,16 @@ vi.mock("../materialization-ledger", () => ({
 }));
 vi.mock("../artifact-extension-access", () => ({
   isArtifactExtensionWriteAllowed: isWriteAllowedMock,
+}));
+// cinatra#1891 A3: the shared write core POST-COMMIT enqueues the meaning-matcher
+// via `./matcher-enqueue` (dynamic import). Stub it so this UNIT suite stays
+// hermetic — the real seam opens a live BullMQ/Redis connection (hangs on an
+// unreachable broker); its behavior is covered by the enqueue suite + live walk.
+vi.mock("../matcher-enqueue", () => ({
+  enqueueArtifactMatchRun: enqueueArtifactMatchRunMock,
+  artifactMatchJobId: (p: { orgId: string; artifactId: string; representationRevisionId: string }) =>
+    `artifact-match__${p.orgId}__${p.artifactId}__${p.representationRevisionId}`,
+  ARTIFACT_MATCH_RETRY_POLICY: { attempts: 3, backoff: { type: "exponential", delay: 5_000 } },
 }));
 // artifact-authoring pulls the full authoring stack; the materializer needs
 // only its two exported constants (values mirror the real module).

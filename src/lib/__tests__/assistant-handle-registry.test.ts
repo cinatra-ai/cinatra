@@ -38,10 +38,20 @@ describe("normalizeAssistantHandle", () => {
 });
 
 describe("assistantHandles table shape", () => {
-  it("exposes the registry columns (1:1 principal key, handle, override, timestamps)", async () => {
+  it("exposes the registry columns (1:1 principal key, handle, override, origin/package, timestamps)", async () => {
     const mod = await import("@/lib/better-auth-db");
     const { getTableColumns } = await import("drizzle-orm");
     const names = Object.keys(getTableColumns(mod.assistantHandles)).sort();
-    expect(names).toEqual(["assistantUserId", "createdAt", "handle", "isOverride", "updatedAt"]);
+    // origin + packageName added by cinatra#1874 W1 (extension vs standalone
+    // provenance + the owning package link).
+    expect(names).toEqual([
+      "assistantUserId",
+      "createdAt",
+      "handle",
+      "isOverride",
+      "origin",
+      "packageName",
+      "updatedAt",
+    ]);
   });
 });

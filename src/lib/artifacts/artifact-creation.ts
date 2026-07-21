@@ -638,12 +638,47 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
   // mime-equality check fails.
   // -------------------------------------------------------------------
 
+  // Resolve + ORG-VALIDATE the deterministic producer-assertion plan BEFORE
+  // Tx2 (and before the classifier-signals composition, so the composed signals
+  // can carry the producer's declared `produces` — cinatra#1891 scope 3). A
+  // missing or cross-org `createdByRunId` yields `validatedRunId: null` (we then
+  // persist NULL into representation.created_by_run_id — never a
+  // cross-tenant run id) and an empty `produces`. Never throws;
+  // failure degrades to no producer assertions (the LLM matcher is
+  // the fallback).
+  const producerPlan = await resolveProducerAssertionPlan({
+    createdByRunId: input.createdByRunId,
+    orgId: input.orgId,
+  });
+  // The run id actually persisted into the representation row — the
+  // validated one (or NULL when the run was missing / cross-org).
+  const persistedRunId = producerPlan.validatedRunId;
+  // Per-binding producer scoping (cinatra#923): when the caller names ONE
+  // produced extension, assert only that one — the whole-`produces` splice
+  // would stamp a multi-produce agent's every declared type onto every
+  // output. The plan's `produces` list already passed run-org validation,
+  // manifest membership, and the CG-4 write gate; an extension that did not
+  // survive (or was never declared) degrades to NO producer assertion —
+  // the existing fail-soft (the LLM matcher path stays the fallback).
+  let planProduces = producerPlan.produces;
+  if (input.producerAssertionExtension !== undefined) {
+    planProduces = planProduces.includes(input.producerAssertionExtension)
+      ? [input.producerAssertionExtension]
+      : [];
+    if (planProduces.length === 0) {
+      console.warn(
+        `[producer-assertions] producerAssertionExtension "${input.producerAssertionExtension}" is not in the run's validated produces set — degrading to no producer assertion`,
+      );
+    }
+  }
+
   // Server-side composition of `ClassifierSignals` BEFORE the
   // artifact-creation tx commits, so the signals row goes in atomically
   // with the representation row. The composition pipeline:
   //   1) resolve `chatContextSource.threadId` via the tenant-safe
   //      reader (deny-by-default; null on legacy/cross-user/wrong-org);
-  //   2) compose with the upload-side metadata already in `input`;
+  //   2) compose with the upload-side metadata already in `input` AND the
+  //      producer's declared `produces` (cinatra#1891 scope 3);
   //   3) run `composeAndValidateClassifierSignals` (strict-schema parse
   //      → dedupe → byte cap).
   // Resolution failure is BEST-EFFORT: chatContext is dropped from the
@@ -684,8 +719,17 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
         };
       }
     }
+    // cinatra#1891 scope 3: carry the producer's declared `produces` (the
+    // scoped, run-org-validated set) into the signals so the matcher prompt can
+    // use "what the emitting run said it produces" as meaning evidence. The
+    // composer dedupes + byte-caps; an empty list is omitted.
+    const producesSignals =
+      planProduces.length > 0
+        ? planProduces.map((extension) => ({ extension }))
+        : undefined;
     const candidateSignals: ClassifierSignals = {
       chatContext,
+      produces: producesSignals,
       upload: uploadSignals,
     };
     composedClassifierSignals = composeAndValidateClassifierSignals(
@@ -697,38 +741,6 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
     composedClassifierSignals = null;
   }
 
-  // Resolve + ORG-VALIDATE the deterministic producer-assertion plan BEFORE
-  // Tx2. A missing or
-  // cross-org `createdByRunId` yields `validatedRunId: null` (we then
-  // persist NULL into representation.created_by_run_id — never a
-  // cross-tenant run id) and an empty `produces`. Never throws;
-  // failure degrades to no producer assertions (the LLM matcher is
-  // the fallback).
-  const producerPlan = await resolveProducerAssertionPlan({
-    createdByRunId: input.createdByRunId,
-    orgId: input.orgId,
-  });
-  // The run id actually persisted into the representation row — the
-  // validated one (or NULL when the run was missing / cross-org).
-  const persistedRunId = producerPlan.validatedRunId;
-  // Per-binding producer scoping (cinatra#923): when the caller names ONE
-  // produced extension, assert only that one — the whole-`produces` splice
-  // would stamp a multi-produce agent's every declared type onto every
-  // output. The plan's `produces` list already passed run-org validation,
-  // manifest membership, and the CG-4 write gate; an extension that did not
-  // survive (or was never declared) degrades to NO producer assertion —
-  // the existing fail-soft (the LLM matcher path stays the fallback).
-  let planProduces = producerPlan.produces;
-  if (input.producerAssertionExtension !== undefined) {
-    planProduces = planProduces.includes(input.producerAssertionExtension)
-      ? [input.producerAssertionExtension]
-      : [];
-    if (planProduces.length === 0) {
-      console.warn(
-        `[producer-assertions] producerAssertionExtension "${input.producerAssertionExtension}" is not in the run's validated produces set — degrading to no producer assertion`,
-      );
-    }
-  }
   // Build the tx-composable producer assertion ops (assertedBy:"agent"
   // — the highest-confidence deterministic source). One archive +
   // insert-RETURNING pair per produced extension. The default-floor
@@ -1142,13 +1154,30 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
     }
   }
 
-  // The async LLM artifact matcher enqueue is RETIRED (epic #1785 wave A3).
-  // Under the dependency model every artifact is typed at write time — its
-  // exact declared type is in `objects.type`, validated before this point — so
-  // there is no untyped default-floor row for a post-persistence matcher to
-  // classify. The matcher runtime is left dormant (a no-op on absent generic
-  // rows); `skipFallbackClassification` is retained on the input for caller
-  // back-compat but no longer gates any work here.
+  // Async LLM MEANING-matcher enqueue — REACTIVATED (epic #1883 wave A3,
+  // cinatra#1891). Every artifact is typed at write time (its STRUCTURAL type is
+  // in `objects.type`), but the matcher layers a MEANING assertion (a `matcher`
+  // DRAFT surfaced by the presentation resolver) on top — e.g. a structurally
+  // "document" upload recognized as "our marketing strategy". Enqueued POST-Tx2
+  // COMMIT so the matcher's authoritative read always resolves the committed row
+  // + its persisted classifier signals; best-effort so a queue failure never
+  // fails the committed creation.
+  //
+  // `skipFallbackClassification` is honored: the deterministic template /
+  // chat-authoring paths set it so the matcher does not race their follow-up
+  // `assertSemanticType` (their type is asserted AFTER this create returns). The
+  // agent-emit materializer sets it too and enqueues EXPLICITLY after its
+  // producer assertion has committed (run-artifact-materializer) — the issue's
+  // "after agent-emit materialization" seam.
+  if (!input.skipFallbackClassification) {
+    const { enqueueArtifactMatchRun } = await import("./matcher-enqueue");
+    await enqueueArtifactMatchRun({
+      orgId: input.orgId,
+      artifactId,
+      representationRevisionId,
+      createdByRunId: persistedRunId,
+    });
+  }
 
   const ref: ArtifactRef = {
     artifactId,

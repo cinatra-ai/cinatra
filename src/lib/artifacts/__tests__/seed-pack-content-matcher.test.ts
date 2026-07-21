@@ -8,7 +8,7 @@
  *   - NO `draft` lands on the OTHER content-pack extensions whose MIME
  *     happens to match the staged resource.
  *
- * The pack manifests are mocked into `objectTypeRegistry.listArtifacts()`
+ * The pack manifests are mocked into `matcherManifestRegistry.list()`
  * directly (we are NOT exercising the bridge here — that's the role of
  * `register-artifact-extensions.ts` tests). The point is the matcher
  * runtime's per-candidate dispatch + threshold gate + target identification.
@@ -20,7 +20,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   runPgMock,
   registerAllObjectTypesMock,
-  listArtifactsMock,
+  matcherListMock,
   resolveRuntimeMock,
   runLlmMock,
   listSkillsMock,
@@ -31,7 +31,7 @@ const {
 } = vi.hoisted(() => ({
   runPgMock: vi.fn(),
   registerAllObjectTypesMock: vi.fn(),
-  listArtifactsMock: vi.fn(),
+  matcherListMock: vi.fn(),
   resolveRuntimeMock: vi.fn(),
   runLlmMock: vi.fn(),
   listSkillsMock: vi.fn(),
@@ -51,7 +51,13 @@ vi.mock("@/lib/register-all-object-types", () => ({
   registerAllObjectTypes: registerAllObjectTypesMock,
 }));
 vi.mock("@cinatra-ai/objects/registry", () => ({
-  objectTypeRegistry: { listArtifacts: listArtifactsMock },
+  objectTypeRegistry: {
+    resolve: () => ({ isArtifact: {} }),
+  },
+  // cinatra#1891 A3: candidate discovery reads the MEANING-SURFACE channel.
+  matcherManifestRegistry: {
+    list: matcherListMock,
+  },
 }));
 vi.mock("@cinatra-ai/llm", () => ({
   resolveConfiguredLlmRuntime: resolveRuntimeMock,
@@ -109,7 +115,7 @@ function stageAuthoritative(mime: string) {
   runPgMock.mockReturnValueOnce([
     {
       rows: [
-        { digest: "sha", mime, storage_key: "k", origin_kind: "upload" },
+        { digest: "sha", mime, storage_key: "k", origin_kind: "upload", object_type: "@cinatra-ai/blog-post-artifact:artifact", classifier_signals: null },
       ],
       rowCount: 1,
     },
@@ -119,10 +125,17 @@ function stageAuthoritative(mime: string) {
 }
 
 function registerAllAsArtifactDefs() {
-  listArtifactsMock.mockReturnValue(
+  // cinatra#1891 A3: candidates via the meaning-surface channel (channel key IS
+  // the owning package; threshold resolved to the manifest value or default 0.7).
+  matcherListMock.mockReturnValue(
     PACK_DEFS.map((p) => ({
-      type: `${p.pkgName}:artifact`,
-      isArtifact: p.manifest,
+      packageName: p.pkgName,
+      matcherSkillIds: p.manifest.skills!.matchers!,
+      matcherConfidenceThreshold:
+        typeof p.manifest.matcherConfidenceThreshold === "number"
+          ? p.manifest.matcherConfidenceThreshold
+          : 0.7,
+      fileMimeTypes: p.manifest.accepts.file!.mimeTypes,
     })),
   );
 }
@@ -167,7 +180,7 @@ describe("Content pack — target-aware matcher integration", () => {
   beforeEach(() => {
     runPgMock.mockReset();
     registerAllObjectTypesMock.mockReset();
-    listArtifactsMock.mockReset();
+    matcherListMock.mockReset();
     resolveRuntimeMock.mockReset();
     runLlmMock.mockReset();
     listSkillsMock.mockReset();

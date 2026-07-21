@@ -205,8 +205,14 @@ async function packageHasLiveSibling(packageName: string): Promise<boolean> {
 async function deregisterIfOwned(packageName: string, hasLiveSibling: boolean): Promise<void> {
   if (hasLiveSibling) return;
   try {
-    const { objectTypeRegistry } = await import("@cinatra-ai/objects");
+    const { objectTypeRegistry, matcherManifestRegistry } = await import("@cinatra-ai/objects");
     objectTypeRegistry.removeByPackage(packageName);
+    // Meaning-surface channel (cinatra#1891 A3): reap the package's matcher
+    // manifest at PARITY with its object types, so a restore-abort of a
+    // matcher-only pack does not leak a channel entry that keeps its draft
+    // auto-surfacing (a matcher-only pack registers no object type — the
+    // objectTypeRegistry reap above is a no-op for it).
+    matcherManifestRegistry.removeByPackage(packageName);
   } catch (err) {
     console.warn(
       `[artifact-claim-reactivation] "${packageName}": de-register on abort failed (non-fatal):`,

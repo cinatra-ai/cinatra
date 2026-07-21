@@ -1,7 +1,11 @@
 import "server-only";
 
 import { sql } from "drizzle-orm";
-import { betterAuthDb, registerAssistantHandle } from "@/lib/better-auth-db";
+import {
+  betterAuthDb,
+  registerAssistantHandle,
+  type AssistantHandleOrigin,
+} from "@/lib/better-auth-db";
 import { insertOAuthClientWithTx } from "@/lib/better-auth-oauth-client";
 import {
   createAssistantUserWithTx,
@@ -70,8 +74,15 @@ export async function registerAssistantAgent(params: {
   /** agent_templates `source_nl` provenance note. Defaults (store-side) to the
    *  historical Cinatra literal when omitted, so @cinatra stays byte-identical. */
   sourceNl?: string;
+  /** Handle-registry origin for the minted principal (cinatra#1874 W1, item 4).
+   *  Threaded through to {@link registerAssistantHandle}. Omitted for the three
+   *  boot-seeded built-ins (they stay `'standalone'` via the handle's default);
+   *  the extension ADOPTION path (item 2) supplies `'extension'` so an
+   *  extension-adopted principal is classified — and its bare-name resolution is
+   *  suppressed — correctly. */
+  origin?: AssistantHandleOrigin;
 }): Promise<{ assistantUserId: string; templateId: string }> {
-  const { username, config, name, templateId, packageName, description, sourceNl } = params;
+  const { username, config, name, templateId, packageName, description, sourceNl, origin } = params;
 
   // 1. Advisory-locked resolve-or-mint of the principal. The lock + the mint ride
   //    ONE betterAuthDb transaction/connection (reusing the historical seed key)
@@ -128,8 +139,18 @@ export async function registerAssistantAgent(params: {
   }
 
   // 2. Mint the mention handle (best-effort; boot backfill is the self-healing net).
+  //    `origin`/`packageName` are forwarded ONLY when the caller supplies `origin`
+  //    (the extension adoption path, item 2) so the built-in call sites stay
+  //    `{ desired }` — the handle row keeps its `'standalone'` default. An
+  //    extension-adopted principal carries `origin:'extension'` + its package_name
+  //    so the registry reader's bare-name fallback correctly excludes it.
+  const handleOpts: Parameters<typeof registerAssistantHandle>[1] = { desired: username };
+  if (origin !== undefined) {
+    handleOpts.origin = origin;
+    if (packageName !== undefined) handleOpts.packageName = packageName;
+  }
   try {
-    await registerAssistantHandle(userId, { desired: username });
+    await registerAssistantHandle(userId, handleOpts);
   } catch (err) {
     console.warn(
       `[cinatra-assistant] could not mint handle for ${username}; boot backfill will retry:`,
