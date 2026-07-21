@@ -775,6 +775,15 @@ importers:
       '@cinatra-ai/sdk-extensions':
         specifier: workspace:*
         version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: 19.2.7
+        version: 19.2.7(react@19.2.7)
 
   extensions/cinatra-ai/email-connector:
     dependencies:
