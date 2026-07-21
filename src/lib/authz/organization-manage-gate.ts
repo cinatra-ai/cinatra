@@ -1,7 +1,11 @@
 import "server-only";
 
+import { eq } from "drizzle-orm";
+
 import { resolveOrgRoleForUser, type AuthzOrgRole } from "@/lib/auth-session";
 import { roleHasPermission } from "@/lib/authz/policies";
+import { isSingleOrgMode } from "@/lib/authz/instance-mode";
+import { betterAuthDb, betterAuthOrganizations } from "@/lib/better-auth-db";
 
 /**
  * Shared VIEWED-org management gate for `/organizations/[id]` (cinatra#1510).
@@ -51,13 +55,42 @@ export type OrganizationManageCapabilities = {
   readonly canManageSettings: boolean;
   /** `organization.manageMembers` — org_owner; member role/remove + invites. */
   readonly canManageMembers: boolean;
+  /**
+   * `organization.delete` (org_owner) AND structurally deletable: NOT the
+   * bootstrap `default` org (recreated on boot — hazard 1) and NOT single-org
+   * mode (hazard 3). Structural blocks hide the affordance entirely; whether
+   * referenced records ALSO block is the delete module's per-request question,
+   * not a capability.
+   */
+  readonly canDelete: boolean;
 };
 
 const NO_CAPABILITIES: OrganizationManageCapabilities = {
   role: undefined,
   canManageSettings: false,
   canManageMembers: false,
+  canDelete: false,
 };
+
+/**
+ * Structural delete eligibility (hazards 1 + 3). Only consulted for a role that
+ * already holds `organization.delete`, so non-owners cost no extra reads.
+ * Fail-closed: an unreadable org row or mode toggle yields NOT deletable.
+ */
+async function isStructurallyDeletable(organizationId: string): Promise<boolean> {
+  try {
+    if (await isSingleOrgMode()) return false;
+    const rows = await betterAuthDb
+      .select({ slug: betterAuthOrganizations.slug })
+      .from(betterAuthOrganizations)
+      .where(eq(betterAuthOrganizations.id, organizationId))
+      .limit(1);
+    if (rows.length === 0) return false;
+    return rows[0].slug !== "default";
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Resolve the viewed-org management capabilities for a session. Fail-closed:
@@ -76,10 +109,12 @@ export async function resolveOrganizationManageCapabilities(
   );
   if (!role) return NO_CAPABILITIES;
 
+  const holdsDelete = roleHasPermission(role, "organization.delete");
   return {
     role,
     canManageSettings: roleHasPermission(role, "organization.update"),
     canManageMembers: roleHasPermission(role, "organization.manageMembers"),
+    canDelete: holdsDelete && (await isStructurallyDeletable(organizationId)),
   };
 }
 
