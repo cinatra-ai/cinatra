@@ -313,6 +313,12 @@ export {
 } from "./instance-screens";
 
 export { agentPluginScreens } from "./screens";
+export {
+  ASSISTANT_A2A_PUBLICATION_ERROR,
+  assertNotAssistantPublication,
+  isAssistantPublicationAttempt,
+  excludeAssistantTemplates,
+} from "./a2a-publication-guard";
 export { readAgentTemplateBySlug, slugifyAgentTemplateName } from "./store";
 export { readAgentTemplateByPackageName, setAgentTemplatePackageName, seedCodeBasedAgentIoSpec, deleteAgentTemplate } from "./store";
 // Built-in assistant-agent registration (#1037 P1.3).

@@ -36,6 +36,7 @@ import {
 } from "@/lib/assistant-runtime/cinatra-assistant-config";
 import { runAssistantTurn } from "@/lib/assistant-runtime/runtime";
 import { resolveUserContextForUserId } from "@/lib/auth-session";
+import { isAssistantInCallerAudience } from "@/lib/assistant-audience-closure";
 
 // ---------------------------------------------------------------------------
 // Generalized assistant MCP surface (cinatra#1037 P5.5).
@@ -410,6 +411,18 @@ export async function authorizeAssistantMcpTurn(
   const resolvedHandles = await resolveAssistantHandles([normalized]);
   const assistantUserId = resolvedHandles.get(normalized);
   if (!assistantUserId) return { ok: false, miss: notFound() };
+
+  // (2b) AUDIENCE CLOSURE (cinatra#1875 W2, AC#6). The handle registry is
+  // platform-GLOBAL, so a resolved handle alone is not authorization to address
+  // it: the caller must also be IN THE ASSISTANT'S AUDIENCE. Evaluated ACTOR-SIDE
+  // at turn creation through the SAME W1 audience-filtered registry the browser
+  // surfaces use (the builtin stays universally visible; every installed
+  // assistant is gated by its `assistant_audience` grants). A forged
+  // out-of-audience target 404-hides, byte-identical with an unresolvable handle.
+  // Because this runs per send, a shrunk audience denies the NEXT turn while any
+  // already-queued delivery completes (the revocation contract).
+  const inAudience = await isAssistantInCallerAudience(assistantUserId, caller);
+  if (!inAudience) return { ok: false, miss: notFound() };
 
   // (3) target access policy (mcp.enabled/restriction). The config source is
   // the same resolution ladder the runtime binding uses; a principal with no

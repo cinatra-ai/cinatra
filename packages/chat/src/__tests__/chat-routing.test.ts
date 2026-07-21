@@ -25,9 +25,14 @@ const mention = (over: Partial<Mention> = {}): Mention => ({
 });
 
 describe("countMentions / shouldEnterSlackModeOnSend", () => {
-  it("counts @handle tokens with the original regex", () => {
+  it("counts flat + scoped mention tokens via the shared tokenizer (cinatra#1875 AC#1)", () => {
     expect(countMentions("hi @claude and @gpt-4")).toBe(2);
-    expect(countMentions("email me at a@b — not a mention count of zero? it is one")).toBe(1);
+    // A scoped `@vendor/slug` ref counts as ONE token (not vendor + slug).
+    expect(countMentions("run @cinatra-ai/gemini-assistant now")).toBe(1);
+    expect(countMentions("@claude and @cinatra-ai/x")).toBe(2);
+    // Email guard: an address local-part no longer counts (was a false positive
+    // under the old flat regex).
+    expect(countMentions("email me at a@b.com — not a mention")).toBe(0);
     expect(countMentions("no mentions")).toBe(0);
   });
 

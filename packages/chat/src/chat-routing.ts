@@ -10,20 +10,23 @@
 
 import type { Mention } from "./types";
 import type { UiMessage } from "./types";
+import { tokenizeMentions } from "./mention-tokenizer";
 
 /** Cinatra takeover delay while waiting for an external assistant's reply. */
 export const EXTERNAL_TAKEOVER_MS = 20_000;
 
 /**
- * Cheap synchronous mention count. resolveMessageRouting is async; this regex
- * check is sufficient to switch to Slack mode NOW — in the same synchronous
- * batch as setMessages — so the message is never rendered in normal
- * (right-aligned) mode. Applies to all messages (not just the first) to handle
- * human-user tags and built-in assistant tags (@chatgpt) that produce no
- * externalMentions.
+ * Cheap synchronous mention count. resolveMessageRouting is async; this check is
+ * sufficient to switch to Slack mode NOW — in the same synchronous batch as
+ * setMessages — so the message is never rendered in normal (right-aligned) mode.
+ * Applies to all messages (not just the first) to handle human-user tags and
+ * assistant tags that produce no externalMentions. Counts BOTH flat `@handle`
+ * and scoped `@vendor/slug` tokens via the shared tokenizer (cinatra#1875 W2
+ * AC#1) so the count matches the lexer the routing path uses — and no longer
+ * double-counts a scoped ref as its vendor + slug or mis-counts URL/email `@`s.
  */
 export function countMentions(text: string): number {
-  return (text.match(/@[a-z0-9_-]+/gi) ?? []).length;
+  return tokenizeMentions(text).length;
 }
 
 export function shouldEnterSlackModeOnSend(args: {
