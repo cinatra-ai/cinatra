@@ -237,6 +237,14 @@ const authPlugins: CinatraRuntimeBetterAuthPlugins = [
       allowImpersonatingAdmins: process.env.CINATRA_RUNTIME_MODE === "development",
     },
     organization: {
+      // cinatra#1936: organization deletion has exactly ONE door — the
+      // reference-guarded Danger-zone action (src/lib/organization-delete.ts,
+      // cinatra#1928), which blocks on live references and deletes only org
+      // furniture in a single serializable transaction. Better Auth's native
+      // `/organization/delete` (unguarded cascade) refuses with 404
+      // ORGANIZATION_DELETION_DISABLED on both transports (raw HTTP and
+      // `auth.api.*`) for everyone, platform admins included.
+      disableOrganizationDeletion: true,
       allowUserToCreateOrganization: async (user) => {
         // Server-enforced single-org gate. When single-org compatibility mode
         // is on, org creation is blocked
