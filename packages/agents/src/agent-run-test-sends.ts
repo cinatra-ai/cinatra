@@ -102,6 +102,61 @@ export async function claimTestSend(input: {
   return insertedId ? { kind: "claimed", row } : { kind: "existing", row };
 }
 
+export type RecordPreClaimFailureResult =
+  | { kind: "recorded"; row: TestSendRecord }
+  | { kind: "existing"; row: TestSendRecord };
+
+/**
+ * eng#548 #1625 (F3) — record a PRE-CLAIM failure (invalid recipient, no
+ * selection, campaign-access-denied, null-owner) as a terminal `failed` ledger
+ * row that ALLOCATES the next per-run `seq`. The gate wires `seq` → `gateCycle`
+ * (the renderer's rehydration token), so advancing it on a pre-claim failure is
+ * what keeps the HITL screen from stranding: without a fresh seq the token never
+ * changes and the renderer's pending state never clears.
+ *
+ * Because the submission id is fresh-per-gate-visit (F1), each visit's pre-claim
+ * failure is a DISTINCT row → distinct seq → gateCycle advances even for repeated
+ * identical failure REASONS. A `failed` row is user-correctable and NOT counted
+ * toward the send cap (`readSentCountForRun` counts only `sent`), so overloading
+ * `failed` for both post-send and pre-claim failures is safe; `result_json.reason`
+ * distinguishes them.
+ *
+ * Fenced by UNIQUE (run_id, submission_id) via ON CONFLICT DO NOTHING, then it
+ * reads back the WINNING row (like `claimTestSend`): a same-submission transport
+ * retry returns `existing` with whatever the authoritative row is (a prior
+ * `failed`/`sent`/`sending`), and the caller returns `ledgerRowToResult(row)`
+ * verbatim — never synthesizing a fresh seq over a row that already settled.
+ * `selected_draft_ids` is empty (nothing was planned) and `lease_expires_at` is a
+ * non-null inert `now()` (the row is terminal and never reconciled).
+ */
+export async function recordPreClaimFailure(input: {
+  runId: string;
+  submissionId: string;
+  recipientEmail: string | null;
+  result: Record<string, unknown>;
+}): Promise<RecordPreClaimFailureResult> {
+  const id = `arts_${randomUUID()}`;
+  const res = await db.execute(sql`
+    INSERT INTO ${agentRunTestSends}
+      (id, run_id, submission_id, seq, status, recipient_email, selected_draft_ids, result_json, lease_expires_at)
+    SELECT ${id}, ${input.runId}, ${input.submissionId},
+           COALESCE((SELECT MAX(seq) FROM ${agentRunTestSends} WHERE run_id = ${input.runId}), 0) + 1,
+           'failed', ${input.recipientEmail},
+           '[]'::jsonb, ${JSON.stringify(input.result)}::jsonb,
+           now()
+    ON CONFLICT (run_id, submission_id) DO NOTHING
+    RETURNING id
+  `);
+  const insertedId = (res.rows as Array<{ id: string }>)[0]?.id;
+  const row = await readTestSendBySubmission(input.runId, input.submissionId);
+  if (!row) {
+    throw new Error(
+      `recordPreClaimFailure: row for (${input.runId}, ${input.submissionId}) neither inserted nor found`,
+    );
+  }
+  return insertedId ? { kind: "recorded", row } : { kind: "existing", row };
+}
+
 /**
  * Settle a claimed row to its terminal state with the typed result. Idempotent
  * by construction — settling the same row twice writes the same terminal shape.

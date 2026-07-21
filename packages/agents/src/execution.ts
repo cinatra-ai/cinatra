@@ -275,7 +275,7 @@ import {
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
 import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
-import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask } from "@cinatra-ai/a2a";
+import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLatestWayflowGateTask } from "@cinatra-ai/a2a";
 // Host capability resolution for the HITL schema enricher: the enricher itself
 // is provider-agnostic (agent-ui-protocol imports no provider package); THIS
 // host-side caller injects the live `email-send` providers so sender-alias
@@ -655,6 +655,18 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   );
 
   if (taskState === "input-required") {
+    // eng#548 #1625 (F1) — record THIS gate visit's a2a task id to the
+    // authoritative Redis latest-task map BEFORE the interrupt is published.
+    // This is the fresh-guaranteed submission identity the run-scoped
+    // test-delivery send resolves at the passthrough seam. AWAITED and
+    // correctness-critical (NOT best-effort, NOT inside the xRenderer catch
+    // below): a Redis failure THROWS here and prevents the interrupt from being
+    // published, so a send can never resolve a stale identity from the racy
+    // `agent_runs.a2a_task_id` column (the defensive resync above persists that
+    // column best-effort and may leave it stale under a "tuple concurrently
+    // updated" race). Redis is already load-bearing for gate resume (the
+    // reverse-map fallback), so this is no new hard dependency.
+    await rememberLatestWayflowGateTask(runId, task.id);
     const adapter = new DualAdapterDispatch(
       new AgUiAdapter(runId, run.templateId, (event) => publishAgUiEvent(runId, event)),
       new A2UiAdapter(

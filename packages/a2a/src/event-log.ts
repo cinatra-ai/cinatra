@@ -428,6 +428,47 @@ export async function getOrAddWayflowRendererGateIndex(
 }
 
 /**
+ * eng#548 #1625 (F1) — the AUTHORITATIVE, non-racing source of the CURRENT gate
+ * visit's a2a task id for a run. Written UNCONDITIONALLY at each input-required
+ * interrupt (execution.ts) BEFORE the interrupt is published, so the run-scoped
+ * test-delivery send resolves a fresh-guaranteed submission identity that CANNOT
+ * be stale — unlike `agent_runs.a2a_task_id`, whose best-effort Postgres write
+ * can LOSE a "tuple concurrently updated" race and leave the column pointing at
+ * a PREVIOUS visit's id. A plain Redis SET (no compare-and-swap), so it never
+ * races a Postgres row. The experiment (Stage-1) proved each gate visit mints a
+ * DISTINCT a2a task id, so this key is a distinct-per-visit submission identity.
+ *
+ * MUST be awaited and treated as correctness-critical by the caller: a Redis
+ * failure here THROWS so the interrupt is NOT published (fail closed) rather than
+ * emitting a gate whose send would resolve a stale identity. Redis is already
+ * load-bearing for gate resume (the reverse-map below is the resume fallback), so
+ * this adds no new hard dependency.
+ */
+export async function rememberLatestWayflowGateTask(
+  runId: string,
+  taskId: string,
+): Promise<void> {
+  const r = getPublisher();
+  await r.set(`cinatra:wayflow:latest-task:${runId}`, taskId, "EX", GATE_SEQUENCE_TTL_S);
+}
+
+/**
+ * eng#548 #1625 (F1) — read the current gate visit's a2a task id for a run,
+ * written by `rememberLatestWayflowGateTask` at interrupt-emit. The passthrough
+ * seam stamps this as the run-scoped send's `verifiedSubmissionId`. Returns null
+ * when absent/expired; the seam then fails CLOSED (omits the id) rather than
+ * trusting the racy DB column.
+ */
+export async function resolveLatestWayflowGateTaskId(
+  runId: string,
+): Promise<string | null> {
+  if (!runId) return null;
+  const r = getPublisher();
+  const taskId = await r.get(`cinatra:wayflow:latest-task:${runId}`);
+  return typeof taskId === "string" && taskId.length > 0 ? taskId : null;
+}
+
+/**
  * Reverse lookup: WayFlow task id → agent run id.
  *
  * Backs the multi-gate resume path: when `readAgentRunByTaskId` misses

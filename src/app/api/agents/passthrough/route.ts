@@ -421,19 +421,31 @@ export async function POST(req: Request): Promise<Response> {
       // Nesting the two ALS frames is safe — they are distinct AsyncLocalStorage
       // instances. Carry the run's org + owner so the frame is a coherent
       // identity tuple with the run id.
+      // eng#548 #1625 (F1) — the trusted per-gate-resume submission id, resolved
+      // from the AUTHORITATIVE Redis latest-task map (written UNCONDITIONALLY at
+      // each interrupt in execution.ts, BEFORE the interrupt is published), NOT
+      // from the racy `agent_runs.a2a_task_id` column which a lost "tuple
+      // concurrently updated" race can leave pointing at a PREVIOUS visit's id.
+      // Fresh-guaranteed: a plain Redis SET, never a Postgres CAS. Fails CLOSED —
+      // a null/absent value OR a Redis read error OMITS verifiedSubmissionId and
+      // the send handler then denies (resolveRunScopedSubmissionId). NEVER falls
+      // back to run.a2aTaskId (a surviving stale value would reintroduce the
+      // false-dedup hole that suppresses a legitimate distinct send).
+      let verifiedSubmissionId: string | undefined;
+      if (RUN_SCOPED_CONTEXT_TOOLS.has(tool)) {
+        try {
+          const { resolveLatestWayflowGateTaskId } = await import("@cinatra-ai/a2a");
+          verifiedSubmissionId = (await resolveLatestWayflowGateTaskId(run.id)) ?? undefined;
+        } catch {
+          verifiedSubmissionId = undefined; // fail closed on a Redis read error
+        }
+      }
       result = RUN_SCOPED_CONTEXT_TOOLS.has(tool)
         ? await mcpRequestContextStorage.run(
             {
               runId: binding.runId,
               verifiedRunScopeId: binding.runId,
-              // eng#548 #1625 — the trusted per-gate-resume submission id, read
-              // SERVER-SIDE from the context-id-bound run row's a2aTaskId (a fresh
-              // task id per WayFlow input-required interrupt). The
-              // email_test_delivery_run_send primitive reads THIS as its
-              // (run_id, submission_id) ledger dedupe identity — never caller
-              // input. Undefined when the run carries no task id (a non-A2A run
-              // can never reach the run-scoped send node).
-              ...(run.a2aTaskId ? { verifiedSubmissionId: run.a2aTaskId } : {}),
+              ...(verifiedSubmissionId ? { verifiedSubmissionId } : {}),
               userId: run.runBy ?? undefined,
               orgId: run.orgId,
               ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),

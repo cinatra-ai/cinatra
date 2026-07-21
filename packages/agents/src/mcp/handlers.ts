@@ -63,9 +63,9 @@ import {
 import {
   claimTestSend,
   settleTestSend,
+  recordPreClaimFailure,
   readTestSendBySubmission,
   readSentCountForRun,
-  readMaxSeqForRun,
   type TestSendRecord,
 } from "../agent-run-test-sends";
 import { enqueueBackgroundJob } from "@/lib/background-jobs";
@@ -5756,10 +5756,17 @@ async function handleEmailTestDeliveryRunSend(
       };
     }
 
-    // EXECUTE-tier authz (DESIGN-V3 (5)): readAgentRunById only enforced "read",
-    // which is insufficient for a mutating send. Thread co-owners + effective
-    // policy exactly like agent_run_resume so co-owner / policy / token-scope
-    // gates actually evaluate. A caller who cannot execute the run is denied.
+    // EXECUTE-tier authz — OWNER-CONTEXT defense-in-depth, NOT responder authz
+    // (eng#548 #1625 F2). This send runs under the run OWNER's borrowed authority
+    // (the passthrough seam reconstructs the actor from run.runBy for this
+    // server-side back-edge node), so this `execute` check is evaluated against
+    // the owner and is effectively tautological here. The RESPONDER-side execute
+    // gate lives at the resume seam (review-task-actions.ts enforceResumeAccess /
+    // agent_run_resume), which enforces `execute` + `approveHitl` against the
+    // actual responder BEFORE the WayFlow resume ever reaches this node. This
+    // check is retained as belt-and-suspenders alongside the declaring-package
+    // and campaign-pin guards. Thread co-owners + effective policy exactly like
+    // agent_run_resume so the shape matches.
     const coOwnerRows = await readRunCoOwners(run.id);
     const coOwnerUserIds = coOwnerRows.map((r) => r.userId);
     const effectivePolicy = run.authPolicy ?? template?.agentAuthPolicy ?? null;
@@ -5773,13 +5780,22 @@ async function handleEmailTestDeliveryRunSend(
     }
     // Fail closed on a null runBy — the run owner is the mailbox selector; there
     // is no arbitrary-OAuth fallback (parity with the deleted route's guard).
+    // eng#548 #1625 (F3): record the pre-claim failure so `seq`→`gateCycle`
+    // ADVANCES and the renderer clears its pending state (never strands). The
+    // helper reads back the winning row (ON CONFLICT), so a same-submission
+    // retry returns the authoritative prior result verbatim.
     if (!run.runBy) {
-      return {
-        ok: false,
-        seq: await readMaxSeqForRun(runId),
-        reason: "connector_unavailable",
-        message: "This run has no owner mailbox to send the test email from.",
-      };
+      const rec = await recordPreClaimFailure({
+        runId,
+        submissionId,
+        recipientEmail: recipientEmail || null,
+        result: {
+          ok: false,
+          reason: "connector_unavailable",
+          message: "This run has no owner mailbox to send the test email from.",
+        },
+      });
+      return ledgerRowToResult(rec.row);
     }
 
     const port = getTestDeliverySendPort();
@@ -5849,19 +5865,30 @@ async function handleEmailTestDeliveryRunSend(
       specificFollowUpDraftIds: followUpIds,
     });
     if (!prepared.ok) {
-      // A pre-claim expected failure — report it as data with the current max
-      // seq (nothing was claimed, so there is no new ordinal).
-      return {
-        ok: false,
-        seq: await readMaxSeqForRun(runId),
-        reason: prepared.reason,
-        message:
-          prepared.reason === "campaign_access_denied"
-            ? "You do not have access to this campaign."
-            : prepared.reason === "invalid_recipient"
-              ? "Enter a valid recipient email address for the test send."
-              : "No test emails were selected to send.",
-      };
+      // A pre-claim expected failure — report it as data. eng#548 #1625 (F3):
+      // record it as a terminal `failed` ledger row that ALLOCATES the next
+      // `seq`, so `gateCycle` advances and the renderer clears its pending state
+      // (the previous unchanged max-seq return stranded the screen). Fresh
+      // submission id per visit (F1) ⇒ distinct row ⇒ distinct seq, even for a
+      // repeated identical failure reason. The helper reads back the winning row
+      // (ON CONFLICT), so a same-submission transport retry returns the
+      // authoritative prior result verbatim — never a second attempt.
+      const rec = await recordPreClaimFailure({
+        runId,
+        submissionId,
+        recipientEmail: recipientEmail || null,
+        result: {
+          ok: false,
+          reason: prepared.reason,
+          message:
+            prepared.reason === "campaign_access_denied"
+              ? "You do not have access to this campaign."
+              : prepared.reason === "invalid_recipient"
+                ? "Enter a valid recipient email address for the test send."
+                : "No test emails were selected to send.",
+        },
+      });
+      return ledgerRowToResult(rec.row);
     }
 
     // ---- Claim: the atomic exactly-once fence on (run, submission). ----

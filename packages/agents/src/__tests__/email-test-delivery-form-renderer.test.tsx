@@ -207,4 +207,40 @@ describe("EmailTestDeliveryFormRenderer", () => {
     );
     expect(document.querySelector('[data-testid="test-delivery-banner"]')).not.toBeNull();
   });
+
+  it("a pre-claim FAILURE re-entry (advanced gateCycle) clears pending — never strands (F3)", () => {
+    // F3: a pre-claim failure now records a `failed` ledger row that allocates a
+    // fresh seq, so gateCycle ADVANCES on the failure re-entry (previously it
+    // returned the unchanged max seq → gateCycle stayed put → the screen stranded
+    // permanently disabled). This asserts the renderer clears pending + re-enables
+    // the controls on a failure re-entry, driven purely by the advanced gateCycle.
+    const { onChange, rerender } = renderField({
+      value: { ...BASE_VALUE, gateCycle: 3 },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send test email/i }));
+    expect(document.querySelector('[data-testid="test-delivery-pending"]')).not.toBeNull();
+    expect((screen.getByRole("button", { name: /sending test/i }) as HTMLButtonElement).disabled).toBe(true);
+    // The run re-enters the gate with a FRESH gateCycle carrying a FAILURE result.
+    rerender(
+      <EmailTestDeliveryFormRenderer
+        fieldName="testForm"
+        schema={{ "x-renderer": "@cinatra-ai/email-test-delivery-agent:input" }}
+        value={{
+          ...BASE_VALUE,
+          gateCycle: 4, // advanced by the recorded pre-claim failure row's seq
+          lastSendResult: { ok: false, message: "Enter a valid recipient email address for the test send." },
+        }}
+        onChange={onChange}
+        context={MINIMAL_CONTEXT}
+      />,
+    );
+    // Pending cleared, controls RE-ENABLED (the user can correct + retry), and the
+    // failure banner is shown — the screen is never stranded.
+    expect(document.querySelector('[data-testid="test-delivery-pending"]')).toBeNull();
+    expect((screen.getByRole("button", { name: /send test email/i }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: /^continue$/i }) as HTMLButtonElement).disabled).toBe(false);
+    const banner = document.querySelector('[data-testid="test-delivery-banner"]');
+    expect(banner).not.toBeNull();
+    expect(banner!.getAttribute("data-status")).toBe("error");
+  });
 });

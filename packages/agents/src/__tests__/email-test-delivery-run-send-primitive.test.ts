@@ -77,6 +77,7 @@ vi.mock("../store", () => storeMock);
 const ledgerMock = vi.hoisted(() => ({
   claimTestSend: vi.fn(),
   settleTestSend: vi.fn(),
+  recordPreClaimFailure: vi.fn(),
   readTestSendBySubmission: vi.fn(),
   readSentCountForRun: vi.fn(async () => 0),
   readMaxSeqForRun: vi.fn(async () => 0),
@@ -241,6 +242,20 @@ beforeEach(() => {
   ledgerMock.readSentCountForRun.mockResolvedValue(0);
   ledgerMock.readMaxSeqForRun.mockResolvedValue(0);
   ledgerMock.claimTestSend.mockResolvedValue({ kind: "claimed", row: makeRow() });
+  // F3: a pre-claim failure ALLOCATES a fresh seq via a terminal `failed` row so
+  // gateCycle advances. The default mock echoes the failure result + a fresh seq.
+  ledgerMock.recordPreClaimFailure.mockImplementation(async (input: {
+    runId: string; submissionId: string; recipientEmail: string | null; result: Record<string, unknown>;
+  }) => ({
+    kind: "recorded" as const,
+    row: makeRow({
+      status: "failed",
+      seq: 7,
+      submissionId: input.submissionId,
+      recipientEmail: input.recipientEmail,
+      resultJson: input.result,
+    }),
+  }));
   ledgerMock.settleTestSend.mockImplementation(async (input: { id: string; status: string; result: Record<string, unknown> }) =>
     makeRow({ id: input.id, status: input.status, resultJson: input.result }),
   );
@@ -337,13 +352,19 @@ describe("email_test_delivery_run_send — authz & scope", () => {
     );
   });
 
-  it("maps a cross-tenant campaign (prepare campaign_access_denied) to data, no claim", async () => {
+  it("maps a cross-tenant campaign (prepare campaign_access_denied) to data, no claim, but ADVANCES seq (F3)", async () => {
     const handlers = await getHandlers();
     fakePort.prepareSend.mockResolvedValueOnce({ ok: false, reason: "campaign_access_denied" });
     const result = (await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_A }, () =>
       callSend(handlers, VALID_SEND_INPUT),
     )) as Record<string, unknown>;
-    expect(result).toMatchObject({ ok: false, reason: "campaign_access_denied", seq: 0 });
+    // F3: the pre-claim failure is recorded as a `failed` row that allocates a
+    // fresh seq (7 here) so gateCycle advances and the renderer clears pending.
+    expect(result).toMatchObject({ ok: false, reason: "campaign_access_denied", seq: 7 });
+    expect(ledgerMock.recordPreClaimFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: RUN_ID, submissionId: SUBMISSION_A }),
+    );
+    // still NO real send claim.
     expect(ledgerMock.claimTestSend).not.toHaveBeenCalled();
     expect(fakePort.performSend).not.toHaveBeenCalled();
   });
@@ -358,14 +379,37 @@ describe("email_test_delivery_run_send — authz & scope", () => {
     expect(ledgerMock.claimTestSend).not.toHaveBeenCalled();
   });
 
-  it("fails closed with connector_unavailable when the run has no owner mailbox", async () => {
+  it("fails closed with connector_unavailable when the run has no owner mailbox, ADVANCING seq (F3)", async () => {
     const handlers = await getHandlers();
     storeMock.readAgentRunById.mockResolvedValueOnce({ ...RUN, runBy: null });
     const result = (await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_A }, () =>
       callSend(handlers, VALID_SEND_INPUT),
     )) as Record<string, unknown>;
-    expect(result).toMatchObject({ ok: false, reason: "connector_unavailable" });
+    // F3: even the null-owner pre-claim failure advances seq so the gate never strands.
+    expect(result).toMatchObject({ ok: false, reason: "connector_unavailable", seq: 7 });
+    expect(ledgerMock.recordPreClaimFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: RUN_ID, submissionId: SUBMISSION_A }),
+    );
     expect(fakePort.performSend).not.toHaveBeenCalled();
+  });
+
+  it("returns the WINNING row verbatim when a pre-claim failure conflicts with an existing send (F3)", async () => {
+    const handlers = await getHandlers();
+    // A same-submission transport retry: the row already SENT. recordPreClaimFailure
+    // ON CONFLICT reads it back and the handler returns it verbatim — never a fresh seq.
+    fakePort.prepareSend.mockResolvedValueOnce({ ok: false, reason: "campaign_access_denied" });
+    ledgerMock.recordPreClaimFailure.mockResolvedValueOnce({
+      kind: "existing",
+      row: makeRow({
+        status: "sent",
+        seq: 2,
+        resultJson: { ok: true, sentTo: "to@example.com", sentCount: 1, message: "Test email sent to to@example.com." },
+      }),
+    });
+    const result = (await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_A }, () =>
+      callSend(handlers, VALID_SEND_INPUT),
+    )) as Record<string, unknown>;
+    expect(result).toMatchObject({ ok: true, seq: 2, sentTo: "to@example.com" });
   });
 
   it("fails closed with no verified run context", async () => {
