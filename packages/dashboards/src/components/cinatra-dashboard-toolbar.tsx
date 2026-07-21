@@ -6,7 +6,7 @@
  * MutationObserver relabel/injection workaround) with a toolbar rendered
  * entirely by Cinatra through the public composable seam: it reads the
  * dashboard state machine from `useDashboardContext()` (drizzle-cube
- * `0.5.7`) and drives it through the documented handlers — no DOM
+ * `0.6.4`) and drives it through the documented handlers — no DOM
  * mutation, no DC-internal class selectors.
  *
  * What it renders:
@@ -24,7 +24,7 @@
  *     `handleAddText` / `handleAddPortlet`.
  *
  * Deliberately NOT reproduced from the bundled toolbar:
- *   - The colour-palette dropdown: drizzle-cube `0.5.7` does not export
+ *   - The colour-palette dropdown: drizzle-cube `0.6.4` does not export
  *     `ColorPaletteSelector` or its palette registry from any public
  *     entrypoint, and rebuilding it would mean hardcoding DC-internal
  *     palette names — the same fragile coupling this toolbar retires.

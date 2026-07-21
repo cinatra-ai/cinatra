@@ -56,13 +56,21 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
   const orgId = session.session?.activeOrganizationId;
-  // The uploading user — the recipient of the refusal advisory (cinatra#1890).
+  // The uploading user — owner of the upload (private, #1885 C1) AND the
+  // recipient of the refusal advisory (cinatra#1890).
   const userId = session.user?.id ?? undefined;
   if (!orgId) {
     return Response.json(
       { ok: false, error: "No active organization" },
       { status: 400 },
     );
+  }
+  // Write-time scope-derived visibility (#1885 C1 / D10, ruling 3): an upload is
+  // owned by the SESSION USER and PRIVATE to them — never organization-wide.
+  // The session is gated above, so a user id is present; guard defensively so
+  // ownership is never derived from a missing subject.
+  if (!userId) {
+    return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
   // The file is the raw request body. Do not use request.formData(), which
@@ -101,14 +109,17 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const result = await createUploadedArtifact({
       orgId,
-      createdBy: userId ?? null,
-      // Ownership is required by the semantic creation contract. Web uploads
-      // are organization-owned and org-visible — canonical vocabulary only
-      // (cinatra#1428): visibility 'organization', never the retired 'org'
-      // composite.
-      ownerLevel: "organization",
-      ownerId: orgId,
-      visibility: "organization",
+      createdBy: userId,
+      // Write-time scope-derived visibility (#1885 C1 / D10, ruling 3): an
+      // upload is owned by the SESSION USER and PRIVATE to them — never
+      // organization-wide. Any project refinement is server-derived ONLY (the
+      // request-context project frame the write path reads); this route sets no
+      // frame and accepts NO client-supplied project input, so uploads land at
+      // substrate (project_id null) until a server-derived surface context is
+      // plumbed. Canonical visibility vocabulary only (cinatra#1428).
+      ownerLevel: "user",
+      ownerId: userId,
+      visibility: "private",
       declaredMime: request.headers.get("content-type") ?? undefined,
       title: title ?? undefined,
       originKind: "upload",

@@ -1,6 +1,6 @@
 "use client";
 /**
- * ComposedDashboard — Cinatra's assembly of drizzle-cube `0.5.7`'s
+ * ComposedDashboard — Cinatra's assembly of drizzle-cube `0.6.4`'s
  * composable dashboard pieces.
  *
  * Mirrors the upstream back-compat `<DashboardGrid>` wiring

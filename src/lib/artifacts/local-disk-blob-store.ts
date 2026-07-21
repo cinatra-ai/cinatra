@@ -176,8 +176,16 @@ function absFor(storageKey: string): string {
 
 // Minimal dependency-free magic-byte sniff (no new deps per repo constraint).
 // Common types only; unknown → declaredMime (if safe) → octet-stream.
-function sniffMime(head: Uint8Array, declared?: string): string {
+function sniffMime(head: Uint8Array, declaredRaw?: string): string {
   const b = head;
+  // CANONICALIZE the declared MIME up front: strip parameters (`; charset=…`),
+  // trim, and lowercase. The stored/detected MIME must be canonical — the preview
+  // eligibility gate + the system representation-provider registrar match EXACTLY
+  // against the (unparameterized) allowlist, so a `application/json; charset=utf-8`
+  // (or `text/csv; charset=utf-8`) upload would otherwise be stored verbatim and
+  // then 415 on preview. Every declared-honoring branch below returns this
+  // canonical form. (epic #1883 A1 — Codex convergence.)
+  const declared = declaredRaw ? (declaredRaw.split(";", 1)[0] ?? "").trim().toLowerCase() : undefined;
   if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47)
     return "image/png";
   if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff)
@@ -186,8 +194,33 @@ function sniffMime(head: Uint8Array, declared?: string): string {
     return "image/gif";
   if (b.length >= 5 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46)
     return "application/pdf";
-  if (b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && (b[2] === 0x03 || b[2] === 0x05))
+  if (
+    b.length >= 4 &&
+    b[0] === 0x50 &&
+    b[1] === 0x4b &&
+    ((b[2] === 0x03 && b[3] === 0x04) || (b[2] === 0x05 && b[3] === 0x06))
+  ) {
+    // ZIP container (`PK\x03\x04` local-file-header / `PK\x05\x06` end-of-central-
+    // directory — the two complete 4-byte ZIP signatures). OOXML (docx/xlsx/pptx)
+    // and ODF
+    // (odt/...) office documents are ZIP containers ON DISK, but their DECLARED
+    // media type is a specific office format — a legitimate, SAFE refinement of
+    // the raw ZIP signature that wins here (epic #1883 A1: the artifact type is
+    // decided by the DECLARED mime, never by container magic). Without this, a
+    // .docx sniffs as `application/zip` and the writer then rejects it against
+    // document-artifact's office-only `accepts` (the office ZIP-sniffer trap).
+    // Any non-office declaration falls back to `application/zip` (zip-artifact).
+    // The bytes are still a genuine ZIP (the PK check held), and both bases serve
+    // downloads as `attachment`, so honouring the declared office type opens no
+    // inline-execution surface.
+    if (
+      declared &&
+      (declared.startsWith("application/vnd.openxmlformats-officedocument.") ||
+        declared.startsWith("application/vnd.oasis.opendocument."))
+    )
+      return declared;
     return "application/zip";
+  }
   // Media containers. These MUST be sniffed before the UTF-8 text
   // heuristic: several (WebM/EBML, RIFF, bare-frame MP3) can have a
   // NUL-free 16-byte head and would otherwise mis-sniff as text/plain,

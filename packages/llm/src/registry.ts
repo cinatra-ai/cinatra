@@ -8,6 +8,7 @@ import { createOpenAIProviderAdapter, getConfiguredOpenAIConnection, type OpenAI
 import { createAnthropicProviderAdapter, type AnthropicConnectionConfig } from "./providers/anthropic";
 import { createGeminiProviderAdapter, getConfiguredGeminiConnection } from "./providers/gemini";
 import { buildLlmMcpServerTool, buildExternalMcpServerTools } from "./mcp-access";
+import { isScriptedTestProviderEnabled } from "./scripted-test-provider";
 import type { LlmProvider, LlmProviderAdapter, LlmMcpServerTool } from "./types";
 // Anthropic API connection config is owned by the anthropic connector and
 // resolves through its `llm-provider-surface` registration at call time
@@ -305,6 +306,14 @@ export async function resolveFirstAvailableAdapter(
  * Check if any LLM runtime is available.
  */
 export async function hasConfiguredLlmRuntime(preferredProviders?: LlmProvider[]): Promise<boolean> {
+  // Scripted-test-provider seam (dev/CI UAT only; #1919 AC3). When the
+  // deterministic provider is enabled the runtime IS "configured": the widget
+  // broker gate (and every hasConfiguredLlmRuntime caller) must not 400 the turn
+  // before the scripted stream can answer, since the deterministic UAT app
+  // carries no real provider creds. Production is untouched — the flag is never
+  // set there, and the scripted stream itself fail-closes outside an explicit
+  // development runtime (assertScriptedProviderNotProduction at the stream entry).
+  if (isScriptedTestProviderEnabled()) return true;
   return Boolean(await resolveFirstAvailableAdapter(preferredProviders));
 }
 

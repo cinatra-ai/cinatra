@@ -317,6 +317,9 @@ export function AppShell({
   }, [requiresSetupRedirect, router]);
 
   useEffect(() => {
+    // Deliberately UUID-strict (NOT the #1907 format-agnostic grammar): chat
+    // thread ids are app-minted UUIDs (ag-ui-chat-client.ts generateId), never
+    // better-auth entity ids.
     const isChatThread = /^\/chat\/[a-f0-9-]{36}$/.test(pathname);
     const segments = pathname.split("/").filter(Boolean);
     const isAgentInstance = segments.length >= 4 && segments[0] === "agents";

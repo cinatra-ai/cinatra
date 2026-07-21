@@ -7,6 +7,10 @@ import {
   type CollectedArtifactBinding,
   type SemanticArtifactProducesRef,
 } from "@cinatra-ai/agents/artifact-binding";
+import {
+  deriveScopeOwnership,
+  type ScopeDerivedOwnership,
+} from "@cinatra-ai/mcp-server/obo-ceiling";
 import { resolveBoundArtifactTarget } from "./resolve-bound-artifact-type";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
 import { getPooledDb } from "@/lib/db/pooled";
@@ -187,6 +191,60 @@ async function resolveTemplatePackageName(
     : null;
 }
 
+// ---------------------------------------------------------------------------
+// Write-time scope-derived ownership (#1885 C1 / D10).
+//
+// The run-completion materializer previously stamped EVERY output
+// organization-wide (`ownerLevel: "organization"`), so an agent's outputs were
+// visible far wider than the agent's own anchored reach. Now the row ownership
+// is derived from the run's LOCKED template anchor + org + (optional) project
+// launch, through the single shared derivation (`deriveScopeOwnership`) — the
+// sibling projection of the OBO ceiling chain. A run is by definition an
+// agent_run delegation, so this seam always derives from the anchor (no
+// delegation gate is needed here — unlike objects_save, which serves chat +
+// human callers too).
+// ---------------------------------------------------------------------------
+async function resolveRunScopeOwnership(input: {
+  templateId: string;
+  runId: string;
+  orgId: string;
+}): Promise<ScopeDerivedOwnership> {
+  ensurePostgresSchema();
+  const s = postgresSchema.replaceAll('"', '""');
+  const [tmplRes, runRes] = await Promise.all([
+    pool().query(
+      `SELECT owner_level, owner_id FROM "${s}"."agent_templates" WHERE id = $1 LIMIT 1`,
+      [input.templateId],
+    ),
+    pool().query(
+      `SELECT project_id FROM "${s}"."agent_runs" WHERE id = $1 LIMIT 1`,
+      [input.runId],
+    ),
+  ]);
+  const tmpl = tmplRes.rows[0] as
+    | { owner_level?: string | null; owner_id?: string | null }
+    | undefined;
+  const run = runRes.rows[0] as { project_id?: string | null } | undefined;
+  const derived = deriveScopeOwnership({
+    ownerLevel: tmpl?.owner_level ?? null,
+    ownerId: tmpl?.owner_id ?? null,
+    orgId: input.orgId,
+    projectId: run?.project_id ?? null,
+  });
+  // A corrupt partial anchor (known non-org owner tier with a missing id) fails
+  // closed at ceiling derivation and never reaches a successful terminal run,
+  // so `derived` is non-null here; the org-owned fallback preserves the
+  // never-throw materializer contract if a raw-SQL fixture violates that.
+  return (
+    derived ?? {
+      ownerLevel: "organization",
+      ownerId: input.orgId,
+      visibility: "organization",
+      projectId: null,
+    }
+  );
+}
+
 async function* asUtf8Stream(s: string): AsyncIterable<Uint8Array> {
   yield new TextEncoder().encode(s);
 }
@@ -211,6 +269,9 @@ async function writeClaimedArtifact(input: {
   title: string;
   mime: string;
   content: string;
+  /** Scope-derived row ownership (#1885 C1 / D10) — replaces the hard-coded
+   *  organization ownership; derived from the run's LOCKED template anchor. */
+  ownership: ScopeDerivedOwnership;
   /** The declared object type + its accepted representation forms, ALREADY
    *  resolved by `resolveBoundArtifactTarget` (cinatra#1454) — replaces the
    *  retired `${extension}:artifact` umbrella lookup (#1824). */
@@ -275,8 +336,11 @@ async function writeClaimedArtifact(input: {
       // claim-backed host type that carries no `isArtifact.accepts` on its def.
       expectedAcceptMimes: input.resolvedTarget.acceptedFileMimeTypes,
       createdBy: input.createdBy,
-      ownerLevel: "organization",
-      ownerId: input.orgId,
+      // Scope-derived ownership (#1885 C1 / D10) — the run's anchor tuple,
+      // no longer hard-coded organization-wide.
+      ownerLevel: input.ownership.ownerLevel,
+      ownerId: input.ownership.ownerId,
+      visibility: input.ownership.visibility,
       title: input.title,
       declaredMime: input.mime,
       originKind: "agent_generated",
@@ -385,6 +449,14 @@ export async function materializeRunArtifacts(input: {
   // Warm the registry once so the declared-type resolution below sees every
   // installed type (the resolver reads `objectTypeRegistry.resolve`).
   registerAllObjectTypes();
+
+  // Scope-derived ownership for every output of this run (#1885 C1 / D10) —
+  // resolved once from the run's anchor, applied to each materialized row.
+  const ownership = await resolveRunScopeOwnership({
+    templateId: input.templateId,
+    runId: input.runId,
+    orgId: input.orgId,
+  });
 
   for (const { nodeId, outputId, binding } of bindings) {
     const fail = (error: string): void => {
@@ -501,6 +573,7 @@ export async function materializeRunArtifacts(input: {
         title,
         mime,
         content,
+        ownership,
         resolvedTarget: resolved.target,
         mimeDescription: "the binding resolved MIME",
       });
@@ -624,6 +697,13 @@ export async function materializeToolArtifact(input: {
     });
     if (!resolved.ok) return { ok: false, error: resolved.error };
 
+    // Scope-derived ownership (#1885 C1 / D10) — the run's anchor tuple.
+    const ownership = await resolveRunScopeOwnership({
+      templateId: input.templateId,
+      runId: input.runId,
+      orgId: input.orgId,
+    });
+
     return await writeClaimedArtifact({
       runId: input.runId,
       orgId: input.orgId,
@@ -635,6 +715,7 @@ export async function materializeToolArtifact(input: {
       title,
       mime: input.mime,
       content: input.content,
+      ownership,
       resolvedTarget: resolved.target,
       mimeDescription: "the call declared MIME",
     });

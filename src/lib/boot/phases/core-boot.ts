@@ -76,6 +76,20 @@ export function coreBootPhases(): BootPhase[] {
       },
     },
     {
+      name: "owner-containment-resolver-wiring",
+      policy: "retryable",
+      run: async () => {
+        // Publish the LIVE owner-axis containment resolver at boot (#1885 C1;
+        // C4 #1884 handoff) so `deriveRunOboCeilingJson` can collapse a mixed-
+        // owner-tier child OBO ceiling chain to its verified-narrowest tier —
+        // even in a worker that dispatches child runs without importing the
+        // heavier app graph. The module self-publishes on the globalThis port on
+        // load. Retryable: if it fails to load, mixed-owner-tier child dispatches
+        // simply fail closed (C4's safe default) rather than aborting boot.
+        await import("@/lib/authz/owner-containment-resolver");
+      },
+    },
+    {
       name: "core-migrations",
       policy: "fatal",
       run: async () => {

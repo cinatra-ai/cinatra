@@ -43,7 +43,8 @@
     "./integration/register-object-types": "./src/integration/register-object-types.ts",
     "./verdaccio/client": "./src/verdaccio/client.ts",
     "./verdaccio/publish-metadata": "./src/verdaccio/publish-metadata.ts",
-    "./artifact-binding": "./src/artifact-binding.ts"
+    "./artifact-binding": "./src/artifact-binding.ts",
+  "./owner-containment-port": "./src/owner-containment-port.ts"
   },
   "scripts": {
     "test": "vitest run",

@@ -87,7 +87,50 @@ describe("G2 — never-blank guardrail", () => {
   });
 
   it("the core-owned floor survives the cutover (markdown/plain-text still host-rendered)", () => {
+    // The REPRESENTATION path (a markdown/plain-text REPRESENTATION of a row NOT
+    // typed to a text base) keeps the host floor: text-artifact declares
+    // representations=[text/csv] ONLY, so it registers no representation provider
+    // for text/plain or text/markdown and cannot displace this floor.
     expect(dispatchFor("text/markdown")).toEqual({ kind: "mime", handler: "markdown" });
     expect(dispatchFor("text/plain")).toEqual({ kind: "mime", handler: "text" });
+  });
+});
+
+// The SEMANTIC (by object-type) path is distinct from the representation path
+// above (epic #1883 A1). A row TYPED to a required text/JSON base renders via THAT
+// pack's own detail renderer regardless of its representation MIME — the base owns
+// its typed rows. text-artifact's `representations=[text/csv]` subset bounds only
+// the mime-keyed REPRESENTATION path (preserving the host floor above); it does
+// NOT change that a text-artifact-TYPED row mounts text-artifact::detail. Pinned
+// here so the two paths' interaction is deliberate, not accidental.
+describe("G2 — a required text base owns its OWN typed rows via the semantic path", () => {
+  const TEXT_PKG = "@cinatra-ai/text-artifact";
+  const TEXT_TYPE = "@cinatra-ai/text-artifact:artifact";
+
+  function dispatchTyped(baseType: string, mime: string) {
+    return pickArtifactRenderer(
+      resolveArtifactDispatchInputs({
+        orgId: ORG,
+        baseType,
+        identity: { kind: "extension", extension: TEXT_PKG },
+        mime,
+      }),
+    );
+  }
+
+  it("a text-artifact-TYPED markdown/plain/csv row mounts text-artifact::detail (semantic, build-map)", () => {
+    // The bridge registers the pack's detail renderer semantically for its owned
+    // type; text-artifact::detail is a real system entry in the generated build map.
+    semanticRendererRegistry.register({ objectTypeId: TEXT_TYPE, packageName: TEXT_PKG });
+    for (const mime of ["text/markdown", "text/plain", "text/csv"]) {
+      expect(dispatchTyped(TEXT_TYPE, mime)).toEqual({
+        kind: "semantic",
+        packageName: TEXT_PKG,
+        generatedKey: `${TEXT_PKG}::detail`,
+      });
+    }
+    expect(classifyLoadablePath(`${TEXT_PKG}::detail`)).toBe("build-map");
+    // The floor still owns a markdown REPRESENTATION of a row NOT typed to the base.
+    expect(dispatchFor("text/markdown")).toEqual({ kind: "mime", handler: "markdown" });
   });
 });

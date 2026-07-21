@@ -160,3 +160,112 @@ describe("selectRequiredArtifactUploadCandidates", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Full required-base roster after the MIME-base expansion (epic #1883 A1): the
+// existing five (image/pdf/audio/video/chart) + the four new bases (zip / text /
+// document / json). This matrix proves the roster is MUTUALLY DISJOINT under the
+// core matcher (exactly-one-or-refuse) — every declared MIME resolves to exactly
+// its own base, and the two known container/suffix traps (docx-as-zip, json vs
+// the chart `+json` type) do NOT collide.
+// ---------------------------------------------------------------------------
+const FULL_ROSTER: UploadArtifactTypeCandidate[] = [
+  { objectTypeId: "@cinatra-ai/image-artifact:artifact", acceptMimes: ["image/*"] },
+  { objectTypeId: "@cinatra-ai/pdf-artifact:artifact", acceptMimes: ["application/pdf"] },
+  { objectTypeId: "@cinatra-ai/audio-artifact:artifact", acceptMimes: ["audio/*"] },
+  { objectTypeId: "@cinatra-ai/video-artifact:artifact", acceptMimes: ["video/*"] },
+  { objectTypeId: "@cinatra-ai/chart-artifact:artifact", acceptMimes: ["application/vnd.cinatra.chart+json"] },
+  { objectTypeId: "@cinatra-ai/zip-artifact:artifact", acceptMimes: ["application/zip", "application/x-zip-compressed"] },
+  { objectTypeId: "@cinatra-ai/text-artifact:artifact", acceptMimes: ["text/plain", "text/markdown", "text/csv"] },
+  {
+    objectTypeId: "@cinatra-ai/document-artifact:artifact",
+    acceptMimes: [
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "application/vnd.oasis.opendocument.text",
+    ],
+  },
+  { objectTypeId: "@cinatra-ai/json-artifact:artifact", acceptMimes: ["application/json"] },
+];
+
+describe("required-base roster — exactly-one-or-refuse over the expanded set (#1883 A1)", () => {
+  const cases: Array<[string, string]> = [
+    ["application/pdf", "@cinatra-ai/pdf-artifact:artifact"],
+    ["image/png", "@cinatra-ai/image-artifact:artifact"],
+    ["audio/mpeg", "@cinatra-ai/audio-artifact:artifact"],
+    ["video/mp4", "@cinatra-ai/video-artifact:artifact"],
+    ["application/vnd.cinatra.chart+json", "@cinatra-ai/chart-artifact:artifact"],
+    ["application/zip", "@cinatra-ai/zip-artifact:artifact"],
+    ["application/x-zip-compressed", "@cinatra-ai/zip-artifact:artifact"],
+    ["text/plain", "@cinatra-ai/text-artifact:artifact"],
+    ["text/markdown", "@cinatra-ai/text-artifact:artifact"],
+    ["text/csv", "@cinatra-ai/text-artifact:artifact"],
+    [
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "@cinatra-ai/document-artifact:artifact",
+    ],
+    [
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "@cinatra-ai/document-artifact:artifact",
+    ],
+    [
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "@cinatra-ai/document-artifact:artifact",
+    ],
+    ["application/vnd.oasis.opendocument.text", "@cinatra-ai/document-artifact:artifact"],
+    ["application/json", "@cinatra-ai/json-artifact:artifact"],
+  ];
+
+  it.each(cases)("resolves %s to exactly %s", (mime, expected) => {
+    expect(resolveUploadArtifactTypeFromCandidates(mime, FULL_ROSTER)).toEqual({
+      ok: true,
+      objectTypeId: expected,
+    });
+  });
+
+  it("does NOT collide application/json with the chart +json type (declared exact match only)", () => {
+    expect(resolveUploadArtifactTypeFromCandidates("application/json", FULL_ROSTER)).toEqual({
+      ok: true,
+      objectTypeId: "@cinatra-ai/json-artifact:artifact",
+    });
+    expect(resolveUploadArtifactTypeFromCandidates("application/vnd.cinatra.chart+json", FULL_ROSTER)).toEqual({
+      ok: true,
+      objectTypeId: "@cinatra-ai/chart-artifact:artifact",
+    });
+  });
+
+  it("routes an office type to document-artifact, NOT zip-artifact (the declared mime decides, not the ZIP container)", () => {
+    // The core map only ever sees the DECLARED mime; the office types are never
+    // application/zip, so document and zip stay disjoint here — the byte-sniff
+    // refinement is handled at the blob layer (see local-disk-blob-store).
+    expect(
+      resolveUploadArtifactTypeFromCandidates(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        FULL_ROSTER,
+      ).ok,
+    ).toBe(true);
+    expect(
+      resolveUploadArtifactTypeFromCandidates(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        FULL_ROSTER,
+      ),
+    ).toEqual({ ok: true, objectTypeId: "@cinatra-ai/document-artifact:artifact" });
+  });
+
+  it("still REFUSES an unmapped MIME after the expansion (no floor)", () => {
+    for (const miss of ["application/octet-stream", "font/woff2", "text/html", "application/x-tar"]) {
+      const r = resolveUploadArtifactTypeFromCandidates(miss, FULL_ROSTER);
+      expect(r.ok, miss).toBe(false);
+    }
+  });
+
+  it("no MIME in the roster is accepted by two bases (mutual disjointness)", () => {
+    for (const [mime] of cases) {
+      const matched = FULL_ROSTER.filter((c) =>
+        c.acceptMimes.some((a) => mimeAcceptedByAccepts([a], mime)),
+      );
+      expect(matched.map((m) => m.objectTypeId), `${mime} matched >1 base`).toHaveLength(1);
+    }
+  });
+});

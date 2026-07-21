@@ -247,7 +247,7 @@ function useInertSiblingsAlongActiveDialog(trapped: boolean): void {
  * while a DC dashboard modal is open, and routes Escape to the close
  * action of whichever modal is open (via `resolveDcModalEscapeClose`).
  *
- * Why this is needed: DC `0.5.7`'s modals disagree on ESC. The three that
+ * Why this is needed: DC `0.6.4`'s modals disagree on ESC. The three that
  * render through DC's shared `<Modal>` already close on ESC, but
  * `TextPortletModal` ("Add text") hand-rolls its own overlay with NO key
  * handling — so ESC behaviour is inconsistent (cinatra#438). We can't
@@ -311,7 +311,7 @@ export type DcModalA11yScopeProps = {
  * chain — so background page chrome AND background dashboard grid
  * controls become uninteractive in tandem.
  *
- * Mount this INSIDE `<DashboardProvider>` (drizzle-cube `0.5.7` creates
+ * Mount this INSIDE `<DashboardProvider>` (drizzle-cube `0.6.4` creates
  * a per-instance store there, so `useDashboardStore` must resolve THAT
  * store to see the modal flags) and AROUND the composable pieces (so the
  * FocusScope contains the inline-rendered modal subtree). See

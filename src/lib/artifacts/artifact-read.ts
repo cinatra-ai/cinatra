@@ -176,6 +176,14 @@ const PREVIEW_INLINE_MIME_ALLOWLIST: ReadonlySet<string> = new Set([
   "text/markdown",
   "text/x-markdown",
   "text/plain",
+  // Required text/JSON bases (epic #1883 A1): non-executable text formats that
+  // render safely under the same preview sandbox CSP + `nosniff` as text/plain
+  // (no script surface). This is what bounds text-artifact's `text/csv` and
+  // json-artifact's `application/json` to inline byte-serving; their system-base
+  // detail renderers (a sandboxed text frame / the collapsible JSON tree) fetch
+  // `urls.preview`, which 415s any type absent from this set.
+  "text/csv",
+  "application/json",
   "application/pdf",
   "image/png",
   "image/jpeg",

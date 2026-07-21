@@ -1,14 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import type {
-  FieldRendererProps,
-} from "./field-renderer-registry";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { fieldRendererRegistry } from "./field-renderer-registry";
+import type { FieldRendererProps } from "./field-renderer-registry";
 import {
   fetchCampaignRecipients,
   fetchInitialDrafts,
 } from "./email-outreach-stage-actions";
-import { GmailSenderFieldRenderer } from "./gmail-sender-renderer";
 
 // ---------------------------------------------------------------------------
 // Condition
@@ -139,6 +139,29 @@ export function SendConfirmationRenderer({
     );
   }
 
+  // Sender picker — resolved through the field-renderer REGISTRY
+  // (cinatra#1625): the gmail-sender COMPONENT migrated into @cinatra-ai/email-artifacts,
+  // so it can no longer be imported directly here. resolve() returns the migrated
+  // binding's ExtensionFieldRenderer wrapper when the host-owned gmail-sender
+  // condition activates (gmail connected + aliases present) — the wrapper mounts
+  // the pack-shipped From-address dropdown (its Select commits the selection
+  // eagerly via onChange, matching the retired host component).
+  //
+  // When the condition does NOT activate (no gmail), resolve() returns null. We
+  // do NOT floor to SchemaOnlyFloorRenderer here: that floor BUFFERS text in
+  // local state and only commits via registerFlush/Continue, so a typed address
+  // could be lost when the outer approval fires (codex 2026-07-21). Instead we
+  // render an EAGER inline email input that commits every keystroke to
+  // senderEmail immediately — never blank, and the approval payload always
+  // carries what the user typed, preserving the original Select's commit contract.
+  const senderSchema: Record<string, unknown> = {
+    type: "string",
+    title: "Sender email",
+    "x-renderer": "gmail-sender",
+  };
+  const senderEntry = fieldRendererRegistry.resolve("senderEmail", senderSchema, context);
+  const ResolvedSenderRenderer = senderEntry?.renderer ?? null;
+
   return (
     <div className="soft-panel flex flex-col gap-4 p-4">
       {/* Campaign summary */}
@@ -168,17 +191,38 @@ export function SendConfirmationRenderer({
         )}
       </div>
 
-      {/* Sender email */}
-      <GmailSenderFieldRenderer
-        fieldName="senderEmail"
-        schema={{ type: "string", title: "Sender email", "x-renderer": "gmail-sender" }}
-        value={senderEmail}
-        onChange={(v) => setSenderEmail(typeof v === "string" ? v : "")}
-        disabled={disabled}
-        required
-        label="Sender email"
-        context={context}
-      />
+      {/* Sender email — registry-resolved (see senderEntry above). When the
+          gmail-sender condition activates, the pack-shipped Select renders (via
+          the ExtensionFieldRenderer wrapper); hideSubmit suppresses the wrapper's
+          degrade-floor Continue button. Otherwise an eager inline input renders. */}
+      {ResolvedSenderRenderer ? (
+        <ResolvedSenderRenderer
+          fieldName="senderEmail"
+          schema={senderSchema}
+          value={senderEmail}
+          onChange={(v) => setSenderEmail(typeof v === "string" ? v : "")}
+          disabled={disabled}
+          required
+          hideSubmit
+          label="Sender email"
+          context={context}
+        />
+      ) : (
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="field-senderEmail" className="text-foreground">
+            Sender email *
+          </Label>
+          <Input
+            id="field-senderEmail"
+            type="email"
+            className="border-line"
+            value={senderEmail}
+            disabled={disabled}
+            placeholder="you@example.com"
+            onChange={(e) => setSenderEmail(e.target.value)}
+          />
+        </div>
+      )}
 
       {/* Warning */}
       <p className="text-sm text-destructive font-medium">

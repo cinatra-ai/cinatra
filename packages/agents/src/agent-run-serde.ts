@@ -18,9 +18,11 @@ import {
   parseOboCeilingChain,
   composeOboCeilingChain,
   OboCeilingCompositionError,
+  type OboCeiling,
   type OboCeilingChain,
   type OboOwnerContainment,
 } from "@cinatra-ai/mcp-server/obo-ceiling";
+import { readOwnerContainmentResolver } from "./owner-containment-port";
 import { db } from "./db";
 import { agentTemplates, agentRuns } from "./schema";
 import { AgentAuthPolicySchema } from "./auth-policy";
@@ -171,13 +173,57 @@ export async function deriveRunOboCeilingJson(input: {
   // Genuine child dispatch → fold the parent chain in on top of the freshly
   // derived child anchor (never copy the parent as the child's own anchor).
   if (input.parentOboCeiling && input.parentOboCeiling.length > 0) {
+    // Owner-axis containment facts (#1885 C1; C4 handoff). When the composed
+    // chain carries ≥2 DISTINCT owner tiers, resolve LIVE membership so a
+    // legitimate mixed-owner-tier child collapses to its verified-narrowest
+    // tier; otherwise C4 fails the composition closed. Explicit facts (test
+    // seams / future direct callers) win; else the globalThis-published resolver
+    // is consulted. No resolver / no facts → C4's structured fail-closed denial.
+    const ownerContainments = await resolveOwnerContainmentsForCompose({
+      orgId: input.orgId,
+      childChain,
+      parentChain: input.parentOboCeiling,
+      explicit: input.ownerContainments,
+    });
     const composed = composeOboCeilingChain(
       input.parentOboCeiling,
       childChain,
-      input.ownerContainments ?? [],
+      ownerContainments,
     );
     if (!composed.ok) throw new OboCeilingCompositionError(composed);
     return JSON.stringify(composed.chain);
   }
   return JSON.stringify(childChain);
+}
+
+const OWNER_AXIS_TIERS: ReadonlySet<OboCeiling["tier"]> = new Set([
+  "user",
+  "team",
+  "workspace",
+]);
+
+/**
+ * Gather the DISTINCT owner-axis elements the composed chain will carry (child
+ * anchor ∪ parent chain) and, only when there are ≥2 distinct owner TIERS,
+ * resolve the verified containment facts among them via the published resolver.
+ * Returns explicit facts verbatim when supplied. Zero/one owner tier → no facts
+ * needed (the composer passes them through untouched, byte-stable).
+ */
+async function resolveOwnerContainmentsForCompose(input: {
+  orgId: string;
+  childChain: OboCeilingChain;
+  parentChain: OboCeilingChain;
+  explicit?: OboOwnerContainment[];
+}): Promise<OboOwnerContainment[]> {
+  if (input.explicit) return input.explicit;
+  const ownerEls: OboCeiling[] = [];
+  for (const c of [...input.childChain, ...input.parentChain]) {
+    if (!OWNER_AXIS_TIERS.has(c.tier)) continue;
+    if (!ownerEls.some((e) => e.tier === c.tier && e.id === c.id)) ownerEls.push(c);
+  }
+  const distinctTiers = new Set(ownerEls.map((e) => e.tier));
+  if (distinctTiers.size < 2) return [];
+  const resolver = readOwnerContainmentResolver();
+  if (!resolver) return []; // fail closed — C4 denies the mixed composition
+  return resolver({ orgId: input.orgId, ownerElements: ownerEls });
 }

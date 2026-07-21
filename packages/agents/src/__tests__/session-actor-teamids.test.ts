@@ -1,4 +1,4 @@
-// #1486 — session actors must carry `teamIds` so a #1069 `team:<uuid>`
+// #1486 — session actors must carry `teamIds` so a #1069 `team:<id>`
 // visibility token can match in `requireResourceAccess`.
 //
 // AC2 requires the coverage to exercise the session BUILDER, not a fabricated
@@ -128,7 +128,7 @@ beforeEach(() => {
   state.readTeamsCalls = [];
 });
 
-describe("#1486 session builder → requireResourceAccess (team:<uuid> token)", () => {
+describe("#1486 session builder → requireResourceAccess (team:<id> token)", () => {
   it("getActorContext(): a member of the granted team is ADMITTED (was 404 before the fix)", async () => {
     state.session = memberSession();
     state.teams = [{ id: MEMBER_TEAM, name: "Active-org team" }];

@@ -8,6 +8,7 @@ import {
   readSeed,
   sendPrompt,
   trackAuthPath,
+  trackContentEditRun,
   trackNoDirectCmsEgress,
 } from "../helpers";
 
@@ -54,15 +55,27 @@ test.describe("Drupal assistant UAT", () => {
     auth.verify();
   });
 
-  test("5. an edit prompt round-trips a content-change diff against the seeded node — with NO direct-egress (cinatra#1214)", async ({ page }) => {
+  test("5. an edit prompt applies a content change (*_content_editor_run) against the seeded node — with NO direct-egress (cinatra#1214)", async ({ page }) => {
     const seed = readSeed();
     await page.goto(`${DRUPAL_BASE}${seed.drupal.viewUrl}`);
     await openWidget(page);
     // cinatra#1214: the in-admin assistant edit routes server-side over MCP; the
     // client must issue no direct /jsonapi content-mutation on the agent timeline.
     const egress = trackNoDirectCmsEgress(page, "drupal");
+    // Post-#87 (design#87): the unified /api/assistants/chat AG-UI stream carries
+    // no field-level `changes` diff payload — the live diff card was retired — so
+    // the content-edit signal is the drupal_content_editor_run TOOL_CALL the
+    // widget keys its applied-change editor reload on.
+    const edit = await trackContentEditRun(page, "drupal");
+    // The widget applies the edit server-side then reloads the editor — but ONLY
+    // after it has FULLY consumed the *_content_editor_run tool frame + terminal.
+    // Fence the #1214 egress assertion on that reload so the ENTIRE client
+    // round-trip window (in which a direct CMS write would be the violation) has
+    // closed before we inspect it. Arm the waiter before the turn.
+    const reloaded = page.waitForEvent("load", { timeout: 30_000 });
     await sendPrompt(page, "Please add a short summary.");
-    await expect(page.locator(SEL.diff).first()).toBeVisible({ timeout: 30_000 });
+    await reloaded;
+    await edit.verify();
     await egress.verify();
   });
 
