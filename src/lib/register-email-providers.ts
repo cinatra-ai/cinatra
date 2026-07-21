@@ -30,18 +30,71 @@ import type { EmailTransportCorrelation } from "@cinatra-ai/sdk-extensions";
 import { deriveThreadId } from "@/lib/email-thread-key";
 
 /**
- * These sender-identity reads run on a system/registration path with no user
- * session. Build an org-scoped, ROLE-LESS System actor —
- * `principalType:"System"` + `organizationId` only, no platform/org role —
- * so reads cannot widen beyond the intended org-scoped client behavior.
- * Owner-scoping of the result stays explicit in `findSenderIdentityFor` via
- * `data.ownerLevel`/`data.ownerId`.
+ * Build the objects-read actor the routing resolver uses to surface the run
+ * owner's sender-identity objects.
+ *
+ * D3 (eng#548 #1625): a ROLE-LESS `System` actor is DENIED `object.read` by the
+ * authz kernel — `System` principals carry NO synthetic role (enforce.ts:48-60),
+ * `object.read` is granted only to platform_admin/org_admin/member
+ * (policies.ts), so `filterByAuthz` silently drops EVERY sender-identity row and
+ * the whole routing chain returns null (the facade then falls through to the
+ * first-registered connector, i.e. gmail — "Google OAuth is not connected").
+ *
+ * This actor instead represents the RUN OWNER's own read authority, scoped to
+ * their org. Two shapes:
+ *
+ *   - With a `userId` (the run owner): `principalType:"HumanUser"` +
+ *     `principalId:userId`. The objects envelope carries `userId` ONLY for human
+ *     principals (objects-actor-envelope.ts:63-65) — that is what surfaces the
+ *     SQL user-owner axis (`owner_level='user' AND owner_id=userId`,
+ *     derived-store-ownership.ts:95) and the `decideResourceAccess` owner
+ *     short-circuit, so the owner's OWN (default-`private`) mailbox identity is
+ *     readable. A `System`/`platform_admin` actor could NEVER reach it: their
+ *     principalId is not the owner's userId, and platform_admin only widens the
+ *     `public` SQL clause, not the user-owner axis. `orgRole:"member"` grants
+ *     `object.read` for the ORG-owned identity (step 4) WITHOUT the
+ *     platform_admin cross-org bypass.
+ *
+ *   - Without a `userId` (a pure org-scoped send): `System` + `orgRole:"member"`.
+ *     Org-visible identities still resolve via the org clause; the (skipped) user
+ *     step needs no owner axis. This is the accepted trusted policy "an internal
+ *     org-scoped routing read may use the org-visible default mailbox"; it CANNOT
+ *     read any user-private row (no owner-axis principal).
+ *
+ * MEMBERSHIP-STALENESS (accepted policy): `orgRole:"member"` is the least-
+ * privilege floor a run owner holds in their run's org. We do NOT re-validate
+ * live membership here — that MIRRORS the established run-derived-actor policy in
+ * build-actor-context-from-run.ts:104-118 (#1131), which floors a run actor's
+ * `orgRole` to `member` and documents that a run replays the owner's standing
+ * for the run's lifetime ("ACCEPTED STALENESS"). A revoked-membership run owner
+ * retaining read of the org-default mailbox for the duration of their own run is
+ * the SAME retained-run-authority semantic, not a new grant.
+ *
+ * READ ONLY: this actor is consumed exclusively by `findSenderIdentityFor`
+ * (objects_list) and `resolveSenderIdentityById` (objects_get). It never reaches
+ * a write path — the object writers below use the separate ALS-scoped
+ * `objectsClient` singleton, not this actor.
  */
-function systemActorForOrg(orgId: string | null): ActorContext {
+function ownerReadActorForOrg(opts: {
+  userId?: string;
+  orgId: string | null;
+}): ActorContext {
+  const orgFields = opts.orgId ? { organizationId: opts.orgId } : {};
+  if (opts.userId) {
+    return {
+      principalType: "HumanUser",
+      principalId: opts.userId,
+      ...orgFields,
+      orgRole: "member",
+      authSource: "worker",
+      policyVersion: POLICY_VERSION,
+    };
+  }
   return {
     principalType: "System",
     principalId: "system",
-    ...(orgId ? { organizationId: orgId } : {}),
+    ...orgFields,
+    orgRole: "member",
     authSource: "worker",
     policyVersion: POLICY_VERSION,
   };
@@ -79,10 +132,10 @@ const SENDER_IDENTITY_PAGE_BUDGET = 200;
 async function findSenderIdentityFor(opts: {
   ownerLevel: "user" | "organization";
   ownerId: string;
-  orgId?: string;
+  readActor: ActorContext;
 }): Promise<SenderIdentityData | null> {
   try {
-    const client = createSessionObjectsClient(systemActorForOrg(opts.orgId ?? null));
+    const client = createSessionObjectsClient(opts.readActor);
     const { items } = await client.list({
       type: SENDER_IDENTITY_TYPE,
       limit: SENDER_IDENTITY_PAGE_BUDGET,
@@ -123,22 +176,28 @@ async function findSenderIdentityFor(opts: {
  */
 async function resolveSenderIdentityById(
   senderIdentityId: string,
-  orgId?: string,
+  readActor: ActorContext,
 ): Promise<SenderIdentityData | null> {
-  let obj: unknown;
+  let result: unknown;
   try {
-    const client = createSessionObjectsClient(systemActorForOrg(orgId ?? null));
-    obj = await client.get(senderIdentityId);
+    const client = createSessionObjectsClient(readActor);
+    result = await client.get(senderIdentityId);
   } catch (err) {
     throw new Error(
       `Explicit senderIdentityId "${senderIdentityId}" could not be resolved ` +
         `(refusing to mis-route to a fallback connector): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  const data = (obj as { data?: Record<string, unknown> } | null)?.data as
-    | SenderIdentityData
-    | undefined;
-  if (!data) return null; // genuinely not found → chain may fall through
+  // `objects_get` returns the `{ object }` envelope (handlers.ts:1206) — unwrap
+  // it (reading `result.data` directly is always undefined). And VALIDATE the
+  // type: without the `type` guard any readable object that happens to carry a
+  // `data.connectorId` could masquerade as a sender-identity and mis-route the
+  // send. A denied/not-found read returns `{ object: null }`.
+  const object = (result as { object?: { type?: unknown; data?: unknown } | null } | null)
+    ?.object;
+  if (!object || object.type !== SENDER_IDENTITY_TYPE) return null; // not found / wrong type → chain may fall through
+  const data = object.data as SenderIdentityData | undefined;
+  if (!data) return null;
   return typeof data.connectorId === "string" && data.connectorId.length > 0
     ? data
     : null;
@@ -169,8 +228,18 @@ async function resolveConnectorId(opts: {
     return opts.explicitConnectorId;
   }
 
+  // D3: build the owner-scoped read actor ONCE (the run owner's own read
+  // authority within their org). Threaded into every objects read below so the
+  // owner's (default-private) mailbox + the org-default identity are both
+  // readable. A role-less System actor is authz-denied `object.read` and drops
+  // every row (see `ownerReadActorForOrg`).
+  const readActor = ownerReadActorForOrg({
+    userId: opts.userId,
+    orgId: opts.orgId ?? null,
+  });
+
   if (opts.senderIdentityId) {
-    const id = await resolveSenderIdentityById(opts.senderIdentityId, opts.orgId);
+    const id = await resolveSenderIdentityById(opts.senderIdentityId, readActor);
     if (id?.connectorId) return id.connectorId;
   }
 
@@ -178,7 +247,7 @@ async function resolveConnectorId(opts: {
     const userIdentity = await findSenderIdentityFor({
       ownerLevel: "user",
       ownerId: opts.userId,
-      orgId: opts.orgId,
+      readActor,
     });
     if (userIdentity?.connectorId) return userIdentity.connectorId;
   }
@@ -187,7 +256,7 @@ async function resolveConnectorId(opts: {
     const orgIdentity = await findSenderIdentityFor({
       ownerLevel: "organization",
       ownerId: opts.orgId,
-      orgId: opts.orgId,
+      readActor,
     });
     if (orgIdentity?.connectorId) return orgIdentity.connectorId;
   }
