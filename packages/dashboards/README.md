@@ -17,3 +17,5 @@ This package is **not** structured for extraction. Cinatra concepts (better-auth
 ## Storage envelope history
 
 Existing analytics dashboards (legacy `apiVersion` rows, revisions, and seeds) were normalized to the current dashboards storage envelope by a single one-time, no-backward-compat data migration. The migration rewrites every legacy row into a registry-valid analytics envelope and aborts the transaction if any row would land invalid. See `#327` for the rationale and the proof record.
+
+<!-- diagnostic canary 2026-07-21: no-op touch so the real dashboard-live-verify smoke runs against pure main; see the canary PR body. Remove with the PR. -->
