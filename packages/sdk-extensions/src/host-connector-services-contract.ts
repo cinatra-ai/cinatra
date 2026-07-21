@@ -31,6 +31,7 @@
 // internals — every shape is structural.
 
 import type { ObjectsProvider } from "./objects-provider-contract";
+import type { LlmProviderAdapter } from "./llm-provider-adapter-contract";
 import type { CrmConnector } from "./crm-connector-contract";
 import type { BlogDraftBuildInput, BlogDraftPayload } from "./blog-connector-contract";
 import type {
@@ -1561,10 +1562,12 @@ export type LlmProviderAdapterSurface = {
    * present but not configured/ready — an AUTHORITATIVE result: once a trusted
    * surface is registered for this provider the host does NOT fall back to a
    * legacy in-core factory. The returned value is the host's `LlmProviderAdapter`
-   * (kept `unknown` at this leaf boundary — relocating the full ABI type closure
-   * into this leaf is a later S4 slice — and cast host-side).
+   * (the full ABI type closure now lives canonically in this leaf —
+   * `./llm-provider-adapter-contract`, llm-providers S4.0 cinatra#1715 PR-0 —
+   * so this port states its already-intended v1 result type directly; the host
+   * resolver still structurally validates the surface and casts host-side).
    */
-  createAdapter(): Promise<unknown | null>;
+  createAdapter(): Promise<LlmProviderAdapter | null>;
 };
 
 /**
