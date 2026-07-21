@@ -2,7 +2,7 @@
 /**
  * Shared visibility predicate for drizzle-cube's `<DashboardFilterBar>`.
  *
- * Mirrors the upstream gating in drizzle-cube `0.5.7`'s
+ * Mirrors the upstream gating in drizzle-cube `0.6.4`'s
  * `DashboardFilterPanel` (the only thing `DashboardFilterBar` renders
  * outside filter-selection mode, which itself requires edit mode):
  *

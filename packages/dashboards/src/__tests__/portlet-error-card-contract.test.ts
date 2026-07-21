@@ -82,29 +82,60 @@ describe("drizzle-cube portlet error-card contract (cinatra#1512)", () => {
   });
 
   it("the error card renders error.message verbatim (where the endpoint copy lands)", () => {
-    const portlet = getFrom(editModalSources, "AnalyticsPortlet.tsx");
-    expect(portlet).toMatch(/error\.message \|\| error\.toString\(\)/);
+    // 0.6.4 moved the error card out of AnalyticsPortlet into PortletStates
+    // (cinatra#1929) — copy behavior intact, only the file moved.
+    const states = getFrom(editModalSources, "PortletStates.tsx");
+    expect(states).toMatch(/error\.message \|\| error\.toString\(\)/);
   });
 
   it("the raw debug JSON stays behind collapsed, labeled <details> sections", () => {
-    const portlet = getFrom(editModalSources, "AnalyticsPortlet.tsx");
-    expect(portlet).toMatch(/<details>/);
-    expect(portlet).toContain("portlet.queryWithFilters");
-    expect(portlet).toContain("portlet.chartConfig");
+    const states = getFrom(editModalSources, "PortletStates.tsx");
+    expect(states).toMatch(/<details>/);
+    expect(states).toContain("portlet.queryWithFilters");
+    expect(states).toContain("portlet.chartConfig");
     // The <pre> blocks own their inner two-axis scrolling.
-    expect(portlet).toMatch(/dc:overflow-auto dc:max-h-20/);
+    expect(states).toMatch(/dc:overflow-auto dc:max-h-20/);
   });
 
   it("the error-card root keeps the utility classes the containment selector targets", () => {
-    const portlet = getFrom(editModalSources, "AnalyticsPortlet.tsx");
+    const states = getFrom(editModalSources, "PortletStates.tsx");
     // Card root: dc:p-4 dc:border dc:rounded-sm with an inline height.
-    expect(portlet).toMatch(
+    expect(states).toMatch(
       /className="dc:p-4 dc:border dc:rounded-sm"\s+style=\{\{\s*height/,
     );
     const card = getFrom(editModalSources, "DashboardPortletCard.tsx");
     // Chart body wrapper: the direct parent the `>` combinator relies on.
     expect(card).toMatch(/dc:flex-1 dc:min-h-0 dc:flex dc:flex-col/);
     expect(card).toMatch(/data-portlet-id=\{portlet\.id\}/);
+  });
+
+  it("RELATIONAL ancestry: the error card lands as the DIRECT child the `>` combinator needs", () => {
+    // Class co-occurrence is not enough — the containment selector depends on
+    // the error-card root being the DIRECT DOM child of the dc:flex-1
+    // dc:min-h-0 chart body. Function components add no DOM nodes, so pinning
+    // every React hop componentwise proves the DOM relationship; an upstream
+    // re-nest at ANY hop must fail here loudly (cinatra#1929).
+    const card = getFrom(editModalSources, "DashboardPortletCard.tsx");
+    // Hop 1: the chart-body wrapper is an INTRINSIC <div> (a component
+    // carrying the class could nest DOM internally) whose direct element
+    // child is <AnalyticsPortlet>.
+    expect(card).toMatch(
+      /<div[^>]*className=\{`dc:flex-1 dc:min-h-0 dc:flex dc:flex-col\$\{[^}]*\}`\}\s*>\s*<AnalyticsPortlet/,
+    );
+    // Hop 2: AnalyticsPortlet's non-chart branch RETURNS the state view
+    // unwrapped (no intervening element).
+    const portlet = getFrom(editModalSources, "AnalyticsPortlet.tsx");
+    expect(portlet).toMatch(
+      /if \(renderKind !== 'chart'\) \{\s*return \(\s*<PortletStateView/,
+    );
+    // Hop 3: the state view dispatches the error kind to <PortletError>
+    // unwrapped.
+    const states = getFrom(editModalSources, "PortletStates.tsx");
+    expect(states).toMatch(/if \(kind === 'error'\) \{\s*return \(\s*<PortletError/);
+    // Hop 4: PortletError's ROOT is the card div itself.
+    expect(states).toMatch(
+      /return \(\s*<div ref=\{inViewRef\} className="dc:p-4 dc:border dc:rounded-sm"/,
+    );
   });
 
   it("dashboard-theme.css carries the scoped containment rule AND keeps the portlet clip", () => {

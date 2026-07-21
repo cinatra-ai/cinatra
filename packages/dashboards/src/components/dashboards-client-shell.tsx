@@ -24,7 +24,7 @@ import "./dashboard-theme.css";
  *    render.
  *
  * The per-dashboard store and the modal a11y scope live INSIDE
- * `<ComposedDashboard>` now: drizzle-cube `0.5.7`'s `DashboardProvider`
+ * `<ComposedDashboard>` now: drizzle-cube `0.6.4`'s `DashboardProvider`
  * creates its own per-instance Zustand store, so a shell-level
  * `DashboardStoreProvider` would be shadowed and never see modal state.
  *
