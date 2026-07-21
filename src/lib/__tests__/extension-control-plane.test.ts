@@ -19,12 +19,14 @@ import {
   getActivationGeneration,
   __resetActivationGenerationForTests,
 } from "@/lib/extension-activation-generation";
+import { matcherManifestRegistry } from "@cinatra-ai/objects/registry";
 
 beforeEach(() => {
   _resetExtensionMcpForTests();
   __resetCapabilityRegistry();
   __resetExtensionUiRegistry();
   __resetActivationGenerationForTests();
+  matcherManifestRegistry._clearForTests();
 });
 
 describe("extension control-plane snapshot + generation-on-teardown", () => {
@@ -81,6 +83,28 @@ describe("extension control-plane snapshot + generation-on-teardown", () => {
     expect(removedTypes).toEqual([]);
     expect(getActivationGeneration()).toBe(1);
     expect(getExtensionControlPlaneState().capabilityProviders).toHaveLength(0);
+  });
+
+  it("teardown of a MATCHER-ONLY package (no tools/types/ui, cinatra#1891) still bumps the generation", () => {
+    // A matcher-only pack registers NO object type — its meaning-surface channel
+    // entry is the only in-memory registration it has. Reaping it IS an
+    // observable control-plane change, so the guarded bump must cover it (else a
+    // matcher-only uninstall reports no teardown and its draft keeps surfacing).
+    matcherManifestRegistry.register({
+      packageName: "@cinatra-ai/only-matcher",
+      matcherSkillIds: ["@cinatra-ai/only-matcher:matcher"],
+      matcherConfidenceThreshold: 0.7,
+      fileMimeTypes: ["text/markdown"],
+    });
+    expect(getActivationGeneration()).toBe(0);
+
+    const { removedTools, removedTypes, removedMatcherManifest } =
+      teardownExtensionCapabilities("@cinatra-ai/only-matcher");
+    expect(removedTools).toEqual([]);
+    expect(removedTypes).toEqual([]);
+    expect(removedMatcherManifest).toBe(true);
+    expect(getActivationGeneration()).toBe(1);
+    expect(matcherManifestRegistry.get("@cinatra-ai/only-matcher")).toBeNull();
   });
 
   it("a no-op defensive teardown (nothing registered) does NOT bump the generation", () => {

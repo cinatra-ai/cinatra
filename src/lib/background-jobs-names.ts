@@ -82,11 +82,15 @@ export const BACKGROUND_JOB_NAMES = {
   // pin/representation writers do not yet share the resource-level advisory
   // lock.
   ARTIFACT_PROVIDER_CACHE_EVICT: "artifact-provider-cache-evict",
-  // Async LLM artifact matcher.
-  // Enqueued POST-COMMIT from createSemanticArtifact for every
-  // non-agent-produced artifact (agent-produced ones are already
-  // typed deterministically at creation). NOT self-rescheduling — it is a
-  // one-shot per-artifact classification.
+  // Async LLM MEANING-matcher (cinatra#1891, epic #1883 A3).
+  // Enqueued POST-COMMIT at TWO seams: (1) upload / non-agent creation
+  // (`createSemanticArtifact` when `skipFallbackClassification` is false), and
+  // (2) agent-emit materialization (`run-artifact-materializer`, after the
+  // producer assertion has committed). Layers a MEANING draft (surfaced by the
+  // presentation resolver) on top of the row's structural type — it never
+  // mutates `objects.type`. NOT self-rescheduling — one-shot per artifact, with
+  // attempts/backoff (`ARTIFACT_MATCH_RETRY_POLICY`) covering transient LLM/DB
+  // failures the worker rethrows as `MatcherRetryableError`.
   ARTIFACT_MATCH_RUN: "artifact-match-run",
   // Durable audit-log retention sweep. Deletes authz
   // audit events older than the configured window (default 12 months;

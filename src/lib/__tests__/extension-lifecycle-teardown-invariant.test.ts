@@ -70,8 +70,11 @@ import {
   invalidateExtensionUiForPackage,
   __resetExtensionUiRegistry,
 } from "@/lib/extension-ui-registry";
-import { invalidateObjectTypesForPackage } from "@/lib/extension-object-types-teardown";
-import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import {
+  invalidateObjectTypesForPackage,
+  invalidateMatcherManifestForPackage,
+} from "@/lib/extension-object-types-teardown";
+import { objectTypeRegistry, matcherManifestRegistry } from "@cinatra-ai/objects/registry";
 import {
   semanticRendererRegistry,
   representationProviderRegistry,
@@ -93,6 +96,7 @@ afterEach(() => {
   __resetCapabilityRegistry();
   __resetExtensionUiRegistry();
   objectTypeRegistry._clearForTests();
+  matcherManifestRegistry._clearForTests();
   semanticRendererRegistry._clearForTests();
   representationProviderRegistry._clearForTests(true);
   runtimeAssetRegistry._clearForTests();
@@ -147,6 +151,18 @@ describe("per-kind teardown (b) — the teardown hook covers EXACTLY the four re
     expect(objectTypeRegistry.resolve(TYPE)).toBeNull();
   });
 
+  it("matcher manifest (cinatra#1891): register → get shows it → invalidateMatcherManifestForPackage drops it", () => {
+    matcherManifestRegistry.register({
+      packageName: PKG,
+      matcherSkillIds: [`${PKG}:matcher`],
+      matcherConfidenceThreshold: 0.7,
+      fileMimeTypes: ["text/markdown"],
+    });
+    expect(matcherManifestRegistry.get(PKG)).not.toBeNull();
+    expect(invalidateMatcherManifestForPackage(PKG)).toBe(true);
+    expect(matcherManifestRegistry.get(PKG)).toBeNull();
+  });
+
   it("the host wires a teardown hook composed of EXACTLY these four primitives — and there is NO in-memory dereg primitive for the structurally-absent kinds (jobs/skills/agents/artifacts/credentials)", async () => {
     // Drive the REAL production closure `teardownExtensionCapabilities`
     // (the single source of truth the host wires at src/lib/extensions.ts ~:87 —
@@ -162,6 +178,15 @@ describe("per-kind teardown (b) — the teardown hook covers EXACTLY the four re
     registerExtensionUiAction({ packageName: PKG, id: "a", handler: async () => ({}) });
     const TYPE = `${PKG}:t`;
     objectTypeRegistry.register({ type: TYPE, category: "data" } as never, PKG);
+    // Meaning-surface channel (cinatra#1891 A3): a matcher-only pack's channel
+    // entry must retire through this SAME closure — otherwise a leaked entry
+    // keeps its matcher draft auto-surfacing after uninstall.
+    matcherManifestRegistry.register({
+      packageName: PKG,
+      matcherSkillIds: [`${PKG}:matcher`],
+      matcherConfidenceThreshold: 0.7,
+      fileMimeTypes: ["text/markdown"],
+    });
     // Artifact renderers (cinatra#1629): a semantic detail renderer + an
     // org-scoped representation provider must also retire through the closure.
     const RTYPE = `${PKG}:artifact`;
@@ -198,6 +223,8 @@ describe("per-kind teardown (b) — the teardown hook covers EXACTLY the four re
 
     expect(result.removedTools).toContain("t");
     expect(result.removedTypes).toContain(TYPE);
+    expect(result.removedMatcherManifest).toBe(true);
+    expect(matcherManifestRegistry.get(PKG)).toBeNull();
     expect(result.removedRendererTypes).toContain(RTYPE);
     expect(result.removedRepresentationProviders).toBe(1);
     expect(result.removedRuntimeBindings).toBe(1);

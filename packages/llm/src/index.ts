@@ -54,6 +54,8 @@ export type {
 export {
   CAPABILITY_RULES,
   resolveAttachmentCapability,
+  extensionForIngestibleMime,
+  filenameExtensionMatchesMime,
 } from "./attachments/capability-registry";
 export type {
   LlmProviderId,
