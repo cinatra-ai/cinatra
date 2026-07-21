@@ -101,6 +101,76 @@ export function buildScriptedContentEditorReplyText(input: {
   );
 }
 
+/**
+ * Deterministic widget-assistant turn for the WP/Drupal Playwright UATs on the
+ * UNIFIED `/api/assistants/chat` broker path (cinatra#1221 S5 / #1919 AC3).
+ *
+ * Unlike `runScriptedStream` (which feeds the host `stream()` seam once an
+ * adapter has already resolved) this emits the RUNTIME's `send` vocabulary via
+ * typed callbacks so `runAssistantTurn` can short-circuit BEFORE
+ * `resolveDefaultAdapter()`. The deterministic UAT app carries no provider
+ * creds, so adapter resolution would otherwise resolve null and fail the widget
+ * turn with "No LLM provider configured." before this stream could answer — the
+ * exact defect this restores (#1919 AC3).
+ *
+ * Sequence (SAME shape a real content-editor turn produces, so the widget's
+ * frame handling is exercised unchanged):
+ *   - a sentinel-bearing text reply (→ `TEXT_MESSAGE_CONTENT`), always; and
+ *   - on an edit intent, one `*_content_editor_run` tool_call (→
+ *     `TOOL_CALL_START`, the widget's content-edit key that triggers the
+ *     apply/reload) plus its tool_result.
+ * Intent is matched against the USER'S INSTRUCTIONS ONLY (never a prompt
+ * template), mirroring `runScriptedStream`'s last-user-message matching. The CMS
+ * (WordPress vs Drupal, → tool name + id key) is selected from the bound
+ * assistant handle, the server-verified widget principal's own field — never a
+ * model- or body-supplied value.
+ */
+export async function runScriptedWidgetAssistantTurn(input: {
+  /** The end user's latest message (the editing instruction). */
+  instructions: string;
+  /** The bound assistant handle ("wordpress" | "drupal" | …); selects the CMS. */
+  assistantHandle: string;
+  onText: (chunk: string) => void;
+  onToolCall: (call: { id: string; name: string }) => void;
+  onToolResult: (result: { id: string; name: string; result: string }) => void;
+}): Promise<void> {
+  const isDrupal = input.assistantHandle.trim().toLowerCase() === "drupal";
+  const idKey: "postId" | "nodeId" = isDrupal ? "nodeId" : "postId";
+  const toolName = isDrupal
+    ? "drupal_content_editor_run"
+    : "wordpress_content_editor_run";
+  const cms = isDrupal ? "Drupal" : "WordPress";
+
+  const reply =
+    `${UAT_SENTINEL}: deterministic test reply for ${cms}. ` +
+    `You said: "${input.instructions.slice(0, 120)}".`;
+  for (const chunk of reply.match(/[\s\S]{1,24}/g) ?? [reply]) {
+    input.onText(chunk);
+  }
+
+  if (EDIT_INTENT.test(input.instructions)) {
+    const id = randomUUID();
+    input.onToolCall({ id, name: toolName });
+    input.onToolResult({
+      id,
+      name: toolName,
+      result: JSON.stringify({
+        // The write-target id is the server-derived one at the real seam; the
+        // deterministic stand-in leaves it empty (the UAT asserts the round-trip
+        // + no-direct-egress, not a specific id).
+        [idKey]: "",
+        changes: [
+          {
+            field: "title",
+            before: "UAT seeded title",
+            after: "UAT seeded title (edited by the deterministic provider)",
+          },
+        ],
+      }),
+    });
+  }
+}
+
 function lastUserMessage(input: OrchestrateStreamInput): string {
   const messages = input.messages ?? [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {
