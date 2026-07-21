@@ -46,7 +46,8 @@ export type EntityDashboardMutationReason =
   | "name-reserved"
   | "denied"
   | "protected"
-  | "not-found";
+  | "not-found"
+  | "invalid-config";
 
 export type MutatedEntityDashboard =
   | { readonly ok: true; readonly dashboard: EntityDashboardSummary }
@@ -66,7 +67,23 @@ export const ENTITY_DASHBOARD_REASON_COPY: Readonly<
   denied: "You don’t have permission to do that.",
   protected: "The Overview dashboard can’t be changed.",
   "not-found": "That dashboard no longer exists.",
+  // Fallback only — the save result usually carries the validator's own
+  // card-naming `message` (cinatra#1913), which the shell prefers.
+  "invalid-config": "The dashboard configuration is invalid.",
 };
+
+/** Result of persisting an edited config (cinatra#1913: the save path returns
+ *  a typed result like every other mutation — it never throws into the client,
+ *  so a validation failure renders as in-product copy, not an error overlay). */
+export type SavedEntityDashboard =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly reason: EntityDashboardMutationReason;
+      /** The validator's user-facing copy (names the offending card). Present
+       *  only for `invalid-config`. */
+      readonly message?: string;
+    };
 
 /**
  * The server-action callback surface a hosting screen (#703–#706) binds (with
@@ -92,5 +109,5 @@ export type EntityDashboardsDataSource = {
   readonly saveDashboard: (
     id: string,
     config: DashboardConfigV1_1,
-  ) => Promise<void>;
+  ) => Promise<SavedEntityDashboard>;
 };

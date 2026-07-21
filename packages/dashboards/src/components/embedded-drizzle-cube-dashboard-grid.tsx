@@ -38,6 +38,7 @@
  *     are available to entity screens that opt in. They default to the shell's
  *     own defaults (no anchor, `["grid"]`) for the embedded read-only case.
  */
+import type { SavedEntityDashboard } from "../entity-dashboards-contract";
 import type { DashboardConfigV1_1 } from "../store/dashboard-config";
 import { DashboardGridContainer } from "./dashboard-grid-container";
 import {
@@ -53,8 +54,11 @@ export type EmbeddedDrizzleCubeDashboardGridProps = {
   /** Editable mount (entity dashboards, #328). Defaults to read-only. */
   readonly editable?: boolean;
   /** Server action persisting the edited DC config. Required for editable mounts;
-   *  read-only mounts omit it and skip all save wiring. */
-  readonly onSave?: (next: DashboardConfigV1_1) => Promise<void>;
+   *  read-only mounts omit it and skip all save wiring. May resolve the typed
+   *  save result (cinatra#1913) — interpreted by the grid container. */
+  readonly onSave?: (
+    next: DashboardConfigV1_1,
+  ) => Promise<void | SavedEntityDashboard>;
   /** Tags the surface for route-scoped toolbar actions (forwarded to the shell). */
   readonly pageAnchor?: DashboardPageAnchor;
   /** Layout modes offered in edit mode (forwarded to the shell). */

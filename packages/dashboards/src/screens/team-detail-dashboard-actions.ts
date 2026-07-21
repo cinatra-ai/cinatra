@@ -51,6 +51,7 @@ import type {
   DeletedEntityDashboard,
   EntityDashboardsList,
   MutatedEntityDashboard,
+  SavedEntityDashboard,
 } from "../entity-dashboards-contract";
 
 /** Thrown when the live session may not operate this team's dashboards. Fails
@@ -151,6 +152,6 @@ export async function teamSaveDashboardConfigAction(
   teamId: string,
   id: string,
   config: unknown,
-): Promise<void> {
+): Promise<SavedEntityDashboard> {
   return saveEntityDashboardConfigAction(await authorizeTeamDashboards(teamId), id, config);
 }

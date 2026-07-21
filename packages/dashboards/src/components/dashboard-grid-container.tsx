@@ -14,6 +14,12 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { toast } from "@/lib/cinatra-toast";
+
+import {
+  ENTITY_DASHBOARD_REASON_COPY,
+  type SavedEntityDashboard,
+} from "../entity-dashboards-contract";
 import type { DashboardConfigV1_1 } from "../store/dashboard-config";
 import {
   ComposedDashboard,
@@ -30,13 +36,23 @@ export type DashboardGridContainerProps = {
   readonly initialConfig: DashboardConfigV1_1;
   readonly editable?: boolean;
   /**
-   * Server Action — must accept a serializable config and return void/throw.
+   * Server Action — accepts a serializable config and resolves void (legacy)
+   * or a typed `SavedEntityDashboard` (cinatra#1913). A `{ ok: false }` result
+   * is surfaced HERE as an in-product toast (the validator's card-naming copy)
+   * and the coordinator keeps the edit PENDING — never committed as persisted,
+   * never escaped into the third-party grid as an unhandled rejection.
    * Optional: read-only mounts (`editable={false}`, e.g. the per-entity detail
    * surfaces) omit it; the autosave coordinator + save wiring are then skipped
    * entirely.
    */
-  readonly onSave?: (next: DashboardConfigV1_1) => Promise<void>;
+  readonly onSave?: (
+    next: DashboardConfigV1_1,
+  ) => Promise<void | SavedEntityDashboard>;
 };
+
+/** Sentinel: the save failure was already reported (toasted) by the guard —
+ *  callers must not report it again, and it must never escape into DC. */
+class SaveAlreadyReportedError extends Error {}
 
 export function DashboardGridContainer({
   initialConfig,
@@ -55,7 +71,18 @@ export function DashboardGridContainer({
   if (editable && onSave && coordinatorRef.current === null) {
     coordinatorRef.current = createAutoSaveCoordinator<DashboardConfigV1_1>({
       initialPersistedJson: JSON.stringify(initialConfig),
-      onSave: (next) => onSaveRef.current?.(next) ?? Promise.resolve(),
+      // cinatra#1913: interpret the action's typed result. A failed save
+      // toasts the precise copy and THROWS a sentinel so the coordinator
+      // never commits it as persisted (the edit stays pending for retry).
+      onSave: async (next) => {
+        const result = await onSaveRef.current?.(next);
+        if (result && result.ok === false) {
+          toast.error(
+            `Not saved: ${result.message ?? ENTITY_DASHBOARD_REASON_COPY[result.reason]}`,
+          );
+          throw new SaveAlreadyReportedError();
+        }
+      },
       onCommit: (next) => {
         if (mountedRef.current) setConfig(next);
       },
@@ -136,7 +163,17 @@ export function DashboardGridContainer({
           pendingTimerRef.current = null;
         }
         coord.setPending(next as unknown as DashboardConfigV1_1);
-        await coord.flush({ rethrow: true });
+        // cinatra#1913: every failure is surfaced in-product HERE — nothing
+        // rejects into the third-party grid (an uncaught rejection there is
+        // exactly the issue's error overlay). The coordinator did not commit,
+        // so the edit stays pending; a later save retries it.
+        try {
+          await coord.flush({ rethrow: true });
+        } catch (e) {
+          if (!(e instanceof SaveAlreadyReportedError)) {
+            toast.error("Not saved — something went wrong. Try again.");
+          }
+        }
       }}
     />
   );
