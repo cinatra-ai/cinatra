@@ -38,6 +38,13 @@
       "treeSha256": "1459be627e5c7e9b1ff1c3d5beecebb19456dc5fdb59567c16584e2999884401"
     },
     {
+      "packageName": "@cinatra-ai/dashboard-artifact",
+      "repo": "cinatra-ai/dashboard-artifact",
+      "resolvedSha": "de56f95342b6df5f8d8d87249e13b29f64cc7f78",
+      "packageVersion": "0.1.0",
+      "treeSha256": "0492050cb98f77fd940f34cf590b5d8414a342b6ad4eacf236260b748a2e0a90"
+    },
+    {
       "packageName": "@cinatra-ai/document-artifact",
       "repo": "cinatra-ai/document-artifact",
       "resolvedSha": "0e6df2c8197fe9b5b70d97c80fa2e8fcf5ef1c36",
