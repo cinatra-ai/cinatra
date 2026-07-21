@@ -1,0 +1,105 @@
+// Bootstrap DDL for the assistant REGISTRY-FOUNDATION tables (cinatra#1874,
+// Epic #1873 W1) — a pure string builder with ZERO imports (a synchronous leaf,
+// safe for `drizzle-store.ts`'s synchronous composition; same pattern as
+// `assistant-thread-schema.ts`).
+//
+// Two NET-NEW tables (additive), so the fresh-install shape is born here and the
+// twin migration `core__0065` carries the SAME creates + seed onto the operator
+// upgrade path (AC#3: fresh-install AND upgrade produce identical schema):
+//
+//   assistant_audience   — install-time audience grants. Rows
+//     `(package_name, subject_kind, subject_id?)` where subject_kind is exactly
+//     CONNECTOR_ACCESS_SCOPES minus `user` (workspace|admin|organization|team|
+//     project). subject_id NULL for the global kinds (workspace/admin). Default
+//     grant on install is a single `workspace` row (W1 persists; W2+ enforces).
+//
+//   assistant_tag_alias  — platform-global flat-token aliases
+//     `(alias PK, package_name, source builtin|manifest|admin)`. The builtin
+//     `cinatra → @cinatra-ai/cinatra-assistant` seed is IMMUTABLE (ON CONFLICT
+//     DO NOTHING; the namespace primitive refuses to overwrite a builtin).
+//
+// The `assistant_handles` origin/package_name columns live in
+// `assistant-thread-schema.ts` (next to that table's CREATE); the
+// `installed_extension.assistant_declaration` column lives inline in
+// drizzle-store.ts (next to that table's CREATE).
+
+/** The audience subject kinds — exactly CONNECTOR_ACCESS_SCOPES minus `user`.
+ *  Duplicated as a bare literal here (this leaf has ZERO imports); the shared
+ *  vocabulary source is `@cinatra-ai/sdk-extensions` CONNECTOR_ACCESS_SCOPES,
+ *  pinned in agreement by a unit test. */
+export const ASSISTANT_AUDIENCE_SUBJECT_KINDS = [
+  "workspace",
+  "admin",
+  "organization",
+  "team",
+  "project",
+] as const;
+
+/** Sources for a tag alias row. */
+export const ASSISTANT_TAG_ALIAS_SOURCES = ["builtin", "manifest", "admin"] as const;
+
+/** The immutable builtin alias seed. */
+export const BUILTIN_ASSISTANT_ALIAS = Object.freeze({
+  alias: "cinatra",
+  packageName: "@cinatra-ai/cinatra-assistant",
+  source: "builtin",
+});
+
+/** Bootstrap DDL for `assistant_audience` + `assistant_tag_alias`, spread into
+ *  `buildCreateStoreSchemaQueries`. Idempotent (IF NOT EXISTS + ON CONFLICT).
+ *  Unqualified names in the DO block resolve to the runner's search_path. */
+export function assistantRegistrySchemaQueries(schemaName: string): { text: string }[] {
+  const s = schemaName.replaceAll('"', '""');
+  const kinds = ASSISTANT_AUDIENCE_SUBJECT_KINDS.map((k) => `'${k}'`).join(", ");
+  const sources = ASSISTANT_TAG_ALIAS_SOURCES.map((k) => `'${k}'`).join(", ");
+  const seed = BUILTIN_ASSISTANT_ALIAS;
+  return [
+    { text: `CREATE TABLE IF NOT EXISTS "${s}"."assistant_audience" (
+      id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      package_name text NOT NULL,
+      subject_kind text NOT NULL,
+      subject_id text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
+            AND table_name = 'assistant_audience'
+            AND constraint_name = 'assistant_audience_subject_kind_check'
+        ) THEN
+          ALTER TABLE "${s}"."assistant_audience" ADD CONSTRAINT assistant_audience_subject_kind_check CHECK (subject_kind IN (${kinds}));
+        END IF;
+      END $$` },
+    // Uniqueness of a grant: (package, kind, id) — NULL id (workspace/admin)
+    // collapses to '' so a duplicate global grant is rejected.
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS assistant_audience_grant_uniq ON "${s}"."assistant_audience" (package_name, subject_kind, COALESCE(subject_id, ''))` },
+    { text: `CREATE INDEX IF NOT EXISTS assistant_audience_package_idx ON "${s}"."assistant_audience" (package_name)` },
+
+    { text: `CREATE TABLE IF NOT EXISTS "${s}"."assistant_tag_alias" (
+      alias text PRIMARY KEY,
+      package_name text NOT NULL,
+      source text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
+            AND table_name = 'assistant_tag_alias'
+            AND constraint_name = 'assistant_tag_alias_source_check'
+        ) THEN
+          ALTER TABLE "${s}"."assistant_tag_alias" ADD CONSTRAINT assistant_tag_alias_source_check CHECK (source IN (${sources}));
+        END IF;
+      END $$` },
+    { text: `CREATE INDEX IF NOT EXISTS assistant_tag_alias_package_idx ON "${s}"."assistant_tag_alias" (package_name)` },
+    // Immutable builtin seed — ON CONFLICT DO NOTHING so a re-boot never
+    // overwrites an admin-relocated alias (the primitive guards the same rule).
+    { text: `INSERT INTO "${s}"."assistant_tag_alias" (alias, package_name, source)
+      VALUES ('${seed.alias}', '${seed.packageName}', '${seed.source}')
+      ON CONFLICT (alias) DO NOTHING` },
+  ];
+}

@@ -102,6 +102,51 @@ describe("registerAssistantAgent — fresh install", () => {
   });
 });
 
+describe("registerAssistantAgent — origin threading (cinatra#1874 W1 item 4)", () => {
+  function freshMint(principalId: string) {
+    mocks.txExecute
+      .mockResolvedValueOnce({ rows: [] }) // advisory lock
+      .mockResolvedValueOnce({ rows: [] }); // SELECT existing user -> none
+    mocks.createAssistantUserWithTx.mockResolvedValue({
+      id: principalId,
+      username: "acme",
+      email: "acme@system.local",
+      clientId: "cid",
+      clientSecret: "csecret",
+      userType: "assistant",
+    });
+  }
+
+  it("forwards origin:'extension' + package_name to the handle registry (adoption path)", async () => {
+    freshMint("ext-principal");
+    await registerAssistantAgent({
+      username: "acme",
+      config: cinatraAssistantConfig,
+      name: "Acme",
+      packageName: "@acme/assistant",
+      origin: "extension",
+    });
+    expect(mocks.registerAssistantHandle).toHaveBeenCalledWith("ext-principal", {
+      desired: "acme",
+      origin: "extension",
+      packageName: "@acme/assistant",
+    });
+  });
+
+  it("omitting origin keeps the handle call at { desired } — built-ins stay 'standalone'", async () => {
+    freshMint("std-principal");
+    await registerAssistantAgent({
+      username: "acme",
+      config: cinatraAssistantConfig,
+      name: "Acme",
+      // NB: packageName supplied but NO origin → NOT forwarded to the handle
+      // (built-ins keep the standalone default; backfill self-heals package_name).
+      packageName: "@acme/assistant",
+    });
+    expect(mocks.registerAssistantHandle).toHaveBeenCalledWith("std-principal", { desired: "acme" });
+  });
+});
+
 describe("registerAssistantAgent — steady state (principal exists)", () => {
   it("reuses the principal without minting, still re-links the template", async () => {
     mocks.txExecute
