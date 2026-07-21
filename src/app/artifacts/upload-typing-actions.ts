@@ -53,35 +53,41 @@ export type ArtifactMarketplacePack = {
 };
 
 export type ListTypesResult =
-  | { ok: true; types: InstalledMeaningType[] }
-  | { ok: false; reason: "auth-required" };
+  | { ok: true; types: InstalledMeaningType[]; mime: string }
+  | { ok: false; reason: "auth-required" | "not-found" | "denied" };
 
 /**
- * The §VI.1 picker candidate list — installed file-accepting types whose
- * `accepts` admit the detected MIME. `excludeTypeId` drops the artifact's OWN
- * base type (re-asserting the format base as a meaning is a no-op). Auth-gated:
- * the registry read is cheap but the surface is authenticated-only.
+ * The §VI.1 picker candidate list, resolved for ONE artifact. The artifact's
+ * MIME + base type are re-derived SERVER-SIDE from the stored artifact (never
+ * trusted from the client, which only knows the browser-declared Content-Type):
+ * the candidates are the installed file-accepting types whose `accepts` admit
+ * that authoritative MIME, minus the artifact's own base type (re-asserting the
+ * format base as a meaning is a no-op). Gated on the acting user's read of the
+ * artifact.
  */
-export async function listInstalledTypesAcceptingMime(
-  mime: string,
-  excludeTypeId?: string,
+export async function listInstalledTypesForArtifact(
+  artifactId: string,
 ): Promise<ListTypesResult> {
   const session = await getAuthSession();
-  if (!session?.session?.activeOrganizationId) {
-    return { ok: false, reason: "auth-required" };
-  }
+  const orgId = session?.session?.activeOrganizationId ?? null;
+  const actor = await getActorContext();
+  if (!orgId || !actor) return { ok: false, reason: "auth-required" };
+  const read = readArtifactForDetail({ orgId, actor, artifactId });
+  if (read.kind === "not-found") return { ok: false, reason: "not-found" };
+  if (read.kind === "denied") return { ok: false, reason: "denied" };
+  const { mime, objectType } = read.artifact;
   const types = listInstalledMeaningTypesAcceptingMime(
     mime,
-    excludeTypeId ? { excludeTypeId } : undefined,
+    objectType ? { excludeTypeId: objectType } : undefined,
   );
-  return { ok: true, types };
+  return { ok: true, types, mime };
 }
 
 export type AssertMeaningResult =
   | { ok: true }
   | {
       ok: false;
-      reason: "auth-required" | "not-found" | "denied" | "blocked";
+      reason: "auth-required" | "not-found" | "denied" | "invalid-type" | "blocked";
       message: string;
     };
 
@@ -105,9 +111,7 @@ export async function assertUploadMeaning(input: {
       message: "Asserting a meaning requires an authenticated session.",
     };
   }
-  // Ownership gate: the acting user must be able to READ the artifact before
-  // asserting a meaning over it (a user meaning is only ever asserted on one's
-  // own uploaded artifact). This reuses the canonical per-actor detail read.
+  // Access gate: the acting user must be able to READ the artifact.
   const read = readArtifactForDetail({ orgId, actor, artifactId: input.artifactId });
   if (read.kind === "not-found") {
     return { ok: false, reason: "not-found", message: "Artifact not found." };
@@ -117,6 +121,25 @@ export async function assertUploadMeaning(input: {
       ok: false,
       reason: "denied",
       message: "You do not have access to this artifact.",
+    };
+  }
+  // Candidate validation (fail-closed): the chosen extension MUST be one of the
+  // installed file-accepting types whose `accepts` admit the artifact's
+  // SERVER-DERIVED MIME — never a raw client-supplied string. This closes an
+  // arbitrary / uninstalled / wrong-MIME / cross-org extension being asserted
+  // through a crafted server-action call; the MIME + base type are re-derived
+  // from the stored artifact, not trusted from the client.
+  const { mime, objectType } = read.artifact;
+  const candidates = listInstalledMeaningTypesAcceptingMime(
+    mime,
+    objectType ? { excludeTypeId: objectType } : undefined,
+  );
+  if (!candidates.some((c) => c.extension === input.extension)) {
+    return {
+      ok: false,
+      reason: "invalid-type",
+      message:
+        "That type is not an installed type that accepts this file — refresh and pick again.",
     };
   }
   const result = assertSemanticType({
@@ -188,7 +211,8 @@ export async function requestTypeInstall(input: {
 }): Promise<RequestInstallResult> {
   const session = await getAuthSession();
   const requesterId = session?.user?.id;
-  if (!session?.session?.activeOrganizationId || !requesterId) {
+  const orgId = session?.session?.activeOrganizationId ?? null;
+  if (!orgId || !requesterId) {
     return {
       ok: false,
       reason: "auth-required",
@@ -196,6 +220,7 @@ export async function requestTypeInstall(input: {
     };
   }
   const notification = buildTypeInstallRequestNotificationInput({
+    orgId,
     requesterId,
     packageName: input.packageName,
     displayName: input.displayName,

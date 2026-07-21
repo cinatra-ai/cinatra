@@ -47,14 +47,17 @@ export function buildTypeInstallMarketplaceHref(packageName: string): string {
   return `/configuration/marketplace?q=${encodeURIComponent(bounded)}`;
 }
 
-/** Stable per-(requester, package) occurrence key. Both axes are in the key so
- *  one requester's repeat clicks for one pack coalesce, while a different
- *  requester or pack is a distinct occurrence. */
+/** Stable per-(org, requester, package) occurrence key. All three axes are in
+ *  the key so one requester's repeat clicks for one pack in one org coalesce,
+ *  while a different org, requester or pack is a distinct occurrence — the org
+ *  axis matters because the admin installs into a tenant, so a request must not
+ *  cross tenants or be deduped forever across orgs. */
 export function typeInstallRequestDedupeKey(
+  orgId: string,
   requesterId: string,
   packageName: string,
 ): string {
-  return `${TYPE_INSTALL_REQUEST_DEDUPE_PREFIX}${requesterId.slice(0, 128)}:${packageName.slice(0, 255)}`;
+  return `${TYPE_INSTALL_REQUEST_DEDUPE_PREFIX}${orgId.slice(0, 128)}:${requesterId.slice(0, 128)}:${packageName.slice(0, 255)}`;
 }
 
 /**
@@ -63,12 +66,13 @@ export function typeInstallRequestDedupeKey(
  * `href`; the dedupe key makes it occurrence-deduped per (requester, pack).
  */
 export function buildTypeInstallRequestNotificationInput(args: {
+  orgId: string;
   requesterId: string;
   packageName: string;
   displayName?: string;
   requesterLabel?: string;
 }): NotificationInput {
-  const { requesterId, packageName, displayName, requesterLabel } = args;
+  const { orgId, requesterId, packageName, displayName, requesterLabel } = args;
   const named = displayName && displayName.trim() ? displayName.trim() : packageName;
   const by =
     requesterLabel && requesterLabel.trim()
@@ -81,10 +85,11 @@ export function buildTypeInstallRequestNotificationInput(args: {
       `Review it in the marketplace and install it if appropriate.`,
     kind: "info",
     href: buildTypeInstallMarketplaceHref(packageName),
-    dedupeKey: typeInstallRequestDedupeKey(requesterId, packageName),
+    dedupeKey: typeInstallRequestDedupeKey(orgId, requesterId, packageName),
     metadata: {
       category: TYPE_INSTALL_REQUEST_CATEGORY,
       packageName,
+      orgId,
       requesterId,
       ...(displayName && displayName.trim() ? { displayName: displayName.trim() } : {}),
     },

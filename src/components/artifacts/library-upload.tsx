@@ -61,7 +61,7 @@ import {
   assertUploadMeaning,
   installArtifactPackInline,
   listArtifactMarketplacePacks,
-  listInstalledTypesAcceptingMime,
+  listInstalledTypesForArtifact,
   requestTypeInstall,
   type ArtifactMarketplacePack,
 } from "@/app/artifacts/upload-typing-actions";
@@ -78,8 +78,9 @@ type UploadState =
       phase: "typed";
       artifactId: string;
       filename: string;
+      /** Display-only MIME (browser Content-Type / ref); the AUTHORITATIVE MIME
+       *  for the picker + assertion is re-derived server-side by artifactId. */
       mime: string;
-      objectType: string;
     }
   | {
       phase: "refused";
@@ -160,25 +161,34 @@ export function LibraryUploadProvider({ children }: { children: ReactNode }) {
           /* non-JSON body — fall through to status handling */
         }
         if (xhr.status === 201 && body.ok === true) {
+          // Display-only MIME from the response `ref` (else the browser type);
+          // the picker re-derives the AUTHORITATIVE MIME + base server-side.
+          const ref = body.ref as { mime?: unknown } | undefined;
           setState({
             phase: "typed",
             artifactId: String(body.artifactId ?? ""),
             filename: file.name,
-            mime: typeof body.mime === "string" ? body.mime : file.type,
-            objectType: typeof body.objectType === "string" ? body.objectType : "",
+            mime:
+              ref && typeof ref.mime === "string"
+                ? ref.mime
+                : file.type || "application/octet-stream",
           });
           router.refresh();
           return;
         }
-        // Refusal (§VI.3). A 415 with a marketplaceHref is the base-case refusal
-        // with recourse; other failures surface visibly WITHOUT a marketplace
-        // link (an ambiguous / no-mime refusal is not fixed by installing more).
+        // Refusal (§VI.3). ONLY a 415 that carries a `marketplaceHref` is the
+        // base-case "no installed base accepts this MIME" refusal with install
+        // recourse; every other failure (413 too-large, 500, ambiguous/no-mime
+        // 415) is surfaced with its own message and NO marketplace link.
+        const marketplaceHref =
+          typeof body.marketplaceHref === "string" ? body.marketplaceHref : undefined;
         setState({
           phase: "refused",
           filename: file.name,
-          mime: typeof body.mime === "string" ? body.mime : file.type || undefined,
-          marketplaceHref:
-            typeof body.marketplaceHref === "string" ? body.marketplaceHref : undefined,
+          // Only carry the refused MIME when it is the base-case (a link is
+          // present); otherwise the panel must not claim "no base accepts <mime>".
+          mime: marketplaceHref && typeof body.mime === "string" ? body.mime : undefined,
+          marketplaceHref,
           message:
             typeof body.error === "string" && body.error.length > 0
               ? body.error
@@ -474,33 +484,49 @@ function TypePickerPanel() {
   const { state, openMarketplace, closeDialog } = useUpload();
   const router = useRouter();
   const [types, setTypes] = useState<InstalledMeaningType[] | null>(null);
+  const [serverMime, setServerMime] = useState<string>("");
   const [error, setError] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const artifactId = state.phase === "typed" ? state.artifactId : "";
-  const mime = state.phase === "typed" ? state.mime : "";
   const filename = state.phase === "typed" ? state.filename : "";
-  const objectType = state.phase === "typed" ? state.objectType : "";
+  // Display MIME is the server-derived one once loaded, else the display hint.
+  const mime = serverMime || (state.phase === "typed" ? state.mime : "");
 
-  // Load the candidate installed types once the picker mounts.
+  // Load the candidate installed types once the picker mounts. The server
+  // re-derives the artifact's AUTHORITATIVE MIME + base type by id — the client
+  // never supplies the MIME (the browser type can be empty or wrong).
   useEffect(() => {
-    if (!mime) return;
+    if (!artifactId) return;
     let live = true;
-    void listInstalledTypesAcceptingMime(mime, objectType || undefined).then((r) => {
-      if (!live) return;
-      if (r.ok) setTypes(r.types);
-      else setError(true);
-    });
+    listInstalledTypesForArtifact(artifactId)
+      .then((r) => {
+        if (!live) return;
+        if (r.ok) {
+          setTypes(r.types);
+          setServerMime(r.mime);
+        } else setError(true);
+      })
+      .catch(() => {
+        if (live) setError(true);
+      });
     return () => {
       live = false;
     };
-  }, [mime, objectType]);
+  }, [artifactId]);
 
   const confirm = useCallback(async () => {
     if (!selected || !artifactId) return;
     setBusy(true);
-    const r = await assertUploadMeaning({ artifactId, extension: selected });
+    let r: Awaited<ReturnType<typeof assertUploadMeaning>>;
+    try {
+      r = await assertUploadMeaning({ artifactId, extension: selected });
+    } catch {
+      setBusy(false);
+      toast.error("Couldn't set the meaning — try again.");
+      return;
+    }
     setBusy(false);
     if (r.ok) {
       toast.success("Meaning set.");
@@ -662,21 +688,24 @@ function MarketplaceTabPanel() {
   const [rowState, setRowState] = useState<Record<string, "installing" | "installed" | "requested">>({});
   const [scopeFor, setScopeFor] = useState<ArtifactMarketplacePack | null>(null);
 
-  const mime = state.phase === "typed" ? state.mime : state.phase === "refused" ? state.mime : undefined;
   const contextName = state.phase === "typed" ? state.filename : state.phase === "refused" ? state.filename : "";
 
   useEffect(() => {
     let live = true;
-    void listArtifactMarketplacePacks().then((r) => {
-      if (!live) return;
-      if (r.ok) {
-        setPacks(r.packs);
-        setRegistryConnected(r.registryConnected);
-        setCanInstall(r.canInstall);
-      } else {
-        setError(true);
-      }
-    });
+    listArtifactMarketplacePacks()
+      .then((r) => {
+        if (!live) return;
+        if (r.ok) {
+          setPacks(r.packs);
+          setRegistryConnected(r.registryConnected);
+          setCanInstall(r.canInstall);
+        } else {
+          setError(true);
+        }
+      })
+      .catch(() => {
+        if (live) setError(true);
+      });
     return () => {
       live = false;
     };
@@ -684,18 +713,27 @@ function MarketplaceTabPanel() {
 
   const doRequest = useCallback(async (pack: ArtifactMarketplacePack) => {
     setRowState((s) => ({ ...s, [pack.packageName]: "requested" }));
-    const r = await requestTypeInstall({
-      packageName: pack.packageName,
-      displayName: pack.displayName,
-    });
-    if (r.ok) {
-      toast.success("Request sent — admins notified.");
-    } else {
+    const rollback = () =>
       setRowState((s) => {
         const next = { ...s };
         delete next[pack.packageName];
         return next;
       });
+    let r: Awaited<ReturnType<typeof requestTypeInstall>>;
+    try {
+      r = await requestTypeInstall({
+        packageName: pack.packageName,
+        displayName: pack.displayName,
+      });
+    } catch {
+      rollback();
+      toast.error("Couldn't send the request — try again.");
+      return;
+    }
+    if (r.ok) {
+      toast.success("Request sent — admins notified.");
+    } else {
+      rollback();
       toast.error(r.message);
     }
   }, []);
@@ -704,24 +742,33 @@ function MarketplaceTabPanel() {
     async (pack: ArtifactMarketplacePack, level: "workspace" | "admin") => {
       setScopeFor(null);
       setRowState((s) => ({ ...s, [pack.packageName]: "installing" }));
-      const r = await installArtifactPackInline({
-        packageName: pack.packageName,
-        version: pack.version,
-        // The action re-derives the workspace/admin id from the session and
-        // discards the client id (a cross-tenant guard), so a placeholder id is
-        // sufficient for the workspace-scoped install-scope choice.
-        accessTarget: { level, id: level },
-      });
-      if (r.ok) {
-        setRowState((s) => ({ ...s, [pack.packageName]: "installed" }));
-        toast.success("Installed — selectable once it settles.");
-        router.refresh();
-      } else {
+      const rollback = () =>
         setRowState((s) => {
           const next = { ...s };
           delete next[pack.packageName];
           return next;
         });
+      let r: Awaited<ReturnType<typeof installArtifactPackInline>>;
+      try {
+        r = await installArtifactPackInline({
+          packageName: pack.packageName,
+          version: pack.version,
+          // The action re-derives the workspace/admin id from the session and
+          // discards the client id (a cross-tenant guard), so a placeholder id
+          // is sufficient for the workspace-scoped install-scope choice.
+          accessTarget: { level, id: level },
+        });
+      } catch {
+        rollback();
+        toast.error("The install failed — try again.");
+        return;
+      }
+      if (r.ok) {
+        setRowState((s) => ({ ...s, [pack.packageName]: "installed" }));
+        toast.success("Installed — selectable once it settles.");
+        router.refresh();
+      } else {
+        rollback();
         toast.error(r.message);
       }
     },
@@ -763,7 +810,7 @@ function MarketplaceTabPanel() {
           Marketplace
         </Button>
         <span className="ml-auto font-mono text-badge-2xs uppercase tracking-kicker-wide text-muted-foreground">
-          kind: artifact{mime ? ` · accepts ${mimeShortLabel(mime)}` : ""}
+          kind: artifact
         </span>
       </div>
       {/* Context bar with a return-to-picker path (only when reached from it). */}
@@ -952,10 +999,11 @@ function InstallScopeConfirm({
 // helpers
 // ---------------------------------------------------------------------------
 
-/** Header values must be latin1-safe; a filename with non-ASCII bytes would
- *  throw in setRequestHeader. Percent-encode to keep the round-trip lossless. */
+/** Header values must be latin1-safe; a filename with characters above U+00FF
+ *  would throw in setRequestHeader. Percent-encode those so a non-latin1
+ *  filename cannot crash the upload. */
 function encodeHeader(value: string): string {
-  return /[^ -ÿ]/.test(value) ? encodeURIComponent(value) : value;
+  return /[^\u0020-\u00FF]/.test(value) ? encodeURIComponent(value) : value;
 }
 
 /** A short human label for a MIME in the picker / tab chrome ("PDF" from
