@@ -62,7 +62,7 @@ import {
 } from "@/lib/database";
 import { updateOpenAIPromptCaching } from "@/lib/openai-connection-store";
 
-// The OpenAI save/clear/skills actions are connector-owned impls resolved
+// The OpenAI save/clear actions are connector-owned impls resolved
 // from the openai surface's `actions` member at INVOCATION time (the
 // connector's register(ctx) builds them on the same gated action cores its
 // "use server" exports wrap — permission gating identical). Re-exports are
@@ -607,13 +607,21 @@ export async function saveDevExtensionsSettingsAction(formData: FormData) {
 
 // ---------------------------------------------------------------------------
 // OpenAI Skills administration
+//
+// REMOVED (openai-connector 0.1.9, cinatra#1715 core switch-over): the host
+// `saveOpenAISkillsSettingsAction` wrapper reached the openai surface's
+// `actions.saveSkillsSettings`, which the connector retired when it dropped
+// src/openai-skills.ts. Skills administration is moving connector-side —
+// delivery rides the #1967 skill-delivery registration channel and the setup
+// surface is owned by the #1104/#1926 track. There is deliberately no host
+// wrapper (and no host settings control) for it here: the settings-menu entry
+// and the /configuration/(llm|apps)/openai-skills routes already redirect to
+// the connector's own schema-config setup surface, so nothing renders a
+// silently-dead host control. The openai-skills gate test pins the ABSENCE of
+// both the connector body and this host wrapper so an ungated re-introduction
+// fails CI. The anthropic skill-sync analog still functions via its own path
+// (orchestrateAnthropicSkillSync, above) until #1104 relocates it.
 // ---------------------------------------------------------------------------
-
-export async function saveOpenAISkillsSettingsAction(formData: FormData) {
-  const save = requireLlmProviderSurface("openai").actions?.saveSkillsSettings;
-  if (!save) throw new Error("The OpenAI connector exposes no skills-settings action.");
-  await save(formData);
-}
 
 // Gmail send-as refresh/clear + Google Calendar appointment-schedule mutations
 // are owned by the connectors: the manage-gated extension actions
