@@ -9,12 +9,22 @@
  * `CubeDescriptor`).
  *
  * The adapter deliberately does NOT support funnel/flow/retention/multi-query
- * shapes (rejected by the route with `400 unsupported_analysis_type`) or
- * timeDimensions (rejected with `400 unsupported_query_feature`). The ONLY
- * filter shape accepted in v1 is a same-cube `equals` predicate with non-empty
- * string values (used to scope a per-entity detail dashboard to one row);
- * every other filter shape (grouped and/or, other operators) is rejected with
- * `400 unsupported_query_feature`.
+ * shapes (rejected by the route with `400 unsupported_analysis_type`).
+ *
+ * v1 filter surface (cinatra#1911): a flat AND-list of same-cube predicates
+ * with operator `equals` | `in` (non-empty string values) or `inDateRange`
+ * (one relative token like "last 30 days", or an absolute [from, to] pair,
+ * on a time-typed dimension). `timeDimensions` carries at most ONE entry and
+ * it MUST name a granularity (day|week|month) — drizzle-cube applies an
+ * implicit daily grouping to a granularity-less time dimension, which its own
+ * authoring guidance calls "usually wrong", so v1 requires the grouping to be
+ * explicit; a date window without time-series grouping is an `inDateRange`
+ * filter instead. Everything else (grouped and/or, other operators) is
+ * rejected with `400 unsupported_query_feature`.
+ *
+ * `collectQueryFeatureViolations` is the SINGLE feature predicate shared by
+ * this wire gate and the dashboards write path (cinatra#1911): what cannot
+ * execute cannot be persisted, and both seats emit the same product copy.
  */
 
 import type {
@@ -114,46 +124,236 @@ export type CubeJsBatchResponse = {
   readonly results: readonly CubeJsBatchResultItem[];
 };
 
-// ─── Equals-filter support (v1 — same-cube equality only) ──────────────
+// ─── Supported-filter surface (v1 — flat same-cube predicates) ─────────
+
+export const SUPPORTED_FILTER_OPERATORS = ["equals", "in", "inDateRange"] as const;
+export type SupportedFilterOperator = (typeof SUPPORTED_FILTER_OPERATORS)[number];
+
+export const SUPPORTED_TIME_GRANULARITIES = ["day", "week", "month"] as const;
+export type SupportedTimeGranularity = (typeof SUPPORTED_TIME_GRANULARITIES)[number];
 
 /**
- * The only filter shape v1 accepts: a single-member equality predicate with
- * non-empty string values. drizzle-cube's filter DSL also supports other
- * operators and grouped `and`/`or` wrappers, but the per-entity detail
- * dashboards only need same-cube `equals`, so we keep the accepted surface
- * minimal — everything else is rejected with `unsupported_query_feature`.
+ * The flat filter shape v1 accepts: a single-member predicate with non-empty
+ * string values and a supported operator. drizzle-cube's filter DSL also
+ * supports many more operators and grouped `and`/`or` wrappers; those stay
+ * rejected with `unsupported_query_feature` until a use case earns them.
  */
-export type CubeJsEqualsFilter = {
+export type CubeJsSupportedFilter = {
   readonly member: string;
-  readonly operator: "equals";
+  readonly operator: SupportedFilterOperator;
   readonly values: readonly string[];
 };
 
-export function isEqualsFilter(f: unknown): f is CubeJsEqualsFilter {
+/** @deprecated cinatra#1911 — kept as an alias for the equals-only era. */
+export type CubeJsEqualsFilter = CubeJsSupportedFilter & { readonly operator: "equals" };
+
+export function isSupportedFilter(f: unknown): f is CubeJsSupportedFilter {
   if (typeof f !== "object" || f === null) return false;
   const o = f as Record<string, unknown>;
-  return (
-    typeof o.member === "string" &&
-    o.member.length > 0 &&
-    o.operator === "equals" &&
-    Array.isArray(o.values) &&
-    o.values.length > 0 &&
-    o.values.every((v) => typeof v === "string")
-  );
+  if (
+    typeof o.member !== "string" ||
+    o.member.length === 0 ||
+    typeof o.operator !== "string" ||
+    !(SUPPORTED_FILTER_OPERATORS as readonly string[]).includes(o.operator) ||
+    !Array.isArray(o.values) ||
+    o.values.length === 0 ||
+    !o.values.every((v) => typeof v === "string" && v.length > 0)
+  ) {
+    return false;
+  }
+  // A date window is either one relative token ("last 30 days") or an
+  // absolute [from, to] pair — drizzle-cube accepts exactly these two arities
+  // (a bare string dateRange is wrapped to a 1-element array internally).
+  if (o.operator === "inDateRange" && o.values.length > 2) return false;
+  return true;
+}
+
+export function isEqualsFilter(f: unknown): f is CubeJsEqualsFilter {
+  return isSupportedFilter(f) && f.operator === "equals";
 }
 
 /**
- * First equals-filter member (if any) — an additional cube-id source so a
+ * First supported-filter member (if any) — an additional cube-id source so a
  * filters-only query still resolves a cube. Returns undefined when no
- * equals-filter is present.
+ * supported filter is present.
  */
-function firstEqualsFilterMember(
+function firstSupportedFilterMember(
   filters: readonly unknown[] | undefined,
 ): string | undefined {
   for (const f of filters ?? []) {
-    if (isEqualsFilter(f)) return f.member;
+    if (isSupportedFilter(f)) return f.member;
   }
   return undefined;
+}
+
+// ─── Feature predicate (shared: wire gate + dashboards write path) ─────
+
+export type QueryFeatureViolation = {
+  /** Stable machine identity of the violation class (cinatra#1911). */
+  readonly kind:
+    | "grouped_boolean_filters"
+    | "unsupported_filter_operator"
+    | "invalid_filter_shape"
+    | "invalid_date_window"
+    | "multiple_time_dimensions"
+    | "invalid_time_dimension"
+    | "missing_or_invalid_granularity"
+    | "invalid_date_range";
+  /** Offending fully-qualified member, when one is identifiable. */
+  readonly member?: string;
+  /** Product copy — safe to render on a card and in a write-rejection. */
+  readonly message: string;
+};
+
+const SUPPORTED_SURFACE_COPY =
+  `Supported filters: "equals" and "in" with exact text values, and ` +
+  `"inDateRange" with one relative period (like "last 30 days") or a ` +
+  `[from, to] pair of dates.`;
+
+function isNonEmptyStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "string" && x.length > 0);
+}
+
+/**
+ * The v1 executable-feature predicate (cinatra#1911). Tolerant of unknown or
+ * partial shapes — persisted portlet queries are opaque to Zod, so this is
+ * safe to run on untrusted `analysisConfig.query` blobs at save time (same
+ * philosophy as `collectQueryCubeIds`). Non-object input yields no
+ * violations; presence/absence rules stay with the callers' schemas.
+ *
+ * Checks only what is decidable WITHOUT cube metadata. Member existence and
+ * time-typedness stay render-time (`findInvalidMetaMembers`) — write-time
+ * callers must not claim member resolution happened.
+ */
+export function collectQueryFeatureViolations(query: unknown): QueryFeatureViolation[] {
+  const out: QueryFeatureViolation[] = [];
+  if (typeof query !== "object" || query === null) return out;
+  const q = query as Record<string, unknown>;
+
+  if (Array.isArray(q.filters)) {
+    for (const f of q.filters) {
+      if (typeof f !== "object" || f === null) {
+        out.push({
+          kind: "invalid_filter_shape",
+          message: `A filter entry is not a { member, operator, values } object. ${SUPPORTED_SURFACE_COPY}`,
+        });
+        continue;
+      }
+      const o = f as Record<string, unknown>;
+      if ("and" in o || "or" in o) {
+        out.push({
+          kind: "grouped_boolean_filters",
+          message:
+            "Grouped and/or filters aren't supported. Use a flat list of filters — they combine with AND.",
+        });
+        continue;
+      }
+      const member = typeof o.member === "string" && o.member.length > 0 ? o.member : undefined;
+      const label = member ? `Filter on "${member}"` : "A filter";
+      if (typeof o.operator !== "string" || !(SUPPORTED_FILTER_OPERATORS as readonly string[]).includes(o.operator)) {
+        out.push({
+          kind: "unsupported_filter_operator",
+          member,
+          message: `${label} uses the unsupported operator "${String(o.operator)}". ${SUPPORTED_SURFACE_COPY}`,
+        });
+        continue;
+      }
+      if (!isNonEmptyStringArray(o.values)) {
+        out.push({
+          kind: "invalid_filter_shape",
+          member,
+          message: `${label} needs a non-empty list of non-empty text values.`,
+        });
+        continue;
+      }
+      if (o.operator === "inDateRange" && (o.values as string[]).length > 2) {
+        out.push({
+          kind: "invalid_date_window",
+          member,
+          message: `${label} has ${(o.values as string[]).length} values — a date window is one relative period (like "last 30 days") or a [from, to] pair of dates.`,
+        });
+        continue;
+      }
+      if (!member) {
+        out.push({
+          kind: "invalid_filter_shape",
+          message: `A filter is missing its member (the "<cube>.<field>" it applies to).`,
+        });
+      }
+    }
+  }
+
+  if (Array.isArray(q.timeDimensions) && q.timeDimensions.length > 0) {
+    if (q.timeDimensions.length > 1) {
+      out.push({
+        kind: "multiple_time_dimensions",
+        message: "Only one time dimension per query is supported.",
+      });
+    }
+    for (const td of q.timeDimensions) {
+      if (typeof td !== "object" || td === null) {
+        out.push({
+          kind: "invalid_time_dimension",
+          message: "A timeDimensions entry is not a { dimension, granularity, dateRange? } object.",
+        });
+        continue;
+      }
+      const t = td as Record<string, unknown>;
+      const member = typeof t.dimension === "string" && t.dimension.length > 0 ? t.dimension : undefined;
+      if (!member) {
+        out.push({
+          kind: "invalid_time_dimension",
+          message: "A timeDimensions entry is missing its dimension.",
+        });
+        continue;
+      }
+      if (
+        typeof t.granularity !== "string" ||
+        !(SUPPORTED_TIME_GRANULARITIES as readonly string[]).includes(t.granularity)
+      ) {
+        out.push({
+          kind: "missing_or_invalid_granularity",
+          member,
+          message:
+            `Time dimension "${member}" needs a granularity of "day", "week" or "month" for a time series. ` +
+            `For a plain date window without time grouping, use an "inDateRange" filter instead.`,
+        });
+      }
+      const dr = t.dateRange;
+      if (dr !== undefined) {
+        const okString = typeof dr === "string" && dr.length > 0;
+        const okPair =
+          Array.isArray(dr) &&
+          (dr.length === 1 || dr.length === 2) &&
+          dr.every((v) => typeof v === "string" && v.length > 0);
+        if (!okString && !okPair) {
+          out.push({
+            kind: "invalid_date_range",
+            member,
+            message:
+              `Time dimension "${member}" has an invalid dateRange — use one relative period ` +
+              `(like "last 30 days") or a [from, to] pair of dates.`,
+          });
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Query complexity as counted by the endpoint's cap: measures + dimensions +
+ * time dimensions (each time dimension is a grouping axis under the v1
+ * granularity-required contract). Exported so the dashboards write path
+ * enforces the SAME arithmetic — a query that saves must never later be
+ * rejected as too complex (cinatra#1911). Tolerant of unknown shapes.
+ */
+export function queryComplexityOf(query: unknown): number {
+  if (typeof query !== "object" || query === null) return 0;
+  const q = query as Record<string, unknown>;
+  const len = (v: unknown): number => (Array.isArray(v) ? v.length : 0);
+  return len(q.measures) + len(q.dimensions) + len(q.timeDimensions);
 }
 
 /**
@@ -172,7 +372,7 @@ export function findUnknownFilterMembers(
   const prefix = `${cubeId}.`;
   const unknown: string[] = [];
   for (const f of q.filters ?? []) {
-    if (!isEqualsFilter(f)) continue;
+    if (!isSupportedFilter(f)) continue;
     if (!f.member.startsWith(prefix)) {
       unknown.push(f.member);
       continue;
@@ -181,6 +381,50 @@ export function findUnknownFilterMembers(
     if (!knownMemberIds.has(suffix)) unknown.push(f.member);
   }
   return unknown;
+}
+
+/**
+ * Meta-dependent member validation (cinatra#1911) — everything that needs the
+ * cube's dimension list in hand:
+ *   - `unknownMembers`: supported-filter members AND `timeDimensions[].dimension`
+ *     that don't name a known dimension of the cube (drizzle-cube silently
+ *     drops unknown filter members — fail-closed, same rationale as
+ *     `findUnknownFilterMembers`);
+ *   - `nonTimeMembers`: `inDateRange` filter members and
+ *     `timeDimensions[].dimension` that name a KNOWN dimension whose type is
+ *     not time — drizzle-cube itself throws on a non-time dateRange target,
+ *     so we reject earlier with readable copy.
+ * Cinatra descriptors use type `"date"` for what drizzle-cube's meta calls
+ * `"time"` (see `toCubeMetaCube`).
+ */
+export function findInvalidMetaMembers(
+  q: CubeJsWireQuery,
+  cubeId: string,
+  dimensions: ReadonlyArray<{ readonly id: string; readonly type: string }>,
+): { unknownMembers: string[]; nonTimeMembers: string[] } {
+  const prefix = `${cubeId}.`;
+  const knownIds = new Set(dimensions.map((d) => d.id));
+  const timeIds = new Set(dimensions.filter((d) => d.type === "date").map((d) => d.id));
+  // Filter-member unknowns (all supported operators) — the pre-existing check.
+  const unknownMembers = findUnknownFilterMembers(q, cubeId, knownIds);
+  const nonTimeMembers: string[] = [];
+  const isKnown = (member: string): boolean =>
+    member.startsWith(prefix) && knownIds.has(member.slice(prefix.length));
+  const isTimeTyped = (member: string): boolean =>
+    member.startsWith(prefix) && timeIds.has(member.slice(prefix.length));
+  for (const f of q.filters ?? []) {
+    // Unknowns already collected above — only the type check remains here.
+    if (isSupportedFilter(f) && f.operator === "inDateRange" && isKnown(f.member) && !isTimeTyped(f.member)) {
+      nonTimeMembers.push(f.member);
+    }
+  }
+  for (const td of q.timeDimensions ?? []) {
+    const member = typeof td?.dimension === "string" && td.dimension.length > 0 ? td.dimension : undefined;
+    if (!member) continue;
+    if (!isKnown(member)) unknownMembers.push(member);
+    else if (!isTimeTyped(member)) nonTimeMembers.push(member);
+  }
+  return { unknownMembers, nonTimeMembers };
 }
 
 // ─── Resolver: cube id from query members ──────────────────────────────
@@ -201,7 +445,7 @@ export function resolveCubeIdFromQuery(q: CubeJsWireQuery): string | null {
     q.timeDimensions?.[0]?.dimension ??
     (q.order ? Object.keys(q.order)[0] : undefined) ??
     q.segments?.[0] ??
-    firstEqualsFilterMember(q.filters);
+    firstSupportedFilterMember(q.filters);
   if (!firstMember) return null;
   const dot = firstMember.indexOf(".");
   return dot > 0 ? firstMember.slice(0, dot) : null;
@@ -323,9 +567,9 @@ export function resolveAndValidateCubeId(
     ...((q.timeDimensions ?? []).map((td) => td.dimension)),
     ...Object.keys(q.order ?? {}),
     ...(q.segments ?? []),
-    // Filter members participate in the same-cube check so an `equals`
+    // Filter members participate in the same-cube check so a supported
     // filter on a foreign cube triggers `cube_id_ambiguous` (no widening).
-    ...((q.filters ?? []).filter(isEqualsFilter).map((f) => f.member)),
+    ...((q.filters ?? []).filter(isSupportedFilter).map((f) => f.member)),
   ];
   const prefix = `${cubeId}.`;
   const foreign = allMembers.filter((m) => !m.startsWith(prefix));
@@ -364,36 +608,21 @@ export function checkUnsupportedAnalysisType(
 }
 
 /**
- * The route accepts ONLY same-cube `equals` filters; it rejects every other
- * filter shape and all `timeDimensions`.
- *
- * Rejecting only `timeDimensions[].granularity` lets valid Cube.js fields like
- * `dateRange`, `fillMissingDates`, or a bare time dimension pass and then get
- * silently dropped by `toQuerySpec` (which only maps measures/dimensions/order/
- * limit/offset/filters). That would return successful but incorrect results.
- *
- * Reject any non-empty `timeDimensions` entirely until both `QuerySpec` and
- * the adapter support time-grain queries.
+ * The wire gate over the v1 executable feature surface (cinatra#1911) — a
+ * thin wrapper over the shared `collectQueryFeatureViolations` predicate.
+ * `reason` carries product copy (drizzle-cube's CubeClient throws
+ * `new Error(body.error)` and the portlet error card renders `error.message`
+ * verbatim), joined when a query violates on several counts.
  */
 export function checkUnsupportedQueryFeature(
   q: CubeJsWireQuery,
 ): { code: string; reason: string } | null {
-  if (Array.isArray(q.filters) && q.filters.length > 0) {
-    if (!q.filters.every(isEqualsFilter)) {
-      return {
-        code: "unsupported_query_feature",
-        reason:
-          "only same-cube `equals` filters with non-empty string values are supported in v1 (no grouped and/or, no other operators)",
-      };
-    }
-  }
-  if (Array.isArray(q.timeDimensions) && q.timeDimensions.length > 0) {
-    return {
-      code: "unsupported_query_feature",
-      reason: "timeDimensions not supported by this adapter",
-    };
-  }
-  return null;
+  const violations = collectQueryFeatureViolations(q);
+  if (violations.length === 0) return null;
+  return {
+    code: "unsupported_query_feature",
+    reason: violations.map((v) => v.message).join(" "),
+  };
 }
 
 // ─── Wire → Cinatra conversion ─────────────────────────────────────────
@@ -424,18 +653,45 @@ export function toQuerySpec(q: CubeJsWireQuery, cubeId: string): QuerySpec {
       order.push([stripCubePrefix(member, cubeId), direction]);
     }
   }
-  // Map same-cube `equals` filters (validated upstream by
+  // Map supported filters (validated upstream by
   // `checkUnsupportedQueryFeature`); strip the `<cube>.` prefix off each member.
   const filters = (q.filters ?? [])
-    .filter(isEqualsFilter)
+    .filter(isSupportedFilter)
     .map((f) => ({
       member: stripCubePrefix(f.member, cubeId),
-      operator: "equals" as const,
+      operator: f.operator,
       values: [...f.values],
     }));
+  // Map the (single, granularity-bearing — validated upstream) time dimension.
+  // A 1-element dateRange array is a relative token; normalize it to the bare
+  // string form so `QueryTimeDimension` stays string | [from, to].
+  const timeDimensions = (q.timeDimensions ?? [])
+    .filter(
+      (td): td is { dimension: string; granularity: string; dateRange?: string | readonly string[] } =>
+        typeof td?.dimension === "string" &&
+        typeof td.granularity === "string" &&
+        (SUPPORTED_TIME_GRANULARITIES as readonly string[]).includes(td.granularity),
+    )
+    .map((td) => {
+      const dr = td.dateRange;
+      const dateRange =
+        typeof dr === "string"
+          ? dr
+          : Array.isArray(dr) && dr.length === 1
+            ? dr[0]
+            : Array.isArray(dr) && dr.length === 2
+              ? ([dr[0], dr[1]] as const)
+              : undefined;
+      return {
+        dimension: stripCubePrefix(td.dimension, cubeId),
+        granularity: td.granularity as SupportedTimeGranularity,
+        ...(dateRange !== undefined ? { dateRange } : {}),
+      };
+    });
   const out: QuerySpec = {
     ...(measures && measures.length > 0 ? { measures } : {}),
     ...(dimensions && dimensions.length > 0 ? { dimensions } : {}),
+    ...(timeDimensions.length > 0 ? { timeDimensions } : {}),
     ...(order.length > 0 ? { order } : {}),
     ...(typeof q.limit === "number" ? { limit: q.limit } : {}),
     ...(typeof q.offset === "number" ? { offset: q.offset } : {}),

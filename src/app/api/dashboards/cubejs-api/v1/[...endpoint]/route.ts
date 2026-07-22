@@ -27,8 +27,10 @@
  * Any other endpoint path returns 404 because the endpoint allowlist is strict.
  *
  * v1 rejects unsupported analysis types (funnel/flow/retention/multi-query)
- * with `400 unsupported_analysis_type` and unsupported query features
- * (filters, timeDimensions.granularity) with `400 unsupported_query_feature`.
+ * with `400 unsupported_analysis_type` and unsupported query features with
+ * `400 unsupported_query_feature`. The v1 executable surface (cinatra#1911):
+ * measures, dimensions, order/limit/offset, flat same-cube filters with
+ * `equals` | `in` | `inDateRange`, and ONE granularity-bearing timeDimension.
  */
 import "server-only";
 
@@ -46,7 +48,8 @@ import {
   resolveAndValidateCubeId,
   checkUnsupportedAnalysisType,
   checkUnsupportedQueryFeature,
-  findUnknownFilterMembers,
+  findInvalidMetaMembers,
+  queryComplexityOf,
   toQuerySpec,
   toCubeJsLoadResponse,
   toCubeMeta,
@@ -119,9 +122,9 @@ function clampQuery<T extends { limit?: number }>(q: T): T & { limit: number } {
   return { ...q, limit };
 }
 
-function queryComplexity(q: CubeJsWireQuery): number {
-  return (q.measures?.length ?? 0) + (q.dimensions?.length ?? 0) + (q.timeDimensions?.length ?? 0);
-}
+// Complexity arithmetic is shared with the dashboards write path
+// (cinatra#1911): a query that saves must never later be rejected as too
+// complex, so both seats import the SAME `queryComplexityOf`.
 
 async function runWithTimeout<T>(
   promise: Promise<T>,
@@ -168,14 +171,14 @@ async function executeWireQuery(
       body: { error: feature.reason, code: "unsupported_query_feature" },
     };
   }
-  if (queryComplexity(wireQuery) > QUERY_ENDPOINT_LIMITS.maxQueryComplexity) {
+  if (queryComplexityOf(wireQuery) > QUERY_ENDPOINT_LIMITS.maxQueryComplexity) {
     return {
       ok: false,
       status: 400,
       body: {
         error: `Query complexity exceeds ${QUERY_ENDPOINT_LIMITS.maxQueryComplexity} members`,
         code: "query_too_complex",
-        details: { complexity: queryComplexity(wireQuery) },
+        details: { complexity: queryComplexityOf(wireQuery) },
       },
     };
   }
@@ -204,30 +207,45 @@ async function executeWireQuery(
     };
   }
   const adapter = getAdapter();
-  // Fail-closed: an `equals` filter on a member the cube does NOT define — or on
-  // a MEASURE (drizzle-cube silently drops measure filters in WHERE context) —
+  // Fail-closed: a filter on a member the cube does NOT define — or on a
+  // MEASURE (drizzle-cube silently drops measure filters in WHERE context) —
   // would fail to narrow, widening a single-entity query back to the full
   // visible set. Validate filter members against the cube's DIMENSIONS only and
   // reject anything else before execution. (The per-cube SecurityContext
   // predicate still AND-applies, so this is defense-in-depth, not the only guard.)
-  if (Array.isArray(wireQuery.filters) && wireQuery.filters.length > 0) {
+  // cinatra#1911 additionally: `inDateRange` members and
+  // `timeDimensions[].dimension` must name a TIME-typed dimension — drizzle-cube
+  // itself throws on a non-time dateRange target, so reject earlier with
+  // readable copy.
+  if (
+    (Array.isArray(wireQuery.filters) && wireQuery.filters.length > 0) ||
+    (Array.isArray(wireQuery.timeDimensions) && wireQuery.timeDimensions.length > 0)
+  ) {
     const descriptor = await adapter.getCubeMeta(resolved.cubeId, ctx);
-    const knownMemberIds = new Set<string>(
-      descriptor.dimensions.map((d) => d.id),
-    );
-    const unknownMembers = findUnknownFilterMembers(
+    const { unknownMembers, nonTimeMembers } = findInvalidMetaMembers(
       wireQuery,
       resolved.cubeId,
-      knownMemberIds,
+      descriptor.dimensions,
     );
     if (unknownMembers.length > 0) {
       return {
         ok: false,
         status: 400,
         body: {
-          error: "filter references unknown cube member(s)",
+          error: `This card's query references fields the data source doesn't have: ${unknownMembers.join(", ")}. Edit this card and pick existing fields.`,
           code: "unsupported_query_feature",
           details: { unknownMembers },
+        },
+      };
+    }
+    if (nonTimeMembers.length > 0) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: `Date filtering needs a date field, but this card's query applies it to: ${nonTimeMembers.join(", ")}. Edit this card and pick a date field for the time axis or date window.`,
+          code: "unsupported_query_feature",
+          details: { nonTimeMembers },
         },
       };
     }
@@ -405,14 +423,27 @@ export async function POST(
             return { ...f, member };
           })
         : undefined;
+      // Carry timeDimensions through the legacy shape too (cinatra#1911) —
+      // prefix bare dimension members; shape validity is enforced downstream.
+      const timeDimensionsInput = inner.timeDimensions;
+      const timeDimensions = Array.isArray(timeDimensionsInput)
+        ? (timeDimensionsInput as Array<Record<string, unknown>>).map((td) => {
+            const dimension =
+              typeof td.dimension === "string" && !td.dimension.includes(".")
+                ? `${cubeId}.${td.dimension}`
+                : td.dimension;
+            return { ...td, dimension };
+          })
+        : undefined;
       wire = {
         measures,
         dimensions,
         order,
         filters,
+        timeDimensions,
         limit: typeof inner.limit === "number" ? inner.limit : undefined,
         offset: typeof inner.offset === "number" ? inner.offset : undefined,
-      };
+      } as CubeJsWireQuery;
     } else if (typeof obj === "object" && obj !== null) {
       wire = obj as CubeJsWireQuery;
     } else {

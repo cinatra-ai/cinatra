@@ -51,7 +51,12 @@ const dashboardConfigInputSchema = z
       "analysisConfig | query, ... }], grid?, layouts?, ... }) or a full apiVersion 1.2 " +
       "envelope. Portlet content: use the canonical `analysisConfig` object. The legacy " +
       "`query` field is DEPRECATED and, when used, MUST be a JSON string of a " +
-      "CubeQuery/MultiQuery (JSON.stringify the query object) — never a raw object.",
+      "CubeQuery/MultiQuery (JSON.stringify the query object) — never a raw object. " +
+      "Queries must use only executable features (cinatra#1911): flat same-cube filters " +
+      "with `equals` | `in` | `inDateRange` (a date window is one relative period like " +
+      "\"last 30 days\" or a [from, to] pair, on a date field) and at most one " +
+      "timeDimensions entry with granularity day|week|month. Grouped and/or filters and " +
+      "other operators are rejected at write time; field names/types resolve at render time.",
   );
 
 // Read schemas
