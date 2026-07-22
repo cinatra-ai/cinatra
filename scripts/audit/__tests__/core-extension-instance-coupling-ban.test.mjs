@@ -317,12 +317,21 @@ describe("core-extension-instance-coupling-ban gate", () => {
     ).toEqual([]);
   });
 
-  it("the LIVE allowlist has no shape defects against the real extension tree (and is EMPTY at the zero-floor end-state)", () => {
+  it("the LIVE allowlist has no shape defects against the real extension tree (and holds exactly the owner-ruled entry set)", () => {
     const extensions = { names: discoverExtensionNames(), dirPaths: new Set() };
     expect(allowlistShapeDefects(DATA_CONTRACT_ID_ALLOWLIST, extensions)).toEqual([]);
-    // Acceptance pin (cinatra#151): the allowlist stays EMPTY unless an
-    // owner ruling mints an entry.
-    expect(DATA_CONTRACT_ID_ALLOWLIST.size).toBe(0);
+    // Acceptance pin (cinatra#151): the allowlist holds ONLY owner-ruled
+    // entries. Today that is exactly one — the dashboard object-type contract
+    // id minted by owner ruling 2026-07-22 (PR #1971). Any
+    // extra/renamed key here is an unauthorized addition and fails this pin.
+    expect([...DATA_CONTRACT_ID_ALLOWLIST.keys()]).toEqual([
+      "@cinatra-ai/dashboard-artifact:dashboard",
+    ]);
+    // Every entry carries a non-empty written justification (owner ruling).
+    for (const [id, justification] of DATA_CONTRACT_ID_ALLOWLIST) {
+      expect(typeof justification, id).toBe("string");
+      expect(justification.trim().length, id).toBeGreaterThan(0);
+    }
   });
 
   it("growthAllowance NEVER permits growth — the zero-tolerance flip (#36) retired the epoch recompute path", () => {
