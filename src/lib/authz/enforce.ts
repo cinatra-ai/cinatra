@@ -92,6 +92,19 @@ function resolveRoles(actor: ActorContext, resource: ResourceRef): Role[] {
     if (actor.principalType === "ServiceAccount") roles.push("service_account");
     if (actor.principalType === "ExternalA2AAgent") roles.push("external_agent");
   }
+  // Internal-read authority (D3 follow-up, cinatra#1948 (b)). An actor carrying
+  // the explicit, trusted `internalRead` flag gets the READ-ONLY
+  // `internal_reader` role — but ONLY within its own org (same-org gate above).
+  // This is the first-class authority for TRUSTED internal routing resolves:
+  // it reaches the org-visible default WITHOUT impersonating a user/member, and
+  // is auditable as a named role. Gated on `sameOrg` so an org-less / mismatched
+  // internal actor never gains a cross-org read; the cross-org guard in `can()`
+  // is the belt to this suspenders. `internalRead` is a dedicated trusted field
+  // (never sourced from the loose `roles[]` bag), so it cannot be forged by a
+  // role-string injection.
+  if (sameOrg && actor.internalRead === true) {
+    roles.push("internal_reader");
+  }
   // Per-scope role grants are resolved into `actor.roles` by the
   // better-auth → ActorContext bridge (developer / release_manager /
   // customer). The grants are scoped to the resource's owning scope; the

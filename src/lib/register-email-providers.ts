@@ -34,38 +34,43 @@ import { deriveThreadId } from "@/lib/email-thread-key";
  * owner's sender-identity objects.
  *
  * D3 (#1625): a ROLE-LESS `System` actor is DENIED `object.read` by the
- * authz kernel — `System` principals carry NO synthetic role (enforce.ts:48-60),
+ * authz kernel — `System` principals carry NO synthetic role (enforce.ts),
  * `object.read` is granted only to platform_admin/org_admin/member
  * (policies.ts), so `filterByAuthz` silently drops EVERY sender-identity row and
  * the whole routing chain returns null (the facade then falls through to the
  * first-registered connector, i.e. gmail — "Google OAuth is not connected").
  *
- * This actor instead represents the RUN OWNER's own read authority, scoped to
- * their org. Two shapes:
+ * INTERNAL-READ AUTHORITY (D3 follow-up, cinatra#1948 (b)): both shapes now
+ * carry the first-class, explicitly-scoped, READ-ONLY `internalRead` authority
+ * (kernel role `internal_reader`, granted only within the actor's own org)
+ * instead of impersonating a `member`. `internal_reader` is strictly NARROWER
+ * than `member` (object reads only), so the org-visible default is reachable
+ * without a per-call member floor — cleaner, less error-prone, and auditable as
+ * a named role. The two shapes:
  *
  *   - With a `userId` (the run owner): `principalType:"HumanUser"` +
- *     `principalId:userId`. The objects envelope carries `userId` ONLY for human
- *     principals (objects-actor-envelope.ts:63-65) — that is what surfaces the
- *     SQL user-owner axis (`owner_level='user' AND owner_id=userId`,
- *     derived-store-ownership.ts:95) and the `decideResourceAccess` owner
- *     short-circuit, so the owner's OWN (default-`private`) mailbox identity is
- *     readable. A `System`/`platform_admin` actor could NEVER reach it: their
- *     principalId is not the owner's userId, and platform_admin only widens the
- *     `public` SQL clause, not the user-owner axis. `orgRole:"member"` grants
- *     `object.read` for the ORG-owned identity (step 4) WITHOUT the
- *     platform_admin cross-org bypass.
+ *     `principalId:userId` + `internalRead:true`. The objects envelope carries
+ *     `userId` ONLY for human principals — that is what surfaces the SQL
+ *     user-owner axis (`owner_level='user' AND owner_id=userId`) and the
+ *     `decideResourceAccess` OWNER short-circuit, so the owner's OWN
+ *     (default-`private`) mailbox identity is readable regardless of role. A
+ *     `System`/`platform_admin` actor could NEVER reach it: their principalId is
+ *     not the owner's userId. `internalRead` then grants `object.read` for the
+ *     ORG-owned identity (step 4) WITHOUT any cross-org bypass (the kernel
+ *     gates `internal_reader` on same-org).
  *
- *   - Without a `userId` (a pure org-scoped send): `System` + `orgRole:"member"`.
- *     Org-visible identities still resolve via the org clause; the (skipped) user
- *     step needs no owner axis. This is the accepted trusted policy "an internal
- *     org-scoped routing read may use the org-visible default mailbox"; it CANNOT
- *     read any user-private row (no owner-axis principal).
+ *   - Without a `userId` (a pure org-scoped send): `System` + `internalRead:true`.
+ *     Org-visible identities resolve via `internal_reader` object.read + the SQL
+ *     org clause; the (skipped) user step needs no owner axis. This is the
+ *     accepted trusted policy "an internal org-scoped routing read may use the
+ *     org-visible default mailbox"; it CANNOT read any user-private row (no
+ *     owner-axis principal, and `internal_reader` grants no cross-owner reach the
+ *     SQL vantage would not already admit).
  *
- * MEMBERSHIP-STALENESS (accepted policy): `orgRole:"member"` is the least-
- * privilege floor a run owner holds in their run's org. We do NOT re-validate
- * live membership here — that MIRRORS the established run-derived-actor policy in
- * build-actor-context-from-run.ts:104-118 (#1131), which floors a run actor's
- * `orgRole` to `member` and documents that a run replays the owner's standing
+ * MEMBERSHIP-STALENESS (accepted policy): the internal-read authority is scoped
+ * to the run's org and NOT re-validated against live membership here — that
+ * MIRRORS the established run-derived-actor policy in
+ * build-actor-context-from-run.ts (#1131), which replays the owner's standing
  * for the run's lifetime ("ACCEPTED STALENESS"). A revoked-membership run owner
  * retaining read of the org-default mailbox for the duration of their own run is
  * the SAME retained-run-authority semantic, not a new grant.
@@ -73,7 +78,8 @@ import { deriveThreadId } from "@/lib/email-thread-key";
  * READ ONLY: this actor is consumed exclusively by `findSenderIdentityFor`
  * (objects_list) and `resolveSenderIdentityById` (objects_get). It never reaches
  * a write path — the object writers below use the separate ALS-scoped
- * `objectsClient` singleton, not this actor.
+ * `objectsClient` singleton, not this actor. `internal_reader` itself carries no
+ * write grant, so the authority cannot escalate even if mis-wired to a writer.
  */
 function ownerReadActorForOrg(opts: {
   userId?: string;
@@ -85,7 +91,7 @@ function ownerReadActorForOrg(opts: {
       principalType: "HumanUser",
       principalId: opts.userId,
       ...orgFields,
-      orgRole: "member",
+      internalRead: true,
       authSource: "worker",
       policyVersion: POLICY_VERSION,
     };
@@ -94,7 +100,7 @@ function ownerReadActorForOrg(opts: {
     principalType: "System",
     principalId: "system",
     ...orgFields,
-    orgRole: "member",
+    internalRead: true,
     authSource: "worker",
     policyVersion: POLICY_VERSION,
   };
