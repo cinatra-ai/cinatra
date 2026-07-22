@@ -740,3 +740,18 @@ describe("toQuerySpec — timeDimensions + new operators (cinatra#1911)", () => 
     ]);
   });
 });
+
+describe("collectQueryFeatureViolations — malformed containers (codex merge-round)", () => {
+  it("rejects present-but-non-array filters / timeDimensions instead of letting them 500 downstream", () => {
+    expect(
+      collectQueryFeatureViolations({ measures: ["a.count"], filters: { member: "a.x" } }).map((v) => v.kind),
+    ).toEqual(["invalid_filter_shape"]);
+    expect(
+      collectQueryFeatureViolations({ measures: ["a.count"], timeDimensions: "a.t" }).map((v) => v.kind),
+    ).toEqual(["invalid_time_dimension"]);
+    // The wire gate surfaces them as unsupported_query_feature 400s.
+    expect(
+      checkUnsupportedQueryFeature({ measures: ["a.count"], filters: {} } as unknown as CubeJsWireQuery),
+    ).toMatchObject({ code: "unsupported_query_feature" });
+  });
+});

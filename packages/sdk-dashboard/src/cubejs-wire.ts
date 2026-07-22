@@ -230,6 +230,22 @@ export function collectQueryFeatureViolations(query: unknown): QueryFeatureViola
   if (typeof query !== "object" || query === null) return out;
   const q = query as Record<string, unknown>;
 
+  // A present-but-non-array container would evade the per-entry checks below
+  // and then throw inside `toQuerySpec` (500 instead of a readable 400) —
+  // fail closed here on both seats (codex merge-round finding).
+  if (q.filters !== undefined && !Array.isArray(q.filters)) {
+    out.push({
+      kind: "invalid_filter_shape",
+      message: "`filters` must be an array of { member, operator, values } objects.",
+    });
+  }
+  if (q.timeDimensions !== undefined && !Array.isArray(q.timeDimensions)) {
+    out.push({
+      kind: "invalid_time_dimension",
+      message: "`timeDimensions` must be an array with one { dimension, granularity, dateRange? } entry.",
+    });
+  }
+
   if (Array.isArray(q.filters)) {
     for (const f of q.filters) {
       if (typeof f !== "object" || f === null) {
