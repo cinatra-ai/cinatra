@@ -10,12 +10,26 @@
 // (mint the nonce, post READY, listen for BOOTSTRAP, post uplinks) so the same
 // controls the unit tests exercise are the ones that run in the browser.
 //
-// FAIL-CLOSED handling order for the ONE inbound message (§3/§4), each step
-// BEFORE the next: (1) `event.origin === expectedParentOrigin` (§6a) → (2)
-// `event.source === window.parent` (§6a-2) → (3) schema + protocolVersion +
-// nonceEcho + assistant/instance agreement via `evaluateBootstrap` (§4) → (4)
-// single-use nonce burn (§6c-i). A second bootstrap on a mounted session is
-// IGNORED. Any inbound message that is not the accepted BOOTSTRAP is dropped.
+// PORT-BOUND TRANSPORT (§12b, issue #1965): the iframe creates a `MessageChannel`
+// and transfers ONE endpoint in the token-free READY, RETAINING the other. The
+// parent replies with the token-bearing BOOTSTRAP over that retained port, never
+// via `window.postMessage` to the WindowProxy — so a same-origin replacement of
+// this browsing context (a fresh realm that never inherits the retained endpoint)
+// can never receive the tokens. Steady-state uplinks then ride the entangled
+// port. A legacy WINDOW path is kept ONLY for the negotiated transition with an
+// as-yet-unmigrated widget, and is refused entirely under `requirePort`.
+//
+// FAIL-CLOSED handling order for the ONE inbound BOOTSTRAP (§3/§4):
+//   - PORT path (§12b): schema + protocolVersion + nonceEcho + assistant/instance
+//     via `evaluateBootstrap` (§4) → single-use nonce burn (§6c-i). No origin/
+//     source check is needed — the port was transferred ONLY to the expected
+//     parent origin, so its provenance IS the origin guarantee (a NARROWING).
+//   - legacy WINDOW path, each step BEFORE the next: (1) `event.origin ===
+//     expectedParentOrigin` (§6a) → (2) `event.source === window.parent` (§6a-2)
+//     → (3) `evaluateBootstrap` (§4) → (4) single-use nonce burn (§6c-i).
+// The single-use burn is SHARED across both transports, so whichever the parent
+// chooses, a second bootstrap on a mounted session is IGNORED. Any inbound
+// message that is not the accepted BOOTSTRAP is dropped.
 //
 // TOKEN NON-DISCLOSURE (§6i): the `cit_`/`cwu_` tokens arrive ONLY on the
 // bootstrap and are handed to `onBootstrap` in a closure. This module NEVER
@@ -53,6 +67,41 @@ export type ApplyIntentSignal =
   | { proposalId: string; viewType: "content_change_proposal" }
   | { changeSetId: string; viewType: "content_change_proposal" };
 
+// ---------------------------------------------------------------------------
+// (§12b) The retained MessageChannel endpoint the iframe uses for the port-bound
+// transport. Structural (a test seam can supply a synchronous double), matching
+// the `MessagePort` surface this module actually touches.
+// ---------------------------------------------------------------------------
+export interface BridgePortEndpoint {
+  postMessage(message: unknown): void;
+  addEventListener(type: "message", listener: (event: MessageEvent) => void): void;
+  removeEventListener(type: "message", listener: (event: MessageEvent) => void): void;
+  start(): void;
+  close(): void;
+}
+
+export type BridgeMessageChannel = {
+  /** The endpoint the iframe RETAINS — receives the BOOTSTRAP + posts uplinks. */
+  readonly localPort: BridgePortEndpoint;
+  /** The endpoint TRANSFERRED to the parent in the token-free READY. */
+  readonly remotePort: Transferable;
+};
+
+/** Mint the handshake channel. Defaults to a real `MessageChannel`; a test seam
+ *  supplies a synchronous double so the wiring matrix stays deterministic. */
+export type CreateBridgeChannel = () => BridgeMessageChannel;
+
+function defaultCreateBridgeChannel(): BridgeMessageChannel {
+  const channel = new MessageChannel();
+  // The iframe keeps port1 (bound to THIS realm — a same-origin replacement of
+  // the browsing context is a fresh realm that never inherits it) and transfers
+  // port2 to the parent origin in READY.
+  return {
+    localPort: channel.port1 as unknown as BridgePortEndpoint,
+    remotePort: channel.port2,
+  };
+}
+
 export type EmbedBridgeOptions = {
   /** The server-resolved expected parent origin (§7 `frameAncestorOrigin`) — the
    *  ONLY origin READY/uplinks are posted to and the ONLY origin BOOTSTRAP is
@@ -74,6 +123,18 @@ export type EmbedBridgeOptions = {
   parentWindow?: Window;
   /** The window the iframe listens/posts on. Test seam; defaults to `window`. */
   selfWindow?: Window;
+  /**
+   * (§12b) Require the PORT transport: refuse a window-delivered (legacy)
+   * bootstrap so a downgrade cannot be forced by stripping the transferred port.
+   * The iframe still transfers the port in READY and accepts the BOOTSTRAP over
+   * it. Defaults to FALSE during the negotiated transition (interoperate with an
+   * as-yet-unmigrated widget that replies via `window.postMessage`); flip to TRUE
+   * — and drop the legacy path — once both CMS widgets have migrated.
+   */
+  requirePort?: boolean;
+  /** (§12b) Test seam: mint the handshake `MessageChannel`. Defaults to a real
+   *  channel; the iframe RETAINS `localPort` and TRANSFERS `remotePort`. */
+  createChannel?: CreateBridgeChannel;
 };
 
 export type EmbedBridge = {
@@ -98,13 +159,23 @@ export type EmbedBridge = {
 
 /**
  * Install the iframe-side bridge. Returns an `EmbedBridge` handle whose
- * `postReady()` starts the handshake. The listener is attached immediately so a
- * bootstrap posted right after READY is never missed.
+ * `postReady()` starts the handshake by transferring one `MessageChannel`
+ * endpoint to the expected parent origin (§12b). Both channels — the retained
+ * port and (unless `requirePort`) the window — are listening BEFORE READY is
+ * posted so a bootstrap that races the transfer is never missed. Whichever
+ * transport the parent chooses, the SAME single-use nonce burn + seq gates apply
+ * and the second channel is mooted once bootstrapped.
  */
 export function installEmbedBridge(options: EmbedBridgeOptions): EmbedBridge {
   const self = options.selfWindow ?? window;
   const parent = options.parentWindow ?? self.parent;
+  const requirePort = options.requirePort ?? false;
   const nonce = mintBridgeNonce();
+
+  // §12b: the iframe creates the channel, RETAINS the local endpoint (bound to
+  // this realm), and TRANSFERS the remote endpoint to the parent in READY.
+  const channel = (options.createChannel ?? defaultCreateBridgeChannel)();
+  const localPort = channel.localPort;
 
   const nonceGate = createSingleUseGate(); // §6c-i single bootstrap per frame
   // §6c: two INDEPENDENT monotonic seq counters, one per direction.
@@ -112,7 +183,11 @@ export function installEmbedBridge(options: EmbedBridgeOptions): EmbedBridge {
   const inboundSeq = createMonotonicSeqGate(); // parent -> iframe (post-bootstrap)
 
   let bootstrapped = false;
+  let readyPosted = false;
   let correlationId: string | null = null;
+  // The transport the accepted bootstrap arrived on — uplinks then ride the same
+  // channel the parent proved it is listening on.
+  let activeTransport: "port" | "legacy" | null = null;
 
   function nextOutboundSeq(): number {
     const next = (outboundSeq.last ?? -1) + 1;
@@ -120,34 +195,42 @@ export function installEmbedBridge(options: EmbedBridgeOptions): EmbedBridge {
     return next;
   }
 
-  function postToParent(message: Record<string, unknown>): void {
-    // ALWAYS an explicit origin, never "*" (§6a outbound).
-    parent.postMessage(message, options.expectedParentOrigin);
-  }
-
   function postReady(): void {
-    if (bootstrapped) return;
-    postToParent({
-      type: EMBED_MESSAGE_TYPES.ready,
-      protocolVersion: EMBED_PROTOCOL_VERSION,
-      nonce,
-      seq: nextOutboundSeq(),
-    });
+    // Idempotent: the remote endpoint is transferred (neutered) exactly once —
+    // a second pre-bootstrap call must NOT re-transfer an already-detached port
+    // (which would throw DataCloneError).
+    if (bootstrapped || readyPosted) return;
+    readyPosted = true;
+    // Transfer the remote endpoint to the expected parent origin ONLY, never "*"
+    // (§6a outbound). The explicit target origin is the origin gate AT TRANSFER
+    // TIME: only a document at `expectedParentOrigin` receives the port, so a
+    // message later arriving on the retained `localPort` is inherently from that
+    // origin. The READY body is byte-identical to the pre-migration envelope
+    // (protocolVersion 1) so an unmigrated widget is unaffected; the transferred
+    // port is out-of-band and simply ignored by a legacy parent.
+    parent.postMessage(
+      {
+        type: EMBED_MESSAGE_TYPES.ready,
+        protocolVersion: EMBED_PROTOCOL_VERSION,
+        nonce,
+        seq: nextOutboundSeq(),
+      },
+      options.expectedParentOrigin,
+      [channel.remotePort],
+    );
   }
 
-  function onMessage(event: MessageEvent): void {
-    // A second bootstrap on a mounted session is IGNORED (§4). Do NOT even
-    // inspect further inbound messages once bootstrapped — the wire is the
-    // renderer's, not the bridge's.
-    if (bootstrapped) return;
-    // (§6a) strict origin, BEFORE schema.
-    if (!originMatchesExpected(event.origin, options.expectedParentOrigin)) return;
-    // (§6a-2) source-window binding, BEFORE schema — a sibling frame on the same
-    // origin must never cross-bootstrap.
-    if (!sourceMatchesExpected(event.source, parent)) return;
-
+  // Shared acceptance: schema + protocolVersion + nonceEcho + assistant/instance
+  // (§4) → single-use burn (§6c-i) → seed the inbound seq gate (§6c). Identical
+  // across transports; the ONLY per-transport difference is the pre-schema gate
+  // (the window path additionally proves origin + source-window; the port path
+  // is origin-bound by the targeted transfer that delivered it — a NARROWING,
+  // never a loosening — and source-window is meaningless for a document-bound
+  // port). Token non-disclosure is unchanged: the tokens are handed to
+  // `onBootstrap` in a closure and never logged/persisted/uplinked.
+  function acceptBootstrap(raw: unknown, transport: "port" | "legacy"): void {
     const decision = evaluateBootstrap({
-      raw: event.data,
+      raw,
       frameNonce: nonce,
       expectedAssistant: options.expectedAssistant,
       expectedInstanceId: options.expectedInstanceId,
@@ -156,27 +239,62 @@ export function installEmbedBridge(options: EmbedBridgeOptions): EmbedBridge {
       options.onReject?.(decision.reason);
       return;
     }
-    // (§6c-i) burn the nonce — the bootstrap is single-use.
-    if (!nonceGate.consume()) return;
-    // (§6c) seed the inbound seq gate with the bootstrap seq.
-    if (!inboundSeq.accept(decision.data.seq)) return;
+    if (!nonceGate.consume()) return; // §6c-i burn — single-use across transports
+    if (!inboundSeq.accept(decision.data.seq)) return; // §6c
 
     bootstrapped = true;
+    activeTransport = transport;
     correlationId = decision.data.correlationId;
     options.onBootstrap(decision.data);
   }
 
-  self.addEventListener("message", onMessage);
+  // §12b PORT path — the hardened transport. No origin/source check: the port was
+  // transferred ONLY to `expectedParentOrigin`, so its provenance IS the origin
+  // guarantee (and it is document-bound, immune to the WindowProxy residual).
+  function onPortMessage(event: MessageEvent): void {
+    if (bootstrapped) return;
+    acceptBootstrap(event.data, "port");
+  }
+
+  // Legacy WINDOW path — the pre-migration transport, kept ONLY for the
+  // negotiated transition and refused entirely under `requirePort`.
+  function onWindowMessage(event: MessageEvent): void {
+    if (bootstrapped) return;
+    // (§6a) strict origin, BEFORE schema.
+    if (!originMatchesExpected(event.origin, options.expectedParentOrigin)) return;
+    // (§6a-2) source-window binding, BEFORE schema — a sibling frame on the same
+    // origin must never cross-bootstrap.
+    if (!sourceMatchesExpected(event.source, parent)) return;
+    acceptBootstrap(event.data, "legacy");
+  }
+
+  localPort.addEventListener("message", onPortMessage);
+  localPort.start();
+  // Downgrade resistance (§12b): under `requirePort` the window path is NOT
+  // attached at all, so a legacy/window-delivered bootstrap can never be accepted
+  // — the transport cannot be silently downgraded by stripping the port.
+  if (!requirePort) {
+    self.addEventListener("message", onWindowMessage);
+  }
 
   function postUplink(partial: Record<string, unknown>): boolean {
-    // Uplinks are only valid after a bootstrap established the correlationId.
-    if (!bootstrapped || correlationId === null) return false;
-    postToParent({
+    // Uplinks are only valid after a bootstrap established the correlationId +
+    // the transport the parent is listening on.
+    if (!bootstrapped || correlationId === null || activeTransport === null) {
+      return false;
+    }
+    const message = {
       ...partial,
       protocolVersion: EMBED_PROTOCOL_VERSION,
       correlationId,
       seq: nextOutboundSeq(),
-    });
+    };
+    if (activeTransport === "port") {
+      localPort.postMessage(message); // rides the entangled port
+    } else {
+      // ALWAYS an explicit origin, never "*" (§6a outbound).
+      parent.postMessage(message, options.expectedParentOrigin);
+    }
     return true;
   }
 
@@ -205,7 +323,9 @@ export function installEmbedBridge(options: EmbedBridgeOptions): EmbedBridge {
       return postUplink({ type: EMBED_MESSAGE_TYPES.applyIntent, ...signal });
     },
     dispose(): void {
-      self.removeEventListener("message", onMessage);
+      self.removeEventListener("message", onWindowMessage);
+      localPort.removeEventListener("message", onPortMessage);
+      localPort.close();
     },
   };
 }
