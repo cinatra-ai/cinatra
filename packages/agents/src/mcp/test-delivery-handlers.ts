@@ -63,32 +63,61 @@ import {
 // which authorized co-owner clicked Send — and only after the "execute" boundary.
 // ---------------------------------------------------------------------------
 
-// REGISTRY-ROUTED declaring-package restriction (core-extension-instance-
-// coupling-ban: core source names NO extension package). This send wrapper exists
-// solely to drive the test-delivery HITL renderer gate; the manifest/registry —
-// the generated field-renderer bindings + the runtime installed-package collector
-// (getMergedFieldRendererBindings) — is the source of truth for which package
-// DECLARES that renderer. Core matches the run's own declaring package against the
-// registry's `declaredBy` for this renderer KIND, so the restriction is derived
-// from the manifest, never hardcoded. `test-delivery-input` is a renderer-KIND
+// REGISTRY-ROUTED gate-owner restriction (core-extension-instance-coupling-ban:
+// core source names NO extension package). This send wrapper exists solely to
+// drive the test-delivery HITL renderer gate; the manifest/registry — the
+// generated field-renderer bindings + the runtime installed-package collector
+// (getMergedFieldRendererBindings) — is the source of truth for the gate. Core
+// matches the run's own package against the OWNER of the `test-delivery-input`
+// binding, derived from the binding-ID prefix, so the restriction is
+// manifest-derived, never hardcoded. `test-delivery-input` is a renderer-KIND
 // contract id (not a package name/path), the #1854 A3 registry-routed precedent.
 // (Adjudication: the coupling-ban gate WINS over DESIGN-V3 212-213's named-package
 // restriction — the standing ratified principle is no pack names in core.)
+//
+// AXIS (#1958): send-authorization answers "whose GATE is this" — the AGENT that
+// HOSTS the test-delivery gate, carried by the binding ID's package PREFIX
+// (`@cinatra-ai/email-test-delivery-agent:input` → the `…-agent` package). It must
+// NOT key on the binding's physical `declaredBy` (who SHIPS the renderer
+// component), because a renderer can be RELOCATED to another pack without changing
+// whose gate it is: #1958 moved this renderer's `declaredBy` from the agent to
+// `@cinatra-ai/email-artifacts` while leaving the binding ID (the gate identity)
+// untouched. The render axis keys on the unchanged binding ID and kept working;
+// keying send-authz on `declaredBy` refused EVERY send after the move. Keying on
+// the binding-ID owner prefix is invariant under such relocation — the render and
+// send axes both track the one stable identity.
 const TEST_DELIVERY_RENDERER_KIND = "test-delivery-input";
 
-/** The set of packages that DECLARE the test-delivery renderer gate (per the
- *  manifest/registry). A run may invoke the send wrapper only if its own declaring
- *  package is in this set — resolved from the registry, never a hardcoded name.
- *  The field-renderer-bindings.server module is imported LAZILY (dynamic) so its
- *  filesystem-scanning graph is not pulled onto handlers.ts's eager import cycle
- *  (the extension-edge-bound-agent precedent). */
-async function resolveTestDeliveryDeclaringPackages(): Promise<Set<string>> {
+/** Extract the OWNER package from a field-renderer binding id. A binding id is
+ *  `<ownerPackage>:<rendererLocalId>` (e.g.
+ *  `@cinatra-ai/email-test-delivery-agent:input`); the npm package that hosts the
+ *  gate is everything before the FIRST `:` — an npm package name cannot contain a
+ *  colon, so the split is unambiguous. Returns null for a malformed id (no colon /
+ *  empty prefix) so a bad registry row can never authorize an empty package. */
+function bindingOwnerPackage(bindingId: string): string | null {
+  const idx = bindingId.indexOf(":");
+  if (idx <= 0) return null;
+  return bindingId.slice(0, idx);
+}
+
+/** The set of AGENT packages that OWN the test-delivery renderer gate (per the
+ *  manifest/registry). A run may invoke the send wrapper only if its own package
+ *  HOSTS the gate — i.e. is the binding-ID owner of a `test-delivery-input`
+ *  binding. Derived from the binding ID (the gate identity), NOT the physical
+ *  `declaredBy` (the renderer shipper), so authorization is INVARIANT under a
+ *  renderer relocation across packs (#1958). Resolved from the registry, never a
+ *  hardcoded name. The field-renderer-bindings.server module is imported LAZILY
+ *  (dynamic) so its filesystem-scanning graph is not pulled onto handlers.ts's
+ *  eager import cycle (the extension-edge-bound-agent precedent). */
+async function resolveTestDeliveryGateOwnerPackages(): Promise<Set<string>> {
   const { getMergedFieldRendererBindings } = await import("../field-renderer-bindings.server");
-  return new Set(
-    getMergedFieldRendererBindings()
-      .filter((b) => b.kind === TEST_DELIVERY_RENDERER_KIND)
-      .map((b) => b.declaredBy),
-  );
+  const owners = new Set<string>();
+  for (const b of getMergedFieldRendererBindings()) {
+    if (b.kind !== TEST_DELIVERY_RENDERER_KIND) continue;
+    const owner = bindingOwnerPackage(b.id);
+    if (owner) owners.add(owner);
+  }
+  return owners;
 }
 
 // The claim lease. A row still `sending` past this window is treated as a
@@ -264,15 +293,17 @@ export async function handleEmailTestDeliveryRunSend(
     const effectivePolicy = run.authPolicy ?? template?.agentAuthPolicy ?? null;
     await enforceRunAccess({ ...run, effectivePolicy, coOwnerUserIds }, actor, "execute", roles);
 
-    // Declaring-package restriction — REGISTRY-ROUTED (see
-    // resolveTestDeliveryDeclaringPackages / TEST_DELIVERY_RENDERER_KIND: core
-    // names NO extension package; the manifest/registry declares who owns the
-    // test-delivery renderer gate). Enforced AFTER execute-authz above, so
-    // recording a pre-claim failure here cannot be driven by a read-only actor.
+    // Gate-owner restriction — REGISTRY-ROUTED (see
+    // resolveTestDeliveryGateOwnerPackages / TEST_DELIVERY_RENDERER_KIND: core
+    // names NO extension package; the manifest/registry says which agent OWNS the
+    // test-delivery gate, via the binding-ID prefix — NOT the renderer's physical
+    // `declaredBy`, so a renderer relocation across packs never revokes the send
+    // (#1958)). Enforced AFTER execute-authz above, so recording a pre-claim
+    // failure here cannot be driven by a read-only actor.
     const agentPackageName =
       template?.packageName && template.packageName.length > 0 ? template.packageName : null;
-    const declaringPackages = await resolveTestDeliveryDeclaringPackages();
-    if (!agentPackageName || !declaringPackages.has(agentPackageName)) {
+    const gateOwnerPackages = await resolveTestDeliveryGateOwnerPackages();
+    if (!agentPackageName || !gateOwnerPackages.has(agentPackageName)) {
       // Fail-as-data (no send), F3-recorded so the gate never strands. This run's
       // agent does not declare the test-delivery renderer this primitive drives.
       return preClaimFail({
