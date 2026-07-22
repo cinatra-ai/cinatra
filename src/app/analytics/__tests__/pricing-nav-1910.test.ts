@@ -31,7 +31,7 @@ const PRICING_CONTRIBUTIONS = [
 
 describe("pricing entry affordance (#1910)", () => {
   it.each([COSTS_PAGE, USAGE_PAGE])(
-    "%s: labeled header button, not an unlabelled icon",
+    "%s: labeled header button, not an icon-only link",
     (file) => {
       const src = readFileSync(file, "utf-8");
       expect(src).toContain('<Button asChild variant="outline">');

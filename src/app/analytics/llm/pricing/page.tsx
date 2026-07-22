@@ -13,16 +13,13 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Model Pricing | Cinatra" };
 
 // Admin management sub-page of /analytics/llm (cinatra#1910): it edits the
-// price list rather than reading a dashboard, so it deliberately renders NO
-// analytics tab strip — a tab would present this write surface as a peer of
-// the read views (and falsely light "Costs", which is how it used to be).
+// price list, so it deliberately renders no analytics tab strip.
 export default async function MetricsCostPricingPage() {
   await requireAdminSession();
   return (
     <Main className="min-h-screen">
-      {/* Post-gate crumb publisher (cinatra#1737): fixes the "Llm" middle
-          crumb on this page and pins the leaf to "Pricing" (the deliberate
-          crumb contract beats the header title broadcast). */}
+      {/* Post-gate crumb publisher (cinatra#1737): middle crumb "LLM", leaf
+          "Pricing" — the crumb contract beats the header title broadcast. */}
       <CrumbContributions
         entries={[
           { prefix: "/analytics/llm", label: "LLM" },
