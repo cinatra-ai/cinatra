@@ -14,15 +14,10 @@ describe("llm subpath resolution", () => {
     expect(typeof mod.getActorContext).toBe("function");
   });
 
-  it("resolves @cinatra-ai/llm/anthropic-log-directory subpath", async () => {
-    const mod = await import("@cinatra-ai/llm/anthropic-log-directory");
-    expect(mod).toBeTruthy();
-  });
-
-  it("resolves @cinatra-ai/llm/anthropic-logging-state subpath", async () => {
-    const mod = await import("@cinatra-ai/llm/anthropic-logging-state");
-    expect(mod).toBeTruthy();
-  });
+  // The `./anthropic-log-directory` and `./anthropic-logging-state` subpaths
+  // were removed with the anthropic adapter+telemetry relocation (cinatra#1715);
+  // the anthropic log directory + logging-enabled flag are now connector-owned
+  // (surface `logDirectory` / persisted `anthropic-logging` config authority).
 
   it("resolves @cinatra-ai/llm/openai-model-capabilities subpath", async () => {
     const mod = await import("@cinatra-ai/llm/openai-model-capabilities");

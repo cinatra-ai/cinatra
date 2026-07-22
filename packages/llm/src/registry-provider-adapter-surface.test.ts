@@ -1,10 +1,12 @@
 /**
- * llm-providers S4 (cinatra#1715) — `resolveProviderAdapter` honours the
- * connector-registered `llm-provider-adapter` surface:
- *   - surface WINS (the in-core factory is not consulted),
- *   - a surface `createAdapter()->null` is AUTHORITATIVE (no legacy fallback),
- *   - an ABSENT surface falls through to the transitional in-core factory
- *     (zero behavior change for the current, un-relocated image),
+ * llm-providers S4 switch-over (cinatra#1715) — `resolveProviderAdapter`
+ * resolves a provider ONLY through its connector-registered
+ * `llm-provider-adapter` surface:
+ *   - surface WINS (there is no in-core factory left to consult),
+ *   - a surface `createAdapter()->null` is AUTHORITATIVE (connector present but
+ *     unconfigured),
+ *   - an ABSENT surface ⇒ `null` — the provider is honestly UNAVAILABLE
+ *     (fail-closed; NO silent fallback to deleted in-core code),
  *   - a malformed surface's fail-closed throw PROPAGATES (never silent fallback).
  *
  * Mocks mirror the sibling `registry-declared-toolboxes.test.ts` discipline
@@ -12,21 +14,6 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("./providers/openai", () => ({
-  createOpenAIProviderAdapter: vi.fn((connection: unknown) => ({
-    provider: "openai",
-    via: "legacy",
-    connection,
-  })),
-  getConfiguredOpenAIConnection: vi.fn(async () => ({ apiKey: "sk-legacy" })),
-}));
-vi.mock("./providers/anthropic", () => ({
-  createAnthropicProviderAdapter: vi.fn(),
-}));
-vi.mock("./providers/gemini", () => ({
-  createGeminiProviderAdapter: vi.fn(),
-  getConfiguredGeminiConnection: vi.fn(async () => null),
-}));
 vi.mock("./mcp-access", () => ({
   buildLlmMcpServerTool: vi.fn(async () => null),
   buildExternalMcpServerTools: vi.fn(async () => []),
@@ -35,7 +22,7 @@ vi.mock("@/lib/llm-provider-surfaces", () => ({
   getLlmProviderSurface: vi.fn(() => null),
   requireLlmProviderSurface: vi.fn(),
   listLlmProviderSurfaces: vi.fn(() => []),
-  // llm-providers S4: co-located with the surface resolver in the same module.
+  // llm-providers S4: the connector-registered adapter surface resolver.
   getLlmProviderAdapterSurface: vi.fn(() => null),
 }));
 vi.mock("@/lib/database", () => ({
@@ -52,7 +39,6 @@ vi.mock("@/lib/external-mcp-toolbox-loader.server", () => ({
 }));
 
 import { getLlmProviderAdapterSurface } from "@/lib/llm-provider-surfaces";
-import { getConfiguredOpenAIConnection, createOpenAIProviderAdapter } from "./providers/openai";
 import { resolveProviderAdapter } from "./registry";
 import type { LlmProviderAdapter } from "./types";
 
@@ -65,38 +51,36 @@ beforeEach(() => {
   vi.mocked(getLlmProviderAdapterSurface).mockReturnValue(null);
 });
 
-describe("resolveProviderAdapter — llm-provider-adapter surface (S4)", () => {
-  it("uses the connector-registered adapter and does NOT consult the in-core factory", async () => {
+describe("resolveProviderAdapter — llm-provider-adapter surface (S4 switch-over)", () => {
+  it("resolves the adapter through the connector-registered surface", async () => {
     // Deliberate partial stub — this test proves reference identity + null
     // authority, not adapter shape; cast to the firmed ABI type (S4.0).
     const adapter = { provider: "openai", via: "surface" } as unknown as LlmProviderAdapter;
-    vi.mocked(getLlmProviderAdapterSurface).mockReturnValue(surface(async () => adapter));
+    const createAdapter = vi.fn(async () => adapter);
+    vi.mocked(getLlmProviderAdapterSurface).mockReturnValue(surface(createAdapter));
 
     const result = await resolveProviderAdapter("openai");
 
     expect(result).toBe(adapter);
-    expect(vi.mocked(getConfiguredOpenAIConnection)).not.toHaveBeenCalled();
-    expect(vi.mocked(createOpenAIProviderAdapter)).not.toHaveBeenCalled();
+    expect(createAdapter).toHaveBeenCalledTimes(1);
   });
 
-  it("treats a surface createAdapter()->null as AUTHORITATIVE (no legacy fallback)", async () => {
+  it("treats a surface createAdapter()->null as AUTHORITATIVE (connector present, unconfigured)", async () => {
     vi.mocked(getLlmProviderAdapterSurface).mockReturnValue(surface(async () => null));
 
     const result = await resolveProviderAdapter("openai");
 
     expect(result).toBeNull();
-    expect(vi.mocked(getConfiguredOpenAIConnection)).not.toHaveBeenCalled();
-    expect(vi.mocked(createOpenAIProviderAdapter)).not.toHaveBeenCalled();
   });
 
-  it("falls back to the in-core factory when NO surface is registered (transitional zero-behavior-change)", async () => {
+  it("returns null (honest unavailable, fail-closed) when NO surface is registered", async () => {
     vi.mocked(getLlmProviderAdapterSurface).mockReturnValue(null);
 
     const result = await resolveProviderAdapter("openai");
 
-    expect(vi.mocked(getConfiguredOpenAIConnection)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(createOpenAIProviderAdapter)).toHaveBeenCalledWith({ apiKey: "sk-legacy" });
-    expect(result).toMatchObject({ provider: "openai", via: "legacy" });
+    // No connector for this provider ⇒ unavailable. There is NO in-core factory
+    // fallback anymore (deleted in the #1715 switch-over).
+    expect(result).toBeNull();
   });
 
   it("propagates a fail-closed throw from a malformed surface (never silent fallback)", async () => {
@@ -105,7 +89,5 @@ describe("resolveProviderAdapter — llm-provider-adapter surface (S4)", () => {
     });
 
     await expect(resolveProviderAdapter("openai")).rejects.toThrow(/malformed/);
-    expect(vi.mocked(getConfiguredOpenAIConnection)).not.toHaveBeenCalled();
-    expect(vi.mocked(createOpenAIProviderAdapter)).not.toHaveBeenCalled();
   });
 });

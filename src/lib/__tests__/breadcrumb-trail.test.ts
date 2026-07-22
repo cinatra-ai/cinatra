@@ -282,11 +282,30 @@ describe("buildBreadcrumbTrail — crumb contributions (#1737)", () => {
         contributions: [{ prefix: `/organizations/${ORG_ID}`, label: "Acme Inc" }],
       }).map((c) => c.label),
     ).toEqual(["Organizations", "Acme Inc"]);
-    expect(
-      buildBreadcrumbTrail(`/projects/${TEAM_ID}/permissions`, {
-        contributions: [{ prefix: `/projects/${TEAM_ID}`, label: "Apollo" }],
-      }).map((c) => c.label),
-    ).toEqual(["Projects", "Apollo", "Permissions"]);
+    // Projects settings publishes the same dual contribution as teams (#1733).
+    const projectSettings = buildBreadcrumbTrail(`/projects/${TEAM_ID}/settings`, {
+      contributions: [
+        { prefix: `/projects/${TEAM_ID}`, label: "Apollo" },
+        { prefix: `/projects/${TEAM_ID}/settings`, label: "Settings" },
+      ],
+    });
+    expect(projectSettings.map((c) => c.label)).toEqual([
+      "Projects",
+      "Apollo",
+      "Settings",
+    ]);
+    // The old permissions address survives as a navigable redirect segment
+    // (#1733; the /teams/[teamId]/dashboards precedent — never a 404 crumb).
+    const legacyPermissions = buildBreadcrumbTrail(
+      `/projects/${TEAM_ID}/permissions`,
+      { contributions: [{ prefix: `/projects/${TEAM_ID}`, label: "Apollo" }] },
+    );
+    expect(legacyPermissions.map((c) => c.label)).toEqual([
+      "Projects",
+      "Apollo",
+      "Permissions",
+    ]);
+    expect(legacyPermissions[2].nonNavigable).toBeFalsy();
   });
 
   it("renders the short-id placeholder for an unresolved id — leaf and intermediate — never title-cased hex", () => {

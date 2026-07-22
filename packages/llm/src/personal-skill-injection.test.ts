@@ -38,11 +38,25 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   buildSingleExternalMcpTool: vi.fn(async () => null),
 }));
 
-// LLM provider surfaces resolve to "absent" — registry/telemetry degrade
-// (anthropic connection null, log writers no-op), same semantics as the
-// pre-cutover connector mocks (cinatra#151 Stage 2).
+// The OpenAI adapter resolves through the connector-registered
+// `llm-provider-adapter` surface (cinatra#1715 switch-over — there is no in-core
+// factory). The surface supplies the capture-aware adapter; every other surface
+// is absent (telemetry log writers no-op).
 vi.mock("@/lib/llm-provider-surfaces", () => ({
-  getLlmProviderAdapterSurface: vi.fn(() => null),
+  getLlmProviderAdapterSurface: vi.fn((providerId: string) =>
+    providerId === "openai"
+      ? {
+          abiVersion: 1 as const,
+          providerId: "openai",
+          createAdapter: async () => ({
+            provider: "openai" as const,
+            defaultModel: "mock-model",
+            generate: _generateMock,
+            stream: vi.fn(async () => undefined),
+          }),
+        }
+      : null,
+  ),
   getLlmProviderSurface: vi.fn(() => null),
   requireLlmProviderSurface: vi.fn((providerId: string) => {
     throw new Error(`The "${providerId}" LLM provider connector is not installed/active`);
@@ -86,25 +100,6 @@ const _generateMock = vi.fn(async (input: GenerateInput): Promise<LlmResponse> =
   _capturedGenerateInput = input;
   return { text: "mock-response", status: null, incompleteReason: null, rawBody: "", usage: undefined, model: "mock-model" };
 });
-
-vi.mock("./providers/openai", () => ({
-  createOpenAIProviderAdapter: vi.fn(() => ({
-    provider: "openai" as const,
-    defaultModel: "mock-model",
-    generate: _generateMock,
-    stream: vi.fn(async () => undefined),
-  })),
-  getConfiguredOpenAIConnection: vi.fn(async () => ({ apiKey: "sk-test" })),
-}));
-
-vi.mock("./providers/anthropic", () => ({
-  createAnthropicProviderAdapter: vi.fn(),
-}));
-
-vi.mock("./providers/gemini", () => ({
-  createGeminiProviderAdapter: vi.fn(),
-  getConfiguredGeminiConnection: vi.fn(async () => null),
-}));
 
 import { runSkillAwareDeterministicLlmTask } from "./index";
 import { withActorContext } from "./actor-context";
