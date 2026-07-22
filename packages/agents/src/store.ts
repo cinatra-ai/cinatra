@@ -14,6 +14,10 @@ import { shadowUpsertObject, shadowDeleteObject } from "@/lib/objects-dual-write
 // append the `WHERE agent_runs.project_id = $projectId` clause.
 import { sealedRoomFilterValue } from "@/lib/sealed-room";
 import { db, agentBuilderPool } from "./db";
+import {
+  assertNotAssistantPublication,
+  excludeAssistantTemplates,
+} from "./a2a-publication-guard";
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
 import { dispatchRunWaitTransition } from "./run-wait-notifier"; // #1559/E9: zero-dep leaf seam
 import {
@@ -809,6 +813,19 @@ async function _updateAgentTemplateImpl(
   id: string,
   patch: Partial<CreateAgentTemplateInput>,
 ): Promise<AgentTemplateRecord | null> {
+  // A2A-publication invariant (cinatra#1875 W2, AC#7). An assistant template is a
+  // conversational principal, never an A2A-addressable agent — refuse to move one
+  // to status='published'. `serializeTemplate` never writes agent_kind (create is
+  // always executor; assistant kind is set by the install seam), so the ONLY way an
+  // assistant reaches 'published' is a status patch here — guard exactly that, reading
+  // the PERSISTED agent_kind (never a caller value) so a forged patch cannot bypass it.
+  if (patch.status === "published") {
+    const [existing] = await db
+      .select({ agentKind: agentTemplates.agentKind })
+      .from(agentTemplates)
+      .where(eq(agentTemplates.id, id));
+    assertNotAssistantPublication(existing?.agentKind, patch.status);
+  }
   const updates: Partial<ReturnType<typeof serializeTemplate>> & { updatedAt?: Date } = {
     updatedAt: new Date(),
   };
@@ -927,10 +944,21 @@ async function _updateAgentTemplateImpl(
     }
   }
 
+  // A2A-publication invariant, ATOMIC form (cinatra#1875 W2, AC#7). The pre-read
+  // guard above throws a clear error for the common case, but a read-then-write
+  // pair is not atomic against a concurrent kind change. On the publish
+  // transition ONLY, the UPDATE itself carries `agent_kind <> 'assistant'` in its
+  // WHERE, so an assistant can NEVER be moved to published even under a race —
+  // the write matches 0 rows and returns null (fail-safe: the publish simply does
+  // not happen). Non-publish patches keep the plain id predicate (byte-identical).
+  const whereClause =
+    patch.status === "published"
+      ? and(eq(agentTemplates.id, id), ne(agentTemplates.agentKind, "assistant"))
+      : eq(agentTemplates.id, id);
   const [row] = await db
     .update(agentTemplates)
     .set(updates)
-    .where(eq(agentTemplates.id, id))
+    .where(whereClause)
     .returning();
   if (!row) return null;
   const record = deserializeTemplate(row);
@@ -1077,7 +1105,13 @@ export function isAgentPubliclyDiscoverable(template: {
 }
 
 // retrieve all published templates that have a packageName set.
-// Used by registerPublishedAgentTools to dynamically wire each as an MCP tool.
+// Used by registerPublishedAgentTools to dynamically wire each as an MCP tool,
+// by the /api/a2a mount, the public `/.well-known/agent.json` AgentCard, and the
+// in-process A2A resolver. Assistant templates are EXCLUDED (cinatra#1875 W2 AC#7):
+// they are conversational principals, not A2A-addressable agents. The store
+// invariant prevents an assistant from ever reaching status='published'; this
+// reader-level filter is the shared chokepoint covering all three A2A consumers
+// (mount + well-known card + resolver) as defense-in-depth.
 // Secondary sort desc(createdAt) ensures that when multiple published entries
 // share the same packageName (due to successive compile_and_write calls), the
 // newest is found first by resolveAgentByPackageName's .find call.
@@ -1089,10 +1123,16 @@ export async function readPublishedAgentTemplates(): Promise<AgentTemplateRecord
       and(
         eq(agentTemplates.status, "published"),
         isNotNull(agentTemplates.packageName),
+        // agent_kind is NOT NULL DEFAULT 'executor', so a plain `<>` is safe
+        // (no NULL three-valued-logic drop).
+        ne(agentTemplates.agentKind, "assistant"),
       ),
     )
     .orderBy(asc(agentTemplates.name), desc(agentTemplates.createdAt));
-  return rows.map(deserializeTemplate);
+  // Defense-in-depth: re-assert the exclusion on the deserialized records so a
+  // caller path with a mocked db (tests) or a future SQL regression cannot leak
+  // an assistant into an A2A surface.
+  return excludeAssistantTemplates(rows.map(deserializeTemplate));
 }
 
 // used by RegistryCatalogScreen to annotate installed state.

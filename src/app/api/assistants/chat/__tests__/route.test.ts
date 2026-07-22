@@ -32,6 +32,7 @@ const expireRunStream = vi.fn();
 const resolveAssistantHandles = vi.fn();
 const resolveAssistantRuntimeConfigByPrincipal = vi.fn();
 const runAssistantTurn = vi.fn();
+const isSelectedAssistantVisible = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
@@ -51,6 +52,19 @@ vi.mock("@/lib/assistant-runtime/resolve-runtime-config", () => ({
 }));
 vi.mock("@/lib/assistant-runtime/runtime", () => ({
   runAssistantTurn: (...a: unknown[]) => runAssistantTurn(...a),
+}));
+vi.mock("@/lib/assistant-selector-audience", () => ({
+  isSelectedAssistantVisible: (...a: unknown[]) => isSelectedAssistantVisible(...a),
+  sessionSelectorCaller: (userId: string, orgId: string | null, platformRole: string) => ({
+    userId,
+    orgId: orgId ?? "",
+    platformRole,
+  }),
+  widgetSelectorCaller: (p: { userId: string; orgId: string }) => ({
+    userId: p.userId,
+    orgId: p.orgId,
+    platformRole: "member",
+  }),
 }));
 vi.mock("@/lib/chat-thread-store", () => ({
   readChatThreadOwnershipById: (id: string) => readChatThreadOwnershipById(id),
@@ -138,6 +152,8 @@ beforeEach(() => {
       args.send("done", {});
     },
   );
+  // AC#3: the selected assistant is in the caller's audience by default.
+  isSelectedAssistantVisible.mockResolvedValue(true);
 });
 
 // cinatra#1823 (epic #1037 P4.1): the OPTIONAL `assistant` selector makes a
@@ -204,6 +220,34 @@ describe("POST /api/assistants/chat — the assistant selector (cinatra#1823)", 
     expect(res.status).toBe(403);
     expect(resolveAssistantHandles).not.toHaveBeenCalled();
     expect(runAssistantTurn).not.toHaveBeenCalled();
+  });
+
+  // AC#3 — the cookie-session selector is re-resolved actor+audience-scoped: a
+  // handle the caller resolves but is NOT in-audience for 404-hides, no turn.
+  it("404s an out-of-audience selected assistant (forged selection never dispatches)", async () => {
+    isSelectedAssistantVisible.mockResolvedValue(false);
+    const res = await POST(
+      chatReq({ threadId: "th1", messages: [{ role: "user", content: "hi" }], assistant: "wordpress" }),
+    );
+    expect(res.status).toBe(404);
+    // The gate was consulted with the resolved principal + the session caller.
+    expect(isSelectedAssistantVisible).toHaveBeenCalledWith(
+      "wp-principal",
+      expect.objectContaining({ userId: "user-1", platformRole: "member" }),
+    );
+    // Fail-closed BEFORE runtime-config resolution and BEFORE any turn.
+    expect(resolveAssistantRuntimeConfigByPrincipal).not.toHaveBeenCalled();
+    expect(runAssistantTurn).not.toHaveBeenCalled();
+  });
+
+  it("an in-audience selected assistant dispatches unchanged (gate passes)", async () => {
+    isSelectedAssistantVisible.mockResolvedValue(true);
+    const res = await POST(
+      chatReq({ threadId: "th1", messages: [{ role: "user", content: "hi" }], assistant: "wordpress" }),
+    );
+    expect(res.status).toBe(200);
+    expect(runAssistantTurn).toHaveBeenCalledTimes(1);
+    expect(isSelectedAssistantVisible).toHaveBeenCalledTimes(1);
   });
 });
 
