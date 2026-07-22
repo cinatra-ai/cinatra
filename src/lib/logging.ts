@@ -21,7 +21,11 @@ import {
   resolveLinkedInConnectionClient,
   resolveWordPressInstanceAdmin,
 } from "@/lib/connector-client-providers";
-import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from "@/lib/database";
+import {
+  writeConnectorConfigToDatabase,
+  readAnthropicLoggingEnabledFromDatabase,
+  ANTHROPIC_LOGGING_CONFIG_KEY,
+} from "@/lib/database";
 import { listLlmProviderSurfaces } from "@/lib/llm-provider-surfaces";
 
 // Host-owned log directories (static). Connector-owned directories resolve
@@ -43,18 +47,24 @@ function allProviderLogDirectories(): string[] {
   return [...connectorDirs, ...vendorClientDirs, ...HOST_LOG_DIRECTORIES];
 }
 
-const ANTHROPIC_LOGGING_CONFIG_KEY = "anthropic-logging";
-
 export function getAnthropicLoggingSettings() {
-  const config = readConnectorConfigFromDatabase<{ enabled?: boolean }>(ANTHROPIC_LOGGING_CONFIG_KEY, {});
   return {
-    enabled: config.enabled !== false,
+    // Read from the PERSISTED authority (#1715 D2) — the same store the log
+    // writer and a connector-relocated adapter read, so the UI display never
+    // diverges from what the writer actually honors.
+    enabled: readAnthropicLoggingEnabledFromDatabase(),
     directory: ANTHROPIC_API_LOG_DIRECTORY,
   };
 }
 
 export async function saveAnthropicLoggingSettings(enabled: boolean) {
+  // Authority write: persist into the connector-config store (#1715 D2). This
+  // is the value the Anthropic log writer gates on — in-tree today and, after
+  // the adapter relocates into its connector, cross-realm too.
   writeConnectorConfigToDatabase(ANTHROPIC_LOGGING_CONFIG_KEY, { enabled });
+  // Non-authoritative in-process cache warm (module state reduced to a cache,
+  // #1715 D2). Nothing on the write-gate path reads it anymore; kept only for
+  // the back-compat `isAnthropicLoggingEnabled()`/subpath export surface.
   setAnthropicLoggingEnabled(enabled);
 }
 

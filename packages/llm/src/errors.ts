@@ -200,3 +200,74 @@ export class AnthropicSkillPreflightError extends AnthropicSkillDeliveryError {
     this.byteSize = input.byteSize;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Cross-realm STRUCTURAL discriminators (llm-providers #1715 — D1).
+//
+// Once the host resolves a CONNECTOR-registered provider adapter (epic #1711),
+// the adapter that throws these sentinels is a SEPARATE module realm. A
+// connector-inlined copy of these error classes therefore has a DIFFERENT
+// constructor identity, so `err instanceof <CoreClass>` silently returns false
+// and a fail-LOUD configuration sentinel is swallowed to a warning (e.g. the
+// `dispatchLlmReviewer` rethrow in agent-creation-review.ts).
+//
+// The fix: discriminate STRUCTURALLY on the stable `code` (+ `provider`) fields
+// that EVERY faithful copy of these classes carries — never on constructor
+// identity. Both the in-core class and a faithful connector-side copy satisfy
+// these predicates; an unrelated error does not. The core classes above keep
+// carrying these exact `code`/`provider` values (that is the contract these
+// predicates read), and any faithful connector-side copy MUST preserve them
+// verbatim (see the #1715 stage-2 handback).
+// ---------------------------------------------------------------------------
+
+/**
+ * The `code` value of every concrete `AnthropicSkillDeliveryError` subclass.
+ * The abstract base carries no single code (its `code` is abstract), so the
+ * skill-delivery family is recognized by membership in this set. Adding a new
+ * subclass REQUIRES adding its code here (guarded by the discriminator contract
+ * test) so the structural check stays exhaustive across realms.
+ */
+export const ANTHROPIC_SKILL_DELIVERY_ERROR_CODES = [
+  "anthropic_skill_not_synced",
+  "anthropic_skill_cap_exceeded",
+  "anthropic_function_tool_skill_forbidden",
+  "anthropic_skill_preflight_failed",
+] as const;
+
+function readStringField(err: unknown, field: "code" | "provider"): string | undefined {
+  if (typeof err !== "object" || err === null) return undefined;
+  const value = (err as Record<string, unknown>)[field];
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * Structural recognizer for the Anthropic skill-delivery sentinel family
+ * (NotSynced / Cap / FunctionTool / Preflight) that survives a module-realm
+ * boundary. Matches any object carrying a known skill-delivery `code` and
+ * `provider === "anthropic"` — the exact shape the core classes above expose
+ * and a faithful connector copy preserves. Replaces the realm-fragile
+ * `err instanceof AnthropicSkillDeliveryError`.
+ */
+export function isAnthropicSkillDeliveryError(err: unknown): err is AnthropicSkillDeliveryError {
+  const code = readStringField(err, "code");
+  return (
+    code !== undefined &&
+    (ANTHROPIC_SKILL_DELIVERY_ERROR_CODES as readonly string[]).includes(code) &&
+    readStringField(err, "provider") === "anthropic"
+  );
+}
+
+/** Cross-realm recognizer for `BatchNotSupportedError` (unique stable `code`). */
+export function isBatchNotSupportedError(err: unknown): err is BatchNotSupportedError {
+  return readStringField(err, "code") === "batch_not_supported";
+}
+
+/** Cross-realm recognizer for `NativeMcpCapabilityRequiredError`. */
+export function isNativeMcpCapabilityRequiredError(err: unknown): err is NativeMcpCapabilityRequiredError {
+  return readStringField(err, "code") === "native_mcp_capability_required";
+}
+
+/** Cross-realm recognizer for `McpApprovalUnsupportedError`. */
+export function isMcpApprovalUnsupportedError(err: unknown): err is McpApprovalUnsupportedError {
+  return readStringField(err, "code") === "mcp_approval_unsupported";
+}

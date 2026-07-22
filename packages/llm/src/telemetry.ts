@@ -13,10 +13,20 @@ import * as path from "node:path";
 // registration at call time — packages/llm carries NO connector
 // value-imports. Surface/member absent ⇒ no-op (best-effort logging).
 import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
+// #1715 D2: the Anthropic request-logging enabled flag is read from the
+// PERSISTED connector-config authority (host store), NOT from core module
+// state. Module state is realm-local, so once the adapter relocates into its
+// connector (epic #1711) an admin toggle would never reach a connector-realm
+// writer. The host reader is a single process-wide authority every realm sees.
+// (packages/llm already statically reads host config — see registry.ts — so
+// this adds no new module-init edge to the barrel graph.)
+import { readAnthropicLoggingEnabledFromDatabase } from "@/lib/database";
 import { redactAuthorizationDeep } from "./log-redaction";
 import type { LlmProvider } from "./types";
 import { ANTHROPIC_API_LOG_DIRECTORY } from "./anthropic-log-directory";
-import { isAnthropicLoggingEnabled, setAnthropicLoggingEnabled } from "./anthropic-logging-state";
+// `setAnthropicLoggingEnabled` is re-exported for back-compat only; the module
+// state it writes is now a NON-authoritative in-process cache (#1715 D2).
+import { setAnthropicLoggingEnabled } from "./anthropic-logging-state";
 
 // ---------------------------------------------------------------------------
 // Anthropic log writer (mirrors writeOpenAILogFile / writeGeminiLogFile)
@@ -32,7 +42,7 @@ const MAX_ANTHROPIC_LOG_FILES = 200;
 
 export function getAnthropicLoggingSettings() {
   return {
-    enabled: isAnthropicLoggingEnabled(),
+    enabled: readAnthropicLoggingEnabledFromDatabase(),
     directory: ANTHROPIC_API_LOG_DIRECTORY,
   };
 }
@@ -59,7 +69,7 @@ export async function writeAnthropicLogFile(input: {
   kind: "request" | "response";
   body: unknown;
 }) {
-  if (!isAnthropicLoggingEnabled()) {
+  if (!readAnthropicLoggingEnabledFromDatabase()) {
     return;
   }
 
