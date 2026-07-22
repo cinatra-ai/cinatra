@@ -19,6 +19,10 @@ import {
   shapeTestDeliverySendInput,
   shapeTestDeliverySendResult,
 } from "./test-delivery-seam";
+import {
+  shapeDraftsReviewResumeInput,
+  isDraftsReviewFailureResult,
+} from "./drafts-review-seam";
 
 /**
  * Deterministic MCP-call passthrough for WayFlow.
@@ -273,74 +277,15 @@ TOOL_INPUT_SHAPERS.objects_save = (raw, agentRunId) => {
 // stringifies json_body templates) and projects the send fields the handler reads.
 TOOL_INPUT_SHAPERS.email_test_delivery_run_send = (raw) => shapeTestDeliverySendInput(raw);
 
-// email-outreach drafts-review persist input shaping (cinatra#1959). The
-// re-entrant gate's apply ApiNode passes the gate's `userResponse` (a JSON
-// string, string-forwarded because wayflowcore renders array/object templates
-// to Python-repr) as `resumePayloadJson`. Parse it and forward ONLY the
-// per-recipient `drafts[]` the persist primitive consumes — run scope and the
-// declaring package come from the run-bound frame, never the payload, so
-// campaignId / approvedDraftIds / editedIds are informational and dropped here.
-//
-// FAIL-CLOSED (codex #1959 finding 3): the payload may arrive WRAPPED in the
-// canonical attachment envelope (`{ text: <renderer JSON string>, attachments }`,
-// wayflow-user-response-envelope.ts) when the operator paperclipped a file — so
-// the envelope's `text` is unwrapped + re-parsed. A present-but-unparseable /
-// unrecognized payload THROWS (the shaper-throw contract → HTTP 400, the ApiNode
-// fails visibly) rather than degrading to `{ drafts: [] }` — silently discarding
-// the operator's approved edits is the exact fail-open codex flagged. An
-// intentionally-empty reviewed set (`{ drafts: [] }` in a VALID payload) is
-// preserved and passes to the primitive's benign no-op.
-function unwrapDraftsResumePayload(json: string): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    throw new Error(
-      "email_outreach_initial_drafts_update: resumePayloadJson is not valid JSON — refusing to persist an empty edit set over the operator's approved drafts.",
-    );
-  }
-  // Unwrap the attachment envelope: the renderer's payload string is nested in `text`.
-  if (
-    parsed &&
-    typeof parsed === "object" &&
-    !Array.isArray(parsed) &&
-    typeof (parsed as Record<string, unknown>).text === "string" &&
-    Array.isArray((parsed as Record<string, unknown>).attachments)
-  ) {
-    try {
-      parsed = JSON.parse((parsed as Record<string, unknown>).text as string);
-    } catch {
-      throw new Error(
-        "email_outreach_initial_drafts_update: the wrapped resume envelope's `text` payload is not valid JSON.",
-      );
-    }
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(
-      "email_outreach_initial_drafts_update: resumePayloadJson did not resolve to a drafts-review resume payload object.",
-    );
-  }
-  const obj = parsed as Record<string, unknown>;
-  if (obj.drafts !== undefined && !Array.isArray(obj.drafts)) {
-    throw new Error(
-      "email_outreach_initial_drafts_update: resume payload `drafts` must be an array.",
-    );
-  }
-  return obj;
-}
-
-TOOL_INPUT_SHAPERS.email_outreach_initial_drafts_update = (raw) => {
-  const json = typeof raw.resumePayloadJson === "string" ? raw.resumePayloadJson : "";
-  if (!json) {
-    // The apply node ALWAYS wires resumePayloadJson from the gate output; an
-    // absent one is a wiring fault, not an empty approval — fail visibly.
-    throw new Error(
-      "email_outreach_initial_drafts_update: resumePayloadJson is required (the gate's resume payload).",
-    );
-  }
-  const payload = unwrapDraftsResumePayload(json);
-  return { drafts: Array.isArray(payload.drafts) ? payload.drafts : [] };
-};
+// email-outreach drafts-review persist input shaping (cinatra#1959) — the pure
+// shaper lives in ./drafts-review-seam (zero-dep, unit-tested). It parses the
+// apply ApiNode's `resumePayloadJson`, unwraps the canonical attachment envelope,
+// and projects ONLY the per-recipient `drafts[]` the persist primitive consumes.
+// FAIL-CLOSED: a present-but-unparseable / unrecognized / wrong-typed payload
+// THROWS (the shaper-throw contract → HTTP 400, the ApiNode fails visibly) rather
+// than degrading to `{ drafts: [] }` and silently discarding approved edits.
+TOOL_INPUT_SHAPERS.email_outreach_initial_drafts_update = (raw) =>
+  shapeDraftsReviewResumeInput(raw);
 
 export async function POST(req: Request): Promise<Response> {
   if (!isAuthorizedBridgeRequest(req)) {
@@ -636,6 +581,21 @@ export async function POST(req: Request): Promise<Response> {
     ) {
       const shaped = shapeTestDeliverySendResult(input, result);
       if (shaped) return NextResponse.json(shaped);
+    }
+
+    // Fail-closed output extraction for the drafts-review apply node
+    // (cinatra#1959 gate #2). The apply ApiNode has an UNCONDITIONAL edge to the
+    // EndNode, so a handler error/`ok:false` envelope returned at HTTP 200 would
+    // let the run COMPLETE after a KNOWN persist failure (e.g. a missing pre-gate
+    // bundle, or a partial-match drop of the operator's approved edits). Convert
+    // it to a non-2xx here — before WayFlow extracts the node's declared outputs
+    // — so the apply node FAILS the run instead. Scoped to this tool; every other
+    // tool's error semantics are untouched.
+    if (
+      tool === "email_outreach_initial_drafts_update" &&
+      isDraftsReviewFailureResult(result)
+    ) {
+      return NextResponse.json(result, { status: 422 });
     }
 
     return NextResponse.json(result);

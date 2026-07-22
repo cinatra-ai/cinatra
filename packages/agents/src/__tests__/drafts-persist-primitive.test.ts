@@ -23,6 +23,7 @@ import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import {
   applyEditsToBundleArray,
   normalizeEdits,
+  renderReviewedDocument,
 } from "../mcp/drafts-persist-handler";
 
 // ---------------------------------------------------------------------------
@@ -269,6 +270,69 @@ describe("applyEditsToBundleArray", () => {
     expect(matched).toBe(0);
     expect(changed).toBe(0);
   });
+
+  it("is ONE-TO-ONE: a single edit never clobbers two rows sharing an email (matched stays 1)", () => {
+    const dupEmail = [
+      { id: "r1", recipientEmail: "same@x.com", subject: "S1", body: "B1" },
+      { id: "r2", recipientEmail: "same@x.com", subject: "S2", body: "B2" },
+    ];
+    const { nextArray, changed, matched } = applyEditsToBundleArray(dupEmail, [
+      // matches by id r1, and would ALSO match r2 by shared email — the consumed
+      // set prevents the second application.
+      { id: "r1", recipientEmail: "same@x.com", subject: "EDITED", body: "B1" },
+    ]);
+    expect(matched).toBe(1); // distinct edits consumed, never > edits.length
+    expect(changed).toBe(1);
+    expect(nextArray[0]).toMatchObject({ id: "r1", subject: "EDITED" });
+    expect(nextArray[1]).toBe(dupEmail[1]); // second row untouched (no clobber)
+  });
+});
+
+// ===========================================================================
+// Server-side reviewed-document regeneration (nit #4) — the EndNode artifact
+// content is regenerated from the authoritative post-update array, never a
+// caller-supplied document, and is faithful to each agent's own prompt shape.
+// ===========================================================================
+describe("renderReviewedDocument", () => {
+  it("renders the drafting-agent per-recipient document (one '## <recipientName>' section)", () => {
+    const doc = renderReviewedDocument(
+      [
+        { recipientId: "c1", recipientName: "Ada Lovelace", recipientEmail: "ada@x.com", subject: "Hi Ada", body: "Body A" },
+        { recipientId: "c2", recipientName: "Alan Turing", recipientEmail: "alan@x.com", subject: "Hi Alan", body: "Body B" },
+      ],
+      "@cinatra-ai/email-drafting-agent",
+    );
+    expect(doc).toBe(
+      "## Ada Lovelace\n**Subject:** Hi Ada\n\nBody A\n\n---\n" +
+        "## Alan Turing\n**Subject:** Hi Alan\n\nBody B\n\n---\n",
+    );
+  });
+
+  it("falls back to the recipient email then a positional heading when no name is present", () => {
+    const doc = renderReviewedDocument(
+      [
+        { recipientEmail: "only@x.com", subject: "S", body: "B" },
+        { subject: "S2", body: "B2" },
+      ],
+      "@cinatra-ai/email-drafting-agent",
+    );
+    expect(doc).toContain("## only@x.com");
+    expect(doc).toContain("## Recipient 2");
+  });
+
+  it("renders the follow-up-agent digest (one '## Follow-up <n> (day <day>)' section)", () => {
+    const doc = renderReviewedDocument(
+      [
+        { recipientId: "follow-up-1", subject: "Bump 1", body: "FU A", followUpDay: 3 },
+        { recipientId: "follow-up-2", subject: "Bump 2", body: "FU B", followUpDay: 7 },
+      ],
+      "@cinatra-ai/email-follow-up-agent",
+    );
+    expect(doc).toBe(
+      "## Follow-up 1 (day 3)\n**Subject:** Bump 1\n\nFU A\n" +
+        "\n## Follow-up 2 (day 7)\n**Subject:** Bump 2\n\nFU B\n",
+    );
+  });
 });
 
 // ===========================================================================
@@ -288,10 +352,31 @@ describe("handleEmailOutreachInitialDraftsUpdate", () => {
     expect(storeMock.readAgentRunById).toHaveBeenCalledWith(RUN_ID, expect.anything(), undefined);
   });
 
-  it("empty edits is a benign no-op (never a phantom write)", async () => {
+  it("empty edits is a benign no-op that still returns the stored reviewed bundle (never a phantom write)", async () => {
+    // Design (a): even an empty edit set loads the pre-gate bundle and returns
+    // the authoritative reviewed content for the EndNode — it just never writes.
+    objectsMock.client.list.mockResolvedValue({
+      items: [
+        {
+          id: "obj-1",
+          type: "@cinatra-ai/campaigns:email-draft-bundle",
+          createdAt: "2026-07-20T00:00:00.000Z",
+          data: {
+            cinatra_agent_run_id: RUN_ID,
+            drafts: [{ id: "d1", recipientName: "Ada", recipientEmail: "a@x.com", subject: "S1", body: "B1" }],
+            summary: "one draft",
+          },
+        },
+      ],
+    });
     const res = await withVerifiedRun(RUN_ID, () => invoke({ drafts: [] }));
     expect(res).toMatchObject({ ok: true, runId: RUN_ID, updated: 0, matched: 0 });
-    expect(objectsMock.client.list).not.toHaveBeenCalled();
+    // Authoritative reviewed content is returned, provenance stripped, no write.
+    expect((res as { reviewedBundle?: Record<string, unknown> }).reviewedBundle).toEqual({
+      drafts: [{ id: "d1", recipientName: "Ada", recipientEmail: "a@x.com", subject: "S1", body: "B1" }],
+      summary: "one draft",
+    });
+    expect((res as { reviewedDocument?: string }).reviewedDocument).toContain("## Ada");
     expect(objectsMock.client.update).not.toHaveBeenCalled();
   });
 
@@ -322,8 +407,51 @@ describe("handleEmailOutreachInitialDraftsUpdate", () => {
       ],
     });
     const res = await withVerifiedRun(RUN_ID, () => invoke(editsInput));
-    expect(res.error).toMatch(/did not match a stored bundle row/);
+    expect(res.error).toMatch(/did not map one-to-one onto a stored bundle row/);
     expect(res.ok).toBeUndefined();
+    expect(objectsMock.client.update).not.toHaveBeenCalled();
+  });
+
+  it("FAILS CLOSED when a submitted row is un-keyable (dropped before matching) even if the rest match", async () => {
+    objectsMock.client.list.mockResolvedValue({
+      items: [
+        {
+          id: "obj-1",
+          type: "@cinatra-ai/campaigns:email-draft-bundle",
+          createdAt: "2026-07-20T00:00:00.000Z",
+          data: { drafts: [{ id: "d1", recipientEmail: "a@x.com", subject: "S", body: "B" }] },
+        },
+      ],
+    });
+    // Two submitted rows: one keyed (d1) and one un-keyable (no id / no email).
+    // normalizeEdits drops the un-keyable row, so edits.length (1) < rawRowCount
+    // (2) — the handler refuses rather than silently persisting only the keyed one.
+    const res = await withVerifiedRun(RUN_ID, () =>
+      invoke({ drafts: [{ id: "d1", recipientEmail: "a@x.com", subject: "NEW", body: "B" }, { subject: "orphan", body: "no-key" }] }),
+    );
+    expect(res.error).toMatch(/did not map one-to-one/);
+    expect(res.ok).toBeUndefined();
+    expect(objectsMock.client.update).not.toHaveBeenCalled();
+  });
+
+  it("recognizes an existing but EMPTY pre-gate bundle by type (returns empty reviewed outputs, not 'missing')", async () => {
+    objectsMock.client.list.mockResolvedValue({
+      items: [
+        {
+          id: "obj-empty",
+          type: "@cinatra-ai/campaigns:email-draft-bundle",
+          createdAt: "2026-07-20T00:00:00.000Z",
+          data: { cinatra_agent_run_id: RUN_ID, draftedEmails: [], summary: "no recipients" },
+        },
+      ],
+    });
+    const res = await withVerifiedRun(RUN_ID, () => invoke({ drafts: [] }));
+    expect(res).toMatchObject({ ok: true, objectId: "obj-empty", matched: 0, updated: 0 });
+    expect((res as { reviewedBundle?: Record<string, unknown> }).reviewedBundle).toEqual({
+      draftedEmails: [],
+      summary: "no recipients",
+    });
+    expect((res as { reviewedDocument?: string }).reviewedDocument).toBe("");
     expect(objectsMock.client.update).not.toHaveBeenCalled();
   });
 
@@ -351,6 +479,14 @@ describe("handleEmailOutreachInitialDraftsUpdate", () => {
       objectId: "obj-new",
       data: { drafts: [{ id: "d1", recipientEmail: "a@x.com", subject: "NEW", body: "B1" }] },
     });
+    // Returns the AUTHORITATIVE reviewed content for the EndNode (nit #4): the
+    // stored bundle with the reviewed array spliced in + a regenerated document.
+    expect((res as { reviewedBundle?: Record<string, unknown> }).reviewedBundle).toEqual({
+      drafts: [{ id: "d1", recipientEmail: "a@x.com", subject: "NEW", body: "B1" }],
+    });
+    expect((res as { reviewedDocument?: string }).reviewedDocument).toBe(
+      "## a@x.com\n**Subject:** NEW\n\nB1\n\n---\n",
+    );
     expect(authPolicyMock.enforceRunAccess).toHaveBeenCalledWith(
       expect.objectContaining({ id: RUN_ID, coOwnerUserIds: [] }),
       expect.anything(),
