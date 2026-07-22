@@ -69,6 +69,7 @@ import {
   collectNewlyTaggedIds,
   resolveDispatchPlan,
 } from "./chat-routing";
+import { useChatUrlSync } from "./chat-client-url"; // cinatra#1878 W3 /chat URL sync (push/restore/adopt/seed)
 // The unified AG-UI wire (cinatra#1218, epic #1216 S2): the headless client
 // drives the full turn lifecycle over the S3 reducer behind a small UI port
 // (driveAssistantChatTurn); persistence fetch helpers are co-located there
@@ -119,7 +120,7 @@ const ChatMessagesView = dynamic(
 // above.
 // ---------------------------------------------------------------------------
 
-export function ChatPage({ initialThreadId, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, chatViews = EMPTY_CHAT_VIEWS }: ChatPageProps = {}) {
+export function ChatPage({ initialThreadId, initialAssistantPackage, initialInstanceId, remoteChat, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, chatViews = EMPTY_CHAT_VIEWS }: ChatPageProps = {}) {
   const { resolvedTheme } = useTheme();
   const theme: ThemeName = resolvedTheme === "dark" ? "github-dark" : "github-light";
   // Manifest-driven widget runtime — registries/detectors/wizard helpers
@@ -131,6 +132,8 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   const isCreateAgentMode = initialMode === "create-agent";
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(initialThreadId ?? null);
+  const { pushChatUrl, pushNewChatUrl, restoreActiveThread, adoptThreadBinding, newThreadSummary } =
+    useChatUrlSync(threads, initialAssistantPackage, initialInstanceId);
   const [messages, setMessages] = useState<Message[]>([]);
   // Streaming registry: one AbortController per in-flight streamResponse call.
   // Replaces the single boolean flag so N concurrent streams can coexist.
@@ -287,16 +290,14 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
       // when clicking "New chat" while already at the empty state.
       if (wasInThread) setGreeting(getGreeting());
       void fetchThreadList().then(setThreads);
-      if (window.location.pathname !== "/chat") {
-        window.history.pushState(null, "", "/chat");
-      }
+      pushNewChatUrl(); // codec base path for the bound assistant (cinatra#1878 W3)
     }
 
     function handlePopState() {
       promptRef.current?.clear();
-      const match = window.location.pathname.match(/^\/chat\/([a-f0-9-]{36})$/);
-      if (match) {
-        setActiveThreadId(match[1]);
+      const restored = restoreActiveThread(); // pathname → known thread, else clear (#1878 W3)
+      if (restored) {
+        setActiveThreadId(restored);
       } else {
         setActiveThreadId(null);
         setMessages([]);
@@ -309,7 +310,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
       const { threadId } = (e as CustomEvent<{ threadId: string }>).detail;
       promptRef.current?.clear();
       setActiveThreadId(threadId);
-      window.history.pushState(null, "", `/chat/${threadId}`);
+      pushChatUrl(threadId);
     }
 
     window.addEventListener("cinatra:chat:new", handleNewChat);
@@ -379,6 +380,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
         // backfilled ids and make a pure open look like real activity (#283).
         const loadedMessages = thread.messages.map((m) => ({ ...m, id: m.id || generateId() }));
         setMessages(loadedMessages);
+        adoptThreadBinding(thread); // keep New chat/URL in this container (#1878 W3)
         // Restore active assistant handle so subsequent messages route correctly.
         setActiveAssistantHandle(thread.activeAssistantHandle);
         // Synchronise Slack-mode state on cold reload. Set prevIsSlackModeRef.current
@@ -571,11 +573,6 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
     const title = threads.find((t) => t.id === activeThreadId)?.title ?? null;
     publishChatThreadTitle(title);
   }, [activeThreadId, threads]);
-
-  function pushChatUrl(threadId: string | null) {
-    const url = threadId ? `/chat/${threadId}` : "/chat";
-    window.history.pushState(null, "", url);
-  }
 
   // Register a stream in the registry and bump the count. Must only be called
   // from inside streamResponse's try block so cleanup is guaranteed in finally.
@@ -846,7 +843,8 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
       // New thread — reset pause state so stale participants from previous thread don't bleed in.
       setPausedParticipants([]);
       setActiveThreadId(threadId);
-      setThreads((prev) => [{ id: threadId!, title, createdAt: now, updatedAt: now }, ...prev]);
+      // Seed the new thread with this mount's binding; slug arrives next refetch.
+      setThreads((prev) => [newThreadSummary(threadId!, title, now), ...prev]);
       pushChatUrl(threadId);
     }
 
@@ -1140,6 +1138,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
                   mentionables={mentionables}
                   onAttachmentsSelected={handleAttachmentsSelected}
                   autosave={autosaveProp}
+                  remoteChat={remoteChat}
                 />
                 <SkillBadgeCloud
                   badges={selectChatBadges(initialMode)}
@@ -1228,6 +1227,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
               mentionables={mentionables}
               onAttachmentsSelected={handleAttachmentsSelected}
               autosave={autosaveProp}
+              remoteChat={remoteChat}
             />
           </div>
         </div>

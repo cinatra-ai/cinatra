@@ -104,6 +104,60 @@ export function projectAssistantDelivery(declaration: unknown): AssistantDeliver
 }
 
 // ---------------------------------------------------------------------------
+// Assistant LAUNCH topology (cinatra#1878 W3, AC#1/#3/#4). `local` runs on the
+// host runtime; `remote` proxies to a first-party `targetProvider` resolver (a
+// connected site). This is the DECLARED kind the /chat path codec disambiguates
+// the third segment by (instance for `remote`, titleSlug for `local`) — never a
+// format-sniff. Projected from `installed_extension.assistant_declaration`,
+// FAIL-SAFE to `local` (the builtin Cinatra descriptor + any malformed/absent
+// launch block resolve to a host-local assistant, never an accidental remote).
+// Kept as LOCAL closed literals so this DB-layer read leaf never pulls the
+// zod-carrying declaration parser into its static import graph (mirrors
+// ASSISTANT_LAUNCH_KINDS in `@cinatra-ai/sdk-extensions/assistant-declaration`).
+// ---------------------------------------------------------------------------
+
+/** The declared launch topology of an assistant. */
+export type AssistantLaunchKind = "local" | "remote";
+const LAUNCH_KINDS: ReadonlySet<AssistantLaunchKind> = new Set(["local", "remote"]);
+/** The platform default when no (or a malformed) launch is declared. */
+export const DEFAULT_ASSISTANT_LAUNCH_KIND: AssistantLaunchKind = "local";
+
+/** The projected launch descriptor — the kind plus, for `remote`, the first-party
+ *  `targetProvider` id the remote-target resolver keys on (never a manifest URL). */
+export type AssistantLaunch = {
+  kind: AssistantLaunchKind;
+  targetProvider: string | null;
+};
+
+/**
+ * Project the launch topology from a persisted `assistant_declaration` jsonb
+ * value. FAIL-SAFE + defensive for the hot read path: a builtin (no
+ * declaration), a partial/corrupt jsonb, an unsupported future `formatVersion`,
+ * or an unknown kind all resolve to `{ kind: "local", targetProvider: null }` —
+ * a schema drift can never silently turn a thread into a remote proxy.
+ */
+export function projectAssistantLaunch(declaration: unknown): AssistantLaunch {
+  const d = declaration as
+    | { formatVersion?: unknown; block?: { launch?: { kind?: unknown; targetProvider?: unknown } } }
+    | null
+    | undefined;
+  if (!d || d.formatVersion !== RECOGNIZED_DECLARATION_FORMAT_VERSION) {
+    return { kind: DEFAULT_ASSISTANT_LAUNCH_KIND, targetProvider: null };
+  }
+  const kind = d.block?.launch?.kind;
+  const resolvedKind =
+    typeof kind === "string" && LAUNCH_KINDS.has(kind as AssistantLaunchKind)
+      ? (kind as AssistantLaunchKind)
+      : DEFAULT_ASSISTANT_LAUNCH_KIND;
+  const tp = d.block?.launch?.targetProvider;
+  return {
+    kind: resolvedKind,
+    // targetProvider is only meaningful for a remote launch.
+    targetProvider: resolvedKind === "remote" && typeof tp === "string" && tp.length > 0 ? tp : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Core-store drizzle handles for the two tables the reader joins that are NOT
 // already exported by `better-auth-db`. Same schema-name derivation as
 // `better-auth-db`'s `coreStoreSchema` (read INLINE from the environment, per that
@@ -279,6 +333,12 @@ export type AssistantRegistryEntry = {
    *  webhook/mcp-poll); transport (API vs local-CLI) stays the connector's
    *  concern, never the planner's. */
   delivery: AssistantDeliveryKind;
+  /** The declared LAUNCH topology (cinatra#1878 W3): `local` (host runtime) vs
+   *  `remote` (proxies to a first-party `targetProvider`). The /chat codec
+   *  disambiguates the third path segment by this kind (instance for `remote`,
+   *  titleSlug for `local`); the /assistants directory + "Remote chat" flyout use
+   *  it (and `targetProvider`) for the remote destination. FAIL-SAFE to `local`. */
+  launch: AssistantLaunch;
 };
 
 type CandidateRow = {
@@ -306,6 +366,7 @@ function toEntry(row: CandidateRow, aliases: string[], isBuiltin: boolean): Assi
     aliases: [...aliases].sort(),
     isBuiltin,
     delivery: projectAssistantDelivery(row.declaration),
+    launch: projectAssistantLaunch(row.declaration),
   };
 }
 

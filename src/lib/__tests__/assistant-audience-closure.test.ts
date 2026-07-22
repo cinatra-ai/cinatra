@@ -44,6 +44,7 @@ function depsWithVisible(visibleIds: string[]): AudienceClosureDeps {
         aliases: [],
         isBuiltin: false,
         delivery: "host-runtime" as const,
+        launch: { kind: "local" as const, targetProvider: null },
       })),
   };
 }
