@@ -10,7 +10,13 @@
 // { fromInstanceId, key } using these generic keys, distinguished by
 // instanceId — NOT instance-specific output names. Launcher kinds set
 // allowsArbitraryInputs (dynamic prefill keys).
-import { collectQueryCubeIds, describeCrossCubeQuery } from "@cinatra-ai/sdk-dashboard";
+import {
+  collectQueryCubeIds,
+  collectQueryFeatureViolations,
+  describeCrossCubeQuery,
+  queryComplexityOf,
+  QUERY_ENDPOINT_LIMITS,
+} from "@cinatra-ai/sdk-dashboard";
 
 import { registerPortletKind, type PortletConfigError, type PortletInstanceForValidation } from "./registry";
 import { DashboardConfigV1_1Schema } from "../store/dashboard-config";
@@ -238,6 +244,32 @@ function validateAnalyticsPortletConfig(p: PortletInstanceForValidation): Portle
             message: `card "${dcPortlet.title}": ${describeCrossCubeQuery(cubeIds)}`,
           });
         }
+      }
+    }
+    // Executable-feature contract (cinatra#1911): a query the v1 endpoint
+    // rejects with `unsupported_query_feature` must not persist — the failure
+    // lands on the AUTHOR with a correction instead of on the viewer as a
+    // broken widget. Same predicate + copy as the wire gate (single source of
+    // truth in sdk-dashboard). Member existence/type stays render-time (needs
+    // cube meta). Messages are keyed by the STABLE card id, never the display
+    // title, so the #1913 error-multiset grandfathering is rename-proof for
+    // this class.
+    const cardId = typeof dp.id === "string" && dp.id.length > 0 ? dp.id : "<no id>";
+    for (const query of queries) {
+      for (const violation of collectQueryFeatureViolations(query)) {
+        errors.push({
+          code: "port_analytics_unsupported_query_feature",
+          message: `card ${cardId}: ${violation.message}`,
+        });
+      }
+      // Same arithmetic as the endpoint's cap — a query that saves must never
+      // later be rejected as too complex.
+      const complexity = queryComplexityOf(query);
+      if (complexity > QUERY_ENDPOINT_LIMITS.maxQueryComplexity) {
+        errors.push({
+          code: "port_analytics_query_too_complex",
+          message: `card ${cardId}: query uses ${complexity} fields; the maximum is ${QUERY_ENDPOINT_LIMITS.maxQueryComplexity}. Remove some measures, dimensions or time dimensions.`,
+        });
       }
     }
   }

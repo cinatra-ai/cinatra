@@ -46,6 +46,7 @@ import {
   APIVERSION_V12,
   seedDashboardFixtures,
   seedDimsOnly1914Dashboard,
+  seedExecSurface1911Dashboard,
   seedV12AnalyticsDashboard,
   V12_ANALYTICS_DASHBOARD_ID,
 } from "./seed-data";
@@ -180,6 +181,18 @@ setup("create test user + seed dashboard fixtures + save session", async ({ requ
     organizationId: seeded.organizationId,
   });
   expect(dims.dashboardId).toBe("e2e-1914-dims-only");
+
+  // 5d. Seed the cinatra#1911 executable-surface dashboard (six cards
+  //     reproducing the reference dashboard's timeDimensions / inDateRange /
+  //     `in` feature mix) so its spec can prove the formerly-rejected
+  //     features render data end to end.
+  const execSurface = await seedExecSurface1911Dashboard({
+    databaseUrl: DATABASE_URL,
+    schema: SCHEMA,
+    userId: seeded.userId,
+    organizationId: seeded.organizationId,
+  });
+  expect(execSurface.dashboardId).toBe("e2e-1911-exec-surface");
 
   // 6. Preflight `/agents/executions` (200) — and, under a local `pnpm dev`,
   //    warm its per-route compile — so the chromium project's first
