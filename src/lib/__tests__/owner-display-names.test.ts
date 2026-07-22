@@ -144,4 +144,10 @@ describe("readOwnerDisplayName (single-ref convenience)", () => {
     h.execute.mockResolvedValueOnce({ rows: [] });
     await expect(readOwnerDisplayName("team", "missing")).resolves.toBeNull();
   });
+
+  it("normalizes the id before the map lookup (CodeRabbit round)", async () => {
+    h.execute.mockResolvedValueOnce({ rows: [{ id: "t1", name: "Best Team Ever" }] });
+    await expect(readOwnerDisplayName("team", "  t1  ")).resolves.toBe("Best Team Ever");
+    await expect(readOwnerDisplayName("team", "   ")).resolves.toBeNull();
+  });
 });

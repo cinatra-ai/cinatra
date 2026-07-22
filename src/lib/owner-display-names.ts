@@ -92,6 +92,9 @@ export async function readOwnerDisplayName(
 ): Promise<string | null> {
   if (!OWNER_NAME_LEVELS.has(level)) return null;
   const ownerLevel = level as OwnerNameLevel;
-  const names = await readOwnerDisplayNames([{ level: ownerLevel, id }]);
-  return names.get(ownerNameKey(ownerLevel, id)) ?? null;
+  // Normalize like the batch read does — its map keys use the TRIMMED id.
+  const trimmed = typeof id === "string" ? id.trim() : "";
+  if (!trimmed) return null;
+  const names = await readOwnerDisplayNames([{ level: ownerLevel, id: trimmed }]);
+  return names.get(ownerNameKey(ownerLevel, trimmed)) ?? null;
 }
