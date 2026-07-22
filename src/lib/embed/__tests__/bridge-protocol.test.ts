@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   EMBED_PROTOCOL_VERSION,
   EMBED_MESSAGE_TYPES,
@@ -13,6 +13,9 @@ import {
   evaluateBootstrap,
   createMonotonicSeqGate,
   createSingleUseGate,
+  selectParentBootstrapTransport,
+  sendBootstrapOverTransport,
+  type EmbedBootstrap,
 } from "@/lib/embed/bridge-protocol";
 
 // A well-formed CSPRNG-shaped base64url id (>=22 chars) for the id fields.
@@ -303,5 +306,181 @@ describe("bridge-protocol uplinks (§5 / B9)", () => {
   it("B13: the uplink union rejects an unknown type", () => {
     const r = embedUplinkSchema.safeParse({ type: "cinatra.embed.evil", ...up });
     expect(r.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §12b — PORT-BOUND TRANSPORT (issue #1965). The PARENT-side transport primitives
+// the two CMS widgets mirror. The load-bearing acceptance regression: in PORT
+// mode a token-bearing message is NEVER sent via a window-targeted postMessage —
+// the bootstrap rides ONLY the entangled port the pre-navigation realm
+// established; and the READY handshake is TOKEN-FREE.
+// ---------------------------------------------------------------------------
+describe("bridge-protocol §12b READY handshake is token-free", () => {
+  it("a well-formed READY parses and carries NO cit_/cwu_ token", () => {
+    const ready = { type: EMBED_MESSAGE_TYPES.ready, protocolVersion: 1, nonce: NONCE, seq: 0 };
+    expect(embedReadySchema.safeParse(ready).success).toBe(true);
+    const serialized = JSON.stringify(ready);
+    expect(serialized).not.toContain("cit_");
+    expect(serialized).not.toContain("cwu_");
+  });
+
+  it("a token-bearing field on READY is rejected (strict) — READY can never carry auth", () => {
+    const bad = {
+      type: EMBED_MESSAGE_TYPES.ready,
+      protocolVersion: 1,
+      nonce: NONCE,
+      seq: 0,
+      auth: { citToken: "cit_x", cwuToken: "cwu_y" },
+    };
+    expect(embedReadySchema.safeParse(bad).success).toBe(false);
+  });
+});
+
+describe("bridge-protocol §12b selectParentBootstrapTransport (downgrade-resistant)", () => {
+  const PARENT = "https://cms.example.com";
+  const legacyWindow = { postMessage: vi.fn() };
+
+  it("selects PORT mode when the iframe transferred a port", () => {
+    const port = { postMessage: vi.fn() };
+    const d = selectParentBootstrapTransport({
+      transferredPorts: [port],
+      legacyWindow,
+      legacyTargetOrigin: PARENT,
+      requirePort: false,
+    });
+    expect(d.ok).toBe(true);
+    expect(d.ok && d.transport.mode).toBe("port");
+  });
+
+  it("FAILS CLOSED (no_port_available) with no port under requirePort — no downgrade by stripping the port", () => {
+    const d = selectParentBootstrapTransport({
+      transferredPorts: [],
+      legacyWindow,
+      legacyTargetOrigin: PARENT,
+      requirePort: true,
+    });
+    expect(d).toEqual({ ok: false, reason: "no_port_available" });
+  });
+
+  it("null/undefined ports also fail closed under requirePort", () => {
+    for (const ports of [null, undefined]) {
+      const d = selectParentBootstrapTransport({
+        transferredPorts: ports,
+        legacyWindow,
+        legacyTargetOrigin: PARENT,
+        requirePort: true,
+      });
+      expect(d).toEqual({ ok: false, reason: "no_port_available" });
+    }
+  });
+
+  it("falls back to LEGACY window mode with no port only when legacy is allowed", () => {
+    const d = selectParentBootstrapTransport({
+      transferredPorts: [],
+      legacyWindow,
+      legacyTargetOrigin: PARENT,
+      requirePort: false,
+    });
+    expect(d.ok).toBe(true);
+    expect(d.ok && d.transport.mode).toBe("legacy");
+  });
+});
+
+describe("bridge-protocol §12b sendBootstrapOverTransport — no token-bearing postMessage in port mode", () => {
+  const PARENT = "https://cms.example.com";
+  const bootstrap = validBootstrap() as unknown as EmbedBootstrap;
+
+  it("REGRESSION: in PORT mode the token-bearing bootstrap rides ONLY the port — window.postMessage is never called", () => {
+    const port = { postMessage: vi.fn() };
+    const legacyWindow = { postMessage: vi.fn() };
+    const decision = selectParentBootstrapTransport({
+      transferredPorts: [port],
+      legacyWindow,
+      legacyTargetOrigin: PARENT,
+      requirePort: true, // strictest: both peers require the port
+    });
+    expect(decision.ok).toBe(true);
+    if (!decision.ok) return;
+    sendBootstrapOverTransport(decision.transport, bootstrap);
+    // the tokens went over the port …
+    expect(port.postMessage).toHaveBeenCalledTimes(1);
+    expect(port.postMessage).toHaveBeenCalledWith(bootstrap);
+    // … and NEVER via a window-targeted postMessage.
+    expect(legacyWindow.postMessage).not.toHaveBeenCalled();
+    const windowSerialized = JSON.stringify(legacyWindow.postMessage.mock.calls);
+    expect(windowSerialized).not.toContain("cit_");
+    expect(windowSerialized).not.toContain("cwu_");
+  });
+
+  it("in LEGACY mode posts to the origin-pinned window, never '*'", () => {
+    const legacyWindow = { postMessage: vi.fn() };
+    const decision = selectParentBootstrapTransport({
+      transferredPorts: [],
+      legacyWindow,
+      legacyTargetOrigin: PARENT,
+      requirePort: false,
+    });
+    expect(decision.ok).toBe(true);
+    if (!decision.ok) return;
+    sendBootstrapOverTransport(decision.transport, bootstrap);
+    expect(legacyWindow.postMessage).toHaveBeenCalledWith(bootstrap, PARENT);
+  });
+
+  it("LEGACY mode FAILS CLOSED on a wildcard/empty target origin — no token broadcast", () => {
+    for (const legacyTargetOrigin of ["*", ""]) {
+      const legacyWindow = { postMessage: vi.fn() };
+      sendBootstrapOverTransport(
+        { mode: "legacy", window: legacyWindow, targetOrigin: legacyTargetOrigin },
+        bootstrap,
+      );
+      expect(legacyWindow.postMessage).not.toHaveBeenCalled();
+    }
+  });
+
+  it("downgrade attempt: a no-port READY under requirePort sends NOTHING (fail closed)", () => {
+    const legacyWindow = { postMessage: vi.fn() };
+    const decision = selectParentBootstrapTransport({
+      transferredPorts: [],
+      legacyWindow,
+      legacyTargetOrigin: PARENT,
+      requirePort: true,
+    });
+    // The caller sends only on ok; a fail-closed decision emits no token traffic.
+    if (decision.ok) sendBootstrapOverTransport(decision.transport, bootstrap);
+    expect(legacyWindow.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("single-use binding: a REPLACEMENT no-port READY on a burned nonce cannot re-open a legacy downgrade", () => {
+    // Parent binds the transport to the frame's single-use nonce gate: the first
+    // (port) READY consumes it; a later replacement's no-port READY is ignored,
+    // so it can never coax the parent into a legacy token send.
+    const nonceGate = createSingleUseGate();
+    const port = { postMessage: vi.fn() };
+    const legacyWindow = { postMessage: vi.fn() };
+
+    // READY #1 — the genuine iframe transferred a port; parent commits.
+    if (nonceGate.consume()) {
+      const d1 = selectParentBootstrapTransport({
+        transferredPorts: [port],
+        legacyWindow,
+        legacyTargetOrigin: PARENT,
+        requirePort: false,
+      });
+      if (d1.ok) sendBootstrapOverTransport(d1.transport, bootstrap);
+    }
+    // READY #2 — a same-origin replacement, no port; the burned nonce drops it.
+    if (nonceGate.consume()) {
+      const d2 = selectParentBootstrapTransport({
+        transferredPorts: [],
+        legacyWindow,
+        legacyTargetOrigin: PARENT,
+        requirePort: false,
+      });
+      if (d2.ok) sendBootstrapOverTransport(d2.transport, bootstrap);
+    }
+
+    expect(port.postMessage).toHaveBeenCalledTimes(1); // only the genuine send
+    expect(legacyWindow.postMessage).not.toHaveBeenCalled(); // no downgrade send
   });
 });
