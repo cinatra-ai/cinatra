@@ -84,6 +84,12 @@ const ALLOWED_TOOLS = new Set([
   // (a `skill` read scoped by the run's resolved actor authority), so it stays
   // in the GENERIC set and NOT in RUN_SCOPED_CONTEXT_TOOLS.
   "skills_installed_resolve_for_agent",
+  // Run-scoped drafts-review PERSIST primitive (cinatra#1959) — the re-entrant
+  // drafts / follow-ups gate's post-resume `apply` node dispatches this to write
+  // the operator's reviewed per-recipient edits onto the run's own draft-bundle
+  // object. Run + declaring package + actor are derived from the run-bound frame
+  // established below; a runId/campaign in the resume payload is IGNORED.
+  "email_outreach_initial_drafts_update",
 ]);
 
 // Tools that must execute inside an mcpRequestContextStorage frame carrying the
@@ -100,6 +106,9 @@ const RUN_SCOPED_CONTEXT_TOOLS = new Set<string>([
   // context-id-bound run row's a2aTaskId) as its ledger dedupe identity.
   "email_test_delivery_run_send",
   "email_test_delivery_parse_action",
+  // #1959 — persists the reviewed drafts onto the run's own draft-bundle object;
+  // reads verifiedRunScopeId from the frame (never the caller-supplied runId).
+  "email_outreach_initial_drafts_update",
 ]);
 
 type RequestBody = {
@@ -263,6 +272,75 @@ TOOL_INPUT_SHAPERS.objects_save = (raw, agentRunId) => {
 // gate's `envelopeJson` (the ApiNode cannot pass native id arrays — wayflowcore
 // stringifies json_body templates) and projects the send fields the handler reads.
 TOOL_INPUT_SHAPERS.email_test_delivery_run_send = (raw) => shapeTestDeliverySendInput(raw);
+
+// email-outreach drafts-review persist input shaping (cinatra#1959). The
+// re-entrant gate's apply ApiNode passes the gate's `userResponse` (a JSON
+// string, string-forwarded because wayflowcore renders array/object templates
+// to Python-repr) as `resumePayloadJson`. Parse it and forward ONLY the
+// per-recipient `drafts[]` the persist primitive consumes — run scope and the
+// declaring package come from the run-bound frame, never the payload, so
+// campaignId / approvedDraftIds / editedIds are informational and dropped here.
+//
+// FAIL-CLOSED (codex #1959 finding 3): the payload may arrive WRAPPED in the
+// canonical attachment envelope (`{ text: <renderer JSON string>, attachments }`,
+// wayflow-user-response-envelope.ts) when the operator paperclipped a file — so
+// the envelope's `text` is unwrapped + re-parsed. A present-but-unparseable /
+// unrecognized payload THROWS (the shaper-throw contract → HTTP 400, the ApiNode
+// fails visibly) rather than degrading to `{ drafts: [] }` — silently discarding
+// the operator's approved edits is the exact fail-open codex flagged. An
+// intentionally-empty reviewed set (`{ drafts: [] }` in a VALID payload) is
+// preserved and passes to the primitive's benign no-op.
+function unwrapDraftsResumePayload(json: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error(
+      "email_outreach_initial_drafts_update: resumePayloadJson is not valid JSON — refusing to persist an empty edit set over the operator's approved drafts.",
+    );
+  }
+  // Unwrap the attachment envelope: the renderer's payload string is nested in `text`.
+  if (
+    parsed &&
+    typeof parsed === "object" &&
+    !Array.isArray(parsed) &&
+    typeof (parsed as Record<string, unknown>).text === "string" &&
+    Array.isArray((parsed as Record<string, unknown>).attachments)
+  ) {
+    try {
+      parsed = JSON.parse((parsed as Record<string, unknown>).text as string);
+    } catch {
+      throw new Error(
+        "email_outreach_initial_drafts_update: the wrapped resume envelope's `text` payload is not valid JSON.",
+      );
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(
+      "email_outreach_initial_drafts_update: resumePayloadJson did not resolve to a drafts-review resume payload object.",
+    );
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (obj.drafts !== undefined && !Array.isArray(obj.drafts)) {
+    throw new Error(
+      "email_outreach_initial_drafts_update: resume payload `drafts` must be an array.",
+    );
+  }
+  return obj;
+}
+
+TOOL_INPUT_SHAPERS.email_outreach_initial_drafts_update = (raw) => {
+  const json = typeof raw.resumePayloadJson === "string" ? raw.resumePayloadJson : "";
+  if (!json) {
+    // The apply node ALWAYS wires resumePayloadJson from the gate output; an
+    // absent one is a wiring fault, not an empty approval — fail visibly.
+    throw new Error(
+      "email_outreach_initial_drafts_update: resumePayloadJson is required (the gate's resume payload).",
+    );
+  }
+  const payload = unwrapDraftsResumePayload(json);
+  return { drafts: Array.isArray(payload.drafts) ? payload.drafts : [] };
+};
 
 export async function POST(req: Request): Promise<Response> {
   if (!isAuthorizedBridgeRequest(req)) {

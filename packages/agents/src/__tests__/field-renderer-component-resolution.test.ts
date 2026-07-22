@@ -148,12 +148,22 @@ describe("registration resolution", () => {
     expect(viaAlias!.renderer.displayName).toMatch(/^ExtensionFieldRenderer\(/);
   });
 
-  it("resolves to the host KIND component when the build map is empty (behavior-preserving)", () => {
-    expect(hasFieldRendererComponent(BINDING_ID)).toBe(false); // real empty map
+  it("resolves to the host KIND component when the binding is absent from the build map (behavior-preserving)", () => {
+    // cinatra#1959: BINDING_ID (the non-reviewer drafting gate) is now PRESENT in
+    // the real build map (pack-served). The reviewer `:output` gates of the same
+    // kind are DELIBERATELY absent from the map — they KEEP the host renderer
+    // (the retain-host guardrail) — so they prove the behavior-preserving
+    // unmapped-binding → host-KIND-component path against the real map.
+    const HOST_ONLY_ID = "@cinatra-ai/reviewer-agent:drafts-output";
+    expect(hasFieldRendererComponent(HOST_ONLY_ID)).toBe(false); // real map: reviewer gate keeps the host renderer
     registerFieldRendererBindings([
-      { id: BINDING_ID, kind: BINDING_KIND, priority: 80 },
+      { id: HOST_ONLY_ID, kind: BINDING_KIND, priority: 80 },
     ]);
-    const resolved = fieldRendererRegistry.resolve("f", schema, { connectedApps: [] });
+    const resolved = fieldRendererRegistry.resolve(
+      "f",
+      { "x-renderer": HOST_ONLY_ID, type: "string", title: "T" },
+      { connectedApps: [] },
+    );
     expect(resolved?.renderer).toBe(EmailDraftsReviewRenderer);
   });
 

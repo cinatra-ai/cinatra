@@ -693,6 +693,11 @@
       "line": 17
     },
     {
+      "primitiveName": "email_outreach_initial_drafts_update",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 191
+    },
+    {
       "primitiveName": "email_send",
       "file": "extensions/cinatra-ai/email-connector/src/mcp/module.ts",
       "line": 59

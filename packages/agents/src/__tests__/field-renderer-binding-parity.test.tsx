@@ -90,9 +90,14 @@ const PARITY_TABLE: ReadonlyArray<
   ["@cinatra-ai/email-recipient-selection-agent:output", CampaignRecipientsReviewRenderer as never, 80],
   ["@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review", CampaignRecipientsReviewRenderer as never, 80],
   ["campaign-recipients-review", CampaignRecipientsReviewRenderer as never, 80],
+  // The non-reviewer drafts/follow-up gate renderer COMPONENTS relocated into
+  // @cinatra-ai/email-artifacts (cinatra#1959): both agent-namespaced
+  // `:email-drafts-review` ids + the bare `email-drafts-review` alias now resolve
+  // to the ExtensionFieldRenderer wrapper (asserted in the migrated-binding block
+  // + the bare-alias test below), NOT this frozen host table. The reviewer
+  // `:output` gates (drafts-output/followups-output) + these agents' own `:output`
+  // ids carry NO component and KEEP the host renderer (the retain-host guardrail).
   ["@cinatra-ai/email-drafting-agent:output", EmailDraftsReviewRenderer as never, 80],
-  ["@cinatra-ai/email-drafting-agent:email-drafts-review", EmailDraftsReviewRenderer as never, 80],
-  ["email-drafts-review", EmailDraftsReviewRenderer as never, 80],
   ["@cinatra-ai/email-follow-up-agent:output", EmailDraftsReviewRenderer as never, 80],
   ["@cinatra-ai/reviewer-agent:contacts-output", CampaignRecipientsReviewRenderer as never, 80],
   ["@cinatra-ai/reviewer-agent:drafts-output", EmailDraftsReviewRenderer as never, 80],
@@ -181,6 +186,12 @@ describe("resolution parity with the retired hand map", () => {
     // (cinatra#1625): BOTH scoped ids load the same pack component, priority 90.
     ["@cinatra-ai/email-follow-up-agent:follow-up-cadence", 90],
     ["@cinatra-ai/email-drafting-agent:follow-up-cadence", 90],
+    // email-drafts-review non-reviewer gate renderer relocated into
+    // @cinatra-ai/email-artifacts (cinatra#1959): BOTH agent-namespaced ids load
+    // the same pack component at the pre-cutover priority 80. The reviewer
+    // `:output` gates keep the host renderer (retain-host guardrail).
+    ["@cinatra-ai/email-drafting-agent:email-drafts-review", 80],
+    ["@cinatra-ai/email-follow-up-agent:email-drafts-review", 80],
   ] as const)(
     "migrated field-renderer binding %s resolves to the extension wrapper at the pre-cutover priority",
     (id, priority) => {
@@ -251,6 +262,23 @@ describe("resolution parity with the retired hand map", () => {
     );
   });
 
+  it("migrated email-drafts-review bare alias resolves to the pack wrapper (cinatra#1959 hybrid kind)", () => {
+    // email-drafts-review is now a HYBRID kind: the non-reviewer gates are
+    // pack-served (component in the build map) while the reviewer `:output` gates
+    // KEEP the host renderer. The unscoped bare alias resolves map-first to a
+    // pack-served binding's ExtensionFieldRenderer wrapper (whichever of the two
+    // email-drafts-review bindings registered first — both load the same pack
+    // component, so the ambiguity is harmless; the same documented shared-alias
+    // caveat as follow-up-cadence). Priority 80 unchanged.
+    const entry = resolveWith("email-drafts-review");
+    expect(entry).toBeTruthy();
+    expect(entry!.priority).toBe(80);
+    const resolved = entry!.renderer as ComponentType & { displayName?: string };
+    expect(resolved.displayName).toMatch(
+      /^ExtensionFieldRenderer\(@cinatra-ai\/email-(follow-up|drafting)-agent:email-drafts-review\)$/,
+    );
+  });
+
   it("an unknown namespaced id resolves to NO custom entry (schema-fallback path)", () => {
     expect(resolveWith("@cinatra-ai/unknown-agent:whatever")).toBeNull();
   });
@@ -273,6 +301,11 @@ describe("mid-run HITL classification parity", () => {
     "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
     "@cinatra-ai/auditor-agent:review",
     "@cinatra-ai/context-selection-agent:context-selector",
+    // cinatra#1959: the pack-served re-entrant drafts / follow-ups gates carry
+    // midRunHitl:true in the merged bindings (email-artifacts declares it), so the
+    // new -review ids classify strictly (they match NO :output/-output suffix).
+    "@cinatra-ai/email-drafting-agent:email-drafts-review",
+    "@cinatra-ai/email-follow-up-agent:email-drafts-review",
   ])("manifest-flagged strict id %s classifies as mid-run", (id) => {
     expect(hasMidRunHitlBinding(id)).toBe(true);
     expect(classifyMidRunHitl(id)).toBe(true);
