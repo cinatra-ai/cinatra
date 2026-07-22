@@ -155,7 +155,7 @@
     {
       "packageName": "@cinatra-ai/email-artifacts",
       "repo": "cinatra-ai/email-artifacts",
-      "resolvedSha": "52f6afedc257d804eea8ca5b5acf78e8321fbf12"
+      "resolvedSha": "c34f0c4d12d0e6ce5f79cae2b8de4dc0d7a37b9e"
     },
     {
       "packageName": "@cinatra-ai/email-connector",
@@ -185,7 +185,7 @@
     {
       "packageName": "@cinatra-ai/email-recipient-selection-agent",
       "repo": "cinatra-ai/email-recipient-selection-agent",
-      "resolvedSha": "a73c0ce5eea27cad0e35fade97b3865663f8f85f"
+      "resolvedSha": "23fd0419c717d29422a188f220638e7a90eb63c1"
     },
     {
       "packageName": "@cinatra-ai/email-test-delivery-agent",
