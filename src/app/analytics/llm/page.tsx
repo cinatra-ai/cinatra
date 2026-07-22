@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Settings2 } from "lucide-react";
 import { requireAdminSession } from "@/lib/auth-session";
+import { Button } from "@/components/ui/button";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
@@ -28,9 +29,12 @@ export default async function MetricsCostsPage({
         title="LLM"
         description={analyticsTabDescription("costs")}
         actions={
-          <Link href="/analytics/llm/pricing" aria-label="Pricing administration">
-            <Settings2 className="h-5 w-5 text-muted-foreground hover:text-foreground transition" />
-          </Link>
+          <Button asChild variant="outline">
+            <Link href="/analytics/llm/pricing">
+              <Settings2 data-icon="inline-start" aria-hidden="true" />
+              Pricing administration
+            </Link>
+          </Button>
         }
         divider={false}
       />
