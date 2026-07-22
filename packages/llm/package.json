@@ -9,8 +9,6 @@
     ".": "./src/index.ts",
     "./actor-context": "./src/actor-context.ts",
     "./attachment-capability": "./src/attachments/capability-registry.ts",
-    "./anthropic-log-directory": "./src/anthropic-log-directory.ts",
-    "./anthropic-logging-state": "./src/anthropic-logging-state.ts",
     "./openai-model-capabilities": "./src/providers/openai-model-capabilities.ts",
     "./scripted-test-provider": "./src/scripted-test-provider.ts"
   },

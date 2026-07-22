@@ -1,15 +1,11 @@
 import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
-// The Anthropic log directory + logging setter come from dependency-free LEAF
-// subpaths of the host-owned llm package, never the heavy barrels (ESM
-// init-cycle hazard — see the history on this file). The LLM CONNECTORS'
-// log directories are no longer imported at all: each connector exposes its
-// `logDirectory` on its `llm-provider-surface` capability (lazy/guarded
-// host-access cutover), resolved at CALL time inside
+// The LLM CONNECTORS' log directories are not imported at all: each connector
+// (openai/anthropic/gemini — every adapter relocated out of packages/llm in
+// cinatra#1715) exposes its `logDirectory` on its `llm-provider-surface`
+// capability (lazy/guarded host-access cutover), resolved at CALL time inside
 // clearAllProviderLogEntries — an absent connector's directory is simply not
 // cleared (degraded), and module-init carries no connector edge.
-import { ANTHROPIC_API_LOG_DIRECTORY } from "@cinatra-ai/llm/anthropic-log-directory";
-import { setAnthropicLoggingEnabled } from "@cinatra-ai/llm/anthropic-logging-state";
 import { MCP_CLIENT_LOG_DIRECTORY, MCP_SERVER_LOG_DIRECTORY } from "@/lib/mcp-logging";
 // The wordpress/linkedin API-capture directories are CONNECTOR-owned since
 // cinatra#975 Wave 3 (the relocated clients write through the host #981
@@ -26,12 +22,13 @@ import {
   readAnthropicLoggingEnabledFromDatabase,
   ANTHROPIC_LOGGING_CONFIG_KEY,
 } from "@/lib/database";
-import { listLlmProviderSurfaces } from "@/lib/llm-provider-surfaces";
+import { getLlmProviderSurface, listLlmProviderSurfaces } from "@/lib/llm-provider-surfaces";
 
-// Host-owned log directories (static). Connector-owned directories resolve
-// from the live llm-provider surfaces at call time.
+// Host-owned log directories (static). Connector-owned directories (including
+// Anthropic's, now that its adapter+writer relocated into the anthropic
+// connector — cinatra#1715) resolve from the live llm-provider surfaces at call
+// time via `allProviderLogDirectories`.
 const HOST_LOG_DIRECTORIES = [
-  ANTHROPIC_API_LOG_DIRECTORY,
   MCP_SERVER_LOG_DIRECTORY,
   MCP_CLIENT_LOG_DIRECTORY,
 ];
@@ -49,23 +46,24 @@ function allProviderLogDirectories(): string[] {
 
 export function getAnthropicLoggingSettings() {
   return {
-    // Read from the PERSISTED authority (#1715 D2) — the same store the log
-    // writer and a connector-relocated adapter read, so the UI display never
+    // Read from the PERSISTED authority (#1715 D2) — the same store the
+    // connector-relocated adapter's log writer reads, so the UI display never
     // diverges from what the writer actually honors.
     enabled: readAnthropicLoggingEnabledFromDatabase(),
-    directory: ANTHROPIC_API_LOG_DIRECTORY,
+    // The Anthropic log directory is connector-owned post-relocation (#1715):
+    // resolve it from the live surface. Absent connector ⇒ undefined (no
+    // writer, nothing to display).
+    directory: getLlmProviderSurface("anthropic")?.logDirectory,
   };
 }
 
 export async function saveAnthropicLoggingSettings(enabled: boolean) {
-  // Authority write: persist into the connector-config store (#1715 D2). This
-  // is the value the Anthropic log writer gates on — in-tree today and, after
-  // the adapter relocates into its connector, cross-realm too.
+  // Authority write (#1715 D2): persist into the connector-config store. This
+  // is the single value the Anthropic log writer gates on — now cross-realm, in
+  // the anthropic connector. The admin write stays host-side; the connector
+  // only READS. There is no in-process module-state cache to warm anymore (the
+  // `anthropic-logging-state` leaf relocated out of packages/llm).
   writeConnectorConfigToDatabase(ANTHROPIC_LOGGING_CONFIG_KEY, { enabled });
-  // Non-authoritative in-process cache warm (module state reduced to a cache,
-  // #1715 D2). Nothing on the write-gate path reads it anymore; kept only for
-  // the back-compat `isAnthropicLoggingEnabled()`/subpath export surface.
-  setAnthropicLoggingEnabled(enabled);
 }
 
 export async function clearAllProviderLogEntries() {

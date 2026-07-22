@@ -62,7 +62,13 @@ import {
   AnthropicSkillNotSyncedError,
   AnthropicSkillCapError,
 } from "../errors";
-import { ANTHROPIC_MAX_SKILLS_PER_REQUEST } from "../providers/anthropic-skill-tools";
+
+// Anthropic's hard per-request Custom Skills maximum. Inlined here (the
+// `anthropic-skill-tools` leaf that once held it relocated into the anthropic
+// connector — cinatra#1715; the connector keeps its own copy for the provider
+// boundary). This is the value the core delivery floor uses to rank-and-cap the
+// selected skill set before it reaches any provider.
+const ANTHROPIC_MAX_SKILLS_PER_REQUEST = 8;
 
 // `SkillSelectionMode`, `SkillDeliveryResult`, and `SkillDeliveryAdapter` are
 // defined canonically in the sdk-extensions leaf

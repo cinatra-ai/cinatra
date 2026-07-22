@@ -1,112 +1,74 @@
 /**
- * Batch API surface tests.
+ * Batch API surface tests — CORE orchestration dispatch.
  *
  * Asserts that:
- *   1. The new batch types (LlmBatchRequest, LlmBatchSubmitInput,
- *      LlmBatchResult, LlmBatchStatus) are importable from
- *      `@cinatra-ai/llm`.
+ *   1. The batch types (LlmBatchRequest, LlmBatchSubmitInput, LlmBatchResult,
+ *      LlmBatchStatus) are importable from `@cinatra-ai/llm`.
  *   2. `BatchNotSupportedError` is exported, extends Error, and carries
  *      `code: "batch_not_supported"` and the provider name.
- *   3. The four orchestrate-* dispatchers (`orchestrateSubmitBatch`,
- *      `orchestrateRetrieveBatch`, `orchestrateDownloadBatchResults`,
- *      `orchestrateCancelBatch`) throw `BatchNotSupportedError` when
- *      routed to anthropic or gemini providers.
- *   4. The OpenAI provider implements all four batch methods against
- *      `client.files.create({ purpose: "batch" })`, `client.files.content`,
- *      `client.batches.create`, `client.batches.retrieve`, and
- *      `client.batches.cancel` with the documented response mapping.
+ *   3. The four orchestrate-* dispatchers throw `BatchNotSupportedError` when
+ *      the resolved adapter does NOT implement the batch method (anthropic /
+ *      gemini here).
+ *   4. When the resolved adapter DOES implement the batch methods (openai), the
+ *      orchestrators FORWARD the request to the adapter and return its result.
  *
- * Mocks the openai SDK and the @cinatra-ai/openai-connector connection
- * helper so no real API key / network call is required.
+ * Post-#1715 switch-over: adapters resolve ONLY through the connector-registered
+ * `llm-provider-adapter` surface — there is no in-core factory and no provider
+ * SDK import in core. The SDK-level batch translation (files.create /
+ * batches.create / JSONL parsing / field mapping) is the openai connector
+ * adapter's responsibility and is covered by the connector's own tests; here we
+ * pin the CORE dispatch layer against surface-supplied stub adapters.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ---------------------------------------------------------------------------
-// Mocks — stub heavy / network-bound dependencies before the entry-point
-// import below pulls in the orchestration index.ts module graph.
+// Mocks — stub the module graph ./index pulls in before the entry-point import.
 // ---------------------------------------------------------------------------
 
-const filesCreateMock = vi.fn();
-const filesContentMock = vi.fn();
-const batchesCreateMock = vi.fn();
-const batchesRetrieveMock = vi.fn();
-const batchesCancelMock = vi.fn();
-
-vi.mock("openai", () => {
-  // OpenAI client constructor returns a stub with the surface we exercise.
-  class MockOpenAI {
-    files = {
-      create: filesCreateMock,
-      content: filesContentMock,
-    };
-    batches = {
-      create: batchesCreateMock,
-      retrieve: batchesRetrieveMock,
-      cancel: batchesCancelMock,
-    };
-    // The real adapter constructor reads connection.apiKey; the mock just
-    // ignores the constructor args.
-    constructor(_config: unknown) {}
-  }
-  return { default: MockOpenAI };
+// Surface-supplied stub adapters. The openai adapter exposes the four batch
+// methods (vi.fn stubs); anthropic/gemini expose NONE, so the orchestrators
+// fail with BatchNotSupportedError.
+const h = vi.hoisted(() => {
+  const submitBatchMock = vi.fn();
+  const retrieveBatchMock = vi.fn();
+  const downloadBatchResultsMock = vi.fn();
+  const cancelBatchMock = vi.fn();
+  return {
+    submitBatchMock,
+    retrieveBatchMock,
+    downloadBatchResultsMock,
+    cancelBatchMock,
+    adaptersByProvider: {
+      openai: {
+        provider: "openai",
+        defaultModel: "gpt-4o-mini",
+        submitBatch: submitBatchMock,
+        retrieveBatch: retrieveBatchMock,
+        downloadBatchResults: downloadBatchResultsMock,
+        cancelBatch: cancelBatchMock,
+      },
+      anthropic: { provider: "anthropic", defaultModel: "claude-sonnet-4-6" },
+      gemini: { provider: "gemini", defaultModel: "gemini-2.5-flash" },
+    } as Record<string, object>,
+  };
 });
 
-// All three LLM provider surfaces (cinatra#151 Stage 2): connection
-// readers / headers / log writers resolve through the capability resolver.
-const { llmSurfaces } = vi.hoisted(() => ({
-  llmSurfaces: {
-    openai: {
-      providerId: "openai",
-      // Minimal stub so getConfiguredOpenAIConnection returns a usable shape.
-      getConfiguredConnection: async () => ({ apiKey: "sk-test", defaultModel: "gpt-4o-mini" }),
-      writeLogFile: async () => {},
-    },
-    anthropic: {
-      providerId: "anthropic",
-      getConfiguredConnection: async () => ({ apiKey: "sk-ant-test" }),
-    },
-    gemini: {
-      providerId: "gemini",
-      getConfiguredAPIKey: async () => "gem-test",
-      buildRequestHeaders: () => ({}),
-      writeLogFile: async () => {},
-    },
-  } as Record<string, object>,
-}));
 vi.mock("@/lib/llm-provider-surfaces", () => ({
-  getLlmProviderAdapterSurface: vi.fn(() => null),
-  getLlmProviderSurface: vi.fn((providerId: string) => llmSurfaces[providerId] ?? null),
-  requireLlmProviderSurface: vi.fn((providerId: string) => {
-    const surface = llmSurfaces[providerId];
-    if (!surface) {
-      throw new Error(`The "${providerId}" LLM provider connector is not installed/active`);
-    }
-    return surface;
+  getLlmProviderAdapterSurface: vi.fn((providerId: string) => {
+    const adapter = h.adaptersByProvider[providerId];
+    return adapter
+      ? { abiVersion: 1 as const, providerId, createAdapter: async () => adapter }
+      : null;
   }),
-  listLlmProviderSurfaces: vi.fn(() => Object.values(llmSurfaces)),
+  getLlmProviderSurface: vi.fn(() => null),
+  requireLlmProviderSurface: vi.fn((providerId: string) => {
+    throw new Error(`The "${providerId}" LLM provider connector is not installed/active`);
+  }),
+  listLlmProviderSurfaces: vi.fn(() => []),
 }));
 
-// Stub Anthropic + Gemini client modules so importing their providers does
-// not require real SDK boot for this test file.
-vi.mock("@anthropic-ai/sdk", () => {
-  class MockAnthropic {
-    constructor(_config: unknown) {}
-    beta = { messages: { create: vi.fn() }, files: { upload: vi.fn(), delete: vi.fn() } };
-    messages = { create: vi.fn() };
-    models = { list: vi.fn() };
-  }
-  return { default: MockAnthropic };
-});
-vi.mock("@google/genai", () => {
-  class MockGoogleGenAI {
-    constructor(_config: unknown) {}
-    files = { upload: vi.fn(), delete: vi.fn() };
-    models = { list: vi.fn(), generateContent: vi.fn(), generateContentStream: vi.fn() };
-  }
-  return { GoogleGenAI: MockGoogleGenAI };
-});
 // MCP-related stubs — mirror entry-point-actor-context.test.ts so importing
-// ./index does not pull DB / Nango calls.
+// ./index does not pull DB / Nango calls at module load.
 vi.mock("../mcp-access", () => ({
   buildLlmMcpServerTool: vi.fn(async () => null),
   buildExternalMcpServerTools: vi.fn(async () => []),
@@ -137,22 +99,15 @@ vi.mock("../tools/skills", () => ({
   buildMcpTools: vi.fn(),
 }));
 
-// Bypass the fail-closed actor-context gate. The batch entry points wrap
-// their bodies the same way generate does; we don't want every
-// test to have to set up an ALS frame just to verify dispatch.
+// Bypass the fail-closed actor-context gate — the batch entry points wrap their
+// bodies the same way generate does; we only verify dispatch here.
 beforeEach(() => {
   process.env.CINATRA_REQUIRE_ACTOR_CONTEXT = "false";
-  filesCreateMock.mockReset();
-  filesContentMock.mockReset();
-  batchesCreateMock.mockReset();
-  batchesRetrieveMock.mockReset();
-  batchesCancelMock.mockReset();
+  h.submitBatchMock.mockReset();
+  h.retrieveBatchMock.mockReset();
+  h.downloadBatchResultsMock.mockReset();
+  h.cancelBatchMock.mockReset();
 });
-
-// ---------------------------------------------------------------------------
-// Imports under test — pulled in lazily inside each test so the mocks above
-// are guaranteed to be applied first.
-// ---------------------------------------------------------------------------
 
 import {
   BatchNotSupportedError,
@@ -169,10 +124,10 @@ import type {
 } from "../index";
 
 // ---------------------------------------------------------------------------
-// Test 1 — TYPES: importing the new types compiles.
+// Test 1 — TYPES: importing the new types compiles + the dispatchers are wired.
 // ---------------------------------------------------------------------------
 describe("batch types", () => {
-  it("Test 1 (TYPES): LlmBatchRequest / LlmBatchSubmitInput / LlmBatchResult / LlmBatchStatus are importable", () => {
+  it("Test 1 (TYPES): batch types are importable + the four orchestrate-* dispatchers are exported", () => {
     const req: LlmBatchRequest = {
       customId: "abc",
       body: { model: "gpt-4o-mini", messages: [] },
@@ -188,12 +143,8 @@ describe("batch types", () => {
       completedAt: null,
       errorMessage: null,
     };
-    // The types-only assertions above already exercise the shape; this
-    // expect-call is here so vitest counts it as a passing assertion.
     expect(input.requests[0]?.customId).toBe("abc");
     expect(result.batchId).toBe("batch_x");
-    // Runtime gate: confirm the four orchestrate-* dispatchers are wired
-    // up as named exports. RED phase: these are undefined → fails.
     expect(typeof orchestrateSubmitBatch).toBe("function");
     expect(typeof orchestrateRetrieveBatch).toBe("function");
     expect(typeof orchestrateDownloadBatchResults).toBe("function");
@@ -214,25 +165,19 @@ describe("BatchNotSupportedError", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 3-6 — provider stubs throw BatchNotSupportedError.
+// Test 3-6 — an adapter that does NOT implement batch throws BatchNotSupported.
 // ---------------------------------------------------------------------------
-describe("batch dispatch — anthropic + gemini stubs", () => {
+describe("batch dispatch — adapters without batch support (anthropic + gemini)", () => {
   it("Test 3 (ANTHROPIC SUBMIT): orchestrateSubmitBatch({ provider: 'anthropic' }) throws BatchNotSupportedError", async () => {
     await expect(
       orchestrateSubmitBatch({ provider: "anthropic", requests: [] }),
-    ).rejects.toMatchObject({
-      code: "batch_not_supported",
-      provider: "anthropic",
-    });
+    ).rejects.toMatchObject({ code: "batch_not_supported", provider: "anthropic" });
   });
 
   it("Test 4 (GEMINI SUBMIT): orchestrateSubmitBatch({ provider: 'gemini' }) throws BatchNotSupportedError", async () => {
     await expect(
       orchestrateSubmitBatch({ provider: "gemini", requests: [] }),
-    ).rejects.toMatchObject({
-      code: "batch_not_supported",
-      provider: "gemini",
-    });
+    ).rejects.toMatchObject({ code: "batch_not_supported", provider: "gemini" });
   });
 
   it("Test 5 (ANTHROPIC RETRIEVE/DOWNLOAD/CANCEL): all three throw BatchNotSupportedError", async () => {
@@ -261,73 +206,27 @@ describe("batch dispatch — anthropic + gemini stubs", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 7 — OpenAI submitBatch shape.
+// Test 7-10 — the orchestrators FORWARD to the resolved adapter's batch methods
+// and return the adapter's result (the SDK-level translation lives in the
+// openai connector, not core).
 // ---------------------------------------------------------------------------
-describe("OpenAI batch implementation", () => {
-  it("Test 7 (OPENAI SUBMIT): uploads JSONL via files.create + creates batch via batches.create", async () => {
-    filesCreateMock.mockResolvedValue({ id: "file_input_xyz" });
-    batchesCreateMock.mockResolvedValue({
-      id: "batch_abc",
-      status: "validating",
-      input_file_id: "file_input_xyz",
-    });
+describe("batch dispatch — forwards to the resolved openai adapter", () => {
+  it("Test 7 (OPENAI SUBMIT): forwards { requests } to adapter.submitBatch and returns its result", async () => {
+    const adapterResult = { batchId: "batch_abc", inputFileId: "file_input_xyz", status: "validating" };
+    h.submitBatchMock.mockResolvedValue(adapterResult);
 
-    const result = await orchestrateSubmitBatch({
-      provider: "openai",
-      requests: [
-        {
-          customId: "abc",
-          body: {
-            model: "gpt-4o-mini",
-            messages: [{ role: "user", content: "hi" }],
-            response_format: { type: "json_object" },
-            max_tokens: 200,
-          },
-        },
-      ],
-    });
+    const requests = [
+      { customId: "abc", body: { model: "gpt-4o-mini", messages: [{ role: "user", content: "hi" }] } },
+    ];
+    const result = await orchestrateSubmitBatch({ provider: "openai", requests });
 
-    expect(filesCreateMock).toHaveBeenCalledTimes(1);
-    const filesArgs = filesCreateMock.mock.calls[0]?.[0] as { purpose: string };
-    expect(filesArgs.purpose).toBe("batch");
-
-    expect(batchesCreateMock).toHaveBeenCalledTimes(1);
-    const batchArgs = batchesCreateMock.mock.calls[0]?.[0] as {
-      input_file_id: string;
-      endpoint: string;
-      completion_window: string;
-    };
-    expect(batchArgs.input_file_id).toBe("file_input_xyz");
-    expect(batchArgs.endpoint).toBe("/v1/chat/completions");
-    expect(batchArgs.completion_window).toBe("24h");
-
-    expect(result).toEqual({
-      batchId: "batch_abc",
-      inputFileId: "file_input_xyz",
-      status: "validating",
-    });
+    expect(h.submitBatchMock).toHaveBeenCalledTimes(1);
+    expect(h.submitBatchMock).toHaveBeenCalledWith({ requests });
+    expect(result).toBe(adapterResult);
   });
 
-  // -------------------------------------------------------------------------
-  // Test 8 — OpenAI retrieveBatch shape.
-  // -------------------------------------------------------------------------
-  it("Test 8 (OPENAI RETRIEVE): maps SDK fields to LlmBatchResult shape", async () => {
-    batchesRetrieveMock.mockResolvedValue({
-      id: "batch_abc",
-      status: "completed",
-      input_file_id: "file_in",
-      output_file_id: "file_out",
-      error_file_id: null,
-      completed_at: 1700000000, // unix seconds
-      errors: null,
-    });
-
-    const result = await orchestrateRetrieveBatch({
-      provider: "openai",
-      batchId: "batch_abc",
-    });
-
-    expect(result).toEqual({
+  it("Test 8 (OPENAI RETRIEVE): forwards batchId to adapter.retrieveBatch and returns its result", async () => {
+    const adapterResult = {
       batchId: "batch_abc",
       status: "completed",
       inputFileId: "file_in",
@@ -335,62 +234,35 @@ describe("OpenAI batch implementation", () => {
       errorFileId: null,
       completedAt: new Date(1700000000 * 1000).toISOString(),
       errorMessage: null,
-    });
+    };
+    h.retrieveBatchMock.mockResolvedValue(adapterResult);
+
+    const result = await orchestrateRetrieveBatch({ provider: "openai", batchId: "batch_abc" });
+
+    expect(h.retrieveBatchMock).toHaveBeenCalledWith("batch_abc");
+    expect(result).toBe(adapterResult);
   });
 
-  // -------------------------------------------------------------------------
-  // Test 9 — OpenAI downloadBatchResults parses JSONL.
-  // -------------------------------------------------------------------------
-  it("Test 9 (OPENAI DOWNLOAD): parses two JSONL lines into LlmBatchOutputLine[]", async () => {
-    const jsonl = [
-      JSON.stringify({
-        custom_id: "row-1",
-        response: { status_code: 200, body: { ok: true, value: 1 } },
-      }),
-      JSON.stringify({
-        custom_id: "row-2",
-        error: { code: "invalid_request", message: "bad input" },
-      }),
-    ].join("\n");
+  it("Test 9 (OPENAI DOWNLOAD): forwards fileId to adapter.downloadBatchResults and returns its result", async () => {
+    const lines = [
+      { customId: "row-1", response: { status_code: 200, body: { ok: true, value: 1 } }, error: null },
+      { customId: "row-2", response: null, error: { code: "invalid_request", message: "bad input" } },
+    ];
+    h.downloadBatchResultsMock.mockResolvedValue(lines);
 
-    filesContentMock.mockResolvedValue({
-      text: async () => jsonl,
-    });
+    const result = await orchestrateDownloadBatchResults({ provider: "openai", fileId: "file_xyz" });
 
-    const result = await orchestrateDownloadBatchResults({
-      provider: "openai",
-      fileId: "file_xyz",
-    });
-
-    expect(filesContentMock).toHaveBeenCalledWith("file_xyz");
-    expect(result).toHaveLength(2);
-    expect(result[0]).toEqual({
-      customId: "row-1",
-      response: { status_code: 200, body: { ok: true, value: 1 } },
-      error: null,
-    });
-    expect(result[1]).toEqual({
-      customId: "row-2",
-      response: null,
-      error: { code: "invalid_request", message: "bad input" },
-    });
+    expect(h.downloadBatchResultsMock).toHaveBeenCalledWith("file_xyz");
+    expect(result).toBe(lines);
   });
 
-  // -------------------------------------------------------------------------
-  // Test 10 — OpenAI cancelBatch shape.
-  // -------------------------------------------------------------------------
-  it("Test 10 (OPENAI CANCEL): returns { batchId, status }", async () => {
-    batchesCancelMock.mockResolvedValue({
-      id: "batch_abc",
-      status: "cancelling",
-    });
+  it("Test 10 (OPENAI CANCEL): forwards batchId to adapter.cancelBatch and returns its result", async () => {
+    const adapterResult = { batchId: "batch_abc", status: "cancelling" };
+    h.cancelBatchMock.mockResolvedValue(adapterResult);
 
-    const result = await orchestrateCancelBatch({
-      provider: "openai",
-      batchId: "batch_abc",
-    });
+    const result = await orchestrateCancelBatch({ provider: "openai", batchId: "batch_abc" });
 
-    expect(batchesCancelMock).toHaveBeenCalledWith("batch_abc");
-    expect(result).toEqual({ batchId: "batch_abc", status: "cancelling" });
+    expect(h.cancelBatchMock).toHaveBeenCalledWith("batch_abc");
+    expect(result).toBe(adapterResult);
   });
 });

@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
-import { getAnthropicLoggingSettings } from "@/lib/logging";
 // LLM-connector logging settings resolve through the `llm-provider-surface`
 // capability each connector registers at activation (lazy/guarded host-access
-// cutover). An absent connector's row is simply omitted (degraded).
+// cutover). An absent connector's row is simply omitted (degraded). Anthropic
+// joined this surface-sourced set once its adapter+writer relocated into the
+// anthropic connector (cinatra#1715) — the same posture as openai/gemini.
 import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 // The wordpress/linkedin logging settings resolve the CONNECTOR-owned
 // relocated clients lazily (cinatra#975 Wave 3 — the vendor clients are gone
@@ -35,7 +36,7 @@ export default async function SettingsTelemetryPage({ searchParams }: Props) {
   const resolved = (await (searchParams ?? Promise.resolve({}))) as Record<string, string | string[] | undefined>;
   const tab = (Array.isArray(resolved.tab) ? resolved.tab[0] : resolved.tab) ?? "logs";
 
-  const anthropic = getAnthropicLoggingSettings();
+  const anthropic = getLlmProviderSurface("anthropic")?.getLoggingSettings?.() ?? null;
   const apollo = getLlmProviderSurface("apollo")?.getLoggingSettings?.() ?? null;
   const gemini = getLlmProviderSurface("gemini")?.getLoggingSettings?.() ?? null;
   const openAI = getLlmProviderSurface("openai")?.getLoggingSettings?.() ?? null;
@@ -112,13 +113,15 @@ export default async function SettingsTelemetryPage({ searchParams }: Props) {
                       directory: openAI.directory,
                     }]
                   : []),
-                {
-                  id: "anthropic",
-                  label: "Anthropic API",
-                  description: "Persist Anthropic request and response payloads for Claude model calls.",
-                  enabled: anthropic.enabled,
-                  directory: anthropic.directory,
-                },
+                ...(anthropic
+                  ? [{
+                      id: "anthropic" as const,
+                      label: "Anthropic API",
+                      description: "Persist Anthropic request and response payloads for Claude model calls.",
+                      enabled: anthropic.enabled,
+                      directory: anthropic.directory,
+                    }]
+                  : []),
                 ...(wordpress
                   ? [{
                       id: "wordpress" as const,
