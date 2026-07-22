@@ -25,13 +25,19 @@ import {
   type ParsedRenderableView,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
-import { ContentChangeProposalCard } from "./content-change-proposal-card";
+import { ContentChangeProposalCard, type ApplyIntentRef } from "./content-change-proposal-card";
 import { ArtifactPreviewCard } from "./artifact-preview-card";
 import { CitationGroupCard } from "./citation-group-card";
 import { ChangeHistoryCard } from "./change-history-card";
 
 type ComponentFor<K extends KnownRenderableViewType> = (props: {
   view: Extract<ParsedRenderableView, { viewType: K }>;
+  // §6e (cinatra#1221 S5 Lane B): the apply-intent gesture seam, passed OPAQUELY
+  // to every dispatched card (dispatch stays identity-agnostic — core never
+  // branches on a view-type identity). Only the apply-eligible card reads it; the
+  // display-only cards accept-and-ignore it (structurally assignable). This keeps
+  // the artifact-ui presentation-identity-keying boundary intact.
+  onApplyIntent?: (ref: ApplyIntentRef) => void;
 }) => ReactElement;
 
 /** Component per registered `viewType`. Keys MUST match the schema registry. */
@@ -70,7 +76,18 @@ export function RenderableViewFallback({
  * Render a renderable-view `DATA_PART` payload. Pass the raw `data` off the
  * wire; validation + sanitization + dispatch happen here.
  */
-export function RenderableViewCard({ data }: { data: unknown }): ReactElement {
+export function RenderableViewCard({
+  data,
+  onApplyIntent,
+}: {
+  data: unknown;
+  /** §6e (cinatra#1221 S5 Lane B): injected ONLY by a surface that owns an apply
+   *  flow (the embed). Wired to the `content_change_proposal` card — the ONLY
+   *  apply-eligible view — so its explicit apply gesture emits the intent. Card
+   *  DISPATCH stays definitional (unchanged) — this is an orthogonal gesture
+   *  seam, not a host-injected renderer. Absent → every card is DISPLAY-ONLY. */
+  onApplyIntent?: (ref: ApplyIntentRef) => void;
+}): ReactElement {
   const parsed = parseRenderableView(data);
   if (parsed === null) {
     let rawViewType: string | undefined;
@@ -83,8 +100,11 @@ export function RenderableViewCard({ data }: { data: unknown }): ReactElement {
   }
   // `parsed.viewType` is a KnownRenderableViewType; index the component map.
   const key = parsed.viewType as KnownRenderableViewType;
+  // §6e: pass the apply-intent seam OPAQUELY through the SAME dispatch — no
+  // identity branch. Only the apply-eligible card acts on it; the others ignore
+  // it (accept-and-ignore, structurally assignable).
   const Component = RENDERABLE_VIEW_COMPONENTS[key] as ComponentFor<typeof key>;
-  return <Component view={parsed as never} />;
+  return <Component view={parsed as never} onApplyIntent={onApplyIntent} />;
 }
 
 export { RENDERABLE_VIEW_COMPONENTS };

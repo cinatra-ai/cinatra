@@ -102,7 +102,7 @@ describe("campaign-action degraded modes (R6)", () => {
   // surface at INVOCATION time. Import the module once here (it is heavy);
   // each wrapper is exercised against an empty registry (absent connector)
   // and a registered one (FormData passthrough + result propagation).
-  it("openai save/clear/skills wrappers throw the descriptive degraded error when the connector is absent", async () => {
+  it("openai save/clear wrappers throw the descriptive degraded error when the connector is absent", async () => {
     const actions = await import("@/app/campaigns/actions");
     await expect(actions.saveOpenAIConnectionAction(new FormData())).rejects.toThrow(
       /openai.*not installed\/active/i,
@@ -110,9 +110,13 @@ describe("campaign-action degraded modes (R6)", () => {
     await expect(actions.clearOpenAIConnectionAction()).rejects.toThrow(
       /openai.*not installed\/active/i,
     );
-    await expect(actions.saveOpenAISkillsSettingsAction(new FormData())).rejects.toThrow(
-      /openai.*not installed\/active/i,
-    );
+    // The openai skills-settings wrapper was REMOVED with the connector's
+    // saveSkillsSettings action (openai-connector 0.1.9, cinatra#1715): skills
+    // administration moved connector-side. Assert the host no longer exports it
+    // (pins the removal — an ungated re-export would fail this).
+    expect(
+      (actions as Record<string, unknown>).saveOpenAISkillsSettingsAction,
+    ).toBeUndefined();
   });
 
   it("openai save wrapper passes the FormData through to the connector action impl", async () => {

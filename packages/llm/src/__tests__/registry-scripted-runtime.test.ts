@@ -30,15 +30,6 @@ vi.mock("@/lib/external-mcp-toolbox-loader.server", () => ({
   loadExternalMcpToolboxBySlug: vi.fn(async () => null),
   loadExternalMcpToolboxByServerId: vi.fn(async () => null),
 }));
-vi.mock("../providers/openai", () => ({
-  createOpenAIProviderAdapter: vi.fn(),
-  getConfiguredOpenAIConnection: vi.fn(async () => null),
-}));
-vi.mock("../providers/anthropic", () => ({ createAnthropicProviderAdapter: vi.fn() }));
-vi.mock("../providers/gemini", () => ({
-  createGeminiProviderAdapter: vi.fn(),
-  getConfiguredGeminiConnection: vi.fn(async () => null),
-}));
 vi.mock("../mcp-access", () => ({
   buildLlmMcpServerTool: vi.fn(),
   buildExternalMcpServerTools: vi.fn(),

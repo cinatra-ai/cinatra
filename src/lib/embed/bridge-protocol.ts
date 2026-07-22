@@ -363,3 +363,133 @@ export function createSingleUseGate(): { consume(): boolean; readonly used: bool
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// (§12b) PORT-BOUND TRANSPORT — defense-in-depth over WindowProxy source gating.
+//
+// The residual the §12 transport narrows but cannot eliminate: `event.source`
+// is a WindowProxy — a live handle to a browsing CONTEXT, not to a specific
+// DOCUMENT. If a same-Cinatra-origin document replaced the iframe's document
+// within the same browsing context, a parent that relayed the token-bearing
+// BOOTSTRAP with `iframe.contentWindow.postMessage(...)` would deliver the
+// `cit_`/`cwu_` tokens to the REPLACEMENT document — `event.source ===
+// expectedWindow` still holds across a same-origin navigation, and origin gating
+// cannot distinguish two documents on the same origin.
+//
+// The fix (issue #1965): the IFRAME creates a `MessageChannel` and transfers ONE
+// endpoint in the token-free, origin/source-gated READY. Because that READY is
+// posted with an EXPLICIT target origin (never "*"), ONLY a document at the
+// expected parent origin can receive the transferred port — origin gating is
+// preserved AT TRANSFER TIME. The parent then sends the token-bearing BOOTSTRAP
+// ONLY over that retained port, never via `window.postMessage`. The retained
+// endpoint is owned by the REALM that ran the handshake; a later same-origin
+// replacement of the context is a FRESH realm that never inherits it, so it can
+// never receive the bootstrap or subsequent port-bound traffic.
+//
+// The two functions below are the PURE (DOM-free, tier-neutral) parent-side
+// transport primitives — the SINGLE SOURCE OF TRUTH the two CMS widgets
+// (wordpress-plugin, drupal-module) mirror for their parent bridge. The BOOTSTRAP
+// body is byte-identical across transports (protocolVersion 1), so a migrated
+// parent interoperates with the merged schema during the negotiated transition.
+// ---------------------------------------------------------------------------
+
+/**
+ * Structural handle for a window/WindowProxy postMessage sink — it REQUIRES an
+ * explicit target origin (never "*"). Kept structural so this module stays
+ * tier-neutral (no DOM lib): the caller passes `iframe.contentWindow`.
+ */
+export interface WindowPostTarget {
+  postMessage(message: unknown, targetOrigin: string): void;
+}
+
+/**
+ * Structural handle for an entangled `MessageChannel` endpoint. A port needs NO
+ * target origin — the origin-targeted READY transfer that delivered it is the
+ * binding; the caller passes the port from the READY's `event.ports`.
+ */
+export interface PortPostTarget {
+  postMessage(message: unknown): void;
+}
+
+/** The transport the PARENT uses for the ONE token-bearing BOOTSTRAP (§12b). */
+export type ParentBootstrapTransport =
+  | { readonly mode: "port"; readonly port: PortPostTarget }
+  | {
+      readonly mode: "legacy";
+      readonly window: WindowPostTarget;
+      readonly targetOrigin: string;
+    };
+
+export type ParentTransportDecision =
+  | { ok: true; transport: ParentBootstrapTransport }
+  | { ok: false; reason: "no_port_available" };
+
+/**
+ * (§12b) PARENT-side transport selection. Given the ports the iframe transferred
+ * on the ALREADY-GATED READY (origin + source-window + schema, checked by the
+ * caller with `originMatchesExpected`/`sourceMatchesExpected`/`embedReadySchema`)
+ * and the legacy WindowProxy fallback, choose the transport for the token-bearing
+ * BOOTSTRAP — fail-closed and downgrade-resistant:
+ *   - a transferred port is present    -> PORT MODE (the tokens ride ONLY the
+ *     entangled port; a same-origin replacement of the iframe cannot receive it);
+ *   - no port AND `requirePort`        -> FAIL CLOSED (`no_port_available`): the
+ *     legacy transport can NOT be selected merely by omitting/stripping the
+ *     transferred port, and the caller sends NOTHING (no `cit_`/`cwu_` ever
+ *     leaves via `window.postMessage`);
+ *   - no port AND legacy allowed       -> LEGACY MODE: the pre-migration
+ *     origin-pinned window transport, for an UNMIGRATED iframe during the
+ *     negotiated transition.
+ *
+ * Bind this to the frame's single-use nonce gate on the parent side
+ * (`createSingleUseGate`): a second READY on a burned nonce is ignored, so a
+ * replacement document cannot re-open the handshake to force a downgrade. PURE:
+ * the caller passes the opaque transferred ports + the legacy window; no DOM
+ * assumption, fully unit-testable.
+ */
+export function selectParentBootstrapTransport(input: {
+  transferredPorts: ReadonlyArray<PortPostTarget> | null | undefined;
+  legacyWindow: WindowPostTarget;
+  legacyTargetOrigin: string;
+  requirePort: boolean;
+}): ParentTransportDecision {
+  const port = input.transferredPorts != null ? input.transferredPorts[0] : undefined;
+  if (port != null) {
+    return { ok: true, transport: { mode: "port", port } };
+  }
+  if (input.requirePort) {
+    return { ok: false, reason: "no_port_available" };
+  }
+  return {
+    ok: true,
+    transport: {
+      mode: "legacy",
+      window: input.legacyWindow,
+      targetOrigin: input.legacyTargetOrigin,
+    },
+  };
+}
+
+/**
+ * (§12b) Send the token-bearing BOOTSTRAP over the SELECTED transport. In PORT
+ * MODE the bootstrap rides ONLY the entangled port — this function NEVER calls a
+ * window `postMessage` in port mode. That is the structural guarantee the
+ * acceptance regression asserts: no token-bearing message is ever sent via a
+ * window-targeted `postMessage`; the bootstrap rides only the port the
+ * pre-navigation realm established. In LEGACY MODE it posts to the origin-pinned
+ * WindowProxy, never "*": a wildcard/empty legacy target origin FAILS CLOSED
+ * (the token-bearing bootstrap is dropped, never broadcast cross-origin) so the
+ * "never '*'" invariant is enforced HERE, in the reference the widgets mirror,
+ * not left to the caller.
+ */
+export function sendBootstrapOverTransport(
+  transport: ParentBootstrapTransport,
+  bootstrap: EmbedBootstrap,
+): void {
+  if (transport.mode === "port") {
+    transport.port.postMessage(bootstrap);
+    return;
+  }
+  // §6a: a token-bearing message is NEVER broadcast to a wildcard/empty origin.
+  if (!transport.targetOrigin || transport.targetOrigin === "*") return;
+  transport.window.postMessage(bootstrap, transport.targetOrigin);
+}

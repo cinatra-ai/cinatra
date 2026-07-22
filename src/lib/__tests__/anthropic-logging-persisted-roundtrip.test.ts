@@ -28,21 +28,17 @@ vi.mock("@/lib/database", () => ({
   }),
 }));
 
-// The setter is the non-authoritative in-process cache; spy on it to prove the
-// save path still warms it without it being the authority.
-const setSpy = vi.hoisted(() => vi.fn());
-vi.mock("@cinatra-ai/llm/anthropic-logging-state", () => ({
-  setAnthropicLoggingEnabled: setSpy,
-}));
-
 // Heavy siblings logging.ts imports at module scope (only used by
-// clearAllProviderLogEntries, which these tests do not exercise).
+// clearAllProviderLogEntries, which these tests do not exercise). The anthropic
+// log DIRECTORY is now resolved from the connector surface (#1715); absent here
+// ⇒ undefined, which these enabled-flag tests do not assert on.
 vi.mock("@/lib/connector-client-providers", () => ({
   resolveLinkedInConnectionClient: vi.fn(() => null),
   resolveWordPressInstanceAdmin: vi.fn(() => null),
 }));
 vi.mock("@/lib/llm-provider-surfaces", () => ({
   listLlmProviderSurfaces: vi.fn(() => []),
+  getLlmProviderSurface: vi.fn(() => null),
 }));
 vi.mock("@/lib/mcp-logging", () => ({
   MCP_CLIENT_LOG_DIRECTORY: "/tmp/mcp-client",
@@ -53,7 +49,6 @@ import { saveAnthropicLoggingSettings, getAnthropicLoggingSettings } from "../lo
 
 beforeEach(() => {
   h.store.clear();
-  setSpy.mockClear();
 });
 
 describe("saveAnthropicLoggingSettings ↔ persisted authority round-trip (#1715 D2)", () => {
@@ -63,10 +58,11 @@ describe("saveAnthropicLoggingSettings ↔ persisted authority round-trip (#1715
 
   it("round-trips a disable through the persisted store", async () => {
     await saveAnthropicLoggingSettings(false);
+    // The persisted connector-config store is the SOLE authority (#1715): no
+    // in-process module-state cache is warmed anymore (the `anthropic-logging-
+    // state` leaf relocated out of packages/llm).
     expect(h.store.get(KEY)).toEqual({ enabled: false });
     expect(getAnthropicLoggingSettings().enabled).toBe(false);
-    // Cache warm still happens (non-authoritative).
-    expect(setSpy).toHaveBeenCalledWith(false);
   });
 
   it("round-trips a re-enable through the persisted store", async () => {
@@ -74,6 +70,5 @@ describe("saveAnthropicLoggingSettings ↔ persisted authority round-trip (#1715
     await saveAnthropicLoggingSettings(true);
     expect(h.store.get(KEY)).toEqual({ enabled: true });
     expect(getAnthropicLoggingSettings().enabled).toBe(true);
-    expect(setSpy).toHaveBeenLastCalledWith(true);
   });
 });

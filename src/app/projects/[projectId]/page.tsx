@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { format } from "date-fns";
 import { eq, sql } from "drizzle-orm";
+import { Settings } from "lucide-react";
 
 import * as authSession from "@/lib/auth-session";
 const { requireAuthSession } = authSession;
@@ -30,19 +32,15 @@ import type { DashboardEntityRef } from "@cinatra-ai/dashboards/entity-identity"
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
+import { Button } from "@/components/ui/button";
 import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
 import type { PortletInstanceProp } from "@/components/dashboards/portlet-host";
 
-import { ProjectDetailTabs } from "./project-detail-tabs";
-import type { ProjectDashboardsTabProps } from "./project-dashboards-tab";
-import type { ProjectPermissionsTabClientProps } from "./permissions/permissions-tab-client";
 import {
-  readProjectOwnerViews,
-  listProjectAccessAction,
-  type ProjectAccessRow,
-} from "./permissions/actions";
-import { listGuestRows, type GuestRow } from "./permissions/guest-actions";
+  ProjectDashboardsTab,
+  type ProjectDashboardsTabProps,
+} from "./project-dashboards-tab";
 
 // Gate-repeating metadata (cinatra#1737, the dashboards pattern): the tab
 // title repeats the page's read gate before disclosing the project name; any
@@ -88,27 +86,27 @@ type Props = {
 };
 
 // ---------------------------------------------------------------------------
-// `/projects/[projectId]` detail page (cinatra#706).
+// `/projects/[projectId]` detail page (cinatra#706, tabless since #1733).
 //
 // Project is NEVER an ownership tier — there is no promotion path between
-// tiers. Access is N:M via `project_access`. The detail page is a TABBED
-// Dashboards surface:
-//   1. PageHeader with ScopeBadge for owner level + an Archived badge when
-//      `projects.archived_at IS NOT NULL`.
-//   2. A "Dashboards" tab — the reusable entity Dashboards shell (#701) whose
-//      non-removable "Overview" default renders this project's CURRENT info as
-//      render-only portlets (#702): metadata (name / slug / id / owner /
-//      organization / visibility / created / description) + sealed-room counts
-//      (objects, agent runs, chat threads). Counts read directly from the same
-//      physical columns the sealed-room list handlers query
-//      (`*.project_id = $projectId`), so the numbers match what the sealed room
-//      exposes through its tooling.
-//   3. A "Permissions" tab — today's project permissions content (ownership,
-//      N:M project-access grants, and — for admins — external guest grants;
-//      the folded-in Guests section is the former project Customers surface).
+// tiers. Access is N:M via `project_access`. The detail page is a Dashboards
+// surface:
+//   1. PageHeader with ScopeBadge for owner level, an Archived badge when
+//      `projects.archived_at IS NOT NULL`, and a "Project settings" button —
+//      management (ownership, access grants, guest grants) lives on
+//      `/projects/[projectId]/settings` (#1733, the #1693 teams ruling: one
+//      settings surface, no Permissions tab).
+//   2. The reusable entity Dashboards shell (#701) whose non-removable
+//      "Overview" default renders this project's CURRENT info as render-only
+//      portlets (#702): metadata (name / slug / id / owner / organization /
+//      visibility / created / description) + sealed-room counts (objects,
+//      agent runs, chat threads). Counts read directly from the same physical
+//      columns the sealed-room list handlers query
+//      (`*.project_id = $projectId`), so the numbers match what the sealed
+//      room exposes through its tooling.
 //
 // The legacy /customers and /agents routes + their nav buttons were removed in
-// the #707 cleanup slice (customers folded into the Permissions Guests section
+// the #707 cleanup slice (customers folded into the permissions Guests section
 // in #1640; /customers 404s with no redirect).
 // ---------------------------------------------------------------------------
 
@@ -158,7 +156,6 @@ export default async function ProjectDetailPage({ params }: Props) {
   // resource envelope is sufficient.
   const actor = actorFromSession(session);
   const userId = actor.userId!;
-  const orgId = actor.organizationId ?? null;
   const coOwners = await readProjectCoOwners(project.id);
   try {
     await enforceResourceAccess(
@@ -307,58 +304,6 @@ export default async function ProjectDetailPage({ params }: Props) {
     dashboardsInitial = undefined;
   }
 
-  // ── Permissions tab wiring (today's /permissions content) ────────────────
-  let owner: Awaited<ReturnType<typeof readProjectOwnerViews>>["owner"] = null;
-  let coOwnerViews: Awaited<ReturnType<typeof readProjectOwnerViews>>["coOwners"] = [];
-  try {
-    const views = await readProjectOwnerViews(
-      project.ownerId,
-      coOwners.map((c) => c.userId),
-    );
-    owner = views.owner;
-    coOwnerViews = views.coOwners;
-  } catch {
-    owner = null;
-    coOwnerViews = [];
-  }
-
-  // Platform-admin probe drives `canEdit`. Defensive — `isPlatformAdmin` may be
-  // unavailable in unit-test mocks of `@/lib/auth-session`; treat any throw /
-  // absence as "not admin". Owner short-circuit also grants edit.
-  let isAdmin = false;
-  try {
-    const fn = (authSession as unknown as { isPlatformAdmin?: (s: unknown) => boolean })
-      .isPlatformAdmin;
-    isAdmin = typeof fn === "function" ? fn(session) : false;
-  } catch {
-    isAdmin = false;
-  }
-  const canEdit = isAdmin || project.ownerId === userId;
-
-  // Current project_access grants; degrade to empty so the tab stays renderable.
-  let projectAccessRows: ProjectAccessRow[] = [];
-  const accessResult = await listProjectAccessAction(project.id);
-  if (accessResult.ok) projectAccessRows = accessResult.items;
-
-  // Guest rows are ADMIN-ONLY (guest emails are never shown to read-only
-  // members): loaded only under canEdit — listGuestRows re-asserts server-side.
-  let guestRows: GuestRow[] = [];
-  if (canEdit) {
-    guestRows = await listGuestRows(project.id).catch(() => []);
-  }
-
-  const permissions: ProjectPermissionsTabClientProps = {
-    activeOrgId: orgId,
-    projectId: project.id,
-    projectName: project.name,
-    canEdit,
-    resourceOwner: owner,
-    coOwners: coOwnerViews,
-    currentUserId: userId,
-    projectAccessRows,
-    guestRows,
-  };
-
   return (
     <Main className="min-h-screen">
       {/* Post-gate crumb publisher (cinatra#1737). */}
@@ -374,6 +319,12 @@ export default async function ProjectDetailPage({ params }: Props) {
           <div className="flex items-center gap-2">
             {isArchived && <LifecycleBadge status="archived" />}
             <ScopeBadge level={ownerLevel} aria-label={`Ownership: ${ownerLevel}`} />
+            <Button asChild variant="outline">
+              <Link href={`/projects/${encodeURIComponent(project.id)}/settings`}>
+                <Settings data-icon="inline-start" aria-hidden="true" />
+                Project settings
+              </Link>
+            </Button>
           </div>
         }
         divider={false}
@@ -389,9 +340,10 @@ export default async function ProjectDetailPage({ params }: Props) {
           </div>
         )}
 
-        <ProjectDetailTabs
-          dashboards={{ dataSource, initialData: dashboardsInitial, overviewPortlets }}
-          permissions={permissions}
+        <ProjectDashboardsTab
+          dataSource={dataSource}
+          initialData={dashboardsInitial}
+          overviewPortlets={overviewPortlets}
         />
       </PageContent>
     </Main>

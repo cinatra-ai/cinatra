@@ -10,7 +10,7 @@
     {
       "packageName": "@cinatra-ai/anthropic-connector",
       "repo": "cinatra-ai/anthropic-connector",
-      "resolvedSha": "f2a9078a183685d715c01e233f5818a1f93c8ad5"
+      "resolvedSha": "9783123fe02bf4930fdaa0f24dab27ae9c0667b4"
     },
     {
       "packageName": "@cinatra-ai/apify-connector",
@@ -195,7 +195,7 @@
     {
       "packageName": "@cinatra-ai/gemini-connector",
       "repo": "cinatra-ai/gemini-connector",
-      "resolvedSha": "d13dde45859ed3847947d0e1f19d251ab5a6f6ed"
+      "resolvedSha": "673fc96851cddabeb1f21ea4dadd10e11a47f8af"
     },
     {
       "packageName": "@cinatra-ai/github-connector",
