@@ -33,14 +33,14 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { renderableViewType } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import { renderableViewType, safeUrl } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import {
   formatToolCallLabel,
   trimIncompleteEmbeds,
   type AssistantMessagePart,
   type AssistantToolCallPart,
 } from "../assistant-parts";
-import { RenderableViewCard } from "../renderable-views/index";
+import { RenderableViewCard, type ApplyIntentRef } from "../renderable-views/index";
 import type { UiCitation, UiThoughtGroup, UiToolCall } from "../types";
 import type {
   ConversationViewState,
@@ -59,6 +59,12 @@ export type InteractiveRenderers = {
   renderRunCard?: (runId: string) => ReactNode;
   /** Mount the real HITL approval form. Default: a read-only field summary. */
   renderInterrupt?: (interrupt: HitlInterruptSlice) => ReactNode;
+  /** §6e (cinatra#1221 S5 Lane B) apply-intent gesture seam. When a surface owns
+   *  an apply flow (the embed), its handler is wired to the apply-eligible
+   *  `content_change_proposal` card's explicit apply gesture (NO auto-emit on
+   *  render). Absent (`/chat`) → the card stays DISPLAY-ONLY. This does NOT change
+   *  which card renders (dispatch stays definitional); it only adds a gesture. */
+  onApplyIntent?: (ref: ApplyIntentRef) => void;
 };
 
 function defaultRenderText(text: string): ReactNode {
@@ -143,18 +149,32 @@ export function CitationsList({ citations }: { citations: UiCitation[] }) {
           } catch {
             /* keep raw url */
           }
+          // §6h (cinatra#1221 S5 Lane B): scheme-allowlist the reducer-fed
+          // citation URL before it reaches an active `href`. In a
+          // credential-bearing cross-origin iframe an unfiltered LLM/tool URL is
+          // a `javascript:`/`data:`/protocol-relative exfil vector. A dropped URL
+          // renders as INERT text (never an active link) — mirrors the markdown
+          // renderer's `safeHref` and the renderable-view cards' `safeUrl`.
+          const safe = safeUrl(c.url);
           return (
             <li key={`cite-${i}-${c.url}`} className="my-1 flex gap-2 first:mt-0">
               <span className="text-muted-foreground">{i + 1}.</span>
-              <Link
-                href={c.url}
-                target="_blank"
-                rel="noreferrer"
-                className="truncate text-muted-foreground underline underline-offset-4 hover:text-foreground"
-              >
-                {c.title || host}
-                <span className="ml-2 text-muted-foreground/70">({host})</span>
-              </Link>
+              {safe ? (
+                <Link
+                  href={safe}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="truncate text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                >
+                  {c.title || host}
+                  <span className="ml-2 text-muted-foreground/70">({host})</span>
+                </Link>
+              ) : (
+                <span className="truncate text-muted-foreground">
+                  {c.title || host}
+                  <span className="ml-2 text-muted-foreground/70">({host})</span>
+                </span>
+              )}
             </li>
           );
         })}
@@ -261,8 +281,11 @@ export function HitlInterruptFallback({ interrupt }: { interrupt: HitlInterruptS
 
 export function RenderableViewParts({
   dataParts,
+  onApplyIntent,
 }: {
   dataParts: Record<string, unknown>[];
+  /** §6e apply-intent gesture seam (wired to the apply-eligible card only). */
+  onApplyIntent?: (ref: ApplyIntentRef) => void;
 }) {
   const views = dataParts.filter((d) => {
     // Classification must not pierce the never-throw boundary: a hostile
@@ -279,7 +302,7 @@ export function RenderableViewParts({
   return (
     <div className="flex flex-col gap-2" data-renderable-views>
       {views.map((view, idx) => (
-        <RenderableViewCard key={`view-${idx}`} data={view} />
+        <RenderableViewCard key={`view-${idx}`} data={view} onApplyIntent={onApplyIntent} />
       ))}
     </div>
   );
@@ -362,7 +385,7 @@ export function ConversationTurn({
         <ThinkingGroup key={g.id} group={g} />
       ))}
 
-      <RenderableViewParts dataParts={state.dataParts} />
+      <RenderableViewParts dataParts={state.dataParts} onApplyIntent={renderers.onApplyIntent} />
 
       {showLiveStatus ? <LiveStatusLine status={message.liveStatus as string} /> : null}
 

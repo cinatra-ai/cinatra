@@ -390,3 +390,42 @@ export function buildWidgetStreamCorsHeaders(allowedOrigin: string): Record<stri
     Vary: "Origin",
   };
 }
+
+/**
+ * CORS headers reflecting the validated origin for the ASSISTANT AG-UI RESUME
+ * GET (`GET /api/assistants/runs/[runId]/stream`), S5 Lane B embed wave
+ * (cinatra#1221, §9.3(A)). The runs-stream resume is a cross-origin GET carrying
+ * the DISTINCT run-bound resume token on `Authorization: Bearer` and the SSE
+ * resume cursor on `Last-Event-ID`; this is the deferred cross-origin half
+ * #1881 explicitly parked ("the shared CORS builder still permits only
+ * POST/OPTIONS and does not expose/reflect the resume-token header,
+ * Authorization, or Last-Event-ID on a GET … which rides the embed wave").
+ *
+ * Differences from `buildWidgetStreamCorsHeaders` (the turn POST builder):
+ *  - Methods `GET, OPTIONS` (the resume is a GET, not a POST).
+ *  - Request-header allowlist adds `Last-Event-ID` (the SSE resume cursor a
+ *    cross-origin browser fetch may only send when named here) and drops
+ *    `X-Cinatra-Widget-User-Token` (the resume presents ONLY the run-bound
+ *    resume token, never the per-user `cwu_` proof — its own audience, §9.3(A)).
+ *
+ * CORS is RESPONSE-HEADER POLICY only — never the authorization mechanism; the
+ * route's own MODE-2 run-bound-resume-token verifier is the authoritative gate
+ * (a matching origin with a missing/invalid token still 401s in-handler). Use
+ * only after `resolveWidgetStreamOrigin` returns non-null.
+ */
+export function buildAssistantResumeCorsHeaders(allowedOrigin: string): Record<string, string> {
+  return {
+    "Access-Control-Allow-Origin": allowedOrigin,
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    // `Authorization` carries the run-bound resume token; `Last-Event-ID` is the
+    // SSE resume cursor. A cross-origin browser fetch may only send a custom /
+    // non-simple request header named here.
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, Last-Event-ID",
+    "Access-Control-Allow-Credentials": "false",
+    // The widget reads `X-Cinatra-Widget-Auth` on a fail-closed 401 to tell
+    // "re-login required" from a generic error and swap back to the login window.
+    "Access-Control-Expose-Headers": "X-Cinatra-Widget-Auth",
+    "Access-Control-Max-Age": "86400",
+    Vary: "Origin",
+  };
+}
