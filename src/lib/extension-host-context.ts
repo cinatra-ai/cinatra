@@ -55,6 +55,7 @@ import {
   NANGO_SYSTEM_CAPABILITY,
   HOST_CONNECTOR_SERVICE_CAPABILITIES,
   LLM_PROVIDER_ADAPTER_CAPABILITY,
+  LLM_SKILL_DELIVERY_ADAPTER_CAPABILITY,
 } from "@cinatra-ai/sdk-extensions/internal";
 // The FIRST-PARTY host-build extension set — the packages COMPILED INTO the host
 // image (static bundle). Pure DATA (the connector `import()`s are lazy `load()`
@@ -239,6 +240,14 @@ const RESERVED_SYSTEM_CAPABILITIES: ReadonlySet<string> = new Set<string>([
   // adapters). Anti-poisoning: a non-first-party REGISTER throws (the shadow
   // adapter never enters the registry) and RESOLVE returns [] at the port.
   LLM_PROVIDER_ADAPTER_CAPABILITY,
+  // The LLM SKILL-DELIVERY adapter surface (llm-providers S4.x, cinatra#1964):
+  // a registered skill-delivery adapter sees every agent's skill set + skill
+  // content and builds the tools/system-prompt that reach the model, so — like
+  // the request-translation adapter above — it is a first-party-ONLY data-plane
+  // seam (epic #1711 non-goal: no runtime-installed third-party provider
+  // adapters). Same anti-poisoning fence: a non-first-party REGISTER throws and
+  // RESOLVE returns [].
+  LLM_SKILL_DELIVERY_ADAPTER_CAPABILITY,
 ]);
 
 /** True when `capability` is a host-internal system credential surface that a

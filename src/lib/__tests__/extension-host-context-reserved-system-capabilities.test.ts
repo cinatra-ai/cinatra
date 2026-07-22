@@ -26,6 +26,7 @@ import {
   NANGO_SYSTEM_CAPABILITY,
   HOST_CONNECTOR_SERVICE_CAPABILITIES,
   LLM_PROVIDER_ADAPTER_CAPABILITY,
+  LLM_SKILL_DELIVERY_ADAPTER_CAPABILITY,
 } from "@cinatra-ai/sdk-extensions/internal";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 
@@ -236,6 +237,48 @@ describe("extension-facing capability port — reserved system credential capabi
       thirdPartyCtx.capabilities.registerProvider(CAP_ID, {
         packageName: THIRD_PARTY,
         impl: { abiVersion: 1, providerId: "openai", createAdapter: async () => ({ hijacked: true }) },
+      }),
+    ).toThrow(/may not register\b[\s\S]*host-internal system capability/i);
+
+    // Registry unpoisoned: only the first-party registration remains, so the
+    // host resolver can never select a third-party shadow.
+    const hostSide = resolveCapabilityProviders(CAP_ID);
+    expect(hostSide).toHaveLength(1);
+    expect(hostSide[0].packageName).toBe(FIRST_PARTY_REGISTRAR);
+  });
+
+  it("llm-skill-delivery-adapter (llm-providers S4.x, cinatra#1964) is RESERVED: third-party register THROWS + resolve is [] (skill-delivery data plane is first-party only); first-party register/resolve works", () => {
+    const CAP_ID = LLM_SKILL_DELIVERY_ADAPTER_CAPABILITY;
+    // A minimal skill-delivery surface (the gate is package-identity-based; any
+    // first-party package suffices for the fence assertion — the real registrars
+    // are the openai/anthropic/gemini connectors once relocated).
+    const surfaceImpl = {
+      abiVersion: 1,
+      providerId: "openai",
+      createSkillDeliveryAdapter: () => ({ provider: "openai", deliver: async () => ({ tools: [], systemContext: "", exposure: [] }) }),
+    };
+
+    const firstPartyCtx = createExtensionHostContext(FIRST_PARTY_REGISTRAR, [CAP]);
+    expect(() =>
+      firstPartyCtx.capabilities.registerProvider(CAP_ID, {
+        packageName: FIRST_PARTY_REGISTRAR,
+        impl: surfaceImpl,
+      }),
+    ).not.toThrow();
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // A THIRD-PARTY marketplace extension must not intercept the skill-delivery
+    // data plane: fail-closed resolve.
+    const thirdPartyCtx = createExtensionHostContext(THIRD_PARTY, [CAP]);
+    expect(thirdPartyCtx.capabilities.resolveProviders(CAP_ID)).toEqual([]);
+    expect(warn).toHaveBeenCalled();
+
+    // …and a third-party REGISTER is denied fail-loud (anti-poisoning — the
+    // shadow adapter never enters the registry).
+    expect(() =>
+      thirdPartyCtx.capabilities.registerProvider(CAP_ID, {
+        packageName: THIRD_PARTY,
+        impl: { abiVersion: 1, providerId: "openai", createSkillDeliveryAdapter: () => ({ hijacked: true }) },
       }),
     ).toThrow(/may not register\b[\s\S]*host-internal system capability/i);
 
