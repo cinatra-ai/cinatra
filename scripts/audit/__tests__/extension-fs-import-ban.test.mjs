@@ -108,24 +108,29 @@ describe("scanExtensionsForFsImports (fixture tree)", () => {
 
 describe("violationsOf / staleAllowlistEntries (self-policing carve-out)", () => {
   it("an allowlisted (extension, file) hit never violates", () => {
-    const hits = { "@cinatra-ai/openai-connector": ["src/openai-skills.ts"] };
-    expect(violationsOf(hits)).toEqual([]);
+    const hits = { "@acme/example-connector": ["src/needs-fs.ts"] };
+    const allowlist = new Set(["@acme/example-connector::src/needs-fs.ts"]);
+    expect(violationsOf(hits, allowlist)).toEqual([]);
   });
 
   it("the SAME extension's OTHER file still violates (edge-scoped, not whole-extension)", () => {
     const hits = {
-      "@cinatra-ai/openai-connector": ["src/openai-skills.ts", "src/index.ts"],
+      "@acme/example-connector": ["src/needs-fs.ts", "src/index.ts"],
     };
-    expect(violationsOf(hits)).toEqual(["@cinatra-ai/openai-connector::src/index.ts"]);
+    const allowlist = new Set(["@acme/example-connector::src/needs-fs.ts"]);
+    expect(violationsOf(hits, allowlist)).toEqual(["@acme/example-connector::src/index.ts"]);
   });
 
   it("a stale allowlist entry (the hit is gone) is flagged, forcing shrink-only carve-outs", () => {
     const hits = {};
-    expect(staleAllowlistEntries(hits)).toEqual([...FS_IMPORT_ALLOWLIST].sort());
+    const allowlist = new Set(["@acme/example-connector::src/needs-fs.ts"]);
+    expect(staleAllowlistEntries(hits, allowlist)).toEqual([
+      "@acme/example-connector::src/needs-fs.ts",
+    ]);
   });
 
-  it("the real FS_IMPORT_ALLOWLIST is not empty (documents the one known residual, cinatra#979)", () => {
-    expect(FS_IMPORT_ALLOWLIST.size).toBeGreaterThan(0);
+  it("the real FS_IMPORT_ALLOWLIST is empty — its one documented residual (openai-skills.ts, cinatra#979) was retired when openai-connector 0.1.9 dropped it (cinatra#1715)", () => {
+    expect(FS_IMPORT_ALLOWLIST.size).toBe(0);
   });
 });
 
@@ -156,7 +161,7 @@ describe("violationsOf with a baseline (temporary migration-debt ratchet)", () =
     expect(staleBaselineEntries(hits, baseline)).toEqual(["@cinatra-ai/gemini-connector::src/index.ts"]);
   });
 
-  it("the real committed baseline covers exactly the three cinatra#981-migrated connectors' pre-migration logging files (not the permanently-allowlisted openai-skills.ts)", async () => {
+  it("the real committed baseline covers exactly the cinatra#981-migrated connectors' pre-migration logging files (incl. the anthropic provider log-writing relocated into the connector by cinatra#1715), and stays disjoint from the (now-empty) permanent allowlist", async () => {
     const { readFileSync } = await import("node:fs");
     const { fileURLToPath } = await import("node:url");
     const { dirname, join } = await import("node:path");
@@ -172,6 +177,7 @@ describe("violationsOf with a baseline (temporary migration-debt ratchet)", () =
     }
     expect(keys).toEqual(
       new Set([
+        "@cinatra-ai/anthropic-connector::src/telemetry.ts",
         "@cinatra-ai/gemini-connector::src/index.ts",
         "@cinatra-ai/gemini-connector::src/log-retention.ts",
         "@cinatra-ai/openai-connector::src/index.ts",
