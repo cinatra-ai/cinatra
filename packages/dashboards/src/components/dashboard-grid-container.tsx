@@ -12,7 +12,7 @@
  *   - `onSave` flushes immediately (cancels any pending debounce).
  *   - Pending changes flush on unmount via a no-op `mountedRef` guard.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { toast } from "@/lib/cinatra-toast";
 
@@ -54,6 +54,45 @@ export type DashboardGridContainerProps = {
  *  callers must not report it again, and it must never escape into DC. */
 class SaveAlreadyReportedError extends Error {}
 
+/**
+ * cinatra#1914 — every DC portlet defers its data fetch behind an on-screen
+ * visibility check (`useInView`, `initialInView: false`). When that signal
+ * never fires (page-load geometry), the card silently skips its `/load`
+ * request forever and renders DC's bare `lazy-placeholder` — a blank body
+ * with no spinner, no copy, no error. DC's supported escape hatch is the
+ * config-level `eagerLoad` flag (`portlet.eagerLoad ?? config.eagerLoad ??
+ * false`), so the grid mounts every dashboard eager UNLESS the stored config
+ * explicitly carries an `eagerLoad` key (an authored `false` is a deliberate
+ * lazy opt-out and is respected, as is a per-portlet `false`).
+ *
+ * The injection is render-only: DC echoes the mounted config back through
+ * `onConfigChange`/`onSave`, so when the stored row had NO `eagerLoad` key
+ * the sanitizer below drops the injected key from every outgoing config —
+ * saves never mutate stored rows, and the autosave dirty-baseline (raw
+ * initial config) stays comparable. Key PRESENCE decides, never truthiness.
+ */
+function injectEagerLoad(
+  config: DashboardConfigV1_1,
+  hadEagerLoad: boolean,
+): DashboardConfigV1_1 {
+  if (hadEagerLoad) return config;
+  return { ...(config as Record<string, unknown>), eagerLoad: true } as DashboardConfigV1_1;
+}
+
+/** Inverse of `injectEagerLoad` for the save path: when the stored config had
+ *  no `eagerLoad` key, strip the injected one from the DC-echoed config so
+ *  persistence round-trips byte-stable. Authored values pass through. */
+function stripInjectedEagerLoad(
+  next: DashboardConfigV1_1,
+  hadEagerLoad: boolean,
+): DashboardConfigV1_1 {
+  if (hadEagerLoad) return next;
+  if (!next || typeof next !== "object" || !("eagerLoad" in next)) return next;
+  const rest = { ...(next as Record<string, unknown>) };
+  delete rest.eagerLoad;
+  return rest as DashboardConfigV1_1;
+}
+
 export function DashboardGridContainer({
   initialConfig,
   editable = true,
@@ -64,6 +103,20 @@ export function DashboardGridContainer({
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
   const mountedRef = useRef<boolean>(true);
+  // cinatra#1914 — key PRESENCE on the stored config decides whether the
+  // eager-load injection (and its save-path strip) applies; pinned once at
+  // mount (lazy state init) so the two directions stay symmetric for the
+  // row's lifetime.
+  const [hadEagerLoad] = useState<boolean>(
+    () =>
+      typeof initialConfig === "object" &&
+      initialConfig !== null &&
+      "eagerLoad" in initialConfig,
+  );
+  const mountedConfig = useMemo(
+    () => injectEagerLoad(config, hadEagerLoad),
+    [config, hadEagerLoad],
+  );
 
   const coordinatorRef = useRef<AutoSaveCoordinator<DashboardConfigV1_1> | null>(null);
   // Only the editable path needs the autosave coordinator. Read-only mounts
@@ -102,13 +155,13 @@ export function DashboardGridContainer({
   const schedule = useCallback((next: DashboardConfigV1_1): void => {
     const coord = coordinatorRef.current;
     if (!coord) return;
-    coord.setPending(next);
+    coord.setPending(stripInjectedEagerLoad(next, hadEagerLoad));
     if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
     pendingTimerRef.current = setTimeout(() => {
       pendingTimerRef.current = null;
       void coord.flush();
     }, SAVE_DEBOUNCE_MS);
-  }, []);
+  }, [hadEagerLoad]);
 
   useEffect(
     () => () => {
@@ -140,7 +193,7 @@ export function DashboardGridContainer({
   if (!editable || !onSave) {
     return (
       <ComposedDashboard
-        config={config as unknown as ComposedDashboardProps["config"]}
+        config={mountedConfig as unknown as ComposedDashboardProps["config"]}
         editable={false}
       />
     );
@@ -148,7 +201,7 @@ export function DashboardGridContainer({
 
   return (
     <ComposedDashboard
-      config={config as unknown as ComposedDashboardProps["config"]}
+      config={mountedConfig as unknown as ComposedDashboardProps["config"]}
       editable={editable}
       onConfigChange={
         ((next: unknown) => {
@@ -162,7 +215,12 @@ export function DashboardGridContainer({
           clearTimeout(pendingTimerRef.current);
           pendingTimerRef.current = null;
         }
-        coord.setPending(next as unknown as DashboardConfigV1_1);
+        coord.setPending(
+          stripInjectedEagerLoad(
+            next as unknown as DashboardConfigV1_1,
+            hadEagerLoad,
+          ),
+        );
         // cinatra#1913: every failure is surfaced in-product HERE — nothing
         // rejects into the third-party grid (an uncaught rejection there is
         // exactly the issue's error overlay). The coordinator did not commit,
