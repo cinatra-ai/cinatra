@@ -19,12 +19,14 @@ import { sql, type SQL } from "drizzle-orm";
  * the placeholders on the SAME connection — one atomic transaction, no
  * second-writer, no post-commit reconcile.
  *
- * === SQL-AWARENESS (cinatra#1894 delta D1 — the codex-r2 REBUT fix) ===
+ * === SQL-AWARENESS (cinatra#1894 delta D1 — the codex-r2 REBUT fix; extended in
+ * the STAGE-3 codex convergence to double-quoted identifiers) ===
  * A naive regex splice is NOT SQL-aware: it would bind a parameter into a `$n`
  * that occurs INSIDE a single-quoted string literal (`SELECT '$1', $1::int`
- * splices inside the quoted `'$1'`), a dollar-quoted body (`$$ … $1 … $$` or
- * `$tag$ … $tag$`), or a line comment or a block comment. This scanner
- * recognizes a `$n` as a placeholder ONLY when it is OUTSIDE all of those spans.
+ * splices inside the quoted `'$1'`), a double-quoted IDENTIFIER (a schema/table/
+ * column name such as `"weird$1col"`), a dollar-quoted body (`$$ … $1 … $$` or
+ * `$tag$ … $tag$`), or a line comment or a block comment. This scanner recognizes
+ * a `$n` as a placeholder ONLY when it is OUTSIDE all of those spans.
  * A `$` that opens a dollar-quote (`$$` or `$ident$`) is consumed as a quote,
  * never a parameter — and since a dollar-quote tag can never START with a digit,
  * a genuine positional parameter (`$1`) is never mistaken for a dollar-quote
@@ -93,6 +95,33 @@ export function rawWithParams(text: string, values: readonly unknown[]): SQL {
             continue;
           }
           literal += "'";
+          i += 1;
+          break;
+        }
+        literal += text[i];
+        i += 1;
+      }
+      continue;
+    }
+
+    // ── double-quoted identifier: "…" with "" as the embedded-quote escape ──
+    // (a schema/table/column name). A `$n` inside a quoted identifier is part of
+    // the NAME, never a positional parameter — so, exactly like the single-quote
+    // span, it must NOT be spliced. The substrate builders escape interpolated
+    // identifiers (`schema.replaceAll('"', '""')`) into this form, so treating it
+    // as a span keeps a `$` that appears in an identifier from becoming a param.
+    if (c === '"') {
+      literal += c;
+      i += 1;
+      while (i < n) {
+        if (text[i] === '"') {
+          if (text[i + 1] === '"') {
+            // doubled quote — an escaped " that does NOT close the identifier
+            literal += '""';
+            i += 2;
+            continue;
+          }
+          literal += '"';
           i += 1;
           break;
         }

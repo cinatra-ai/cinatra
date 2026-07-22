@@ -80,6 +80,21 @@ describe("rawWithParams — SQL-aware placeholder splicing (D1)", () => {
     expect(params).toEqual(["n"]);
   });
 
+  it("does NOT splice a $n inside a double-quoted identifier (STAGE-3 codex)", () => {
+    // A `$1` inside a quoted identifier is part of the NAME, not a parameter; only
+    // the real trailing $1 binds. (No real substrate builder emits this shape, but
+    // the scanner must be a genuine span-aware bridge, not half-aware.)
+    const { sql, params } = render('SELECT "weird$1col", $1::int FROM t', ["v"]);
+    expect(sql).toBe('SELECT "weird$1col", $1::int FROM t');
+    expect(params).toEqual(["v"]);
+  });
+
+  it('treats "" as an embedded-quote escape inside an identifier', () => {
+    const { sql, params } = render('SELECT "a""b$1", $1 FROM t', ["w"]);
+    expect(sql).toBe('SELECT "a""b$1", $1 FROM t');
+    expect(params).toEqual(["w"]);
+  });
+
   it("collapses REPEATED params onto ONE placeholder (preserves param identity)", () => {
     const { sql, params } = render("$1 = $1 AND b = $2", ["v", "w"]);
     // Both occurrences of $1 render to the SAME placeholder $1 — so a
