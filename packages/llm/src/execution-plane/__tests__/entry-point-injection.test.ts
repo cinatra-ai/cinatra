@@ -32,8 +32,35 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   buildRegisteredExternalMcpServerTools: vi.fn(async () => []),
   buildSingleExternalMcpTool: vi.fn(async () => null),
 }));
+// The OpenAI adapter resolves through the connector-registered
+// `llm-provider-adapter` surface (cinatra#1715 switch-over — there is no in-core
+// factory). The surface supplies the capture-aware adapter; every other surface
+// is absent.
 vi.mock("@/lib/llm-provider-surfaces", () => ({
-  getLlmProviderAdapterSurface: vi.fn(() => null),
+  getLlmProviderAdapterSurface: vi.fn((providerId: string) =>
+    providerId === "openai"
+      ? {
+          abiVersion: 1 as const,
+          providerId: "openai",
+          createAdapter: async () => ({
+            provider: "openai" as const,
+            defaultModel: "mock-model",
+            generate: (input: GenerateInput) => {
+              _capturedGenerate = input;
+              return Promise.resolve({
+                text: "",
+                usage: undefined,
+                model: "mock-model",
+              } as LlmResponse);
+            },
+            stream: (input: StreamInput) => {
+              _capturedStream = input;
+              return Promise.resolve();
+            },
+          }),
+        }
+      : null,
+  ),
   getLlmProviderSurface: vi.fn(() => null),
   requireLlmProviderSurface: vi.fn((providerId: string) => {
     throw new Error(`The "${providerId}" LLM provider connector is not installed/active`);
@@ -48,32 +75,6 @@ vi.mock("@/lib/database", () => ({
 let _capturedGenerate: GenerateInput | undefined;
 let _capturedStream: StreamInput | undefined;
 
-vi.mock("../../providers/openai", () => ({
-  createOpenAIProviderAdapter: vi.fn(() => ({
-    provider: "openai" as const,
-    defaultModel: "mock-model",
-    generate: (input: GenerateInput) => {
-      _capturedGenerate = input;
-      return Promise.resolve({
-        text: "",
-        usage: undefined,
-        model: "mock-model",
-      } as LlmResponse);
-    },
-    stream: (input: StreamInput) => {
-      _capturedStream = input;
-      return Promise.resolve();
-    },
-  })),
-  getConfiguredOpenAIConnection: vi.fn(async () => ({ apiKey: "mock-key" })),
-}));
-vi.mock("../../providers/anthropic", () => ({
-  createAnthropicProviderAdapter: vi.fn(),
-}));
-vi.mock("../../providers/gemini", () => ({
-  createGeminiProviderAdapter: vi.fn(),
-  getConfiguredGeminiConnection: vi.fn(async () => null),
-}));
 vi.mock("../../tools/skills", () => ({
   buildSkillTools: vi.fn().mockResolvedValue([]),
   buildSkillContext: vi.fn().mockResolvedValue(""),

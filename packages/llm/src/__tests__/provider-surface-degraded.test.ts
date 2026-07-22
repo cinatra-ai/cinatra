@@ -63,24 +63,21 @@ vi.mock("@cinatra-ai/skills/mcp-client", () => ({
 
 import { resolveProviderAdapter } from "../registry";
 import { writeLlmLogFile } from "../telemetry";
-import { getConfiguredOpenAIConnection } from "../providers/openai";
 
 beforeEach(() => {
   surfaces.clear();
   vi.clearAllMocks();
 });
 
-describe("surface ABSENT — registry degrades to null adapters", () => {
+describe("adapter surface ABSENT — registry is fail-closed (honest unavailable)", () => {
   it.each(["openai", "anthropic", "gemini"] as const)(
-    "resolveProviderAdapter(%s) returns null with no registered surface",
+    "resolveProviderAdapter(%s) returns null with no registered adapter surface",
     async (provider) => {
+      // No connector for the provider ⇒ null. The in-core factories were
+      // deleted in the #1715 switch-over — there is NO fallback.
       await expect(resolveProviderAdapter(provider)).resolves.toBeNull();
     },
   );
-
-  it("getConfiguredOpenAIConnection returns null (not configured) when absent", async () => {
-    await expect(getConfiguredOpenAIConnection()).resolves.toBeNull();
-  });
 });
 
 describe("log writers — best-effort no-op on absence, delegation when present", () => {
@@ -110,26 +107,5 @@ describe("log writers — best-effort no-op on absence, delegation when present"
     await expect(
       writeLlmLogFile({ provider: "gemini", label: "lab", kind: "response", body: "x" }),
     ).rejects.toThrow("disk full");
-  });
-});
-
-describe("gemini adapter — connection vs headers member (design MEDIUM)", () => {
-  it("adapter resolves null when the gemini surface is absent (degraded, no throw)", async () => {
-    await expect(resolveProviderAdapter("gemini")).resolves.toBeNull();
-  });
-
-  it("an ACTIVE surface missing buildRequestHeaders fails loud at adapter construction", async () => {
-    surfaces.set("gemini", {
-      providerId: "gemini",
-      getConfiguredAPIKey: async () => "key-123",
-      // buildRequestHeaders deliberately MISSING (pre-Stage-2 connector skew)
-    });
-    // The client is constructed inside createGeminiProviderAdapter — the
-    // descriptive error surfaces at resolution rather than silently
-    // defaulting headers (a skewed connector is a defect, not a degraded
-    // mode: a CONFIGURED key proves the surface registered).
-    await expect(resolveProviderAdapter("gemini")).rejects.toThrow(
-      /does not expose\s+buildRequestHeaders/,
-    );
   });
 });

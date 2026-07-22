@@ -111,14 +111,25 @@ export {
   resolveDefaultAdapter,
   resolveDefaultImageAdapter,
   hasConfiguredLlmRuntime,
-  createOpenAIProviderAdapter,
-  createAnthropicProviderAdapter,
-  createGeminiProviderAdapter,
   resolveChatExternalMcpTools,
 } from "./registry";
 
-// Connection helpers
-export { getConfiguredOpenAIConnection, type OpenAIConnectionConfig } from "./providers/openai";
+// Connection config type. The adapter + its `getConfiguredOpenAIConnection`
+// resolver relocated into the openai connector (cinatra#1715); this host-local
+// structural type is the shared shape the host runtime API still threads
+// (`ResolvedLlmRuntime`, `DeterministicLlmExecutionInput.connection`). It is
+// kept dependency-free and mirrors the connector's `OpenAILlmConnection`.
+export type OpenAIConnectionConfig = {
+  apiKey?: string;
+  projectId?: string;
+  organizationId?: string;
+  defaultModel?: string;
+  serviceTier?: string;
+  loggingEnabled?: boolean;
+  promptCachingEnabled?: boolean;
+  lastValidatedAt?: string;
+  availableModels?: string[];
+};
 // Exec-plane S2 (cinatra#1707): the restricted named skill-read surface OpenAI
 // emits for skills-without-execution requests (singular-native-shell rule).
 // Dependency-free leaf (NOT ./providers/openai — test mocks of the provider
@@ -130,8 +141,6 @@ export {
   OPENAI_SHELL_INCOMPATIBLE_MODEL_IDS,
   openAiModelSupportsShell,
 } from "./providers/openai-model-capabilities";
-export { type AnthropicConnectionConfig } from "./providers/anthropic";
-export { getConfiguredGeminiConnection, DEFAULT_GEMINI_MODEL } from "./providers/gemini";
 
 // Skill tools. `createShellTool` (the connector-Docker executor) is RETIRED
 // (exec-plane S2, cinatra#1707): skill execution runs on the execution plane.
@@ -216,14 +225,12 @@ export {
   type AnthropicSkillLeasePort,
 } from "./tools/anthropic-skill-sync-map-table";
 
-// Telemetry helpers.
-export {
-  writeAnthropicLogFile,
-  writeLlmLogFile,
-  ANTHROPIC_API_LOG_DIRECTORY,
-  getAnthropicLoggingSettings,
-  setAnthropicLoggingEnabled,
-} from "./telemetry";
+// Telemetry helpers. The anthropic in-core log writer + its dependency-free
+// leaves (log directory, logging-state cache) relocated into the anthropic
+// connector (cinatra#1715); the host now writes anthropic logs through the
+// connector's `llm-provider-surface` `writeLogFile` (see telemetry.ts). Only
+// the provider-transparent `writeLlmLogFile` router stays host-owned.
+export { writeLlmLogFile } from "./telemetry";
 
 // LLM MCP access helpers
 export {
@@ -317,7 +324,8 @@ export type {
 
 import { randomUUID } from "node:crypto";
 import type { LlmProvider, LlmCapabilityRequirement, LlmProviderAdapter, LlmFileReference, GenerateInput, LlmTool, LlmUsageData, LlmResponse, LlmMcpServerTool, OrchestrateGenerateInput, OrchestrateStreamInput, OrchestrateUploadFileInput, OrchestrateFileInputGenerateInput, LlmAttachmentRef, SandboxExecutor, SandboxEnvironmentMount } from "./types";
-import type { OpenAIConnectionConfig } from "./providers/openai";
+// `OpenAIConnectionConfig` is defined+exported above (host-local structural type;
+// the openai provider that once owned it relocated into its connector, #1715).
 // Shared orchestration-entry attachment step plus the app-injected
 // resolver-ports type used by the entry input types.
 import {
@@ -1554,8 +1562,20 @@ export async function resolveConfiguredLlmRuntime(input?: {
     const adapter = await resolveProviderAdapter(provider);
     if (adapter) {
       if (provider === "openai") {
-        const { getConfiguredOpenAIConnection } = await import("./providers/openai");
-        const connection = await getConfiguredOpenAIConnection(input?.openaiConnection);
+        // The openai adapter (and its `getConfiguredOpenAIConnection` resolver)
+        // relocated into the openai connector (cinatra#1715). Read the openai
+        // connection snapshot through the REGISTERED connector's server module —
+        // the same host pattern connector-readiness / the LLM APIs page use —
+        // rather than an in-tree provider import (there is none). `adapter` above
+        // already confirmed the connector is registered + configured.
+        const { loadConnectorModule } = await import("@/lib/connector-modules.server");
+        const mod = await loadConnectorModule<{
+          getConfiguredOpenAIConnection: (
+            connection?: OpenAIConnectionConfig | null,
+          ) => Promise<OpenAIConnectionConfig | null>;
+        }>("openai-connector");
+        const connection =
+          (await mod?.getConfiguredOpenAIConnection(input?.openaiConnection)) ?? null;
         if (connection) {
           return { provider: "openai", connection };
         }

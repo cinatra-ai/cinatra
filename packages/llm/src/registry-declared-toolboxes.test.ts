@@ -19,17 +19,6 @@ import type { LlmMcpServerTool } from "./types";
 // Mocks — registered BEFORE the module-under-test is imported
 // ---------------------------------------------------------------------------
 
-vi.mock("./providers/openai", () => ({
-  createOpenAIProviderAdapter: vi.fn(),
-  getConfiguredOpenAIConnection: vi.fn(async () => null),
-}));
-vi.mock("./providers/anthropic", () => ({
-  createAnthropicProviderAdapter: vi.fn(),
-}));
-vi.mock("./providers/gemini", () => ({
-  createGeminiProviderAdapter: vi.fn(),
-  getConfiguredGeminiConnection: vi.fn(async () => null),
-}));
 vi.mock("./mcp-access", () => ({
   buildLlmMcpServerTool: vi.fn(async () => null),
   buildExternalMcpServerTools: vi.fn(async () => []),

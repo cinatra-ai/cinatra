@@ -1,24 +1,17 @@
 /**
- * cinatra#1850 — `resolveConfiguredLlmRuntime` Anthropic last-resort fallback.
+ * cinatra#1850 — `resolveConfiguredLlmRuntime` Anthropic last-resort fallback,
+ * re-proven against the #1715 switch-over resolution model (adapters resolve
+ * ONLY through the connector-registered `llm-provider-adapter` surface; the
+ * openai connection snapshot is re-sourced from the openai connector module).
  *
- * Personal-skill generation (auditor drawer action, background skill-autosave
- * job, and the MCP skills_personal_skill_create_or_update primitive) is a
- * per-purpose task that may legitimately run on Anthropic. It opts in via
- * `{ allowAnthropicFallback: true }`. This locks the resolution matrix:
- *
+ * The resolution matrix is unchanged:
  *   - Anthropic-only install + flag ON  -> resolves { provider: "anthropic" }.
  *   - Anthropic-only install + flag OFF -> null (global exclusion preserved).
  *   - Multi-provider install + flag ON  -> openai/gemini dbDefault-first winner
  *     is UNCHANGED; Anthropic never beats a configured OpenAI/Gemini.
  *   - No provider configured + flag ON  -> null.
- *   - Explicit `preferredProviders` supplied -> the flag has NO effect (the
- *     list is authoritative).
- *   - Anthropic present but with invalid credentials -> skipped -> null.
- *
- * Mock discipline mirrors the sibling personal-skill-injection.test.ts:
- * everything the index.ts module graph drags in is mocked BEFORE the
- * module-under-test is imported, and each test reconfigures per-provider
- * availability via the mocked accessors.
+ *   - Explicit `preferredProviders` supplied -> the flag has NO effect.
+ *   - Anthropic present but unconfigured (connector adapter -> null) -> skipped.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -32,21 +25,38 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   buildSingleExternalMcpTool: vi.fn(async () => null),
 }));
 
-// Anthropic availability flows through getLlmProviderSurface("anthropic")
-// .getConfiguredConnection() (see registry.ts getConfiguredAnthropicConnection).
-// Adapter surfaces resolve to "absent" so the transitional in-core factory runs.
-const anthropicGetConfiguredConnectionMock = vi.fn(async () => null as { apiKey?: string } | null);
+// Per-provider availability: `resolveProviderAdapter(provider)` resolves an
+// adapter iff the connector-registered adapter surface is present AND its
+// `createAdapter()` returns non-null. Both "connector absent" and "connector
+// present but unconfigured" collapse to "provider unavailable" here.
+const availability = { openai: false, gemini: false, anthropic: false } as Record<string, boolean>;
 vi.mock("@/lib/llm-provider-surfaces", () => ({
-  getLlmProviderAdapterSurface: vi.fn(() => null),
-  getLlmProviderSurface: vi.fn((providerId: string) =>
-    providerId === "anthropic"
-      ? { getConfiguredConnection: anthropicGetConfiguredConnectionMock }
+  getLlmProviderAdapterSurface: vi.fn((providerId: string) =>
+    availability[providerId]
+      ? {
+          abiVersion: 1 as const,
+          providerId,
+          createAdapter: async () => ({ provider: providerId }),
+        }
       : null,
   ),
+  getLlmProviderSurface: vi.fn(() => null),
   requireLlmProviderSurface: vi.fn((providerId: string) => {
     throw new Error(`The "${providerId}" LLM provider connector is not installed/active`);
   }),
   listLlmProviderSurfaces: vi.fn(() => []),
+}));
+
+// The openai connection snapshot is re-sourced from the openai connector module
+// (the in-tree provider relocated — #1715). Returns a connection iff openai is
+// available.
+const openaiConnectionMock = vi.fn(async () => null as { apiKey: string } | null);
+vi.mock("@/lib/connector-modules.server", () => ({
+  loadConnectorModule: vi.fn(async (slug: string) =>
+    slug === "openai-connector"
+      ? { getConfiguredOpenAIConnection: openaiConnectionMock }
+      : null,
+  ),
 }));
 
 vi.mock("@/lib/database", () => ({
@@ -71,54 +81,28 @@ vi.mock("@cinatra-ai/metric-usage-api", () => ({
   emitUsageEvent: vi.fn(),
 }));
 
-vi.mock("./providers/openai", () => ({
-  createOpenAIProviderAdapter: vi.fn((connection: unknown) => ({
-    provider: "openai" as const,
-    connection,
-  })),
-  getConfiguredOpenAIConnection: vi.fn(async () => null as { apiKey: string } | null),
-}));
-
-vi.mock("./providers/anthropic", () => ({
-  createAnthropicProviderAdapter: vi.fn((connection: unknown) => ({
-    provider: "anthropic" as const,
-    connection,
-  })),
-}));
-
-vi.mock("./providers/gemini", () => ({
-  createGeminiProviderAdapter: vi.fn(() => ({ provider: "gemini" as const })),
-  getConfiguredGeminiConnection: vi.fn(async () => null as { apiKey: string } | null),
-}));
-
 import { resolveConfiguredLlmRuntime } from "./index";
 import { readDefaultLlmProviderFromDatabase } from "@/lib/database";
-import { getConfiguredOpenAIConnection } from "./providers/openai";
-import { getConfiguredGeminiConnection } from "./providers/gemini";
 
 // Per-test provider availability knobs.
 function configure(opts: {
   dbDefault?: "openai" | "gemini";
   openai?: boolean;
   gemini?: boolean;
-  anthropic?: boolean | { apiKey?: string };
+  anthropic?: boolean;
 }) {
   vi.mocked(readDefaultLlmProviderFromDatabase).mockReturnValue(opts.dbDefault ?? "openai");
-  vi.mocked(getConfiguredOpenAIConnection).mockResolvedValue(opts.openai ? { apiKey: "sk-openai" } : null);
-  vi.mocked(getConfiguredGeminiConnection).mockResolvedValue(
-    opts.gemini ? { apiKey: "gm-key", defaultModel: "gemini-2.0" } : null,
-  );
-  const anthropicConn =
-    opts.anthropic === true
-      ? { apiKey: "sk-anthropic" }
-      : opts.anthropic && typeof opts.anthropic === "object"
-        ? opts.anthropic
-        : null;
-  anthropicGetConfiguredConnectionMock.mockResolvedValue(anthropicConn);
+  availability.openai = Boolean(opts.openai);
+  availability.gemini = Boolean(opts.gemini);
+  availability.anthropic = Boolean(opts.anthropic);
+  openaiConnectionMock.mockResolvedValue(opts.openai ? { apiKey: "sk-openai" } : null);
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  availability.openai = false;
+  availability.gemini = false;
+  availability.anthropic = false;
 });
 
 describe("resolveConfiguredLlmRuntime — Anthropic last-resort fallback (cinatra#1850)", () => {
@@ -175,8 +159,8 @@ describe("resolveConfiguredLlmRuntime — Anthropic last-resort fallback (cinatr
     expect(runtime).toEqual({ provider: "anthropic" });
   });
 
-  it("Anthropic present but with invalid credentials + flag -> skipped -> null", async () => {
-    configure({ dbDefault: "openai", openai: false, gemini: false, anthropic: { apiKey: "" } });
+  it("Anthropic present but unconfigured (connector adapter -> null) + flag -> skipped -> null", async () => {
+    configure({ dbDefault: "openai", openai: false, gemini: false, anthropic: false });
     const runtime = await resolveConfiguredLlmRuntime({ allowAnthropicFallback: true });
     expect(runtime).toBeNull();
   });

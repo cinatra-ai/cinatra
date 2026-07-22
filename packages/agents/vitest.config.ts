@@ -190,12 +190,11 @@ export default defineConfig({
       ),
       // Use the src DIRECTORY (not index.ts) so FLAT subpath imports resolve via
       // vite's natural extension resolution — same pattern + reason as
-      // @cinatra-ai/objects / @cinatra-ai/skills above. The host-app
-      // src/lib/logging.ts imports `@cinatra-ai/llm/anthropic-log-directory`
-      // (reachable from any test that touches the store → @/lib/logging chain);
-      // the index.ts file-form made that subpath resolve to
-      // `…/src/index.ts/anthropic-log-directory` → ENOTDIR, breaking every
-      // agents integration test.
+      // @cinatra-ai/objects / @cinatra-ai/skills above. Flat subpaths such as
+      // `@cinatra-ai/llm/openai-model-capabilities` (reachable from host chains
+      // pulled into agents integration tests) need this: the index.ts file-form
+      // made such a subpath resolve to `…/src/index.ts/openai-model-capabilities`
+      // → ENOTDIR, breaking every agents integration test.
       "@cinatra-ai/llm": path.join(
         root,
         "packages/llm/src",

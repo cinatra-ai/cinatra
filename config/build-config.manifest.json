@@ -312,8 +312,6 @@
     { "alias": "@cinatra-ai/metric-usage-api/mcp-module", "target": "./packages/metric-usage-api/src/mcp/module.ts" },
     { "alias": "@cinatra-ai/llm", "target": "./packages/llm/src/index.ts" },
     { "alias": "@cinatra-ai/llm/attachment-capability", "target": "./packages/llm/src/attachments/capability-registry.ts" },
-    { "alias": "@cinatra-ai/llm/anthropic-log-directory", "target": "./packages/llm/src/anthropic-log-directory.ts" },
-    { "alias": "@cinatra-ai/llm/anthropic-logging-state", "target": "./packages/llm/src/anthropic-logging-state.ts" },
     { "alias": "@cinatra-ai/llm/actor-context", "target": "./packages/llm/src/actor-context.ts" },
     { "alias": "@cinatra-ai/llm/openai-model-capabilities", "target": "./packages/llm/src/providers/openai-model-capabilities.ts" },
     { "alias": "@cinatra-ai/llm/scripted-test-provider", "target": "./packages/llm/src/scripted-test-provider.ts" },

@@ -4,24 +4,18 @@
 
 import "server-only";
 
-import { createOpenAIProviderAdapter, getConfiguredOpenAIConnection, type OpenAIConnectionConfig } from "./providers/openai";
-import { createAnthropicProviderAdapter, type AnthropicConnectionConfig } from "./providers/anthropic";
-import { createGeminiProviderAdapter, getConfiguredGeminiConnection } from "./providers/gemini";
 import { buildLlmMcpServerTool, buildExternalMcpServerTools } from "./mcp-access";
 import { isScriptedTestProviderEnabled } from "./scripted-test-provider";
 import type { LlmProvider, LlmProviderAdapter, LlmMcpServerTool } from "./types";
-// Anthropic API connection config is owned by the anthropic connector and
-// resolves through its `llm-provider-surface` registration at call time
-// (cinatra#151 Stage 2 — packages/llm carries NO connector value-imports).
-// The MCP-client-registry connector owns inbound MCP-client OAuth client
-// management only.
-// llm-providers S4 (cinatra#1715): `getLlmProviderAdapterSurface` (co-located in
-// llm-provider-surfaces so it adds no net-new route-reachable module) is the
-// connector-registered adapter surface. Absent for every provider in this first
-// slice -> the in-core fallback below runs unchanged (zero behavior change); a
-// trusted connector registration wins once it relocates, and a malformed one
-// fails closed (never silent fallback).
-import { getLlmProviderSurface, getLlmProviderAdapterSurface } from "@/lib/llm-provider-surfaces";
+// llm-providers S4 switch-over (cinatra#1715): every provider adapter now lives
+// in its connector and registers the `llm-provider-adapter` capability surface.
+// packages/llm carries NO in-tree adapter and NO connector value-imports; a
+// provider is resolvable ONLY through `getLlmProviderAdapterSurface` (co-located
+// in llm-provider-surfaces so it adds no net-new route-reachable module). A
+// provider whose connector is absent is honestly unavailable (null), never a
+// silent fallback to deleted in-core code; a registered-but-malformed surface
+// makes `getLlmProviderAdapterSurface` THROW (fail closed).
+import { getLlmProviderAdapterSurface } from "@/lib/llm-provider-surfaces";
 import { readDefaultLlmProviderFromDatabase, readDefaultImageProviderFromDatabase } from "@/lib/database";
 import {
   buildRegisteredExternalMcpServerTools,
@@ -219,52 +213,20 @@ export async function resolveChatExternalMcpTools(
 // Resolve a provider adapter from stored connection config
 // ---------------------------------------------------------------------------
 
-/**
- * Anthropic connection via the anthropic surface; absent surface/member ⇒
- * null (the existing "not configured" adapter semantics — no new error
- * class).
- */
-async function getConfiguredAnthropicConnection(): Promise<AnthropicConnectionConfig | null> {
-  const getConfiguredConnection = getLlmProviderSurface("anthropic")?.getConfiguredConnection;
-  if (typeof getConfiguredConnection !== "function") return null;
-  return ((await getConfiguredConnection()) ?? null) as AnthropicConnectionConfig | null;
-}
-
 export async function resolveProviderAdapter(provider: LlmProvider): Promise<LlmProviderAdapter | null> {
-  // llm-providers S4 (cinatra#1715): prefer a CONNECTOR-registered adapter
-  // surface (`llm-provider-adapter`). When a trusted connector has registered an
-  // adapter for this provider it OWNS resolution — the result (an adapter, or a
-  // `null` "connector present but not configured") is AUTHORITATIVE and the
-  // legacy in-core factory below is NOT consulted. When ABSENT (no connector has
-  // relocated this provider yet — the transitional state of this slice), fall
-  // through to the in-core factory. A registered-but-malformed surface makes
+  // llm-providers S4 switch-over (cinatra#1715): a provider is resolvable ONLY
+  // through its CONNECTOR-registered `llm-provider-adapter` surface. The
+  // connector OWNS resolution — the result (an adapter, or a `null` "connector
+  // present but not configured") is AUTHORITATIVE. When the surface is ABSENT
+  // (the provider's connector is not installed/registered), the provider is
+  // honestly UNAVAILABLE (`null`) — the in-core factories were deleted, so there
+  // is NO silent fallback. A registered-but-malformed surface makes
   // `getLlmProviderAdapterSurface` THROW (fail closed), so a broken adapter can
-  // never silently downgrade to the legacy path.
+  // never silently downgrade.
   const surface = getLlmProviderAdapterSurface(provider);
-  if (surface) {
-    const adapter = await surface.createAdapter();
-    return (adapter ?? null) as LlmProviderAdapter | null;
-  }
-
-  // ---- transitional in-core fallback (deleted per-provider as each connector
-  // relocates its adapter under `llm-provider-adapter` — S4 AC2/AC4) ----
-  switch (provider) {
-    case "openai": {
-      const connection = await getConfiguredOpenAIConnection();
-      if (!connection?.apiKey) return null;
-      return createOpenAIProviderAdapter(connection);
-    }
-    case "anthropic": {
-      const connection = await getConfiguredAnthropicConnection();
-      if (!connection?.apiKey) return null;
-      return createAnthropicProviderAdapter(connection);
-    }
-    case "gemini": {
-      const connection = await getConfiguredGeminiConnection();
-      if (!connection?.apiKey) return null;
-      return createGeminiProviderAdapter(connection.apiKey);
-    }
-  }
+  if (!surface) return null;
+  const adapter = await surface.createAdapter();
+  return (adapter ?? null) as LlmProviderAdapter | null;
 }
 
 /**
@@ -345,8 +307,7 @@ export async function resolveDefaultImageAdapter(): Promise<LlmProviderAdapter |
   return null;
 }
 
-// Re-export adapter factories for direct use when connection is already known
-export { createOpenAIProviderAdapter } from "./providers/openai";
-export { createAnthropicProviderAdapter } from "./providers/anthropic";
-export { createGeminiProviderAdapter } from "./providers/gemini";
-export type { OpenAIConnectionConfig, AnthropicConnectionConfig };
+// Adapter factories are no longer re-exported: every provider adapter lives in
+// its connector (cinatra#1715). Callers resolve an adapter via
+// `resolveProviderAdapter` / `resolveFirstAvailableAdapter`, which go through
+// the connector-registered `llm-provider-adapter` surface.

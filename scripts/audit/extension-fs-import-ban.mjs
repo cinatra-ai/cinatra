@@ -99,13 +99,13 @@ export function scanFsImportsInText(rawText) {
 // staleAllowlistEntries. NEVER use this for a temporary migration-debt hit —
 // that belongs in the committed BASELINE (shrink-only ratchet) instead.
 export const FS_IMPORT_ALLOWLIST = new Set([
-  // @cinatra-ai/openai-connector — `openai-skills.ts` uses `existsSync` to
-  // validate a LOCAL skill-directory mount path for the sandboxed shell tool
-  // (read-only existence/containment check against the configured sandbox
-  // readRoots) BEFORE handing it to the model — unrelated to request/response
-  // logging (the #981 migration this gate follows from). No host port exists
-  // for "does this on-disk path exist" today; carved out until one does.
-  "@cinatra-ai/openai-connector::src/openai-skills.ts",
+  // (empty) The one documented residual — @cinatra-ai/openai-connector
+  // `src/openai-skills.ts` (an `existsSync` containment check for the sandboxed
+  // shell tool's local skill-directory mount, cinatra#979) — was RETIRED when
+  // openai-connector 0.1.9 dropped the sandboxed-shell architecture: the file
+  // no longer exists, so a lingering carve-out would be a stale, forgotten
+  // exemption (cinatra#1715). Add a new entry ONLY with an inline rationale +
+  // a follow-up reference (keys are `${extensionName}::${posix path}`).
 ]);
 
 function walkSourceFiles(dir, acc = []) {
