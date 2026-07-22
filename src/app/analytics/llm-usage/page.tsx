@@ -8,6 +8,7 @@ import { MetricApiNav } from "@/components/metric-api-nav";
 import { analyticsTabDescription } from "@/lib/section-nav";
 import Link from "next/link";
 import { Settings2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "LLM Usage | Cinatra" };
@@ -27,9 +28,12 @@ export default async function MetricUsageApiPage({
         title="LLM"
         description={analyticsTabDescription("usage")}
         actions={
-          <Link href="/analytics/llm/pricing" aria-label="Pricing administration">
-            <Settings2 className="h-5 w-5 text-muted-foreground hover:text-foreground transition" />
-          </Link>
+          <Button asChild variant="outline">
+            <Link href="/analytics/llm/pricing">
+              <Settings2 data-icon="inline-start" aria-hidden="true" />
+              Pricing administration
+            </Link>
+          </Button>
         }
         divider={false}
       />

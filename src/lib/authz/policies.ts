@@ -36,6 +36,15 @@ export const ALL_ROLES = [
   "developer",
   "release_manager",
   "customer",
+  // Internal-read authority (D3 follow-up, cinatra#1948 (b)). A first-class,
+  // explicitly-scoped, READ-ONLY authority for TRUSTED internal routing
+  // resolves (e.g. the email send-routing resolver reaching the org-visible
+  // default sender-identity) — instead of constructing a per-call user/member
+  // actor. Granted ONLY to an actor carrying the trusted `internalRead` flag
+  // and ONLY within its own org (see `resolveRoles`); strictly narrower than
+  // `member` (object reads only, no create/update/delete), so it can never
+  // widen an internal read past what a member could already do.
+  "internal_reader",
 ] as const;
 
 export type Role = (typeof ALL_ROLES)[number];
@@ -311,6 +320,18 @@ const DIRECT_GRANTS: Record<Role, ReadonlySet<Permission>> = {
     "notification.read",
     "notification.list",
     "notification.update",
+  ]),
+  internal_reader: new Set<Permission>([
+    // Internal-read authority (cinatra#1948 (b)) — the object READ surface ONLY.
+    // NO inheritance from `member` (least privilege), and deliberately NO
+    // create/update/delete/promoteScope. A trusted internal routing resolve
+    // reads (list / get / search) object rows within its own org; the row-level
+    // visibility filter (the SQL ownership vantage) still scopes WHICH rows it
+    // sees, exactly as it does for a member. The cross-org guard in `can()`
+    // still denies any row outside the actor's org.
+    "object.read",
+    "object.list",
+    "object.search",
   ]),
 };
 

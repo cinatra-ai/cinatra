@@ -89,6 +89,22 @@ export type ActorContext = Principal & {
   platformRole?: "platform_admin" | "member";
   orgRole?: "org_owner" | "org_admin" | "member";
   teamRoles?: Record<string, "team_admin" | "member">;
+  /**
+   * Internal-read authority (D3 follow-up, cinatra#1948 (b)). When `true`, the
+   * kernel grants the READ-ONLY `internal_reader` role WITHIN the actor's own
+   * org (`resolveRoles`) — a first-class, explicitly-scoped, auditable read for
+   * TRUSTED internal routing resolves (e.g. the email send-routing resolver
+   * reaching the org-visible default sender-identity) instead of constructing a
+   * per-call member/user actor.
+   *
+   * Trust boundary: this is a TRUSTED field, set ONLY by server-only internal
+   * call sites that own a legitimate internal read (see
+   * src/lib/register-email-providers.ts). It is NOT derived from any client /
+   * MCP tool input, and `resolveRoles` admits `internal_reader` ONLY from this
+   * dedicated field — never from the loose `roles[]` string bag — so it cannot
+   * be forged by injecting a role string. Strictly narrower than `member`.
+   */
+  internalRead?: boolean;
   authSource: "ui" | "worker" | "mcp" | "a2a" | "agent";
   runAsUserId?: string;
   delegatedBy?: string;

@@ -18,20 +18,26 @@ import { GitMerge } from "lucide-react";
 
 import { listPendingMergeProposals } from "@/lib/object-history";
 import { Badge } from "@/components/ui/badge";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+} from "@/components/ui/empty";
 
 export function MergeProposalsMode({ orgId }: { orgId: string | null }) {
   const items = orgId ? listPendingMergeProposals({ orgId, limit: 100 }) : [];
 
   if (items.length === 0) {
     return (
-      <div
-        className="flex flex-col items-center gap-2 rounded-lg border border-line bg-surface-strong px-5 py-10 text-center"
-        data-testid="artifacts-merge-proposals"
-        data-state="empty"
-      >
-        <GitMerge aria-hidden className="size-8 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">No pending merge proposals.</p>
-      </div>
+      <Empty data-testid="artifacts-merge-proposals" data-state="empty">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <GitMerge aria-hidden />
+          </EmptyMedia>
+          <EmptyDescription>No pending merge proposals.</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     );
   }
 

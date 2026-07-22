@@ -413,7 +413,13 @@ export async function handleEmailTestDeliveryRunSend(
             message: `Test email sent to ${existing.recipientEmail ?? recipientEmail}.`,
           },
         });
-        return ledgerRowToResult(settled ?? existing);
+        if (settled) return ledgerRowToResult(settled);
+        // CAS lost (#1947): the original slow claimer's performSend returned and
+        // settled this row between our reconcile and here. Its result is a real
+        // send outcome — return the AUTHORITATIVE persisted terminal verbatim,
+        // never our reconcile-synthesized shape over a row that already settled.
+        const authoritative = await readTestSendBySubmission(runId, submissionId);
+        return ledgerRowToResult(authoritative ?? existing);
       }
       // Ambiguous — the earlier send's outcome is unknowable. Do NOT auto-resend.
       return {
@@ -458,6 +464,22 @@ export async function handleEmailTestDeliveryRunSend(
     // delivered drafts would double-deliver. Subtract them (same-recipient, since
     // the last success) from the pinned plan before the claim. Keyed on the SAME
     // recipient the row is claimed/stored under (prepared.recipientEmail).
+    //
+    // SCOPE BOUNDARY (#1947): this suppression TRUSTS the transport-reported
+    // `deliveredDraftIds` on each prior row. The #1947 hardening makes the
+    // SAME-submission replay path airtight (the priority-CAS settle makes a
+    // reconcile-confirmed `sent` win over a delivered-but-reported-`failed`, so a
+    // crashed claim reconciles to its true delivered set — see settleTestSend).
+    // The residual it does NOT close is a DIFFERENT-submission interleave: a
+    // pathological delivered-but-reported-`failed` row whose `deliveredDraftIds`
+    // is empty, read here by a FRESH submission before any same-submission replay
+    // has reconciled it to `sent`. That window is bounded by WayFlow gate
+    // serialization (one HITL resume in flight per run — a fresh gate visit is not
+    // admitted until the prior resume, and its transport-retry reconcile, returns),
+    // and closing it unconditionally would require a fresh-send-time objects-store
+    // reconcile of every stale row here (a #1625 partial-retry-guard change with
+    // its own hot-path/cost trade-offs), deliberately OUT of #1947's
+    // same-submission scope.
     const alreadyDelivered = new Set(
       await readUnacknowledgedDeliveredDraftIds(runId, prepared.recipientEmail),
     );
@@ -506,12 +528,20 @@ export async function handleEmailTestDeliveryRunSend(
       recipientEmail: prepared.recipientEmail,
       selectedDraftIds,
     });
-    await settleTestSend({
+    const settled = await settleTestSend({
       id: claim.row.id,
       status: result.ok ? "sent" : "failed",
       result: { ...result },
     });
-    return { ...result, seq: claim.row.seq };
+    if (settled) return { ...result, seq: claim.row.seq };
+    // CAS lost (#1947): a concurrent lease-expiry reconcile already settled this
+    // row (it read the outbound correlation store and confirmed delivery) between
+    // our performSend and this settle — the classic slow-send-past-lease window.
+    // The reconcile-confirmed terminal is authoritative (ground truth from the
+    // persisted sent-email objects); return it verbatim rather than clobbering it
+    // with this (possibly delivered-but-reported-failed) transport self-report.
+    const authoritative = await readTestSendBySubmission(runId, submissionId);
+    return authoritative ? ledgerRowToResult(authoritative) : { ...result, seq: claim.row.seq };
   } catch (err) {
     if (err instanceof AuthzError) {
       emitReadDenialAudit(actor, runId);

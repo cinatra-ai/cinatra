@@ -64,6 +64,7 @@ describe("pure row mappers", () => {
       contextId: "ctx1",
       assistantPackage: "@cinatra-ai/wordpress-assistant",
       instanceId: "inst-42",
+      titleSlug: null,
       createdAt: "2026-07-10T10:00:00.000Z",
       updatedAt: "2026-07-10T11:00:00.000Z",
     });
@@ -189,10 +190,11 @@ describe("query assembly", () => {
     const q = call.queries[0];
     expect(q.text.toLowerCase()).toContain('insert into "app_test"."assistant_threads"');
     expect(q.text.toLowerCase()).toContain("returning");
-    // [id, assistantUserId, ownerUserId, orgId, projectId, title, contextId, assistantPackage, instanceId]
+    // [id, assistantUserId, ownerUserId, orgId, projectId, title, contextId, assistantPackage, instanceId, titleSlug]
     // Binding columns default to null at creation (seeded later by the W3 route);
     // origin is stamped as the SQL literal 'assistant-native', not a bound param.
-    expect(q.values).toEqual(["th1", "au1", "u1", "org1", "proj1", null, null, null, null]);
+    // A titleless create defers the slug → title_slug ($10) is null (AC#2).
+    expect(q.values).toEqual(["th1", "au1", "u1", "org1", "proj1", null, null, null, null, null]);
   });
 
   it("appendAssistantTurn inserts thread_id/run_id/principal/role/status", () => {
@@ -291,6 +293,7 @@ const baseThread: AssistantThread = {
   contextId: null,
   assistantPackage: null,
   instanceId: null,
+  titleSlug: null,
   createdAt: "2026-07-10T10:00:00.000Z",
   updatedAt: "2026-07-10T12:00:00.000Z",
 };
@@ -599,7 +602,7 @@ describe("thread binding (AC#4)", () => {
     expect(t.assistantPackage).toBe("@cinatra-ai/drupal-assistant");
     expect(t.instanceId).toBe("inst-7");
     const q = runPostgresQueriesSync.mock.calls[0][0].queries[0];
-    // [id, assistantUserId, ownerUserId, orgId, projectId, title, contextId, assistantPackage, instanceId]
+    // [id, assistantUserId, ownerUserId, orgId, projectId, title, contextId, assistantPackage, instanceId, titleSlug]
     expect(q.values).toEqual([
       "th1",
       null,
@@ -610,6 +613,7 @@ describe("thread binding (AC#4)", () => {
       null,
       "@cinatra-ai/drupal-assistant",
       "inst-7",
+      null,
     ]);
   });
 });

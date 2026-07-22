@@ -128,6 +128,18 @@ export type { ObjectSyncAdapterConfigRow } from "./sync-adapters/config-store";
 // MCP + integration surface.
 export { createObjectsPrimitiveHandlers } from "./mcp/handlers";
 export { registerObjectsPrimitives } from "./mcp/registry";
+// Loud-drop diagnostics (cinatra#1948 (a)): the metric + subscription hook a
+// metrics sink consumes so a mis-scoped internal/system read that
+// `filterByAuthz` drops is observable, not silent. Re-exported from the
+// already-route-reachable handlers module (a new leaf here would grow the
+// shrink-only route-graph ratchet — the metric is colocated with the filter).
+export {
+  onInternalReadAuthzDrop,
+  getInternalReadAuthzDropMetric,
+  isInternalSystemRead,
+  INTERNAL_READ_AUTHZ_DROP_CODE,
+} from "./mcp/handlers";
+export type { InternalReadAuthzDrop } from "./mcp/handlers";
 export type { DeterministicObjectsClient } from "./mcp/client/deterministic-client";
 export { createDeterministicObjectsClient } from "./mcp/client/deterministic-client";
 export { objectsClient } from "./objects-client";

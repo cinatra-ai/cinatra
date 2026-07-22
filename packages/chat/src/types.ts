@@ -120,6 +120,11 @@ export type UiThread = {
   taggedAssistantUserIds?: string[];
   slackMode?: boolean;
   ownerUserId?: string;
+  // Canonical thread binding + URL slug (cinatra#1878 W3). Optional — an unbound
+  // legacy thread carries none and falls back to the builtin Cinatra container.
+  assistantPackage?: string | null;
+  instanceId?: string | null;
+  titleSlug?: string | null;
 };
 
 export type UiThreadSummary = {
@@ -127,4 +132,10 @@ export type UiThreadSummary = {
   title: string;
   createdAt: string;
   updatedAt: string;
+  // Canonical binding + URL slug so the client can build `/chat/<vendor>/<slug>
+  // [/<instance>]/<titleSlug>` for the sidebar/back-forward without a per-URL
+  // registry lookup (cinatra#1878 W3). Optional — unbound threads carry none.
+  assistantPackage?: string | null;
+  instanceId?: string | null;
+  titleSlug?: string | null;
 };

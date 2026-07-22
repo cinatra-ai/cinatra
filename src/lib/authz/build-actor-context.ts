@@ -80,6 +80,10 @@ export type ActorRoleHints = {
   platformRole?: "platform_admin" | "member";
   orgRole?: "org_owner" | "org_admin" | "member";
   teamRoles?: Record<string, "team_admin" | "member">;
+  // Internal-read authority (cinatra#1948 (b)). Threaded from the actor
+  // envelope's trusted `internalRead` flag so the kernel `ActorContext` carries
+  // it and `resolveRoles` can grant the read-only `internal_reader` role.
+  internalRead?: boolean;
   actorOrganizationId?: string | null;
   teamIds?: string[];
   // `projectGrants` is the canonical axis, resolved by
@@ -199,6 +203,9 @@ export function buildActorContextFromPrimitive(
     platformRole,
     orgRole,
     teamRoles,
+    // Internal-read authority (cinatra#1948 (b)) — carried onto the kernel
+    // context ONLY when true so a non-internal actor's shape is unchanged.
+    ...(roles?.internalRead === true ? { internalRead: true } : {}),
     authSource,
     tokenScopes: actor.tokenScopes,
     policyVersion: POLICY_VERSION,

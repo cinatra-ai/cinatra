@@ -9,8 +9,19 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { deleteChatThread, renameChatThread } from "./actions";
+import { activeThreadIdForPathname } from "./chat-client-url";
 
-type ThreadSummary = { id: string; title: string; createdAt: string; updatedAt: string };
+type ThreadSummary = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  // Canonical binding + URL slug (cinatra#1878 W3) so the active row can be
+  // matched from the pathname via the codec on SSR/direct load.
+  assistantPackage?: string | null;
+  instanceId?: string | null;
+  titleSlug?: string | null;
+};
 
 function formatRelativeTime(iso: string) {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -33,9 +44,12 @@ export function ChatThreadPanel({ initialThreads = [], embedded = false }: { ini
   const inputRef = useRef<HTMLInputElement>(null);
   const threadRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
-  // Initialize from URL (SSR / direct load), then stay in sync via events from ChatPage.
+  // Initialize from URL (SSR / direct load), then stay in sync via events from
+  // ChatPage. Kind-agnostic (cinatra#1878 W3): match the pathname to an initial
+  // thread by its canonical codec URL rather than the retired `/chat/<uuid>`
+  // regex.
   const [activeThreadId, setActiveThreadId] = useState<string | null>(
-    pathname.match(/^\/chat\/([a-f0-9-]{36})$/)?.[1] ?? null,
+    activeThreadIdForPathname(pathname, initialThreads),
   );
 
   useEffect(() => {

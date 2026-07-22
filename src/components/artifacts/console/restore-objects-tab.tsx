@@ -17,6 +17,12 @@ import { formatDistanceToNow } from "date-fns";
 import { Undo2 } from "lucide-react";
 
 import { listChangeSets, loadChangeSet } from "@/lib/object-history";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+} from "@/components/ui/empty";
 import { RestoreModal } from "@/components/data-safety/restore-modal";
 import { restoreChangeSetAction } from "@/components/data-safety/restore-change-set-action";
 import { buildUndoDiffLines, composeUndoTitle } from "@/components/artifacts/undo-row";
@@ -114,15 +120,18 @@ export async function RestoreObjectsTab({ orgId }: { orgId: string | null }) {
 
 function RestoreEmptyState() {
   return (
-    <div
-      className="flex flex-col items-center gap-2 rounded-lg border border-line bg-surface-strong px-5 py-10 text-center"
+    <Empty
       data-testid="artifacts-restore-console"
       data-conformance-id="artifacts-restore-console"
       data-state="empty"
     >
-      <Undo2 aria-hidden className="size-8 text-muted-foreground" />
-      <p className="text-sm text-muted-foreground">There is nothing to undo.</p>
-    </div>
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Undo2 aria-hidden />
+        </EmptyMedia>
+        <EmptyDescription>There is nothing to undo.</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 

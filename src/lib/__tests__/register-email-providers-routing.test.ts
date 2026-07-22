@@ -98,6 +98,26 @@ const systemMemberEnvelope = {
   organizationId: ORG,
   roles: ["member"],
 };
+// D3 follow-up (#1948 (b)) — the internal-read authority the resolver now
+// stamps (in place of a `member` floor). EXACTLY as
+// `actorContextToObjectsEnvelope` produces it for the two resolver shapes.
+const internalReadSystemEnvelope = {
+  actorType: "system" as const,
+  source: "worker" as const,
+  orgId: ORG,
+  organizationId: ORG,
+  internalRead: true,
+  // NO roles — isolates the `internal_reader` grant from any member masking.
+};
+const internalReadOwnerEnvelope = {
+  actorType: "human" as const,
+  source: "worker" as const,
+  userId: OWNER,
+  orgId: ORG,
+  organizationId: ORG,
+  internalRead: true,
+  // NO roles — the OWNER short-circuit + internal_reader are the only axes.
+};
 
 describe("D3 authz gate — object.read on a sender-identity row", () => {
   it("REGRESSION: a role-less System actor is DENIED object.read (the silent-drop cause)", async () => {
@@ -136,6 +156,47 @@ describe("D3 authz gate — object.read on a sender-identity row", () => {
         "object.read",
       ),
     ).rejects.toBeInstanceOf(AuthzError);
+  });
+
+  // -------------------------------------------------------------------------
+  // Internal-read authority (#1948 (b)) — the first-class read the resolver now
+  // uses instead of a per-call member floor. Exercised through the SAME real
+  // kernel (enforceResourceAccess → decideResourceAccess → can() → policies).
+  // -------------------------------------------------------------------------
+  it("internal-read authority reaches the org-visible default WITHOUT impersonating a member", async () => {
+    await expect(
+      enforceResourceAccess(orgVisibleIdentity(), internalReadSystemEnvelope, "object.read"),
+    ).resolves.toBeUndefined();
+  });
+
+  it("internal-read authority is READ-ONLY: DENIED object.update / object.delete on the same org row", async () => {
+    await expect(
+      enforceResourceAccess(orgVisibleIdentity(), internalReadSystemEnvelope, "object.update"),
+    ).rejects.toBeInstanceOf(AuthzError);
+    await expect(
+      enforceResourceAccess(orgVisibleIdentity(), internalReadSystemEnvelope, "object.delete"),
+    ).rejects.toBeInstanceOf(AuthzError);
+  });
+
+  it("internal-read authority does NOT widen cross-org", async () => {
+    await expect(
+      enforceResourceAccess(
+        orgVisibleIdentity({ organizationId: OTHER_ORG, resourceId: "si-cross" }),
+        internalReadSystemEnvelope,
+        "object.read",
+      ),
+    ).rejects.toBeInstanceOf(AuthzError);
+  });
+
+  it("the owner+internalRead actor reads BOTH its own user-private identity AND the org-visible default", async () => {
+    // Owner short-circuit (own private row) + internal_reader (org-visible row)
+    // coexist on the one resolver actor.
+    await expect(
+      enforceResourceAccess(userPrivateIdentity(), internalReadOwnerEnvelope, "object.read"),
+    ).resolves.toBeUndefined();
+    await expect(
+      enforceResourceAccess(orgVisibleIdentity(), internalReadOwnerEnvelope, "object.read"),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -215,23 +276,29 @@ describe("D3 resolver — resolveConnectorId against the objects store", () => {
     expect(connectorId).toBe("resend");
     // codex anti-false-green remedy: assert the store actor is EXACTLY the
     // owner-scoped shape (a stale System/user-less envelope would fail here).
+    // #1948 (b): the org-visible read authority is now the first-class
+    // `internalRead` flag, NOT an impersonated `member` floor.
     const actor = capturedActors[0];
     expect(actor.principalType).toBe("HumanUser");
     expect(actor.principalId).toBe(OWNER);
     expect(actor.organizationId).toBe(ORG);
-    expect(actor.orgRole).toBe("member");
+    expect(actor.internalRead).toBe(true);
+    expect(actor.orgRole).toBeUndefined();
   });
 
-  it("resolves the ORG-owned identity via a System+member actor when there is no run-owner user", async () => {
+  it("resolves the ORG-owned identity via a System + internal-read authority when there is no run-owner user", async () => {
     seededListItems = [
       { data: { ownerLevel: "organization", ownerId: ORG, connectorId: "resend" } },
     ];
     const connectorId = await getResolveConnectorId()({ orgId: ORG });
     expect(connectorId).toBe("resend");
+    // #1948 (b): a System actor with the first-class internal-read authority —
+    // NOT an impersonated `member`.
     const actor = capturedActors[0];
     expect(actor.principalType).toBe("System");
     expect(actor.organizationId).toBe(ORG);
-    expect(actor.orgRole).toBe("member");
+    expect(actor.internalRead).toBe(true);
+    expect(actor.orgRole).toBeUndefined();
   });
 
   it("explicit senderIdentityId resolves through the {object} envelope unwrap", async () => {

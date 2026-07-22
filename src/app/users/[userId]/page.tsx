@@ -10,6 +10,34 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+// The ONE /chat path codec (cinatra#1878 W3): the legacy `/chat/<uuid>` grammar
+// is retired (a lone segment now 404s), so build the canonical
+// `/chat/<vendor>/<slug>[/<instance>]/<titleSlug>` link from the thread's binding.
+// Zero-dep subpath (not the heavy @cinatra-ai/chat barrel) so this server
+// component's route graph stays light — same seam AppShell uses.
+import { buildChatPath, packageNameToVendorSlug } from "@cinatra-ai/chat/chat-path-codec";
+import type { AssistantThreadSummary } from "@/lib/assistant-thread-store";
+
+/** The canonical `/chat` link for a shared-thread summary, or the bare `/chat`
+ *  mount when it cannot be addressed yet: an UNBOUND thread (no package → no
+ *  container) or one whose title-slug has not been minted. Never emits the
+ *  retired `/chat/<uuid>` shape (which the W3 route guard now 404s). Falls back
+ *  defensively if any segment is unroutable. */
+function sharedThreadHref(t: AssistantThreadSummary): string {
+  if (!t.assistantPackage || !t.titleSlug) return "/chat";
+  const vs = packageNameToVendorSlug(t.assistantPackage);
+  if (!vs) return "/chat";
+  try {
+    return buildChatPath({
+      vendor: vs.vendor,
+      slug: vs.slug,
+      instance: t.instanceId ?? undefined,
+      titleSlug: t.titleSlug,
+    });
+  } catch {
+    return "/chat";
+  }
+}
 
 type Props = { params: Promise<{ userId: string }> };
 
@@ -91,7 +119,7 @@ export default async function UserProfilePage({ params }: Props) {
               {sharedThreads.map((t) => (
                 <li key={t.id as string}>
                   <Link
-                    href={`/chat/${t.id as string}`}
+                    href={sharedThreadHref(t)}
                     className="flex flex-col rounded-md px-3 py-2 transition hover:bg-surface-muted"
                   >
                     <span className="text-sm text-foreground">{(t.title as string) || "Untitled"}</span>

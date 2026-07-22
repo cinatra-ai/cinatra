@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { agentRunTestSends } from "./schema";
 
@@ -158,15 +158,49 @@ export async function recordPreClaimFailure(input: {
 }
 
 /**
- * Settle a claimed row to its terminal state with the typed result. Idempotent
- * by construction — settling the same row twice writes the same terminal shape.
- * Returns the settled record, or null if the row vanished (cascade delete).
+ * Settle a claimed row to its terminal state with the typed result — a
+ * PRIORITY-ORDERED CAS, not a symmetric first-writer-wins (#1947).
+ *
+ * The transitions, ordered by authority (a `sent` is delivery-confirmed ground
+ * truth and must be the strongest terminal):
+ *   - settle `sent`  matches `status <> 'sent'`  → lands on a `sending` row AND
+ *       UPGRADES a transport-reported `failed`. A `sent` verdict is only ever
+ *       asserted by delivery-confirmed evidence — the claimer's own `ok` result,
+ *       or the lease-expiry reconcile that found EVERY expected draft's
+ *       (submissionId, draftId) correlation on the persisted sent-email objects
+ *       (the cinatra#1625/#35 pairs; reconcile returns `unknown`, never `sent`,
+ *       for an unproven send). Already-`sent` matches nothing (idempotent no-op).
+ *   - settle `failed` matches `status = 'sending'` → NEVER downgrades a `sent`.
+ *
+ * Why priority and not first-writer-wins: consider a slow send whose lease
+ * expired while performSend was still in flight, and the two settle orderings for
+ * the SAME row:
+ *   (a) reconcile settles `sent` first, then the claimer's late performSend
+ *       reports `failed` — the `failed` settle is fenced to `sending` and loses;
+ *   (b) the claimer's late performSend reports `failed` FIRST (a
+ *       "delivered-but-reported-failed" send), then reconcile confirms `sent` —
+ *       the `sent` settle matches `<> 'sent'` and UPGRADES the `failed`.
+ * A symmetric `status = 'sending'` guard closes (a) but NOT (b): the `failed`
+ * would survive with an empty `deliveredDraftIds`, and a subsequent fresh gate
+ * re-entry would no longer suppress the already-delivered drafts and would
+ * DOUBLE-DELIVER. Priority ordering closes BOTH — a delivery-confirmed `sent`
+ * always wins, in either order, and a `sent` is never downgraded.
+ *
+ * Returns the settled record; null when the settle did not apply (the target was
+ * already `sent`, or a `failed` settle hit an already-terminal row, or the row
+ * vanished via cascade delete). Callers MUST treat null as "another writer holds
+ * the authoritative terminal" and re-read + return the persisted row, never a
+ * second send and never their own unpersisted result.
  */
 export async function settleTestSend(input: {
   id: string;
   status: Extract<TestSendStatus, "sent" | "failed">;
   result: Record<string, unknown>;
 }): Promise<TestSendRecord | null> {
+  const statusGuard =
+    input.status === "sent"
+      ? ne(agentRunTestSends.status, "sent") // upgrades sending OR a mis-reported failed
+      : eq(agentRunTestSends.status, "sending"); // failed never downgrades a sent
   const [row] = await db
     .update(agentRunTestSends)
     .set({
@@ -174,7 +208,7 @@ export async function settleTestSend(input: {
       resultJson: input.result,
       updatedAt:  new Date(),
     })
-    .where(eq(agentRunTestSends.id, input.id))
+    .where(and(eq(agentRunTestSends.id, input.id), statusGuard))
     .returning();
   return row ? deserialize(row) : null;
 }

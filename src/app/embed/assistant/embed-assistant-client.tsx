@@ -5,9 +5,14 @@
 //
 // The SOLE AG-UI session owner (the CMS widget holds no chat client — only the
 // launcher/panel chrome + the bridge peer). It:
-//   1. installs the iframe-side bridge and posts READY (§3a);
-//   2. accepts the ONE inbound BOOTSTRAP (origin + source-window + schema + nonce
-//      + assistant/instance agreement, all in `embed-bridge.client` / §4-6);
+//   1. installs the iframe-side bridge and posts READY, transferring one
+//      MessageChannel endpoint to the expected parent origin (§3a/§12b);
+//   2. accepts the ONE inbound BOOTSTRAP — over the retained port (the hardened
+//      transport) or, during the negotiated transition, the legacy window path
+//      (origin + source-window + schema + nonce + assistant/instance agreement,
+//      all in `embed-bridge.client` / §4-6/§12b). `requirePort` is intentionally
+//      left at its default (false) here so the embed still interoperates with an
+//      as-yet-unmigrated widget; it flips to true once both widgets have migrated;
 //   3. negotiates the stream contract CLIENT-SIDE (§8) — mounts the wire ONLY on
 //      `ok`, else renders the honest GATED state (Lane-A interlock);
 //   4. drives the turn against `/api/assistants/chat` with the §9.1 broker seams

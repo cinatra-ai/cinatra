@@ -197,15 +197,30 @@ describe("buildBreadcrumbTrail — other routes (preserved behavior)", () => {
     expect(crumbs[2].nonNavigable).toBeFalsy();
   });
 
-  it("collapses a chat thread to Chat > <title>", () => {
-    const uuid = "0123abcd-4567-89ab-cdef-0123456789ab";
-    const crumbs = buildBreadcrumbTrail(`/chat/${uuid}`, {
-      chatThreadTitle: "My Thread",
-    });
+  it("collapses a chat thread to Chat > <title> (cinatra#1878 W3 grammar)", () => {
+    const path = "/chat/cinatra-ai/cinatra-assistant/my-thread";
+    const crumbs = buildBreadcrumbTrail(path, { chatThreadTitle: "My Thread" });
     expect(crumbs).toEqual([
       { label: "Chat", href: "/chat" },
-      { label: "My Thread", href: `/chat/${uuid}` },
+      { label: "My Thread", href: path },
     ]);
+  });
+
+  it("collapses a REMOTE (instance-scoped) chat thread the same way", () => {
+    const path = "/chat/cinatra-ai/wordpress-assistant/site-9/launch-plan";
+    const crumbs = buildBreadcrumbTrail(path, { chatThreadTitle: "Launch Plan" });
+    expect(crumbs).toEqual([
+      { label: "Chat", href: "/chat" },
+      { label: "Launch Plan", href: path },
+    ]);
+  });
+
+  it("a new/empty chat (no thread title) is just Chat", () => {
+    // A new chat carries no bus title → the crumb is the bare "Chat".
+    expect(buildBreadcrumbTrail("/chat/cinatra-ai/cinatra-assistant")).toEqual([
+      { label: "Chat", href: "/chat" },
+    ]);
+    expect(buildBreadcrumbTrail("/chat")).toEqual([{ label: "Chat", href: "/chat" }]);
   });
 
   it("collapses an agent instance to Agents > <instance name> (rename-equivalence: the contribution channel renders exactly what the retired agentInstanceName opt did)", () => {
@@ -282,6 +297,18 @@ describe("buildBreadcrumbTrail — crumb contributions (#1737)", () => {
         contributions: [{ prefix: `/organizations/${ORG_ID}`, label: "Acme Inc" }],
       }).map((c) => c.label),
     ).toEqual(["Organizations", "Acme Inc"]);
+    // Org settings publishes the same dual contribution as teams (#1734).
+    const orgSettings = buildBreadcrumbTrail(`/organizations/${ORG_ID}/settings`, {
+      contributions: [
+        { prefix: `/organizations/${ORG_ID}`, label: "Acme Inc" },
+        { prefix: `/organizations/${ORG_ID}/settings`, label: "Settings" },
+      ],
+    });
+    expect(orgSettings.map((c) => c.label)).toEqual([
+      "Organizations",
+      "Acme Inc",
+      "Settings",
+    ]);
     // Projects settings publishes the same dual contribution as teams (#1733).
     const projectSettings = buildBreadcrumbTrail(`/projects/${TEAM_ID}/settings`, {
       contributions: [

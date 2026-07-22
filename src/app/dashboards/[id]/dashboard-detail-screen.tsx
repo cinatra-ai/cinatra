@@ -9,6 +9,7 @@ import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/ca
 import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import { buildDashboardActorFromSession } from "@/lib/dashboards/dashboard-actor";
 import { requireDashboardAccess, DashboardAccessError } from "@/lib/dashboards/authz";
+import { readOwnerDisplayName } from "@/lib/owner-display-names";
 import { resolveLiveExtensionPredicate } from "@/lib/dashboards/live-extension-oracle";
 // canonical-path has its OWN alias (not re-exported through the reads module):
 // the reads module rides the MCP handlers into the locked API-route graphs,
@@ -123,6 +124,10 @@ export async function DashboardDetailScreen({
   // apiVersion 1.2 falls through to the "unsupported format" card.
   const parsed = validateDashboardConfigV12(row.configJson);
 
+  // Owner display name for the ScopeBadge (#1905) — best-effort, level-only
+  // badge when unresolved.
+  const ownerDisplayName = await readOwnerDisplayName(row.ownerLevel, row.ownerId);
+
   let body: ReactNode;
   if (parsed.ok) {
     const portlets = parsed.config.portlets as unknown as PortletInstanceProp[];
@@ -146,7 +151,17 @@ export async function DashboardDetailScreen({
       <PageHeader
         title={row.name}
         description={row.description ?? undefined}
-        actions={<ScopeBadge level={row.ownerLevel as ScopeLevel} />}
+        actions={
+          <ScopeBadge
+            level={row.ownerLevel as ScopeLevel}
+            ownerName={ownerDisplayName ?? undefined}
+            aria-label={
+              ownerDisplayName
+                ? `Ownership: ${row.ownerLevel} — ${ownerDisplayName}`
+                : `Ownership: ${row.ownerLevel}`
+            }
+          />
+        }
       />
       <PageContent className="flex flex-col gap-6 pb-8">{body}</PageContent>
     </Main>

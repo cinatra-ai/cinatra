@@ -1,0 +1,9 @@
+{
+  "seq": "0069",
+  "file": "core/core__0069_assistant-thread-title-slug.mjs",
+  "summary": "Assistant-thread NET-NEW title_slug column + container-scoped partial unique index (cinatra#1878, Epic #1873 W3, AC#2) — the operator-upgrade twin of the fresh-install bootstrap DDL (the ADD COLUMN + CREATE UNIQUE INDEX in assistant-thread-schema.ts). title_slug is the thread's URL segment (/chat/<vendor>/<slug>/[<instance>/]<titleSlug>), minted ONCE by the atomic allocator from the thread's title, container-scoped-unique over (assistant_package, instance_id) via assistant_threads_container_slug_uniq, and stable forever (a rename never re-slugs). ADDITIVE + IDEMPOTENT + NON-DESTRUCTIVE: one nullable column (ADD COLUMN IF NOT EXISTS) + one PARTIAL UNIQUE INDEX over non-null title_slug (CREATE UNIQUE INDEX IF NOT EXISTS), so a second run or a ledger-faked fresh-bootstrap DB is a no-op; NULL title_slug == a titleless not-yet-minted thread, so every pre-existing row is undisturbed and outside the partial-index predicate (the index can never collide on backfill). Rides the idempotent bootstrap DDL (assistantThreadSchemaQueries, same PR); this module carries the same ADD COLUMN + index onto the operator upgrade path. Single all-or-nothing transaction; unqualified names resolve to the app schema on the runner's search_path. down() drops the index then the column (true reverse; minted slug data lost by design as a structural addition, not a rename). SEQ IS PROVISIONAL + FLAGGED: shipped max on origin/main at cut time is core__0068 (#1875 W2); this slice claims the next genuinely-free sequence 0069 — parallel lanes may also hold 0069, so a concurrent sibling claiming it first makes renumber-at-merge normal (rename file + fragment, zero SQL diff). migrations/** is HIGH-RISK: owner approval required; the lane never merges (W3 routes as ONE unit).",
+  "destructive": false,
+  "tables": [
+    "assistant_threads"
+  ]
+}

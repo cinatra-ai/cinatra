@@ -12,6 +12,16 @@ export type ChatPageMode = "create-agent" | "create-workflow";
 
 export type ChatPageProps = {
   initialThreadId?: string;
+  /** The route-resolved assistant binding for this mount (cinatra#1878 W3): the
+   *  bound assistant PACKAGE and, for a remote-capable assistant, the connected
+   *  site instance. Seeds the client's URL builders + thread binding so new
+   *  threads persist their canonical `/chat/<vendor>/<slug>[/<instance>]` shape. */
+  initialAssistantPackage?: string | null;
+  initialInstanceId?: string | null;
+  /** The "Remote chat" flyout entry (cinatra#1878 W3, AC#5): shown ONLY for a
+   *  remote-capable bound thread; the href is server-sourced from the bound
+   *  assistant's first-party remote-target resolver for the authorized instance. */
+  remoteChat?: { label: string; href: string };
   userId?: string;
   initialMention?: string;
   initialMode?: ChatPageMode;
