@@ -11,7 +11,7 @@ import { Main } from "@/components/layout/main";
 import { saveOpenAIConnectionAction } from "@/app/campaigns/actions";
 import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
 import { Label } from "@/components/ui/label";
-import { readDefaultLlmProviderFromDatabase, readDefaultImageProviderFromDatabase, readObjectsClassificationModelFromDatabase, readAgentCreationLlmProviderFromDatabase, readAgentCreationModelFromDatabase, readAnthropicSkillSyncEnabledFromDatabase, isAgentCreationPinActive } from "@/lib/database";
+import { readDefaultLlmProviderFromDatabase, readDefaultImageProviderFromDatabase, readObjectsClassificationModelFromDatabase, readAgentCreationLlmProviderFromDatabase, readAgentCreationModelFromDatabase, isAgentCreationPinActive } from "@/lib/database";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";
 import { SearchParamToast } from "@/components/search-param-toast";
 import { Button } from "@/components/ui/button";
@@ -369,7 +369,6 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
                   // inputs until the readiness gate flips so operators cannot set a
                   // value that no live LLM call consumes.
                   agentCreationPinActive={isAgentCreationPinActive()}
-                  anthropicSkillSyncEnabled={readAnthropicSkillSyncEnabledFromDatabase()}
                 />
               </CardContent>
             </Card>

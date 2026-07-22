@@ -1,25 +1,29 @@
 // @vitest-environment jsdom
 /**
- * DefaultProvidersCard end-of-page Anthropic section gating (cinatra#613).
+ * DefaultProvidersCard — Anthropic skill-upload section REMOVAL PIN
+ * (cinatra#1104, following the #1972 openai honest-retirement template).
  *
  * The Anthropic skill-upload governance block (the "Upload skill content to
- * Anthropic" toggle + its non-ZDR data-residency warning) is the last section
- * on `/configuration/llm`. It must NOT render when the Anthropic connector
- * isn't set up — showing Anthropic-specific config for a provider that isn't
- * connected makes no sense. When hidden, a discoverable "Connect Anthropic"
- * affordance must remain, pointing at the connector setup page.
+ * Anthropic" toggle + its non-ZDR data-residency warning) and its
+ * "Connect Anthropic" affordance USED to be the last section on
+ * `/configuration/llm`. It was a duplicate of the setting the
+ * anthropic-connector Skills tab now owns (persisted through the
+ * `@cinatra-ai/host:anthropic-skill-config` write capability), so core's copy
+ * was retired.
  *
- * Gating is on `anthropicConnected`, which the server page derives from durable
- * connector setup state (a saved Nango connection — see
- * `getAnthropicAPIStatus`), NOT a live healthcheck, so a momentary Anthropic
- * outage does not make the section vanish.
+ * This test pins the ABSENCE of that section so an ungated re-introduction of a
+ * second, core-side write surface for the non-ZDR skill-upload opt-in fails CI:
+ *   1. the toggle + ZDR warning + Connect-Anthropic affordance render in
+ *      NEITHER connector state (connected or not);
+ *   2. `DefaultProvidersCard` no longer accepts an `anthropicSkillSyncEnabled`
+ *      prop (dropped from `renderCard`) — TS would fail the build if it did.
  */
 import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// next/link → a plain anchor so the rendered href is assertable in jsdom.
+// next/link → a plain anchor so any rendered href is assertable in jsdom.
 vi.mock("next/link", () => ({
   default: ({
     href,
@@ -32,7 +36,7 @@ vi.mock("next/link", () => ({
     React.createElement("a", { href, ...rest }, children),
 }));
 
-// The save button posts a server action; it is irrelevant to the gating contract.
+// The save button posts a server action; it is irrelevant to the removal contract.
 vi.mock("@/app/campaigns/actions", () => ({
   setDefaultProvidersAction: vi.fn(),
 }));
@@ -63,7 +67,6 @@ function renderCard(overrides: { anthropicConnected: boolean }): HTMLElement {
         agentCreationOpenaiModels={["gpt-5.5", "gpt-5"]}
         agentCreationProvider={null}
         agentCreationModel={null}
-        anthropicSkillSyncEnabled={false}
       />,
     );
   });
@@ -83,35 +86,25 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("DefaultProvidersCard Anthropic section gating (#613)", () => {
-  it("renders the Anthropic skill-upload section when the connector is set up", () => {
-    const container = renderCard({ anthropicConnected: true });
-    const text = container.textContent ?? "";
-    expect(text).toContain("Upload skill content to Anthropic");
-    // The always-visible non-ZDR data-residency warning is part of the section.
-    expect(text).toMatch(/not ZDR-eligible/i);
-    // The opt-in toggle is present.
-    expect(
-      container.querySelector("#anthropic-skill-sync-enabled"),
-    ).not.toBeNull();
-  });
+describe("DefaultProvidersCard — Anthropic skill-upload section removed (#1104)", () => {
+  for (const anthropicConnected of [true, false]) {
+    it(`renders no skill-upload toggle or ZDR warning (anthropicConnected=${anthropicConnected})`, () => {
+      const container = renderCard({ anthropicConnected });
+      const text = container.textContent ?? "";
+      expect(text).not.toContain("Upload skill content to Anthropic");
+      expect(text).not.toMatch(/not ZDR-eligible/i);
+      expect(
+        container.querySelector("#anthropic-skill-sync-enabled"),
+      ).toBeNull();
+    });
 
-  it("hides the Anthropic skill-upload section when the connector is NOT set up", () => {
-    const container = renderCard({ anthropicConnected: false });
-    const text = container.textContent ?? "";
-    expect(text).not.toContain("Upload skill content to Anthropic");
-    expect(text).not.toMatch(/not ZDR-eligible/i);
-    expect(
-      container.querySelector("#anthropic-skill-sync-enabled"),
-    ).toBeNull();
-  });
-
-  it("keeps a discoverable Connect Anthropic affordance when the connector is NOT set up", () => {
-    const container = renderCard({ anthropicConnected: false });
-    const connectLink = container.querySelector(
-      'a[href="/connectors/cinatra-ai/anthropic-connector/setup"]',
-    );
-    expect(connectLink).not.toBeNull();
-    expect(connectLink?.textContent ?? "").toMatch(/connect anthropic/i);
-  });
+    it(`renders no Connect-Anthropic setup affordance (anthropicConnected=${anthropicConnected})`, () => {
+      const container = renderCard({ anthropicConnected });
+      expect(
+        container.querySelector(
+          'a[href="/connectors/cinatra-ai/anthropic-connector/setup"]',
+        ),
+      ).toBeNull();
+    });
+  }
 });
