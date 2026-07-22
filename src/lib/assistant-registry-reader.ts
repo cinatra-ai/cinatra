@@ -41,6 +41,7 @@ import {
   assistantHandles,
   assistantTagAlias,
   assistantAudience,
+  assistantPause,
   normalizeAssistantHandle,
   readTeamsForUser,
   readProjectGrantsForUser,
@@ -448,8 +449,19 @@ export async function readAssistantRegistryForActor(
   );
   if (packageNames.length === 0) return [];
 
-  // 3. Aliases + audience grants for the candidate packages.
-  const [aliasRows, audienceRows] = await Promise.all([
+  // The candidate principal ids (for the principal-keyed PAUSE lookup).
+  const candidatePrincipalIds = Array.from(
+    new Set([...installed, ...builtin].map((r) => r.assistantUserId).filter((id): id is string => !!id)),
+  );
+
+  // 3. Aliases + audience grants for the candidate packages, plus the paused
+  //    principal set (cinatra#1880 W5). An installation-wide PAUSE is keyed by the
+  //    assistant PRINCIPAL (`assistant_user_id`) — a paused assistant fails CLOSED
+  //    exactly like an out-of-audience one: it is dropped from the visible set, so
+  //    the pause is enforced across every W2 surface through this ONE audience
+  //    truth. The builtin Cinatra principal is NEVER dropped for pause (defense in
+  //    depth; the writer + UI also refuse to pause it).
+  const [aliasRows, audienceRows, pausedRows] = await Promise.all([
     db
       .select({ packageName: assistantTagAlias.packageName, alias: assistantTagAlias.alias })
       .from(assistantTagAlias)
@@ -462,7 +474,14 @@ export async function readAssistantRegistryForActor(
       })
       .from(assistantAudience)
       .where(inArray(assistantAudience.packageName, packageNames)),
+    candidatePrincipalIds.length === 0
+      ? Promise.resolve([] as { id: string }[])
+      : db
+          .select({ id: assistantPause.assistantUserId })
+          .from(assistantPause)
+          .where(inArray(assistantPause.assistantUserId, candidatePrincipalIds)),
   ]);
+  const pausedIds = new Set(pausedRows.map((r) => r.id));
 
   const aliasesByPkg = new Map<string, string[]>();
   for (const r of aliasRows) {
@@ -477,10 +496,12 @@ export async function readAssistantRegistryForActor(
     grantsByPkg.set(r.packageName, list);
   }
 
-  // 4. Audience-filter the installed set; union the always-visible builtin. Dedupe
-  //    by package_name (builtin wins the isBuiltin flag).
+  // 4. Audience-filter the installed set (AND drop PAUSED principals); union the
+  //    always-visible builtin. Dedupe by package_name (builtin wins the isBuiltin
+  //    flag). A paused principal is invisible exactly like an out-of-audience one.
   const byPkg = new Map<string, AssistantRegistryEntry>();
   for (const row of installed) {
+    if (row.assistantUserId && pausedIds.has(row.assistantUserId)) continue; // paused → fail-closed
     if (matchesAssistantAudience(grantsByPkg.get(row.packageName) ?? [], ctx)) {
       byPkg.set(row.packageName, toEntry(row, aliasesByPkg.get(row.packageName) ?? [], false));
     }

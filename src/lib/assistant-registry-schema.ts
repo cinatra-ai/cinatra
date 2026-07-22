@@ -103,3 +103,38 @@ export function assistantRegistrySchemaQueries(schemaName: string): { text: stri
       ON CONFLICT (alias) DO NOTHING` },
   ];
 }
+
+// --- Assistant PAUSE table (cinatra#1880, Epic #1873 W5) ---------------------
+// Co-located with the registry-foundation DDL (rather than a standalone module)
+// so the store's synchronous bootstrap composition reaches it WITHOUT adding a
+// new first-party module to every route's reachable graph (route-graph ratchet).
+// Still a pure string builder with ZERO imports.
+//
+//   assistant_pause — an installation-wide operational PAUSE of an assistant,
+//     keyed by the assistant PRINCIPAL (`assistant_user_id`) — the SAME axis the
+//     W2 builtin-host identification fix (f9f70d26a) keys on, so a handle/alias
+//     rename never loses or retargets a pause. Presence of a row == paused. A
+//     paused principal drops out of the audience-filtered registry reader
+//     (`readAssistantRegistryForActor`) exactly like an out-of-audience
+//     assistant, so pause is enforced fail-closed across every W2 enforcement
+//     surface through the ONE audience truth. The builtin Cinatra principal is
+//     never paused (the reader unions it in unconditionally; the writer + UI
+//     refuse it). ONE NET-NEW table (additive); the twin migration `core__0070`
+//     carries the SAME create onto the operator upgrade path (fresh-install AND
+//     upgrade produce identical schema). Fail-CLOSED permission surface: a
+//     paused assistant is unaddressable; an empty table means "nothing paused"
+//     (a strict additive no-op on every existing deployment).
+
+/** Bootstrap DDL for `assistant_pause`, spread into
+ *  `buildCreateStoreSchemaQueries`. Idempotent (CREATE TABLE IF NOT EXISTS).
+ *  Keyed by the assistant PRINCIPAL (`assistant_user_id` is the PK). */
+export function assistantPauseSchemaQueries(schemaName: string): { text: string }[] {
+  const s = schemaName.replaceAll('"', '""');
+  return [
+    { text: `CREATE TABLE IF NOT EXISTS "${s}"."assistant_pause" (
+      assistant_user_id text PRIMARY KEY,
+      paused_at timestamptz NOT NULL DEFAULT now(),
+      paused_by text
+    )` },
+  ];
+}

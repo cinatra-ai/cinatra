@@ -229,6 +229,17 @@ describe("canonical lifecycle status reachability guard", () => {
         // above. The code under test is READ-ONLY (it never writes
         // installed_extension; the raw INSERTs are fixture seeding only).
         "src/lib/objects/__tests__/platform-artifact-enumeration-store.integration.test.ts",
+        // Assistant audience + pause integration test (cinatra#1880 W5): the
+        // same fixture class as the registry-reader entry above — its FIXTURE
+        // builds a minimal isolated per-test schema (installed_extension +
+        // agent_templates + assistant_handles/audience/tag_alias/pause) and
+        // seeds live install rows with raw INSERTs so the audience-filtered
+        // reader (readAssistantRegistryForActor) and the principal-keyed pause
+        // resolve against real SQL. Confined to its own per-test schema; the
+        // code under test is READ-ONLY against installed_extension (the raw
+        // INSERTs are fixture seeding only; the writers touch assistant_audience
+        // and assistant_pause, never installed_extension).
+        "src/lib/__tests__/integration/assistant-audience-pause.integration.test.ts",
       ]);
       const offenders = hits.filter((f) => !allowed.has(f));
       expect(

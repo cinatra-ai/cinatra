@@ -22,7 +22,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { assistantHandleSchemaQueries } from "@/lib/assistant-thread-schema";
-import { assistantRegistrySchemaQueries, BUILTIN_ASSISTANT_ALIAS } from "@/lib/assistant-registry-schema";
+import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries, BUILTIN_ASSISTANT_ALIAS } from "@/lib/assistant-registry-schema";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
@@ -63,8 +63,13 @@ maybe("AC#5 — registry reader audience filter (live)", () => {
     await admin.query(`CREATE SCHEMA "${schema}"`);
     await admin.query(`SET search_path TO "${schema}"`);
 
-    // Registry tables from the shared bootstrap leaf builders.
-    for (const q of [...assistantHandleSchemaQueries(schema), ...assistantRegistrySchemaQueries(schema)]) {
+    // Registry tables from the shared bootstrap leaf builders (incl. the
+    // principal-keyed pause table the reader now fail-closes on — cinatra#1880 W5).
+    for (const q of [
+      ...assistantHandleSchemaQueries(schema),
+      ...assistantRegistrySchemaQueries(schema),
+      ...assistantPauseSchemaQueries(schema),
+    ]) {
       if (q.text.trim().toUpperCase().startsWith("INSERT")) continue; // control our own seed
       await admin.query(q.text);
     }
@@ -101,7 +106,8 @@ maybe("AC#5 — registry reader audience filter (live)", () => {
   beforeEach(async () => {
     await admin.query(
       `TRUNCATE "${schema}".assistant_handles, "${schema}".assistant_tag_alias,
-       "${schema}".assistant_audience, "${schema}".agent_templates, "${schema}".installed_extension`,
+       "${schema}".assistant_audience, "${schema}".assistant_pause,
+       "${schema}".agent_templates, "${schema}".installed_extension`,
     );
   });
 
