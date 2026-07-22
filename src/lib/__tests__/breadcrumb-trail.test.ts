@@ -282,6 +282,18 @@ describe("buildBreadcrumbTrail — crumb contributions (#1737)", () => {
         contributions: [{ prefix: `/organizations/${ORG_ID}`, label: "Acme Inc" }],
       }).map((c) => c.label),
     ).toEqual(["Organizations", "Acme Inc"]);
+    // Org settings publishes the same dual contribution as teams (#1734).
+    const orgSettings = buildBreadcrumbTrail(`/organizations/${ORG_ID}/settings`, {
+      contributions: [
+        { prefix: `/organizations/${ORG_ID}`, label: "Acme Inc" },
+        { prefix: `/organizations/${ORG_ID}/settings`, label: "Settings" },
+      ],
+    });
+    expect(orgSettings.map((c) => c.label)).toEqual([
+      "Organizations",
+      "Acme Inc",
+      "Settings",
+    ]);
     // Projects settings publishes the same dual contribution as teams (#1733).
     const projectSettings = buildBreadcrumbTrail(`/projects/${TEAM_ID}/settings`, {
       contributions: [
