@@ -28,6 +28,11 @@ export type ObjectsActorEnvelope = PrimitiveActorContext & {
   teamIds?: string[];
   projectGrants?: ActorContext["projectGrants"];
   projectIds?: string[];
+  // Internal-read authority (cinatra#1948 (b)). Carried through as the trusted
+  // boolean the kernel reads (`deriveRoleHints` → `internal_reader`); only ever
+  // set by a server-only internal call site that builds an `internalRead`
+  // ActorContext.
+  internalRead?: boolean;
 };
 
 /**
@@ -70,5 +75,8 @@ export function actorContextToObjectsEnvelope(actor: ActorContext): ObjectsActor
     ...(actor.teamIds !== undefined ? { teamIds: actor.teamIds } : {}),
     ...(actor.projectGrants !== undefined ? { projectGrants: actor.projectGrants } : {}),
     ...(actor.projectIds !== undefined ? { projectIds: actor.projectIds } : {}),
+    // Internal-read authority (cinatra#1948 (b)) — forwarded as the trusted
+    // boolean the objects handlers' authz path (`deriveRoleHints`) reads.
+    ...(actor.internalRead === true ? { internalRead: true } : {}),
   } as ObjectsActorEnvelope;
 }

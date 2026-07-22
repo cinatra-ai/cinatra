@@ -189,18 +189,19 @@ export function buildBreadcrumbTrail(
     return undefined;
   };
 
-  // Chat thread: collapse to "Chat > <thread title>" — a documented shape
-  // rule (ratified on cinatra#1737): the crumb shows the thread's PERSISTED
-  // title (whatever wrote it), supplied over the chat bus, never re-derived.
-  if (
-    segments[0] === "chat" &&
-    segments.length >= 2 &&
-    /^[a-f0-9-]{36}$/.test(segments[1])
-  ) {
-    return [
-      { label: "Chat", href: "/chat" },
-      { label: chatThreadTitle ?? "Thread", href: pathname },
-    ];
+  // Chat: collapse to "Chat" (a new/empty chat or the bare mount) or
+  // "Chat > <thread title>" (a thread) — a documented shape rule (ratified on
+  // cinatra#1737). The URL now carries `/chat/<vendor>/<slug>[/<instance>]/
+  // <titleSlug>` (cinatra#1878 W3), so the retired `/chat/<uuid>` regex is gone;
+  // a thread is signalled by the PERSISTED title arriving over the chat bus
+  // (present only while a thread is active — never for a new/empty chat), never
+  // re-derived from the path.
+  if (segments[0] === "chat") {
+    const crumbs: BreadcrumbCrumb[] = [{ label: "Chat", href: "/chat" }];
+    if (chatThreadTitle) {
+      crumbs.push({ label: chatThreadTitle, href: pathname });
+    }
+    return crumbs;
   }
 
   // Agent instance: collapse the opaque vendor/package/instance path to

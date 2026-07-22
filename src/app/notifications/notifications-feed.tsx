@@ -48,6 +48,12 @@ import type { AppNotification } from "@cinatra-ai/notifications/types";
 import { isRunningProgressNotification } from "@cinatra-ai/notifications/client";
 
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
@@ -718,20 +724,14 @@ function FeedEmptyState({
   // per-type empties).
   if (feedIsEmpty) {
     return (
-      <div
-        data-conformance-id="notifications-empty"
-        className="flex flex-col items-center gap-3 rounded-lg border border-line bg-surface-strong px-5 py-10 text-center"
-      >
-        <span
-          aria-hidden
-          className="grid size-10 place-items-center rounded-lg bg-surface-muted text-muted-foreground"
-        >
-          <Info className="size-5" />
-        </span>
-        <p className="font-sans text-sm font-semibold text-foreground">
-          No notifications
-        </p>
-      </div>
+      <Empty data-conformance-id="notifications-empty">
+        <EmptyHeader>
+          <EmptyMedia variant="icon" aria-hidden>
+            <Info />
+          </EmptyMedia>
+          <EmptyTitle>No notifications</EmptyTitle>
+        </EmptyHeader>
+      </Empty>
     );
   }
   const chipLabel =

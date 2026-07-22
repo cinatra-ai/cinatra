@@ -24,6 +24,11 @@ import { randomUUID } from "node:crypto";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
+// The PURE title-slug allocator core (cinatra#1878 W3, AC#2). Zero-dep leaf —
+// keeps this sync store sync (reaches no async-root import); the container-scoped
+// atomic mint below drives it against the `assistant_threads_container_slug_uniq`
+// unique index.
+import { allocateByAttempt, slugifyTitle } from "@cinatra-ai/chat/thread-slug";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -73,6 +78,11 @@ export type AssistantThread = {
    *  instance the binding is scoped to, carried into dispatch context. NULL when
    *  the binding is not instance-scoped. */
   instanceId: string | null;
+  /** The thread's URL title-slug (cinatra#1878 W3, AC#2): the stable
+   *  `/chat/<vendor>/<slug>/[<instance>/]<titleSlug>` segment, minted ONCE by the
+   *  atomic allocator from the title, container-scoped-unique. NULL == a
+   *  titleless thread whose slug has not been minted yet. */
+  titleSlug: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -204,6 +214,7 @@ export function mapAssistantThreadRow(row: Record<string, unknown>): AssistantTh
     contextId: toStringOrNull(row.context_id),
     assistantPackage: toStringOrNull(row.assistant_package),
     instanceId: toStringOrNull(row.instance_id),
+    titleSlug: toStringOrNull(row.title_slug),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
@@ -244,39 +255,156 @@ function schemaIdent(): string {
   return postgresSchema.replaceAll('"', '""');
 }
 
-/** Create a structured assistant thread; returns the persisted record. */
+// ---------------------------------------------------------------------------
+// Thread title-slug allocator — the DB seam (cinatra#1878 W3, AC#2). The PURE
+// normalization + collision policy lives in @cinatra-ai/chat/thread-slug; this
+// half drives the atomic, container-scoped mint against the
+// `assistant_threads_container_slug_uniq` unique index. First-writer-wins:
+//   - createAssistantThread mints AT insert when a title is present (no titled
+//     row commits slugless);
+//   - a titleless create defers (title_slug NULL);
+//   - ensureThreadSlug is the deferred/idempotent mint the FIRST titled persist
+//     calls (no-op if a slug already exists; concurrent titled writers of the
+//     SAME thread converge on exactly one slug via the `title_slug IS NULL`
+//     guard);
+//   - a rename never re-slugs (the guard + no-op keep the URL stable).
+// ---------------------------------------------------------------------------
+
+/** True when a sync-runner error is a container slug-uniqueness violation (the
+ *  index the allocator retries against). The sync worker surfaces the pg error
+ *  as a plain message string (no `.code`), so match the constraint name. */
+export function isContainerSlugUniqueViolation(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /duplicate key value violates unique constraint/i.test(msg) &&
+    /assistant_threads_container_slug_uniq/.test(msg)
+  );
+}
+
+/** Create a structured assistant thread; returns the persisted record. When a
+ *  title is present, mints the container-scoped title-slug ATOMICALLY at insert
+ *  (retrying a suffixed candidate on a container collision) so a titled row never
+ *  commits slugless; a titleless create defers the slug (NULL). */
 export function createAssistantThread(input: CreateAssistantThreadInput): AssistantThread {
   ensurePostgresSchema();
   const id = input.id ?? randomUUID();
   const schema = schemaIdent();
-  const [res] = runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    queries: [
-      {
-        // origin is stamped 'assistant-native' — createAssistantThread is the
-        // structured-native writer (assistant runtime). The legacy delete-all
-        // wipe restricts to 'legacy-chat' rows, so a thread born here survives it.
-        text: `INSERT INTO "${schema}"."assistant_threads"
-                 (id, assistant_user_id, owner_user_id, org_id, project_id, origin, title, context_id, assistant_package, instance_id)
-               VALUES ($1, $2, $3, $4, $5, 'assistant-native', $6, $7, $8, $9)
-               RETURNING id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, created_at, updated_at`,
-        values: [
-          id,
-          input.assistantUserId ?? null,
-          input.ownerUserId ?? null,
-          input.orgId ?? null,
-          input.projectId ?? null,
-          input.title ?? null,
-          input.contextId ?? null,
-          input.assistantPackage ?? null,
-          input.instanceId ?? null,
-        ],
-      },
-    ],
-  });
-  const row = res?.rows?.[0] as Record<string, unknown> | undefined;
-  if (!row) throw new Error("createAssistantThread: insert returned no row");
-  return mapAssistantThreadRow(row);
+
+  const insertWithSlug = (titleSlug: string | null): AssistantThread => {
+    // origin is stamped 'assistant-native' — createAssistantThread is the
+    // structured-native writer (assistant runtime). The legacy delete-all wipe
+    // restricts to 'legacy-chat' rows, so a thread born here survives it.
+    const [res] = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      queries: [
+        {
+          text: `INSERT INTO "${schema}"."assistant_threads"
+                   (id, assistant_user_id, owner_user_id, org_id, project_id, origin, title, context_id, assistant_package, instance_id, title_slug)
+                 VALUES ($1, $2, $3, $4, $5, 'assistant-native', $6, $7, $8, $9, $10)
+                 RETURNING id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, title_slug, created_at, updated_at`,
+          values: [
+            id,
+            input.assistantUserId ?? null,
+            input.ownerUserId ?? null,
+            input.orgId ?? null,
+            input.projectId ?? null,
+            input.title ?? null,
+            input.contextId ?? null,
+            input.assistantPackage ?? null,
+            input.instanceId ?? null,
+            titleSlug,
+          ],
+        },
+      ],
+    });
+    const row = res?.rows?.[0] as Record<string, unknown> | undefined;
+    if (!row) throw new Error("createAssistantThread: insert returned no row");
+    return mapAssistantThreadRow(row);
+  };
+
+  // Titleless create → defer the slug (NULL); the first titled persist mints it.
+  if (input.title == null || input.title.trim().length === 0) {
+    return insertWithSlug(null);
+  }
+
+  // Titled create → mint the slug at insert. Each attempt is its OWN transaction
+  // (a failed insert on the container index rolls back cleanly and the id is free
+  // to reuse), so the retry loop is atomic per attempt.
+  let created: AssistantThread | null = null;
+  allocateByAttempt(
+    slugifyTitle(input.title),
+    (candidate) => {
+      try {
+        created = insertWithSlug(candidate);
+        return true;
+      } catch (err) {
+        if (isContainerSlugUniqueViolation(err)) return false; // container collision → next candidate
+        throw err;
+      }
+    },
+    { uniqueTail: id },
+  );
+  if (!created) throw new Error("createAssistantThread: slug allocation returned no row");
+  return created;
+}
+
+/**
+ * The DEFERRED, idempotent title-slug mint (cinatra#1878 W3, AC#2) — the seam a
+ * title-bearing persist calls to give a titleless thread its stable URL slug.
+ *   - NO-OP if a slug already exists (returns it) — the idempotency that keeps a
+ *     rename from re-slugging and makes concurrent titled writers converge.
+ *   - Otherwise a CONDITIONAL update (`title_slug IS NULL` guard) mints the
+ *     container-scoped slug; a container collision retries a suffixed candidate;
+ *     if another writer set the slug first (0 rows updated), re-reads and returns
+ *     THEIR slug — so exactly one slug is ever minted for a thread.
+ * Returns the thread's slug, or null when the thread does not exist.
+ */
+export function ensureThreadSlug(
+  threadId: string,
+  title?: string | null,
+): string | null {
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  const existing = getAssistantThread(threadId);
+  if (!existing) return null;
+  if (existing.titleSlug) return existing.titleSlug; // no-op: slug already minted
+
+  const base = slugifyTitle(title ?? existing.title);
+  let minted: string | null = null;
+  allocateByAttempt(
+    base,
+    (candidate) => {
+      let res;
+      try {
+        [res] = runPostgresQueriesSync({
+          connectionString: getPostgresConnectionString(),
+          queries: [
+            {
+              // First-writer-wins guard: only sets the slug while it is still NULL.
+              text: `UPDATE "${schema}"."assistant_threads"
+                     SET title_slug = $1, updated_at = now()
+                     WHERE id = $2 AND title_slug IS NULL
+                     RETURNING title_slug`,
+              values: [candidate, threadId],
+            },
+          ],
+        });
+      } catch (err) {
+        if (isContainerSlugUniqueViolation(err)) return false; // container collision → next candidate
+        throw err;
+      }
+      if ((res?.rowCount ?? 0) > 0) {
+        minted = candidate;
+        return true;
+      }
+      // 0 rows: another writer minted first (or the thread vanished) — adopt the
+      // committed slug so exactly one slug is minted for the thread.
+      minted = getAssistantThread(threadId)?.titleSlug ?? null;
+      return true;
+    },
+    { uniqueTail: threadId },
+  );
+  return minted;
 }
 
 /** Load a single thread by id, or null when absent. No authorization — callers
@@ -288,9 +416,44 @@ export function getAssistantThread(threadId: string): AssistantThread | null {
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, created_at, updated_at
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, title_slug, created_at, updated_at
                FROM "${schema}"."assistant_threads" WHERE id = $1 LIMIT 1`,
         values: [threadId],
+      },
+    ],
+  });
+  const row = res?.rows?.[0] as Record<string, unknown> | undefined;
+  return row ? mapAssistantThreadRow(row) : null;
+}
+
+/**
+ * Resolve a thread by its container-scoped title-slug (cinatra#1878 W3) — the
+ * read the /chat route uses to turn `/chat/<vendor>/<slug>/[<instance>/]<slug>`
+ * back into the durable thread id. The container is `(assistantPackage,
+ * instanceId?)`; NULL package/instance collapse to '' exactly like the unique
+ * index, so the lookup key matches the mint key. No authorization — the caller
+ * applies the actor's audience/thread-access policy (the route guard + the
+ * downstream authorized thread load). Returns the thread, or null when no thread
+ * in that container carries the slug.
+ */
+export function getAssistantThreadBySlug(
+  assistantPackage: string | null,
+  instanceId: string | null,
+  titleSlug: string,
+): AssistantThread | null {
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, title_slug, created_at, updated_at
+               FROM "${schema}"."assistant_threads"
+               WHERE COALESCE(assistant_package, '') = COALESCE($1, '')
+                 AND COALESCE(instance_id, '') = COALESCE($2, '')
+                 AND title_slug = $3
+               LIMIT 1`,
+        values: [assistantPackage, instanceId, titleSlug],
       },
     ],
   });
@@ -306,7 +469,7 @@ export function listAssistantThreadsForOrg(orgId: string, limit = 50): Assistant
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, created_at, updated_at
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, title_slug, created_at, updated_at
                FROM "${schema}"."assistant_threads"
                WHERE org_id = $1
                ORDER BY updated_at DESC, id
@@ -337,7 +500,7 @@ export function listAssistantThreadsForOrgVisibleTo(
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, created_at, updated_at
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, title_slug, created_at, updated_at
                FROM "${schema}"."assistant_threads"
                WHERE org_id = $1
                  AND (owner_user_id = $2 OR assistant_user_id = $2)
@@ -366,7 +529,7 @@ export function getAssistantThreadByTeamId(teamId: string): AssistantThread | nu
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, created_at, updated_at
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, title_slug, created_at, updated_at
                FROM "${schema}"."assistant_threads"
                WHERE team_id = $1
                ORDER BY updated_at DESC, id
@@ -668,6 +831,14 @@ export type AssistantThreadSummary = {
   ownerUserId: string | null;
   teamId: string | null;
   origin: AssistantThreadOrigin | null;
+  /** Canonical binding + URL slug (cinatra#1878 W3) — the fields a consumer needs
+   *  to build the thread's canonical `/chat/<vendor>/<slug>[/<instance>]/<titleSlug>`
+   *  link via the codec (the user-profile "Recent Conversations" list). NULL slug
+   *  == not-yet-minted; NULL package == an unbound thread (no addressable
+   *  container yet — the caller falls back to the bare `/chat` mount). */
+  assistantPackage: string | null;
+  instanceId: string | null;
+  titleSlug: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -696,7 +867,7 @@ export function listAssistantThreadSummariesForOwnerInOrg(
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT at.id, at.owner_user_id, at.team_id, at.origin, at.title, at.created_at, at.updated_at
+        text: `SELECT at.id, at.owner_user_id, at.team_id, at.origin, at.title, at.assistant_package, at.instance_id, at.title_slug, at.created_at, at.updated_at
                FROM "${schema}"."assistant_threads" at
                WHERE at.org_id = $1
                  AND at.owner_user_id = $2
@@ -721,6 +892,9 @@ export function listAssistantThreadSummariesForOwnerInOrg(
       ownerUserId: toStringOrNull(row.owner_user_id),
       teamId: toStringOrNull(row.team_id),
       origin: toOriginOrNull(row.origin),
+      assistantPackage: toStringOrNull(row.assistant_package),
+      instanceId: toStringOrNull(row.instance_id),
+      titleSlug: toStringOrNull(row.title_slug),
       createdAt: toIso(row.created_at),
       updatedAt: toIso(row.updated_at),
     };
@@ -808,7 +982,7 @@ export function reconstructThreadPayload(threadId: string): Record<string, unkno
       // runner; SET TRANSACTION must precede the first query in the tx).
       { text: `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ`, values: [] },
       {
-        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, scalars, title, context_id, assistant_package, instance_id, created_at, updated_at
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, scalars, title, context_id, assistant_package, instance_id, title_slug, created_at, updated_at
                FROM "${schema}"."assistant_threads" WHERE id = $1 LIMIT 1`,
         values: [threadId],
       },

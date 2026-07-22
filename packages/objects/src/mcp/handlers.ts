@@ -181,6 +181,171 @@ function deriveEntityName(data: Record<string, unknown>, type: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Loud-drop diagnostics (D3 follow-up, cinatra#1948 (a)).
+//
+// `objects_list`'s authorization post-filter (`filterByAuthz`) drops rows the
+// actor cannot read. For an INTERACTIVE caller (a UI user / an agent) that is
+// the intended, silent behaviour — the caller simply cannot see some rows. For
+// an INTERNAL / SYSTEM read (a background routing resolve, a worker) a drop
+// means the internal read authority was MIS-SCOPED: the read returns `[]`
+// indistinguishable from "no rows". That exact silence is what let the #1946
+// send-routing defect (a role-less `System` actor denied `object.read`) hide
+// across several verification rounds. So when the filter drops rows for an
+// internal/system read we emit a structured `console.warn` (greppable,
+// alertable) AND increment an in-process metric (scrapable by a metrics sink,
+// deterministically observable in tests via the subscription hook).
+//
+// DELIBERATELY colocated in this already-route-reachable module rather than a
+// new leaf file: `objects_list` is reachable from the locked FIXED_ROUTES and
+// the route-graph ratchet (scripts/audit/route-graph-ratchet) is shrink-only —
+// a NEW first-party module imported here would grow every locked route's
+// reachable-module count. The metric state is `globalThis`-pinned (a single
+// process-wide instance across module re-eval), mirroring the usage-event bus.
+// ---------------------------------------------------------------------------
+
+/** The minimal actor facets the internal/system-read predicate reads. */
+export type InternalReadActorFacets = {
+  actorType?: string | null;
+  source?: string | null;
+};
+
+/**
+ * Is this list read an INTERNAL / SYSTEM read (as opposed to an interactive
+ * user / agent read)?
+ *
+ * True for exactly the two shapes the internal routing resolves produce:
+ *   - `actorType === "system"` — a `System` / `InternalWorker` / service-account
+ *     principal (the role-less-System silent-drop class), and
+ *   - `source === "worker"` — a background/worker execution context (the
+ *     `authSource:"worker"` the routing resolver stamps, including its
+ *     HumanUser owner shape).
+ *
+ * Interactive callers — a UI user (`source:"ui"`, `actorType:"human"`) or an
+ * agent (`source:"agent"`, `actorType:"model"`) — are NOT internal reads: a
+ * dropped row there is the normal authorization post-filter, so the loud-drop
+ * stays off for them (no noise).
+ */
+export function isInternalSystemRead(
+  actor: InternalReadActorFacets | null | undefined,
+): boolean {
+  if (!actor) return false;
+  return actor.actorType === "system" || actor.source === "worker";
+}
+
+/** Structured payload emitted when an internal/system read drops rows. */
+export type InternalReadAuthzDrop = {
+  /** The primitive that dropped rows (e.g. "objects_list"). */
+  primitive: string;
+  /** Number of rows the authz post-filter dropped. */
+  droppedCount: number;
+  /** Total rows considered before the post-filter. */
+  totalCount: number;
+  /** The dropped rows' distinct object types (for triage). */
+  droppedTypes: string[];
+  /** The read actor's tier — "system" / "human" / etc. */
+  actorType: string | null;
+  /** The read actor's source — "worker" / "scheduler" / etc. */
+  source: string | null;
+  /** The org the read was scoped to (mis-scoped reads still carry an org). */
+  orgId: string | null;
+};
+
+type AuthzDropDiagnosticsState = {
+  dropEvents: number;
+  droppedRows: number;
+  listeners: Set<(event: InternalReadAuthzDrop) => void>;
+};
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __cinatraObjectsInternalReadAuthzDrop: AuthzDropDiagnosticsState | undefined;
+}
+
+function authzDropState(): AuthzDropDiagnosticsState {
+  if (!globalThis.__cinatraObjectsInternalReadAuthzDrop) {
+    globalThis.__cinatraObjectsInternalReadAuthzDrop = {
+      dropEvents: 0,
+      droppedRows: 0,
+      listeners: new Set(),
+    };
+  }
+  return globalThis.__cinatraObjectsInternalReadAuthzDrop;
+}
+
+/** The stable diagnostic code — grep / alert on this. */
+export const INTERNAL_READ_AUTHZ_DROP_CODE = "objects.filterByAuthz.internal_read_drop" as const;
+
+/**
+ * Record that an internal/system read dropped rows: a structured `console.warn`
+ * (the loud, greppable line) + an in-process metric increment + listener
+ * fan-out (the metric). Never throws — a diagnostic must never break a read.
+ * Callers gate on `isInternalSystemRead(actor)` first.
+ */
+export function recordInternalReadAuthzDrop(event: InternalReadAuthzDrop): void {
+  const state = authzDropState();
+  state.dropEvents += 1;
+  state.droppedRows += event.droppedCount;
+
+  try {
+    console.warn(
+      `[${event.primitive}] filterByAuthz dropped ${event.droppedCount}/${event.totalCount} row(s) on an ` +
+        `internal/system read — the internal read authority is likely MIS-SCOPED ` +
+        `(a mis-scoped internal read returns [] indistinguishable from "no rows"; D3 follow-up cinatra#1948).`,
+      {
+        code: INTERNAL_READ_AUTHZ_DROP_CODE,
+        primitive: event.primitive,
+        droppedCount: event.droppedCount,
+        totalCount: event.totalCount,
+        droppedTypes: event.droppedTypes,
+        actorType: event.actorType,
+        source: event.source,
+        orgId: event.orgId,
+      },
+    );
+  } catch {
+    // console failures must never break a read.
+  }
+
+  for (const listener of state.listeners) {
+    try {
+      listener(event);
+    } catch {
+      // A misbehaving metrics sink must never break a read.
+    }
+  }
+}
+
+/**
+ * Subscribe to internal/system-read drop events (a metrics sink, or a test).
+ * Returns an unsubscribe function.
+ */
+export function onInternalReadAuthzDrop(
+  listener: (event: InternalReadAuthzDrop) => void,
+): () => void {
+  const state = authzDropState();
+  state.listeners.add(listener);
+  return () => {
+    state.listeners.delete(listener);
+  };
+}
+
+/** Read the in-process metric counters (for a scrape endpoint / tests). */
+export function getInternalReadAuthzDropMetric(): {
+  dropEvents: number;
+  droppedRows: number;
+} {
+  const { dropEvents, droppedRows } = authzDropState();
+  return { dropEvents, droppedRows };
+}
+
+/** Reset the metric counters (test helper). Does not clear listeners. */
+export function resetInternalReadAuthzDropMetric(): void {
+  const state = authzDropState();
+  state.dropEvents = 0;
+  state.droppedRows = 0;
+}
+
+// ---------------------------------------------------------------------------
 // Actor context extension helper
 //
 // orgId / agentId / runId / packageVersion / agentSpecVersion are runtime-
@@ -1005,10 +1170,22 @@ export function createObjectsPrimitiveHandlers() {
       // canonical rows are re-fetched from Postgres and run through
       // `filterByAuthz` here. This is the authorization boundary for the
       // derived Graphiti index.
+      //
+      // LOUD-DROP (cinatra#1948 (a)): dropping a row is the intended, silent
+      // behaviour for an INTERACTIVE caller (a UI user / an agent simply cannot
+      // see some rows). For an INTERNAL / SYSTEM read a drop means the internal
+      // read authority was mis-scoped — the read returns `[]` indistinguishable
+      // from "no rows", which is exactly what let the #1946 send-routing defect
+      // (a role-less `System` actor denied `object.read`) hide across several
+      // verification rounds. So when this filter drops rows for an
+      // internal/system read (`isInternalSystemRead`), we surface a structured
+      // warn + a metric instead of staying silent. Interactive reads are
+      // unaffected (the predicate is false for them).
       const filterByAuthz = async (
         rows: ObjectRecord[],
       ): Promise<ObjectRecord[]> => {
         const out: ObjectRecord[] = [];
+        const droppedTypes = new Set<string>();
         for (const r of rows) {
           try {
             await enforceResourceAccess(
@@ -1018,9 +1195,24 @@ export function createObjectsPrimitiveHandlers() {
             );
             out.push(r);
           } catch (err) {
-            if (err instanceof AuthzError) continue;
+            if (err instanceof AuthzError) {
+              droppedTypes.add(r.type);
+              continue;
+            }
             throw err;
           }
+        }
+        const droppedCount = rows.length - out.length;
+        if (droppedCount > 0 && isInternalSystemRead(request.actor)) {
+          recordInternalReadAuthzDrop({
+            primitive: "objects_list",
+            droppedCount,
+            totalCount: rows.length,
+            droppedTypes: Array.from(droppedTypes),
+            actorType: (request.actor.actorType as string | null | undefined) ?? null,
+            source: (request.actor.source as string | null | undefined) ?? null,
+            orgId,
+          });
         }
         return out;
       };

@@ -1,41 +1,41 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1551,
-    "/api/mcp": 1547,
-    "/chat": 1616,
-    "/api/a2a": 1552,
-    "/api/llm-bridge": 1559
+    "/sign-in": 1552,
+    "/api/mcp": 1548,
+    "/chat": 1622,
+    "/api/a2a": 1553,
+    "/api/llm-bridge": 1560
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1549,
-      "to": 1551,
-      "reason": "#1959 (PR #1975): the drafts-review persist primitive (email_outreach_initial_drafts_update) is registered in the agent MCP handler barrel (packages/agents/src/mcp/handlers.ts) and the /api/agents/passthrough resume seam imports it, so the handler + its Zod schema become first-party-reachable from every tracked route that imports the MCP handler barrel — a CI-measured UNIFORM +2 first-party modules per route with the companion extensions cloned pinned (origin/main ceiling 1549 -> merged measured 1551). Re-anchored onto origin/main current ceilings during the origin/main merge reconcile (from = base ceiling, which already carries #1972's connector-adapter +1); retires/replaces the base branch's carried #1972 record. The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned.",
+      "from": 1550,
+      "to": 1552,
+      "reason": "#1959 (PR #1975): the drafts-review persist primitive (email_outreach_initial_drafts_update) is registered in the agent MCP handler barrel (packages/agents/src/mcp/handlers.ts) and the /api/agents/passthrough resume seam imports it, so the handler + its Zod schema become first-party-reachable from every tracked route that imports the MCP handler barrel — a CI-measured UNIFORM +2 first-party modules per route with the companion extensions cloned pinned (origin/main ceiling 1550 -> merged measured 1552). RE-ANCHORED onto origin/main current ceilings during the origin/main merge reconcile (from = base ceiling, which already carries #1974 W3's chat-slug +1); retires/replaces the base branch's carried #1974 record. The #1959 handler modules are disjoint from #1974's chat-slug module, so the +2 delta stacks. The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
       "pr": 1975
     },
     "/api/mcp": {
-      "from": 1545,
-      "to": 1547,
-      "reason": "#1959 (PR #1975): the drafts-review persist primitive (email_outreach_initial_drafts_update) is registered in the agent MCP handler barrel (packages/agents/src/mcp/handlers.ts) and the /api/agents/passthrough resume seam imports it, so the handler + its Zod schema become first-party-reachable from every tracked route that imports the MCP handler barrel — a CI-measured UNIFORM +2 first-party modules per route with the companion extensions cloned pinned (origin/main ceiling 1545 -> merged measured 1547). Re-anchored onto origin/main current ceilings during the origin/main merge reconcile (from = base ceiling, which already carries #1972's connector-adapter +1); retires/replaces the base branch's carried #1972 record. The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned.",
+      "from": 1546,
+      "to": 1548,
+      "reason": "#1959 (PR #1975): the drafts-review persist primitive (email_outreach_initial_drafts_update) is registered in the agent MCP handler barrel (packages/agents/src/mcp/handlers.ts) and the /api/agents/passthrough resume seam imports it, so the handler + its Zod schema become first-party-reachable from every tracked route that imports the MCP handler barrel — a CI-measured UNIFORM +2 first-party modules per route with the companion extensions cloned pinned (origin/main ceiling 1546 -> merged measured 1548). RE-ANCHORED onto origin/main current ceilings during the origin/main merge reconcile (from = base ceiling, which already carries #1974 W3's chat-slug +1); retires/replaces the base branch's carried #1974 record. The #1959 handler modules are disjoint from #1974's chat-slug module, so the +2 delta stacks. The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
       "pr": 1975
     },
     "/chat": {
-      "from": 1614,
-      "to": 1616,
-      "reason": "#1959 (PR #1975): the drafts-review persist primitive (email_outreach_initial_drafts_update) is registered in the agent MCP handler barrel (packages/agents/src/mcp/handlers.ts) and the /api/agents/passthrough resume seam imports it, so the handler + its Zod schema become first-party-reachable from every tracked route that imports the MCP handler barrel — a CI-measured UNIFORM +2 first-party modules per route with the companion extensions cloned pinned (origin/main ceiling 1614 -> merged measured 1616). Re-anchored onto origin/main current ceilings during the origin/main merge reconcile (from = base ceiling, which already carries #1972's connector-adapter +1); retires/replaces the base branch's carried #1972 record. The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned.",
+      "from": 1620,
+      "to": 1622,
+      "reason": "#1959 (PR #1975): the drafts-review persist primitive (email_outreach_initial_drafts_update) is registered in the agent MCP handler barrel (packages/agents/src/mcp/handlers.ts) and the /api/agents/passthrough resume seam imports it, so the handler + its Zod schema become first-party-reachable from every tracked route that imports the MCP handler barrel — a CI-measured UNIFORM +2 first-party modules per route with the companion extensions cloned pinned (origin/main ceiling 1620 -> merged measured 1622). RE-ANCHORED onto origin/main current ceilings during the origin/main merge reconcile (from = base ceiling, which already carries #1974 W3's six chat modules); retires/replaces the base branch's carried #1974 record. The #1959 handler modules are disjoint from #1974's chat routing modules, so the +2 delta stacks. The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
       "pr": 1975
     },
     "/api/a2a": {
-      "from": 1550,
-      "to": 1552,
-      "reason": "#1959 (PR #1975): the drafts-review persist primitive (email_outreach_initial_drafts_update) is registered in the agent MCP handler barrel (packages/agents/src/mcp/handlers.ts) and the /api/agents/passthrough resume seam imports it, so the handler + its Zod schema become first-party-reachable from every tracked route that imports the MCP handler barrel — a CI-measured UNIFORM +2 first-party modules per route with the companion extensions cloned pinned (origin/main ceiling 1550 -> merged measured 1552). Re-anchored onto origin/main current ceilings during the origin/main merge reconcile (from = base ceiling, which already carries #1972's connector-adapter +1); retires/replaces the base branch's carried #1972 record. The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned.",
+      "from": 1551,
+      "to": 1553,
+      "reason": "#1959 (PR #1975): the drafts-review persist primitive (email_outreach_initial_drafts_update) is registered in the agent MCP handler barrel (packages/agents/src/mcp/handlers.ts) and the /api/agents/passthrough resume seam imports it, so the handler + its Zod schema become first-party-reachable from every tracked route that imports the MCP handler barrel — a CI-measured UNIFORM +2 first-party modules per route with the companion extensions cloned pinned (origin/main ceiling 1551 -> merged measured 1553). RE-ANCHORED onto origin/main current ceilings during the origin/main merge reconcile (from = base ceiling, which already carries #1974 W3's chat-slug +1); retires/replaces the base branch's carried #1974 record. The #1959 handler modules are disjoint from #1974's chat-slug module, so the +2 delta stacks. The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
       "pr": 1975
     },
     "/api/llm-bridge": {
-      "from": 1557,
-      "to": 1559,
-      "reason": "#1959 (PR #1975): the drafts-review persist primitive (email_outreach_initial_drafts_update) is registered in the agent MCP handler barrel (packages/agents/src/mcp/handlers.ts) and the /api/agents/passthrough resume seam imports it, so the handler + its Zod schema become first-party-reachable from every tracked route that imports the MCP handler barrel — a CI-measured UNIFORM +2 first-party modules per route with the companion extensions cloned pinned (origin/main ceiling 1557 -> merged measured 1559). Re-anchored onto origin/main current ceilings during the origin/main merge reconcile (from = base ceiling, which already carries #1972's connector-adapter +1); retires/replaces the base branch's carried #1972 record. The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned.",
+      "from": 1558,
+      "to": 1560,
+      "reason": "#1959 (PR #1975): the drafts-review persist primitive (email_outreach_initial_drafts_update) is registered in the agent MCP handler barrel (packages/agents/src/mcp/handlers.ts) and the /api/agents/passthrough resume seam imports it, so the handler + its Zod schema become first-party-reachable from every tracked route that imports the MCP handler barrel — a CI-measured UNIFORM +2 first-party modules per route with the companion extensions cloned pinned (origin/main ceiling 1558 -> merged measured 1560). RE-ANCHORED onto origin/main current ceilings during the origin/main merge reconcile (from = base ceiling, which already carries #1974 W3's chat-slug +1); retires/replaces the base branch's carried #1974 record. The #1959 handler modules are disjoint from #1974's chat-slug module, so the +2 delta stacks. The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
       "pr": 1975
     }
   }

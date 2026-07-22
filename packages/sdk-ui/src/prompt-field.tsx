@@ -1,7 +1,8 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { Plus, Paperclip } from "lucide-react";
+import Link from "next/link";
+import { Plus, Paperclip, ExternalLink } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
@@ -151,6 +152,16 @@ export type PromptFieldProps = {
    * a single trigger.
    */
   onAttachmentsSelected?: (files: File[]) => void;
+
+  /**
+   * "Remote chat" jump-out entry (cinatra#1878 W3, AC#5). When provided, the
+   * Plus-icon flyout renders a row (with the ExternalLink icon) linking to the
+   * bound remote-capable assistant's connected site. Server-sourced from the
+   * bound assistant's first-party remote-target resolver for the authorized
+   * instance; shown ONLY for a remote-capable bound thread. Consumers that do
+   * NOT pass this see no remote-chat row.
+   */
+  remoteChat?: { label: string; href: string };
 };
 
 const MAX_AUTO_HEIGHT_PX = 240;
@@ -290,9 +301,11 @@ type AttachmentMenuProps = {
   onUploadClick?: () => void;
   /** Disables the upload row (e.g. while a submission is pending). */
   uploadDisabled?: boolean;
+  /** "Remote chat" jump-out row (cinatra#1878 W3, AC#5). */
+  remoteChat?: { label: string; href: string };
 };
 
-function AttachmentMenu({ autosave, onUploadClick, uploadDisabled = false }: AttachmentMenuProps) {
+function AttachmentMenu({ autosave, onUploadClick, uploadDisabled = false, remoteChat }: AttachmentMenuProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -324,6 +337,14 @@ function AttachmentMenu({ autosave, onUploadClick, uploadDisabled = false }: Att
             <DropdownMenuItem onSelect={() => onUploadClick()} disabled={uploadDisabled}>
               <Paperclip />
               Upload files
+            </DropdownMenuItem>
+          )}
+          {remoteChat && (
+            <DropdownMenuItem asChild>
+              <Link href={remoteChat.href} target="_blank" rel="noreferrer noopener">
+                <ExternalLink />
+                {remoteChat.label}
+              </Link>
             </DropdownMenuItem>
           )}
           {autosave && (
@@ -377,6 +398,7 @@ export const PromptField = forwardRef<PromptFieldHandle, PromptFieldProps>(funct
     fieldClassName,
     mentionables,
     onAttachmentsSelected,
+    remoteChat,
   },
   ref,
 ) {
@@ -688,7 +710,8 @@ export const PromptField = forwardRef<PromptFieldHandle, PromptFieldProps>(funct
     maxHeight: `${MAX_AUTO_HEIGHT_PX}px`,
   };
 
-  const hasLeftMenu = Boolean(autosave?.canToggle) || Boolean(onAttachmentsSelected);
+  const hasLeftMenu =
+    Boolean(autosave?.canToggle) || Boolean(onAttachmentsSelected) || Boolean(remoteChat);
 
   const field = (
     <div
@@ -738,6 +761,7 @@ export const PromptField = forwardRef<PromptFieldHandle, PromptFieldProps>(funct
         <div className="shrink-0 self-end pb-2 pl-2">
           <AttachmentMenu
             autosave={autosave}
+            remoteChat={remoteChat}
             onUploadClick={onAttachmentsSelected ? () => fileInputRef.current?.click() : undefined}
             uploadDisabled={disabled || pending}
           />
