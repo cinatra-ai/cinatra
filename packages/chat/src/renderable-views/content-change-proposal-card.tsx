@@ -1,3 +1,5 @@
+"use client";
+
 // ---------------------------------------------------------------------------
 // content_change_proposal renderer — the change-diff card (cinatra#1220, S4).
 //
@@ -22,6 +24,16 @@
 // ---------------------------------------------------------------------------
 
 import type { ContentChangeProposalView } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import { Button } from "@/components/ui/button";
+
+// §6e (cinatra#1221 S5 Lane B) — the apply-intent gesture reference. The ONLY
+// apply-eligible S4 view is `content_change_proposal`; the payload carries
+// EXACTLY ONE of `proposalId`/`changeSetId` as the UNTRUSTED SELECTOR the CMS
+// parent re-checks (§6f). Never an open string — an arbitrary value must never
+// choose behaviour.
+export type ApplyIntentRef =
+  | { proposalId: string; viewType: "content_change_proposal" }
+  | { changeSetId: string; viewType: "content_change_proposal" };
 
 function targetLabel(view: ContentChangeProposalView): string | undefined {
   if (view.postId) return `post #${view.postId}`;
@@ -31,8 +43,17 @@ function targetLabel(view: ContentChangeProposalView): string | undefined {
 
 export function ContentChangeProposalCard({
   view,
+  onApplyIntent,
 }: {
   view: ContentChangeProposalView;
+  /**
+   * §6e apply-intent seam. When injected by a surface that owns an apply flow
+   * (the S5 embed), the card renders an EXPLICIT apply affordance whose click —
+   * an explicit end-user GESTURE — emits the intent (NO auto-emit on render).
+   * The default surfaces (`/chat`) inject nothing, so the card stays
+   * DISPLAY-ONLY exactly as before.
+   */
+  onApplyIntent?: (ref: ApplyIntentRef) => void;
 }) {
   const heading =
     view.title ?? (view.fields.length > 0 ? "Proposed changes" : "Content update");
@@ -96,6 +117,33 @@ export function ContentChangeProposalCard({
             Already saved as a draft — applying refreshes the editor to it. No
             additional write is performed.
           </span>
+          {onApplyIntent && (
+            // §6e: emitted ONLY on this explicit user gesture. Prefer proposalId;
+            // else changeSetId — exactly one selector (§5). Carries NO content and
+            // NO tool call; the parent treats the id as an UNTRUSTED SELECTOR (§6f).
+            <Button
+              type="button"
+              data-apply-intent
+              variant="outline"
+              size="sm"
+              className="ml-auto shrink-0"
+              onClick={() => {
+                if (view.proposalId !== undefined) {
+                  onApplyIntent({
+                    proposalId: view.proposalId,
+                    viewType: "content_change_proposal",
+                  });
+                } else if (view.changeSetId !== undefined) {
+                  onApplyIntent({
+                    changeSetId: view.changeSetId,
+                    viewType: "content_change_proposal",
+                  });
+                }
+              }}
+            >
+              Apply
+            </Button>
+          )}
         </div>
       )}
     </div>

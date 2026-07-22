@@ -6,6 +6,15 @@ import { loadChatThreadForActorAccess } from "@/lib/chat-thread-store";
 import { evaluateChatThreadAccess } from "@/lib/chat-thread-access";
 import { subscribeToAgUiEventsWithId } from "@cinatra-ai/agent-ui-protocol/server";
 import { verifyWidgetChatResumeToken } from "@/lib/widget-chat-resume-token";
+import { listAssistantWidgetBindings } from "@/lib/assistant-widget-handles";
+import {
+  resolveWidgetStreamAgentUnion,
+  widgetStreamRequestSource,
+} from "@/lib/widget-stream-agents.server";
+import {
+  resolveWidgetStreamOrigin,
+  buildAssistantResumeCorsHeaders,
+} from "@/lib/widget-stream-auth";
 
 // ---------------------------------------------------------------------------
 // GET /api/assistants/runs/[runId]/stream — AG-UI resume/tail for an
@@ -51,9 +60,49 @@ type RouteContext = { params: Promise<{ runId: string }> };
 
 const KEEPALIVE_MS = 15_000;
 
+// ---------------------------------------------------------------------------
+// CORS (S5 Lane B embed wave, cinatra#1221 §9.3(A)) — the deferred cross-origin
+// half #1881 parked. The cross-origin widget's resume GET carries the run-bound
+// resume token on `Authorization` + the SSE cursor on `Last-Event-ID`, both
+// non-simple headers a browser only sends after a passing preflight. A resume
+// GET has no body, so (exactly like the turn POST's OPTIONS) the target
+// assistant is unknown here — reflect the request Origin if it matches ANY
+// public-site widget binding's configured-instance allowlist (wordpress ∪
+// drupal). CORS is RESPONSE-HEADER POLICY only; the route's MODE-2 run-bound
+// resume-token verifier remains the authoritative gate. A non-matching origin
+// gets no reflected header (its cross-origin fetch is blocked by the browser).
+// ---------------------------------------------------------------------------
+async function resolveResumeCorsHeaders(request: Request): Promise<Record<string, string> | null> {
+  const requestOrigin = request.headers.get("Origin");
+  if (!requestOrigin) return null;
+  for (const binding of listAssistantWidgetBindings()) {
+    const resolved = await resolveWidgetStreamAgentUnion(binding.agentSlug, undefined, {
+      requestSource: widgetStreamRequestSource(request),
+    });
+    if (!resolved) continue;
+    const allowed = resolveWidgetStreamOrigin(requestOrigin, resolved.entry.auth);
+    if (allowed) return buildAssistantResumeCorsHeaders(allowed);
+  }
+  return null;
+}
+
+export async function OPTIONS(request: Request): Promise<Response> {
+  const requestOrigin = request.headers.get("Origin");
+  if (!requestOrigin) return new Response(null, { status: 403 });
+  const cors = await resolveResumeCorsHeaders(request);
+  if (!cors) return new Response(null, { status: 403 });
+  return new Response(null, { status: 200, headers: cors });
+}
+
 export async function GET(request: Request, context: RouteContext) {
   const { runId } = await context.params;
   const decodedRunId = decodeURIComponent(runId);
+
+  // Reflected only for a cross-origin request whose Origin matches a widget
+  // binding; a same-origin in-app GET (no Origin header) resolves null and the
+  // session path stays byte-unchanged. Applied to the MODE-2 error responses and
+  // the stream response so a cross-origin browser can READ them.
+  const corsHeaders = (await resolveResumeCorsHeaders(request)) ?? {};
 
   const session = await getAuthSession();
   const actorUserId = session?.user?.id ?? null;
@@ -104,7 +153,7 @@ export async function GET(request: Request, context: RouteContext) {
       expectedRunId: decodedRunId,
     });
     if (!resumeActor) {
-      return new Response("Unauthorized", { status: 401 });
+      return new Response("Unauthorized", { status: 401, headers: corsHeaders });
     }
     // The run-bound token IS the authorization (minted only after the broker-auth
     // turn fully authorized THIS run for THIS user). Still confirm the run's turn
@@ -112,7 +161,7 @@ export async function GET(request: Request, context: RouteContext) {
     // (existence not disclosed, matching the session path).
     const turn = findAssistantTurnByRunId(decodedRunId);
     if (!turn) {
-      return new Response("Not Found", { status: 404 });
+      return new Response("Not Found", { status: 404, headers: corsHeaders });
     }
   }
 
@@ -181,6 +230,7 @@ export async function GET(request: Request, context: RouteContext) {
 
   return new Response(stream, {
     headers: {
+      ...corsHeaders,
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",

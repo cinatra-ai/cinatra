@@ -7,6 +7,7 @@ import {
   GENERATED_WIDGET_STREAM_CAPABILITY_PATHS,
 } from "@/lib/generated/widget-stream-public-paths";
 import { isRuntimeApprovedWidgetStreamPublicPath } from "@/lib/widget-stream-runtime-slug-snapshot";
+import { frameAncestorsDirectiveFor } from "@/lib/embed/frame-ancestors.server";
 
 const PUBLIC_PATH_PREFIXES = [
   "/permissions",
@@ -54,12 +55,18 @@ const PUBLIC_AGENT_STREAM_PATHS = GENERATED_WIDGET_STREAM_PUBLIC_PATHS;
 const PUBLIC_AGENT_TOKEN_PATHS = GENERATED_WIDGET_STREAM_TOKEN_PATHS;
 const PUBLIC_AGENT_CAPABILITY_PATHS = GENERATED_WIDGET_STREAM_CAPABILITY_PATHS;
 
+// cinatra#1221 S5 Lane B (§2/§7). The provisional embed-page path (OQ2): if it
+// is renamed, ONLY this constant + the CMS iframe `src` change; the bridge and
+// schemas are stable.
+const EMBED_ASSISTANT_PATH = "/embed/assistant";
+
 const PUBLIC_EXACT_PATHS = [
   "/favicon.ico",
   "/sign-in",
   "/sign-up",
   "/widget-auth", // cinatra#407 hosted widget login — a SESSIONLESS visitor must render the login form here (NOT be 307'd to /sign-in). The page itself reads a present session normally and gates issuing a code on org membership + explicit consent. Exact path only (the ?txn=... query carries the transaction id).
   "/api/assistants/chat", // cinatra#1221 S5 — the UNIFIED assistant chat route also serves the public-site (WordPress/Drupal) widget via its broker-auth branch (Bearer cit_ + X-Cinatra-Widget-User-Token cwu_). A cross-origin browser widget holds no cookie, so the middleware must NOT 307 it to /sign-in — the route's OWN dual-token fail-closed sequence is the authoritative gate (a non-widget, session-less request still 401s inside the handler; the cookie-session @cinatra path is byte-unchanged). Exact path only (no widget subpaths are public).
+  EMBED_ASSISTANT_PATH, // cinatra#1221 S5 Lane B — the Cinatra-served embed page GET /embed/assistant (§2). A SESSIONLESS cross-origin CMS end user must RENDER the iframe shell here, not be 307'd to /sign-in (exactly like /widget-auth). The page renders NO user data before a bootstrap; tokens are NEVER in the URL — they arrive only via the postMessage bootstrap (§4). The per-request `frame-ancestors` CSP is applied below (§7). Exact path only (the ?instanceId=…&assistant=… query carries the non-secret disambiguators).
   "/api/openai/connection-status",
   "/api/app/setup-status",
   "/api/app/route-guard-status",
@@ -234,8 +241,38 @@ function isSetupPath(pathname: string) {
   return SETUP_PATH_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
 
+// cinatra#1221 S5 Lane B §7 — apply the per-request `frame-ancestors` CSP to the
+// embed page. An RSC cannot set a per-request response header, so the directive
+// is computed by the read-only, exception-wrapped resolver and set HERE for this
+// ONE exact path. FAIL-CLOSED to `'none'` on EVERY failure (unknown assistant,
+// missing/duplicate/non-normalizable instance row, any thrown DB/normalize
+// exception — the resolver never throws): a `'none'` page still renders the
+// shell but the browser refuses to frame it anywhere (a safe, debuggable wall).
+// NO `'self'` (the policy is "ONLY the registered site"; `'self'` would let the
+// Cinatra origin frame it too). `X-Frame-Options` is OMITTED deliberately (XFO
+// cannot express an allow-list origin and would override to SAMEORIGIN, blocking
+// the legitimate CMS frame). `Cache-Control: no-store` so a per-instance CSP is
+// never cached and served to a different instance. Gated on the EXACT path so no
+// other route pays.
+function applyEmbedFrameAncestors(request: NextRequest): NextResponse {
+  const response = NextResponse.next();
+  const directive = frameAncestorsDirectiveFor({
+    assistant: request.nextUrl.searchParams.get("assistant"),
+    instanceId: request.nextUrl.searchParams.get("instanceId"),
+  });
+  response.headers.set("Content-Security-Policy", `frame-ancestors ${directive}`);
+  response.headers.set("Cache-Control", "no-store");
+  return response;
+}
+
 export async function guardAppRoute(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
+
+  // The embed page is public (below) AND carries a per-request frame-ancestors
+  // CSP (§7). Handle it first so the header is set on the response.
+  if (pathname === EMBED_ASSISTANT_PATH) {
+    return applyEmbedFrameAncestors(request);
+  }
 
   if (isPublicPath(pathname)) {
     return NextResponse.next();
