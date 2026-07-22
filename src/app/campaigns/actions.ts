@@ -41,7 +41,6 @@ import { saveDevExtensionsSettings } from "@/lib/dev-extensions";
 import { clearAllProviderLogEntries, saveAnthropicLoggingSettings } from "@/lib/logging";
 import { saveMcpLoggingSettings } from "@/lib/mcp-logging";
 import { createNotification } from "@/lib/notifications";
-import { orchestrateAnthropicSkillSync } from "@/lib/anthropic-skill-config-service";
 import {
   importNangoConnection,
   ensureNangoIntegration,
@@ -57,7 +56,6 @@ import {
   writeObjectsClassificationModelToDatabase,
   writeAgentCreationLlmProviderToDatabase,
   writeAgentCreationModelToDatabase,
-  writeAnthropicSkillSyncEnabledToDatabase,
   isAgentCreationPinActive,
 } from "@/lib/database";
 import { updateOpenAIPromptCaching } from "@/lib/openai-connection-store";
@@ -295,29 +293,14 @@ export async function setDefaultProvidersAction(formData: FormData) {
       writeAgentCreationModelToDatabase("");
     }
   }
-  // The governance Switch always submits an explicit "true"/"false" string,
-  // never checkbox absence. Parse exactly: never coerce a missing or garbage
-  // value into a silent OFF that would erase an existing opt-in from an
-  // unrelated partial post.
-  const skillSyncRaw = formData.get("anthropicSkillSyncEnabled");
-  if (skillSyncRaw === "true") {
-    writeAnthropicSkillSyncEnabledToDatabase(true);
-  } else if (skillSyncRaw === "false") {
-    writeAnthropicSkillSyncEnabledToDatabase(false);
-  } else if (skillSyncRaw === null) {
-    // Legacy / partial caller never sent the field — leave the stored value
-    // unchanged (do NOT default it OFF here).
-  } else {
-    throw new Error("Invalid Anthropic skill sync value.");
-  }
-
-  // Eager catalog-sync then stale-GC after the opt-in persist above. Extracted
-  // to `orchestrateAnthropicSkillSync` (a host capability the connector-owned
-  // Skills tab runs identically — cinatra#1104): admin-notify on failure, the
-  // save is never rolled back, both steps inert when OFF. Unchanged behavior,
-  // now single-sourced. Runs unconditionally (even for a legacy caller that
-  // omitted the field) exactly as before.
-  await orchestrateAnthropicSkillSync();
+  // Anthropic skill-upload opt-in + its eager catalog-sync/stale-GC were
+  // RELOCATED out of core (cinatra#1104): the anthropic-connector Skills tab
+  // now owns that control and persists it through the
+  // `@cinatra-ai/host:anthropic-skill-config` write capability, which runs the
+  // identical host-side orchestration. This action no longer reads the field,
+  // persists the setting, or triggers the sync — there is deliberately no host
+  // control left here that could leave a silently-dead write behind (the
+  // removal is pinned by set-default-providers-skill-write-removed.test.ts).
 
   redirect("/configuration/llm");
 }
@@ -619,8 +602,11 @@ export async function saveDevExtensionsSettingsAction(formData: FormData) {
 // the connector's own schema-config setup surface, so nothing renders a
 // silently-dead host control. The openai-skills gate test pins the ABSENCE of
 // both the connector body and this host wrapper so an ungated re-introduction
-// fails CI. The anthropic skill-sync analog still functions via its own path
-// (orchestrateAnthropicSkillSync, above) until #1104 relocates it.
+// fails CI. The anthropic skill-sync analog has now been relocated
+// connector-side too (cinatra#1104): its opt-in + host orchestration are
+// reached only through the anthropic-connector Skills tab's
+// `@cinatra-ai/host:anthropic-skill-config` write capability — core no longer
+// wires it (pinned by set-default-providers-skill-write-removed.test.ts).
 // ---------------------------------------------------------------------------
 
 // Gmail send-as refresh/clear + Google Calendar appointment-schedule mutations
