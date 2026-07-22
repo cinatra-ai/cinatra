@@ -1,24 +1,22 @@
 /**
  * Pure mention-parsing utilities — NO server-only imports, NO DB dependencies.
  *
- * Extracted from mentions.ts so:
- *  1. Client components and test files can import parseMentions without
- *     pulling in server-only/DB modules.
- *  2. parseMentions is independently testable without mocking the DB.
+ * `parseMentions` is now a thin projection over the shared mention TOKENIZER
+ * (`./mention-tokenizer`, cinatra#1875 W2 AC#1): it returns the FLAT `@handle`
+ * tokens only. A scoped `@vendor/slug` reference (e.g.
+ * `@cinatra-ai/contact-discovery-agent`) is lexed as a distinct SCOPED token by
+ * the tokenizer and is therefore NO LONGER mis-read here as a flat `@cinatra-ai`
+ * handle — the historical false-positive (bug chat-no-assistant-response's
+ * sibling) is resolved at the lexer instead of relying on a resolver-layer
+ * fall-through. Scoped references flow to the explicit `agent_run` dispatch path
+ * (or, once phase 2 resolves them, to an assistant mention), never to the flat
+ * @-mention routing this function feeds.
  *
- * Fix for bug chat-no-assistant-response:
- *   The original MENTION_RE = /@([a-z0-9_-]+)/gi matched @handles inside
- *   URLs (e.g. https://www.youtube.com/@theericriesshow). This caused
- *   resolveMessageRouting to return { shouldCallLlm: false } for any message
- *   containing a YouTube/Twitter/etc. URL with a channel handle, silently
- *   suppressing the LLM response with no error or UI feedback.
- *
- * The fix uses a negative lookbehind `(?<!\/)` to exclude @-matches that
- * immediately follow a `/` character (the URL path separator before a handle).
- * Additionally, a positive lookahead `(?=\s|$|[^a-z0-9_-])` is added as a
- * secondary guard — though the handle character class already limits greedy
- * matching. The key guard is `(?<!\/)`.
+ * The URL/email guards live in the tokenizer and are preserved: URL-path handles
+ * (`youtube.com/@channel`) and email local-parts (`user@example.com`) never lex.
  */
+
+import { flatMentionTokens } from "./mention-tokenizer";
 
 export type RawMention = {
   handle: string;
@@ -27,36 +25,18 @@ export type RawMention = {
 };
 
 /**
- * URL-safe mention regex:
- *   - (?<!\/) — negative lookbehind: @handle must NOT be immediately preceded by "/"
- *     This excludes URL path handles like domain.com/@channel or https://x.com/@user
- *   - (?<![.:]) — also exclude after "." or ":" to further guard protocol/domain edge cases
- *   - @ — literal @
- *   - ([a-z0-9_-]+) — the handle (letters, digits, underscore, hyphen)
- *
- * Valid mention positions (examples that should match):
- *   "@cinatra please help"    → @cinatra at start
- *   "ask @alice to review"    → @alice after whitespace
- *   "cc @bob!"                → @bob before punctuation
- *
- * Invalid positions (examples that must NOT match):
- *   "https://www.youtube.com/@theericriesshow"  → / before @
- *   "https://twitter.com/@handle"               → / before @
- *   "example.com/@user"                         → / before @
- */
-const MENTION_RE = /(?<![/.:])@([a-z0-9_-]+)/gi;
-
-/**
- * Parse explicit @mentions from a chat message.
- * Skips @handles that appear inside URLs (after a "/" separator).
+ * Parse explicit FLAT @mentions from a chat message (the routing/@-mention feed).
+ * Scoped `@vendor/slug` references are intentionally EXCLUDED (they are package
+ * references, surfaced by the tokenizer's scoped tokens). URL/email `@`s are
+ * skipped by the shared tokenizer.
  *
  * @param content - The raw chat message text.
- * @returns Array of raw mentions with handle, offset, and length.
+ * @returns Array of raw FLAT mentions with handle, offset, and length.
  */
 export function parseMentions(content: string): RawMention[] {
-  const out: RawMention[] = [];
-  for (const m of content.matchAll(MENTION_RE)) {
-    out.push({ handle: m[1].toLowerCase(), offset: m.index ?? 0, length: m[0].length });
-  }
-  return out;
+  return flatMentionTokens(content).map((t) => ({
+    handle: t.handle,
+    offset: t.offset,
+    length: t.length,
+  }));
 }

@@ -8,7 +8,10 @@ import {
   describeCrossCubeQuery,
   checkUnsupportedAnalysisType,
   checkUnsupportedQueryFeature,
+  collectQueryFeatureViolations,
   findUnknownFilterMembers,
+  findInvalidMetaMembers,
+  queryComplexityOf,
   toQuerySpec,
   toCubeMetaCube,
   toCubeMeta,
@@ -270,28 +273,120 @@ describe("checkUnsupportedQueryFeature", () => {
       } as unknown as CubeJsWireQuery),
     ).toMatchObject({ code: "unsupported_query_feature" });
   });
-  it("rejects timeDimensions entirely", () => {
-    // Granularity case.
+  // cinatra#1911 — timeDimensions with granularity are now EXECUTABLE.
+  it("accepts a single granularity-bearing timeDimension (with and without dateRange)", () => {
     expect(
       checkUnsupportedQueryFeature({
         measures: ["agent_runs.count"],
         timeDimensions: [{ dimension: "agent_runs.created_at", granularity: "day" }],
       }),
-    ).toMatchObject({ code: "unsupported_query_feature" });
-    // Bare time dimensions without granularity or dateRange must be rejected
-    // because toQuerySpec does not carry timeDimensions forward.
+    ).toBeNull();
+    expect(
+      checkUnsupportedQueryFeature({
+        measures: ["agent_runs.count"],
+        timeDimensions: [
+          { dimension: "agent_runs.created_at", granularity: "month", dateRange: "last 6 months" },
+        ],
+      }),
+    ).toBeNull();
+    expect(
+      checkUnsupportedQueryFeature({
+        measures: ["agent_runs.count"],
+        timeDimensions: [
+          { dimension: "agent_runs.created_at", granularity: "week", dateRange: ["2024-01-01", "2024-01-31"] },
+        ],
+      }),
+    ).toBeNull();
+  });
+  it("rejects a granularity-less timeDimension (drizzle-cube would group daily implicitly)", () => {
     expect(
       checkUnsupportedQueryFeature({
         measures: ["agent_runs.count"],
         timeDimensions: [{ dimension: "agent_runs.created_at" }],
       }),
     ).toMatchObject({ code: "unsupported_query_feature" });
-    // dateRange / fillMissingDates also silently dropped — same fix.
     expect(
       checkUnsupportedQueryFeature({
         measures: ["agent_runs.count"],
         timeDimensions: [{ dimension: "agent_runs.created_at", dateRange: ["2024-01-01", "2024-01-31"] }],
       }),
+    ).toMatchObject({ code: "unsupported_query_feature" });
+    // Unsupported granularity value.
+    expect(
+      checkUnsupportedQueryFeature({
+        measures: ["agent_runs.count"],
+        timeDimensions: [{ dimension: "agent_runs.created_at", granularity: "hour" }],
+      }),
+    ).toMatchObject({ code: "unsupported_query_feature" });
+  });
+  it("rejects multiple timeDimensions entries", () => {
+    expect(
+      checkUnsupportedQueryFeature({
+        measures: ["agent_runs.count"],
+        timeDimensions: [
+          { dimension: "agent_runs.created_at", granularity: "day" },
+          { dimension: "agent_runs.finished_at", granularity: "day" },
+        ],
+      }),
+    ).toMatchObject({ code: "unsupported_query_feature" });
+  });
+  it("rejects an invalid timeDimension dateRange shape", () => {
+    for (const dateRange of ["", ["", ""], ["2024-01-01", "2024-02-01", "2024-03-01"], 7]) {
+      expect(
+        checkUnsupportedQueryFeature({
+          measures: ["agent_runs.count"],
+          timeDimensions: [
+            { dimension: "agent_runs.created_at", granularity: "day", dateRange },
+          ],
+        } as unknown as CubeJsWireQuery),
+      ).toMatchObject({ code: "unsupported_query_feature" });
+    }
+  });
+  // cinatra#1911 — `in` and `inDateRange` filters are now EXECUTABLE.
+  it("accepts `in` filters with non-empty string values", () => {
+    expect(
+      checkUnsupportedQueryFeature({
+        measures: ["agent_runs.count"],
+        filters: [{ member: "agent_runs.status", operator: "in", values: ["failed", "stopped"] }],
+      } as unknown as CubeJsWireQuery),
+    ).toBeNull();
+  });
+  it("accepts `inDateRange` filters with one relative token or a [from, to] pair", () => {
+    expect(
+      checkUnsupportedQueryFeature({
+        measures: ["agent_runs.count"],
+        filters: [{ member: "agent_runs.created_at", operator: "inDateRange", values: ["last 30 days"] }],
+      } as unknown as CubeJsWireQuery),
+    ).toBeNull();
+    expect(
+      checkUnsupportedQueryFeature({
+        measures: ["agent_runs.count"],
+        filters: [
+          { member: "agent_runs.created_at", operator: "inDateRange", values: ["2024-01-01", "2024-03-31"] },
+        ],
+      } as unknown as CubeJsWireQuery),
+    ).toBeNull();
+  });
+  it("rejects `inDateRange` filters with more than two values", () => {
+    expect(
+      checkUnsupportedQueryFeature({
+        measures: ["agent_runs.count"],
+        filters: [
+          {
+            member: "agent_runs.created_at",
+            operator: "inDateRange",
+            values: ["2024-01-01", "2024-02-01", "2024-03-01"],
+          },
+        ],
+      } as unknown as CubeJsWireQuery),
+    ).toMatchObject({ code: "unsupported_query_feature" });
+  });
+  it("rejects empty-string filter values (all operators)", () => {
+    expect(
+      checkUnsupportedQueryFeature({
+        measures: ["agent_runs.count"],
+        filters: [{ member: "agent_runs.status", operator: "in", values: ["ok", ""] }],
+      } as unknown as CubeJsWireQuery),
     ).toMatchObject({ code: "unsupported_query_feature" });
   });
   it("accepts a query with an empty timeDimensions array (defensive)", () => {
@@ -477,5 +572,186 @@ describe("findUnknownFilterMembers — fail-closed member validation", () => {
         dimensionsOnly,
       ),
     ).toEqual(["teams.member_count"]);
+  });
+});
+
+// ─── cinatra#1911 — shared feature predicate + meta-dependent members ────
+
+describe("collectQueryFeatureViolations (cinatra#1911)", () => {
+  it("is tolerant of non-object and empty input", () => {
+    expect(collectQueryFeatureViolations(undefined)).toEqual([]);
+    expect(collectQueryFeatureViolations(null)).toEqual([]);
+    expect(collectQueryFeatureViolations("{}")).toEqual([]);
+    expect(collectQueryFeatureViolations({})).toEqual([]);
+  });
+  it("returns structured violations with stable kinds", () => {
+    const violations = collectQueryFeatureViolations({
+      filters: [
+        { member: "agent_runs.status", operator: "contains", values: ["x"] },
+        { or: [] },
+      ],
+      timeDimensions: [{ dimension: "agent_runs.created_at" }],
+    });
+    expect(violations.map((v) => v.kind).sort()).toEqual([
+      "grouped_boolean_filters",
+      "missing_or_invalid_granularity",
+      "unsupported_filter_operator",
+    ]);
+    // Product copy names the offending member and the supported surface.
+    const op = violations.find((v) => v.kind === "unsupported_filter_operator");
+    expect(op?.member).toBe("agent_runs.status");
+    expect(op?.message).toContain('"contains"');
+    expect(op?.message).toContain("inDateRange");
+  });
+  it("accepts the reference-dashboard query shapes (issue #1911's six portlets)", () => {
+    // timeDimensions time series, inDateRange window, in-filter breakdown —
+    // the exact feature mix that used to 400 on every portlet.
+    expect(
+      collectQueryFeatureViolations({
+        measures: ["agent_runs.count"],
+        timeDimensions: [{ dimension: "agent_runs.created_at", granularity: "day", dateRange: "last 30 days" }],
+      }),
+    ).toEqual([]);
+    expect(
+      collectQueryFeatureViolations({
+        measures: ["agent_runs.count"],
+        dimensions: ["agent_runs.status"],
+        filters: [{ member: "agent_runs.created_at", operator: "inDateRange", values: ["last 30 days"] }],
+      }),
+    ).toEqual([]);
+    expect(
+      collectQueryFeatureViolations({
+        measures: ["agent_runs.count"],
+        dimensions: ["agent_runs.agent_id"],
+        filters: [
+          { member: "agent_runs.status", operator: "in", values: ["failed", "stopped"] },
+          { member: "agent_runs.created_at", operator: "inDateRange", values: ["last 30 days"] },
+        ],
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("queryComplexityOf (cinatra#1911 — shared cap arithmetic)", () => {
+  it("counts measures + dimensions + timeDimensions and tolerates junk", () => {
+    expect(queryComplexityOf({})).toBe(0);
+    expect(queryComplexityOf(null)).toBe(0);
+    expect(
+      queryComplexityOf({
+        measures: ["a.count"],
+        dimensions: ["a.x", "a.y"],
+        timeDimensions: [{ dimension: "a.t", granularity: "day" }],
+      }),
+    ).toBe(4);
+  });
+});
+
+describe("findInvalidMetaMembers (cinatra#1911)", () => {
+  const dims = [
+    { id: "status", type: "string" },
+    { id: "created_at", type: "date" },
+  ];
+  it("flags unknown filter members (all supported operators) and unknown timeDimensions", () => {
+    const res = findInvalidMetaMembers(
+      {
+        measures: ["agent_runs.count"],
+        filters: [{ member: "agent_runs.nope", operator: "in", values: ["x"] }],
+        timeDimensions: [{ dimension: "agent_runs.missing", granularity: "day" }],
+      } as unknown as CubeJsWireQuery,
+      "agent_runs",
+      dims,
+    );
+    expect(res.unknownMembers.sort()).toEqual(["agent_runs.missing", "agent_runs.nope"]);
+    expect(res.nonTimeMembers).toEqual([]);
+  });
+  it("flags non-time-typed members for inDateRange and timeDimensions", () => {
+    const res = findInvalidMetaMembers(
+      {
+        measures: ["agent_runs.count"],
+        filters: [{ member: "agent_runs.status", operator: "inDateRange", values: ["last 30 days"] }],
+        timeDimensions: [{ dimension: "agent_runs.status", granularity: "day" }],
+      } as unknown as CubeJsWireQuery,
+      "agent_runs",
+      dims,
+    );
+    expect(res.unknownMembers).toEqual([]);
+    expect(res.nonTimeMembers).toEqual(["agent_runs.status", "agent_runs.status"]);
+  });
+  it("accepts a valid time-typed usage", () => {
+    const res = findInvalidMetaMembers(
+      {
+        measures: ["agent_runs.count"],
+        filters: [
+          { member: "agent_runs.status", operator: "equals", values: ["ok"] },
+          { member: "agent_runs.created_at", operator: "inDateRange", values: ["last 30 days"] },
+        ],
+        timeDimensions: [{ dimension: "agent_runs.created_at", granularity: "day" }],
+      } as unknown as CubeJsWireQuery,
+      "agent_runs",
+      dims,
+    );
+    expect(res.unknownMembers).toEqual([]);
+    expect(res.nonTimeMembers).toEqual([]);
+  });
+});
+
+describe("toQuerySpec — timeDimensions + new operators (cinatra#1911)", () => {
+  it("maps timeDimensions with prefix stripping and dateRange normalization", () => {
+    const spec = toQuerySpec(
+      {
+        measures: ["agent_runs.count"],
+        timeDimensions: [
+          { dimension: "agent_runs.created_at", granularity: "day", dateRange: ["last 30 days"] },
+        ],
+      },
+      "agent_runs",
+    );
+    // 1-element dateRange array normalizes to the bare relative token.
+    expect(spec.timeDimensions).toEqual([
+      { dimension: "created_at", granularity: "day", dateRange: "last 30 days" },
+    ]);
+    const spec2 = toQuerySpec(
+      {
+        measures: ["agent_runs.count"],
+        timeDimensions: [
+          { dimension: "agent_runs.created_at", granularity: "week", dateRange: ["2024-01-01", "2024-03-31"] },
+        ],
+      },
+      "agent_runs",
+    );
+    expect(spec2.timeDimensions).toEqual([
+      { dimension: "created_at", granularity: "week", dateRange: ["2024-01-01", "2024-03-31"] },
+    ]);
+  });
+  it("maps in / inDateRange filters preserving the operator", () => {
+    const spec = toQuerySpec(
+      {
+        measures: ["agent_runs.count"],
+        filters: [
+          { member: "agent_runs.status", operator: "in", values: ["failed", "stopped"] },
+          { member: "agent_runs.created_at", operator: "inDateRange", values: ["last 30 days"] },
+        ],
+      } as unknown as CubeJsWireQuery,
+      "agent_runs",
+    );
+    expect(spec.filters).toEqual([
+      { member: "status", operator: "in", values: ["failed", "stopped"] },
+      { member: "created_at", operator: "inDateRange", values: ["last 30 days"] },
+    ]);
+  });
+});
+
+describe("collectQueryFeatureViolations — malformed containers (codex merge-round)", () => {
+  it("rejects present-but-non-array filters / timeDimensions instead of letting them 500 downstream", () => {
+    expect(
+      collectQueryFeatureViolations({ measures: ["a.count"], filters: { member: "a.x" } }).map((v) => v.kind),
+    ).toEqual(["invalid_filter_shape"]);
+    expect(
+      collectQueryFeatureViolations({ measures: ["a.count"], timeDimensions: "a.t" }).map((v) => v.kind),
+    ).toEqual(["invalid_time_dimension"]);
+    // The wire gate surfaces them as unsupported_query_feature 400s.
+    expect(
+      checkUnsupportedQueryFeature({ measures: ["a.count"], filters: {} } as unknown as CubeJsWireQuery),
+    ).toMatchObject({ code: "unsupported_query_feature" });
   });
 });

@@ -49,7 +49,7 @@ import {
 // Chat persistence/replay must carry artifact refs alongside text. Adding to
 // the Message shape lets the bridge resolve them without the chat path
 // importing @/lib directly.
-import type { UiMessage as Message, UiThread as Thread, UiThreadSummary as ThreadSummary } from "./types";
+import type { UiMessage as Message, UiThread as Thread, UiThreadSummary as ThreadSummary, Mention } from "./types";
 import type { ChatViewComponents } from "./chat-messages-view";
 import type { ChatPageProps } from "./chat-page-props";
 import {
@@ -65,7 +65,7 @@ import {
   countMentions,
   shouldEnterSlackModeOnSend,
   applyExternalMentionsToMessages,
-  applyBuiltInMentionToMessages,
+  attachRoutingMentionsToMessage,
   collectNewlyTaggedIds,
   resolveDispatchPlan,
 } from "./chat-routing";
@@ -594,12 +594,11 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
 
   // AG-UI stream driver (cinatra#1218) — the turn drive lives headlessly in
   // ./ag-ui-chat-client. This wrapper owns registry + guard.
-  async function streamAgUiResponse(contextMessages: Message[], threadId: string, handle?: string, authorUserId?: string, endpoint?: string) {
+  async function streamAgUiResponse(contextMessages: Message[], threadId: string, handle?: string, authorUserId?: string, endpoint?: string, assistant?: string) {
     const assistantId = generateId();
     const abortController = new AbortController();
-    // The ORIGIN thread is the one this turn was dispatched FOR (captured
-    // BEFORE the handshake await) — re-reading the ref here would guard
-    // against the WRONG thread after a switch during that await.
+    // The ORIGIN thread this turn was dispatched FOR (captured BEFORE the handshake
+    // await — re-reading the ref would guard the WRONG thread after a mid-await switch).
     const originThreadId = threadId;
     const stillOnOriginThread = () => activeThreadIdRef.current === originThreadId;
     try {
@@ -608,16 +607,15 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
         threadId,
         assistantId,
         authorUserId,
-        // @chatgpt targets its own producer endpoint; others default in-driver.
+        // Host-runtime assistant: explicit producer endpoint + selector; @cinatra/default neither.
         ...(endpoint ? { endpoint } : {}),
+        ...(assistant ? { assistant } : {}),
         slack: isSlackModeRef.current,
         signal: abortController.signal,
         messages: contextMessages.map((m) => ({
           role: m.role,
           content: m.content,
-          ...(m.attachments && m.attachments.length > 0
-            ? { attachments: m.attachments }
-            : {}),
+          ...(m.attachments && m.attachments.length > 0 ? { attachments: m.attachments } : {}),
         })),
         ui: {
           updateMessages: (updater) =>
@@ -643,7 +641,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   // negotiation surfaces a turn error on a never-blank assistant bubble —
   // there is no legacy fallback to retry over. Externals are webhook-polled
   // and never touch this dispatcher.
-  async function streamResponse(contextMessages: Message[], handle?: string, endpoint = "/api/assistants/chat", authorUserId?: string) {
+  async function streamResponse(contextMessages: Message[], handle?: string, endpoint = "/api/assistants/chat", authorUserId?: string, assistant?: string) {
     const threadId = activeThreadIdRef.current;
     if (!threadId) {
       // Unreachable in practice: every caller dispatches inside an active
@@ -667,7 +665,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
       );
       return;
     }
-    return streamAgUiResponse(contextMessages, threadId, handle, authorUserId, endpoint);
+    return streamAgUiResponse(contextMessages, threadId, handle, authorUserId, endpoint, assistant);
   }
 
   async function submitEmbed() {
@@ -768,11 +766,15 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
       return;
     }
 
-    // Slack mode — always regenerate. Use routing to pick the right endpoint;
-    // fall back to the Cinatra assistant endpoint.
+    // Slack mode — regenerate through the SAME declaration-driven send-path routing.
     let editEndpoint = "/api/assistants/chat";
     let editHandle: string | undefined = activeAssistantHandle;
     let editAuthorId: string | undefined;
+    let editSelector: string | undefined;
+    // A routing decline (honest no-responder / out-of-band push) must NOT force a
+    // Cinatra regeneration; stays false if routing threw (legacy always-stream).
+    let editDeclined = false;
+    let editPending: Mention[] | undefined;
 
     try {
       const routing = await resolveMessageRouting(
@@ -789,13 +791,26 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
       const nextHandle = routing.activeHandle !== undefined ? (routing.activeHandle || undefined) : activeAssistantHandle;
       if (routing.activeHandle !== undefined) setActiveAssistantHandle(nextHandle);
       editHandle = nextHandle ?? activeAssistantHandle;
-      editAuthorId = routing.builtInMention?.assistantUserId;
+      editAuthorId = routing.hostRuntimeMention?.assistantUserId;
+      editSelector = routing.hostRuntimeMention?.handle;
+      // No host reply and no in-band host-runtime target ⇒ nothing streams here.
+      editDeclined = !routing.shouldCallLlm && !routing.hostRuntimeMention;
+      editPending = routing.externalMentions;
     } catch {
-      // Routing failed — proceed with current assistant context
+      // Routing failed — proceed with current assistant context (legacy stream).
     }
 
-    // Always fire the stream so the user always gets a regenerated response on edit.
-    void streamResponse(truncated, editHandle, editEndpoint, editAuthorId);
+    if (editDeclined) {
+      // Attach any pending push mentions for the connector poll (send-path parity).
+      if (editPending && editPending.length > 0) {
+        const pending = editPending;
+        setMessages((prev) => applyExternalMentionsToMessages(prev, editedMessage.id, pending));
+      }
+      return;
+    }
+
+    // Fire the stream so the user gets a regenerated response on edit.
+    void streamResponse(truncated, editHandle, editEndpoint, editAuthorId, editSelector);
   }
 
   async function sendMessage(text: string) {
@@ -985,11 +1000,10 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
           }
           // Nothing extracted → fall through to normal chat routing.
         }
-        // verdict.kind === "chat" → fall through to normal chat routing.
       }
     }
 
-    // Check routing: broadcast to all non-paused participants when no @mention.
+    // Routing: broadcast to all non-paused participants when there is no @mention.
     const routing = await resolveMessageRouting(
       trimmed,
       threadId,
@@ -1000,33 +1014,23 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
         handleMap: Object.fromEntries(assistantHandleMap),
       },
     );
-    // Optimistically append newly-tagged assistantUserIds to component state BEFORE
-    // saveChatThread — this triggers the Slack-mode transition the moment the user sends.
+    // Optimistically append newly-tagged assistantUserIds BEFORE saveChatThread —
+    // triggers the Slack-mode transition the moment the user sends.
     const newlyTaggedIds = collectNewlyTaggedIds(routing.externalMentions);
     if (newlyTaggedIds.length > 0) {
-      // First message with @mention — conversation opens directly in Slack mode,
-      // no "switching" animation needed. Mirror the cold-load suppression pattern.
+      // First @mention opens directly in Slack mode (mirror the cold-load
+      // suppression pattern — no "switching" animation).
       if (baseMessages.length === 0) prevIsSlackModeRef.current = true;
       setTaggedAssistantUserIds((prev) => {
         const merged = new Set([...prev, ...newlyTaggedIds]);
         return Array.from(merged);
       });
     }
-    // Persist the active assistant handle in component state.
     const nextActiveHandle = routing.activeHandle !== undefined ? (routing.activeHandle || undefined) : activeAssistantHandle;
     if (routing.activeHandle !== undefined) setActiveAssistantHandle(nextActiveHandle);
 
-    // Always attach mentionState to the user message so external assistants get polled.
-    if (routing.externalMentions && routing.externalMentions.length > 0) {
-      const externalMentions = routing.externalMentions;
-      setMessages((prev) => applyExternalMentionsToMessages(prev, userMessage.id, externalMentions));
-    }
-
-    // Attach mention for built-in assistants so assistantHandleMap resolves their handle → name.
-    if (routing.builtInMention) {
-      const builtInMention = routing.builtInMention;
-      setMessages((prev) => applyBuiltInMentionToMessages(prev, userMessage.id, builtInMention));
-    }
+    // Attach the routed mention chips (pending external, or in-band host-runtime).
+    setMessages((prev) => attachRoutingMentionsToMessage(prev, userMessage.id, routing));
 
     const plan = resolveDispatchPlan(routing, nextActiveHandle);
 
@@ -1042,26 +1046,27 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
       externalReplyTimerRef.current = window.setTimeout(() => {
         externalReplyTimerRef.current = null;
         // Cinatra takeover — launch the stream FIRST so beginStream() registers the
-        // abort controller / typing indicator in the same render batch where
-        // pendingExternalHandle is cleared. This removes the visible gap between
-        // "Waiting for @handle…" and the cinatra thinking indicator.
+        // abort controller in the same render batch that clears pendingExternalHandle
+        // (removes the visible gap before the cinatra thinking indicator).
         void streamResponse(currentMessages, "cinatra");
         setPendingExternalHandle(null);
       }, EXTERNAL_TAKEOVER_MS);
       return;
     }
 
-    // plan.kind === "stream"
+    // plan.kind === "stream". The producer selector: a declared host-runtime
+    // assistant runs AS its own principal (canonical handle drives the endpoint);
+    // @cinatra/default carry NO selector (undefined ⇒ byte-identical runChatTurn).
+    const streamSelector = routing.hostRuntimeMention?.handle;
     if (isSlackMode) {
-      // Slack mode: fire-and-forget so sendMessage returns immediately and the
-      // composer unblocks. streamResponse is guaranteed non-throwing by its
-      // internal try/catch, which writes errors into the assistant message, so
-      // void dispatch cannot leak an unhandled rejection.
+      // Slack mode: fire-and-forget so sendMessage returns immediately. streamResponse
+      // is non-throwing (internal try/catch writes errors into the assistant message),
+      // so void dispatch cannot leak an unhandled rejection.
       const displayHandle = nextActiveHandle ?? activeAssistantHandle ?? "Assistant";
-      void streamResponse(currentMessages, displayHandle, plan.endpoint, plan.authorUserId);
+      void streamResponse(currentMessages, displayHandle, plan.endpoint, plan.authorUserId, streamSelector);
     } else {
       // ChatGPT mode: preserve the existing synchronous, blocking behavior.
-      await streamResponse(currentMessages, undefined, plan.endpoint, plan.authorUserId);
+      await streamResponse(currentMessages, undefined, plan.endpoint, plan.authorUserId, streamSelector);
     }
   }
 

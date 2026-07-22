@@ -85,11 +85,14 @@ import { resolveRequiredCreationSkillIds } from "./resolve-required-creation-ski
 // from author-agent dispatch so the deterministic merge layer surfaces a
 // blocker rather than a downgraded warning).
 import { AuthorDraftExtractionError } from "./author-draft";
-// Anthropic skill-delivery base error class.
+// Anthropic skill-delivery sentinel recognizer.
 // `dispatchLlmReviewer`'s catch rethrows any subclass (NotSynced, Cap,
 // FunctionTool, Preflight) so config/sync errors become deterministic
-// blockers, not downgraded warnings.
-import { AnthropicSkillDeliveryError } from "@cinatra-ai/llm";
+// blockers, not downgraded warnings. Uses the STRUCTURAL discriminator (not
+// `instanceof`) so a connector-relocated adapter's copy of the sentinel — a
+// different module realm, different constructor identity — is still recognized
+// (llm-providers #1715 D1).
+import { isAnthropicSkillDeliveryError } from "@cinatra-ai/llm";
 // Append-only creation-progress emit. Imported
 // dynamically inside the helper so this primitive is still safely callable
 // from environments that don't have a live notifications DB (e.g. vitest
@@ -593,13 +596,14 @@ async function dispatchLlmReviewer(
     // them to deterministic blockers. Without this rethrow, a pin-config
     // error / sync error / function-tool-fallback error would silently
     // become a `review_dispatch_failed` WARNING — masking the real issue.
-    // The `AnthropicSkillDeliveryError` base-class instanceof check covers
-    // every current + future Anthropic skill-delivery subclass (NotSynced,
-    // Cap, FunctionTool, Preflight).
+    // The `isAnthropicSkillDeliveryError` structural check covers every current
+    // + future Anthropic skill-delivery subclass (NotSynced, Cap, FunctionTool,
+    // Preflight) AND a connector-relocated adapter's realm-foreign copy of them
+    // (where `instanceof` would silently miss — #1715 D1).
     if (
       err instanceof AgentCreationDispatchAbortError ||
       err instanceof AgentCreationPinConfigError ||
-      err instanceof AnthropicSkillDeliveryError ||
+      isAnthropicSkillDeliveryError(err) ||
       err instanceof AuthorDraftExtractionError
     ) {
       throw err;
@@ -850,8 +854,9 @@ export async function handleAgentCreationReview(
 
   // Sentinel rethrow catch. `dispatchLlmReviewer`
   // rethrows config/sync sentinels (AgentCreationDispatchAbortError,
-  // AgentCreationPinConfigError, AnthropicSkillDeliveryError subclasses,
-  // AuthorDraftExtractionError) instead of downgrading to a warning. Convert
+  // AgentCreationPinConfigError, AnthropicSkillDeliveryError subclasses via
+  // isAnthropicSkillDeliveryError, AuthorDraftExtractionError) instead of
+  // downgrading to a warning. Convert
   // them to deterministic blockers here so the same blocker stream surfaces.
   // review_started milestone + per-lane *_running emits. Per-lane
   // emits are fired BEFORE the dispatch promises are created so they happen
@@ -887,7 +892,7 @@ export async function handleAgentCreationReview(
     if (
       err instanceof AgentCreationDispatchAbortError ||
       err instanceof AgentCreationPinConfigError ||
-      err instanceof AnthropicSkillDeliveryError ||
+      isAnthropicSkillDeliveryError(err) ||
       err instanceof AuthorDraftExtractionError
     ) {
       const code = (err as { code?: string }).code ?? err.name;

@@ -33,12 +33,21 @@ const TOOL_META: Record<string, { description: string; inputSchema: ZodTypeAny }
   // Write tools.
   dashboards_create: {
     description:
-      "Create a new dashboard. Validates DashboardConfig (Zod) and writes an audit_events row inside the same transaction. Returns { dashboard } on success; { error } with code forbidden / invalid_config / internal_error.",
+      "Create a new dashboard. Validates DashboardConfig (Zod) and writes an audit_events row inside the same transaction. " +
+      "Portlet queries must stay on the EXECUTABLE surface: measures, dimensions, order/limit/offset, flat same-cube filters " +
+      "with operator `equals` | `in` (non-empty string values) | `inDateRange` (one relative period like \"last 30 days\", or " +
+      "a [from, to] date pair, on a date field), and at most ONE timeDimensions entry which MUST set granularity " +
+      "(day|week|month) — grouped and/or filters and all other operators are rejected at write time. Field names and types " +
+      "are resolved at render time, so a query can still fail on an unknown or non-date field. " +
+      "Returns { dashboard } on success; { error } with code forbidden / invalid_config / internal_error.",
     inputSchema: dashboardsCreateSchema,
   },
   dashboards_update: {
     description:
-      "Update a dashboard (name / description / config / configVersion / visibility). Bumps `dashboard_version` for cache invalidation. Returns { dashboard } on success; { error } with code forbidden / not_found / invalid_config / internal_error.",
+      "Update a dashboard (name / description / config / configVersion / visibility). Bumps `dashboard_version` for cache invalidation. " +
+      "Portlet queries follow the same executable-surface contract as dashboards_create (equals/in/inDateRange filters, one " +
+      "granularity-bearing timeDimensions entry, no grouped and/or). " +
+      "Returns { dashboard } on success; { error } with code forbidden / not_found / invalid_config / internal_error.",
     inputSchema: dashboardsUpdateSchema,
   },
   dashboards_publish: {

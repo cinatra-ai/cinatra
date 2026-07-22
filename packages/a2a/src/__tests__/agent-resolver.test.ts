@@ -81,4 +81,19 @@ describe("resolveAgentByPackageName", () => {
     );
     expect(mockRead).not.toHaveBeenCalled();
   });
+
+  // cinatra#1875 W2 — AC#7. The resolver addresses sub-agents THROUGH the shared
+  // `readPublishedAgentTemplates` reader, which excludes assistant templates at
+  // the store chokepoint. So an assistant package is never in the resolvable set
+  // and cannot be reached over in-process A2A — byte-identical to a missing agent.
+  it("cannot resolve an assistant package (excluded by the filtered reader)", async () => {
+    // The filtered reader has already dropped the assistant; only executors remain.
+    mockRead.mockResolvedValueOnce([
+      { id: "t-exec", packageName: "@x/exec-agent", name: "Exec" },
+    ]);
+
+    await expect(
+      resolveAgentByPackageName("@x/gemini-assistant"),
+    ).rejects.toThrow(/no published agent template with packageName.*gemini-assistant/);
+  });
 });

@@ -86,11 +86,25 @@ function toSemanticQuery(cubeId: string, query: QuerySpec): SemanticQuery {
   }
   if (query.filters && query.filters.length > 0) {
     // Re-prefix each bare member back to `<cube>.<member>` for drizzle-cube's
-    // native filter DSL. v1 only carries same-cube `equals` predicates.
+    // native filter DSL. v1 carries flat same-cube `equals` | `in` |
+    // `inDateRange` predicates (cinatra#1911).
     out.filters = query.filters.map((f) => ({
       member: dot + f.member,
       operator: f.operator,
       values: [...f.values],
+    }));
+  }
+  if (query.timeDimensions && query.timeDimensions.length > 0) {
+    // Granularity is always present under the v1 contract (the wire gate
+    // rejects granularity-less entries — drizzle-cube would apply an implicit
+    // daily grouping). dateRange passes through: drizzle-cube accepts a bare
+    // relative token or a [from, to] pair natively.
+    out.timeDimensions = query.timeDimensions.map((td) => ({
+      dimension: dot + td.dimension,
+      granularity: td.granularity,
+      ...(td.dateRange !== undefined
+        ? { dateRange: typeof td.dateRange === "string" ? td.dateRange : [...td.dateRange] }
+        : {}),
     }));
   }
   return out;

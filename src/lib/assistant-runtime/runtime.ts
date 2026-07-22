@@ -49,12 +49,13 @@ import {
   stream,
   buildSkillTools,
   resolveDefaultAdapter,
+  resolveProviderAdapter,
   resolveChatExternalMcpTools,
   buildLlmMcpServerToolForChat,
   buildLlmMcpServerToolForWidget,
   checkPublicMcpReachability,
 } from "@cinatra-ai/llm";
-import type { LlmTool } from "@cinatra-ai/llm";
+import type { LlmTool, LlmProvider } from "@cinatra-ai/llm";
 import {
   assertScriptedProviderNotProduction,
   isScriptedTestProviderEnabled,
@@ -71,7 +72,24 @@ import {
 // (auth-derived; never caller-controlled).
 import { buildAttachmentResolverPorts } from "@/lib/artifacts/attachment-resolver-ports";
 import { isAllowedByList, type AssistantRuntimeConfig } from "./ports";
+import {
+  selectAdapterProvider,
+  isConversationOnlyProvider,
+  conversationOnlyNoticeFor,
+} from "./model-routing";
 import type { WidgetPrincipal } from "./widget-principal";
+
+/**
+ * Type-narrowing guard: a provider with NATIVE MCP (OpenAI/Anthropic) is the
+ * tool-capable set. Deriving it from the shared `isConversationOnlyProvider`
+ * data list keeps one source of truth while giving TypeScript the narrowing the
+ * tool-assembly calls (`buildLlmMcpServerToolFor*`, `resolveChatExternalMcpTools`,
+ * all typed to `"openai" | "anthropic"`) require now that Gemini flows through to
+ * the conversation-only branch instead of early-returning (cinatra#1875 AC#5).
+ */
+function isNativeMcpProvider(provider: LlmProvider): provider is "openai" | "anthropic" {
+  return !isConversationOnlyProvider(provider);
+}
 
 // ---------------------------------------------------------------------------
 // Public types (unchanged from the pre-extraction runner; re-exported by
@@ -449,16 +467,24 @@ export async function runAssistantTurn(
   // carried on the config; their full routing lands with the AG-UI endpoint
   // (P3) once the LLM layer exposes them — the reference config leaves them
   // empty, so this path is byte-identical for Cinatra.
+  // Assistant-level model routing (cinatra#1875 W2, AC#5). An assistant's
+  // `modelPrefs.provider` selects the adapter where the legacy runtime always
+  // chose the platform default. The Cinatra reference assistant carries an EMPTY
+  // modelPrefs, so it resolves through `resolveDefaultAdapter()` exactly as
+  // before (byte-parity). A pinned provider resolves EXACTLY that provider (or
+  // fails) — an assistant declared for Anthropic never silently downgrades to the
+  // global default. Consumes #1711's live resolver via `resolveProviderAdapter`
+  // (declaration ∩ activation ∩ readiness) once its surfaces land.
   const { modelPrefs } = runtimeConfig;
-  const adapter = await resolveDefaultAdapter();
+  const pinnedProvider = selectAdapterProvider(modelPrefs);
+  const adapter = pinnedProvider
+    ? await resolveProviderAdapter(pinnedProvider as Parameters<typeof resolveProviderAdapter>[0])
+    : await resolveDefaultAdapter();
   if (!adapter) {
-    send("error", { message: "No LLM provider configured." });
-    return;
-  }
-  if (adapter.provider === "gemini") {
     send("error", {
-      message:
-        "Chat MCP dispatch requires an OpenAI or Anthropic provider (Gemini has no native MCP support).",
+      message: pinnedProvider
+        ? `No LLM provider configured for '${pinnedProvider}'.`
+        : "No LLM provider configured.",
     });
     return;
   }
@@ -468,7 +494,24 @@ export async function runAssistantTurn(
     });
     return;
   }
+  // Capability-degraded conversation-only mode (cinatra#1875 W2, AC#5). A
+  // provider with no NATIVE MCP support (Gemini today) can NOT host the Cinatra
+  // self-MCP / connector tools, so instead of the legacy HARD REJECT it runs a
+  // tool-less conversational turn — `gemini-assistant` works day one. The user is
+  // told EXPLICITLY (a system-prompt notice below) that tools are unavailable, so
+  // a tool-needing request degrades with a notice rather than a silent drop. This
+  // interim mode is SUPERSEDED by #1717 native-MCP activation when it fires.
+  const conversationOnly = isConversationOnlyProvider(adapter.provider);
+  const conversationOnlyNotice = conversationOnlyNoticeFor(conversationOnly);
 
+  // Tool array. Conversation-only providers (Gemini, AC#5) carry NO tools; every
+  // MCP/skill assembly + the dead-ingress reachability probe is skipped for them.
+  // Tool-capable providers (OpenAI/Anthropic) assemble the full array below,
+  // byte-identical to before.
+  let tools: LlmTool[] = [];
+  if (isNativeMcpProvider(adapter.provider)) {
+  // adapter.provider is narrowed to "openai" | "anthropic" in this block
+  // (equivalent to `!conversationOnly`), so the tool-assembly calls type-check.
   // Guarantee the assistant's skills resolve with an on-disk sourcePath so
   // buildSkillTools emits the shell tool (also feeds the catalog-backed
   // loadSystemPrompt above; the read_skill fallback is retired).
@@ -564,11 +607,12 @@ export async function runAssistantTurn(
   // primitives behind one `type: "mcp"` entry) and provider-native tools carry
   // no filterable `name`, so they are unaffected by name-level allow-listing at
   // this layer (per-primitive gating is an MCP-layer concern for a later slice).
-  const tools: LlmTool[] = assembledTools.filter((tool) => {
+  tools = assembledTools.filter((tool) => {
     const name = (tool as { name?: string }).name;
     if (typeof name !== "string") return true;
     return isAllowedByList(name, runtimeConfig.allowedTools);
   });
+  } // end !conversationOnly tool assembly
 
   const systemPrompt = await loadSystemPrompt(
     runtimeConfig.systemSkillId,
@@ -597,8 +641,18 @@ export async function runAssistantTurn(
   // The LLM never gets a chance to skip the tool. The chat-mcp e2e
   // harness's `tool_call` listener fires immediately and the run is queued
   // exactly as if the LLM had called it.
-  const explicitDispatchDirective = detectExplicitDispatchDirective(messages);
-  const explicitDispatchPackage = detectExplicitDispatchPackage(messages);
+  //
+  // SKIPPED in conversation-only mode (cinatra#1875 AC#5): a no-native-MCP
+  // provider (Gemini) runs tool-less, and server-side `agent_run` dispatch IS a
+  // tool action — firing it would contradict the "no live actions" notice and
+  // let a tool-less turn perform a live dispatch. The directive/dispatch are both
+  // gated so the conversation-only turn is genuinely tool-free.
+  const explicitDispatchDirective = conversationOnly
+    ? ""
+    : detectExplicitDispatchDirective(messages);
+  const explicitDispatchPackage = conversationOnly
+    ? null
+    : detectExplicitDispatchPackage(messages);
 
   if (explicitDispatchPackage) {
     // Find the latest user message; the pre-router uses it as source material
@@ -671,7 +725,10 @@ export async function runAssistantTurn(
         systemPrompt +
         userContext +
         instanceContext +
-        extensionConfirmationPolicy,
+        extensionConfirmationPolicy +
+        // AC#5: the conversation-only degrade notice (empty for tool-capable
+        // providers, so their system string is byte-identical to before).
+        conversationOnlyNotice,
       messages: messages.map((m) => ({
         role: m.role,
         content: m.content,

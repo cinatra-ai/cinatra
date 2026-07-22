@@ -8,7 +8,7 @@ import {
   countMentions,
   shouldEnterSlackModeOnSend,
   applyExternalMentionsToMessages,
-  applyBuiltInMentionToMessages,
+  applyHostRuntimeMentionToMessages,
   collectNewlyTaggedIds,
   resolveDispatchPlan,
 } from "../chat-routing";
@@ -25,9 +25,14 @@ const mention = (over: Partial<Mention> = {}): Mention => ({
 });
 
 describe("countMentions / shouldEnterSlackModeOnSend", () => {
-  it("counts @handle tokens with the original regex", () => {
+  it("counts flat + scoped mention tokens via the shared tokenizer (cinatra#1875 AC#1)", () => {
     expect(countMentions("hi @claude and @gpt-4")).toBe(2);
-    expect(countMentions("email me at a@b — not a mention count of zero? it is one")).toBe(1);
+    // A scoped `@vendor/slug` ref counts as ONE token (not vendor + slug).
+    expect(countMentions("run @cinatra-ai/gemini-assistant now")).toBe(1);
+    expect(countMentions("@claude and @cinatra-ai/x")).toBe(2);
+    // Email guard: an address local-part no longer counts (was a false positive
+    // under the old flat regex).
+    expect(countMentions("email me at a@b.com — not a mention")).toBe(0);
     expect(countMentions("no mentions")).toBe(0);
   });
 
@@ -50,9 +55,9 @@ describe("mention transforms", () => {
     expect(next[1].mentionState).toEqual({ "au-1": "pending" });
   });
 
-  it("attaches the built-in mention without mentionState", () => {
-    const m = mention({ handle: "chatgpt" });
-    const next = applyBuiltInMentionToMessages([userMsg()], "u1", m);
+  it("attaches the host-runtime assistant mention without mentionState", () => {
+    const m = mention({ handle: "openai" });
+    const next = applyHostRuntimeMentionToMessages([userMsg()], "u1", m);
     expect(next[0].mentions).toEqual([m]);
     expect(next[0].mentionState).toBeUndefined();
   });
@@ -83,18 +88,20 @@ describe("resolveDispatchPlan", () => {
     });
   });
 
-  it("LLM turn → stream with endpoint default and built-in author id", () => {
+  it("LLM turn → stream with endpoint default and host-runtime author id", () => {
     expect(resolveDispatchPlan({ shouldCallLlm: true }, undefined)).toEqual({
       kind: "stream",
       endpoint: "/api/assistants/chat",
       authorUserId: undefined,
     });
+    // A declared host-runtime assistant streams over the UNIFIED endpoint,
+    // attributed to its own principal (cinatra#1875 W2 AC#2 — no @chatgpt route).
     expect(
       resolveDispatchPlan(
-        { shouldCallLlm: true, isBroadcast: true, chatEndpoint: "/api/assistants/chatgpt", builtInMention: mention({ assistantUserId: "b-1" }) },
-        "chatgpt",
+        { shouldCallLlm: true, chatEndpoint: "/api/assistants/chat", hostRuntimeMention: mention({ handle: "openai", assistantUserId: "b-1" }) },
+        "openai",
       ),
-    ).toEqual({ kind: "stream", endpoint: "/api/assistants/chatgpt", authorUserId: "b-1" });
+    ).toEqual({ kind: "stream", endpoint: "/api/assistants/chat", authorUserId: "b-1" });
   });
 
   it("host Cinatra reply carries the host principal as authorUserId (P2.4 attribution)", () => {
@@ -105,18 +112,18 @@ describe("resolveDispatchPlan", () => {
     });
   });
 
-  it("a built-in @-mention author wins over the host fallback", () => {
+  it("a host-runtime assistant author wins over the host fallback", () => {
     expect(
       resolveDispatchPlan(
         {
           shouldCallLlm: true,
-          chatEndpoint: "/api/assistants/chatgpt",
-          builtInMention: mention({ assistantUserId: "b-1" }),
+          chatEndpoint: "/api/assistants/chat",
+          hostRuntimeMention: mention({ handle: "openai", assistantUserId: "b-1" }),
           hostAssistantUserId: "cinatra-9",
         },
-        "chatgpt",
+        "openai",
       ),
-    ).toEqual({ kind: "stream", endpoint: "/api/assistants/chatgpt", authorUserId: "b-1" });
+    ).toEqual({ kind: "stream", endpoint: "/api/assistants/chat", authorUserId: "b-1" });
   });
 
   it("keeps the 20s takeover window", () => {

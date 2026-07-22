@@ -64,6 +64,13 @@ const MIGRATED_ENTRIES = [
     propsApiVersion: 1,
   },
   {
+    bindingId: "@cinatra-ai/email-test-delivery-agent:input",
+    packageName: "@cinatra-ai/email-artifacts",
+    specifier: "@cinatra-ai/email-artifacts/src/renderers/test-delivery-input",
+    resolution: "guardedOptional",
+    propsApiVersion: 1,
+  },
+  {
     bindingId: "@cinatra-ai/list-curator-agent:final-list-review",
     packageName: "@cinatra-ai/list-curator-agent",
     specifier: "@cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer",

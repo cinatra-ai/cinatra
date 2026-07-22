@@ -42,6 +42,7 @@ const normalizeOriginStrict = vi.fn();
 const consumeUserWidgetToken = vi.fn();
 const resolveCanonicalInstanceForOrigin = vi.fn();
 const emitWidgetAuthAudit = vi.fn();
+const isSelectedAssistantVisible = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
@@ -87,6 +88,20 @@ vi.mock("@/lib/widget-user-auth", () => ({
 }));
 vi.mock("@/lib/widget-auth-audit", () => ({
   emitWidgetAuthAudit: (...a: unknown[]) => emitWidgetAuthAudit(...a),
+}));
+vi.mock("@/lib/assistant-selector-audience", () => ({
+  isSelectedAssistantVisible: (...a: unknown[]) => isSelectedAssistantVisible(...a),
+  // Pure caller-builders: passthrough shapes the mocked gate ignores.
+  widgetSelectorCaller: (p: { userId: string; orgId: string }) => ({
+    userId: p.userId,
+    orgId: p.orgId,
+    platformRole: "member",
+  }),
+  sessionSelectorCaller: (userId: string, orgId: string | null) => ({
+    userId,
+    orgId: orgId ?? "",
+    platformRole: "member",
+  }),
 }));
 
 import { POST, OPTIONS } from "../route";
@@ -148,6 +163,8 @@ beforeEach(() => {
     runtimeConfig: { systemSkillId: "@cinatra-ai/chat:wordpress-authoring-core" },
   });
   streamAgUiChatTurn.mockResolvedValue(new Response("ok", { status: 200 }));
+  // AC#3: the verified end user is IN the assistant's audience by default.
+  isSelectedAssistantVisible.mockResolvedValue(true);
   // Cookie-path defaults (for the T-cookie test).
   getAuthSession.mockResolvedValue({ user: { id: "cookie-user" }, session: { activeOrganizationId: "org-1" } });
   requireActorContext.mockResolvedValue({ principalType: "HumanUser", principalId: "cookie-user" });
@@ -338,6 +355,41 @@ describe("broker-auth fail-closed rungs — deny with NO turn started", () => {
   it("404s an unresolvable widget-stream union", async () => {
     resolveWidgetStreamAgentUnion.mockResolvedValue(null);
     await expectDenied(await POST(widgetReq({ cit: "cit_abc", cwu: "cwu_xyz" })), 404);
+  });
+});
+
+// AC#3 — site auth is NOT the installation's audience. A verified end user who is
+// OUT of the assistant's audience is 404-hidden after the full dual-token sequence
+// passes; an in-audience user runs the unchanged protocol.
+describe("AC#3 audience closure — the verified end user must be in-audience", () => {
+  it("404-hides an out-of-audience end user (valid site auth, NO turn started)", async () => {
+    isSelectedAssistantVisible.mockResolvedValue(false);
+    const res = await POST(widgetReq({ cit: "cit_abc", cwu: "cwu_xyz" }));
+    expect(res.status).toBe(404);
+    // The audience gate was consulted with the VERIFIED end user (floored member).
+    expect(isSelectedAssistantVisible).toHaveBeenCalledWith(
+      "wp-principal",
+      expect.objectContaining({ userId: "user-7", orgId: "org-3", platformRole: "member" }),
+    );
+    // Opaque 404 — no run, no config resolution.
+    expect(streamAgUiChatTurn).not.toHaveBeenCalled();
+    expect(runAssistantTurn).not.toHaveBeenCalled();
+    expect(resolveAssistantRuntimeConfigByPrincipal).not.toHaveBeenCalled();
+    // A scrubbed audit line is emitted server-side.
+    expect(emitWidgetAuthAudit).toHaveBeenCalledWith(
+      "assistant_chat_widget_out_of_audience",
+      expect.objectContaining({ actor: "user-7", orgId: "org-3" }),
+    );
+    // CORS still reflected on the deny.
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
+  });
+
+  it("an in-audience end user runs the unchanged protocol (200, turn started)", async () => {
+    isSelectedAssistantVisible.mockResolvedValue(true);
+    const res = await POST(widgetReq({ cit: "cit_abc", cwu: "cwu_xyz" }));
+    expect(res.status).toBe(200);
+    expect(streamAgUiChatTurn).toHaveBeenCalledTimes(1);
+    expect(isSelectedAssistantVisible).toHaveBeenCalledTimes(1);
   });
 });
 

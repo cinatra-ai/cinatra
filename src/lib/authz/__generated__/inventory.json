@@ -350,17 +350,17 @@
     {
       "primitiveName": "assistant_send",
       "file": "src/lib/assistant-mcp.ts",
-      "line": 916
+      "line": 929
     },
     {
       "primitiveName": "assistant_thread_get",
       "file": "src/lib/assistant-mcp.ts",
-      "line": 926
+      "line": 939
     },
     {
       "primitiveName": "assistant_thread_list",
       "file": "src/lib/assistant-mcp.ts",
-      "line": 921
+      "line": 934
     },
     {
       "primitiveName": "blog_connector_list",
@@ -605,7 +605,7 @@
     {
       "primitiveName": "dashboards_archive",
       "file": "packages/dashboards/src/mcp/registry.ts",
-      "line": 49
+      "line": 58
     },
     {
       "primitiveName": "dashboards_create",
@@ -645,12 +645,12 @@
     {
       "primitiveName": "dashboards_publish",
       "file": "packages/dashboards/src/mcp/registry.ts",
-      "line": 44
+      "line": 53
     },
     {
       "primitiveName": "dashboards_update",
       "file": "packages/dashboards/src/mcp/registry.ts",
-      "line": 39
+      "line": 45
     },
     {
       "primitiveName": "drupal_content_editor_run",
