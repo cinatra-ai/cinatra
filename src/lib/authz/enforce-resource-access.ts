@@ -227,10 +227,19 @@ function deriveRoleHints(actor: PrimitiveActorContext): ActorRoleHints {
     }
   }
 
+  // Internal-read authority (cinatra#1948 (b)). A dedicated trusted boolean on
+  // the envelope — read directly (never inferred from the loose `roles[]` bag),
+  // so it cannot be forged by injecting an `"internal_reader"` role string.
+  const internalRead =
+    (actor as unknown as { internalRead?: unknown }).internalRead === true
+      ? true
+      : undefined;
+
   return {
     platformRole,
     orgRole,
     teamRoles,
+    internalRead,
     actorOrganizationId: actorOrgId,
   };
 }
@@ -546,6 +555,10 @@ export async function enforceResourceAccess(
         platformRole: roleHintsOverride.platformRole ?? derivedHints.platformRole,
         orgRole: roleHintsOverride.orgRole ?? derivedHints.orgRole,
         teamRoles: roleHintsOverride.teamRoles ?? derivedHints.teamRoles,
+        // Internal-read authority (cinatra#1948 (b)) — preserve it across the
+        // override merge so a forwarding caller (e.g. enforceRunAccess) that
+        // supplies role hints does not silently drop a legitimate internal read.
+        internalRead: roleHintsOverride.internalRead ?? derivedHints.internalRead,
         teamIds: roleHintsOverride.teamIds,
         projectGrants: mergedProjectGrants,
         projectIds:
