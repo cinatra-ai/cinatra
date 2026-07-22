@@ -353,6 +353,7 @@
       "@cinatra-ai/openai-connector/settings-page": ["./extensions/cinatra-ai/openai-connector/src/settings-page.tsx"],
       "@cinatra-ai/openai-connector/setup-page": ["./extensions/cinatra-ai/openai-connector/src/setup-page.tsx"],
       "@cinatra-ai/openai-connector/openai-skills-settings-page": ["./extensions/cinatra-ai/openai-connector/src/openai-skills-settings-page.tsx"],
+      "@cinatra-ai/org-write-kernel": ["./packages/org-write-kernel/src/index.ts"],
       "@cinatra-ai/permissions": ["./packages/permissions/src/index.ts"],
       "@cinatra-ai/permissions/pages": ["./packages/permissions/src/pages.tsx"],
       "@cinatra-ai/permissions/impersonate-page": ["./packages/permissions/src/impersonate-page.tsx"],
