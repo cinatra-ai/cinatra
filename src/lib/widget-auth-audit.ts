@@ -35,7 +35,12 @@ export type WidgetAuthAuditEvent =
   // the stream-side pair above (the AUTHORIZED event precedes the LLM turn; the
   // turn/carrier lifecycle is the run-outcome trail).
   | "assistant_chat_widget_dispatch_authorized"
-  | "assistant_chat_widget_token_rejected";
+  | "assistant_chat_widget_token_rejected"
+  // cinatra#1875 W2 AC#3 — the audience closure on the broker-auth branch. Site
+  // auth is NOT the installation's audience: emitted (reason-coded, never a
+  // secret) when the verified end user passes the dual-token sequence but is
+  // OUT of the selected assistant's audience, so the turn 404-hides.
+  | "assistant_chat_widget_out_of_audience";
 
 export type WidgetAuthAuditFields = {
   actor?: string | null; // userId (never an email/secret)

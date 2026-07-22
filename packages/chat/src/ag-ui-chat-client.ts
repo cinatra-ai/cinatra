@@ -198,14 +198,20 @@ export type StreamAssistantTurnOptions = {
   /** Optional per-event hook (widget-refresh detection, diagnostics). */
   onEvent?: (event: AgUiEvent, state: ConversationViewState) => void;
   endpoint?: string;
+  /** OPTIONAL producer SELECTOR (cinatra#1875 W2 AC#2): the CANONICAL handle of a
+   *  declared host-runtime assistant to drive this turn AS. Sent as `body.assistant`
+   *  so the unified `/api/assistants/chat` endpoint resolves that assistant's own
+   *  runtime config + audience gate. OMITTED for the @cinatra host default (an
+   *  absent selector keeps the byte-identical `runChatTurn` path). */
+  assistant?: string;
   resumeEndpointFor?: (runId: string) => string;
   // ----- S5 Lane B embed seams (cinatra#1221 §9.1) — ADDITIVE; every field is
   // optional and defaults to today's session behaviour so `/chat` is
-  // byte-unchanged when the token-broker seams are unused. -----
-  /** The registered assistant mention handle ("wordpress"|"drupal"); included in
-   *  the POST body so the broker-auth branch resolves the closed widget binding.
-   *  ABSENT = the built-in @cinatra binding (historical behaviour). */
-  assistant?: "wordpress" | "drupal";
+  // byte-unchanged when the token-broker seams are unused. The producer SELECTOR
+  // itself is the `assistant` field above (W2 cinatra#1875 AC#2, canonical
+  // `string`); the embed handles ("wordpress"|"drupal") are assignable to it and,
+  // in the broker-auth branch, that same `assistant` value resolves the closed
+  // widget binding server-side. -----
   /** A `token-broker` provider returning `{ Authorization: "Bearer <citToken>",
    *  "X-Cinatra-Widget-User-Token": "<cwuToken>" }`. Applied to the TURN POST and
    *  the CAPABILITY fetch. NOT applied to the resume GET — the resume endpoint has
@@ -308,8 +314,10 @@ export async function streamAssistantTurn(
     body: JSON.stringify({
       threadId: options.threadId,
       messages: options.messages,
-      // Included ONLY when set (the broker-auth branch needs it; the built-in
-      // @cinatra session path omits it — body byte-parity when unused).
+      // The producer selector — present ONLY for a declared host-runtime
+      // assistant (incl. the embed handles "wordpress"|"drupal", whose
+      // broker-auth branch needs it); an absent field keeps the endpoint's
+      // byte-identical @cinatra default (`assistant === undefined` → `runChatTurn`).
       ...(options.assistant ? { assistant: options.assistant } : {}),
     }),
     signal: options.signal,
@@ -441,11 +449,16 @@ export type DriveAssistantChatTurnOptions = {
   authorUserId?: string;
   signal: AbortSignal;
   ui: AssistantChatTurnUiPort;
-  /** AG-UI producer endpoint. Defaults to the Cinatra endpoint
-   *  (`/api/assistants/chat`); the @chatgpt built-in targets
-   *  `/api/assistants/chatgpt` (cinatra#1218 predecessor 3). The durable-log
-   *  resume endpoint is producer-agnostic (runId-keyed), so it stays default. */
+  /** AG-UI producer endpoint. Defaults to the unified Cinatra endpoint
+   *  (`/api/assistants/chat`). Every declared assistant now streams over this
+   *  ONE endpoint (cinatra#1875 W2 AC#2 — the per-built-in endpoints are retired);
+   *  the target assistant is chosen by {@link assistant}. The durable-log resume
+   *  endpoint is producer-agnostic (runId-keyed), so it stays default. */
   endpoint?: string;
+  /** OPTIONAL producer SELECTOR — the CANONICAL handle of a declared host-runtime
+   *  assistant to drive this turn AS (forwarded to the endpoint as `body.assistant`).
+   *  Omitted for the @cinatra host default. */
+  assistant?: string;
 };
 
 /**
@@ -493,9 +506,11 @@ export async function driveAssistantChatTurn(
         threadId: options.threadId,
         messages: options.messages,
         // Propagated on BOTH the initial attempt and the retry (this closure
-        // is re-invoked for the retry-once path) so the @chatgpt producer
-        // endpoint is never silently downgraded to the Cinatra endpoint.
+        // is re-invoked for the retry-once path) so the producer endpoint +
+        // assistant selector are never silently downgraded to the default
+        // @cinatra turn.
         ...(options.endpoint ? { endpoint: options.endpoint } : {}),
+        ...(options.assistant ? { assistant: options.assistant } : {}),
         signal,
         onState: (state) => {
           anyEventSeen = true;

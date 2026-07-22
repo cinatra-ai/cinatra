@@ -60,6 +60,8 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
       scalars jsonb,
       title text,
       context_id text,
+      assistant_package text,
+      instance_id text,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
@@ -118,6 +120,17 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
       BEGIN
         ${addConstraintIfAbsentSql(schemaName, "assistant_threads", "assistant_threads_scalars_object_check", `CHECK (scalars IS NULL OR jsonb_typeof(scalars) = 'object')`)}
       END $$` },
+    // Canonical thread BINDING `{assistantPackage, instanceId?}` (cinatra#1875 W2,
+    // AC#4, core__0068): WHICH registered assistant package drives the thread
+    // (package-keyed so the W1 registry reader's audience gate resolves it
+    // directly), plus the OPTIONAL project/site instance the binding is scoped to.
+    // A fresh install is born WITH the columns (the CREATE above); the ADD COLUMN
+    // IF NOT EXISTS pair carries them onto a DB bootstrapped before this change
+    // (bootstrap-upgrade parity), and core__0068 carries them onto the operator
+    // migration path. NULLABLE — NULL == an unbound thread (implicit-@cinatra,
+    // backward compatible).
+    { text: `ALTER TABLE "${s}"."assistant_threads" ADD COLUMN IF NOT EXISTS assistant_package text` },
+    { text: `ALTER TABLE "${s}"."assistant_threads" ADD COLUMN IF NOT EXISTS instance_id text` },
     // `content` (cinatra#1037 P5.6 drop-history PR1 EXPAND, core__0061): the
     // durable per-turn message content the legacy chat_threads.payload has held
     // — the FULL message object for faithful /chat reconstruction (not just

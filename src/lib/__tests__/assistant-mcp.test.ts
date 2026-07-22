@@ -59,6 +59,7 @@ const mocks = vi.hoisted(() => {
     readRecentRunEventsReverse: vi.fn(),
     expireRunStream: vi.fn(),
     readAssistantConfigByPrincipalId: vi.fn(),
+    isAssistantInCallerAudience: vi.fn(),
     cinatraConfig,
   };
 });
@@ -96,6 +97,13 @@ vi.mock("@cinatra-ai/a2a", () => ({
 // runtime binding (resolveTemplateLinkedAssistantConfig).
 vi.mock("@cinatra-ai/agents", () => ({
   readAssistantConfigByPrincipalId: mocks.readAssistantConfigByPrincipalId,
+}));
+// cinatra#1875 W2 AC#6: the MCP audience closure. Mocked here (its own decision
+// is proven by assistant-audience-closure.test.ts); default-allow in beforeEach
+// so the existing send/thread contracts are unchanged, with a dedicated
+// out-of-audience deny test below.
+vi.mock("@/lib/assistant-audience-closure", () => ({
+  isAssistantInCallerAudience: mocks.isAssistantInCallerAudience,
 }));
 
 import { mcpRequestContextStorage, isDelegatedChatMcpToolAllowed } from "@cinatra-ai/mcp-server";
@@ -162,6 +170,9 @@ function thread(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.cinatraConfig.mcp = undefined;
+  // AC#6: default the audience closure to ALLOW so the existing contracts hold;
+  // individual tests override it to prove the out-of-audience 404-hide.
+  mocks.isAssistantInCallerAudience.mockResolvedValue(true);
   mocks.resolveAssistantHandles.mockImplementation(async (handles: string[]) => {
     const map = new Map<string, string>();
     for (const h of handles) {
@@ -385,6 +396,36 @@ describe("404-hide parity", () => {
       memberFrame,
     );
     expect(out.code).toBe("NOT_FOUND");
+  });
+
+  // cinatra#1875 W2 AC#6: audience closure. A RESOLVED handle the caller is not
+  // in the audience of 404-hides byte-identically to an unresolvable handle —
+  // the platform-global registry is never a handle-existence oracle.
+  it("denies an out-of-audience assistant as NOT_FOUND (audience closure)", async () => {
+    mocks.isAssistantInCallerAudience.mockResolvedValue(false);
+    const out = await call(
+      "assistant_send",
+      { handle: "helper", message: "hi" },
+      memberFrame,
+    );
+    expect(out.status).toBe("rejected");
+    expect(out.code).toBe("NOT_FOUND");
+    expect(mocks.isAssistantInCallerAudience).toHaveBeenCalledWith(
+      HELPER_ID,
+      expect.objectContaining({ userId: USER, orgId: ORG, platformRole: "member" }),
+    );
+  });
+
+  it("REVOCATION: the same handle succeeds then denies once the audience shrinks", async () => {
+    // @cinatra resolves through the reference config, so a send completes when
+    // the caller is in-audience...
+    mocks.isAssistantInCallerAudience.mockResolvedValueOnce(true);
+    const first = await call("assistant_send", { handle: "cinatra", message: "hi" }, memberFrame);
+    expect(first.status).toBe("completed");
+    // ...and the NEXT turn (a fresh actor-side evaluation) denies once revoked.
+    mocks.isAssistantInCallerAudience.mockResolvedValue(false);
+    const second = await call("assistant_send", { handle: "cinatra", message: "hi" }, memberFrame);
+    expect(second.code).toBe("NOT_FOUND");
   });
 });
 
