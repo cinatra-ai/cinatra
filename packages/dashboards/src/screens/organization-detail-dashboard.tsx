@@ -1,29 +1,34 @@
 /**
- * `/organizations/[id]` screen — per-org detail surface (cinatra#705, epic #699).
+ * `/organizations/[id]` screen — per-org detail surface (cinatra#705, epic
+ * #699; tabless since #1734, the #1693 ruling: the detail page keeps only the
+ * dashboards).
  *
- * A tablist mirroring the other entity detail surfaces:
- *   - **Dashboards** — the reusable entity Dashboards shell (#701) bound to this
- *     org's per-user dashboard set, with the non-removable **Overview** default
- *     rendering the org's identity + member/team counts as portlets (#702) and a
- *     "+ New dashboard" / select toolbar.
- *   - **Permissions** — the org's access MODEL (members by role + teams),
- *     read-only. Membership derives from the Better-Auth `member` table; org-wide
- *     management lives at `/configuration/workspace`; no customer invite.
+ *   - The reusable entity Dashboards shell (#701) bound to this org's
+ *     per-user dashboard set, with the non-removable **Overview** default
+ *     rendering the org's identity + member/team counts as portlets (#702)
+ *     and a "+ New dashboard" / select toolbar.
+ *   - The access model + management (settings, members & invitations, danger
+ *     zone) live on `/organizations/[id]/settings`, linked from the header —
+ *     the button is visible to EVERY member (the settings page itself splits
+ *     read-only vs manage, exactly as the retired tabs did).
  *
  * Authz (fail closed): the redirect gate uses the session SecurityContext, then
  * the org identity + counts are only read AFTER `readUserIsOrgMember` confirms
- * the viewer is a member of THIS org — the Overview/Permissions data is fetched
+ * the viewer is a member of THIS org — the Overview data is fetched
  * outside the cube, so this surface enforces the same "member of the org" rule
  * the cube predicate (`WHERE id IN (accessibleOrgIds)`) applies to the analytics
  * path. A non-member (or a deleted org) is a 404, never a widened surface.
  */
 import "server-only";
+import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
+import { Settings } from "lucide-react";
 
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
+import { Button } from "@/components/ui/button";
 import { getAuthSession } from "@/lib/auth-session";
 import { CrumbContributions } from "@/components/crumb-contributions";
 import {
@@ -35,16 +40,8 @@ import {
   readUserIsOrgMember,
 } from "@/lib/better-auth-db";
 
-import { resolveOrganizationManageCapabilities } from "@/lib/authz/organization-manage-gate";
-import {
-  countOrganizationDeleteBlockers,
-  type OrganizationDeleteBlockers,
-} from "@/lib/organization-delete";
-
 import { buildSecurityContextFromSession } from "../auth/security-context";
-import { OrganizationDetailTabs } from "../components/organization-detail-tabs";
-import { OrganizationPermissionsPanel } from "../components/organization-permissions-panel";
-import { OrganizationManagePanel } from "../components/organization-manage-panel";
+import { OrganizationDashboards } from "../components/organization-dashboards";
 import { buildOrganizationOverviewConfig } from "../components/seed-configs/overview-config";
 import type { EntityDashboardsDataSource } from "../entity-dashboards-contract";
 import {
@@ -58,9 +55,6 @@ import {
 import {
   buildOrganizationAccessModel,
   buildOrganizationDetailRef,
-  buildOrganizationManageMembers,
-  normalizePendingInvitation,
-  type OrganizationPendingInvitation,
 } from "./organization-detail-model";
 
 export async function OrganizationDetailDashboardPage({
@@ -114,63 +108,9 @@ export async function OrganizationDetailDashboardPage({
   }
 
   const orgName = org.name ?? "";
+  // Access model retained ONLY for its counts (Overview portlets) — the full
+  // view + management moved to /organizations/[id]/settings (#1734).
   const accessModel = buildOrganizationAccessModel(memberRows, teams);
-
-  // Viewed-org management capabilities (cinatra#1510): resolve the caller's
-  // role in THIS org and map it through the real catalog. A read-only member
-  // (or a platform admin who is not a member here) gets no capabilities and no
-  // Manage tab. `canManageSettings` (org_admin+) gates the tab; the member
-  // console inside is further gated on `canManageMembers` (org_owner).
-  const manage = await resolveOrganizationManageCapabilities(session, id);
-
-  // Pending invitations are only read for an owner who can act on them; keep
-  // fail-closed (a read error degrades to an empty list, never a broken tab).
-  let pendingInvitations: readonly OrganizationPendingInvitation[] = [];
-  if (manage.canManageMembers) {
-    try {
-      const invitationRows = await betterAuthDb.execute<{
-        id: string;
-        email: string | null;
-        role: string | null;
-      }>(sql`
-        SELECT id, email, role
-        FROM public."invitation"
-        WHERE "organizationId" = ${id} AND status = 'pending'
-        ORDER BY email ASC
-      `);
-      pendingInvitations = invitationRows.rows.map(normalizePendingInvitation);
-    } catch {
-      pendingInvitations = [];
-    }
-  }
-
-  // Danger-zone pre-count (cinatra#1510 remainder): only a viewer whose
-  // capabilities carry `canDelete` pays the count query. Advisory for the UI —
-  // the delete transaction re-counts under the org-row lock. Fail-closed: an
-  // unreadable count hides the card rather than rendering an unverified one.
-  let deleteBlockers: OrganizationDeleteBlockers | undefined;
-  if (manage.canDelete) {
-    try {
-      deleteBlockers = await countOrganizationDeleteBlockers(id);
-    } catch {
-      deleteBlockers = undefined;
-    }
-  }
-
-  const manageSlot = manage.canManageSettings ? (
-    <OrganizationManagePanel
-      organizationId={id}
-      orgName={orgName}
-      currentSlug={org.slug ?? ""}
-      currentUserId={userId}
-      canManageSettings={manage.canManageSettings}
-      canManageMembers={manage.canManageMembers}
-      canDelete={manage.canDelete && deleteBlockers !== undefined}
-      deleteBlockers={deleteBlockers}
-      members={buildOrganizationManageMembers(memberRows)}
-      invitations={pendingInvitations}
-    />
-  ) : undefined;
 
   // The Overview is EPHEMERAL: built fresh here from the just-fetched counts and
   // handed to the shell's render seam, never persisted (render-only portlets).
@@ -209,20 +149,21 @@ export async function OrganizationDetailDashboardPage({
       />
       <PageHeader
         title={orgName || "Organization"}
-        description="Dashboards and access for this organization."
+        description="Dashboards for this organization."
         divider={false}
+        actions={
+          <Button asChild variant="outline">
+            <Link href={`/organizations/${encodeURIComponent(id)}/settings`}>
+              <Settings data-icon="inline-start" aria-hidden="true" />
+              Organization settings
+            </Link>
+          </Button>
+        }
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <OrganizationDetailTabs
+        <OrganizationDashboards
           dataSource={dataSource}
           overviewPortlets={overviewConfig.portlets}
-          permissionsSlot={
-            <OrganizationPermissionsPanel
-              orgName={orgName}
-              accessModel={accessModel}
-            />
-          }
-          manageSlot={manageSlot}
         />
       </PageContent>
     </Main>
