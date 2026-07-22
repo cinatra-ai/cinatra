@@ -10,6 +10,7 @@ import { formatDistanceToNow } from "date-fns";
 
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { loadStoredArtifactObjects } from "@/lib/artifacts/stored-objects-inventory";
+import { Empty, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
 
 /** Shorten a long opaque id for the mono meta line ("obj_2a4e…"). */
 function shortId(id: string): string {
@@ -72,14 +73,15 @@ export async function StoredObjectsTab({
 
 function StoredObjectsEmptyState() {
   return (
-    <div
-      className="rounded-lg border border-line bg-surface-strong px-5 py-10 text-center text-sm text-muted-foreground"
+    <Empty
       data-testid="artifacts-stored-objects"
       data-conformance-id="artifacts-stored-objects"
       data-state="empty"
     >
-      No objects are stored yet.
-    </div>
+      <EmptyHeader>
+        <EmptyDescription>No objects are stored yet.</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 
