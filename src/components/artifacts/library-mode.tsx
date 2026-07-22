@@ -19,6 +19,13 @@ import { formatDistanceToNow } from "date-fns";
 import { AlertTriangle, Braces, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import {
@@ -293,24 +300,25 @@ function LibraryToolbarShell({
 
 function LibraryEmptyState({ filtered }: { filtered: boolean }) {
   return (
-    <div
-      className="flex flex-col items-center gap-2 rounded-lg border border-line bg-surface-strong px-5 py-10 text-center"
+    <Empty
       data-testid="artifacts-library-empty"
       data-conformance-id="artifacts-library-empty"
       data-state="empty"
     >
-      <div className="grid size-10 place-items-center rounded-lg bg-surface-muted text-muted-foreground">
-        <Braces aria-hidden className="size-5" />
-      </div>
-      <p className="text-sm font-semibold text-foreground">
-        {filtered ? "No artifacts match your filters" : "No artifacts yet"}
-      </p>
-      <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
-        {filtered
-          ? "Try a different type or clear the search."
-          : "Artifacts appear here as your agents produce work and as you upload files."}
-      </p>
-    </div>
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Braces aria-hidden />
+        </EmptyMedia>
+        <EmptyTitle>
+          {filtered ? "No artifacts match your filters" : "No artifacts yet"}
+        </EmptyTitle>
+        <EmptyDescription>
+          {filtered
+            ? "Try a different type or clear the search."
+            : "Artifacts appear here as your agents produce work and as you upload files."}
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 

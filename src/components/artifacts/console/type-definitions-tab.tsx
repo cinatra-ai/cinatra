@@ -8,6 +8,7 @@ import "server-only";
  * inventory — record inspection only, no actions.
  */
 import { loadTypeDefinitionRows } from "@/lib/artifacts/type-definitions-inventory";
+import { Empty, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
 
 export async function TypeDefinitionsTab({ orgId }: { orgId: string | null }) {
   let rows: Awaited<ReturnType<typeof loadTypeDefinitionRows>>;
@@ -92,14 +93,15 @@ function Cell({
 
 function TypeDefinitionsEmptyState() {
   return (
-    <div
-      className="rounded-lg border border-line bg-surface-strong px-5 py-10 text-center text-sm text-muted-foreground"
+    <Empty
       data-testid="artifacts-type-definitions"
       data-conformance-id="artifacts-type-definitions"
       data-state="empty"
     >
-      No artifact extension defines a type yet.
-    </div>
+      <EmptyHeader>
+        <EmptyDescription>No artifact extension defines a type yet.</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 
