@@ -424,6 +424,7 @@
     { "alias": "@cinatra-ai/email-artifacts/src/renderers/email-drafts-review", "target": "./extensions/cinatra-ai/email-artifacts/src/renderers/email-drafts-review.tsx" },
     { "alias": "@cinatra-ai/email-artifacts/src/renderers/follow-up-cadence", "target": "./extensions/cinatra-ai/email-artifacts/src/renderers/follow-up-cadence.tsx" },
     { "alias": "@cinatra-ai/email-artifacts/src/renderers/gmail-sender", "target": "./extensions/cinatra-ai/email-artifacts/src/renderers/gmail-sender.tsx" },
+    { "alias": "@cinatra-ai/email-artifacts/src/renderers/test-delivery-input", "target": "./extensions/cinatra-ai/email-artifacts/src/renderers/test-delivery-input.tsx" },
     { "alias": "@cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer", "target": "./extensions/cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer.tsx" },
     { "alias": "@cinatra-ai/auditor-agent/src/auditor-review-renderer", "target": "./extensions/cinatra-ai/auditor-agent/src/auditor-review-renderer.tsx" },
     { "alias": "@cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer", "target": "./extensions/cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer.tsx" },

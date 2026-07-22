@@ -190,7 +190,7 @@
     {
       "packageName": "@cinatra-ai/email-test-delivery-agent",
       "repo": "cinatra-ai/email-test-delivery-agent",
-      "resolvedSha": "afc3334d05fba7991a4c48bdbf0f4765111bb7ce"
+      "resolvedSha": "86342965f32f0ad69737403d5edd7017cee382be"
     },
     {
       "packageName": "@cinatra-ai/gemini-connector",

@@ -50,6 +50,60 @@ import {
 import { BUILTIN_ASSISTANT_ALIAS } from "@/lib/assistant-registry-schema";
 
 // ---------------------------------------------------------------------------
+// Assistant DELIVERY channel (cinatra#1875 W2, Epic #1873 — AC#2). The declared
+// delivery of an assistant's turns, projected from the persisted
+// `installed_extension.assistant_declaration.block.delivery.kind`. Kept as a
+// LOCAL closed literal (mirrors the SINGLE source in
+// `@cinatra-ai/sdk-extensions/assistant-declaration` — `ASSISTANT_DELIVERY_KINDS`)
+// so this DB-layer read leaf never pulls the zod-carrying declaration parser into
+// its static import graph. `host-runtime` is the platform default: the builtin
+// Cinatra descriptor (no declaration) and any malformed/absent delivery block
+// fail SAFE to the local host runtime — never to an external push channel.
+// ---------------------------------------------------------------------------
+
+/** The declared delivery channel of an assistant's turns. */
+export type AssistantDeliveryKind = "host-runtime" | "webhook" | "mcp-poll";
+const DELIVERY_KINDS: ReadonlySet<AssistantDeliveryKind> = new Set([
+  "host-runtime",
+  "webhook",
+  "mcp-poll",
+]);
+/** The platform default when no (or a malformed) delivery is declared. */
+export const DEFAULT_ASSISTANT_DELIVERY: AssistantDeliveryKind = "host-runtime";
+
+/** The only `assistant_declaration.formatVersion` this projection recognizes —
+ *  mirrors `ASSISTANT_DECLARATION_FORMAT_VERSION` in the sdk parser (kept local so
+ *  this DB-layer leaf never imports the zod-carrying parser). An unrecognized /
+ *  absent version fails SAFE (host-runtime), never to an external push channel. */
+const RECOGNIZED_DECLARATION_FORMAT_VERSION = 1;
+
+/**
+ * Project the delivery channel from a persisted `assistant_declaration` jsonb
+ * value. The install-time parser validates + stamps the envelope
+ * (`{ formatVersion, block, assistantConfig }`, fail-closed), so an installed row
+ * carries a well-formed, versioned declaration. This reader is FAIL-SAFE and
+ * DEFENSIVE for the hot read path: it honors an EXTERNAL delivery kind
+ * (`webhook` / `mcp-poll`) ONLY when the envelope is a RECOGNIZED-version
+ * declaration whose `block.delivery.kind` is a known kind. A builtin (no
+ * declaration), a partial/corrupt jsonb, an unsupported future `formatVersion`,
+ * or an unknown kind all resolve to the host-runtime default — a schema drift can
+ * never silently escalate a turn onto an out-of-band push.
+ */
+export function projectAssistantDelivery(declaration: unknown): AssistantDeliveryKind {
+  const d = declaration as
+    | { formatVersion?: unknown; block?: { delivery?: { kind?: unknown } } }
+    | null
+    | undefined;
+  if (!d || d.formatVersion !== RECOGNIZED_DECLARATION_FORMAT_VERSION) {
+    return DEFAULT_ASSISTANT_DELIVERY;
+  }
+  const kind = d.block?.delivery?.kind;
+  return typeof kind === "string" && DELIVERY_KINDS.has(kind as AssistantDeliveryKind)
+    ? (kind as AssistantDeliveryKind)
+    : DEFAULT_ASSISTANT_DELIVERY;
+}
+
+// ---------------------------------------------------------------------------
 // Core-store drizzle handles for the two tables the reader joins that are NOT
 // already exported by `better-auth-db`. Same schema-name derivation as
 // `better-auth-db`'s `coreStoreSchema` (read INLINE from the environment, per that
@@ -218,6 +272,13 @@ export type AssistantRegistryEntry = {
   aliases: string[];
   /** True for the boot-seeded builtin Cinatra descriptor (unconditionally visible). */
   isBuiltin: boolean;
+  /** The declared delivery channel of this assistant's turns (cinatra#1875 W2,
+   *  AC#2). Projected from `installed_extension.assistant_declaration`; the
+   *  builtin Cinatra descriptor (no declaration) is the host-runtime default. The
+   *  dispatch planner reads THIS to choose the delivery path (host stream vs
+   *  webhook/mcp-poll); transport (API vs local-CLI) stays the connector's
+   *  concern, never the planner's. */
+  delivery: AssistantDeliveryKind;
 };
 
 type CandidateRow = {
@@ -227,6 +288,8 @@ type CandidateRow = {
   assistantUserId: string | null;
   handle: string;
   origin: string | null;
+  /** Raw persisted `assistant_declaration` jsonb (null for the builtin). */
+  declaration: unknown;
 };
 
 /** Minimal drizzle read surface (injectable — the default is `betterAuthDb`). */
@@ -242,6 +305,7 @@ function toEntry(row: CandidateRow, aliases: string[], isBuiltin: boolean): Assi
     origin: row.origin === "extension" ? "extension" : "standalone",
     aliases: [...aliases].sort(),
     isBuiltin,
+    delivery: projectAssistantDelivery(row.declaration),
   };
 }
 
@@ -265,6 +329,7 @@ export async function readAssistantRegistryForActor(
       assistantUserId: agentTemplates.assistantUserId,
       handle: assistantHandles.handle,
       origin: assistantHandles.origin,
+      declaration: installedExtension.assistantDeclaration,
     })
     .from(installedExtension)
     .innerJoin(
@@ -312,6 +377,9 @@ export async function readAssistantRegistryForActor(
   const builtin: CandidateRow[] = builtinRaw.map((r) => ({
     ...r,
     packageName: BUILTIN_ASSISTANT_ALIAS.packageName,
+    // The builtin Cinatra descriptor has no installed_extension row → no
+    // declaration; it resolves to the host-runtime default in `toEntry`.
+    declaration: null,
   }));
 
   const packageNames = Array.from(

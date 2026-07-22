@@ -430,3 +430,145 @@ describe("analytics portlet cross-cube query validation (cinatra#1512)", () => {
     expect(errs[0].code).toBe("port_analytics_cross_cube_query");
   });
 });
+
+// cinatra#1911: a query the v1 endpoint rejects with
+// `unsupported_query_feature` must not persist — write-time rejection with
+// the SAME predicate + product copy as the wire gate (single source of truth
+// in sdk-dashboard). Messages are keyed by the STABLE card id (never the
+// display title) so the #1913 error-multiset grandfathering is rename-proof.
+describe("analytics portlet executable-feature validation (cinatra#1911)", () => {
+  const embed = (portlet: Record<string, unknown>) => ({
+    dashboard: {
+      portlets: [{ id: "card-1911", title: "Runs over time", w: 3, h: 4, x: 0, y: 0, ...portlet }],
+      layoutMode: "grid",
+      grid: { cols: 12, rowHeight: 50, minW: 3, minH: 4 },
+    },
+  });
+  const queryAnalysis = (query: unknown): Record<string, unknown> => ({
+    analysisConfig: {
+      version: 1,
+      analysisType: "query",
+      activeView: "chart",
+      charts: { query: { chartType: "line", chartConfig: {}, displayConfig: {} } },
+      query,
+    },
+  });
+
+  it("accepts the issue-#1911 reference query shapes (timeDimensions / inDateRange / in)", () => {
+    expect(
+      vc(
+        ANALYTICS_PORTLET_KIND,
+        embed(
+          queryAnalysis({
+            measures: ["agent_runs.count"],
+            timeDimensions: [
+              { dimension: "agent_runs.created_at", granularity: "day", dateRange: "last 30 days" },
+            ],
+          }),
+        ),
+      ),
+    ).toEqual([]);
+    expect(
+      vc(
+        ANALYTICS_PORTLET_KIND,
+        embed(
+          queryAnalysis({
+            measures: ["agent_runs.count"],
+            dimensions: ["agent_runs.agent_id"],
+            filters: [
+              { member: "agent_runs.status", operator: "in", values: ["failed", "stopped"] },
+              { member: "agent_runs.created_at", operator: "inDateRange", values: ["last 30 days"] },
+            ],
+          }),
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects an unsupported filter operator with card-id-keyed product copy", () => {
+    const errs = vc(
+      ANALYTICS_PORTLET_KIND,
+      embed(
+        queryAnalysis({
+          measures: ["agent_runs.count"],
+          filters: [{ member: "agent_runs.status", operator: "contains", values: ["fail"] }],
+        }),
+      ),
+    );
+    expect(errs).toHaveLength(1);
+    expect(errs[0].code).toBe("port_analytics_unsupported_query_feature");
+    // Identity is the stable card id, NOT the display title (rename-proof
+    // under the #1913 grandfathering multiset).
+    expect(errs[0].message).toContain("card card-1911:");
+    expect(errs[0].message).not.toContain("Runs over time");
+    expect(errs[0].message).toContain('"contains"');
+    expect(errs[0].message).toContain("inDateRange");
+  });
+
+  it("rejects grouped and/or filters and granularity-less timeDimensions", () => {
+    const errs = vc(
+      ANALYTICS_PORTLET_KIND,
+      embed(
+        queryAnalysis({
+          measures: ["agent_runs.count"],
+          filters: [{ or: [{ member: "agent_runs.status", operator: "equals", values: ["ok"] }] }],
+          timeDimensions: [{ dimension: "agent_runs.created_at" }],
+        }),
+      ),
+    );
+    expect(errs.map((e) => e.code)).toEqual([
+      "port_analytics_unsupported_query_feature",
+      "port_analytics_unsupported_query_feature",
+    ]);
+    expect(errs[0].message).toContain("Grouped and/or filters");
+    expect(errs[1].message).toContain("granularity");
+  });
+
+  it("checks the legacy JSON-string query path too", () => {
+    const errs = vc(
+      ANALYTICS_PORTLET_KIND,
+      embed({
+        query: JSON.stringify({
+          measures: ["agent_runs.count"],
+          filters: [{ member: "agent_runs.status", operator: "notIn", values: ["ok"] }],
+        }),
+        chartType: "bar",
+      }),
+    );
+    expect(errs).toHaveLength(1);
+    expect(errs[0].code).toBe("port_analytics_unsupported_query_feature");
+    expect(errs[0].message).toContain('"notIn"');
+  });
+
+  it("checks each sub-query of a multi-query config individually", () => {
+    const errs = vc(
+      ANALYTICS_PORTLET_KIND,
+      embed(
+        queryAnalysis({
+          queries: [
+            { measures: ["agent_runs.count"] },
+            {
+              measures: ["agent_runs.count"],
+              filters: [{ member: "agent_runs.status", operator: "gte", values: ["1"] }],
+            },
+          ],
+        }),
+      ),
+    );
+    expect(errs).toHaveLength(1);
+    expect(errs[0].code).toBe("port_analytics_unsupported_query_feature");
+  });
+
+  it("rejects a query over the shared complexity cap with the same arithmetic as the endpoint", () => {
+    const errs = vc(
+      ANALYTICS_PORTLET_KIND,
+      embed(
+        queryAnalysis({
+          measures: Array.from({ length: 20 }, (_, i) => `agent_runs.m${i}`),
+          dimensions: Array.from({ length: 20 }, (_, i) => `agent_runs.d${i}`),
+        }),
+      ),
+    );
+    expect(errs.some((e) => e.code === "port_analytics_query_too_complex")).toBe(true);
+  });
+});

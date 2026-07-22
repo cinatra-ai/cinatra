@@ -183,6 +183,85 @@ export async function seedV12AnalyticsDashboard(opts: {
   }
 }
 
+/** Deterministic id of the cinatra#1914 dims-only regression dashboard. */
+export const DIMS_ONLY_1914_DASHBOARD_ID = "e2e-1914-dims-only";
+
+/** The EXACT card from cinatra#1914 (dimension only, `measures: []`, table
+ *  chart, no displayConfig) — byte-faithful to the issue's persisted config
+ *  apart from the layout fields the grid needs. A dimensions-only card is
+ *  fully supported by the backend and the DC client; this dashboard proves
+ *  it renders rows end-to-end in a real browser (no silent blank). */
+const DIMS_ONLY_1914_DC = {
+  portlets: [
+    {
+      id: "portlet-1784574031597",
+      title: "das hier",
+      w: 6,
+      h: 8,
+      x: 0,
+      y: 0,
+      analysisConfig: {
+        version: 1,
+        analysisType: "query",
+        activeView: "chart",
+        query: { measures: [], dimensions: ["agent_runs.agent_name"] },
+        charts: {
+          query: {
+            chartType: "table",
+            chartConfig: { xAxis: ["agent_runs.agent_name"] },
+          },
+        },
+      },
+    },
+  ],
+  layoutMode: "grid",
+  grid: { cols: 12, rowHeight: 50, minW: 3, minH: 4 },
+};
+
+/**
+ * Seed (idempotently) the cinatra#1914 dims-only dashboard row: one card,
+ * dimensions-only query, table chart — the issue's exact repro. Same direct
+ * `pg` upsert as `seedV12AnalyticsDashboard` (persisted shape is what the
+ * create/save path writes).
+ */
+export async function seedDimsOnly1914Dashboard(opts: {
+  readonly databaseUrl: string;
+  readonly schema: string;
+  readonly userId: string;
+  readonly organizationId: string;
+}): Promise<{ dashboardId: string }> {
+  const pool = new Pool({ connectionString: opts.databaseUrl });
+  const schema = `"${opts.schema.replaceAll('"', '""')}"`;
+  try {
+    const envelope = v12AnalyticsEnvelope(DIMS_ONLY_1914_DC);
+    await pool.query(
+      `INSERT INTO ${schema}.dashboards
+         (id, name, config_json, config_version, owner_level, owner_id,
+          organization_id, visibility, status, created_by)
+       VALUES ($1, $2, $3::jsonb, $6, 'user', $4, $5, 'private', 'published', $4)
+       ON CONFLICT (id) DO UPDATE SET
+         name = EXCLUDED.name,
+         config_json = EXCLUDED.config_json,
+         config_version = EXCLUDED.config_version,
+         owner_id = EXCLUDED.owner_id,
+         organization_id = EXCLUDED.organization_id,
+         visibility = EXCLUDED.visibility,
+         status = EXCLUDED.status`,
+      [
+        DIMS_ONLY_1914_DASHBOARD_ID,
+        "E2E 1914 dims-only",
+        JSON.stringify(envelope),
+        opts.userId,
+        opts.organizationId,
+        APIVERSION_V12,
+      ],
+    );
+    return { dashboardId: DIMS_ONLY_1914_DASHBOARD_ID };
+  } finally {
+    await pool.end();
+  }
+}
+
 const TEMPLATES = [
   { id: "tmpl-test-scrape", name: "Test Scrape Agent" },
   { id: "tmpl-test-publish", name: "Test Publish Agent" },
@@ -263,6 +342,174 @@ export async function seedDashboardFixtures(
       templateCount: Number(tCount.rows[0].count),
       runCount: Number(rCount.rows[0].count),
     };
+  } finally {
+    await pool.end();
+  }
+}
+
+/** Deterministic id of the cinatra#1911 executable-surface dashboard. */
+export const EXEC_SURFACE_1911_DASHBOARD_ID = "e2e-1911-exec-surface";
+
+/** cinatra#1911 — six cards reproducing the REFERENCE dashboard's query
+ *  feature mix ("Team Agent Operations", where 6/6 portlets 400'd with
+ *  `unsupported_query_feature`): timeDimensions time series (×2), inDateRange
+ *  windows (×3 incl. a KPI-style measures-only card), and an `in` filter —
+ *  all on the seeded agent_runs cube so every card has real rows. All table
+ *  charts so the spec can assert painted rows. This is the AC-#5 proof: the
+ *  formerly-rejected feature set renders data end to end. */
+const EXEC_SURFACE_1911_DC = {
+  portlets: [
+    {
+      id: "p1911-runs-over-time",
+      title: "Agent runs over time",
+      w: 6, h: 6, x: 0, y: 0,
+      analysisConfig: {
+        version: 1,
+        analysisType: "query",
+        activeView: "chart",
+        query: {
+          measures: ["agent_runs.count"],
+          timeDimensions: [
+            { dimension: "agent_runs.created_at", granularity: "day", dateRange: "last 30 days" },
+          ],
+        },
+        charts: { query: { chartType: "table", chartConfig: {} } },
+      },
+    },
+    {
+      id: "p1911-status-mix",
+      title: "Run status mix",
+      w: 6, h: 6, x: 6, y: 0,
+      analysisConfig: {
+        version: 1,
+        analysisType: "query",
+        activeView: "chart",
+        query: {
+          measures: ["agent_runs.count"],
+          dimensions: ["agent_runs.status"],
+          filters: [
+            { member: "agent_runs.created_at", operator: "inDateRange", values: ["last 30 days"] },
+          ],
+        },
+        charts: { query: { chartType: "table", chartConfig: {} } },
+      },
+    },
+    {
+      id: "p1911-top-agents",
+      title: "Top agents by run count",
+      w: 6, h: 6, x: 0, y: 6,
+      analysisConfig: {
+        version: 1,
+        analysisType: "query",
+        activeView: "chart",
+        query: {
+          measures: ["agent_runs.count"],
+          dimensions: ["agent_runs.agent_name"],
+          filters: [
+            { member: "agent_runs.created_at", operator: "inDateRange", values: ["last 30 days"] },
+          ],
+          order: { "agent_runs.count": "desc" },
+          limit: 5,
+        },
+        charts: { query: { chartType: "table", chartConfig: {} } },
+      },
+    },
+    {
+      id: "p1911-activity-over-time",
+      title: "Run activity over time",
+      w: 6, h: 6, x: 6, y: 6,
+      analysisConfig: {
+        version: 1,
+        analysisType: "query",
+        activeView: "chart",
+        query: {
+          measures: ["agent_runs.count", "agent_runs.last_run_at"],
+          timeDimensions: [
+            { dimension: "agent_runs.created_at", granularity: "day" },
+          ],
+        },
+        charts: { query: { chartType: "table", chartConfig: {} } },
+      },
+    },
+    {
+      id: "p1911-runs-30d",
+      title: "Runs, last 30 days",
+      w: 6, h: 4, x: 0, y: 12,
+      analysisConfig: {
+        version: 1,
+        analysisType: "query",
+        activeView: "chart",
+        query: {
+          measures: ["agent_runs.count"],
+          filters: [
+            { member: "agent_runs.created_at", operator: "inDateRange", values: ["last 30 days"] },
+          ],
+        },
+        charts: { query: { chartType: "table", chartConfig: {} } },
+      },
+    },
+    {
+      id: "p1911-failed-by-agent",
+      title: "Failed or stopped runs by agent",
+      w: 6, h: 4, x: 6, y: 12,
+      analysisConfig: {
+        version: 1,
+        analysisType: "query",
+        activeView: "chart",
+        query: {
+          measures: ["agent_runs.count"],
+          dimensions: ["agent_runs.agent_name"],
+          filters: [
+            { member: "agent_runs.status", operator: "in", values: ["failed", "stopped"] },
+            { member: "agent_runs.created_at", operator: "inDateRange", values: ["last 30 days"] },
+          ],
+        },
+        charts: { query: { chartType: "table", chartConfig: {} } },
+      },
+    },
+  ],
+  layoutMode: "grid",
+  grid: { cols: 12, rowHeight: 50, minW: 3, minH: 4 },
+};
+
+/**
+ * Seed (idempotently) the cinatra#1911 executable-surface dashboard. Same
+ * direct `pg` upsert as the other fixtures (persisted shape is what the
+ * create/save path writes).
+ */
+export async function seedExecSurface1911Dashboard(opts: {
+  readonly databaseUrl: string;
+  readonly schema: string;
+  readonly userId: string;
+  readonly organizationId: string;
+}): Promise<{ dashboardId: string }> {
+  const pool = new Pool({ connectionString: opts.databaseUrl });
+  const schema = `"${opts.schema.replaceAll('"', '""')}"`;
+  try {
+    const envelope = v12AnalyticsEnvelope(EXEC_SURFACE_1911_DC);
+    await pool.query(
+      `INSERT INTO ${schema}.dashboards
+         (id, name, config_json, config_version, owner_level, owner_id,
+          organization_id, visibility, status, created_by)
+       VALUES ($1, $2, $3::jsonb, $6, 'user', $4, $5, 'private', 'published', $4)
+       ON CONFLICT (id) DO UPDATE SET
+         name = EXCLUDED.name,
+         config_json = EXCLUDED.config_json,
+         config_version = EXCLUDED.config_version,
+         owner_id = EXCLUDED.owner_id,
+         organization_id = EXCLUDED.organization_id,
+         visibility = EXCLUDED.visibility,
+         status = EXCLUDED.status`,
+      [
+        EXEC_SURFACE_1911_DASHBOARD_ID,
+        "E2E 1911 executable surface",
+        JSON.stringify(envelope),
+        opts.userId,
+        opts.organizationId,
+        APIVERSION_V12,
+      ],
+    );
+    return { dashboardId: EXEC_SURFACE_1911_DASHBOARD_ID };
   } finally {
     await pool.end();
   }

@@ -31,7 +31,11 @@
 // internals — every shape is structural.
 
 import type { ObjectsProvider } from "./objects-provider-contract";
-import type { LlmProviderAdapter } from "./llm-provider-adapter-contract";
+import type {
+  LlmProviderAdapter,
+  SkillDeliveryAdapter,
+  SkillDeliveryFloor,
+} from "./llm-provider-adapter-contract";
 import type { CrmConnector } from "./crm-connector-contract";
 import type { BlogDraftBuildInput, BlogDraftPayload } from "./blog-connector-contract";
 import type {
@@ -1568,6 +1572,60 @@ export type LlmProviderAdapterSurface = {
    * resolver still structurally validates the surface and casts host-side).
    */
   createAdapter(): Promise<LlmProviderAdapter | null>;
+};
+
+// ---------------------------------------------------------------------------
+// LLM SKILL-DELIVERY adapter surface (llm-providers S4.x — cinatra#1964,
+// epic #1711).
+//
+// A SIBLING channel to `llm-provider-adapter` above, same channel class —
+// DISTINCT because skill delivery is a separate core-orchestration seam:
+// `selectSkillDeliveryAdapter(provider).deliver()` builds a provider's
+// `skillTools` + system-prompt fragment BEFORE `adapter.generate` runs (the
+// request-translation adapter never invokes skill delivery). Each LLM
+// connector registers its provider-specific skill-delivery adapter FACTORY at
+// activation under `LLM_SKILL_DELIVERY_ADAPTER_CAPABILITY`, so core's
+// `packages/llm` resolution (`selectSkillDeliveryAdapter`) resolves the adapter
+// from the CONNECTOR instead of a hardcoded in-core switch — the strict
+// core/extension border the epic ratifies.
+//
+// CORE-OWNED FLOOR DI SEAM: the generic delivery floor
+// (`buildSkillTools`/`readSkillContent`/`resolveSkillSummaries` +
+// `@cinatra-ai/skills`) STAYS in core (#1715 AC2). Core passes it INTO the
+// connector's adapter as `SkillDeliveryFloor` at construction, so a relocated
+// adapter consumes the neutral floor WITHOUT importing core (zero
+// `@cinatra-ai/skills` relocation).
+//
+// v1 SCOPE identical to `llm-provider-adapter`: a RESERVED_SYSTEM_CAPABILITY —
+// the host's `ctx.capabilities` port refuses a NON-first-party REGISTER
+// (anti-poisoning; the shadow adapter never enters the registry) or RESOLVE
+// ([]). The LLM data plane is first-party only.
+//
+// VERSIONED + fail-closed exactly like the request-translation surface: an
+// unknown `abiVersion` is refused (never silently downgraded to the legacy
+// in-core adapter), and a malformed / duplicate-owner claimant fails closed at
+// the host resolver.
+export const LLM_SKILL_DELIVERY_ADAPTER_ABI_VERSION = 1 as const;
+export const LLM_SKILL_DELIVERY_ADAPTER_CAPABILITY = "llm-skill-delivery-adapter";
+export type LlmSkillDeliveryAdapterSurface = {
+  /**
+   * Skill-delivery-surface ABI version. The host refuses a surface whose
+   * version it does not recognise (fail-closed) rather than falling back to the
+   * legacy in-core adapter. v1 is the only shape this host resolves.
+   */
+  abiVersion: typeof LLM_SKILL_DELIVERY_ADAPTER_ABI_VERSION;
+  /** The LLM vendor id this adapter serves ("openai" | "anthropic" | "gemini"). */
+  providerId: string;
+  /**
+   * Build the provider's skill-delivery adapter, consuming the CORE-supplied
+   * neutral delivery floor (the DI seam — core keeps the floor; the connector
+   * keeps the provider-specific packaging). Synchronous: unlike the
+   * request-translation `createAdapter`, skill delivery resolves no connection
+   * (no API credential) at construction — the async work is inside
+   * `deliver()`. AUTHORITATIVE: once a trusted surface is registered for a
+   * provider the host does NOT fall back to the legacy in-core adapter.
+   */
+  createSkillDeliveryAdapter(floor: SkillDeliveryFloor): SkillDeliveryAdapter;
 };
 
 /**

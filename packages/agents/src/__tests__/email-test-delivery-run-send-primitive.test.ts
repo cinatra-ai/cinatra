@@ -8,7 +8,11 @@
  * suites):
  *   - run id + submission id derived from VERIFIED context channels only, never
  *     caller input;
- *   - declaring-package restriction to @cinatra-ai/email-test-delivery-agent;
+ *   - gate-owner restriction to the AGENT that HOSTS the test-delivery gate,
+ *     derived from the binding-ID prefix (@cinatra-ai/email-test-delivery-agent),
+ *     INVARIANT under a renderer relocation that moves the binding's physical
+ *     `declaredBy` to another pack (#1958 — the renderer now ships from
+ *     @cinatra-ai/email-artifacts; the gate owner is unchanged);
  *   - EXECUTE-tier authz (not just read);
  *   - campaign PINNED from run.inputParams.campaignId (caller campaign ignored);
  *   - the two-phase prepare→claim→perform flow, fail-closed on an unwired port;
@@ -85,17 +89,26 @@ const ledgerMock = vi.hoisted(() => ({
 }));
 vi.mock("../agent-run-test-sends", () => ledgerMock);
 
-// --- field-renderer bindings (registry-routed declaring-package restriction) --
-// The send wrapper resolves the packages that DECLARE the test-delivery renderer
-// KIND from the manifest/registry (core names NO extension package). The default
-// registry declares `test-delivery-input` for the test-delivery agent.
+// --- field-renderer bindings (registry-routed gate-owner restriction) ---------
+// The send wrapper resolves the AGENT packages that OWN the test-delivery gate
+// from the manifest/registry (core names NO extension package). The gate owner is
+// the binding-ID prefix — NOT the binding's physical `declaredBy`.
+//
+// The default binding mirrors the REAL post-#1958 generated binding: the renderer
+// was RELOCATED into @cinatra-ai/email-artifacts (so `declaredBy` is the artifacts
+// pack) while the binding ID — the gate identity — stays
+// `@cinatra-ai/email-test-delivery-agent:input`. This shape is deliberate: the
+// happy-path send tests dispatch a run whose package is
+// @cinatra-ai/email-test-delivery-agent, so they PASS only if authz keys on the
+// binding-ID owner (the fix) and FAIL if it keys on `declaredBy` (the #1958
+// regression) — the whole suite guards the relocation.
 const bindingsMock = vi.hoisted(() => ({
   getMergedFieldRendererBindings: vi.fn(() => [
     {
       id: "@cinatra-ai/email-test-delivery-agent:input",
       kind: "test-delivery-input",
       priority: 80,
-      declaredBy: "@cinatra-ai/email-test-delivery-agent",
+      declaredBy: "@cinatra-ai/email-artifacts",
     },
   ]),
 }));
@@ -264,7 +277,9 @@ beforeEach(() => {
       id: "@cinatra-ai/email-test-delivery-agent:input",
       kind: "test-delivery-input",
       priority: 80,
-      declaredBy: "@cinatra-ai/email-test-delivery-agent",
+      // RELOCATED renderer (#1958): declaredBy is the artifacts pack, the gate
+      // owner is the binding-ID prefix (the agent). Authz must key on the latter.
+      declaredBy: "@cinatra-ai/email-artifacts",
     },
   ]);
   ledgerMock.claimTestSend.mockResolvedValue({ kind: "claimed", row: makeRow() });
@@ -351,9 +366,9 @@ describe("email_test_delivery_run_send — send flow", () => {
 // authz / scope denials
 // ===========================================================================
 describe("email_test_delivery_run_send — authz & scope", () => {
-  it("denies a run whose declaring package does not declare the test-delivery renderer (registry-routed), F3-recorded", async () => {
+  it("denies a run whose package does not OWN the test-delivery gate (binding-ID prefix), F3-recorded", async () => {
     const handlers = await getHandlers();
-    // A run whose package is NOT in the registry's declaredBy set for the
+    // A run whose package is NOT the gate owner (the binding-ID prefix) for the
     // test-delivery renderer kind — no hardcoded package name in core.
     storeMock.readAgentTemplateById.mockResolvedValueOnce({ id: "tpl-1", packageName: "@evil/other-agent" });
     const result = (await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_A }, () =>
@@ -368,12 +383,13 @@ describe("email_test_delivery_run_send — authz & scope", () => {
     expect(ledgerMock.claimTestSend).not.toHaveBeenCalled();
   });
 
-  it("ADMITS a run whose package declares the test-delivery renderer via the runtime registry (no hardcoded name)", async () => {
+  it("ADMITS a run whose package OWNS the gate via the binding-ID prefix, no hardcoded name", async () => {
     const handlers = await getHandlers();
-    // Registry declares the kind for a DIFFERENT (runtime-installed) package; the
-    // run's own package matches it — resolution is purely registry-driven.
+    // A DIFFERENT (runtime-installed) gate owner, with the renderer physically
+    // shipped by yet another pack (declaredBy). The run's package equals the
+    // binding-ID OWNER — resolution is purely registry-driven off the id prefix.
     bindingsMock.getMergedFieldRendererBindings.mockReturnValueOnce([
-      { id: "@acme/td:input", kind: "test-delivery-input", priority: 80, declaredBy: "@acme/td-agent" },
+      { id: "@acme/td-agent:input", kind: "test-delivery-input", priority: 80, declaredBy: "@acme/renderer-pack" },
     ]);
     storeMock.readAgentTemplateById.mockResolvedValueOnce({ id: "tpl-1", packageName: "@acme/td-agent", approvalPolicy: { steps: [] } });
     const result = (await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_A }, () =>
@@ -381,6 +397,36 @@ describe("email_test_delivery_run_send — authz & scope", () => {
     )) as Record<string, unknown>;
     expect(result).toMatchObject({ ok: true, seq: 1 });
     expect(fakePort.performSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("ADMITS the gate owner even though the renderer's declaredBy was RELOCATED to another pack (#1958 regression)", async () => {
+    const handlers = await getHandlers();
+    // The EXACT post-#1958 shape: the binding ID (gate identity) is the agent, but
+    // the renderer's physical declaredBy is now @cinatra-ai/email-artifacts. The
+    // run IS the agent → it OWNS the gate → the send is authorized. Keying on
+    // declaredBy (the pre-fix bug) would refuse this. This is the default binding
+    // shape; assert it explicitly so the regression can never silently return.
+    const result = (await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_A }, () =>
+      callSend(handlers, VALID_SEND_INPUT),
+    )) as Record<string, unknown>;
+    expect(result).toMatchObject({ ok: true, seq: 1, sentTo: "to@example.com" });
+    expect(fakePort.performSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("DENIES the renderer-shipping pack itself — declaredBy must NOT gate sends (#1958)", async () => {
+    const handlers = await getHandlers();
+    // The pack that SHIPS the renderer (@cinatra-ai/email-artifacts, the binding's
+    // declaredBy) is NOT the gate owner. A run whose package equals the declaredBy
+    // must still be refused — send-authz answers "whose gate is this," not "who
+    // ships the renderer." (email-artifacts is an artifact pack with no runnable
+    // agent, so this is inert in production; the test pins the axis.)
+    storeMock.readAgentTemplateById.mockResolvedValueOnce({ id: "tpl-1", packageName: "@cinatra-ai/email-artifacts" });
+    const result = (await withSendContext({ runId: RUN_ID, submissionId: SUBMISSION_A }, () =>
+      callSend(handlers, VALID_SEND_INPUT),
+    )) as Record<string, unknown>;
+    expect(result).toMatchObject({ ok: false, reason: "not_authorized", seq: 7 });
+    expect(fakePort.prepareSend).not.toHaveBeenCalled();
+    expect(ledgerMock.claimTestSend).not.toHaveBeenCalled();
   });
 
   it("surfaces an execute-tier denial (safe error + denial audit), no claim/send", async () => {

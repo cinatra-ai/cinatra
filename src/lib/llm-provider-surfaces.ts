@@ -12,14 +12,23 @@ import "server-only";
 // omitted from lists; each consumer degrades per feature (a 400/disabled row/
 // not-ready state/descriptive error — never a crash).
 
-import type { LlmProviderSurface, LlmProviderAdapterSurface } from "@cinatra-ai/sdk-extensions";
-// llm-providers S4 (cinatra#1715): the adapter-surface ABI-version literal is
-// author-facing PUBLIC (like `LLM_PROVIDER_ABI_VERSION` / `SDK_EXTENSIONS_ABI_VERSION`);
-// the capability-id constant stays host-fenced behind ./internal.
-import { LLM_PROVIDER_ADAPTER_ABI_VERSION } from "@cinatra-ai/sdk-extensions";
+import type {
+  LlmProviderSurface,
+  LlmProviderAdapterSurface,
+  LlmSkillDeliveryAdapterSurface,
+} from "@cinatra-ai/sdk-extensions";
+// llm-providers S4 (cinatra#1715) / S4.x (cinatra#1964): the adapter-surface
+// ABI-version literals are author-facing PUBLIC (like `LLM_PROVIDER_ABI_VERSION`
+// / `SDK_EXTENSIONS_ABI_VERSION`); the capability-id constants stay host-fenced
+// behind ./internal.
+import {
+  LLM_PROVIDER_ADAPTER_ABI_VERSION,
+  LLM_SKILL_DELIVERY_ADAPTER_ABI_VERSION,
+} from "@cinatra-ai/sdk-extensions";
 import {
   LLM_PROVIDER_SURFACE_CAPABILITY,
   LLM_PROVIDER_ADAPTER_CAPABILITY,
+  LLM_SKILL_DELIVERY_ADAPTER_CAPABILITY,
 } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 
@@ -155,4 +164,104 @@ export function getLlmProviderAdapterSurface(providerId: string): LlmProviderAda
     );
   }
   return claimants[0].impl as LlmProviderAdapterSurface;
+}
+
+// ===========================================================================
+// LLM SKILL-DELIVERY adapter surface (llm-providers S4.x — cinatra#1964).
+//
+// A SIBLING channel to `llm-provider-adapter` above, resolved by the SAME
+// fail-closed rules. Co-located here (rather than a new module) so it adds NO
+// net-new route-reachable module to the locked FIXED_ROUTES graph — every
+// import it needs is already reachable from this file.
+//
+// Each LLM connector will register its provider-specific SKILL-DELIVERY adapter
+// FACTORY at activation under `LLM_SKILL_DELIVERY_ADAPTER_CAPABILITY`; core's
+// `packages/llm` (`selectSkillDeliveryAdapter`) resolves the adapter from the
+// CONNECTOR instead of the hardcoded in-core switch. TRANSITIONAL in this first
+// slice: no connector registers this surface yet, so
+// `getLlmSkillDeliveryAdapterSurface` returns null for every provider and
+// `selectSkillDeliveryAdapter` takes its legacy in-core fallback (ZERO behavior
+// change).
+//
+// TRUST + FAIL-CLOSED rules are IDENTICAL to `llm-provider-adapter`:
+//   - first-party-only is enforced UPSTREAM at the `ctx.capabilities`
+//     RESERVED_SYSTEM_CAPABILITY port (`LLM_SKILL_DELIVERY_ADAPTER_CAPABILITY`
+//     in extension-host-context.ts): a non-first-party REGISTER throws and
+//     RESOLVE gets []. Every claimant here is therefore first-party.
+//   - VERSIONED: a surface must declare the exact
+//     `LLM_SKILL_DELIVERY_ADAPTER_ABI_VERSION` — unknown is refused, never
+//     silently downgraded to the legacy in-core adapter.
+//   - MALFORMED / COLLISION != ABSENT: any malformed claimant, or more than one
+//     claimant for the same provider, FAILS CLOSED (throws) — a valid sibling
+//     must never mask a malformed one, and only a genuine ABSENCE (no claimant)
+//     falls back to the legacy in-core adapter.
+
+/** Does this impl CLAIM `providerId`? Decides whether a registration is even
+ * ABOUT this provider before it is validated in full. */
+function skillDeliverySurfaceClaimsProvider(impl: unknown, providerId: string): boolean {
+  return (
+    typeof impl === "object" &&
+    impl !== null &&
+    (impl as { providerId?: unknown }).providerId === providerId
+  );
+}
+
+/** Full structural + version validity of a claimed skill-delivery surface. A
+ * claimed-but-invalid surface is a hard error (never treated as absent). */
+function isValidLlmSkillDeliveryAdapterSurface(
+  impl: unknown,
+): impl is LlmSkillDeliveryAdapterSurface {
+  if (typeof impl !== "object" || impl === null) return false;
+  const c = impl as {
+    providerId?: unknown;
+    abiVersion?: unknown;
+    createSkillDeliveryAdapter?: unknown;
+  };
+  return (
+    typeof c.providerId === "string" &&
+    c.providerId.length > 0 &&
+    c.abiVersion === LLM_SKILL_DELIVERY_ADAPTER_ABI_VERSION &&
+    typeof c.createSkillDeliveryAdapter === "function"
+  );
+}
+
+/**
+ * The live skill-delivery adapter surface for one provider id, or `null` when
+ * ABSENT (no registration claims it — the caller falls back to the legacy
+ * in-core adapter).
+ *
+ * FAIL-CLOSED (never returns a masking result): if ANY registration that claims
+ * this provider is malformed (wrong `abiVersion` / non-callable
+ * `createSkillDeliveryAdapter`), or MORE THAN ONE registration claims it
+ * (ambiguous ownership), this THROWS rather than returning a surface. Trust
+ * (first-party-only) is enforced upstream by the RESERVED_SYSTEM_CAPABILITY
+ * port fence, so every claimant here is first-party.
+ */
+export function getLlmSkillDeliveryAdapterSurface(
+  providerId: string,
+): LlmSkillDeliveryAdapterSurface | null {
+  const claimants = resolveCapabilityProviders(LLM_SKILL_DELIVERY_ADAPTER_CAPABILITY).filter((p) =>
+    skillDeliverySurfaceClaimsProvider(p.impl, providerId),
+  );
+
+  if (claimants.length === 0) return null; // genuinely ABSENT -> caller falls back
+
+  // Fail closed on ANY malformed claimant — a valid sibling must NOT mask it.
+  const malformed = claimants.filter((p) => !isValidLlmSkillDeliveryAdapterSurface(p.impl));
+  if (malformed.length > 0) {
+    throw new Error(
+      `The "${providerId}" llm-skill-delivery-adapter surface is registered but malformed ` +
+        `(expected abiVersion ${LLM_SKILL_DELIVERY_ADAPTER_ABI_VERSION} and a callable ` +
+        `createSkillDeliveryAdapter) — refusing to resolve it (fail closed).`,
+    );
+  }
+  // Ambiguous ownership: exactly one connector may own a provider's adapter.
+  if (claimants.length > 1) {
+    const owners = claimants.map((p) => p.packageName).join(", ");
+    throw new Error(
+      `Multiple llm-skill-delivery-adapter surfaces claim provider "${providerId}" (${owners}) — ` +
+        `ambiguous ownership; refusing to resolve (fail closed).`,
+    );
+  }
+  return claimants[0].impl as LlmSkillDeliveryAdapterSurface;
 }

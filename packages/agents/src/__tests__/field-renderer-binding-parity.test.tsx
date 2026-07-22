@@ -35,7 +35,6 @@ import { SendConfirmationRenderer } from "../send-confirmation-renderer";
 import { CtaRenderer } from "../cta-renderer";
 import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 import { GroupedSetupFormRenderer } from "../grouped-setup-form-renderer";
-import { EmailTestDeliveryFormRenderer } from "../email-test-delivery-form-renderer";
 import { classifyMidRunHitl, hasMidRunHitlBinding } from "../orchestrator-mid-run-hitl";
 
 // Gmail context: the gmail-sender condition is context-gated (gmail
@@ -115,7 +114,10 @@ const PARITY_TABLE: ReadonlyArray<
   ["@cinatra-ai/email-delivery-agent:output", SendConfirmationRenderer as never, 80],
   ["@cinatra-ai/email-delivery-agent:send-confirmation", SendConfirmationRenderer as never, 80],
   ["send-confirmation", SendConfirmationRenderer as never, 80],
-  ["@cinatra-ai/email-test-delivery-agent:input", EmailTestDeliveryFormRenderer as never, 80],
+  // test-delivery-input (the email-test-delivery-agent:input binding) MIGRATED into
+  // @cinatra-ai/email-artifacts (cinatra#1958, S8 successor) — now the
+  // ExtensionFieldRenderer wrapper at priority 80. Asserted in the migrated-binding
+  // it.each below, not in this frozen host-component table.
   ["@cinatra-ai/email-outreach-agent:cta", CtaRenderer as never, 90],
   ["cta", CtaRenderer as never, 90],
   // The terminal schema-field-fallback is the TRUE registry-bypass floor
@@ -192,6 +194,10 @@ describe("resolution parity with the retired hand map", () => {
     // `:output` gates keep the host renderer (retain-host guardrail).
     ["@cinatra-ai/email-drafting-agent:email-drafts-review", 80],
     ["@cinatra-ai/email-follow-up-agent:email-drafts-review", 80],
+    // test-delivery-input relocated into @cinatra-ai/email-artifacts
+    // (cinatra#1958, S8 successor): the pure snapshot->onChange input form is
+    // pack-shipped, priority 80.
+    ["@cinatra-ai/email-test-delivery-agent:input", 80],
   ] as const)(
     "migrated field-renderer binding %s resolves to the extension wrapper at the pre-cutover priority",
     (id, priority) => {

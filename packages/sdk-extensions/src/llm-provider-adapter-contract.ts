@@ -690,3 +690,112 @@ export interface LlmProviderAdapter {
   /** Cancel an in-progress batch. */
   cancelBatch?(batchId: string): Promise<{ batchId: string; status: LlmBatchStatus }>;
 }
+
+// ---------------------------------------------------------------------------
+// SKILL-DELIVERY adapter closure (llm-providers S4.x — cinatra#1964).
+//
+// A DISTINCT core-orchestration seam from the request-translation
+// `LlmProviderAdapter` above: `selectSkillDeliveryAdapter(provider)` builds the
+// provider's `skillTools` + system-prompt fragment BEFORE `adapter.generate` is
+// called (the orchestration layer merges them into the request). The two never
+// share a method — the request-translation adapter only translates the shell
+// tools this seam already produced.
+//
+// These interface types are relocated VERBATIM from
+// `packages/llm/src/tools/skill-delivery.ts` (no shape change) so a connector
+// can `import type { SkillDeliveryAdapter, SkillDeliveryFloor }` from the SDK
+// leaf and implement a compliant adapter — exactly as `LlmProviderAdapter`
+// above was relocated for the request-translation channel (S4.0). Core
+// re-exports them from `tools/skill-delivery.ts` so it keeps compiling
+// byte-for-byte (zero behavior change). Their transitive closure
+// (`LlmTool` / `SkillExposureEntry`) already lives in this leaf.
+//
+// The registration SURFACE (`LlmSkillDeliveryAdapterSurface` +
+// `LLM_SKILL_DELIVERY_ADAPTER_CAPABILITY`) lives in
+// `host-connector-services-contract.ts`, the same channel class as
+// `LlmProviderAdapterSurface`.
+
+/**
+ * Skill-selection policy mode.
+ *
+ * - `"creation"` (and the **default when unset**): the pinned agent-creation
+ *   path. A fixed, pre-synced per-agent allowlist (2-3 skills). Over Anthropic's
+ *   hard 8-skill/request cap is a HARD fail — a fixed allowlist must NEVER be
+ *   silently truncated. Absence selects this mode.
+ * - `"general"`: the broad selectable Anthropic path (any non-creation agent
+ *   whose admin selected Anthropic; the recommendation agent may dynamically
+ *   resolve MORE than 8). Over-cap ⇒ DETERMINISTIC rank-and-truncate-to-8 with
+ *   visible (non-silent) `droppedSkillIds` reporting.
+ */
+export type SkillSelectionMode = "general" | "creation";
+
+/**
+ * What a provider's skill delivery contributes to an LLM call: extra tools to
+ * merge into the request, plus an optional system-prompt fragment.
+ */
+export type SkillDeliveryResult = {
+  /** Tools to merge into the request (shell for OpenAI, container_skills for Anthropic, none for Gemini). */
+  tools: LlmTool[];
+  /** System-prompt fragment (inline skill content for Gemini, an availability cue for Anthropic, "" for OpenAI). */
+  systemContext: string;
+  /**
+   * Set ONLY when the general selectable Anthropic path
+   * deterministically truncated an over-cap (>8) resolved skill set. Lists the
+   * catalog skill ids that were dropped (deterministic, stable order) plus a
+   * human-readable reason. Absent on every non-truncating call (creation path,
+   * ≤8, OpenAI, Gemini) — surfaces the drop so it is never silent.
+   */
+  droppedSkillIds?: string[];
+  /** Human + machine readable explanation of the truncation. */
+  selectionReason?: string;
+  /**
+   * Every skill this adapter actually delivered to the model, with its mode +
+   * invocation-attributability (S10 efficacy loop, cinatra#1368). Excludes
+   * skills the adapter dropped (unmountable for OpenAI, empty-body for Gemini,
+   * over-cap truncated for the general Anthropic path) — a dropped skill was
+   * never exposed. Never includes the personal delta (injected separately by
+   * the orchestration layer, which owns that skill's identity).
+   */
+  exposure: SkillExposureEntry[];
+};
+
+export interface SkillDeliveryAdapter {
+  readonly provider: LlmProvider;
+  deliver(input: {
+    skillIds: string[];
+    /** Absent ⇒ `"creation"` (hard cap). */
+    selectionMode?: SkillSelectionMode;
+    /**
+     * Invoked once per attributable per-skill invocation observed DURING the
+     * subsequent LLM call (OpenAI shell reads of a named `/skills/<slug>`
+     * file). Non-attributable adapters (Gemini, Anthropic) never call it.
+     */
+    onSkillRead?: (skillId: string) => void;
+  }): Promise<SkillDeliveryResult>;
+}
+
+/**
+ * The provider-NEUTRAL skill-delivery floor, supplied by CORE to a connector's
+ * skill-delivery adapter through the registration surface's factory (the
+ * core-owned dependency-injection seam — llm-providers S4.x AC2). These three
+ * primitives (+ `@cinatra-ai/skills`) STAY in core as the generic delivery
+ * floor #1715 AC2 keeps; a relocated connector adapter consumes them through
+ * this seam instead of importing core (which would invert the extension
+ * border). ZERO `@cinatra-ai/skills` relocation.
+ *
+ * The signatures mirror the core exports byte-for-byte:
+ *  - `buildSkillTools`      (OpenAI shell delivery),
+ *  - `readSkillContent`     (Gemini inline delivery),
+ *  - `resolveSkillSummaries`(Anthropic availability cue).
+ */
+export type SkillDeliveryFloor = {
+  buildSkillTools(input: {
+    skillIds?: string[];
+    onMounted?: (mountedSkillIds: string[]) => void;
+    onSkillRead?: (skillId: string) => void;
+  }): Promise<LlmTool[]>;
+  readSkillContent(skillId: string): Promise<string | null>;
+  resolveSkillSummaries(
+    skillIds: string[],
+  ): Promise<Array<{ id: string; name: string; description: string }>>;
+};
