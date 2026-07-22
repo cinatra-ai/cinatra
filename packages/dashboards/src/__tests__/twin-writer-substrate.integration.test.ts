@@ -208,7 +208,7 @@ d("twin writer — substrate atomicity (cinatra#1894 kill-tests)", () => {
   });
 
   it("PARITY: OBJECTS_WRITE_COLUMNS matches the live objects write column set", async () => {
-    const { OBJECTS_WRITE_COLUMNS } = await import("@/lib/objects/objects-outbox-cte");
+    const { OBJECTS_WRITE_COLUMNS } = await import("@/lib/objects-store");
     const cols = await q<{ column_name: string }>(
       `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'objects'`,
       [SCHEMA],

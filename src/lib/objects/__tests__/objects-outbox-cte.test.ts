@@ -3,7 +3,7 @@ import {
   OBJECTS_WRITE_COLUMNS,
   OBJECTS_UPSERT_CHANGE_COLUMNS,
   buildObjectsWithOutboxQuery,
-} from "../objects-outbox-cte";
+} from "@/lib/objects-store";
 
 // The shared objects+outbox single-CTE builder (cinatra#1894 tier-b). These are
 // DB-FREE contract tests: the GOLDEN insert string pins behaviour-preservation

@@ -137,3 +137,33 @@ export async function pairTwin(tx: TwinTx, ctx: DashboardTwinContext): Promise<v
  *  atomicity (only the substrate-backed kill-tests do) — it exists solely to
  *  satisfy the fail-closed seam in a no-substrate test. */
 export const NOOP_DASHBOARD_TWIN_WRITER: DashboardArtifactTwinWriter = async () => {};
+
+// ---------------------------------------------------------------------------
+// ROUTE-GRAPH DECOUPLING (cinatra#1894 B1b, route-graph ratchet cinatra#732)
+//
+// The mutation service reaches `pairTwin` through THIS globalThis dispatch port
+// instead of a static value import, so this seam module — boot-registered
+// machinery, not a per-request concern — stays OUT of every tracked route's
+// first-party dev-compile graph. Without the port, `mutation-service.ts`'s
+// value-import of `pairTwin` pulled this module into all five ratchet-tracked
+// routes (+1 each); a globalThis port is the same seam-decoupling pattern the
+// audit pool (`globalThis.__cinatraAuditPool`) and the owner-containment
+// resolver already use.
+//
+// The seam self-publishes its OWN `pairTwin` here on module load. `pairTwin`
+// reads the live `registeredTwinWriter`, so the FAIL-CLOSED disposition is
+// unchanged through the port: an unregistered writer still throws
+// `DashboardTwinWriterNotRegisteredError`. The host boot phase loads this module
+// (via the twin-writer self-register import) BEFORE any mutation can run, and
+// the fatal boot assertion proves registration; a mutation that somehow runs
+// with the seam never loaded reads an undefined port and fails closed at the
+// call site (see `mutation-service.ts`).
+// ---------------------------------------------------------------------------
+declare global {
+  // eslint-disable-next-line no-var
+  var __cinatraDashboardArtifactTwinPair:
+    | ((tx: TwinTx, ctx: DashboardTwinContext) => Promise<void>)
+    | undefined;
+}
+
+globalThis.__cinatraDashboardArtifactTwinPair = pairTwin;

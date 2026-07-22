@@ -3,9 +3,8 @@ import { randomUUID } from "node:crypto";
 
 import { postgresSchema } from "@/lib/postgres-config";
 import { rawWithParams } from "@/lib/dashboards/raw-with-params";
-import { buildObjectsWithOutboxQuery } from "@/lib/objects/objects-outbox-cte";
 import { buildBindingReconcileQueries } from "@/lib/objects/binding-write-path";
-import { buildSoftDeleteObjectQuery } from "@/lib/objects-store";
+import { buildObjectsWithOutboxQuery, buildSoftDeleteObjectQuery } from "@/lib/objects-store";
 import {
   setDashboardArtifactTwinWriter,
   type DashboardArtifactTwinWriter,

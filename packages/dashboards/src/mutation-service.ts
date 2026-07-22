@@ -67,7 +67,13 @@ import {
   ownerLevelToScopeLevel,
   reEnvelopeDcSave,
 } from "./v12-envelope";
-import { pairTwin, type DashboardTwinContext, type TwinTx } from "./twin-writer-seam";
+// TYPE-ONLY (erased): the seam's runtime `pairTwin` is reached through the
+// globalThis dispatch port below, NOT a static value import, so the boot-only
+// twin seam module stays OUT of every ratchet-tracked route's first-party
+// dev-compile graph (route-graph ratchet, cinatra#732 / #1894 B1b). The type
+// surface (DashboardTwinContext / TwinTx) is erased at compile time and adds no
+// graph pressure.
+import type { DashboardTwinContext, TwinTx } from "./twin-writer-seam";
 
 export class DashboardForbiddenError extends Error {
   readonly code = "dashboard_forbidden";
@@ -197,6 +203,37 @@ async function writeAudit(
 // (ownerLevel/ownerId/projectId) is copied VERBATIM from the just-written
 // dashboards row — the exact axis `resolveDashboardAccess` reads.
 // ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Dispatch the dashboards-artifact twin INSIDE the caller's transaction, through
+ * the seam's globalThis port (cinatra#1894 B1b). This is the read side of the
+ * route-graph decoupling: the seam module self-publishes its own `pairTwin`
+ * (which reads the live registry) on `globalThis.__cinatraDashboardArtifactTwinPair`
+ * at boot, so this hot mutation path reaches it WITHOUT a static value import —
+ * keeping the boot-only seam machinery out of every tracked route's first-party
+ * graph.
+ *
+ * FAIL-CLOSED is preserved end to end:
+ *   - seam LOADED, writer registered → dispatches to the registered twin;
+ *   - seam LOADED, no writer         → the seam's own `pairTwin` throws
+ *     `DashboardTwinWriterNotRegisteredError` (unchanged behaviour);
+ *   - seam NEVER LOADED (boot skipped) → the port is undefined and we THROW here
+ *     rather than silently skip the substrate twin. The `fatal` core-boot phase
+ *     + its registration assertion guarantee the seam is loaded and a writer
+ *     registered before any mutation can run in production.
+ */
+async function pairTwin(tx: TwinTx, ctx: DashboardTwinContext): Promise<void> {
+  const dispatch = globalThis.__cinatraDashboardArtifactTwinPair;
+  if (typeof dispatch !== "function") {
+    throw new Error(
+      "dashboards-artifact twin seam is not loaded — @cinatra-ai/dashboards/" +
+        "twin-writer-seam must be imported by the host boot phase (via the " +
+        "twin-writer self-register) before any dashboards mutation runs " +
+        "(cinatra#1894 B1b, fail-closed).",
+    );
+  }
+  await dispatch(tx, ctx);
+}
 
 /** Build the twin context from a just-written dashboards row + the acting
  *  principal. Pure — NOT a write. */

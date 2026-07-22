@@ -18,7 +18,7 @@ import { mimeAcceptedByAccepts } from "./upload-artifact-type-map";
 type ResolvedObjectTypeDef = ReturnType<typeof objectTypeRegistry.resolve>;
 import { createLocalDiskBlobStore } from "./local-disk-blob-store";
 import { deriveSubstanceKey } from "./resource-store";
-import { buildObjectsWithOutboxQuery } from "@/lib/objects/objects-outbox-cte";
+import { buildObjectsWithOutboxQuery } from "@/lib/objects-store";
 import {
   type OwnerLevel,
   normalizeOwnerLevel,
