@@ -1,10 +1,12 @@
 /**
- * `/projects/[projectId]/permissions` route must:
- *   - 404-hide when actor lacks `project.read`
+ * `/projects/[projectId]/settings` — the single project-management surface
+ * (cinatra#1733, the #1693 teams ruling) — must:
+ *   - 404-hide when actor lacks `project.read` (same gate the absorbed
+ *     /permissions page ran)
  *   - render ScopeBadge + ProjectSharingPanel + the Project access grants
- *     section when allowed (the retired Access section is removed —
- *     cinatra#1509, Open Decision 3 = Remove)
- *   - wrap content in Main / PageHeader / PageContent
+ *     section when allowed (everything the former Permissions tab showed)
+ *   - wrap content in Main / PageHeader / PageContent, with NO ProjectSubnav
+ *     (removed in #1733) and the "Settings" crumb leaf pinned
  */
 import { describe, it, expect, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -12,7 +14,7 @@ import type { ReactElement } from "react";
 
 // guest-actions imports @/lib/auth (top-level-await better-auth boot) — that
 // module is always mocked in the vitest sandbox, so mock the actions surface.
-vi.mock("../guest-actions", () => ({
+vi.mock("../../permissions/guest-actions", () => ({
   inviteGuestByEmailAction: async () => ({ ok: false, error: "unknown" }),
   revokeGuestAction: async () => ({ ok: false }),
   listGuestRows: async () => [],
@@ -24,12 +26,14 @@ vi.mock("@/lib/auth-session", () => ({
 vi.mock("@/lib/projects-store", () => ({
   readProjectById: vi.fn(),
   readProjectCoOwners: vi.fn().mockResolvedValue([]),
+  // The archived-parity read (badge only) — default: not archived.
+  projectsDb: { execute: vi.fn().mockResolvedValue({ rows: [] }) },
 }));
 vi.mock("next/navigation", () => ({
   notFound: () => {
     throw new Error("NEXT_NOT_FOUND");
   },
-  usePathname: () => "/projects/proj-1/permissions",
+  usePathname: () => "/projects/proj-1/settings",
 }));
 
 const ORG_A = "org-A";
@@ -44,9 +48,9 @@ const userOwnedProject = {
   organizationId: ORG_A,
 };
 
-describe("permissions page RSC", () => {
+describe("project settings page RSC (#1733)", () => {
   it("404-hides when actor lacks project.read", async () => {
-    const { default: PermissionsPage } = await import("../page");
+    const { default: SettingsPage } = await import("../page");
 
     const { requireAuthSession } = await import("@/lib/auth-session");
     (requireAuthSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -59,12 +63,12 @@ describe("permissions page RSC", () => {
     projectsStore.readProjectById.mockResolvedValue(userOwnedProject);
 
     await expect(
-      PermissionsPage({ params: Promise.resolve({ projectId: userOwnedProject.id }) } as never),
+      SettingsPage({ params: Promise.resolve({ projectId: userOwnedProject.id }) } as never),
     ).rejects.toThrow(/NEXT_NOT_FOUND/);
   });
 
-  it("renders ScopeBadge + ProjectSharingPanel + grants section (no retired Access section) when allowed", async () => {
-    const { default: PermissionsPage } = await import("../page");
+  it("renders ScopeBadge + ProjectSharingPanel + grants section when allowed — no subnav, Settings crumb pinned", async () => {
+    const { default: SettingsPage } = await import("../page");
 
     const { requireAuthSession } = await import("@/lib/auth-session");
     (requireAuthSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -76,16 +80,46 @@ describe("permissions page RSC", () => {
     };
     projectsStore.readProjectById.mockResolvedValue(userOwnedProject);
 
-    const ui = (await PermissionsPage({
+    const ui = (await SettingsPage({
       params: Promise.resolve({ projectId: userOwnedProject.id }),
     } as never)) as ReactElement;
     const html = renderToStaticMarkup(ui);
 
     expect(html).toMatch(/<main/);
-    expect(html).toMatch(/Demo project/);
+    expect(html).toMatch(/Project settings — Demo project/);
     expect(html).toMatch(/data-testid="scope-badge"/);
     expect(html).not.toMatch(/data-testid="access-combobox"/);
     expect(html).toMatch(/data-testid="project-sharing-panel"/);
     expect(html).toMatch(/data-testid="project-access-section"/);
+    // Not archived → no lifecycle badge.
+    expect(html).not.toMatch(/>Archived</);
+    // The route-based subnav died with the standalone permissions page.
+    expect(html).not.toMatch(/Permissions<\/a>/);
+  });
+
+  it("shows the Archived badge on an archived project (detail-header parity)", async () => {
+    const { default: SettingsPage } = await import("../page");
+
+    const { requireAuthSession } = await import("@/lib/auth-session");
+    (requireAuthSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      user: { id: OWNER },
+      session: { activeOrganizationId: ORG_A },
+    });
+    const projectsStore = (await import("@/lib/projects-store")) as unknown as {
+      readProjectById: ReturnType<typeof vi.fn>;
+      projectsDb: { execute: ReturnType<typeof vi.fn> };
+    };
+    projectsStore.readProjectById.mockResolvedValue(userOwnedProject);
+    projectsStore.projectsDb.execute.mockResolvedValueOnce({
+      rows: [{ archived_at: new Date("2026-01-01T00:00:00Z") }],
+    });
+
+    const ui = (await SettingsPage({
+      params: Promise.resolve({ projectId: userOwnedProject.id }),
+    } as never)) as ReactElement;
+    const html = renderToStaticMarkup(ui);
+
+    expect(html).toMatch(/>Archived</);
+    expect(html).toMatch(/data-testid="project-sharing-panel"/);
   });
 });

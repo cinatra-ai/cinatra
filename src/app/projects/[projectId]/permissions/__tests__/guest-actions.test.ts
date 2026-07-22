@@ -166,6 +166,9 @@ describe("inviteGuestByEmailAction — existing-account classification", () => {
       expect.objectContaining({ subjectUserId: "u-guest", projectId: PROJECT, orgId: ORG }),
     );
     expect(h.requestPasswordReset).not.toHaveBeenCalled();
+    // #1733: the settings page absorbed the permissions surface — the grant
+    // refresh must revalidate the page the admin is actually on.
+    expect(h.revalidatePath).toHaveBeenCalledWith(`/projects/${PROJECT}/settings`);
     // classification read the SUBJECT's grants? not needed for existing guest
   });
 
@@ -226,6 +229,8 @@ describe("inviteGuestByEmailAction — account creation", () => {
     });
     // Guests are never org members: no membership-writing dep even exists here.
     expect(h.createUser).not.toHaveBeenCalled();
+    // #1733: fresh-account invites revalidate the settings page too.
+    expect(h.revalidatePath).toHaveBeenCalledWith(`/projects/${PROJECT}/settings`);
   });
 
   it("REGISTRATION_CLOSED + non-platform-admin → structured registration-closed", async () => {
@@ -284,6 +289,8 @@ describe("revokeGuestAction / listGuestRows", () => {
       subjectUserId: "u-guest",
       projectId: PROJECT,
     });
+    // #1733: revokes revalidate the settings page (permissions absorbed).
+    expect(h.revalidatePath).toHaveBeenCalledWith(`/projects/${PROJECT}/settings`);
   });
 
   it("revoke reports failure when the actor is not a project admin", async () => {
