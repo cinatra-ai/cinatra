@@ -93,6 +93,17 @@ export type {
 // Batch errors
 export { BatchNotSupportedError } from "./errors";
 
+// Cross-realm STRUCTURAL error discriminators (#1715 D1) — recognize a
+// connector-inlined copy of these sentinels (different constructor identity)
+// where `instanceof` fails. See errors.ts.
+export {
+  isAnthropicSkillDeliveryError,
+  isBatchNotSupportedError,
+  isNativeMcpCapabilityRequiredError,
+  isMcpApprovalUnsupportedError,
+  ANTHROPIC_SKILL_DELIVERY_ERROR_CODES,
+} from "./errors";
+
 // Registry — resolve adapters from connection config
 export {
   resolveProviderAdapter,
