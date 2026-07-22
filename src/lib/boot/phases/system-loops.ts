@@ -315,6 +315,37 @@ export function systemLoopPhases(): BootPhase[] {
       },
     },
     {
+      name: "seed-unbound-output-derive-sweep",
+      policy: "retryable",
+      run: async () => {
+        // Seed the unbound-output derivation reconciliation sweep (cinatra#1893,
+        // epic #1883 A5). The sweep NEVER runs at boot — boot only creates this
+        // delayed job; the worker handler drains `pending` outbox rows / reclaims
+        // expired `deriving` leases and self-reschedules at ~5-min cadence via
+        // moveToDelayed. It is the backstop for a lost/crashed one-shot derive
+        // enqueue.
+        const {
+          enqueueBackgroundJob,
+          BACKGROUND_JOB_NAMES,
+          UNBOUND_OUTPUT_DERIVE_SWEEP_LOOP_JOB_ID,
+        } = await import("@/lib/background-jobs");
+        await enqueueBackgroundJob(
+          BACKGROUND_JOB_NAMES.UNBOUND_OUTPUT_DERIVE_SWEEP,
+          {},
+          {
+            jobId: UNBOUND_OUTPUT_DERIVE_SWEEP_LOOP_JOB_ID,
+            delay: 5 * 60 * 1000, // 5m
+            overwriteIfStale: true,
+            skipWorker: true,
+            inheritActorContext: false,
+          },
+        );
+        console.log(
+          "[unbound-output-derive-sweep] ~5-minute reconcile loop scheduled (5m delay)",
+        );
+      },
+    },
+    {
       name: "eager-background-worker",
       policy: "degraded",
       run: async () => {

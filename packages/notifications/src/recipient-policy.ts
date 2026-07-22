@@ -179,6 +179,14 @@ const SYSTEM_JOBS = new Set<string>([
   // re-delay) reaping zero-reference layers past the retention window from the
   // durable environment-layer store. System-initiated.
   "environment-layer-gc-reap",
+  // Unbound agent-output derivation (cinatra#1893, epic #1883 A5). Both are
+  // system-initiated (no user initiator): the post-terminal one-shot that types
+  // an unbound WayFlow terminal-success output against the agent's validated
+  // `produces` (materialize or advise), and the boot-seeded reconciliation sweep
+  // that backstops a lost/crashed one-shot. Silent on success; failure fans out
+  // to admins.
+  "unbound-output-derive",
+  "unbound-output-derive-sweep",
 ]);
 
 // `started` is included so worker.on("active") can resolve a recipient for

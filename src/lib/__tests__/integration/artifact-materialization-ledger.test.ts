@@ -205,6 +205,9 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#923 materialization ledger (real DB)", ()
       kind: "finalized",
       artifactId: firstArtifactId,
       representationRevisionId: firstRepresentationId,
+      // cinatra#1893: the finalized claim now surfaces the winning row's `path`
+      // (the Q3 alias guard consumes it).
+      path: "end_node_binding",
     });
   });
 
@@ -269,6 +272,8 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#923 materialization ledger (real DB)", ()
       kind: "finalized",
       artifactId: created.artifactId,
       representationRevisionId: created.representationRevisionId,
+      // cinatra#1893: the finalized claim now surfaces the winning row's `path`.
+      path: "materialize_tool",
     });
 
     // The tool path's provenance column is recorded.
@@ -301,7 +306,13 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#923 materialization ledger (real DB)", ()
       extension: EXT,
       contentHash: crashHash,
     });
-    expect(second).toEqual(first); // same ledger id — the claim is re-used
+    // Same ledger id — the claim is re-used. cinatra#1893: a RE-USED claim now
+    // also carries the existing row's `path` (the fresh insert `first` carries
+    // none — its path is this write's own), so compare the identity explicitly.
+    expect(second.kind).toBe("claimed");
+    if (second.kind !== "claimed" || first.kind !== "claimed") throw new Error("expected claimed");
+    expect(second.ledgerId).toBe(first.ledgerId);
+    expect(second.path).toBe("end_node_binding"); // the re-used row's path
   });
 
   it("the finalize guard ABORTS the loser's whole Tx2 (no second artifact) and the winner's refs are recoverable", async () => {

@@ -21,6 +21,7 @@ import {
   EXTENSION_STORE_GC_REAP_LOOP_JOB_ID,
   EXTENSION_AUTO_UPDATE_LOOP_JOB_ID,
   ENVIRONMENT_LAYER_GC_REAP_LOOP_JOB_ID,
+  UNBOUND_OUTPUT_DERIVE_SWEEP_LOOP_JOB_ID,
 } from "@/lib/background-jobs-names";
 // TYPE-ONLY (erased at compile; not a route-graph edge) — the reaper VALUE is
 // boot-registered through the slot below, never imported here.
@@ -1041,6 +1042,64 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           }),
         },
       );
+    },
+  },
+  [BACKGROUND_JOB_NAMES.UNBOUND_OUTPUT_DERIVE]: {
+    payloadSchema: z
+      .object({
+        runId: z.string().optional(),
+        orgId: z.string().optional(),
+      })
+      .passthrough(),
+    async handle(job) {
+      // Post-terminal unbound agent-output derivation (cinatra#1893, epic #1883
+      // A5). ONE-SHOT per run. A TRANSIENT failure inside `deriveUnboundRunOutput`
+      // (a DB blip, a classifier hiccup) throws `UnboundDerivationRetryableError`
+      // PAST this boundary — BullMQ retries per the enqueue's
+      // UNBOUND_OUTPUT_DERIVE_RETRY_POLICY; the reconciliation sweep is the final
+      // backstop. A settled row (missing/terminal/held/exhausted) resolves cleanly
+      // as `skipped` and is NOT retried.
+      const p = job.data as { runId?: string; orgId?: string };
+      if (!p.runId || !p.orgId) {
+        console.warn(
+          "[unbound-output] malformed UNBOUND_OUTPUT_DERIVE payload — skipping:",
+          p,
+        );
+        return;
+      }
+      const { deriveUnboundRunOutput } = await import(
+        "@/lib/artifacts/unbound-output-derivation"
+      );
+      await deriveUnboundRunOutput({ runId: p.runId, orgId: p.orgId });
+    },
+  },
+  [BACKGROUND_JOB_NAMES.UNBOUND_OUTPUT_DERIVE_SWEEP]: {
+    payloadSchema: looseObject(),
+    async handle(job) {
+      // ~5-minute reconciliation sweep over the unbound-output outbox
+      // (cinatra#1893). Drains `pending` rows + reclaims expired `deriving` leases
+      // whose one-shot enqueue was lost / crashed. The worker never throws
+      // per-row (deriveUnboundRunOutput's retryable failures are tallied, not
+      // rethrown); any unexpected throw propagates to runRecurringLoop, which
+      // reports it and always re-delays (cinatra#849).
+      const FIVE_MINUTES_MS = 5 * 60 * 1000;
+      await runRecurringLoop({
+        job,
+        loopJobId: UNBOUND_OUTPUT_DERIVE_SWEEP_LOOP_JOB_ID,
+        delayMs: FIVE_MINUTES_MS,
+        label: "unbound-output-derive-sweep",
+        run: async () => {
+          const { sweepPendingUnboundDerivations } = await import(
+            "@/lib/artifacts/unbound-output-derivation"
+          );
+          const summary = await sweepPendingUnboundDerivations();
+          if (summary.attempted > 0) {
+            console.log(
+              `[unbound-output-sweep] attempted=${summary.attempted} done=${summary.done} no_match=${summary.no_match} no_produces=${summary.no_produces} skipped=${summary.skipped} failed=${summary.failed}`,
+            );
+          }
+        },
+      });
     },
   },
   [BACKGROUND_JOB_NAMES.MARKETPLACE_CATALOG_SYNC]: {

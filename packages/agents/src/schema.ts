@@ -534,6 +534,46 @@ export const agentRunTestSends = cinatraSchema.table("agent_run_test_sends", {
 }));
 
 // ---------------------------------------------------------------------------
+// agent_run_output_derivations — transactional outbox for the produces-scoped
+// capture of an unbound agent run's FINAL output (cinatra#1893, epic #1883 A5).
+//
+// ONE row per non-empty WayFlow terminal-success run, inserted ATOMICALLY with
+// the terminal status CAS + final-output snapshot in transitionRunStatus'
+// `derivationOutbox` branch (PK run_id + ON CONFLICT DO NOTHING ⇒ capture is
+// idempotent under a stop/retry re-drive). The post-terminal derivation job
+// derives the captured `content` against the run agent's validated `produces`.
+// `status` carries the lifecycle: pending (unclaimed) → deriving (LEASED,
+// in-flight) → terminal done|no_match|no_produces. The recoverable row lease
+// (lease_token + lease_expires_at, attempts bumped atomically on claim)
+// SERIALIZES the derivation decision so the one-shot job and the reconciliation
+// sweep can never split a run into no_match+artifact.
+// ---------------------------------------------------------------------------
+
+export const agentRunOutputDerivations = cinatraSchema.table("agent_run_output_derivations", {
+  runId:          text("run_id").primaryKey().references(() => agentRuns.id, { onDelete: "cascade" }),
+  orgId:          text("org_id").notNull(),
+  templateId:     text("template_id").notNull(),
+  packageVersion: text("package_version"),
+  createdBy:      text("created_by"),
+  // The captured final-output snapshot (the run's last-agent-message text, or
+  // its JSON serialization) + a flag recording whether it parsed as JSON.
+  content:        text("content").notNull(),
+  contentIsJson:  boolean("content_is_json").notNull().default(false),
+  // sha256(content) — the derived_output ledger dedupe component.
+  contentHash:    text("content_hash").notNull(),
+  // pending | deriving | done | no_match | no_produces
+  status:         text("status").notNull().default("pending"),
+  attempts:       integer("attempts").notNull().default(0),
+  leaseToken:     text("lease_token"),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  detail:         jsonb("detail").$type<Record<string, unknown> | null>(),
+  createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:      timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  statusIdx: index("agent_run_output_derivations_status_idx").on(t.status, t.createdAt),
+}));
+
+// ---------------------------------------------------------------------------
 // agent_registry_entries — published registry entries for team sharing
 // ---------------------------------------------------------------------------
 
