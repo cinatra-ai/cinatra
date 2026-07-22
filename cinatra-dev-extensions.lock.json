@@ -155,7 +155,7 @@
     {
       "packageName": "@cinatra-ai/email-artifacts",
       "repo": "cinatra-ai/email-artifacts",
-      "resolvedSha": "bdda35cc67997c8e6380c3050ac5862fce0b5800"
+      "resolvedSha": "7da5e685ffa007736cc72b68d3529f1786fbe3d0"
     },
     {
       "packageName": "@cinatra-ai/email-connector",
@@ -190,7 +190,7 @@
     {
       "packageName": "@cinatra-ai/email-test-delivery-agent",
       "repo": "cinatra-ai/email-test-delivery-agent",
-      "resolvedSha": "afc3334d05fba7991a4c48bdbf0f4765111bb7ce"
+      "resolvedSha": "86342965f32f0ad69737403d5edd7017cee382be"
     },
     {
       "packageName": "@cinatra-ai/gemini-connector",
