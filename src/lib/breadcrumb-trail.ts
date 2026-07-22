@@ -129,6 +129,9 @@ export const MARKETPLACE_STATIC_ROUTES = new Set([
 
 export function isPagelessContainerCrumb(segments: string[], i: number): boolean {
   const depth = i + 1; // number of path segments up to and including this crumb
+  // /analytics has no page.tsx and no redirect — the section root is a pure
+  // routing container (cinatra#1910), so its crumb must not link.
+  if (segments[0] === "analytics" && depth === 1) return true;
   if (segments[0] === "connectors" && (depth === 2 || depth === 3)) return true;
   if (
     segments[0] === "configuration" &&

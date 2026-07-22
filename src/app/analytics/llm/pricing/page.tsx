@@ -1,32 +1,44 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Settings2 } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { requireAdminSession } from "@/lib/auth-session";
+import { Button } from "@/components/ui/button";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { MetricsCostPricingScreen } from "@cinatra-ai/metric-cost-api";
-import { MetricApiNav } from "@/components/metric-api-nav";
-import { analyticsTabDescription } from "@/lib/section-nav";
+import { CrumbContributions } from "@/components/crumb-contributions";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Model Pricing | Cinatra" };
 
+// Admin management sub-page of /analytics/llm (cinatra#1910): it edits the
+// price list, so it deliberately renders no analytics tab strip.
 export default async function MetricsCostPricingPage() {
   await requireAdminSession();
   return (
     <Main className="min-h-screen">
+      {/* Post-gate crumb publisher (cinatra#1737): middle crumb "LLM", leaf
+          "Pricing" — the crumb contract beats the header title broadcast. */}
+      <CrumbContributions
+        entries={[
+          { prefix: "/analytics/llm", label: "LLM" },
+          { prefix: "/analytics/llm/pricing", label: "Pricing" },
+        ]}
+      />
       <PageHeader
-        title="LLM"
-        description={analyticsTabDescription("costs")}
+        title="Model pricing"
+        description="Manage the per-model price list used to compute LLM spend."
         actions={
-          <Link href="/analytics/llm/pricing" aria-label="Pricing administration">
-            <Settings2 className="h-5 w-5 text-muted-foreground hover:text-foreground transition" />
-          </Link>
+          <Button asChild variant="outline">
+            <Link href="/analytics/llm">
+              <ArrowLeft data-icon="inline-start" aria-hidden="true" />
+              Back to LLM costs
+            </Link>
+          </Button>
         }
         divider={false}
       />
-      <MetricApiNav activeTab="costs" />
       <PageContent className="flex flex-col gap-6 pb-8">
         <MetricsCostPricingScreen />
       </PageContent>
