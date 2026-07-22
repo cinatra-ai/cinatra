@@ -31,9 +31,16 @@ import { sql, type SQL } from "drizzle-orm";
  * open.
  *
  * Preserved verbatim:
- *   - REPEATED params: each textual occurrence of `$1` emits its OWN Drizzle
- *     parameter bound to `values[0]`, so a builder that references `$1` twice
- *     stays correct after Drizzle re-numbers.
+ *   - REPEATED params: every textual occurrence of `$1` renders to the SAME
+ *     rendered placeholder (the first occurrence emits one Drizzle parameter
+ *     bound to `values[0]`; later occurrences reference that placeholder as raw
+ *     `$k` text). This reproduces the builder's ORIGINAL param identity, which is
+ *     load-bearing for type inference: a bare `$n IS NULL` (as in
+ *     `buildSoftDeleteObjectQuery`'s `(org_id = $2 OR $2 IS NULL)`) has NO type
+ *     of its own and borrows it from the SAME param's typed use (`org_id = $2`).
+ *     Splitting the two occurrences into distinct untyped placeholders makes
+ *     Postgres reject the standalone one with 42P18 "could not determine data
+ *     type of parameter" — so the bridge must keep them one placeholder.
  *   - LONGEST digit run: `$10` reads as parameter 10, never `$1` then `0`.
  *   - `::casts`: `$1::int` splices the value at `$1` and leaves `::int` as
  *     literal SQL — casts are untouched.
@@ -53,6 +60,15 @@ export function rawWithParams(text: string, values: readonly unknown[]): SQL {
   let literal = "";
   let i = 0;
   const n = text.length;
+
+  // Maps an INPUT param index (`$n`) to the rendered placeholder ordinal its
+  // FIRST occurrence was assigned. Drizzle numbers Param chunks sequentially in
+  // render order, and we emit a Param chunk ONLY for a first occurrence (in
+  // textual order), so `nextOrdinal` tracks exactly the ordinal Drizzle will
+  // assign. Repeats then reference that ordinal as raw `$k`, collapsing all
+  // occurrences of one input param onto ONE rendered placeholder.
+  const ordinalByInputIndex = new Map<number, number>();
+  let nextOrdinal = 0;
 
   const flushLiteral = (): void => {
     if (literal.length > 0) {
@@ -153,8 +169,20 @@ export function rawWithParams(text: string, values: readonly unknown[]): SQL {
           );
         }
         flushLiteral();
-        // A fresh Drizzle Param per occurrence — repeated $n stays repeated.
-        parts.push(sql`${values[index - 1]}`);
+        const existing = ordinalByInputIndex.get(index);
+        if (existing === undefined) {
+          // First occurrence: emit ONE Drizzle Param (Drizzle assigns it the
+          // next sequential rendered ordinal). Record that ordinal.
+          nextOrdinal += 1;
+          ordinalByInputIndex.set(index, nextOrdinal);
+          parts.push(sql`${values[index - 1]}`);
+        } else {
+          // Repeat: reference the first occurrence's rendered placeholder as raw
+          // text (safe — we are OUTSIDE any quote/comment span here), so all
+          // occurrences of `$index` collapse onto ONE placeholder and Postgres
+          // infers the type across them (see the $n-IS-NULL note above).
+          parts.push(sql.raw(`$${existing}`));
+        }
         i = j;
         continue;
       }

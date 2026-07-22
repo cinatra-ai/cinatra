@@ -200,6 +200,7 @@
       "@cinatra-ai/sdk-dashboard/ai": ["./packages/sdk-dashboard/src/ai/index.ts"],
       "@cinatra-ai/sdk-dashboard/cube-ir": ["./packages/sdk-dashboard/src/cube-ir/index.ts"],
       "@cinatra-ai/dashboards": ["./packages/dashboards/src/index.ts"],
+      "@cinatra-ai/dashboards/twin-writer-seam": ["./packages/dashboards/src/twin-writer-seam.ts"],
       "@cinatra-ai/dashboards/module": ["./packages/dashboards/src/integration/module.ts"],
       "@cinatra-ai/dashboards/extension-materialization": ["./packages/dashboards/src/extension-materialization.ts"],
       "@cinatra-ai/dashboards/contribution-lineage": ["./packages/dashboards/src/contribution-lineage.ts"],

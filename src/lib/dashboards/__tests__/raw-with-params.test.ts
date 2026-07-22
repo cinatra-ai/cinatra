@@ -80,11 +80,22 @@ describe("rawWithParams — SQL-aware placeholder splicing (D1)", () => {
     expect(params).toEqual(["n"]);
   });
 
-  it("preserves REPEATED params — each occurrence binds its own value", () => {
+  it("collapses REPEATED params onto ONE placeholder (preserves param identity)", () => {
     const { sql, params } = render("$1 = $1 AND b = $2", ["v", "w"]);
-    // Two occurrences of $1 each emit a Drizzle param bound to values[0].
-    expect(sql).toBe("$1 = $2 AND b = $3");
-    expect(params).toEqual(["v", "v", "w"]);
+    // Both occurrences of $1 render to the SAME placeholder $1 — so a
+    // `$n IS NULL` occurrence keeps the type its typed sibling establishes
+    // (no 42P18). The builder's original numbering is reproduced verbatim.
+    expect(sql).toBe("$1 = $1 AND b = $2");
+    expect(params).toEqual(["v", "w"]);
+  });
+
+  it("collapses a repeated param even in an $n IS NULL position (42P18 guard)", () => {
+    // The buildSoftDeleteObjectQuery shape: a nullable param used both typed and
+    // as a bare IS NULL. Both $2 render to ONE placeholder so Postgres can infer
+    // its type from `org_id = $2`.
+    const { sql, params } = render("(org_id = $2 OR $2 IS NULL)", ["org", "o1"]);
+    expect(sql).toBe("(org_id = $1 OR $1 IS NULL)");
+    expect(params).toEqual(["o1"]);
   });
 
   it("longest-digit-run: $10 is parameter 10, not $1 then 0", () => {
@@ -94,10 +105,10 @@ describe("rawWithParams — SQL-aware placeholder splicing (D1)", () => {
     expect(params).toEqual(["TEN", "1"]);
   });
 
-  it("preserves ::casts adjacent to a placeholder", () => {
+  it("preserves ::casts adjacent to a placeholder (repeat collapses to $1)", () => {
     const { sql, params } = render("VALUES ($1::text, $2::jsonb, $1::text)", ["p", "q"]);
-    expect(sql).toBe("VALUES ($1::text, $2::jsonb, $3::text)");
-    expect(params).toEqual(["p", "q", "p"]);
+    expect(sql).toBe("VALUES ($1::text, $2::jsonb, $1::text)");
+    expect(params).toEqual(["p", "q"]);
   });
 
   it("empty text yields an empty SQL", () => {
@@ -121,35 +132,45 @@ describe("rawWithParams — real-builder round-trip parity (drift guard)", () =>
     newBindingId: "bind-new",
   });
 
-  function textualParams(text: string, values: readonly unknown[]): unknown[] {
-    // These builders carry NO $n inside a literal/comment, so a bare scan over
-    // the whole text yields the same placeholder order the SQL-aware bridge does
-    // — which is exactly the invariant this parity check pins.
+  /** The DISTINCT param values in first-occurrence order — what the deduping
+   *  bridge emits (these builders number params in ascending first-occurrence
+   *  order, so this equals `[orgId, artifactId, …]`). */
+  function distinctTextualParams(text: string, values: readonly unknown[]): unknown[] {
+    const seen = new Set<number>();
     const out: unknown[] = [];
-    for (const m of text.matchAll(/\$(\d+)/g)) out.push(values[Number(m[1]) - 1]);
+    for (const m of text.matchAll(/\$(\d+)/g)) {
+      const idx = Number(m[1]);
+      if (seen.has(idx)) continue;
+      seen.add(idx);
+      out.push(values[idx - 1]);
+    }
     return out;
   }
 
-  it("round-trips the archive statement (values = [orgId, artifactId])", () => {
+  it("round-trips the archive statement VERBATIM (values = [orgId, artifactId])", () => {
     const { sql, params } = render(archive.text, archive.values);
-    expect(params).toEqual(textualParams(archive.text, archive.values));
-    // Rendered SQL must carry sequential $1..$k with no gaps.
-    const rendered = [...sql.matchAll(/\$(\d+)/g)].map((m) => Number(m[1]));
-    expect(rendered).toEqual(Array.from({ length: rendered.length }, (_v, i) => i + 1));
+    // The dedup bridge reproduces the builder's SQL byte-for-byte (its params are
+    // numbered in ascending first-occurrence order) — the strongest verbatim-reuse
+    // invariant. Params collapse to the distinct values.
+    expect(sql).toBe(archive.text);
+    expect(params).toEqual(distinctTextualParams(archive.text, archive.values));
+    expect(params).toEqual(["org-1", "art-1"]);
   });
 
-  it("round-trips the insert statement (values = [orgId, artifactId, newBindingId])", () => {
+  it("round-trips the insert statement VERBATIM (values = [orgId, artifactId, newBindingId])", () => {
     const { sql, params } = render(insert.text, insert.values);
-    expect(params).toEqual(textualParams(insert.text, insert.values));
-    const rendered = [...sql.matchAll(/\$(\d+)/g)].map((m) => Number(m[1]));
-    expect(rendered).toEqual(Array.from({ length: rendered.length }, (_v, i) => i + 1));
+    expect(sql).toBe(insert.text);
+    expect(params).toEqual(distinctTextualParams(insert.text, insert.values));
+    expect(params).toEqual(["org-1", "art-1", "bind-new"]);
   });
 
-  it("the bridged param COUNT equals the builder's textual placeholder count", () => {
+  it("the bridged param COUNT equals the builder's DISTINCT placeholder count", () => {
     for (const q of [archive, insert]) {
-      const textualCount = [...q.text.matchAll(/\$(\d+)/g)].length;
+      const distinctCount = new Set(
+        [...q.text.matchAll(/\$(\d+)/g)].map((m) => m[1]),
+      ).size;
       const { params } = render(q.text, q.values);
-      expect(params.length).toBe(textualCount);
+      expect(params.length).toBe(distinctCount);
     }
   });
 });

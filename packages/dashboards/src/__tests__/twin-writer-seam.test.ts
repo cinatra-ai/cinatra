@@ -3,7 +3,7 @@
 // Proves the FAIL-CLOSED disposition (Q1) and the double-registration guard +
 // test-reset (delta D4). No DB — the seam is pure registration/dispatch; the
 // substrate-backed kill-tests prove atomicity separately.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DashboardArtifactTwinWriter,
   DashboardTwinContext,
@@ -28,7 +28,11 @@ const ctx: DashboardTwinContext = {
   actorId: "user-1",
 };
 
-// The seam holds process-global state; reset between tests for isolation.
+// The seam holds process-global state; reset between tests for isolation. The
+// `beforeEach` reset runs AFTER the suite-wide setup file's NOOP registration
+// (file hooks run after global setup hooks), so each case starts truly
+// unregistered and exercises the raw seam disposition it asserts.
+beforeEach(() => resetDashboardArtifactTwinWriter());
 afterEach(() => resetDashboardArtifactTwinWriter());
 
 describe("twin-writer seam — fail-closed (Q1)", () => {

@@ -18,6 +18,7 @@ import { mimeAcceptedByAccepts } from "./upload-artifact-type-map";
 type ResolvedObjectTypeDef = ReturnType<typeof objectTypeRegistry.resolve>;
 import { createLocalDiskBlobStore } from "./local-disk-blob-store";
 import { deriveSubstanceKey } from "./resource-store";
+import { buildObjectsWithOutboxQuery } from "@/lib/objects/objects-outbox-cte";
 import {
   type OwnerLevel,
   normalizeOwnerLevel,
@@ -962,43 +963,33 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
         // representation/audit/assertion rows pointing at an artifactId that
         // did NOT actually get an objects row. Letting the duplicate-key
         // error throw rolls back the entire Tx2 (held-lock tx) cleanly.
-        {
-          text: `WITH upserted AS (
-  INSERT INTO "${schema}"."objects"
-    (id, type, parent_id, parent_type, data, created_by, org_id, source,
-     graphiti_sync_status, version, owner_level, owner_id, visibility,
-     project_id)
-  VALUES ($1::text, $2::text, $3::text, $4::text, $5::jsonb, $6::text, $7::text, 'route',
-          'pending', 1, $8::text, $9::text, $10::text,
-          $11::text)
-  RETURNING id, version, org_id
-)
-INSERT INTO "${schema}"."graphiti_projection_outbox"
-  (id, object_id, object_version, org_id, operation, payload_hash, status, attempts)
-SELECT gen_random_uuid()::text, upserted.id, upserted.version, upserted.org_id,
-       'upsert', NULL, 'pending', 0
-FROM upserted`,
-          values: [
-            artifactId,
+        // Extracted to the SHARED objects+outbox single-CTE builder
+        // (cinatra#1894 tier-b): ONE place expresses the "outbox fires only if
+        // the objects write happened" invariant, consumed identically by the
+        // dashboards-artifact twin writer. Mode `"insert"` reproduces this
+        // create path's SQL verbatim (pinned by the builder's golden test);
+        // `source: "route"` is inlined as the SQL literal it always was.
+        buildObjectsWithOutboxQuery(postgresSchema, "insert", {
+          id: artifactId,
+          type: input.objectType,
+          parentId: input.parentId ?? null,
+          parentType: input.parentType ?? null,
+          dataJson: JSON.stringify(objectData),
+          createdBy: input.createdBy ?? null,
+          orgId: input.orgId,
+          source: "route",
+          ownerLevel: ownerLevelNorm,
+          ownerId: input.ownerId,
+          visibility,
+          // Artifact inherits projectId from the active
+          // mcpRequestContextStorage frame. A semantic-artifact type is never
+          // on the substrate exclusion list, so the helper returns the frame
+          // projectId verbatim (or null when no frame is active).
+          projectId: resolveProjectInheritanceForType(
+            mcpRequestContextStorage.getStore()?.projectContext?.projectId,
             input.objectType,
-            input.parentId ?? null,
-            input.parentType ?? null,
-            JSON.stringify(objectData),
-            input.createdBy ?? null,
-            input.orgId,
-            ownerLevelNorm,
-            input.ownerId,
-            visibility,
-            // Artifact inherits projectId from the active
-            // mcpRequestContextStorage frame. A semantic-artifact type is never
-            // on the substrate exclusion list, so the helper returns the frame
-            // projectId verbatim (or null when no frame is active).
-            resolveProjectInheritanceForType(
-              mcpRequestContextStorage.getStore()?.projectContext?.projectId,
-              input.objectType,
-            ),
-          ],
-        },
+          ),
+        }),
         // Representation (revision=1 at creation — the append-only table is
         // empty for this artifactId). `classifier_signals` carries the
         // server-composed intake signals for the matcher to consume; NULL
