@@ -1107,8 +1107,8 @@ export function upsertObjectAndEnqueue(
 // projector job.
 //
 // TWO consumers, ONE column set (`OBJECTS_WRITE_COLUMNS`):
-//   - `createSemanticArtifact` (src/lib/artifacts/artifact-creation.ts) — the
-//     artifact-creation path — uses mode `"insert"` (a fresh UUID, plain INSERT,
+//   - `createSemanticArtifact` (the artifact-creation hot path under
+//     src/lib/artifacts) — uses mode `"insert"` (a fresh UUID, plain INSERT,
 //     `version` = 1). Behaviour is byte-for-byte the string this module inlines
 //     (extracted verbatim, pinned by the golden test).
 //   - the dashboards-artifact TWIN WRITER (src/lib/dashboards/…) — uses mode
