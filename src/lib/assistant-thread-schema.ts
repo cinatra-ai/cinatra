@@ -62,6 +62,7 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
       context_id text,
       assistant_package text,
       instance_id text,
+      title_slug text,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
@@ -131,6 +132,25 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
     // backward compatible).
     { text: `ALTER TABLE "${s}"."assistant_threads" ADD COLUMN IF NOT EXISTS assistant_package text` },
     { text: `ALTER TABLE "${s}"."assistant_threads" ADD COLUMN IF NOT EXISTS instance_id text` },
+    // `title_slug` (cinatra#1878 W3, AC#2): the NET-NEW URL segment for a thread
+    // (`/chat/<vendor>/<slug>/[<instance>/]<titleSlug>`). Minted ONCE by the
+    // atomic allocator (thread-slug.ts + createAssistantThread/ensureThreadSlug)
+    // from the thread's title; container-scoped-unique over
+    // (assistant_package, instance_id); STABLE forever (a rename never re-slugs).
+    // NULLABLE — NULL == a titleless thread whose slug has not been minted yet
+    // (the first titled persist mints it; a titled row never commits slugless).
+    // A fresh install is born WITH the column (the CREATE above carries it too);
+    // the ADD COLUMN IF NOT EXISTS carries it onto a DB bootstrapped before this
+    // change (bootstrap-upgrade parity), and core__0069 carries it onto the
+    // operator migration path.
+    { text: `ALTER TABLE "${s}"."assistant_threads" ADD COLUMN IF NOT EXISTS title_slug text` },
+    // Container-scoped slug UNIQUENESS — the DB-level guarantee the allocator's
+    // first-writer-wins retry relies on. PARTIAL over non-null title_slug (a
+    // titleless thread is exempt). NULL package/instance collapse to '' so the
+    // implicit-@cinatra (unbound) container is one namespace. Two DIFFERENT
+    // threads with the same title in the same container are disambiguated by the
+    // allocator's suffix retry when this index rejects the second write.
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS assistant_threads_container_slug_uniq ON "${s}"."assistant_threads" (COALESCE(assistant_package, ''), COALESCE(instance_id, ''), title_slug) WHERE title_slug IS NOT NULL` },
     // `content` (cinatra#1037 P5.6 drop-history PR1 EXPAND, core__0061): the
     // durable per-turn message content the legacy chat_threads.payload has held
     // — the FULL message object for faithful /chat reconstruction (not just

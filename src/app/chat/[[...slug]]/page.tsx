@@ -1,7 +1,14 @@
 import type { Metadata } from "next";
+import { notFound, redirect } from "next/navigation";
 import { requireAuthSession } from "@/lib/auth-session";
 import { resolveChatWidgetCatalog } from "@/lib/chat-widget-catalog.server";
 import { resolveChatViewCatalog } from "@/lib/chat-views-catalog.server";
+// The /chat route guard (cinatra#1878 W3): resolves `/chat/<vendor>/<slug>…`
+// through the actor's audience-filtered registry + per-instance authority, and
+// turns an unknown/out-of-audience assistant, a bad instance, or a missing
+// thread into a 404 (a bare /chat into a redirect).
+import { resolveChatRouteForCurrentActor } from "@/lib/chat-route-resolver";
+import { resolveRemoteChatForBoundRoute } from "@/lib/assistants-directory.server";
 // Narrow subpath import (not the @cinatra-ai/chat barrel): the barrel also
 // re-exports the thread/history/side panels this page never renders, and the
 // /chat route-graph ratchet counts every module the entry can reach. The
@@ -35,8 +42,28 @@ export default async function ChatPageMount({
     resolveChatWidgetCatalog(),
     resolveChatViewCatalog(),
   ]);
+
+  // Resolve + guard the route (cinatra#1878 W3): bare /chat redirects to the
+  // canonical default; an unknown/out-of-audience assistant, an unauthorized
+  // instance, or a missing thread is a 404-hide.
+  const resolution = await resolveChatRouteForCurrentActor(slug);
+  if (resolution.kind === "redirect") redirect(resolution.to);
+  if (resolution.kind !== "resolved") notFound();
+  const { route, assistant, threadId } = resolution;
+
+  // "Remote chat" flyout (AC#5): only for a remote-capable, instance-scoped
+  // bound route; the href is server-sourced from the first-party remote-target
+  // resolver for the authorized instance.
+  let remoteChat: { label: string; href: string } | undefined;
+  if (assistant.remoteCapable && route.instance) {
+    const dest = await resolveRemoteChatForBoundRoute({
+      targetProvider: assistant.targetProvider,
+      instanceId: route.instance,
+    });
+    if (dest) remoteChat = { label: "Remote chat", href: dest.href };
+  }
+
   const sp = rawSp as Record<string, string | string[] | undefined>;
-  const threadId = slug?.[0];
   const mention = typeof sp.mention === "string" ? sp.mention : undefined;
   const mode = typeof sp.mode === "string" ? sp.mode : undefined;
   // Workflow-task handoff via the /chat?wf=<id>&task=<key> deep link →
@@ -48,7 +75,10 @@ export default async function ChatPageMount({
     : undefined;
   return (
     <ChatPage
-      initialThreadId={threadId}
+      initialThreadId={threadId ?? undefined}
+      initialAssistantPackage={assistant.packageName}
+      initialInstanceId={route.instance ?? null}
+      remoteChat={remoteChat}
       userId={session.user.id}
       initialMention={mention}
       initialMode={

@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Fragment, useMemo } from "react";
 import { useEffect, useRef, useState } from "react";
 import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
+import { isChatPathname } from "@cinatra-ai/chat/chat-path-codec";
 import { CreateOrganizationDialog } from "@daveyplate/better-auth-ui";
 import { authClient } from "@/lib/auth-client";
 import {
@@ -331,10 +332,12 @@ export function AppShell({
   }, [requiresSetupRedirect, router]);
 
   useEffect(() => {
-    // Deliberately UUID-strict (NOT the #1907 format-agnostic grammar): chat
-    // thread ids are app-minted UUIDs (ag-ui-chat-client.ts generateId), never
-    // better-auth entity ids.
-    const isChatThread = /^\/chat\/[a-f0-9-]{36}$/.test(pathname);
+    // A /chat thread route (cinatra#1878 W3): the URL now carries
+    // `/chat/<vendor>/<slug>[/<instance>]/<titleSlug>`, so the old UUID regex is
+    // retired. `chatThreadTitle` is published over the chat bus ONLY while a
+    // thread is active, so gating the document-title override on it keeps a
+    // new/empty chat (no title) on the route's own "Chat" tab title.
+    const isChatThread = isChatPathname(pathname);
     const segments = pathname.split("/").filter(Boolean);
     const isAgentInstance = segments.length >= 4 && segments[0] === "agents";
     const agentLabel = isAgentInstance
