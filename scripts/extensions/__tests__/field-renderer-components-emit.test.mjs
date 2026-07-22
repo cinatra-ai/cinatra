@@ -43,6 +43,20 @@ const MIGRATED_ENTRIES = [
     propsApiVersion: 1,
   },
   {
+    bindingId: "@cinatra-ai/email-delivery-agent:output",
+    packageName: "@cinatra-ai/email-artifacts",
+    specifier: "@cinatra-ai/email-artifacts/src/renderers/send-confirmation",
+    resolution: "guardedOptional",
+    propsApiVersion: 1,
+  },
+  {
+    bindingId: "@cinatra-ai/email-delivery-agent:send-confirmation",
+    packageName: "@cinatra-ai/email-artifacts",
+    specifier: "@cinatra-ai/email-artifacts/src/renderers/send-confirmation",
+    resolution: "guardedOptional",
+    propsApiVersion: 1,
+  },
+  {
     bindingId: "@cinatra-ai/email-drafting-agent:email-drafts-review",
     packageName: "@cinatra-ai/email-artifacts",
     specifier: "@cinatra-ai/email-artifacts/src/renderers/email-drafts-review",
