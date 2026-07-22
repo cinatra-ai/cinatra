@@ -42,6 +42,9 @@ const { openaiShellSurface } = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/llm-provider-surfaces", () => ({
   getLlmProviderAdapterSurface: vi.fn(() => null),
+  // llm-providers S4.x (cinatra#1964): selectSkillDeliveryAdapter now resolves
+  // through this seam first; absent -> in-core fallback (unchanged routing).
+  getLlmSkillDeliveryAdapterSurface: vi.fn(() => null),
   getLlmProviderSurface: vi.fn((providerId: string) =>
     providerId === "openai" ? openaiShellSurface : null,
   ),

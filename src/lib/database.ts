@@ -898,6 +898,23 @@ export function readAnthropicConnectionFromDatabase() {
   return readConnectorConfigFromDatabase<{ apiKey?: string; lastValidatedAt?: string } | null>("anthropic_connection", null);
 }
 
+// Anthropic request-logging enabled flag — the PERSISTED authority (#1715 D2).
+//
+// Historically the enabled flag was core MODULE STATE (anthropic-logging-state.ts)
+// toggled from the admin UI. Once the Anthropic adapter relocates into its
+// connector (epic #1711) that module state lives in a DIFFERENT realm than the
+// host toggle, so the admin switch stops reaching the log writer. The flag now
+// lives in the connector-config store — a single process-wide authority every
+// realm reads through this host accessor, mirroring OpenAI's stateless
+// connection-config-driven logging. Default ENABLED (absent/`{}` ⇒ true); only
+// an explicit `enabled === false` disables — identical to the prior default.
+export const ANTHROPIC_LOGGING_CONFIG_KEY = "anthropic-logging";
+
+export function readAnthropicLoggingEnabledFromDatabase(): boolean {
+  const config = readConnectorConfigFromDatabase<{ enabled?: boolean }>(ANTHROPIC_LOGGING_CONFIG_KEY, {});
+  return config.enabled !== false;
+}
+
 export function readDefaultLlmProviderFromDatabase() {
   const stored = readConnectorConfigFromDatabase<string>("llm_default_provider", "openai");
   // The WRITE chokepoint cannot heal stale persisted values. A stale

@@ -24,21 +24,24 @@ const { mockLlmTask, mockSkillAwareLlmTask } = vi.hoisted(() => ({
   mockLlmTask: vi.fn(),
   mockSkillAwareLlmTask: vi.fn(),
 }));
-// Re-export the REAL `AnthropicSkillDeliveryError` from its source file so
-// the mock can provide a class that subclass `instanceof` checks pass against.
-// The package-index full chain pulls in `@cinatra-ai/openai-connector` which
-// is unresolvable in vitest's node-ESM loader. Direct-file import sidesteps
-// the chain. `vi.hoisted` ensures the dynamic-import runs BEFORE vi.mock's
-// factory (which is also hoisted).
-const { AnthropicSkillDeliveryError } = await vi.hoisted(async () => {
+// Re-export the REAL `AnthropicSkillDeliveryError` + its structural recognizer
+// `isAnthropicSkillDeliveryError` from their source file so the mock's sentinel
+// class is recognized by `dispatchLlmReviewer`'s catch. The package-index full
+// chain pulls in `@cinatra-ai/openai-connector` which is unresolvable in
+// vitest's node-ESM loader; direct-file import sidesteps the chain. `vi.hoisted`
+// ensures the dynamic-import runs BEFORE vi.mock's factory (which is also
+// hoisted).
+const { AnthropicSkillDeliveryError, isAnthropicSkillDeliveryError } = await vi.hoisted(async () => {
   return await import("../../../llm/src/errors");
 });
 vi.mock("@cinatra-ai/llm", () => ({
   runDeterministicLlmTask: mockLlmTask,
   runSkillAwareDeterministicLlmTask: mockSkillAwareLlmTask,
-  // Sentinel class — re-exported from real source so `instanceof` works in
-  // `dispatchLlmReviewer.catch` during abort rethrows.
+  // Sentinel class + its cross-realm structural recognizer — re-exported from
+  // real source so `dispatchLlmReviewer.catch` recognizes the sentinel during
+  // abort rethrows (#1715 D1: recognition is structural, not `instanceof`).
   AnthropicSkillDeliveryError,
+  isAnthropicSkillDeliveryError,
 }));
 
 // Mock `@cinatra-ai/skills` so the strict catalog resolver

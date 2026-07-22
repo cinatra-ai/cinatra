@@ -1,74 +1,88 @@
 /**
- * Regression gate for the chat silent-reply bug.
+ * Lockstep semantics for the mention tokenizer vs. the flat-mention parser
+ * (cinatra#1875 W2, Epic #1873 — AC#1). Rewritten from the legacy
+ * "parser-permissive + resolver-tolerant" contract.
  *
- * `parseMentions` regex `/(?<![/.:])@([a-z0-9_-]+)/gi` correctly matches
- * `@handle` tokens but ALSO matches the `@cinatra-ai` prefix of package
- * references like `@cinatra-ai/contact-discovery-agent`. The captured token
- * resolves to no assistant user, so the chat used to short-circuit
- * to a silent empty reply.
+ * The old `parseMentions` regex mis-lexed a `@vendor/slug` package reference
+ * (e.g. `@cinatra-ai/contact-discovery-agent`) as a FLAT `@cinatra-ai` handle —
+ * a false positive that resolved to no assistant and forced a resolver-layer
+ * fall-through. The shared tokenizer now lexes scoped `@vendor/slug` as a
+ * distinct SCOPED token, so:
  *
- * The fix is at the resolver / routing layer — `resolved.length === 0`
- * now falls through to the no-mention broadcast branch. The parser regex
- * stays permissive on purpose (refining it would break valid `@handle` cases
- * inside markdown / quoted text). This test documents the parser's
- * false-positive shape so future regression analysis has a fast pointer:
+ *   - `parseMentions` (the FLAT feed) NO LONGER emits a bogus `cinatra-ai`
+ *     handle for a package reference — the false positive is gone at the lexer;
+ *   - `tokenizeMentions` surfaces the scoped token with vendor + slug, which
+ *     phase-2 classification routes to an assistant mention (if registered +
+ *     in-audience) or to `agent_run` dispatch (otherwise).
  *
- *   "Why does the chat sometimes look like it has @-mentions but resolves
- *    to nothing? Because of THIS line in the user prompt."
- *
- * If a future fix tightens the parser to reject this case explicitly, this
- * test should be UPDATED in lockstep with the routing-layer fallback so
- * the contract stays: parser-permissive + resolver-tolerant.
+ * A future change to the tokenizer MUST keep this lockstep: scoped stays scoped,
+ * flat stays flat, and neither leaks into the other.
  */
 import { describe, it, expect } from "vitest";
 import { parseMentions } from "../mentions-pure";
+import { tokenizeMentions } from "../mention-tokenizer";
 
-describe("parseMentions — package-ref false-positive contract (regression gate)", () => {
-  it("matches @cinatra-ai from a `@cinatra-ai/<slug>` package reference", () => {
+describe("parseMentions — flat feed excludes scoped package references (AC#1 lockstep)", () => {
+  it("emits NO flat mention for a lone `@vendor/slug` package reference", () => {
+    // Was: `[{ handle: "cinatra-ai" }]` (the false positive). Now: `[]`.
     const mentions = parseMentions(
       "Use the @cinatra-ai/contact-discovery-agent to discover contacts.",
     );
-    // The captured raw handle is "cinatra-ai" — this is the false-positive
-    // that triggers the empty-resolve fall-through.
-    expect(mentions).toHaveLength(1);
-    expect(mentions[0]?.handle).toBe("cinatra-ai");
+    expect(mentions).toEqual([]);
   });
 
-  it("matches the first @<token> from multiple package references in one message", () => {
+  it("emits NO flat mention for multiple package references in one message", () => {
     const mentions = parseMentions(
       "Run @cinatra-ai/apollo-prospecting-agent then @cinatra-ai/contact-discovery-agent.",
     );
-    // Both `@cinatra-ai` instances are captured as separate raw mentions; both
-    // resolve to nothing → routing must fall through to broadcast for both.
-    expect(mentions.length).toBeGreaterThanOrEqual(1);
-    for (const m of mentions) {
-      expect(m.handle).toBe("cinatra-ai");
-    }
+    expect(mentions).toEqual([]);
   });
 
-  it("DOES match a real @handle when one is present alongside a package reference", () => {
-    // A user might mention an actual assistant AND reference a package by
-    // name in the same message. The parser MUST still capture the assistant
-    // mention; the resolver-layer fall-through only fires when EVERY raw
-    // mention resolves empty, not when some resolve.
+  it("emits ONLY the real flat handle when a mention sits alongside a package reference", () => {
     const mentions = parseMentions(
       "@cinatra please run @cinatra-ai/apollo-prospecting-agent on acme.com",
     );
-    // Two raw mentions: "cinatra" + "cinatra-ai". After resolveMentions(),
-    // "cinatra" resolves to the assistant, "cinatra-ai" does not — the
-    // resolver returns 1 mention, which is non-empty, so the broadcast
-    // fall-through correctly does NOT fire here.
-    const handles = mentions.map((m) => m.handle).sort();
-    expect(handles).toEqual(["cinatra", "cinatra-ai"]);
+    // The scoped ref no longer contaminates the flat feed — only `cinatra`.
+    expect(mentions.map((m) => m.handle)).toEqual(["cinatra"]);
   });
 
-  it("DOES NOT match @handles inside URLs (existing URL-safety contract, preserved)", () => {
-    // Regression cross-check with the existing parse-mentions URL safety
-    // contract: this test exists so a future "broaden parser" fix can't
-    // accidentally reintroduce URL false-positives without failing here.
-    const mentions = parseMentions(
-      "Check https://www.youtube.com/@theericriesshow.",
+  it("still excludes @handles inside URLs (URL-safety contract preserved)", () => {
+    const mentions = parseMentions("Check https://www.youtube.com/@theericriesshow.");
+    expect(mentions).toEqual([]);
+  });
+});
+
+describe("tokenizeMentions — scoped vs flat lexing (AC#1)", () => {
+  it("lexes `@vendor/slug` as ONE scoped token with vendor + slug + packageRef", () => {
+    const tokens = tokenizeMentions(
+      "Use the @cinatra-ai/contact-discovery-agent to discover contacts.",
     );
-    expect(mentions).toHaveLength(0);
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]).toMatchObject({
+      kind: "scoped",
+      vendor: "cinatra-ai",
+      slug: "contact-discovery-agent",
+      packageRef: "@cinatra-ai/contact-discovery-agent",
+      handle: "contact-discovery-agent",
+    });
+    // Never a flat `cinatra-ai` alongside it.
+    expect(tokens.filter((t) => t.kind === "flat")).toHaveLength(0);
+  });
+
+  it("distinguishes a flat handle from a scoped ref in the same message", () => {
+    const tokens = tokenizeMentions(
+      "@cinatra please run @cinatra-ai/apollo-prospecting-agent",
+    );
+    expect(tokens.map((t) => t.kind)).toEqual(["flat", "scoped"]);
+    expect(tokens[0]).toMatchObject({ kind: "flat", handle: "cinatra" });
+    expect(tokens[1]).toMatchObject({ kind: "scoped", packageRef: "@cinatra-ai/apollo-prospecting-agent" });
+  });
+
+  it("preserves offsets/lengths for both kinds", () => {
+    const content = "hi @gemini and @cinatra-ai/x";
+    const tokens = tokenizeMentions(content);
+    for (const t of tokens) {
+      expect(content.slice(t.offset, t.offset + t.length)).toBe(t.raw);
+    }
   });
 });

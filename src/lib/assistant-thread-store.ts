@@ -64,8 +64,26 @@ export type AssistantThread = {
   title: string | null;
   /** A2A `contextId` continuity handle (epic #1037 §4/§5). */
   contextId: string | null;
+  /** Canonical thread BINDING (cinatra#1875 W2, AC#4): the registered assistant
+   *  PACKAGE that drives the thread (package-keyed, so the W1 registry reader's
+   *  audience gate resolves it directly). NULL == an unbound thread
+   *  (implicit-@cinatra, backward compatible). */
+  assistantPackage: string | null;
+  /** Canonical thread BINDING (cinatra#1875 W2, AC#4): the OPTIONAL project/site
+   *  instance the binding is scoped to, carried into dispatch context. NULL when
+   *  the binding is not instance-scoped. */
+  instanceId: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+/** The canonical per-thread binding `{assistantPackage, instanceId?}` (cinatra#1875
+ *  W2, AC#4). `assistantPackage` is the registered assistant package that drives
+ *  the thread; `instanceId` scopes the binding to a project/site instance when
+ *  present. Read/written at the thread seam the W1 registry reader supports. */
+export type AssistantThreadBinding = {
+  assistantPackage: string;
+  instanceId?: string | null;
 };
 
 /** Durable per-turn message content (cinatra#1037 P5.6 drop-history PR1 EXPAND):
@@ -98,6 +116,10 @@ export type CreateAssistantThreadInput = {
   projectId?: string | null;
   title?: string | null;
   contextId?: string | null;
+  /** Optional canonical binding at creation (cinatra#1875 W2, AC#4); usually
+   *  seeded/updated later via {@link bindAssistantThread}. */
+  assistantPackage?: string | null;
+  instanceId?: string | null;
 };
 
 export type AppendAssistantTurnInput = {
@@ -180,9 +202,19 @@ export function mapAssistantThreadRow(row: Record<string, unknown>): AssistantTh
     origin: toOriginOrNull(row.origin),
     title: toStringOrNull(row.title),
     contextId: toStringOrNull(row.context_id),
+    assistantPackage: toStringOrNull(row.assistant_package),
+    instanceId: toStringOrNull(row.instance_id),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
+}
+
+/** Extract the canonical binding from a thread record, or null when the thread is
+ *  unbound (no `assistantPackage`). Pure — the read-side twin of
+ *  {@link bindAssistantThread}. */
+export function threadBindingOf(thread: AssistantThread): AssistantThreadBinding | null {
+  if (!thread.assistantPackage) return null;
+  return { assistantPackage: thread.assistantPackage, instanceId: thread.instanceId };
 }
 
 /** Map a raw `assistant_turns` DB row to the typed record. Pure. Falls back to
@@ -225,9 +257,9 @@ export function createAssistantThread(input: CreateAssistantThreadInput): Assist
         // structured-native writer (assistant runtime). The legacy delete-all
         // wipe restricts to 'legacy-chat' rows, so a thread born here survives it.
         text: `INSERT INTO "${schema}"."assistant_threads"
-                 (id, assistant_user_id, owner_user_id, org_id, project_id, origin, title, context_id)
-               VALUES ($1, $2, $3, $4, $5, 'assistant-native', $6, $7)
-               RETURNING id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, created_at, updated_at`,
+                 (id, assistant_user_id, owner_user_id, org_id, project_id, origin, title, context_id, assistant_package, instance_id)
+               VALUES ($1, $2, $3, $4, $5, 'assistant-native', $6, $7, $8, $9)
+               RETURNING id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, created_at, updated_at`,
         values: [
           id,
           input.assistantUserId ?? null,
@@ -236,6 +268,8 @@ export function createAssistantThread(input: CreateAssistantThreadInput): Assist
           input.projectId ?? null,
           input.title ?? null,
           input.contextId ?? null,
+          input.assistantPackage ?? null,
+          input.instanceId ?? null,
         ],
       },
     ],
@@ -254,7 +288,7 @@ export function getAssistantThread(threadId: string): AssistantThread | null {
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, created_at, updated_at
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, created_at, updated_at
                FROM "${schema}"."assistant_threads" WHERE id = $1 LIMIT 1`,
         values: [threadId],
       },
@@ -272,7 +306,7 @@ export function listAssistantThreadsForOrg(orgId: string, limit = 50): Assistant
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, created_at, updated_at
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, created_at, updated_at
                FROM "${schema}"."assistant_threads"
                WHERE org_id = $1
                ORDER BY updated_at DESC, id
@@ -303,7 +337,7 @@ export function listAssistantThreadsForOrgVisibleTo(
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, created_at, updated_at
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, created_at, updated_at
                FROM "${schema}"."assistant_threads"
                WHERE org_id = $1
                  AND (owner_user_id = $2 OR assistant_user_id = $2)
@@ -332,7 +366,7 @@ export function getAssistantThreadByTeamId(teamId: string): AssistantThread | nu
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, created_at, updated_at
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, created_at, updated_at
                FROM "${schema}"."assistant_threads"
                WHERE team_id = $1
                ORDER BY updated_at DESC, id
@@ -358,6 +392,36 @@ export function touchAssistantThread(threadId: string): void {
       },
     ],
   });
+}
+
+/** Persist the canonical BINDING `{assistantPackage, instanceId?}` on a thread
+ *  (cinatra#1875 W2, AC#4). Sets `assistant_package` + `instance_id` and bumps
+ *  `updated_at`. `instanceId` omitted/undefined clears the instance scope (NULL);
+ *  pass an explicit value to scope the binding. The write-side twin the W3 route
+ *  seeds; dispatch reads it back via {@link readAssistantThreadBinding}. */
+export function bindAssistantThread(threadId: string, binding: AssistantThreadBinding): void {
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `UPDATE "${schema}"."assistant_threads"
+               SET assistant_package = $1, instance_id = $2, updated_at = now()
+               WHERE id = $3`,
+        values: [binding.assistantPackage, binding.instanceId ?? null, threadId],
+      },
+    ],
+  });
+}
+
+/** Read a thread's canonical binding, or null when the thread is absent or
+ *  unbound (no `assistant_package`). The read-side twin of
+ *  {@link bindAssistantThread}; dispatch consults it to carry the bound package
+ *  (+ instance) into the turn context. */
+export function readAssistantThreadBinding(threadId: string): AssistantThreadBinding | null {
+  const thread = getAssistantThread(threadId);
+  return thread ? threadBindingOf(thread) : null;
 }
 
 /** Id namespace RESERVED for the legacy chat_threads write-through mirror
@@ -744,7 +808,7 @@ export function reconstructThreadPayload(threadId: string): Record<string, unkno
       // runner; SET TRANSACTION must precede the first query in the tx).
       { text: `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ`, values: [] },
       {
-        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, scalars, title, context_id, created_at, updated_at
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, scalars, title, context_id, assistant_package, instance_id, created_at, updated_at
                FROM "${schema}"."assistant_threads" WHERE id = $1 LIMIT 1`,
         values: [threadId],
       },

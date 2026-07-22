@@ -25,8 +25,11 @@ import { betterAuthDb } from "@/lib/better-auth-db";
 import { sql } from "drizzle-orm";
 import { runDeterministicLlmTask } from "@cinatra-ai/llm";
 import { readLocalPackageSkillContent } from "@cinatra-ai/skills";
-import { parseMentions, resolveMentions, resolveBuiltInCinatraAssistantUserId } from "./mentions";
-import type { ChatThread, Mention } from "./types";
+import { classifyMentions } from "./classify-mentions";
+import { buildAudienceRoutingContext } from "./server-audience-resolver";
+import { decideMessageRouting } from "./route-decision";
+import type { MessageRoutingResult } from "./chat-routing";
+import type { ChatThread } from "./types";
 
 // Chat prompt-window HITL extraction skill, loaded once at module init
 // (synchronous; matches the mcp-instructions pattern). Static LLM instructions
@@ -346,23 +349,32 @@ export async function renameChatThread(threadId: string, newTitle: string): Prom
   });
 }
 
-// Handles that bypass webhook delivery and respond via a dedicated built-in
-// endpoint. Keep in sync with BUILT_IN_HANDLES in
-// packages/chat/src/mcp/handlers.ts. Only current built-in chat handles are
-// routed here.
-const BUILT_IN_HANDLES = new Set(["chatgpt"]);
-
-const BUILT_IN_ENDPOINTS: Record<string, string> = {
-  chatgpt: "/api/assistants/chatgpt",
-};
-
 /**
- * Resolve whether the Cinatra LLM should respond to this message.
+ * Resolve whether — and how — a message dispatches to assistants.
  *
- * - Explicit @mentions to external (non-@cinatra) assistants → skip LLM
- * - Explicit @mentions to built-in assistants (e.g. @chatgpt) → shouldCallLlm: true, chatEndpoint set
- * - No explicit @mention + thread has tagged participants → broadcast to all non-paused
- * - Otherwise → call LLM only
+ * DECLARATION-DRIVEN (cinatra#1875 W2, Epic #1873 — AC#2). This is the retirement
+ * site of the hardcoded `chatgpt`/`gemini` routing: the message's mention tokens
+ * are CLASSIFIED against the actor's AUDIENCE-FILTERED registry (`classifyMentions`
+ * over the W1 reader — a forged out-of-audience mention never classifies as an
+ * assistant), then the classified assistants are PLANNED by their DECLARED
+ * delivery channel (`decideMessageRouting` → `planAssistantDispatch`). An
+ * assistant dispatches because it is a REGISTERED, IN-AUDIENCE assistant with a
+ * DECLARED delivery — never because its handle matches a built-in table.
+ *
+ * Ruling (Epic #1873 plan-of-record, 2026-07-21): there is no built-in assistant
+ * class and no `@chatgpt` token — the former `@chatgpt` route is GONE, so an
+ * `@chatgpt` mention is now an HONEST NO-RESPONDER (delisted; it neither streams
+ * nor hangs). The OpenAI assistant returns as the `@openai` connector-backed
+ * package in W6. @cinatra remains the implicit host default (byte-parity).
+ *
+ * Routing outcomes (see `decideMessageRouting`):
+ *   - a DECLARED host-runtime assistant → in-band AG-UI stream, attributed to its
+ *     own principal (`hostRuntimeMention`);
+ *   - a DECLARED webhook/mcp-poll assistant → persisted pending (`externalMentions`),
+ *     the connector delivers out of band;
+ *   - @cinatra / no mention → the host Cinatra reply;
+ *   - tagged participants (no explicit assistant mention) → broadcast;
+ *   - an @-token that resolves to no in-audience assistant → honest no-responder.
  */
 export async function resolveMessageRouting(
   message: string,
@@ -375,79 +387,19 @@ export async function resolveMessageRouting(
     pausedParticipants: string[];
     handleMap: Record<string, string>;
   },
-): Promise<{ shouldCallLlm: boolean; activeHandle?: string; externalMentions?: Mention[]; isBroadcast?: boolean; chatEndpoint?: string; builtInMention?: Mention; hostAssistantUserId?: string }> {
-  // Parse explicit @mentions — explicit always wins over broadcast.
-  const rawMentions = parseMentions(message);
+): Promise<MessageRoutingResult> {
+  // ONE audience-scoped read: the classifier resolver, the delivery lookup, and
+  // the Cinatra host principal, all built from the W1 registry reader filtered to
+  // this actor's audience.
+  const { resolver, deliveryFor, cinatraHostId } = await buildAudienceRoutingContext();
 
-  if (rawMentions.length > 0) {
-    const resolved = await resolveMentions(rawMentions);
+  // Phase 1+2: lex the message and classify each token against the audience
+  // registry (an out-of-audience or unknown token never classifies as assistant).
+  const classified = await classifyMentions(message, resolver);
 
-    if (resolved.length > 0) {
-      const builtIn = resolved.find((m) => BUILT_IN_HANDLES.has(m.handle));
-      if (builtIn) {
-        // Built-in assistant: route to its dedicated AG-UI producer endpoint
-        // instead of the default Cinatra assistant endpoint.
-        // Its reply is attributed to the built-in principal (builtInMention), not Cinatra.
-        return {
-          shouldCallLlm: true,
-          activeHandle: builtIn.handle,
-          chatEndpoint: BUILT_IN_ENDPOINTS[builtIn.handle],
-          builtInMention: builtIn,
-        };
-      }
-      const external = resolved.filter((m) => m.handle !== "cinatra");
-      const allExternal = resolved.length > 0 && external.length === resolved.length;
-      const lastExternal = external[external.length - 1];
-      // When Cinatra replies (!allExternal), cinatra IS in `resolved` (allExternal
-      // is false only if a non-external handle — cinatra — is present). Attribute
-      // the host reply to that principal (P2.4).
-      const cinatraMention = resolved.find((m) => m.handle === "cinatra");
-      return {
-        shouldCallLlm: !allExternal,
-        activeHandle: lastExternal?.handle ?? "cinatra",
-        externalMentions: allExternal ? external : undefined,
-        ...(!allExternal && cinatraMention
-          ? { hostAssistantUserId: cinatraMention.assistantUserId }
-          : {}),
-      };
-    }
-
-    // resolved.length === 0: parser found `@…` but NONE resolved to an
-    // assistant. Could be human-only mentions, false-positive package
-    // refs like `@cinatra-ai/<slug>`, or unknown handles. Fall through to
-    // the no-mention broadcast branch below so `pausedParticipants` +
-    // `taggedAssistantUserIds` are honored. Returning early here caused a
-    // silent-reply bug.
-  }
-
-  // No explicit mention + broadcast context with tagged participants → broadcast.
-  const tagged = broadcastContext?.taggedAssistantUserIds ?? [];
-  const paused = broadcastContext?.pausedParticipants ?? [];
-  const handleMap = broadcastContext?.handleMap ?? {};
-
-  if (tagged.length > 0) {
-    const activeExternalIds = tagged.filter((id) => !paused.includes(id));
-    const externalMentions: Mention[] = activeExternalIds
-      .map((id): Mention | null => {
-        const handle = handleMap[id];
-        return handle ? { handle, assistantUserId: id, offset: 0, length: 0 } : null;
-      })
-      .filter((m): m is Mention => m !== null);
-
-    const cinatraPaused = paused.includes("cinatra");
-    // Broadcast: Cinatra also replies unless paused — attribute its reply (P2.4).
-    const hostId = cinatraPaused ? null : await resolveBuiltInCinatraAssistantUserId();
-    return {
-      shouldCallLlm: !cinatraPaused,
-      externalMentions: externalMentions.length > 0 ? externalMentions : undefined,
-      isBroadcast: true,
-      ...(hostId ? { hostAssistantUserId: hostId } : {}),
-    };
-  }
-
-  // Default: the host Cinatra assistant replies — attribute its reply (P2.4).
-  const hostId = await resolveBuiltInCinatraAssistantUserId();
-  return { shouldCallLlm: true, ...(hostId ? { hostAssistantUserId: hostId } : {}) };
+  // Pure decision: declared assistants → planner-driven dispatch; @cinatra host
+  // default + broadcast preserved byte-for-byte.
+  return decideMessageRouting({ classified, deliveryFor, cinatraHostId, broadcastContext });
 }
 
 /**

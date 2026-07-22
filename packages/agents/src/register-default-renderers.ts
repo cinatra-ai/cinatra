@@ -57,7 +57,6 @@ import {
   SKILL_SELECTOR_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
 } from "./agent-builder-ids";
-import { EmailTestDeliveryFormRenderer } from "./email-test-delivery-form-renderer";
 import { hasFieldRendererComponent } from "./field-renderer-components";
 import { makeExtensionFieldRenderer } from "./extension-field-renderer";
 
@@ -184,7 +183,16 @@ const RENDERER_KIND_TABLE: Record<
   // final-list-review / scrape-schema-review / linkedin-draft-review /
   // wordpress-draft-confirm above.
   "skill-recommend": { renderer: SchemaOnlyFloorRenderer },
-  "test-delivery-input": { renderer: EmailTestDeliveryFormRenderer },
+  // MIGRATED (cinatra#1958, S8 successor of #1625): the pure snapshot->onChange
+  // test-delivery input form COMPONENT moved into @cinatra-ai/email-artifacts
+  // (src/renderers/test-delivery-input.tsx), declared there with declaredBy=
+  // email-artifacts. The KIND stays (the manifest still declares it —
+  // kind-vocabulary set-equality), but the host ships no component: a bundled
+  // binding resolves map-first to the extension wrapper (hasFieldRendererComponent
+  // -> makeExtensionFieldRenderer), and a not-in-build binding of this kind
+  // degrades to the SchemaFieldRenderer floor here (AC4 never-blank). Same shape
+  // as final-list-review / skill-recommend above.
+  "test-delivery-input": { renderer: SchemaOnlyFloorRenderer },
   "wayflow-setup-form": { renderer: GroupedSetupFormRenderer },
   // MIGRATED (cinatra#1625 S8/M3): the blog-wordpress draft-confirm component
   // moved into @cinatra-ai/blog-wordpress-publish-agent. The KIND stays (the

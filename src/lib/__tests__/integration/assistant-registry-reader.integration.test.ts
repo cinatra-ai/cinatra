@@ -240,6 +240,45 @@ maybe("AC#5 — registry reader audience filter (live)", () => {
     expect(entries.map((e) => e.handle)).not.toContain("nodeclbot");
   });
 
+  it("projects the DECLARED delivery channel onto the visible entry (AC#2)", async () => {
+    await seedAssistant({
+      pkg: "@x/webhooked",
+      handle: "webhookbot",
+      declaration: { formatVersion: 1, assistant: { delivery: { kind: "webhook" } } },
+      audience: [{ kind: "workspace" }],
+    });
+    // The host stamps the RESOLVED declaration envelope
+    // `{ formatVersion, block, assistantConfig }`; the reader projects
+    // `block.delivery.kind` ONLY from a recognized-version envelope. Seed the
+    // complete stamped shape the finalize seam persists.
+    await admin.query(
+      `UPDATE "${schema}".installed_extension SET assistant_declaration=$1 WHERE package_name=$2`,
+      [
+        JSON.stringify({
+          formatVersion: 1,
+          block: {
+            abiVersion: 1,
+            displayName: "Webhooked",
+            preferredTag: "webhookbot",
+            persona: "x",
+            skillBundle: [],
+            launch: { kind: "local" },
+            delivery: { kind: "webhook" },
+          },
+          assistantConfig: {},
+        }),
+        "@x/webhooked",
+      ],
+    );
+    const entries = await reader.readAssistantRegistryForActor(ctx());
+    const e = entries.find((x) => x.handle === "webhookbot");
+    expect(e?.delivery).toBe("webhook");
+    // The builtin (no declaration) is the host-runtime default.
+    await seedBuiltinCinatra();
+    const withBuiltin = await reader.readAssistantRegistryForActor(ctx());
+    expect(withBuiltin.find((x) => x.handle === "cinatra")?.delivery).toBe("host-runtime");
+  });
+
   it("aliases are attached to the visible entry (sorted, deduped)", async () => {
     await seedAssistant({
       pkg: "@x/aliased",

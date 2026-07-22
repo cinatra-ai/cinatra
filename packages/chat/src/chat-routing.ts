@@ -10,20 +10,23 @@
 
 import type { Mention } from "./types";
 import type { UiMessage } from "./types";
+import { tokenizeMentions } from "./mention-tokenizer";
 
 /** Cinatra takeover delay while waiting for an external assistant's reply. */
 export const EXTERNAL_TAKEOVER_MS = 20_000;
 
 /**
- * Cheap synchronous mention count. resolveMessageRouting is async; this regex
- * check is sufficient to switch to Slack mode NOW — in the same synchronous
- * batch as setMessages — so the message is never rendered in normal
- * (right-aligned) mode. Applies to all messages (not just the first) to handle
- * human-user tags and built-in assistant tags (@chatgpt) that produce no
- * externalMentions.
+ * Cheap synchronous mention count. resolveMessageRouting is async; this check is
+ * sufficient to switch to Slack mode NOW — in the same synchronous batch as
+ * setMessages — so the message is never rendered in normal (right-aligned) mode.
+ * Applies to all messages (not just the first) to handle human-user tags and
+ * assistant tags that produce no externalMentions. Counts BOTH flat `@handle`
+ * and scoped `@vendor/slug` tokens via the shared tokenizer (cinatra#1875 W2
+ * AC#1) so the count matches the lexer the routing path uses — and no longer
+ * double-counts a scoped ref as its vendor + slug or mis-counts URL/email `@`s.
  */
 export function countMentions(text: string): number {
-  return (text.match(/@[a-z0-9_-]+/gi) ?? []).length;
+  return tokenizeMentions(text).length;
 }
 
 export function shouldEnterSlackModeOnSend(args: {
@@ -52,17 +55,40 @@ export function applyExternalMentionsToMessages(
 }
 
 /**
- * Attach the mention for a built-in assistant so assistantHandleMap resolves
- * its handle → name. Pure (prev) => next transform.
+ * Attach the mention for a host-runtime assistant (a declared assistant whose
+ * reply streams in-band, attributed to its own principal) so assistantHandleMap
+ * resolves its handle → name. Pure (prev) => next transform.
  */
-export function applyBuiltInMentionToMessages(
+export function applyHostRuntimeMentionToMessages(
   prev: UiMessage[],
   userMessageId: string,
-  builtInMention: Mention,
+  hostRuntimeMention: Mention,
 ): UiMessage[] {
   return prev.map((m) =>
-    m.id === userMessageId ? { ...m, mentions: [builtInMention] } : m,
+    m.id === userMessageId ? { ...m, mentions: [hostRuntimeMention] } : m,
   );
+}
+
+/**
+ * Attach a routing result's mention chips to the user message: the pending
+ * external (webhook/mcp-poll) mentions the connector polls, then the in-band
+ * host-runtime assistant's mention. These are mutually exclusive in practice (the
+ * routing decision returns at most one), so order is immaterial. Pure transform —
+ * shared by the send and edit paths.
+ */
+export function attachRoutingMentionsToMessage(
+  prev: UiMessage[],
+  userMessageId: string,
+  routing: MessageRoutingResult,
+): UiMessage[] {
+  let next = prev;
+  if (routing.externalMentions && routing.externalMentions.length > 0) {
+    next = applyExternalMentionsToMessages(next, userMessageId, routing.externalMentions);
+  }
+  if (routing.hostRuntimeMention) {
+    next = applyHostRuntimeMentionToMessages(next, userMessageId, routing.hostRuntimeMention);
+  }
+  return next;
 }
 
 /** Newly-tagged external assistant ids from a routing result's mentions. */
@@ -79,7 +105,10 @@ export type MessageRoutingResult = {
   externalMentions?: Mention[];
   isBroadcast?: boolean;
   chatEndpoint?: string;
-  builtInMention?: Mention;
+  /** A DECLARED host-runtime assistant whose reply STREAMS in-band (the
+   *  generalized former built-in path, cinatra#1875 W2 AC#2). Its turn is
+   *  attributed to the assistant's OWN principal (not Cinatra). */
+  hostRuntimeMention?: Mention;
   /** cinatra#1037 P2.4 (attribution, I4): the HOST Cinatra assistant's own
    *  principal id, set on every branch where Cinatra itself produces the reply
    *  (default / @cinatra / broadcast-with-Cinatra). Threaded onto the reply
@@ -119,9 +148,10 @@ export function resolveDispatchPlan(
     return {
       kind: "stream",
       endpoint: routing.chatEndpoint ?? "/api/assistants/chat",
-      // A built-in @-mention (@chatgpt) attributes to that assistant; otherwise
-      // the HOST Cinatra reply carries the Cinatra principal (P2.4 attribution).
-      authorUserId: routing.builtInMention?.assistantUserId ?? routing.hostAssistantUserId,
+      // A declared host-runtime assistant streams attributed to its own
+      // principal; otherwise the HOST Cinatra reply carries the Cinatra principal
+      // (P2.4 attribution).
+      authorUserId: routing.hostRuntimeMention?.assistantUserId ?? routing.hostAssistantUserId,
     };
   }
   // shouldCallLlm=false + isBroadcast=true is covered by the first branch;

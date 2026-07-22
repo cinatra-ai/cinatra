@@ -29,11 +29,14 @@ import {
   listAssistantThreadIdsWithDurableContent,
   assembleThreadPayloadFromParts,
   reconstructThreadPayload,
+  bindAssistantThread,
+  readAssistantThreadBinding,
+  threadBindingOf,
 } from "../assistant-thread-store";
 import type { AssistantThread, AssistantTurn } from "../assistant-thread-store";
 
 describe("pure row mappers", () => {
-  it("maps an assistant_threads row (nulls preserved, dates → ISO)", () => {
+  it("maps an assistant_threads row (nulls preserved, dates → ISO, binding carried)", () => {
     const created = new Date("2026-07-10T10:00:00.000Z");
     const t = mapAssistantThreadRow({
       id: "th1",
@@ -44,6 +47,8 @@ describe("pure row mappers", () => {
       origin: "legacy-chat",
       title: "My chat",
       context_id: "ctx1",
+      assistant_package: "@cinatra-ai/wordpress-assistant",
+      instance_id: "inst-42",
       created_at: created,
       updated_at: "2026-07-10T11:00:00.000Z",
     });
@@ -57,6 +62,8 @@ describe("pure row mappers", () => {
       origin: "legacy-chat",
       title: "My chat",
       contextId: "ctx1",
+      assistantPackage: "@cinatra-ai/wordpress-assistant",
+      instanceId: "inst-42",
       createdAt: "2026-07-10T10:00:00.000Z",
       updatedAt: "2026-07-10T11:00:00.000Z",
     });
@@ -71,6 +78,22 @@ describe("pure row mappers", () => {
   it("maps project_id to null when absent (ambient/legacy thread)", () => {
     const t = mapAssistantThreadRow({ id: "th2", created_at: "2026-07-10T10:00:00.000Z", updated_at: "2026-07-10T10:00:00.000Z" });
     expect(t.projectId).toBeNull();
+  });
+
+  it("an unbound thread maps the binding columns to null (AC#4)", () => {
+    const t = mapAssistantThreadRow({
+      id: "th2",
+      assistant_user_id: null,
+      owner_user_id: "u1",
+      org_id: null,
+      title: null,
+      context_id: null,
+      // assistant_package / instance_id absent → null
+      created_at: "2026-07-10T10:00:00.000Z",
+      updated_at: "2026-07-10T10:00:00.000Z",
+    });
+    expect(t.assistantPackage).toBeNull();
+    expect(t.instanceId).toBeNull();
   });
 
   it("maps an assistant_turns row and keeps the run pointer + principal + content", () => {
@@ -146,6 +169,8 @@ describe("query assembly", () => {
             org_id: "org1",
             title: null,
             context_id: null,
+            assistant_package: null,
+            instance_id: null,
             created_at: "2026-07-10T10:00:00.000Z",
             updated_at: "2026-07-10T10:00:00.000Z",
           },
@@ -164,8 +189,10 @@ describe("query assembly", () => {
     const q = call.queries[0];
     expect(q.text.toLowerCase()).toContain('insert into "app_test"."assistant_threads"');
     expect(q.text.toLowerCase()).toContain("returning");
-    // [id, assistantUserId, ownerUserId, orgId, projectId, title, contextId]
-    expect(q.values).toEqual(["th1", "au1", "u1", "org1", "proj1", null, null]);
+    // [id, assistantUserId, ownerUserId, orgId, projectId, title, contextId, assistantPackage, instanceId]
+    // Binding columns default to null at creation (seeded later by the W3 route);
+    // origin is stamped as the SQL literal 'assistant-native', not a bound param.
+    expect(q.values).toEqual(["th1", "au1", "u1", "org1", "proj1", null, null, null, null]);
   });
 
   it("appendAssistantTurn inserts thread_id/run_id/principal/role/status", () => {
@@ -262,6 +289,8 @@ const baseThread: AssistantThread = {
   origin: "legacy-chat",
   title: "My chat",
   contextId: null,
+  assistantPackage: null,
+  instanceId: null,
   createdAt: "2026-07-10T10:00:00.000Z",
   updatedAt: "2026-07-10T12:00:00.000Z",
 };
@@ -454,5 +483,133 @@ describe("reconstructThreadPayload (single snapshot-consistent read)", () => {
       { rows: [] },
     ]);
     expect(reconstructThreadPayload("th1")).toBeNull();
+  });
+});
+
+// cinatra#1875 W2, AC#4 — the canonical thread binding {assistantPackage,
+// instanceId?} round-trips through the store seam the W1 registry reader supports.
+describe("thread binding (AC#4)", () => {
+  beforeEach(() => runPostgresQueriesSync.mockReset());
+
+  function threadRow(over: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+    return {
+      id: "th1",
+      assistant_user_id: null,
+      owner_user_id: "u1",
+      org_id: "org1",
+      title: null,
+      context_id: null,
+      assistant_package: null,
+      instance_id: null,
+      created_at: "2026-07-10T10:00:00.000Z",
+      updated_at: "2026-07-10T10:00:00.000Z",
+      ...over,
+    };
+  }
+
+  it("threadBindingOf extracts the binding, or null when unbound", () => {
+    const bound = mapAssistantThreadRow(
+      threadRow({ assistant_package: "@cinatra-ai/drupal-assistant", instance_id: "inst-9" }),
+    );
+    expect(threadBindingOf(bound)).toEqual({
+      assistantPackage: "@cinatra-ai/drupal-assistant",
+      instanceId: "inst-9",
+    });
+    // A package with no instance scope: instanceId null.
+    const pkgOnly = mapAssistantThreadRow(
+      threadRow({ assistant_package: "@cinatra-ai/cinatra-assistant", instance_id: null }),
+    );
+    expect(threadBindingOf(pkgOnly)).toEqual({
+      assistantPackage: "@cinatra-ai/cinatra-assistant",
+      instanceId: null,
+    });
+    // Unbound thread → null (implicit-@cinatra default).
+    expect(threadBindingOf(mapAssistantThreadRow(threadRow()))).toBeNull();
+  });
+
+  it("bindAssistantThread writes assistant_package + instance_id and bumps updated_at", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [] }]);
+    bindAssistantThread("th1", {
+      assistantPackage: "@cinatra-ai/wordpress-assistant",
+      instanceId: "inst-42",
+    });
+    const q = runPostgresQueriesSync.mock.calls[0][0].queries[0];
+    expect(q.text.toLowerCase()).toContain('update "app_test"."assistant_threads"');
+    expect(q.text).toContain("assistant_package = $1");
+    expect(q.text).toContain("instance_id = $2");
+    expect(q.text).toContain("updated_at = now()");
+    expect(q.text).toContain("WHERE id = $3");
+    expect(q.values).toEqual(["@cinatra-ai/wordpress-assistant", "inst-42", "th1"]);
+  });
+
+  it("bindAssistantThread clears the instance scope to null when instanceId omitted", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [] }]);
+    bindAssistantThread("th1", { assistantPackage: "@cinatra-ai/cinatra-assistant" });
+    const q = runPostgresQueriesSync.mock.calls[0][0].queries[0];
+    expect(q.values).toEqual(["@cinatra-ai/cinatra-assistant", null, "th1"]);
+  });
+
+  it("bind → read round-trips the binding (write then read the persisted row)", () => {
+    // Write.
+    runPostgresQueriesSync.mockReturnValueOnce([{ rows: [] }]);
+    bindAssistantThread("th1", {
+      assistantPackage: "@cinatra-ai/wordpress-assistant",
+      instanceId: "inst-42",
+    });
+    // Read back the row the bind persisted (the SELECT returns the bound columns).
+    runPostgresQueriesSync.mockReturnValueOnce([
+      {
+        rows: [
+          threadRow({ assistant_package: "@cinatra-ai/wordpress-assistant", instance_id: "inst-42" }),
+        ],
+      },
+    ]);
+    const binding = readAssistantThreadBinding("th1");
+    expect(binding).toEqual({
+      assistantPackage: "@cinatra-ai/wordpress-assistant",
+      instanceId: "inst-42",
+    });
+  });
+
+  it("readAssistantThreadBinding returns null for an unbound thread", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [threadRow()] }]);
+    expect(readAssistantThreadBinding("th1")).toBeNull();
+  });
+
+  it("readAssistantThreadBinding returns null for an absent thread", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [] }]);
+    expect(readAssistantThreadBinding("nope")).toBeNull();
+  });
+
+  it("createAssistantThread can seed the binding at creation", () => {
+    runPostgresQueriesSync.mockReturnValue([
+      {
+        rows: [
+          threadRow({ assistant_package: "@cinatra-ai/drupal-assistant", instance_id: "inst-7" }),
+        ],
+      },
+    ]);
+    const t: AssistantThread = createAssistantThread({
+      id: "th1",
+      ownerUserId: "u1",
+      orgId: "org1",
+      assistantPackage: "@cinatra-ai/drupal-assistant",
+      instanceId: "inst-7",
+    });
+    expect(t.assistantPackage).toBe("@cinatra-ai/drupal-assistant");
+    expect(t.instanceId).toBe("inst-7");
+    const q = runPostgresQueriesSync.mock.calls[0][0].queries[0];
+    // [id, assistantUserId, ownerUserId, orgId, projectId, title, contextId, assistantPackage, instanceId]
+    expect(q.values).toEqual([
+      "th1",
+      null,
+      "u1",
+      "org1",
+      null,
+      null,
+      null,
+      "@cinatra-ai/drupal-assistant",
+      "inst-7",
+    ]);
   });
 });

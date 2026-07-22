@@ -15,6 +15,11 @@ import type { WidgetPrincipal } from "@/lib/assistant-runtime/widget-principal";
 import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
 import { resolveAssistantWidgetBinding, listAssistantWidgetBindings } from "@/lib/assistant-widget-handles";
 import {
+  isSelectedAssistantVisible,
+  sessionSelectorCaller,
+  widgetSelectorCaller,
+} from "@/lib/assistant-selector-audience";
+import {
   resolveWidgetStreamAgentUnion,
   widgetStreamRequestSource,
   reassertWidgetStreamGrantBeforeOboRun,
@@ -363,6 +368,24 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
   if (!assistantUserId) {
     return Response.json({ error: "Assistant not found" }, { status: 404, headers: corsHeaders });
   }
+
+  // AC#3 audience closure (cinatra#1875 W2). Site auth is NOT the installation's
+  // audience: the dual-token sequence proved the end user is a legit member of the
+  // bound org for this SITE, but the verified end user must ALSO be IN the
+  // assistant installation's audience. The widget principal is floored to `member`
+  // and carries its own cwu_-claim org, so its audience closes through the SAME
+  // registry-reader decision the browser selector uses (#1848). An out-of-audience
+  // end user 404-HIDES (opaque, real reason server-side only) and starts NO run.
+  if (!(await isSelectedAssistantVisible(assistantUserId, widgetSelectorCaller(widgetPrincipal)))) {
+    emitWidgetAuthAudit("assistant_chat_widget_out_of_audience", {
+      actor: widgetPrincipal.userId,
+      orgId: widgetPrincipal.orgId,
+      agentSlug: binding.agentSlug,
+      siteOrigin: verifiedOrigin,
+    });
+    return Response.json({ error: "Unknown assistant" }, { status: 404, headers: corsHeaders });
+  }
+
   const resolvedConfig = await resolveAssistantRuntimeConfigByPrincipal({
     assistantUserId,
     handle: binding.handle,
@@ -495,6 +518,19 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
     const resolvedHandles = await resolveAssistantHandles([handle]);
     const assistantUserId = resolvedHandles.get(handle);
     if (!assistantUserId) {
+      return Response.json({ error: "Assistant not found" }, { status: 404 });
+    }
+    // AC#3 audience closure (cinatra#1875 W2). The picker surfaces the caller's
+    // audience-visible set (the W1 reader); the chosen handle is re-resolved
+    // actor+audience-scoped HERE so a forged out-of-audience selection 404-hides
+    // instead of dispatching. The built-in @cinatra is always visible (the reader
+    // unions it); an installed assistant is gated by its audience grants.
+    if (
+      !(await isSelectedAssistantVisible(
+        assistantUserId,
+        sessionSelectorCaller(userId, sessionOrgId, platformRole),
+      ))
+    ) {
       return Response.json({ error: "Assistant not found" }, { status: 404 });
     }
     const resolved = await resolveAssistantRuntimeConfigByPrincipal({ assistantUserId, handle });

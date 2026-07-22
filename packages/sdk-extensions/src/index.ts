@@ -701,6 +701,7 @@ export type {
   HostExtensionActionGuardService,
   LlmProviderSurface,
   LlmProviderAdapterSurface,
+  LlmSkillDeliveryAdapterSurface,
 } from "./host-connector-services-contract";
 
 // LLM provider ADAPTER surface version (llm-providers S4 — cinatra#1715). The
@@ -709,6 +710,11 @@ export type {
 // non-capability value, like `LLM_PROVIDER_ABI_VERSION` and
 // `SDK_EXTENSIONS_ABI_VERSION`.
 export { LLM_PROVIDER_ADAPTER_ABI_VERSION } from "./host-connector-services-contract";
+
+// LLM SKILL-DELIVERY adapter surface version (llm-providers S4.x — cinatra#1964).
+// Author-facing like `LLM_PROVIDER_ADAPTER_ABI_VERSION`; the capability-id
+// constant stays host-fenced behind ./internal.
+export { LLM_SKILL_DELIVERY_ADAPTER_ABI_VERSION } from "./host-connector-services-contract";
 
 // Chat user-context contribution: a connector contributes pre-formatted chat
 // system-prompt sections through the generic capability registry (see the
