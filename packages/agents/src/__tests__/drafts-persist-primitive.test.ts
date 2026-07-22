@@ -116,11 +116,37 @@ const objectsMock = vi.hoisted(() => {
     classify: vi.fn(),
     typesList: vi.fn(),
   };
-  return { client, createDeterministicObjectsClient: vi.fn(() => client) };
+  return {
+    client,
+    createDeterministicObjectsClient: vi.fn(() => client),
+    createSessionObjectsClient: vi.fn(() => client),
+  };
 });
 vi.mock("@cinatra-ai/objects", () => ({
   createDeterministicObjectsClient: objectsMock.createDeterministicObjectsClient,
+  createSessionObjectsClient: objectsMock.createSessionObjectsClient,
 }));
+
+// ---------------------------------------------------------------------------
+// buildActorContextFromRun mock — the handler builds the run's OWNER
+// ActorContext (full team/project authority, #1625 posture) to read/update the
+// run's own objects, so a team/project-scoped pre-gate save stays visible.
+// ---------------------------------------------------------------------------
+const buildActorCtxMock = vi.hoisted(() => ({
+  buildActorContextFromRun: vi.fn(
+    async (run: { id: string; runBy: string | null; orgId: string }) => ({
+      principalType: run.runBy ? "HumanUser" : "InternalWorker",
+      principalId: run.runBy ?? `run:${run.id}`,
+      organizationId: run.orgId,
+      teamIds: [],
+      projectGrants: [],
+      projectIds: [],
+      authSource: "a2a",
+      policyVersion: "1.0",
+    }),
+  ),
+}));
+vi.mock("@/lib/authz/build-actor-context-from-run", () => buildActorCtxMock);
 
 // ---------------------------------------------------------------------------
 // field-renderer-bindings.server mock (the registry-derived allowed-package set)
@@ -455,6 +481,27 @@ describe("handleEmailOutreachInitialDraftsUpdate", () => {
     expect(objectsMock.client.update).not.toHaveBeenCalled();
   });
 
+  it("FAILS CLOSED on a registered-type object carrying NO per-recipient array key (malformed, not a phantom-empty ok)", async () => {
+    objectsMock.client.list.mockResolvedValue({
+      items: [
+        {
+          id: "obj-malformed",
+          type: "@cinatra-ai/campaigns:email-draft-bundle",
+          createdAt: "2026-07-20T00:00:00.000Z",
+          // Registered bundle type but NO array key at all (draftedEmails/
+          // sequence/followups/drafts/confirmedRecipients all absent). The
+          // permissive z.record schema admits this shape; the handler must NOT
+          // default it to an empty `draftedEmails` and return a phantom ok.
+          data: { cinatra_agent_run_id: RUN_ID, summary: "no array key at all" },
+        },
+      ],
+    });
+    const res = await withVerifiedRun(RUN_ID, () => invoke({ drafts: [] }));
+    expect(res).toHaveProperty("error");
+    expect((res as { error: string }).error).toMatch(/no draft-bundle object/);
+    expect(objectsMock.client.update).not.toHaveBeenCalled();
+  });
+
   it("persists the reviewed edits onto the run's latest draft-bundle row", async () => {
     objectsMock.client.list.mockResolvedValue({
       items: [
@@ -529,6 +576,28 @@ describe("handleEmailOutreachInitialDraftsUpdate", () => {
       objectId: "obj-fu",
       data: { sequence: [{ recipientEmail: "a@x.com", subject: "NEW", body: "B1", step: 1 }] },
     });
+  });
+
+  it("reads/updates through the run's OWNER ActorContext so team/project-scoped bundles stay visible (#1959 finding 3)", async () => {
+    objectsMock.client.list.mockResolvedValue({
+      items: [
+        {
+          id: "obj-team",
+          type: "@cinatra-ai/campaigns:email-draft-bundle",
+          createdAt: "2026-07-20T00:00:00.000Z",
+          data: { drafts: [{ id: "d1", recipientEmail: "a@x.com", subject: "OLD", body: "B1" }] },
+        },
+      ],
+    });
+    await withVerifiedRun(RUN_ID, () => invoke(editsInput));
+    // The objects client is built from the run's OWNER ActorContext (carrying the
+    // owner's team/project authority) — NOT the narrowed passthrough actor — so a
+    // team/project-scoped pre-gate save is admitted by buildOwnershipFilter and
+    // the runId-bounded read finds it (mirrors the #1625 test-delivery posture).
+    expect(buildActorCtxMock.buildActorContextFromRun).toHaveBeenCalledWith(
+      expect.objectContaining({ id: RUN_ID, runBy: OWNER_ID, orgId: ORG_ID }),
+    );
+    expect(objectsMock.createSessionObjectsClient).toHaveBeenCalled();
   });
 
   it("surfaces a run-access denial as a safe error", async () => {

@@ -40,8 +40,9 @@
 // Absent run context ⇒ fail closed.
 
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
-import { createDeterministicObjectsClient } from "@cinatra-ai/objects";
+import { createSessionObjectsClient } from "@cinatra-ai/objects";
 import { AuthzError, logAuditEvent, POLICY_VERSION, type AuditEventInput } from "@/lib/authz";
+import { buildActorContextFromRun } from "@/lib/authz/build-actor-context-from-run";
 import {
   readAgentRunById,
   readAgentTemplateById,
@@ -156,9 +157,12 @@ const BUNDLE_ARRAY_KEYS = [
 // The registered object types the pre-gate persist node writes (the DATA
 // contract this primitive operates on — an object-type id, NOT a package name,
 // so the core-extension-coupling-ban is preserved). A stored object of one of
-// these types IS this run's bundle even when its per-recipient array is empty
-// (a degenerate zero-recipient bundle), so it is recognized by type — never
-// misreported as "missing bundle" (corruption).
+// these types IS this run's bundle even when its per-recipient array is
+// present-but-empty (a degenerate zero-recipient bundle), so it is recognized
+// by type — never misreported as "missing bundle" (corruption). A type-matched
+// object carrying NO per-recipient array key at all is NOT a bundle shape and
+// fails closed (these types register a permissive `z.record` schema, so type
+// alone cannot vouch for shape).
 const CAMPAIGN_BUNDLE_TYPES = new Set<string>([
   "@cinatra-ai/campaigns:email-draft-bundle",
   "@cinatra-ai/campaigns:email-followup-bundle",
@@ -192,11 +196,17 @@ function pickLatestBundle(items: ObjEnvelope[]): { bundle: ObjEnvelope; arrayKey
   const candidates = items
     .filter((o) => o && typeof o === "object" && o.data && typeof o.data === "object")
     .map((o) => {
-      // A registered campaign-bundle type is recognized even when EMPTY
-      // (default the array key to `draftedEmails`); otherwise fall back to the
-      // non-empty draft-shape heuristic for untyped/back-compat rows.
+      // A registered campaign-bundle type is recognized when it carries a
+      // PRESENT per-recipient array key — an EMPTY array counts (a degenerate
+      // zero-recipient bundle: `Array.isArray([])` is true, so
+      // `firstPresentArrayKey` returns it). A registered-type object carrying NO
+      // array key at all resolves to null and fails closed as "missing/
+      // corruption" rather than being defaulted to an empty `draftedEmails` —
+      // that default would return a phantom `ok` for a malformed object under
+      // this permissive-schema type. Untyped/back-compat rows use the non-empty
+      // draft-shape heuristic.
       const arrayKey = CAMPAIGN_BUNDLE_TYPES.has(o.type)
-        ? firstPresentArrayKey(o.data) ?? "draftedEmails"
+        ? firstPresentArrayKey(o.data)
         : draftShapedArrayKey(o.data);
       return { o, arrayKey };
     })
@@ -375,11 +385,28 @@ export async function handleEmailOutreachInitialDraftsUpdate(
     // node's LLM step wrote the generated bundle BEFORE the approval gate, so the
     // row must exist; the EndNode's terminal output/artifact is now sourced from
     // THIS authoritative reviewed bundle (never the pre-gate generated draft), so
-    // every ok path must load and return it. The objects handlers apply per-row
-    // object.read authz under this actor.
-    const objects = createDeterministicObjectsClient({
-      actor: actor as unknown as Parameters<typeof createDeterministicObjectsClient>[0]["actor"],
+    // every ok path must load and return it.
+    //
+    // Read/update through the run's FULL OWNER ActorContext (teamIds,
+    // projectGrants, org/platform role), mirroring the #1625 test-delivery
+    // precedent — NOT the narrowed passthrough PrimitiveActorContext. The
+    // pre-gate `objects_save` scope-DERIVES the bundle's ownership from the run's
+    // OBO ceiling (deriveAgentRunScopeOwnership), so an agent_run-delegated save
+    // lands team/project/org-scoped, not necessarily user-owned. A read under the
+    // narrowed actor — which drops teamIds/projectGrants — would NOT match that
+    // row in buildOwnershipFilter (no team/project clause) and would fail closed
+    // as "missing bundle" for every team/project-scoped run (codex #1959 finding
+    // 3). The owner context sees every row the run owner can; the `runId` filter
+    // below bounds the read to THIS run's own objects (the same runId-bounded
+    // posture #1625 relies on). Per-row object.read/update authz still applies
+    // inside the objects handlers.
+    const ownerCtx = await buildActorContextFromRun({
+      id: run.id,
+      runBy: run.runBy,
+      orgId: run.orgId,
+      dependentInstallId: run.dependentInstallId ?? null,
     });
+    const objects = createSessionObjectsClient(ownerCtx);
     const listed = (await objects.list({ runId, limit: 500 })) as { items?: ObjEnvelope[] };
     const items = Array.isArray(listed.items) ? listed.items : [];
     const selected = pickLatestBundle(items);
