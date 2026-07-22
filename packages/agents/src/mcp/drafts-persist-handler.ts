@@ -225,13 +225,14 @@ const rowId = (r: Record<string, unknown>): string | null => {
   return typeof id === "string" && id.length > 0 ? id : null;
 };
 
-// The follow-up agent's reviewed document uses the follow-up digest heading
-// shape; every other drafts-review declaring package uses the per-recipient
-// draft-document shape. A package-name switch (not a hardcoded coupling — the
-// package is the run's own template.packageName) mirroring the two agents'
-// original LLM document formats (email-drafting-agent draft node / follow-up
-// node system prompts).
-const FOLLOWUP_DECLARING_PACKAGE = "@cinatra-ai/email-follow-up-agent";
+// The follow-up bundle's reviewed document uses the follow-up digest heading
+// shape; every other campaign draft-bundle uses the per-recipient draft-document
+// shape. Keyed off the run's own persisted bundle TYPE — a data-contract id, the
+// sanctioned cross-extension reference (already in CAMPAIGN_BUNDLE_TYPES above) —
+// never a hardcoded extension-instance package name, so the two agents' original
+// LLM document formats (drafting draft node / follow-up node system prompts) are
+// mirrored without coupling core to a specific extension.
+const FOLLOWUP_BUNDLE_TYPE = "@cinatra-ai/campaigns:email-followup-bundle";
 
 // The internal run-provenance fields objects_save stamps onto the bundle
 // (`cinatra_agent_run_id` set by the pre-gate LLM save; `cinatraAgentRunId`
@@ -249,9 +250,9 @@ const BUNDLE_PROVENANCE_KEYS = ["cinatra_agent_run_id", "cinatraAgentRunId"] as 
  */
 export function renderReviewedDocument(
   array: ReadonlyArray<Record<string, unknown>>,
-  packageName: string | null,
+  bundleType: string | null,
 ): string {
-  const isFollowup = packageName === FOLLOWUP_DECLARING_PACKAGE;
+  const isFollowup = bundleType === FOLLOWUP_BUNDLE_TYPE;
   const sections = array.map((row, i) => {
     const subject = typeof row.subject === "string" ? row.subject : "";
     const body = typeof row.body === "string" ? row.body : "";
@@ -466,7 +467,7 @@ export async function handleEmailOutreachInitialDraftsUpdate(
     // Markdown document. Returned on EVERY ok path (write, clean no-op, empty
     // edit set) so the terminal output never reverts to the pre-gate draft.
     const reviewedBundle = buildReviewedBundle(selected.bundle.data, selected.arrayKey, nextArray);
-    const reviewedDocument = renderReviewedDocument(nextArray, agentPackageName);
+    const reviewedDocument = renderReviewedDocument(nextArray, selected.bundle.type);
 
     return {
       ok: true,

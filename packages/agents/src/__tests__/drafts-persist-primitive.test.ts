@@ -326,7 +326,7 @@ describe("renderReviewedDocument", () => {
         { recipientId: "c1", recipientName: "Ada Lovelace", recipientEmail: "ada@x.com", subject: "Hi Ada", body: "Body A" },
         { recipientId: "c2", recipientName: "Alan Turing", recipientEmail: "alan@x.com", subject: "Hi Alan", body: "Body B" },
       ],
-      "@cinatra-ai/email-drafting-agent",
+      "@cinatra-ai/campaigns:email-draft-bundle",
     );
     expect(doc).toBe(
       "## Ada Lovelace\n**Subject:** Hi Ada\n\nBody A\n\n---\n" +
@@ -340,7 +340,7 @@ describe("renderReviewedDocument", () => {
         { recipientEmail: "only@x.com", subject: "S", body: "B" },
         { subject: "S2", body: "B2" },
       ],
-      "@cinatra-ai/email-drafting-agent",
+      "@cinatra-ai/campaigns:email-draft-bundle",
     );
     expect(doc).toContain("## only@x.com");
     expect(doc).toContain("## Recipient 2");
@@ -352,7 +352,7 @@ describe("renderReviewedDocument", () => {
         { recipientId: "follow-up-1", subject: "Bump 1", body: "FU A", followUpDay: 3 },
         { recipientId: "follow-up-2", subject: "Bump 2", body: "FU B", followUpDay: 7 },
       ],
-      "@cinatra-ai/email-follow-up-agent",
+      "@cinatra-ai/campaigns:email-followup-bundle",
     );
     expect(doc).toBe(
       "## Follow-up 1 (day 3)\n**Subject:** Bump 1\n\nFU A\n" +
