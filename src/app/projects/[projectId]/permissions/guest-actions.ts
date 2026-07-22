@@ -240,7 +240,7 @@ export async function inviteGuestByEmailAction(
         grantedBy: actorId,
         expiresAt,
       });
-      revalidatePath(`/projects/${projectId}/permissions`);
+      revalidatePath(`/projects/${projectId}/settings`);
       // An existing account has a login path already — no reset email.
       return {
         ok: true,
@@ -272,7 +272,7 @@ export async function inviteGuestByEmailAction(
       resetEmailSent = false;
     }
 
-    revalidatePath(`/projects/${projectId}/permissions`);
+    revalidatePath(`/projects/${projectId}/settings`);
     return {
       ok: true,
       guest: { userId: created.userId, email, name: null, existed: false },
@@ -298,7 +298,7 @@ export async function revokeGuestAction(
     // project_access), keyed per (subjectUserId, projectId) — unrelated
     // grants are untouched.
     await revokeCustomerAccess({ subjectUserId, projectId });
-    revalidatePath(`/projects/${projectId}/permissions`);
+    revalidatePath(`/projects/${projectId}/settings`);
     return { ok: true };
   } catch (err) {
     if (!(err instanceof AuthzError)) console.error("[guest-invite] revokeGuestAction failed", err);
