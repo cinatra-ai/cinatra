@@ -26,6 +26,8 @@ vi.mock("@/lib/auth-session", () => ({
 vi.mock("@/lib/projects-store", () => ({
   readProjectById: vi.fn(),
   readProjectCoOwners: vi.fn().mockResolvedValue([]),
+  // The archived-parity read (badge only) — default: not archived.
+  projectsDb: { execute: vi.fn().mockResolvedValue({ rows: [] }) },
 }));
 vi.mock("next/navigation", () => ({
   notFound: () => {
@@ -89,7 +91,35 @@ describe("project settings page RSC (#1733)", () => {
     expect(html).not.toMatch(/data-testid="access-combobox"/);
     expect(html).toMatch(/data-testid="project-sharing-panel"/);
     expect(html).toMatch(/data-testid="project-access-section"/);
+    // Not archived → no lifecycle badge.
+    expect(html).not.toMatch(/>Archived</);
     // The route-based subnav died with the standalone permissions page.
     expect(html).not.toMatch(/Permissions<\/a>/);
+  });
+
+  it("shows the Archived badge on an archived project (detail-header parity)", async () => {
+    const { default: SettingsPage } = await import("../page");
+
+    const { requireAuthSession } = await import("@/lib/auth-session");
+    (requireAuthSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      user: { id: OWNER },
+      session: { activeOrganizationId: ORG_A },
+    });
+    const projectsStore = (await import("@/lib/projects-store")) as unknown as {
+      readProjectById: ReturnType<typeof vi.fn>;
+      projectsDb: { execute: ReturnType<typeof vi.fn> };
+    };
+    projectsStore.readProjectById.mockResolvedValue(userOwnedProject);
+    projectsStore.projectsDb.execute.mockResolvedValueOnce({
+      rows: [{ archived_at: new Date("2026-01-01T00:00:00Z") }],
+    });
+
+    const ui = (await SettingsPage({
+      params: Promise.resolve({ projectId: userOwnedProject.id }),
+    } as never)) as ReactElement;
+    const html = renderToStaticMarkup(ui);
+
+    expect(html).toMatch(/>Archived</);
+    expect(html).toMatch(/data-testid="project-sharing-panel"/);
   });
 });

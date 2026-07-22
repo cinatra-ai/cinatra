@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { sql } from "drizzle-orm";
 
 import * as authSession from "@/lib/auth-session";
 const { requireAuthSession } = authSession;
@@ -9,12 +10,13 @@ import { AuthzError } from "@/lib/authz/errors";
 import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 // Re-exported from `@/lib/projects-store` so tests that mock the
 // surface keep working (see settings-page.test.tsx).
-import { readProjectById, readProjectCoOwners } from "@/lib/projects-store";
+import { projectsDb, readProjectById, readProjectCoOwners } from "@/lib/projects-store";
 import { CrumbContributions } from "@/components/crumb-contributions";
 
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
+import { LifecycleBadge } from "@/components/lifecycle-badge";
 import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import { AccessVsOwnershipNote } from "@/components/access-vs-ownership-note";
 import { ProjectPermissionsTabClient } from "../permissions/permissions-tab-client";
@@ -127,6 +129,22 @@ export default async function ProjectSettingsPage({ params }: Props) {
 
   const ownerLevel = assertOwnerLevel(project.ownerLevel);
 
+  // Archived parity with the detail header (`archived_at` lives outside the
+  // Drizzle binding — same raw read the detail page does): an admin changing
+  // access must SEE the project is archived. Best-effort — a failed read
+  // degrades to no badge, never a 500.
+  let archivedAt: Date | null = null;
+  try {
+    const schema = (process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra").replaceAll('"', '""');
+    const archivedResult = await projectsDb.execute<{ archived_at: Date | null }>(sql`
+      SELECT archived_at FROM "${sql.raw(schema)}"."projects" WHERE id = ${project.id}
+    `);
+    archivedAt = archivedResult.rows[0]?.archived_at ?? null;
+  } catch {
+    archivedAt = null;
+  }
+  const isArchived = archivedAt !== null;
+
   // Owner display info + Better Auth enrichment. Wrapped defensively so a
   // transient Better Auth outage degrades to "Unknown" rather than 500ing
   // the page.
@@ -194,9 +212,12 @@ export default async function ProjectSettingsPage({ params }: Props) {
         title={`Project settings — ${project.name}`}
         description="Choose who can access this project and manage its owners."
         actions={
-          <span data-testid="scope-badge">
-            <ScopeBadge level={ownerLevel} aria-label={`Ownership: ${ownerLevel}`} />
-          </span>
+          <div className="flex items-center gap-2">
+            {isArchived && <LifecycleBadge status="archived" />}
+            <span data-testid="scope-badge">
+              <ScopeBadge level={ownerLevel} aria-label={`Ownership: ${ownerLevel}`} />
+            </span>
+          </div>
         }
         divider={false}
       />
