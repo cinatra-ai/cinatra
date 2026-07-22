@@ -155,7 +155,7 @@
     {
       "packageName": "@cinatra-ai/email-artifacts",
       "repo": "cinatra-ai/email-artifacts",
-      "resolvedSha": "1b2eb4b8286301ffe8c30614a82c5447cef85725"
+      "resolvedSha": "74e4530acc997f5ab13b175f3208de9b76f1ac50"
     },
     {
       "packageName": "@cinatra-ai/email-connector",
