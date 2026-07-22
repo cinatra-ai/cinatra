@@ -68,7 +68,9 @@ export default async function DashboardsPage() {
           </Empty>
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {rows.map((row) => (
+            {rows.map((row) => {
+              const ownerName = ownerNameFor(row);
+              return (
               <Link
                 key={row.id}
                 href={`/dashboards/${row.id}`}
@@ -80,10 +82,10 @@ export default async function DashboardsPage() {
                       <CardTitle>{row.name}</CardTitle>
                       <ScopeBadge
                         level={row.ownerLevel as ScopeLevel}
-                        ownerName={ownerNameFor(row)}
+                        ownerName={ownerName}
                         aria-label={
-                          ownerNameFor(row)
-                            ? `Ownership: ${row.ownerLevel} — ${ownerNameFor(row)}`
+                          ownerName
+                            ? `Ownership: ${row.ownerLevel} — ${ownerName}`
                             : `Ownership: ${row.ownerLevel}`
                         }
                       />
@@ -95,7 +97,8 @@ export default async function DashboardsPage() {
                   </CardContent>
                 </Card>
               </Link>
-            ))}
+              );
+            })}
           </div>
         )}
       </PageContent>

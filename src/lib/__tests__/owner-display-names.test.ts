@@ -102,6 +102,23 @@ describe("readOwnerDisplayNames (#1905)", () => {
     expect(names.has(ownerNameKey("team", "t1"))).toBe(false);
   });
 
+  it("binds ids via the pg-array literal + ::text[] idiom (codex diff round)", async () => {
+    // Drizzle's sql tag spreads a raw JS array into ($1,$2)::text[], which
+    // Postgres REJECTS (42809) — the repo idiom binds ONE text param built by
+    // toPgTextArrayLiteral and casts it. Pin the shape, including quote
+    // escaping inside the literal.
+    h.execute.mockResolvedValue({ rows: [] });
+    await readOwnerDisplayNames([{ level: "team", id: 'a"b' }]);
+
+    expect(h.execute).toHaveBeenCalledTimes(1);
+    const text = sqlTextOf(h.execute.mock.calls[0][0]);
+    expect(text).toContain("::text[]");
+    const { toPgTextArrayLiteral } = await import("@/lib/pg-array");
+    const expectedLiteral = toPgTextArrayLiteral(['a"b']);
+    // The literal must ride as a bound param value (same JSON escaping).
+    expect(text).toContain(JSON.stringify(expectedLiteral).slice(1, -1));
+  });
+
   it("never throws — full outage yields an empty map", async () => {
     h.execute.mockRejectedValue(new Error("pg down"));
     const names = await readOwnerDisplayNames([
