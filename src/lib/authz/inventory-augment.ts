@@ -268,6 +268,10 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
 
   // ───── email ─────
   email_send: { resourceType: "connector_instance", action: "execute", status: "enforced" },
+  // Run-scoped drafts-review persist (#1959) — writes the reviewed per-recipient
+  // edits onto the run's own draft-bundle object under respondToHitl (update-tier)
+  // run authz; run + declaring package + actor are context-derived.
+  email_outreach_initial_drafts_update: { resourceType: "agent_run", action: "update", status: "enforced" },
   // Run-scoped test-delivery primitives (#1625). The send performs a
   // mutating outbound send under execute-tier run authz; parse_action is a
   // read-tier deterministic parse of the gate envelope + ledger send-count.

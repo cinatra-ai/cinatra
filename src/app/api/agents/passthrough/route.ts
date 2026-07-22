@@ -19,6 +19,10 @@ import {
   shapeTestDeliverySendInput,
   shapeTestDeliverySendResult,
 } from "./test-delivery-seam";
+import {
+  shapeDraftsReviewResumeInput,
+  isDraftsReviewFailureResult,
+} from "./drafts-review-seam";
 
 /**
  * Deterministic MCP-call passthrough for WayFlow.
@@ -84,6 +88,12 @@ const ALLOWED_TOOLS = new Set([
   // (a `skill` read scoped by the run's resolved actor authority), so it stays
   // in the GENERIC set and NOT in RUN_SCOPED_CONTEXT_TOOLS.
   "skills_installed_resolve_for_agent",
+  // Run-scoped drafts-review PERSIST primitive (cinatra#1959) — the re-entrant
+  // drafts / follow-ups gate's post-resume `apply` node dispatches this to write
+  // the operator's reviewed per-recipient edits onto the run's own draft-bundle
+  // object. Run + declaring package + actor are derived from the run-bound frame
+  // established below; a runId/campaign in the resume payload is IGNORED.
+  "email_outreach_initial_drafts_update",
 ]);
 
 // Tools that must execute inside an mcpRequestContextStorage frame carrying the
@@ -100,6 +110,9 @@ const RUN_SCOPED_CONTEXT_TOOLS = new Set<string>([
   // context-id-bound run row's a2aTaskId) as its ledger dedupe identity.
   "email_test_delivery_run_send",
   "email_test_delivery_parse_action",
+  // #1959 — persists the reviewed drafts onto the run's own draft-bundle object;
+  // reads verifiedRunScopeId from the frame (never the caller-supplied runId).
+  "email_outreach_initial_drafts_update",
 ]);
 
 type RequestBody = {
@@ -263,6 +276,16 @@ TOOL_INPUT_SHAPERS.objects_save = (raw, agentRunId) => {
 // gate's `envelopeJson` (the ApiNode cannot pass native id arrays — wayflowcore
 // stringifies json_body templates) and projects the send fields the handler reads.
 TOOL_INPUT_SHAPERS.email_test_delivery_run_send = (raw) => shapeTestDeliverySendInput(raw);
+
+// email-outreach drafts-review persist input shaping (cinatra#1959) — the pure
+// shaper lives in ./drafts-review-seam (zero-dep, unit-tested). It parses the
+// apply ApiNode's `resumePayloadJson`, unwraps the canonical attachment envelope,
+// and projects ONLY the per-recipient `drafts[]` the persist primitive consumes.
+// FAIL-CLOSED: a present-but-unparseable / unrecognized / wrong-typed payload
+// THROWS (the shaper-throw contract → HTTP 400, the ApiNode fails visibly) rather
+// than degrading to `{ drafts: [] }` and silently discarding approved edits.
+TOOL_INPUT_SHAPERS.email_outreach_initial_drafts_update = (raw) =>
+  shapeDraftsReviewResumeInput(raw);
 
 export async function POST(req: Request): Promise<Response> {
   if (!isAuthorizedBridgeRequest(req)) {
@@ -558,6 +581,21 @@ export async function POST(req: Request): Promise<Response> {
     ) {
       const shaped = shapeTestDeliverySendResult(input, result);
       if (shaped) return NextResponse.json(shaped);
+    }
+
+    // Fail-closed output extraction for the drafts-review apply node
+    // (cinatra#1959 gate #2). The apply ApiNode has an UNCONDITIONAL edge to the
+    // EndNode, so a handler error/`ok:false` envelope returned at HTTP 200 would
+    // let the run COMPLETE after a KNOWN persist failure (e.g. a missing pre-gate
+    // bundle, or a partial-match drop of the operator's approved edits). Convert
+    // it to a non-2xx here — before WayFlow extracts the node's declared outputs
+    // — so the apply node FAILS the run instead. Scoped to this tool; every other
+    // tool's error semantics are untouched.
+    if (
+      tool === "email_outreach_initial_drafts_update" &&
+      isDraftsReviewFailureResult(result)
+    ) {
+      return NextResponse.json(result, { status: 422 });
     }
 
     return NextResponse.json(result);

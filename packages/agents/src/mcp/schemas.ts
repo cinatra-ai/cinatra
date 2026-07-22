@@ -188,6 +188,29 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
         .describe("The gate's resolved userResponse envelope (a JSON string). Malformed/absent → action:'continue'."),
     }),
   },
+  "email_outreach_initial_drafts_update": {
+    description:
+      "Run-scoped persist of the operator's reviewed per-recipient draft edits (subject/body) onto THIS run's own draft-bundle object — the write the re-entrant drafts / follow-ups review gate's post-resume apply node dispatches. UPDATE-ONLY: the draft node pre-persists the generated bundle before the gate (design (a)), so a missing bundle at apply time is genuine corruption and fails closed. The run, its declaring agent package (restricted to packages that serve an email-drafts-review mid-run gate, resolved from the manifest), and the actor all come from the run-bound invocation context; a caller runId/campaign is ignored. Only callable from inside such a run (the deterministic pre-interrupt seam or an agent-run OBO frame); a bare chat/session call fails closed. On success returns { ok:true, runId, agentPackageName, objectId, matched, updated, reviewedBundle, reviewedDocument } (the authoritative reviewed content the EndNode terminal output/artifact is sourced from); a genuine persist gap (missing bundle, partial/unmatched edits) returns an { error } the passthrough surfaces as a non-2xx so the apply node fails the run.",
+    inputSchema: z.object({
+      drafts: z
+        .array(
+          z.object({
+            id: z.string().optional(),
+            recipientId: z.string().optional(),
+            recipientEmail: z.string().nullable().optional(),
+            subject: z.string().optional(),
+            body: z.string().optional(),
+            status: z.string().optional(),
+            followUpDay: z.number().optional(),
+          }),
+        )
+        .max(2000)
+        .optional()
+        .describe(
+          "Per-recipient edit rows matched to the run's draft-bundle rows by id then recipient email. Empty/absent = a benign no-op (operator approved with no edits).",
+        ),
+    }),
+  },
   "agent_run_stop": {
     description: "Stop a running agent run by ID. Marks the run as stopped in the database; the background job halts after its current step completes.",
     inputSchema: z.object({

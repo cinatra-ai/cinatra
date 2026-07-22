@@ -55,6 +55,7 @@ import {
 // the file-size ratchet). The send PORT, ledger store, and port types are
 // imported by that module, not here.
 import { handleEmailTestDeliveryRunSend, handleEmailTestDeliveryParseAction } from "./test-delivery-handlers";
+import { handleEmailOutreachInitialDraftsUpdate } from "./drafts-persist-handler";
 import { enqueueBackgroundJob } from "@/lib/background-jobs";
 import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import {
@@ -5613,6 +5614,11 @@ export function createAgentBuilderPrimitiveHandlers(): Record<
       handleEmailTestDeliveryRunSend(req as Parameters<typeof handleEmailTestDeliveryRunSend>[0]),
     email_test_delivery_parse_action: (req) =>
       handleEmailTestDeliveryParseAction(req as Parameters<typeof handleEmailTestDeliveryParseAction>[0]),
+    // run-scoped drafts-review PERSIST primitive (#1959) — run, declaring
+    // package, and actor context-derived; writes the reviewed per-recipient
+    // edits onto the run's own draft-bundle object (the drafts _list read's row).
+    email_outreach_initial_drafts_update: (req) =>
+      handleEmailOutreachInitialDraftsUpdate(req as Parameters<typeof handleEmailOutreachInitialDraftsUpdate>[0]),
     agent_run_resume: (req) =>
       handleAgentBuilderRunResume(req as Parameters<typeof handleAgentBuilderRunResume>[0]),
     agent_run_stop: (req) =>
