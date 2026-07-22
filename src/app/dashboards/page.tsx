@@ -9,6 +9,12 @@ import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from "@/components/ui/empty";
 import { buildDashboardActorFromSession } from "@/lib/dashboards/dashboard-actor";
 import { filterReadableDashboards } from "@/lib/dashboards/authz";
+import {
+  readOwnerDisplayNames,
+  ownerNameKey,
+  type OwnerNameLevel,
+  type OwnerRef,
+} from "@/lib/owner-display-names";
 import { resolveLiveExtensionPredicate } from "@/lib/dashboards/live-extension-oracle";
 import {
   listOrgDashboardRows,
@@ -34,6 +40,19 @@ export default async function DashboardsPage() {
       )
     : [];
 
+  // Owner display names for the ScopeBadges (#1905) — one batch read across
+  // all rows (≤1 query per level), degrading to level-only badges on failure.
+  const isOwnerNameLevel = (level: string): level is OwnerNameLevel =>
+    level === "user" || level === "team" || level === "organization";
+  const ownerRefs: OwnerRef[] = rows.flatMap((row) =>
+    isOwnerNameLevel(row.ownerLevel) ? [{ level: row.ownerLevel, id: row.ownerId }] : [],
+  );
+  const ownerNames = await readOwnerDisplayNames(ownerRefs);
+  const ownerNameFor = (row: (typeof rows)[number]): string | undefined =>
+    isOwnerNameLevel(row.ownerLevel)
+      ? ownerNames.get(ownerNameKey(row.ownerLevel, row.ownerId))
+      : undefined;
+
   return (
     <Main className="min-h-screen">
       <PageHeader title="Dashboards" description="Operator workspaces composed from extension-shipped portlets." />
@@ -49,7 +68,9 @@ export default async function DashboardsPage() {
           </Empty>
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {rows.map((row) => (
+            {rows.map((row) => {
+              const ownerName = ownerNameFor(row);
+              return (
               <Link
                 key={row.id}
                 href={`/dashboards/${row.id}`}
@@ -59,7 +80,15 @@ export default async function DashboardsPage() {
                   <CardHeader>
                     <div className="flex items-start justify-between gap-3">
                       <CardTitle>{row.name}</CardTitle>
-                      <ScopeBadge level={row.ownerLevel as ScopeLevel} />
+                      <ScopeBadge
+                        level={row.ownerLevel as ScopeLevel}
+                        ownerName={ownerName}
+                        aria-label={
+                          ownerName
+                            ? `Ownership: ${row.ownerLevel} — ${ownerName}`
+                            : `Ownership: ${row.ownerLevel}`
+                        }
+                      />
                     </div>
                     {row.description && <CardDescription>{row.description}</CardDescription>}
                   </CardHeader>
@@ -68,7 +97,8 @@ export default async function DashboardsPage() {
                   </CardContent>
                 </Card>
               </Link>
-            ))}
+              );
+            })}
           </div>
         )}
       </PageContent>

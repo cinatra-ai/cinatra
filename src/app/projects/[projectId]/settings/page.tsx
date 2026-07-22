@@ -11,6 +11,7 @@ import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 // Re-exported from `@/lib/projects-store` so tests that mock the
 // surface keep working (see settings-page.test.tsx).
 import { projectsDb, readProjectById, readProjectCoOwners } from "@/lib/projects-store";
+import { readOwnerDisplayName } from "@/lib/owner-display-names";
 import { CrumbContributions } from "@/components/crumb-contributions";
 
 import { Main } from "@/components/layout/main";
@@ -129,6 +130,10 @@ export default async function ProjectSettingsPage({ params }: Props) {
 
   const ownerLevel = assertOwnerLevel(project.ownerLevel);
 
+  // Owner display name for the badge (#1905) — covers team/org-owned
+  // projects, which the USER-only readProjectOwnerViews below cannot.
+  const ownerDisplayName = await readOwnerDisplayName(ownerLevel, project.ownerId);
+
   // Archived parity with the detail header (`archived_at` lives outside the
   // Drizzle binding — same raw read the detail page does): an admin changing
   // access must SEE the project is archived. Best-effort — a failed read
@@ -215,7 +220,15 @@ export default async function ProjectSettingsPage({ params }: Props) {
           <div className="flex items-center gap-2">
             {isArchived && <LifecycleBadge status="archived" />}
             <span data-testid="scope-badge">
-              <ScopeBadge level={ownerLevel} aria-label={`Ownership: ${ownerLevel}`} />
+              <ScopeBadge
+                level={ownerLevel}
+                ownerName={ownerDisplayName ?? undefined}
+                aria-label={
+                  ownerDisplayName
+                    ? `Ownership: ${ownerLevel} — ${ownerDisplayName}`
+                    : `Ownership: ${ownerLevel}`
+                }
+              />
             </span>
           </div>
         }

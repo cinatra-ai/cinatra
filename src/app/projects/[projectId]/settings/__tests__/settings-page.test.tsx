@@ -29,6 +29,10 @@ vi.mock("@/lib/projects-store", () => ({
   // The archived-parity read (badge only) — default: not archived.
   projectsDb: { execute: vi.fn().mockResolvedValue({ rows: [] }) },
 }));
+// Owner-name resolution (#1905) — default: unresolved (level-only badge).
+vi.mock("@/lib/owner-display-names", () => ({
+  readOwnerDisplayName: vi.fn().mockResolvedValue(null),
+}));
 vi.mock("next/navigation", () => ({
   notFound: () => {
     throw new Error("NEXT_NOT_FOUND");
@@ -95,6 +99,32 @@ describe("project settings page RSC (#1733)", () => {
     expect(html).not.toMatch(/>Archived</);
     // The route-based subnav died with the standalone permissions page.
     expect(html).not.toMatch(/Permissions<\/a>/);
+  });
+
+  it("names the owner in the badge when resolution succeeds (#1905)", async () => {
+    const { default: SettingsPage } = await import("../page");
+
+    const { requireAuthSession } = await import("@/lib/auth-session");
+    (requireAuthSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      user: { id: OWNER },
+      session: { activeOrganizationId: ORG_A },
+    });
+    const projectsStore = (await import("@/lib/projects-store")) as unknown as {
+      readProjectById: ReturnType<typeof vi.fn>;
+    };
+    projectsStore.readProjectById.mockResolvedValue(userOwnedProject);
+    const ownerNames = (await import("@/lib/owner-display-names")) as unknown as {
+      readOwnerDisplayName: ReturnType<typeof vi.fn>;
+    };
+    ownerNames.readOwnerDisplayName.mockResolvedValueOnce("Jane Doe");
+
+    const ui = (await SettingsPage({
+      params: Promise.resolve({ projectId: userOwnedProject.id }),
+    } as never)) as ReactElement;
+    const html = renderToStaticMarkup(ui);
+
+    expect(html).toContain("— Jane Doe");
+    expect(html).toMatch(/Ownership: user — Jane Doe/);
   });
 
   it("shows the Archived badge on an archived project (detail-header parity)", async () => {

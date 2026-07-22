@@ -9,6 +9,7 @@ import * as authSession from "@/lib/auth-session";
 const { requireAuthSession } = authSession;
 import { projectsDb, projects } from "@/lib/projects-store";
 import { betterAuthDb } from "@/lib/better-auth-db";
+import { readOwnerDisplayName } from "@/lib/owner-display-names";
 import { readProjectCoOwners } from "@/lib/project-co-owners-store";
 import { CrumbContributions } from "@/components/crumb-contributions";
 import { actorFromSession } from "@/lib/authz/build-actor-context";
@@ -203,26 +204,12 @@ export default async function ProjectDetailPage({ params }: Props) {
   const threadsCount = Number(threadsCountRes.rows[0]?.c ?? "0");
 
   // Owner + organization display names (best-effort — fall back to id on a
-  // Better Auth outage so the page stays renderable).
-  let ownerDisplayName: string | null = null;
+  // Better Auth outage so the page stays renderable). Owner-name resolution
+  // is the shared #1905 helper (also feeds the ScopeBadge); the tenant-org
+  // display name below is a separate concern (Overview portlet only).
+  const ownerDisplayName = await readOwnerDisplayName(ownerLevel, project.ownerId);
   let orgDisplayName: string | null = null;
   try {
-    if (ownerLevel === "user") {
-      const u = await betterAuthDb.execute<{ name: string | null; email: string | null }>(sql`
-        SELECT name, email FROM public."user" WHERE id = ${project.ownerId} LIMIT 1
-      `);
-      ownerDisplayName = u.rows[0]?.name ?? u.rows[0]?.email ?? null;
-    } else if (ownerLevel === "team") {
-      const t = await betterAuthDb.execute<{ name: string }>(sql`
-        SELECT name FROM public."team" WHERE id = ${project.ownerId} LIMIT 1
-      `);
-      ownerDisplayName = t.rows[0]?.name ?? null;
-    } else if (ownerLevel === "organization") {
-      const o = await betterAuthDb.execute<{ name: string }>(sql`
-        SELECT name FROM public."organization" WHERE id = ${project.ownerId} LIMIT 1
-      `);
-      ownerDisplayName = o.rows[0]?.name ?? null;
-    }
     if (project.organizationId) {
       const o = await betterAuthDb.execute<{ name: string }>(sql`
         SELECT name FROM public."organization" WHERE id = ${project.organizationId} LIMIT 1
@@ -230,7 +217,7 @@ export default async function ProjectDetailPage({ params }: Props) {
       orgDisplayName = o.rows[0]?.name ?? null;
     }
   } catch {
-    // Best-effort; leave names as null.
+    // Best-effort; leave the name null.
   }
 
   const isArchived = archivedAt !== null;
@@ -318,7 +305,15 @@ export default async function ProjectDetailPage({ params }: Props) {
         actions={
           <div className="flex items-center gap-2">
             {isArchived && <LifecycleBadge status="archived" />}
-            <ScopeBadge level={ownerLevel} aria-label={`Ownership: ${ownerLevel}`} />
+            <ScopeBadge
+              level={ownerLevel}
+              ownerName={ownerDisplayName ?? undefined}
+              aria-label={
+                ownerDisplayName
+                  ? `Ownership: ${ownerLevel} — ${ownerDisplayName}`
+                  : `Ownership: ${ownerLevel}`
+              }
+            />
             <Button asChild variant="outline">
               <Link href={`/projects/${encodeURIComponent(project.id)}/settings`}>
                 <Settings data-icon="inline-start" aria-hidden="true" />

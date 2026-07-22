@@ -33,11 +33,20 @@ export type ScopeLevel = "user" | "team" | "organization" | "workspace" | "proje
 
 export type ScopeBadgeProps = {
   level: ScopeLevel;
+  /**
+   * Resolved display name of the OWNING entity (cinatra#1905): renders
+   * "LEVEL — Name" inside the pill, the name in normal case. Ownership
+   * encoding stays in this one component — call sites resolve the name
+   * (see `@/lib/owner-display-names`) and pass it, never re-compose.
+   * Whitespace-only names are treated as absent (level-only badge).
+   */
+  ownerName?: string;
   className?: string;
   children?: React.ReactNode;
 } & Omit<React.ComponentProps<"span">, "children" | "className">;
 
-export function ScopeBadge({ level, className, children, ...props }: ScopeBadgeProps) {
+export function ScopeBadge({ level, ownerName, className, children, ...props }: ScopeBadgeProps) {
+  const name = ownerName?.trim();
   return (
     <span
       data-slot="scope-badge"
@@ -45,7 +54,15 @@ export function ScopeBadge({ level, className, children, ...props }: ScopeBadgeP
       className={cn(scopeBadgeVariants({ level }), className)}
       {...props}
     >
-      {children ?? level}
+      {children ??
+        (name ? (
+          <>
+            {level}
+            <span className="normal-case tracking-normal">— {name}</span>
+          </>
+        ) : (
+          level
+        ))}
     </span>
   );
 }
