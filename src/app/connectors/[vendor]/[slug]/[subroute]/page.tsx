@@ -51,8 +51,12 @@ import {
   resolveRuntimeConnectorCardRecord,
 } from "@/lib/extension-install-resolution";
 import { resolveVersionKeyedUiAction } from "@/lib/extension-version-keyed-serving";
-import { requiresRebuildState } from "@/lib/extension-schema-config";
+import {
+  requiresRebuildState,
+  filterSurfaceForLocalCliEligibility,
+} from "@/lib/extension-schema-config";
 import type { SchemaConfigSurface } from "@/lib/extension-schema-config";
+import { localCliEligible } from "@/lib/runtime-mode";
 import { SchemaConfigConnectorForm } from "@/components/extensions/schema-config-connector-form";
 import { ConnectorStatusProbeCard } from "@/components/extensions/connector-status-probe-card";
 import { SearchParamToast, type SearchParamToastConfig } from "@/components/search-param-toast";
@@ -243,6 +247,16 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
   const sharingSection = <ConnectionSharingSection packageId={packageId} />;
 
   if (render.kind === "schema-config") {
+    // SERVER-SIDE local-CLI eligibility gate (cinatra#1926). A `devPreviewOnly`
+    // select option — the connectors' dev/preview "Local CLI" connection mode —
+    // is STRIPPED from the surface here, before it ever reaches the client form,
+    // whenever this installation is not development-mode and not a preview
+    // installation. Decided server-side through the single `localCliEligible`
+    // helper (never a client-supplied value); an ineligible install never ships
+    // the option's value/label to the browser ("absent from the rendered DOM",
+    // not a client-side hide). Every downstream read (hydration, status probe,
+    // tab presence) operates on this same gated surface.
+    const surface = filterSurfaceForLocalCliEligibility(render.surface, localCliEligible());
     // Resolve the addressable install id so named actions / status probes can
     // POST to /api/extensions/{installId}/actions/...; when the connector isn't
     // installed/active for the actor's workspace, show an explicit Install /
@@ -274,7 +288,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     // install resolved above (proof of authorization for this render).
     const initialValues = await resolveSchemaConfigInitialValues(
       {
-        surface: render.surface,
+        surface,
         packageName: packageId,
         installId,
         isDefault: activeInstall?.isDefault,
@@ -290,14 +304,14 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
         },
       },
     );
-    const statusProbeActionId = findStatusProbeActionId(render.surface);
+    const statusProbeActionId = findStatusProbeActionId(surface);
     // A tabbed surface's tab row is page-header chrome (design §II — "the page
     // header and tablist stay at the Wide column"): the form renders it as a
     // `TabsListRow` whose etched rule replaces the header's own, so the header
     // divider is suppressed EXACTLY when that tab row actually renders (the
     // form renders — installId present — AND the surface declares tabs). The
     // Install/Activate CTA state keeps the header rule.
-    const hasTabs = !!render.surface.tabs && render.surface.tabs.length > 0;
+    const hasTabs = !!surface.tabs && surface.tabs.length > 0;
     const headerDivider = !(installId && hasTabs);
     if (statusProbeActionId) {
       // Model-A chrome (design/specs/app-connectors.html §II, "One connection"):
@@ -330,7 +344,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
             <SchemaConfigConnectorForm
               installId={installId}
               packageName={packageId}
-              surface={render.surface}
+              surface={surface}
               isAdmin={isAdmin}
               initialValues={initialValues}
               omitFieldKinds={["status-probe"]}
@@ -377,7 +391,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
           <SchemaConfigConnectorForm
             installId={installId}
             packageName={packageId}
-            surface={render.surface}
+            surface={surface}
             isAdmin={isAdmin}
             initialValues={initialValues}
             setupFooter={sharingSection}

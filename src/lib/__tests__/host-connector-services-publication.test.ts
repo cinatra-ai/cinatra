@@ -98,7 +98,7 @@ vi.mock("@/lib/nango-system", () => ({ getNangoStatus: () => ({ status: "connect
 vi.mock("@/lib/instance-secrets", () => ({ encryptSecret: (v: string) => v, decryptSecret: (v: string) => v }));
 vi.mock("@/lib/mcp-self-client", () => ({ buildAppMcpSelfClientHeaders: () => ({}) }));
 vi.mock("@/lib/instance-identity-store", () => ({ readInstanceIdentity: () => null }));
-vi.mock("@/lib/runtime-mode", () => ({ isAppDevelopmentMode: () => false }));
+vi.mock("@/lib/runtime-mode", () => ({ isAppDevelopmentMode: () => false, localCliEligible: () => false }));
 vi.mock("@/lib/notifications", () => ({ createNotification: async () => {} }));
 vi.mock("@/lib/openai-connection-store", () => ({
   readOpenAIConnection: () => ({}),
@@ -507,6 +507,12 @@ describe("transport-DI inversion services (cinatra#151 Stage 3)", () => {
 
     const runtimeMode = resolveSingle<HostRuntimeModeService>(svc.runtimeMode);
     expect(runtimeMode.isDevelopment()).toBe(false);
+    // cinatra#1926: the runtime-mode service ALSO carries the single local-CLI
+    // eligibility predicate the provider connectors consume for their
+    // server-side write rejection + transport resolution (never re-derived).
+    expect(
+      typeof (runtimeMode as unknown as { localCliEligible?: unknown }).localCliEligible,
+    ).toBe("function");
 
     const openai = resolveSingle<HostOpenAIConnectionService>(svc.openaiConnection);
     expect(typeof openai.readRowFromDatabase).toBe("function");

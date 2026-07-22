@@ -139,6 +139,19 @@ export type SelectOption = {
   label: string;
   /** Host-evaluated: only a platform admin may see/submit this option. */
   adminOnly?: boolean;
+  /**
+   * Host-evaluated (cinatra#1926): only a development-mode OR preview
+   * installation may see/submit this option — the single `localCliEligible`
+   * predicate. Unlike `adminOnly` (a CLIENT-side visibility filter against a
+   * host-provided flag), a `devPreviewOnly` option is stripped from the surface
+   * SERVER-SIDE before the form reaches the browser
+   * (`filterSurfaceForLocalCliEligibility`), so an ineligible installation never
+   * ships the option's value/label to the client at all — and each connector's
+   * write handler independently re-rejects the value server-side. The option
+   * gates the provider connectors' dev/preview "Local CLI" connection mode; the
+   * default `api` option carries no gate. PURE DATA.
+   */
+  devPreviewOnly?: boolean;
 };
 export type SelectField = {
   kind: "select";
@@ -787,11 +800,19 @@ function validateField(
           errors.push(`${optAt}: must be an object`);
           return;
         }
-        if (!rejectUnknownKeys(optRaw, new Set(["value", "label", "adminOnly"]), optAt, errors)) {
+        if (!rejectUnknownKeys(optRaw, new Set(["value", "label", "adminOnly", "devPreviewOnly"]), optAt, errors)) {
           return;
         }
         if (!str(optRaw.value) || !str(optRaw.label)) {
           errors.push(`${optAt}: requires string "value" and "label"`);
+          return;
+        }
+        // The `devPreviewOnly` gate (cinatra#1926) is a SECURITY flag — a
+        // malformed value must FAIL CLOSED at parse time, never be silently
+        // dropped (which would un-gate the local-CLI option). Only an exact
+        // boolean is accepted; any other defined value is rejected.
+        if (optRaw.devPreviewOnly !== undefined && typeof optRaw.devPreviewOnly !== "boolean") {
+          errors.push(`${optAt}: "devPreviewOnly" must be a boolean`);
           return;
         }
         if (seenValues.has(optRaw.value)) {
@@ -803,6 +824,7 @@ function validateField(
           value: optRaw.value,
           label: optRaw.label,
           ...(optRaw.adminOnly === true ? { adminOnly: true } : {}),
+          ...(optRaw.devPreviewOnly === true ? { devPreviewOnly: true } : {}),
         });
       });
       if (options.length === 0) return null;
@@ -1118,6 +1140,74 @@ export function collectHydrationKeySets(surface: SchemaConfigSurface): {
   // enforces secret-wins independently — belt and braces).
   for (const k of secretKeys) hydratableKeys.delete(k);
   return { hydratableKeys, secretKeys };
+}
+
+/**
+ * Strip every `devPreviewOnly` select option from a surface when the local-CLI
+ * connection mode is INELIGIBLE (cinatra#1926). This is the SERVER-SIDE gate the
+ * connector setup route applies before handing the surface to the client form, so
+ * an ineligible installation never ships the gated option's value/label to the
+ * browser — "absent from the rendered DOM", not a client-side hide.
+ *
+ * PURE (returns the same reference unchanged when nothing is gated, or when
+ * `eligible`): removes only gated OPTIONS; a `select` whose `defaultValue` was the
+ * removed option loses the stale default (so the renderer falls to the first
+ * surviving option); a `select` whose options are ALL gated is dropped entirely,
+ * and a tab left with no fields is dropped so no empty tab dangles. All other
+ * field kinds, keys, actions and tab order (Help still last) are untouched.
+ */
+export function filterSurfaceForLocalCliEligibility(
+  surface: SchemaConfigSurface,
+  eligible: boolean,
+): SchemaConfigSurface {
+  if (eligible) return surface;
+
+  let changed = false;
+  const filterField = (f: SchemaConfigField): SchemaConfigField | null => {
+    if (f.kind !== "select") return f;
+    const kept = f.options.filter((o) => o.devPreviewOnly !== true);
+    if (kept.length === f.options.length) return f;
+    changed = true;
+    // Every option gated → the field carries no valid choice; drop it.
+    if (kept.length === 0) return null;
+    const defaultSurvives =
+      f.defaultValue !== undefined && kept.some((o) => o.value === f.defaultValue);
+    const next: SelectField = { ...f, options: kept };
+    if (!defaultSurvives) delete next.defaultValue;
+    return next;
+  };
+  const filterList = (fields: SchemaConfigField[]): SchemaConfigField[] => {
+    const out: SchemaConfigField[] = [];
+    for (const f of fields) {
+      const nf = filterField(f);
+      if (nf) out.push(nf);
+    }
+    return out;
+  };
+
+  const fields = filterList(surface.fields);
+  const tabs = surface.tabs
+    ? surface.tabs
+        .map((t) => ({ ...t, fields: filterList(t.fields) }))
+        .filter((t) => t.fields.length > 0)
+    : undefined;
+
+  if (!changed) return surface;
+  // Explicitly REPLACE `fields`/`tabs` rather than spread-then-conditionally-add:
+  // if EVERY tab was stripped (all its fields gated away), a conditional add
+  // would leave `...surface`'s ORIGINAL (ungated) tabs in place — a fail-OPEN
+  // that would re-expose the gated option. So when the surface declared tabs,
+  // always overwrite them with the filtered set, dropping the key entirely when
+  // nothing survives.
+  const next: SchemaConfigSurface = { ...surface, fields };
+  if (surface.tabs) {
+    if (tabs && tabs.length > 0) {
+      next.tabs = tabs;
+    } else {
+      delete next.tabs;
+    }
+  }
+  return next;
 }
 
 /** The installer state for a connector whose UI cannot hot-install. */

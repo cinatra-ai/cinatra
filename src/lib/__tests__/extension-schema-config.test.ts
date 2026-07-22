@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { parseSchemaConfig, collectActionIds, requiresRebuildState } from "@/lib/extension-schema-config";
+import {
+  parseSchemaConfig,
+  collectActionIds,
+  requiresRebuildState,
+  filterSurfaceForLocalCliEligibility,
+} from "@/lib/extension-schema-config";
 
 describe("parseSchemaConfig (the schema-config vocabulary)", () => {
   it("parses the full primitive vocabulary", () => {
@@ -361,5 +366,196 @@ describe("parseSchemaConfig — field-kind vocabulary expansion (#782)", () => {
     ]) {
       expect(parseSchemaConfig({ fields: [field] }).ok, `${field.kind} must reject ${evil}`).toBe(false);
     }
+  });
+});
+
+describe("devPreviewOnly select option + filterSurfaceForLocalCliEligibility (cinatra#1926)", () => {
+  const connectionModeSurface = () => {
+    const r = parseSchemaConfig({
+      fields: [
+        {
+          kind: "select",
+          key: "connectionMode",
+          label: "Connect via",
+          defaultValue: "api",
+          options: [
+            { value: "api", label: "API" },
+            { value: "localCli", label: "Local CLI", devPreviewOnly: true },
+          ],
+        },
+      ],
+    });
+    if (!r.ok) throw new Error(`fixture failed to parse: ${r.errors.join(", ")}`);
+    return r.surface;
+  };
+
+  it("parses a devPreviewOnly option (retained as a boolean flag)", () => {
+    const surface = connectionModeSurface();
+    const field = surface.fields[0];
+    if (field.kind !== "select") throw new Error("expected select");
+    expect(field.options).toEqual([
+      { value: "api", label: "API" },
+      { value: "localCli", label: "Local CLI", devPreviewOnly: true },
+    ]);
+  });
+
+  it("rejects an unknown option key (fail-closed allowlist unchanged for other keys)", () => {
+    const r = parseSchemaConfig({
+      fields: [
+        {
+          kind: "select",
+          key: "s",
+          label: "S",
+          options: [{ value: "a", label: "A", onClick: "x()" }],
+        },
+      ],
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it("eligible=true returns the SAME surface reference (no stripping)", () => {
+    const surface = connectionModeSurface();
+    expect(filterSurfaceForLocalCliEligibility(surface, true)).toBe(surface);
+  });
+
+  it("eligible=false strips the devPreviewOnly option from the DOM-bound surface", () => {
+    const surface = connectionModeSurface();
+    const gated = filterSurfaceForLocalCliEligibility(surface, false);
+    expect(gated).not.toBe(surface);
+    const field = gated.fields[0];
+    if (field.kind !== "select") throw new Error("expected select");
+    expect(field.options).toEqual([{ value: "api", label: "API" }]);
+    // The non-gated default survives, so it is retained.
+    expect(field.defaultValue).toBe("api");
+    // Non-destructive: the original surface is untouched (pure).
+    const orig = surface.fields[0];
+    if (orig.kind !== "select") throw new Error("expected select");
+    expect(orig.options).toHaveLength(2);
+  });
+
+  it("drops a stale defaultValue when it pointed at the removed option", () => {
+    const r = parseSchemaConfig({
+      fields: [
+        {
+          kind: "select",
+          key: "s",
+          label: "S",
+          defaultValue: "gated",
+          options: [
+            { value: "keep", label: "Keep" },
+            { value: "gated", label: "Gated", devPreviewOnly: true },
+          ],
+        },
+      ],
+    });
+    if (!r.ok) throw new Error(r.errors.join(", "));
+    const gated = filterSurfaceForLocalCliEligibility(r.surface, false);
+    const field = gated.fields[0];
+    if (field.kind !== "select") throw new Error("expected select");
+    expect(field.options).toEqual([{ value: "keep", label: "Keep" }]);
+    expect(field.defaultValue).toBeUndefined();
+  });
+
+  it("strips devPreviewOnly options inside tabs and drops a tab left empty", () => {
+    const r = parseSchemaConfig({
+      fields: [{ kind: "text", key: "base", label: "Base" }],
+      tabs: [
+        {
+          id: "connection",
+          label: "Connection",
+          fields: [
+            {
+              kind: "select",
+              key: "connectionMode",
+              label: "Connect via",
+              defaultValue: "api",
+              options: [
+                { value: "api", label: "API" },
+                { value: "localCli", label: "Local CLI", devPreviewOnly: true },
+              ],
+            },
+          ],
+        },
+        {
+          // A tab whose ONLY field is an all-gated select is dropped entirely.
+          id: "cli",
+          label: "CLI",
+          fields: [
+            {
+              kind: "select",
+              key: "cliOnly",
+              label: "CLI only",
+              options: [{ value: "x", label: "X", devPreviewOnly: true }],
+            },
+          ],
+        },
+      ],
+    });
+    if (!r.ok) throw new Error(r.errors.join(", "));
+    const gated = filterSurfaceForLocalCliEligibility(r.surface, false);
+    expect(gated.tabs?.map((t) => t.id)).toEqual(["connection"]);
+    const field = gated.tabs![0].fields[0];
+    if (field.kind !== "select") throw new Error("expected select");
+    expect(field.options).toEqual([{ value: "api", label: "API" }]);
+  });
+
+  it("drops the tabs key ENTIRELY when EVERY tab is stripped (fail-closed — original ungated tabs never leak back)", () => {
+    const r = parseSchemaConfig({
+      fields: [{ kind: "text", key: "base", label: "Base" }],
+      tabs: [
+        {
+          // The surface's ONLY tab has a single all-gated select — it is dropped,
+          // leaving zero tabs. The filter must REMOVE the tabs key, not let the
+          // spread of the original surface re-expose the gated option.
+          id: "cli",
+          label: "CLI",
+          fields: [
+            {
+              kind: "select",
+              key: "cliOnly",
+              label: "CLI only",
+              options: [{ value: "x", label: "X", devPreviewOnly: true }],
+            },
+          ],
+        },
+      ],
+    });
+    if (!r.ok) throw new Error(r.errors.join(", "));
+    const gated = filterSurfaceForLocalCliEligibility(r.surface, false);
+    expect(gated.tabs).toBeUndefined();
+    // The gated option must not survive ANYWHERE in the serialized surface.
+    expect(JSON.stringify(gated)).not.toContain("devPreviewOnly");
+    expect(JSON.stringify(gated)).not.toContain('"cliOnly"');
+  });
+
+  it("REJECTS a non-boolean devPreviewOnly at parse time (security flag fails closed, never silently un-gated)", () => {
+    for (const bad of ["true", 1, "yes", null, {}]) {
+      const r = parseSchemaConfig({
+        fields: [
+          {
+            kind: "select",
+            key: "s",
+            label: "S",
+            options: [
+              { value: "a", label: "A" },
+              { value: "b", label: "B", devPreviewOnly: bad },
+            ],
+          },
+        ],
+      });
+      expect(r.ok, `devPreviewOnly=${JSON.stringify(bad)} must be rejected`).toBe(false);
+    }
+    // An explicit boolean `false` is valid (ungated) — the flag is simply absent.
+    const ok = parseSchemaConfig({
+      fields: [
+        {
+          kind: "select",
+          key: "s",
+          label: "S",
+          options: [{ value: "a", label: "A", devPreviewOnly: false }],
+        },
+      ],
+    });
+    expect(ok.ok).toBe(true);
   });
 });

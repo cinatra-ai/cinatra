@@ -72,7 +72,7 @@ import { getNangoStatus } from "@/lib/nango-system";
 import { encryptSecret, decryptSecret } from "@/lib/instance-secrets";
 import { buildAppMcpSelfClientHeaders } from "@/lib/mcp-self-client";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
-import { isAppDevelopmentMode } from "@/lib/runtime-mode";
+import { isAppDevelopmentMode, localCliEligible } from "@/lib/runtime-mode";
 import { createNotification } from "@/lib/notifications";
 // The per-instance connection use-gate seam (#975 Wave 3 prerequisite, epic
 // #978): published so the RELOCATED vendor connection clients gate credential
@@ -698,9 +698,19 @@ export function registerHostConnectorServices(): void {
   // publishes nothing here. The webhook HMAC verification is a generic
   // mechanism kept host-side (@cinatra-ai/webhooks verifyLegacyHmac).
 
+  // The runtime-mode service ALSO carries the single local-CLI eligibility
+  // predicate (cinatra#1926): the provider connectors resolve it here — via a
+  // local structural shape, never the SDK contract type — for their SERVER-SIDE
+  // config-write rejection and transport resolution, so the connector-side
+  // enforcement consumes the SAME `localCliEligible` helper the host setup route
+  // uses to strip the option, never an independent re-derivation. The extra
+  // member rides alongside the SDK `HostRuntimeModeService` contract (an
+  // intersection satisfies-check) so no SDK change is needed and a connector that
+  // predates it (calling only `isDevelopment`) is unaffected.
   register(svc.runtimeMode, {
     isDevelopment: isAppDevelopmentMode,
-  } satisfies HostRuntimeModeService);
+    localCliEligible,
+  } satisfies HostRuntimeModeService & { localCliEligible: () => boolean });
 
   register(svc.notifications, {
     create: createNotification,

@@ -1200,13 +1200,19 @@ function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
     const seenValues = new Set();
     options.forEach((opt, j) => {
       const optAt = `${at}.options[${j}]`;
-      if (!isObj(opt) || !rejectUnknownConfigKeys(opt, new Set(["value", "label", "adminOnly"]), optAt, errors)) {
+      if (!isObj(opt) || !rejectUnknownConfigKeys(opt, new Set(["value", "label", "adminOnly", "devPreviewOnly"]), optAt, errors)) {
         if (isObj(opt)) return;
         errors.push(`${optAt}: must be an object`);
         return;
       }
       if (!nonEmptyStr(opt.value) || !nonEmptyStr(opt.label)) {
         errors.push(`${optAt}: requires string "value" and "label"`);
+        return;
+      }
+      // cinatra#1926: the `devPreviewOnly` gate is a SECURITY flag — reject a
+      // malformed (non-boolean) value fail-closed rather than silently drop it.
+      if (opt.devPreviewOnly !== undefined && typeof opt.devPreviewOnly !== "boolean") {
+        errors.push(`${optAt}: "devPreviewOnly" must be a boolean`);
         return;
       }
       if (seenValues.has(opt.value)) {
