@@ -36,26 +36,28 @@ import "server-only";
 //     an unwired slot means archival genuinely cannot run in this worker — a
 //     fail-closed error, not a silent skip.
 //
-// SCOPE: the seam itself maps `organizationId == null` → "platform" (the claim
-// registry is scope-keyed and platform claims exist), so it is capable of a
-// platform-scoped retire. The DISPATCHER, however, currently fires this ONLY for
-// ORG-SCOPED rows (see `fireArtifactClaimArchivalForRow` in index.ts): the
-// "platform" uninstall scope archives assertions across EVERY org (no org
-// filter), a cross-org sweep whose destructive semantics are still unresolved
-// (cinatra#1454 remainder R1). The org-scoped path is scope-exact and safe.
+// SCOPE: the seam maps `organizationId == null` → "platform" (the claim registry
+// is scope-keyed and platform claims exist), so it can retire at platform scope.
+// The DISPATCHER (see `fireArtifactClaimArchivalForRow` in index.ts) fires the
+// scope-exact "org:<id>" scope for an org row, and the cross-org "platform" scope
+// for the NULL-org row ONLY once the OWNER-RULING gate (2026-07-22, groganz) has
+// confirmed no organization still has the extension installed — so, within the
+// process holding the install lock, the platform sweep does not wipe a coexisting
+// org install's assertions. (That lock is PROCESS-LOCAL — the shipped R4a
+// boundary — so cross-worker serialization is bounded, not strengthened here; see
+// the dispatcher header note in index.ts.)
 //
-// REPORTED REMAINDERS (cinatra#1454; codex convergence 2026-07-19 — owner/design
-// -gated, NOT silently dropped):
-//   R1 platform-scope (NULL-org) archive retirement — needs the cross-org
-//      "platform" archival semantics defined before wiring.
-//   R2 package-GLOBAL destructive paths (platform-admin hard-delete, forceDelete,
-//      purge) — need an ALL-SCOPES retirement primitive; not wired here.
-//   R3 RESTORE reactivation — once an org archive retires claims, restore only
-//      re-converges at the next boot via the install-anchor claim backstop, not
-//      synchronously. Immediate restore reactivation is a follow-up.
-//   R4 archive/install SERIALIZATION — archive/uninstall do not hold the install
-//      lifecycle lock, so a concurrent update could interleave with retirement; a
-//      lock/CAS/fence is a follow-up.
+// REMAINDER STATUS (cinatra#1454 / cinatra#1837):
+//   R1 platform-scope archive/restore — RESOLVED by the owner ruling 2026-07-22
+//      (groganz): the platform archive/restore REFUSES while any org still has
+//      the extension installed (naming those orgs for the migration list), else
+//      proceeds at the platform scope; restore is symmetric.
+//   R2 package-GLOBAL destructive paths (platform-admin hard-delete, forceDelete)
+//      — the ALL-SCOPES retirement primitive retires every ORG scope and still
+//      DEFERS the platform leg (a distinct destroy path, not the R1 legs).
+//   R3 RESTORE reactivation — SHIPPED (the reactivation seam below).
+//   R4 archive/install SERIALIZATION — SHIPPED (the install-lifecycle lock is
+//      held across archive/uninstall/restore).
 
 export interface ExtensionArtifactClaimArchivalInput {
   packageName: string;
@@ -125,8 +127,9 @@ export async function fireExtensionArtifactClaimArchival(
 // restore (the row stays archived, never active with dead claims). Co-located in
 // this module (not a separate file) so it adds no module to the locked route
 // graphs; the seam is still a DISTINCT set/fire pair with its own input shape.
-// A NULL-org (platform) restore DEFERS (R1, symmetric with the deferred platform
-// archive — nothing was retired at the platform scope to reactivate).
+// A NULL-org (platform) restore is symmetric with the ruled platform archive
+// (OWNER RULING 2026-07-22, groganz): the dispatcher refuses it while any org
+// still has the extension installed, else reactivates at the platform scope.
 // ---------------------------------------------------------------------------
 
 export interface ExtensionArtifactClaimReactivationInput {
@@ -249,4 +252,57 @@ export async function fireExtensionArtifactClaimArchivalAllScopes(
     );
   }
   await hook(input);
+}
+
+// ---------------------------------------------------------------------------
+// OPTIONAL org-name resolver seam (OWNER RULING 2026-07-22, groganz). The
+// platform-scope archive/restore refusal names the blocking organizations for
+// the administrator's migration list. The org IDs come straight from the
+// canonical store; the NAMES need the host (the betterAuth `organization`
+// table), injected via this globalThis slot — the same pattern as the claim
+// hooks above. Distinct from those: this seam is BEST-EFFORT, not fail-closed —
+// an unwired resolver, a thrown lookup, or a partial result simply leaves the
+// missing names absent ("name where resolvable"), so name resolution NEVER
+// fails the refusal closed (the id-only migration list is still actionable).
+// Co-located here (no new module) so it stays off the locked route graphs.
+// ---------------------------------------------------------------------------
+
+export type ExtensionArchiveOrgNameResolver = (
+  orgIds: string[],
+) => Map<string, string> | Promise<Map<string, string>>;
+
+const ORG_NAME_RESOLVER_SLOT = Symbol.for("cinatra.extensions.archiveOrgNameResolver.v1");
+type OrgNameResolverHolder = { resolver: ExtensionArchiveOrgNameResolver | null };
+function orgNameResolverHolder(): OrgNameResolverHolder {
+  const g = globalThis as unknown as Record<symbol, OrgNameResolverHolder | undefined>;
+  return (g[ORG_NAME_RESOLVER_SLOT] ??= { resolver: null });
+}
+
+/** Host wiring entry: inject the org-name resolver. Pass `null` to clear (tests). */
+export function setExtensionArchiveOrgNameResolver(
+  resolver: ExtensionArchiveOrgNameResolver | null,
+): void {
+  orgNameResolverHolder().resolver = resolver;
+}
+
+/**
+ * Resolve org ids → display names, BEST-EFFORT. An unwired resolver, an empty
+ * input, a thrown lookup, or a non-Map result all yield an empty/partial map;
+ * every unresolved id falls back to id-only at the call site. Never throws.
+ */
+export async function resolveExtensionArchiveOrgNames(
+  orgIds: string[],
+): Promise<Map<string, string>> {
+  const { resolver } = orgNameResolverHolder();
+  if (!resolver || orgIds.length === 0) return new Map();
+  try {
+    const result = await resolver(orgIds);
+    return result instanceof Map ? result : new Map();
+  } catch (err) {
+    console.warn(
+      `[artifact-claim-archival] org-name resolution failed (falling back to id-only migration list):`,
+      err instanceof Error ? err.message : err,
+    );
+    return new Map();
+  }
 }

@@ -79,6 +79,29 @@ describe("classifyRemovalFailure", () => {
       dependents: ["x"],
     });
   });
+
+  it("maps a PLATFORM artifact org-installs refusal to reason=org-installs, NAMING the orgs (id + name where resolvable)", () => {
+    // Owner ruling 2026-07-22 (groganz). Duck-typed on the stable code +
+    // .organizations (survives the server-action / package boundary).
+    const err = {
+      code: "PLATFORM_ARTIFACT_ORG_INSTALLS_PRESENT",
+      organizations: [{ id: "org-a", name: "Acme Inc" }, { id: "org-b" }],
+      message: "…",
+    };
+    expect(classifyRemovalFailure(err)).toEqual({
+      ok: false,
+      reason: "org-installs",
+      organizations: [{ id: "org-a", name: "Acme Inc" }, { id: "org-b" }],
+    });
+  });
+
+  it("falls SAFE to reason=error when the org-installs refusal carries no organizations", () => {
+    const err = { code: "PLATFORM_ARTIFACT_ORG_INSTALLS_PRESENT", organizations: [] };
+    expect(classifyRemovalFailure(err)).toEqual({ ok: false, reason: "error" });
+    // Malformed org entries (no id) are dropped; an all-malformed list is not actionable.
+    const malformed = { code: "PLATFORM_ARTIFACT_ORG_INSTALLS_PRESENT", organizations: [{ name: "X" }] };
+    expect(classifyRemovalFailure(malformed)).toEqual({ ok: false, reason: "error" });
+  });
 });
 
 describe("removalFailureCopy", () => {
@@ -117,5 +140,30 @@ describe("removalFailureCopy", () => {
     expect(copy.toLowerCase()).toContain("try again");
     // Never leaks technical detail.
     expect(copy).not.toMatch(/store|manifest|closure|canonical|stack/i);
+  });
+
+  it("names the blocking organizations (id + name) for reason=org-installs — the migration list", () => {
+    const r: RemovalActionResult = {
+      ok: false,
+      reason: "org-installs",
+      organizations: [{ id: "org-a", name: "Acme Inc" }, { id: "org-b" }],
+    };
+    const copy = removalFailureCopy(r, "archive", "Kanban Board");
+    expect(copy).toContain("Kanban Board");
+    expect(copy).toContain("Acme Inc (org-a)");
+    expect(copy).toContain("org-b"); // id-only fallback where the name is unresolved
+    expect(copy).toContain("2 organizations");
+    expect(copy).toContain("archive"); // operation verb
+    expect(copy).toContain("archive its own copy first");
+  });
+
+  it("uses singular grammar for a single blocking organization", () => {
+    const r: RemovalActionResult = {
+      ok: false,
+      reason: "org-installs",
+      organizations: [{ id: "org-solo", name: "Solo Org" }],
+    };
+    const copy = removalFailureCopy(r, "archive", "Kanban Board");
+    expect(copy).toContain("1 organization still has it installed");
   });
 });
