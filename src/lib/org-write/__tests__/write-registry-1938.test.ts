@@ -88,3 +88,27 @@ describe("org-write registry lockstep (#1938)", () => {
     }
   });
 });
+
+describe("per-function write-site ratchet + R4 seed (codex diff round)", () => {
+  it("each dashboards writer's drizzle write-site count matches its registry row", () => {
+    const src = readFileSync(MUTATION_SERVICE, "utf-8");
+    const parts = src.split(/export async function (\w+)/);
+    const counts = new Map<string, number>();
+    for (let i = 1; i < parts.length; i += 2) {
+      const body = parts[i + 1] ?? "";
+      counts.set(parts[i], (body.match(/\.(insert|update|delete)\(/g) ?? []).length);
+    }
+    for (const row of ORG_WRITE_REGISTRY.filter((e) => e.module === MUTATION_SERVICE)) {
+      expect(
+        counts.get(row.exportName),
+        `${row.exportName} write sites drifted — update the registry row deliberately`,
+      ).toBe(row.writeSites);
+    }
+  });
+
+  it("no entry is import-banned in S2 (the ban flips per-writer in S3 wiring)", () => {
+    for (const row of ORG_WRITE_REGISTRY) {
+      expect(row.importBanned).toBe(false);
+    }
+  });
+});

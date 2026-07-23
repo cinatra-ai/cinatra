@@ -34,6 +34,15 @@ export interface OrgWriteRegistryEntry {
   readonly orgIdExtractor: string;
   readonly storageReferences: readonly string[];
   readonly cascadeOwnership: CascadeOwnership;
+  /** Drizzle write sites inside THIS function's body (ratcheted by the
+   *  lockstep test — a new site inside a registered writer fails until the
+   *  row is deliberately updated). Only tracked where the source is scanned. */
+  readonly writeSites?: number;
+  /** R4 seed: when true, the boundary gate bans importing this entry point
+   *  outside its guarded wrapper. ALL FALSE in S2 — the writers are today's
+   *  legitimate product path; S3 flips each row as it wires through
+   *  guardOrgMutation (banning now would break the app, not protect it). */
+  readonly importBanned: boolean;
 }
 
 const DASHBOARDS_MODULE = "packages/dashboards/src/mutation-service.ts";
@@ -63,6 +72,7 @@ function dashboardsWriter(
   exportName: string,
   direct: readonly string[],
   twin: "upsert" | "delete",
+  writeSites: number,
 ): OrgWriteRegistryEntry {
   return {
     module: DASHBOARDS_MODULE,
@@ -75,26 +85,28 @@ function dashboardsWriter(
       ...(twin === "upsert" ? TWIN_UPSERT_TABLES : TWIN_DELETE_TABLES),
     ],
     cascadeOwnership: "block",
+    writeSites,
+    importBanned: false,
   };
 }
 
 export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
   // — dashboards mutation service (15 writers; all pair with the artifact twin) —
-  dashboardsWriter("createDashboard", ["dashboards"], "upsert"),
-  dashboardsWriter("updateDashboard", ["dashboards"], "upsert"),
-  dashboardsWriter("publishDashboard", ["dashboards", "dashboardRevisions"], "upsert"),
-  dashboardsWriter("archiveDashboard", ["dashboards"], "upsert"),
-  dashboardsWriter("upsertDashboardConfig", ["dashboards"], "upsert"),
-  dashboardsWriter("ensureOverview", ["dashboards"], "upsert"),
-  dashboardsWriter("createEntityDashboard", ["dashboards"], "upsert"),
-  dashboardsWriter("renameDashboard", ["dashboards"], "upsert"),
-  dashboardsWriter("deleteEntityDashboard", ["dashboards"], "delete"),
-  dashboardsWriter("materializeExtensionTemplate", ["dashboards"], "upsert"),
-  dashboardsWriter("materializeExtensionInstanceForProject", ["dashboards"], "upsert"),
-  dashboardsWriter("archiveExtensionDashboards", ["dashboards"], "upsert"),
-  dashboardsWriter("restoreExtensionDashboards", ["dashboards"], "upsert"),
-  dashboardsWriter("adoptExtensionDashboards", ["dashboards"], "upsert"),
-  dashboardsWriter("upgradeExtensionDashboards", ["dashboards"], "upsert"),
+  dashboardsWriter("createDashboard", ["dashboards"], "upsert", 1),
+  dashboardsWriter("updateDashboard", ["dashboards"], "upsert", 1),
+  dashboardsWriter("publishDashboard", ["dashboards", "dashboardRevisions"], "upsert", 2),
+  dashboardsWriter("archiveDashboard", ["dashboards"], "upsert", 1),
+  dashboardsWriter("upsertDashboardConfig", ["dashboards"], "upsert", 1),
+  dashboardsWriter("ensureOverview", ["dashboards"], "upsert", 1),
+  dashboardsWriter("createEntityDashboard", ["dashboards"], "upsert", 1),
+  dashboardsWriter("renameDashboard", ["dashboards"], "upsert", 1),
+  dashboardsWriter("deleteEntityDashboard", ["dashboards"], "delete", 1),
+  dashboardsWriter("materializeExtensionTemplate", ["dashboards"], "upsert", 2),
+  dashboardsWriter("materializeExtensionInstanceForProject", ["dashboards"], "upsert", 1),
+  dashboardsWriter("archiveExtensionDashboards", ["dashboards"], "upsert", 1),
+  dashboardsWriter("restoreExtensionDashboards", ["dashboards"], "upsert", 1),
+  dashboardsWriter("adoptExtensionDashboards", ["dashboards"], "upsert", 1),
+  dashboardsWriter("upgradeExtensionDashboards", ["dashboards"], "upsert", 3),
 
   // — the host-side twin itself (reached only through pairTwin; registered so
   //   the sweep can attribute its hand-written SQL builders) —
@@ -105,6 +117,7 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     orgIdExtractor: "ctx.orgId (copied verbatim from the dashboards row)",
     storageReferences: [...TWIN_UPSERT_TABLES, ...TWIN_DELETE_TABLES],
     cascadeOwnership: "inert-history",
+    importBanned: false,
   },
 
   // — agent-run lifecycle (canonical CAS entry point + delegated meta writer) —
@@ -115,6 +128,7 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     orgIdExtractor: "agent_runs.org_id (row-derived; NOT NULL)",
     storageReferences: ["agent_runs"],
     cascadeOwnership: "inert-history",
+    importBanned: false,
   },
   {
     module: "packages/agents/src/store.ts",
@@ -123,6 +137,7 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     orgIdExtractor: "agent_runs.org_id (row-derived)",
     storageReferences: ["agent_runs"],
     cascadeOwnership: "inert-history",
+    importBanned: false,
   },
 
   // — artifact substrate (postgres-sync world entry point) —
@@ -138,6 +153,7 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "graphiti_projection_outbox",
     ],
     cascadeOwnership: "inert-history",
+    importBanned: false,
   },
 
   // — organization furniture & lifecycle —
@@ -154,6 +170,56 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "dashboards",
     ],
     cascadeOwnership: "app-furniture",
+    importBanned: false,
+  },
+
+  // — better-auth org furniture (public schema; real FK cascades) —
+  {
+    module: "src/lib/auth.ts",
+    exportName: "registrationBootstrapTransaction",
+    capability: "membership.write",
+    orgIdExtractor: "created organization id (registration gate lock held)",
+    storageReferences: ["organization", "member", "session"],
+    cascadeOwnership: "db-cascade",
+    importBanned: false,
+  },
+  {
+    module: "src/app/teams/[teamId]/settings/member-actions.ts",
+    exportName: "teamMemberActions",
+    capability: "membership.write",
+    orgIdExtractor: "team.organizationId (advisory-locked per team)",
+    storageReferences: ["member", "invitation", "teamMember"],
+    cascadeOwnership: "db-cascade",
+    importBanned: false,
+  },
+  {
+    module: "src/app/teams/new/actions.ts",
+    exportName: "createTeamAction",
+    capability: "membership.write",
+    orgIdExtractor: "session-resolved organization id",
+    storageReferences: ["team", "teamMember"],
+    cascadeOwnership: "db-cascade",
+    importBanned: false,
+  },
+  {
+    module: "src/lib/assistant-agent-registration.ts",
+    exportName: "ensureBuiltinAssistantRegistration",
+    capability: "membership.write",
+    orgIdExtractor: "target organization id (builtin-assistant seed lock)",
+    storageReferences: ["member"],
+    cascadeOwnership: "db-cascade",
+    importBanned: false,
+  },
+
+  // — objects canonical history writer (raw-SQL world) —
+  {
+    module: "src/lib/object-history/canonical-writer.ts",
+    exportName: "canonicalObjectWriter",
+    capability: "content.write",
+    orgIdExtractor: "change-set org_id (threaded per emit)",
+    storageReferences: ["objects", "change_set", "object_change_event", "graphiti_projection_outbox"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
   },
 
   // — kernel-owned tables (S2's own entry points) —
@@ -164,6 +230,7 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     orgIdExtractor: "explicit request.orgId (authority-bound)",
     storageReferences: ["org_write_completion_ticket"],
     cascadeOwnership: "app-furniture",
+    importBanned: false,
   },
   {
     module: "packages/org-write-kernel/src/leases.ts",
@@ -172,6 +239,7 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     orgIdExtractor: "explicit input.orgId (archive transaction only)",
     storageReferences: ["org_archive_lease", "agent_runs"],
     cascadeOwnership: "app-furniture",
+    importBanned: false,
   },
 ];
 

@@ -165,6 +165,17 @@ describe("Better Auth schema parity (runtime ↔ migration)", () => {
     });
   });
 
+  it("declares the organization.archiveEpoch additionalField (archive S2, cinatra#1938)", () => {
+    expect(normalizedRuntime.organization.archiveEpoch).toEqual({
+      type: "number",
+      required: false,
+    });
+    expect(normalize(migrationSchema).organization.archiveEpoch).toEqual({
+      type: "number",
+      required: false,
+    });
+  });
+
   it("wires the username / twoFactor / admin / organization plugin columns", () => {
     expect(normalizedRuntime.user).toHaveProperty("username"); // username()
     expect(normalizedRuntime.user).toHaveProperty("twoFactorEnabled"); // twoFactor()

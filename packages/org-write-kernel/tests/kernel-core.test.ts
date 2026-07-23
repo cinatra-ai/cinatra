@@ -166,7 +166,7 @@ describe("live-attempt predicate (#1938, shared by leases AND authority)", () =>
   it("the SQL condition mirrors the predicate structure (single source)", () => {
     const cond = liveAttemptSqlCondition("r");
     expect(cond).toContain("r.execution_attempt_id IS NOT NULL");
-    expect(cond).toContain("r.execution_deadline_at IS NULL OR r.execution_deadline_at > now()");
+    expect(cond).toContain("r.execution_deadline_at IS NOT NULL AND r.execution_deadline_at > now()");
     expect(cond).toContain("'running','waiting_trigger'");
     expect(cond).toContain("r.status = 'pending_approval'");
     expect(cond).toContain("r.human_wait_attempt_id = r.execution_attempt_id");
@@ -223,5 +223,16 @@ describe("permit unforgeability (#1938, runtime WeakSet — codex r0 #4)", () =>
   it("permits are frozen values", () => {
     const permit = mintPermit(fields);
     expect(Object.isFrozen(permit)).toBe(true);
+  });
+});
+
+describe("null execution deadline is fail-closed (codex diff round)", () => {
+  it("a run with no deadline is never live — a bounded window needs a bound", () => {
+    expect(
+      isLiveAttempt(liveRow({ executionDeadlineAt: null }), NOW),
+    ).toBe(false);
+    const cond = liveAttemptSqlCondition("r");
+    expect(cond).toContain("r.execution_deadline_at IS NOT NULL");
+    expect(cond).not.toContain("execution_deadline_at IS NULL OR");
   });
 });

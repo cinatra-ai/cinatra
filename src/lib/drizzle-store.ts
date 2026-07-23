@@ -1756,6 +1756,37 @@ END $$` },
     // execution_attempt_id (edge-derived by the status CAS in
     // packages/agents/src/store.ts).
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS human_wait_attempt_id text` },
+    // cinatra#1938 (archive S2): archive-epoch lease rows — the bounded
+    // window an in-flight run gets when its org archives. Minted by the S6
+    // archive transaction via the kernel's snapshot SQL (shared live-attempt
+    // predicate); expiry copied from the run's own execution deadline. The
+    // (org_id, archive_epoch, run_id) uniqueness backs the snapshot's
+    // ON CONFLICT DO NOTHING idempotency.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."org_archive_lease" (
+  org_id               text NOT NULL,
+  archive_epoch        integer NOT NULL,
+  run_id               text NOT NULL,
+  execution_attempt_id text NOT NULL,
+  acquired_at          timestamptz NOT NULL DEFAULT now(),
+  expires_at           timestamptz NOT NULL,
+  PRIMARY KEY (org_id, archive_epoch, run_id)
+)` },
+    // cinatra#1938 (archive S2): single-use completion tickets — epoch-bound
+    // authorization to land one run output after archive. Unique idempotency
+    // key per org backs the atomic-consume semantics (same-key same-output
+    // replays are no-ops; different-output replays refuse).
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."org_write_completion_ticket" (
+  org_id               text NOT NULL,
+  archive_epoch        integer NOT NULL,
+  run_id               text NOT NULL,
+  execution_attempt_id text NOT NULL,
+  output_ref           text NOT NULL,
+  idempotency_key      text NOT NULL,
+  expires_at           timestamptz,
+  consumed_at          timestamptz,
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (org_id, idempotency_key)
+)` },
     // traces table: Postgres SpanExporter storage.
     // Composite PK (trace_id, span_id). attributes/events stored as jsonb.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."traces" (

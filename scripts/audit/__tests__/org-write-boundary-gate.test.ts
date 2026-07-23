@@ -48,7 +48,9 @@ describe("org-write-boundary-gate rules (#1938)", () => {
       "src/lib/some-writer.ts",
       'const permit = require("@cinatra-ai/org-write-kernel/src/permit");',
     );
-    expect(v).toHaveLength(1);
+    // Both R1 (deep subpath) and the opaque-access rule fire — correct: two
+    // independent boundaries are crossed by one require().
+    expect(v.map((x) => x.rule)).toContain("R1-deep-subpath");
     expect(v[0].kind).toBe("require");
   });
 
@@ -57,7 +59,7 @@ describe("org-write-boundary-gate rules (#1938)", () => {
       "src/lib/some-writer.ts",
       'const m = await import("@cinatra-ai/org-write-kernel/src/guard");',
     );
-    expect(v).toHaveLength(1);
+    expect(v.map((x) => x.rule)).toContain("R1-deep-subpath");
     expect(v[0].kind).toBe("dynamic");
   });
 
@@ -140,5 +142,40 @@ describe("org-write-boundary-gate rules (#1938)", () => {
     expect(edges).toHaveLength(1);
     expect(edges[0].isValueEdge).toBe(true);
     expect(edges[0].valueBindings).toEqual(["guardOrgMutation"]);
+  });
+});
+
+describe("opaque access forms are fail-closed (codex diff round)", () => {
+  it("a namespace import of the kernel root outside the allowlist is red", () => {
+    const v = check(
+      "src/lib/rogue-ns.ts",
+      'import * as kernel from "@cinatra-ai/org-write-kernel";',
+    );
+    expect(v.map((x) => x.rule)).toContain("R3-batch-unwrap-opaque");
+  });
+
+  it("a bare require() of the kernel root outside the allowlist is red", () => {
+    const v = check(
+      "src/lib/rogue-req.ts",
+      'const k = require("@cinatra-ai/org-write-kernel"); k.guardedBatchQueries;',
+    );
+    expect(v.map((x) => x.rule)).toContain("R3-batch-unwrap-opaque");
+  });
+
+  it("a namespace import of the authority module is red (mint reachable)", () => {
+    const v = check(
+      "src/lib/rogue-auth-ns.ts",
+      'import * as auth from "@/lib/org-write/authority";',
+    );
+    expect(v.map((x) => x.rule)).toContain("R2-system-mint-opaque");
+  });
+
+  it("named imports of unrestricted bindings stay green", () => {
+    expect(
+      check(
+        "src/lib/legit-consumer.ts",
+        'import { guardOrgMutation } from "@cinatra-ai/org-write-kernel";\nimport { verifySessionAuthority } from "@/lib/org-write/authority";',
+      ),
+    ).toEqual([]);
   });
 });

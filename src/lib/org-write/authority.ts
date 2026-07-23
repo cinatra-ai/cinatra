@@ -82,18 +82,35 @@ export function isVerifiedRunRef(value: unknown): value is VerifiedRunRef {
   return typeof value === "object" && value !== null && VERIFIED_RUN_REFS.has(value);
 }
 
-/** Narrow row projection the verifier needs (DI seam for tests). */
+/** Narrow row projection the verifier needs (DI seam for tests). The policy
+ *  columns ride along so the capability ceiling can consult them. */
 export interface RunRowForAuthority {
   readonly orgId: string;
   readonly status: string;
   readonly executionAttemptId: string | null;
   readonly executionDeadlineAt: Date | string | null;
   readonly humanWaitAttemptId: string | null;
+  /** agent_runs.authPolicy / oboCeiling snapshots (opaque here; evaluated by
+   *  the ceiling hook — S4 supplies the real evaluator). */
+  readonly authPolicy?: unknown;
+  readonly oboCeiling?: unknown;
 }
 
 export interface VerifyRunAuthorityDeps {
   readRunRow(runId: string): Promise<RunRowForAuthority | null>;
   nowMs(): number;
+  /**
+   * The run-capability CEILING (codex diff round): consulted IN ADDITION to
+   * the structural floor below — it can only restrict, never widen. S4 (the
+   * system-authority slice) wires the real authPolicy/oboCeiling evaluator;
+   * until a caller supplies one, the conservative default DENIES nothing
+   * beyond the floor but is an explicit, visible seam rather than an implicit
+   * grant. S2 has no production callers either way (dark slice).
+   */
+  evaluateRunCapabilityCeiling?(
+    row: RunRowForAuthority,
+    capability: OrgWriteCapability,
+  ): boolean;
 }
 
 /** Run capabilities: a verified live run may write content and land its own
@@ -127,11 +144,15 @@ export async function verifyRunAuthority(
       "run is not inside a live attempt (parked, pre-dispatch, expired, or terminal)",
     );
   }
+  const ceiling = deps.evaluateRunCapabilityCeiling ?? (() => true);
   const ref: VerifiedRunRef = Object.freeze({
     orgId: input.orgId,
     runId: input.runId,
     executionAttemptId: row.executionAttemptId,
-    can: (capability: OrgWriteCapability) => RUN_CAPABILITIES.has(capability),
+    // Floor AND ceiling: the structural run floor (content + own completion)
+    // intersected with the policy ceiling — the hook can only restrict.
+    can: (capability: OrgWriteCapability) =>
+      RUN_CAPABILITIES.has(capability) && ceiling(row, capability),
   });
   VERIFIED_RUN_REFS.add(ref);
   return ref;

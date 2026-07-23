@@ -202,3 +202,35 @@ describe("runGuardedOrgWriteBatchSync (#1938)", () => {
     expect(shared.syncCalls).toHaveLength(0);
   });
 });
+
+describe("run-capability ceiling hook (codex diff round)", () => {
+  const NOW = Date.parse("2026-07-23T00:00:00Z");
+  const ROW = {
+    orgId: "org-1",
+    status: "running",
+    executionAttemptId: "att-1",
+    executionDeadlineAt: new Date(NOW + 60_000).toISOString(),
+    humanWaitAttemptId: null,
+    authPolicy: { ceiling: "narrow" },
+  };
+
+  it("the ceiling can only RESTRICT the structural floor, and is consulted with the row", async () => {
+    const consulted: string[] = [];
+    const ref = await verifyRunAuthority(
+      { runId: "run-1", orgId: "org-1", claimedAttemptId: "att-1" },
+      {
+        readRunRow: async () => ROW,
+        nowMs: () => NOW,
+        evaluateRunCapabilityCeiling: (row, capability) => {
+          consulted.push(capability);
+          expect(row.authPolicy).toEqual({ ceiling: "narrow" });
+          return capability !== "run.complete"; // ceiling denies completion
+        },
+      },
+    );
+    expect(ref.can("content.write")).toBe(true);
+    expect(ref.can("run.complete")).toBe(false); // floor allows, ceiling denies
+    expect(ref.can("org.lifecycle")).toBe(false); // floor denies regardless
+    expect(consulted).toContain("run.complete");
+  });
+});

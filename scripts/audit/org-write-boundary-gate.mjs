@@ -197,28 +197,48 @@ export function evaluateBoundaryRules(fileRel, edges, resolveSpecifier) {
 
     const touchesKernelRoot = edge.specifier === KERNEL_PACKAGE;
     const touchesAuthority =
-      edge.specifier.startsWith(".") &&
-      (resolveSpecifier(edge.specifier) ?? "").startsWith(join("src", "lib", "org-write") + sep);
+      (edge.specifier.startsWith(".") &&
+        (resolveSpecifier(edge.specifier) ?? "").startsWith(join("src", "lib", "org-write") + sep)) ||
+      edge.specifier.includes("org-write/authority") ||
+      edge.specifier === "@/lib/org-write" ||
+      edge.specifier.startsWith("@/lib/org-write/");
+
+    // OPAQUE access forms (codex diff round): a namespace import, a bindingless
+    // bare import, a require() or a dynamic import() grants access to EVERY
+    // export — including the restricted ones — without naming them. For the
+    // restricted modules these are violations unless the file is allowlisted:
+    // fail-closed beats convenient.
+    const isOpaqueAccess =
+      edge.valueBindings.length === 0 ||
+      edge.valueBindings.some((b) => b.startsWith("* as "));
 
     // R2 — mintSystemWriteAuthority is dispatcher-only.
     if (
       !isOrgWriteTest &&
-      edge.valueBindings.includes("mintSystemWriteAuthority") &&
+      touchesAuthority &&
       !SYSTEM_MINT_ALLOWLIST.has(fileRel) &&
-      (touchesAuthority || edge.specifier.includes("org-write/authority") || edge.specifier.includes("@/lib/org-write"))
+      (edge.valueBindings.includes("mintSystemWriteAuthority") || isOpaqueAccess)
     ) {
-      violations.push({ rule: "R2-system-mint", fileRel, ...edge });
+      violations.push({
+        rule: isOpaqueAccess ? "R2-system-mint-opaque" : "R2-system-mint",
+        fileRel,
+        ...edge,
+      });
     }
 
     // R3 — guardedBatchQueries has ONE consumer outside the kernel.
     if (
       !insideKernel &&
       !isOrgWriteTest &&
-      edge.valueBindings.includes("guardedBatchQueries") &&
       (touchesKernelRoot || edge.specifier.startsWith(KERNEL_PACKAGE)) &&
-      !BATCH_UNWRAP_ALLOWLIST.has(fileRel)
+      !BATCH_UNWRAP_ALLOWLIST.has(fileRel) &&
+      (edge.valueBindings.includes("guardedBatchQueries") || isOpaqueAccess)
     ) {
-      violations.push({ rule: "R3-batch-unwrap", fileRel, ...edge });
+      violations.push({
+        rule: isOpaqueAccess ? "R3-batch-unwrap-opaque" : "R3-batch-unwrap",
+        fileRel,
+        ...edge,
+      });
     }
   }
   return violations;

@@ -49,10 +49,14 @@ export function isLiveAttempt(
   clock: LiveAttemptClock,
 ): boolean {
   if (row.executionAttemptId === null) return false;
-  if (row.executionDeadlineAt !== null) {
-    const deadlineMs = new Date(row.executionDeadlineAt).getTime();
-    if (Number.isFinite(deadlineMs) && deadlineMs <= clock.nowMs) return false;
-  }
+  // A NULL deadline is FAIL-CLOSED (codex diff round): every dispatch stamps
+  // one (COALESCE(timeout, 86400) — S1), so NULL means a legacy/corrupt row,
+  // and an unbounded row cannot hold a "bounded verifiable window" anyway
+  // (a lease copies this deadline and NULL could never satisfy
+  // expires_at > now() semantics honestly).
+  if (row.executionDeadlineAt === null) return false;
+  const deadlineMs = new Date(row.executionDeadlineAt).getTime();
+  if (!Number.isFinite(deadlineMs) || deadlineMs <= clock.nowMs) return false;
   if (UNCONDITIONALLY_LIVE.has(row.status)) return true;
   if (row.status === "pending_approval") {
     return (
@@ -74,7 +78,7 @@ export function isLiveAttempt(
 export function liveAttemptSqlCondition(alias: string): string {
   return (
     `(${alias}.execution_attempt_id IS NOT NULL` +
-    ` AND (${alias}.execution_deadline_at IS NULL OR ${alias}.execution_deadline_at > now())` +
+    ` AND ${alias}.execution_deadline_at IS NOT NULL AND ${alias}.execution_deadline_at > now()` +
     ` AND (${alias}.status IN ('running','waiting_trigger')` +
     ` OR (${alias}.status = 'pending_approval'` +
     ` AND ${alias}.human_wait_attempt_id IS NOT NULL` +
