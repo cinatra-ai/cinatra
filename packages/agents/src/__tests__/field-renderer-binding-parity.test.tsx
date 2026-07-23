@@ -31,7 +31,6 @@ import { ContextSelectorRenderer } from "../context-selector-renderer";
 import { CampaignRecipientsReviewRenderer } from "../campaign-recipients-review-renderer";
 import { EmailDraftsReviewRenderer } from "../email-drafts-review-renderer";
 import { ReviewerAgentOutputRenderer } from "../reviewer-agent-output-renderer";
-import { SendConfirmationRenderer } from "../send-confirmation-renderer";
 import { CtaRenderer } from "../cta-renderer";
 import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 import { GroupedSetupFormRenderer } from "../grouped-setup-form-renderer";
@@ -116,9 +115,14 @@ const PARITY_TABLE: ReadonlyArray<
   // shows "no renderer configured" with no Continue and cannot be resumed — an
   // unresumable dead-end accepted under the owner's backward-compat waiver (NOT
   // a SchemaFieldRenderer floor).
-  ["@cinatra-ai/email-delivery-agent:output", SendConfirmationRenderer as never, 80],
-  ["@cinatra-ai/email-delivery-agent:send-confirmation", SendConfirmationRenderer as never, 80],
-  ["send-confirmation", SendConfirmationRenderer as never, 80],
+  // send-confirmation SHELL renderer COMPONENT relocated into
+  // @cinatra-ai/email-artifacts (cinatra#1961, S8 successor): both agent-namespaced
+  // ids (`:output` + `:send-confirmation`) + the bare `send-confirmation` alias now
+  // resolve to the ExtensionFieldRenderer wrapper (asserted in the migrated-binding
+  // it.each + the bare-alias test below), NOT this frozen host table. Unlike
+  // email-drafts-review, send-confirmation is single-family (email-delivery-agent
+  // only, no reviewer coupling), so ALL its ids repoint to the pack — the host
+  // renderer is deleted, none retained.
   // test-delivery-input (the email-test-delivery-agent:input binding) MIGRATED into
   // @cinatra-ai/email-artifacts (cinatra#1958, S8 successor) — now the
   // ExtensionFieldRenderer wrapper at priority 80. Asserted in the migrated-binding
@@ -208,6 +212,12 @@ describe("resolution parity with the retired hand map", () => {
     // (cinatra#1958, S8 successor): the pure snapshot->onChange input form is
     // pack-shipped, priority 80.
     ["@cinatra-ai/email-test-delivery-agent:input", 80],
+    // send-confirmation SHELL relocated into @cinatra-ai/email-artifacts
+    // (cinatra#1961, S8 successor): both agent-namespaced ids load the same pack
+    // component at the pre-cutover priority 80. Single-family (no reviewer
+    // coupling), so BOTH ids repoint (no host renderer retained).
+    ["@cinatra-ai/email-delivery-agent:output", 80],
+    ["@cinatra-ai/email-delivery-agent:send-confirmation", 80],
   ] as const)(
     "migrated field-renderer binding %s resolves to the extension wrapper at the pre-cutover priority",
     (id, priority) => {
@@ -311,6 +321,23 @@ describe("resolution parity with the retired hand map", () => {
     );
   });
 
+  it("migrated send-confirmation bare alias resolves to the pack wrapper (cinatra#1961 full repoint)", () => {
+    // send-confirmation is single-family (email-delivery-agent only): BOTH ids
+    // (`:output` + `:send-confirmation`) are pack-served, so the unscoped bare
+    // alias resolves map-first to whichever of the two bindings registered first —
+    // both load the same pack component, so the ambiguity is harmless (same
+    // documented shared-alias caveat as follow-up-cadence / email-drafts-review).
+    // Priority 80 unchanged, so stored/in-flight runs still resolve the SAME kind.
+    const entry = resolveWith("send-confirmation");
+    expect(entry).toBeTruthy();
+    expect(entry!.priority).toBe(80);
+    const resolved = entry!.renderer as ComponentType & { displayName?: string };
+    expect(resolved.displayName).toMatch(
+      /^ExtensionFieldRenderer\(@cinatra-ai\/email-delivery-agent:(output|send-confirmation)\)$/,
+    );
+  });
+
+
   it("an unknown namespaced id resolves to NO custom entry (schema-fallback path)", () => {
     expect(resolveWith("@cinatra-ai/unknown-agent:whatever")).toBeNull();
   });
@@ -342,6 +369,12 @@ describe("mid-run HITL classification parity", () => {
     // midRunHitl:true in the merged bindings (email-artifacts declares it), so the
     // new -review id classifies strictly (it matches NO :output/-output suffix).
     "@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review",
+    // cinatra#1961: the send-confirmation APPROVAL gate must classify strictly as
+    // mid-run HITL (the id matches no :output/-output suffix). Without it the
+    // run panel routes the renderer's mount-time onChange straight to
+    // performGateSubmit, auto-approving the send with no operator click — the
+    // owner ruling 2026-07-22 requires an explicit confirmation.
+    "@cinatra-ai/email-delivery-agent:send-confirmation",
   ])("manifest-flagged strict id %s classifies as mid-run", (id) => {
     expect(hasMidRunHitlBinding(id)).toBe(true);
     expect(classifyMidRunHitl(id)).toBe(true);

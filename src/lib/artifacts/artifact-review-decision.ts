@@ -25,9 +25,10 @@
  * post-commit side effect (which could fail and strand a resolved-but-unresumed
  * workflow) — the terminal resume INTENT is part of the plan and the `commit`
  * port persists it TRANSACTIONALLY with the gate CAS + audit rows + dispositions
- * (a durable outbox the binder's delivery worker drains exactly-once). So a
- * persistence failure rolls back every effect INCLUDING the resume, and a
- * committed decision's resume can never be lost.
+ * (a durable outbox — the intent is persisted EXACTLY ONCE, and the binder's
+ * delivery worker drains it AT-LEAST-ONCE, so the downstream resume consumer must
+ * be idempotent per gate). So a persistence failure rolls back every effect
+ * INCLUDING the resume, and a committed decision's resume can never be lost.
  *
  * IDEMPOTENCY (sequential AND concurrent): the decision carries a stable
  * FINGERPRINT (run + gate + disposition + sorted targets + comment). A gate
@@ -43,7 +44,8 @@
  * binder (the single-transaction commit + the outbox resume-delivery worker + the
  * type-resolution `deriveProvenance`) is the decision-chrome surface's job —
  * fenced until the review-surface design spec — and MUST honor the
- * single-transaction + exactly-once-delivery contract this core assumes.
+ * single-transaction + exactly-once-PERSISTENCE / at-least-once-delivery
+ * (idempotent-consumer) contract this core assumes.
  */
 import { createHash } from "node:crypto";
 
@@ -146,9 +148,10 @@ export interface ReviewDispositionOp {
 }
 
 /** The terminal resume INTENT — persisted transactionally with the resolution
- * and drained exactly-once by the binder's delivery worker. Discriminated so a
- * reject can never be delivered down the approve wire. Null for a non-terminal
- * (comment) decision. */
+ * (exactly once) and drained at-least-once by the binder's delivery worker (an
+ * idempotent consumer makes redelivery safe). Discriminated so a reject can never
+ * be delivered down the approve wire. Null for a non-terminal (comment)
+ * decision. */
 export type ReviewResumeIntent =
   | { kind: "approve"; userResponse: string }
   | { kind: "reject"; rejectResponse: string };
@@ -165,7 +168,7 @@ export interface ReviewDecisionCommitPlan {
   comment: string | null;
   auditRows: ReviewAuditRow[];
   dispositionOps: ReviewDispositionOp[];
-  /** The exactly-once resume outbox intent (terminal only). */
+  /** The exactly-once-persisted resume outbox intent (terminal only). */
   resumeIntent: ReviewResumeIntent | null;
 }
 
@@ -299,8 +302,8 @@ export async function submitReviewDecisionCore(
   if (gate.status === "resolved") {
     if (gate.fingerprint === fingerprint) {
       // Already committed by an identical prior submit — the resume intent was
-      // persisted with it and is delivered exactly-once by the outbox, so this
-      // retry re-drives nothing.
+      // persisted with it and is delivered (at-least-once) by the outbox to an
+      // idempotent consumer, so this retry re-drives nothing.
       return { ok: true, idempotent: true, fingerprint, plan: null };
     }
     return { ok: false, error: { kind: "gate-conflict" } };

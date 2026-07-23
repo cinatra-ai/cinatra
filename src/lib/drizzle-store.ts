@@ -27,6 +27,7 @@ import {
 import { publicationOperationLedgerSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
 import { environmentLayerStoreSchemaQueries } from "@/lib/execution/environment-layer-schema";
 import { auditorSnapshotSchemaQueries } from "@/lib/auditor-snapshot-schema";
+import { artifactReviewGateSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
 import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
@@ -1190,6 +1191,15 @@ END $$` },
     // auditor review companion (cinatra#1625): immutable per-run proposal
     // snapshot + single-use SoD approval receipts. Additive; mirrors core__0058.
     ...auditorSnapshotSchemaQueries(schemaName),
+    // ---- artifact_review_gates + audit + dispositions + resume_outbox (cinatra#1796) ----
+    // The generic artifact-review GATE store: the emitting gate PINS immutable
+    // review targets and a terminal decision CAS-resolves the gate transactionally
+    // with the audit rows, the reject→tombstone disposition record, and the
+    // exactly-once-persisted resume intent. DDL in the pure-strings leaf
+    // src/lib/artifacts/artifact-review-gate-schema.ts; existing deployments also
+    // converge via migration core__0072. Self-contained (child tables FK to the
+    // gate; no cross-block bootstrap ordering).
+    ...artifactReviewGateSchemaQueries(schemaName),
     // dashboards + dashboard_revisions for @cinatra-ai/dashboards.
     // Idempotent — ALTERs below handle older schemas that lack CHECK constraints + lifecycle columns.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."dashboards" (
