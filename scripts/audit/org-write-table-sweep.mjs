@@ -5,9 +5,9 @@
 // for RAW SQL DML (INSERT INTO / UPDATE / DELETE FROM in string literals)
 // against the org-axis tables, and fails on any writer FILE that is neither a
 // registry-covered module nor in the committed baseline. Drizzle-call DML is
-// deliberately out of scope here — it is covered by the existing AST gates
-// (no-direct-writes for dashboards, objects-writer-drift-gate for objects)
-// and by the registry lockstep test's writer-set pin.
+// deliberately out of scope here — it is covered by the existing per-table
+// AST write guards for dashboards and objects, and by the registry lockstep
+// test's writer-set pin.
 //
 // NO-NEW-ROT RATCHET: the committed baseline records the CURRENT raw-SQL
 // surface per file; it can only shrink. Regenerate with --write-baseline.

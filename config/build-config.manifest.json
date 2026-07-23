@@ -270,6 +270,7 @@
     { "alias": "@cinatra-ai/mcp-server/delegated-chat-tool-policy", "target": "./packages/mcp-server/src/delegated-chat-tool-policy.ts" },
     { "alias": "@modelcontextprotocol/server", "target": "./packages/mcp-server/vendor/modelcontextprotocol-server" },
     { "alias": "@cinatra-ai/mcp-client", "target": "./packages/mcp-client/src/index.ts" },
+    { "alias": "@cinatra-ai/org-write-kernel", "target": "./packages/org-write-kernel/src/index.ts" },
     { "alias": "@cinatra-ai/metric-contracts", "target": "./packages/metric-contracts/src/index.ts" },
     { "alias": "@cinatra-ai/metric-usage-api", "target": "./packages/metric-usage-api/src/index.ts" },
     { "alias": "@cinatra-ai/metric-usage-api/screens", "target": "./packages/metric-usage-api/src/screens.tsx" },
