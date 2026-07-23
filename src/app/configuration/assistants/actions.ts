@@ -4,16 +4,12 @@ import { revalidatePath } from "next/cache";
 import { requireAdminSession } from "@/lib/auth-session";
 import {
   deleteAssistantUser,
-  rotateAssistantClient,
   isBuiltInCinatraAssistantUserId,
 } from "@/lib/assistant-users";
-import { upsertAssistantProfile, deleteAssistantProfile } from "@/lib/assistant-profiles";
+import { deleteAssistantProfile } from "@/lib/assistant-profiles";
 import {
-  claimAssistantAliasExclusive,
-  removeAssistantAlias,
-  renameAssistantAlias,
-  addAssistantAudienceGrant,
-  removeAssistantAudienceGrant,
+  renameAssistantHandleByPrincipal,
+  replaceAssistantAudienceGrants,
   pauseAssistant,
   resumeAssistant,
   normalizeAssistantHandle,
@@ -24,19 +20,28 @@ import { isFlatToken } from "@cinatra-ai/sdk-extensions/assistant-declaration";
 // The manual "create assistant" action was DELETED (cinatra#1037 P1.4): assistant
 // PRINCIPAL minting is now the exclusive job of assistant-agent registration
 // (src/lib/assistant-agent-registration.ts, invariant I3). The actions here manage
-// an already-registered principal's registry facets (aliases, audience, pause) plus
-// its OAuth client + webhook + lifecycle. EVERY action re-checks
-// `requireAdminSession()` and `revalidatePath`s the surface (cinatra#1880 W5).
+// an already-registered principal's registry facets — its SINGLE resolving tag
+// (the handle) + its audience + pause + lifecycle. EVERY action re-checks
+// `requireAdminSession()` and `revalidatePath`s the surface.
+//
+// cinatra#1880 W5 rework (owner ruling 2026-07-23 (groganz)): the surface manages
+// exactly ONE mutable tag per assistant — the RESOLVING tag (the handle) — with no
+// locked/immutable tag and no per-package alias list; the built-in Cinatra tag is
+// editable too. Collision protection is preserved (a tag can't steal another
+// assistant's tag or handle — the handle rename is collision-checked against BOTH
+// namespace tables). The audience becomes the shipped access picker. The
+// delivery/endpoint config (webhook URL + secret + OAuth client rotation) no
+// longer lives on this page.
 
 const SURFACE = "/configuration/assistants";
 
 /** Result of a mutating registry action — a typed object so the client can render
- *  an INLINE error (naming a namespace conflict) rather than a generic toast. */
+ *  the failure (a namespace collision, a validation error) as a TOAST. */
 export type AssistantActionResult =
   | { ok: true }
   | { ok: false; error: string; conflictWith?: { token: string; ownedBy: "handle" | "alias" } };
 
-/** Normalize + validate a flat-token alias, returning the normalized token or an
+/** Normalize + validate a flat-token tag, returning the normalized token or an
  *  inline error result. */
 function normalizeAliasToken(raw: string): { token: string } | { error: string } {
   const normalized = normalizeAssistantHandle(raw);
@@ -48,30 +53,42 @@ function normalizeAliasToken(raw: string): { token: string } | { error: string }
   return { token: normalized };
 }
 
+/** A namespace collision, rendered @-prefixed (the tag is always shown with its
+ *  leading `@`) so the toast names the exact contested tag. */
 function collisionResult(err: AssistantNamespaceCollisionError): AssistantActionResult {
   return {
     ok: false,
-    error: `"${err.token}" is already claimed as a ${err.ownedBy}.`,
+    error: `@${err.token} is already claimed as a ${err.ownedBy}.`,
     conflictWith: { token: err.token, ownedBy: err.ownedBy },
   };
 }
 
 // ---------------------------------------------------------------------------
-// Aliases (AC#1) — add / rename / remove through the W1 advisory-locked namespace.
+// The SINGLE editable tag — the RESOLVING tag (the handle). One mutable tag per
+// assistant, no locked tag, editable for EVERY assistant including the built-in
+// Cinatra one (owner ruling 2026-07-23 (groganz)). The rename is routed through
+// the W1 advisory-locked namespace primitive `renameAssistantHandleByPrincipal`,
+// which is keyed by the STABLE principal id and collision-checks the desired token
+// against BOTH the handle and the alias tables — so a tag can never steal another
+// assistant's tag or handle. A collision surfaces as a TOAST.
 // ---------------------------------------------------------------------------
 
-export async function addAssistantAliasAction(args: {
-  packageName: string;
-  alias: string;
+export async function renameAssistantTagAction(args: {
+  assistantUserId: string;
+  tag: string;
 }): Promise<AssistantActionResult> {
   await requireAdminSession();
-  if (!args.packageName) return { ok: false, error: "This assistant has no package to attach a tag to." };
-  const norm = normalizeAliasToken(args.alias);
+  if (!args.assistantUserId) return { ok: false, error: "assistantUserId required" };
+  const norm = normalizeAliasToken(args.tag);
   if ("error" in norm) return { ok: false, error: norm.error };
   try {
-    // Strict claim: a token owned by another package (or a handle, or the builtin)
-    // is an INLINE CONFLICT (AC#1), never a silent steal.
-    await claimAssistantAliasExclusive(norm.token, args.packageName);
+    const next = await renameAssistantHandleByPrincipal(args.assistantUserId, norm.token);
+    if (!next) {
+      // No handle row to rename (a degenerate/partial registration with no
+      // resolving tag). The UI does not offer the editor in that state; this is
+      // the defensive server refusal.
+      return { ok: false, error: "This assistant has no resolving tag to change." };
+    }
   } catch (err) {
     if (err instanceof AssistantNamespaceCollisionError) return collisionResult(err);
     throw err;
@@ -80,83 +97,89 @@ export async function addAssistantAliasAction(args: {
   return { ok: true };
 }
 
-export async function renameAssistantAliasAction(args: {
-  packageName: string;
-  oldAlias: string;
-  newAlias: string;
-}): Promise<AssistantActionResult> {
-  await requireAdminSession();
-  if (!args.packageName) return { ok: false, error: "This assistant has no package to attach a tag to." };
-  const norm = normalizeAliasToken(args.newAlias);
-  if ("error" in norm) return { ok: false, error: norm.error };
-  try {
-    await renameAssistantAlias(args.oldAlias, norm.token, args.packageName);
-  } catch (err) {
-    if (err instanceof AssistantNamespaceCollisionError) return collisionResult(err);
-    throw err;
-  }
-  revalidatePath(SURFACE);
-  return { ok: true };
-}
-
-export async function removeAssistantAliasAction(args: {
-  alias: string;
-  source: string;
-  packageName: string;
-}): Promise<AssistantActionResult> {
-  await requireAdminSession();
-  if (args.source === "builtin") {
-    return { ok: false, error: "The built-in cinatra tag is reserved and cannot be removed." };
-  }
-  // The removal is ALWAYS scoped to the owning package (cinatra#1880 W5). The
-  // alias is the table PK, so an UNSCOPED delete-by-alias would drop whichever
-  // package owns the token — a stale/crafted call for another assistant's tag.
-  // Require the owning package and pass it through so one assistant's editor can
-  // never remove another package's alias (defense-in-depth; the reserved builtin
-  // is already refused above and is additionally protected by removeAssistantAlias).
-  if (!args.packageName) {
-    return { ok: false, error: "This tag has no owning package to scope the removal to." };
-  }
-  await removeAssistantAlias(args.alias, args.packageName);
-  revalidatePath(SURFACE);
-  return { ok: true };
-}
-
 // ---------------------------------------------------------------------------
-// Audience editor (AC#2) — platform-admin only; each subject kind persisted.
+// Audience editor (AC#2) — now the shipped access picker. The client renders the
+// canonical `AccessCombobox` (multiple mode) and submits the selected scope tokens
+// as a SET; this action maps them to `assistant_audience` grants and ATOMICALLY
+// replaces the package's grant set (`replaceAssistantAudienceGrants` — one
+// transaction, validated fail-closed), so a multi-grant edit is all-or-nothing
+// (never a partial / fail-open ACL state) and takes effect on the next
+// authorization decision across every W2 surface through the ONE registry reader.
+// The picker's Personal ("owner") token and a bare id-less `org` token have no
+// audience representation (the audience vocabulary is the connector access scopes
+// minus `user`) and are dropped — an all-`owner` selection maps to zero grants,
+// i.e. visible to no one (fail-closed). A token that is neither a known scope nor
+// one of those two intentional drops is REJECTED (never silently dropped — that
+// would let a malformed payload wipe every valid grant).
 // ---------------------------------------------------------------------------
 
-export async function addAssistantAudienceAction(args: {
+type AudienceGrant = { subjectKind: string; subjectId: string | null };
+
+function grantKey(g: AudienceGrant): string {
+  return `${g.subjectKind}:${g.subjectId ?? ""}`;
+}
+
+/** Map access-picker scope tokens → audience grant tuples (deduped), or an error
+ *  string. A scoped token (`org:`/`team:`/`project:`) with an empty/whitespace tail
+ *  is a MALFORMED scope and is rejected — silently dropping it would map to an
+ *  empty desired set and wipe every valid grant (codex rounds 1–2). `owner` and a
+ *  bare id-less `org` are the only intentional drops. */
+function tokensToAudienceGrants(
+  tokens: readonly string[],
+): { grants: AudienceGrant[] } | { error: string } {
+  const out: AudienceGrant[] = [];
+  const seen = new Set<string>();
+  const push = (g: AudienceGrant) => {
+    const k = grantKey(g);
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(g);
+    }
+  };
+  const scoped = (kind: string, prefix: string, t: string): { error: string } | null => {
+    const id = t.slice(prefix.length).trim();
+    if (!id) return { error: `Malformed access scope "${t}".` };
+    push({ subjectKind: kind, subjectId: id });
+    return null;
+  };
+  for (const t of tokens) {
+    if (t === "workspace") push({ subjectKind: "workspace", subjectId: null });
+    else if (t === "admin") push({ subjectKind: "admin", subjectId: null });
+    else if (t.startsWith("org:")) {
+      const err = scoped("organization", "org:", t);
+      if (err) return err;
+    } else if (t.startsWith("team:")) {
+      const err = scoped("team", "team:", t);
+      if (err) return err;
+    } else if (t.startsWith("project:")) {
+      const err = scoped("project", "project:", t);
+      if (err) return err;
+    } else if (t === "owner" || t === "org") {
+      // Intentionally no audience grant (Personal / id-less org).
+    } else {
+      return { error: `Unrecognized access scope "${t}".` };
+    }
+  }
+  return { grants: out };
+}
+
+export async function setAssistantAudienceAction(args: {
   packageName: string;
-  subjectKind: string;
-  subjectId?: string | null;
+  tokens: string[];
 }): Promise<AssistantActionResult> {
   await requireAdminSession();
   if (!args.packageName) {
     return { ok: false, error: "Only installed assistants have an editable audience." };
   }
+  const mapped = tokensToAudienceGrants(args.tokens);
+  if ("error" in mapped) return { ok: false, error: mapped.error };
   try {
-    await addAssistantAudienceGrant(args.packageName, args.subjectKind, args.subjectId ?? null);
+    // ATOMIC all-or-nothing replace: on any failure the DB is left UNCHANGED (the
+    // transaction rolls back), so there is never a partial / fail-open ACL state,
+    // and the surface's persisted state still matches what it last read.
+    await replaceAssistantAudienceGrants(args.packageName, mapped.grants);
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "Could not add the grant." };
-  }
-  revalidatePath(SURFACE);
-  return { ok: true };
-}
-
-export async function removeAssistantAudienceAction(args: {
-  packageName: string;
-  subjectKind: string;
-  subjectId?: string | null;
-}): Promise<AssistantActionResult> {
-  await requireAdminSession();
-  if (!args.packageName) {
-    return { ok: false, error: "Only installed assistants have an editable audience." };
-  }
-  try {
-    await removeAssistantAudienceGrant(args.packageName, args.subjectKind, args.subjectId ?? null);
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "Could not remove the grant." };
+    return { ok: false, error: err instanceof Error ? err.message : "Could not update access." };
   }
   revalidatePath(SURFACE);
   return { ok: true };
@@ -190,7 +213,9 @@ export async function resumeAssistantAction(args: {
 }
 
 // ---------------------------------------------------------------------------
-// Lifecycle — delete (extension-owned refused, AC#3) / rotate / webhook.
+// Lifecycle — delete (extension-owned refused, AC#3). Delivery/endpoint config
+// (webhook + OAuth client rotation) is NOT managed on this page (owner ruling
+// 2026-07-23 (groganz)).
 // ---------------------------------------------------------------------------
 
 export async function deleteAssistantAction(args: {
@@ -208,28 +233,4 @@ export async function deleteAssistantAction(args: {
   deleteAssistantProfile(args.id);
   revalidatePath(SURFACE);
   return { ok: true };
-}
-
-export async function rotateAssistantClientAction(formData: FormData) {
-  await requireAdminSession();
-  const id = String(formData.get("id") ?? "");
-  if (!id) throw new Error("id required");
-  const result = await rotateAssistantClient(id);
-  revalidatePath(SURFACE);
-  return result;
-}
-
-export async function setAssistantWebhookAction(formData: FormData) {
-  await requireAdminSession();
-  const assistantUserId = String(formData.get("assistantUserId") ?? "");
-  const webhookUrl = String(formData.get("webhookUrl") ?? "").trim() || undefined;
-  const webhookSecret = String(formData.get("webhookSecret") ?? "").trim() || undefined;
-  if (!assistantUserId) throw new Error("assistantUserId required");
-  upsertAssistantProfile({
-    assistantUserId,
-    webhookUrl,
-    webhookSecret,
-    updatedAt: new Date().toISOString(),
-  });
-  revalidatePath(SURFACE);
 }

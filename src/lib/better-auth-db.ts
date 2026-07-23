@@ -476,6 +476,11 @@ export async function renameAssistantAlias(
 /** The audience subject kinds that carry NO subject id (global grants). */
 const GLOBAL_AUDIENCE_KINDS: ReadonlySet<string> = new Set(["workspace", "admin"]);
 
+/** Advisory-lock CLASS id for the package-scoped audience set-replace lock
+ *  (`pg_advisory_xact_lock(class, hashtext(package))`). A two-int key in its own
+ *  class, distinct from the single-key assistant namespace lock's space. */
+const ASSISTANT_AUDIENCE_LOCK_CLASS = 0x41554449; // "AUDI"
+
 /** Validate + normalize an audience grant tuple, throwing on an unknown kind or a
  *  missing/extra subject id (fail-closed — a malformed grant is never persisted). */
 function validateAudienceGrant(
@@ -541,6 +546,46 @@ export async function listAssistantAudienceGrants(
     .from(assistantAudience)
     .where(eq(assistantAudience.packageName, packageName));
   return rows;
+}
+
+/**
+ * ATOMIC replace of a package's audience grant SET (cinatra#1880 W5 rework — owner
+ * ruling 2026-07-23 (groganz): the audience editor is the shipped access picker,
+ * which submits the full selection as a set). Every desired grant is validated
+ * fail-closed FIRST (an unknown kind / missing subject id aborts the whole replace
+ * — nothing is deleted, nothing inserted); then, in ONE transaction, the package's
+ * current grants are deleted and the desired set inserted. So a multi-grant edit is
+ * all-or-nothing — a mid-write failure rolls back rather than leaving a partial /
+ * fail-open ACL — and it takes effect on the next reader decision through the ONE
+ * audience truth. An EMPTY `grants` set clears the audience (visible to no one —
+ * fail-closed). Idempotent on the grant-uniqueness index.
+ */
+export async function replaceAssistantAudienceGrants(
+  packageName: string,
+  grants: ReadonlyArray<{ subjectKind: string; subjectId?: string | null }>,
+): Promise<void> {
+  // Validate BEFORE opening the transaction: one malformed grant refuses the
+  // entire replace (the current grant set is left untouched).
+  const validated = grants.map((g) => validateAudienceGrant(g.subjectKind, g.subjectId));
+  await betterAuthDb.transaction(async (tx) => {
+    // Serialize concurrent replaces for the SAME package: a PACKAGE-scoped advisory
+    // xact lock (its own two-int lock class, so it never collides with the
+    // single-key namespace lock, and different packages never block each other),
+    // released automatically on commit/rollback. Without it, two simultaneous
+    // delete-all→insert replaces could interleave under READ COMMITTED into a union
+    // of both desired sets or a fail-open ACL (a concurrent narrow/empty replace
+    // missing the other's just-inserted rows). Mirrors `acquireAssistantNamespaceLock`.
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(${ASSISTANT_AUDIENCE_LOCK_CLASS}, hashtext(${packageName}))`,
+    );
+    await tx.delete(assistantAudience).where(eq(assistantAudience.packageName, packageName));
+    for (const g of validated) {
+      await tx
+        .insert(assistantAudience)
+        .values({ packageName, subjectKind: g.subjectKind, subjectId: g.subjectId, createdAt: new Date() })
+        .onConflictDoNothing();
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

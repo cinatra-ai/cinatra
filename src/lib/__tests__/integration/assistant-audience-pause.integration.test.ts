@@ -190,6 +190,62 @@ maybe("W5 audience + pause + alias + guard (live)", () => {
     expect(await db.listAssistantAudienceGrants(pkg)).toEqual([]);
   });
 
+  it("replaceAssistantAudienceGrants atomically sets the grant set; an invalid grant aborts the whole replace", async () => {
+    const pkg = "@x/replace-assistant";
+    await seedAssistant({ pkg, handle: "replacebot" }); // NO audience → invisible
+
+    // Replace with a scoped set → the org member sees it, a bare actor does not.
+    await db.replaceAssistantAudienceGrants(pkg, [
+      { subjectKind: "organization", subjectId: "org-1" },
+      { subjectKind: "team", subjectId: "team-1" },
+    ]);
+    expect(await handlesOf({ orgIds: new Set(["org-1"]) })).toContain("replacebot");
+    expect(await handlesOf()).not.toContain("replacebot");
+
+    // Replace with the universal workspace grant → visible to everyone (the prior
+    // org/team rows are gone, not unioned).
+    await db.replaceAssistantAudienceGrants(pkg, [{ subjectKind: "workspace" }]);
+    expect(await handlesOf()).toContain("replacebot");
+    expect(await db.listAssistantAudienceGrants(pkg)).toEqual([
+      { subjectKind: "workspace", subjectId: null },
+    ]);
+
+    // A replace containing an INVALID grant is refused ATOMICALLY — the prior
+    // (workspace) set is left untouched (nothing deleted, nothing inserted).
+    await expect(
+      db.replaceAssistantAudienceGrants(pkg, [{ subjectKind: "everyone" }]),
+    ).rejects.toThrow(/unknown subject kind/i);
+    expect(await handlesOf()).toContain("replacebot"); // still workspace-visible
+
+    // An EMPTY replace clears the audience → visible to no one (fail-closed).
+    await db.replaceAssistantAudienceGrants(pkg, []);
+    expect(await handlesOf()).not.toContain("replacebot");
+    expect(await db.listAssistantAudienceGrants(pkg)).toEqual([]);
+  });
+
+  it("concurrent replaces for the SAME package are serialized (last-writer-wins; never a union)", async () => {
+    const pkg = "@x/race-assistant";
+    await seedAssistant({ pkg, handle: "racebot" });
+
+    const setA = [{ subjectKind: "organization", subjectId: "org-A" }];
+    const setB = [{ subjectKind: "team", subjectId: "team-B" }];
+    // Two simultaneous set-replaces on the SAME package. The package-scoped advisory
+    // xact lock serializes them, so the committed state is EXACTLY one desired set —
+    // never a union of both (which a non-serialized delete-all→insert could produce
+    // under READ COMMITTED).
+    await Promise.all([
+      db.replaceAssistantAudienceGrants(pkg, setA),
+      db.replaceAssistantAudienceGrants(pkg, setB),
+    ]);
+
+    const final = (await db.listAssistantAudienceGrants(pkg))
+      .map((g) => `${g.subjectKind}:${g.subjectId ?? ""}`)
+      .sort();
+    expect([JSON.stringify(["organization:org-A"]), JSON.stringify(["team:team-B"])]).toContain(
+      JSON.stringify(final),
+    );
+  });
+
   // ---- Pause control (principal-keyed, fail-closed) -----------------------
 
   it("pausing a principal drops it from the reader; resume restores it", async () => {
@@ -267,6 +323,52 @@ maybe("W5 audience + pause + alias + guard (live)", () => {
     await db.removeAssistantAlias("nick");
     const e2 = (await reader.readAssistantRegistryForActor(ctx())).find((x) => x.handle === "resbot");
     expect(e2?.aliases).not.toContain("nick");
+  });
+
+  // ---- Single editable tag (the resolving handle) -------------------------
+  // Owner ruling 2026-07-23 (groganz): the surface manages ONE mutable tag per
+  // assistant — the RESOLVING tag (the handle) — collision-checked against BOTH
+  // namespace tables, editable for EVERY assistant incl. the built-in Cinatra one
+  // (no immutability on the resolving handle). Proven against the real reader.
+
+  it("renaming the resolving tag re-points the reader; collides with another handle OR an alias", async () => {
+    const pkg = "@x/tagbot";
+    const principal = await seedAssistant({ pkg, handle: "tagbot", audience: [{ kind: "workspace" }] });
+    expect(await handlesOf()).toContain("tagbot");
+
+    // Rename to a FREE token → the reader now resolves the new tag, not the old.
+    const next = await db.renameAssistantHandleByPrincipal(principal, "helper");
+    expect(next).toBe("helper");
+    expect(await handlesOf()).toContain("helper");
+    expect(await handlesOf()).not.toContain("tagbot");
+
+    // Collision with ANOTHER assistant's HANDLE → throws (names the handle table);
+    // the rename rolls back, so the current tag survives.
+    await seedAssistant({ pkg: "@x/other", handle: "keeper", audience: [{ kind: "workspace" }] });
+    await expect(db.renameAssistantHandleByPrincipal(principal, "keeper")).rejects.toMatchObject({
+      name: "AssistantNamespaceCollisionError",
+      ownedBy: "handle",
+    });
+
+    // Collision with an ALIAS token → throws (names the alias table).
+    await db.claimAssistantAlias("reserved", "@x/other", "admin");
+    await expect(db.renameAssistantHandleByPrincipal(principal, "reserved")).rejects.toMatchObject({
+      name: "AssistantNamespaceCollisionError",
+      ownedBy: "alias",
+    });
+
+    // Both collisions rolled back — the earlier successful tag still resolves.
+    expect(await handlesOf()).toContain("helper");
+  });
+
+  it("the built-in Cinatra tag is editable — no immutability on the resolving handle", async () => {
+    const builtin = await seedBuiltinCinatra(); // handle 'cinatra'
+    const next = await db.renameAssistantHandleByPrincipal(builtin, "cinatra-primary");
+    expect(next).toBe("cinatra-primary");
+    // The reader unions the builtin by PACKAGE, now surfacing the renamed tag; it
+    // is still flagged builtin.
+    const entry = (await reader.readAssistantRegistryForActor(ctx())).find((e) => e.isBuiltin);
+    expect(entry?.handle).toBe("cinatra-primary");
   });
 
   // ---- Deletion guard (AC#3) ----------------------------------------------

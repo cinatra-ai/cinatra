@@ -2,77 +2,82 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { LinkIcon, PencilIcon, XIcon, LockIcon, PlusIcon } from "lucide-react";
+import { PencilIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { NativeSelect } from "@/components/ui/native-select";
 import { Separator } from "@/components/ui/separator";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
-import type { AssistantAdminRow, AssistantPreferredTagState } from "@/lib/assistant-admin-registry";
+import { AccessCombobox, type AvailableScopes } from "@/components/access-combobox";
+import type { AssistantAdminRow } from "@/lib/assistant-admin-registry";
 import { toast } from "@/lib/cinatra-toast";
 import {
-  addAssistantAliasAction,
-  renameAssistantAliasAction,
-  removeAssistantAliasAction,
-  addAssistantAudienceAction,
-  removeAssistantAudienceAction,
+  renameAssistantTagAction,
+  setAssistantAudienceAction,
   pauseAssistantAction,
   resumeAssistantAction,
   deleteAssistantAction,
-  rotateAssistantClientAction,
-  setAssistantWebhookAction,
   type AssistantActionResult,
 } from "./actions";
 
 // ---------------------------------------------------------------------------
-// The audience subject kinds (mirrors ASSISTANT_AUDIENCE_SUBJECT_KINDS). The two
-// GLOBAL kinds carry no subject id; the three SCOPED kinds require one.
+// Owner ruling 2026-07-23 (groganz): this surface shows ONE mutable tag per
+// assistant (the resolving handle — editable inline, no lock, built-in included),
+// the audience as the shipped access picker, and NO metadata badges / delivery
+// endpoint config. Collisions and failures surface as TOASTS.
 // ---------------------------------------------------------------------------
-const AUDIENCE_KINDS = ["workspace", "admin", "organization", "team", "project"] as const;
-const SCOPED_KINDS = new Set(["organization", "team", "project"]);
 
-type CredentialResult = { clientId: string; clientSecret: string };
+/** Map the persisted audience grants → access-picker scope tokens (the value the
+ *  multi-select `AccessCombobox` renders). Grants with no picker token (none, in
+ *  the current vocabulary) are dropped. */
+function audienceToTokens(
+  audience: ReadonlyArray<{ subjectKind: string; subjectId: string | null }>,
+): string[] {
+  const out: string[] = [];
+  for (const g of audience) {
+    if (g.subjectKind === "workspace") out.push("workspace");
+    else if (g.subjectKind === "admin") out.push("admin");
+    else if (g.subjectKind === "organization" && g.subjectId) out.push(`org:${g.subjectId}`);
+    else if (g.subjectKind === "team" && g.subjectId) out.push(`team:${g.subjectId}`);
+    else if (g.subjectKind === "project" && g.subjectId) out.push(`project:${g.subjectId}`);
+  }
+  return out;
+}
+
+/** Do any of the selected picker tokens map to a real audience grant? (`owner` /
+ *  a bare `org` do not.) An assistant with no effective grant is visible to no
+ *  one — the editor surfaces that as a warning. */
+function hasEffectiveAudience(tokens: readonly string[]): boolean {
+  return tokens.some(
+    (t) =>
+      t === "workspace" ||
+      t === "admin" ||
+      t.startsWith("org:") ||
+      t.startsWith("team:") ||
+      t.startsWith("project:"),
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Top-level surface
 // ---------------------------------------------------------------------------
 
-export function AssistantsTable({ rows }: { rows: AssistantAdminRow[] }) {
-  const [credentials, setCredentials] = useState<CredentialResult | null>(null);
-  const [credentialLabel, setCredentialLabel] = useState("");
-
+export function AssistantsTable({
+  rows,
+  availableScopes,
+}: {
+  rows: AssistantAdminRow[];
+  availableScopes: AvailableScopes;
+}) {
   return (
     <div className="flex flex-col gap-4">
       {rows.length === 0 ? (
         <p className="text-sm text-muted-foreground">No assistants registered yet.</p>
       ) : (
         rows.map((row) => (
-          <AssistantCard
-            key={row.assistantUserId}
-            row={row}
-            onCredentials={(c, label) => {
-              setCredentials(c);
-              setCredentialLabel(label);
-            }}
-          />
+          <AssistantCard key={row.assistantUserId} row={row} availableScopes={availableScopes} />
         ))
       )}
-
-      <CredentialsDialog
-        credentials={credentials}
-        label={credentialLabel}
-        onClose={() => setCredentials(null)}
-      />
     </div>
   );
 }
@@ -83,34 +88,29 @@ export function AssistantsTable({ rows }: { rows: AssistantAdminRow[] }) {
 
 function AssistantCard({
   row,
-  onCredentials,
+  availableScopes,
 }: {
   row: AssistantAdminRow;
-  onCredentials: (c: CredentialResult, label: string) => void;
+  availableScopes: AvailableScopes;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
-  // Editable-alias flow
-  const [newAlias, setNewAlias] = useState("");
-  const [aliasError, setAliasError] = useState<string | null>(null);
-  const [renaming, setRenaming] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
+  // The single editable tag (the resolving handle) — inline edit.
+  const [editingTag, setEditingTag] = useState(false);
+  const [tagValue, setTagValue] = useState(row.handle ?? "");
 
-  // Audience flow
-  const [audienceKind, setAudienceKind] = useState<string>("workspace");
-  const [audienceId, setAudienceId] = useState("");
-  const [audienceError, setAudienceError] = useState<string | null>(null);
-
-  // AC#5: the RESOLVING tag is the registry handle — NEVER the raw Better-Auth
-  // username (that WAS the bug). When a principal has no registered handle (a
-  // degenerate/partial registration) there is no resolving tag to show, so the
-  // chip renders a neutral placeholder rather than masquerading a username as a
-  // tag. `label` is a human identifier for confirm dialogs only (not a tag claim).
+  // The RESOLVING tag is the registry handle — NEVER the raw Better-Auth
+  // username. When a principal has no registered handle (a degenerate/partial
+  // registration) there is no resolving tag to show or edit, so the chip renders
+  // a neutral placeholder. `label` is a human identifier for confirm dialogs only.
   const resolvingTag = row.handle ? `@${row.handle}` : null;
   const label = resolvingTag ?? row.displayName;
   const deletable = !row.isBuiltin && !row.isExtensionOwned;
-  const canEditAliases = !!row.packageName;
+  // The audience is enforced only for an INSTALLED, non-builtin assistant (the
+  // reader audience-filters installed extensions); the builtin is always visible
+  // to everyone, and a standalone principal with no install row has no enforced
+  // audience.
   const canEditAudience = !!row.packageName && !row.isBuiltin && row.installStatus !== null;
 
   function run(fn: () => Promise<AssistantActionResult>, onErr: (msg: string) => void) {
@@ -128,6 +128,14 @@ function AssistantCard({
     });
   }
 
+  function submitTag() {
+    setEditingTag(false);
+    run(
+      () => renameAssistantTagAction({ assistantUserId: row.assistantUserId, tag: tagValue }),
+      (msg) => toast.error(msg),
+    );
+  }
+
   return (
     <section className="rounded-card border border-line bg-surface-strong/40 p-5">
       {/* Header ---------------------------------------------------------- */}
@@ -135,27 +143,67 @@ function AssistantCard({
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
             <span className="text-base font-semibold text-foreground">{row.displayName}</span>
-            {/* AC#5: the RESOLVING tag (handle), not the raw username. */}
-            {resolvingTag ? (
-              <code className="rounded bg-surface-strong px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
-                {resolvingTag}
-              </code>
+            {/* The ONE editable tag (the resolving handle). No lock; editable for
+                every assistant, built-in included. */}
+            {editingTag ? (
+              <form
+                className="flex items-center gap-1"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  submitTag();
+                }}
+              >
+                <span className="font-mono text-xs text-muted-foreground">@</span>
+                <Input
+                  autoFocus
+                  value={tagValue}
+                  onChange={(e) => setTagValue(e.target.value)}
+                  className="h-6 w-32 text-xs"
+                  aria-label="Edit tag"
+                />
+                <Button type="submit" size="sm" variant="outline" disabled={isPending || !tagValue.trim()}>
+                  Save
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={isPending}
+                  onClick={() => {
+                    setEditingTag(false);
+                    setTagValue(row.handle ?? "");
+                  }}
+                >
+                  Cancel
+                </Button>
+              </form>
+            ) : resolvingTag ? (
+              <span className="flex items-center gap-1">
+                <code className="rounded bg-surface-strong px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
+                  {resolvingTag}
+                </code>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Edit tag"
+                  className="size-5 opacity-60 hover:opacity-100"
+                  disabled={isPending}
+                  onClick={() => {
+                    setTagValue(row.handle ?? "");
+                    setEditingTag(true);
+                  }}
+                >
+                  <PencilIcon className="size-3" />
+                </Button>
+              </span>
             ) : (
               <span className="text-xs italic text-muted-foreground">no resolving tag</span>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <InstallStatusBadge status={row.installStatus} isBuiltin={row.isBuiltin} />
-            <OriginBadge origin={row.origin} isBuiltin={row.isBuiltin} />
-            <LaunchBadge launchKind={row.launchKind} instanceCount={row.instanceCount} />
-            <DeliveryBadge
-              delivery={row.delivery}
-              ready={row.deliveryReady}
-              webhookConfigured={row.webhookConfigured}
-            />
-            <PreferredTagBadge state={row.preferredTagState} preferredTag={row.preferredTag} />
-            {row.paused && <Badge variant="destructive">Paused</Badge>}
-          </div>
+          <p className="text-xs text-muted-foreground">
+            The tag people @-mention this assistant by — e.g. @wordpress. Change it any time.
+          </p>
         </div>
 
         {/* Pause control — installation-wide, principal-keyed. */}
@@ -181,443 +229,126 @@ function AssistantCard({
 
       <Separator className="my-4" />
 
-      {/* Tags (aliases) editor — AC#1 --------------------------------------- */}
+      {/* Access (audience) — the shipped access picker, per assistant --------- */}
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Tags</span>
-          <span className="text-xs text-muted-foreground">— @-mention aliases (platform-global)</span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Access
+          </span>
+          <span className="text-xs text-muted-foreground">— who can see and use this assistant</span>
         </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {/* The canonical tag is immutable. */}
-          <Badge variant="secondary" className="gap-1">
-            <LockIcon aria-hidden="true" className="size-3" />
-            {row.handle ?? "—"}
-          </Badge>
-          {row.aliases.map((a) =>
-            renaming === a.alias ? (
-              <form
-                key={a.alias}
-                className="flex items-center gap-1"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  setAliasError(null);
-                  run(
-                    () =>
-                      renameAssistantAliasAction({
-                        packageName: row.packageName ?? "",
-                        oldAlias: a.alias,
-                        newAlias: renameValue,
-                      }),
-                    (msg) => setAliasError(msg),
-                  );
-                  setRenaming(null);
-                }}
-              >
-                <Input
-                  autoFocus
-                  value={renameValue}
-                  onChange={(e) => setRenameValue(e.target.value)}
-                  className="h-6 w-28 text-xs"
-                  aria-label={`Rename tag ${a.alias}`}
-                />
-                <Button type="submit" size="sm" variant="outline" disabled={isPending}>
-                  Save
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setRenaming(null)}
-                  disabled={isPending}
-                >
-                  Cancel
-                </Button>
-              </form>
-            ) : (
-              <Badge key={a.alias} variant={a.source === "builtin" ? "secondary" : "outline"} className="gap-1">
-                {a.source === "builtin" && <LockIcon aria-hidden="true" className="size-3" />}
-                {a.alias}
-                {a.source !== "builtin" && (
-                  <>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={`Rename tag ${a.alias}`}
-                      className="size-4 ml-0.5 opacity-60 hover:opacity-100"
-                      disabled={isPending}
-                      onClick={() => {
-                        setRenaming(a.alias);
-                        setRenameValue(a.alias);
-                        setAliasError(null);
-                      }}
-                    >
-                      <PencilIcon className="size-3" />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={`Remove tag ${a.alias}`}
-                      className="size-4 opacity-60 hover:opacity-100"
-                      disabled={isPending}
-                      onClick={() =>
-                        run(
-                          () =>
-                            removeAssistantAliasAction({
-                              alias: a.alias,
-                              source: a.source,
-                              packageName: row.packageName ?? "",
-                            }),
-                          (msg) => setAliasError(msg),
-                        )
-                      }
-                    >
-                      <XIcon className="size-3" />
-                    </Button>
-                  </>
-                )}
-              </Badge>
-            ),
-          )}
-          {canEditAliases && (
-            <form
-              className="flex items-center gap-1"
-              onSubmit={(e) => {
-                e.preventDefault();
-                setAliasError(null);
-                run(
-                  () => addAssistantAliasAction({ packageName: row.packageName ?? "", alias: newAlias }),
-                  (msg) => setAliasError(msg),
-                );
-                setNewAlias("");
-              }}
-            >
-              <Input
-                value={newAlias}
-                onChange={(e) => setNewAlias(e.target.value)}
-                placeholder="add tag"
-                className="h-6 w-24 text-xs"
-                aria-label="Add tag"
-              />
-              <Button type="submit" size="sm" variant="outline" disabled={isPending || !newAlias.trim()}>
-                <PlusIcon className="size-3" />
-                Add
-              </Button>
-            </form>
-          )}
-        </div>
-        {aliasError && <p className="text-xs text-destructive">{aliasError}</p>}
-      </div>
-
-      {/* Audience editor — AC#2 -------------------------------------------- */}
-      {row.isBuiltin ? (
-        <>
-          <Separator className="my-4" />
+        {row.isBuiltin ? (
           <p className="text-xs text-muted-foreground">
-            <span className="font-semibold uppercase tracking-wide">Audience</span> — the platform
-            assistant is always available to everyone.
+            The built-in Cinatra assistant is available to everyone.
           </p>
-        </>
-      ) : canEditAudience ? (
-        <>
-          <Separator className="my-4" />
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Audience
-              </span>
-              <span className="text-xs text-muted-foreground">— who may use this assistant</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {row.audience.length === 0 && (
-                <span className="text-xs text-warning">No audience — visible to no one.</span>
-              )}
-              {row.audience.map((g) => (
-                <Badge key={`${g.subjectKind}:${g.subjectId ?? ""}`} variant="info" className="gap-1">
-                  {g.subjectKind}
-                  {g.subjectId ? `:${g.subjectId}` : ""}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    aria-label={`Remove ${g.subjectKind} grant`}
-                    className="size-4 opacity-60 hover:opacity-100"
-                    disabled={isPending}
-                    onClick={() =>
-                      run(
-                        () =>
-                          removeAssistantAudienceAction({
-                            packageName: row.packageName ?? "",
-                            subjectKind: g.subjectKind,
-                            subjectId: g.subjectId,
-                          }),
-                        (msg) => setAudienceError(msg),
-                      )
-                    }
-                  >
-                    <XIcon className="size-3" />
-                  </Button>
-                </Badge>
-              ))}
-            </div>
-            <form
-              className="flex flex-wrap items-center gap-1.5"
-              onSubmit={(e) => {
-                e.preventDefault();
-                setAudienceError(null);
-                run(
-                  () =>
-                    addAssistantAudienceAction({
-                      packageName: row.packageName ?? "",
-                      subjectKind: audienceKind,
-                      subjectId: SCOPED_KINDS.has(audienceKind) ? audienceId : null,
-                    }),
-                  (msg) => setAudienceError(msg),
-                );
-                setAudienceId("");
-              }}
-            >
-              <NativeSelect
-                value={audienceKind}
-                onChange={(e) => setAudienceKind(e.target.value)}
-                aria-label="Audience subject kind"
-                className="h-7 rounded-control border border-line bg-surface px-2 text-xs"
-              >
-                {AUDIENCE_KINDS.map((k) => (
-                  <option key={k} value={k}>
-                    {k}
-                  </option>
-                ))}
-              </NativeSelect>
-              {SCOPED_KINDS.has(audienceKind) && (
-                <Input
-                  value={audienceId}
-                  onChange={(e) => setAudienceId(e.target.value)}
-                  placeholder={`${audienceKind} id`}
-                  className="h-7 w-40 text-xs"
-                  aria-label={`${audienceKind} id`}
-                />
-              )}
-              <Button
-                type="submit"
-                size="sm"
-                variant="outline"
-                disabled={isPending || (SCOPED_KINDS.has(audienceKind) && !audienceId.trim())}
-              >
-                <PlusIcon className="size-3" />
-                Grant
-              </Button>
-            </form>
-            {audienceError && <p className="text-xs text-destructive">{audienceError}</p>}
-          </div>
-        </>
-      ) : null}
+        ) : canEditAudience ? (
+          <AssistantAccessControl row={row} availableScopes={availableScopes} />
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Audience is managed where this assistant is installed.
+          </p>
+        )}
+      </div>
 
       <Separator className="my-4" />
 
-      {/* Delivery / credentials / lifecycle -------------------------------- */}
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <form action={setAssistantWebhookAction} className="flex items-center gap-2">
-          <Input type="hidden" name="assistantUserId" value={row.assistantUserId} />
-          <InputGroup className="w-52">
-            <InputGroupAddon>
-              <LinkIcon aria-hidden="true" />
-            </InputGroupAddon>
-            <InputGroupInput
-              name="webhookUrl"
-              type="url"
-              placeholder="https://... (delivery webhook)"
-              className="text-xs"
-              autoComplete="off"
-            />
-          </InputGroup>
-          <Input
-            name="webhookSecret"
-            type="password"
-            placeholder="Secret"
-            className="w-24 text-xs"
-            autoComplete="off"
-          />
-          <Button type="submit" variant="outline" size="sm" disabled={isPending}>
-            Save
-          </Button>
-        </form>
-
-        <div className="flex items-center gap-2">
-          <code className="rounded bg-surface-strong px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
-            {row.clientId ? `${row.clientId.slice(0, 8)}…` : "—"}
-          </code>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={isPending}
-            onClick={() => {
-              if (
-                !window.confirm(
-                  `Rotate OAuth client for ${label}? The old credentials will stop working immediately.`,
-                )
-              )
-                return;
-              startTransition(async () => {
-                const fd = new FormData();
-                fd.set("id", row.assistantUserId);
-                try {
-                  const result = await rotateAssistantClientAction(fd);
-                  onCredentials(result, `${label} (rotated)`);
-                  router.refresh();
-                } catch {
-                  toast.error("Could not rotate the OAuth client.");
-                }
-              });
-            }}
-          >
-            Rotate
-          </Button>
-          <Button
-            variant="destructive"
-            size="sm"
-            disabled={isPending || !deletable}
-            title={
-              deletable
-                ? undefined
-                : row.isBuiltin
-                  ? "The built-in Cinatra assistant cannot be deleted."
-                  : "Owned by an installed extension — uninstall the package to remove it."
-            }
-            onClick={() => {
-              if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return;
-              run(
-                () => deleteAssistantAction({ id: row.assistantUserId }),
-                (msg) => toast.error(msg),
-              );
-            }}
-          >
-            Delete
-          </Button>
-        </div>
+      {/* Lifecycle — delete only (no delivery/endpoint config on this page). --- */}
+      <div className="flex justify-end">
+        <Button
+          variant="destructive"
+          size="sm"
+          disabled={isPending || !deletable}
+          title={
+            deletable
+              ? undefined
+              : row.isBuiltin
+                ? "The built-in Cinatra assistant cannot be deleted."
+                : "Owned by an installed extension — uninstall the package to remove it."
+          }
+          onClick={() => {
+            if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return;
+            run(
+              () => deleteAssistantAction({ id: row.assistantUserId }),
+              (msg) => toast.error(msg),
+            );
+          }}
+        >
+          Delete
+        </Button>
       </div>
     </section>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Badges
+// Per-assistant audience editor — the shipped `AccessCombobox` (multiple mode),
+// mirroring the extension "Who can access this?" control. The selected scope
+// tokens are reconciled onto the assistant's audience grants by
+// `setAssistantAudienceAction`. Failures surface as TOASTS.
 // ---------------------------------------------------------------------------
 
-function InstallStatusBadge({ status, isBuiltin }: { status: string | null; isBuiltin: boolean }) {
-  if (isBuiltin) return <Badge variant="info">built-in</Badge>;
-  if (status === "active") return <Badge variant="success">installed</Badge>;
-  if (status === "locked") return <Badge variant="warning">locked</Badge>;
-  if (status === "archived") return <Badge variant="secondary">archived</Badge>;
-  return <Badge variant="secondary">standalone</Badge>;
-}
-
-function OriginBadge({ origin, isBuiltin }: { origin: string | null; isBuiltin: boolean }) {
-  if (isBuiltin) return null;
-  if (origin === "extension") return <Badge variant="outline">extension-owned</Badge>;
-  return <Badge variant="outline">standalone</Badge>;
-}
-
-function LaunchBadge({
-  launchKind,
-  instanceCount,
+function AssistantAccessControl({
+  row,
+  availableScopes,
 }: {
-  launchKind: string | null;
-  instanceCount: number | null;
+  row: AssistantAdminRow;
+  availableScopes: AvailableScopes;
 }) {
-  if (!launchKind) return null;
-  const label =
-    launchKind === "remote" && instanceCount !== null
-      ? `remote · ${instanceCount} ${instanceCount === 1 ? "instance" : "instances"}`
-      : launchKind;
-  return <Badge variant="outline">{label}</Badge>;
-}
+  const router = useRouter();
+  const initial = audienceToTokens(row.audience);
+  const [value, setValue] = useState<string[]>(initial);
+  const [pending, startSave] = useTransition();
 
-function DeliveryBadge({
-  delivery,
-  ready,
-  webhookConfigured,
-}: {
-  delivery: string;
-  ready: boolean;
-  webhookConfigured: boolean;
-}) {
-  if (delivery === "webhook" && !ready) {
-    return <Badge variant="warning">delivery: webhook — not ready (webhook missing)</Badge>;
-  }
-  if (delivery === "webhook" && webhookConfigured) {
-    return <Badge variant="outline">delivery: webhook</Badge>;
-  }
-  return <Badge variant="outline">delivery: {delivery}</Badge>;
-}
+  // Order-insensitive dirty check.
+  const dirty = [...value].sort().join(" ") !== [...initial].sort().join(" ");
 
-function PreferredTagBadge({
-  state,
-  preferredTag,
-}: {
-  state: AssistantPreferredTagState;
-  preferredTag: string | null;
-}) {
-  if (state === "collision" && preferredTag) {
-    return <Badge variant="warning">preferred @{preferredTag} — unclaimed (collision)</Badge>;
-  }
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Credentials dialog (shown once after rotate)
-// ---------------------------------------------------------------------------
-
-function CredentialsDialog({
-  credentials,
-  label,
-  onClose,
-}: {
-  credentials: CredentialResult | null;
-  label: string;
-  onClose: () => void;
-}) {
   return (
-    <Dialog open={!!credentials} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>OAuth credentials for {label}</DialogTitle>
-          <DialogDescription>
-            Save these credentials now — the client secret will not be shown again.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-col gap-4 pt-2">
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-xs text-muted-foreground">Client ID</Label>
-            <code className="block rounded bg-surface-strong px-3 py-2 font-mono text-sm text-foreground break-all">
-              {credentials?.clientId}
-            </code>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-xs text-muted-foreground">Client Secret</Label>
-            <code className="block rounded bg-surface-strong px-3 py-2 font-mono text-sm text-foreground break-all">
-              {credentials?.clientSecret}
-            </code>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Use these with the OAuth client_credentials grant at{" "}
-            <code className="font-mono">/api/auth/oauth/token</code> to obtain an access token for MCP calls.
-          </p>
+    <div className="flex flex-col gap-2">
+      <AccessCombobox
+        selectionMode="multiple"
+        id={`audience-${row.assistantUserId}`}
+        value={value}
+        onChange={setValue}
+        scopes={availableScopes}
+      />
+      {!hasEffectiveAudience(value) && (
+        <p className="text-xs text-warning">No audience selected — visible to no one.</p>
+      )}
+      {dirty && (
+        <div className="flex items-center gap-3">
           <Button
-            onClick={() => {
-              if (credentials) {
-                void navigator.clipboard.writeText(
-                  `CINATRA_MCP_CLIENT_ID=${credentials.clientId}\nCINATRA_MCP_CLIENT_SECRET=${credentials.clientSecret}`,
-                );
-              }
-            }}
+            type="button"
             variant="outline"
+            size="sm"
+            disabled={pending}
+            onClick={() =>
+              startSave(async () => {
+                const res = await setAssistantAudienceAction({
+                  packageName: row.packageName ?? "",
+                  tokens: value,
+                });
+                if (res.ok) {
+                  toast.success("Access updated.");
+                  router.refresh();
+                } else {
+                  toast.error(res.error);
+                }
+              })
+            }
           >
-            Copy as env vars
+            {pending ? "Saving…" : "Save access"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={pending}
+            onClick={() => setValue(initial)}
+          >
+            Reset
           </Button>
         </div>
-      </DialogContent>
-    </Dialog>
+      )}
+    </div>
   );
 }
