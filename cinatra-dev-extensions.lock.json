@@ -98,6 +98,16 @@
       "resolvedSha": "e01e1d5a166aac7c7e66994a3df391aeae981dbc"
     },
     {
+      "packageName": "@cinatra-ai/cinatra-assistant",
+      "repo": "cinatra-ai/cinatra-assistant",
+      "resolvedSha": "747d308c25bcefa71b0e87e60533360193f4b5a2"
+    },
+    {
+      "packageName": "@cinatra-ai/claude-assistant",
+      "repo": "cinatra-ai/claude-assistant",
+      "resolvedSha": "518e7e4d23b3254406d5fe3f2e4398b0355596f4"
+    },
+    {
       "packageName": "@cinatra-ai/company-discovery-agent",
       "repo": "cinatra-ai/company-discovery-agent",
       "resolvedSha": "72cf120fc157beeb812651255c4863e4973e4d60"
@@ -136,6 +146,11 @@
       "packageName": "@cinatra-ai/drupal-artifacts",
       "repo": "cinatra-ai/drupal-artifacts",
       "resolvedSha": "8bd7bf36bc46ccaceb0938f53b00f7d2013e4f0b"
+    },
+    {
+      "packageName": "@cinatra-ai/drupal-assistant",
+      "repo": "cinatra-ai/drupal-assistant",
+      "resolvedSha": "f961a161d397370fddf866485ccdf500ca5f10b8"
     },
     {
       "packageName": "@cinatra-ai/drupal-assistant-connector",
@@ -191,6 +206,11 @@
       "packageName": "@cinatra-ai/email-test-delivery-agent",
       "repo": "cinatra-ai/email-test-delivery-agent",
       "resolvedSha": "86342965f32f0ad69737403d5edd7017cee382be"
+    },
+    {
+      "packageName": "@cinatra-ai/gemini-assistant",
+      "repo": "cinatra-ai/gemini-assistant",
+      "resolvedSha": "c3124680c7fca604df36c17c89d3c31091103878"
     },
     {
       "packageName": "@cinatra-ai/gemini-connector",
@@ -273,6 +293,11 @@
       "resolvedSha": "7d93303ce4f8295c839d85150aa5aacf45d6231a"
     },
     {
+      "packageName": "@cinatra-ai/openai-assistant",
+      "repo": "cinatra-ai/openai-assistant",
+      "resolvedSha": "63f04d5253d67980173e50f48e77621b446d95cc"
+    },
+    {
       "packageName": "@cinatra-ai/plane-connector",
       "repo": "cinatra-ai/plane-connector",
       "resolvedSha": "88ae7789113213273ecbc541f344a6ba27cca27d"
@@ -341,6 +366,11 @@
       "packageName": "@cinatra-ai/wordpress-agent",
       "repo": "cinatra-ai/wordpress-agent",
       "resolvedSha": "920fd3d4bb7d3dd9136a451c4c3f1c7b44d1e419"
+    },
+    {
+      "packageName": "@cinatra-ai/wordpress-assistant",
+      "repo": "cinatra-ai/wordpress-assistant",
+      "resolvedSha": "a29f274404206c11872d6bcc6b70da304ea1c4d5"
     },
     {
       "packageName": "@cinatra-ai/wordpress-assistant-connector",
