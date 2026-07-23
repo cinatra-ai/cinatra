@@ -12,16 +12,27 @@
 // AVAILABILITY IS EXPLICIT, NEVER SILENT. Each factory returns a target plus an
 // `probe()` that resolves the surface's readiness against the running stack:
 //   - the generic embedded view is served at `/embed/assistant` (S5 #1221 Lane
-//     B). The embed CORE (bridge protocol + frame-ancestors) merged INERT in
-//     #1848 ("library-only, no route"); the route itself lands with the embed
-//     page slice. Until it does, `probe()` reports `available:false` with that
-//     exact reason and the cross-target spec SKIPS loudly (documented follow-up),
-//     rather than pretending parity it never measured.
+//     B — LANDED on origin/main: core 1e0d8d0e0 + §12 MessagePort 2d4482682).
+//     But the merged route is a LIVE-BRIDGE BROKER, not a seeded-thread viewer:
+//     it mounts the shared renderer ONLY after a parent postMessage bootstrap +
+//     a `token-broker` stream-contract negotiation, then drives content via a
+//     LIVE turn (embed-assistant-client.tsx). Until Lane A advertises
+//     `token-broker` at /api/assistants/chat/capabilities the embed fails closed
+//     to the gated card and can render NO corpus content; AND the merged page has
+//     no deterministic seeded-corpus path (reads only instanceId+assistant, no
+//     thread). So `probe()` is gated OFF behind an explicit opt-in flag
+//     (E2E_EMBED_PARITY_LIVE=1) and reports a loud, tracked skip by default —
+//     never a silent skip, never the stale 404-only guard that would ERROR on the
+//     now-landed route. Enabling it (after BOTH deps land + the drive is
+//     redesigned) makes the probe enforce for real, failing loud on any drift.
+//     The #1216 S6 / #1222 embed-parity follow-up.
 //   - the CMS iframe target drives the embedded view INSIDE the WordPress /
 //     Drupal admin (the S5 widget cutover, wordpress-plugin#87 / drupal-module#86)
 //     so it additionally exercises the postMessage embed bridge + the CMS shell
-//     CSP. It needs the docker CMS+wayflow compose profile (host port 3010); when
-//     the profile is not up, `probe()` reports it and the spec skips.
+//     CSP. It frames the SAME /embed/assistant, so it inherits the SAME Lane-A
+//     interlock above AND needs the docker CMS+wayflow compose profile (host port
+//     3010). No render-parity CMS spec is wired yet — it is the second half of
+//     the same follow-up, blocked on the same deps.
 //
 // The seeded-thread mechanic mirrors chat-render-parity-target.ts exactly (seed
 // the corpus fixture as the sole assistant message via the real persistence
@@ -38,6 +49,20 @@ import type {
   ContentRenderResult,
   RenderTheme,
 } from "../design/conformance/render-parity/targets/target";
+
+/** The chat capability surface the embed negotiates against (§8). It advertises
+ *  the `token-broker` auth mode only once Lane A lands; until then the embed
+ *  fails closed to the gated card. Named in the gated-OFF skip reason below. */
+const CHAT_CAPABILITIES_ENDPOINT = "/api/assistants/chat/capabilities";
+
+/** Opt-in flag that ENABLES the live embedded/CMS render-parity legs. Default
+ *  (unset) → a loud, tracked skip (the legs cannot render corpus content until
+ *  the Lane-A `token-broker` advertisement AND a deterministic embed
+ *  corpus-render path land — the #1216 S6 / #1222 embed-parity follow-up). Set
+ *  to "1" only after both land AND `drive()`/`urlFor` are redesigned to reach the
+ *  embed's "active" state; the probe then enforces for real (fails loud on any
+ *  drift), never a silent skip. */
+const EMBED_PARITY_LIVE_ENV = "E2E_EMBED_PARITY_LIVE";
 
 /** The outcome of probing a live surface before driving it. */
 export type SurfaceProbe =
@@ -181,35 +206,61 @@ export function createSeededThreadTarget(deps: SeededThreadTargetDeps): ProbedTa
   return {
     target,
     async probe(): Promise<SurfaceProbe> {
-      // Only a DEFINITIVE missing route (HTTP 404) reports `available:false` (the
-      // documented inert-route skip). Every OTHER failure — a seed error, a
-      // 401/403/5xx, or a 200 that never mounts the content block — is a REAL
-      // regression once the route exists and is rethrown so the gated spec fails
-      // loud rather than silently skipping (a false green). `seedFixtureThread`
-      // itself throws on a seed failure and is intentionally NOT swallowed here.
+      // EXPLICIT ENV GATE (opt-in), never a silent or heuristic skip.
+      //
+      // The embed route LANDED on origin/main (S5 #1221 core 1e0d8d0e0 + §12
+      // MessagePort 2d4482682), so the old "HTTP 404 → skip" guard is stale (once
+      // the route serves 200 it would proceed to the content wait and THROW —
+      // erroring, not skipping). But the merged `/embed/assistant` still cannot
+      // render corpus content DETERMINISTICALLY on this branch, for TWO reasons:
+      //   (a) LANE-A INTERLOCK. It is a live-bridge broker that mounts the shared
+      //       renderer only after a `token-broker` stream-contract negotiation
+      //       against `/api/assistants/chat/capabilities`; that surface advertises
+      //       only ["session"] here (grep-confirmed: no `token-broker` anywhere),
+      //       so the embed fails closed to the gated card.
+      //   (b) NO SEEDED-CORPUS PATH. The page reads only `instanceId`+`assistant`
+      //       (no `thread`) and starts from `initialConversationState()` with no
+      //       injection seam — content arrives ONLY via a live turn.
+      // A runtime probe cannot faithfully discriminate (a): it holds no real
+      // `cit_`/`cwu_` broker tokens (those require a live CMS bootstrap), so a
+      // header-less capabilities fetch could false-skip even after Lane A lands,
+      // and non-2xx/parse/network failures could mask a real regression. So the
+      // leg is gated OFF behind an explicit opt-in and reports a loud, tracked
+      // skip. Enabling it (`${EMBED_PARITY_LIVE_ENV}=1`) — done only once BOTH
+      // (a) token-broker AND (b) a deterministic embed corpus-render path land,
+      // AND `drive()`/`urlFor` are redesigned to reach the "active" state — runs
+      // the real route + content-mount assertion below, which fails LOUD on any
+      // drift/regression (never a skip). Tracked: #1216 S6 / #1222 embed-parity.
+      if (process.env[EMBED_PARITY_LIVE_ENV] !== "1") {
+        return {
+          available: false,
+          reason:
+            `${label}: gated OFF (set ${EMBED_PARITY_LIVE_ENV}=1 to enable). ` +
+            `Blocked on the Lane-A interlock — the embed negotiates broker-auth ` +
+            `against ${CHAT_CAPABILITIES_ENDPOINT}, which advertises only ` +
+            `["session"] (no token-broker) on this branch, so it fails closed to ` +
+            `the gated card and renders no corpus content — AND the merged ` +
+            `/embed/assistant has no deterministic seeded-corpus path (reads only ` +
+            `instanceId+assistant, no thread). Enable once BOTH land and the drive ` +
+            `is redesigned to reach the "active" state. #1216 S6 / #1222 follow-up.`,
+        };
+      }
+      // ENABLED (opt-in, post-Lane-A + drive redesign). The route MUST serve and
+      // the shared-renderer content block MUST mount — ANY miss is a REAL
+      // regression, thrown LOUD (never a skip / false green). `seedFixtureThread`
+      // itself throws on a seed failure and is intentionally NOT swallowed.
       const threadId = await seedFixtureThread(request, baseUrl, "parity probe");
       const resp = await page.goto(urlFor(threadId, "github-light"), {
         waitUntil: "domcontentloaded",
       });
       const status = resp?.status() ?? 0;
-      if (status === 404) {
-        return {
-          available: false,
-          reason: `${label}: ${urlFor("<id>", "github-light")} returned HTTP 404 — ` +
-            `the embed route is not served (S5 #1848 landed the embed core INERT — no route). ` +
-            `This leg enforces once the /embed/assistant page slice lands.`,
-        };
-      }
       if (status >= 400) {
         throw new Error(
           `${label}: ${urlFor("<id>", "github-light")} returned HTTP ${status} — ` +
-            `NOT a missing route (404). Surfacing rather than skipping so a real ` +
-            `regression on a LIVE embed route fails loud instead of passing green.`,
+            `${EMBED_PARITY_LIVE_ENV}=1 but the embed route is not serving. A real ` +
+            `regression, surfaced LOUD (not skipped) so it never passes green.`,
         );
       }
-      // Route serves (<400): the content block MUST mount. A miss here is a real
-      // render-path/selector regression (route exists but is broken) — the
-      // selector wait throws, which propagates as a loud failure, not a skip.
       await page
         .locator(contentSelector)
         .first()
@@ -237,9 +288,14 @@ export function createEmbeddedViewTarget(deps: {
     ...deps,
     id: "embedded-view",
     label: "Generic embedded conversation-view (/embed/assistant)",
-    // The embed page renders the shared renderer's content container. Query-carried
-    // thread id per the S5 embed contract; refined to the final param name when the
-    // route lands (the probe gates on the route actually serving until then).
+    // The embed page renders the shared renderer's content container ONCE it can
+    // reach its "active" state (Lane-A `token-broker` negotiation). NOTE: the
+    // merged /embed/assistant reads only `instanceId`+`assistant` — it does NOT
+    // consume `thread`; this URL is the pre-Lane-A placeholder the probe gates on
+    // (it skips honestly until token-broker is advertised, so drive() never runs
+    // against the wrong contract). When Lane A lands, this drive must be
+    // redesigned to reach "active" (parent bootstrap + a deterministic seeded
+    // turn) rather than a query-carried thread — the #1216 S6 / #1222 follow-up.
     urlFor: (threadId) => `/embed/assistant?assistant=chat&thread=${threadId}`,
     contentSelector: ".max-w-none.leading-relaxed.text-foreground",
   });
