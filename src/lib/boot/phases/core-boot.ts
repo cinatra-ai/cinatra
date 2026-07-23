@@ -126,6 +126,28 @@ export function coreBootPhases(): BootPhase[] {
       },
     },
     {
+      name: "dashboard-artifact-twin-backfill",
+      policy: "retryable",
+      run: async () => {
+        // B1c (cinatra#1894 / #2006): pair the artifact-substrate twin for
+        // dashboards that predate the B1b forward writer (#1971) and have not been
+        // mutated since. Runs AFTER core-migrations (the substrate schema is
+        // present) and after the twin-writer wiring phase above (the writer is
+        // registered), so it reuses the REAL registered writer verbatim. Convergent
+        // + idempotent: an already-twinned dashboard is skipped, so steady-state
+        // boots are a single cheap "is anything untwinned?" scan.
+        //
+        // Retryable: a partial/failed backfill simply completes on the next boot —
+        // Phase-1 dual-auth keeps `resolveDashboardAccess` gating the un-twinned
+        // rows meanwhile, so a deferred backfill is never a correctness gap. No-op
+        // on a fresh install (no dashboards to backfill / no DB configured).
+        const { backfillDashboardArtifactTwins } = await import(
+          "@cinatra-ai/dashboards/twin-backfill"
+        );
+        await backfillDashboardArtifactTwins({ log: (msg) => console.log(`[boot] ${msg}`) });
+      },
+    },
+    {
       name: "cache-warmup",
       policy: "retryable",
       run: async () => {

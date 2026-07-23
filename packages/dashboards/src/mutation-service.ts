@@ -2172,3 +2172,200 @@ export async function upgradeExtensionDashboards(
     return { merged, seeded, unchanged, failed };
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// B1c — CONVERGENT backfill of the artifact-substrate twin for PRE-EXISTING
+// dashboards (cinatra#1894 slice B1c / #2006).
+//
+// B1b (#1971) writes the twin FORWARD only — on every dashboards mutation from
+// its landing onward. A dashboard row created BEFORE #1971 that has not been
+// mutated since therefore has NO artifact twin (e.g. the seeded per-entity
+// "Overview" rows from core__0049). This backfill pairs the missing twins by
+// driving the SAME registered twin writer (`pairTwin` → the host
+// `dashboardArtifactTwinWriter`) the forward writers use — it does NOT
+// re-implement the substrate pairing SQL, so it can never drift from the
+// canonical writer (the exact concern B1b's shared-builder controls exist for).
+//
+// Why a host-context sweep and NOT a core migration: the shipped pairing logic
+// lives in the host module `src/lib/dashboards/dashboard-artifact-twin-writer.ts`
+// (it consumes `@/lib` substrate builders + `rawWithParams`); core migrations
+// are plain-ESM `.mjs` run by the standalone `@cinatra-ai/migrations` runner
+// (no TS / path-alias resolution) and CANNOT import that host module, so a
+// pure-SQL migration would be forced to hand-re-implement the objects/resource/
+// representation/audit/binding CTEs. This sweep runs host-side from a core-boot
+// phase (mirroring the idempotent `instance-identity` boot backfill) AFTER the
+// twin-writer is registered, so it reuses the real writer verbatim.
+//
+// CONVERGENT (not literally once): a boot phase re-runs every boot; steady state
+// is a single cheap "is anything untwinned?" scan that returns nothing.
+
+/** The `objects.type` a dashboard twin carries. MIRRORS `DASHBOARD_OBJECT_TYPE`
+ *  in the host `src/lib/dashboards/dashboard-artifact-twin-writer.ts` (this
+ *  package cannot import host `@/lib`); the twin-backfill integration test
+ *  cross-checks the two constants so a rename on either side reds CI. */
+export const DASHBOARD_TWIN_OBJECT_TYPE = "@cinatra-ai/dashboard-artifact:dashboard";
+
+export interface TwinBackfillResult {
+  /** dashboards examined (a dashboard lacking a dashboard-type twin at scan time). */
+  scanned: number;
+  /** twins newly paired by this run. */
+  paired: number;
+  /** skipped because a dashboard-type twin already existed under the lock (a
+   *  forward mutation twinned it between the scan and the per-id tx). */
+  alreadyTwinned: number;
+  /** skipped because the id was occupied by a NON-dashboard object — a same-id
+   *  collision that is surfaced, NEVER clobbered. */
+  collisions: number;
+  /** the dashboard row disappeared between the scan and the per-id tx. */
+  gone: number;
+  /** per-dashboard failures (isolated — the run continues; retried next run). */
+  failed: Array<{ id: string; error: string }>;
+}
+
+export interface BackfillTwinsDeps {
+  /** page size for the untwinned scan + per-id pairing (default 200). */
+  batchSize?: number;
+  /** hard cap on scan iterations (safety; default effectively unbounded). */
+  maxBatches?: number;
+  /** optional logger for a non-trivial run. */
+  log?: (msg: string) => void;
+}
+
+/** The app schema name — mirrors `SCHEMA_NAME` in `store/schema.ts`. */
+function backfillSchemaName(): string {
+  return process.env.SUPABASE_SCHEMA ?? "cinatra";
+}
+
+/** Pair ONE untwinned dashboard inside its own advisory-locked transaction,
+ *  reusing the exact forward-writer pairing (`acquireTwinLockFirst` → row
+ *  `SELECT … FOR UPDATE` → `pairTwin`). Returns the disposition.
+ *
+ *  @internal Exported for the twin-backfill integration test's concurrency proof
+ *  (a twin that lands between the scan and this transaction ⇒ `"already"`, no
+ *  second pairing). Not part of the package's public surface. */
+export async function pairOneUntwinnedDashboardTwin(
+  id: string,
+  schemaName: string,
+): Promise<"paired" | "already" | "collision" | "gone"> {
+  const objTable = sql.raw(`"${schemaName.replaceAll('"', '""')}"."objects"`);
+  return getDashboardsDb().transaction(async (tx) => {
+    // Uniform advisory-first lock (the SAME order every forward writer takes),
+    // then the dashboard row lock — serializes this backfill against a forward
+    // mutation racing the same id.
+    await acquireTwinLockFirst(tx as unknown as TwinTx, id);
+    const rows = await tx
+      .select()
+      .from(dashboards)
+      .where(eq(dashboards.id, id))
+      .for("update")
+      .limit(1);
+    const row = rows[0];
+    if (!row) return "gone";
+    // Re-check UNDER THE LOCK — this is what makes the backfill idempotent even
+    // when a forward mutation twins the id between the scan and here. A
+    // non-dashboard object at the id is a collision: skip + surface, never
+    // clobber it.
+    //
+    // BOUNDED RESIDUAL (codex-noted): this check + `pairTwin` are atomic against
+    // any writer that cooperates on the per-id advisory lock — i.e. EVERY
+    // dashboards mutation (all advisory-first). It is NOT atomic against a
+    // hypothetical writer that inserts an `objects` row at this id WITHOUT taking
+    // the lock, which could land between this SELECT and `pairTwin`'s upsert and
+    // then be overwritten. This is (a) the EXACT exposure the shipped forward
+    // twin writer (#1971) already carries — the twin's `objects.id` = dashboardId
+    // with an unconditional upsert — so the backfill adds no new risk and is in
+    // fact strictly safer here (the forward path has no wrong-type pre-check at
+    // all); and (b) not reachable in practice: the object and dashboard id spaces
+    // are disjoint, so the only writer that ever targets `objects.id` = a
+    // dashboard id is the advisory-locked dashboard twin. A truly-atomic
+    // type-conditional upsert belongs in the shared `buildObjectsWithOutboxQuery`
+    // (fixing the forward path too), not in a re-implementation here.
+    const existing = await tx.execute(sql`SELECT type FROM ${objTable} WHERE id = ${id} LIMIT 1`);
+    const existingRows = (existing as { rows?: Array<Record<string, unknown>> }).rows ?? [];
+    if (existingRows.length > 0) {
+      return existingRows[0].type === DASHBOARD_TWIN_OBJECT_TYPE ? "already" : "collision";
+    }
+    // Pair via the registered forward writer (upsert). actor=null — a backfill
+    // has no acting principal; the twin's audit row records source='dashboards-twin'.
+    await pairTwin(tx as unknown as TwinTx, twinCtx(row, "upsert", null));
+    return "paired";
+  });
+}
+
+/**
+ * Backfill the artifact twin for every pre-existing dashboard that lacks one
+ * (cinatra#1894 B1c / #2006). Convergent + idempotent: a re-run creates nothing
+ * new. Safe on a fresh install (no DB configured ⇒ no-op) and cheap once
+ * complete (a single scan returning zero rows). Bounded/batched with per-id
+ * failure isolation.
+ */
+export async function backfillDashboardArtifactTwins(
+  deps: BackfillTwinsDeps = {},
+): Promise<TwinBackfillResult> {
+  const result: TwinBackfillResult = {
+    scanned: 0,
+    paired: 0,
+    alreadyTwinned: 0,
+    collisions: 0,
+    gone: 0,
+    failed: [],
+  };
+  // Fresh install pre-setup: no database configured — nothing to backfill.
+  if (!process.env.SUPABASE_DB_URL) return result;
+
+  const batchSize = Math.max(1, deps.batchSize ?? 200);
+  const maxBatches = Math.max(1, deps.maxBatches ?? 10_000_000);
+  const schemaName = backfillSchemaName();
+  const s = schemaName.replaceAll('"', '""');
+  const dashTable = sql.raw(`"${s}"."dashboards"`);
+  const objTable = sql.raw(`"${s}"."objects"`);
+  const db = getDashboardsDb();
+
+  // Keyset (cursor) scan over `dashboards.id`. Paired rows drop out of the
+  // NOT EXISTS predicate on the next scan; the `id > cursor` keyset advances the
+  // window past skipped/failed rows too, so the loop terminates in one ascending
+  // pass. A wrong-type id-collision is INCLUDED (so the per-id tx can surface it,
+  // never silently dropped); an already-dashboard-twinned row is EXCLUDED.
+  let cursor = "";
+  for (let b = 0; b < maxBatches; b++) {
+    const scan = sql`
+      SELECT d.id AS id
+      FROM ${dashTable} d
+      WHERE d.id > ${cursor}
+        AND NOT EXISTS (
+          SELECT 1 FROM ${objTable} o
+          WHERE o.id = d.id AND o.type = ${DASHBOARD_TWIN_OBJECT_TYPE}
+        )
+      ORDER BY d.id
+      LIMIT ${batchSize}
+    `;
+    const res = await db.execute(scan);
+    const rows = (res as { rows?: Array<Record<string, unknown>> }).rows ?? [];
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      const id = String(r.id);
+      result.scanned += 1;
+      cursor = id; // advance past every processed id (paired, skipped, or failed)
+      try {
+        const outcome = await pairOneUntwinnedDashboardTwin(id, schemaName);
+        if (outcome === "paired") result.paired += 1;
+        else if (outcome === "already") result.alreadyTwinned += 1;
+        else if (outcome === "collision") result.collisions += 1;
+        else result.gone += 1;
+      } catch (e) {
+        // Per-dashboard failure isolation: one bad row never aborts the run — it
+        // stays untwinned and is retried on the next boot.
+        result.failed.push({ id, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    if (rows.length < batchSize) break;
+  }
+
+  if (deps.log && (result.paired > 0 || result.collisions > 0 || result.failed.length > 0)) {
+    deps.log(
+      `[dashboards] artifact-twin backfill: paired=${result.paired} scanned=${result.scanned} ` +
+        `already=${result.alreadyTwinned} collisions=${result.collisions} failed=${result.failed.length}`,
+    );
+  }
+  return result;
+}
