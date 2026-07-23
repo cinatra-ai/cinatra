@@ -11,21 +11,14 @@
  *
  * MIGRATION NOTE (cinatra#1625): the FollowUpCadence component moved
  * into @cinatra-ai/email-artifacts; its value-sync + poll-guard coverage moved
- * with it (email-artifacts/src/__tests__/follow-up-cadence.test.tsx). This host
- * suite keeps the renderers that remain host-owned: SchemaFieldRenderer,
- * EmailDraftsReviewRenderer, and SendConfirmationRenderer.
- *
- * INLINE-FALLBACK NOTE for Test 4:
- *   `SendConfirmationRenderer` resolves its embedded sender field through the
- *   field-renderer REGISTRY (the gmail-sender COMPONENT migrated into
- *   @cinatra-ai/email-artifacts, cinatra#1625). With no gmail connected
- *   (BASE_CONTEXT), the gmail-sender condition does NOT activate, so resolve()
- *   returns null and SendConfirmation renders its OWN eager inline email
- *   `<input id="field-senderEmail">` fallback — a native input `queryByDisplayValue`
- *   can read, which commits every keystroke to senderEmail immediately (codex
- *   2026-07-21: the buffering schema floor was rejected because a typed address
- *   could be lost on approval). These tests exercise that eager path + the
- *   SendConfirmation senderEmail sync.
+ * with it (email-artifacts/src/__tests__/follow-up-cadence.test.tsx). The
+ * SendConfirmation SHELL likewise relocated into @cinatra-ai/email-artifacts
+ * (cinatra#1961, S8 successor) — action-decoupled, it now composes the sibling
+ * gmail-sender directly and renders its eager inline email `<input>` fallback when
+ * gmail is disconnected; its senderEmail value-sync + poll-guard coverage moved
+ * with it (email-artifacts/src/__tests__/send-confirmation.test.tsx). This host
+ * suite keeps the renderers that remain host-owned: SchemaFieldRenderer and
+ * EmailDraftsReviewRenderer.
  *
  *   pnpm --filter @cinatra/agents exec vitest run \
  *     src/__tests__/renderer-local-state.test.tsx
@@ -71,7 +64,6 @@ vi.mock("../email-outreach-stage-actions", () => ({
 
 import { SchemaFieldRenderer } from "../schema-field-renderer";
 import { EmailDraftsReviewRenderer } from "../email-drafts-review-renderer";
-import { SendConfirmationRenderer } from "../send-confirmation-renderer";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -220,98 +212,7 @@ describe("EmailDraftsReviewRenderer value-sync", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Test 4 — SendConfirmationRenderer (registry-resolved sender via input shim)
-// ---------------------------------------------------------------------------
-
-describe("SendConfirmationRenderer value-sync", () => {
-  afterEach(() => {
-    cleanup();
-  });
-
-  it("syncs senderEmail when value.senderEmail changes externally from a@x.com to b@x.com (via registry-shim input)", () => {
-    const { rerender } = render(
-      <SendConfirmationRenderer
-        fieldName="send"
-        schema={{ type: "object" }}
-        value={{ campaignId: "c1", senderEmail: "a@x.com" }}
-        onChange={() => {}}
-        context={BASE_CONTEXT}
-        label="Send"
-      />,
-    );
-    // Initial state: shim shows "a@x.com".
-    expect(screen.queryByDisplayValue("a@x.com")).not.toBeNull();
-
-    rerender(
-      <SendConfirmationRenderer
-        fieldName="send"
-        schema={{ type: "object" }}
-        value={{ campaignId: "c1", senderEmail: "b@x.com" }}
-        onChange={() => {}}
-        context={BASE_CONTEXT}
-        label="Send"
-      />,
-    );
-    // After sync, the senderEmail state syncs and the shim shows "b@x.com".
-    expect(screen.queryByDisplayValue("b@x.com")).not.toBeNull();
-  });
-
-  it("POLL SAFETY: does NOT overwrite user-typed senderEmail when parent re-emits same content", () => {
-    const onChange = vi.fn();
-    const { rerender } = render(
-      <SendConfirmationRenderer
-        fieldName="send"
-        schema={{ type: "object" }}
-        value={{ campaignId: "c1", senderEmail: "a@x.com" }}
-        onChange={onChange}
-        context={BASE_CONTEXT}
-        label="Send"
-      />,
-    );
-    // Simulate user typing a different address directly into the shim input.
-    const input = screen.getByDisplayValue("a@x.com") as HTMLInputElement;
-    fireEvent.change(input, { target: { value: "user@typed.com" } });
-    expect(screen.queryByDisplayValue("user@typed.com")).not.toBeNull();
-
-    // Poll tick: parent re-emits the SAME senderEmail with a new object reference.
-    rerender(
-      <SendConfirmationRenderer
-        fieldName="send"
-        schema={{ type: "object" }}
-        value={{ campaignId: "c1", senderEmail: "a@x.com" }}
-        onChange={onChange}
-        context={BASE_CONTEXT}
-        label="Send"
-      />,
-    );
-    // The fingerprint guard must prevent the poll re-reference from resetting the
-    // user's typed value back to "a@x.com".
-    expect(screen.queryByDisplayValue("user@typed.com")).not.toBeNull();
-    expect(screen.queryByDisplayValue("a@x.com")).toBeNull();
-  });
-
-  it("commits a typed fallback address to the approval payload (eager, not buffered)", () => {
-    // codex 2026-07-21 merge gate: typing into the no-gmail inline fallback must
-    // reach the approval onChange payload WITHOUT a Continue/flush (the buffering
-    // schema floor would have dropped it). SendConfirmation emits
-    // { campaignId, senderEmail } whenever senderEmail changes.
-    const onChange = vi.fn();
-    render(
-      <SendConfirmationRenderer
-        fieldName="send"
-        schema={{ type: "object" }}
-        value={{ campaignId: "c1" }}
-        onChange={onChange}
-        context={BASE_CONTEXT}
-        label="Send"
-      />,
-    );
-    const input = document.getElementById("field-senderEmail") as HTMLInputElement;
-    expect(input).not.toBeNull();
-    fireEvent.change(input, { target: { value: "typed@sender.com" } });
-    // The latest onChange emission carries the eagerly-committed address.
-    const lastCall = onChange.mock.calls.at(-1);
-    expect(lastCall?.[0]).toMatchObject({ campaignId: "c1", senderEmail: "typed@sender.com" });
-  });
-});
+// Test 4 — SendConfirmationRenderer — RELOCATED (cinatra#1961): the send-confirmation
+// SHELL moved into @cinatra-ai/email-artifacts; its eager-inline sender value-sync,
+// poll-safety fingerprint guard, and eager approval-payload commit coverage now
+// live in email-artifacts/src/__tests__/send-confirmation.test.tsx.
