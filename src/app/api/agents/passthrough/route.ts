@@ -27,6 +27,10 @@ import {
   shapeRecipientsReviewResumeInput,
   isRecipientsReviewFailureResult,
 } from "./recipients-review-seam";
+import {
+  isRunScopedPersistTool,
+  enforceAnsweredGateProvenance,
+} from "./answered-gate-provenance";
 
 /**
  * Deterministic MCP-call passthrough for WayFlow.
@@ -505,6 +509,35 @@ export async function POST(req: Request): Promise<Response> {
           verifiedSubmissionId = (await resolveLatestWayflowGateTaskId(run.id)) ?? undefined;
         } catch {
           verifiedSubmissionId = undefined; // fail closed on a Redis read error
+        }
+      }
+      // #1987 — ANSWERED-gate-submission provenance binding (the shared-seam
+      // invariant). A run-scoped PERSIST primitive must originate from the
+      // operator's ANSWERED gate submission for its OWN gate + payload: consume
+      // the single-use answered-gate record keyed by the exact gate task id
+      // (`verifiedSubmissionId`, from the trusted frame — never caller input) and
+      // bound to the operator's canonical resume payload (`rawInput.resume-
+      // PayloadJson`, verbatim-forwarded from the answer). A persist that cannot
+      // present valid, unconsumed provenance FAILS CLOSED — this rejects an
+      // in-run OBO synthesized write, a replay, a mutated payload, and a
+      // substrate-error decision, so no member ships an unbound write. The
+      // read/shape run-scoped primitives (list/exclude) are not persists and are
+      // not bound. Runs BEFORE the handler; a deny is a non-2xx so the apply
+      // ApiNode fails the run rather than completing it with an unauthorized write.
+      // Consuming BEFORE the handler is deliberate: it is the atomic single-use
+      // point (two concurrent applies cannot both pass), per AC3. A subsequent
+      // handler failure fails the run anyway (its own error → non-2xx), so the
+      // burned record changes no outcome; a lost-response transport retry then
+      // fails closed (safe — no unauthorized write; the operator re-answers).
+      if (isRunScopedPersistTool(tool)) {
+        const provenance = await enforceAnsweredGateProvenance({
+          tool,
+          runId: binding.runId,
+          verifiedSubmissionId,
+          resumePayloadJson: rawInput.resumePayloadJson,
+        });
+        if (!provenance.ok) {
+          return NextResponse.json({ error: provenance.error }, { status: provenance.status });
         }
       }
       result = RUN_SCOPED_CONTEXT_TOOLS.has(tool)

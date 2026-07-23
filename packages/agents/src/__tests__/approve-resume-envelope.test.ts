@@ -71,6 +71,10 @@ vi.mock("@cinatra-ai/a2a", () => ({
   createExternalA2AClient: vi.fn(async () => ({
     sendTask: sendTaskMock,
   })),
+  // #1987 — the wayflow- resume mints answered-gate provenance (and re-asserts
+  // the latest-task join key) before dispatch; stub both so the resume proceeds.
+  rememberLatestWayflowGateTask: vi.fn(async () => {}),
+  rememberAnsweredGateSubmission: vi.fn(async () => {}),
 }));
 
 // Avoid pulling the full execution graph for downstream state handling.
