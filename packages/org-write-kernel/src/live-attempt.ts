@@ -8,20 +8,29 @@
  *   - run-authority minting (`verifyRunAuthority` refuses a VerifiedRunRef for
  *     anything that fails it).
  *
- * pending_input is ambiguous by construction: it is entered both pre-dispatch
- * (setup, resets — `failed→pending_input` RETAINS the stale attempt id) and
- * in-flight (a genuine human wait inside a live attempt). The durable
- * discriminator is `human_wait_attempt_id`: stamped with the CURRENT
- * execution_attempt_id exactly on the one human-wait `running→pending_input`
- * transition, cleared on every other `→pending_input` edge and on every
- * dispatch. A reset run therefore fails the equality below and is treated as
- * pre-dispatch — fail-closed.
+ * Grounded against the REAL transition table (run-status.ts), which corrected
+ * the original design's framing:
+ *   - `pending_input` is categorically PARKED: every edge into it is
+ *     pre-dispatch (setup, compensation, resets — `failed→pending_input`
+ *     retains a stale attempt id) INCLUDING the one "genuine human wait"
+ *     (#1058), which fires from `queued` BEFORE the dispatch CAS. Never live.
+ *   - `queued` is pre-dispatch by definition (the attempt id on a queued row
+ *     is from a PREVIOUS dispatch); the S3 dispatch freeze governs it under
+ *     archive. Never live.
+ *   - `waiting_trigger` is unambiguously MID-ATTEMPT (only reachable from
+ *     `running`; holds an open a2aContextId). Live.
+ *   - `pending_approval` is the ONE ambiguous state: entered mid-attempt
+ *     (`running→`, interrupt paths) AND pre-dispatch (`queued→`, setup
+ *     interrupts). The durable discriminator is `human_wait_attempt_id`,
+ *     stamped BY THE EDGE inside the status CAS (running→pending_approval
+ *     copies the row's own attempt id; queued→pending_approval and every
+ *     dispatch clear it). Live only while it equals the current attempt id.
  */
 
-/** Run statuses that are live unconditionally (dispatch happened, work or an
- *  approval is genuinely in flight). Pre-dispatch/gated states (pending_trigger,
- *  armed, setup-phase pending_input) and terminal states are NOT here. */
-const UNCONDITIONALLY_LIVE = new Set(["queued", "running", "pending_approval"]);
+/** Mid-attempt beyond doubt: executing, or a WayFlow trigger wait holding an
+ *  open context. Pre-dispatch (queued, pending_input, pending_trigger, armed)
+ *  and terminal states are NOT here. */
+const UNCONDITIONALLY_LIVE = new Set(["running", "waiting_trigger"]);
 
 export interface LiveAttemptRow {
   readonly status: string;
@@ -45,7 +54,7 @@ export function isLiveAttempt(
     if (Number.isFinite(deadlineMs) && deadlineMs <= clock.nowMs) return false;
   }
   if (UNCONDITIONALLY_LIVE.has(row.status)) return true;
-  if (row.status === "pending_input") {
+  if (row.status === "pending_approval") {
     return (
       row.humanWaitAttemptId !== null &&
       row.humanWaitAttemptId === row.executionAttemptId
@@ -66,8 +75,8 @@ export function liveAttemptSqlCondition(alias: string): string {
   return (
     `(${alias}.execution_attempt_id IS NOT NULL` +
     ` AND (${alias}.execution_deadline_at IS NULL OR ${alias}.execution_deadline_at > now())` +
-    ` AND (${alias}.status IN ('queued','running','pending_approval')` +
-    ` OR (${alias}.status = 'pending_input'` +
+    ` AND (${alias}.status IN ('running','waiting_trigger')` +
+    ` OR (${alias}.status = 'pending_approval'` +
     ` AND ${alias}.human_wait_attempt_id IS NOT NULL` +
     ` AND ${alias}.human_wait_attempt_id = ${alias}.execution_attempt_id)))`
   );

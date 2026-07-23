@@ -267,6 +267,18 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Migration: see src/lib/drizzle-store.ts (ADD COLUMN IF NOT EXISTS pair).
   executionDeadlineAt: timestamp("execution_deadline_at", { withTimezone: true }),
   executionAttemptId:  text("execution_attempt_id"),
+  // cinatra#1938 (archive S2): the DURABLE "paused inside a live attempt"
+  // marker for the ONE ambiguous wait state, pending_approval (entered both
+  // mid-attempt via running→ and pre-dispatch via queued→ setup interrupts).
+  // Edge-derived inside the status CAS — no caller flag: running→
+  // pending_approval copies the row's own execution_attempt_id in-SQL;
+  // queued→pending_approval and every dispatch clear it. Archive leases /
+  // run authority treat pending_approval as in-flight ONLY while this equals
+  // the current execution_attempt_id (stale or cleared ⇒ parked,
+  // fail-closed). pending_input needs no marker: every edge into it is
+  // pre-dispatch, including the #1058 human wait (fires from queued).
+  // Migration: see src/lib/drizzle-store.ts (ADD COLUMN IF NOT EXISTS).
+  humanWaitAttemptId: text("human_wait_attempt_id"),
   // streamed_text: accumulated external A2A peer text output persisted
   // on clean RUN_FINISHED by startExternalSseProxyFromStream (see packages/a2a/src/
   // external-sse-proxy.ts). NULL for: (a) internal LangGraph runs (never emit

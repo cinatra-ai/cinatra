@@ -102,8 +102,8 @@ describe("org locks (#1938)", () => {
 });
 
 describe("live-attempt predicate (#1938, shared by leases AND authority)", () => {
-  it("queued / running / pending_approval with a live deadline are live", () => {
-    for (const status of ["queued", "running", "pending_approval"]) {
+  it("running and waiting_trigger with a live deadline are live (mid-attempt beyond doubt)", () => {
+    for (const status of ["running", "waiting_trigger"]) {
       expect(isLiveAttempt(liveRow({ status }), NOW)).toBe(true);
     }
   });
@@ -118,48 +118,57 @@ describe("live-attempt predicate (#1938, shared by leases AND authority)", () =>
     expect(isLiveAttempt(liveRow({ executionDeadlineAt: PAST }), NOW)).toBe(false);
   });
 
-  it("pending_input is live ONLY inside a matching human wait (codex r0 #1)", () => {
+  it("pending_approval is live ONLY under a matching mid-attempt marker (the one ambiguous state)", () => {
     expect(
       isLiveAttempt(
-        liveRow({ status: "pending_input", humanWaitAttemptId: "attempt-1" }),
+        liveRow({ status: "pending_approval", humanWaitAttemptId: "attempt-1" }),
         NOW,
       ),
     ).toBe(true);
-    // The reset case: failed→pending_input keeps the stale attempt id but the
-    // human-wait marker was cleared — pre-dispatch, fail-closed.
+    // Setup interrupt (queued→pending_approval): marker cleared — parked.
     expect(
       isLiveAttempt(
-        liveRow({ status: "pending_input", humanWaitAttemptId: null }),
+        liveRow({ status: "pending_approval", humanWaitAttemptId: null }),
         NOW,
       ),
     ).toBe(false);
     // A marker from a PREVIOUS attempt does not carry into a new one.
     expect(
       isLiveAttempt(
-        liveRow({ status: "pending_input", humanWaitAttemptId: "attempt-0" }),
+        liveRow({ status: "pending_approval", humanWaitAttemptId: "attempt-0" }),
         NOW,
       ),
     ).toBe(false);
   });
 
-  it("terminal and pre-dispatch states are never live", () => {
+  it("parked, pre-dispatch, and terminal states are never live — including queued and ALL pending_input", () => {
     for (const status of [
+      "queued",
+      "pending_input",
       "completed",
       "failed",
       "stopped",
       "armed",
       "pending_trigger",
-      "waiting_trigger",
     ]) {
       expect(isLiveAttempt(liveRow({ status }), NOW)).toBe(false);
     }
+    // Even a (stale) marker cannot make pending_input live — the state is
+    // categorically parked (the #1058 human wait fires pre-dispatch).
+    expect(
+      isLiveAttempt(
+        liveRow({ status: "pending_input", humanWaitAttemptId: "attempt-1" }),
+        NOW,
+      ),
+    ).toBe(false);
   });
 
   it("the SQL condition mirrors the predicate structure (single source)", () => {
     const cond = liveAttemptSqlCondition("r");
     expect(cond).toContain("r.execution_attempt_id IS NOT NULL");
     expect(cond).toContain("r.execution_deadline_at IS NULL OR r.execution_deadline_at > now()");
-    expect(cond).toContain("'queued','running','pending_approval'");
+    expect(cond).toContain("'running','waiting_trigger'");
+    expect(cond).toContain("r.status = 'pending_approval'");
     expect(cond).toContain("r.human_wait_attempt_id = r.execution_attempt_id");
   });
 });

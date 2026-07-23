@@ -1751,6 +1751,11 @@ END $$` },
     // with every queued→running CAS (packages/agents/src/store.ts).
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS execution_deadline_at timestamptz` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS execution_attempt_id text` },
+    // cinatra#1938 (archive S2): durable mid-attempt wait marker —
+    // pending_approval is in-flight only while this equals
+    // execution_attempt_id (edge-derived by the status CAS in
+    // packages/agents/src/store.ts).
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS human_wait_attempt_id text` },
     // traces table: Postgres SpanExporter storage.
     // Composite PK (trace_id, span_id). attributes/events stored as jsonb.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."traces" (

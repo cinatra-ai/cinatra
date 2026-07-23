@@ -1618,6 +1618,24 @@ export async function updateAgentRunStatusConditional(
             // 24h — AGENT_RUN_TIMEOUT_MAX_SECONDS) from now(), evaluated
             // inside the same UPDATE.
             executionDeadlineAt: sql`now() + make_interval(secs => COALESCE(${agentRuns.timeoutSeconds}, 86400))`,
+            // cinatra#1938: a fresh attempt never inherits an old human-wait
+            // window — cleared atomically with every dispatch.
+            humanWaitAttemptId: null,
+          }
+        : {}),
+      ...(nextStatus === "pending_approval"
+        ? {
+            // cinatra#1938: pending_approval is the ONE ambiguous wait state —
+            // entered mid-attempt (running→, interrupt paths) AND pre-dispatch
+            // (queued→, setup interrupts). The EDGE is the discriminator, so
+            // the CAS stamps it durably with no caller flag: a mid-attempt
+            // interrupt copies the row's own attempt id in-SQL; a setup
+            // interrupt clears it. Lease/authority checks treat the row as
+            // in-flight only while this equals execution_attempt_id.
+            humanWaitAttemptId:
+              expectedStatus === "running"
+                ? sql`${agentRuns.executionAttemptId}`
+                : null,
           }
         : {}),
     })
@@ -1663,7 +1681,7 @@ export async function transitionRunStatus(
     startedAt?: Date;
     completedAt?: Date;
     stepResults?: unknown[];
-    /** Flags the ONE genuine human-wait `→pending_input` (stop-run-hitl, #1058) so it notifies; every other `pending_input` reason leaves it unset. Not a DB column — only feeds the run-wait-notifier classification below. */
+    /** Flags the ONE genuine human-wait `→pending_input` (stop-run-hitl, #1058) so it notifies; every other `pending_input` reason leaves it unset. Not a DB column — only feeds the run-wait-notifier classification below. (The archive program's durable in-attempt marker is edge-derived on `→pending_approval` inside the CAS — cinatra#1938 — and deliberately independent of this flag: the #1058 wait fires pre-dispatch from `queued`, so it is parked, not in-flight.) */
     humanWaitGate?: boolean;
     /** REQUIRED on queued→running (cinatra#1937): per-dispatch bookkeeping stamped atomically with the CAS. The primitive below throws without it. */
     dispatch?: AgentRunDispatchFields;
