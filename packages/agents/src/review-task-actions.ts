@@ -460,6 +460,39 @@ export async function approveReviewTaskInternal(
       console.warn(`[approveReviewTaskInternal] writeHitlPrompt failed run=${run.id}`, e);
     });
 
+    // #1987 (F1 deferred from #1960) — mint the ANSWERED-gate-submission
+    // provenance BEFORE the WayFlow resume dispatch, so the post-resume `apply`
+    // node's run-scoped PERSIST primitive can bind its write to THIS operator
+    // answer (run + exact gate task id + canonical payload), single-use. Only the
+    // STRUCTURED userResponse path is minted — the persist-driving gates
+    // (#1959/#1960/#1961) always carry one; a bare click-to-approve / note has no
+    // structured payload to persist and needs no binding. Keyed by the bare gate
+    // `taskId` (== the passthrough seam's `verifiedSubmissionId`, which resolves
+    // the same latest-task id set at this gate's interrupt-emit). AWAITED and
+    // fail-closed: a Redis failure THROWS and the resume is NOT dispatched (an
+    // unrecorded answer means the persist denies rather than persisting an unbound
+    // write), mirroring `rememberLatestWayflowGateTask`. The digest hashes
+    // `userResponseRaw` — the exact byte string WayFlow forwards VERBATIM to the
+    // apply node as `resumePayloadJson`, which the persist seam re-hashes.
+    if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
+      const { rememberAnsweredGateSubmission, rememberLatestWayflowGateTask } =
+        await import("@cinatra-ai/a2a");
+      // RE-ASSERT the latest-task join key to THIS answered gate before minting.
+      // The passthrough seam derives the persist's `verifiedSubmissionId` from the
+      // latest-task map, stamped at interrupt-EMIT with a TTL; a gate that stays
+      // pending PAST that TTL before the operator answers would leave the key
+      // expired, so the post-resume consume would resolve no `verifiedSubmissionId`
+      // and FALSELY deny a genuine answer. Re-asserting it here guarantees the
+      // immediate post-resume consume resolves the same gate identity we mint
+      // under. It is IDEMPOTENT: a WayFlow run is suspended at exactly ONE gate at
+      // a time and `taskId` IS that gate, so this only re-writes the value already
+      // present (or restores it after a TTL expiry); concurrent answers to the
+      // same gate write the identical `taskId`, and the next gate's interrupt-emit
+      // legitimately advances the key afterwards.
+      await rememberLatestWayflowGateTask(run.id, taskId);
+      await rememberAnsweredGateSubmission(run.id, taskId, userResponseRaw);
+    }
+
     // Dynamic imports mirror mcp/handlers.ts:625-628 — avoids circular dep at
     // module load time (review-task-actions is imported by actions.ts which is
     // re-exported from index.ts; @cinatra-ai/a2a pulls in mcp-server which depends

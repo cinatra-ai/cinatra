@@ -143,4 +143,4 @@ export {
   InMemoryTaskStore,
   JsonRpcTransportHandler,
 } from "@a2a-js/sdk/server";
-export { getOrAddWayflowGateIndex, getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLatestWayflowGateTask, resolveLatestWayflowGateTaskId, resolveRunIdByWayflowTaskId } from "./event-log";
+export { getOrAddWayflowGateIndex, getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLatestWayflowGateTask, resolveLatestWayflowGateTaskId, resolveRunIdByWayflowTaskId, rememberAnsweredGateSubmission, consumeAnsweredGateSubmission, answeredGatePayloadDigest, type AnsweredGateConsumeResult } from "./event-log";
