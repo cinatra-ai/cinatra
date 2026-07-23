@@ -734,6 +734,15 @@ async function runInitialSend(args: {
         },
         {
           userId: actor.userId,
+          // cinatra#1983 — thread the authenticated actor's org (mirrors the
+          // run-scoped test-send path below) so the facade's sent-email object
+          // writer receives `routing.orgId` and can persist the semantic record
+          // under an authorization-bearing, org-scoped actor. Without it the
+          // writer's org-less guard cleanly skips the write and the
+          // fully-correlated campaign record (the reason this loop threads
+          // campaign/contact/run correlation at all, #1456) would never land.
+          // Undefined on an org-less caller preserves the AC3 clean-skip.
+          orgId: actor.orgId ?? undefined,
           correlation: {
             campaignId: input.campaignId,
             ...(runScopeId ? { runId: runScopeId } : {}),
