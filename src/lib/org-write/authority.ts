@@ -11,7 +11,7 @@ import "server-only";
  *   - verified run: the agent_runs row itself, admitted ONLY under the
  *     kernel's shared live-attempt predicate with the caller's claimed
  *     attempt id matching the row's CURRENT one (a stale worker from a
- *     previous attempt is refused — codex-converged r1);
+ *     previous attempt is refused — design review);
  *   - system: purpose-scoped minting for the dispatcher's own writes. The
  *     restricted-importer discipline is enforced by the S2 boundary gate;
  *     S4 wires and audits per-job use.
@@ -100,7 +100,7 @@ export interface VerifyRunAuthorityDeps {
   readRunRow(runId: string): Promise<RunRowForAuthority | null>;
   nowMs(): number;
   /**
-   * The run-capability CEILING (codex diff round): consulted IN ADDITION to
+   * The run-capability CEILING: consulted IN ADDITION to
    * the structural floor below — it can only restrict, never widen. S4 (the
    * system-authority slice) wires the real authPolicy/oboCeiling evaluator;
    * until a caller supplies one, the conservative default DENIES nothing

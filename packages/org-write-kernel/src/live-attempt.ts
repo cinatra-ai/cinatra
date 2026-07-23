@@ -1,8 +1,7 @@
 /**
  * The ONE live-attempt predicate — cinatra#1938 (archive epic S2).
  *
- * Both consumers evaluate exactly this function, so they can never diverge
- * (codex-converged r1):
+ * Both consumers evaluate exactly this function, so they can never diverge:
  *   - archive-lease snapshot eligibility ("which in-flight runs get a bounded
  *     window when the org archives");
  *   - run-authority minting (`verifyRunAuthority` refuses a VerifiedRunRef for
@@ -49,7 +48,7 @@ export function isLiveAttempt(
   clock: LiveAttemptClock,
 ): boolean {
   if (row.executionAttemptId === null) return false;
-  // A NULL deadline is FAIL-CLOSED (codex diff round): every dispatch stamps
+  // A NULL deadline is FAIL-CLOSED: every dispatch stamps
   // one (COALESCE(timeout, 86400) — S1), so NULL means a legacy/corrupt row,
   // and an unbounded row cannot hold a "bounded verifiable window" anyway
   // (a lease copies this deadline and NULL could never satisfy
@@ -70,7 +69,7 @@ export function isLiveAttempt(
 /**
  * The same predicate as a SQL condition fragment over an `agent_runs` alias —
  * the single source both guard adapters splice (callback guard and fixed-batch
- * guard SQL are GENERATED from here; codex-converged r1: no drift between the
+ * guard SQL are GENERATED from here; design review: no drift between the
  * two write worlds). Positional parameters are the caller's responsibility;
  * this returns text with the alias interpolated (a trusted identifier, never
  * user input).

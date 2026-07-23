@@ -89,7 +89,7 @@ describe("org-write registry lockstep (#1938)", () => {
   });
 });
 
-describe("per-function write-site ratchet + R4 seed (codex diff round)", () => {
+describe("per-function write-site ratchet + R4 seed", () => {
   it("each dashboards writer's drizzle write-site count matches its registry row", () => {
     const src = readFileSync(MUTATION_SERVICE, "utf-8");
     const parts = src.split(/export async function (\w+)/);

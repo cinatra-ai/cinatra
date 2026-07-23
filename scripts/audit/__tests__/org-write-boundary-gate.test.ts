@@ -145,7 +145,7 @@ describe("org-write-boundary-gate rules (#1938)", () => {
   });
 });
 
-describe("opaque access forms are fail-closed (codex diff round)", () => {
+describe("opaque access forms are fail-closed", () => {
   it("a namespace import of the kernel root outside the allowlist is red", () => {
     const v = check(
       "src/lib/rogue-ns.ts",

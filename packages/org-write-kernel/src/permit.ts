@@ -1,7 +1,7 @@
 /**
  * Transaction-bound write permits — cinatra#1938 (archive epic S2).
  *
- * Unforgeability is RUNTIME, not type-level (codex-converged r0): every permit
+ * Unforgeability is RUNTIME, not type-level: every permit
  * the kernel mints is registered in a module-private WeakSet, and
  * `assertPermitUsable` checks membership before anything else — a value cast
  * with `as any as OrgWritePermit` is not in the set and fails. The phantom

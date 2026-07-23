@@ -203,7 +203,7 @@ export function evaluateBoundaryRules(fileRel, edges, resolveSpecifier) {
       edge.specifier === "@/lib/org-write" ||
       edge.specifier.startsWith("@/lib/org-write/");
 
-    // OPAQUE access forms (codex diff round): a namespace import, a bindingless
+    // OPAQUE access forms: a namespace import, a bindingless
     // bare import, a require() or a dynamic import() grants access to EVERY
     // export — including the restricted ones — without naming them. For the
     // restricted modules these are violations unless the file is allowlisted:

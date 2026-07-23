@@ -1589,19 +1589,16 @@ export async function updateAgentRunStatusConditional(
   nextStatus: string,
   dispatch?: AgentRunDispatchFields,
 ): Promise<boolean> {
-  // cinatra#1937: a queued→running CAS IS a dispatch — it must stamp the
-  // per-dispatch bookkeeping ATOMICALLY with the status flip (every
-  // re-dispatch path funnels through here, so `running` rows can never exist
-  // with stale/absent attempt ids). Enforced at the deepest layer so no
-  // caller — present or future — can bypass it.
+  // cinatra#1937: a queued→running CAS IS a dispatch — it stamps per-dispatch
+  // bookkeeping ATOMICALLY with the status flip at the deepest layer, so no
+  // caller can bypass it and `running` rows never carry stale attempt ids.
   const isDispatchTransition = expectedStatus === "queued" && nextStatus === "running";
   if (isDispatchTransition && !dispatch) {
     throw new Error(
       `updateAgentRunStatusConditional: queued→running for run ${id} requires dispatch fields (executionAttemptId; the deadline is computed in SQL)`,
     );
   }
-  // Inverse guard: dispatch bookkeeping belongs ONLY to the dispatch edge — a
-  // caller stamping it on any other transition is a bug, not a request.
+  // Inverse guard: dispatch bookkeeping belongs ONLY to the dispatch edge.
   if (!isDispatchTransition && dispatch) {
     throw new Error(
       `updateAgentRunStatusConditional: dispatch fields supplied for non-dispatch transition ${expectedStatus}→${nextStatus} on run ${id}`,
@@ -1614,29 +1611,15 @@ export async function updateAgentRunStatusConditional(
       ...(dispatch
         ? {
             executionAttemptId: dispatch.attemptId,
-            // DB clock by construction: the row's own timeout (capped default
-            // 24h — AGENT_RUN_TIMEOUT_MAX_SECONDS) from now(), evaluated
-            // inside the same UPDATE.
+            // DB clock: the row's own timeout (COALESCE default 24h) from now().
             executionDeadlineAt: sql`now() + make_interval(secs => COALESCE(${agentRuns.timeoutSeconds}, 86400))`,
-            // cinatra#1938: a fresh attempt never inherits an old human-wait
-            // window — cleared atomically with every dispatch.
-            humanWaitAttemptId: null,
+            humanWaitAttemptId: null, // #1938: a fresh dispatch drops any wait marker
           }
         : {}),
+      // cinatra#1938: durable in-attempt wait marker (rationale on the agent_runs
+      // column). running→pending_approval stamps the attempt id; else clears.
       ...(nextStatus === "pending_approval"
-        ? {
-            // cinatra#1938: pending_approval is the ONE ambiguous wait state —
-            // entered mid-attempt (running→, interrupt paths) AND pre-dispatch
-            // (queued→, setup interrupts). The EDGE is the discriminator, so
-            // the CAS stamps it durably with no caller flag: a mid-attempt
-            // interrupt copies the row's own attempt id in-SQL; a setup
-            // interrupt clears it. Lease/authority checks treat the row as
-            // in-flight only while this equals execution_attempt_id.
-            humanWaitAttemptId:
-              expectedStatus === "running"
-                ? sql`${agentRuns.executionAttemptId}`
-                : null,
-          }
+        ? { humanWaitAttemptId: expectedStatus === "running" ? sql`${agentRuns.executionAttemptId}` : null }
         : {}),
     })
     .where(and(eq(agentRuns.id, id), eq(agentRuns.status, expectedStatus)))
@@ -1700,8 +1683,7 @@ export async function transitionRunStatus(
     // it here is a no-op that still runs the terminal-detection branch
     // (expireRunStream) and meta-patch logic. The CONTROL keys (`dispatch` —
     // written BY the CAS — and `humanWaitGate` — not a DB column) are stripped
-    // first: only genuine DB meta reaches the delegated write, and a
-    // control-keys-only meta skips the second write entirely.
+    // first: only genuine DB meta reaches the delegated write.
     const { dispatch: _dispatch, humanWaitGate: _humanWaitGate, ...dbMeta } = meta ?? {};
     const hasDelegatedMeta =
       dbMeta.error !== undefined ||

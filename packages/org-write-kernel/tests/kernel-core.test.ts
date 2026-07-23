@@ -1,7 +1,7 @@
 /**
  * cinatra#1938 — kernel core: capability table totality + archived denials,
  * global lock order, the shared live-attempt predicate (incl. the
- * reset-to-input refusal codex round-0 forced), and runtime permit
+ * reset-to-input refusal design review forced), and runtime permit
  * unforgeability (the WeakSet claim, not the type brand).
  */
 import { describe, it, expect } from "vitest";
@@ -173,7 +173,7 @@ describe("live-attempt predicate (#1938, shared by leases AND authority)", () =>
   });
 });
 
-describe("permit unforgeability (#1938, runtime WeakSet — codex r0 #4)", () => {
+describe("permit unforgeability (#1938, runtime WeakSet)", () => {
   const tx = {};
   const fields = {
     txIdentity: tx,
@@ -226,7 +226,7 @@ describe("permit unforgeability (#1938, runtime WeakSet — codex r0 #4)", () =>
   });
 });
 
-describe("null execution deadline is fail-closed (codex diff round)", () => {
+describe("null execution deadline is fail-closed", () => {
   it("a run with no deadline is never live — a bounded window needs a bound", () => {
     expect(
       isLiveAttempt(liveRow({ executionDeadlineAt: null }), NOW),

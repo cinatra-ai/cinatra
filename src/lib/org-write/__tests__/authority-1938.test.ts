@@ -203,7 +203,7 @@ describe("runGuardedOrgWriteBatchSync (#1938)", () => {
   });
 });
 
-describe("run-capability ceiling hook (codex diff round)", () => {
+describe("run-capability ceiling hook", () => {
   const NOW = Date.parse("2026-07-23T00:00:00Z");
   const ROW = {
     orgId: "org-1",
