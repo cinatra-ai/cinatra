@@ -51,6 +51,7 @@ const {
   upsertExternalMcpServer,
   listExternalMcpServers,
   ExternalMcpServerManagedEndpointError,
+  _resetManagedEndpointSweepForTests,
 } = await import("@/lib/external-mcp-registry");
 
 const byoRow = (over: Partial<Record<string, unknown>> = {}) => ({
@@ -70,8 +71,10 @@ beforeEach(() => {
   nextResults = [];
   notifications.length = 0;
   wpInstances = [];
-  // Reset the registry's in-process cache between tests.
+  // Reset the registry's in-process cache AND re-arm the once-per-process
+  // sweep so every test exercises the fresh-sweep path deterministically.
   (globalThis as Record<string, unknown>)["__cinatraExternalMcpServerCache"] = null;
+  _resetManagedEndpointSweepForTests();
 });
 
 describe("canonicalizeMcpEndpointUrl", () => {

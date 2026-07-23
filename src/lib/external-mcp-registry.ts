@@ -265,6 +265,13 @@ function assertNotManagedConnectorEndpoint(serverUrl: string): void {
 
 let managedEndpointSweepDone = false;
 
+/** TEST-ONLY: re-arm the once-per-process managed-endpoint sweep so each test
+ *  exercises the fresh-sweep path deterministically (module state survives
+ *  across tests in one worker). Mirrors the `_reset*ForTests` convention. */
+export function _resetManagedEndpointSweepForTests(): void {
+  managedEndpointSweepDone = false;
+}
+
 /**
  * Once-per-process migration sweep: disable pre-existing ENABLED rows whose
  * canonical URL matches a managed connector endpoint. Each disabled row is
