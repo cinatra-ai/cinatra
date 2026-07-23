@@ -263,17 +263,36 @@ function registerDeclaredArtifactTypes(
   const claims = descriptor.objectTypes ?? [];
   const perTypeDescriptor = declaredTypeArtifactDescriptor(descriptor);
   const registeredTypeIds: string[] = [];
+  // CROSS-NAMESPACE RENDERER TARGETS (cinatra#1896 / epic #1883 §D8): the
+  // well-formed, foreign-namespace type ids this pack CLAIMS but does not OWN.
+  // The owning package registers the TYPE (never this bridge, below); but when
+  // this pack ships semantic renderers, it may render a foreign type it depends
+  // on — a meaning-type dashboard pack renders the base
+  // `@cinatra-ai/dashboard-artifact:dashboard` rows (whose meaning is the pack's,
+  // via its eligible assertion) even though the base pack owns that type. Its
+  // renderer is keyed by (foreignType, THIS pack, slot) and resolves ONLY when
+  // this pack is the row's per-org presentation-identity winner (never the
+  // owner's — competing claimants keep disjoint descriptors), so a foreign type's
+  // own renderer is never shadowed. Collected here; registered below.
+  const crossNamespaceRendererTypeIds: string[] = [];
   for (const claim of claims) {
     // OWNERSHIP is by NAMESPACE, never by inline schema. Epic #1448 / #1424: "exactly
     // one package remains the runtime type registrar per type; the claimant schema is
     // activation evidence, not a second registrar." A pack registers ONLY the types
     // it OWNS (a self-namespaced id, `@scope/pkg:local` where `@scope/pkg` is this
     // package). A cross-namespace claim — WITH or WITHOUT an inline schema — is
-    // registered by its owning package; the bridge never registers it here. (The
-    // registry is replace-by-id, so shadowing another package's registrant and then
-    // reaping it via this pack's removeByPackage would delete the real owner's type
-    // — and, with the registry conflict guard, would throw at boot.)
-    if (claimedTypeRegisteringPackage(claim.type) !== packageName) continue;
+    // never registered as a TYPE here; its owning package is the sole registrar.
+    // (The registry is replace-by-id, so shadowing another package's registrant and
+    // then reaping it via this pack's removeByPackage would delete the real owner's
+    // type — and, with the registry conflict guard, would throw at boot.) But a
+    // well-formed foreign claim IS recorded as a cross-namespace renderer target
+    // (cinatra#1896) so this pack's semantic renderers register for it below; a
+    // malformed / non-namespaced id (owner === null) is skipped entirely.
+    const owner = claimedTypeRegisteringPackage(claim.type);
+    if (owner !== packageName) {
+      if (owner !== null) crossNamespaceRendererTypeIds.push(claim.type);
+      continue;
+    }
     // Enforce the type's inline JSON Schema when present; fall back to a permissive
     // record schema when a self-owned type ships none. An uncompilable inline
     // schema fail-closes the single type.
@@ -320,9 +339,18 @@ function registerDeclaredArtifactTypes(
     );
     registeredTypeIds.push(claim.type);
   }
-  if (registeredTypeIds.length === 0) return false;
-  registerSemanticRenderersForTypes(descriptor, registeredTypeIds, packageName);
-  return true;
+  // Register this pack's semantic renderers for BOTH the types it owns AND the
+  // cross-namespace types it claims (cinatra#1896). `registerSemanticRenderersForTypes`
+  // is a no-op when the manifest declares no `ui.renderers`, so a pack shipping no
+  // renderers registers none. A pack that ONLY cross-claims (owns zero types) still
+  // registers its cross-namespace renderers here but reports `false` (it registered
+  // no OWNED type — the bridge's return contract is unchanged).
+  registerSemanticRenderersForTypes(
+    descriptor,
+    [...registeredTypeIds, ...crossNamespaceRendererTypeIds],
+    packageName,
+  );
+  return registeredTypeIds.length > 0;
 }
 
 /**
@@ -350,7 +378,10 @@ function declaredTypeArtifactDescriptor(
 // given object type ids — each slot keyed to its own generated build entry (an
 // extension ships at most ONE renderer per slot). Idempotent replace-by-(type,
 // slot). The caller supplies the exact type-id set: every declared type this
-// pack owns (there is no umbrella).
+// pack owns PLUS the cross-namespace types it claims (cinatra#1896) — there is no
+// umbrella. Each descriptor is keyed by (objectTypeId, THIS packageName, slot),
+// so a renderer for a foreign type resolves only when this pack is the row's
+// presentation-identity winner and never shadows the owner's own renderer.
 function registerSemanticRenderersForTypes(
   descriptor: SemanticArtifactManifest,
   typeIds: Iterable<string>,
