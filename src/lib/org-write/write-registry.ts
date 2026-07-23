@@ -91,7 +91,7 @@ function dashboardsWriter(
 }
 
 export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
-  // — dashboards mutation service (15 writers; all pair with the artifact twin) —
+  // — dashboards mutation service (17 writers; all pair with the artifact twin) —
   dashboardsWriter("createDashboard", ["dashboards"], "upsert", 1),
   dashboardsWriter("updateDashboard", ["dashboards"], "upsert", 1),
   dashboardsWriter("publishDashboard", ["dashboards", "dashboardRevisions"], "upsert", 2),
@@ -107,6 +107,35 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
   dashboardsWriter("restoreExtensionDashboards", ["dashboards"], "upsert", 1),
   dashboardsWriter("adoptExtensionDashboards", ["dashboards"], "upsert", 1),
   dashboardsWriter("upgradeExtensionDashboards", ["dashboards"], "upsert", 3),
+
+  // — the #2006 B1c twin backfill (landed 8215d7c2): pairs pre-twin dashboards
+  //   with their artifact twins. Both writers land rows ONLY through the
+  //   registered pairTwin forward path (zero direct drizzle write sites), have
+  //   no acting principal (actor=null — no auditEvents row), and take the org
+  //   axis from each locked dashboards row rather than a DashboardActor —
+  //   hence explicit rows, not the dashboardsWriter helper. —
+  {
+    module: DASHBOARDS_MODULE,
+    exportName: "pairOneUntwinnedDashboardTwin",
+    capability: "content.write",
+    orgIdExtractor:
+      "dashboards row (locked FOR UPDATE; org axis copied into twinCtx, actor=null)",
+    storageReferences: [...TWIN_UPSERT_TABLES],
+    cascadeOwnership: "inert-history",
+    writeSites: 0,
+    importBanned: false,
+  },
+  {
+    module: DASHBOARDS_MODULE,
+    exportName: "backfillDashboardArtifactTwins",
+    capability: "content.write",
+    orgIdExtractor:
+      "per scanned dashboards row (delegates each id to pairOneUntwinnedDashboardTwin)",
+    storageReferences: [...TWIN_UPSERT_TABLES],
+    cascadeOwnership: "inert-history",
+    writeSites: 0,
+    importBanned: false,
+  },
 
   // — the host-side twin itself (reached only through pairTwin; registered so
   //   the sweep can attribute its hand-written SQL builders) —

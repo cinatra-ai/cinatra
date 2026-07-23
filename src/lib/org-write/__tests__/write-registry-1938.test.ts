@@ -39,7 +39,7 @@ describe("org-write registry lockstep (#1938)", () => {
       ),
     );
     expect([...exported].sort()).toEqual([...registered].sort());
-    expect(registered.size).toBe(15);
+    expect(registered.size).toBe(17);
   });
 
   it("every dashboards row carries the landed twin substrate tables", () => {
