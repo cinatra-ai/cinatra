@@ -602,6 +602,223 @@ describe("registerArtifactExtensions — semantic slot registration (S7 listRow)
   });
 });
 
+// cinatra#1896 / epic #1883 §D8 — the CROSS-NAMESPACE renderer-registration
+// bridge. Registration previously registered semantic renderers ONLY for a
+// pack's self-owned declared types; a meaning-type dashboard pack must render
+// the BASE `@cinatra-ai/dashboard-artifact:dashboard` rows (whose meaning is the
+// pack's, via its eligible assertion) even though the base pack OWNS that type.
+// A well-formed cross-namespace `objectTypes` claim now also registers the pack's
+// `ui.renderers` for the foreign type — keyed by (foreignType, THIS pack, slot),
+// so it resolves only when this pack is the row's presentation-identity winner
+// and never shadows the owner's own renderer, and never REGISTERS the foreign
+// type (the owner is the sole registrar).
+describe("registerArtifactExtensions — cross-namespace renderer bridge (cinatra#1896)", () => {
+  const BASE = "@cinatra-ai/dashboard-artifact:dashboard";
+  const MEANING_PKG = "@cinatra-ai/web-analytics-dashboard-artifact";
+  const BASE_PKG = "@cinatra-ai/dashboard-artifact";
+  const meaningWinner: EffectiveIdentity = { kind: "extension", extension: MEANING_PKG };
+  const baseWinner: EffectiveIdentity = { kind: "extension", extension: BASE_PKG };
+
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), "artifact-bridge-xns-"));
+    objectTypeRegistry._clearForTests();
+    matcherManifestRegistry._clearForTests();
+    semanticRendererRegistry._clearForTests();
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    objectTypeRegistry._clearForTests();
+    matcherManifestRegistry._clearForTests();
+    semanticRendererRegistry._clearForTests();
+  });
+
+  it("registers a meaning pack's renderer for the foreign base dashboard type it CLAIMS but does not own (keyed by the pack)", () => {
+    // A meaning pack: owns its own meaning type + CROSS-claims the base dashboard
+    // type + ships a detail renderer. (Direct seam — the fs schema-source rule is
+    // covered by the dependency-based fs test below.)
+    const registered = registerParsedArtifactManifest(
+      {
+        accepts: { file: { mimeTypes: ["application/json"] } },
+        objectTypes: [
+          { type: `${MEANING_PKG}:web-analytics-dashboard`, claim: "dedicated", schema: { type: "object" } },
+          // CROSS-NAMESPACE: owned by @cinatra-ai/dashboard-artifact, not this pack.
+          { type: BASE, claim: "dedicated", schema: { type: "object" } },
+        ],
+        ui: {
+          abiVersion: 1,
+          sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+          renderers: { detail: { entry: "./src/detail.tsx", propsApiVersion: 1 } },
+        },
+      } as unknown as SemanticArtifactManifest,
+      MEANING_PKG,
+    );
+    // The pack registered its OWN type (return contract = registered ≥1 owned type).
+    expect(registered).toBe(true);
+    // It did NOT register the foreign BASE type (the owner is the sole registrar).
+    expect(objectTypeRegistry.resolve(BASE)).toBeNull();
+    // Its own meaning type IS registered.
+    expect(objectTypeRegistry.resolve(`${MEANING_PKG}:web-analytics-dashboard`)).not.toBeNull();
+    // The cross-namespace renderer resolves for the BASE type when THIS pack wins.
+    expect(semanticRendererRegistry.resolve(BASE, meaningWinner)).toMatchObject({
+      slot: "detail",
+      objectTypeId: BASE,
+      packageName: MEANING_PKG,
+      generatedKey: `${MEANING_PKG}::detail`,
+    });
+    // Pack-wide renderers also apply to the pack's own type (inert for dashboard
+    // rows, which are base-typed, but consistent with the self-owned model).
+    expect(
+      semanticRendererRegistry.resolve(`${MEANING_PKG}:web-analytics-dashboard`, meaningWinner),
+    ).not.toBeNull();
+    // The base pack is NOT a winner for this descriptor — a losing/other claimant
+    // never reaches the meaning pack's renderer (keyspace isolation).
+    expect(semanticRendererRegistry.resolve(BASE, baseWinner)).toBeNull();
+  });
+
+  it("the owner's own renderer for the base type is NOT shadowed — competing claimants keep disjoint descriptors", () => {
+    // Owner pack: owns + renders the base dashboard type.
+    registerParsedArtifactManifest(
+      {
+        accepts: { dashboard: {} },
+        objectTypes: [{ type: BASE, claim: "dedicated", schema: { type: "object" } }],
+        ui: {
+          abiVersion: 1,
+          sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+          renderers: { detail: { entry: "./src/base-detail.tsx", propsApiVersion: 1 } },
+        },
+      } as unknown as SemanticArtifactManifest,
+      BASE_PKG,
+    );
+    // Meaning pack: cross-claims + renders the base type.
+    registerParsedArtifactManifest(
+      {
+        accepts: { file: { mimeTypes: ["application/json"] } },
+        objectTypes: [
+          { type: `${MEANING_PKG}:web-analytics-dashboard`, claim: "dedicated", schema: { type: "object" } },
+          { type: BASE, claim: "dedicated", schema: { type: "object" } },
+        ],
+        ui: {
+          abiVersion: 1,
+          sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+          renderers: { detail: { entry: "./src/detail.tsx", propsApiVersion: 1 } },
+        },
+      } as unknown as SemanticArtifactManifest,
+      MEANING_PKG,
+    );
+    // Owner wins → owner's renderer; meaning pack wins → meaning pack's renderer.
+    expect(semanticRendererRegistry.resolve(BASE, baseWinner)).toMatchObject({
+      packageName: BASE_PKG,
+      generatedKey: `${BASE_PKG}::detail`,
+    });
+    expect(semanticRendererRegistry.resolve(BASE, meaningWinner)).toMatchObject({
+      packageName: MEANING_PKG,
+      generatedKey: `${MEANING_PKG}::detail`,
+    });
+    // The base type is registered exactly ONCE, by its owner.
+    expect(objectTypeRegistry.resolve(BASE)?.type).toBe(BASE);
+  });
+
+  it("removeByPackage reaps a pack's cross-namespace renderers on teardown", () => {
+    registerParsedArtifactManifest(
+      {
+        accepts: { file: { mimeTypes: ["application/json"] } },
+        objectTypes: [
+          { type: `${MEANING_PKG}:web-analytics-dashboard`, claim: "dedicated", schema: { type: "object" } },
+          { type: BASE, claim: "dedicated", schema: { type: "object" } },
+        ],
+        ui: {
+          abiVersion: 1,
+          sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+          renderers: { detail: { entry: "./src/detail.tsx", propsApiVersion: 1 } },
+        },
+      } as unknown as SemanticArtifactManifest,
+      MEANING_PKG,
+    );
+    expect(semanticRendererRegistry.resolve(BASE, meaningWinner)).not.toBeNull();
+    const removed = semanticRendererRegistry.removeByPackage(MEANING_PKG);
+    expect(removed).toContain(BASE);
+    expect(semanticRendererRegistry.resolve(BASE, meaningWinner)).toBeNull();
+  });
+
+  it("a cross-namespace-ONLY pack (owns zero types) registers its foreign renderer but reports false", () => {
+    const registered = registerParsedArtifactManifest(
+      {
+        accepts: { file: { mimeTypes: ["application/json"] } },
+        objectTypes: [{ type: BASE, claim: "dedicated", schema: { type: "object" } }],
+        ui: {
+          abiVersion: 1,
+          sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+          renderers: { detail: { entry: "./src/detail.tsx", propsApiVersion: 1 } },
+        },
+      } as unknown as SemanticArtifactManifest,
+      MEANING_PKG,
+    );
+    // Registered no OWNED type → false; but the foreign renderer IS registered.
+    expect(registered).toBe(false);
+    expect(objectTypeRegistry.resolve(BASE)).toBeNull();
+    expect(semanticRendererRegistry.resolve(BASE, meaningWinner)).not.toBeNull();
+  });
+
+  it("a malformed / non-namespaced claim id registers NO cross-namespace renderer", () => {
+    registerParsedArtifactManifest(
+      {
+        accepts: { file: { mimeTypes: ["application/json"] } },
+        objectTypes: [
+          { type: `${MEANING_PKG}:web-analytics-dashboard`, claim: "dedicated", schema: { type: "object" } },
+          // No `:` namespace separator → claimedTypeRegisteringPackage === null → skipped.
+          { type: "not-a-namespaced-id", claim: "dedicated", schema: { type: "object" } },
+        ],
+        ui: {
+          abiVersion: 1,
+          sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+          renderers: { detail: { entry: "./src/detail.tsx", propsApiVersion: 1 } },
+        },
+      } as unknown as SemanticArtifactManifest,
+      MEANING_PKG,
+    );
+    // Only the pack's own type carries a renderer; the malformed id is inert.
+    expect(semanticRendererRegistry.resolve("not-a-namespaced-id", meaningWinner)).toBeNull();
+    const snap = semanticRendererRegistry._snapshot().filter((d) => d.packageName === MEANING_PKG);
+    expect(snap.map((d) => d.objectTypeId).sort()).toEqual([`${MEANING_PKG}:web-analytics-dashboard`]);
+  });
+
+  it("fs install path: a dependency-declared cross-namespace claim registers the foreign renderer", () => {
+    // The real install path: a pack dir whose cross-namespace claim has NO inline
+    // schema but declares a cinatra.dependencies entry on the owner — the
+    // schema-source rule (validateObjectTypeClaimSchemaSources) is satisfied.
+    writeExt(root, "web-analytics-dashboard-artifact", {
+      name: MEANING_PKG,
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        dependencies: [{ packageName: BASE_PKG }],
+        artifact: {
+          accepts: { file: { mimeTypes: ["application/json"] } },
+          objectTypes: [
+            // Own type (inline schema).
+            { type: `${MEANING_PKG}:web-analytics-dashboard`, claim: "dedicated", schema: { type: "object" } },
+            // CROSS-namespace claim WITHOUT inline schema — sourced via the dep.
+            { type: BASE, claim: "dedicated" },
+          ],
+          ui: {
+            abiVersion: 1,
+            sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+            renderers: { detail: { entry: "./src/detail.tsx", propsApiVersion: 1 } },
+          },
+        },
+      },
+    });
+    expect(registerArtifactExtensions(root)).toBe(1);
+    expect(semanticRendererRegistry.resolve(BASE, meaningWinner)).toMatchObject({
+      packageName: MEANING_PKG,
+      slot: "detail",
+    });
+    // The foreign base type is NOT registered by the meaning pack.
+    expect(objectTypeRegistry.resolve(BASE)).toBeNull();
+  });
+});
+
 // entry 95 / epic #1785 — the EXPLICIT-DECLARED-TYPES registration substrate. A
 // pack mints NO generic `${pkg}:artifact` umbrella; each declared objectTypes
 // type it OWNS is registered as its own first-class artifact type, surfaced

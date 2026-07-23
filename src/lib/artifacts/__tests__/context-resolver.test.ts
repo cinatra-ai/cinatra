@@ -169,6 +169,28 @@ describe("resolveContextSlot — boundary guards", () => {
   });
 });
 
+describe("resolveContextSlot — dashboard-form exclusion (cinatra#1896, epic #1883 §D8 v1)", () => {
+  beforeEach(() => runPgMock.mockReset());
+
+  it("the candidate query excludes any object holding a dashboard-form representation", () => {
+    stageRows([]);
+    resolveContextSlot({
+      actor: ACTOR_BASE,
+      slot: SLOT_BASE,
+      installedExtensions: [],
+    });
+    const text = runPgMock.mock.calls[0][0].queries[0].text as string;
+    // The exclusion is a NOT EXISTS over dashboard-form representations, applied
+    // in the visible_objects CTE (before the assertion/representation joins), so a
+    // dashboards-artifact twin never reaches the candidate set.
+    expect(text).toMatch(/NOT EXISTS/);
+    expect(text).toMatch(/rdash\.form = 'dashboard'/);
+    // It sits inside the visible_objects CTE WHERE, alongside the deleted_at guard.
+    const cte = text.slice(text.indexOf("visible_objects AS"), text.indexOf("pins AS"));
+    expect(cte).toMatch(/rdash\.form = 'dashboard'/);
+  });
+});
+
 describe("resolveContextSlot — accumulate mode (narrow→broad ordering)", () => {
   beforeEach(() => runPgMock.mockReset());
 
