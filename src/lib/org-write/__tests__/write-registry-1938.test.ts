@@ -16,6 +16,9 @@ import {
 
 const MUTATION_SERVICE = "packages/dashboards/src/mutation-service.ts";
 const DRIZZLE_STORE = "src/lib/drizzle-store.ts";
+// The kernel's archive tables bootstrap in their own leaf module (spread into
+// drizzle-store's DDL array); FK scans must cover BOTH files.
+const ORG_WRITE_SCHEMA = "src/lib/org-write-schema.ts";
 
 const READ_ONLY_EXPORTS = new Set(["listDashboardsForEntity", "getEntityDashboard"]);
 
@@ -75,7 +78,12 @@ describe("org-write registry lockstep (#1938)", () => {
   });
 
   it("declared FK-less references stay FK-less (no new silent org cascade)", () => {
-    const ddl = readFileSync(DRIZZLE_STORE, "utf-8");
+    const orgWriteDdl = readFileSync(ORG_WRITE_SCHEMA, "utf-8");
+    // The kernel tables must actually bootstrap from the leaf module — an
+    // empty scan target would make this pin vacuous.
+    expect(orgWriteDdl).toContain('."org_archive_lease"');
+    expect(orgWriteDdl).toContain('."org_write_completion_ticket"');
+    const ddl = readFileSync(DRIZZLE_STORE, "utf-8") + orgWriteDdl;
     for (const ref of DECLARED_FKLESS_ORG_REFERENCES) {
       const [table] = ref.split(".");
       // A new `<table>… REFERENCES public."organization"` clause would mean a
