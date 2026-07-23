@@ -363,6 +363,10 @@ describe("materializeRunArtifacts", () => {
       kind: "finalized",
       artifactId: "art-prev",
       representationRevisionId: "rep-prev",
+      // cinatra#1893: the finalized claim now carries the winning row's `path`
+      // (the ledger SELECT surfaces it); the Q3 alias guard compares it to this
+      // write's path. A normal same-path dedupe returns the refs unchanged.
+      path: "end_node_binding",
     });
     const outcomes = await materializeRunArtifacts(BASE_INPUT);
     expect(outcomes).toEqual([

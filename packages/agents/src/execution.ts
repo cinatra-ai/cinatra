@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import semver from "semver";
 import {
@@ -951,8 +951,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       .map((p) => p.text!)
       .join("") ?? "";
   let parsedOutput: unknown = finalText;
+  let finalOutputIsJson = false;
   try {
     parsedOutput = JSON.parse(finalText);
+    finalOutputIsJson = true;
   } catch {
     // not JSON — keep raw text
   }
@@ -1024,12 +1026,35 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     ];
   }
 
+  // Unbound-output capture (cinatra#1893, epic #1883 A5). The derivation-outbox
+  // row is written ATOMICALLY with the terminal CAS + snapshot below — a
+  // transaction-local capture only (produces/binding discovery is the derivation
+  // job's concern, NOT a registry read in this hot completion path). Captured for
+  // EVERY non-empty WayFlow terminal-success run; the job later types it against
+  // the agent's validated `produces` or emits an advisory. Empty output ⇒ nothing
+  // to capture (no row, no advisory). File-part outputs + the external-A2A
+  // completion branch are explicit v1 deferrals (this is the internal WayFlow
+  // success path only).
+  const derivationOutbox =
+    finalText.length > 0
+      ? {
+          orgId: run.orgId,
+          templateId: run.templateId,
+          packageVersion: run.packageVersion,
+          createdBy: run.runBy,
+          content: finalText,
+          contentIsJson: finalOutputIsJson,
+          contentHash: createHash("sha256").update(finalText, "utf8").digest("hex"),
+        }
+      : undefined;
+
   // Both terminal-success edges are legal:
   //   running          -> completed
   //   pending_approval -> completed
   let transitioned = true;
   await transitionRunStatus(runId, fromStatus, "completed", {
     completedAt: new Date(),
+    ...(derivationOutbox ? { derivationOutbox } : {}),
     stepResults: [
       {
         kind: "wayflow_response",
@@ -1063,6 +1088,46 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   });
 
   if (!transitioned) return;
+
+  // Unbound-output derivation (cinatra#1893): the outbox row committed with the
+  // terminal transition above; enqueue the one-shot derivation job best-effort.
+  // A failed enqueue never destabilizes the completed run — the durable outbox
+  // row + the reconciliation sweep guarantee eventual derivation. Only when a row
+  // was actually captured (non-empty output).
+  //
+  // Enqueued INLINE through the background-jobs modules (which this locked
+  // dev-perf route already reaches) rather than via a dedicated leaf module, so
+  // the WayFlow terminal-success hot path adds no first-party graph pressure to
+  // the ratchet-tracked routes (route-graph ratchet). The derivation CORE stays
+  // out of this path entirely — it is reached only by the boot-registered worker
+  // slot (see background-jobs-registry's UnboundOutputDerivationRunner slot).
+  if (derivationOutbox) {
+    try {
+      const { enqueueBackgroundJob } = await import("@/lib/background-jobs");
+      const { BACKGROUND_JOB_NAMES } = await import("@/lib/background-jobs-names");
+      await enqueueBackgroundJob(
+        BACKGROUND_JOB_NAMES.UNBOUND_OUTPUT_DERIVE,
+        { runId, orgId: run.orgId },
+        {
+          // 3 attempts (1 + 2 retries), exponential backoff — a transient DB/LLM
+          // blip in the one-shot derive gets a bounded retry; the sweep covers
+          // anything beyond. Colon-free jobId de-dupes a crash-restart re-enqueue
+          // (the row lease makes a double-drive safe anyway; this avoids churn).
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5_000 },
+          jobId: `unbound-output-derive__${runId}`,
+          // The derivation worker anchors its own org-scoped System actor; it
+          // must not inherit the run principal's frame.
+          inheritActorContext: false,
+        },
+      );
+    } catch (e) {
+      console.warn(
+        `[unbound-output] derive enqueue threw for run=${runId} (outbox persisted; sweep backstops):`,
+        e instanceof Error ? e.message : e,
+      );
+    }
+  }
 
   // 1. Publish terminal AG-UI event immediately so the operator's UI shows
   //    "completed" without waiting on autosave latency.

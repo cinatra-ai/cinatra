@@ -20,24 +20,15 @@ import {
 } from "./a2a-publication-guard";
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
 import { dispatchRunWaitTransition } from "./run-wait-notifier"; // #1559/E9: zero-dep leaf seam
-import {
-  LEGAL_TRANSITIONS,
-  TERMINAL_RUN_STATUSES,
-  CannotReassignAfterFirstRun,
-  RunTransitionError,
-  __LEGAL_TRANSITIONS__,
-} from "./run-status";
+import { LEGAL_TRANSITIONS, TERMINAL_RUN_STATUSES, CannotReassignAfterFirstRun, RunTransitionError, __LEGAL_TRANSITIONS__ } from "./run-status";
 import type { AgentRunStatus } from "./run-status";
+// cinatra#1893 (epic #1883 A5): terminal-success-with-derivation-outbox seam extracted from store.ts (file-size ratchet #1893); transitionRunStatus delegates its `derivationOutbox` branch here (option type re-used in the unchanged public signature).
+import { transitionRunToCompletedWithDerivationOutbox, type DerivationOutboxCapture } from "./run-terminal-derivation-outbox";
 // Re-export the run-status state machine (extracted to ./run-status, #1037 P1
 // file-size ratchet) so store.ts's public surface is unchanged for existing
 // `./store` importers.
-export {
-  TERMINAL_RUN_STATUSES,
-  CannotReassignAfterFirstRun,
-  RunTransitionError,
-  __LEGAL_TRANSITIONS__,
-};
-export type { AgentRunStatus };
+export { TERMINAL_RUN_STATUSES, CannotReassignAfterFirstRun, RunTransitionError, __LEGAL_TRANSITIONS__ };
+export type { AgentRunStatus, DerivationOutboxCapture };
 // Re-export the agent_run_hitl_prompts persistence seam (extracted to
 // ./agent-run-hitl-prompts, file-size ratchet #1803 repair). Grouped with the
 // other extracted-seam re-exports at the top: an interspersed `export … from`
@@ -1667,11 +1658,20 @@ export async function transitionRunStatus(
     humanWaitGate?: boolean;
     /** REQUIRED on queued→running (cinatra#1937): per-dispatch bookkeeping stamped atomically with the CAS. The primitive below throws without it. */
     dispatch?: AgentRunDispatchFields;
+    /** cinatra#1893 (epic #1883 A5): when present, delegate to transitionRunToCompletedWithDerivationOutbox — terminal CAS + final-output snapshot + derivation-outbox INSERT in ONE transaction (legal ONLY for `to === "completed"`). Absent for every other caller — the historical two-write path is unchanged. */
+    derivationOutbox?: DerivationOutboxCapture;
   },
 ): Promise<void> {
   if (!LEGAL_TRANSITIONS.has(`${from}->${to}` as const)) {
     throw new RunTransitionError({ code: "illegal_transition", runId, from, to });
   }
+
+  // cinatra#1893: delegate the terminal-success-with-derivation-outbox path (atomic CAS + snapshot + outbox INSERT, then side-effects; asserts to==="completed"; legality checked above) to ./run-terminal-derivation-outbox.
+  if (meta?.derivationOutbox) {
+    await transitionRunToCompletedWithDerivationOutbox(runId, from, to, meta, meta.derivationOutbox);
+    return;
+  }
+
   const won = await updateAgentRunStatusConditional(runId, from, to, meta?.dispatch);
   if (!won) {
     throw new RunTransitionError({ code: "stale_from_status", runId, from, to });

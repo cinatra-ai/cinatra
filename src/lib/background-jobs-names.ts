@@ -92,6 +92,18 @@ export const BACKGROUND_JOB_NAMES = {
   // attempts/backoff (`ARTIFACT_MATCH_RETRY_POLICY`) covering transient LLM/DB
   // failures the worker rethrows as `MatcherRetryableError`.
   ARTIFACT_MATCH_RUN: "artifact-match-run",
+  // Post-terminal unbound agent-output derivation (cinatra#1893, epic #1883 A5).
+  // ONE-SHOT per run, enqueued best-effort AFTER the terminal transition commits
+  // the durable `agent_run_output_derivations` outbox row. Types the run's
+  // captured final output against the agent's validated `produces` and
+  // materializes it under the `derived_output` ledger path, or emits an advisory.
+  // NOT self-rescheduling; the row lease makes a re-drive idempotent.
+  UNBOUND_OUTPUT_DERIVE: "unbound-output-derive",
+  // Reconciliation sweep for the unbound-output outbox (cinatra#1893). Self-
+  // rescheduling ~5-min loop that drains `pending` outbox rows (and reclaims
+  // expired `deriving` leases) whose one-shot enqueue was lost / crashed. The
+  // backstop that guarantees eventual derivation of every captured output.
+  UNBOUND_OUTPUT_DERIVE_SWEEP: "unbound-output-derive-sweep",
   // Durable audit-log retention sweep. Deletes authz
   // audit events older than the configured window (default 12 months;
   // admin-configurable). Self-scheduling at 24h cadence, matching the
@@ -242,3 +254,12 @@ export const EXTENSION_AUTO_UPDATE_LOOP_JOB_ID = "extension-auto-update-loop";
  * queue storm guarded by the perpetual-system-loops CI gate.
  */
 export const ENVIRONMENT_LAYER_GC_REAP_LOOP_JOB_ID = "environment-layer-gc-reap-loop";
+/**
+ * Canonical loop-job id for the unbound-output derivation reconciliation sweep
+ * (cinatra#1893, epic #1883 A5). Same contract as the other loop ids above: the
+ * boot seed creates the job under this id and the handler re-delays THIS job via
+ * moveToDelayed each cycle; any other id is a legacy anonymous duplicate that
+ * runs once WITHOUT rescheduling. Drift here re-introduces the per-restart queue
+ * storm guarded by the perpetual-system-loops CI gate.
+ */
+export const UNBOUND_OUTPUT_DERIVE_SWEEP_LOOP_JOB_ID = "unbound-output-derive-sweep-loop";
