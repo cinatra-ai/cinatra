@@ -54,8 +54,18 @@ const COVERED_PREFIXES = [
 ];
 
 const SKIP_DIRS = new Set(["node_modules", "dist", ".next", "__generated__"]);
+// Raw org-axis DML in this repo is always a QUOTED identifier, optionally
+// schema-qualified with a (usually interpolated) quoted schema, e.g.
+//   UPDATE "${schema}"."agent_runs"        INSERT INTO "${q}"."objects"
+// Anchoring on `"<table>"` (with an optional `"<schema>".` prefix) — rather
+// than a bare word within slop — is what separates real DML from English prose
+// ("...update authz still applies inside the objects handlers") and fluent JS
+// (`objects.update(`, `updateStagedResource(`), which never quote the table.
+// Comments are stripped before matching (below), so SQL documented in prose is
+// not counted either. Drizzle query-builder writes are out of scope here (they
+// emit no raw SQL text); the boundary gate + registry cover those.
 const DML_RE = new RegExp(
-  `(?:INSERT\\s+INTO|UPDATE|DELETE\\s+FROM)[^;\`"']{0,120}"?\\.?"?(?:${ORG_AXIS_TABLES.join("|")})\\b`,
+  `(?:INSERT\\s+INTO|UPDATE|DELETE\\s+FROM)\\s+(?:"[^"]*"\\s*\\.\\s*)?"(?:${ORG_AXIS_TABLES.join("|")})"`,
   "gi",
 );
 
@@ -78,6 +88,17 @@ function* walk(rootAbs) {
   }
 }
 
+/** Blank out `//` line comments and block comments before matching. Raw SQL
+ *  DML lives in code / template literals, never in a JS comment; prose like
+ *  "// UPDATE objects.project_id ..." would otherwise be counted as a write
+ *  site. Replacing with spaces (not "") keeps byte offsets stable. SQL uses
+ *  `--` for its own comments, so stripping `//` cannot eat real DML. */
+function stripComments(text) {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length))
+    .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length));
+}
+
 function scan() {
   const surface = {};
   for (const root of ["src", "packages", "scripts"]) {
@@ -86,7 +107,7 @@ function scan() {
     for (const abs of walk(rootAbs)) {
       const fileRel = relative(REPO_ROOT, abs);
       if (isCovered(fileRel)) continue;
-      const text = readFileSync(abs, "utf-8");
+      const text = stripComments(readFileSync(abs, "utf-8"));
       const hits = text.match(DML_RE);
       if (hits && hits.length > 0) surface[fileRel] = hits.length;
     }

@@ -11,16 +11,24 @@
 // whose divergence-detection is proven per-PR in cross-target-compare.spec.ts).
 //
 // HONEST GATING. The generic embedded view is served at `/embed/assistant` (S5
-// #1221 Lane B). #1848 merged the embed CORE inert ("library-only, no route");
-// the route lands with the embed page slice. Until the surface actually serves
-// the content block, `probe()` reports it unavailable and this spec SKIPS with
-// that exact reason — a documented follow-up, never a silent pass. The moment
-// the route is live, this leg enforces with no code change.
+// #1221 Lane B — LANDED on origin/main). But the merged route is a LIVE-BRIDGE
+// BROKER, not a seeded-thread viewer: it mounts the shared renderer only after a
+// parent postMessage bootstrap + a `token-broker` stream-contract negotiation
+// against /api/assistants/chat/capabilities. That advertisement is Lane A's to
+// land; until it does, the embed fails closed to the gated card and can render
+// no corpus content (and the merged page has no deterministic seeded-corpus
+// path). So this leg is gated OFF behind an explicit opt-in flag
+// (E2E_EMBED_PARITY_LIVE=1) and `probe()` SKIPS with a loud, tracked reason
+// (never a silent pass) — enabling the flag once the deps land makes it ENFORCE
+// for real. (Reconciles the premature #1222 close: the old guard skipped only on
+// HTTP 404, so once the route landed it would ERROR rather than skip.)
 //
-// The CMS iframe target (target 3) additionally needs the docker WP/Drupal +
-// wayflow compose profile (host port 3010) and the postMessage embed bridge; it
-// is driven by the wp-drupal-uat suite path (which owns the CMS stack + the
-// #1214 no-direct-egress assertion) once the embed page it frames is live.
+// The CMS iframe target (target 3) frames the SAME /embed/assistant, so it
+// inherits the SAME Lane-A interlock AND additionally needs the docker WP/Drupal
+// + wayflow compose profile (host port 3010) and the postMessage embed bridge;
+// its render-parity spec (on the wp-drupal-uat suite path, which owns the CMS
+// stack + the #1214 no-direct-egress assertion) is the second half of the same
+// follow-up and is not wired yet — blocked on the same deps.
 //
 // GATED LIVE SPEC (not per-PR) — like its agents-run siblings it needs the real
 // authenticated app + persistence. Run against the verify stack:
@@ -39,7 +47,6 @@ import {
   domNormalize,
 } from "../design/conformance/render-parity/normalize";
 import { REFERENCE_TARGET } from "../design/conformance/render-parity/targets/packaged-renderer-target";
-import type { RenderTheme } from "../design/conformance/render-parity/targets/target";
 import {
   compareToReference,
   describeReport,

@@ -43,7 +43,7 @@ export const GENERATED_FIELD_RENDERER_BINDINGS: ReadonlyArray<GeneratedFieldRend
   { id: "@cinatra-ai/email-outreach-agent:gmail-sender", kind: "gmail-sender", priority: 100, declaredBy: "@cinatra-ai/email-artifacts" },
   { id: "@cinatra-ai/email-outreach-agent:list-picker", kind: "list-picker", priority: 90, declaredBy: "@cinatra-ai/email-outreach-agent" },
   { id: "@cinatra-ai/email-outreach-agent:setup-form", kind: "wayflow-setup-form", priority: 60, declaredBy: "@cinatra-ai/email-outreach-agent" },
-  { id: "@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review", kind: "campaign-recipients-review", priority: 80, declaredBy: "@cinatra-ai/email-recipient-selection-agent" },
+  { id: "@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review", kind: "campaign-recipients-review", priority: 80, midRunHitl: true, declaredBy: "@cinatra-ai/email-artifacts" },
   { id: "@cinatra-ai/email-recipient-selection-agent:output", kind: "campaign-recipients-review", priority: 80, a2uiTranslator: "recipients-output", declaredBy: "@cinatra-ai/email-recipient-selection-agent" },
   { id: "@cinatra-ai/email-test-delivery-agent:input", kind: "test-delivery-input", priority: 80, declaredBy: "@cinatra-ai/email-artifacts" },
   { id: "@cinatra-ai/list-curator-agent:final-list-review", kind: "final-list-review", priority: 90, declaredBy: "@cinatra-ai/list-curator-agent" },

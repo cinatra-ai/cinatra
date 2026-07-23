@@ -438,6 +438,7 @@
       "@cinatra-ai/document-artifact/src/renderers/detail": ["./extensions/cinatra-ai/document-artifact/src/renderers/detail.tsx"],
       "@cinatra-ai/json-artifact/src/renderers/detail": ["./extensions/cinatra-ai/json-artifact/src/renderers/detail.tsx"],
       "@cinatra-ai/json-artifact/src/renderers/preview": ["./extensions/cinatra-ai/json-artifact/src/renderers/preview.tsx"],
+      "@cinatra-ai/email-artifacts/src/renderers/campaign-recipients-review": ["./extensions/cinatra-ai/email-artifacts/src/renderers/campaign-recipients-review.tsx"],
       "@cinatra-ai/email-artifacts/src/renderers/email-drafts-review": ["./extensions/cinatra-ai/email-artifacts/src/renderers/email-drafts-review.tsx"],
       "@cinatra-ai/email-artifacts/src/renderers/follow-up-cadence": ["./extensions/cinatra-ai/email-artifacts/src/renderers/follow-up-cadence.tsx"],
       "@cinatra-ai/email-artifacts/src/renderers/gmail-sender": ["./extensions/cinatra-ai/email-artifacts/src/renderers/gmail-sender.tsx"],

@@ -73,6 +73,9 @@ vi.mock("@cinatra-ai/extensions", () => ({
   // capture them into no-op setters (these tests only exercise reactivation).
   setExtensionArtifactClaimArchivalHook: () => {},
   setExtensionArtifactClaimArchivalAllScopesHook: () => {},
+  // The consolidated wiring module also installs the best-effort org-name
+  // resolver (OWNER RULING 2026-07-22); capture into a no-op setter.
+  setExtensionArchiveOrgNameResolver: () => {},
 }));
 
 // The reactivation hook is installed by the CONSOLIDATED archival wiring module
@@ -183,12 +186,32 @@ describe("extension-artifact-claim-reactivation-wiring", () => {
     expect(objectTypeRegistry.removeByPackage).not.toHaveBeenCalled();
   });
 
-  it("FAIL-CLOSED on an empty/absent organizationId (nothing registered)", async () => {
+  it("FAIL-CLOSED on an EMPTY-STRING organizationId (malformed; nothing registered)", async () => {
     await expect(
       (async () => holder.hook!({ packageName: "@v/pkg-artifact", organizationId: "", extensionVersion: "2.0.0" }))(),
-    ).rejects.toThrow(/empty\/absent organizationId/i);
+    ).rejects.toThrow(/empty organizationId/i);
     expect(rescanArtifactBridgeFromStore).not.toHaveBeenCalled();
     expect(runInstallAnchorClaimActivation).not.toHaveBeenCalled();
+  });
+
+  it("OWNER RULING: a NULL-org restore reactivates at the PLATFORM claim scope (symmetric with the ruled platform archive)", async () => {
+    // The dispatcher's org-install refusal has already gated this (a platform
+    // restore reaches the wiring only once no org still has the extension
+    // installed), so the platform reactivation runs.
+    await holder.hook!({
+      packageName: "@v/pkg-artifact",
+      organizationId: null,
+      extensionVersion: "2.0.0",
+      installId: "iext_plat",
+      actorPrincipalId: "user-3",
+    });
+    expect(rescanArtifactBridgeFromStore).toHaveBeenCalledWith({
+      onlyPackage: "@v/pkg-artifact",
+      restorePackage: "@v/pkg-artifact",
+    });
+    expect(runInstallAnchorClaimActivation).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "platform", extensionPackage: "@v/pkg-artifact" }),
+    );
   });
 
   it("FAIL-CLOSED when no store record can be registered (missing/unresolved schema)", async () => {
