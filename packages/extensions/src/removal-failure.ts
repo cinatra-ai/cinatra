@@ -30,12 +30,19 @@ export type RemovalOperation = "uninstall" | "archive";
  * never returns (it `redirect()`s), so a returned value always means failure.
  *  - `dependents` — a closure/reverse-dependency gate refused the removal; the
  *    named extensions require the target and must be removed/detached first.
+ *  - `org-installs` — a PLATFORM-scope archive of an artifact extension was
+ *    refused because organizations still have it installed (owner ruling
+ *    2026-07-22, groganz). The named organizations are the migration list — each
+ *    must archive its own org-scoped install first. Like `dependents`, this is a
+ *    LOCAL install-graph fact the gate already computed to refuse the op (org
+ *    identities the admin manages), not an entitlement secret.
  *  - `system`     — the #1036 system-extension guard refused (update-only).
  *  - `error`      — any other failure (incl. a fail-CLOSED closure-check-
  *    unavailable outage); raw detail stays operator-side, generic copy shown.
  */
 export type RemovalActionResult =
   | { ok: false; reason: "dependents"; dependents: string[] }
+  | { ok: false; reason: "org-installs"; organizations: { id: string; name?: string }[] }
   | { ok: false; reason: "system" }
   | { ok: false; reason: "error" };
 
@@ -48,15 +55,33 @@ export type RemovalActionResult =
  *  - `SystemExtensionRemovalError`  (code SYSTEM_EXTENSION_PROTECTED) → system
  *  - `DependencyClosureError`       (code ARCHIVE_BREAKS_CLOSURE, .dependents[]) → dependents
  *  - `ActiveDependentError`         (name, .dependentName) → dependents([one])
+ *  - `PlatformArtifactLifecycleOrgInstallsError`
+ *      (code PLATFORM_ARTIFACT_ORG_INSTALLS_PRESENT, .organizations[]) → org-installs
  *  - anything else (incl. ClosureCheckUnavailableError) → error (fail-safe)
  */
 export function classifyRemovalFailure(error: unknown): RemovalActionResult {
-  const e = error as { code?: unknown; name?: unknown; dependents?: unknown; dependentName?: unknown } | null;
+  const e = error as {
+    code?: unknown;
+    name?: unknown;
+    dependents?: unknown;
+    dependentName?: unknown;
+    organizations?: unknown;
+  } | null;
   const code = typeof e?.code === "string" ? e.code : undefined;
   const name = typeof e?.name === "string" ? e.name : undefined;
 
   if (code === "SYSTEM_EXTENSION_PROTECTED") {
     return { ok: false, reason: "system" };
+  }
+  if (code === "PLATFORM_ARTIFACT_ORG_INSTALLS_PRESENT" && Array.isArray(e?.organizations)) {
+    const organizations = (e.organizations as unknown[]).flatMap((o) => {
+      const rec = o as { id?: unknown; name?: unknown } | null;
+      if (!rec || typeof rec.id !== "string" || rec.id.length === 0) return [];
+      return [typeof rec.name === "string" && rec.name.length > 0
+        ? { id: rec.id, name: rec.name }
+        : { id: rec.id }];
+    });
+    if (organizations.length > 0) return { ok: false, reason: "org-installs", organizations };
   }
   if (code === "ARCHIVE_BREAKS_CLOSURE" && Array.isArray(e?.dependents)) {
     const dependents = (e.dependents as unknown[]).filter(
@@ -100,6 +125,15 @@ export function removalFailureCopy(
       const requires = result.dependents.length === 1 ? "requires" : "require";
       const them = result.dependents.length === 1 ? "it" : "them";
       return `Can't ${verb} ${packageTitle} — ${list} ${requires} it. Uninstall or archive ${them} first.`;
+    }
+    case "org-installs": {
+      const list = formatDependentList(
+        result.organizations.map((o) => (o.name ? `${o.name} (${o.id})` : o.id)),
+      );
+      const count = result.organizations.length;
+      const orgWord = count === 1 ? "organization" : "organizations";
+      const has = count === 1 ? "has" : "have";
+      return `Can't ${verb} ${packageTitle} at platform scope — ${count} ${orgWord} still ${has} it installed: ${list}. Each must archive its own copy first, then this platform ${verb} will succeed.`;
     }
     case "system":
       return SYSTEM_REMOVAL_COPY;

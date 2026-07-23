@@ -56,6 +56,7 @@ import {
 // imported by that module, not here.
 import { handleEmailTestDeliveryRunSend, handleEmailTestDeliveryParseAction } from "./test-delivery-handlers";
 import { handleEmailOutreachInitialDraftsUpdate } from "./drafts-persist-handler";
+import { handleEmailOutreachRecipientsUpdate } from "./recipients-persist-handler";
 import { enqueueBackgroundJob } from "@/lib/background-jobs";
 import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import {
@@ -5619,6 +5620,11 @@ export function createAgentBuilderPrimitiveHandlers(): Record<
     // edits onto the run's own draft-bundle object (the drafts _list read's row).
     email_outreach_initial_drafts_update: (req) =>
       handleEmailOutreachInitialDraftsUpdate(req as Parameters<typeof handleEmailOutreachInitialDraftsUpdate>[0]),
+    // run-scoped campaign-recipients-review PERSIST primitive (#1960) — run,
+    // declaring package, and actor context-derived; persists the operator's
+    // reviewed (kept) recipient set onto the run's own recipients bundle object.
+    email_outreach_recipients_update: (req) =>
+      handleEmailOutreachRecipientsUpdate(req as Parameters<typeof handleEmailOutreachRecipientsUpdate>[0]),
     agent_run_resume: (req) =>
       handleAgentBuilderRunResume(req as Parameters<typeof handleAgentBuilderRunResume>[0]),
     agent_run_stop: (req) =>

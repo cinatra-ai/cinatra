@@ -173,13 +173,18 @@ export default defineConfig({
     {
       // Live three-target render-parity (cinatra#1222 S6): drives the generic
       // embedded conversation-view (target 2) against the S3 packaged-renderer
-      // reference via the target-agnostic divergence engine. Like
-      // chat-render-parity it is seeded-thread driven (cost-free, no live turn),
-      // gated (needs the real authenticated app + persistence), and depends on
-      // `setup` (auth) ONLY. It SELF-SKIPS with a documented reason until the
-      // /embed/assistant route lands (S5 #1848 merged the embed core inert). The
-      // CMS iframe leg (target 3) rides the wp-drupal-uat suite (which owns the
-      // CMS docker stack + the #1214 no-direct-egress assertion).
+      // reference via the target-agnostic divergence engine. Gated (needs the
+      // real authenticated app + persistence); depends on `setup` (auth) ONLY.
+      // The /embed/assistant route has LANDED (#1221), but the merged surface is
+      // a live-bridge broker that mounts the shared renderer only after a
+      // `token-broker` negotiation against /api/assistants/chat/capabilities
+      // (Lane A's to land) AND has no deterministic seeded-corpus path. So it is
+      // gated OFF behind an explicit opt-in flag (E2E_EMBED_PARITY_LIVE=1) and
+      // SELF-SKIPS with a loud, tracked reason by default — enabling it once the
+      // deps land + the drive is redesigned makes it ENFORCE for real. The CMS
+      // iframe leg (target 3) frames the SAME embed (same interlock) and rides
+      // the wp-drupal-uat suite (CMS docker stack + #1214 no-direct-egress); its
+      // render-parity spec is the second half of the follow-up, not wired yet.
       name: "render-parity-cross-target",
       testMatch: /render-parity-cross-target\.spec\.ts/,
       use: {

@@ -23,6 +23,10 @@ import {
   shapeDraftsReviewResumeInput,
   isDraftsReviewFailureResult,
 } from "./drafts-review-seam";
+import {
+  shapeRecipientsReviewResumeInput,
+  isRecipientsReviewFailureResult,
+} from "./recipients-review-seam";
 
 /**
  * Deterministic MCP-call passthrough for WayFlow.
@@ -94,6 +98,11 @@ const ALLOWED_TOOLS = new Set([
   // object. Run + declaring package + actor are derived from the run-bound frame
   // established below; a runId/campaign in the resume payload is IGNORED.
   "email_outreach_initial_drafts_update",
+  // Run-scoped campaign-recipients-review PERSIST primitive (cinatra#1960) — the
+  // re-entrant recipients gate's post-resume `apply` node dispatches this to write
+  // the operator's reviewed (kept) recipient set onto the run's own recipients
+  // bundle object. Same run-bound-frame trust model as the drafts primitive.
+  "email_outreach_recipients_update",
 ]);
 
 // Tools that must execute inside an mcpRequestContextStorage frame carrying the
@@ -113,6 +122,9 @@ const RUN_SCOPED_CONTEXT_TOOLS = new Set<string>([
   // #1959 — persists the reviewed drafts onto the run's own draft-bundle object;
   // reads verifiedRunScopeId from the frame (never the caller-supplied runId).
   "email_outreach_initial_drafts_update",
+  // #1960 — persists the reviewed recipient set onto the run's own recipients
+  // bundle object; reads verifiedRunScopeId from the frame (never the caller runId).
+  "email_outreach_recipients_update",
 ]);
 
 type RequestBody = {
@@ -286,6 +298,16 @@ TOOL_INPUT_SHAPERS.email_test_delivery_run_send = (raw) => shapeTestDeliverySend
 // than degrading to `{ drafts: [] }` and silently discarding approved edits.
 TOOL_INPUT_SHAPERS.email_outreach_initial_drafts_update = (raw) =>
   shapeDraftsReviewResumeInput(raw);
+
+// email-outreach campaign-recipients-review persist input shaping (cinatra#1960)
+// — the pure shaper lives in ./recipients-review-seam (zero-dep, unit-tested). It
+// parses the apply ApiNode's `resumePayloadJson`, unwraps the canonical attachment
+// envelope, and projects ONLY the operator's kept `recipients[]` the persist
+// primitive consumes. FAIL-CLOSED: a present-but-unparseable / unrecognized /
+// wrong-typed payload THROWS (→ HTTP 400, the ApiNode fails visibly) rather than
+// degrading to `{ recipients: [] }` and silently deleting every recipient.
+TOOL_INPUT_SHAPERS.email_outreach_recipients_update = (raw) =>
+  shapeRecipientsReviewResumeInput(raw);
 
 export async function POST(req: Request): Promise<Response> {
   if (!isAuthorizedBridgeRequest(req)) {
@@ -594,6 +616,18 @@ export async function POST(req: Request): Promise<Response> {
     if (
       tool === "email_outreach_initial_drafts_update" &&
       isDraftsReviewFailureResult(result)
+    ) {
+      return NextResponse.json(result, { status: 422 });
+    }
+
+    // Same fail-closed output extraction for the recipients-review apply node
+    // (cinatra#1960): a handler error / ok:false at HTTP 200 would let the
+    // unconditional apply->End edge complete the run after a KNOWN persist failure
+    // (missing bundle, or a partial-match drop of the operator's kept set). Convert
+    // it to a non-2xx so the apply node FAILS the run. Scoped to this tool.
+    if (
+      tool === "email_outreach_recipients_update" &&
+      isRecipientsReviewFailureResult(result)
     ) {
       return NextResponse.json(result, { status: 422 });
     }

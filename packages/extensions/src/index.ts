@@ -253,9 +253,140 @@ async function syncCanonicalRowTransition(
   });
 }
 
-// FAIL-CLOSED artifact CLAIM-ARCHIVAL fire for a committed ORG-SCOPED archive of
-// a `kind:"artifact"` extension (cinatra#1454). A no-op for every other kind.
-// Ties the archive/uninstall dispatch to the durable claim lifecycle: retire the
+// ---------------------------------------------------------------------------
+// PLATFORM-SCOPE artifact lifecycle refusal (OWNER RULING 2026-07-22, groganz —
+// resolves the deferred platform legs of cinatra#1454 / cinatra#1837).
+//
+// A platform-wide (NULL-org) archive of a `kind:"artifact"` extension REFUSES —
+// fail-closed — while ANY organization still has the extension installed. The
+// platform-scope claim archival is a package-GLOBAL, cross-org sweep (the
+// "platform" claim scope applies NO org filter, unlike the scope-exact
+// "org:<id>" path), so archiving it while an org still runs it would wipe that
+// org's live assertions. The refusal hands the administrator the migration list
+// — the organizations, id + name where resolvable — and each org archives its
+// own org-scoped install first. Once NO org install remains, the cross-org sweep
+// has nothing coexisting to wipe and the archive proceeds at platform scope.
+// Restore is symmetric with the ruled archive (the SAME org-install refusal,
+// then the platform-scope reactivation).
+//
+// "Installed" = an org-scoped canonical row in the LIVE set (`active`|`locked`);
+// an `archived` org row is a migrated-off org and never blocks.
+//
+// LOCKED sub-state asymmetry (honest): a `locked` org row is in the LIVE set and
+// SHOULD be named, but on the ARCHIVE path the package-wide locked-row guard
+// (`assertNoLockedCanonicalRow`, cinatra#1130) runs BEFORE this enumeration and
+// refuses first with its own fail-closed error — so the structured migration list
+// here covers the `active` installs (the common case) and a locked org surfaces
+// via that guard instead. RESTORE has no locked-row guard, so a locked org row
+// reaches this enumeration and IS named. Both paths refuse (fail-closed); only
+// which refusal message surfaces differs. Narrowing the set to `active` would be
+// LESS safe (a genuinely-installed locked org would stop blocking), so `locked`
+// stays in the set.
+//
+// TOCTOU (honest scope): archive/restore hold the per-package install lifecycle
+// lock (cinatra#1837 R4a) — the SAME lock every org install/update/archive takes,
+// re-entrant via AsyncLocalStorage — so WITHIN a process no org row can be created
+// between this enumeration and the platform commit; the read is consistent with
+// the transition it gates. That lock is PROCESS-LOCAL (a `Map` + ALS, not a DB
+// advisory lock), so cross-process serialization of a platform archive against a
+// concurrent org install on ANOTHER worker is bounded by the shipped R4a lock's
+// scope, NOT strengthened here (build-on, do-not-disturb). A distributed fence is
+// a separate follow-up if cross-worker platform-archive races become a concern;
+// the refusal stays fail-closed for the overwhelmingly-common single-writer admin
+// action, matching the guarantee the shipped org-scoped R3/R4 path already relies
+// on.
+// ---------------------------------------------------------------------------
+
+/** Structured refusal of a platform-scope artifact archive/restore while orgs
+ *  still have the extension installed. The stable `code` lets a caller (UI action
+ *  / MCP handler) classify the refusal; `organizations` is the migration list. */
+export class PlatformArtifactLifecycleOrgInstallsError extends Error {
+  readonly code = "PLATFORM_ARTIFACT_ORG_INSTALLS_PRESENT" as const;
+  constructor(
+    public readonly packageName: string,
+    public readonly operation: "archive" | "restore",
+    public readonly organizations: ReadonlyArray<{ id: string; name?: string }>,
+  ) {
+    super(
+      `Cannot ${operation} "${packageName}" at platform scope — ` +
+        `${organizations.length} organization(s) still have it installed: ` +
+        `${organizations
+          .map((o) => (o.name ? `${o.name} (${o.id})` : o.id))
+          .join(", ")}. Each must archive its org-scoped install first.`,
+    );
+    this.name = "PlatformArtifactLifecycleOrgInstallsError";
+  }
+}
+
+/**
+ * PURE: the distinct org ids that still have the package INSTALLED (an org-scoped
+ * `active`|`locked` canonical row), sorted for a deterministic refusal list. A
+ * null/empty organizationId is the platform row (never an org install); an
+ * `archived` org row is a migrated-off org and never blocks. Exported so the
+ * enumeration decision can be pinned directly, without a store.
+ */
+export function enumerateOrgScopedInstallsBlockingPlatformArchive(
+  rows: ReadonlyArray<{ organizationId: string | null; status: string }>,
+): string[] {
+  const blocking = new Set<string>();
+  for (const r of rows) {
+    if (!r.organizationId) continue; // platform / null / empty — not an org install
+    if (r.status !== "active" && r.status !== "locked") continue; // installed = LIVE set
+    blocking.add(r.organizationId);
+  }
+  return [...blocking].sort();
+}
+
+/**
+ * Enumerate the org-scoped installs of the package (the REAL canonical store) and
+ * REFUSE the platform-scope `operation` while any remain — the fail-closed owner
+ * ruling. Runs inside the archive/restore install lock, so WITHIN THE PROCESS the
+ * enumeration is consistent with the platform commit; the lock is process-local
+ * (see the header note — cross-worker serialization is the shipped R4a boundary,
+ * not strengthened here). Org names are enriched best-effort via the host
+ * resolver; an unresolved name falls back to id-only.
+ */
+async function assertNoOrgScopedInstallsBlockPlatformArtifactLifecycle(
+  ref: PackageRef,
+  operation: "archive" | "restore",
+): Promise<void> {
+  const { readInstalledExtensionsByPackageName } = await import("./canonical-store");
+  const rows = await readInstalledExtensionsByPackageName(ref.packageName);
+  // FAIL-CLOSED on a live MALFORMED SIBLING row (empty-string org id). The pure
+  // enumeration below treats "" as "not an org install" and SKIPS it — but a live
+  // "" row is neither a platform install (null) nor a scope-exact org install, and
+  // the cross-org "platform" sweep cannot safely reason about it. `assertWellFormed
+  // LifecycleOrgId` only guards the RESOLVED target row, so a valid NULL-org target
+  // with a live "" SIBLING would otherwise slip the gate and permit an ungated
+  // sweep. Refuse over the whole set here.
+  const malformed = rows.filter(
+    (r) => r.organizationId === "" && (r.status === "active" || r.status === "locked"),
+  );
+  if (malformed.length > 0) {
+    throw new Error(
+      `[artifact-claim-lifecycle] cannot ${operation} "${ref.packageName}" at platform scope — ` +
+        `${malformed.length} live canonical row(s) carry a malformed empty organizationId ` +
+        `(${malformed.map((r) => r.id).join(", ")}). Refusing rather than running an ungated ` +
+        `cross-org platform sweep past a malformed live install.`,
+    );
+  }
+  const blockingOrgIds = enumerateOrgScopedInstallsBlockingPlatformArchive(rows);
+  if (blockingOrgIds.length === 0) return;
+  const { resolveExtensionArchiveOrgNames } = await import("./artifact-claim-lifecycle-hook");
+  const names = await resolveExtensionArchiveOrgNames(blockingOrgIds);
+  throw new PlatformArtifactLifecycleOrgInstallsError(
+    ref.packageName,
+    operation,
+    blockingOrgIds.map((id) => {
+      const name = names.get(id);
+      return name ? { id, name } : { id };
+    }),
+  );
+}
+
+// FAIL-CLOSED artifact CLAIM-ARCHIVAL fire for a committed archive of a
+// `kind:"artifact"` extension (cinatra#1454). A no-op for every other kind. Ties
+// the archive/uninstall dispatch to the durable claim lifecycle: retire the
 // extension's `objectTypes` claims + archive its eligible governed rows via the
 // host-injected `fireExtensionArtifactClaimArchival` seam. Fired BEFORE the
 // durable row transition commits, and NON-swallowing — so a hook failure (or an
@@ -263,43 +394,97 @@ async function syncCanonicalRowTransition(
 // archive/uninstall rather than leaving the extension archived while its type
 // claims / governed rows stay live ("reports, never silently drops").
 //
-// SCOPE — deliberately ORG-SCOPED ONLY (the defined, scope-exact part of the
-// ratified disposition; codex convergence 2026-07-19). The claim/uninstall scope
-// "org:<id>" archives EXACTLY that org's assertions (`scopeOrgFilter` → org_id =
-// $2), so an org-admin uninstall / org-scoped archive retires precisely the right
-// rows. A NULL-org (platform) install maps to the "platform" scope, whose
-// archival applies NO org filter — a package-GLOBAL, cross-org sweep that could
-// wipe a coexisting org-scoped install's assertions. Retiring a platform
-// install's claims therefore needs the platform-scope destructive semantics
-// resolved first (owner/design-gated remainder R1, cinatra#1454); until then a
-// platform archive DEFERS (a diagnostic, not a silent drop). The package-GLOBAL
-// destructive paths (platform-admin hard-delete — common for artifacts since
-// `extensionHasBeenUsed` is agent-run-based; forceDelete; purge) likewise need an
-// ALL-SCOPES retirement primitive (remainder R2) and are not wired here.
+// SCOPE: the "org:<id>" path archives EXACTLY that org's assertions
+// (`scopeOrgFilter` → org_id = $2). The PLATFORM (NULL-org) path is the cross-org
+// "platform" sweep — gated by the OWNER-RULING refusal above: it fires only once
+// no organization still has the extension installed (else the whole archive is
+// refused with the migration list). The package-GLOBAL destructive paths
+// (platform-admin hard-delete, forceDelete, purge) use the separate ALL-SCOPES
+// retirement primitive (remainder R2) and are not wired here.
+/**
+ * FAIL-CLOSED guard against a MIS-DISPATCHED artifact row. A `kind:"artifact"`
+ * canonical row MUST be processed under the artifact typeId. The typeId is
+ * resolved separately from the row (`resolveExtensionTypeId` → `deriveTypeId`,
+ * which floors an UNRESOLVED kind to "agent" when both registry reads fail), so a
+ * registry-read outage can mis-derive an artifact package's typeId to "agent".
+ * Were that to reach here, the `typeId !== "artifact"` early-return below would
+ * silently skip BOTH the artifact claim gate AND the platform org-install refusal
+ * — archiving/restoring the artifact at platform scope with NO gate and NO
+ * cross-org protection (the exact harm the owner ruling 2026-07-22 (groganz)
+ * prevents). Refuse loudly instead. Fires before the durable transition, so the
+ * whole op aborts. (Only the dangerous direction — an artifact row under a
+ * non-artifact typeId — is guarded; a non-artifact row keeps its no-op path.)
+ */
+function assertArtifactDispatchConsistent(
+  typeId: string,
+  row: InstalledExtension,
+  gate: "archival" | "reactivation",
+): void {
+  if (row.kind === "artifact" && typeId !== "artifact") {
+    throw new Error(
+      `[artifact-claim-${gate}] canonical row ${row.id} ("${row.packageName}") is kind:"artifact" ` +
+        `but was dispatched under typeId="${typeId}" — refusing. The artifact claim ${gate} gate and ` +
+        `the platform org-install refusal would be silently skipped (live claims / an ungated cross-org ` +
+        `platform sweep). This is a typeId-resolution bug at the call site, not a valid no-op.`,
+    );
+  }
+}
+
+/**
+ * FAIL-CLOSED guard against a MALFORMED empty-string organizationId. A canonical
+ * row is either a genuine PLATFORM install (`organizationId === null`) or a
+ * scope-exact ORG install (a non-empty id). An empty string is NEITHER: the
+ * pre-hardening `!row.organizationId` test conflated `""` with `null` and would
+ * run the cross-org "platform" sweep off a malformed row (the wiring's own
+ * `=== ""` refusal is bypassed because the dispatcher passes `null`, not `""`).
+ * Refuse — symmetric across archive + restore, consistent with the wiring guard.
+ */
+function assertWellFormedLifecycleOrgId(
+  row: InstalledExtension,
+  ref: PackageRef,
+  operation: "archive" | "restore",
+): void {
+  if (row.organizationId === "") {
+    throw new Error(
+      `[artifact-claim-lifecycle] cannot ${operation} "${ref.packageName}" — canonical row ${row.id} ` +
+        `has a malformed empty organizationId (neither a platform install (null) nor a scope-exact org ` +
+        `install). Refusing rather than running an ungated cross-org platform sweep off a malformed row.`,
+    );
+  }
+}
+
 async function fireArtifactClaimArchivalForRow(
   typeId: string,
   row: InstalledExtension,
   ref: PackageRef,
   actor: Actor,
 ): Promise<void> {
+  assertArtifactDispatchConsistent(typeId, row, "archival");
   if (typeId !== "artifact") return;
-  // `!row.organizationId` covers null/undefined AND the empty string — an empty
-  // org id must NEVER reach the wiring (it would map to the cross-org "platform"
-  // sweep). Only a non-empty org id is the scope-exact, wired path.
-  if (!row.organizationId) {
-    // Remainder R1 (cinatra#1454): platform-scope retirement is unresolved — do
-    // NOT fire the cross-org "platform" archival. Diagnostic so the deferral is
-    // visible (never silent).
-    console.warn(
-      `[artifact-claim-archival] "${ref.packageName}" platform (NULL-org) archive: claim ` +
-        `retirement DEFERRED — platform-scope destructive semantics are unresolved (cinatra#1454 R1)`,
-    );
+  assertWellFormedLifecycleOrgId(row, ref, "archive");
+  // `organizationId === null` is the genuine PLATFORM row (the cross-org sweep,
+  // gated by the ruling); a non-empty id is the scope-exact org path. The
+  // malformed `""` case is already refused above.
+  if (row.organizationId == null) {
+    // OWNER RULING 2026-07-22 (groganz): refuse the platform archive while any org
+    // still has it installed; else proceed with the platform-scope archival.
+    await assertNoOrgScopedInstallsBlockPlatformArtifactLifecycle(ref, "archive");
+    await firePlatformOrOrgArtifactClaimArchival(row, ref, actor, null);
     return;
   }
+  await firePlatformOrOrgArtifactClaimArchival(row, ref, actor, row.organizationId);
+}
+
+async function firePlatformOrOrgArtifactClaimArchival(
+  row: InstalledExtension,
+  ref: PackageRef,
+  actor: Actor,
+  organizationId: string | null,
+): Promise<void> {
   const { fireExtensionArtifactClaimArchival } = await import("./artifact-claim-lifecycle-hook");
   await fireExtensionArtifactClaimArchival({
     packageName: ref.packageName,
-    organizationId: row.organizationId,
+    organizationId,
     // Provenance precedence mirrors the install anchor: the pipeline rewrites
     // `source.version` on the row (the trusted identity), while the separate
     // `version` column can lag — so prefer `source.version`, then the column,
@@ -311,33 +496,47 @@ async function fireArtifactClaimArchivalForRow(
   });
 }
 
-// FAIL-CLOSED artifact CLAIM-REACTIVATION fire for a committed ORG-SCOPED restore
-// of a `kind:"artifact"` extension (cinatra#1837 R3) — the MIRROR of
-// `fireArtifactClaimArchivalForRow`. A no-op for every other kind. Fired BEFORE
-// the durable `activate` transition, non-swallowing, so a failed reactivation
-// aborts the whole restore (the row stays archived) rather than marking it active
-// with dead claims. Symmetric R1 deferral: a NULL-org (platform) restore DEFERS
-// with a diagnostic (nothing was retired at the platform scope to reactivate).
+// FAIL-CLOSED artifact CLAIM-REACTIVATION fire for a committed restore of a
+// `kind:"artifact"` extension — the MIRROR of `fireArtifactClaimArchivalForRow`.
+// A no-op for every other kind. The ORG-SCOPED path (cinatra#1837 R3) is the
+// shipped substrate and is UNTOUCHED here. The PLATFORM (NULL-org) path is
+// symmetric with the ruled archive: the SAME org-install refusal, then the
+// platform-scope reactivation. Fired BEFORE the durable `activate` transition,
+// non-swallowing, so a failed reactivation (or the ruled refusal) aborts the
+// whole restore (the row stays archived) rather than marking it active with dead
+// claims.
 async function fireArtifactClaimReactivationForRow(
   typeId: string,
   row: InstalledExtension,
   ref: PackageRef,
   actor: Actor,
 ): Promise<void> {
+  assertArtifactDispatchConsistent(typeId, row, "reactivation");
   if (typeId !== "artifact") return;
-  if (!row.organizationId) {
-    console.warn(
-      `[artifact-claim-reactivation] "${ref.packageName}" platform (NULL-org) restore: claim ` +
-        `reactivation DEFERRED — symmetric with the deferred platform archive (cinatra#1837 R1)`,
-    );
+  assertWellFormedLifecycleOrgId(row, ref, "restore");
+  if (row.organizationId == null) {
+    // OWNER RULING 2026-07-22 (groganz): restore is symmetric with the ruled
+    // archive — refuse while any org still has it installed; else proceed with
+    // the platform-scope reactivation.
+    await assertNoOrgScopedInstallsBlockPlatformArtifactLifecycle(ref, "restore");
+    await firePlatformOrOrgArtifactClaimReactivation(row, ref, actor, null);
     return;
   }
+  await firePlatformOrOrgArtifactClaimReactivation(row, ref, actor, row.organizationId);
+}
+
+async function firePlatformOrOrgArtifactClaimReactivation(
+  row: InstalledExtension,
+  ref: PackageRef,
+  actor: Actor,
+  organizationId: string | null,
+): Promise<void> {
   const { fireExtensionArtifactClaimReactivation } = await import(
     "./artifact-claim-lifecycle-hook"
   );
   await fireExtensionArtifactClaimReactivation({
     packageName: ref.packageName,
-    organizationId: row.organizationId,
+    organizationId,
     extensionVersion:
       (row.source as { version?: string } | null)?.version ?? row.version ?? "0.0.0",
     installId: row.id,
@@ -1889,4 +2088,12 @@ export type {
   ExtensionArtifactClaimArchivalAllScopesHook,
   ExtensionArtifactClaimArchivalAllScopesInput,
 } from "./artifact-claim-lifecycle-hook";
+// OPTIONAL, BEST-EFFORT org-name resolver (OWNER RULING 2026-07-22, groganz).
+// Host-injected; used to enrich the platform-scope archive/restore refusal's
+// migration list with org names. Unwired / failing → id-only (never fails closed).
+export {
+  setExtensionArchiveOrgNameResolver,
+  resolveExtensionArchiveOrgNames,
+} from "./artifact-claim-lifecycle-hook";
+export type { ExtensionArchiveOrgNameResolver } from "./artifact-claim-lifecycle-hook";
 export { readEffectiveStatusByPackageNames } from "./canonical-store";

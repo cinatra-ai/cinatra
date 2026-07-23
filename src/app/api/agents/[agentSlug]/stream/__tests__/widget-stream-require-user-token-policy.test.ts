@@ -25,8 +25,12 @@ const PRODUCTION_CONTENT_EDITOR_SLUGS = [
 ] as const;
 
 // The route gate: enforce unless the entry EXPLICITLY opts out with `false`.
-// Mirrors src/app/api/agents/[agentSlug]/stream/route.ts. Kept here as the
-// single source of truth the invariant asserts against the real manifest.
+// Mirrors the unified assistant broker's widget branch
+// (src/app/api/assistants/chat/route.ts — the legacy per-agent stream relay this
+// test used to mirror was DELETED under cinatra#1221, owner ruling 2026-07-22
+// (groganz); the manifest policy this suite pins is now enforced there). Kept
+// here as the single source of truth the invariant asserts against the real
+// manifest.
 function entryEnforcesUserToken(auth: { requireUserToken?: boolean }): boolean {
   return auth.requireUserToken !== false;
 }

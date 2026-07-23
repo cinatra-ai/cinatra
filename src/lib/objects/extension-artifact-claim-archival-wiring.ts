@@ -32,6 +32,7 @@ import {
   setExtensionArtifactClaimArchivalHook,
   setExtensionArtifactClaimReactivationHook,
   setExtensionArtifactClaimArchivalAllScopesHook,
+  setExtensionArchiveOrgNameResolver,
 } from "@cinatra-ai/extensions";
 import {
   retireArtifactExtensionClaims,
@@ -100,13 +101,23 @@ export function wireExtensionArtifactClaimReactivationHook(): void {
   if (reactivationWired) return;
   reactivationWired = true;
   setExtensionArtifactClaimReactivationHook(async (input) => {
-    if (input.organizationId === "" || input.organizationId == null) {
+    // An EMPTY-STRING org id is malformed and must never reach the wiring — it
+    // would map to the cross-org "platform" sweep without the ruling's org-install
+    // gate having run. Stays fail-closed.
+    if (input.organizationId === "") {
       throw new Error(
-        `[artifact-claim-reactivation] "${input.packageName}": empty/absent organizationId — ` +
-          `refusing (org-scoped restore reactivation only; platform is deferred, cinatra#1837 R1)`,
+        `[artifact-claim-reactivation] "${input.packageName}": empty organizationId — ` +
+          `refusing (would map to a cross-org "platform" assertion sweep)`,
       );
     }
-    const scope = `org:${input.organizationId}`;
+    // OWNER RULING 2026-07-22 (groganz): a NULL-org restore reactivates at the
+    // PLATFORM claim scope, symmetric with the ruled platform archive. The
+    // dispatcher's org-install refusal has already run (a platform restore
+    // proceeds only once no org still has the extension installed), so — within
+    // the process holding the install lock — the cross-org platform reactivation
+    // has no coexisting org assertion to disturb. (The lock is process-local — the
+    // shipped R4a boundary; see the dispatcher header note in the extensions pkg.)
+    const scope = input.organizationId == null ? "platform" : `org:${input.organizationId}`;
     const pkg = input.packageName;
 
     // HEAVY graphs — dynamically imported so this module stays a cheap leaf.
@@ -265,7 +276,44 @@ export function wireExtensionArtifactClaimArchivalAllScopesHook(): void {
   });
 }
 
-// Wire all three fail-closed seams on import — a side-effect import installs them.
+// ---------------------------------------------------------------------------
+// OWNER RULING 2026-07-22 (groganz) — the OPTIONAL org-name resolver for the
+// platform-scope archive/restore refusal's migration list. The dispatcher refuses
+// a platform archive/restore while any organization still has the artifact
+// extension installed and names those organizations (id always; name where
+// resolvable). The IDs come from the canonical store; NAMES come from here — the
+// betterAuth `organization` table. BEST-EFFORT: the resolver never throws upward
+// (the extensions seam swallows failures to id-only), so a name lookup can never
+// turn the refusal into a hard failure. The heavy auth-db handle is dynamically
+// imported so this wiring module stays a cheap static leaf.
+// ---------------------------------------------------------------------------
+
+let orgNameResolverWired = false;
+
+/** Idempotently install the best-effort org-name resolver used by the platform
+ *  archive/restore refusal's migration list. */
+export function wireExtensionArchiveOrgNameResolver(): void {
+  if (orgNameResolverWired) return;
+  orgNameResolverWired = true;
+  setExtensionArchiveOrgNameResolver(async (orgIds) => {
+    const names = new Map<string, string>();
+    if (orgIds.length === 0) return names;
+    const { betterAuthDb, betterAuthOrganizations } = await import("@/lib/better-auth-db");
+    const { inArray } = await import("drizzle-orm");
+    const rows = await betterAuthDb
+      .select({ id: betterAuthOrganizations.id, name: betterAuthOrganizations.name })
+      .from(betterAuthOrganizations)
+      .where(inArray(betterAuthOrganizations.id, orgIds));
+    for (const r of rows) {
+      if (r.id && typeof r.name === "string" && r.name.length > 0) names.set(r.id, r.name);
+    }
+    return names;
+  });
+}
+
+// Wire all fail-closed seams (+ the best-effort resolver) on import — a
+// side-effect import installs them.
 wireExtensionArtifactClaimArchivalHook();
 wireExtensionArtifactClaimReactivationHook();
 wireExtensionArtifactClaimArchivalAllScopesHook();
+wireExtensionArchiveOrgNameResolver();
