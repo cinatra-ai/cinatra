@@ -40,6 +40,9 @@ vi.mock("../store/db", () => {
         return [v];
       },
     }),
+    // Backs the writer's advisory-lock statement (cinatra#1894 B1b): a
+    // DB-concurrency no-op with no observable effect in this mock.
+    execute: async () => ({ rows: [] }),
   };
   return {
     auditEvents: {},

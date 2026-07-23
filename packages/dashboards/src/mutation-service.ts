@@ -67,6 +67,13 @@ import {
   ownerLevelToScopeLevel,
   reEnvelopeDcSave,
 } from "./v12-envelope";
+// TYPE-ONLY (erased): the seam's runtime `pairTwin` is reached through the
+// globalThis dispatch port below, NOT a static value import, so the boot-only
+// twin seam module stays OUT of every ratchet-tracked route's first-party
+// dev-compile graph (route-graph ratchet, cinatra#732 / #1894 B1b). The type
+// surface (DashboardTwinContext / TwinTx) is erased at compile time and adds no
+// graph pressure.
+import type { DashboardTwinContext, TwinTx } from "./twin-writer-seam";
 
 export class DashboardForbiddenError extends Error {
   readonly code = "dashboard_forbidden";
@@ -184,6 +191,125 @@ async function writeAudit(
     decision: "allow",
     metadata: opts.metadata ?? null,
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Artifact-substrate TWIN (cinatra#1894 B1b).
+//
+// Every writer pairs its dashboards write with the artifact-substrate twin
+// INSIDE the SAME transaction via the fail-closed seam. `pairTwin` dispatches to
+// the host-registered twin writer (or the explicit test twin); an UNREGISTERED
+// seam THROWS, rolling the mutation back. The twin's scope axis
+// (ownerLevel/ownerId/projectId) is copied VERBATIM from the just-written
+// dashboards row — the exact axis `resolveDashboardAccess` reads.
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Dispatch the dashboards-artifact twin INSIDE the caller's transaction, through
+ * the seam's globalThis port (cinatra#1894 B1b). This is the read side of the
+ * route-graph decoupling: the seam module self-publishes its own `pairTwin`
+ * (which reads the live registry) on `globalThis.__cinatraDashboardArtifactTwinPair`
+ * at boot, so this hot mutation path reaches it WITHOUT a static value import —
+ * keeping the boot-only seam machinery out of every tracked route's first-party
+ * graph.
+ *
+ * FAIL-CLOSED is preserved end to end:
+ *   - seam LOADED, writer registered → dispatches to the registered twin;
+ *   - seam LOADED, no writer         → the seam's own `pairTwin` throws
+ *     `DashboardTwinWriterNotRegisteredError` (unchanged behaviour);
+ *   - seam NEVER LOADED (boot skipped) → the port is undefined and we THROW here
+ *     rather than silently skip the substrate twin. The `fatal` core-boot phase
+ *     + its registration assertion guarantee the seam is loaded and a writer
+ *     registered before any mutation can run in production.
+ */
+async function pairTwin(tx: TwinTx, ctx: DashboardTwinContext): Promise<void> {
+  const dispatch = globalThis.__cinatraDashboardArtifactTwinPair;
+  if (typeof dispatch !== "function") {
+    throw new Error(
+      "dashboards-artifact twin seam is not loaded — @cinatra-ai/dashboards/" +
+        "twin-writer-seam must be imported by the host boot phase (via the " +
+        "twin-writer self-register) before any dashboards mutation runs " +
+        "(cinatra#1894 B1b, fail-closed).",
+    );
+  }
+  await dispatch(tx, ctx);
+}
+
+/** Build the twin context from a just-written dashboards row + the acting
+ *  principal. Pure — NOT a write. */
+function twinCtx(
+  row: DashboardRow,
+  operation: "upsert" | "delete",
+  actorId: string | null,
+): DashboardTwinContext {
+  return {
+    operation,
+    dashboardId: row.id,
+    orgId: row.organizationId,
+    ownerLevel: row.ownerLevel,
+    ownerId: row.ownerId,
+    projectId: row.projectId ?? null,
+    actorId,
+  };
+}
+
+/**
+ * Pair the twin for a BULK writer's affected rows in SORTED dashboardId order
+ * (delta D5 deadlock-freedom: every bulk tx acquires the per-id twin advisory
+ * locks in the same total order, so concurrent bulk writers never cycle). One
+ * tx, all-or-nothing — a twin throw rolls the whole bulk mutation back.
+ */
+async function pairTwinBulk(
+  tx: TwinTx,
+  rows: readonly DashboardRow[],
+  operation: "upsert" | "delete",
+  actorId: string | null,
+): Promise<void> {
+  const sorted = [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  for (const row of sorted) {
+    await pairTwin(tx, twinCtx(row, operation, actorId));
+  }
+}
+
+/**
+ * Acquire the per-dashboard twin advisory lock `hashtext(id)` FIRST — before any
+ * dashboard-row lock in this transaction. This makes the lock order UNIFORM
+ * across every writer (advisory(id) → row(id)), which:
+ *   - serializes the substrate representation-revision allocation for this id
+ *     across BOTH writer families (the row-first SELECT-FOR-UPDATE writers and the
+ *     advisory-first `upsertDashboardConfig`), so the `COALESCE(MAX(revision),0)+1`
+ *     the twin runs can never race; and
+ *   - removes the row-lock ↔ advisory-lock INVERSION that would otherwise deadlock
+ *     a row-first writer against `upsertDashboardConfig` (which takes the SAME
+ *     `hashtext(id)` advisory lock first) — codex Q3/Q4.
+ * Re-taking the same xact advisory key inside `pairTwin`/the twin is a harmless
+ * no-op (xact advisory locks are re-entrant and released once at COMMIT/ROLLBACK).
+ */
+async function acquireTwinLockFirst(tx: TwinTx, id: string): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${id}))`);
+}
+
+/** The sorted-id twin-lock pre-acquire for a BULK writer: take every affected id's
+ *  `hashtext(id)` advisory lock in sorted order BEFORE the bulk row write, so the
+ *  bulk tx is ALSO advisory-first (no row→advisory inversion vs a single writer)
+ *  and D5's sorted order still guarantees bulk-vs-bulk deadlock-freedom.
+ *
+ *  RESIDUAL (codex-noted, bounded): the pre-lock SELECT and the write share one
+ *  predicate const (no CODE drift), but under READ COMMITTED a row that ENTERS the
+ *  predicate set BETWEEN the pre-lock and the write (a MEMBERSHIP phantom) is
+ *  updated without its advisory pre-taken, re-introducing a row→advisory inversion
+ *  for THAT row only. The window is narrow — the phantom's creator is itself
+ *  advisory-first and has committed+released by the time the bulk sees it, so an
+ *  inversion needs a THIRD writer to begin operating on the just-created row during
+ *  the bulk write — and the bulk writers are extension-lifecycle operations already
+ *  serialized per (package, org). A deadlock here is Postgres-detected and the
+ *  caller retries. Full elimination would require REPEATABLE READ on the bulk tx
+ *  (unavailable on the reconciler's caller-provided composed tx). */
+async function acquireTwinLocksSorted(tx: TwinTx, ids: readonly string[]): Promise<void> {
+  const sorted = [...ids].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const id of sorted) {
+    await acquireTwinLockFirst(tx, id);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -455,6 +581,8 @@ export async function createDashboard(
   const db = getDashboardsDb();
   try {
     return await db.transaction(async (tx) => {
+      // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
+      await acquireTwinLockFirst(tx as unknown as TwinTx, id);
       const insertRow: NewDashboardRow = {
         id,
         name,
@@ -479,6 +607,7 @@ export async function createDashboard(
         row,
         metadata: { initialStatus: row.status, ownerLevel: row.ownerLevel },
       });
+      await pairTwin(tx as unknown as TwinTx, twinCtx(row, "upsert", actor.userId));
       return row;
     });
   } catch (e) {
@@ -501,6 +630,8 @@ export async function updateDashboard(
 ): Promise<DashboardRow> {
   const db = getDashboardsDb();
   return db.transaction(async (tx) => {
+    // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
+    await acquireTwinLockFirst(tx as unknown as TwinTx, id);
     const row = await selectForUpdate(tx as unknown as DashboardsDb, id);
     if (!row) throw new DashboardNotFoundError(id);
     const access = resolveDashboardAccess(row, actor);
@@ -565,6 +696,7 @@ export async function updateDashboard(
         dashboardVersion: updated.dashboardVersion,
       },
     });
+    await pairTwin(tx as unknown as TwinTx, twinCtx(updated, "upsert", actor.userId));
     return updated;
   });
 }
@@ -575,6 +707,8 @@ export async function publishDashboard(
 ): Promise<DashboardRow> {
   const db = getDashboardsDb();
   return db.transaction(async (tx) => {
+    // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
+    await acquireTwinLockFirst(tx as unknown as TwinTx, id);
     const row = await selectForUpdate(tx as unknown as DashboardsDb, id);
     if (!row) throw new DashboardNotFoundError(id);
     const access = resolveDashboardAccess(row, actor);
@@ -621,6 +755,7 @@ export async function publishDashboard(
         dashboardVersion: updated.dashboardVersion,
       },
     });
+    await pairTwin(tx as unknown as TwinTx, twinCtx(updated, "upsert", actor.userId));
     return updated;
   });
 }
@@ -631,6 +766,8 @@ export async function archiveDashboard(
 ): Promise<DashboardRow> {
   const db = getDashboardsDb();
   return db.transaction(async (tx) => {
+    // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
+    await acquireTwinLockFirst(tx as unknown as TwinTx, id);
     const row = await selectForUpdate(tx as unknown as DashboardsDb, id);
     if (!row) throw new DashboardNotFoundError(id);
     const access = resolveDashboardAccess(row, actor);
@@ -662,6 +799,7 @@ export async function archiveDashboard(
       row: updated,
       metadata: { prevStatus, dashboardVersion: updated.dashboardVersion },
     });
+    await pairTwin(tx as unknown as TwinTx, twinCtx(updated, "upsert", actor.userId));
     return updated;
   });
 }
@@ -889,6 +1027,7 @@ export async function upsertDashboardConfig(
       row,
       metadata: { upsert: true, dashboardVersion: row.dashboardVersion },
     });
+    await pairTwin(tx as unknown as TwinTx, twinCtx(row, "upsert", actor.userId));
     return row;
   });
 }
@@ -1117,6 +1256,10 @@ export async function ensureOverview(
 
   const db = getDashboardsDb();
   return db.transaction(async (tx) => {
+    // Advisory-first on the canonical overview id (uniform lock order across
+    // writers, see acquireTwinLockFirst) THEN the composite ensure-lock. The
+    // create path pairs the twin for exactly this id.
+    await acquireTwinLockFirst(tx as unknown as TwinTx, buildOverviewDashboardId(ref));
     // Serialize concurrent ensures on the composite; released at COMMIT/ROLLBACK.
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
 
@@ -1177,6 +1320,7 @@ export async function ensureOverview(
       row,
       metadata: { overview: true, entityType: ref.entityType, entityId: ref.entityId },
     });
+    await pairTwin(tx as unknown as TwinTx, twinCtx(row, "upsert", actor.userId));
     return row;
   });
 }
@@ -1236,6 +1380,8 @@ export async function createEntityDashboard(
   const db = getDashboardsDb();
   try {
     return await db.transaction(async (tx) => {
+      // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
+      await acquireTwinLockFirst(tx as unknown as TwinTx, id);
       const [row] = await tx
         .insert(dashboards)
         .values({
@@ -1260,6 +1406,7 @@ export async function createEntityDashboard(
         row,
         metadata: { entityType: input.ref.entityType, entityId: input.ref.entityId, name },
       });
+      await pairTwin(tx as unknown as TwinTx, twinCtx(row, "upsert", actor.userId));
       return row;
     });
   } catch (e) {
@@ -1284,6 +1431,8 @@ export async function renameDashboard(
   const db = getDashboardsDb();
   try {
     return await db.transaction(async (tx) => {
+      // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
+      await acquireTwinLockFirst(tx as unknown as TwinTx, id);
       const row = await selectForUpdate(tx as unknown as DashboardsDb, id);
       if (!row) throw new DashboardNotFoundError(id);
       if (!resolveDashboardAccess(row, actor).canWrite) {
@@ -1308,6 +1457,7 @@ export async function renameDashboard(
         row: updated,
         metadata: { previousName: row.name, name },
       });
+      await pairTwin(tx as unknown as TwinTx, twinCtx(updated, "upsert", actor.userId));
       return updated;
     });
   } catch (e) {
@@ -1327,6 +1477,8 @@ export async function deleteEntityDashboard(
 ): Promise<void> {
   const db = getDashboardsDb();
   await db.transaction(async (tx) => {
+    // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
+    await acquireTwinLockFirst(tx as unknown as TwinTx, id);
     const row = await selectForUpdate(tx as unknown as DashboardsDb, id);
     if (!row) throw new DashboardNotFoundError(id);
     if (!resolveDashboardAccess(row, actor).canWrite) {
@@ -1341,6 +1493,10 @@ export async function deleteEntityDashboard(
       row,
       metadata: { name: row.name, entityType: row.entityType, entityId: row.entityId },
     });
+    // Soft-delete tombstone the artifact-substrate twin BEFORE the hard delete
+    // (same tx, atomic). Q2: no claim-binding withdraw — the dashboard type
+    // mints no dedicated claim, so the tombstone + delete outbox suffice.
+    await pairTwin(tx as unknown as TwinTx, twinCtx(row, "delete", actor.userId));
     await tx.delete(dashboards).where(eq(dashboards.id, id));
   });
 }
@@ -1480,6 +1636,8 @@ export async function materializeExtensionTemplate(
       updatedAt: new Date(),
     };
     async function updateTemplate(targetId: string): Promise<DashboardRow> {
+      // Advisory-first: uniform lock order (see acquireTwinLockFirst).
+      await acquireTwinLockFirst(q as unknown as TwinTx, targetId);
       const [updated] = await q.update(dashboards).set(updateSet).where(eq(dashboards.id, targetId)).returning();
       return updated;
     }
@@ -1489,10 +1647,13 @@ export async function materializeExtensionTemplate(
       row = await updateTemplate(existing[0].id);
     } else {
       try {
+        const newTemplateId = randomUUID();
+        // Advisory-first on the new id before the INSERT (see acquireTwinLockFirst).
+        await acquireTwinLockFirst(q as unknown as TwinTx, newTemplateId);
         const [inserted] = await q
           .insert(dashboards)
           .values({
-            id: randomUUID(),
+            id: newTemplateId,
             name,
             configJson: config as never,
             configVersion: DASHBOARD_CONFIG_V12_VERSION,
@@ -1523,6 +1684,7 @@ export async function materializeExtensionTemplate(
       }
     }
     await writeAudit(q, { operation: "dashboards.materialize_template", actor: input.actor, row, metadata: { extensionId: input.extensionId, templateScope } });
+    await pairTwin(q as unknown as TwinTx, twinCtx(row, "upsert", input.actor.userId));
     return row;
   });
 }
@@ -1573,10 +1735,13 @@ export async function materializeExtensionInstanceForProject(
     const t = template[0];
     let inserted: DashboardRow;
     try {
+      const newInstanceId = randomUUID();
+      // Advisory-first on the new id before the INSERT (see acquireTwinLockFirst).
+      await acquireTwinLockFirst(q as unknown as TwinTx, newInstanceId);
       const [row] = await q
         .insert(dashboards)
         .values({
-          id: randomUUID(),
+          id: newInstanceId,
           name: t.name,
           description: t.description,
           configJson: t.configJson as never,
@@ -1607,6 +1772,7 @@ export async function materializeExtensionInstanceForProject(
       return winner[0];
     }
     await writeAudit(q, { operation: "dashboards.materialize_instance", actor: input.actor, row: inserted, metadata: { extensionId: input.extensionId, projectId: input.projectId } });
+    await pairTwin(q as unknown as TwinTx, twinCtx(inserted, "upsert", input.actor.userId));
     return inserted;
   });
 }
@@ -1621,6 +1787,16 @@ export async function archiveExtensionDashboards(
   input: { extensionId: string; organizationId: string; actor: DashboardActor; reason?: string },
 ): Promise<number> {
   return withDashboardsTx(tx, async (q) => {
+    // Shared predicate so the pre-lock SELECT and the UPDATE can never drift.
+    const where = and(
+      eq(dashboards.extensionId, input.extensionId),
+      eq(dashboards.organizationId, input.organizationId),
+      ne(dashboards.status, "archived"),
+    );
+    // Advisory-first for the bulk tx: pre-lock the matched ids in sorted order
+    // BEFORE the row write (uniform advisory→row order; D5 sorted, deadlock-free).
+    const targets = await q.select({ id: dashboards.id }).from(dashboards).where(where);
+    await acquireTwinLocksSorted(q as unknown as TwinTx, targets.map((t) => t.id));
     const rows = await q
       .update(dashboards)
       .set({
@@ -1630,17 +1806,12 @@ export async function archiveExtensionDashboards(
         updatedBy: input.actor.userId,
         updatedAt: new Date(),
       })
-      .where(
-        and(
-          eq(dashboards.extensionId, input.extensionId),
-          eq(dashboards.organizationId, input.organizationId),
-          ne(dashboards.status, "archived"),
-        ),
-      )
+      .where(where)
       .returning();
     for (const row of rows) {
       await writeAudit(q, { operation: "dashboards.extension_archive", actor: input.actor, row, metadata: { extensionId: input.extensionId, reason: input.reason ?? null } });
     }
+    await pairTwinBulk(q as unknown as TwinTx, rows, "upsert", input.actor.userId);
     return rows.length;
   });
 }
@@ -1650,20 +1821,23 @@ export async function restoreExtensionDashboards(
   input: { extensionId: string; organizationId: string; actor: DashboardActor },
 ): Promise<number> {
   return withDashboardsTx(tx, async (q) => {
+    const where = and(
+      eq(dashboards.extensionId, input.extensionId),
+      eq(dashboards.organizationId, input.organizationId),
+      eq(dashboards.status, "archived"),
+    );
+    // Advisory-first for the bulk tx (see acquireTwinLocksSorted).
+    const targets = await q.select({ id: dashboards.id }).from(dashboards).where(where);
+    await acquireTwinLocksSorted(q as unknown as TwinTx, targets.map((t) => t.id));
     const rows = await q
       .update(dashboards)
       .set({ status: "published", archivedAt: null, archiveReason: null, updatedBy: input.actor.userId, updatedAt: new Date() })
-      .where(
-        and(
-          eq(dashboards.extensionId, input.extensionId),
-          eq(dashboards.organizationId, input.organizationId),
-          eq(dashboards.status, "archived"),
-        ),
-      )
+      .where(where)
       .returning();
     for (const row of rows) {
       await writeAudit(q, { operation: "dashboards.extension_restore", actor: input.actor, row, metadata: { extensionId: input.extensionId } });
     }
+    await pairTwinBulk(q as unknown as TwinTx, rows, "upsert", input.actor.userId);
     return rows.length;
   });
 }
@@ -1765,24 +1939,22 @@ export async function adoptExtensionDashboards(
       setPatch.appliedDefaultHash = input.appliedDefaultHash ?? null;
     }
 
-    const rows = await q
-      .update(dashboards)
-      .set(setPatch)
-      .where(
-        and(
-          eq(dashboards.organizationId, input.organizationId),
-          // RESTORE-of-archived ONLY: never re-home a LIVE (published) extension
-          // row out from under its owner (the load-bearing anti-clobber guard).
-          eq(dashboards.status, "archived"),
-          // NEVER an operator row — extension-owned only.
-          sql`${dashboards.extensionId} IS NOT NULL`,
-          inArray(dashboards.contributionId, lineageIds),
-          // Idempotency belt-and-suspenders: skip rows already keyed to the
-          // successor identity (the archived gate already makes a re-fire a no-op).
-          sql`NOT (${dashboards.extensionId} = ${input.successorPackage} AND ${dashboards.contributionId} = ${input.successorContributionId})`,
-        ),
-      )
-      .returning();
+    const where = and(
+      eq(dashboards.organizationId, input.organizationId),
+      // RESTORE-of-archived ONLY: never re-home a LIVE (published) extension
+      // row out from under its owner (the load-bearing anti-clobber guard).
+      eq(dashboards.status, "archived"),
+      // NEVER an operator row — extension-owned only.
+      sql`${dashboards.extensionId} IS NOT NULL`,
+      inArray(dashboards.contributionId, lineageIds),
+      // Idempotency belt-and-suspenders: skip rows already keyed to the
+      // successor identity (the archived gate already makes a re-fire a no-op).
+      sql`NOT (${dashboards.extensionId} = ${input.successorPackage} AND ${dashboards.contributionId} = ${input.successorContributionId})`,
+    );
+    // Advisory-first for the bulk tx (see acquireTwinLocksSorted).
+    const targets = await q.select({ id: dashboards.id }).from(dashboards).where(where);
+    await acquireTwinLocksSorted(q as unknown as TwinTx, targets.map((t) => t.id));
+    const rows = await q.update(dashboards).set(setPatch).where(where).returning();
 
     for (const row of rows) {
       await writeAudit(q, {
@@ -1798,6 +1970,7 @@ export async function adoptExtensionDashboards(
         },
       });
     }
+    await pairTwinBulk(q as unknown as TwinTx, rows, "upsert", input.actor.userId);
     return rows.length;
   });
 }
@@ -1866,23 +2039,25 @@ export async function upgradeExtensionDashboards(
     // merge write — the no-clobber guarantee holds under concurrency. A user edit
     // that commits first is read here as `ours`; one that arrives after blocks
     // until this tx commits and then re-bases on the merged result.
-    const rows = await q
-      .select()
-      .from(dashboards)
-      .where(
-        and(
-          eq(dashboards.organizationId, input.organizationId),
-          eq(dashboards.contributionId, input.contributionId),
-          sql`${dashboards.extensionId} IS NOT NULL`,
-          eq(dashboards.status, "published"),
-        ),
-      )
-      .for("update");
+    const where = and(
+      eq(dashboards.organizationId, input.organizationId),
+      eq(dashboards.contributionId, input.contributionId),
+      sql`${dashboards.extensionId} IS NOT NULL`,
+      eq(dashboards.status, "published"),
+    );
+    // Advisory-first for the bulk tx: pre-lock the matched ids in sorted order
+    // BEFORE the SELECT-FOR-UPDATE takes the row locks (uniform advisory→row order).
+    const preTargets = await q.select({ id: dashboards.id }).from(dashboards).where(where);
+    await acquireTwinLocksSorted(q as unknown as TwinTx, preTargets.map((t) => t.id));
+    const rows = await q.select().from(dashboards).where(where).for("update");
 
     let merged = 0;
     let seeded = 0;
     let unchanged = 0;
     let failed = 0;
+    // Rows actually written this tx — paired to the substrate twin in SORTED id
+    // order AFTER the loop (delta D5 deadlock-freedom for the per-id twin locks).
+    const twinTargets: DashboardRow[] = [];
     for (const row of rows) {
       // Idempotent: already at this exact default + version.
       if (
@@ -1912,6 +2087,7 @@ export async function upgradeExtensionDashboards(
           row,
           metadata: { contributionId: input.contributionId, mode: "seed-baseline", appliedContributionVersion: input.newContributionVersion },
         });
+        twinTargets.push(row);
         seeded += 1;
         continue;
       }
@@ -1956,6 +2132,7 @@ export async function upgradeExtensionDashboards(
           row,
           metadata: { contributionId: input.contributionId, mode: "rebase-only", appliedContributionVersion: input.newContributionVersion },
         });
+        twinTargets.push(row);
         unchanged += 1;
         continue;
       }
@@ -1988,8 +2165,10 @@ export async function upgradeExtensionDashboards(
           appliedContributionVersion: input.newContributionVersion,
         },
       });
+      twinTargets.push(updated);
       merged += 1;
     }
+    await pairTwinBulk(q as unknown as TwinTx, twinTargets, "upsert", input.actor.userId);
     return { merged, seeded, unchanged, failed };
   });
 }
