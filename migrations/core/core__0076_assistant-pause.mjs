@@ -1,4 +1,4 @@
-// core__0072 — installation-wide assistant PAUSE table (cinatra#1880, Epic #1873
+// core__0076 — installation-wide assistant PAUSE table (cinatra#1880, Epic #1873
 // W5). The operator-upgrade twin of the fresh-install bootstrap DDL
 // (`assistantPauseSchemaQueries` in src/lib/assistant-registry-schema.ts, spread into
 // `buildCreateStoreSchemaQueries`). ONE brand-new table `assistant_pause`, keyed
@@ -11,11 +11,13 @@
 // SEQ RECONCILED. Cut against core__0068 (assistant-thread-binding, #1875 W2) as
 // provisional 0069; a sibling W3 lane (assistant-thread-title-slug) landed
 // core__0069 on origin/main first, moving this slice to 0070. Then core__0071
-// (unbound-output-derivation-outbox, #1893) shipped on origin/main (PR #1989),
-// making 0071 the max shipped seq — a new migration's seq must be strictly
-// greater than it, so 0070 no longer qualified and this slice was renumbered to
-// the next genuinely-free sequence, core__0072 (a rename-only change, zero SQL
-// diff — the additive CREATE TABLE is seq-agnostic). migrations/** is HIGH-RISK:
+// (unbound-output-derivation-outbox, #1893) and core__0072
+// (artifact-review-gate-store, #1796) shipped on origin/main; then
+// core__0075 (widget-auth-token-keys-canonical) landed on origin/main, making
+// 0075 the max shipped seq — a new migration's seq must be strictly greater than
+// it, so on the rebase onto main this slice was renumbered to the next
+// genuinely-free sequence, core__0076 (a rename-only change, zero SQL diff — the
+// additive CREATE TABLE is seq-agnostic). migrations/** is HIGH-RISK:
 // owner approval is required and the lane never merges.
 //
 // ADDITIVE + IDEMPOTENT + NON-DESTRUCTIVE. A brand-new table (CREATE TABLE IF NOT

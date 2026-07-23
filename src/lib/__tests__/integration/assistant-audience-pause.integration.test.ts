@@ -80,6 +80,11 @@ maybe("W5 audience + pause + alias + guard (live)", () => {
     return principal;
   }
 
+  // Seed the built-in Cinatra assistant in its RULED shape (owner ruling
+  // 2026-07-23 (groganz)): ONE tag, the resolving HANDLE `cinatra`, and NO builtin
+  // alias (the fresh-install bootstrap no longer seeds one; core__0077 frees it on
+  // upgrades). This is exactly what the boot backfill mints once the `cinatra`
+  // token is no longer occupied by a builtin alias.
   async function seedBuiltinCinatra(): Promise<string> {
     const principal = `p-cinatra-${randomUUID()}`;
     await admin.query(
@@ -91,11 +96,6 @@ maybe("W5 audience + pause + alias + guard (live)", () => {
       `INSERT INTO "${schema}".assistant_handles (assistant_user_id, handle, origin, package_name)
        VALUES ($1,'cinatra','standalone',$2)`,
       [principal, BUILTIN_ASSISTANT_ALIAS.packageName],
-    );
-    await admin.query(
-      `INSERT INTO "${schema}".assistant_tag_alias (alias, package_name, source)
-       VALUES ('cinatra',$1,'builtin')`,
-      [BUILTIN_ASSISTANT_ALIAS.packageName],
     );
     return principal;
   }
@@ -302,14 +302,20 @@ maybe("W5 audience + pause + alias + guard (live)", () => {
     expect(aliases).toContain("gamma");
     expect(aliases).not.toContain("alpha");
 
-    // builtin immutable: renaming FROM builtin throws; remove is a no-op.
-    await seedBuiltinCinatra();
-    await expect(db.renameAssistantAlias("cinatra", "x", pkgA)).rejects.toMatchObject({
+    // A `source='builtin'` alias is IMMUTABLE: renaming FROM it throws and remove
+    // is a no-op. No builtin alias is seeded any more (owner ruling 2026-07-23
+    // (groganz): the built-in's ONE tag is its resolving handle, not an alias), so
+    // this exercises the substrate guard directly by inserting a builtin-source row.
+    await admin.query(
+      `INSERT INTO "${schema}".assistant_tag_alias (alias, package_name, source) VALUES ('reserved-builtin',$1,'builtin')`,
+      [pkgA],
+    );
+    await expect(db.renameAssistantAlias("reserved-builtin", "x", pkgA)).rejects.toMatchObject({
       name: "AssistantNamespaceCollisionError",
     });
-    await db.removeAssistantAlias("cinatra");
+    await db.removeAssistantAlias("reserved-builtin");
     const stillThere = await admin.query(
-      `SELECT 1 FROM "${schema}".assistant_tag_alias WHERE alias='cinatra'`,
+      `SELECT 1 FROM "${schema}".assistant_tag_alias WHERE alias='reserved-builtin'`,
     );
     expect(stillThere.rowCount).toBe(1);
   });
@@ -361,12 +367,18 @@ maybe("W5 audience + pause + alias + guard (live)", () => {
     expect(await handlesOf()).toContain("helper");
   });
 
-  it("the built-in Cinatra tag is editable — no immutability on the resolving handle", async () => {
-    const builtin = await seedBuiltinCinatra(); // handle 'cinatra'
+  it("the built-in's ONE tag is @cinatra (its handle) and it is editable — no builtin alias, no immutability", async () => {
+    const builtin = await seedBuiltinCinatra(); // handle 'cinatra', NO builtin alias
+    // The built-in surfaces its resolving handle `cinatra` as its ONE tag (owner
+    // ruling 2026-07-23 (groganz)) — @cinatra, never @cinatra-2.
+    const seeded = (await reader.readAssistantRegistryForActor(ctx())).find((e) => e.isBuiltin);
+    expect(seeded?.handle).toBe("cinatra");
+    // And there is NO builtin alias — the token belongs to the handle alone.
+    expect(seeded?.aliases ?? []).not.toContain("cinatra");
+    // The resolving handle is editable (no immutability on the built-in tag). The
+    // rename target here is only a demonstration — the ruled default is `cinatra`.
     const next = await db.renameAssistantHandleByPrincipal(builtin, "cinatra-primary");
     expect(next).toBe("cinatra-primary");
-    // The reader unions the builtin by PACKAGE, now surfacing the renamed tag; it
-    // is still flagged builtin.
     const entry = (await reader.readAssistantRegistryForActor(ctx())).find((e) => e.isBuiltin);
     expect(entry?.handle).toBe("cinatra-primary");
   });

@@ -157,7 +157,9 @@ maybe("AC#5 — registry reader audience filter (live)", () => {
     return principal;
   }
 
-  /** Seed the boot-seeded builtin Cinatra (template + handle, NO installed row). */
+  /** Seed the boot-seeded builtin Cinatra in its RULED shape (template + handle,
+   *  NO installed row, NO builtin alias): the built-in's ONE tag is its resolving
+   *  handle `cinatra` (owner ruling 2026-07-23 (groganz)). */
   async function seedBuiltinCinatra(): Promise<void> {
     const principal = `p-cinatra-${randomUUID()}`;
     await admin.query(
@@ -169,11 +171,6 @@ maybe("AC#5 — registry reader audience filter (live)", () => {
       `INSERT INTO "${schema}".assistant_handles (assistant_user_id, handle, origin, package_name)
        VALUES ($1,'cinatra','standalone',$2)`,
       [principal, BUILTIN_ASSISTANT_ALIAS.packageName],
-    );
-    await admin.query(
-      `INSERT INTO "${schema}".assistant_tag_alias (alias, package_name, source)
-       VALUES ('cinatra',$1,'builtin')`,
-      [BUILTIN_ASSISTANT_ALIAS.packageName],
     );
   }
 
@@ -214,10 +211,12 @@ maybe("AC#5 — registry reader audience filter (live)", () => {
     await seedAssistant({ pkg: "@x/team-only", handle: "teambot", audience: [{ kind: "team", id: TEAM }] });
 
     const entries = await reader.readAssistantRegistryForActor(ctx());
+    // The built-in's ONE tag is its resolving handle `cinatra` (@cinatra); it
+    // carries NO builtin alias (owner ruling 2026-07-23 (groganz)).
     const cinatra = entries.find((e) => e.handle === "cinatra");
     expect(cinatra).toBeTruthy();
     expect(cinatra?.isBuiltin).toBe(true);
-    expect(cinatra?.aliases).toContain("cinatra");
+    expect(cinatra?.aliases).not.toContain("cinatra");
     // the team-gated one is NOT visible to the bare actor
     expect(entries.map((e) => e.handle)).not.toContain("teambot");
   });
