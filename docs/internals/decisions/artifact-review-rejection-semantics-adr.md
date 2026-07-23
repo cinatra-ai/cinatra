@@ -81,14 +81,16 @@ the review audit row captures the reviewed revision + the HOST-derived renderer
 provenance (re-resolved from the artifact type at submit time — never accepted
 from the client decision, which names only the immutable targets + disposition).
 
-**Exactly-once resume (durability):** the typed reject (or approve) resume is NOT
-a post-commit side effect that could fail and strand a resolved-but-unresumed
-workflow. The resume INTENT is part of the decision commit plan and is persisted
-TRANSACTIONALLY with the gate CAS + audit rows + dispositions (a durable outbox
-the binder's delivery worker drains exactly-once). A commit that resolves the gate
-therefore also durably enqueues the reject send; a sequential retry of the same
-decision (matched by its fingerprint) is an idempotent no-op that re-drives
-nothing.
+**Durable resume (exactly-once persistence, at-least-once delivery):** the typed
+reject (or approve) resume is NOT a post-commit side effect that could fail and
+strand a resolved-but-unresumed workflow. The resume INTENT is part of the
+decision commit plan and is persisted TRANSACTIONALLY with the gate CAS + audit
+rows + dispositions (a durable outbox — the intent is persisted EXACTLY ONCE, and
+the binder's delivery worker drains it AT-LEAST-ONCE, so the downstream resume
+consumer must be idempotent per gate; a send-then-crash safely redelivers on lease
+expiry). A commit that resolves the gate therefore also durably enqueues the
+reject send; a sequential retry of the same decision (matched by its fingerprint)
+is an idempotent no-op that re-drives nothing.
 
 ## Consequences
 

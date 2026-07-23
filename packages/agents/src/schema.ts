@@ -456,6 +456,111 @@ export const auditorApprovalReceipts = cinatraSchema.table("auditor_approval_rec
 }));
 
 // ---------------------------------------------------------------------------
+// Generic artifact-REVIEW GATE store (cinatra#1796, epic #1620 S13) — the
+// persistence backing the #1795/#1807 generic artifact-review surface: the
+// emitting gate PINS immutable `{artifactId, representationRevisionId}` targets
+// and a terminal decision CAS-resolves the gate, transactionally with the audit
+// rows, the reject→tombstone disposition record, and the exactly-once-persisted
+// resume intent (at-least-once delivery). Mirrors core__0072 + the bootstrap leaf
+// src/lib/artifacts/artifact-review-gate-schema.ts.
+//
+// No FK to agent_runs ON PURPOSE (auditor-review-companion precedent): the gate
+// is keyed by run id (validated at write time by the emitting gate's run-access
+// guard) and must outlive run-row churn. The child tables FK to the gate.
+// ---------------------------------------------------------------------------
+
+/** A frozen review target as pinned in `pinned_targets` — no renderer identity. */
+export type PinnedReviewTargetRow = {
+  artifactId: string;
+  representationRevisionId: string;
+};
+
+export const artifactReviewGates = cinatraSchema.table("artifact_review_gates", {
+  id:            text("id").primaryKey(),
+  runId:         text("run_id").notNull(),
+  orgId:         text("org_id").notNull(),
+  reviewTaskId:  text("review_task_id").notNull(),
+  // 'pending' (emitted, frozen target set) | 'resolved' (terminal decision).
+  status:        text("status").notNull().default("pending"),
+  // The frozen [{artifactId, representationRevisionId}] set (resolved once at
+  // gate creation) — the pinned-membership witness the prep + decision cores
+  // check caller targets against.
+  pinnedTargets: jsonb("pinned_targets").notNull(),
+  // Terminal disposition + idempotency fingerprint, stamped ONLY on resolve.
+  disposition:   text("disposition"),
+  fingerprint:   text("fingerprint"),
+  resolvedBy:    text("resolved_by"),
+  resolvedAt:    timestamp("resolved_at", { withTimezone: true }),
+  createdAt:     timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  // One gate per (run, task) — makes emit idempotent + is the pending anchor.
+  runTaskUniq: uniqueIndex("artifact_review_gates_run_task_uniq").on(t.runId, t.reviewTaskId),
+  orgIdx:      index("artifact_review_gates_org_idx").on(t.orgId),
+}));
+
+export const artifactReviewAudit = cinatraSchema.table("artifact_review_audit", {
+  id:                       text("id").primaryKey(),
+  gateId:                   text("gate_id").notNull().references(() => artifactReviewGates.id, { onDelete: "cascade" }),
+  runId:                    text("run_id").notNull(),
+  reviewTaskId:             text("review_task_id").notNull(),
+  // The decision fingerprint the audit row belongs to — makes the insert
+  // idempotent under a response-lost retry (same decision → no duplicate rows).
+  decisionFingerprint:      text("decision_fingerprint").notNull(),
+  artifactId:               text("artifact_id").notNull(),
+  representationRevisionId: text("representation_revision_id").notNull(),
+  disposition:              text("disposition").notNull(),
+  // HOST-derived renderer provenance (re-resolved from the artifact TYPE at
+  // submit; never a client claim). digest only for a runtime (dynamic) load.
+  rendererKind:             text("renderer_kind").notNull(),
+  rendererPackage:          text("renderer_package"),
+  rendererDigest:           text("renderer_digest"),
+  createdAt:                timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  rowUniq: uniqueIndex("artifact_review_audit_row_uniq")
+    .on(t.gateId, t.decisionFingerprint, t.artifactId, t.representationRevisionId),
+  gateIdx: index("artifact_review_audit_gate_idx").on(t.gateId),
+}));
+
+export const artifactReviewDispositions = cinatraSchema.table("artifact_review_dispositions", {
+  id:                       text("id").primaryKey(),
+  gateId:                   text("gate_id").notNull().references(() => artifactReviewGates.id, { onDelete: "cascade" }),
+  orgId:                    text("org_id").notNull(),
+  runId:                    text("run_id").notNull(),
+  artifactId:               text("artifact_id").notNull(),
+  representationRevisionId: text("representation_revision_id").notNull(),
+  // The op union admits ONLY 'tombstone' — a review can never hard-delete.
+  kind:                     text("kind").notNull(),
+  // NULL ⇒ pending downstream tombstone application on the objects store.
+  appliedAt:                timestamp("applied_at", { withTimezone: true }),
+  createdAt:                timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  rowUniq:     uniqueIndex("artifact_review_dispositions_uniq")
+    .on(t.gateId, t.artifactId, t.representationRevisionId),
+  pendingIdx:  index("artifact_review_dispositions_pending_idx")
+    .on(t.createdAt)
+    .where(sql`applied_at IS NULL`),
+}));
+
+export const artifactReviewResumeOutbox = cinatraSchema.table("artifact_review_resume_outbox", {
+  // PK gate_id ⇒ at most ONE resume per resolved gate (exactly-once; no
+  // resolved-but-unresumed stranding and no double-resume).
+  gateId:         text("gate_id").primaryKey().references(() => artifactReviewGates.id, { onDelete: "cascade" }),
+  runId:          text("run_id").notNull(),
+  reviewTaskId:   text("review_task_id").notNull(),
+  // Discriminated so a reject can never drain down the approve wire.
+  kind:           text("kind").notNull(),
+  responseText:   text("response_text").notNull(),
+  status:         text("status").notNull().default("pending"),
+  attempts:       integer("attempts").notNull().default(0),
+  leaseToken:     text("lease_token"),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:      timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  statusIdx: index("artifact_review_resume_outbox_status_idx").on(t.status, t.createdAt),
+}));
+
+// ---------------------------------------------------------------------------
 // agent_run_messages — per-run LLM conversation thread checkpoint
 // ---------------------------------------------------------------------------
 // Structured fields support tool-call replay after HITL pause/resume.

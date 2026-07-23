@@ -76,6 +76,7 @@
     { "alias": "@cinatra-ai/agents/install-target-picker", "target": "./packages/agents/src/install-target-picker.ts" },
     { "alias": "@cinatra-ai/agents/llm-provider-policy", "target": "./packages/agents/src/llm-provider-policy.ts" },
     { "alias": "@cinatra-ai/agents/store", "target": "./packages/agents/src/store.ts" },
+    { "alias": "@cinatra-ai/agents/artifact-review-gate-store", "target": "./packages/agents/src/artifact-review-gate-store.ts" },
     { "alias": "@cinatra-ai/agents/mcp-handlers", "target": "./packages/agents/src/mcp/handlers.ts" },
     { "alias": "@cinatra-ai/agents/integration/register-object-types", "target": "./packages/agents/src/integration/register-object-types.ts" },
     { "alias": "@cinatra-ai/agents/verdaccio/client", "target": "./packages/agents/src/verdaccio/client.ts" },
