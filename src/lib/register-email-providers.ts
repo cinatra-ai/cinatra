@@ -338,6 +338,61 @@ function correlationFields(
 }
 
 /**
+ * Stable diagnostic code for a DROPPED sent-email object write (cinatra#1983) —
+ * the WRITE-side analogue of #1948's internal-read loud-drop
+ * (`INTERNAL_READ_AUTHZ_DROP_CODE`). Grep / alert on this so an internal/system
+ * write rejection stops being an ad-hoc, un-coded `console.warn`.
+ */
+const SENT_EMAIL_WRITE_DROP_CODE = "email-routing.sent_email_object_write_drop" as const;
+
+/**
+ * Build the objects-WRITE actor for the sent-email record (cinatra#1983).
+ *
+ * The writer previously persisted through the roleless, org-less `objectsClient`
+ * singleton (objects-client.ts:14-15), which fails `objects_save` in TWO ways — a
+ * null-org fail-close on the standalone path (handlers.ts: `actor.orgId is null`)
+ * and a role-less `object.create` denial on the run-scoped path
+ * (handlers.ts `enforceResourceAccess(..., "object.create")`) — BOTH swallowed by
+ * the best-effort try/catch, so the semantic record was silently dropped.
+ *
+ * This actor carries BOTH the org AND real create authority (the run-owner /
+ * session standing the send already ran under), derived from the `routing.orgId`
+ * / `routing.userId` the writer already receives:
+ *
+ *   - With a `userId` (the run owner / authenticated sender): a `HumanUser`
+ *     principal whose id is that user. `deriveSaveDefaults` (handlers.ts) defaults
+ *     an authored record to `user`-owned / `private` BY THAT USER, and the kernel
+ *     OWNER short-circuit grants `object.create` on the owner's own row — the SAME
+ *     owner-scoped scope the send/ledger ran under, readable back by the run
+ *     owner's org-scoped list (the reconcile vantage in
+ *     test-delivery-send-port-impl.ts, which reads via `buildActorContextFromRun`
+ *     — the same run-owner `HumanUser` principal).
+ *
+ *   - Without a `userId` (a pure org-scoped send): a `System` principal → the
+ *     record defaults to org-owned; `object.create` is granted by the `member`
+ *     org-role floor below (a role-LESS System actor is DENIED — the singleton's
+ *     failure mode (ii)).
+ *
+ * `orgRole: "member"` is the LEAST-privilege standing that grants `object.create`
+ * (policies.ts: the `member` set includes `object.create`). An org-stamped-but-
+ * role-less actor is NOT sufficient (cinatra#1983 AC1): org scope alone does not
+ * confer create. This is the WRITE-side sibling of the routing READ path's
+ * `internalRead` authority — which is intentionally read-only and grants no create
+ * (cinatra#1948 (b)); the two authorities never share a shape.
+ */
+function ownerWriteActorForOrg(opts: { userId?: string; orgId: string }): ActorContext {
+  const base = {
+    organizationId: opts.orgId,
+    orgRole: "member" as const,
+    authSource: "worker" as const,
+    policyVersion: POLICY_VERSION,
+  };
+  return opts.userId
+    ? { principalType: "HumanUser", principalId: opts.userId, ...base }
+    : { principalType: "System", principalId: "system", ...base };
+}
+
+/**
  * Best-effort write of the sent-email object after a successful
  * provider.send(). The facade calls this and swallows errors — the email
  * has already been delivered by this point, so failure here only loses
@@ -367,6 +422,14 @@ async function saveSentEmailObject(input: {
   };
   correlation?: EmailTransportCorrelation;
 }): Promise<void> {
+  // cinatra#1983 AC3: a LEGITIMATELY org-less send (pre-auth platform /
+  // transactional mail — `sendPlatformEmail` passes `routing: { connectorId }`
+  // with no org) has no org scope to persist the semantic record under. SKIP the
+  // write cleanly — no `objects_save` attempt, no null-org throw, no swallowed
+  // warn — rather than driving it through an org-less actor and dropping the
+  // guaranteed failure.
+  const orgId = input.routing.orgId;
+  if (!orgId) return;
   // Defense-in-depth. The facade already wraps this callback in `.catch()`, but
   // a best-effort writer must be robust regardless of caller — never let an
   // objects-layer failure here surface as a thrown error to whatever invoked the
@@ -374,7 +437,15 @@ async function saveSentEmailObject(input: {
   try {
     const msg = input.msg as SentEmailMessageLike;
     const receipt = input.receipt as SentEmailReceiptLike;
-    const { objectsClient } = await import("@cinatra-ai/objects");
+    // cinatra#1983 AC1: write under an AUTHORIZATION-BEARING, org-scoped actor
+    // (the run-owner / session standing derived from `routing`) via the SESSION
+    // objects client — NOT the roleless, org-less `objectsClient` singleton, which
+    // fails-closed (null-org) or is denied (roleless `object.create`) and silently
+    // drops the record. The routing READ path already adopted
+    // `createSessionObjectsClient` post-#1979; this is the WRITE-side sibling.
+    const client = createSessionObjectsClient(
+      ownerWriteActorForOrg({ userId: input.routing.userId, orgId }),
+    );
     const idempotencyKey =
       `email-send:${receipt.providerId}:${receipt.providerMessageId}`;
     // Standardized thread correlation key (connectorId, providerThreadId) —
@@ -384,7 +455,7 @@ async function saveSentEmailObject(input: {
     // id. Omitted when the provider surfaced no thread id. Uses the SHARED
     // derivation (email-thread-key.ts) so writer + query seam never drift.
     const sentThreadId = deriveThreadId(input.routing.connectorId, receipt.providerThreadId);
-    await objectsClient.save({
+    await client.save({
       typeHint: "@cinatra-ai/email:sent-email",
       rawData: {
         auditId: idempotencyKey, // synthetic — standalone email_send path has no real audit row
@@ -414,8 +485,20 @@ async function saveSentEmailObject(input: {
       },
     });
   } catch (err) {
+    // cinatra#1983 AC4: strictly best-effort — a GENUINE objects-layer failure is
+    // still swallowed and NEVER surfaces to the send caller (the email was already
+    // delivered by the time this runs). AC5 (hardening): emit a STRUCTURED,
+    // greppable signal (stable code + facets) so an internal/system write drop
+    // stops being an ad-hoc `console.warn` — the write-side analogue of #1948's
+    // internal-read loud-drop.
     console.warn(
-      `[email-routing] sent-email object write failed (send already succeeded): ${err instanceof Error ? err.message : String(err)}`,
+      `[email-routing] sent-email object write dropped (send already succeeded): ${err instanceof Error ? err.message : String(err)}`,
+      {
+        code: SENT_EMAIL_WRITE_DROP_CODE,
+        orgId,
+        hasUserScope: Boolean(input.routing.userId),
+        connectorId: input.routing.connectorId,
+      },
     );
   }
 }
