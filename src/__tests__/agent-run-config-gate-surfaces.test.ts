@@ -60,21 +60,9 @@ describe("chat runner is covered transitively by its two gated dispatch mechanis
   });
 });
 
-describe("widget stream route routes through the config-needs run gate", () => {
-  const src = read("app/api/agents/[agentSlug]/stream/route.ts");
-
-  it("calls assertAgentRunReadyByPackage before dispatchContentEditorViaA2A", () => {
-    expect(src).toMatch(/assertAgentRunReadyByPackage/);
-    const gateIdx = src.indexOf("assertAgentRunReadyByPackage");
-    // Match the CALL site (`await dispatchContentEditorViaA2A({`), not the import.
-    const dispatchIdx = src.indexOf("await dispatchContentEditorViaA2A({");
-    expect(gateIdx).toBeGreaterThan(-1);
-    expect(dispatchIdx).toBeGreaterThan(-1);
-    expect(gateIdx).toBeLessThan(dispatchIdx);
-  });
-
-  it("fails closed with a 409 naming the unconfigured connectors", () => {
-    expect(src).toMatch(/status:\s*409/);
-    expect(src).toMatch(/NextResponse\.json\(notConfigured/);
-  });
-});
+// NOTE (cinatra#1221, owner ruling 2026-07-22 (groganz)): the legacy widget
+// relay surface `app/api/agents/[agentSlug]/stream/route.ts` was DELETED — the
+// public-site widget moved onto the unified assistant broker
+// (`app/api/assistants/chat/route.ts`), which pre-creates its OBO-carrier run
+// through the same MCP agent_run primitive (config-gated in the handler barrel).
+// Its dedicated config-needs-gate source assertion was removed with the route.
