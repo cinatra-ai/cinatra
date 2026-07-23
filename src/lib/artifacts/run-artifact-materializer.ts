@@ -176,6 +176,27 @@ export function __resetRunPackageBindingsCacheForTests(): void {
   pinnedBindingsCache.clear();
 }
 
+/**
+ * cinatra#1893 (epic #1883 A5): the run-derivation context the post-terminal
+ * unbound-output job needs — the run agent's validated typed `produces` refs and
+ * whether the package declared ANY artifact binding. Reuses the cached binding
+ * loader (a pinned re-load is a cache hit). `packageName===null` (a template with
+ * no package) yields an empty-produces / no-binding context, which the job
+ * settles as `no_produces`.
+ */
+export async function loadRunDerivationContext(input: {
+  templateId: string;
+  packageVersion: string | null;
+}): Promise<{ producesRefs: SemanticArtifactProducesRef[]; hasBindings: boolean }> {
+  const packageName = await resolveTemplatePackageName(input.templateId);
+  if (packageName === null) return { producesRefs: [], hasBindings: false };
+  const loaded = await loadRunPackageBindings({
+    packageName,
+    packageVersion: input.packageVersion,
+  });
+  return { producesRefs: loaded.producesRefs, hasBindings: loaded.bindings.length > 0 };
+}
+
 async function resolveTemplatePackageName(
   templateId: string,
 ): Promise<string | null> {
@@ -204,7 +225,7 @@ async function resolveTemplatePackageName(
 // delegation gate is needed here — unlike objects_save, which serves chat +
 // human callers too).
 // ---------------------------------------------------------------------------
-async function resolveRunScopeOwnership(input: {
+export async function resolveRunScopeOwnership(input: {
   templateId: string;
   runId: string;
   orgId: string;
@@ -257,14 +278,16 @@ async function* asUtf8Stream(s: string): AsyncIterable<Uint8Array> {
  * finalize → concurrent-loser recovery. Throws only on infra failure (both
  * callers wrap); every validation failure is a returned error string.
  */
-async function writeClaimedArtifact(input: {
+export async function writeClaimedArtifact(input: {
   runId: string;
   orgId: string;
   createdBy: string | null;
-  /** Ledger identity: the EndNode output name (bindings) or node id (tool). */
+  /** Ledger identity: the EndNode output name (bindings), the node id (tool), or
+   *  the reserved `derived_output` sentinel (cinatra#1893 unbound-output job). */
   outputId: string;
-  nodeId: string;
-  path: "end_node_binding" | "materialize_tool";
+  /** The calling node id, or null on the `derived_output` path (no node). */
+  nodeId: string | null;
+  path: "end_node_binding" | "materialize_tool" | "derived_output";
   extension: string;
   title: string;
   mime: string;
@@ -278,6 +301,16 @@ async function writeClaimedArtifact(input: {
   resolvedTarget: { objectTypeId: string; acceptedFileMimeTypes: string[] };
   /** Per-path wording for the accepts-mismatch error message. */
   mimeDescription: string;
+  /** OPTIONAL extra Tx2 queries composed into the SAME transaction as the
+   *  artifact write + the ledger finalize (cinatra#1893). The derived_output
+   *  path passes its token-guarded outbox `done`-settle here so the settle and
+   *  the artifact commit atomically — a stale lease aborts the whole write. Runs
+   *  ONLY on a fresh create (not on a dedupe short-circuit, where no Tx2 runs).
+   *  Other callers omit it (behaviour unchanged). */
+  extraTx2Queries?: (ids: {
+    artifactId: string;
+    representationRevisionId: string;
+  }) => Array<{ text: string; values: unknown[] }>;
 }): Promise<
   | {
       ok: true;
@@ -316,6 +349,24 @@ async function writeClaimedArtifact(input: {
     extension: input.extension,
     contentHash,
   });
+  // cinatra#1893 Q3: the 4-part unique key (run, output_id, extension,
+  // content_hash) excludes `path`. A same-key row whose `path` DIFFERS from this
+  // write's path is a FOREIGN row (a different materialization intent that
+  // aliased the key) — reusing/aliasing it could hand back or finalize a
+  // different-typed artifact. Fail closed rather than alias. This covers BOTH a
+  // finalized hit AND a re-used unfinalized claim (a fresh insert carries no
+  // path — always this write's own — so the guard skips it). The reserved
+  // `derived_output` sentinel output id makes a real collision practically
+  // unreachable; this is the belt-and-suspenders codex asked for.
+  if (claim.path !== undefined && claim.path !== input.path) {
+    return {
+      ok: false,
+      error:
+        `materialization ledger identity collided with a different path ` +
+        `("${claim.path}" vs "${input.path}") for run ${input.runId} ` +
+        `output "${input.outputId}" extension "${input.extension}" — refusing to alias`,
+    };
+  }
   if (claim.kind === "finalized") {
     return {
       ok: true,
@@ -361,6 +412,10 @@ async function writeClaimedArtifact(input: {
           artifactId: ids.artifactId,
           representationRevisionId: ids.representationRevisionId,
         }),
+        // cinatra#1893: the derived_output path's token-guarded outbox settle,
+        // committed atomically with the artifact + finalize (a stale lease aborts
+        // the whole Tx). Empty for every other caller.
+        ...(input.extraTx2Queries?.(ids) ?? []),
       ],
     });
   } catch (err) {

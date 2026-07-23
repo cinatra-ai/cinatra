@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1554,
-    "/api/mcp": 1550,
-    "/chat": 1624,
-    "/api/a2a": 1555,
-    "/api/llm-bridge": 1562
+    "/sign-in": 1556,
+    "/api/mcp": 1552,
+    "/chat": 1626,
+    "/api/a2a": 1557,
+    "/api/llm-bridge": 1564
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1552,
-      "to": 1554,
-      "reason": "#1960 (PR #2000): the recipients-review persist primitive (email_outreach_recipients_update) is registered in the agent MCP handler barrel (packages/agents/src/mcp/handlers.ts) and the /api/agents/passthrough resume seam (recipients-review-seam.ts) imports it, so the handler + its Zod schema become first-party-reachable from every tracked route that imports the MCP handler barrel — a CI-measured UNIFORM +2 first-party modules per route with the companion extensions cloned pinned (origin/main ceiling 1552 -> merged measured 1554). RE-ANCHORED onto origin/main current ceilings (from = base ceiling, which already carries #1959's drafts +2); retires/replaces the base branch's carried #1959 record. The #1960 handler modules are disjoint from #1959's drafts modules, so the +2 delta stacks. The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2000
+      "from": 1555,
+      "to": 1556,
+      "reason": "#1796 (PR #2009): the generic artifact-review GATE store's bootstrap DDL leaf (src/lib/artifacts/artifact-review-gate-schema.ts, the fresh-install twin of migration core__0072) is statically imported by src/lib/drizzle-store.ts and spread into buildCreateStoreSchemaQueries, so the pure-strings leaf becomes first-party-reachable from every tracked route that reaches drizzle-store.ts — a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned (origin/main ceiling 1555 -> measured 1556). Retires/replaces the base branch's carried #1989 record via this new annotated raise (the schema leaf is a module DISJOINT from #1989's derivation-outbox seam; it re-anchors the same +1 slot onto origin/main's current ceiling). The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2009
     },
     "/api/mcp": {
-      "from": 1548,
-      "to": 1550,
-      "reason": "#1960 (PR #2000): the recipients-review persist primitive (email_outreach_recipients_update) is registered in the agent MCP handler barrel (packages/agents/src/mcp/handlers.ts) and the /api/agents/passthrough resume seam (recipients-review-seam.ts) imports it, so the handler + its Zod schema become first-party-reachable from every tracked route that imports the MCP handler barrel — a CI-measured UNIFORM +2 first-party modules per route with the companion extensions cloned pinned (origin/main ceiling 1548 -> merged measured 1550). RE-ANCHORED onto origin/main current ceilings (from = base ceiling, which already carries #1959's drafts +2); retires/replaces the base branch's carried #1959 record. The #1960 handler modules are disjoint from #1959's drafts modules, so the +2 delta stacks. The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2000
+      "from": 1551,
+      "to": 1552,
+      "reason": "#1796 (PR #2009): the generic artifact-review GATE store's bootstrap DDL leaf (src/lib/artifacts/artifact-review-gate-schema.ts, the fresh-install twin of migration core__0072) is statically imported by src/lib/drizzle-store.ts and spread into buildCreateStoreSchemaQueries, so the pure-strings leaf becomes first-party-reachable from every tracked route that reaches drizzle-store.ts — a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned (origin/main ceiling 1551 -> measured 1552). Retires/replaces the base branch's carried #1989 record via this new annotated raise (the schema leaf is a module DISJOINT from #1989's derivation-outbox seam; it re-anchors the same +1 slot onto origin/main's current ceiling). The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2009
     },
     "/chat": {
-      "from": 1622,
-      "to": 1624,
-      "reason": "#1960 (PR #2000): the recipients-review persist primitive (email_outreach_recipients_update) is registered in the agent MCP handler barrel (packages/agents/src/mcp/handlers.ts) and the /api/agents/passthrough resume seam (recipients-review-seam.ts) imports it, so the handler + its Zod schema become first-party-reachable from every tracked route that imports the MCP handler barrel — a CI-measured UNIFORM +2 first-party modules per route with the companion extensions cloned pinned (origin/main ceiling 1622 -> merged measured 1624). RE-ANCHORED onto origin/main current ceilings (from = base ceiling, which already carries #1959's drafts +2); retires/replaces the base branch's carried #1959 record. The #1960 handler modules are disjoint from #1959's drafts modules, so the +2 delta stacks. The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2000
+      "from": 1625,
+      "to": 1626,
+      "reason": "#1796 (PR #2009): the generic artifact-review GATE store's bootstrap DDL leaf (src/lib/artifacts/artifact-review-gate-schema.ts, the fresh-install twin of migration core__0072) is statically imported by src/lib/drizzle-store.ts and spread into buildCreateStoreSchemaQueries, so the pure-strings leaf becomes first-party-reachable from every tracked route that reaches drizzle-store.ts — a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned (origin/main ceiling 1625 -> measured 1626). Retires/replaces the base branch's carried #1989 record via this new annotated raise (the schema leaf is a module DISJOINT from #1989's derivation-outbox seam; it re-anchors the same +1 slot onto origin/main's current ceiling). The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2009
     },
     "/api/a2a": {
-      "from": 1553,
-      "to": 1555,
-      "reason": "#1960 (PR #2000): the recipients-review persist primitive (email_outreach_recipients_update) is registered in the agent MCP handler barrel (packages/agents/src/mcp/handlers.ts) and the /api/agents/passthrough resume seam (recipients-review-seam.ts) imports it, so the handler + its Zod schema become first-party-reachable from every tracked route that imports the MCP handler barrel — a CI-measured UNIFORM +2 first-party modules per route with the companion extensions cloned pinned (origin/main ceiling 1553 -> merged measured 1555). RE-ANCHORED onto origin/main current ceilings (from = base ceiling, which already carries #1959's drafts +2); retires/replaces the base branch's carried #1959 record. The #1960 handler modules are disjoint from #1959's drafts modules, so the +2 delta stacks. The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2000
+      "from": 1556,
+      "to": 1557,
+      "reason": "#1796 (PR #2009): the generic artifact-review GATE store's bootstrap DDL leaf (src/lib/artifacts/artifact-review-gate-schema.ts, the fresh-install twin of migration core__0072) is statically imported by src/lib/drizzle-store.ts and spread into buildCreateStoreSchemaQueries, so the pure-strings leaf becomes first-party-reachable from every tracked route that reaches drizzle-store.ts — a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned (origin/main ceiling 1556 -> measured 1557). Retires/replaces the base branch's carried #1989 record via this new annotated raise (the schema leaf is a module DISJOINT from #1989's derivation-outbox seam; it re-anchors the same +1 slot onto origin/main's current ceiling). The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2009
     },
     "/api/llm-bridge": {
-      "from": 1560,
-      "to": 1562,
-      "reason": "#1960 (PR #2000): the recipients-review persist primitive (email_outreach_recipients_update) is registered in the agent MCP handler barrel (packages/agents/src/mcp/handlers.ts) and the /api/agents/passthrough resume seam (recipients-review-seam.ts) imports it, so the handler + its Zod schema become first-party-reachable from every tracked route that imports the MCP handler barrel — a CI-measured UNIFORM +2 first-party modules per route with the companion extensions cloned pinned (origin/main ceiling 1560 -> merged measured 1562). RE-ANCHORED onto origin/main current ceilings (from = base ceiling, which already carries #1959's drafts +2); retires/replaces the base branch's carried #1959 record. The #1960 handler modules are disjoint from #1959's drafts modules, so the +2 delta stacks. The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2000
+      "from": 1563,
+      "to": 1564,
+      "reason": "#1796 (PR #2009): the generic artifact-review GATE store's bootstrap DDL leaf (src/lib/artifacts/artifact-review-gate-schema.ts, the fresh-install twin of migration core__0072) is statically imported by src/lib/drizzle-store.ts and spread into buildCreateStoreSchemaQueries, so the pure-strings leaf becomes first-party-reachable from every tracked route that reaches drizzle-store.ts — a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned (origin/main ceiling 1563 -> measured 1564). Retires/replaces the base branch's carried #1989 record via this new annotated raise (the schema leaf is a module DISJOINT from #1989's derivation-outbox seam; it re-anchors the same +1 slot onto origin/main's current ceiling). The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2009
     }
   }
 }

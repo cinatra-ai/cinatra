@@ -33,6 +33,7 @@
     "./schema": "./src/schema.ts",
     "./auditor-apply": "./src/auditor-apply.ts",
     "./auditor-snapshot-store": "./src/auditor-snapshot-store.ts",
+    "./artifact-review-gate-store": "./src/artifact-review-gate-store.ts",
     "./auditor-snapshot-errors": "./src/auditor-snapshot-errors.ts",
     "./db": "./src/db.ts",
     "./pm-link-store": "./src/pm-link-store.ts",

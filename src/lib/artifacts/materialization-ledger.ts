@@ -38,19 +38,31 @@ import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 export type MaterializationPath =
   | "end_node_binding"
   | "materialize_tool"
-  | "llm_emit";
+  | "llm_emit"
+  // cinatra#1893 (epic #1883 A5): the post-terminal derivation job's path — the
+  // produces-scoped capture of an UNBOUND run's final output.
+  | "derived_output";
 
 export type MaterializationClaim =
   | {
       /** Fresh claim, or a re-used unfinalized claim from a crashed drive. */
       kind: "claimed";
       ledgerId: string;
+      /** The claimed row's `path` (cinatra#1893 Q3). Absent on a FRESH insert
+       *  (the caller's own path, no possible alias); present on a RE-USED
+       *  unfinalized row so the caller can refuse to finalize a foreign-path
+       *  collision (the 4-part unique key excludes `path`). */
+      path?: string;
     }
   | {
       /** The key already finalized — return these refs, do NOT write. */
       kind: "finalized";
       artifactId: string;
       representationRevisionId: string;
+      /** The winning row's `path` (cinatra#1893 Q3): the 4-part unique key
+       *  excludes `path`, so a caller that must not alias a foreign-path row of
+       *  the same (run, output_id, extension, content_hash) verifies this. */
+      path: string;
     };
 
 function pool(): Pool {
@@ -111,7 +123,7 @@ export async function claimMaterialization(input: {
   // run-id collision (not reachable through the callers, which derive the
   // run's own org) can never leak another org's refs.
   const existing = await pool().query(
-    `SELECT id, phase, artifact_id, representation_revision_id
+    `SELECT id, phase, path, artifact_id, representation_revision_id
    FROM "${s}"."artifact_materializations"
   WHERE run_id = $1 AND output_id = $2 AND extension = $3 AND content_hash = $4
     AND org_id = $5
@@ -122,6 +134,7 @@ export async function claimMaterialization(input: {
     | {
         id: string;
         phase: string;
+        path: string;
         artifact_id: string | null;
         representation_revision_id: string | null;
       }
@@ -140,10 +153,14 @@ export async function claimMaterialization(input: {
       kind: "finalized",
       artifactId: row.artifact_id,
       representationRevisionId: row.representation_revision_id,
+      path: row.path,
     };
   }
-  // Unfinalized claim from a crashed drive — re-use it.
-  return { kind: "claimed", ledgerId: String(row.id) };
+  // Unfinalized claim from a crashed drive — re-use it. Carry its `path` so the
+  // caller can refuse to finalize a FOREIGN-path row that aliased the 4-part key
+  // (cinatra#1893 Q3): the key excludes `path`, so a same-key row of a different
+  // materialization intent must never be re-used across paths.
+  return { kind: "claimed", ledgerId: String(row.id), path: row.path };
 }
 
 /**

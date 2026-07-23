@@ -21,11 +21,16 @@ describe("ARTIFACT_ALLOWED_CINATRA_KEYS", () => {
     expect(ARTIFACT_ALLOWED_CINATRA_KEYS.has("fieldRenderers")).toBe(true);
   });
 
+  it("admits the dashboard-contribution carrier key (cinatra#1896 / epic #1883 — the artifact kind is the SOLE dashboardContribution carrier, re-homed off the retired agent carrier)", () => {
+    expect(ARTIFACT_ALLOWED_CINATRA_KEYS.has("dashboardContribution")).toBe(true);
+  });
+
   it("admits exactly the expected closed set (narrowly additive)", () => {
     expect([...ARTIFACT_ALLOWED_CINATRA_KEYS].sort()).toEqual(
       [
         "apiVersion",
         "artifact",
+        "dashboardContribution",
         "dependencies",
         "displayName",
         "fieldRenderers",

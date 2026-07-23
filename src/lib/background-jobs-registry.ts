@@ -21,6 +21,7 @@ import {
   EXTENSION_STORE_GC_REAP_LOOP_JOB_ID,
   EXTENSION_AUTO_UPDATE_LOOP_JOB_ID,
   ENVIRONMENT_LAYER_GC_REAP_LOOP_JOB_ID,
+  UNBOUND_OUTPUT_DERIVE_SWEEP_LOOP_JOB_ID,
 } from "@/lib/background-jobs-names";
 // TYPE-ONLY (erased at compile; not a route-graph edge) — the reaper VALUE is
 // boot-registered through the slot below, never imported here.
@@ -28,6 +29,10 @@ import type { ExtensionStoreReapReport } from "@/lib/extension-store-reaper";
 // TYPE-ONLY (erased at compile; not a route-graph edge) — the auto-update
 // cycle VALUE is boot-registered through its slot below, never imported here.
 import type { ExtensionAutoUpdateRunSummary } from "@/lib/extension-auto-update";
+// TYPE-ONLY (erased at compile; not a route-graph edge) — the unbound-output
+// derivation VALUE is boot-registered through its slot below, never imported
+// here (see the slot block for the route-graph-ratchet rationale).
+import type { UnboundDerivationSweepSummary } from "@/lib/artifacts/unbound-output-derivation";
 
 // ---------------------------------------------------------------------------
 // Extension-store GC reaper slot (cinatra#796).
@@ -88,6 +93,47 @@ export function registerExtensionAutoUpdateRunner(runner: ExtensionAutoUpdateRun
 
 function resolveExtensionAutoUpdateRunner(): ExtensionAutoUpdateRunner | null {
   return globalThis.__cinatraExtensionAutoUpdateRunner ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Unbound-output derivation runner slot (cinatra#1893, epic #1883 A5).
+//
+// Same posture as the GC-reaper / auto-update slots above: the derivation core
+// (`@/lib/artifacts/unbound-output-derivation`, which reaches the run-artifact
+// materializer / artifact-authoring / pooled-db graph) is BOOT-REGISTERED by
+// the system-loops seed phase — never imported here, even dynamically, because
+// this registry sits in the reachable first-party graph of the LOCKED dev-perf
+// routes (route-graph ratchet) and even a dynamic
+// `import("@/lib/artifacts/unbound-output-derivation")` specifier would pull the
+// derivation + materializer + db modules into every enqueuer's request-path
+// graph. BOTH the one-shot UNBOUND_OUTPUT_DERIVE handler and the recurring
+// UNBOUND_OUTPUT_DERIVE_SWEEP handler resolve through this single slot; each
+// no-ops LOUDLY when the slot is empty — a missed one-shot derive is recovered
+// by the reconciliation sweep, and a skipped sweep cycle is safe — and the boot
+// seed always registers the runner BEFORE it seeds the sweep loop job.
+// globalThis-backed so a worker dispatching from a different bundle's module
+// instance still sees the boot registration.
+// ---------------------------------------------------------------------------
+
+type UnboundOutputDerivationRunner = {
+  derive: (input: { runId: string; orgId: string }) => Promise<unknown>;
+  sweep: () => Promise<UnboundDerivationSweepSummary>;
+};
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __cinatraUnboundOutputDerivationRunner: UnboundOutputDerivationRunner | undefined;
+}
+
+/** Boot-time registration (system-loops phase). Idempotent (last write wins). */
+export function registerUnboundOutputDerivationRunner(
+  runner: UnboundOutputDerivationRunner,
+): void {
+  globalThis.__cinatraUnboundOutputDerivationRunner = runner;
+}
+
+function resolveUnboundOutputDerivationRunner(): UnboundOutputDerivationRunner | null {
+  return globalThis.__cinatraUnboundOutputDerivationRunner ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1041,6 +1087,80 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           }),
         },
       );
+    },
+  },
+  [BACKGROUND_JOB_NAMES.UNBOUND_OUTPUT_DERIVE]: {
+    payloadSchema: z
+      .object({
+        runId: z.string().optional(),
+        orgId: z.string().optional(),
+      })
+      .passthrough(),
+    async handle(job) {
+      // Post-terminal unbound agent-output derivation (cinatra#1893, epic #1883
+      // A5). ONE-SHOT per run. A TRANSIENT failure inside `deriveUnboundRunOutput`
+      // (a DB blip, a classifier hiccup) throws `UnboundDerivationRetryableError`
+      // PAST this boundary — BullMQ retries per the enqueue's
+      // UNBOUND_OUTPUT_DERIVE_RETRY_POLICY; the reconciliation sweep is the final
+      // backstop. A settled row (missing/terminal/held/exhausted) resolves cleanly
+      // as `skipped` and is NOT retried.
+      const p = job.data as { runId?: string; orgId?: string };
+      if (!p.runId || !p.orgId) {
+        console.warn(
+          "[unbound-output] malformed UNBOUND_OUTPUT_DERIVE payload — skipping:",
+          p,
+        );
+        return;
+      }
+      // The derivation core is boot-registered through the runner slot (kept out
+      // of this registry's route graph). `runner.derive` IS `deriveUnboundRunOutput`
+      // when registered, so the retry/settle semantics above hold unchanged. An
+      // empty slot means the boot seed has not run in this bundle yet — skip the
+      // one-shot; the durable outbox row + reconciliation sweep are the backstop.
+      const runner = resolveUnboundOutputDerivationRunner();
+      if (!runner) {
+        console.warn(
+          `[unbound-output] derivation runner slot empty — one-shot derive skipped for run ${p.runId} (the reconciliation sweep backstops)`,
+        );
+        return;
+      }
+      await runner.derive({ runId: p.runId, orgId: p.orgId });
+    },
+  },
+  [BACKGROUND_JOB_NAMES.UNBOUND_OUTPUT_DERIVE_SWEEP]: {
+    payloadSchema: looseObject(),
+    async handle(job) {
+      // ~5-minute reconciliation sweep over the unbound-output outbox
+      // (cinatra#1893). Drains `pending` rows + reclaims expired `deriving` leases
+      // whose one-shot enqueue was lost / crashed. The worker never throws
+      // per-row (deriveUnboundRunOutput's retryable failures are tallied, not
+      // rethrown); any unexpected throw propagates to runRecurringLoop, which
+      // reports it and always re-delays (cinatra#849).
+      const FIVE_MINUTES_MS = 5 * 60 * 1000;
+      await runRecurringLoop({
+        job,
+        loopJobId: UNBOUND_OUTPUT_DERIVE_SWEEP_LOOP_JOB_ID,
+        delayMs: FIVE_MINUTES_MS,
+        label: "unbound-output-derive-sweep",
+        run: async () => {
+          // Boot-registered slot (kept out of this registry's route graph). A
+          // skipped maintenance cycle is safe; the boot seed registers the runner
+          // before it seeds this loop, so a healthy boot never sees an empty slot.
+          const runner = resolveUnboundOutputDerivationRunner();
+          if (!runner) {
+            console.warn(
+              "[unbound-output-derive-sweep] runner slot empty — skipping cycle",
+            );
+            return;
+          }
+          const summary = await runner.sweep();
+          if (summary.attempted > 0) {
+            console.log(
+              `[unbound-output-sweep] attempted=${summary.attempted} done=${summary.done} no_match=${summary.no_match} no_produces=${summary.no_produces} skipped=${summary.skipped} failed=${summary.failed}`,
+            );
+          }
+        },
+      });
     },
   },
   [BACKGROUND_JOB_NAMES.MARKETPLACE_CATALOG_SYNC]: {

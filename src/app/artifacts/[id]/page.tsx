@@ -27,6 +27,7 @@
  *     http/https before it ever reaches this href).
  */
 import "server-only";
+import { Suspense } from "react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { Download, ExternalLink } from "lucide-react";
@@ -44,7 +45,15 @@ import {
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
 import { buildArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
 
+import { isDashboardArtifactType } from "@/lib/dashboards/dashboard-artifact-surface";
+import { resolveDashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-pointer-resolvers";
+
 import { ArtifactReadDeniedPanel } from "./read-denied-panel";
+import {
+  DashboardPointerDetail,
+  DashboardPointerLoading,
+  DashboardPointerError,
+} from "./dashboard-pointer-detail";
 import {
   pickArtifactRenderer,
   isSelectionPreparing,
@@ -83,6 +92,32 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
   if (access.kind === "not-found") notFound();
   if (access.kind === "denied") return <ArtifactReadDeniedPanel />;
   const artifact: ArtifactSummary = access.artifact;
+
+  // §VIII — a dashboard artifact opens as a POINTER, never an inline render
+  // (owner ruling 2026-07-20; spec app-artifacts.html §VIII, design@5daf862). It carries
+  // NO renderer dispatch and NO Download: the detail is a pointer surface that
+  // navigates to the dashboard's canonical surface. The dual authorization + the
+  // dashboard name/scope resolve inside the streamed boundary, so the loading /
+  // error / not-authorized states are the pointer surface's own frames.
+  if (isDashboardArtifactType(artifact.objectType)) {
+    return (
+      <Main className="min-h-screen">
+        <PageHeader
+          title="Dashboard"
+          description="A dashboard artifact — opens at its canonical surface."
+          divider={false}
+        />
+        <PageContent
+          className="flex flex-col gap-6 pb-8"
+          data-render-dispatch="dashboard-pointer"
+        >
+          <Suspense fallback={<DashboardPointerLoading />}>
+            <DashboardPointerBoundary artifactId={id} />
+          </Suspense>
+        </PageContent>
+      </Main>
+    );
+  }
 
   const revisionId = artifact.latestRepresentationRevisionId;
   // Latest representation is required for any in-page rendering. Without
@@ -270,4 +305,24 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
       </PageContent>
     </Main>
   );
+}
+
+/**
+ * §VIII pointer boundary — streams the READY pointer behind the detail page's
+ * Suspense (fallback = the loading frame). Applies the Phase-1 DUAL
+ * AUTHORIZATION: `denied` routes to the not-authorized panel (the object.read
+ * gate already passed above — this is the "may list but not read" case);
+ * `not-found` 404s (existence stays hidden); a dashboards-source failure renders
+ * the error frame rather than bubbling. NEVER renders the dashboard inline.
+ */
+async function DashboardPointerBoundary({ artifactId }: { artifactId: string }) {
+  let resolved;
+  try {
+    resolved = await resolveDashboardArtifactPointer(artifactId);
+  } catch {
+    return <DashboardPointerError />;
+  }
+  if (resolved.access === "not-found") notFound();
+  if (resolved.access === "denied") return <ArtifactReadDeniedPanel />;
+  return <DashboardPointerDetail pointer={resolved.pointer} />;
 }

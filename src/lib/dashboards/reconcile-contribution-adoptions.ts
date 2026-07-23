@@ -12,7 +12,7 @@ import "server-only";
 //
 // RECOVERY POSTURE (the #1628 contract). At S11-land no successor
 // `dashboardContribution` exists yet, so this reconciler is DORMANT — it becomes
-// live only once a successor `kind:"agent"` extension that declares `adopts`
+// live only once a successor `kind:"artifact"` meaning pack that declares `adopts`
 // ships. The reader gate + the orphan sweep already stopped the leak; adoption is
 // the deferred restore that re-homes the recoverably-archived orphan rows onto
 // the successor IN PLACE (AC2 "re-key not duplicate"). It is intentionally NOT
@@ -50,8 +50,8 @@ export type LiveContributionCandidate = {
  * PURE parse-and-collect: turn raw live records into validated successor claims.
  * FIELD-TOLERANT (degrade-with-diagnostic): a record whose `dashboardContribution`
  * fails `parseDashboardContribution` is DROPPED with a diagnostic (never fatal, the
- * other records keep reconciling); a non-`agent` carrier is ignored
- * (defense-in-depth — the generator already gates emission on `kind:"agent"`); a
+ * other records keep reconciling); a non-`artifact` carrier is ignored
+ * (defense-in-depth — the generator already gates emission on `kind:"artifact"`); a
  * null/absent claim is skipped.
  */
 export function parseLiveContributionClaims(

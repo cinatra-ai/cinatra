@@ -27,6 +27,7 @@ import {
 import { publicationOperationLedgerSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
 import { environmentLayerStoreSchemaQueries } from "@/lib/execution/environment-layer-schema";
 import { auditorSnapshotSchemaQueries } from "@/lib/auditor-snapshot-schema";
+import { artifactReviewGateSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
 import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
@@ -1190,6 +1191,15 @@ END $$` },
     // auditor review companion (cinatra#1625): immutable per-run proposal
     // snapshot + single-use SoD approval receipts. Additive; mirrors core__0058.
     ...auditorSnapshotSchemaQueries(schemaName),
+    // ---- artifact_review_gates + audit + dispositions + resume_outbox (cinatra#1796) ----
+    // The generic artifact-review GATE store: the emitting gate PINS immutable
+    // review targets and a terminal decision CAS-resolves the gate transactionally
+    // with the audit rows, the reject→tombstone disposition record, and the
+    // exactly-once-persisted resume intent. DDL in the pure-strings leaf
+    // src/lib/artifacts/artifact-review-gate-schema.ts; existing deployments also
+    // converge via migration core__0072. Self-contained (child tables FK to the
+    // gate; no cross-block bootstrap ordering).
+    ...artifactReviewGateSchemaQueries(schemaName),
     // dashboards + dashboard_revisions for @cinatra-ai/dashboards.
     // Idempotent — ALTERs below handle older schemas that lack CHECK constraints + lifecycle columns.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."dashboards" (
@@ -1390,6 +1400,34 @@ END $$` },
     )` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_run_test_sends_run_id_submission_id_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_run_test_sends" (run_id, submission_id)` },
     { text: `CREATE INDEX IF NOT EXISTS agent_run_test_sends_run_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_test_sends" (run_id)` },
+    // agent_run_output_derivations: transactional outbox for the produces-scoped
+    // capture of an unbound agent run's final output (cinatra#1893, epic #1883
+    // A5). ONE row per non-empty WayFlow terminal-success run, written ATOMICALLY
+    // with the terminal status CAS + final-output snapshot (transitionRunStatus'
+    // derivationOutbox branch). PK run_id ⇒ ON CONFLICT (run_id) DO NOTHING makes
+    // capture idempotent under a stop/retry re-drive. `status` carries the
+    // derivation lifecycle (pending → deriving [LEASED] → done|no_match|
+    // no_produces); the lease (lease_token + lease_expires_at, attempts bumped on
+    // claim) SERIALIZES the decision across the one-shot job + reconciliation
+    // sweep. TWIN of migrations/core/core__0071 — the two DDLs MUST stay identical.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_output_derivations" (
+      run_id text PRIMARY KEY REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,
+      org_id text NOT NULL,
+      template_id text NOT NULL,
+      package_version text,
+      created_by text,
+      content text NOT NULL,
+      content_is_json boolean NOT NULL DEFAULT false,
+      content_hash text NOT NULL,
+      status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','deriving','done','no_match','no_produces')),
+      attempts integer NOT NULL DEFAULT 0,
+      lease_token text,
+      lease_expires_at timestamptz,
+      detail jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_run_output_derivations_status_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_output_derivations" (status, created_at)` },
     // agent_run_triggers: per-run trigger gate (immediate/scheduled/recurring)
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_triggers" (
       run_id text PRIMARY KEY REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,
@@ -2079,7 +2117,7 @@ $body$` },
   run_id                      text NOT NULL,
   output_id                   text NOT NULL,
   node_id                     text,
-  path                        text NOT NULL CHECK (path IN ('end_node_binding','materialize_tool','llm_emit')),
+  path                        text NOT NULL CHECK (path IN ('end_node_binding','materialize_tool','llm_emit','derived_output')),
   extension                   text NOT NULL,
   content_hash                text NOT NULL,
   artifact_id                 text,

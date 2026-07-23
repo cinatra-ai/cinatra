@@ -35,8 +35,12 @@ import {
 import type { EffectiveIdentity } from "@cinatra-ai/objects/effective-identity";
 
 import { isSelectionPreparing } from "@/app/artifacts/[id]/renderer-dispatch";
+import { isDashboardArtifactType } from "@/lib/dashboards/dashboard-artifact-surface";
+import type { DashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-surface";
+import { resolveLibraryDashboardPointers } from "@/lib/dashboards/dashboard-artifact-pointer-resolvers";
 import { LibraryFacetControl } from "./library-facet-control";
 import { isFileMime, LibraryRowGlyph } from "./library-row-glyph";
+import { DashboardLibraryRow } from "./dashboard-library-row";
 import {
   LibraryUploadButton,
   LibraryUploadDropZone,
@@ -84,7 +88,17 @@ function facetKeyOf(id: EffectiveIdentity): string {
 // Library mode (server component)
 // ---------------------------------------------------------------------------
 
-export function LibraryMode({
+/** A resolved, faceted, searched library entry: a normal artifact row, or a
+ *  §VIII dashboard row that survived the Phase-1 dual authorization. */
+type VisibleLibraryItem =
+  | { readonly kind: "artifact"; readonly summary: ArtifactSummary }
+  | {
+      readonly kind: "dashboard";
+      readonly summary: ArtifactSummary;
+      readonly pointer: DashboardArtifactPointer;
+    };
+
+export async function LibraryMode({
   orgId,
   actor,
   query,
@@ -104,39 +118,83 @@ export function LibraryMode({
     </LibraryToolbarShell>;
   }
 
+  // §VIII — resolve the pointer for every dashboard-typed row, applying the
+  // Phase-1 DUAL AUTHORIZATION (object.read, already applied by `listArtifacts`,
+  // PLUS the dashboard resolver's owner+project gate) + the liveness gate. A
+  // dashboard row survives ONLY when its pointer is present; the resolution fails
+  // CLOSED (empty map) so a dashboard is never rendered un-gated.
+  const dashboardIds = all
+    .filter((a) => isDashboardArtifactType(a.objectType))
+    .map((a) => a.artifactId);
+  const dashboardPointers = await resolveLibraryDashboardPointers(
+    orgId,
+    dashboardIds,
+  );
+
   // Facet options: every distinct claiming extension present + a default-
-  // artifact bucket when any floor/plain row is present.
-  const facetOptions = buildFacetOptions(all);
+  // artifact bucket when any floor/plain row is present. Derived from the
+  // dual-auth-GATED set (all rows MINUS dashboard rows the §VIII gate denied),
+  // so a list-but-not-read dashboard never discloses its "Dashboards" facet —
+  // the dual-authorization drop is complete, not row-only. Filtered off `all`
+  // (before the active-facet/search filter) so the facet selector still offers
+  // every readable facet regardless of the current selection.
+  const facetSource = all.filter(
+    (a) =>
+      !isDashboardArtifactType(a.objectType) ||
+      dashboardPointers.has(a.artifactId),
+  );
+  const facetOptions = buildFacetOptions(facetSource);
 
   const q = (query ?? "").trim().toLowerCase();
-  const filtered = all.filter((a) => {
+  const facetActive = Boolean(facet && facet !== "__all__");
+
+  const visible: VisibleLibraryItem[] = [];
+  for (const a of all) {
     if (facet && facet !== "__all__" && facetKeyOf(a.presentationIdentity) !== facet) {
-      return false;
+      continue;
+    }
+    if (isDashboardArtifactType(a.objectType)) {
+      // Dual-auth denied / not-live / templated ⇒ absent from the map ⇒ dropped.
+      const pointer = dashboardPointers.get(a.artifactId);
+      if (!pointer) continue;
+      // A dashboard row searches on its DISPLAY name (the twin's objects.data
+      // carries only identity/scope, so `summary.title` is null here).
+      if (q && !pointer.name.toLowerCase().includes(q)) continue;
+      visible.push({ kind: "dashboard", summary: a, pointer });
+      continue;
     }
     if (q) {
       const name = (a.title ?? a.artifactId).toLowerCase();
-      if (!name.includes(q)) return false;
+      if (!name.includes(q)) continue;
     }
-    return true;
-  });
+    visible.push({ kind: "artifact", summary: a });
+  }
 
   return (
     <LibraryToolbarShell query={query} facet={facetOptions} selectedFacet={facet}>
-      {filtered.length === 0 ? (
-        <LibraryEmptyState filtered={Boolean(q || (facet && facet !== "__all__"))} />
+      {visible.length === 0 ? (
+        <LibraryEmptyState filtered={Boolean(q) || facetActive} />
       ) : (
         <ul
           className="overflow-hidden rounded-lg border border-line bg-surface-strong"
           data-testid="artifacts-library-list"
           data-conformance-id="artifacts-library-list"
         >
-          {filtered.map((a, i) => (
-            <LibraryRow
-              key={a.artifactId}
-              summary={a}
-              isLast={i === filtered.length - 1}
-            />
-          ))}
+          {visible.map((item, i) =>
+            item.kind === "dashboard" ? (
+              <DashboardLibraryRow
+                key={item.summary.artifactId}
+                pointer={item.pointer}
+                isLast={i === visible.length - 1}
+              />
+            ) : (
+              <LibraryRow
+                key={item.summary.artifactId}
+                summary={item.summary}
+                isLast={i === visible.length - 1}
+              />
+            ),
+          )}
         </ul>
       )}
     </LibraryToolbarShell>
