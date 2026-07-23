@@ -150,9 +150,20 @@ describe("Better Auth schema parity (runtime ↔ migration)", () => {
     expect(normalizedRuntime.team.slug).toEqual({ type: "string", required: true });
   });
 
+  // normalize() keeps only the column shape (type + optionality); the
+  // never-client-settable contract lives in the RAW field attributes, so the
+  // archive columns pin `input: false` directly on both schemas.
+  function organizationField(
+    schema: Record<string, unknown>,
+    field: string,
+  ): { input?: boolean } | undefined {
+    const org = schema.organization as
+      | { fields?: Record<string, { input?: boolean }> }
+      | undefined;
+    return org?.fields?.[field];
+  }
+
   it("declares the organization.archivedAt additionalField (archive S1, cinatra#1937)", () => {
-    // `input: false` is behavioral (never client-settable) and not part of the
-    // normalized column shape; the schema-bearing facts are type + optionality.
     // Both runtime AND migration schemas must carry it — getMigrations() owns
     // the column precisely because cinatraOrganizationOptions is shared.
     expect(normalizedRuntime.organization.archivedAt).toEqual({
@@ -163,6 +174,8 @@ describe("Better Auth schema parity (runtime ↔ migration)", () => {
       type: "date",
       required: false,
     });
+    expect(organizationField(runtimeSchema, "archivedAt")?.input).toBe(false);
+    expect(organizationField(migrationSchema, "archivedAt")?.input).toBe(false);
   });
 
   it("declares the organization.archiveEpoch additionalField (archive S2, cinatra#1938)", () => {
@@ -174,6 +187,8 @@ describe("Better Auth schema parity (runtime ↔ migration)", () => {
       type: "number",
       required: false,
     });
+    expect(organizationField(runtimeSchema, "archiveEpoch")?.input).toBe(false);
+    expect(organizationField(migrationSchema, "archiveEpoch")?.input).toBe(false);
   });
 
   it("wires the username / twoFactor / admin / organization plugin columns", () => {

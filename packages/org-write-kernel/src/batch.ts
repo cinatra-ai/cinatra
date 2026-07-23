@@ -6,7 +6,9 @@
  * generated from the same capability table + lease predicate the callback
  * adapter evaluates (single source — no drift between the write worlds), and
  * refuses by casting a descriptive message to int (the error text carries the
- * reason) whenever the allow-condition matches no row.
+ * reason) whenever the allow-condition matches no row. The message travels as
+ * a transaction-local setting (see refusalExpression) because the planner
+ * constant-folds an inline literal cast before any row is read.
  *
  * The batch value is OPAQUE: a WeakSet-registered wrapper the host wrapper
  * must unwrap via `guardedBatchQueries` — which is the only accessor and lives
@@ -43,10 +45,30 @@ export interface GuardedBatchRequest {
   readonly schema?: string;
 }
 
-/** Refuse-by-cast: `('message')::int` fails with the message in the error. */
-function refusalExpression(message: string): string {
-  const safe = message.replace(/'/g, "''");
-  return `('org-write-kernel refused: ${safe}')::int`;
+/** Transaction-local GUC carrying the refusal message; set by the companion
+ *  query `buildGuardedOrgWriteBatch` prepends before the guard. */
+const REFUSAL_SETTING = "cinatra.org_write_refusal";
+
+/** Refuse-by-cast, planner-proof: the refusal arm casts
+ *  `current_setting(...)` — a STABLE function the planner never
+ *  constant-folds — so the cast can only raise at RUNTIME, when the guard's
+ *  allow-subquery actually returned no row. An inline `('message')::int`
+ *  literal (or a bound `$n::int`, which one-shot custom plans substitute as a
+ *  constant) is folded and RAISED at planning time, refusing even allowed
+ *  batches. missing_ok is deliberately omitted: run without the companion
+ *  set_config (or outside the mandatory transaction), the guard still fails
+ *  closed — just without the descriptive message. */
+function refusalExpression(): string {
+  return `(current_setting('${REFUSAL_SETTING}'))::int`;
+}
+
+/** The companion query that binds the refusal message for this transaction.
+ *  The message rides in `values`, never in SQL text. */
+function refusalMessageQuery(message: string): QueryInput {
+  return {
+    text: `SELECT set_config('${REFUSAL_SETTING}', $1, true)`,
+    values: [`org-write-kernel refused: ${message}`],
+  };
 }
 
 /**
@@ -98,7 +120,7 @@ export function guardQueryFor(
     text:
       `SELECT COALESCE(` +
       `(SELECT 1 FROM public."organization" o WHERE o.id = $1 AND ((${activeCondition}) OR (${archivedCondition}))), ` +
-      `${refusalExpression(`${capability} not permitted for this organization's lifecycle state`)})`,
+      `${refusalExpression()})`,
     values,
   };
 }
@@ -116,6 +138,9 @@ export function buildGuardedOrgWriteBatch(
   }
   const assembled: QueryInput[] = [
     ...orgLockQueries({ orgId, epoch: false }),
+    refusalMessageQuery(
+      `${capability} not permitted for this organization's lifecycle state`,
+    ),
     guardQueryFor(request),
     ...queries,
   ];

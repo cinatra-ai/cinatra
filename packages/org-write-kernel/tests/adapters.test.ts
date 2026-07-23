@@ -200,17 +200,31 @@ describe("guardOrgMutation (#1938)", () => {
 describe("guarded batches (#1938)", () => {
   const authority = authorityFor("org-1", ["content.write"]);
 
-  it("assembles lock → guard → payload, in order", () => {
+  it("assembles lock → refusal message → guard → payload, in order", () => {
     const batch = buildGuardedOrgWriteBatch(
       { orgId: "org-1", capability: "content.write", authority },
       [{ text: "INSERT INTO x VALUES ($1)", values: ["v"] }],
     );
     const queries = guardedBatchQueries(batch);
-    expect(queries).toHaveLength(3);
+    expect(queries).toHaveLength(4);
     expect(queries[0].text).toContain("pg_advisory_xact_lock(hashtext($1), hashtext($2))");
-    expect(queries[1].text).toContain('public."organization"');
-    expect(queries[1].text).toContain("org-write-kernel refused");
-    expect(queries[2].text).toBe("INSERT INTO x VALUES ($1)");
+    expect(queries[1].text).toContain("set_config('cinatra.org_write_refusal', $1, true)");
+    expect(queries[1].values).toEqual([
+      "org-write-kernel refused: content.write not permitted for this organization's lifecycle state",
+    ]);
+    expect(queries[2].text).toContain('public."organization"');
+    expect(queries[3].text).toBe("INSERT INTO x VALUES ($1)");
+  });
+
+  it("the refusal arm can only raise at runtime, never at planning", () => {
+    // The refusal cast must read the tx-local setting (STABLE, never
+    // constant-folded); an inline literal cast is folded — and raised — by
+    // the Postgres planner even when the batch is allowed. The message rides
+    // in values, never in SQL text.
+    const guard = guardQueryFor({ orgId: "org-1", capability: "content.write", authority });
+    expect(guard.text).toContain("(current_setting('cinatra.org_write_refusal'))::int");
+    expect(guard.text).not.toMatch(/'[^']*'\s*\)?\s*::int/);
+    expect(guard.text).not.toContain("refused");
   });
 
   it("a hand-built object is not a guarded batch", () => {

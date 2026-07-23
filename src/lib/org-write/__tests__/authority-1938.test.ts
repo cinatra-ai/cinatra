@@ -193,7 +193,7 @@ describe("runGuardedOrgWriteBatchSync (#1938)", () => {
     expect(shared.syncCalls).toHaveLength(1);
     const call = shared.syncCalls[0];
     expect(call.transaction).toBe(true);
-    expect((call.queries as unknown[]).length).toBe(3);
+    expect((call.queries as unknown[]).length).toBe(4); // lock, refusal message, guard, payload
   });
 
   it("refuses a forged batch value", () => {
