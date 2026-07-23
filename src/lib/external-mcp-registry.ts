@@ -17,11 +17,7 @@ import {
 } from "@/lib/nango-system";
 import { getMcpPublicBaseUrl } from "@cinatra-ai/mcp-server/credentials";
 import type { LlmMcpServerTool } from "@cinatra-ai/llm";
-import { resolveWordPressInstanceAdmin } from "@/lib/connector-client-providers";
-import {
-  resolveWordPressMcpEndpoint,
-  resolveWordPressMcpFallbackEndpoint,
-} from "@/lib/wordpress-mcp-connection";
+import { listManagedExternalMcpEndpointUrls } from "@/lib/connector-client-providers";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -238,36 +234,19 @@ export class ExternalMcpServerManagedEndpointError extends Error {
 }
 
 /**
- * Canonical URLs of every endpoint a managed connector instance owns. Today
- * that is the WordPress connector's mcp-adapter endpoint per instance (both
- * URL forms canonicalize to one key); later gateway slices extend this as
- * more managed MCP surfaces appear. Absent provider (extension not active)
- * ⇒ empty set — there is nothing managed to protect.
+ * Canonical URLs of every endpoint a managed connector instance owns —
+ * enumerated through the vendor-neutral capability surface
+ * (`listManagedExternalMcpEndpointUrls`; both URL forms per instance
+ * canonicalize onto one key). Absent provider (extension not active) or a
+ * failed enumeration ⇒ empty set — fail-open for ENUMERATION only: a broken
+ * provider must not take the whole BYO registry down; the write-path check
+ * simply sees fewer managed endpoints and the sweep re-runs next process.
  */
 function managedConnectorEndpointCanonicalUrls(): Set<string> {
   const out = new Set<string>();
-  try {
-    const admin = resolveWordPressInstanceAdmin();
-    if (!admin) return out;
-    for (const instance of admin.listInstances()) {
-      const siteUrl = (instance as { siteUrl?: unknown }).siteUrl;
-      if (typeof siteUrl !== "string" || siteUrl === "") continue;
-      for (const endpoint of [
-        resolveWordPressMcpEndpoint(siteUrl),
-        resolveWordPressMcpFallbackEndpoint(siteUrl),
-      ]) {
-        const canonical = canonicalizeMcpEndpointUrl(endpoint);
-        if (canonical) out.add(canonical);
-      }
-    }
-  } catch (err) {
-    // Fail-open for ENUMERATION only: a broken provider must not take the
-    // whole BYO registry down. The write-path check simply sees fewer managed
-    // endpoints; the sweep re-runs next process.
-    console.warn(
-      "[external-mcp-registry] managed-endpoint enumeration failed — containment check degraded this process",
-      err instanceof Error ? err.message : String(err),
-    );
+  for (const endpoint of listManagedExternalMcpEndpointUrls()) {
+    const canonical = canonicalizeMcpEndpointUrl(endpoint);
+    if (canonical) out.add(canonical);
   }
   return out;
 }

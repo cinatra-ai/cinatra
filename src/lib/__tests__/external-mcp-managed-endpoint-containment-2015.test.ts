@@ -23,15 +23,19 @@ vi.mock("@/lib/postgres-sync", () => ({
   },
 }));
 
-// The managed WordPress instance the containment must protect.
+// The managed WordPress instances the containment must protect. The registry
+// consumes the vendor-neutral capability surface, which returns BOTH endpoint
+// URL forms per instance (pretty-permalink + query-string) — mirrored here.
 let wpInstances: Array<{ siteUrl: string }> = [];
 vi.mock("@/lib/connector-client-providers", () => ({
-  resolveWordPressInstanceAdmin: () =>
-    wpInstances.length === 0
-      ? null
-      : {
-          listInstances: () => wpInstances,
-        },
+  listManagedExternalMcpEndpointUrls: () =>
+    wpInstances.flatMap(({ siteUrl }) => {
+      const trimmed = siteUrl.replace(/\/+$/, "");
+      return [
+        `${trimmed}/wp-json/mcp/mcp-adapter-default-server`,
+        `${trimmed}/index.php?rest_route=/mcp/mcp-adapter-default-server`,
+      ];
+    }),
 }));
 
 const notifications: Array<{ title: string; body: string }> = [];
