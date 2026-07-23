@@ -256,11 +256,26 @@ describe("auth-route-guard - cinatra#1221 S5 /api/assistants/chat broker-auth wi
 
   it("does NOT expose a sibling assistants sub-route (exact-path list, no prefix)", async () => {
     // A broad /api/assistants prefix would make every assistant API route
-    // public; only the exact /api/assistants/chat pathname is exempt.
+    // public; only the exact exempt pathnames are. A different assistants
+    // sub-route (threads) stays session-guarded (307→/sign-in).
     expect(guardSource).not.toMatch(/"\/api\/assistants"\s*,/);
-    const res = await guardAppRoute(fakeRequest("/api/assistants/chat/capabilities"));
+    const res = await guardAppRoute(fakeRequest("/api/assistants/threads"));
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toContain("/sign-in");
+  });
+
+  it("EXACT-exempts /api/assistants/chat/capabilities so the sessionless broker embed reaches the handler (cinatra#1998 Lane A)", async () => {
+    // The cross-origin embed GETs the advertisement client-side with no cookie
+    // + broker headers; the middleware must NOT 307 it before the handler's own
+    // dual-token fail-closed auth runs. Exact path only, with a broker-auth
+    // source comment (mirrors the /api/assistants/chat exemption above).
+    const res = await guardAppRoute(fakeRequest("/api/assistants/chat/capabilities"));
+    expect(isNext(res)).toBe(true);
+    expect(guardSource).toMatch(/"\/api\/assistants\/chat\/capabilities",\s*\/\//);
+    const line = guardSource
+      .split("\n")
+      .find((l) => l.includes('"/api/assistants/chat/capabilities"'));
+    expect((line ?? "").toLowerCase()).toMatch(/broker-auth|dual-token/);
   });
 });
 

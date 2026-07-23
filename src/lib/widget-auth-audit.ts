@@ -40,7 +40,13 @@ export type WidgetAuthAuditEvent =
   // auth is NOT the installation's audience: emitted (reason-coded, never a
   // secret) when the verified end user passes the dual-token sequence but is
   // OUT of the selected assistant's audience, so the turn 404-hides.
-  | "assistant_chat_widget_out_of_audience";
+  | "assistant_chat_widget_out_of_audience"
+  // cinatra#1998 Lane A — a sessionless broker-auth caller passed the SAME
+  // dual-token sequence at GET /api/assistants/chat/capabilities and was served
+  // the static advertisement (this authenticates the capability READ; it does
+  // not authorize a run — the turn's own dual-token decision above is the
+  // dispatch record). Reason-coded/scrubbed like its siblings; never a secret.
+  | "assistant_chat_capabilities_broker_advertised";
 
 export type WidgetAuthAuditFields = {
   actor?: string | null; // userId (never an email/secret)

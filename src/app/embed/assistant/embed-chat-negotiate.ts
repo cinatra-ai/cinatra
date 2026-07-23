@@ -15,11 +15,18 @@
 // `auth_mode_unsupported` / `no_mutual_contract` / `not_resumable`, AND on
 // malformed capability JSON / transport failure (§B18).
 //
-// LANE-A INTERLOCK (§8): until Lane A makes `/api/assistants/chat/capabilities`
-// (a) advertise `token-broker` AND (b) serve that advertisement to a sessionless
-// broker-auth embed, the GET here 401s (session-gated) or the advertisement
-// lacks `token-broker` → this correctly fails closed and the embed does NOT
-// mount. That is the honest gated state, not a bug.
+// LANE-A INTERLOCK (§8) — RESOLVED by cinatra#1998 (epic #1216 S6). The
+// capabilities route now (a) advertises `token-broker` AND (b) serves that
+// advertisement to a sessionless broker-auth embed presenting the SAME
+// `cit_`/`cwu_` dual-token pair the turn endpoint brokers. Because this GET is
+// SAME-ORIGIN to the Cinatra-served app, the browser sends no CMS `Origin`
+// header (and JS cannot set the forbidden `Origin`), so the embed forwards the
+// server-resolved parent (CMS) origin + its bound assistant handle here
+// (`X-Cinatra-Widget-Origin` / `X-Cinatra-Widget-Assistant`); the route
+// validates both against the token binding (a forged value fails closed — the
+// tokens are the authority). Absent forwarded context (or an invalid token pair)
+// → the route 401s → this fails closed and the embed does NOT mount. That
+// remains the honest gated state, never a fail-open.
 //
 // `requiresResumable: false` UNTIL §9.3 lands a broker-auth resume path (codex
 // R1): the server always advertises `resumable: true`, but whether a
@@ -45,6 +52,24 @@ export const EMBED_CLIENT_HELLO: StreamClientHello = {
 };
 
 const CAPABILITIES_ENDPOINT = "/api/assistants/chat/capabilities";
+
+/** Cross-origin forwarding seams (cinatra#1998 Lane A). The embed's negotiate
+ *  GET is SAME-ORIGIN to the Cinatra app, so the CMS origin cannot ride the
+ *  browser `Origin` header; it is forwarded explicitly and validated against the
+ *  token binding server-side (a lie fails the consume closed). */
+const WIDGET_ORIGIN_HEADER = "X-Cinatra-Widget-Origin";
+const WIDGET_ASSISTANT_HEADER = "X-Cinatra-Widget-Assistant";
+
+/** The non-secret disambiguators the embed forwards so the sessionless,
+ *  same-origin capabilities GET can be authenticated against the CMS-origin-
+ *  bound `cit_`/`cwu_` tokens. Both are validated against the token binding —
+ *  never trusted on their own. */
+export type EmbedNegotiateContext = {
+  /** The bound assistant handle ("wordpress" | "drupal"). */
+  readonly assistant?: string;
+  /** The server-resolved expected parent (CMS) origin the tokens are bound to. */
+  readonly parentOrigin?: string;
+};
 
 /** Structural guard for the advertisement JSON — a malformed body is a
  *  fail-closed transport-integrity failure (§B18), not a parse crash. Validates
@@ -79,11 +104,15 @@ function isCapabilitiesShape(v: unknown): v is AssistantStreamCapabilities {
  */
 export async function negotiateEmbedChatContract(
   authHeaders: () => Record<string, string>,
+  context: EmbedNegotiateContext = {},
 ): Promise<StreamNegotiation> {
   try {
+    const forwarded: Record<string, string> = {};
+    if (context.assistant) forwarded[WIDGET_ASSISTANT_HEADER] = context.assistant;
+    if (context.parentOrigin) forwarded[WIDGET_ORIGIN_HEADER] = context.parentOrigin;
     const res = await fetch(CAPABILITIES_ENDPOINT, {
       method: "GET",
-      headers: { ...authHeaders() },
+      headers: { ...authHeaders(), ...forwarded },
       credentials: "omit", // §B11 — ambient Cinatra cookies must NOT auth this.
       cache: "no-store",
     });

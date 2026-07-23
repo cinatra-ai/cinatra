@@ -24,7 +24,24 @@ import { EmbedAssistantClient } from "./embed-assistant-client";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = Promise<{ instanceId?: string; assistant?: string }>;
+type SearchParams = Promise<{
+  instanceId?: string;
+  assistant?: string;
+  // cinatra#1998 (b) TEST-ONLY render-parity seam params — READ ONLY when the
+  // server-side `EMBED_PARITY_SEAM` gate is on (see below). Ignored in prod.
+  parityThread?: string;
+  parityTheme?: string;
+}>;
+
+// cinatra#1998 (b) — the deterministic corpus-render seam gate. A NON-PUBLIC
+// server env (never `NEXT_PUBLIC_*`, never a URL/client value): unset in prod →
+// the seam is inert (the `parityThread` param is ignored, the client renders no
+// injected content and behaves exactly as before). Set to "1" ONLY on the
+// render-parity verify stack. This is what makes the seam test-only,
+// non-user-controllable, and unable to bypass auth.
+function paritySeamEnabled(): boolean {
+  return process.env.EMBED_PARITY_SEAM === "1";
+}
 
 export default async function EmbedAssistantPage({
   searchParams,
@@ -34,6 +51,14 @@ export default async function EmbedAssistantPage({
   const params = await searchParams;
   const assistant = params.assistant ?? "";
   const instanceId = params.instanceId ?? "";
+
+  // Content-render theme (renderMarkdown / shiki). Prod default is github-light;
+  // the render-parity seam pins each theme via `?parityTheme=` so the compare
+  // exercises both goldens. Only honored when the seam gate is on.
+  const seamOn = paritySeamEnabled();
+  const theme = seamOn && params.parityTheme === "github-dark" ? "github-dark" : "github-light";
+  const paritySeam =
+    seamOn && params.parityThread ? { threadId: params.parityThread } : null;
 
   // READ-ONLY (§7). Reuse the SAME resolver the CSP uses so the bridge's expected
   // parent origin is byte-consistent with the frame-ancestors wall. `'none'`
@@ -49,6 +74,8 @@ export default async function EmbedAssistantPage({
         expectedParentOrigin={expectedParentOrigin}
         assistant={assistant}
         instanceId={instanceId}
+        theme={theme}
+        paritySeam={paritySeam}
       />
     </main>
   );

@@ -28,6 +28,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConversationTurn } from "@cinatra-ai/chat/renderer/ag-ui-interactive";
+import { renderMarkdown, type ThemeName } from "@cinatra-ai/chat/renderer";
 import {
   initialConversationState,
   type ConversationViewState,
@@ -57,7 +58,42 @@ export type EmbedAssistantClientProps = {
   expectedParentOrigin: string;
   assistant: string;
   instanceId: string;
+  /** github-light | github-dark — the content-render theme passed to the S3
+   *  `renderMarkdown` (shiki code theme). Prod default is github-light; the
+   *  render-parity seam pins each theme so the compare exercises both goldens. */
+  theme?: ThemeName;
+  /** cinatra#1998 (b) — the TEST-ONLY deterministic corpus-render seam. Non-null
+   *  ONLY when the server-side `EMBED_PARITY_SEAM` gate is on (resolved in
+   *  page.tsx from a non-public server env, never a client/URL value), so prod is
+   *  INERT. When set, the embed — AFTER reaching `active` via the REAL mount path
+   *  (parent bootstrap + broker negotiation + renderer mount) — renders a seeded
+   *  thread's assistant message deterministically IN PLACE OF a live LLM turn. It
+   *  CANNOT bypass auth (reaching `active` still requires the real handshake) and
+   *  is not user-controllable in prod (the server gate is off → this is null). */
+  paritySeam?: { threadId: string } | null;
 };
+
+/** The S3 renderer's live widget detector. The render-parity corpus is
+ *  widget-free by design (the reference target supplies the same empty
+ *  detector), so the embed content block is byte-comparable to the reference. */
+const NO_WIDGETS = (): [] => [];
+
+/** Build a deterministic reduced conversation state whose sole assistant message
+ *  IS the seeded corpus — the same content the /chat reference target seeds,
+ *  rendered here through the embed's REAL mounted `ConversationTurn`. */
+function seededCorpusState(content: string): ConversationViewState {
+  const base = initialConversationState();
+  return {
+    ...base,
+    message: {
+      ...base.message,
+      id: "parity-seed",
+      content,
+      parts: [{ kind: "text", content }],
+    },
+    status: "finished",
+  };
+}
 
 export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // An unresolvable expected parent origin (§7 'none') is an initial ERROR — a
@@ -84,6 +120,47 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       Authorization: `Bearer ${b.auth.citToken}`,
       "X-Cinatra-Widget-User-Token": b.auth.cwuToken,
     };
+  }, []);
+
+  // Render assistant text through the S3 packaged renderer (`renderMarkdown`),
+  // the EXACT content path `/chat` and the render-parity reference target render
+  // through — so the same assistant renders IDENTICALLY here (the epic promise),
+  // not as the interactive layer's plain-text safe default. `[data-embed-content]`
+  // is the stable content-block hook the render-parity harness scrapes.
+  const renderText = useCallback(
+    (text: string) => (
+      <div
+        data-embed-content
+        className="max-w-none leading-relaxed text-foreground"
+        dangerouslySetInnerHTML={{
+          __html: renderMarkdown(text, props.theme ?? "github-light", NO_WIDGETS),
+        }}
+      />
+    ),
+    [props.theme],
+  );
+
+  // cinatra#1998 (b) TEST-ONLY seam: load a seeded thread's assistant message and
+  // render it deterministically through the mounted renderer (no live LLM turn).
+  // Gated OFF in prod (`paritySeam` is null unless the server env is set), so
+  // this fetch never runs for a real user. It cannot bypass auth — it runs only
+  // AFTER the real bootstrap + broker negotiation reached `active`.
+  const loadParitySeed = useCallback(async (threadId: string) => {
+    try {
+      const res = await fetch(`/api/assistants/threads/${encodeURIComponent(threadId)}`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+      const payload = (await res.json()) as {
+        messages?: Array<{ role?: string; content?: string }>;
+      };
+      const assistantMsg = payload.messages?.find((m) => m.role === "assistant");
+      setConvo(seededCorpusState(assistantMsg?.content ?? ""));
+    } catch {
+      /* best-effort + test-only: a failure leaves the mounted-but-empty active
+         state, which the harness surfaces as a missing content block (loud). */
+    }
   }, []);
 
   const runTurn = useCallback(
@@ -119,18 +196,26 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       // gated, never fail-open to a mounted wire).
       void (async () => {
         try {
-          const negotiation = await negotiateEmbedChatContract(authHeaders);
+          const negotiation = await negotiateEmbedChatContract(authHeaders, {
+            assistant: bootstrap.session.assistant, // "wordpress" | "drupal"
+            parentOrigin: props.expectedParentOrigin, // the CMS-origin the tokens bind
+          });
           if (!negotiation.ok) {
             setPhase({ kind: "gated", reason: negotiation.reason });
             return;
           }
           setPhase({ kind: "active" });
+          // TEST-ONLY seam (gated OFF in prod): render the seeded corpus here in
+          // place of a live turn, through the same mounted renderer.
+          if (props.paritySeam) {
+            void loadParitySeed(props.paritySeam.threadId);
+          }
         } catch {
           setPhase({ kind: "gated", reason: "handshake_failed" });
         }
       })();
     },
-    [authHeaders],
+    [authHeaders, props.expectedParentOrigin, props.paritySeam, loadParitySeed],
   );
 
   // Install the bridge + post READY once. The expected parent origin gates the
@@ -195,7 +280,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       )}
       {phase.kind === "active" && (
         <div className="p-4" data-embed-state="active">
-          <ConversationTurn state={convo} renderers={{ onApplyIntent }} />
+          <ConversationTurn state={convo} renderers={{ onApplyIntent, renderText }} />
           <EmbedComposer onSend={(text) => void runTurn([{ role: "user", content: text }])} />
         </div>
       )}
