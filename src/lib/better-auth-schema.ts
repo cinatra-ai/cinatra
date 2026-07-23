@@ -85,6 +85,17 @@ export const cinatraOrganizationOptions = {
           required: false,
           input: false,
         },
+        // cinatra#1938 (archive program S2): the archive EPOCH — bumped by
+        // every archive/unarchive transition (S6 transaction), read under the
+        // org write lock by the kernel's capability guard, and the binding
+        // that invalidates leases/completion tickets across an
+        // unarchive/re-archive cycle. Never client-settable. Dark until S6;
+        // the kernel COALESCEs NULL to 0 for rows predating the migration.
+        archiveEpoch: {
+          type: "number",
+          required: false,
+          input: false,
+        },
       },
     },
     team: {

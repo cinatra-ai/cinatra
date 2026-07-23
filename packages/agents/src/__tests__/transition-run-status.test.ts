@@ -265,3 +265,56 @@ describe("queued→running dispatch fields (cinatra#1937)", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#1938 (archive S2): the durable mid-attempt wait marker on
+// pending_approval — the one ambiguous wait state (running→ = mid-attempt
+// interrupt, queued→ = pre-dispatch setup interrupt). Edge-derived inside the
+// CAS with no caller flag: running→pending_approval copies the row's own
+// execution_attempt_id in-SQL; queued→pending_approval and every dispatch
+// clear it. pending_input gets NO marker: every edge into it (including the
+// #1058 human wait, which fires from queued) is pre-dispatch/parked.
+// ---------------------------------------------------------------------------
+
+type CasPayload = { humanWaitAttemptId?: unknown; status?: unknown };
+
+describe("mid-attempt wait marker stamping (#1938)", () => {
+  it("running\u2192pending_approval (mid-attempt interrupt) stamps the marker from the row's own attempt id", async () => {
+    await transitionRunStatus("run-1", "running", "pending_approval");
+    const cas = shared.setPayloads[0] as CasPayload;
+    // In-SQL copy: a drizzle SQL fragment referencing execution_attempt_id -
+    // NOT null, NOT a JS-computed string.
+    expect(cas.humanWaitAttemptId).not.toBeNull();
+    expect(cas.humanWaitAttemptId).toBeTypeOf("object");
+  });
+
+  it("queued\u2192pending_approval (setup interrupt, pre-dispatch) clears the marker", async () => {
+    await transitionRunStatus("run-1", "queued", "pending_approval");
+    const cas = shared.setPayloads[0] as CasPayload;
+    expect(cas).toHaveProperty("humanWaitAttemptId", null);
+  });
+
+  it("every dispatch clears the marker atomically with the attempt stamp", async () => {
+    await transitionRunStatus("run-1", "queued", "running", {
+      dispatch: { attemptId: "att-fresh" },
+    });
+    const cas = shared.setPayloads[0] as CasPayload;
+    expect(cas).toHaveProperty("humanWaitAttemptId", null);
+  });
+
+  it("pending_input edges never touch the marker column (parked state, no discriminator)", async () => {
+    for (const from of ["queued", "failed"] as const) {
+      shared.setPayloads.length = 0;
+      shared.returningRows = [[{ id: "run-1" }]];
+      await transitionRunStatus("run-1", from, "pending_input", from === "queued" ? { humanWaitGate: true } : undefined);
+      const cas = shared.setPayloads[0] as CasPayload;
+      expect(Object.prototype.hasOwnProperty.call(cas, "humanWaitAttemptId")).toBe(false);
+    }
+  });
+
+  it("other transitions leave the marker column untouched", async () => {
+    await transitionRunStatus("run-1", "running", "completed");
+    const cas = shared.setPayloads[0] as CasPayload;
+    expect(Object.prototype.hasOwnProperty.call(cas, "humanWaitAttemptId")).toBe(false);
+  });
+});

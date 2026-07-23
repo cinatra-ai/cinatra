@@ -1,0 +1,20 @@
+{
+  "name": "@cinatra-ai/org-write-kernel",
+  "description": "The enforcement heart of the organization archive program (cinatra#1938, epic #1510 S2): the one capability predicate every org-scoped write must pass, runtime-unforgeable transaction-bound write permits, globally-ordered org advisory locks, and guarded adapters for both write worlds (callback-scoped drizzle transactions and fixed-query sync batches). Pure leaf: depends only on drizzle-orm's sql tag; db/tx handles are passed in, never imported.",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10"
+  }
+}
