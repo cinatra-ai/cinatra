@@ -42,8 +42,16 @@ const validStore = {
 // SELECT (used to prove org-scoped grants are ignored at these org-agnostic
 // callers). The real resolveOwnershipOwner queries org first ONLY when orgId is
 // non-null; S1 always passes orgId:null, so only the global branch runs.
+// The install-provenance FALLBACK (arm (c)) is consulted only when build ∪ grant
+// is empty. This matrix isolates the GRANT arm, so every deps() pins an INERT
+// provenance seam (no trusted install anchor for any package) — arm (c) resolves
+// nothing and can never mask a grant-arm assertion. (The provenance arm's own
+// fail-closed matrix lives in `widget-auth-provider-install-provenance.test.ts`.)
+const inertProvenance = { resolveInstallAnchor: async () => null };
+
 function deps(opts: { approvedGlobal?: string | null; approvedOrg?: string | null }): WidgetAuthResolveDeps {
   return {
+    installProvenanceDeps: inertProvenance,
     ownershipGrantDeps: {
       schema: "cinatra",
       query: async <T>(text: string): Promise<T[]> => {
@@ -60,6 +68,7 @@ function deps(opts: { approvedGlobal?: string | null; approvedOrg?: string | nul
 }
 
 const depsThrowing: WidgetAuthResolveDeps = {
+  installProvenanceDeps: inertProvenance,
   ownershipGrantDeps: {
     schema: "cinatra",
     query: async () => {
