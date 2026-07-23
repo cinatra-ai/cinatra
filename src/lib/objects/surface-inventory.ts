@@ -113,6 +113,7 @@ export const RAW_OBJECT_ACCESS_ALLOWLIST: readonly RawObjectAccessEntry[] = [
   { file: "src/lib/artifacts/artifact-read.ts",              category: "substrate", note: "artifacts substrate" },
   { file: "src/lib/artifacts/object-content-snapshot.ts", category: "substrate", note: "artifacts substrate (cinatra#1430) — policy-aware content snapshot capture; READS the object row (+ its binding/claim) for the candidate and the under-lock re-read, writes resource/artifact_blobs/representation/object_content_snapshots (never objects)" },
   { file: "src/lib/artifacts/context-selection-finalize.ts", category: "substrate", note: "artifacts substrate (cinatra#1430) — GC-serialized selection finalization; READS objects only in the coherence gate, writes run_context_selections + artifact_refs (never objects)" },
+  { file: "packages/dashboards/src/mutation-service.ts", category: "substrate", note: "dashboards artifact-twin substrate (cinatra#2006 B1c / #1894) — the convergent twin backfill READS the objects table to find dashboards lacking a dashboard-type twin (keyset NOT-EXISTS scan) + the in-tx wrong-type re-check; twin pairing itself flows through the shared registered twin writer (pairTwin), never a raw objects write here" },
   // No live entity-bypass remains; the raw-objects-table scan re-asserts this.
 ];
 
