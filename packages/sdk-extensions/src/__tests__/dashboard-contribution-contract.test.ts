@@ -27,10 +27,11 @@ describe("dashboardContribution v1 — constants + carrier allowlist", () => {
   it("the claim ABI version is 1", () => {
     expect(DASHBOARD_CONTRIBUTION_ABI_VERSION).toBe(1);
   });
-  it("the carrier-kind allowlist is exactly {agent} (workflow is NOT a carrier)", () => {
-    expect([...DASHBOARD_CONTRIBUTION_CARRIER_KINDS]).toEqual(["agent"]);
-    expect(isDashboardContributionCarrierKind("agent")).toBe(true);
-    for (const k of ["workflow", "connector", "artifact", "skill", null, undefined, 1]) {
+  it("the carrier-kind allowlist is exactly {artifact} (agent + workflow are NOT carriers; cinatra#1896 re-home)", () => {
+    expect([...DASHBOARD_CONTRIBUTION_CARRIER_KINDS]).toEqual(["artifact"]);
+    expect(isDashboardContributionCarrierKind("artifact")).toBe(true);
+    // `agent` was the ORIGINAL carrier (cinatra#1628); #1896 retires it.
+    for (const k of ["agent", "workflow", "connector", "skill", null, undefined, 1]) {
       expect(isDashboardContributionCarrierKind(k)).toBe(false);
     }
   });
@@ -111,18 +112,18 @@ describe("dashboardContribution v1 — field-tolerant rejection (degrade, no val
 });
 
 describe("dashboardContribution v1 — publish verdict (fail-closed + carrier-gated)", () => {
-  it("accepts a valid claim on kind:agent", () => {
-    expect(validateDashboardContributionForPublish(validClaim(), "agent")).toEqual({ valid: true, errors: [] });
+  it("accepts a valid claim on kind:artifact", () => {
+    expect(validateDashboardContributionForPublish(validClaim(), "artifact")).toEqual({ valid: true, errors: [] });
   });
-  it("REJECTS a valid claim authored on a non-agent kind", () => {
-    for (const kind of ["workflow", "connector", "artifact", "skill"]) {
+  it("REJECTS a valid claim authored on a non-artifact kind (incl. the retired agent carrier)", () => {
+    for (const kind of ["agent", "workflow", "connector", "skill"]) {
       const v = validateDashboardContributionForPublish(validClaim(), kind);
       expect(v.valid).toBe(false);
-      expect(v.errors[0]).toMatch(/only on kind:"agent"/);
+      expect(v.errors[0]).toMatch(/only on kind:"artifact"/);
     }
   });
-  it("REJECTS a malformed claim on kind:agent (fail-closed, unlike the degrading boot path)", () => {
-    const v = validateDashboardContributionForPublish(validClaim({ contributionKey: "Bad Key" }), "agent");
+  it("REJECTS a malformed claim on kind:artifact (fail-closed, unlike the degrading boot path)", () => {
+    const v = validateDashboardContributionForPublish(validClaim({ contributionKey: "Bad Key" }), "artifact");
     expect(v.valid).toBe(false);
     expect(v.errors.length).toBeGreaterThan(0);
   });

@@ -350,7 +350,7 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
         );
         if (extraneous.length > 0) {
           errors.push(
-            `artifact extensions may only declare cinatra.{kind,apiVersion,artifact,dependencies,roles,displayName,vendor,views,fieldRenderers}; ` +
+            `artifact extensions may only declare cinatra.{kind,apiVersion,artifact,dependencies,roles,displayName,vendor,views,fieldRenderers,dashboardContribution}; ` +
               `unexpected key(s): ${extraneous.join(", ")}`,
           );
         }

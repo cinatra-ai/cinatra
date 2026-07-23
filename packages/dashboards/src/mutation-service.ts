@@ -1846,7 +1846,7 @@ export async function restoreExtensionDashboards(
 // Adopt-in-place re-key (cinatra#1628, S11b — the AC2 "re-key not duplicate"
 // recovery).
 //
-// When a LIVE successor `kind:"agent"` extension declares a
+// When a LIVE successor `kind:"artifact"` meaning pack declares a
 // `cinatra.dashboardContribution` whose `adopts` edge names an ORPHANED/legacy
 // row's lineage, the reconciler adopts those rows IN PLACE: it re-keys
 // `extension_id` (→ the successor package) + `contribution_id` (→ the successor's

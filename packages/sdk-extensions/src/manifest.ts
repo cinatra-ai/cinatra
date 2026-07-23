@@ -183,15 +183,20 @@ export type CinatraManifest = {
   envOverrides?: Record<string, string>;
 
   /**
-   * Versioned dashboard-contribution claim (cinatra#1628, S11a). Authored on
-   * `kind:"agent"` ONLY — the successor carrier that re-homes extension-shipped
-   * dashboards off the removed `kind:"workflow"` install path. IDENTITY +
-   * versioning + adoption; the dashboard CONTENT stays in the existing
-   * `cinatra/dashboard.json` sidecar. Carried through UNVALIDATED as DATA (the
-   * same discipline as `accessConfig`/`envOverrides`); the host validates it
-   * fail-closed + field-tolerantly via `parseDashboardContribution` (the
-   * sdk-extensions leaf) at consumption — see
-   * `NormalizedExtensionRecord.dashboardContribution`.
+   * Versioned dashboard-contribution claim (cinatra#1628, S11a; re-homed to the
+   * artifact kind by cinatra#1896 / epic #1883). Authored on `kind:"artifact"`
+   * ONLY — the sole carrier that re-homes extension-shipped dashboards off the
+   * removed `kind:"workflow"` install path (the `agent` carrier the claim first
+   * landed on is retired). A meaning pack that ships a ready-made dashboard is an
+   * artifact extension (a required dep on the generic `@cinatra-ai/dashboard-artifact`
+   * base + its own type claim). IDENTITY + versioning + adoption; the dashboard
+   * CONTENT stays in the existing `cinatra/dashboard.json` sidecar. Carried
+   * through UNVALIDATED as DATA (the same discipline as `accessConfig`/`envOverrides`);
+   * the host validates it fail-closed + field-tolerantly via
+   * `parseDashboardContribution` (the sdk-extensions leaf) at consumption — see
+   * `NormalizedExtensionRecord.dashboardContribution`. (`dashboardContribution` is
+   * admitted into `ARTIFACT_ALLOWED_CINATRA_KEYS` so the artifact bridge does not
+   * reject an artifact manifest that declares it.)
    */
   dashboardContribution?: DashboardContributionManifest;
 
@@ -349,16 +354,15 @@ export type NormalizedExtensionRecord = {
    */
   envOverrides?: Record<string, string> | null;
   /**
-   * RAW `cinatra.dashboardContribution` pass-through (cinatra#1628, S11a), or
-   * `null` when the package declares none / for a non-`agent` kind. OPTIONAL on
-   * the type (strictly additive; the record shape is ABI-frozen). Carried
-   * UNVALIDATED as data — the host validates it fail-closed + field-tolerantly
-   * via `parseDashboardContribution` (the sdk-extensions leaf) at consumption
-   * (the reader-gate liveness oracle + the S11b reconciler); a consumer must
-   * never trust this field without that validation. The generator EMISSION of
-   * this field + the reconciler that consumes it land in S11b — S11a ships the
-   * versioned leaf + this ABI-additive carry so the record type cannot silently
-   * drop the claim.
+   * RAW `cinatra.dashboardContribution` pass-through (cinatra#1628, S11a; re-homed
+   * to the artifact kind by cinatra#1896 / epic #1883), or `null` when the package
+   * declares none / for a non-`artifact` kind (the sole allowlisted carrier — the
+   * generator gates emission on `kind:"artifact"`). OPTIONAL on the type (strictly
+   * additive; the record shape is ABI-frozen). Carried UNVALIDATED as data — the
+   * host validates it fail-closed + field-tolerantly via `parseDashboardContribution`
+   * (the sdk-extensions leaf) at consumption (the reader-gate liveness oracle + the
+   * S11b reconciler); a consumer must never trust this field without that
+   * validation.
    */
   dashboardContribution?: Record<string, unknown> | null;
   /**

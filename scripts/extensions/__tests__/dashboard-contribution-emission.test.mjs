@@ -13,22 +13,22 @@ const CLAIM = {
 };
 
 describe("resolveDashboardContributionClaim — generator emission", () => {
-  it("emits the RAW claim on kind:agent (carried UNVALIDATED — the host parses it at consumption)", () => {
-    expect(resolveDashboardContributionClaim("agent", { dashboardContribution: CLAIM })).toBe(CLAIM);
+  it("emits the RAW claim on kind:artifact (carried UNVALIDATED — the host parses it at consumption)", () => {
+    expect(resolveDashboardContributionClaim("artifact", { dashboardContribution: CLAIM })).toBe(CLAIM);
   });
 
-  it("emits null on kind:agent when the agent declares no claim", () => {
-    expect(resolveDashboardContributionClaim("agent", {})).toBeNull();
-    expect(resolveDashboardContributionClaim("agent", { dashboardContribution: undefined })).toBeNull();
+  it("emits null on kind:artifact when the pack declares no claim", () => {
+    expect(resolveDashboardContributionClaim("artifact", {})).toBeNull();
+    expect(resolveDashboardContributionClaim("artifact", { dashboardContribution: undefined })).toBeNull();
   });
 
-  it("emits null on kind:agent when the claim is not an object (array / string)", () => {
-    expect(resolveDashboardContributionClaim("agent", { dashboardContribution: [CLAIM] })).toBeNull();
-    expect(resolveDashboardContributionClaim("agent", { dashboardContribution: "x" })).toBeNull();
+  it("emits null on kind:artifact when the claim is not an object (array / string)", () => {
+    expect(resolveDashboardContributionClaim("artifact", { dashboardContribution: [CLAIM] })).toBeNull();
+    expect(resolveDashboardContributionClaim("artifact", { dashboardContribution: "x" })).toBeNull();
   });
 
-  it("CARRIER-KIND GATED: null on every non-agent kind even when a claim is present", () => {
-    for (const kind of ["connector", "artifact", "skill", "workflow", undefined]) {
+  it("CARRIER-KIND GATED: null on every non-artifact kind (incl. the retired agent carrier) even when a claim is present", () => {
+    for (const kind of ["agent", "connector", "skill", "workflow", undefined]) {
       expect(resolveDashboardContributionClaim(kind, { dashboardContribution: CLAIM })).toBeNull();
     }
   });

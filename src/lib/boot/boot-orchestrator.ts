@@ -164,9 +164,10 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
 
   // -- dashboardContribution adoption reconcile (cinatra#1628, S11c) ------------
   // The LIVE TRIGGER for the S11b adoption reconciler. AFTER extension activation
-  // (the install store + generated manifest are loaded) so a successor agent that
-  // declares `adopts` re-homes recoverably-archived orphan dashboard rows onto
-  // itself on boot. DORMANT until a legacy orphan exists AND a successor ships;
+  // (the install store + generated manifest are loaded) so a successor meaning
+  // pack (kind:"artifact" since cinatra#1896) that declares `adopts` re-homes
+  // recoverably-archived orphan dashboard rows onto itself on boot. DORMANT until
+  // a legacy orphan exists AND a successor ships;
   // `retryable` (idempotent, soft-failing, kill-switchable).
   await run(dashboardContributionReconcilePhases());
 

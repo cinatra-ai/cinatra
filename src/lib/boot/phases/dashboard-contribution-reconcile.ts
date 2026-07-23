@@ -6,8 +6,8 @@
 // this slice (no producer to trigger it); callers invoke it explicitly." This
 // phase is that trigger. AFTER extension activation (the dual loaders + required-
 // set enforcement + the store rescans), it reconciles dashboardContribution
-// adoptions across every CANDIDATE org, so a successor `kind:"agent"` extension
-// that declares an `adopts` edge re-homes the recoverably-archived orphan rows
+// adoptions across every CANDIDATE org, so a successor `kind:"artifact"` meaning
+// pack that declares an `adopts` edge re-homes the recoverably-archived orphan rows
 // onto itself on the FIRST boot after it ships — no manual step, no image rebuild.
 //
 // DORMANT by construction: candidate orgs are ONLY those holding archived,
