@@ -37,3 +37,11 @@ services:
     ports:
       - "127.0.0.1:7474:7474"
       - "127.0.0.1:7687:7687"
+
+  # Plane MCP bridge (cinatra#1238) — LOOPBACK ONLY. mcp-proxy listens on :8211
+  # inside the container; publish it at 127.0.0.1:3450 for the host-run cinatra
+  # app (PLANE_MCP_URL=http://localhost:3450/mcp). Profile-gated (plane-mcp), so
+  # this override is a no-op unless that profile is up.
+  plane-mcp:
+    ports:
+      - "127.0.0.1:3450:8211"

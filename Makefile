@@ -8,7 +8,11 @@ setup:
 # runtime + the demo install profile. Brings up the four bundled app profiles
 # (wordpress, drupal, twenty, plane), forces the sample seed, and activates the
 # demo dev-fixtures + the lazy monolithic ACME seed (fires at boot once the
-# first human admin registers). Equivalent to `MODE=demo bash scripts/setup.sh`.
+# first human admin registers). For Plane it ALSO headlessly provisions a
+# dev/demo PAT (owner ruling 2026-07-23 (groganz) — AUTOMATIC connect) and
+# brings up the Plane MCP bridge (--profile plane-mcp @ loopback :3450), so the
+# connector auto-connects with no manual token paste. Equivalent to
+# `MODE=demo bash scripts/setup.sh`.
 setup-demo:
 	MODE=demo bash scripts/setup.sh
 
