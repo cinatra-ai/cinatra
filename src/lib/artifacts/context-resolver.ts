@@ -294,6 +294,28 @@ export function resolveContextSlot(
   const pinRepIdsPh = ph(pins.map((p) => p.representationRevisionId));
   const pinAssertionIdsPh = ph(pins.map((p) => p.semanticAssertionId));
 
+  // cinatra#1896 / epic #1883 §D8 (v1): DASHBOARD-FORM rows are excluded from
+  // attachment-hydrated context candidates. A dashboards-artifact twin (§D7)
+  // carries the base object type `@cinatra-ai/dashboard-artifact:dashboard`
+  // (which IS in listArtifacts(), so the type predicate above admits it) and its
+  // substrate substance is the published dashboard envelope — a `representation.form =
+  // 'dashboard'` row, NOT ingestible file bytes. Such a row can never be
+  // hydrated as an LLM attachment (there is no file body to upload to a
+  // provider), so were it ever to carry an eligible assertion an accepted
+  // extension matches (a user meaning-assertion on a dashboard-typed row, or a
+  // future pack meaning assertion) it would resolve as a doomed candidate. Fail
+  // closed at the CANDIDATE query: exclude any object holding a dashboard-form
+  // representation. Form 'dashboard' is written ONLY by the dashboards twin
+  // writer, so this never touches a file-form artifact. This is v1 defense in
+  // depth — independent of whether a dashboard row currently acquires an
+  // eligible accepted assertion.
+  const dashboardFormExclude = `
+        AND NOT EXISTS (
+          SELECT 1 FROM "${schema}"."representation" rdash
+          WHERE rdash.org_id = o.org_id AND rdash.artifact_id = o.id
+            AND rdash.form = 'dashboard'
+        )`;
+
   const sql = `
     WITH visible_objects AS (
       SELECT id, org_id, owner_level, owner_id, visibility, project_id,
@@ -313,7 +335,7 @@ export function resolveContextSlot(
               AND b.assertion_basis = 'binding' AND b.eligibility = 'eligible'
           )
         )
-        AND o.deleted_at IS NULL
+        AND o.deleted_at IS NULL${dashboardFormExclude}
         AND (${ownership.sql})${projectNarrow}${projectExcludeWhenUnset}
     ),
     pins AS (
