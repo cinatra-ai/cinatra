@@ -16,7 +16,7 @@
 //   node scripts/audit/org-write-table-sweep.mjs                  # check
 //   node scripts/audit/org-write-table-sweep.mjs --write-baseline # regenerate
 
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
