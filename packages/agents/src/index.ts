@@ -188,6 +188,14 @@ export {
 } from "./actions";
 // Auth-neutral approval helper for external /api/a2a/resume callers.
 export { approveReviewTaskInternal } from "./review-task-actions";
+// NB: the generic artifact-review GATE store (cinatra#1796, epic #1620 S13) is
+// intentionally NOT re-exported from this barrel — it imports the host review
+// cores (@/lib/artifacts/artifact-review-*), so barrelling it would grow the
+// reachable first-party graph of every route that imports @cinatra-ai/agents
+// (the route-graph dev-perf ratchet). It ships as a dedicated SUBPATH export
+// `@cinatra-ai/agents/artifact-review-gate-store` (the auditor-snapshot-store
+// precedent); its in-package callers (the reviewer execution) import it
+// relatively.
 export {
   importAgentTemplate,
   createLocalAgentTemplateVersion,
