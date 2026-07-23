@@ -369,6 +369,12 @@ describe("mid-run HITL classification parity", () => {
     // midRunHitl:true in the merged bindings (email-artifacts declares it), so the
     // new -review id classifies strictly (it matches NO :output/-output suffix).
     "@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review",
+    // cinatra#1961: the send-confirmation APPROVAL gate must classify strictly as
+    // mid-run HITL (the id matches no :output/-output suffix). Without it the
+    // run panel routes the renderer's mount-time onChange straight to
+    // performGateSubmit, auto-approving the send with no operator click — the
+    // owner ruling 2026-07-22 requires an explicit confirmation.
+    "@cinatra-ai/email-delivery-agent:send-confirmation",
   ])("manifest-flagged strict id %s classifies as mid-run", (id) => {
     expect(hasMidRunHitlBinding(id)).toBe(true);
     expect(classifyMidRunHitl(id)).toBe(true);

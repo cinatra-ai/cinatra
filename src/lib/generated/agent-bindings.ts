@@ -32,7 +32,7 @@ export const GENERATED_FIELD_RENDERER_BINDINGS: ReadonlyArray<GeneratedFieldRend
   { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm", priority: 90, midRunHitl: true, declaredBy: "@cinatra-ai/blog-wordpress-publish-agent" },
   { id: "@cinatra-ai/context-selection-agent:context-selector", kind: "context-selector", priority: 90, midRunHitl: true, declaredBy: "@cinatra-ai/context-selection-agent" },
   { id: "@cinatra-ai/email-delivery-agent:output", kind: "send-confirmation", priority: 80, a2uiTranslator: "send-output", declaredBy: "@cinatra-ai/email-artifacts" },
-  { id: "@cinatra-ai/email-delivery-agent:send-confirmation", kind: "send-confirmation", priority: 80, declaredBy: "@cinatra-ai/email-artifacts" },
+  { id: "@cinatra-ai/email-delivery-agent:send-confirmation", kind: "send-confirmation", priority: 80, midRunHitl: true, declaredBy: "@cinatra-ai/email-artifacts" },
   { id: "@cinatra-ai/email-drafting-agent:email-drafts-review", kind: "email-drafts-review", priority: 80, midRunHitl: true, declaredBy: "@cinatra-ai/email-artifacts" },
   { id: "@cinatra-ai/email-drafting-agent:follow-up-cadence", kind: "follow-up-cadence", priority: 90, declaredBy: "@cinatra-ai/email-artifacts" },
   { id: "@cinatra-ai/email-drafting-agent:output", kind: "email-drafts-review", priority: 80, a2uiTranslator: "drafts-output", declaredBy: "@cinatra-ai/email-drafting-agent" },
