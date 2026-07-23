@@ -6,7 +6,6 @@
  * (returning kernel-internal paths for symlinked detours).
  */
 import { describe, it, expect } from "vitest";
-// @ts-expect-error — plain .mjs module with exported engine
 import {
   collectModuleEdges,
   evaluateBoundaryRules,
