@@ -535,6 +535,18 @@ jobs:
           CINATRA_DB_INTEGRATION_TESTS: '1'
         run: pnpm exec vitest run src/lib/__tests__/integration/demote-optional-extension-anchors.test.ts
 
+      # cinatra#1988 — the shared dashboards session→actor builder must thread
+      # `teamRoles` end-to-end. Real-store regression: seeds team memberships in
+      # a lane-unique DB and drives buildDashboardActorFromSession → the real
+      # adapter → the real resolver, proving a team admin reads an owners/private
+      # team-owned dashboard and a plain member does not. Own vitest invocation
+      # (own process) so its SUPABASE_DB_URL/pool lifecycle never touches the
+      # step above.
+      - name: Dashboards actor team-roles regression (cinatra#1988)
+        env:
+          CINATRA_DB_INTEGRATION_TESTS: '1'
+        run: pnpm exec vitest run src/lib/dashboards/__tests__/integration/dashboard-actor-team-roles.integration.test.ts
+
   # Gate the canonical-extension invariants as an independent job so the gate
   # is visible regardless of the agents-suite baseline. Runs the
   # `pnpm test:invariants` script from packages/extensions (dispatcher +
