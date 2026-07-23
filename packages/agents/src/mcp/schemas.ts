@@ -211,6 +211,35 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
         ),
     }),
   },
+  "email_outreach_recipients_update": {
+    description:
+      "Run-scoped persist of the operator's reviewed recipient set onto THIS run's own recipients bundle object (@cinatra-ai/campaigns:recipients) — the write the re-entrant campaign-recipients review gate's post-resume apply node dispatches. UPDATE-ONLY: the generate node pre-persists the recipient bundle before the gate (design (a)), so a missing bundle at apply time is genuine corruption and fails closed. EXPLICIT-REMOVAL, NON-DESTRUCTIVE (codex #1960 findings 1+2): the payload carries the operator's EXPLICIT removals in `removedRecipients`, each matched one-to-one onto a stored row by its UNIQUE contactId (accountId and email can collide across rows and are NOT match keys); ONLY the matched rows are removed and every other stored row is KEPT. So an empty/absent `removedRecipients` is a benign no-op (parity with the #1959 drafts primitive), a stray self-MCP call cannot erase the bundle before approval, and a stored row the operator never saw is never silently deleted. The run, its declaring agent package (restricted to packages that serve a campaign-recipients-review mid-run gate, resolved from the manifest), and the actor all come from the run-bound invocation context; a caller runId/campaign is ignored. Only callable from inside such a run (the deterministic pre-interrupt seam or an agent-run OBO frame); a bare chat/session call fails closed. On success returns { ok:true, runId, agentPackageName, objectId, matched, removed, reviewedRecipients, reviewedCount } (the authoritative KEPT set the EndNode confirmedRecipients/recipientCount outputs are sourced from); a genuine persist gap (missing bundle with removals, or a partial/unmatched removal) returns an { error } the passthrough surfaces as a non-2xx so the apply node fails the run.",
+    inputSchema: z.object({
+      removedRecipients: z
+        .array(
+          z.object({
+            id: z.string().optional(),
+            contactId: z.string().nullable().optional(),
+            accountId: z.string().nullable().optional(),
+            recipientId: z.string().optional(),
+            startupId: z.string().optional(),
+            recipientEmail: z.string().nullable().optional(),
+            email: z.string().nullable().optional(),
+          }),
+        )
+        .max(5000)
+        .optional()
+        .describe(
+          "The operator's EXPLICITLY REMOVED recipient rows, each matched to a stored recipients-bundle row by its UNIQUE contactId (accountId/email can collide across rows and are NOT match keys). ONLY these rows are removed; every other stored row is kept. Empty/absent = a benign no-op (the operator approved with no removals).",
+        ),
+      approvedRecipientIds: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "The kept recipient ids the renderer forwarded (the surfaced snapshot minus the removals). Informational to the persist itself, but used to disambiguate a legitimate zero-recipient run (empty surfaced snapshot) from a missing-bundle persistence gap whose surfaced snapshot was non-empty.",
+        ),
+    }),
+  },
   "agent_run_stop": {
     description: "Stop a running agent run by ID. Marks the run as stopped in the database; the background job halts after its current step completes.",
     inputSchema: z.object({

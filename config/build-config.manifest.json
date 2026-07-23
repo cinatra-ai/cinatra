@@ -425,6 +425,7 @@
     { "alias": "@cinatra-ai/document-artifact/src/renderers/detail", "target": "./extensions/cinatra-ai/document-artifact/src/renderers/detail.tsx" },
     { "alias": "@cinatra-ai/json-artifact/src/renderers/detail", "target": "./extensions/cinatra-ai/json-artifact/src/renderers/detail.tsx" },
     { "alias": "@cinatra-ai/json-artifact/src/renderers/preview", "target": "./extensions/cinatra-ai/json-artifact/src/renderers/preview.tsx" },
+    { "alias": "@cinatra-ai/email-artifacts/src/renderers/campaign-recipients-review", "target": "./extensions/cinatra-ai/email-artifacts/src/renderers/campaign-recipients-review.tsx" },
     { "alias": "@cinatra-ai/email-artifacts/src/renderers/email-drafts-review", "target": "./extensions/cinatra-ai/email-artifacts/src/renderers/email-drafts-review.tsx" },
     { "alias": "@cinatra-ai/email-artifacts/src/renderers/follow-up-cadence", "target": "./extensions/cinatra-ai/email-artifacts/src/renderers/follow-up-cadence.tsx" },
     { "alias": "@cinatra-ai/email-artifacts/src/renderers/gmail-sender", "target": "./extensions/cinatra-ai/email-artifacts/src/renderers/gmail-sender.tsx" },

@@ -86,9 +86,14 @@ const PARITY_TABLE: ReadonlyArray<
   // pack component). Asserted in the migrated-binding it.each + the bare-alias
   // block below, not in this frozen host-component table.
   ["@cinatra-ai/email-outreach-agent:setup-form", GroupedSetupFormRenderer as never, 60],
+  // The non-reviewer campaign-recipients-review gate renderer COMPONENT relocated
+  // into @cinatra-ai/email-artifacts (cinatra#1960): the agent-namespaced
+  // `:campaign-recipients-review` id + the bare `campaign-recipients-review` alias
+  // now resolve to the ExtensionFieldRenderer wrapper (asserted in the
+  // migrated-binding block + the bare-alias test below), NOT this frozen host
+  // table. The reviewer `:contacts-output` gate + this agent's own `:output` id
+  // carry NO component and KEEP the host renderer (the retain-host guardrail).
   ["@cinatra-ai/email-recipient-selection-agent:output", CampaignRecipientsReviewRenderer as never, 80],
-  ["@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review", CampaignRecipientsReviewRenderer as never, 80],
-  ["campaign-recipients-review", CampaignRecipientsReviewRenderer as never, 80],
   // The non-reviewer drafts/follow-up gate renderer COMPONENTS relocated into
   // @cinatra-ai/email-artifacts (cinatra#1959): both agent-namespaced
   // `:email-drafts-review` ids + the bare `email-drafts-review` alias now resolve
@@ -194,6 +199,11 @@ describe("resolution parity with the retired hand map", () => {
     // `:output` gates keep the host renderer (retain-host guardrail).
     ["@cinatra-ai/email-drafting-agent:email-drafts-review", 80],
     ["@cinatra-ai/email-follow-up-agent:email-drafts-review", 80],
+    // campaign-recipients-review non-reviewer gate renderer relocated into
+    // @cinatra-ai/email-artifacts (cinatra#1960): the agent-namespaced id loads the
+    // pack component at the pre-cutover priority 80. The reviewer `:contacts-output`
+    // gate + this agent's own `:output` id keep the host renderer (retain-host).
+    ["@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review", 80],
     // test-delivery-input relocated into @cinatra-ai/email-artifacts
     // (cinatra#1958, S8 successor): the pure snapshot->onChange input form is
     // pack-shipped, priority 80.
@@ -285,6 +295,22 @@ describe("resolution parity with the retired hand map", () => {
     );
   });
 
+  it("migrated campaign-recipients-review bare alias resolves to the pack wrapper (cinatra#1960 hybrid kind)", () => {
+    // campaign-recipients-review is now a HYBRID kind: the non-reviewer gate is
+    // pack-served (component in the build map) while the reviewer `:contacts-output`
+    // + agent `:output` gates KEEP the host renderer. The unscoped bare alias
+    // resolves map-first to the pack-served binding's ExtensionFieldRenderer
+    // wrapper (the same documented shared-alias caveat as email-drafts-review).
+    // Priority 80 unchanged.
+    const entry = resolveWith("campaign-recipients-review");
+    expect(entry).toBeTruthy();
+    expect(entry!.priority).toBe(80);
+    const resolved = entry!.renderer as ComponentType & { displayName?: string };
+    expect(resolved.displayName).toBe(
+      "ExtensionFieldRenderer(@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review)",
+    );
+  });
+
   it("an unknown namespaced id resolves to NO custom entry (schema-fallback path)", () => {
     expect(resolveWith("@cinatra-ai/unknown-agent:whatever")).toBeNull();
   });
@@ -312,6 +338,10 @@ describe("mid-run HITL classification parity", () => {
     // new -review ids classify strictly (they match NO :output/-output suffix).
     "@cinatra-ai/email-drafting-agent:email-drafts-review",
     "@cinatra-ai/email-follow-up-agent:email-drafts-review",
+    // cinatra#1960: the pack-served re-entrant campaign-recipients gate carries
+    // midRunHitl:true in the merged bindings (email-artifacts declares it), so the
+    // new -review id classifies strictly (it matches NO :output/-output suffix).
+    "@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review",
   ])("manifest-flagged strict id %s classifies as mid-run", (id) => {
     expect(hasMidRunHitlBinding(id)).toBe(true);
     expect(classifyMidRunHitl(id)).toBe(true);
