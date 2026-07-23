@@ -208,6 +208,21 @@ export type SemanticArtifactRef = { extension: string; objectTypeId?: string };
  * load-bearing path for this build-time devExtension. Narrowly additive —
  * unknown keys stay rejected.
  */
+// `dashboardContribution` (cinatra#1628 `DashboardContributionManifest`, re-homed
+// to the artifact kind by cinatra#1896 / epic #1883): the TOP-LEVEL versioned
+// dashboard-contribution claim. It began as an AGENT-package key (the successor
+// carrier that re-homed extension-shipped dashboards off the removed
+// `kind:"workflow"` install path); #1896 RETIRES the agent carrier and makes the
+// artifact kind the SOLE carrier, so a meaning pack that ships a ready-made
+// dashboard (a required dep on the generic `@cinatra-ai/dashboard-artifact` base +
+// its own type claim) declares the claim on its `kind:"artifact"` manifest.
+// Admitting it here is purely so the artifact bridge (`registerArtifactExtensions`)
+// does not reject the whole manifest as extraneous (dropping the pack's `artifact`
+// descriptor + `objectTypes` claims at boot); the block's CONTENT is carried
+// UNVALIDATED as data (same discipline as `views`/`vendor`/`displayName`) and
+// validated fail-closed + field-tolerantly at consumption via the sdk leaf's
+// `parseDashboardContribution` (`./dashboard-contribution-contract`). Narrowly
+// additive — unknown keys stay rejected.
 export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "kind",
   "apiVersion",
@@ -218,6 +233,7 @@ export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "vendor",
   "views",
   "fieldRenderers",
+  "dashboardContribution",
 ]);
 
 // ===========================================================================

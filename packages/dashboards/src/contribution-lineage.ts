@@ -19,8 +19,9 @@
 //                                     `adopts` edge names again).
 //
 // ADOPTION is NEVER inferred from short-key equality (the #1628 contract): a
-// successor agent declares an explicit `adopts: [{ legacyPackage,
-// legacyContributionKey }]` list; {@link planContributionAdoptions} resolves each
+// successor meaning pack (kind:"artifact" since cinatra#1896) declares an explicit
+// `adopts: [{ legacyPackage, legacyContributionKey }]` list;
+// {@link planContributionAdoptions} resolves each
 // edge to the candidate lineage ids above and matches THOSE against orphaned rows.
 
 // LOCAL structural types (NOT imported from @cinatra-ai/sdk-extensions): this is
@@ -87,7 +88,8 @@ export function adoptionMatchLineageIds(edge: ContributionAdoptionEdge): string[
 
 /** A parsed, live successor contribution claim + the package that declares it. */
 export type LiveContributionClaim = {
-  /** The declaring package (the successor CARRIER — always `kind:"agent"`). */
+  /** The declaring package (the successor CARRIER — always `kind:"artifact"`
+   *  since cinatra#1896; the `agent` carrier is retired). */
   readonly packageName: string;
   /** The parsed, validated `cinatra.dashboardContribution` claim. */
   readonly contribution: ContributionClaimForAdoption;

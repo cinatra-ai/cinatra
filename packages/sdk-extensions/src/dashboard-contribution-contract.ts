@@ -1,14 +1,19 @@
 // Shared DASHBOARD-CONTRIBUTION manifest contract (cinatra#1628, S11a).
 //
 // Re-homes extension-shipped dashboards off the dying `kind:"workflow"` carrier
-// onto a versioned `cinatra.dashboardContribution` manifest claim, authored on
-// `kind:"agent"` ONLY (the project-agent successor kind; #1030/#1035). Today the
-// sidecar `cinatra/dashboard.json` rides the workflow install path, which #1035
+// onto a versioned `cinatra.dashboardContribution` manifest claim. The carrier
+// kind is `kind:"artifact"` ONLY (cinatra#1896, epic #1883): extension-shipped
+// dashboards become artifact extensions like every other artifact type — the
+// generic `@cinatra-ai/dashboard-artifact` base plus meaning packs that ship a
+// ready-made dashboard. (The claim originally landed on `kind:"agent"` in
+// cinatra#1628 S11a; #1896 retires the agent carrier — the seam was inert, no
+// agent ever shipped a claim, so there is nothing to migrate.) Today the sidecar
+// `cinatra/dashboard.json` rides the workflow install path, which #1035
 // removed — this claim is the successor carrier.
 //
 // This module is the SCHEMA-ONLY, host-neutral LEAF (the same S1/#1621 discipline
 // `artifact-contract.ts` uses): it lives in `@cinatra-ai/sdk-extensions` so an
-// agent extension types its claim against the SDK alone and never imports a host
+// artifact extension types its claim against the SDK alone and never imports a host
 // package, AND so BOTH the host manifest-normalization path and the
 // publish/conformance gate share ONE field-tolerant validator
 // ({@link parseDashboardContribution}) without duplicating a literal. The concrete
@@ -18,7 +23,7 @@
 // FIELD-TOLERANT PARSE (the `.strict()` mirror hazard). The claim is carried on
 // the normalized record + the manifest as RAW `unknown` (like `accessConfig` /
 // `envOverrides` / the artifact `ui` block) so a malformed contribution can NEVER
-// reject the surrounding agent manifest and drop the agent's other claims. The
+// reject the surrounding artifact manifest and drop the artifact's other claims. The
 // boot/normalization path degrades-with-diagnostic (drops the claim); the
 // publish/conformance gate rejects fail-closed on the SAME verdict.
 
@@ -39,13 +44,16 @@ import { generateArtifactUiSdkAbiRange, isContainedEntryPath } from "./artifact-
 export const DASHBOARD_CONTRIBUTION_ABI_VERSION = 1;
 
 /**
- * The carrier-kind allowlist for the claim (AC1). Initially `agent` ONLY: legacy
- * `kind:"workflow"` packages are readable SOLELY as grandfathered adoption
- * sources (the host rejects a `kind:"workflow"` install fail-closed), never as a
- * re-materialization carrier. Read as a literal by the conformance gate + the
- * generator (which emits the claim on `kind:"agent"` records only).
+ * The carrier-kind allowlist for the claim (AC1). `artifact` ONLY (cinatra#1896,
+ * epic #1883 — re-homed off the retired `agent` carrier): a meaning pack that
+ * ships a ready-made dashboard is an artifact extension (a required dep on the
+ * generic `@cinatra-ai/dashboard-artifact` base + its own type claim + template).
+ * Legacy `kind:"workflow"` packages remain readable SOLELY as grandfathered
+ * adoption sources (the host rejects a `kind:"workflow"` install fail-closed),
+ * never as a re-materialization carrier. Read as a literal by the conformance
+ * gate + the generator (which emits the claim on `kind:"artifact"` records only).
  */
-export const DASHBOARD_CONTRIBUTION_CARRIER_KINDS = ["agent"] as const;
+export const DASHBOARD_CONTRIBUTION_CARRIER_KINDS = ["artifact"] as const;
 export type DashboardContributionCarrierKind = (typeof DASHBOARD_CONTRIBUTION_CARRIER_KINDS)[number];
 
 /** True iff `kind` may author a `cinatra.dashboardContribution` claim. */
@@ -58,8 +66,8 @@ export function isDashboardContributionCarrierKind(kind: unknown): kind is Dashb
  * segment, hyphen-joined alnum segments) — the SAME slug grammar the registry
  * `<component>`/`<slug>` tokens use. The author-local key is scoped to the
  * package; the PERSISTED row instead carries a carrier-independent immutable
- * lineage `contribution_id` (host-owned) so identity survives the workflow→agent
- * re-home. Adoption is NEVER inferred from key equality — the successor declares
+ * lineage `contribution_id` (host-owned) so identity survives the carrier re-home
+ * (workflow→agent→artifact). Adoption is NEVER inferred from key equality — the successor declares
  * an explicit {@link DashboardContributionAdoption} list.
  */
 export const CONTRIBUTION_KEY_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -74,8 +82,9 @@ export function isValidContributionKey(key: unknown): boolean {
 // ===========================================================================
 
 /**
- * An explicit adoption edge: the successor agent claims an ORPHANED legacy row
- * by naming the legacy package + its author-local contribution key. The
+ * An explicit adoption edge: the successor pack (kind:"artifact") claims an
+ * ORPHANED legacy row by naming the legacy package + its author-local
+ * contribution key. The
  * reconciler (S11b) matches this against orphaned rows and adopt-in-place re-keys
  * them (never a short-key-equality inference, never a duplicate).
  */
@@ -211,10 +220,10 @@ function sanitizeContributionDiagnostic(error: z.ZodError): string {
 /**
  * TOLERANT validator for the `cinatra.dashboardContribution` claim, shared by the
  * host manifest-normalization path and the publish/conformance gate. NEVER throws
- * and NEVER implies the surrounding agent manifest is invalid.
+ * and NEVER implies the surrounding artifact manifest is invalid.
  *  - boot / normalization: on `{ ok: false }` the caller DROPS the claim (the
- *    agent keeps its other claims) and surfaces `diagnostic` — degrade, never
- *    reject.
+ *    artifact pack keeps its other claims) and surfaces `diagnostic` — degrade,
+ *    never reject.
  *  - publish / conformance gate: the SAME `{ ok: false }` is rejected fail-closed
  *    (see {@link validateDashboardContributionForPublish}).
  *
@@ -244,9 +253,10 @@ export function parseDashboardContribution(input: unknown): DashboardContributio
  * PUBLISH/authoring verdict wrapper (parity with
  * `validateSemanticArtifactManifestForPublish`). The authoring path is
  * FAIL-CLOSED on the claim: unlike the boot path — which DEGRADES an unsupported
- * contribution (dropping it, other claims intact) — a chat-authored agent
+ * contribution (dropping it, other claims intact) — a chat-authored artifact
  * package with a malformed `dashboardContribution` (or one authored on a
- * non-`agent` carrier kind) must be REJECTED.
+ * non-`artifact` carrier kind, including the retired `agent` carrier) must be
+ * REJECTED.
  *
  * `carrierKind` is the declaring package's `cinatra.kind`; a contribution on a
  * non-allowlisted kind is rejected here even when the claim body is well-formed.
@@ -259,7 +269,7 @@ export function validateDashboardContributionForPublish(
     return {
       valid: false,
       errors: [
-        `cinatra.dashboardContribution may be authored only on kind:"agent" (got kind:${JSON.stringify(carrierKind)})`,
+        `cinatra.dashboardContribution may be authored only on kind:"artifact" (got kind:${JSON.stringify(carrierKind)})`,
       ],
     };
   }

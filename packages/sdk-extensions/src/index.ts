@@ -543,10 +543,11 @@ export type {
 } from "./llm-provider-contract";
 
 // The versioned DASHBOARD-CONTRIBUTION manifest contract (the
-// `./dashboard-contribution-contract` subpath, cinatra#1628 S11a) so a
-// `kind:"agent"` extension types its `cinatra.dashboardContribution` claim
-// against the SDK alone. Schema-only leaf; the host + the publish/conformance
-// gate share the field-tolerant `parseDashboardContribution` validator.
+// `./dashboard-contribution-contract` subpath, cinatra#1628 S11a; re-homed to the
+// artifact kind by cinatra#1896 / epic #1883) so a `kind:"artifact"` meaning pack
+// types its `cinatra.dashboardContribution` claim against the SDK alone.
+// Schema-only leaf; the host + the publish/conformance gate share the
+// field-tolerant `parseDashboardContribution` validator.
 export {
   DASHBOARD_CONTRIBUTION_ABI_VERSION,
   DASHBOARD_CONTRIBUTION_CARRIER_KINDS,

@@ -43,13 +43,14 @@ beforeEach(() => adoptSpy.mockReset().mockResolvedValue(0));
 
 describe("parseLiveContributionClaims (degrade-with-diagnostic)", () => {
   const cand = (over: Partial<LiveContributionCandidate>): LiveContributionCandidate => ({
-    packageName: "@x/agent",
-    kind: "agent",
+    packageName: "@x/dashboard-artifact",
+    // cinatra#1896: the carrier is `kind:"artifact"` (the `agent` carrier is retired).
+    kind: "artifact",
     rawContribution: { abiVersion: 1, sdkAbiRange: "^2", contributionVersion: 1, contributionKey: "k" },
     ...over,
   });
 
-  it("keeps a well-formed agent claim", () => {
+  it("keeps a well-formed artifact claim", () => {
     expect(parseLiveContributionClaims([cand({})])).toHaveLength(1);
   });
 
@@ -61,8 +62,9 @@ describe("parseLiveContributionClaims (degrade-with-diagnostic)", () => {
     expect(claims.map((c) => c.packageName)).toEqual(["@x/good"]);
   });
 
-  it("ignores a NON-agent carrier even if it carries a claim (kind gate)", () => {
+  it("ignores a NON-artifact carrier even if it carries a claim (kind gate; incl. the retired agent carrier)", () => {
     expect(parseLiveContributionClaims([cand({ kind: "connector" })])).toEqual([]);
+    expect(parseLiveContributionClaims([cand({ kind: "agent" })])).toEqual([]);
   });
 
   it("skips a null/absent claim", () => {
