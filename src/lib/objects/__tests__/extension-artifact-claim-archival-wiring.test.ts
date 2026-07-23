@@ -62,6 +62,9 @@ vi.mock("@cinatra-ai/extensions", () => ({
   // the others into no-op setters so the module's wire calls resolve.
   setExtensionArtifactClaimReactivationHook: () => {},
   setExtensionArtifactClaimArchivalAllScopesHook: () => {},
+  // The consolidated wiring module also installs the best-effort org-name
+  // resolver (OWNER RULING 2026-07-22); capture into a no-op setter.
+  setExtensionArchiveOrgNameResolver: () => {},
 }));
 
 // Import the wiring ONCE (side-effect: installs the hook onto the captured slot).

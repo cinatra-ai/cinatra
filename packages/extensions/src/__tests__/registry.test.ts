@@ -4,6 +4,7 @@ import {
   ActiveDependentError,
   ExpectedInstalledVersionMismatchError,
   resolveLiveInstalledVersionForCas,
+  PlatformArtifactLifecycleOrgInstallsError,
 } from "../index";
 import { setExtensionDataTeardownHook } from "../data-teardown-hook";
 import { setExtensionArtifactClaimArchivalHook } from "../artifact-claim-lifecycle-hook";
@@ -433,13 +434,13 @@ describe("ExtensionRegistry", () => {
   });
 
   // cinatra#1454 — the dispatcher fires the FAIL-CLOSED artifact claim-archival
-  // seam on the ORG-SCOPED archive transition of a `kind:"artifact"` extension
-  // (an org-admin soft uninstall + an org-scoped explicit archive), BEFORE it
+  // seam on the archive transition of a `kind:"artifact"` extension BEFORE it
   // commits the durable row transition, so an archival failure aborts the archive
   // (the extension is never archived while its object-type claims / governed rows
-  // stay live). It DEFERS a NULL-org (platform) archive (remainder R1 — the
-  // cross-org "platform" archival semantics are unresolved) and never fires for a
-  // non-artifact kind.
+  // stay live). The ORG-SCOPED path fires the org:<id> scope. The PLATFORM
+  // (NULL-org) path is gated by the OWNER RULING 2026-07-22 (groganz): it REFUSES
+  // while any org still has the extension installed (naming those orgs) and only
+  // otherwise proceeds at the platform scope. Never fires for a non-artifact kind.
   describe("artifact claim-archival firing (#1454)", () => {
     // An ORG-ADMIN actor + an org-scoped canonical row so the dispatcher resolves
     // an org:<id> claim scope (the scope-exact, wired path).
@@ -527,11 +528,63 @@ describe("ExtensionRegistry", () => {
       expect(fired).toEqual([expect.objectContaining({ packageName: "@v/pkg-artifact", organizationId: ORG })]);
     });
 
-    it("DEFERS a platform (NULL-org) archive — does not fire (remainder R1)", async () => {
+    it("OWNER RULING: a platform (NULL-org) archive PROCEEDS at platform scope when NO org has it installed", async () => {
       extensionRegistry.register(makeHandler("artifact"));
-      // The default seed is a platform (NULL-org) row; a platform admin resolves it.
+      // The default seed is the SOLE platform (NULL-org) row — no org install to
+      // block. A platform admin resolves it; the archival fires at platform scope.
       await extensionRegistry.archive("artifact", makeRef("@v/pkg-artifact"), makeActor());
+      expect(fired).toEqual([
+        expect.objectContaining({ packageName: "@v/pkg-artifact", organizationId: null }),
+      ]);
+    });
+
+    it("OWNER RULING: a platform (NULL-org) archive REFUSES while an org still has it installed (names the migration list, no fire, no transition)", async () => {
+      extensionRegistry.register(makeHandler("artifact"));
+      // A platform (NULL-org) row a platform admin resolves + a live org-scoped
+      // install that must migrate off first.
+      vi.mocked(readInstalledExtensionsByPackageName).mockImplementation(async (pkg: string) => [
+        {
+          id: "iext_plat",
+          packageName: pkg,
+          ownerLevel: "platform",
+          ownerId: null,
+          organizationId: null,
+          kind: "artifact",
+          status: "active",
+          source: { type: "verdaccio", version: "1.0.0" },
+          requiredInProd: false,
+          dependencies: [],
+          manifestHash: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as never,
+        {
+          id: "iext_orgblock",
+          packageName: pkg,
+          ownerLevel: "org",
+          ownerId: null,
+          organizationId: "org-block-1",
+          kind: "artifact",
+          status: "active",
+          source: { type: "verdaccio", version: "1.0.0" },
+          requiredInProd: false,
+          dependencies: [],
+          manifestHash: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as never,
+      ]);
+      vi.mocked(transitionExtensionLifecycle).mockClear();
+      const err = await extensionRegistry
+        .archive("artifact", makeRef("@v/pkg-artifact"), makeActor())
+        .then(() => null)
+        .catch((e) => e);
+      expect(err).toBeInstanceOf(PlatformArtifactLifecycleOrgInstallsError);
+      expect(err.operation).toBe("archive");
+      expect(err.organizations.map((o: { id: string }) => o.id)).toEqual(["org-block-1"]);
+      // No claim archival fired, and the durable row transition never ran.
       expect(fired).toEqual([]);
+      expect(transitionExtensionLifecycle).not.toHaveBeenCalled();
     });
 
     it("does NOT fire for a non-artifact kind (agent archive)", async () => {
@@ -567,11 +620,13 @@ describe("ExtensionRegistry", () => {
   });
 
   // cinatra#1837 R3 — the dispatcher fires the FAIL-CLOSED artifact claim-
-  // REACTIVATION seam on the ORG-SCOPED restore of a `kind:"artifact"` extension,
-  // BEFORE it commits the `activate` row transition, so a failed reactivation
-  // aborts the restore (the row stays archived, never active with dead claims). It
-  // DEFERS a NULL-org (platform) restore (R1, symmetric with the deferred platform
-  // archive) and never fires for a non-artifact kind.
+  // REACTIVATION seam on the restore of a `kind:"artifact"` extension, BEFORE it
+  // commits the `activate` row transition, so a failed reactivation aborts the
+  // restore (the row stays archived, never active with dead claims). The
+  // ORG-SCOPED path (the shipped R3 substrate) is UNTOUCHED. The PLATFORM
+  // (NULL-org) path is symmetric with the ruled archive (OWNER RULING 2026-07-22,
+  // groganz): it REFUSES while any org still has the extension installed and only
+  // otherwise proceeds at the platform scope. Never fires for a non-artifact kind.
   describe("artifact claim-reactivation firing (R3)", () => {
     const ORG = "org-7";
     const orgAdmin = {
@@ -661,11 +716,61 @@ describe("ExtensionRegistry", () => {
       expect(order).toEqual(["reactivate", "transition"]);
     });
 
-    it("DEFERS a platform (NULL-org) restore — does not fire (R1)", async () => {
+    it("OWNER RULING: a platform (NULL-org) restore PROCEEDS at platform scope when NO org has it installed (symmetric with archive)", async () => {
       extensionRegistry.register(makeHandler("artifact"));
-      seedPlatformArtifactRow("@v/pkg-artifact");
+      seedPlatformArtifactRow("@v/pkg-artifact"); // SOLE platform row — no org install
       await extensionRegistry.restore("artifact", makeRef("@v/pkg-artifact"), makeActor());
+      expect(fired).toEqual([
+        expect.objectContaining({ packageName: "@v/pkg-artifact", organizationId: null }),
+      ]);
+    });
+
+    it("OWNER RULING: a platform (NULL-org) restore REFUSES while an org still has it installed (symmetric refusal, no fire, no transition)", async () => {
+      extensionRegistry.register(makeHandler("artifact"));
+      // The platform row being restored is archived; a live org-scoped install
+      // still exists, so the symmetric restore refusal fires.
+      vi.mocked(readInstalledExtensionsByPackageName).mockImplementation(async (pkg: string) => [
+        {
+          id: "iext_plat",
+          packageName: pkg,
+          ownerLevel: "platform",
+          ownerId: null,
+          organizationId: null,
+          kind: "artifact",
+          status: "archived",
+          source: { type: "verdaccio", version: "1.0.0" },
+          requiredInProd: false,
+          dependencies: [],
+          manifestHash: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as never,
+        {
+          id: "iext_orgblock",
+          packageName: pkg,
+          ownerLevel: "org",
+          ownerId: null,
+          organizationId: "org-block-2",
+          kind: "artifact",
+          status: "active",
+          source: { type: "verdaccio", version: "1.0.0" },
+          requiredInProd: false,
+          dependencies: [],
+          manifestHash: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as never,
+      ]);
+      vi.mocked(transitionExtensionLifecycle).mockClear();
+      const err = await extensionRegistry
+        .restore("artifact", makeRef("@v/pkg-artifact"), makeActor())
+        .then(() => null)
+        .catch((e) => e);
+      expect(err).toBeInstanceOf(PlatformArtifactLifecycleOrgInstallsError);
+      expect(err.operation).toBe("restore");
+      expect(err.organizations.map((o: { id: string }) => o.id)).toEqual(["org-block-2"]);
       expect(fired).toEqual([]);
+      expect(transitionExtensionLifecycle).not.toHaveBeenCalled();
     });
 
     it("does NOT fire for a non-artifact kind (agent restore)", async () => {

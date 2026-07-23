@@ -220,6 +220,15 @@ describe("canonical lifecycle status reachability guard", () => {
         // schema; the code under test is READ-ONLY (it never writes
         // installed_extension — the raw INSERTs are fixture seeding only).
         "src/lib/__tests__/integration/assistant-registry-reader.integration.test.ts",
+        // Platform-artifact enumeration integration test (cinatra#1837 R1, owner
+        // ruling 2026-07-22, groganz): its FIXTURE builds a minimal isolated
+        // per-test schema (installed_extension + extension_dependency_edge) and
+        // seeds platform + org install rows with raw INSERTs so the SHIPPED READER
+        // (readInstalledExtensionsByPackageName) + the pure platform-archive
+        // enumeration resolve against real SQL — same fixture class as the entries
+        // above. The code under test is READ-ONLY (it never writes
+        // installed_extension; the raw INSERTs are fixture seeding only).
+        "src/lib/objects/__tests__/platform-artifact-enumeration-store.integration.test.ts",
       ]);
       const offenders = hits.filter((f) => !allowed.has(f));
       expect(
