@@ -9,6 +9,7 @@ import { requestChatPanel } from "@/lib/chat-shell-bus";
 import {
   ChevronRight,
   MessageSquare,
+  Sparkles,
 } from "lucide-react";
 import { domainIcons } from "@/components/domain-icons";
 import {
@@ -239,6 +240,43 @@ function ChatNavItem() {
   );
 }
 
+// ---------- Assistants nav item ----------
+
+// A single FLAT sidebar entry — "Assistants" — sitting directly below Chat and
+// above Agents (ratified spec design@f1b000be6 `specs/app.html` §IX). It is one
+// nav entry, NOT a group: it introduces no section heading of its own and
+// leaves the Agents entry below it untouched. Selecting it opens the
+// `/assistants` surface (the audience-scoped assistants directory, epic #1873
+// W3), exactly as Chat opens /chat and Agents opens /agents. Standard
+// sidebar-row treatment — a leading icon (§IX renders the Sparkles glyph) + the
+// 13px sans label, with the shared indigo-tint active row supplied by
+// SidebarMenuButton's `isActive`. The `data-conformance-id` /​ `data-action`
+// literals pin the §IX conformance surface (`sidebar-assistants-entry`, whose
+// sole action is `open-assistants -> assistants`) and are asserted by the
+// source-conformance test (../__tests__/sidebar-assistants-conformance.test.ts).
+// This entry is shown to every viewer — there is no signed-out shell, so it
+// carries no audience/registry fan-out and no hiddenNavTitles wiring.
+function AssistantsNavItem() {
+  const pathname = usePathname();
+  const { setOpenMobile } = useSidebar();
+  const isActive = pathname === "/assistants" || pathname.startsWith("/assistants/");
+  return (
+    <SidebarMenuItem data-conformance-id="sidebar-assistants-entry">
+      <SidebarMenuButton asChild isActive={isActive} tooltip="Assistants">
+        <Link
+          href="/assistants"
+          data-action="open-assistants -> assistants"
+          data-testid="sidebar-assistants-link"
+          onClick={() => setOpenMobile(false)}
+        >
+          <Sparkles className="h-4 w-4 shrink-0" />
+          <span>Assistants</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
 // ---------- AppSidebar ----------
 
 export function AppSidebar({
@@ -303,6 +341,10 @@ export function AppSidebar({
           <SidebarGroupLabel>Intelligence</SidebarGroupLabel>
           <SidebarMenu>
             <ChatNavItem />
+            {/* Assistants — one flat entry directly below Chat, above Agents
+                (ratified spec design@f1b000be6 §IX). No group container, no new
+                section heading; opens the /assistants surface on click. */}
+            <AssistantsNavItem />
           </SidebarMenu>
         </SidebarGroup>
         <NavGroup
