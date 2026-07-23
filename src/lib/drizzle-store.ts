@@ -1399,7 +1399,7 @@ END $$` },
     // derivation lifecycle (pending → deriving [LEASED] → done|no_match|
     // no_produces); the lease (lease_token + lease_expires_at, attempts bumped on
     // claim) SERIALIZES the decision across the one-shot job + reconciliation
-    // sweep. TWIN of migrations/core/core__0070 — the two DDLs MUST stay identical.
+    // sweep. TWIN of migrations/core/core__0071 — the two DDLs MUST stay identical.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_output_derivations" (
       run_id text PRIMARY KEY REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,
       org_id text NOT NULL,

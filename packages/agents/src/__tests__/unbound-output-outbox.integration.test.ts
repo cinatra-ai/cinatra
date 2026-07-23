@@ -6,7 +6,7 @@
  * `transitionRunStatus`' `derivationOutbox` branch.
  *
  * Proves, against real DDL + constraints (fresh schema per file from the
- * CANONICAL `buildCreateStoreSchemaQueries` bootstrap — the migration-0070 twin):
+ * CANONICAL `buildCreateStoreSchemaQueries` bootstrap — the migration-0071 twin):
  *   1. a WayFlow terminal-success transition (running→completed) carrying a
  *      derivationOutbox captures EXACTLY ONE `pending` outbox row atomically with
  *      the status flip + stepResults snapshot (content / content_hash / org /

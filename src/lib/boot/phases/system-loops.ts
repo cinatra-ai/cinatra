@@ -324,6 +324,24 @@ export function systemLoopPhases(): BootPhase[] {
         // expired `deriving` leases and self-reschedules at ~5-min cadence via
         // moveToDelayed. It is the backstop for a lost/crashed one-shot derive
         // enqueue.
+        //
+        // The derivation IMPLEMENTATION is registered here (boot-only graph)
+        // through the runner slot rather than imported into
+        // background-jobs-registry — same route-graph-ratchet posture as the
+        // GC reaper / auto-update runners: the registry sits in the LOCKED
+        // dev-perf routes' graph, so the derivation core must not be reachable
+        // (even dynamically) from it. Register BEFORE seeding so neither the loop
+        // NOR the one-shot derive handler can observe an empty slot on a healthy
+        // boot.
+        const { registerUnboundOutputDerivationRunner } = await import(
+          "@/lib/background-jobs-registry"
+        );
+        const { deriveUnboundRunOutput, sweepPendingUnboundDerivations } =
+          await import("@/lib/artifacts/unbound-output-derivation");
+        registerUnboundOutputDerivationRunner({
+          derive: (input) => deriveUnboundRunOutput(input),
+          sweep: () => sweepPendingUnboundDerivations(),
+        });
         const {
           enqueueBackgroundJob,
           BACKGROUND_JOB_NAMES,

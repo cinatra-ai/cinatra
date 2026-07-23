@@ -1094,12 +1094,33 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // A failed enqueue never destabilizes the completed run — the durable outbox
   // row + the reconciliation sweep guarantee eventual derivation. Only when a row
   // was actually captured (non-empty output).
+  //
+  // Enqueued INLINE through the background-jobs modules (which this locked
+  // dev-perf route already reaches) rather than via a dedicated leaf module, so
+  // the WayFlow terminal-success hot path adds no first-party graph pressure to
+  // the ratchet-tracked routes (route-graph ratchet). The derivation CORE stays
+  // out of this path entirely — it is reached only by the boot-registered worker
+  // slot (see background-jobs-registry's UnboundOutputDerivationRunner slot).
   if (derivationOutbox) {
     try {
-      const { enqueueUnboundOutputDerive } = await import(
-        "@/lib/artifacts/unbound-output-enqueue"
+      const { enqueueBackgroundJob } = await import("@/lib/background-jobs");
+      const { BACKGROUND_JOB_NAMES } = await import("@/lib/background-jobs-names");
+      await enqueueBackgroundJob(
+        BACKGROUND_JOB_NAMES.UNBOUND_OUTPUT_DERIVE,
+        { runId, orgId: run.orgId },
+        {
+          // 3 attempts (1 + 2 retries), exponential backoff — a transient DB/LLM
+          // blip in the one-shot derive gets a bounded retry; the sweep covers
+          // anything beyond. Colon-free jobId de-dupes a crash-restart re-enqueue
+          // (the row lease makes a double-drive safe anyway; this avoids churn).
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5_000 },
+          jobId: `unbound-output-derive__${runId}`,
+          // The derivation worker anchors its own org-scoped System actor; it
+          // must not inherit the run principal's frame.
+          inheritActorContext: false,
+        },
       );
-      await enqueueUnboundOutputDerive({ runId, orgId: run.orgId });
     } catch (e) {
       console.warn(
         `[unbound-output] derive enqueue threw for run=${runId} (outbox persisted; sweep backstops):`,

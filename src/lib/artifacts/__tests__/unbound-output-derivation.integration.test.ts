@@ -7,7 +7,7 @@
  * ledger), the real claim registry, real object registry, real disk.
  *
  * Proves, against real DDL + constraints (fresh schema per file from the
- * CANONICAL `buildCreateStoreSchemaQueries` bootstrap — the migration-0070 twin,
+ * CANONICAL `buildCreateStoreSchemaQueries` bootstrap — the migration-0071 twin,
  * which carries the widened `artifact_materializations_path_check` admitting
  * `derived_output`):
  *   1. an agent with a declared produce and no binding gets its output

@@ -1,4 +1,4 @@
-// core__0070 — unbound agent-output derivation outbox + `derived_output`
+// core__0071 — unbound agent-output derivation outbox + `derived_output`
 // materialization-ledger path (cinatra#1893, epic #1883 slice A5).
 //
 // Two schema changes backing the produces-scoped capture of an unbound agent
@@ -24,11 +24,12 @@
 //      `no_match`+artifact. A reconciliation sweep scans `(status,created_at)`
 //      for `pending` rows and `deriving` rows whose lease expired.
 //
-// SEQ RENUMBERED 0069 -> 0070 (STAGE-2 CI). core__0069 (assistant-thread-title-
-// slug) landed on origin/main after this slice was cut, so the provisional 0069
-// collided; this migration takes the next genuinely-free sequence, core__0070.
-// A rename-only change — zero SQL diff. migrations/** is HIGH-RISK: owner
-// approval is required and the lane never merges.
+// SEQ RENUMBERED -> 0071 (merge-train ordering). core__0069 (assistant-thread-
+// title-slug) shipped on origin/main and a sibling migration (cinatra#1986)
+// merging ahead of this one in the train claims core__0070, so this migration
+// takes the next genuinely-free sequence, core__0071 (strictly greater than the
+// max shipped seq). A rename-only change — zero SQL diff. migrations/** is
+// HIGH-RISK: owner approval is required and the lane never merges.
 //
 // USER-LAND-AFFECTING (fragment destructive:true) BUT IDEMPOTENT + REVERSIBLE +
 // NON-DATA-DESTROYING. It ALTERs a DEPLOYED table's CHECK
@@ -111,7 +112,7 @@ export function down(pgm) {
     DO $amchk_down$
     BEGIN
       IF EXISTS (SELECT 1 FROM artifact_materializations WHERE path = 'derived_output') THEN
-        RAISE NOTICE 'core__0070 down(): derived_output ledger rows exist; leaving artifact_materializations_path_check widened. Archive/migrate those rows manually to narrow it.';
+        RAISE NOTICE 'core__0071 down(): derived_output ledger rows exist; leaving artifact_materializations_path_check widened. Archive/migrate those rows manually to narrow it.';
       ELSE
         ALTER TABLE artifact_materializations DROP CONSTRAINT IF EXISTS artifact_materializations_path_check;
         ALTER TABLE artifact_materializations
