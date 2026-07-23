@@ -35,6 +35,15 @@ const REQUIRED_BOOT_DEPENDENCY_PATHS = [
   "src/lib/wordpress-mcp-connection.ts",
   "src/lib/wp-drupal-contract.ts",
   "packages/llm/src/scripted-test-provider.ts",
+  // S5 iframe cutover (cinatra#1221): the WP/Drupal widget frames the
+  // Cinatra-served /embed/assistant page, so the suite now boots + drives that
+  // surface. A regression in the embed page, the frame-ancestors resolver, the
+  // assistant chat route, or the route-guard that sets the frame-ancestors CSP
+  // breaks the suite — these are real boot dependencies and MUST trigger run_uat.
+  "src/app/embed/assistant/**",
+  "src/lib/embed/**",
+  "src/app/api/assistants/chat/**",
+  "src/lib/auth-route-guard.ts",
 ];
 
 /**

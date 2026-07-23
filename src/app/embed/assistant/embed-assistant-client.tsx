@@ -262,7 +262,13 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   );
 
   return (
-    <div ref={containerRef} data-embed-assistant data-phase={phase.kind}>
+    // `data-turn-status` mirrors the reduced conversation status (idle → running
+    // → finished/error) so an out-of-process observer (the wp-drupal-uat E2E) can
+    // fence deterministically on a CLIENT-CONSUMED `RUN_FINISHED` (status ===
+    // "finished") rather than a mid-stream signal like a completed tool chip. It
+    // is a passive test-observability attribute only — it drives no behaviour and
+    // is not part of the render-parity content contract (cinatra#1998 (c)).
+    <div ref={containerRef} data-embed-assistant data-phase={phase.kind} data-turn-status={convo.status}>
       {phase.kind === "waiting" && (
         <div className="p-4 text-sm text-muted-foreground" data-embed-state="waiting">
           Waiting for the host…

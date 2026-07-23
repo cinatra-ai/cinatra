@@ -100,6 +100,17 @@ jobs:
               - 'src/lib/external-mcp-registry.ts'
               - 'src/lib/dev-auto-setup.ts'
               - 'packages/llm/src/scripted-test-provider.ts'
+              # S5 iframe cutover (cinatra#1221): the WP/Drupal widget no longer
+              # renders the turn — it frames the Cinatra-served /embed/assistant
+              # page, which the suite drives cross-origin. A regression in the
+              # embed page, the frame-ancestors resolver, the assistant chat
+              # route, or the route-guard that sets the frame-ancestors CSP would
+              # break the suite yet previously skip this gate. These are real
+              # boot dependencies; the coverage test keeps them in this list.
+              - 'src/app/embed/assistant/**'
+              - 'src/lib/embed/**'
+              - 'src/app/api/assistants/chat/**'
+              - 'src/lib/auth-route-guard.ts'
               - 'tests/e2e/wp-drupal-uat/**'
               - 'tests/e2e/config/wp-drupal-uat.config.ts'
               - 'tests/e2e/config/base.ts'
