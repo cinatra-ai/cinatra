@@ -160,6 +160,7 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
     importExternalMcpApiKeyConnection,
     revokeExternalMcpApiKeyConnection,
     ExternalMcpServerWriteConflictError,
+    ExternalMcpServerManagedEndpointError,
   } = await import("@/lib/external-mcp-registry");
 
   // A global write is a platform-wide trust mutation → PLATFORM ADMIN required.
@@ -318,6 +319,11 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
       throw new WriteActionError(
         "This MCP server changed while saving — re-check its scope and try again.",
       );
+    }
+    if (err instanceof ExternalMcpServerManagedEndpointError) {
+      // Managed/BYO containment (cinatra#2015 S0): the endpoint belongs to a
+      // connected site's connector instance.
+      throw new WriteActionError(err.message);
     }
     throw err;
   }
