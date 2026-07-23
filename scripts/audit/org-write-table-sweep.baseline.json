@@ -1,0 +1,21 @@
+{
+  "src/app/api/wizard/[resourceType]/[resourceId]/config/route.ts": 2,
+  "src/app/artifacts/merge-proposals/[proposalId]/actions.ts": 1,
+  "src/lib/authz/enforce-resource-access.ts": 1,
+  "src/lib/authz/policies.ts": 1,
+  "src/lib/background-jobs-registry.ts": 1,
+  "src/lib/dashboards/portlet-actions.ts": 1,
+  "src/lib/resource-project-move.ts": 4,
+  "src/lib/wizard-staging-store.ts": 1,
+  "packages/agents/src/mcp/drafts-persist-handler.ts": 2,
+  "packages/agents/src/mcp/handlers.ts": 1,
+  "packages/agents/src/review-task-actions.ts": 1,
+  "packages/agents/src/store.ts": 3,
+  "packages/dashboards/src/twin-writer-seam.ts": 1,
+  "packages/mcp-server/src/delegated-chat-tool-policy.ts": 1,
+  "packages/mcp-server/src/index.tsx": 1,
+  "packages/objects/src/graphiti-projector.ts": 1,
+  "packages/objects/src/mcp/handlers.ts": 6,
+  "packages/objects/src/mcp/schemas.ts": 1,
+  "packages/sdk-ui/src/widget.tsx": 1
+}
