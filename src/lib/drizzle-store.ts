@@ -894,7 +894,7 @@ $body$` },
     ...assistantThreadSchemaQueries(schemaName), // structured assistant threads + turns (cinatra#1037 P2a), additive
     ...assistantHandleSchemaQueries(schemaName), // assistant handle registry (cinatra#1037 P1.2/P5.1) + origin/package_name (#1874 W1), additive — mirrors core__0046/0065
     ...assistantRegistrySchemaQueries(schemaName), // assistant audience + tag-alias registry (cinatra#1874 W1), additive — mirrors core__0065
-    ...assistantPauseSchemaQueries(schemaName), // installation-wide assistant pause, principal-keyed (cinatra#1880 W5), additive — mirrors core__0070
+    ...assistantPauseSchemaQueries(schemaName), // installation-wide assistant pause, principal-keyed (cinatra#1880 W5), additive — mirrors core__0072
     // usage_events table for @cinatra-ai/metric-cost-api
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."usage_events" (
       id text PRIMARY KEY,

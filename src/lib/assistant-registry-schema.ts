@@ -119,7 +119,7 @@ export function assistantRegistrySchemaQueries(schemaName: string): { text: stri
 //     assistant, so pause is enforced fail-closed across every W2 enforcement
 //     surface through the ONE audience truth. The builtin Cinatra principal is
 //     never paused (the reader unions it in unconditionally; the writer + UI
-//     refuse it). ONE NET-NEW table (additive); the twin migration `core__0070`
+//     refuse it). ONE NET-NEW table (additive); the twin migration `core__0072`
 //     carries the SAME create onto the operator upgrade path (fresh-install AND
 //     upgrade produce identical schema). Fail-CLOSED permission surface: a
 //     paused assistant is unaddressable; an empty table means "nothing paused"
