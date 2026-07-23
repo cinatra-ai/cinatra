@@ -24,6 +24,13 @@ export default defineConfig({
       // cubes always pass the gate, which is what the MCP-path tests exercise;
       // cross-org runtime denial is covered host-side with a mocked read-model.
       { find: "@/lib/dashboards/runtime-cube-serve-host", replacement: runtimeCubeServeHostStub },
+      // cinatra#1894 B1b: the host twin writer (imported by the substrate
+      // kill-test under THIS config) resolves the fail-closed seam by its package
+      // subpath; map it to the local module. Must precede the generic `@/` rule.
+      {
+        find: "@cinatra-ai/dashboards/twin-writer-seam",
+        replacement: path.join(__dirname, "src/twin-writer-seam.ts"),
+      },
       { find: /^@\/(.+)$/, replacement: path.join(root, "src") + "/$1" },
       // Vitest can't resolve workspace package subpath imports without explicit
       // aliases, so mirror the tsconfig paths used by the host app for the
@@ -64,6 +71,10 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Suite-wide explicit test-twin registration (cinatra#1894 B1b, delta D4):
+    // the fail-closed twin seam requires every writer-driving test to register a
+    // twin. This registers the NOOP twin per-test without weakening the seam.
+    setupFiles: [path.join(__dirname, "tests/setup-twin-writer.ts")],
     // `.tsx` covers the React component tests (per-file `@vitest-environment
     // jsdom` pragmas opt those into the DOM environment).
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],

@@ -93,6 +93,14 @@ export default defineConfig({
         find: "@cinatra-ai/artifacts",
         replacement: path.join(__dirname, "packages/artifacts/src/index.ts"),
       },
+      // cinatra#1894 B1b: the host dashboards-artifact twin writer imports the
+      // dashboards fail-closed seam by this leaf subpath. tsconfig has the path
+      // alias; the root vitest run needs the mirrored entry so host-side twin
+      // tests (src/lib/dashboards/) resolve it.
+      {
+        find: "@cinatra-ai/dashboards/twin-writer-seam",
+        replacement: path.join(__dirname, "packages/dashboards/src/twin-writer-seam.ts"),
+      },
       // `src/app/projects/[projectId]/permissions/actions.ts` imports
       // `handlers` from `@cinatra-ai/projects` to call the `project_access_*`
       // MCP handlers in-process through the server-action wrapper. tsconfig

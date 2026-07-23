@@ -36,7 +36,9 @@ vi.mock("../store/db", () => {
       return Object.assign(p, { returning: async () => [v] });
     },
   });
-  const tx = { insert };
+  // `execute` backs the writer's advisory-lock statement (cinatra#1894 B1b): the
+  // twin lock is a DB-concurrency no-op with no observable effect in this mock.
+  const tx = { insert, execute: async () => ({ rows: [] }) };
   return {
     auditEvents: {},
     dashboardRevisions: {},

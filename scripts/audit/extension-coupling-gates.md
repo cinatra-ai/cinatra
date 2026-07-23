@@ -148,9 +148,11 @@ Permanently exempt are ONLY:
    are reported separately from counted ones. IDs may contain ONLY the
    boundary alphabet `[A-Za-z0-9_.:/@-]` (`DATA_CONTRACT_ID_ALPHABET_RE`) —
    enforced as a structural defect — so the exact-ID masking can never
-   prefix-mask a longer ID past a non-alphabet character. **EMPTY at the
-   zero-floor end-state** — it stays empty unless an owner ruling mints an
-   entry.
+   prefix-mask a longer ID past a non-alphabet character. **Holds exactly ONE
+   owner-ruled entry** at the zero-floor end-state —
+   `@cinatra-ai/dashboard-artifact:dashboard` (the `DASHBOARD_OBJECT_TYPE`
+   persisted object-type key; owner ruling 2026-07-22, PR #1971) — and grows
+   only when an owner ruling mints another.
 3. Test files (`*.test.*`, `*.spec.*`, `__tests__/`, `__mocks__/`, `tests/`)
    and the `extensions/` tree itself (an extension naming itself is fine).
 
@@ -215,10 +217,13 @@ stateless `identity-coupling-gate.mjs`:
    re-declaration (precedent: `src/lib/llm-toolbox-providers.ts` and
    `src/lib/email-send-providers.ts` both import the SDK constant).
 
-The `DATA_CONTRACT_ID_ALLOWLIST` stays EMPTY: it is the mechanism for a frozen
-contract id that embeds a REAL extension package name; the identity surfaces
-above embed virtual scopes / object-type namespaces (not real extension dirs),
-so they are neither counted by the lexeme gates nor allowlist candidates.
+The `DATA_CONTRACT_ID_ALLOWLIST` holds exactly ONE owner-ruled entry
+(`@cinatra-ai/dashboard-artifact:dashboard`, the `DASHBOARD_OBJECT_TYPE`
+persisted key — owner ruling 2026-07-22, PR #1971): it is
+the mechanism for a frozen contract id that embeds a REAL extension package
+name. The identity surfaces above embed virtual scopes / object-type namespaces
+(not real extension dirs), so they are neither counted by the lexeme gates nor
+allowlist candidates.
 
 Known, documented residual lexer limitation: JSX TEXT is not modeled by
 `lib/strip-comments.mjs` (that needs a JSX-aware parser), so a named-extension

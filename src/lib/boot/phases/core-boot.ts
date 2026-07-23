@@ -62,6 +62,30 @@ export function coreBootPhases(): BootPhase[] {
       },
     },
     {
+      name: "dashboard-artifact-twin-writer-wiring",
+      policy: "fatal",
+      run: async () => {
+        // Register the HOST dashboards-artifact twin writer into the fail-closed
+        // seam (cinatra#1894 B1b), alongside the extension-dashboard lifecycle
+        // wiring. The module self-registers on import (an in-memory registration —
+        // no DB touched at import time). The startup ASSERTION then fails boot if
+        // registration did not take, so a dropped wiring crashes LOUD at boot
+        // rather than silently fail-closing every dashboards mutation at runtime.
+        // `fatal` is the whole point of the assertion; the import is pure, so this
+        // only aborts boot on a genuine registration regression.
+        await import("@/lib/dashboards/dashboard-artifact-twin-writer");
+        const { isDashboardArtifactTwinWriterRegistered } = await import(
+          "@cinatra-ai/dashboards/twin-writer-seam"
+        );
+        if (!isDashboardArtifactTwinWriterRegistered()) {
+          throw new Error(
+            "dashboards-artifact twin writer failed to register at boot — every " +
+              "dashboards mutation would fail closed (cinatra#1894 B1b).",
+          );
+        }
+      },
+    },
+    {
       name: "system-artifact-renderer-registrar-wiring",
       policy: "retryable",
       run: async () => {
