@@ -28,6 +28,11 @@ test.describe("Drupal assistant fallback (bundle cannot load → error, not sile
     // the assertions PROVE the abort fired — the fallback chrome is server-rendered
     // and visible BEFORE the bundle loads, so a missed glob would otherwise let
     // this test pass spuriously.
+    // The bundle is a LOCAL Drupal library (`js/cinatra-widget.js`); global-setup
+    // disables Drupal JS aggregation for the UAT (cinatra#2031) so the raw per-file
+    // asset is served and this filename glob matches deterministically — with
+    // aggregation ON, core folds it into `js_<hash>.js` and the abort never fires
+    // (the CI-only widgetBundleAborts == 0 anomaly).
     let widgetBundleAborts = 0;
     await page.route(/cinatra-widget\.js(\?|$)/, (route) => {
       widgetBundleAborts += 1;

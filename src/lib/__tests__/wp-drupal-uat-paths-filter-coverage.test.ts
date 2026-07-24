@@ -44,6 +44,43 @@ const REQUIRED_BOOT_DEPENDENCY_PATHS = [
   "src/lib/embed/**",
   "src/app/api/assistants/chat/**",
   "src/lib/auth-route-guard.ts",
+  // cinatra#2036 (surfaced by #2031): the assistant/widget/boot MOUNT + TURN
+  // closure the suite's scenarios 4/5/6 actually execute. The #2031
+  // out-of-audience regression lived in the audience closure + the closed
+  // handle→built-in binding; the whole PR family behind it (#1915 registry,
+  // #1935 chat/boot, #1991 widget) changed ONLY paths like these and fast-passed
+  // the PR gate. Keep this set equal to the workflow's `relevant` additions.
+  // Assistant registry + audience closure (scenarios 4/5 assistant visibility):
+  "src/lib/assistant-registry-reader.ts",
+  "src/lib/assistant-registry-schema.ts",
+  "src/lib/assistant-audience-closure.ts",
+  "src/lib/assistant-selector-audience.ts",
+  "src/lib/assistant-widget-handles.ts",
+  // Assistant boot-seed closure (the WP/Drupal built-in siblings the widget binds
+  // to are minted at boot; a regression here means the assistant never exists):
+  "src/lib/assistant-agent-registration.ts",
+  "src/lib/assistant-users.ts",
+  "src/lib/assistant-config.ts",
+  "packages/agents/src/builtin-assistant-template.ts",
+  // The assistant turn runtime + the chat runner/dispatch it runs through:
+  "src/lib/assistant-runtime/**",
+  "src/app/api/chat/**",
+  "packages/chat/src/**",
+  // Widget auth/broker — the dual-token sequence gating the widget turn + mints:
+  "src/lib/widget-broker-route.ts",
+  "src/lib/widget-token-broker.ts",
+  "src/lib/widget-user-auth.ts",
+  "src/lib/widget-stream-agents.server.ts",
+  "src/lib/widget-stream-auth.ts",
+  "src/lib/widget-auth-audit.ts",
+  "src/lib/widget-mcp-actor-token.ts",
+  "src/lib/widget-chat-resume-token.ts",
+  "src/app/api/widget-auth/**",
+  // The surviving cit_ transport-token mint the suite hits before every widget
+  // turn (POST /api/agents/{slug}/token; global-setup + scenarios 4/5).
+  "src/app/api/agents/*/token/**",
+  // Boot orchestration/phases the mount + assistant seeding depend on:
+  "src/lib/boot/**",
 ];
 
 /**

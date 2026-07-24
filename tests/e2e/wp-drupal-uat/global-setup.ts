@@ -90,6 +90,23 @@ function seedWordPress(): UatSeed["wordpress"] {
 function seedDrupal(): UatSeed["drupal"] {
   const root = process.env.UAT_DRUPAL_ROOT ?? "/drupal/web";
   const drush = (args: string[]) => dockerExec(DRUPAL_CONTAINER, ["drush", `--root=${root}`, ...args]);
+
+  // Disable Drupal JS/CSS AGGREGATION for the UAT (cinatra#2031). The Drupal
+  // module attaches the widget bundle as a LOCAL library (`cinatra/bundle` →
+  // `js/cinatra-widget.js`), so with aggregation ON — Drupal's install default in
+  // a production-like container — core folds it into a hashed aggregate served
+  // from `/sites/*/files/js/js_<hash>.js`, whose URL no longer contains
+  // `cinatra-widget.js`. The drupal-fallback positive control aborts the bundle by
+  // matching `/cinatra-widget\.js/`; under aggregation that glob never matches, so
+  // the abort never fires (widgetBundleAborts == 0) even though the fallback
+  // feature is correct — the exact CI-only anomaly the local (aggregation-OFF dev)
+  // Drupal never reproduced. Serving the raw per-file asset makes the interception
+  // deterministic across environments. Idempotent (config:set) + a cache rebuild so
+  // no previously-aggregated markup/URL is served to the test.
+  drush(["config:set", "system.performance", "js.preprocess", "0", "-y"]);
+  drush(["config:set", "system.performance", "css.preprocess", "0", "-y"]);
+  drush(["cache:rebuild"]);
+
   // Idempotent: delete prior UAT node(s) by title, then create one via the
   // entity API (drush ev returns the new nid).
   const php = `

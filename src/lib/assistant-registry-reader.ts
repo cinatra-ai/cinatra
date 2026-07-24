@@ -493,6 +493,48 @@ export async function readAssistantRegistryForActor(
 }
 
 // ---------------------------------------------------------------------------
+// First-party BUILT-IN recognition by reserved package (cinatra#2031).
+// ---------------------------------------------------------------------------
+
+/**
+ * Is `assistantUserId` the FIRST-PARTY boot-seeded BUILT-IN assistant registered
+ * under `builtinPackageName`? The three built-in assistants (@cinatra, WordPress,
+ * WordPress' Drupal sibling — cinatra#1823) are minted by the boot seeder
+ * (`registerAssistantAgent`) with their OWN 1:1-linked `agent_templates` row
+ * carrying the RESERVED (private, first-party) package name; they have NO
+ * `installed_extension` row and NO `assistant_audience` grants, so
+ * {@link readAssistantRegistryForActor} — which lists installed-extension
+ * assistants + the single @cinatra builtin — never returns the WordPress/Drupal
+ * siblings. This is the narrow recognition primitive the widget audience closure
+ * uses to admit a bound built-in without widening any audience globally.
+ *
+ * True IFF an `agent_kind='assistant'` template row exists linking THIS principal
+ * to THIS reserved package. The reserved package names are private first-party
+ * constants an installed extension can never claim, so a match is proof of
+ * first-party built-in provenance. Fail-closed: an empty id/package returns
+ * false; no match returns false (the caller then applies the audience gate).
+ */
+export async function isBuiltinAssistantByPackage(
+  assistantUserId: string,
+  builtinPackageName: string,
+  db: ReaderDb = betterAuthDb,
+): Promise<boolean> {
+  if (!assistantUserId || !builtinPackageName) return false;
+  const rows = await db
+    .select({ id: agentTemplates.id })
+    .from(agentTemplates)
+    .where(
+      and(
+        eq(agentTemplates.assistantUserId, assistantUserId),
+        eq(agentTemplates.packageName, builtinPackageName),
+        eq(agentTemplates.agentKind, "assistant"),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+// ---------------------------------------------------------------------------
 // Bare-name fallback resolution (EXCLUDES origin='extension').
 // ---------------------------------------------------------------------------
 

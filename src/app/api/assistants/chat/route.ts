@@ -10,6 +10,7 @@ import {
 import { runAssistantTurn } from "@/lib/assistant-runtime/runtime";
 import { resolveAssistantRuntimeConfigByPrincipal } from "@/lib/assistant-runtime/resolve-runtime-config";
 import { resolveAssistantHandles } from "@/lib/better-auth-db";
+import { isBuiltinAssistantByPackage } from "@/lib/assistant-registry-reader";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import type { WidgetPrincipal } from "@/lib/assistant-runtime/widget-principal";
 import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
@@ -382,14 +383,30 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     return Response.json({ error: "Assistant not found" }, { status: 404, headers: corsHeaders });
   }
 
-  // AC#3 audience closure (cinatra#1875 W2). Site auth is NOT the installation's
-  // audience: the dual-token sequence proved the end user is a legit member of the
-  // bound org for this SITE, but the verified end user must ALSO be IN the
-  // assistant installation's audience. The widget principal is floored to `member`
-  // and carries its own cwu_-claim org, so its audience closes through the SAME
-  // registry-reader decision the browser selector uses (#1848). An out-of-audience
-  // end user 404-HIDES (opaque, real reason server-side only) and starts NO run.
-  if (!(await isSelectedAssistantVisible(assistantUserId, widgetSelectorCaller(widgetPrincipal)))) {
+  // AC#3 audience closure (cinatra#1875 W2) + the FIRST-PARTY BUILT-IN exception
+  // (cinatra#2031). Site auth is NOT an installed assistant's audience: the
+  // dual-token sequence proved the end user is a legit member of the bound org for
+  // this SITE, but for an INSTALLED assistant the verified end user must ALSO be IN
+  // its audience — an out-of-audience end user 404-HIDES.
+  //
+  // The bound widget assistant here, however, is a boot-seeded FIRST-PARTY BUILT-IN
+  // (WordPress / Drupal siblings of the @cinatra builtin, cinatra#1823): it carries
+  // NO `assistant_audience` rows and has NO `installed_extension` row, so the W1
+  // registry reader (installed-extension assistants + the single @cinatra builtin)
+  // never lists it — the audience gate alone would 404 EVERY widget turn. The
+  // CLOSED binding names the built-in's reserved package; recognizing the resolved
+  // principal AS that first-party built-in admits it (it is the platform's own
+  // always-available widget assistant), fail-closed and scoped to the EXACT
+  // reserved package — never a global audience widen, never an installed assistant.
+  // An installed (non-built-in) assistant still closes through the audience gate.
+  const isBoundBuiltinAssistant = await isBuiltinAssistantByPackage(
+    assistantUserId,
+    binding.builtinPackageName,
+  );
+  if (
+    !isBoundBuiltinAssistant &&
+    !(await isSelectedAssistantVisible(assistantUserId, widgetSelectorCaller(widgetPrincipal)))
+  ) {
     emitWidgetAuthAudit("assistant_chat_widget_out_of_audience", {
       actor: widgetPrincipal.userId,
       orgId: widgetPrincipal.orgId,
