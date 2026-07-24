@@ -16,7 +16,7 @@ import "server-only";
  * Every mutation RE-AUTHORIZES here (the render gate cannot protect a later
  * server-action invocation), fail-closed.
  */
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { formatDistanceToNow } from "date-fns";
 
 import type { ActorContext } from "@/lib/authz/actor-context";
@@ -75,13 +75,52 @@ function homeDescriptorOf(row: ScopeDashboardRow): HomeDescriptor {
 }
 
 /**
+ * Build a Drizzle SQL fragment for a Postgres `ARRAY[...]` literal of text
+ * values, one bind parameter per element.
+ *
+ * Drizzle's `sql` tag spreads a JS array `${arr}` as a tuple of positional
+ * parameters (`($1, $2, ...)`), NOT as a single array bind. Inside `ANY(...)`
+ * Postgres then parses that tuple as a row-expression and rejects it at runtime
+ * (`malformed array literal` / `42809 op ANY/ALL (array) requires array on right
+ * side`), and a trailing `::text[]` cast does NOT save you — a record cannot be
+ * cast to an array. This helper emits `ARRAY[$1, $2, ..., $N]` — a real Postgres
+ * array on the RHS, no injection surface. Callers MUST guard on a non-empty set
+ * (`ARRAY[]` is ambiguous without an element type). Mirrors the converged idiom
+ * in `packages/skills/src/skill-paths.ts` and `packages/agents/src/store.ts`.
+ */
+function buildTextArraySql(ids: readonly string[]): SQL {
+  return sql`ARRAY[${sql.join(
+    ids.map((id) => sql`${id}`),
+    sql`, `,
+  )}]`;
+}
+
+/** The better-auth `public."team"` name query — the exact SQL sent to
+ *  node-postgres, exported as a test seam (see
+ *  scope-entity-labels-any-binding.test.ts). The ids MUST be non-empty
+ *  (buildTextArraySql invariant). */
+export function _teamNamesQuery(ids: readonly string[]): SQL {
+  return sql`SELECT id, name FROM public."team" WHERE id = ANY(${buildTextArraySql(ids)})`;
+}
+
+/** The better-auth `public."organization"` name query — the exact SQL sent to
+ *  node-postgres, exported as a test seam. The ids MUST be non-empty. */
+export function _orgNamesQuery(ids: readonly string[]): SQL {
+  return sql`SELECT id, name FROM public."organization" WHERE id = ANY(${buildTextArraySql(ids)})`;
+}
+
+/**
  * Batch-resolve entity-named labels ("Team: Growth", "Organization: Acme Corp")
  * for a set of (kind, id) homes. Team + organization names come from the
  * better-auth tables; a project degrades to the bare "Project" prefix when its
  * name is not resolved here (documented; the tenant fence still holds). A missing
  * name falls back to the tier prefix.
+ *
+ * Exported so the REAL node-postgres betterAuthDb path is covered by an
+ * integration test (resolve-entity-labels.integration.test.ts) — the unit
+ * conformance + app-db migration proofs do not exercise betterAuthDb.
  */
-async function resolveEntityLabels(
+export async function resolveEntityLabels(
   homes: readonly HomeDescriptor[],
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>();
@@ -94,15 +133,15 @@ async function resolveEntityLabels(
   }
   const nameByKey = new Map<string, string>();
   if (teamIds.size > 0) {
-    const rows = await betterAuthDb.execute<{ id: string; name: string }>(sql`
-      SELECT id, name FROM public."team" WHERE id = ANY(${[...teamIds]})
-    `);
+    const rows = await betterAuthDb.execute<{ id: string; name: string }>(
+      _teamNamesQuery([...teamIds]),
+    );
     for (const r of rows.rows ?? []) nameByKey.set(`team:${r.id}`, r.name);
   }
   if (orgIds.size > 0) {
-    const rows = await betterAuthDb.execute<{ id: string; name: string }>(sql`
-      SELECT id, name FROM public."organization" WHERE id = ANY(${[...orgIds]})
-    `);
+    const rows = await betterAuthDb.execute<{ id: string; name: string }>(
+      _orgNamesQuery([...orgIds]),
+    );
     for (const r of rows.rows ?? [])
       nameByKey.set(`organization:${r.id}`, r.name);
   }

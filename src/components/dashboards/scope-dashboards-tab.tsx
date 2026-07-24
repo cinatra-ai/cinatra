@@ -71,8 +71,10 @@ export function ScopeDashboardsTab({
       className="flex flex-col gap-3"
     >
       {/* Header — title + subtitle + the manager-only Add affordance (§IX.2). On
-          a narrow viewport the Add drops beneath the title (flex-wrap). */}
-      <div className="flex flex-wrap items-center gap-2.5">
+          a narrow viewport the header STACKS (flex-col) so the Add affordance
+          drops beneath the title/subtitle (spec §X responsive); at ≥sm it is an
+          inline row with Add pushed to the right. */}
+      <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
         <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-extrabold tracking-tight text-foreground">
             Dashboards

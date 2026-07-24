@@ -11,8 +11,11 @@ import "server-only";
 import { getScopeDashboardsTabData } from "@/lib/dashboards/scope-dashboards-service";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { ListingScope } from "@cinatra-ai/dashboards/entity-links";
-import { ScopeDashboardsTab } from "./scope-dashboards-tab";
-import type { ScopeDashboardsDataSource } from "./scope-dashboards-contract";
+import { ScopeDashboardsTab, ScopeDashboardsTabError } from "./scope-dashboards-tab";
+import type {
+  ScopeDashboardsDataSource,
+  ScopeDashboardsTabData,
+} from "./scope-dashboards-contract";
 import {
   scopeAddListingAction,
   scopeListCandidatesAction,
@@ -30,7 +33,21 @@ export async function ScopeDashboardsSection({
   scope: ListingScope;
   scopeLabel: string;
 }) {
-  const data = await getScopeDashboardsTabData({ actor, scope, scopeLabel });
+  // Contain a service failure in the DESIGNED error frame (§IX/§X data-state
+  // "error") instead of bubbling an unhandled Next 500 up through the route: the
+  // tab's own read (Home/Listed rows, the entity-name labels) can fail on a
+  // transient store error, and the surface must degrade to "Couldn't load this
+  // scope's dashboards", not a blank 500.
+  let data: ScopeDashboardsTabData;
+  try {
+    data = await getScopeDashboardsTabData({ actor, scope, scopeLabel });
+  } catch (err) {
+    console.error(
+      `[scope-dashboards] failed to load ${scope.kind} scope ${scope.scopeId}:`,
+      err,
+    );
+    return <ScopeDashboardsTabError />;
+  }
   const scopeArg: ScopeActionArg = {
     kind: scope.kind,
     scopeId: scope.scopeId,

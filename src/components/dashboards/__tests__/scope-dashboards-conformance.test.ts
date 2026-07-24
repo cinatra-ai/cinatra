@@ -92,6 +92,21 @@ describe("§IX conformance id: scope-dashboards-tab (the scope's Dashboards tab)
     expect(TAB).not.toMatch(/pickArtifactRenderer/);
   });
 
+  it("responsive (§X): the header STACKS on a narrow viewport so Add drops beneath the title, and is an inline row at ≥sm (render → spec)", () => {
+    // §X: "its header Add dashboard affordance drops beneath the title". The
+    // header must be a column at narrow width (Add beneath title/subtitle) and a
+    // row only at ≥sm — NOT a bare `flex flex-wrap` (which keeps Add inline-right
+    // because the flex-1 title shrinks, never wrapping — the walk's finding).
+    const header = TAB.match(/<div className="flex[^"]*">\s*<div className="min-w-0 flex-1">/);
+    expect(header, "header container not found").not.toBeNull();
+    const headerClasses = header![0];
+    expect(headerClasses).toContain("flex-col");
+    expect(headerClasses).toMatch(/sm:flex-row/);
+    // A bare non-responsive `flex flex-wrap items-center` header (the pre-fix
+    // shape) is rejected — the stack must be viewport-conditional.
+    expect(headerClasses).not.toMatch(/"flex flex-wrap items-center gap/);
+  });
+
   it("Home vs Listed: both badges render; ONLY a Listed row carries Remove (render → spec)", () => {
     expect(TAB).toMatch(/["'>]Home[<"']/);
     expect(TAB).toMatch(/["'>]Listed[<"']/);
