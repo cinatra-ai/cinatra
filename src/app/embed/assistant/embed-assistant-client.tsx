@@ -294,30 +294,59 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   );
 }
 
-/** Minimal composer — the embed's own input (the CMS widget holds no chat UI). */
+/** Minimal composer — the embed's own input (the CMS widget holds no chat UI).
+ *
+ * SANDBOX CONSTRAINT (why NOT a <form> submit): this embed renders INSIDE the CMS
+ * widget's `sandbox="allow-scripts allow-same-origin"` iframe (wordpress-plugin /
+ * drupal-module #1221), which deliberately grants NO `allow-forms`. Under that
+ * sandbox a native form submission — pressing Enter in the field OR clicking a
+ * `type="submit"` button — is BLOCKED by the browser and its `submit` event never
+ * fires ("Blocked form submission … the 'allow-forms' permission is not set"), so
+ * a `<form onSubmit>` composer could type but never start a turn. Drive the send
+ * purely from JS instead: an explicit `type="button"` onClick plus an Enter
+ * keydown, inside a plain <div> so nothing depends on form submission being
+ * permitted. Behaves identically outside the sandbox. */
 function EmbedComposer({ onSend }: { onSend: (text: string) => void }) {
   const [value, setValue] = useState("");
+  const submit = () => {
+    const text = value.trim();
+    if (!text) return;
+    setValue("");
+    onSend(text);
+  };
   return (
-    <form
-      className="mt-3 flex gap-2"
-      onSubmit={(e) => {
-        e.preventDefault();
-        const text = value.trim();
-        if (!text) return;
-        setValue("");
-        onSend(text);
-      }}
-    >
+    <div className="mt-3 flex gap-2">
       <Input
         className="flex-1"
         value={value}
         onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          // Enter sends; Shift+Enter is reserved (a no-op on this single-line
+          // input). Ignore the Enter that COMMITS an IME candidate: most engines
+          // set `isComposing`, but WebKit fires that Enter with isComposing=false
+          // and keyCode 229 (WebKit bug 165004), so guard on BOTH signals.
+          if (
+            e.key === "Enter" &&
+            !e.shiftKey &&
+            !e.nativeEvent.isComposing &&
+            e.nativeEvent.keyCode !== 229
+          ) {
+            e.preventDefault();
+            submit();
+          }
+        }}
         placeholder="Ask the assistant…"
         aria-label="Message"
       />
-      <Button type="submit" variant="outline" size="sm">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        data-embed-composer-submit
+        onClick={submit}
+      >
         Send
       </Button>
-    </form>
+    </div>
   );
 }

@@ -55,7 +55,14 @@ export const SEL = {
   // frame-ancestors check.
   embedActive: '[data-embed-assistant][data-phase="active"]',
   embedComposerInput: 'input[aria-label="Message"]',
-  embedComposerSubmit: 'button[type="submit"]',
+  // The embed composer's Send control. It is a JS-driven `type="button"` (NOT a
+  // form submit): the embed runs inside the CMS widget's
+  // `sandbox="allow-scripts allow-same-origin"` iframe, which grants no
+  // `allow-forms`, so a native form submission is blocked and never fires — the
+  // composer sends via onClick/Enter instead (embed-assistant-client.tsx). Target
+  // the stable `data-embed-composer-submit` hook, not a `type` that no longer
+  // means "submit".
+  embedComposerSubmit: "[data-embed-composer-submit]",
   // One `[data-embed-content]` per assistant-text part (the S3 renderer output).
   embedAssistant: "[data-embed-content]",
   // The embed container mirrors the reduced conversation status; "finished" is a
@@ -126,11 +133,39 @@ export async function loginWordPress(page: Page): Promise<void> {
 }
 
 export async function loginDrupal(page: Page): Promise<void> {
-  await page.goto(`${DRUPAL_BASE}/user/login`);
-  await page.fill("#edit-name", DRUPAL_ADMIN_USER);
-  await page.fill("#edit-pass", DRUPAL_ADMIN_PASS);
-  await page.click("#edit-submit");
-  await page.waitForLoadState("networkidle");
+  // The Drupal assistant surface is permission-gated (_cinatra_widget_applies
+  // requires "use cinatra assistant"), so an unauthenticated page load attaches
+  // NEITHER the widget bundle NOR the fallback chrome. A bare
+  // `waitForLoadState("networkidle")` after the submit resolves on the RELOADED
+  // login form too, so a transient login miss would silently proceed as an
+  // ANONYMOUS session — and every downstream widget assertion would then fail
+  // confusingly (e.g. the fallback test observes ZERO widget-bundle requests
+  // because the bundle was never attached, not because its abort fired). Assert
+  // we actually reach the authenticated redirect (Drupal sends a successful
+  // login to `/user/{uid}`), and retry the whole login a few times so a flaky
+  // first sign-in self-heals instead of poisoning the test.
+  const authed = /\/user\/\d+(?:[/?#]|$)/;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await page.goto(`${DRUPAL_BASE}/user/login`, { waitUntil: "domcontentloaded" });
+    // A live session already redirects /user/login → /user/{uid}; nothing to do.
+    if (authed.test(page.url())) return;
+    await page.fill("#edit-name", DRUPAL_ADMIN_USER);
+    await page.fill("#edit-pass", DRUPAL_ADMIN_PASS);
+    await page.click("#edit-submit");
+    try {
+      await page.waitForURL(authed, { timeout: 20_000 });
+      return;
+    } catch {
+      if (attempt === 3) {
+        throw new Error(
+          `[wp-drupal-uat] Drupal admin login did not authenticate after 3 attempts ` +
+            `(still at ${page.url()} — expected a /user/{uid} redirect). The widget ` +
+            `surface is permission-gated, so an anonymous session silently fails every ` +
+            `widget assertion.`,
+        );
+      }
+    }
+  }
 }
 
 /**
