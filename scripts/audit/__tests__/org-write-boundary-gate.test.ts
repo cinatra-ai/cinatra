@@ -73,6 +73,18 @@ describe("org-write-boundary-gate rules (#1938)", () => {
     expect(v[0].rule).toBe("R1-relative-reach");
   });
 
+  it("R1: the /testing subpath is legal FROM TEST FILES only (cinatra#1939 S3 fakes)", () => {
+    const importLine =
+      'import { fakeOrgWriteDb } from "@cinatra-ai/org-write-kernel/testing";';
+    // Test files (both layouts) may import the fakes.
+    expect(check("packages/dashboards/src/__tests__/x.test.ts", importLine)).toHaveLength(0);
+    expect(check("src/lib/org-write/__tests__/y.test.ts", importLine)).toHaveLength(0);
+    // A PRODUCTION file importing the fakes is still a violation — test
+    // fakes must never answer real queries.
+    const v = check("src/lib/some-writer.ts", importLine);
+    expect(v.map((x) => x.rule)).toContain("R1-deep-subpath");
+  });
+
   it("R1: the bare package root stays legal everywhere", () => {
     expect(
       check(

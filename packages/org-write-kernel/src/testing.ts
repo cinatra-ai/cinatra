@@ -62,10 +62,18 @@ function queryTextOf(query: unknown): string {
 export function isKernelOrgWriteQuery(query: unknown): boolean {
   const text = queryTextOf(query);
   return (
-    text.includes("pg_advisory_xact_lock") ||
+    isKernelOrgLockQuery(text) ||
     text.includes('COALESCE("archiveEpoch"') ||
     text.includes('"org_archive_lease"')
   );
+}
+
+/** The kernel's org locks are the TWO-ARG advisory form
+ *  `pg_advisory_xact_lock(hashtext(ns), hashtext(orgId))`. Writers' own
+ *  per-row locks use the single-arg form (e.g. mutation-service's per-id
+ *  twin lock) and must stay THEIR statements — never intercepted here. */
+function isKernelOrgLockQuery(text: string): boolean {
+  return text.includes("pg_advisory_xact_lock") && text.includes("), hashtext(");
 }
 
 /**
@@ -77,7 +85,7 @@ export function answerKernelOrgWriteQuery(
   answers: KernelQueryAnswers,
 ): { rows: Record<string, unknown>[] } | undefined {
   const text = queryTextOf(query);
-  if (text.includes("pg_advisory_xact_lock")) {
+  if (isKernelOrgLockQuery(text)) {
     return { rows: [] };
   }
   if (text.includes('COALESCE("archiveEpoch"')) {

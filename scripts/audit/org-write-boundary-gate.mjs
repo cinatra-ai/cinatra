@@ -183,10 +183,17 @@ export function evaluateBoundaryRules(fileRel, edges, resolveSpecifier) {
   for (const edge of edges) {
     if (!edge.isValueEdge) continue;
 
-    // R1 — kernel internals reachable only via the package root.
+    // R1 — kernel internals reachable only via the package root. ONE
+    // sanctioned subpath: "/testing" (the kernel-aware test fakes,
+    // cinatra#1939 S3) is importable from TEST FILES ONLY — a production
+    // file importing it is still a violation (test fakes must never answer
+    // real queries).
+    const isTestFile = /(^|\/)__tests__\//.test(fileRel) || /\.test\.[cm]?tsx?$/.test(fileRel);
     if (!insideKernel) {
       if (edge.specifier.startsWith(KERNEL_PACKAGE + "/")) {
-        violations.push({ rule: "R1-deep-subpath", fileRel, ...edge });
+        if (!(edge.specifier === KERNEL_PACKAGE + "/testing" && isTestFile)) {
+          violations.push({ rule: "R1-deep-subpath", fileRel, ...edge });
+        }
       } else if (edge.specifier.startsWith(".")) {
         const resolved = resolveSpecifier(edge.specifier);
         if (resolved && (resolved.startsWith(KERNEL_DIR_REL + sep))) {

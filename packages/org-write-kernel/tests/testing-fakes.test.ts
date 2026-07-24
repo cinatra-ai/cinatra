@@ -123,6 +123,14 @@ describe("matcher precision (the needles are kernel-distinctive)", () => {
     }
   });
 
+  it("does NOT intercept a writer's SINGLE-ARG advisory lock (mutation-service's per-id twin lock)", () => {
+    const twinLock = sql`SELECT pg_advisory_xact_lock(hashtext(${"dash-1"}))`;
+    expect(isKernelOrgWriteQuery(twinLock)).toBe(false);
+    expect(
+      answerKernelOrgWriteQuery(twinLock, { organization: { archivedAt: null } }),
+    ).toBeUndefined();
+  });
+
   it("lease probe answers held/not-held from the flag (fail-closed default)", () => {
     const probe = sql`SELECT 1 FROM ${sql.raw('"app"."org_archive_lease"')} WHERE org_id = ${"o"}`;
     expect(answerKernelOrgWriteQuery(probe, { organization: {} })?.rows).toHaveLength(0);

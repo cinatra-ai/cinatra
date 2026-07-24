@@ -6,6 +6,7 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "dependencies": {
+    "@cinatra-ai/org-write-kernel": "workspace:*",
     "@cinatra-ai/sdk-dashboard": "workspace:*",
     "@nivo/heatmap": "^0.99.0",
     "@radix-ui/react-focus-scope": "^1.1.10",
