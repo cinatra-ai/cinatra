@@ -192,6 +192,13 @@ const SYSTEM_PURPOSE_CAPABILITIES: Record<string, readonly OrgWriteCapability[]>
    *  Sole minting site: src/lib/dashboards/extension-dashboard-lifecycle.ts
    *  (R2-allowlisted in the boundary gate). */
   "extension-dashboard-lifecycle": ["content.write"],
+  /** The dashboardContribution adopt-in-place reconciler (cinatra#1939 wave 1):
+   *  re-keys orphaned/legacy extension dashboard rows onto their live
+   *  successor package for one org — a lifecycle-triggered system write like
+   *  the hook above, install authz gated upstream. Content-only. Sole minting
+   *  site: src/lib/dashboards/reconcile-contribution-adoptions.ts
+   *  (R2-allowlisted in the boundary gate). */
+  "dashboard-contribution-reconciler": ["content.write"],
 };
 
 export type SystemWritePurpose = keyof typeof SYSTEM_PURPOSE_CAPABILITIES;

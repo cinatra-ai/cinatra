@@ -2001,7 +2001,7 @@ export async function adoptExtensionDashboards(
 ): Promise<number> {
   if (input.matchLineageIds.length === 0) return 0;
   const lineageIds = [...input.matchLineageIds];
-  return withDashboardsTx(tx, async (q) => {
+  const body = async (q: DashboardsDb): Promise<number> => {
     const setPatch: Record<string, unknown> = {
       extensionId: input.successorPackage,
       contributionId: input.successorContributionId,
@@ -2051,7 +2051,15 @@ export async function adoptExtensionDashboards(
     }
     await pairTwinBulk(q as unknown as TwinTx, rows, "upsert", input.actor.userId);
     return rows.length;
-  });
+  };
+  // Org-write kernel guard (cinatra#1939 S3) when this writer opens its own
+  // transaction (the reconciler mints the "dashboard-contribution-reconciler"
+  // system purpose and passes tx=undefined). An OUTER tx rides its caller's
+  // guard — the composed path converts with its caller's wave.
+  if (tx) return withDashboardsTx(tx, body);
+  return guardedDashboardsWrite(input.actor, { schema: backfillSchemaName() }, (g) =>
+    body(g as unknown as DashboardsDb),
+  );
 }
 
 

@@ -6,6 +6,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
+// The reconciler mints its purpose-scoped system authority (cinatra#1939 S3);
+// the real mint module pulls the better-auth chain — stub it to a pure grant.
+vi.mock("@/lib/org-write/authority", () => ({
+  mintSystemWriteAuthority: (_purpose: string, orgId: string) => ({
+    orgId,
+    can: (capability: string) => capability === "content.write",
+  }),
+}));
+
 const adoptSpy = vi.fn(async () => 0);
 vi.mock("@cinatra-ai/dashboards/extension-materialization", () => ({
   adoptExtensionDashboards: (...args: unknown[]) => adoptSpy(...(args as [])),

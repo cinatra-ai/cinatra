@@ -48,6 +48,9 @@ export const SYSTEM_MINT_ALLOWLIST = new Set([
   // The extension archive/restore lifecycle hook — mints the content-only
   // "extension-dashboard-lifecycle" purpose (cinatra#1939 wave 1).
   join("src", "lib", "dashboards", "extension-dashboard-lifecycle.ts"),
+  // The contribution-adoption reconciler — mints the content-only
+  // "dashboard-contribution-reconciler" purpose (cinatra#1939 wave 1).
+  join("src", "lib", "dashboards", "reconcile-contribution-adoptions.ts"),
 ]);
 
 /** R3: the one legal unwrap consumer outside the kernel. */
