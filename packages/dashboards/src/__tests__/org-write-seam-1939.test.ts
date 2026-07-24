@@ -149,3 +149,27 @@ describe("guardedDashboardsWrite end-to-end (kernel fakes)", () => {
     expect(opened).toBe(false);
   });
 });
+
+describe("narrowOrgWriteAuthority (the opaque-frame narrow, fail-closed)", async () => {
+  const { narrowOrgWriteAuthority } = await import("../mcp/handlers");
+
+  it("accepts a structurally-valid authority", () => {
+    const authority = authorityFor("org-1");
+    expect(narrowOrgWriteAuthority(authority)).toBe(authority);
+  });
+
+  it("reads anything malformed as NO authority (never a partial one)", () => {
+    for (const bad of [
+      undefined,
+      null,
+      "authority",
+      42,
+      {},
+      { orgId: "org-1" }, // no can()
+      { can: () => true }, // no orgId
+      { orgId: 7, can: () => true }, // orgId not a string
+    ]) {
+      expect(narrowOrgWriteAuthority(bad)).toBeUndefined();
+    }
+  });
+});

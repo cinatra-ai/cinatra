@@ -78,6 +78,12 @@ function getActor(actor: PrimitiveActorContext): DashboardActor | null {
   // from the request frame). Threaded onto the resolver actor so the ceiling
   // gate in resolveDashboardAccess runs for delegated agent tool calls.
   const oboCeiling = ext["oboCeiling"] as DashboardActor["oboCeiling"];
+  // Host-minted org-write authority (cinatra#1939 S3), forwarded opaquely by
+  // the registry from the request frame. Narrowed FAIL-CLOSED here: anything
+  // not structurally an authority (orgId string + can function) reads as "no
+  // authority", and the org-write seam then refuses the write. Exported-for-
+  // tests via narrowOrgWriteAuthority.
+  const authority = narrowOrgWriteAuthority(ext["orgWriteAuthority"]);
   return {
     userId,
     organizationId: orgId,
@@ -85,7 +91,25 @@ function getActor(actor: PrimitiveActorContext): DashboardActor | null {
     orgRole,
     teamRoles,
     ...(oboCeiling ? { oboCeiling } : {}),
+    ...(authority ? { authority } : {}),
   };
+}
+
+/** Fail-closed structural narrow for the opaquely-forwarded org-write
+ *  authority (see McpRequestContext.orgWriteAuthority). Exported for unit
+ *  tests only. */
+export function narrowOrgWriteAuthority(
+  value: unknown,
+): DashboardActor["authority"] | undefined {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    typeof (value as { orgId?: unknown }).orgId === "string" &&
+    typeof (value as { can?: unknown }).can === "function"
+  ) {
+    return value as DashboardActor["authority"];
+  }
+  return undefined;
 }
 
 // ─────────────────────────────────────────────────────────────────────────

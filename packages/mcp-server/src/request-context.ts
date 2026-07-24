@@ -214,6 +214,18 @@ export type McpRequestContext = {
    */
   oboCeiling?: OboCeilingChain;
   /**
+   * Host-minted org-write authority for this frame (cinatra#1939 S3): the
+   * capability witness `guardOrgMutation` checks INDEPENDENTLY of the org
+   * lifecycle table before any org-scoped write. Trust boundary: ONLY
+   * authenticated context-build sites write this — session callers minted by
+   * the host org-write resolvers (src/lib/org-write/authority.ts), agent-run
+   * OBO callers by `verifyRunAuthority`; never from request input. Typed
+   * OPAQUELY so this transport package takes no kernel dependency —
+   * structurally the kernel's `OrgWriteAuthority`; consumers narrow
+   * fail-closed at their seam (a malformed value reads as "no authority").
+   */
+  orgWriteAuthority?: unknown;
+  /**
    * A run id VERIFIED by a trusted server-side run-bound seam (e.g.
    * `/api/agents/passthrough` after `bindBridgeRunId` proves the executing run
    * from the auth-injected context-id). Run-scoped primitives read THIS — never
