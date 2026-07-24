@@ -7,6 +7,9 @@
 # `a2a-peers`     — External A2A peer fixtures used by Cinatra integration tests
 # `twenty`        — Twenty CRM dev stack (twenty-server/worker/db/redis)
 # `plane`         — Plane project-management dev stack (loopback-only @ :3400)
+# `plane-mcp`     — Plane MCP bridge (makeplane/plane-mcp-server via mcp-proxy,
+#                   loopback-only @ :3450); demo auto-connect, brought up AFTER
+#                   scripts/fixtures/provision-plane.mjs mints the bridge PAT
 # ----------------------------------------------------------------------------
 # Use `docker compose --profile drupal up -d` to bring up Drupal + the shared
 # wayflow runtime. Profiles can be combined: `--profile drupal --profile wordpress`.
@@ -1044,6 +1047,41 @@ services:
         condition: service_started
       plane-live:
         condition: service_started
+
+  # ---- Plane MCP bridge (DEMO auto-connect; profile-gated, separate from `plane`) ----
+  # cinatra#1238; owner ruling 2026-07-23 (groganz) — Plane posture is AUTOMATIC.
+  #
+  # The OFFICIAL Plane MCP server (makeplane/plane-mcp-server) holds the PAT
+  # server-side ONLY in its `stdio` transport, so this image (docker/plane-mcp)
+  # runs it behind `mcp-proxy` to expose the modern MCP Streamable-HTTP transport
+  # at `/mcp` on loopback — the cinatra Plane connector dials it UNAUTHENTICATED
+  # (the row's `nangoConnectionId` is null; the bridge holds the key).
+  #
+  # A SEPARATE `plane-mcp` profile (NOT folded into `plane`): the bridge reads a
+  # PAT that only exists AFTER `scripts/fixtures/provision-plane.mjs` has minted
+  # it, so the demo bring-up starts `--profile plane`, provisions, THEN starts
+  # `--profile plane-mcp`. `PLANE_MCP_URL` (written to .env.local by the provision
+  # script) points the connector's dev-setup hook at http://localhost:3450/mcp.
+  #
+  # env_file is `required: false` so a bare `docker compose config` (before the
+  # provision script has written it) never errors; the demo bring-up guarantees
+  # the file exists before this profile is started.
+  plane-mcp:
+    build:
+      context: ./docker/plane-mcp
+    image: cinatra/plane-mcp-bridge:demo
+    container_name: cinatra-plane-mcp-1
+    profiles: ["plane-mcp"]
+    # On the `plane` network so it can dial the Plane REST api by its alias
+    # (PLANE_BASE_URL=http://api:8000, set in the bridge env file).
+    networks: ["plane"]
+    env_file:
+      - path: ./docker/plane-mcp/.plane-mcp.env
+        required: false
+    restart: unless-stopped
+    depends_on:
+      plane-api:
+        condition: service_healthy
 
 volumes:
   cinatra-postgres:
