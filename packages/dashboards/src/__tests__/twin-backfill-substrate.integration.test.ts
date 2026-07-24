@@ -54,6 +54,8 @@ const actor: DashboardActor = {
   teamIds: [TEAM],
   orgRole: "owner",
   teamRoles: { [TEAM]: "admin" },
+  // cinatra#1939 S3 — createDashboard runs under the org-write kernel guard.
+  authority: { orgId: ORG, can: (c) => c === "content.write" },
 };
 
 const bareConfig = {
@@ -103,6 +105,24 @@ d("dashboards-artifact twin BACKFILL — substrate proof (cinatra#1894 B1c / #20
     }
     (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 
+    // cinatra#1939 S3: the org-write kernel guard reads public."organization"
+    // FOR SHARE before every guarded write — seed the test org (shape-tolerant:
+    // minimal table when no better-auth schema exists, archive columns added
+    // when an older real table lacks them, richer insert on NOT NULL demands).
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS public."organization" (id text PRIMARY KEY, name text, "archivedAt" timestamptz, "archiveEpoch" int)`,
+    );
+    await pool.query(`ALTER TABLE public."organization" ADD COLUMN IF NOT EXISTS "archivedAt" timestamptz`);
+    await pool.query(`ALTER TABLE public."organization" ADD COLUMN IF NOT EXISTS "archiveEpoch" int`);
+    await pool
+      .query(`INSERT INTO public."organization" (id, name) VALUES ($1, $1) ON CONFLICT (id) DO NOTHING`, [ORG])
+      .catch(() =>
+        pool.query(
+          `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $1, $1, now()) ON CONFLICT (id) DO NOTHING`,
+          [ORG],
+        ),
+      );
+
     resetDashboardArtifactTwinWriter();
     setDashboardArtifactTwinWriter(dashboardArtifactTwinWriter);
 
@@ -142,6 +162,7 @@ d("dashboards-artifact twin BACKFILL — substrate proof (cinatra#1894 B1c / #20
     resetDashboardArtifactTwinWriter();
     if (pool) {
       await pool.query(`DROP SCHEMA IF EXISTS "${SCHEMA}" CASCADE`).catch(() => {});
+      await pool.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]).catch(() => {});
       await pool.end();
     }
   });

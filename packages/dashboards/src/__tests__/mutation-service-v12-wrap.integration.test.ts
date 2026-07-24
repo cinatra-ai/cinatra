@@ -44,6 +44,8 @@ const actor: DashboardActor = {
   teamIds: [],
   orgRole: "owner",
   teamRoles: {},
+  // cinatra#1939 S3 — createDashboard runs under the org-write kernel guard.
+  authority: { orgId: "org-it-1", can: (c) => c === "content.write" },
 };
 
 async function readRow(pool: Pool, id: string) {
@@ -119,11 +121,29 @@ describe.skipIf(!RUN_IT)("mutation-service apiVersion 1.2 wrap (real Postgres)",
       metadata jsonb,
       created_at timestamptz NOT NULL DEFAULT now()
     )`);
+    // cinatra#1939 S3: the org-write kernel guard reads public."organization"
+    // FOR SHARE before every guarded write — seed the test org (shape-tolerant:
+    // minimal table when no better-auth schema exists, archive columns added
+    // when an older real table lacks them, richer insert on NOT NULL demands).
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS public."organization" (id text PRIMARY KEY, name text, "archivedAt" timestamptz, "archiveEpoch" int)`,
+    );
+    await pool.query(`ALTER TABLE public."organization" ADD COLUMN IF NOT EXISTS "archivedAt" timestamptz`);
+    await pool.query(`ALTER TABLE public."organization" ADD COLUMN IF NOT EXISTS "archiveEpoch" int`);
+    await pool
+      .query(`INSERT INTO public."organization" (id, name) VALUES ($1, $1) ON CONFLICT (id) DO NOTHING`, [actor.organizationId])
+      .catch(() =>
+        pool.query(
+          `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $1, $1, now()) ON CONFLICT (id) DO NOTHING`,
+          [actor.organizationId],
+        ),
+      );
   }, 60_000);
 
   afterAll(async () => {
     if (pool) {
       await pool.query(`DROP SCHEMA IF EXISTS "${SCHEMA}" CASCADE`).catch(() => {});
+      await pool.query(`DELETE FROM public."organization" WHERE id = $1`, [actor.organizationId]).catch(() => {});
       await pool.end();
     }
   });

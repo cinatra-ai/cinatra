@@ -30,6 +30,8 @@ import {
 } from "../mutation-service";
 import type { DashboardActor } from "../permissions";
 import { resolveDashboardAccess } from "../permissions";
+import { OrgWriteRefusedError } from "@cinatra-ai/org-write-kernel";
+import { DashboardOrgWriteAuthorityError } from "../org-write-seam";
 import {
   dashboardRevisions,
   dashboards,
@@ -405,6 +407,15 @@ export function createDashboardPrimitiveHandlers() {
 /** Convert a thrown mutation-service error into the MCP error envelope. */
 function mutationError(err: unknown): { error: { code: string; message: string } } {
   if (err instanceof DashboardForbiddenError) {
+    return { error: { code: "forbidden", message: err.message } };
+  }
+  // Org-write seam refusals (cinatra#1939 S3): a frame without a host-minted
+  // authority, or a kernel lifecycle ruling against content.write (archived /
+  // missing organization), are authorization outcomes — forbidden, not 500s.
+  if (err instanceof DashboardOrgWriteAuthorityError) {
+    return { error: { code: "forbidden", message: err.message } };
+  }
+  if (err instanceof OrgWriteRefusedError) {
     return { error: { code: "forbidden", message: err.message } };
   }
   if (err instanceof DashboardNotFoundError) {

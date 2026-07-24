@@ -234,9 +234,17 @@ export function evaluateBoundaryRules(fileRel, edges, resolveSpecifier) {
     }
 
     // R3 — guardedBatchQueries has ONE consumer outside the kernel.
+    // The R1-sanctioned "/testing" edge from a TEST FILE is exempt even in
+    // its opaque (dynamic-import) form: vi.mock factories can only reach the
+    // fakes via `await import(...)` (vitest hoists factories above static
+    // imports), and the testing module does not export guardedBatchQueries —
+    // flagging it here would contradict R1's own sanction.
+    const isSanctionedTestingImport =
+      edge.specifier === KERNEL_PACKAGE + "/testing" && isTestFile;
     if (
       !insideKernel &&
       !isOrgWriteTest &&
+      !isSanctionedTestingImport &&
       (touchesKernelRoot || edge.specifier.startsWith(KERNEL_PACKAGE)) &&
       !BATCH_UNWRAP_ALLOWLIST.has(fileRel) &&
       (edge.valueBindings.includes("guardedBatchQueries") || isOpaqueAccess)

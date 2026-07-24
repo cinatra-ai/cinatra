@@ -74,6 +74,7 @@ import {
 // surface (DashboardTwinContext / TwinTx) is erased at compile time and adds no
 // graph pressure.
 import type { DashboardTwinContext, TwinTx } from "./twin-writer-seam";
+import { guardedDashboardsWrite } from "./org-write-seam";
 
 export class DashboardForbiddenError extends Error {
   readonly code = "dashboard_forbidden";
@@ -578,9 +579,18 @@ export async function createDashboard(
     throw new DashboardForbiddenError("dashboards.create", id);
   }
 
-  const db = getDashboardsDb();
   try {
-    return await db.transaction(async (tx) => {
+    // First converted writer on the org-write seam (cinatra#1939 S3 wave 1):
+    // the kernel guard opens the transaction, takes the ORGANIZATION locks and
+    // rules `content.write` against the org lifecycle BEFORE this body runs —
+    // the per-dashboard twin lock below is therefore always second (org-first
+    // lock order, no org↔id inversion). The actor's authority is minted
+    // host-side at the MCP transport; an actor without one refuses up front.
+    return await guardedDashboardsWrite(
+      actor,
+      { schema: backfillSchemaName() },
+      async (guardedTx) => {
+      const tx = guardedTx as unknown as DashboardsDb;
       // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
       await acquireTwinLockFirst(tx as unknown as TwinTx, id);
       const insertRow: NewDashboardRow = {
@@ -601,7 +611,7 @@ export async function createDashboard(
         entityId: anchor.entityId,
       };
       const [row] = await tx.insert(dashboards).values(insertRow).returning();
-      await writeAudit(tx as unknown as DashboardsDb, {
+      await writeAudit(tx, {
         operation: "dashboards.create",
         actor,
         row,
@@ -609,7 +619,8 @@ export async function createDashboard(
       });
       await pairTwin(tx as unknown as TwinTx, twinCtx(row, "upsert", actor.userId));
       return row;
-    });
+      },
+    );
   } catch (e) {
     // Writing anchors activates dashboards_entity_name_uniq for this path
     // (NULL entity buckets never collided — Postgres NULLs are distinct).

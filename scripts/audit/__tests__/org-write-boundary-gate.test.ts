@@ -85,6 +85,17 @@ describe("org-write-boundary-gate rules (#1938)", () => {
     expect(v.map((x) => x.rule)).toContain("R1-deep-subpath");
   });
 
+  it("the /testing subpath from a test file stays legal in its OPAQUE (dynamic-import) form — vi.mock factories can only reach the fakes that way", () => {
+    const dynamicLine =
+      'const fakes = await import("@cinatra-ai/org-write-kernel/testing");';
+    // Sanctioned from test files: R1 admits the subpath and R3's opaque net
+    // must not re-flag the same sanctioned edge.
+    expect(check("packages/dashboards/src/__tests__/x.test.ts", dynamicLine)).toHaveLength(0);
+    // From a PRODUCTION file the same dynamic import is still red (R1).
+    const v = check("src/lib/some-writer.ts", dynamicLine);
+    expect(v.map((x) => x.rule)).toContain("R1-deep-subpath");
+  });
+
   it("R1: the bare package root stays legal everywhere", () => {
     expect(
       check(
