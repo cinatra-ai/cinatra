@@ -364,6 +364,23 @@ export function systemLoopPhases(): BootPhase[] {
       },
     },
     {
+      name: "bind-artifact-review-gate-seam",
+      policy: "retryable",
+      run: async () => {
+        // Bind the run executor's artifact-review gate seam (cinatra#1796) to the
+        // live #2009 store, BEFORE any run can reach a marked gate. execution.ts
+        // reads this seam off globalThis (never importing the store — that would
+        // grow every locked route's reachable graph and trip the route-graph
+        // ratchet); the binder lives in the boot graph so the store rides only
+        // boot, never a route. Idempotent (last write wins).
+        const { bindArtifactReviewGateSeam } = await import(
+          "@cinatra-ai/agents/artifact-review-gate-seam"
+        );
+        bindArtifactReviewGateSeam();
+        console.log("[artifact-review-gate] gate seam bound to the #2009 store at boot");
+      },
+    },
+    {
       name: "seed-artifact-review-resume-delivery",
       policy: "retryable",
       run: async () => {

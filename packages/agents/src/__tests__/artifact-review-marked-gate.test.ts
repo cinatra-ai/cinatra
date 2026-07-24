@@ -1,12 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // cinatra#1796 (epic #1620 S13) — the execution.ts MARKED artifact-review gate.
 //
 // When an input-required gate carries the compiled `artifactReviewTargetsInput`
 // marker, handleWayflowTaskState must (1) PIN the run's immutable review targets
-// via emitArtifactReviewGate and (2) route the human to the generic review
-// surface (the redirect renderer + reviewSurfaceUrl) INSTEAD of the legacy
-// reviewer envelope. An UNMARKED gate must behave byte-identically.
+// via the boot-bound gate SEAM (globalThis.__cinatraArtifactReviewGateSeam) and
+// (2) route the human to the generic review surface (the redirect renderer id +
+// reviewSurfaceUrl) INSTEAD of the legacy reviewer envelope. An UNMARKED gate
+// must behave byte-identically. execution.ts reads the seam off globalThis (it
+// never imports the store — a route-graph-ratchet constraint), so this suite
+// drives the seam slot directly.
 
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "../agent-builder-ids";
 
@@ -62,31 +65,6 @@ vi.mock("../wayflow-url", () => ({
   AGENT_RUN_TIMEOUT_MAX_SECONDS: 86_400,
 }));
 
-// The pin primitive — mocked so this unit test never touches the DB. The error
-// class is a real subclass so execution.ts's `instanceof` fail-open check works.
-const gateStoreMock = vi.hoisted(() => {
-  class ArtifactReviewGateError extends Error {
-    code: "invalid-targets" | "pin-conflict";
-    constructor(code: "invalid-targets" | "pin-conflict", msg: string) {
-      super(msg);
-      this.name = "ArtifactReviewGateError";
-      this.code = code;
-    }
-  }
-  return {
-    emitArtifactReviewGate: vi.fn(
-      async (): Promise<{
-        gateId: string;
-        targets: Array<{ artifactId: string; representationRevisionId: string }>;
-        idempotent: boolean;
-      }> => ({ gateId: "gate-1", targets: [], idempotent: false }),
-    ),
-    readReviewGate: vi.fn(async (): Promise<{ orgId: string; status: string } | null> => null),
-    ArtifactReviewGateError,
-  };
-});
-vi.mock("../artifact-review-gate-store", () => gateStoreMock);
-
 // Hermetic Redis: the interrupt-emit path calls these @cinatra-ai/a2a helpers;
 // stub them so no real Redis connection is opened.
 vi.mock("@cinatra-ai/a2a", async (orig) => {
@@ -101,6 +79,31 @@ vi.mock("@cinatra-ai/a2a", async (orig) => {
 
 import { handleWayflowTaskState } from "../execution";
 import type { AgentRunRecord } from "../store";
+
+// The boot-bound gate seam execution.ts reads off globalThis. Spied per test.
+type EmitResult =
+  | { ok: true }
+  | { ok: false; code: "invalid-targets" | "pin-conflict"; message: string };
+const emitSpy = vi.fn<
+  (input: {
+    runId: string;
+    orgId: string;
+    reviewTaskId: string;
+    targets: unknown;
+  }) => Promise<EmitResult>
+>(async () => ({ ok: true }));
+const readGateSpy = vi.fn<
+  (runId: string, reviewTaskId: string) => Promise<{ orgId: string; status: string } | null>
+>(async () => null);
+function bindSeam() {
+  (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam = {
+    emit: emitSpy,
+    readGate: readGateSpy,
+  };
+}
+function unbindSeam() {
+  delete (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam;
+}
 
 function makeRun(inputParams: Record<string, unknown> = {}): AgentRunRecord {
   return {
@@ -193,18 +196,17 @@ function inputRequiredTask(summaryText?: string) {
   };
 }
 
-describe("execution.ts — marked artifact-review gate (pin + route)", () => {
+describe("execution.ts — marked artifact-review gate (pin + route via the boot seam)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     enrichSpy.mockImplementation(async (schema: unknown) => ({ ...(schema as object) }));
     storeMock.updateAgentRunA2ATaskId.mockResolvedValue(undefined);
     storeMock.updateAgentRunA2AContextId.mockResolvedValue(undefined);
-    gateStoreMock.emitArtifactReviewGate.mockResolvedValue({
-      gateId: "gate-1",
-      targets: TARGETS,
-      idempotent: false,
-    });
+    emitSpy.mockResolvedValue({ ok: true });
+    readGateSpy.mockResolvedValue(null);
+    bindSeam();
   });
+  afterEach(() => unbindSeam());
 
   it("pins the flow-input targets + routes to the generic review surface", async () => {
     storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
@@ -218,15 +220,15 @@ describe("execution.ts — marked artifact-review gate (pin + route)", () => {
     });
 
     // (1) Pinned with the run's immutable targets under the wayflow reviewTaskId.
-    expect(gateStoreMock.emitArtifactReviewGate).toHaveBeenCalledTimes(1);
-    expect(gateStoreMock.emitArtifactReviewGate).toHaveBeenCalledWith({
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    expect(emitSpy).toHaveBeenCalledWith({
       runId: "run-rev-1",
       orgId: "org-rev",
       reviewTaskId: "wayflow-task-rev-1",
       targets: TARGETS,
     });
 
-    // (2) Routed via the redirect renderer — NOT the legacy reviewer envelope.
+    // (2) Routed via the redirect renderer id — NOT the legacy reviewer envelope.
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
     const [, xRenderer, values, invocationId] = onInterruptSpy.mock.calls[0]!;
     expect(xRenderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
@@ -240,7 +242,6 @@ describe("execution.ts — marked artifact-review gate (pin + route)", () => {
     expect(v.contentType).toBeUndefined();
     expect(v.contentBundle).toBeUndefined();
 
-    // Transitions running -> pending_approval like the legacy path.
     expect(storeMock.transitionRunStatus).toHaveBeenCalledWith(
       "run-rev-1",
       "running",
@@ -259,22 +260,39 @@ describe("execution.ts — marked artifact-review gate (pin + route)", () => {
       task: inputRequiredTask("Legacy reviewer summary."),
     });
 
-    expect(gateStoreMock.emitArtifactReviewGate).not.toHaveBeenCalled();
+    expect(emitSpy).not.toHaveBeenCalled();
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
     const [, xRenderer] = onInterruptSpy.mock.calls[0]!;
     expect(xRenderer).toBe("@cinatra-ai/reviewer-agent:output");
     expect(xRenderer).not.toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
   });
 
-  it("pin-conflict on a USABLE same-org pending gate routes to it (single decision path)", async () => {
-    // A same-run re-emit conflict where a usable pending gate for this run+org
-    // exists → route to the review surface (ONE path). Emitting the legacy in-
-    // panel gate too would create a second resume path into the same context.
+  it("unbound seam fails CLOSED — routes to the review surface, never a dual path", async () => {
+    // Boot has not bound the seam (a near-impossible degraded state). We cannot
+    // pin nor read the gate, so we must NOT also emit the legacy gate (a prior
+    // execution may already have pinned this gate → dual path). Route to the
+    // review surface instead (fail-closed).
+    unbindSeam();
     storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
-    gateStoreMock.emitArtifactReviewGate.mockRejectedValueOnce(
-      new gateStoreMock.ArtifactReviewGateError("pin-conflict", "different target set"),
-    );
-    gateStoreMock.readReviewGate.mockResolvedValueOnce({ orgId: "org-rev", status: "pending" });
+    const run = makeRun({ reviewTargets: TARGETS });
+
+    await handleWayflowTaskState({
+      runId: run.id,
+      run,
+      fromStatus: "running",
+      task: inputRequiredTask("summary"),
+    });
+
+    expect(emitSpy).not.toHaveBeenCalled();
+    expect(onInterruptSpy).toHaveBeenCalledTimes(1);
+    const [, xRenderer] = onInterruptSpy.mock.calls[0]!;
+    expect(xRenderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
+  });
+
+  it("pin-conflict on a USABLE same-org pending gate routes to it (single decision path)", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    emitSpy.mockResolvedValue({ ok: false, code: "pin-conflict", message: "different target set" });
+    readGateSpy.mockResolvedValue({ orgId: "org-rev", status: "pending" });
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
@@ -296,11 +314,8 @@ describe("execution.ts — marked artifact-review gate (pin + route)", () => {
 
   it("pin-conflict on a DIFFERENT-org gate falls OPEN to legacy (never redirects to a foreign gate)", async () => {
     storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
-    gateStoreMock.emitArtifactReviewGate.mockRejectedValueOnce(
-      new gateStoreMock.ArtifactReviewGateError("pin-conflict", "bound to a different org"),
-    );
-    // The existing gate belongs to ANOTHER org → NOT usable for this run.
-    gateStoreMock.readReviewGate.mockResolvedValueOnce({ orgId: "org-OTHER", status: "pending" });
+    emitSpy.mockResolvedValue({ ok: false, code: "pin-conflict", message: "bound to a different org" });
+    readGateSpy.mockResolvedValue({ orgId: "org-OTHER", status: "pending" });
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
@@ -317,12 +332,8 @@ describe("execution.ts — marked artifact-review gate (pin + route)", () => {
 
   it("a gate re-read FAILURE fails CLOSED — routes to the review surface, never a dual path", async () => {
     storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
-    gateStoreMock.emitArtifactReviewGate.mockRejectedValueOnce(
-      new gateStoreMock.ArtifactReviewGateError("pin-conflict", "different target set"),
-    );
-    // The re-read itself throws (DB blip) → cannot prove the gate absent → must
-    // NOT also emit the legacy gate (that would risk a dual path).
-    gateStoreMock.readReviewGate.mockRejectedValueOnce(new Error("db blip"));
+    emitSpy.mockResolvedValue({ ok: false, code: "pin-conflict", message: "different target set" });
+    readGateSpy.mockRejectedValue(new Error("db blip"));
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
@@ -339,10 +350,12 @@ describe("execution.ts — marked artifact-review gate (pin + route)", () => {
 
   it("invalid-targets (no gate pinned) fails OPEN to the legacy gate (never dead-ends)", async () => {
     storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
-    gateStoreMock.emitArtifactReviewGate.mockRejectedValueOnce(
-      new gateStoreMock.ArtifactReviewGateError("invalid-targets", "targets must be a non-empty array"),
-    );
-    gateStoreMock.readReviewGate.mockResolvedValueOnce(null); // no gate exists
+    emitSpy.mockResolvedValue({
+      ok: false,
+      code: "invalid-targets",
+      message: "targets must be a non-empty array",
+    });
+    readGateSpy.mockResolvedValue(null); // no gate exists
     const run = makeRun({ reviewTargets: [] });
 
     await handleWayflowTaskState({
@@ -354,7 +367,6 @@ describe("execution.ts — marked artifact-review gate (pin + route)", () => {
 
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
     const [, xRenderer] = onInterruptSpy.mock.calls[0]!;
-    // No gate pinned → fall through to the legacy reviewer gate (single path).
     expect(xRenderer).not.toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
     expect(storeMock.transitionRunStatus).toHaveBeenCalledWith(
       "run-rev-1",
@@ -374,9 +386,8 @@ describe("execution.ts — marked artifact-review gate (pin + route)", () => {
       task: inputRequiredTask("summary"),
     });
 
-    expect(gateStoreMock.emitArtifactReviewGate).toHaveBeenCalledTimes(1);
+    expect(emitSpy).toHaveBeenCalledTimes(1);
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
-    // Already pending_approval → the illegal pending->pending transition is skipped.
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
   });
 });

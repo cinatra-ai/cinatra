@@ -20,8 +20,10 @@ import {
   AlertCircle,
   ArrowRight,
   CalendarClock,
+  ClipboardCheck,
   Clock,
 } from "lucide-react";
+import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import { toast } from "@/lib/cinatra-toast";
 import { approveReviewTask } from "./hitl-actions";
 // Shared gate-submit payload builders (cinatra#853) — the WayFlow
@@ -218,6 +220,76 @@ function ThreadRow({ message }: { message: SerializedAgentRunMessage }) {
       <pre className="text-xs text-foreground whitespace-pre-wrap break-all max-h-40 overflow-y-auto font-mono">
         {content}
       </pre>
+    </div>
+  );
+}
+
+/**
+ * Inline artifact-review REDIRECT card (cinatra#1796, epic #1620 S13). Rendered
+ * IN-PANEL (deliberately not a separate registered renderer module — that would
+ * add a new node to the run executor's locked route graph and trip the route-
+ * graph ratchet) when a MARKED gate routes the human to the generic artifact-
+ * review surface. Display-only: a link to the pinned review surface, with NO
+ * approve/continue affordance, so the legacy in-panel approve path can never
+ * double-resume a marked gate — the typed decision is taken on the review
+ * surface and delivered by the resume-delivery worker.
+ */
+function ArtifactReviewRedirectCard({ values }: { values: Record<string, unknown> }) {
+  const reviewUrl =
+    typeof values.reviewSurfaceUrl === "string" && values.reviewSurfaceUrl.length > 0
+      ? values.reviewSurfaceUrl
+      : null;
+  const agentSummary =
+    typeof values.agentSummary === "string" && values.agentSummary.length > 0
+      ? values.agentSummary
+      : null;
+  const targetCount =
+    typeof values.targetCount === "number" && Number.isFinite(values.targetCount)
+      ? (values.targetCount as number)
+      : null;
+  const countLabel =
+    targetCount === null
+      ? "an artifact this run produced"
+      : targetCount === 1
+        ? "1 artifact this run produced"
+        : `${targetCount} artifacts this run produced`;
+  return (
+    <div
+      data-conformance-id="artifact-review-redirect"
+      className="flex flex-col gap-3 rounded-control border border-line bg-surface-strong px-4 py-4"
+    >
+      <div className="flex flex-wrap items-center gap-2.5">
+        <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-mustard-ink">
+          <ClipboardCheck aria-hidden="true" className="size-4" />
+        </span>
+        <span className="font-sans text-sm font-bold text-foreground">Review requested</span>
+      </div>
+      <p className="max-w-[66ch] text-xs leading-relaxed text-muted-foreground">
+        This run paused for you to review {countLabel}. Continue on the review surface to approve
+        or reject before the run proceeds.
+      </p>
+      {agentSummary ? (
+        <p className="max-w-[66ch] text-xs leading-relaxed text-muted-foreground">
+          <span className="font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground">
+            Agent summary
+          </span>{" "}
+          {agentSummary}
+        </p>
+      ) : null}
+      {reviewUrl ? (
+        <div>
+          <Button asChild size="sm" className="gap-1.5" data-action="open-review-surface">
+            <Link href={reviewUrl}>
+              Continue to review
+              <ArrowRight aria-hidden="true" className="size-3.5" />
+            </Link>
+          </Button>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          The review surface link is unavailable — refresh the run to retry.
+        </p>
+      )}
     </div>
   );
 }
@@ -516,7 +588,13 @@ export function AgenticRunPanel({
     if (!cb) return;
     const ctx = latestHitlContextRef.current;
     const instanceId = instanceIdRef.current;
-    if (ctx) {
+    // cinatra#1796: a MARKED artifact-review gate is NOT a submittable chat gate.
+    // Publishing its descriptor would hand the chat composer a `submit` that calls
+    // approveReviewTask on the paused run — a SECOND resume path that bypasses the
+    // review surface (and could double-resume the gate the worker also resumes).
+    // Publish null for it (as if no gate is active in the composer), so the ONLY
+    // way to decide is the review surface the inline redirect card links to.
+    if (ctx && ctx.xRenderer !== ARTIFACT_REVIEW_REDIRECT_RENDERER_ID) {
       cb(
         runId,
         {
@@ -810,7 +888,20 @@ export function AgenticRunPanel({
         </Badge>
       </div>
 
-      {isPendingApproval && effectiveHitlContext?.xRenderer ? (
+      {isPendingApproval &&
+      effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID ? (
+        // cinatra#1796 — a MARKED artifact-review gate. Render the display-only
+        // redirect card INLINE (not via a separate renderer module, which would
+        // grow the run executor's locked route graph). No approve/continue
+        // affordance, so the legacy in-panel approve path can never double-resume
+        // a marked gate — the typed decision is taken on the review surface.
+        <>
+          <Separator />
+          <ArtifactReviewRedirectCard
+            values={effectiveHitlContext.currentValues ?? {}}
+          />
+        </>
+      ) : isPendingApproval && effectiveHitlContext?.xRenderer ? (
         // Inline HITL bubble.
         <>
           <Separator />

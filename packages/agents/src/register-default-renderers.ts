@@ -55,9 +55,7 @@ import {
   PERSONAL_SKILL_RENDERER_ID,
   SKILL_SELECTOR_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
 } from "./agent-builder-ids";
-import { ArtifactReviewRedirectRenderer } from "./artifact-review-redirect-renderer";
 import { hasFieldRendererComponent } from "./field-renderer-components";
 import { makeExtensionFieldRenderer } from "./extension-field-renderer";
 
@@ -336,20 +334,12 @@ export function ensureDefaultFieldRenderersRegistered(): void {
     renderer: GroupedSetupFormRenderer,
   });
 
-  // Artifact-review REDIRECT card (cinatra#1796). Strict-equality on its own
-  // xRenderer id — emitted only by the marked-gate interrupt hook. Priority 55
-  // sits above the schema-field-fallback (1) and the grouped-setup form (50) but
-  // it never competes with per-field renderers (60-100) because its id is unique
-  // to this host-emitted gate. NOT midRunHitl: the card is display-only (a link
-  // to the review surface), so the run panel emits no Continue row for it and the
-  // legacy in-panel approve path can never double-resume a marked gate.
-  fieldRendererRegistry.register({
-    id: ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
-    priority: 55,
-    condition: (_fieldName, schema) =>
-      xRendererOf(schema) === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
-    renderer: ArtifactReviewRedirectRenderer,
-  });
+  // NOTE (cinatra#1796): the artifact-review REDIRECT card is NOT registered as a
+  // field renderer here. It is rendered INLINE by AgenticRunPanel keyed on
+  // ARTIFACT_REVIEW_REDIRECT_RENDERER_ID (see ArtifactReviewRedirectCard) — a
+  // separate renderer module would add a new node to the run executor's locked
+  // route graph (the route-graph ratchet forbids growth). The inline card is
+  // display-only (no approve affordance) so a marked gate can never double-resume.
 
   fieldRendererRegistry.register({
     id: PERSONAL_SKILL_RENDERER_ID,

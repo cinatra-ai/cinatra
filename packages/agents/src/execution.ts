@@ -31,11 +31,42 @@ import {
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
 } from "./agent-builder-ids";
-import {
-  emitArtifactReviewGate,
-  readReviewGate,
-  ArtifactReviewGateError,
-} from "./artifact-review-gate-store";
+
+// ---------------------------------------------------------------------------
+// Artifact-review gate SEAM (cinatra#1796) — a boot-injected slot, NOT a static
+// import of `./artifact-review-gate-store`. The store module pulls the review
+// pure-cores (artifact-review-target etc.) + db/schema; importing it here (even
+// type-only) would make it reachable from every locked route that reaches this
+// run executor (/api/a2a, /api/mcp, /api/llm-bridge, /chat, /sign-in) and grow
+// their dev-perf reachable graph (the route-graph ratchet forbids growth). So
+// execution.ts reads the seam off `globalThis` (no import edge); a boot phase
+// binds it to the store's `emitArtifactReviewGate` / `readReviewGate` (the store
+// then rides ONLY the boot graph, never a route). The seam's `emit` returns a
+// RESULT (never throws the store's typed error) so this file needs no store type
+// either. An unbound slot (boot hasn't run in this bundle — near-impossible)
+// makes a marked gate FAIL CLOSED to the review surface (never the legacy gate,
+// which could dual-path an already-pinned gate); see the branch below.
+type ArtifactReviewGateSeam = {
+  emit(input: {
+    runId: string;
+    orgId: string;
+    reviewTaskId: string;
+    targets: unknown;
+  }): Promise<
+    | { ok: true }
+    | { ok: false; code: "invalid-targets" | "pin-conflict"; message: string }
+  >;
+  readGate(
+    runId: string,
+    reviewTaskId: string,
+  ): Promise<{ orgId: string; status: string } | null>;
+};
+function resolveArtifactReviewGateSeam(): ArtifactReviewGateSeam | null {
+  return (
+    (globalThis as { __cinatraArtifactReviewGateSeam?: ArtifactReviewGateSeam })
+      .__cinatraArtifactReviewGateSeam ?? null
+  );
+}
 // The run-worker entry reads `run.projectId`
 // from the DB row and wraps the execution body in a fresh
 // mcpRequestContextStorage frame whose `projectContext.projectId` is the
@@ -842,7 +873,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       // routeToReviewSurface is true when a USABLE pending gate for THIS run+org
       // is (or already was) pinned — so exactly ONE decision path exists (the
       // review surface + resume-delivery worker). On an emit failure we do NOT
-      // trust the error CODE to decide (a pin-conflict is thrown for a same-run
+      // trust the failure CODE to decide (a pin-conflict is reported for a same-run
       // re-emit with a different SET — a usable gate — but ALSO for a DIFFERENT
       // ORG or an unreconcilable vanished row, neither of which is usable here).
       // Instead we RE-READ the gate and route only when a pending gate for this
@@ -852,51 +883,66 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       // gate), a different-org conflict, or a vanished row all fall open to the
       // legacy HITL gate so the run degrades rather than dead-ends.
       let routeToReviewSurface = false;
-      try {
-        await emitArtifactReviewGate({
+      const gateSeam = resolveArtifactReviewGateSeam();
+      if (!gateSeam) {
+        // Boot has not bound the gate store in this bundle (a near-impossible
+        // degraded state — the bind phase is a trivial boot step). We cannot pin
+        // NOR read the gate here. FAIL CLOSED against a DUAL decision path: route
+        // to the review surface (which reads the store on its own route) rather
+        // than ALSO emitting the legacy in-panel gate — if a PRIOR execution
+        // already pinned this gate, emitting the legacy gate now would create a
+        // SECOND resume path into the same paused context. A first-visit run whose
+        // gate was never pinned simply sees the review surface's graceful
+        // unavailable/blocked state until boot re-binds the seam; it can never
+        // double-resume. Mirrors the read-failure fail-closed branch below.
+        console.warn(
+          `[artifact-review-gate] run=${runId} task=${task.id} gate seam not bound — ` +
+            `routing to the review surface (fail-closed against a dual path)`,
+        );
+        routeToReviewSurface = true;
+      } else {
+        const emitResult = await gateSeam.emit({
           runId,
           orgId: run.orgId,
           reviewTaskId,
           targets: rawTargets,
         });
-        routeToReviewSurface = true;
-      } catch (err) {
-        if (err instanceof ArtifactReviewGateError) {
-          // Route by the ACTUAL gate state, never the error code alone. FAIL
+        if (emitResult.ok) {
+          routeToReviewSurface = true;
+        } else {
+          // Route by the ACTUAL gate state, never the failure code alone. FAIL
           // CLOSED against a dual decision path: if the re-read itself THROWS we
           // cannot prove the gate absent, so we still route to the review surface
           // (which renders its own graceful blocked/unavailable state for a
           // missing gate) rather than ALSO emitting the legacy gate. Only a re-read
           // that DEFINITIVELY resolves to no usable gate for THIS run (null,
           // resolved, or a foreign org) falls open to the legacy HITL gate.
-          let reread: Awaited<ReturnType<typeof readReviewGate>> | "read-failed";
+          let reread: { orgId: string; status: string } | null | "read-failed";
           try {
-            reread = await readReviewGate(runId, reviewTaskId);
+            reread = await gateSeam.readGate(runId, reviewTaskId);
           } catch {
             reread = "read-failed";
           }
           if (reread === "read-failed") {
             console.warn(
-              `[artifact-review-gate] run=${runId} task=${task.id} emit ${err.code} ` +
-                `(${err.message}) — gate re-read failed; routing to the review surface ` +
+              `[artifact-review-gate] run=${runId} task=${task.id} emit ${emitResult.code} ` +
+                `(${emitResult.message}) — gate re-read failed; routing to the review surface ` +
                 `(fail-closed against a dual path)`,
             );
             routeToReviewSurface = true;
           } else if (reread && reread.orgId === run.orgId && reread.status === "pending") {
             console.warn(
-              `[artifact-review-gate] run=${runId} task=${task.id} emit ${err.code} ` +
-                `(${err.message}) — a usable pending gate for this run already exists; ` +
+              `[artifact-review-gate] run=${runId} task=${task.id} emit ${emitResult.code} ` +
+                `(${emitResult.message}) — a usable pending gate for this run already exists; ` +
                 `routing to it (no legacy gate)`,
             );
             routeToReviewSurface = true;
           } else {
             console.warn(
-              `[artifact-review-gate] run=${runId} task=${task.id} emit ${err.code} ` +
-                `(${err.message}) — no usable pinned gate for this run; falling back to the legacy HITL gate`,
+              `[artifact-review-gate] run=${runId} task=${task.id} emit ${emitResult.code} ` +
+                `(${emitResult.message}) — no usable pinned gate for this run; falling back to the legacy HITL gate`,
             );
           }
-        } else {
-          throw err;
         }
       }
       if (routeToReviewSurface) {
