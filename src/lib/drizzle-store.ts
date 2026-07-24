@@ -28,7 +28,7 @@ import {
 import { publicationOperationLedgerSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
 import { environmentLayerStoreSchemaQueries } from "@/lib/execution/environment-layer-schema";
 import { auditorSnapshotSchemaQueries } from "@/lib/auditor-snapshot-schema";
-import { artifactReviewGateSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
+import { artifactReviewGateSchemaQueries, lifecycleInterceptionsSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
 import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
@@ -229,9 +229,6 @@ export function buildEmailCorrelationIndexQueries(schemaName: string): QueryInpu
   ];
 }
 
-// ---------------------------------------------------------------------------
-// public."member" dedup ranking
-// ---------------------------------------------------------------------------
 export function buildCreateStoreSchemaQueries(schemaName: string): QueryInput[] {
   const queries: QueryInput[] = [
     { text: `CREATE SCHEMA IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"` },
@@ -1201,6 +1198,8 @@ END $$` },
     // converge via migration core__0072. Self-contained (child tables FK to the
     // gate; no cross-block bootstrap ordering).
     ...artifactReviewGateSchemaQueries(schemaName),
+    // lifecycle-interceptions S0 (cinatra#2038, epic #2037): policy lattice bounds, ArtifactProduced outbox, continuation park, advisory seam, decided S3/S4/S5 schemas + gate-store extensions. DDL co-located in artifact-review-gate-schema.ts (already route-reachable, so no new route-graph node); migration twin core__0079. Spread AFTER artifactReviewGateSchemaQueries so its additive ALTERs land on the existing gate tables.
+    ...lifecycleInterceptionsSchemaQueries(schemaName),
     // dashboards + dashboard_revisions for @cinatra-ai/dashboards.
     // Idempotent — ALTERs below handle older schemas that lack CHECK constraints + lifecycle columns.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."dashboards" (
