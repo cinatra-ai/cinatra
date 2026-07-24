@@ -5,7 +5,7 @@
     "/api/mcp": 1567,
     "/chat": 1641,
     "/api/a2a": 1572,
-    "/api/llm-bridge": 1579
+    "/api/llm-bridge": 1582
   },
   "absorbs": {
     "/sign-in": {
@@ -33,10 +33,10 @@
       "pr": 2048
     },
     "/api/llm-bridge": {
-      "from": 1566,
-      "to": 1579,
-      "reason": "#2048 dev-lock fleet bump (supersedes the auto/dev-lock-bump lane): advances the companion cinatra.devExtensions pins toward current fleet tips, holding 6 feature-coupled repos at their last host-green sha (media-transcript-agent, auditor-agent, gmail-connector, mcp-client-connector, github-connector, mcp-server-connector - see the PR body). Regenerating the static extensions registry (src/lib/generated/extensions.server.ts) against the resulting pin set nets a CI-measured UNIFORM +13 first-party modules reachable from every tracked route (extensions cloned pinned, 0 missing). Accepted graph-pressure cost of advancing the pinned extension fleet forward - barrel-import narrowing is out of scope for a mechanical pin roll. Replaces the base branch's #2033 carried record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2048
+      "from": 1579,
+      "to": 1582,
+      "reason": "PR #2035 (#2028 follow-on, owner ruling 2026-07-23 path B slice 2): the widget-stream SESSION MINT ownership-conjunction axis in src/lib/widget-stream-agents.server.ts (reachable from /api/llm-bridge via the agent union) now resolves the credential-store owner through the new src/lib/widget-stream-ownership-provenance.ts, which substitutes sanctioned marketplace-install PROVENANCE for the ownership-GRANT arm so a released-image rider with no admin ownership grant can still serve its widget (the never-auto-approved metadata-grant gate is untouched). That resolver statically reaches THREE first-party feature modules not previously first-party-reachable from this route: src/lib/widget-stream-ownership-provenance.ts (new), src/lib/widget-auth-install-provenance.ts (the resolveInstallProvenanceOwner primitive the axis is built on), and src/lib/widget-auth-provider.ts (the single canonical wordpress widget-auth capability id + tokenConfigKey + provider guard the resolver names as its honest P1 candidate, reused not duplicated) - a CI-measured +3 first-party modules with the companion extensions cloned pinned. The growth is intrinsic to the feature (reachable install-provenance resolution) and irreducible: the widget-auth-provider edge carries no unique additional transitive deps (the measured delta is exactly the three feature files), so extracting the shared descriptor to a leaf would swap one module for another at net zero. Raise is on top of origin/main's #2048 fleet-bump ceiling 1579 (disjoint from these three core src/lib feature modules); 1579 + 3 = 1582. Replaces the base branch's carried #2048 record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2035
     }
   }
 }

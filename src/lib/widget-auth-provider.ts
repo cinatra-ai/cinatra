@@ -82,13 +82,16 @@ import {
 // Inlined string literal (the SAME id the connector registers under and
 // `HOST_CONNECTOR_SERVICE_CAPABILITIES.wordpressWidgetAuth` holds) — a literal,
 // never an import specifier, so it carries no vendor-import coupling and no
-// barrel-init edge.
-const WORDPRESS_WIDGET_AUTH_CAPABILITY = "@cinatra-ai/host:wordpress-widget-auth";
+// barrel-init edge. EXPORTED so the widget-stream ownership surface (slice 2)
+// can name the SAME (capability, tokenConfigKey, providerGuard) triple honestly
+// as its install-provenance P1-candidate for this store — never a second,
+// drift-prone copy of the wordpress widget-auth descriptor.
+export const WORDPRESS_WIDGET_AUTH_CAPABILITY = "@cinatra-ai/host:wordpress-widget-auth";
 
 // The connector_config key of the EXACT store this capability wraps (the
 // UUID-pair api key + webhook secret row `connector_config:wordpress_widget_auth`)
 // — a persisted DATA key, never an extension package name.
-const WORDPRESS_WIDGET_AUTH_TOKEN_CONFIG_KEY = "wordpress_widget_auth";
+export const WORDPRESS_WIDGET_AUTH_TOKEN_CONFIG_KEY = "wordpress_widget_auth";
 
 /** Optional dependency injection for the runtime ownership-grant lookup so the
  * unauthenticated-surface resolver is unit-testable without a live pg pool. The
@@ -269,7 +272,10 @@ async function resolveWordPressWidgetAuthOwner(
 
 // Structural guard: a capability impl is `unknown` by contract (the registry
 // stores `unknown`; the runtime trust boundary is HERE, not the compile type).
-function isWordPressWidgetAuthProvider(
+// EXPORTED so the widget-stream ownership surface (slice 2) reuses the SINGLE
+// canonical wordpress widget-auth provider guard as its install-provenance P1
+// candidate guard — never a divergent duplicate.
+export function isWordPressWidgetAuthProvider(
   impl: unknown,
 ): impl is HostWordPressWidgetAuthService {
   const candidate = impl as Partial<HostWordPressWidgetAuthService> | null;
