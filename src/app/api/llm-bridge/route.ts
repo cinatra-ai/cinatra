@@ -1254,9 +1254,24 @@ export async function POST(req: Request): Promise<Response> {
     // call with no vetted run), delivery falls back to today's computed
     // assignment — behavior unchanged. Only the server-vetted `runForPorts.id`
     // keys the set (never a caller-supplied id).
-    const runSelectedSet = runForPorts?.id
-      ? readRunSelectedSkillRevisions(runForPorts.id)
-      : [];
+    //
+    // BEST-EFFORT (matches the execution-start read in
+    // packages/agents/src/execution.ts, and the store's own contract: "throws
+    // only on a genuine DB error, which the caller wraps"): a selection-read
+    // failure must never fail the bridge request — it falls back to today's
+    // computed assignment (empty set ⇒ no override), behavior unchanged.
+    let runSelectedSet: ReturnType<typeof readRunSelectedSkillRevisions> = [];
+    if (runForPorts?.id) {
+      try {
+        runSelectedSet = readRunSelectedSkillRevisions(runForPorts.id);
+      } catch (err) {
+        console.warn(
+          `[llm-bridge] selected-skill-revision read failed for run ${runForPorts.id}:`,
+          err instanceof Error ? err.message : String(err),
+        );
+        runSelectedSet = [];
+      }
+    }
     const [personalSkill, assignedSkillIds] = body.agent_id
       ? await Promise.all([
           getCustomSkillForCurrentUserAndAgent(
