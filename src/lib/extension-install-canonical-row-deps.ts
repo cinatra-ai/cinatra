@@ -20,6 +20,37 @@ import "server-only";
 
 import type { InstallPipelineDeps } from "@/lib/extension-install-pipeline";
 
+/**
+ * Canonical-row install deps for the widget-auth DECLARED token keys (owner
+ * ruling 2026-07-23 — the widget-auth delivery fix, path B). Records the
+ * SRI-verified manifest's declared `cinatra.widgetStream[.auth].tokenConfigKey`
+ * set onto the SAME canonical row the provenance/edges/access-declaration writes
+ * bind (boundRowId-aware), so the marketplace-install-PROVENANCE owner arm
+ * (arm (c)) reads its P5 declaration from the tamper-proof canonical column
+ * instead of re-reading the mutable `/data/extensions` store. Written at the
+ * FINALIZE SEAM (after `recordProvenance`) so the column is crash-consistent
+ * with the row's source: a crash between the source write and journal-finalize
+ * leaves the row un-anchorable (`selectActiveDigest` mismatch), so an OLD
+ * finalized anchor can never pair with NEW-version keys.
+ */
+export type WidgetAuthTokenKeysInstallDeps = {
+  /** Persist the CURRENT declared token keys (incl. `[]` — a re-install that
+   * DROPS a key clears the stale non-empty value) onto the SAME (package, org)
+   * row the provenance write binds. */
+  persistWidgetAuthTokenKeys?: (input: {
+    packageName: string;
+    orgId: string | null;
+    tokenKeys: string[];
+  }) => Promise<void>;
+  /** Capture the row's CURRENT `widget_auth_token_keys` for the (package, org)
+   * BEFORE the finalize seam overwrites it — restored on a failed UPDATE
+   * (`null` = legacy/absent, restored as the explicit clear). */
+  readCurrentWidgetAuthTokenKeys?: (
+    packageName: string,
+    orgId: string | null,
+  ) => Promise<string[] | null>;
+};
+
 type CanonicalRowInstallDeps = Pick<
   InstallPipelineDeps,
   | "recordProvenance"
@@ -29,6 +60,8 @@ type CanonicalRowInstallDeps = Pick<
   | "persistDependencyEdges"
   | "readCurrentAccessDeclaration"
   | "persistAccessDeclaration"
+  | "persistWidgetAuthTokenKeys"
+  | "readCurrentWidgetAuthTokenKeys"
 >;
 
 /**
@@ -219,5 +252,95 @@ export function makeCanonicalRowInstallDeps(opts: {
         reason: `connector access declaration @ install`,
       });
     },
+    // WIDGET-AUTH DECLARED TOKEN KEYS at the finalize seam (owner ruling
+    // 2026-07-23): the SRI-verified manifest's declared token keys land on the
+    // SAME single (package, org) row the provenance write resolved (boundRowId-
+    // aware, so a non-default side-by-side install writes to its OWN row, never
+    // clobbering the default's declaration). The tamper-proof P5 source arm (c)
+    // reads.
+    persistWidgetAuthTokenKeys: async (p) => {
+      const target = await resolveTarget(p.packageName, p.orgId);
+      if (!target) {
+        throw new Error(
+          `persistWidgetAuthTokenKeys: expected exactly 1 active installed_extension row for ${p.packageName} in org ${p.orgId ?? "(global)"} (0 or ambiguous owner scope) — fail closed`,
+        );
+      }
+      const { recordExtensionWidgetAuthTokenKeys } = await import(
+        "@cinatra-ai/extensions/lifecycle-primitive"
+      );
+      await recordExtensionWidgetAuthTokenKeys(target.id, p.tokenKeys, {
+        actor: { source: "runtime-installer" },
+        reason: `widget-auth declared token keys @ install (owner ruling 2026-07-23)`,
+      });
+    },
+    // CAPTURE (owner ruling 2026-07-23): the prior canonical row's recorded
+    // widget-auth token keys — restored by both unwind paths when an UPDATE fails
+    // after the finalize seam overwrote it (mirrors readCurrentAccessDeclaration).
+    readCurrentWidgetAuthTokenKeys: async (packageName, orgId) => {
+      const target = await resolveTarget(packageName, orgId);
+      return target?.widgetAuthTokenKeys ?? null;
+    },
   };
+}
+
+/**
+ * WIDGET-AUTH TOKEN-KEYS PERSISTENCE at the FINALIZE SEAM (owner ruling
+ * 2026-07-23): record the SRI-verified manifest's declared token keys on the
+ * canonical row, with the same crash-consistency guarantees as the dependency
+ * edges / access declaration. Written UNCONDITIONALLY (including `[]`) so a
+ * re-install that DROPS a key clears a stale non-empty declaration and a null
+ * column reliably means "legacy row" (arm (c) fails closed on it). A pure no-op
+ * when unwired (older pipeline unit tests). A throw aborts the finalize (the
+ * pipeline's existing unwind handles it).
+ */
+export async function persistWidgetAuthTokenKeysAtFinalize(
+  deps: Pick<WidgetAuthTokenKeysInstallDeps, "persistWidgetAuthTokenKeys">,
+  input: { packageName: string; orgId: string | null; tokenKeys: readonly string[] },
+): Promise<void> {
+  if (!deps.persistWidgetAuthTokenKeys) return;
+  await deps.persistWidgetAuthTokenKeys({
+    packageName: input.packageName,
+    orgId: input.orgId,
+    tokenKeys: [...input.tokenKeys],
+  });
+}
+
+/**
+ * Restore the OLD recorded token keys on a failed UPDATE (owner ruling
+ * 2026-07-23) — the finalize seam may have overwritten them with the NEW
+ * manifest's declaration; with the OLD install still live, leaving them would let
+ * arm (c) honor the OLD provider for the NEW version's keys. Keyed on `isUpdate`
+ * (a fresh install's placeholder row is dropped by the dispatcher — nothing to
+ * restore); a captured NULL prior (legacy/absent column) restores to `[]`, never
+ * re-manufacturing a stale non-empty value. Best-effort: a failed restore reports
+ * through `onFailure` and never throws.
+ */
+export async function restorePriorWidgetAuthTokenKeys(
+  deps: Pick<WidgetAuthTokenKeysInstallDeps, "persistWidgetAuthTokenKeys">,
+  input: { packageName: string; orgId: string | null; isUpdate: boolean; prior: string[] | null },
+  onFailure: (reason: string) => void,
+): Promise<void> {
+  if (!input.isUpdate || !deps.persistWidgetAuthTokenKeys) return;
+  const persist = deps.persistWidgetAuthTokenKeys;
+  try {
+    await persist({ packageName: input.packageName, orgId: input.orgId, tokenKeys: input.prior ?? [] });
+  } catch (restoreErr) {
+    // FAIL CLOSED on a restore-write failure (owner ruling 2026-07-23, codex
+    // round-4). If we cannot re-pin the OLD keys, the column must NOT be left
+    // holding the failed NEW-version keys — a re-anchored OLD source paired with
+    // NEW keys would let arm (c) honor a provider for a store its manifest never
+    // declared. Clearing to [] makes arm (c) resolve NO owner (fail-closed) for
+    // whatever source ends up anchored. This is a SECOND best-effort write; if it
+    // ALSO fails the rollback is doubly non-clean (both errors reported) — the
+    // operator-recovery path every durable-restore axis shares. Either way the
+    // step is marked failed (a NON-clean rollback), never a silent success.
+    const rMsg = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
+    try {
+      await persist({ packageName: input.packageName, orgId: input.orgId, tokenKeys: [] });
+      onFailure(`token-keys restore failed (${rMsg}); column FAIL-CLOSED to [] instead`);
+    } catch (clearErr) {
+      const cMsg = clearErr instanceof Error ? clearErr.message : String(clearErr);
+      onFailure(`token-keys restore AND fail-closed clear both failed (${rMsg}; ${cMsg})`);
+    }
+  }
 }

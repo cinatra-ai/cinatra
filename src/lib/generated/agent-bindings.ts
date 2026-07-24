@@ -29,6 +29,7 @@ export type GeneratedFieldRendererBinding = {
 export const GENERATED_FIELD_RENDERER_BINDINGS: ReadonlyArray<GeneratedFieldRendererBinding> = [
   { id: "@cinatra-ai/auditor-agent:review", kind: "auditor-review", priority: 80, midRunHitl: true, declaredBy: "@cinatra-ai/auditor-agent" },
   { id: "@cinatra-ai/blog-linkedin-publish-agent:draft-review", kind: "linkedin-draft-review", priority: 90, midRunHitl: true, declaredBy: "@cinatra-ai/blog-linkedin-publish-agent" },
+  { id: "@cinatra-ai/blog-pipeline-agent:idea-selection", kind: "blog-idea-selection", priority: 80, midRunHitl: true, declaredBy: "@cinatra-ai/blog-pipeline-agent" },
   { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm", priority: 90, midRunHitl: true, declaredBy: "@cinatra-ai/blog-wordpress-publish-agent" },
   { id: "@cinatra-ai/context-selection-agent:context-selector", kind: "context-selector", priority: 90, midRunHitl: true, declaredBy: "@cinatra-ai/context-selection-agent" },
   { id: "@cinatra-ai/email-delivery-agent:output", kind: "send-confirmation", priority: 80, a2uiTranslator: "send-output", declaredBy: "@cinatra-ai/email-artifacts" },

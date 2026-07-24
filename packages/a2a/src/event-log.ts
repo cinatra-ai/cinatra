@@ -1,5 +1,7 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
+
 import { Redis } from "ioredis";
 
 // ---------------------------------------------------------------------------
@@ -466,6 +468,119 @@ export async function resolveLatestWayflowGateTaskId(
   const r = getPublisher();
   const taskId = await r.get(`cinatra:wayflow:latest-task:${runId}`);
   return typeof taskId === "string" && taskId.length > 0 ? taskId : null;
+}
+
+// ---------------------------------------------------------------------------
+// #1987 (F1 deferred from #1960) — ANSWERED-gate-submission provenance.
+//
+// GENERALIZES the #1625 `verifiedSubmissionId` substrate (the `latest-task` map
+// above) from a single-consumer dedupe key into a REQUIRED, single-use authz
+// binding for run-scoped PERSIST primitives (#1959 drafts / #1960 recipients /
+// future #1946-template members). The gap it closes: the `latest-task` map is
+// set at INTERRUPT-EMIT and is therefore present while a gate is merely PENDING,
+// so on its own it cannot tell "the operator ANSWERED this gate" apart from "an
+// in-run OBO node ran while the gate is open". A persist primitive authorized on
+// the run frame alone (verified run + declaring package + `respondToHitl`) — all
+// properties of the whole agent-run OBO context, NOT of the individual gate
+// answer — could therefore write a payload the operator never submitted.
+//
+// This record is minted ONLY at the operator's ANSWER (approveReviewTaskInternal
+// wayflow- branch, BEFORE the WayFlow resume dispatch), keyed by the EXACT gate
+// a2a task id, carrying a digest of the operator's canonical resume payload. The
+// persist seam consumes it ATOMICALLY (single-use) at the post-resume `apply`
+// node, binding (run, exact gate identity, canonical payload) — so a persist that
+// cannot present valid, unconsumed answered-gate provenance for its own gate +
+// payload FAILS CLOSED, is not replayable, and cannot be presented for a mutated
+// payload. The join key is the gate a2a task id: the passthrough seam already
+// stamps `verifiedSubmissionId = resolveLatestWayflowGateTaskId(runId)` (this
+// gate's id, unchanged until the NEXT interrupt, which the post-resume apply node
+// precedes), so the consume side re-derives the same identity from the trusted
+// frame, never caller input.
+// ---------------------------------------------------------------------------
+
+function answeredGateKey(runId: string, taskId: string): string {
+  return `cinatra:wayflow:answered-gate:${runId}:${taskId}`;
+}
+
+// The canonical binding digest over the operator's resume payload string. The
+// mint (the operator's `userResponse`) and the consume (the apply node's
+// verbatim-forwarded `resumePayloadJson`) hash the SAME byte string — WayFlow
+// passes the InputMessageNode's user text through UNCHANGED (the documented
+// byte-identical invariant the #1959/#1960 seams already rely on) — so any
+// mutation of the persisted payload changes the digest and fails the bind.
+export function answeredGatePayloadDigest(resumePayload: string): string {
+  return createHash("sha256").update(resumePayload, "utf8").digest("hex");
+}
+
+/**
+ * #1987 — mint the ANSWERED-gate-submission provenance for a run's gate at the
+ * operator's answer. Keyed by the exact gate a2a task id, valued with the
+ * canonical payload digest. A plain Redis SET with the same TTL as the gate
+ * sequence substrate. MUST be awaited and treated as correctness-critical: a
+ * Redis failure THROWS so the resume is NOT dispatched (fail closed) — an
+ * unrecorded answer means the post-resume persist denies, never persists an
+ * unbound write. Mirrors `rememberLatestWayflowGateTask`'s fail-closed posture.
+ */
+export async function rememberAnsweredGateSubmission(
+  runId: string,
+  taskId: string,
+  resumePayload: string,
+): Promise<void> {
+  if (!runId || !taskId) return;
+  const r = getPublisher();
+  await r.set(
+    answeredGateKey(runId, taskId),
+    answeredGatePayloadDigest(resumePayload),
+    "EX",
+    GATE_SEQUENCE_TTL_S,
+  );
+}
+
+export type AnsweredGateConsumeResult = "consumed" | "mismatch" | "absent";
+
+// Atomic compare-and-consume: GET the stored digest, DEL it iff it equals the
+// presented payload's digest, in ONE server-side Lua step so no interleaving can
+// double-consume. Returns which arm fired. `mismatch` deliberately does NOT
+// delete — a wrong-payload attempt must not burn the operator's genuine answer
+// (the real apply node can still consume it), and a second correct consume after
+// a `consumed` returns `absent` (single-use / replay-safe).
+const ANSWERED_GATE_CONSUME_LUA = `
+local v = redis.call('GET', KEYS[1])
+if not v then return 'absent' end
+if v == ARGV[1] then
+  redis.call('DEL', KEYS[1])
+  return 'consumed'
+end
+return 'mismatch'
+`;
+
+/**
+ * #1987 — atomically consume a run's answered-gate provenance for the EXACT gate
+ * task id, binding the presented resume payload to the operator's answer.
+ *   - `consumed`: a record existed for (run, gate) AND its digest matched the
+ *     presented payload → it is atomically DELETED (single-use). The persist is
+ *     authorized exactly once.
+ *   - `mismatch`: a record existed but the presented payload's digest differed →
+ *     NOT consumed (payload substitution/mutation). The persist must deny.
+ *   - `absent`: no record — the gate was never answered, its answer was already
+ *     applied (replay), or it expired. The persist must deny (fail closed).
+ * The caller treats a THROW (Redis unreadable) as `absent`-equivalent and fails
+ * closed — never a run-frame-only decision.
+ */
+export async function consumeAnsweredGateSubmission(
+  runId: string,
+  taskId: string,
+  resumePayload: string,
+): Promise<AnsweredGateConsumeResult> {
+  if (!runId || !taskId) return "absent";
+  const r = getPublisher();
+  const res = await r.eval(
+    ANSWERED_GATE_CONSUME_LUA,
+    1,
+    answeredGateKey(runId, taskId),
+    answeredGatePayloadDigest(resumePayload),
+  );
+  return res === "consumed" ? "consumed" : res === "mismatch" ? "mismatch" : "absent";
 }
 
 /**

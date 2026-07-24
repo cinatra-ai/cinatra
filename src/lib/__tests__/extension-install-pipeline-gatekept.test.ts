@@ -89,6 +89,10 @@ vi.mock("@cinatra-ai/extensions/lifecycle-primitive", () => ({
   // #180 edge persistence: the sanctioned canonical writer (no-op here — these
   // fixtures pin trust/provenance routing, not edge persistence).
   recordExtensionDependencies: vi.fn(async () => ({})),
+  // Owner ruling 2026-07-23: the canonical widget-auth token-keys writer the
+  // ownership-grant seam invokes (no-op here — these fixtures pin trust routing,
+  // not the token-keys column write).
+  recordExtensionWidgetAuthTokenKeys: vi.fn(async () => ({})),
 }));
 vi.mock("@cinatra-ai/extensions/manifest-dependencies", () => ({
   // The fixture storeDir is synthetic (no real package.json on disk) — the
