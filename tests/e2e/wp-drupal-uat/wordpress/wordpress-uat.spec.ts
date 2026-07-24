@@ -94,23 +94,36 @@ test.describe("WordPress assistant UAT", () => {
     await egress.verify();
   });
 
-  test("6. a missing/invalid API key surfaces a graceful admin-facing error (not 500)", async ({ page }) => {
-    const seed = readSeed();
-    // Drive the API directly with a bogus bearer to assert the error contract:
-    // a structured non-500 response (the bundle renders error.message).
-    const res = await page.request.post(
-      `${process.env.E2E_WP_DRUPAL_BASE_URL ?? "http://localhost:3000"}/api/agents/wordpress-content-editor/stream`,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer invalid-key",
-          Origin: WP_BASE,
-        },
-        data: { contractVersion: "v1", messages: [{ role: "user", content: "hi" }] },
-        failOnStatusCode: false,
+  test("6. an invalid-token widget request to the unified broker turn surfaces a graceful 401 (not 500)", async ({ page }) => {
+    // S5 unified-broker cutover (cinatra#2029 / #1991): the legacy widget relay
+    // POST /api/agents/{slug}/stream was DELETED. The widget now turns against the
+    // unified broker at POST /api/assistants/chat (src/lib/widget-broker-route.ts),
+    // discriminated by the `cit_` transport-token prefix on Authorization and the
+    // per-user `cwu_` token on X-Cinatra-Widget-User-Token, with the bound handle
+    // in `body.assistant`. Drive that exact surface with an INVALID cit_ token: a
+    // well-formed widget request (valid `assistant` handle, a configured agent +
+    // the scripted provider, so the flow reaches the token consume) with an
+    // unauthenticated token fails CLOSED at the cit_ consume with a plain 401
+    // "Unauthorized" — the graceful auth-failure surface the plugins render (never
+    // a 500, never the deleted route's 404). Playwright's APIRequestContext does
+    // not enforce CORS, so this reaches the handler directly.
+    const cinatraBase = process.env.E2E_WP_DRUPAL_BASE_URL ?? "http://localhost:3000";
+    const res = await page.request.post(`${cinatraBase}/api/assistants/chat`, {
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer cit_invalid-site-token",
+        "X-Cinatra-Widget-User-Token": "cwu_invalid-user-token",
+        Origin: WP_BASE,
       },
-    );
+      data: {
+        threadId: "uat-scenario-6-auth-failure",
+        messages: [{ role: "user", content: "hi" }],
+        assistant: "wordpress",
+      },
+      failOnStatusCode: false,
+    });
     expect(res.status()).not.toBe(500);
-    expect([401, 403]).toContain(res.status());
+    expect(res.status()).toBe(401);
+    expect(await res.text()).toContain("Unauthorized");
   });
 });

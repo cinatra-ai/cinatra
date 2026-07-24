@@ -285,35 +285,59 @@ async function warmDevRoutes(): Promise<void> {
       { label: "GET /widget-auth", run: () => ctx.get("/widget-auth", { failOnStatusCode: false, timeout: 120_000 }) },
       { label: "POST /api/widget-auth/token", run: () => ctx.post("/api/widget-auth/token", { data: {}, failOnStatusCode: false, timeout: 120_000 }) },
     );
-    // Per-agent surface. The dynamic [agentSlug] segments share one compiled
-    // module, but warm both slugs anyway: first-hit per-agent work (extension
-    // service registration) also shows up as multi-second latency in run logs.
-    for (const [slug, cmsOrigin] of [
-      ["wordpress-content-editor", process.env.UAT_WP_BASE_URL ?? "http://localhost:8080"],
-      ["drupal-content-editor", process.env.UAT_DRUPAL_BASE_URL ?? "http://localhost:8082"],
-    ] as const) {
+    // S5 unified assistant-broker surface (cinatra#1221/#1998/#2029) — the routes
+    // the cutover widget actually drives. Warm the client-side negotiate GET, the
+    // turn POST + its CORS preflight (broker-auth branch), and the /embed/assistant
+    // page the widget frames (also the fallback's reachability-probe target). These
+    // are single compiled modules (not per-[agentSlug]), so warm them ONCE. The
+    // legacy per-agent /capabilities + /stream warms are dropped: those routes were
+    // deleted (cinatra#1991).
+    const uatWpOrigin = process.env.UAT_WP_BASE_URL ?? "http://localhost:8080";
+    targets.push(
+      { label: "GET /api/assistants/chat/capabilities", run: () => ctx.get("/api/assistants/chat/capabilities", { failOnStatusCode: false, timeout: 120_000 }) },
+      {
+        label: "OPTIONS /api/assistants/chat",
+        run: () =>
+          ctx.fetch("/api/assistants/chat", {
+            method: "OPTIONS",
+            headers: {
+              Origin: uatWpOrigin,
+              "Access-Control-Request-Method": "POST",
+              "Access-Control-Request-Headers": "authorization,content-type,x-cinatra-widget-user-token",
+            },
+            failOnStatusCode: false,
+            timeout: 120_000,
+          }),
+      },
+      {
+        label: "POST /api/assistants/chat",
+        run: () =>
+          ctx.post("/api/assistants/chat", {
+            headers: {
+              Authorization: "Bearer cit_warmup-invalid",
+              "X-Cinatra-Widget-User-Token": "cwu_warmup-invalid",
+              Origin: uatWpOrigin,
+            },
+            data: { threadId: "warmup", messages: [{ role: "user", content: "warm" }], assistant: "wordpress" },
+            failOnStatusCode: false,
+            timeout: 120_000,
+          }),
+      },
+      { label: "GET /embed/assistant", run: () => ctx.get("/embed/assistant?assistant=wordpress&instanceId=warmup", { failOnStatusCode: false, timeout: 120_000 }) },
+    );
+    // Per-agent surface. Only the short-lived cit_ MINT survives on the per-agent
+    // route family (POST /api/agents/{slug}/token — unchanged by the S5 cutover,
+    // cinatra#1221). The dynamic [agentSlug] segments share one compiled module,
+    // but warm both slugs anyway: first-hit per-agent work (extension service
+    // registration) also shows up as multi-second latency in run logs.
+    for (const slug of ["wordpress-content-editor", "drupal-content-editor"] as const) {
       targets.push(
-        { label: `GET /api/agents/${slug}/capabilities`, run: () => ctx.get(`/api/agents/${slug}/capabilities`, { failOnStatusCode: false, timeout: 120_000 }) },
         {
           label: `POST /api/agents/${slug}/token`,
           run: () =>
             ctx.post(`/api/agents/${slug}/token`, {
               headers: { Authorization: "Bearer warmup-invalid", Origin: CINATRA_BASE },
               data: { contractVersion: "v1" },
-              failOnStatusCode: false,
-              timeout: 120_000,
-            }),
-        },
-        {
-          label: `OPTIONS /api/agents/${slug}/stream`,
-          run: () =>
-            ctx.fetch(`/api/agents/${slug}/stream`, {
-              method: "OPTIONS",
-              headers: {
-                Origin: cmsOrigin,
-                "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "authorization,content-type,x-cinatra-widget-user-token",
-              },
               failOnStatusCode: false,
               timeout: 120_000,
             }),
