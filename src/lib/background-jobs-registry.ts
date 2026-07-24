@@ -23,6 +23,8 @@ import {
   ENVIRONMENT_LAYER_GC_REAP_LOOP_JOB_ID,
   UNBOUND_OUTPUT_DERIVE_SWEEP_LOOP_JOB_ID,
   ARTIFACT_REVIEW_RESUME_DELIVERY_LOOP_JOB_ID,
+  LIFECYCLE_REVIEW_ORCHESTRATION_LOOP_JOB_ID,
+  LIFECYCLE_GATE_MAINTENANCE_LOOP_JOB_ID,
 } from "@/lib/background-jobs-names";
 // TYPE-ONLY (erased at compile; not a route-graph edge) — the reaper VALUE is
 // boot-registered through the slot below, never imported here.
@@ -189,6 +191,60 @@ export function registerArtifactReviewResumeDeliveryRunner(
 
 function resolveArtifactReviewResumeDeliveryRunner(): ArtifactReviewResumeDeliveryRunner | null {
   return globalThis.__cinatraArtifactReviewResumeDeliveryRunner ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle-interceptions S1 runner slot (cinatra#2039, epic #2037).
+//
+// Same posture as the slots above: the orchestration + maintenance drains live
+// in `@cinatra-ai/agents/lifecycle-review-orchestration` (which reaches the
+// gate/park/outbox/policy + objects-store graph) and are BOOT-REGISTERED by the
+// system-loops seed phase behind the S1 activation fence — never imported here,
+// even dynamically, because this registry sits in the LOCKED dev-perf routes'
+// reachable graph (route-graph ratchet). Both recurring handlers resolve through
+// this single slot; each no-ops LOUDLY (and re-delays) when the slot is empty —
+// a skipped cycle is safe (the produced-event outbox + gate rows are durable and
+// the next cycle re-claims them) — and the boot seed registers the runner BEFORE
+// it seeds the loops. The slot stays empty on every boot where the S1 fence is
+// OFF (the default): the boot phase never registers it, so both loops no-op.
+// globalThis-backed so a worker dispatching from a different bundle's module
+// instance still sees the boot registration.
+// ---------------------------------------------------------------------------
+
+// Structural mirror of the store's summary shapes (defined LOCALLY, not imported
+// — a cross-package import of the store would grow this locked registry's graph).
+type LifecycleReviewOrchestrationSummary = {
+  scanned: number;
+  gatesCreated: number;
+  noGate: number;
+  notClassifiable: number;
+  failed: number;
+};
+type LifecycleGateMaintenanceSummary = {
+  tombstonesApplied: number;
+  tombstoneFailures: number;
+  optionalExpired: number;
+  requiredExpiredBlocked: number;
+  parksReleased: number;
+};
+
+type LifecycleReviewRunner = {
+  orchestrate: () => Promise<LifecycleReviewOrchestrationSummary>;
+  maintain: () => Promise<LifecycleGateMaintenanceSummary>;
+};
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __cinatraLifecycleReviewRunner: LifecycleReviewRunner | undefined;
+}
+
+/** Boot-time registration (system-loops phase, fence-gated). Idempotent. */
+export function registerLifecycleReviewRunner(runner: LifecycleReviewRunner): void {
+  globalThis.__cinatraLifecycleReviewRunner = runner;
+}
+
+function resolveLifecycleReviewRunner(): LifecycleReviewRunner | null {
+  return globalThis.__cinatraLifecycleReviewRunner ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1250,6 +1306,83 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           if (summary.attempted > 0) {
             console.log(
               `[artifact-review-resume-delivery] attempted=${summary.attempted} delivered=${summary.delivered} already_advanced=${summary.alreadyAdvanced} retryable=${summary.retryable} failed=${summary.failed}`,
+            );
+          }
+        },
+      });
+    },
+  },
+  [BACKGROUND_JOB_NAMES.LIFECYCLE_REVIEW_ORCHESTRATION]: {
+    payloadSchema: looseObject(),
+    async handle(job) {
+      // ~30-second drain of the ArtifactProduced outbox into policy-matched
+      // review gates (cinatra#2039, epic #2037 S1). The drain never runs at boot
+      // — boot only seeds this delayed loop (fence-gated). The store sweep is
+      // FENCED (a no-op when the S1 activation fence is off) and never throws
+      // per-event (per-event failures are tallied, the event stays pending); any
+      // unexpected throw propagates to runRecurringLoop, which reports it and
+      // always re-delays (cinatra#849).
+      const THIRTY_SECONDS_MS = 30 * 1000;
+      await runRecurringLoop({
+        job,
+        loopJobId: LIFECYCLE_REVIEW_ORCHESTRATION_LOOP_JOB_ID,
+        delayMs: THIRTY_SECONDS_MS,
+        label: "lifecycle-review-orchestration",
+        run: async () => {
+          // Boot-registered slot (kept out of this registry's route graph). The
+          // slot is empty whenever the S1 fence is off (the boot phase never
+          // registers it), so the loop no-ops loudly and re-delays.
+          const runner = resolveLifecycleReviewRunner();
+          if (!runner) {
+            console.warn(
+              "[lifecycle-review-orchestration] runner slot empty (S1 fence off, or boot system-loops phase did not run) — skipping cycle",
+            );
+            return;
+          }
+          const summary = await runner.orchestrate();
+          if (summary.scanned > 0) {
+            console.log(
+              `[lifecycle-review-orchestration] scanned=${summary.scanned} gatesCreated=${summary.gatesCreated} noGate=${summary.noGate} notClassifiable=${summary.notClassifiable} failed=${summary.failed}`,
+            );
+          }
+        },
+      });
+    },
+  },
+  [BACKGROUND_JOB_NAMES.LIFECYCLE_GATE_MAINTENANCE]: {
+    payloadSchema: looseObject(),
+    async handle(job) {
+      // ~60-second lifecycle gate-maintenance drain (cinatra#2039, epic #2037 S1):
+      // apply reject tombstones, expire due auto-gates (optional auto-resolve /
+      // required block+notify), release checkpointed parks whose auto-gate
+      // resolved. Boot only seeds this delayed loop (fence-gated). The store sweep
+      // is FENCED (a no-op when the S1 fence is off) and never throws per-item;
+      // any unexpected throw propagates to runRecurringLoop (report + always
+      // re-delay, cinatra#849).
+      const SIXTY_SECONDS_MS = 60 * 1000;
+      await runRecurringLoop({
+        job,
+        loopJobId: LIFECYCLE_GATE_MAINTENANCE_LOOP_JOB_ID,
+        delayMs: SIXTY_SECONDS_MS,
+        label: "lifecycle-gate-maintenance",
+        run: async () => {
+          const runner = resolveLifecycleReviewRunner();
+          if (!runner) {
+            console.warn(
+              "[lifecycle-gate-maintenance] runner slot empty (S1 fence off, or boot system-loops phase did not run) — skipping cycle",
+            );
+            return;
+          }
+          const summary = await runner.maintain();
+          if (
+            summary.tombstonesApplied > 0 ||
+            summary.tombstoneFailures > 0 ||
+            summary.optionalExpired > 0 ||
+            summary.requiredExpiredBlocked > 0 ||
+            summary.parksReleased > 0
+          ) {
+            console.log(
+              `[lifecycle-gate-maintenance] tombstones=${summary.tombstonesApplied} tombstoneFailures=${summary.tombstoneFailures} optionalExpired=${summary.optionalExpired} requiredExpiredBlocked=${summary.requiredExpiredBlocked} parksReleased=${summary.parksReleased}`,
             );
           }
         },

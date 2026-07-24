@@ -6,6 +6,7 @@ import { rawWithParams } from "@/lib/dashboards/raw-with-params";
 import { buildBindingReconcileQueries } from "@/lib/objects/binding-write-path";
 import { buildObjectsWithOutboxQuery, buildSoftDeleteObjectQuery } from "@/lib/objects-store";
 import { buildAssertSemanticTypeQueries } from "@/lib/artifacts/semantic-assertion-store";
+import { maybeBuildProducedEventInsertOp } from "@/lib/lifecycle/lifecycle-emit";
 import {
   setDashboardArtifactTwinWriter,
   type DashboardArtifactTwinWriter,
@@ -134,7 +135,11 @@ ON CONFLICT (id) DO NOTHING`,
  *  `COALESCE(MAX(revision),0)+1` under the held advisory lock (delta D2). One
  *  statement — the aggregate SELECT over the (org, artifact) history feeds the
  *  INSERT. Always advances (NOT outbox-gated, D3). */
-function buildDashboardRepresentationQuery(schema: string, ctx: DashboardTwinContext): SubstrateQuery {
+function buildDashboardRepresentationQuery(
+  schema: string,
+  ctx: DashboardTwinContext,
+  representationRevisionId: string,
+): SubstrateQuery {
   const s = schema.replaceAll('"', '""');
   return {
     text: `INSERT INTO "${s}"."representation"
@@ -144,7 +149,7 @@ SELECT $1::text, $2::text, $3::text, $4::text,
 FROM "${s}"."representation" r
 WHERE r.org_id = $2::text AND r.artifact_id = $3::text`,
     values: [
-      randomUUID(),
+      representationRevisionId,
       ctx.orgId,
       ctx.dashboardId,
       dashboardResourceId(ctx.dashboardId),
@@ -198,6 +203,10 @@ export function buildDashboardTwinQueries(ctx: DashboardTwinContext): SubstrateQ
   }
 
   // operation === "upsert".
+  // The append-only representation revision id for THIS twin write — generated
+  // here (not inside the builder) so the lifecycle produced-event (below) can pin
+  // it as its review target, matching the substrate revision the twin allocates.
+  const representationRevisionId = randomUUID();
   const visibility = deriveConservativeVisibility(ctx.ownerLevel, ctx.projectId);
   const objectsOutbox = buildObjectsWithOutboxQuery(schema, "upsert", {
     id: ctx.dashboardId,
@@ -283,14 +292,38 @@ export function buildDashboardTwinQueries(ctx: DashboardTwinContext): SubstrateQ
   // rolling back. (A re-materialize of such a cross-claiming pack still fails
   // closed on the pre-existing binding — an accepted bound for an unsupported
   // manifest shape, never data corruption.)
+  // ── LIFECYCLE-INTERCEPTIONS S1 PRODUCED EVENT (cinatra#2039, epic #2037) ──
+  // The transactional ArtifactProduced event for the dashboard twin, written in
+  // THIS same dashboards tx so review is driven by a durable, same-tx idempotent
+  // event. FENCED default-OFF: `maybeBuildProducedEventInsertOp` returns null when
+  // the S1 activation fence is off, so this splices NOTHING (the twin query list
+  // is byte-identical to origin/main). ORIGIN: an extension-MATERIALIZED dashboard
+  // (`extensionId` set) is `agent_generated` (review-eligible per policy); a
+  // user/operator-built dashboard is `upload` (→ user_provided → the review core
+  // default SKIPS, unless an org bound requires it). The dashboard produces no
+  // external effect at write time, so `destinationClass` defaults to `none`.
+  // Appended LAST — the twin's result rows are positional only for the pinned
+  // substrate ops above (all before this); the event's result is never read.
+  const s = schema.replaceAll('"', '""');
+  const producedEventOp = maybeBuildProducedEventInsertOp(s, {
+    orgId: ctx.orgId,
+    artifactId: ctx.dashboardId,
+    representationRevisionId,
+    emitter: "dashboard_twin_writer",
+    originKind: ctx.extensionId != null ? "agent_generated" : "upload",
+    producerRunId: null,
+    producerAgentId: null,
+  });
+
   return [
     lock,
     buildDashboardResourceQuery(schema, ctx),
     objectsOutbox,
-    buildDashboardRepresentationQuery(schema, ctx),
+    buildDashboardRepresentationQuery(schema, ctx, representationRevisionId),
     buildDashboardAuditQuery(schema, ctx, "upsert"),
     ...meaningOps,
     ...bindingOps,
+    ...(producedEventOp ? [producedEventOp] : []),
   ];
 }
 

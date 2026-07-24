@@ -164,6 +164,12 @@ export async function emitArtifactReviewGate(input: {
   orgId: string;
   reviewTaskId: string;
   targets: unknown;
+  /** Optional gate TTL (cinatra#2039, epic #2037 S1). An AUTO-created review gate
+   * passes an expiry so the lifecycle maintenance drain can resolve it per policy
+   * (optional auto-resolve / required block+notify); a flow-authored gate passes
+   * none (null — the expiry drain never touches it). Set only on the INSERT: a
+   * re-emit onto an existing gate never re-stamps the expiry (idempotent pin). */
+  expiresAt?: Date | null;
 }): Promise<EmitReviewGateResult> {
   const normalized = normalizeReviewTargets(input.targets);
   if (!normalized.ok) {
@@ -181,6 +187,7 @@ export async function emitArtifactReviewGate(input: {
       reviewTaskId: input.reviewTaskId,
       status: "pending",
       pinnedTargets: pinned,
+      expiresAt: input.expiresAt ?? null,
     })
     // One gate per (run, task) — the run_task_uniq index.
     .onConflictDoNothing({
