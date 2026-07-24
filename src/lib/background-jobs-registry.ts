@@ -34,11 +34,6 @@ import type { ExtensionAutoUpdateRunSummary } from "@/lib/extension-auto-update"
 // derivation VALUE is boot-registered through its slot below, never imported
 // here (see the slot block for the route-graph-ratchet rationale).
 import type { UnboundDerivationSweepSummary } from "@/lib/artifacts/unbound-output-derivation";
-// TYPE-ONLY (erased at compile; not a route-graph edge) — the artifact-review
-// resume-delivery VALUE is boot-registered through its slot below, never imported
-// here (the drain reaches the agents A2A/execution graph; keeping it out of this
-// registry's static + dynamic import surface preserves the route-graph ratchet).
-import type { ResumeSweepSummary } from "@cinatra-ai/agents/artifact-review-resume-delivery";
 
 // ---------------------------------------------------------------------------
 // Extension-store GC reaper slot (cinatra#796).
@@ -159,8 +154,23 @@ function resolveUnboundOutputDerivationRunner(): UnboundOutputDerivationRunner |
 // bundle's module instance still sees the boot registration.
 // ---------------------------------------------------------------------------
 
+// The drain summary shape is defined LOCALLY (a structural mirror of the worker's
+// ResumeSweepSummary) rather than imported from
+// @cinatra-ai/agents/artifact-review-resume-delivery: this registry sits in the
+// LOCKED dev-perf routes' reachable graph, and even a TYPE-ONLY cross-package
+// import of the worker (whose module pulls the agents A2A/execution/store graph)
+// grows that graph and trips the route-graph ratchet. The boot phase supplies the
+// real `sweep` (its structurally-identical return type is assignable here).
+type ArtifactReviewResumeSweepSummary = {
+  attempted: number;
+  delivered: number;
+  alreadyAdvanced: number;
+  retryable: number;
+  failed: number;
+};
+
 type ArtifactReviewResumeDeliveryRunner = {
-  sweep: () => Promise<ResumeSweepSummary>;
+  sweep: () => Promise<ArtifactReviewResumeSweepSummary>;
 };
 
 declare global {
