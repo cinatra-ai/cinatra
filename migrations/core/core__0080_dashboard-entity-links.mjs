@@ -1,4 +1,4 @@
-// core__0078 — dashboard scope-collection SECONDARY LISTINGS junction
+// core__0080 — dashboard scope-collection SECONDARY LISTINGS junction
 // (cinatra#1897 B4; the ratified design spec at design@bb9230d9b,
 // `specs/app-artifacts.html` §IX "The scope Dashboards tab — listings &
 // add-to-scope").
@@ -42,11 +42,11 @@
 // deployment. Unqualified names ride the runner's search_path (the app schema);
 // metadata-only DDL on an empty table, no noTransaction().
 //
-// SEQ 0078 — strictly greater than the max seq VISIBLE across origin/main
+// SEQ 0080 — strictly greater than the max seq VISIBLE across origin/main
 // (core__0075_widget-auth-token-keys-canonical, merged) AND every open PR: PR
 // #1986 currently carries core__0073/0074 (assistants W5) which its own
 // renumber-at-merge bumps to core__0076/0077 (0075 having landed on main after
-// #1986 opened), so 0078 clears both the merged tip AND #1986's post-renumber
+// #1986 opened), so 0080 clears both the merged tip AND #1986's post-renumber
 // pair. Migration seq is assigned at MERGE: a concurrent lane may land an
 // intervening seq first, in which case a rename-only renumber is normal (this is
 // FLAGGED for the coordinator's train; sequence gaps are tolerated by the
