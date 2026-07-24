@@ -197,6 +197,26 @@ export type InstallTrustAnchor = {
    * unbound (legacy resolvers / pure unit tests) → no kind assertion.
    */
   kind?: string | null;
+  /**
+   * The DERIVED organization scope of the canonical row this anchor resolved
+   * (owner ruling 2026-07-23 — widget-auth delivery fix, path B). In
+   * `platform-global` resolution this is the org of the single live row across
+   * orgs; in `exact-org` it is the fixed org. Surfaced so the marketplace-
+   * install-PROVENANCE owner arm (arm (c)) can veto a revoked/pending ownership
+   * grant at the install's ACTUAL org scope AND global — an org-anchored install
+   * writes its grant at its org, so a global-only veto would miss it. Optional
+   * (legacy resolvers / pure unit fixtures omit it → null = global veto only).
+   */
+  orgId?: string | null;
+  /**
+   * The widget-auth token keys the canonical row RECORDED at install
+   * (`installed_extension.widget_auth_token_keys`, owner ruling 2026-07-23). The
+   * TAMPER-PROOF declaration source arm (c) reads for its P5 factor — never the
+   * mutable `/data/extensions` store. `null` = a legacy row persisted before the
+   * recorder ran (arm (c) fails closed — never guesses); an array (incl. `[]`) is
+   * the recorded declaration. Optional (legacy resolvers / unit fixtures omit it).
+   */
+  widgetAuthTokenKeys?: string[] | null;
 };
 
 /** Default fetch — lazily imports the registries package (pacote lives there). */

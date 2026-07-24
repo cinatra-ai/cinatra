@@ -2853,6 +2853,12 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
     // an assistant (agent-kind) package (cinatra#1874 W1); NULL for every other
     // kind. Additive → bootstrap ADD COLUMN + twin migration core__0065.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."installed_extension" ADD COLUMN IF NOT EXISTS assistant_declaration jsonb` },
+    // The widget-auth token keys the SRI-verified manifest DECLARES, recorded at
+    // install (owner ruling 2026-07-23 — widget-auth delivery fix, path B); the
+    // TAMPER-PROOF declaration source arm (c) reads for P5. NULL = legacy row
+    // (arm (c) fails closed). Additive → bootstrap ADD COLUMN + twin migration
+    // core__0075.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."installed_extension" ADD COLUMN IF NOT EXISTS widget_auth_token_keys jsonb` },
     // Identity is (organization_id, owner_level, owner_id, package_name, VERSION).
     // organization_id may be NULL for platform-wide rows (sentinel '__platform__'
     // in owner_id). Postgres treats NULLs as distinct in unique constraints by

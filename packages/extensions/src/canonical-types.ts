@@ -305,6 +305,20 @@ export type InstalledExtension = {
    * (strictly additive field).
    */
   accessDeclaration?: ResolvedConnectorAccessDeclaration | null;
+  /**
+   * The widget-auth token keys this package's SRI-verified manifest DECLARES
+   * (`cinatra.widgetStream[.auth].tokenConfigKey`), recorded on the canonical row
+   * at the install pipeline's ownership-grant seam (owner ruling 2026-07-23 — the
+   * widget-auth delivery fix, path B). This is the TAMPER-PROOF declaration source
+   * the marketplace-install-PROVENANCE owner arm (arm (c)) reads for its P5 factor
+   * — the writable `/data/extensions` store is NOT trusted for the declaration.
+   * `null` for rows persisted before the recorder ran (LEGACY) — arm (c) fails
+   * closed on a null column (never guesses / never re-reads the store); `[]` for a
+   * package that declares no widget-auth key (an explicit, non-legacy empty
+   * declaration, so a re-install that DROPS a key clears a stale non-empty value).
+   * OPTIONAL on the type (strictly additive field).
+   */
+  widgetAuthTokenKeys?: string[] | null;
   createdAt: Date;
   updatedAt: Date;
 };
