@@ -10,6 +10,13 @@ import path from "node:path";
 // them here at runtime. Fully DEGRADE-WITH-DIAGNOSTIC: any missing/unreadable/
 // malformed file yields `null` (no dashboard template) — never throws, so one bad
 // pack never aborts the reconcile.
+//
+// TWO DISK ROOTS (cinatra#1896 runtime-store carry). The dev/static-bundle path
+// resolves the pack against `<cwd>/<sourceDir>` (`readPackDashboardTemplate`); the
+// PROD runtime-store path resolves against the ALREADY-ABSOLUTE anchor-vetted
+// `storeDir` (`<data>/artifact/<slug>/<digest>/`) a marketplace-installed pack
+// materialized to (`readPackDashboardTemplateFromDir`). Both share the SAME
+// template-entry parse + traversal guard; only the root differs.
 
 /** The extensions install root convention (`<cwd>/extensions/...`), matching
  *  `sourceDir` (e.g. `extensions/cinatra-ai/web-analytics-dashboard-artifact`). */
@@ -29,16 +36,17 @@ type ArtifactTemplateEntry = {
 /** Locate the pack's manifest `cinatra.artifact.templates[]` entry with
  *  `form:"dashboard"` (preferring the `default:true` one) and return its `path`
  *  + the pack's `displayName`, or `null` when the pack ships no dashboard template
- *  / the manifest is unreadable. */
-function readDashboardTemplateEntry(
-  sourceDir: string,
+ *  / the manifest is unreadable. Operates on an ALREADY-RESOLVED absolute pack dir
+ *  (the cwd/sourceDir join OR the runtime storeDir). */
+function readDashboardTemplateEntryFromDir(
+  packDirAbs: string,
 ): { templatePath: string; displayName?: string } | null {
   let manifest: {
     displayName?: unknown;
     cinatra?: { displayName?: unknown; artifact?: { templates?: unknown } };
   };
   try {
-    const raw = readFileSync(path.join(packDir(sourceDir), "package.json"), "utf-8");
+    const raw = readFileSync(path.join(packDirAbs, "package.json"), "utf-8");
     manifest = JSON.parse(raw) as typeof manifest;
   } catch {
     return null; // pack not on disk / unreadable package.json
@@ -63,28 +71,21 @@ function readDashboardTemplateEntry(
   };
 }
 
-/** True iff the pack at `sourceDir` ships a `form:"dashboard"` template (cheap
- *  candidate-org probe — reads only the manifest, not the sidecar body). */
-export function packShipsDashboardTemplate(_packageName: string, sourceDir: string): boolean {
-  return readDashboardTemplateEntry(sourceDir) !== null;
-}
-
-/** Read the pack's dashboard template: its parsed `cinatra/dashboard.json` config
- *  + an optional display name. `null` when the pack ships no dashboard template or
- *  any file is missing/unreadable/malformed (validation of the config itself is the
- *  materializer's job — it throws `DashboardConfigInvalidError` on a bad body). */
-export function readPackDashboardTemplate(
+/** Read the pack's dashboard template from an ALREADY-RESOLVED absolute pack dir:
+ *  its parsed `cinatra/dashboard.json` config + an optional display name. `null`
+ *  when the pack ships no dashboard template or any file is missing/unreadable/
+ *  malformed (validation of the config body is the materializer's job — it throws
+ *  `DashboardConfigInvalidError`). The sidecar path is resolved WITHIN the pack dir;
+ *  a traversal that escapes it is rejected (defense-in-depth). */
+export function readPackDashboardTemplateFromDir(
   packageName: string,
-  sourceDir: string,
+  packDirAbs: string,
 ): { config: unknown; name?: string } | null {
-  const entry = readDashboardTemplateEntry(sourceDir);
+  const entry = readDashboardTemplateEntryFromDir(packDirAbs);
   if (!entry) return null;
 
-  // Resolve the sidecar path WITHIN the pack dir; reject a traversal that would
-  // escape it (defense-in-depth against a manifest `path` like `../../etc/...`).
-  const dir = packDir(sourceDir);
-  const resolved = path.resolve(dir, entry.templatePath);
-  const rel = path.relative(dir, resolved);
+  const resolved = path.resolve(packDirAbs, entry.templatePath);
+  const rel = path.relative(packDirAbs, resolved);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
     console.warn(
       `[dashboards/materialize] ${packageName}: dashboard template path "${entry.templatePath}" ` +
@@ -109,4 +110,48 @@ export function readPackDashboardTemplate(
     config,
     ...(displayName !== undefined ? { name: `${displayName} dashboard` } : {}),
   };
+}
+
+/** True iff the pack rooted at an ALREADY-RESOLVED absolute dir ships a
+ *  `form:"dashboard"` template (cheap candidate probe — manifest only). */
+export function packShipsDashboardTemplateInDir(_packageName: string, packDirAbs: string): boolean {
+  return readDashboardTemplateEntryFromDir(packDirAbs) !== null;
+}
+
+/** Read the raw `cinatra.kind` + `cinatra.dashboardContribution` claim from an
+ *  ALREADY-RESOLVED absolute pack dir's manifest — for FAIL-CLOSED claim VALIDATION
+ *  on the UNTRUSTED runtime-store path (the caller runs it through the sdk leaf's
+ *  `parseDashboardContribution`, never a looser parse). `null` when the manifest is
+ *  missing/unreadable. */
+export function readPackContributionClaimFromDir(
+  packDirAbs: string,
+): { kind: unknown; dashboardContribution: unknown } | null {
+  let manifest: { cinatra?: { kind?: unknown; dashboardContribution?: unknown } };
+  try {
+    const raw = readFileSync(path.join(packDirAbs, "package.json"), "utf-8");
+    manifest = JSON.parse(raw) as typeof manifest;
+  } catch {
+    return null;
+  }
+  return {
+    kind: manifest.cinatra?.kind,
+    dashboardContribution: manifest.cinatra?.dashboardContribution,
+  };
+}
+
+/** True iff the pack at `sourceDir` ships a `form:"dashboard"` template (cheap
+ *  candidate-org probe — reads only the manifest, not the sidecar body). The
+ *  dev/static-bundle root (`<cwd>/<sourceDir>`). */
+export function packShipsDashboardTemplate(packageName: string, sourceDir: string): boolean {
+  return packShipsDashboardTemplateInDir(packageName, packDir(sourceDir));
+}
+
+/** Read the pack's dashboard template from the dev/static-bundle root
+ *  (`<cwd>/<sourceDir>`): its parsed `cinatra/dashboard.json` config + an optional
+ *  display name. See {@link readPackDashboardTemplateFromDir} for the semantics. */
+export function readPackDashboardTemplate(
+  packageName: string,
+  sourceDir: string,
+): { config: unknown; name?: string } | null {
+  return readPackDashboardTemplateFromDir(packageName, packDir(sourceDir));
 }

@@ -24,6 +24,7 @@ import type { ActivationResult } from "./activate";
 import { isSdkAbiRangeSatisfied, SDK_EXTENSIONS_ABI_VERSION } from "./register";
 import { isUiSurfaceKind, type UiSurfaceKind } from "./manifest";
 import { resolveExecutionEnvironmentClaim } from "./execution-environment";
+import { resolveDashboardContributionClaim } from "./dashboard-contribution-contract";
 
 /** Default on-disk package store inside the container's `/data` volume. */
 export const DEFAULT_PACKAGE_STORE_PATH = "/data/extensions/packages";
@@ -114,6 +115,19 @@ export type PackageStoreRecord = LoaderRecord & {
    * `invalidMigrationsDirDeclared`).
    */
   invalidAssistantConfigDeclared?: boolean;
+  /**
+   * RAW `cinatra.dashboardContribution` pass-through (cinatra#1628 S11a; re-homed
+   * to the artifact kind by cinatra#1896 / epic #1883), ARTIFACT-KIND GATED via the
+   * shared claim resolver ({@link resolveDashboardContributionClaim} — the SAME
+   * single-source gate the build-time generator emits through, so a MARKETPLACE-
+   * INSTALLED meaning pack's claim round-trips onto its store record exactly as the
+   * static manifest would carry it). Any other kind's stray declaration, or a
+   * non-object claim, is dropped here. Carried ONLY when the pack authors a claim;
+   * absent otherwise. UNVALIDATED — the host parses it FAIL-CLOSED + field-
+   * tolerantly via `parseDashboardContribution` at consumption (the dashboards
+   * contribution/template reconcilers), never a looser runtime parse.
+   */
+  dashboardContribution?: Record<string, unknown> | null;
 };
 
 /**
@@ -318,6 +332,12 @@ export function recordFromManifest(
     cinatra.kind,
     cinatra,
   );
+  // RAW dashboardContribution pass-through (cinatra#1628 / #1896), ARTIFACT-KIND
+  // GATED by the SAME shared claim resolver the generator emits through, so a
+  // marketplace-installed meaning pack surfaces the identical claim the static
+  // manifest would carry. Validated fail-closed downstream
+  // (parseDashboardContribution), never here.
+  const dashboardContribution = resolveDashboardContributionClaim(cinatra.kind, cinatra);
   // RAW assistant declaration pass-through (cinatra#1874, Epic #1873 W1),
   // AGENT-KIND GATED: for a `kind:"agent"` package whose sibling
   // `cinatra/config.json` (passed in as `configJsonText` by the store-discovery
@@ -362,6 +382,7 @@ export function recordFromManifest(
     ...(executionEnvironment ? { executionEnvironment } : {}),
     ...(assistantConfigRaw !== undefined ? { assistantConfigRaw } : {}),
     ...(invalidAssistantConfigDeclared ? { invalidAssistantConfigDeclared } : {}),
+    ...(dashboardContribution ? { dashboardContribution } : {}),
   };
 }
 

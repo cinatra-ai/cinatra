@@ -28,7 +28,58 @@ describe("mapPackageMetadata", () => {
     expect(result.metadata.license).toBe("MIT");
     expect(result.metadata.marketplaceAssets).toEqual([{ path: "screenshots/hero.png", role: "hero" }]);
     expect(result.metadata.readmeMarkdown).toContain("README");
+    expect(result.metadata.shipsDashboard).toBe(false); // an agent never ships a dashboard
     expect(result.warnings).toEqual([]);
+  });
+
+  // --- ships-a-dashboard marketplace facet (cinatra#1896 / #2005) --------------
+  const DASHBOARD_CLAIM = {
+    abiVersion: 1,
+    sdkAbiRange: "^2.4.0",
+    contributionVersion: 1,
+    contributionKey: "web-analytics",
+    sidecar: "./cinatra/dashboard.json",
+  };
+
+  it("sets shipsDashboard=true for a kind:artifact pack declaring a dashboardContribution", () => {
+    const result = mapPackageMetadata({
+      packageJson: {
+        name: "@cinatra-ai/web-analytics-dashboard-artifact",
+        version: "0.1.0",
+        cinatra: { kind: "artifact", dashboardContribution: DASHBOARD_CLAIM },
+      },
+      readme: null,
+    });
+    expect(result.metadata.kind).toBe("artifact");
+    expect(result.metadata.shipsDashboard).toBe(true);
+  });
+
+  it("shipsDashboard=false for a kind:artifact pack with NO dashboardContribution", () => {
+    const result = mapPackageMetadata({
+      packageJson: { name: "@acme/plain-artifact", version: "0.1.0", cinatra: { kind: "artifact" } },
+      readme: null,
+    });
+    expect(result.metadata.shipsDashboard).toBe(false);
+  });
+
+  it("CARRIER-KIND GATED: shipsDashboard=false on a non-artifact kind even with a claim present", () => {
+    for (const kind of ["agent", "skill", "connector"] as const) {
+      const result = mapPackageMetadata({
+        packageJson: { name: `@acme/${kind}-x`, version: "0.1.0", cinatra: { kind, dashboardContribution: DASHBOARD_CLAIM } },
+        readme: null,
+      });
+      expect(result.metadata.shipsDashboard).toBe(false);
+    }
+  });
+
+  it("shipsDashboard=false for a non-object dashboardContribution (fail-closed)", () => {
+    for (const bad of [[DASHBOARD_CLAIM], "x", 1, null]) {
+      const result = mapPackageMetadata({
+        packageJson: { name: "@acme/bad", version: "0.1.0", cinatra: { kind: "artifact", dashboardContribution: bad } },
+        readme: null,
+      });
+      expect(result.metadata.shipsDashboard).toBe(false);
+    }
   });
 
   it("fails closed (throws) when cinatra.kind is missing — never defaults to 'agent'", () => {

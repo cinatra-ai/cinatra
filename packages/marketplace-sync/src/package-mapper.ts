@@ -56,6 +56,14 @@ export interface RawPackageJson {
       longDescription?: string;
       assets?: Array<{ path: string; role: "hero" | "screenshot" | "icon" }>;
     };
+    /**
+     * The versioned `cinatra.dashboardContribution` claim (a `kind:"artifact"`
+     * meaning pack that ships a ready-made dashboard). Carried UNVALIDATED here —
+     * the mapper only derives the coarse "ships a dashboard" catalog facet from its
+     * presence (see {@link pickShipsDashboard}); the host validates the claim body
+     * fail-closed at consumption.
+     */
+    dashboardContribution?: unknown;
   };
 }
 
@@ -83,6 +91,21 @@ function pickKind(pkg: RawPackageJson): ExtensionKind {
     );
   }
   return declared;
+}
+
+/**
+ * The SHIPS-A-DASHBOARD catalog facet (cinatra#1896 / #2005): a `kind:"artifact"`
+ * meaning pack that declares a `cinatra.dashboardContribution` object ships a
+ * ready-made dashboard. Mirrors the sdk leaf's `resolveDashboardContributionClaim`
+ * gate EXACTLY (artifact-kind + plain-object claim) so the catalog facet can never
+ * diverge from what the host actually materializes — inlined (not imported) because
+ * this mapper is deliberately dependency-light (no `@cinatra-ai/sdk-extensions`).
+ * FAIL-CLOSED: any non-artifact kind, or a missing/non-object claim, is `false`.
+ */
+function pickShipsDashboard(pkg: RawPackageJson, kind: ExtensionKind): boolean {
+  if (kind !== "artifact") return false;
+  const claim = pkg.cinatra?.dashboardContribution;
+  return !!claim && typeof claim === "object" && !Array.isArray(claim);
 }
 
 function pickLicense(pkg: RawPackageJson): string | null {
@@ -133,6 +156,7 @@ export function mapPackageMetadata(args: {
   const license = pickLicense(packageJson);
   const marketplaceAssets = pickAssets(packageJson, warnings);
   const longDescription = packageJson.cinatra?.marketplace?.longDescription ?? null;
+  const shipsDashboard = pickShipsDashboard(packageJson, kind);
 
   if (typeof packageJson.name !== "string" || packageJson.name === "") {
     warnings.push(`Package JSON missing name`);
@@ -151,6 +175,7 @@ export function mapPackageMetadata(args: {
       license,
       marketplaceAssets,
       readmeMarkdown: readme,
+      shipsDashboard,
     },
     warnings,
   };

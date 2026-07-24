@@ -7,7 +7,12 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { readPackDashboardTemplate, packShipsDashboardTemplate } from "../read-pack-dashboard-template";
+import {
+  readPackDashboardTemplate,
+  packShipsDashboardTemplate,
+  readPackDashboardTemplateFromDir,
+  packShipsDashboardTemplateInDir,
+} from "../read-pack-dashboard-template";
 
 // The reader resolves `sourceDir` against process.cwd(); pin cwd to a temp root so
 // the relative sourceDir maps to our fixture tree.
@@ -89,5 +94,48 @@ describe("readPackDashboardTemplate", () => {
     const S = "extensions/cinatra-ai/evil";
     writePack(S, { cinatra: { kind: "artifact", artifact: { templates: [{ id: "x", form: "dashboard", path: "../../../etc/passwd", default: true }] } } });
     expect(readPackDashboardTemplate("pkg", S)).toBeNull();
+  });
+});
+
+// --- runtime-store variant: read from an ABSOLUTE storeDir (cinatra#1896) ------
+// A MARKETPLACE-installed pack lives in the runtime package store at an absolute
+// `<data>/artifact/<slug>/<digest>/` dir (NOT a cwd-relative sourceDir). The
+// FromDir variants read + guard against that absolute root directly.
+describe("readPackDashboardTemplateFromDir (runtime store, absolute dir)", () => {
+  it("reads the dashboard template from an absolute store dir", () => {
+    const storeDir = path.join(root, "data/extensions/artifact/web-analytics/deadbeefcafe");
+    mkdirSync(storeDir, { recursive: true });
+    writeFileSync(
+      path.join(storeDir, "package.json"),
+      JSON.stringify({
+        name: "@cinatra-ai/web-analytics-dashboard-artifact",
+        cinatra: {
+          kind: "artifact",
+          displayName: "Web Analytics Dashboard",
+          artifact: { templates: [{ id: "wa", form: "dashboard", path: "./cinatra/dashboard.json", default: true }] },
+        },
+      }),
+    );
+    mkdirSync(path.join(storeDir, "cinatra"), { recursive: true });
+    writeFileSync(path.join(storeDir, "cinatra/dashboard.json"), JSON.stringify(DASH));
+
+    expect(packShipsDashboardTemplateInDir("pkg", storeDir)).toBe(true);
+    const r = readPackDashboardTemplateFromDir("pkg", storeDir);
+    expect(r).not.toBeNull();
+    expect(r!.config).toEqual(DASH);
+    expect(r!.name).toBe("Web Analytics Dashboard dashboard");
+  });
+
+  it("preserves the traversal guard against an absolute store dir root", () => {
+    const storeDir = path.join(root, "data/extensions/artifact/evil/abc123");
+    mkdirSync(storeDir, { recursive: true });
+    writeFileSync(
+      path.join(storeDir, "package.json"),
+      JSON.stringify({
+        name: "@x/evil",
+        cinatra: { kind: "artifact", artifact: { templates: [{ id: "x", form: "dashboard", path: "../../../../../../etc/passwd", default: true }] } },
+      }),
+    );
+    expect(readPackDashboardTemplateFromDir("pkg", storeDir)).toBeNull();
   });
 });
