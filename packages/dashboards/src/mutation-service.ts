@@ -639,11 +639,17 @@ export async function updateDashboard(
   patch: UpdateDashboardPatch,
   actor: DashboardActor,
 ): Promise<DashboardRow> {
-  const db = getDashboardsDb();
-  return db.transaction(async (tx) => {
+  // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
+  // lifecycle ruling run BEFORE this body — the per-dashboard twin lock below
+  // stays second (org-first lock order; see org-write-seam.ts).
+  return guardedDashboardsWrite(
+    actor,
+    { schema: backfillSchemaName() },
+    async (guardedTx) => {
+    const tx = guardedTx as unknown as DashboardsDb;
     // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
     await acquireTwinLockFirst(tx as unknown as TwinTx, id);
-    const row = await selectForUpdate(tx as unknown as DashboardsDb, id);
+    const row = await selectForUpdate(tx, id);
     if (!row) throw new DashboardNotFoundError(id);
     const access = resolveDashboardAccess(row, actor);
     if (!access.canWrite) {
@@ -698,7 +704,7 @@ export async function updateDashboard(
       .where(eq(dashboards.id, id))
       .returning();
 
-    await writeAudit(tx as unknown as DashboardsDb, {
+    await writeAudit(tx, {
       operation: "dashboards.update",
       actor,
       row: updated,
@@ -709,7 +715,8 @@ export async function updateDashboard(
     });
     await pairTwin(tx as unknown as TwinTx, twinCtx(updated, "upsert", actor.userId));
     return updated;
-  });
+    },
+  );
 }
 
 export async function publishDashboard(

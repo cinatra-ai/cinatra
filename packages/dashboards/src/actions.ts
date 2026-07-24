@@ -21,6 +21,9 @@
  */
 import { getAuthSession } from "@/lib/auth-session";
 import { buildDashboardActorFromSession } from "@/lib/dashboards/dashboard-actor";
+import { OrgWriteRefusedError } from "@cinatra-ai/org-write-kernel";
+
+import { DashboardOrgWriteAuthorityError } from "./org-write-seam";
 
 import { buildSecurityContextFromSession } from "./auth/security-context";
 import {
@@ -211,7 +214,7 @@ const EMPTY_ENTITY_DC = {
  *  teamRoles is not resolved from the session actor — team-OWNED Overviews are a
  *  #704 concern that extends the actor there; user/org ownership is complete. */
 async function requireEntityDashboardActor(): Promise<DashboardActor> {
-  const { actor: authz, orgId, userId } = await buildDashboardActorFromSession();
+  const { actor: authz, orgId, userId, authority } = await buildDashboardActorFromSession();
   if (!orgId) throw new Error("entity dashboards: no active organization");
   const orgRole =
     authz.orgRole === "owner" || authz.orgRole === "org_owner"
@@ -226,6 +229,9 @@ async function requireEntityDashboardActor(): Promise<DashboardActor> {
     organizationId: orgId,
     teamIds: authz.teamIds ?? [],
     ...(orgRole ? { orgRole } : {}),
+    // cinatra#1939 S3: session-minted org-write authority — writers on the
+    // org-write seam (updateDashboard et al.) refuse without it.
+    ...(authority ? { authority } : {}),
   };
 }
 
@@ -279,6 +285,10 @@ function classifyMutationError(e: unknown): EntityDashboardMutationReason | null
   if (e instanceof DashboardNameConflictError) return "name-conflict";
   if (e instanceof DashboardOverviewProtectedError) return "protected";
   if (e instanceof DashboardForbiddenError) return "denied";
+  // Org-write seam refusals (cinatra#1939 S3): missing/mismatched authority
+  // and kernel lifecycle rulings are authorization outcomes, same as denied.
+  if (e instanceof DashboardOrgWriteAuthorityError) return "denied";
+  if (e instanceof OrgWriteRefusedError) return "denied";
   if (e instanceof DashboardNotFoundError) return "not-found";
   if (e instanceof DashboardConfigInvalidError) return "invalid-config";
   if (e instanceof DashboardInvalidEntityError) {

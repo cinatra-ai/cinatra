@@ -67,6 +67,19 @@ export default defineConfig({
         find: /^@cinatra-ai\/sdk-dashboard$/,
         replacement: path.join(root, "packages/sdk-dashboard/src/index.ts"),
       },
+      // cinatra#1939 S3: ROOT-side files reached from this package (e.g.
+      // @/lib/dashboards/dashboard-actor → @/lib/org-write/authority) import
+      // the kernel, but the ROOT has no node_modules link for it — alias both
+      // entry points to the workspace source (same realpath the package-side
+      // symlink resolves to, so class identity/instanceof stays intact).
+      {
+        find: "@cinatra-ai/org-write-kernel/testing",
+        replacement: path.join(root, "packages/org-write-kernel/src/testing.ts"),
+      },
+      {
+        find: /^@cinatra-ai\/org-write-kernel$/,
+        replacement: path.join(root, "packages/org-write-kernel/src/index.ts"),
+      },
     ],
   },
   test: {
