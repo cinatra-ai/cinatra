@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { requireAdminSession } from "@/lib/auth-session";
 import { readAssistantAdminRegistry } from "@/lib/assistant-admin-registry";
 import { Main } from "@/components/layout/main";
@@ -19,22 +18,6 @@ export default async function SettingsAssistantsPage() {
       <PageHeader
         title="Assistants"
         description="Manage AI assistant identities and their MCP OAuth clients. Assistants can be @mentioned in chat threads."
-        actions={
-          <div className="flex gap-2">
-            <Link
-              href="/connectors/cinatra-ai/drupal-assistant-connector/setup"
-              className="inline-flex items-center justify-center rounded-control border border-line bg-surface-strong px-5 py-3 text-sm font-semibold text-foreground transition hover:border-primary"
-            >
-              Drupal Widget
-            </Link>
-            <Link
-              href="/connectors/cinatra-ai/wordpress-assistant-connector/setup"
-              className="inline-flex items-center justify-center rounded-control border border-line bg-surface-strong px-5 py-3 text-sm font-semibold text-foreground transition hover:border-primary"
-            >
-              WordPress Widget
-            </Link>
-          </div>
-        }
       />
       <PageContent className="flex flex-col gap-6 pb-8">
         <section className="soft-panel rounded-card px-6 py-6">
