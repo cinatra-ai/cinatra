@@ -1,42 +1,42 @@
 {
-  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
+  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1558,
-    "/api/mcp": 1554,
-    "/chat": 1628,
-    "/api/a2a": 1559,
-    "/api/llm-bridge": 1566
+    "/sign-in": 1571,
+    "/api/mcp": 1567,
+    "/chat": 1641,
+    "/api/a2a": 1572,
+    "/api/llm-bridge": 1582
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1557,
-      "to": 1558,
-      "reason": "#1796 Stage 2 (PR #2033): the dedicated BlogIdeaSelectionRenderer module (packages/agents/src/blog-idea-selection-renderer.tsx) enters RENDERER_KIND_TABLE via register-default-renderers.ts, making it first-party-reachable from every tracked route that reaches the renderer kind table - a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned. Temporary cohort cost of the idea-chooser relocation out of the reviewer dispatcher: the Stage-3 teardown deletes the reviewer contentType dispatcher (including the inline IdeaChooserRenderer) and is expected to reclaim this slot. Replaces the base branch's carried record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2033
+      "from": 1558,
+      "to": 1571,
+      "reason": "#2048 dev-lock fleet bump (supersedes the auto/dev-lock-bump lane): advances the companion cinatra.devExtensions pins toward current fleet tips, holding 6 feature-coupled repos at their last host-green sha (media-transcript-agent, auditor-agent, gmail-connector, mcp-client-connector, github-connector, mcp-server-connector - see the PR body). Regenerating the static extensions registry (src/lib/generated/extensions.server.ts) against the resulting pin set nets a CI-measured UNIFORM +13 first-party modules reachable from every tracked route (extensions cloned pinned, 0 missing). Accepted graph-pressure cost of advancing the pinned extension fleet forward - barrel-import narrowing is out of scope for a mechanical pin roll. Replaces the base branch's #2033 carried record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2048
     },
     "/api/mcp": {
-      "from": 1553,
-      "to": 1554,
-      "reason": "#1796 Stage 2 (PR #2033): the dedicated BlogIdeaSelectionRenderer module (packages/agents/src/blog-idea-selection-renderer.tsx) enters RENDERER_KIND_TABLE via register-default-renderers.ts, making it first-party-reachable from every tracked route that reaches the renderer kind table - a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned. Temporary cohort cost of the idea-chooser relocation out of the reviewer dispatcher: the Stage-3 teardown deletes the reviewer contentType dispatcher (including the inline IdeaChooserRenderer) and is expected to reclaim this slot. Replaces the base branch's carried record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2033
+      "from": 1554,
+      "to": 1567,
+      "reason": "#2048 dev-lock fleet bump (supersedes the auto/dev-lock-bump lane): advances the companion cinatra.devExtensions pins toward current fleet tips, holding 6 feature-coupled repos at their last host-green sha (media-transcript-agent, auditor-agent, gmail-connector, mcp-client-connector, github-connector, mcp-server-connector - see the PR body). Regenerating the static extensions registry (src/lib/generated/extensions.server.ts) against the resulting pin set nets a CI-measured UNIFORM +13 first-party modules reachable from every tracked route (extensions cloned pinned, 0 missing). Accepted graph-pressure cost of advancing the pinned extension fleet forward - barrel-import narrowing is out of scope for a mechanical pin roll. Replaces the base branch's #2033 carried record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2048
     },
     "/chat": {
-      "from": 1627,
-      "to": 1628,
-      "reason": "#1796 Stage 2 (PR #2033): the dedicated BlogIdeaSelectionRenderer module (packages/agents/src/blog-idea-selection-renderer.tsx) enters RENDERER_KIND_TABLE via register-default-renderers.ts, making it first-party-reachable from every tracked route that reaches the renderer kind table - a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned. Temporary cohort cost of the idea-chooser relocation out of the reviewer dispatcher: the Stage-3 teardown deletes the reviewer contentType dispatcher (including the inline IdeaChooserRenderer) and is expected to reclaim this slot. Replaces the base branch's carried record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2033
+      "from": 1628,
+      "to": 1641,
+      "reason": "#2048 dev-lock fleet bump (supersedes the auto/dev-lock-bump lane): advances the companion cinatra.devExtensions pins toward current fleet tips, holding 6 feature-coupled repos at their last host-green sha (media-transcript-agent, auditor-agent, gmail-connector, mcp-client-connector, github-connector, mcp-server-connector - see the PR body). Regenerating the static extensions registry (src/lib/generated/extensions.server.ts) against the resulting pin set nets a CI-measured UNIFORM +13 first-party modules reachable from every tracked route (extensions cloned pinned, 0 missing). Accepted graph-pressure cost of advancing the pinned extension fleet forward - barrel-import narrowing is out of scope for a mechanical pin roll. Replaces the base branch's #2033 carried record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2048
     },
     "/api/a2a": {
-      "from": 1558,
-      "to": 1559,
-      "reason": "#1796 Stage 2 (PR #2033): the dedicated BlogIdeaSelectionRenderer module (packages/agents/src/blog-idea-selection-renderer.tsx) enters RENDERER_KIND_TABLE via register-default-renderers.ts, making it first-party-reachable from every tracked route that reaches the renderer kind table - a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned. Temporary cohort cost of the idea-chooser relocation out of the reviewer dispatcher: the Stage-3 teardown deletes the reviewer contentType dispatcher (including the inline IdeaChooserRenderer) and is expected to reclaim this slot. Replaces the base branch's carried record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2033
+      "from": 1559,
+      "to": 1572,
+      "reason": "#2048 dev-lock fleet bump (supersedes the auto/dev-lock-bump lane): advances the companion cinatra.devExtensions pins toward current fleet tips, holding 6 feature-coupled repos at their last host-green sha (media-transcript-agent, auditor-agent, gmail-connector, mcp-client-connector, github-connector, mcp-server-connector - see the PR body). Regenerating the static extensions registry (src/lib/generated/extensions.server.ts) against the resulting pin set nets a CI-measured UNIFORM +13 first-party modules reachable from every tracked route (extensions cloned pinned, 0 missing). Accepted graph-pressure cost of advancing the pinned extension fleet forward - barrel-import narrowing is out of scope for a mechanical pin roll. Replaces the base branch's #2033 carried record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2048
     },
     "/api/llm-bridge": {
-      "from": 1565,
-      "to": 1566,
-      "reason": "#1796 Stage 2 (PR #2033): the dedicated BlogIdeaSelectionRenderer module (packages/agents/src/blog-idea-selection-renderer.tsx) enters RENDERER_KIND_TABLE via register-default-renderers.ts, making it first-party-reachable from every tracked route that reaches the renderer kind table - a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned. Temporary cohort cost of the idea-chooser relocation out of the reviewer dispatcher: the Stage-3 teardown deletes the reviewer contentType dispatcher (including the inline IdeaChooserRenderer) and is expected to reclaim this slot. Replaces the base branch's carried record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2033
+      "from": 1579,
+      "to": 1582,
+      "reason": "PR #2035 (#2028 follow-on, owner ruling 2026-07-23 path B slice 2): the widget-stream SESSION MINT ownership-conjunction axis in src/lib/widget-stream-agents.server.ts (reachable from /api/llm-bridge via the agent union) now resolves the credential-store owner through the new src/lib/widget-stream-ownership-provenance.ts, which substitutes sanctioned marketplace-install PROVENANCE for the ownership-GRANT arm so a released-image rider with no admin ownership grant can still serve its widget (the never-auto-approved metadata-grant gate is untouched). That resolver statically reaches THREE first-party feature modules not previously first-party-reachable from this route: src/lib/widget-stream-ownership-provenance.ts (new), src/lib/widget-auth-install-provenance.ts (the resolveInstallProvenanceOwner primitive the axis is built on), and src/lib/widget-auth-provider.ts (the single canonical wordpress widget-auth capability id + tokenConfigKey + provider guard the resolver names as its honest P1 candidate, reused not duplicated) - a CI-measured +3 first-party modules with the companion extensions cloned pinned. The growth is intrinsic to the feature (reachable install-provenance resolution) and irreducible: the widget-auth-provider edge carries no unique additional transitive deps (the measured delta is exactly the three feature files), so extracting the shared descriptor to a leaf would swap one module for another at net zero. Raise is on top of origin/main's #2048 fleet-bump ceiling 1579 (disjoint from these three core src/lib feature modules); 1579 + 3 = 1582. Replaces the base branch's carried #2048 record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2035
     }
   }
 }

@@ -3,6 +3,7 @@ import {
   withAssistantNamespaceLock,
   nextFreeSuffixedCandidate,
 } from "@/lib/assistant-namespace-lock";
+import { ASSISTANT_AUDIENCE_SUBJECT_KINDS } from "@/lib/assistant-registry-schema";
 import { toPgTextArrayLiteral } from "@/lib/pg-array";
 import { projectsDb, projects } from "@/lib/projects-store";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -150,6 +151,17 @@ export const assistantAudience = coreStoreSchema.table("assistant_audience", {
   subjectKind: text("subject_kind").notNull(),
   subjectId: text("subject_id"),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }),
+});
+
+/** Installation-wide assistant PAUSE (cinatra#1880 W5). One row per PAUSED
+ *  assistant principal (`assistant_user_id` PK — the SAME axis f9f70d26a keys the
+ *  builtin host on, so a handle/alias rename never loses or retargets a pause).
+ *  Presence == paused; a paused principal drops out of the audience-filtered
+ *  registry reader (fail-closed, enforced across every W2 surface). */
+export const assistantPause = coreStoreSchema.table("assistant_pause", {
+  assistantUserId: text("assistant_user_id").primaryKey(),
+  pausedAt: timestamp("paused_at", { withTimezone: true, mode: "date" }),
+  pausedBy: text("paused_by"),
 });
 
 /**
@@ -349,13 +361,269 @@ export async function claimAssistantAlias(
   });
 }
 
-/** Remove a non-builtin alias under the lock. A builtin alias is immutable. */
-export async function removeAssistantAlias(alias: string): Promise<void> {
+/**
+ * EXCLUSIVE admin alias claim (cinatra#1880 W5 AC#1) — the strict counterpart of
+ * `claimAssistantAlias` for the admin editor's "add tag" path. It NEVER silently
+ * relocates a token another package owns: under the namespace lock it
+ *   - throws {@link AssistantNamespaceCollisionError} (naming the owning table) if
+ *     the token is a builtin alias, a DIFFERENT package's alias, or a handle;
+ *   - is an idempotent no-op if THIS package already owns the alias;
+ *   - inserts a fresh `source='admin'` row when the token is free.
+ * `alias` must already be a normalized flat token. (The relocate-tolerant
+ * `claimAssistantAlias` stays for the W1 manifest install path — unchanged.)
+ */
+export async function claimAssistantAliasExclusive(
+  alias: string,
+  packageName: string,
+): Promise<void> {
   return withAssistantNamespaceLock(betterAuthDb, async (tx) => {
+    const existing = await tx
+      .select({ packageName: assistantTagAlias.packageName, source: assistantTagAlias.source })
+      .from(assistantTagAlias)
+      .where(eq(assistantTagAlias.alias, alias))
+      .limit(1);
+    if (existing[0]) {
+      // Builtin or a different package owns it → conflict (no silent steal).
+      if (existing[0].source === "builtin" || existing[0].packageName !== packageName) {
+        throw new AssistantNamespaceCollisionError(alias, "alias");
+      }
+      return; // this package already owns it → idempotent
+    }
+    const handleRow = await tx
+      .select({ handle: assistantHandles.handle })
+      .from(assistantHandles)
+      .where(eq(assistantHandles.handle, alias))
+      .limit(1);
+    if (handleRow[0]) throw new AssistantNamespaceCollisionError(alias, "handle");
     await tx
-      .delete(assistantTagAlias)
-      .where(and(eq(assistantTagAlias.alias, alias), ne(assistantTagAlias.source, "builtin")));
+      .insert(assistantTagAlias)
+      .values({ alias, packageName, source: "admin", createdAt: new Date(), updatedAt: new Date() });
   });
+}
+
+/** Remove a non-builtin alias under the lock. A builtin alias is immutable. When
+ *  `packageName` is supplied the delete is SCOPED to that owning package
+ *  (cinatra#1880 W5) — a defense-in-depth check so one assistant's editor can
+ *  never remove another package's alias. */
+export async function removeAssistantAlias(alias: string, packageName?: string): Promise<void> {
+  return withAssistantNamespaceLock(betterAuthDb, async (tx) => {
+    const where = packageName
+      ? and(
+          eq(assistantTagAlias.alias, alias),
+          ne(assistantTagAlias.source, "builtin"),
+          eq(assistantTagAlias.packageName, packageName),
+        )
+      : and(eq(assistantTagAlias.alias, alias), ne(assistantTagAlias.source, "builtin"));
+    await tx.delete(assistantTagAlias).where(where);
+  });
+}
+
+/**
+ * Atomically RENAME an admin alias (cinatra#1880 W5 AC#1): free `oldAlias` and
+ * claim `newAlias` for `packageName` in ONE namespace-lock transaction, so the
+ * rename is race-free and never leaves a half-applied gap. A builtin alias is
+ * immutable — renaming FROM a builtin throws (its row is source='builtin'). The
+ * destination is collision-checked against BOTH tables: a handle or a different
+ * package's alias owning `newAlias` throws {@link AssistantNamespaceCollisionError}
+ * (naming the conflicting table) and the whole transaction rolls back, so
+ * `oldAlias` survives. A no-op rename (old == new) returns without touching rows.
+ * Both tokens must already be normalized flat tokens (the caller validates).
+ */
+export async function renameAssistantAlias(
+  oldAlias: string,
+  newAlias: string,
+  packageName: string,
+): Promise<void> {
+  return withAssistantNamespaceLock(betterAuthDb, async (tx) => {
+    const existing = await tx
+      .select({ packageName: assistantTagAlias.packageName, source: assistantTagAlias.source })
+      .from(assistantTagAlias)
+      .where(eq(assistantTagAlias.alias, oldAlias))
+      .limit(1);
+    if (!existing[0]) throw new Error(`[assistant-namespace] alias "${oldAlias}" does not exist`);
+    if (existing[0].source === "builtin") {
+      // The builtin alias is immutable — never renamed.
+      throw new AssistantNamespaceCollisionError(oldAlias, "alias");
+    }
+    // Defense-in-depth (cinatra#1880 W5): the rename may only re-key an alias the
+    // SUPPLIED package owns — one assistant's editor can never retarget another
+    // package's alias.
+    if (existing[0].packageName !== packageName) {
+      throw new AssistantNamespaceCollisionError(oldAlias, "alias");
+    }
+    if (oldAlias === newAlias) return; // no-op
+    // Destination must be free across BOTH tables.
+    const owner = await tokenOwner(tx, newAlias);
+    if (owner) throw new AssistantNamespaceCollisionError(newAlias, owner);
+    await tx.delete(assistantTagAlias).where(eq(assistantTagAlias.alias, oldAlias));
+    await tx
+      .insert(assistantTagAlias)
+      .values({ alias: newAlias, packageName, source: "admin", createdAt: new Date(), updatedAt: new Date() });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Audience grant writers (cinatra#1880 W5 — the audience editor). The W1 reader
+// (`readAssistantRegistryForActor`) is the SINGLE consumer/enforcement point, so
+// an added/removed grant takes effect on the NEXT authorization decision across
+// every W2 surface (browser routing, MCP entry/continuation, widget broker) with
+// no second enforcement path to keep in sync. Fail-CLOSED by construction: an
+// unknown subject kind is rejected at the writer (never persisted), and removing
+// the last grant leaves the assistant invisible to everyone (the matcher denies
+// an empty grant set) — except the always-visible builtin.
+// ---------------------------------------------------------------------------
+
+/** The audience subject kinds that carry NO subject id (global grants). */
+const GLOBAL_AUDIENCE_KINDS: ReadonlySet<string> = new Set(["workspace", "admin"]);
+
+/** Advisory-lock CLASS id for the package-scoped audience set-replace lock
+ *  (`pg_advisory_xact_lock(class, hashtext(package))`). A two-int key in its own
+ *  class, distinct from the single-key assistant namespace lock's space. */
+const ASSISTANT_AUDIENCE_LOCK_CLASS = 0x41554449; // "AUDI"
+
+/** Validate + normalize an audience grant tuple, throwing on an unknown kind or a
+ *  missing/extra subject id (fail-closed — a malformed grant is never persisted). */
+function validateAudienceGrant(
+  subjectKind: string,
+  subjectId: string | null | undefined,
+): { subjectKind: string; subjectId: string | null } {
+  if (!ASSISTANT_AUDIENCE_SUBJECT_KINDS.includes(subjectKind as never)) {
+    throw new Error(`[assistant-audience] unknown subject kind: ${subjectKind}`);
+  }
+  const isGlobal = GLOBAL_AUDIENCE_KINDS.has(subjectKind);
+  const id = typeof subjectId === "string" ? subjectId.trim() : "";
+  if (isGlobal) {
+    // workspace/admin carry no id — a stray id is dropped (normalized to null).
+    return { subjectKind, subjectId: null };
+  }
+  if (!id) {
+    throw new Error(`[assistant-audience] subject kind "${subjectKind}" requires a subject id`);
+  }
+  return { subjectKind, subjectId: id };
+}
+
+/** Add an audience grant `(package, kind, id?)`. Idempotent (ON CONFLICT DO
+ *  NOTHING against the grant-uniqueness index). Validated fail-closed. */
+export async function addAssistantAudienceGrant(
+  packageName: string,
+  subjectKind: string,
+  subjectId?: string | null,
+): Promise<void> {
+  const g = validateAudienceGrant(subjectKind, subjectId);
+  await betterAuthDb
+    .insert(assistantAudience)
+    .values({ packageName, subjectKind: g.subjectKind, subjectId: g.subjectId, createdAt: new Date() })
+    .onConflictDoNothing();
+}
+
+/** Remove an audience grant `(package, kind, id?)`. A global kind matches the
+ *  NULL-id row; a scoped kind matches its exact id. */
+export async function removeAssistantAudienceGrant(
+  packageName: string,
+  subjectKind: string,
+  subjectId?: string | null,
+): Promise<void> {
+  const g = validateAudienceGrant(subjectKind, subjectId);
+  await betterAuthDb
+    .delete(assistantAudience)
+    .where(
+      and(
+        eq(assistantAudience.packageName, packageName),
+        eq(assistantAudience.subjectKind, g.subjectKind),
+        g.subjectId === null
+          ? isNull(assistantAudience.subjectId)
+          : eq(assistantAudience.subjectId, g.subjectId),
+      ),
+    );
+}
+
+/** List an assistant package's audience grants (for the editor display). */
+export async function listAssistantAudienceGrants(
+  packageName: string,
+): Promise<Array<{ subjectKind: string; subjectId: string | null }>> {
+  const rows = await betterAuthDb
+    .select({ subjectKind: assistantAudience.subjectKind, subjectId: assistantAudience.subjectId })
+    .from(assistantAudience)
+    .where(eq(assistantAudience.packageName, packageName));
+  return rows;
+}
+
+/**
+ * ATOMIC replace of a package's audience grant SET (cinatra#1880 W5 rework — owner
+ * ruling 2026-07-23 (groganz): the audience editor is the shipped access picker,
+ * which submits the full selection as a set). Every desired grant is validated
+ * fail-closed FIRST (an unknown kind / missing subject id aborts the whole replace
+ * — nothing is deleted, nothing inserted); then, in ONE transaction, the package's
+ * current grants are deleted and the desired set inserted. So a multi-grant edit is
+ * all-or-nothing — a mid-write failure rolls back rather than leaving a partial /
+ * fail-open ACL — and it takes effect on the next reader decision through the ONE
+ * audience truth. An EMPTY `grants` set clears the audience (visible to no one —
+ * fail-closed). Idempotent on the grant-uniqueness index.
+ */
+export async function replaceAssistantAudienceGrants(
+  packageName: string,
+  grants: ReadonlyArray<{ subjectKind: string; subjectId?: string | null }>,
+): Promise<void> {
+  // Validate BEFORE opening the transaction: one malformed grant refuses the
+  // entire replace (the current grant set is left untouched).
+  const validated = grants.map((g) => validateAudienceGrant(g.subjectKind, g.subjectId));
+  await betterAuthDb.transaction(async (tx) => {
+    // Serialize concurrent replaces for the SAME package: a PACKAGE-scoped advisory
+    // xact lock (its own two-int lock class, so it never collides with the
+    // single-key namespace lock, and different packages never block each other),
+    // released automatically on commit/rollback. Without it, two simultaneous
+    // delete-all→insert replaces could interleave under READ COMMITTED into a union
+    // of both desired sets or a fail-open ACL (a concurrent narrow/empty replace
+    // missing the other's just-inserted rows). Mirrors `acquireAssistantNamespaceLock`.
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(${ASSISTANT_AUDIENCE_LOCK_CLASS}, hashtext(${packageName}))`,
+    );
+    await tx.delete(assistantAudience).where(eq(assistantAudience.packageName, packageName));
+    for (const g of validated) {
+      await tx
+        .insert(assistantAudience)
+        .values({ packageName, subjectKind: g.subjectKind, subjectId: g.subjectId, createdAt: new Date() })
+        .onConflictDoNothing();
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Assistant PAUSE writers/readers (cinatra#1880 W5 — the pause control). Keyed by
+// the assistant PRINCIPAL (`assistant_user_id`) — the SAME axis f9f70d26a keys the
+// builtin host on, so a handle/alias rename never loses or retargets a pause.
+// A paused principal drops out of the registry reader (fail-closed) → unaddressable
+// on every W2 surface. The builtin is refused here (defense-in-depth; the reader
+// also never drops it).
+// ---------------------------------------------------------------------------
+
+/** Pause an assistant principal (installation-wide). Idempotent — re-pausing
+ *  refreshes `paused_at`/`paused_by`. */
+export async function pauseAssistant(assistantUserId: string, pausedBy?: string | null): Promise<void> {
+  await betterAuthDb
+    .insert(assistantPause)
+    .values({ assistantUserId, pausedAt: new Date(), pausedBy: pausedBy ?? null })
+    .onConflictDoUpdate({
+      target: assistantPause.assistantUserId,
+      set: { pausedAt: new Date(), pausedBy: pausedBy ?? null },
+    });
+}
+
+/** Resume (un-pause) an assistant principal. Idempotent. */
+export async function resumeAssistant(assistantUserId: string): Promise<void> {
+  await betterAuthDb.delete(assistantPause).where(eq(assistantPause.assistantUserId, assistantUserId));
+}
+
+/** The set of PAUSED assistant principal ids among `ids` (empty input → empty
+ *  set). Used by the registry reader to fail-close paused principals. */
+export async function listPausedAssistantIds(ids: readonly string[]): Promise<Set<string>> {
+  const unique = [...new Set(ids.filter((id) => !!id))];
+  if (unique.length === 0) return new Set();
+  const rows = await betterAuthDb
+    .select({ id: assistantPause.assistantUserId })
+    .from(assistantPause)
+    .where(inArray(assistantPause.assistantUserId, unique));
+  return new Set(rows.map((r) => r.id));
 }
 
 /**

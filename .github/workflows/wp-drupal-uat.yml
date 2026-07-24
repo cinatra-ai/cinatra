@@ -100,6 +100,61 @@ jobs:
               - 'src/lib/external-mcp-registry.ts'
               - 'src/lib/dev-auto-setup.ts'
               - 'packages/llm/src/scripted-test-provider.ts'
+              # S5 iframe cutover (cinatra#1221): the WP/Drupal widget no longer
+              # renders the turn — it frames the Cinatra-served /embed/assistant
+              # page, which the suite drives cross-origin. A regression in the
+              # embed page, the frame-ancestors resolver, the assistant chat
+              # route, or the route-guard that sets the frame-ancestors CSP would
+              # break the suite yet previously skip this gate. These are real
+              # boot dependencies; the coverage test keeps them in this list.
+              - 'src/app/embed/assistant/**'
+              - 'src/lib/embed/**'
+              - 'src/app/api/assistants/chat/**'
+              - 'src/lib/auth-route-guard.ts'
+              # cinatra#2036 (surfaced by #2031) — the assistant/widget/boot MOUNT +
+              # TURN closure the suite's scenarios actually execute. Scenarios 4/5
+              # drive the widget assistant turn end-to-end: the CLOSED
+              # handle→built-in binding + the audience closure (the exact seam the
+              # #2031 out-of-audience regression lived in), the dual-token widget
+              # auth/broker sequence, the assistant runtime + chat runner the turn
+              # runs through, and the boot seeding that mints the WP/Drupal built-in
+              # assistants. Each PR behind #2031 (#1915 registry, #1935 chat/boot,
+              # #1991 widget) changed ONLY paths like these and fast-passed the gate.
+              # The coverage regression test pins this set; keep the two lists equal.
+              # Assistant registry + audience closure (scenarios 4/5 visibility):
+              - 'src/lib/assistant-registry-reader.ts'
+              - 'src/lib/assistant-registry-schema.ts'
+              - 'src/lib/assistant-audience-closure.ts'
+              - 'src/lib/assistant-selector-audience.ts'
+              - 'src/lib/assistant-widget-handles.ts'
+              # Assistant boot-seed closure (the WP/Drupal built-in siblings the
+              # widget binds to are minted at boot; a regression here → no assistant):
+              - 'src/lib/assistant-agent-registration.ts'
+              - 'src/lib/assistant-users.ts'
+              - 'src/lib/assistant-config.ts'
+              - 'packages/agents/src/builtin-assistant-template.ts'
+              # The assistant turn runtime + the chat runner/dispatch it runs through:
+              - 'src/lib/assistant-runtime/**'
+              - 'src/app/api/chat/**'
+              - 'packages/chat/src/**'
+              # Widget auth/broker — the dual-token (cnx_/cit_/cwu_) sequence that
+              # gates the widget turn (scenarios 4/5/6) + its mint endpoints:
+              - 'src/lib/widget-broker-route.ts'
+              - 'src/lib/widget-token-broker.ts'
+              - 'src/lib/widget-user-auth.ts'
+              - 'src/lib/widget-stream-agents.server.ts'
+              - 'src/lib/widget-stream-auth.ts'
+              - 'src/lib/widget-auth-audit.ts'
+              - 'src/lib/widget-mcp-actor-token.ts'
+              - 'src/lib/widget-chat-resume-token.ts'
+              - 'src/app/api/widget-auth/**'
+              # The short-lived cit_ transport-token MINT survives on the per-agent
+              # route (POST /api/agents/{slug}/token) post-S5; the suite mints there
+              # before every widget turn (global-setup warm-up + scenarios 4/5). A
+              # regression here fails the turn auth yet would otherwise skip the gate.
+              - 'src/app/api/agents/*/token/**'
+              # Boot orchestration/phases the mount + assistant seeding depend on:
+              - 'src/lib/boot/**'
               - 'tests/e2e/wp-drupal-uat/**'
               - 'tests/e2e/config/wp-drupal-uat.config.ts'
               - 'tests/e2e/config/base.ts'

@@ -1,236 +1,171 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { LinkIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
-import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import {
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { PaginatedTable } from "@/components/ui/paginated-table";
-import type { AssistantUser } from "@/lib/assistant-users";
+import { Separator } from "@/components/ui/separator";
+import type { AssistantAdminRow } from "@/lib/assistant-admin-registry";
 import { toast } from "@/lib/cinatra-toast";
-import {
-  deleteAssistantAction,
-  rotateAssistantClientAction,
-  setAssistantWebhookAction,
-} from "./actions";
+import { renameAssistantTagAction } from "./actions";
 
 // ---------------------------------------------------------------------------
-// Types
+// Owner ruling 2026-07-24 (groganz): this surface shows ONE mutable tag per
+// assistant (the resolving handle) as an ALWAYS-editable text field — a literal
+// "@" is rendered immediately in front of, and OUTSIDE, the field, and the field's
+// value carries NO "@". Its Save and Reset controls are ALWAYS VISIBLE (disabled
+// while the field is clean). There is NO per-assistant access/audience control or
+// copy on this page — access is configured on the respective extension's own
+// settings surface, so duplicating it here is removed. There are also NO metadata
+// badges, NO pause ("Active") switch, and NO delete button on this page.
+// Collisions and failures surface as @-prefixed TOASTS.
+//
+// (The audience SUBSTRATE — `replaceAssistantAudienceGrants` + the
+// `assistant_audience` reads in the admin/enforcement registries and their tests —
+// is untouched; only this page's audience control and its now-orphaned page-level
+// server action were removed, mirroring the earlier Active/Delete removals.)
+//
+// Design grounding (always-visible Save/Reset): the design-system specs' pattern
+// for a persistent action that has nothing to act on is to keep it RENDERED and
+// DISABLED, not to hide it (e.g. the connector "Disconnect is disabled until the
+// connector is connected — there is nothing to disconnect otherwise", and the
+// extension detail's persistent-but-disabled Activate / Archive / Publish action
+// rows). So the tag's Save + Reset stay rendered at all times and are disabled
+// while the field is clean (nothing to save / nothing to reset). The field itself
+// mirrors the standard labelled text field (label + input + helper copy —
+// app-components §"Input"); the design-system specs carry no prefix-adorned field
+// pattern, so the literal "@" is added as a leading inline adornment outside the
+// input. Enter in the field also submits.
 // ---------------------------------------------------------------------------
 
-type CredentialResult = {
-  clientId: string;
-  clientSecret: string;
-};
-
 // ---------------------------------------------------------------------------
-// AssistantsTable
+// Top-level surface
 // ---------------------------------------------------------------------------
 
-type AssistantsTableProps = {
-  assistants: AssistantUser[];
-};
+export function AssistantsTable({ rows }: { rows: AssistantAdminRow[] }) {
+  return (
+    <div className="flex flex-col gap-4">
+      {rows.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No assistants registered yet.</p>
+      ) : (
+        rows.map((row) => <AssistantCard key={row.assistantUserId} row={row} />)
+      )}
+    </div>
+  );
+}
 
-export function AssistantsTable({ assistants: initialAssistants }: AssistantsTableProps) {
-  const [assistants, setAssistants] = useState(initialAssistants);
-  const [credentials, setCredentials] = useState<CredentialResult | null>(null);
-  const [credentialLabel, setCredentialLabel] = useState("");
-  const [isPending, startTransition] = useTransition();
+// ---------------------------------------------------------------------------
+// Per-assistant card
+// ---------------------------------------------------------------------------
 
-  // Manual assistant CREATION was removed (cinatra#1037 P1.4) — assistant
-  // principal minting is now the exclusive job of assistant-agent registration
-  // (invariant I3). This table manages already-registered principals: rotate the
-  // OAuth client, set the webhook, or delete (the built-in Cinatra principal is
-  // delete-guarded server-side).
+function AssistantCard({ row }: { row: AssistantAdminRow }) {
+  return (
+    <section className="rounded-card border border-line bg-surface-strong/40 p-5">
+      {/* Header ---------------------------------------------------------- */}
+      <div className="flex flex-col gap-1">
+        <span className="text-base font-semibold text-foreground">{row.displayName}</span>
+      </div>
 
-  // ---------------------------------------------------------------------------
-  // Delete
-  // ---------------------------------------------------------------------------
+      <Separator className="my-4" />
 
-  function handleDelete(id: string) {
-    if (!window.confirm("Delete this assistant? This cannot be undone.")) return;
-    startTransition(async () => {
-      const fd = new FormData();
-      fd.set("id", id);
+      {/* Tag — the ONE resolving handle, as an always-editable text field with a
+          literal "@" rendered OUTSIDE the field (the value carries no "@"). ----- */}
+      <TagField row={row} />
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tag field — the single resolving handle, ALWAYS editable (owner rulings
+// 2026-07-23 / 2026-07-24 (groganz)). The literal "@" is a leading adornment
+// OUTSIDE the input; the input's value never contains it (the rename action
+// normalizes the token and echoes back exactly what the store persisted so the
+// field re-syncs). The Save + Reset controls are ALWAYS VISIBLE and are disabled
+// while the field is clean (nothing to save / reset); Enter in the field also
+// submits. Collisions and validation failures surface as @-prefixed TOASTS.
+// ---------------------------------------------------------------------------
+
+function TagField({ row }: { row: AssistantAdminRow }) {
+  const router = useRouter();
+  const persisted = row.handle ?? "";
+  const [value, setValue] = useState(persisted);
+  const [pending, startSave] = useTransition();
+  const inputId = `tag-${row.assistantUserId}`;
+
+  const trimmed = value.trim();
+  const dirty = trimmed !== persisted;
+
+  function submit() {
+    if (!dirty || !trimmed) return;
+    startSave(async () => {
       try {
-        await deleteAssistantAction(fd);
-        setAssistants((prev) => prev.filter((a) => a.id !== id));
+        const res = await renameAssistantTagAction({
+          assistantUserId: row.assistantUserId,
+          tag: value,
+        });
+        if (res.ok) {
+          // Re-sync the field to exactly what the store now holds (the normalized
+          // token), then refresh so every surface reads the new resolving tag.
+          if (res.tag) setValue(res.tag);
+          toast.success("Tag updated.");
+          router.refresh();
+        } else {
+          toast.error(res.error);
+        }
       } catch {
-        toast.error("Could not delete the assistant.");
+        toast.error("Something went wrong. Please try again.");
       }
     });
   }
-
-  // ---------------------------------------------------------------------------
-  // Rotate client
-  // ---------------------------------------------------------------------------
-
-  function handleRotate(id: string, username: string | null) {
-    if (!window.confirm(`Rotate OAuth client for @${username ?? id}? The old credentials will stop working immediately.`)) return;
-    startTransition(async () => {
-      const fd = new FormData();
-      fd.set("id", id);
-      try {
-        const result = await rotateAssistantClientAction(fd);
-        setCredentials({ clientId: result.clientId, clientSecret: result.clientSecret });
-        setCredentialLabel(`@${username ?? id} (rotated)`);
-        // Update clientId in local state
-        setAssistants((prev) =>
-          prev.map((a) => (a.id === id ? { ...a, clientId: result.clientId } : a)),
-        );
-      } catch {
-        toast.error("Could not rotate the OAuth client.");
-      }
-    });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Webhook
-  // ---------------------------------------------------------------------------
-
-  function handleWebhook(formData: FormData) {
-    startTransition(async () => {
-      try {
-        await setAssistantWebhookAction(formData);
-      } catch {
-        toast.error("Could not save the webhook URL.");
-      }
-    });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------------
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* Table */}
-      {assistants.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No assistant users registered yet.</p>
-      ) : (
-        <PaginatedTable>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Username</TableHead>
-              <TableHead>Email</TableHead>
-              <TableHead>Client ID</TableHead>
-              <TableHead>Webhook</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {assistants.map((a) => (
-              <TableRow key={a.id}>
-                <TableCell className="font-medium text-foreground">@{a.username ?? a.id}</TableCell>
-                <TableCell className="text-muted-foreground">{a.email ?? "—"}</TableCell>
-                <TableCell>
-                  <code className="rounded bg-surface-strong px-1.5 py-0.5 font-mono text-xs text-foreground">
-                    {a.clientId ? `${a.clientId.slice(0, 8)}…` : "—"}
-                  </code>
-                </TableCell>
-                <TableCell>
-                  <form action={handleWebhook} className="flex items-center gap-2">
-                    <Input type="hidden" name="assistantUserId" value={a.id} />
-                    <InputGroup className="w-52">
-                      <InputGroupAddon>
-                        <LinkIcon aria-hidden="true" />
-                      </InputGroupAddon>
-                      <InputGroupInput
-                        name="webhookUrl"
-                        type="url"
-                        placeholder="https://..."
-                        className="text-xs"
-                        autoComplete="off"
-                      />
-                    </InputGroup>
-                    <Input
-                      name="webhookSecret"
-                      type="password"
-                      placeholder="Secret"
-                      className="w-24 text-xs"
-                      autoComplete="off"
-                    />
-                    <Button type="submit" variant="outline" size="sm" disabled={isPending}>
-                      Save
-                    </Button>
-                  </form>
-                </TableCell>
-                <TableCell className="text-right">
-                  <div className="flex justify-end gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={isPending}
-                      onClick={() => handleRotate(a.id, a.username)}
-                    >
-                      Rotate
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      disabled={isPending}
-                      onClick={() => handleDelete(a.id)}
-                    >
-                      Delete
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </PaginatedTable>
-      )}
-
-      {/* Credentials dialog — shown once after create or rotate */}
-      <Dialog open={!!credentials} onOpenChange={(open) => { if (!open) setCredentials(null); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>OAuth credentials for {credentialLabel}</DialogTitle>
-            <DialogDescription>
-              Save these credentials now — the client secret will not be shown again.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-4 pt-2">
-            <div className="flex flex-col gap-1.5">
-              <Label className="text-xs text-muted-foreground">Client ID</Label>
-              <code className="block rounded bg-surface-strong px-3 py-2 font-mono text-sm text-foreground break-all">
-                {credentials?.clientId}
-              </code>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label className="text-xs text-muted-foreground">Client Secret</Label>
-              <code className="block rounded bg-surface-strong px-3 py-2 font-mono text-sm text-foreground break-all">
-                {credentials?.clientSecret}
-              </code>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Use these with the OAuth client_credentials grant at{" "}
-              <code className="font-mono">/api/auth/oauth/token</code> to obtain an access token for MCP calls.
-            </p>
-            <Button
-              onClick={() => {
-                if (credentials) {
-                  void navigator.clipboard.writeText(
-                    `CINATRA_MCP_CLIENT_ID=${credentials.clientId}\nCINATRA_MCP_CLIENT_SECRET=${credentials.clientSecret}`,
-                  );
-                }
-              }}
-              variant="outline"
-            >
-              Copy as env vars
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </div>
+    <form
+      className="flex flex-col gap-1.5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+    >
+      <label htmlFor={inputId} className="text-xs font-semibold text-foreground">
+        Tag
+      </label>
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
+          {/* The literal "@" — OUTSIDE the field; the value never contains it. */}
+          <span aria-hidden className="font-mono text-sm text-muted-foreground select-none">
+            @
+          </span>
+          <Input
+            id={inputId}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            disabled={pending}
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            className="h-8 w-48 font-mono text-sm"
+            aria-label="Assistant tag"
+          />
+        </div>
+        {/* Save + Reset are ALWAYS rendered; disabled while the field is clean
+            (design-system persistent-action-disabled-until-actionable pattern). */}
+        <Button type="submit" size="sm" variant="outline" disabled={pending || !dirty || !trimmed}>
+          {pending ? "Saving…" : "Save"}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={pending || !dirty}
+          onClick={() => setValue(persisted)}
+        >
+          Reset
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        The tag people type in chat to @-mention this assistant — e.g. @wordpress. Change it any
+        time.
+      </p>
+    </form>
   );
 }

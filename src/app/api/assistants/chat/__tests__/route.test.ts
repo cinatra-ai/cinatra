@@ -46,6 +46,11 @@ vi.mock("@/app/api/chat/runner", () => ({
 vi.mock("@/lib/better-auth-db", () => ({
   resolveAssistantHandles: (...a: unknown[]) => resolveAssistantHandles(...a),
 }));
+vi.mock("@/lib/assistant-registry-reader", () => ({
+  // The widget branch only; this cookie-path suite never reaches it. Mock so the
+  // real reader (a heavier better-auth-db graph) is not pulled into this suite.
+  isBuiltinAssistantByPackage: () => Promise.resolve(false),
+}));
 vi.mock("@/lib/assistant-runtime/resolve-runtime-config", () => ({
   resolveAssistantRuntimeConfigByPrincipal: (...a: unknown[]) =>
     resolveAssistantRuntimeConfigByPrincipal(...a),
