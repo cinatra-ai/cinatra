@@ -28,8 +28,10 @@ function entry(over: Partial<AssistantRegistryEntry> & { packageName: string }):
 const CINATRA = entry({
   packageName: "@cinatra-ai/cinatra-assistant",
   displayName: "Cinatra",
-  handle: "cinatra-2",
-  aliases: ["cinatra"],
+  // Ruled shape (owner ruling 2026-07-23 (groganz)): the built-in's ONE tag is its
+  // resolving handle `cinatra` (@cinatra), with no builtin alias.
+  handle: "cinatra",
+  aliases: [],
   isBuiltin: true,
 });
 const WORDPRESS = entry({
@@ -54,8 +56,8 @@ describe("buildAssistantsDirectory (AC#4)", () => {
     expect(cin.localChatHref).toBe("/chat/cinatra-ai/cinatra-assistant");
     expect(cin.remoteCapable).toBe(false);
     expect(cin.remoteInstances).toEqual([]);
-    expect(cin.handle).toBe("cinatra-2");
-    expect(cin.aliases).toEqual(["cinatra"]);
+    expect(cin.handle).toBe("cinatra");
+    expect(cin.aliases).toEqual([]);
   });
 
   it("expands a remote row per AUTHORIZED instance with both actions", async () => {

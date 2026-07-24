@@ -37,11 +37,15 @@ describe("assistantRegistrySchemaQueries — bootstrap DDL", () => {
     expect(q).toMatch(/assistant_audience_grant_uniq[\s\S]*COALESCE\(subject_id, ''\)/);
   });
 
-  it("seeds the immutable builtin alias idempotently", () => {
-    expect(q).toMatch(
-      new RegExp(`INSERT INTO "app"\\."assistant_tag_alias"[\\s\\S]*'${BUILTIN_ASSISTANT_ALIAS.alias}'`),
-    );
-    expect(q).toMatch(/ON CONFLICT \(alias\) DO NOTHING/);
+  it("does NOT seed a builtin alias — the built-in's one tag is its handle (owner ruling 2026-07-23 (groganz))", () => {
+    // The bootstrap DDL creates the alias table + its source constraint but seeds
+    // NO alias row: the built-in Cinatra assistant's ONE tag is its resolving
+    // HANDLE `cinatra` (minted by the boot backfill; the operator-upgrade twin
+    // core__0077 frees the legacy builtin alias). Seeding `cinatra` here would
+    // re-occupy the token in the shared handle+alias namespace and force the
+    // built-in's handle to suffix to cinatra-2.
+    expect(q).not.toMatch(/INSERT\s+INTO\s+"app"\."assistant_tag_alias"/i);
+    expect(q).not.toMatch(new RegExp(`'${BUILTIN_ASSISTANT_ALIAS.alias}'[^\\n]*'builtin'`));
   });
 });
 

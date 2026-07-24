@@ -14,9 +14,17 @@
 //     grant on install is a single `workspace` row (W1 persists; W2+ enforces).
 //
 //   assistant_tag_alias  — platform-global flat-token aliases
-//     `(alias PK, package_name, source builtin|manifest|admin)`. The builtin
-//     `cinatra → @cinatra-ai/cinatra-assistant` seed is IMMUTABLE (ON CONFLICT
-//     DO NOTHING; the namespace primitive refuses to overwrite a builtin).
+//     `(alias PK, package_name, source builtin|manifest|admin)`. The `builtin`
+//     source is still a valid alias kind (manifest/admin aliases may co-exist),
+//     but NO builtin alias is seeded here any more: the built-in Cinatra
+//     assistant's ONE tag is its resolving HANDLE `cinatra` (owner ruling
+//     2026-07-23 (groganz)). The old `cinatra → @cinatra-ai/cinatra-assistant`
+//     builtin alias occupied the `cinatra` token in the shared namespace, forcing
+//     the built-in's handle to suffix to `cinatra-2`; dropping the seed lets the
+//     boot backfill mint the built-in handle as `cinatra` cleanly on a fresh
+//     install, and the operator-upgrade twin `core__0077` frees the pre-existing
+//     builtin alias + renames the built-in handle to `cinatra` so fresh AND
+//     upgraded installs both surface @cinatra.
 //
 // The `assistant_handles` origin/package_name columns live in
 // `assistant-thread-schema.ts` (next to that table's CREATE); the
@@ -38,7 +46,13 @@ export const ASSISTANT_AUDIENCE_SUBJECT_KINDS = [
 /** Sources for a tag alias row. */
 export const ASSISTANT_TAG_ALIAS_SOURCES = ["builtin", "manifest", "admin"] as const;
 
-/** The immutable builtin alias seed. */
+/** The reserved built-in Cinatra assistant identity. Its ONE resolving tag is the
+ *  HANDLE `cinatra` (owner ruling 2026-07-23 (groganz)); this token is NO LONGER
+ *  seeded as a `builtin` alias (see the bootstrap DDL below + migration
+ *  `core__0077`). The constant is retained because `.packageName` is the reserved
+ *  built-in package name the registry reader + admin registry key the built-in
+ *  descriptor off, and `.alias`/`.source` name the legacy builtin-alias row the
+ *  migration frees. */
 export const BUILTIN_ASSISTANT_ALIAS = Object.freeze({
   alias: "cinatra",
   packageName: "@cinatra-ai/cinatra-assistant",
@@ -52,7 +66,6 @@ export function assistantRegistrySchemaQueries(schemaName: string): { text: stri
   const s = schemaName.replaceAll('"', '""');
   const kinds = ASSISTANT_AUDIENCE_SUBJECT_KINDS.map((k) => `'${k}'`).join(", ");
   const sources = ASSISTANT_TAG_ALIAS_SOURCES.map((k) => `'${k}'`).join(", ");
-  const seed = BUILTIN_ASSISTANT_ALIAS;
   return [
     { text: `CREATE TABLE IF NOT EXISTS "${s}"."assistant_audience" (
       id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -96,10 +109,48 @@ export function assistantRegistrySchemaQueries(schemaName: string): { text: stri
         END IF;
       END $$` },
     { text: `CREATE INDEX IF NOT EXISTS assistant_tag_alias_package_idx ON "${s}"."assistant_tag_alias" (package_name)` },
-    // Immutable builtin seed — ON CONFLICT DO NOTHING so a re-boot never
-    // overwrites an admin-relocated alias (the primitive guards the same rule).
-    { text: `INSERT INTO "${s}"."assistant_tag_alias" (alias, package_name, source)
-      VALUES ('${seed.alias}', '${seed.packageName}', '${seed.source}')
-      ON CONFLICT (alias) DO NOTHING` },
+    // NO builtin alias seed (owner ruling 2026-07-23 (groganz)): the built-in
+    // Cinatra assistant's ONE tag is its resolving HANDLE `cinatra`, minted by the
+    // boot backfill. Seeding a `cinatra` alias here would re-occupy the token in
+    // the shared handle+alias namespace and force the handle to suffix to
+    // `cinatra-2`. The operator-upgrade twin `core__0077` frees the legacy builtin
+    // alias + renames the built-in handle to `cinatra` so upgraded installs
+    // converge to the SAME fresh-install shape (no builtin alias row; handle
+    // `cinatra`).
+  ];
+}
+
+// --- Assistant PAUSE table (cinatra#1880, Epic #1873 W5) ---------------------
+// Co-located with the registry-foundation DDL (rather than a standalone module)
+// so the store's synchronous bootstrap composition reaches it WITHOUT adding a
+// new first-party module to every route's reachable graph (route-graph ratchet).
+// Still a pure string builder with ZERO imports.
+//
+//   assistant_pause — an installation-wide operational PAUSE of an assistant,
+//     keyed by the assistant PRINCIPAL (`assistant_user_id`) — the SAME axis the
+//     W2 builtin-host identification fix (f9f70d26a) keys on, so a handle/alias
+//     rename never loses or retargets a pause. Presence of a row == paused. A
+//     paused principal drops out of the audience-filtered registry reader
+//     (`readAssistantRegistryForActor`) exactly like an out-of-audience
+//     assistant, so pause is enforced fail-closed across every W2 enforcement
+//     surface through the ONE audience truth. The builtin Cinatra principal is
+//     never paused (the reader unions it in unconditionally; the writer + UI
+//     refuse it). ONE NET-NEW table (additive); the twin migration `core__0076`
+//     carries the SAME create onto the operator upgrade path (fresh-install AND
+//     upgrade produce identical schema). Fail-CLOSED permission surface: a
+//     paused assistant is unaddressable; an empty table means "nothing paused"
+//     (a strict additive no-op on every existing deployment).
+
+/** Bootstrap DDL for `assistant_pause`, spread into
+ *  `buildCreateStoreSchemaQueries`. Idempotent (CREATE TABLE IF NOT EXISTS).
+ *  Keyed by the assistant PRINCIPAL (`assistant_user_id` is the PK). */
+export function assistantPauseSchemaQueries(schemaName: string): { text: string }[] {
+  const s = schemaName.replaceAll('"', '""');
+  return [
+    { text: `CREATE TABLE IF NOT EXISTS "${s}"."assistant_pause" (
+      assistant_user_id text PRIMARY KEY,
+      paused_at timestamptz NOT NULL DEFAULT now(),
+      paused_by text
+    )` },
   ];
 }

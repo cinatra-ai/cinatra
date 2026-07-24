@@ -274,6 +274,14 @@ const nextConfig: NextConfig = {
   },
   async redirects() {
     return [
+      // cinatra#1880 W5 (AC#4): the assistants admin surface is the SINGULAR
+      // /configuration/assistants; bridge the plural bookmark to it so an
+      // /configurations/... link is never a dead 404.
+      {
+        source: "/configurations/assistants",
+        destination: "/configuration/assistants",
+        permanent: false,
+      },
       // The native /workflows browse/list/overview page was removed
       // (cinatra#609) — workflow overview/tracking now lives in Plane. Old
       // index bookmarks land on the projects surface (the neutral, always-

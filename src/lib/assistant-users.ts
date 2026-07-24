@@ -151,11 +151,38 @@ export async function isBuiltInCinatraAssistantUserId(id: string): Promise<boole
   return row[0]?.username === BUILT_IN_CINATRA_ASSISTANT_USERNAME;
 }
 
+/** Directing message shown when a delete is refused because the principal is
+ *  owned by an installed extension (cinatra#1880 W5 AC#3). */
+export const EXTENSION_OWNED_ASSISTANT_DELETE_MESSAGE =
+  "This assistant is owned by an installed extension. Uninstall the package to remove it.";
+
+/** True when `id` is an EXTENSION-OWNED assistant principal — its registry handle
+ *  carries `origin='extension'` (cinatra#1874 W1). An extension-owned principal's
+ *  lifecycle is exclusively package install/archive, so it must be non-deletable
+ *  from BOTH the Assistants surface (deleteAssistantUser) AND the Permissions
+ *  surface (removeUser). Standalone principals (origin='standalone') are
+ *  unaffected — they remain deletable. The builtin Cinatra principal is guarded
+ *  separately (isBuiltInCinatraAssistantUserId); its handle is 'standalone', so
+ *  this check does not cover it. */
+export async function isExtensionOwnedAssistantPrincipal(id: string): Promise<boolean> {
+  const row = await betterAuthDb
+    .select({ origin: assistantHandles.origin })
+    .from(assistantHandles)
+    .where(eq(assistantHandles.assistantUserId, id))
+    .limit(1);
+  return row[0]?.origin === "extension";
+}
+
 export async function deleteAssistantUser(id: string): Promise<void> {
   // Refuse to delete the built-in Cinatra principal from ANY path (see
   // isBuiltInCinatraAssistantUserId).
   if (await isBuiltInCinatraAssistantUserId(id)) {
     throw new Error("The built-in Cinatra assistant cannot be deleted.");
+  }
+  // Refuse to delete an extension-owned principal — its lifecycle is package
+  // install/archive only (cinatra#1880 W5 AC#3). Standalone principals pass.
+  if (await isExtensionOwnedAssistantPrincipal(id)) {
+    throw new Error(EXTENSION_OWNED_ASSISTANT_DELETE_MESSAGE);
   }
 
   // 1. Look up clientId before deleting user
