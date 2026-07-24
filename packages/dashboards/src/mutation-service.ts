@@ -75,6 +75,7 @@ import {
 // graph pressure.
 import type { DashboardTwinContext, TwinTx } from "./twin-writer-seam";
 import { guardedDashboardsWrite } from "./org-write-seam";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
 export class DashboardForbiddenError extends Error {
   readonly code = "dashboard_forbidden";
@@ -2316,6 +2317,14 @@ export interface BackfillTwinsDeps {
   maxBatches?: number;
   /** optional logger for a non-trivial run. */
   log?: (msg: string) => void;
+  /**
+   * Host-supplied org-write mint (cinatra#1939 S3): called once per row's org
+   * so each per-id transaction runs under the kernel guard for ITS org. The
+   * boot phase wires the "dashboard-twin-backfill" system purpose. ABSENT →
+   * every row fails closed into `failed` (isolated, retried next boot) —
+   * never an unguarded write.
+   */
+  mintOrgAuthority?: (orgId: string) => OrgWriteAuthority;
 }
 
 /** The app schema name — mirrors `SCHEMA_NAME` in `store/schema.ts`. */
@@ -2333,9 +2342,20 @@ function backfillSchemaName(): string {
 export async function pairOneUntwinnedDashboardTwin(
   id: string,
   schemaName: string,
+  guard: { organizationId: string; authority: OrgWriteAuthority },
 ): Promise<"paired" | "already" | "collision" | "gone"> {
   const objTable = sql.raw(`"${schemaName.replaceAll('"', '""')}"."objects"`);
-  return getDashboardsDb().transaction(async (tx) => {
+  // Org-write kernel guard (cinatra#1939 S3): the sweep resolved the row's org
+  // in its scan; each per-id transaction is ruled against that org's
+  // lifecycle. The system actor mirrors the twin audit provenance.
+  const actor: DashboardActor = {
+    userId: "system:dashboard-twin-backfill",
+    organizationId: guard.organizationId,
+    teamIds: [],
+    authority: guard.authority,
+  };
+  return guardedDashboardsWrite(actor, { schema: schemaName }, async (guardedTx) => {
+    const tx = guardedTx as unknown as DashboardsDb;
     // Uniform advisory-first lock (the SAME order every forward writer takes),
     // then the dashboard row lock — serializes this backfill against a forward
     // mutation racing the same id.
@@ -2348,6 +2368,13 @@ export async function pairOneUntwinnedDashboardTwin(
       .limit(1);
     const row = rows[0];
     if (!row) return "gone";
+    // The org is immutable on a dashboards row; a mismatch against the scan's
+    // org means the guard ruled the WRONG org — refuse, never write.
+    if (row.organizationId !== guard.organizationId) {
+      throw new Error(
+        `twin backfill: row ${id} belongs to org ${row.organizationId}, guarded as ${guard.organizationId}`,
+      );
+    }
     // Re-check UNDER THE LOCK — this is what makes the backfill idempotent even
     // when a forward mutation twins the id between the scan and here. A
     // non-dashboard object at the id is a collision: skip + surface, never
@@ -2416,7 +2443,7 @@ export async function backfillDashboardArtifactTwins(
   let cursor = "";
   for (let b = 0; b < maxBatches; b++) {
     const scan = sql`
-      SELECT d.id AS id
+      SELECT d.id AS id, d.organization_id AS org_id
       FROM ${dashTable} d
       WHERE d.id > ${cursor}
         AND NOT EXISTS (
@@ -2431,10 +2458,26 @@ export async function backfillDashboardArtifactTwins(
     if (rows.length === 0) break;
     for (const r of rows) {
       const id = String(r.id);
+      const orgId = String(r.org_id ?? "");
       result.scanned += 1;
       cursor = id; // advance past every processed id (paired, skipped, or failed)
+      // Fail-closed per row (cinatra#1939 S3): no host mint wired, or no org on
+      // the row, means no kernel authority — the row stays untwinned (isolated,
+      // retried next boot), never an unguarded write.
+      if (!deps.mintOrgAuthority || !orgId) {
+        result.failed.push({
+          id,
+          error: !orgId
+            ? "row has no organization_id"
+            : "no org-write mint wired (deps.mintOrgAuthority)",
+        });
+        continue;
+      }
       try {
-        const outcome = await pairOneUntwinnedDashboardTwin(id, schemaName);
+        const outcome = await pairOneUntwinnedDashboardTwin(id, schemaName, {
+          organizationId: orgId,
+          authority: deps.mintOrgAuthority(orgId),
+        });
         if (outcome === "paired") result.paired += 1;
         else if (outcome === "already") result.alreadyTwinned += 1;
         else if (outcome === "collision") result.collisions += 1;

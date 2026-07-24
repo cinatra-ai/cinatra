@@ -226,6 +226,16 @@ describe("mintSystemWriteAuthority (#1938)", () => {
     expect(reconciler.can("org.settings")).toBe(false);
     expect(reconciler.can("org.lifecycle")).toBe(false);
   });
+
+  it("the dashboard-twin-backfill purpose is CONTENT-ONLY (#1939 wave 1)", () => {
+    const backfill = mintSystemWriteAuthority("dashboard-twin-backfill", "org-1");
+    expect(backfill.orgId).toBe("org-1");
+    expect(backfill.can("content.write")).toBe(true);
+    expect(backfill.can("run.execute")).toBe(false);
+    expect(backfill.can("membership.write")).toBe(false);
+    expect(backfill.can("org.settings")).toBe(false);
+    expect(backfill.can("org.lifecycle")).toBe(false);
+  });
 });
 
 describe("runGuardedOrgWriteBatchSync (#1938)", () => {

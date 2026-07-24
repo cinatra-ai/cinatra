@@ -199,6 +199,14 @@ const SYSTEM_PURPOSE_CAPABILITIES: Record<string, readonly OrgWriteCapability[]>
    *  site: src/lib/dashboards/reconcile-contribution-adoptions.ts
    *  (R2-allowlisted in the boundary gate). */
   "dashboard-contribution-reconciler": ["content.write"],
+  /** The boot-phase dashboard artifact-twin backfill (cinatra#1939 wave 1):
+   *  pairs the substrate twin for pre-existing dashboards that lack one —
+   *  minted PER ORG inside the multi-org sweep, so each per-id transaction is
+   *  ruled against ITS row's org lifecycle (an archived org's rows stay
+   *  untwinned until restore; the reader gate covers them meanwhile).
+   *  Content-only. Sole minting site: src/lib/boot/phases/core-boot.ts
+   *  (R2-allowlisted in the boundary gate). */
+  "dashboard-twin-backfill": ["content.write"],
 };
 
 export type SystemWritePurpose = keyof typeof SYSTEM_PURPOSE_CAPABILITIES;

@@ -51,6 +51,9 @@ export const SYSTEM_MINT_ALLOWLIST = new Set([
   // The contribution-adoption reconciler — mints the content-only
   // "dashboard-contribution-reconciler" purpose (cinatra#1939 wave 1).
   join("src", "lib", "dashboards", "reconcile-contribution-adoptions.ts"),
+  // The boot phase — mints the content-only "dashboard-twin-backfill"
+  // purpose per org for the artifact-twin backfill (cinatra#1939 wave 1).
+  join("src", "lib", "boot", "phases", "core-boot.ts"),
 ]);
 
 /** R3: the one legal unwrap consumer outside the kernel. */
