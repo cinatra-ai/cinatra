@@ -119,8 +119,16 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     return {
       Authorization: `Bearer ${b.auth.citToken}`,
       "X-Cinatra-Widget-User-Token": b.auth.cwuToken,
+      // The turn POST is SAME-ORIGIN to the Cinatra app, so the browser `Origin`
+      // is the Cinatra origin — NOT the CMS site origin the cit_/cwu_ tokens are
+      // bound to (and JS cannot set the forbidden `Origin`). Forward the
+      // server-resolved parent (CMS) origin so the broker validates the token
+      // binding against the right origin — the SAME forwarded seam the capability
+      // negotiation already uses (embed-chat-negotiate.ts). A forged value fails
+      // the consume closed; the tokens, never this header, are the authority.
+      "X-Cinatra-Widget-Origin": props.expectedParentOrigin,
     };
-  }, []);
+  }, [props.expectedParentOrigin]);
 
   // Render assistant text through the S3 packaged renderer (`renderMarkdown`),
   // the EXACT content path `/chat` and the render-parity reference target render
@@ -262,7 +270,13 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   );
 
   return (
-    <div ref={containerRef} data-embed-assistant data-phase={phase.kind}>
+    // `data-turn-status` mirrors the reduced conversation status (idle → running
+    // → finished/error) so an out-of-process observer (the wp-drupal-uat E2E) can
+    // fence deterministically on a CLIENT-CONSUMED `RUN_FINISHED` (status ===
+    // "finished") rather than a mid-stream signal like a completed tool chip. It
+    // is a passive test-observability attribute only — it drives no behaviour and
+    // is not part of the render-parity content contract (cinatra#1998 (c)).
+    <div ref={containerRef} data-embed-assistant data-phase={phase.kind} data-turn-status={convo.status}>
       {phase.kind === "waiting" && (
         <div className="p-4 text-sm text-muted-foreground" data-embed-state="waiting">
           Waiting for the host…
@@ -288,30 +302,59 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   );
 }
 
-/** Minimal composer — the embed's own input (the CMS widget holds no chat UI). */
+/** Minimal composer — the embed's own input (the CMS widget holds no chat UI).
+ *
+ * SANDBOX CONSTRAINT (why NOT a <form> submit): this embed renders INSIDE the CMS
+ * widget's `sandbox="allow-scripts allow-same-origin"` iframe (wordpress-plugin /
+ * drupal-module #1221), which deliberately grants NO `allow-forms`. Under that
+ * sandbox a native form submission — pressing Enter in the field OR clicking a
+ * `type="submit"` button — is BLOCKED by the browser and its `submit` event never
+ * fires ("Blocked form submission … the 'allow-forms' permission is not set"), so
+ * a `<form onSubmit>` composer could type but never start a turn. Drive the send
+ * purely from JS instead: an explicit `type="button"` onClick plus an Enter
+ * keydown, inside a plain <div> so nothing depends on form submission being
+ * permitted. Behaves identically outside the sandbox. */
 function EmbedComposer({ onSend }: { onSend: (text: string) => void }) {
   const [value, setValue] = useState("");
+  const submit = () => {
+    const text = value.trim();
+    if (!text) return;
+    setValue("");
+    onSend(text);
+  };
   return (
-    <form
-      className="mt-3 flex gap-2"
-      onSubmit={(e) => {
-        e.preventDefault();
-        const text = value.trim();
-        if (!text) return;
-        setValue("");
-        onSend(text);
-      }}
-    >
+    <div className="mt-3 flex gap-2">
       <Input
         className="flex-1"
         value={value}
         onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          // Enter sends; Shift+Enter is reserved (a no-op on this single-line
+          // input). Ignore the Enter that COMMITS an IME candidate: most engines
+          // set `isComposing`, but WebKit fires that Enter with isComposing=false
+          // and keyCode 229 (WebKit bug 165004), so guard on BOTH signals.
+          if (
+            e.key === "Enter" &&
+            !e.shiftKey &&
+            !e.nativeEvent.isComposing &&
+            e.nativeEvent.keyCode !== 229
+          ) {
+            e.preventDefault();
+            submit();
+          }
+        }}
         placeholder="Ask the assistant…"
         aria-label="Message"
       />
-      <Button type="submit" variant="outline" size="sm">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        data-embed-composer-submit
+        onClick={submit}
+      >
         Send
       </Button>
-    </form>
+    </div>
   );
 }

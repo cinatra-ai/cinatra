@@ -455,8 +455,17 @@ function isObj(v) {
 // if a stray `cinatra.dashboardContribution` is present. An artifact pack that
 // declares a non-object (or nothing) emits null too. The value is carried
 // UNVALIDATED — the host parses it fail-closed + field-tolerantly via
-// `parseDashboardContribution` at consumption (the S11b adoption reconciler);
-// this seam is INERT until a meaning pack ships the claim.
+// `parseDashboardContribution` at consumption (the S11b adoption reconciler + the
+// #1896 template-materialize reconciler); this seam is INERT until a meaning pack
+// ships the claim.
+//
+// SHARED SEMANTIC (cinatra#1896 runtime-store carry): this is a byte-mirror of
+// `resolveDashboardContributionClaim` in
+// packages/sdk-extensions/src/dashboard-contribution-contract.ts (the sdk leaf now
+// owns the gate as the single source of truth; the RUNTIME package loader emits
+// through the SAME leaf function so a marketplace-installed pack surfaces the
+// identical claim the static manifest carries). A parity test pins the two —
+// mirrors the `resolveExecutionEnvironmentClaim` generator/leaf split.
 export function resolveDashboardContributionClaim(kind, cin) {
   if (kind !== "artifact") return null;
   return isObj(cin?.dashboardContribution) ? cin.dashboardContribution : null;

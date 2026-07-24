@@ -90,6 +90,23 @@ function seedWordPress(): UatSeed["wordpress"] {
 function seedDrupal(): UatSeed["drupal"] {
   const root = process.env.UAT_DRUPAL_ROOT ?? "/drupal/web";
   const drush = (args: string[]) => dockerExec(DRUPAL_CONTAINER, ["drush", `--root=${root}`, ...args]);
+
+  // Disable Drupal JS/CSS AGGREGATION for the UAT (cinatra#2031). The Drupal
+  // module attaches the widget bundle as a LOCAL library (`cinatra/bundle` →
+  // `js/cinatra-widget.js`), so with aggregation ON — Drupal's install default in
+  // a production-like container — core folds it into a hashed aggregate served
+  // from `/sites/*/files/js/js_<hash>.js`, whose URL no longer contains
+  // `cinatra-widget.js`. The drupal-fallback positive control aborts the bundle by
+  // matching `/cinatra-widget\.js/`; under aggregation that glob never matches, so
+  // the abort never fires (widgetBundleAborts == 0) even though the fallback
+  // feature is correct — the exact CI-only anomaly the local (aggregation-OFF dev)
+  // Drupal never reproduced. Serving the raw per-file asset makes the interception
+  // deterministic across environments. Idempotent (config:set) + a cache rebuild so
+  // no previously-aggregated markup/URL is served to the test.
+  drush(["config:set", "system.performance", "js.preprocess", "0", "-y"]);
+  drush(["config:set", "system.performance", "css.preprocess", "0", "-y"]);
+  drush(["cache:rebuild"]);
+
   // Idempotent: delete prior UAT node(s) by title, then create one via the
   // entity API (drush ev returns the new nid).
   const php = `
@@ -285,35 +302,59 @@ async function warmDevRoutes(): Promise<void> {
       { label: "GET /widget-auth", run: () => ctx.get("/widget-auth", { failOnStatusCode: false, timeout: 120_000 }) },
       { label: "POST /api/widget-auth/token", run: () => ctx.post("/api/widget-auth/token", { data: {}, failOnStatusCode: false, timeout: 120_000 }) },
     );
-    // Per-agent surface. The dynamic [agentSlug] segments share one compiled
-    // module, but warm both slugs anyway: first-hit per-agent work (extension
-    // service registration) also shows up as multi-second latency in run logs.
-    for (const [slug, cmsOrigin] of [
-      ["wordpress-content-editor", process.env.UAT_WP_BASE_URL ?? "http://localhost:8080"],
-      ["drupal-content-editor", process.env.UAT_DRUPAL_BASE_URL ?? "http://localhost:8082"],
-    ] as const) {
+    // S5 unified assistant-broker surface (cinatra#1221/#1998/#2029) — the routes
+    // the cutover widget actually drives. Warm the client-side negotiate GET, the
+    // turn POST + its CORS preflight (broker-auth branch), and the /embed/assistant
+    // page the widget frames (also the fallback's reachability-probe target). These
+    // are single compiled modules (not per-[agentSlug]), so warm them ONCE. The
+    // legacy per-agent /capabilities + /stream warms are dropped: those routes were
+    // deleted (cinatra#1991).
+    const uatWpOrigin = process.env.UAT_WP_BASE_URL ?? "http://localhost:8080";
+    targets.push(
+      { label: "GET /api/assistants/chat/capabilities", run: () => ctx.get("/api/assistants/chat/capabilities", { failOnStatusCode: false, timeout: 120_000 }) },
+      {
+        label: "OPTIONS /api/assistants/chat",
+        run: () =>
+          ctx.fetch("/api/assistants/chat", {
+            method: "OPTIONS",
+            headers: {
+              Origin: uatWpOrigin,
+              "Access-Control-Request-Method": "POST",
+              "Access-Control-Request-Headers": "authorization,content-type,x-cinatra-widget-user-token",
+            },
+            failOnStatusCode: false,
+            timeout: 120_000,
+          }),
+      },
+      {
+        label: "POST /api/assistants/chat",
+        run: () =>
+          ctx.post("/api/assistants/chat", {
+            headers: {
+              Authorization: "Bearer cit_warmup-invalid",
+              "X-Cinatra-Widget-User-Token": "cwu_warmup-invalid",
+              Origin: uatWpOrigin,
+            },
+            data: { threadId: "warmup", messages: [{ role: "user", content: "warm" }], assistant: "wordpress" },
+            failOnStatusCode: false,
+            timeout: 120_000,
+          }),
+      },
+      { label: "GET /embed/assistant", run: () => ctx.get("/embed/assistant?assistant=wordpress&instanceId=warmup", { failOnStatusCode: false, timeout: 120_000 }) },
+    );
+    // Per-agent surface. Only the short-lived cit_ MINT survives on the per-agent
+    // route family (POST /api/agents/{slug}/token — unchanged by the S5 cutover,
+    // cinatra#1221). The dynamic [agentSlug] segments share one compiled module,
+    // but warm both slugs anyway: first-hit per-agent work (extension service
+    // registration) also shows up as multi-second latency in run logs.
+    for (const slug of ["wordpress-content-editor", "drupal-content-editor"] as const) {
       targets.push(
-        { label: `GET /api/agents/${slug}/capabilities`, run: () => ctx.get(`/api/agents/${slug}/capabilities`, { failOnStatusCode: false, timeout: 120_000 }) },
         {
           label: `POST /api/agents/${slug}/token`,
           run: () =>
             ctx.post(`/api/agents/${slug}/token`, {
               headers: { Authorization: "Bearer warmup-invalid", Origin: CINATRA_BASE },
               data: { contractVersion: "v1" },
-              failOnStatusCode: false,
-              timeout: 120_000,
-            }),
-        },
-        {
-          label: `OPTIONS /api/agents/${slug}/stream`,
-          run: () =>
-            ctx.fetch(`/api/agents/${slug}/stream`, {
-              method: "OPTIONS",
-              headers: {
-                Origin: cmsOrigin,
-                "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "authorization,content-type,x-cinatra-widget-user-token",
-              },
               failOnStatusCode: false,
               timeout: 120_000,
             }),

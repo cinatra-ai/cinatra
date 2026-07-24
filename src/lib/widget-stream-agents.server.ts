@@ -30,7 +30,15 @@ import "server-only";
 //   (iii) the grant package IS the currently-approved credential-store owner of
 //         the canon's declared tokenConfigKey (the ownership-axis conjunction —
 //         the sibling runtime-owner arm in widget-auth-provider.ts — so a
-//         package can never serve a widget riding another package's store);
+//         package can never serve a widget riding another package's store).
+//         Ownership resolves via `resolveWidgetStreamStoreOwner`: the approved
+//         ownership GRANT, OR — for a released-image rider whose store has no
+//         admin grant (owner ruling 2026-07-23, path B, slice 2) — the UNIQUE
+//         sanctioned marketplace-install-PROVENANCE owner of a REVIEWED store key
+//         (honest P1 candidates only; no wildcard trust), vetoed by any explicit
+//         revoked/pending ownership decision at org+global. Provenance
+//         substitutes for the ownership-grant arm ONLY — the deliberately-never-
+//         auto-approved metadata-grant gate (i) above is UNTOUCHED;
 //   (iv)  the package currently classifies trusted-signed + activated
 //         (isPackageSignedActivated) AND its materialized store dir
 //         integrity-verifies against the TRUSTED install anchor at the
@@ -86,12 +94,13 @@ import {
   readWidgetStreamMetadataClaimsFromStore,
   readWidgetStreamMetadataGrant,
   resolveApprovedWidgetStreamMetadataGrant,
-  resolveOwnershipOwner,
   resolveSingleStringExport,
   type OwnershipGrantDeps,
   type WidgetStreamMetadataGrantClaim,
   type WidgetStreamMetadataGrantDeps,
 } from "@/lib/extension-capability-ownership-grants";
+import { resolveWidgetStreamStoreOwner } from "@/lib/widget-stream-ownership-provenance";
+import type { InstallProvenanceDeps } from "@/lib/widget-auth-install-provenance";
 import { isPackageSignedActivated } from "@/lib/extension-capabilities-registry";
 import type { InstallTrustAnchor } from "@/lib/extension-package-store";
 
@@ -178,8 +187,16 @@ export type VerifiedWidgetStreamStoreDir = {
 export type WidgetStreamRuntimeResolveDeps = {
   /** Threaded into the metadata-grant reads (resolve/read/list). */
   metadataGrantDeps?: WidgetStreamMetadataGrantDeps;
-  /** Threaded into `resolveOwnershipOwner` (the conjunction axis). */
+  /** Threaded into the ownership-conjunction axis (`resolveWidgetStreamStoreOwner`
+   * → the approved-ownership-grant arm AND the provenance fallback's grant veto). */
   ownershipGrantDeps?: OwnershipGrantDeps;
+  /** Threaded into the ownership conjunction's marketplace-install-PROVENANCE
+   * fallback (owner ruling 2026-07-23, path B — slice 2) so the ownership arm
+   * honors a released-image rider whose store has no admin ownership grant. The
+   * provenance fallback is consulted ONLY when the grant arm resolves no owner,
+   * and ONLY for a store key with a reviewed provenance candidate (no wildcard
+   * trust). Production callers pass nothing. */
+  installProvenanceDeps?: InstallProvenanceDeps;
   /** Trust classification (default `isPackageSignedActivated`). */
   isSignedActivated?: (packageName: string) => boolean;
   /** The TRUSTED install anchor, from OUTSIDE the writable store (default:
@@ -361,6 +378,7 @@ async function defaultImportRuntimeWidgetChatToolModule(args: {
 type ResolvedRuntimeDeps = {
   metadataGrantDeps?: WidgetStreamMetadataGrantDeps;
   ownershipGrantDeps?: OwnershipGrantDeps;
+  installProvenanceDeps?: InstallProvenanceDeps;
   isSignedActivated: (packageName: string) => boolean;
   resolveInstallAnchor: (packageName: string) => Promise<InstallTrustAnchor | null>;
   resolveVerifiedStoreDir: (
@@ -381,6 +399,7 @@ function withRuntimeDefaults(deps?: WidgetStreamRuntimeResolveDeps): ResolvedRun
   return {
     metadataGrantDeps: deps?.metadataGrantDeps,
     ownershipGrantDeps: deps?.ownershipGrantDeps,
+    installProvenanceDeps: deps?.installProvenanceDeps,
     isSignedActivated: deps?.isSignedActivated ?? isPackageSignedActivated,
     resolveInstallAnchor: deps?.resolveInstallAnchor ?? defaultResolveInstallAnchor,
     resolveVerifiedStoreDir: deps?.resolveVerifiedStoreDir ?? defaultResolveVerifiedStoreDir,
@@ -477,10 +496,16 @@ async function resolveRuntimeWidgetStreamAgent(
     if (claim.canon.relayAgentPackage === null) return null;
 
     // (iii) ownership conjunction: the grant package must BE the currently-
-    // approved credential-store owner of the canon's declared token key.
-    const owner = await resolveOwnershipOwner(
+    // approved credential-store owner of the canon's declared token key. The
+    // owner is the approved ownership GRANT holder, OR — for a released-image
+    // rider whose store has no admin grant (path B, slice 2) — the UNIQUE
+    // sanctioned marketplace-install-PROVENANCE owner of a reviewed store key,
+    // vetoed by any explicit revoked/pending decision (org+global). Provenance
+    // substitutes for the ownership-grant arm ONLY; the metadata-grant gate above
+    // is untouched.
+    const owner = await resolveWidgetStreamStoreOwner(
       { tokenConfigKey: claim.canon.auth.tokenConfigKey, orgId: null },
-      deps.ownershipGrantDeps,
+      { ownershipGrantDeps: deps.ownershipGrantDeps, installProvenanceDeps: deps.installProvenanceDeps },
     );
     if (owner !== grant.packageName) return null;
 
@@ -752,9 +777,22 @@ async function isPinnedGrantStillAuthorized(
     if (row.bindingHashV2 !== grant.bindingHashV2) return false;
     if (row.rowVersion !== grant.grantRowVersion) return false;
     if (!deps.isSignedActivated(grant.packageName)) return false;
-    const owner = await resolveOwnershipOwner(
+    // Ownership conjunction, RE-ASSERTED live at point of use: the pinned package
+    // must STILL own the store — via the approved ownership GRANT or (path B,
+    // slice 2) the marketplace-install-PROVENANCE fallback, vetoed by any
+    // explicit revoked/pending decision. Because the fallback re-derives from the
+    // SAME live trust roots (live provider + trusted-signed + trusted anchor +
+    // integrity + the veto), an admin revocation of the store ownership — or a
+    // loss of a provenance factor that drops ownership (de-signed, integrity
+    // fail, lost P5 declaration, P6 ambiguity) — after mint fails this re-assert
+    // exactly as a revoked grant does. (The pinned ANCHOR DIGEST is NOT compared
+    // here — for a provenance OR a granted owner; re-materialization to a new
+    // trusted digest keeps ownership. The digest pin is the LOAD-path gate in
+    // `buildWidgetChatTool`, so a module is only ever read from the pinned
+    // digest; this re-assert intentionally bites identically for both owner types.)
+    const owner = await resolveWidgetStreamStoreOwner(
       { tokenConfigKey: grant.tokenConfigKey, orgId: null },
-      deps.ownershipGrantDeps,
+      { ownershipGrantDeps: deps.ownershipGrantDeps, installProvenanceDeps: deps.installProvenanceDeps },
     );
     if (owner !== grant.packageName) return false;
     return true;
