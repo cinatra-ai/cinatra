@@ -33,7 +33,6 @@ export const GENERATED_CONNECTOR_SETUP_PAGES: Record<string, GeneratedPageEntry>
   "linkedin-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/linkedin-connector/setup-page", () => import("@cinatra-ai/linkedin-connector/setup-page")) },
   "linkedin-oauth-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/linkedin-oauth-connector/setup-page", () => import("@cinatra-ai/linkedin-oauth-connector/setup-page")) },
   "mcp-client-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/mcp-client-connector/setup-page", () => import("@cinatra-ai/mcp-client-connector/setup-page")) },
-  "mcp-server-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/mcp-server-connector/setup-page", () => import("@cinatra-ai/mcp-server-connector/setup-page")) },
   "plane-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/plane-connector/setup-page", () => import("@cinatra-ai/plane-connector/setup-page")) },
   "tailscale-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/tailscale-connector/setup-page", () => import("@cinatra-ai/tailscale-connector/setup-page")) },
   "twenty-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/twenty-connector/setup-page", () => import("@cinatra-ai/twenty-connector/setup-page")) },
