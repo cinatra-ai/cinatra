@@ -48,7 +48,7 @@
     { "name": "connector_access_policy", "category": "runtime-dependent", "reason": "Written by the connector install/share flow." },
     { "name": "custom_skill_assignments", "category": "runtime-dependent", "reason": "Per-agent skill assignments — written by the skills surface." },
     { "name": "dashboard_revisions", "category": "fixture-driven", "minRows": 5, "seededBy": "seedDashboards", "surface": "Dashboard history" },
-    { "name": "dashboards", "category": "fixture-driven", "minRows": 5, "seededBy": "seedDashboards", "surface": "/dashboards" },
+    { "name": "dashboards", "category": "fixture-driven", "minRows": 5, "seededBy": "seedDashboards", "surface": "/artifacts (per-dashboard detail at /dashboards/{id}; the workspace-wide /dashboards directory page was retired — cinatra#2058)" },
     { "name": "drafts", "category": "user-created", "reason": "Email-send + workflow drafts; generic JSONL payload. Created at runtime by the drafting flow." },
     { "name": "email_send_events", "category": "runtime-event", "reason": "Append-only delivery-attempt ledger; FK to agent_runs (wiped by seed)." },
     { "name": "extension_accent_color", "category": "runtime-dependent", "reason": "Per-extension UI accent; set via the extension settings page." },

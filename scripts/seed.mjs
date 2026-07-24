@@ -1200,8 +1200,10 @@ async function seedCanonicalBlogFixtures() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Dashboards — owner-tier variety so /dashboards is non-empty across all
-// scopes (user / team / organization). Idempotent on `dash-seed-v65-%`.
+// Dashboards — owner-tier variety so the dashboards surface (/artifacts + the
+// per-scope Dashboards tabs; the /dashboards directory page was retired in
+// cinatra#2058) is non-empty across all scopes (user / team / organization).
+// Idempotent on `dash-seed-v65-%`.
 // ---------------------------------------------------------------------------
 
 async function seedDashboards(orgMap, adminUserId) {
