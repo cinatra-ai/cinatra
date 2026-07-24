@@ -189,7 +189,7 @@ async function resolveInstallProvenanceWidgetAuthOwner(
   deps?: WidgetAuthResolveDeps,
 ): Promise<string | null> {
   try {
-    const owner = await resolveInstallProvenanceOwner(
+    const resolved = await resolveInstallProvenanceOwner(
       {
         capability: WORDPRESS_WIDGET_AUTH_CAPABILITY,
         tokenConfigKey: WORDPRESS_WIDGET_AUTH_TOKEN_CONFIG_KEY,
@@ -197,25 +197,35 @@ async function resolveInstallProvenanceWidgetAuthOwner(
       },
       deps?.installProvenanceDeps,
     );
-    if (!owner) return null;
-    // GRANT-DECISION VETO (codex final round). Arm (c) runs whenever the build ∪
-    // grant union is EMPTY — but arm (b) also returns null for a grant that is
-    // explicitly `revoked` (an admin killed this package's ownership) or `pending`
-    // (an admin has not approved it). Provenance MUST NOT override such an
-    // explicit admin decision: if a global-scope grant row exists for this owner
-    // that is NOT `approved`, veto the provenance fallback (fail closed). Only the
-    // NO-ROW case (the auto-staged rider that never had a grant recorded) is
-    // honored. A same-scope `approved` row would have made arm (b) resolve, so
-    // arm (c) would not be consulted — the `approved` check here is defensive.
-    const grant = await readOwnershipGrant(
-      {
-        packageName: owner,
-        orgId: null,
-        tokenConfigKey: WORDPRESS_WIDGET_AUTH_TOKEN_CONFIG_KEY,
-      },
-      deps?.ownershipGrantDeps,
-    );
-    if (grant && grant.status !== "approved") return null;
+    if (!resolved) return null;
+    const { packageName: owner, orgId: ownerOrgId } = resolved;
+    // GRANT-DECISION VETO (codex final round + org-scope fix, owner ruling
+    // 2026-07-23). Arm (c) runs whenever the build ∪ grant union is EMPTY — but
+    // arm (b) also returns null for a grant that is explicitly `revoked` (an admin
+    // killed this package's ownership) or `pending` (an admin has not approved
+    // it). Provenance MUST NOT override such an explicit admin decision.
+    //
+    // ORG SCOPE. Ownership grants for an org-anchored install are written at the
+    // install's ORG, but the runtime arm (b) reads the GLOBAL (`org_id IS NULL`)
+    // row — so an org-scoped revoke/pending decision was previously MISSED by a
+    // global-only veto. Veto at BOTH the anchor's derived org (surfaced by the
+    // provenance resolver) AND global: if a grant row exists at EITHER scope that
+    // is NOT `approved`, fail closed. Only the NO-ROW-at-either-scope case (the
+    // auto-staged rider that never had a grant recorded) is honored. A same-scope
+    // `approved` row would have made arm (b) resolve, so arm (c) would not be
+    // consulted — the `approved` pass here is defensive.
+    const vetoScopes: (string | null)[] = ownerOrgId != null ? [ownerOrgId, null] : [null];
+    for (const scope of vetoScopes) {
+      const grant = await readOwnershipGrant(
+        {
+          packageName: owner,
+          orgId: scope,
+          tokenConfigKey: WORDPRESS_WIDGET_AUTH_TOKEN_CONFIG_KEY,
+        },
+        deps?.ownershipGrantDeps,
+      );
+      if (grant && grant.status !== "approved") return null;
+    }
     return owner;
   } catch (err) {
     console.error(

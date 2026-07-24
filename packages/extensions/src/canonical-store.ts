@@ -55,6 +55,13 @@ export const installedExtensionTable = canonicalSchema.table("installed_extensio
   // Resolved connector access declaration (cinatra#951) — cached at
   // registration/materialize; NULL for non-connector kinds / legacy rows.
   accessDeclaration: jsonb("access_declaration"),
+  // The widget-auth token keys the SRI-verified manifest DECLARES, recorded at
+  // the install pipeline's ownership-grant seam (owner ruling 2026-07-23 —
+  // widget-auth delivery fix, path B). The TAMPER-PROOF declaration source arm
+  // (c) reads for P5; NULL = legacy row (arm (c) fails closed, never re-reads
+  // the mutable store). Schema DDL lives in src/lib/drizzle-store.ts +
+  // migrations/core/core__0075.
+  widgetAuthTokenKeys: jsonb("widget_auth_token_keys"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -120,6 +127,9 @@ function rowToCanonical(
     manifestHash: row.manifestHash ?? null,
     accessDeclaration:
       (row.accessDeclaration as InstalledExtension["accessDeclaration"]) ?? null,
+    // NULL column (legacy row) stays null so arm (c)'s P5 fails closed; a
+    // recorded array (incl. []) is surfaced verbatim.
+    widgetAuthTokenKeys: (row.widgetAuthTokenKeys as string[] | null) ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -599,6 +609,7 @@ export async function _internalUpdateInstalledExtensionMetadata(
     requiredInProd?: boolean;
     manifestHash?: string | null;
     accessDeclaration?: InstalledExtension["accessDeclaration"];
+    widgetAuthTokenKeys?: string[] | null;
   },
 ): Promise<InstalledExtension> {
   const db = await getDb();
@@ -606,6 +617,7 @@ export async function _internalUpdateInstalledExtensionMetadata(
   if (patch.requiredInProd !== undefined) setClause.requiredInProd = patch.requiredInProd;
   if (patch.manifestHash !== undefined) setClause.manifestHash = patch.manifestHash;
   if (patch.accessDeclaration !== undefined) setClause.accessDeclaration = patch.accessDeclaration;
+  if (patch.widgetAuthTokenKeys !== undefined) setClause.widgetAuthTokenKeys = patch.widgetAuthTokenKeys;
   // ONE transaction for the row patch + edge replacement + hydrated return
   // (cinatra#1040 S2): a failed edge write rolls the metadata patch back too.
   return db.transaction(async (tx) => {

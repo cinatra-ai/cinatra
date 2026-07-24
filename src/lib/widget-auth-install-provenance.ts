@@ -41,21 +41,31 @@ import "server-only";
 //   (P4) the anchor-bound materialized store INTEGRITY-VERIFIES against that
 //        anchor (the on-disk bytes re-hash to the recorded SRI + content hash) —
 //        a tampered / swapped store dir refuses;
-//   (P5) the integrity-verified materialized manifest DECLARES this exact
-//        `tokenConfigKey` in `cinatra.widgetStream[.auth].tokenConfigKey` (the
-//        reviewed, signed declaration IS the ownership claim — mirrors the
-//        build-time arm's "the extension whose manifest declares the store owns
-//        it"). The declaration read is BRACKETED by integrity verification (P4
-//        verify → read declaration → re-verify at the same anchor digest), which
-//        NARROWS a filesystem swap-in of a fake declaration to a swap→read→
-//        restore→re-verify race window (defense in depth). It does NOT fully bind
-//        the bytes (codex final round) — the fully-robust source is the signed
-//        catalog / verified tarball bytes, tracked as a hardening follow-up. This
-//        residual grants NO practical power beyond the accepted widening: any
-//        package that can be a candidate is already `trusted-signed` and a LIVE
-//        provider of the store capability, and could simply DECLARE the key in
-//        its own manifest to own the store legitimately — and if the real
-//        declaring connector is also present, P6 uniqueness fails closed. AND
+//   (P5) the CANONICAL `installed_extension` row DECLARES this exact
+//        `tokenConfigKey` in its recorded `widget_auth_token_keys` column (owner
+//        ruling 2026-07-23 — the widget-auth delivery fix, path B). The install
+//        pipeline records the SRI-verified materialized manifest's declared
+//        `cinatra.widgetStream[.auth].tokenConfigKey` set onto the canonical row
+//        at the install FINALIZE seam (crash-consistent with the row's source);
+//        the resolver reads it from the DB row surfaced on the TRUSTED anchor
+//        (`anchor.widgetAuthTokenKeys`) — NEVER by re-reading the mutable
+//        `/data/extensions` store. This CLOSES the RESOLVE-TIME P4→P5 TOCTOU: the
+//        former arm read the declaration from the store on EVERY unauthenticated
+//        request, so a `/data/extensions` writer could swap→read→restore against
+//        that read every time; now the declaration is read ONCE, at install, and
+//        frozen in the DB — post-install store tampering has NO effect on P5.
+//        RESIDUAL (documented, tracked hardening): the install-time source of the
+//        recorded value is still a manifest read of the just-materialized store,
+//        so a writer could in principle race THAT one-time install read — but this
+//        is the EXACT same trust root the ownership GRANT (arm (b)) already
+//        records from (the pipeline's `readWidgetAuthTokenKeys(mat.storeDir)`), so
+//        arm (c) is no weaker than the admin-grant axis it falls back for; the
+//        fully-robust source is the SIGNED tarball / catalog bytes, tracked as a
+//        follow-up. A LEGACY row persisted before the recorder ran carries a NULL
+//        column → arm (c) FAILS CLOSED on it (never guesses, never falls back to
+//        the store). The reviewed, signed declaration IS the ownership claim
+//        (mirrors the build-time arm's "the extension whose manifest declares the
+//        store owns it"). AND
 //   (P6) it is the UNIQUE such package (0 or >1 distinct owners → refuse) — two
 //        signed packages declaring the same store key is an ambiguous,
 //        unsafe state, never a silent pick.
@@ -88,7 +98,6 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { resolveCapabilityProviders, isPackageSignedActivated } from "@/lib/extension-capabilities-registry";
-import { readWidgetAuthTokenKeysFromStore } from "@/lib/extension-capability-ownership-grants";
 import type { InstallTrustAnchor } from "@/lib/extension-package-store";
 
 /** A store dir located via the TRUSTED anchor (kind- and digest-bound) AND
@@ -121,10 +130,6 @@ export type InstallProvenanceDeps = {
     packageName: string,
     anchor: InstallTrustAnchor,
   ) => Promise<VerifiedProvenanceStoreDir | null>;
-  /** Read the widget-auth token keys the integrity-verified materialized manifest
-   * DECLARES (default: the strict `cinatra.widgetStream[.auth].tokenConfigKey`
-   * reader — the exact declaration the ownership grant binds). */
-  readDeclaredTokenKeys?: (storeDir: string) => Promise<string[]>;
 };
 
 /** Default `resolveInstallAnchor` — the canonical `installed_extension` anchor at
@@ -209,6 +214,18 @@ export type ResolveInstallProvenanceOwnerArgs = {
   providerGuard: (impl: unknown) => boolean;
 };
 
+/** The resolved marketplace-install-provenance owner: the UNIQUE package name
+ * AND the DERIVED org scope of its trusted install anchor. The org is surfaced
+ * so the caller can veto a revoked/pending ownership grant at the install's
+ * ACTUAL org scope AND global (owner ruling 2026-07-23) — an org-anchored
+ * install writes its grant at its org, so a global-only veto would miss it. */
+export type ResolvedProvenanceOwner = {
+  packageName: string;
+  /** The anchor's derived org (`platform-global` → the single live row's org),
+   * or null when the row is global/unbound. */
+  orgId: string | null;
+};
+
 /**
  * Resolve the UNIQUE package that owns `tokenConfigKey`'s credential store via
  * sanctioned marketplace-install provenance (rule P1–P6 above), or null.
@@ -222,42 +239,38 @@ export type ResolveInstallProvenanceOwnerArgs = {
 export async function resolveInstallProvenanceOwner(
   args: ResolveInstallProvenanceOwnerArgs,
   deps?: InstallProvenanceDeps,
-): Promise<string | null> {
+): Promise<ResolvedProvenanceOwner | null> {
   const listGuardedProviderPackages =
     deps?.listGuardedProviderPackages ?? defaultListGuardedProviderPackages;
   const isSignedActivated = deps?.isSignedActivated ?? isPackageSignedActivated;
   const resolveInstallAnchor = deps?.resolveInstallAnchor ?? defaultResolveInstallAnchor;
   const resolveVerifiedStoreDir = deps?.resolveVerifiedStoreDir ?? defaultResolveVerifiedStoreDir;
-  const readDeclaredTokenKeys = deps?.readDeclaredTokenKeys ?? readWidgetAuthTokenKeysFromStore;
 
-  const owners = new Set<string>();
+  // package name → the anchor's derived org (for the caller's org-scope veto).
+  const owners = new Map<string, string | null>();
   for (const packageName of listGuardedProviderPackages(args.capability, args.providerGuard)) {
     // (P2) trusted-signed + activated — cheap in-memory gate first.
     if (!isSignedActivated(packageName)) continue;
     // (P3) a TRUSTED install anchor bound to a concrete digest.
     const anchor = await resolveInstallAnchor(packageName);
     if (!anchor || !anchor.digest) continue;
-    // (P4) anchor-bound, integrity-verified materialized store.
+    // (P4) anchor-bound, integrity-verified materialized store (binds the LIVE
+    // provider's on-disk bytes to the DB-recorded digest — a swapped/tampered
+    // store dir fails closed).
     const verified = await resolveVerifiedStoreDir(packageName, anchor);
     if (!verified) continue;
-    // (P5) the materialized manifest DECLARES this exact token key — READ, then
-    // RE-VERIFY integrity at the SAME anchor digest immediately after. This
-    // NARROWS (defense in depth) a filesystem swap-in of a fake declaration to a
-    // swap→read→restore→re-verify race; it does not fully bind the bytes (codex
-    // final round — the robust source is the signed catalog / verified tarball,
-    // tracked as a hardening follow-up). The residual grants no practical power
-    // beyond the accepted widening: a candidate is already trusted-signed and a
-    // live store provider, so it could simply declare the key legitimately, and
-    // if the real declaring connector is also present P6 fails closed.
-    const declared = await readDeclaredTokenKeys(verified.storeDir);
-    if (!declared.includes(args.tokenConfigKey)) continue;
-    const rebound = await resolveVerifiedStoreDir(packageName, anchor);
-    if (!rebound || rebound.digest !== verified.digest || rebound.storeDir !== verified.storeDir) {
-      continue;
-    }
-    owners.add(packageName);
+    // (P5) the CANONICAL `installed_extension` row DECLARES this exact token key,
+    // read from the `widget_auth_token_keys` column surfaced on the trusted anchor
+    // (owner ruling 2026-07-23) — NEVER the mutable store at resolve time. This
+    // closes the RESOLVE-TIME P4→P5 TOCTOU (the value is frozen in the DB at
+    // install; post-install store tampering has no effect). A LEGACY row (null
+    // column) fails closed here (never guessed, never re-read from the store).
+    const declared = anchor.widgetAuthTokenKeys;
+    if (!declared || !declared.includes(args.tokenConfigKey)) continue;
+    owners.set(packageName, anchor.orgId ?? null);
   }
   // (P6) unique or fail closed.
   if (owners.size !== 1) return null;
-  return owners.values().next().value ?? null;
+  const [packageName, orgId] = owners.entries().next().value as [string, string | null];
+  return { packageName, orgId };
 }
