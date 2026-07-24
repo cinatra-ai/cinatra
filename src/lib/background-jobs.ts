@@ -308,11 +308,11 @@ function ensureWorker(runtime: BackgroundJobRuntime) {
   const workerConnection = new IORedis(getRedisUrl(), {
     maxRetriesPerRequest: null,
     connectTimeout: 1500,
-    enableOfflineQueue: false,
+    // Worker OFFLINE-QUEUEs its blocking fetch to ride out a brief Redis flap;
+    // producer queueConn stays fail-fast. Rationale + measurements in commit.
+    enableOfflineQueue: true,
     retryStrategy: redisReconnectBackoff,
   });
-  // Same guard as queueConnection above — prevents dropped Redis connections
-  // from emitting unhandled 'error' events that kill the process.
   workerConnection.on("error", (err) => {
     console.error("[background-jobs] Redis worker connection error:", err.message);
   });

@@ -43,6 +43,7 @@ const consumeUserWidgetToken = vi.fn();
 const resolveCanonicalInstanceForOrigin = vi.fn();
 const emitWidgetAuthAudit = vi.fn();
 const isSelectedAssistantVisible = vi.fn();
+const isBuiltinAssistantByPackage = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
@@ -89,6 +90,9 @@ vi.mock("@/lib/widget-user-auth", () => ({
 vi.mock("@/lib/widget-auth-audit", () => ({
   emitWidgetAuthAudit: (...a: unknown[]) => emitWidgetAuthAudit(...a),
 }));
+vi.mock("@/lib/assistant-registry-reader", () => ({
+  isBuiltinAssistantByPackage: (...a: unknown[]) => isBuiltinAssistantByPackage(...a),
+}));
 vi.mock("@/lib/assistant-selector-audience", () => ({
   isSelectedAssistantVisible: (...a: unknown[]) => isSelectedAssistantVisible(...a),
   // Pure caller-builders: passthrough shapes the mocked gate ignores.
@@ -114,12 +118,16 @@ const WP_ENTRY = {
 
 function widgetReq(opts: {
   origin?: string | null;
+  widgetOrigin?: string | null;
   cit?: string | null;
   cwu?: string | null;
   body?: unknown;
 }): Request {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (opts.origin !== null) headers["Origin"] = opts.origin ?? ORIGIN;
+  // Post-S5 the embed forwards the CMS site origin here (the browser Origin is the
+  // same-origin Cinatra app). Default it to the same value the tokens bind to.
+  if (opts.widgetOrigin !== null) headers["X-Cinatra-Widget-Origin"] = opts.widgetOrigin ?? ORIGIN;
   if (opts.cit) headers["Authorization"] = `Bearer ${opts.cit}`;
   if (opts.cwu) headers["X-Cinatra-Widget-User-Token"] = opts.cwu;
   return new Request("https://app.test/api/assistants/chat", {
@@ -163,8 +171,12 @@ beforeEach(() => {
     runtimeConfig: { systemSkillId: "@cinatra-ai/chat:wordpress-authoring-core" },
   });
   streamAgUiChatTurn.mockResolvedValue(new Response("ok", { status: 200 }));
-  // AC#3: the verified end user is IN the assistant's audience by default.
+  // AC#3: the verified end user is IN the assistant's audience by default. The
+  // resolved principal is treated as an INSTALLED (non-built-in) assistant by
+  // default, so the audience gate is exercised; the built-in confer has its own
+  // test below.
   isSelectedAssistantVisible.mockResolvedValue(true);
+  isBuiltinAssistantByPackage.mockResolvedValue(false);
   // Cookie-path defaults (for the T-cookie test).
   getAuthSession.mockResolvedValue({ user: { id: "cookie-user" }, session: { activeOrganizationId: "org-1" } });
   requireActorContext.mockResolvedValue({ principalType: "HumanUser", principalId: "cookie-user" });
@@ -241,6 +253,25 @@ describe("broker-auth happy path — builds the WidgetPrincipal and drives the s
     // CORS reflected onto the streamed response for the cross-origin widget.
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
     expect(runChatTurn).not.toHaveBeenCalled();
+  });
+
+  it("consumes BOTH tokens against the FORWARDED CMS origin, not the same-origin embed browser Origin (S5 iframe turn)", async () => {
+    // The embed iframe is SAME-ORIGIN to the Cinatra app, so the browser `Origin`
+    // is the Cinatra app origin — never the CMS site origin the cit_/cwu_ tokens
+    // were minted against. That origin arrives on X-Cinatra-Widget-Origin, and
+    // BOTH consumes must validate the token binding against it (mirrors the
+    // capabilities route). Regression guard for the origin_mismatch the S5 iframe
+    // cutover otherwise 401s on.
+    const res = await POST(
+      widgetReq({ origin: "https://app.test", widgetOrigin: ORIGIN, cit: "cit_abc", cwu: "cwu_xyz" }),
+    );
+    expect(res.status).toBe(200);
+    expect(consumeWidgetStreamToken).toHaveBeenCalledWith(
+      expect.objectContaining({ requestOrigin: ORIGIN }),
+    );
+    expect(consumeUserWidgetToken).toHaveBeenCalledWith(
+      expect.objectContaining({ requestOrigin: ORIGIN }),
+    );
   });
 
   it("supplies a mintResumeToken callback that mints a RUN-BOUND resume token from the server-verified principal (S5 #1221)", async () => {
@@ -358,11 +389,16 @@ describe("broker-auth fail-closed rungs — deny with NO turn started", () => {
   });
 });
 
-// AC#3 — site auth is NOT the installation's audience. A verified end user who is
-// OUT of the assistant's audience is 404-hidden after the full dual-token sequence
-// passes; an in-audience user runs the unchanged protocol.
+// AC#3 — site auth is NOT an INSTALLED assistant's audience. A verified end user
+// who is OUT of an installed assistant's audience is 404-hidden after the full
+// dual-token sequence passes; an in-audience user runs the unchanged protocol.
+// The bound FIRST-PARTY BUILT-IN (cinatra#2031) is admitted independently of the
+// audience reader (it carries no audience rows / installed_extension row).
 describe("AC#3 audience closure — the verified end user must be in-audience", () => {
-  it("404-hides an out-of-audience end user (valid site auth, NO turn started)", async () => {
+  it("404-hides an out-of-audience end user of an INSTALLED assistant (valid site auth, NO turn started)", async () => {
+    // Resolved principal is NOT the bound first-party built-in (an installed
+    // assistant with a restricted audience) and the end user is out-of-audience.
+    isBuiltinAssistantByPackage.mockResolvedValue(false);
     isSelectedAssistantVisible.mockResolvedValue(false);
     const res = await POST(widgetReq({ cit: "cit_abc", cwu: "cwu_xyz" }));
     expect(res.status).toBe(404);
@@ -384,12 +420,37 @@ describe("AC#3 audience closure — the verified end user must be in-audience", 
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
   });
 
-  it("an in-audience end user runs the unchanged protocol (200, turn started)", async () => {
+  it("an in-audience end user of an installed assistant runs the unchanged protocol (200, turn started)", async () => {
+    isBuiltinAssistantByPackage.mockResolvedValue(false);
     isSelectedAssistantVisible.mockResolvedValue(true);
     const res = await POST(widgetReq({ cit: "cit_abc", cwu: "cwu_xyz" }));
     expect(res.status).toBe(200);
     expect(streamAgUiChatTurn).toHaveBeenCalledTimes(1);
     expect(isSelectedAssistantVisible).toHaveBeenCalledTimes(1);
+  });
+
+  it("admits the bound FIRST-PARTY BUILT-IN even when the audience reader does not list it (cinatra#2031)", async () => {
+    // The boot-seeded WordPress/Drupal built-in siblings carry no audience rows
+    // and no installed_extension row, so isSelectedAssistantVisible is false for
+    // them — yet the closed binding's reserved package identifies the bound
+    // built-in, which is always available to its widget principal.
+    isBuiltinAssistantByPackage.mockResolvedValue(true);
+    isSelectedAssistantVisible.mockResolvedValue(false);
+    const res = await POST(widgetReq({ cit: "cit_abc", cwu: "cwu_xyz" }));
+    expect(res.status).toBe(200);
+    expect(streamAgUiChatTurn).toHaveBeenCalledTimes(1);
+    // Recognition is scoped to the EXACT reserved package the closed binding names.
+    expect(isBuiltinAssistantByPackage).toHaveBeenCalledWith(
+      "wp-principal",
+      "@cinatra-ai/wordpress-assistant",
+    );
+    // The built-in short-circuits the audience gate (no reader read) and never
+    // emits an out-of-audience audit line.
+    expect(isSelectedAssistantVisible).not.toHaveBeenCalled();
+    expect(emitWidgetAuthAudit).not.toHaveBeenCalledWith(
+      "assistant_chat_widget_out_of_audience",
+      expect.anything(),
+    );
   });
 });
 
