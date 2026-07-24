@@ -175,6 +175,20 @@ export type CreateMcpServerMountOptions = {
     orgId: string;
     orgRole: "org_owner" | "org_admin" | "member";
   }) => unknown;
+  /**
+   * Host-side RUN mint for the org-write authority (cinatra#1939 S3) — the
+   * agent-run counterpart of `mintOrgWriteAuthority`. Called ONLY for an
+   * `agent_run` delegation whose token carried the `att` (execution attempt)
+   * claim; the host implementation verifies the triple against the run row
+   * (live-attempt predicate, claimed-vs-current attempt match) and returns
+   * the authority or undefined. A rejected promise reads as undefined — the
+   * frame stays unstamped, never a transport failure.
+   */
+  mintRunOrgWriteAuthority?: (input: {
+    runId: string;
+    orgId: string;
+    executionAttemptId: string;
+  }) => Promise<unknown>;
 };
 
 export type McpServerSettings = {
@@ -1249,29 +1263,54 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       headerAgentSpecVersion: request.headers.get("x-cinatra-agent-spec-version") ?? undefined,
     });
     options.onRunContextServedBy?.(runContext.servedBy, { runId: runContext.runId, suppressed: runContext.suppressed });
-    // Membership-grounded org-write authority (cinatra#1939 S3), minted by the
-    // app-wired callback only for session/chat-OBO callers whose membership
-    // row resolved above for this exact frame pair — the eligibility contract
-    // (and why agent-run/widget delegations are excluded) lives on
-    // `shouldMintSessionOrgWriteAuthority`. Absent mint or ineligible caller →
-    // the frame stays unstamped and seam writers refuse.
-    const orgWriteAuthority =
-      options.mintOrgWriteAuthority &&
-      resolvedUserId &&
-      resolvedOrgId &&
-      resolvedOrgRole &&
-      shouldMintSessionOrgWriteAuthority({
-        delegatedActor,
-        userId: resolvedUserId,
-        orgId: resolvedOrgId,
-        orgRole: resolvedOrgRole,
-      })
-        ? options.mintOrgWriteAuthority({
-            userId: resolvedUserId,
-            orgId: resolvedOrgId,
-            orgRole: resolvedOrgRole,
-          })
-        : undefined;
+    // Org-write authority for this frame (cinatra#1939 S3), by caller class:
+    //   - agent_run delegation → the RUN mint (host verifies the token's
+    //     `att` triple against the run row's live attempt); no `att` claim or
+    //     no wired mint → unstamped. A rejected mint promise also reads as
+    //     unstamped — never a transport failure.
+    //   - session / chat-OBO → the membership mint, gated by
+    //     `shouldMintSessionOrgWriteAuthority` (which is what excludes the
+    //     run/widget delegations from THIS branch).
+    // Either way, absence just means seam writers refuse — fail-closed.
+    const orgWriteAuthority = await (async (): Promise<unknown> => {
+      if (delegatedActor?.delegation === "agent_run") {
+        if (!options.mintRunOrgWriteAuthority || !delegatedActor.executionAttemptId) {
+          return undefined;
+        }
+        try {
+          return await options.mintRunOrgWriteAuthority({
+            runId: delegatedActor.runId,
+            orgId: delegatedActor.orgId,
+            executionAttemptId: delegatedActor.executionAttemptId,
+          });
+        } catch (error) {
+          console.warn("[mcp-server] run org-write mint rejected — frame stays unstamped", {
+            runId: delegatedActor.runId,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+          return undefined;
+        }
+      }
+      if (
+        options.mintOrgWriteAuthority &&
+        resolvedUserId &&
+        resolvedOrgId &&
+        resolvedOrgRole &&
+        shouldMintSessionOrgWriteAuthority({
+          delegatedActor,
+          userId: resolvedUserId,
+          orgId: resolvedOrgId,
+          orgRole: resolvedOrgRole,
+        })
+      ) {
+        return options.mintOrgWriteAuthority({
+          userId: resolvedUserId,
+          orgId: resolvedOrgId,
+          orgRole: resolvedOrgRole,
+        });
+      }
+      return undefined;
+    })();
     const requestStore: McpRequestContext = {
       clientId: requestClientId,
       orgId: resolvedOrgId,

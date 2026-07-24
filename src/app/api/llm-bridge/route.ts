@@ -1507,7 +1507,18 @@ export async function POST(req: Request): Promise<Response> {
                 );
               const oboTool = await buildLlmMcpServerToolForAgentRun(
                 mcpEffectiveProvider as "openai" | "anthropic",
-                { ...actor, oboCeiling: runForPorts.oboCeiling! },
+                {
+                  ...actor,
+                  oboCeiling: runForPorts.oboCeiling!,
+                  // `att` claim (cinatra#1939 S3): the run row's CURRENT
+                  // attempt id, minted into the OBO token so the org-write
+                  // run authority can match claimed-vs-current and refuse a
+                  // stale attempt's calls. Absent pre-dispatch → no claim →
+                  // that frame just never gets a run authority (fail-closed).
+                  ...(runForPorts.executionAttemptId
+                    ? { executionAttemptId: runForPorts.executionAttemptId }
+                    : {}),
+                },
                 issueAgentRunMcpActorToken,
                 cinatraMcpAllowedTools,
               );

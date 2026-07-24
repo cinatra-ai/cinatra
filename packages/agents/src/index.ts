@@ -85,6 +85,10 @@ export type {
   CinatraAgentProvider,
 } from "./spec";
 
+export {
+  readAgentRunRowForOrgWriteAuthority,
+  type AgentRunRowForOrgWriteAuthority,
+} from "./org-write-run-row";
 export { jsonSchemaToZod } from "./json-schema-to-zod";
 
 export { createAgentsModule, createAgentsModule as createAgentBuilderModule } from "./integration/module";

@@ -79,6 +79,16 @@ export type AgentRunMcpActor = {
    * an un-ceilinged OBO actor.
    */
   oboCeiling: OboCeilingChain;
+  /**
+   * The run's CURRENT execution attempt id at mint time (the `att` claim,
+   * cinatra#1939 S3) — the stale-worker witness for the org-write run
+   * authority: the mint refuses when this no longer matches the row's
+   * current attempt. OPTIONAL for token validity (tokens minted before this
+   * claim existed stay verifiable through their TTL), but the run authority
+   * NEVER mints without it — absence just means an unstamped frame, and
+   * org-write-seam writers refuse. Never widens anything.
+   */
+  executionAttemptId?: string;
 };
 
 type AgentRunMcpActorTokenClaims = {
@@ -89,6 +99,9 @@ type AgentRunMcpActorTokenClaims = {
   prole: AgentRunMcpPlatformRole;
   /** Scope-ceiling chain claim — validated on verify; missing → fail closed. */
   cl: OboCeilingChain;
+  /** Current execution attempt id (cinatra#1939 S3) — optional; see
+   *  `AgentRunMcpActor.executionAttemptId` for the tolerance contract. */
+  att?: string;
   scope: "mcp:connect";
   aud: string;
   iss: string;
@@ -151,6 +164,7 @@ export function issueAgentRunMcpActorToken(input: AgentRunMcpActor): string {
     run: input.runId,
     prole: input.platformRole,
     cl: input.oboCeiling,
+    ...(input.executionAttemptId ? { att: input.executionAttemptId } : {}),
     scope: TOKEN_SCOPE,
     aud: issueAudience(),
     iss: issueIssuer(),
@@ -262,6 +276,13 @@ export function verifyAgentRunMcpActorToken(input: {
       runId: payload.run,
       platformRole: payload.prole,
       oboCeiling: payload.cl,
+      // `att` is tolerated-absent (pre-claim tokens stay valid through their
+      // TTL); a non-string/empty value reads as absent — the org-write run
+      // mint then simply never fires for this frame. Fail-closed downstream,
+      // never here.
+      ...(typeof payload.att === "string" && payload.att.length > 0
+        ? { executionAttemptId: payload.att }
+        : {}),
     };
   } catch {
     return null;

@@ -12,6 +12,7 @@ import { verifyChatMcpActorToken } from "./chat-mcp-actor-token";
 import { verifyAgentRunMcpActorToken } from "./agent-run-mcp-actor-token";
 import { verifyWidgetMcpActorToken } from "./widget-mcp-actor-token";
 import { sessionAuthorityFromResolvedRole } from "./org-write/authority";
+import { mintRunWriteAuthorityForMcp } from "./org-write/run-authority-mint";
 import { createObjectsModule } from "@cinatra-ai/objects/module";
 import { createArtifactsModule } from "@/lib/artifacts/mcp";
 import { createContextModule } from "@/lib/artifacts/context-mcp";
@@ -525,4 +526,10 @@ export const mcpServerMount = createMcpServerMount({
   // (verifyRunAuthority), wired when the run path converts.
   mintOrgWriteAuthority: ({ orgId, orgRole }) =>
     sessionAuthorityFromResolvedRole(orgId, orgRole),
+  // cinatra#1939 S3: run-grounded org-write authority for agent-run OBO
+  // callers. Verifies the token's (runId, orgId, att) triple against the run
+  // row — live-attempt predicate + claimed-vs-current attempt match — via
+  // the pooled agents-store reader; every refusal/failure reads as an
+  // unstamped frame (logged), never a transport error.
+  mintRunOrgWriteAuthority: (input) => mintRunWriteAuthorityForMcp(input),
 });

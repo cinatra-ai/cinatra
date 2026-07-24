@@ -49,6 +49,14 @@ export type DelegatedMcpActor =
        * closed at the verifier (never reconstructs this actor).
        */
       oboCeiling: OboCeilingChain;
+      /**
+       * The run's execution attempt id at token-mint time (the `att` claim,
+       * cinatra#1939 S3). OPTIONAL: pre-claim tokens verify without it through
+       * their TTL — but the org-write run authority NEVER mints without it
+       * (the mint matches it against the run row's CURRENT attempt; stale →
+       * refused). Absence only ever means an unstamped frame.
+       */
+      executionAttemptId?: string;
     }
   | {
       delegation: "public_site_widget";

@@ -253,6 +253,12 @@ export type AgentRunRecord = {
   // column; re-derived + containment-checked at mint.
   oboCeiling: OboCeilingChain | null;
   dependentInstallId: string | null; // installed_extension row id this run executes AS (cinatra#1392 Gap 2)
+  // The CURRENT execution attempt id (set by the queued→running dispatch CAS,
+  // re-minted on every resume). Carried so the llm-bridge can stamp the
+  // attempt onto the agent-run MCP OBO token (`att` claim, cinatra#1939 S3) —
+  // the org-write run mint refuses a claimed attempt that no longer matches
+  // this column (stale-worker refusal). NULL pre-dispatch.
+  executionAttemptId: string | null;
 };
 
 export type CreateAgentTemplateInput = {
