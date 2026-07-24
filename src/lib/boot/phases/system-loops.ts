@@ -364,6 +364,55 @@ export function systemLoopPhases(): BootPhase[] {
       },
     },
     {
+      name: "seed-artifact-review-resume-delivery",
+      policy: "retryable",
+      run: async () => {
+        // Seed the artifact-review resume-delivery drain (cinatra#1796, epic
+        // #1620 S13). The drain NEVER runs at boot — boot only creates this
+        // delayed job; the worker handler leases pending review-decision resume
+        // intents from the #2009 outbox (reclaiming expired `delivering` leases)
+        // and delivers each typed approve/reject payload to its paused WayFlow run
+        // via the A2A resume, self-rescheduling at ~30-second cadence via
+        // moveToDelayed. It is the AT-LEAST-ONCE delivery backstop for the
+        // exactly-once-persisted decision intent.
+        //
+        // The drain IMPLEMENTATION is registered here (boot-only graph) through
+        // the runner slot rather than imported into background-jobs-registry —
+        // same route-graph-ratchet posture as the sweep runners above: the
+        // registry sits in the LOCKED dev-perf routes' graph, so the A2A/execution
+        // drain must not be reachable (even dynamically) from it. Register BEFORE
+        // seeding so the loop never observes an empty slot on a healthy boot.
+        const { registerArtifactReviewResumeDeliveryRunner } = await import(
+          "@/lib/background-jobs-registry"
+        );
+        const { sweepArtifactReviewResumeIntents } = await import(
+          "@cinatra-ai/agents/artifact-review-resume-delivery"
+        );
+        registerArtifactReviewResumeDeliveryRunner({
+          sweep: () => sweepArtifactReviewResumeIntents(),
+        });
+        const {
+          enqueueBackgroundJob,
+          BACKGROUND_JOB_NAMES,
+          ARTIFACT_REVIEW_RESUME_DELIVERY_LOOP_JOB_ID,
+        } = await import("@/lib/background-jobs");
+        await enqueueBackgroundJob(
+          BACKGROUND_JOB_NAMES.ARTIFACT_REVIEW_RESUME_DELIVERY,
+          {},
+          {
+            jobId: ARTIFACT_REVIEW_RESUME_DELIVERY_LOOP_JOB_ID,
+            delay: 30 * 1000, // 30s
+            overwriteIfStale: true,
+            skipWorker: true,
+            inheritActorContext: false,
+          },
+        );
+        console.log(
+          "[artifact-review-resume-delivery] ~30-second resume-delivery drain scheduled (30s delay)",
+        );
+      },
+    },
+    {
       name: "eager-background-worker",
       policy: "degraded",
       run: async () => {

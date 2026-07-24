@@ -187,6 +187,10 @@ const SYSTEM_JOBS = new Set<string>([
   // to admins.
   "unbound-output-derive",
   "unbound-output-derive-sweep",
+  // Artifact-review resume-delivery drain (cinatra#1796): a boot-seeded system
+  // loop that delivers committed review decisions to their paused runs. Silent
+  // on success; an unexpected cycle failure fans out to admins.
+  "artifact-review-resume-delivery",
 ]);
 
 // `started` is included so worker.on("active") can resolve a recipient for
