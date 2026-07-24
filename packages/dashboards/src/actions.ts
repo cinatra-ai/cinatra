@@ -19,11 +19,25 @@
  * First save materializes the user's row. Second save just updates.
  * Race-freedom + auth checks live in the mutation service.
  */
-import { getAuthSession } from "@/lib/auth-session";
+import { getAuthSession, resolveOrgRoleForUser } from "@/lib/auth-session";
 import { buildDashboardActorFromSession } from "@/lib/dashboards/dashboard-actor";
-import { OrgWriteRefusedError } from "@cinatra-ai/org-write-kernel";
+import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
+import { OrgWriteRefusedError, type OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
 import { DashboardOrgWriteAuthorityError } from "./org-write-seam";
+
+/** Membership-grounded session mint for the actions built on the bare
+ *  security context (no resolved role in hand, unlike
+ *  buildDashboardActorFromSession). No membership row → undefined → the
+ *  org-write seam refuses and classifyMutationError maps it to "denied"
+ *  (cinatra#1939 S3). */
+async function sessionWriteAuthorityFor(
+  userId: string,
+  orgId: string,
+): Promise<OrgWriteAuthority | undefined> {
+  const role = await resolveOrgRoleForUser(orgId, userId);
+  return role ? sessionAuthorityFromResolvedRole(orgId, role) : undefined;
+}
 
 import { buildSecurityContextFromSession } from "./auth/security-context";
 import {
@@ -74,10 +88,12 @@ export async function saveAgentsDashboardAction(
   if (!ctx) {
     throw new Error("saveAgentsDashboardAction: no authenticated session");
   }
+  const authority = await sessionWriteAuthorityFor(ctx.userId, ctx.organizationId);
   const actor: DashboardActor = {
     userId: ctx.userId,
     organizationId: ctx.organizationId,
     teamIds: ctx.teamIds,
+    ...(authority ? { authority } : {}),
   };
   try {
     await upsertDashboardConfig(
@@ -123,10 +139,12 @@ async function saveCinatraDashboardAction(
   if (!ctx) {
     throw new Error(`save${name}DashboardAction: no authenticated session`);
   }
+  const authority = await sessionWriteAuthorityFor(ctx.userId, ctx.organizationId);
   const actor: DashboardActor = {
     userId: ctx.userId,
     organizationId: ctx.organizationId,
     teamIds: ctx.teamIds,
+    ...(authority ? { authority } : {}),
   };
   try {
     await upsertDashboardConfig(
