@@ -265,6 +265,189 @@ export function createSeededThreadTarget(deps: SeededThreadTargetDeps): ProbedTa
   };
 }
 
+// ---------------------------------------------------------------------------
+// The generic-embed (target 2) PARENT-BOOTSTRAP DRIVER (cinatra#1998 (c)).
+//
+// The `/embed/assistant` page is designed to be FRAMED: its bridge posts READY
+// to `window.parent`, transferring a MessagePort, and mounts the renderer only
+// after a parent replies with a BOOTSTRAP carrying a valid `cit_`/`cwu_` pair.
+// For the generic embedded-view leg there is no CMS parent — so this module IS
+// the synthetic parent.
+//
+// HOW THE TOP-LEVEL SELF-BOOTSTRAP WORKS. The leg registers a render-parity
+// widget instance whose `siteUrl` == the Cinatra app origin (the operator/stack
+// provisioning step — the SAME kind of connect-site dev-auto-setup registers for
+// the CMS sites, just pointed at the embed's own origin), so the embed's
+// server-resolved `expectedParentOrigin` == its OWN origin and `window.parent
+// === window`. `postReady` therefore posts READY (with the transferred port) to
+// this same window; an init-script listener installed BEFORE navigation captures
+// the nonce + port. The embed's own window listener also receives that READY and
+// briefly fail-closes to a NEUTRAL error card (a READY is not a valid BOOTSTRAP)
+// WITHOUT burning the single-use nonce — so when this driver then posts the real
+// BOOTSTRAP over the captured port, `onPortMessage` accepts it, the nonce burns
+// once, and the phase transitions error → `active`. The content the compare
+// scrapes is the top-level embed's own `[data-embed-content]`; no iframe.
+//
+// TOKENS ARE PROVISIONED, NEVER SYNTHESIZED. Reaching the broker negotiation's
+// `ok` requires a REAL `cit_`/`cwu_` pair bound to that parity site+origin — the
+// driver cannot mint them (that is the connect-site + hosted-PKCE flow the CMS
+// stack owns). The operator/stack that registered the parity connect-site
+// supplies the pre-minted pair via `E2E_EMBED_PARITY_CIT` / `E2E_EMBED_PARITY_CWU`
+// (exactly as it supplies `E2E_EMBED_PARITY_LIVE=1`). Absent them the leg reports
+// a LOUD, tracked skip — never a silent skip, never a synthesized/forged token.
+// ---------------------------------------------------------------------------
+
+/** Env: a pre-minted `cit_` site token for the render-parity widget instance,
+ *  bound to the embed's OWN origin (== the instance `siteUrl`) and the
+ *  `wordpress-content-editor` widget-stream agent. Supplied by the operator/stack
+ *  that provisioned the parity connect-site. */
+const PARITY_CIT_ENV = "E2E_EMBED_PARITY_CIT";
+/** Env: the paired per-user `cwu_` token (same site/origin, dev user). */
+const PARITY_CWU_ENV = "E2E_EMBED_PARITY_CWU";
+
+/** A pre-provisioned broker-token pair the parent bootstrap presents. */
+export type ParityBrokerTokens = {
+  readonly citToken: string;
+  readonly cwuToken: string;
+};
+
+/**
+ * Resolve the operator-provisioned broker tokens for the generic-embed parent
+ * bootstrap, or `null` when they are not supplied (→ a loud, tracked skip). Only
+ * a well-formed `cit_`/`cwu_` pair is accepted — the driver never synthesizes a
+ * token, so an unprovisioned stack skips honestly rather than forging auth.
+ */
+export function resolveParityBrokerTokens(): ParityBrokerTokens | null {
+  const citToken = (process.env[PARITY_CIT_ENV] ?? "").trim();
+  const cwuToken = (process.env[PARITY_CWU_ENV] ?? "").trim();
+  if (citToken.startsWith("cit_") && cwuToken.startsWith("cwu_")) {
+    return { citToken, cwuToken };
+  }
+  return null;
+}
+
+/** The name of the env carrying the token pair (for the skip reason). */
+export const PARITY_BROKER_TOKENS_ENV = `${PARITY_CIT_ENV}/${PARITY_CWU_ENV}`;
+
+/**
+ * Install the SYNTHETIC PARENT side of the embed bridge as a page init script
+ * (runs at document-start on EVERY navigation, BEFORE the embed's own bridge
+ * installs). It buffers the FIRST `cinatra.embed.ready` — its nonce + the
+ * transferred MessagePort (`event.ports[0]`) — into a window global the
+ * per-navigation driver reads. Call ONCE before the fixtures loop; every
+ * subsequent `page.goto` re-runs it against the fresh document.
+ */
+export async function installEmbedParitySyntheticParent(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    // Reset per document; a fresh navigation mints a fresh nonce+port.
+    (window as unknown as { __cinatraParityReady?: unknown }).__cinatraParityReady = null;
+    window.addEventListener("message", (ev: MessageEvent) => {
+      const d = ev.data as { type?: unknown; nonce?: unknown } | null;
+      if (
+        d &&
+        typeof d === "object" &&
+        d.type === "cinatra.embed.ready" &&
+        typeof d.nonce === "string" &&
+        ev.ports &&
+        ev.ports.length > 0
+      ) {
+        (window as unknown as { __cinatraParityReady?: unknown }).__cinatraParityReady = {
+          nonce: d.nonce,
+          port: ev.ports[0],
+        };
+      }
+    });
+  });
+}
+
+/**
+ * Build the parent-bootstrap {@link EmbedBootstrapDriver} for target 2. After the
+ * harness navigates the embed URL, this waits for the init-script listener to
+ * capture the embed's READY, then posts a real BOOTSTRAP over the retained
+ * MessagePort — echoing the nonce, carrying the provisioned `cit_`/`cwu_` pair +
+ * the seeded threadId, exactly the envelope the CMS plugin emits — so the embed
+ * negotiates broker-auth and reaches `active` through the REAL mount path. Throws
+ * loud if the READY is never captured (the parity instance origin did not resolve
+ * to this origin) or the phase does not reach `active` (a real bridge/negotiation
+ * regression), surfacing the neutral gated/error reason.
+ */
+export function createEmbedBootstrapDriver(tokens: ParityBrokerTokens): EmbedBootstrapDriver {
+  return async (page, ctx) => {
+    const outcome = await page.evaluate(
+      async ({ threadId, assistant, instanceId, citToken, cwuToken }) => {
+        type Captured = { nonce: string; port: MessagePort } | null;
+        const read = (): Captured =>
+          (window as unknown as { __cinatraParityReady?: Captured }).__cinatraParityReady ?? null;
+        const started = Date.now();
+        let captured = read();
+        while (!captured && Date.now() - started < 15_000) {
+          await new Promise((r) => setTimeout(r, 50));
+          captured = read();
+        }
+        if (!captured) return { ok: false as const, reason: "ready_not_captured" };
+
+        // correlationId: CSPRNG base64url, 22..128 chars (bridge ID_PATTERN).
+        const bytes = new Uint8Array(18);
+        crypto.getRandomValues(bytes);
+        let bin = "";
+        for (const b of bytes) bin += String.fromCharCode(b);
+        const correlationId = btoa(bin)
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
+
+        captured.port.start();
+        captured.port.postMessage({
+          type: "cinatra.embed.bootstrap",
+          protocolVersion: 1,
+          correlationId,
+          nonceEcho: captured.nonce,
+          seq: 0,
+          auth: { citToken, cwuToken },
+          session: { threadId, assistant },
+          cms: { instanceId },
+        });
+        // Clear so the next navigation captures a fresh READY.
+        (window as unknown as { __cinatraParityReady?: Captured }).__cinatraParityReady = null;
+
+        // Await the phase transition (error/gated → active); surface the neutral
+        // reason if it does not mount, so a negotiation failure is diagnosable.
+        const deadline = Date.now() + 20_000;
+        while (Date.now() < deadline) {
+          const el = document.querySelector("[data-embed-assistant]");
+          const phase = el?.getAttribute("data-phase") ?? "";
+          if (phase === "active") return { ok: true as const };
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        const el = document.querySelector("[data-embed-assistant]");
+        return {
+          ok: false as const,
+          reason: `phase=${el?.getAttribute("data-phase") ?? "<none>"}`,
+        };
+      },
+      {
+        threadId: ctx.threadId,
+        assistant: ctx.assistant,
+        instanceId: ctx.instanceId,
+        citToken: tokens.citToken,
+        cwuToken: tokens.cwuToken,
+      },
+    );
+
+    if (!outcome.ok) {
+      throw new Error(
+        `parent-bootstrap driver could not reach the embed's active phase (${outcome.reason}). ` +
+          (outcome.reason === "ready_not_captured"
+            ? `The embed never posted READY to this window — its server-resolved expectedParentOrigin ` +
+              `did not resolve to this origin, so the render-parity widget instance ` +
+              `("${ctx.instanceId}") is not registered with siteUrl == the embed origin.`
+            : `The broker negotiation did not reach ok (the provisioned cit_/cwu_ pair may be ` +
+              `expired/misbound, or Lane-A capabilities rejected it). This is a REAL regression — thrown loud.`),
+      );
+    }
+  };
+}
+
 /**
  * The generic embedded conversation-view target (target 2). Drives the
  * first-party `/embed/assistant` page (S5 #1221 Lane B) — the SAME shared
