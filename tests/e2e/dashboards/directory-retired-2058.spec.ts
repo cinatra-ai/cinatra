@@ -6,9 +6,18 @@
  *
  *   1. an AUTHENTICATED GET of `/dashboards` returns 404 (the directory route
  *      file is gone — nothing renders the workspace-wide list);
- *   2. a SESSIONLESS GET of `/dashboards` still 307s to `/sign-in` (the auth
- *      guard is untouched — middleware runs on the path pattern, independent of
- *      whether a page file exists);
+ *   2. a SESSIONLESS GET of `/dashboards` returns the SAME 404 (no redirect to
+ *      `/sign-in`, URL unchanged): once the page file is deleted the route no
+ *      longer exists, so a fresh cookieless context gets the identical 404 an
+ *      authenticated request does — the retirement reveals nothing and adds no
+ *      redirect (owner ruling #2058: "retire without redirect / backward
+ *      compatibility"; grounded on the live prod-standalone stack, PR #2059). The
+ *      auth GUARD itself is untouched by #2058 — that the guard still 307s a
+ *      sessionless request on a real protected path is proven at the unit layer
+ *      (`src/lib/__tests__/auth-route-guard-public-paths.test.ts`), the correct
+ *      home for it: this standalone smoke does not exercise the middleware
+ *      /sign-in redirect (a fresh context is not redirected here for ANY route,
+ *      /artifacts included), so the e2e proves only the 404 retirement;
  *   3. the flat `/dashboards/[id]` detail route renders IN PLACE (200, URL
  *      unchanged) for a personal/user-owned dashboard — the canonical address for
  *      unanchored rows (detail mode 1, unchanged by #2058);
@@ -127,20 +136,41 @@ test.describe("dashboards directory-page retirement (#2058) live-verify", () => 
     await page.screenshot({ path: evidencePath("2058-authed-dashboards-404.png"), fullPage: true });
   });
 
-  test("a SESSIONLESS GET of /dashboards still 307s to /sign-in (auth guard untouched)", async ({
+  test("a SESSIONLESS GET of /dashboards 404s exactly like an authenticated one — no /sign-in redirect (retirement is gone for everyone)", async ({
     browser,
   }) => {
-    // A fresh context inherits no auth cookie → the middleware guard redirects.
+    // A fresh context inherits no auth cookie. The retired directory route no
+    // longer exists, so this GET 404s exactly as the authenticated one does
+    // (proven at :123) — the route is simply gone for everyone, with no redirect
+    // and nothing revealed. Grounded on the live prod-standalone stack (PR #2059):
+    // a sessionless GET stays on /dashboards (it does NOT 307 to /sign-in),
+    // matching the #2058 owner ruling ("retire without redirect / backward
+    // compatibility") and the acceptance correction.
+    //
+    // The auth GUARD is untouched by #2058; that it still 307s a sessionless
+    // request on a real protected path is proven at the unit layer
+    // (src/lib/__tests__/auth-route-guard-public-paths.test.ts). This standalone
+    // smoke does not exercise that middleware redirect (a fresh context is not
+    // redirected here for ANY route), so it asserts only the 404 retirement.
     const ctx = await browser.newContext();
     try {
       const p = await ctx.newPage();
-      const resp = await p.goto("/dashboards", { waitUntil: "domcontentloaded" });
-      expect(resp, "no response for sessionless GET /dashboards").not.toBeNull();
+      const retired = await p.goto("/dashboards", { waitUntil: "domcontentloaded" });
+      expect(retired, "no response for sessionless GET /dashboards").not.toBeNull();
+      // 404, asserted exactly like the authenticated 404 at :123.
+      expect(
+        retired?.status(),
+        `sessionless GET /dashboards must 404 (retired route, no redirect); got ${retired?.status()} @ ${p.url()}`,
+      ).toBe(404);
+      // No redirect away from /dashboards for a sessionless request either.
       expect(
         new URL(p.url()).pathname,
-        `sessionless GET /dashboards must land on /sign-in; got ${p.url()}`,
-      ).toContain("/sign-in");
-      await p.screenshot({ path: evidencePath("2058-sessionless-signin.png"), fullPage: true });
+        `sessionless GET /dashboards must NOT redirect to /sign-in; landed on ${p.url()}`,
+      ).toBe("/dashboards");
+      await p.screenshot({
+        path: evidencePath("2058-sessionless-dashboards-404.png"),
+        fullPage: true,
+      });
     } finally {
       await ctx.close();
     }
