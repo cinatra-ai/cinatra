@@ -27,6 +27,7 @@ vi.mock("@/lib/postgres-config", () => ({
 
 import {
   verifySessionAuthority,
+  sessionAuthorityFromResolvedRole,
   verifyRunAuthority,
   isVerifiedRunRef,
   mintSystemWriteAuthority,
@@ -79,6 +80,35 @@ describe("verifySessionAuthority (#1938)", () => {
     expect(auth.can("membership.write")).toBe(false);
     expect(auth.can("org.settings")).toBe(true);
     expect(auth.can("org.lifecycle")).toBe(false);
+  });
+});
+
+describe("sessionAuthorityFromResolvedRole (#1939 S3, sync transport mint)", () => {
+  const CAPABILITIES = [
+    "content.write",
+    "run.execute",
+    "run.complete",
+    "membership.write",
+    "org.settings",
+    "org.lifecycle",
+  ] as const;
+
+  it("answers capability-for-capability identically to verifySessionAuthority for every org role", async () => {
+    for (const role of ["member", "org_admin", "org_owner"] as const) {
+      shared.role = role;
+      const viaMembershipRead = await verifySessionAuthority("u1", "org-1");
+      const viaResolvedRole = sessionAuthorityFromResolvedRole("org-1", role);
+      expect(viaResolvedRole.orgId).toBe("org-1");
+      for (const capability of CAPABILITIES) {
+        expect(viaResolvedRole.can(capability)).toBe(viaMembershipRead.can(capability));
+      }
+    }
+  });
+
+  it("membership-only capabilities hold for ANY resolved role — the role's existence is the membership proof", () => {
+    const auth = sessionAuthorityFromResolvedRole("org-1", "member");
+    expect(auth.can("content.write")).toBe(true);
+    expect(auth.can("membership.write")).toBe(false);
   });
 });
 

@@ -31,7 +31,7 @@ import {
   createMcpRuntimeServer,
   type McpRuntimeToolServer,
 } from "./runtime-server";
-import { mcpRequestContextStorage, resolveRequestRunContext, selectDelegatedToolPolicy, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy } from "./request-context";
+import { mcpRequestContextStorage, resolveRequestRunContext, selectDelegatedToolPolicy, shouldMintSessionOrgWriteAuthority, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy } from "./request-context";
 import { buildMcpHandshakeUrls } from "./handshake-urls";
 import { replaceOriginInValue } from "./origin-rewrite";
 import { McpAuthFlowBridge } from "./components/mcp-auth-flow-bridge";
@@ -159,6 +159,22 @@ export type CreateMcpServerMountOptions = {
     expectedAudience: string;
     expectedIssuer: string;
   }) => DelegatedMcpActor | null | Promise<DelegatedMcpActor | null>;
+  /**
+   * Host-side session mint for the org-write authority (cinatra#1939 S3).
+   * Called at most once per request, AFTER the full identity chain has
+   * settled and ONLY when `shouldMintSessionOrgWriteAuthority` admits the
+   * caller (cookie session or chat-OBO with a resolved membership role — an
+   * agent-run delegation is grounded in the RUN and gets its authority from
+   * the host run verifier instead). The returned value is carried OPAQUELY
+   * on the request store (`orgWriteAuthority`); this package never inspects
+   * it. Optional — omitting it leaves every frame unstamped and org-write
+   * seam writers fail closed.
+   */
+  mintOrgWriteAuthority?: (input: {
+    userId: string;
+    orgId: string;
+    orgRole: "org_owner" | "org_admin" | "member";
+  }) => unknown;
 };
 
 export type McpServerSettings = {
@@ -1233,6 +1249,29 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       headerAgentSpecVersion: request.headers.get("x-cinatra-agent-spec-version") ?? undefined,
     });
     options.onRunContextServedBy?.(runContext.servedBy, { runId: runContext.runId, suppressed: runContext.suppressed });
+    // Membership-grounded org-write authority (cinatra#1939 S3), minted by the
+    // app-wired callback only for session/chat-OBO callers whose membership
+    // row resolved above for this exact frame pair — the eligibility contract
+    // (and why agent-run/widget delegations are excluded) lives on
+    // `shouldMintSessionOrgWriteAuthority`. Absent mint or ineligible caller →
+    // the frame stays unstamped and seam writers refuse.
+    const orgWriteAuthority =
+      options.mintOrgWriteAuthority &&
+      resolvedUserId &&
+      resolvedOrgId &&
+      resolvedOrgRole &&
+      shouldMintSessionOrgWriteAuthority({
+        delegatedActor,
+        userId: resolvedUserId,
+        orgId: resolvedOrgId,
+        orgRole: resolvedOrgRole,
+      })
+        ? options.mintOrgWriteAuthority({
+            userId: resolvedUserId,
+            orgId: resolvedOrgId,
+            orgRole: resolvedOrgRole,
+          })
+        : undefined;
     const requestStore: McpRequestContext = {
       clientId: requestClientId,
       orgId: resolvedOrgId,
@@ -1256,6 +1295,9 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
         delegatedActor?.delegation === "agent_run"
           ? delegatedActor.oboCeiling
           : undefined,
+      // Opaque host-minted org-write authority (undefined for ineligible or
+      // mint-less callers) — trust-boundary contract in request-context.ts.
+      orgWriteAuthority,
     };
     const response = await mcpRequestContextStorage.run(
       requestStore,

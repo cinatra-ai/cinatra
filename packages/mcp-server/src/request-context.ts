@@ -110,6 +110,30 @@ export function selectDelegatedToolPolicy(
 }
 
 /**
+ * Session-mint eligibility for the org-write authority (cinatra#1939 S3).
+ * The transport mints a MEMBERSHIP-grounded authority ONLY for callers whose
+ * identity IS the human's session: a cookie session (no delegation) or a
+ * chat-OBO token (the chat relay acting as that human). An `agent_run`
+ * delegation is grounded in the RUN's live attempt — its authority comes from
+ * the host run verifier, never this mint (minting here would skip the
+ * live-attempt check) — and a `public_site_widget` delegation never receives
+ * one. All three identity fields must be present: `orgRole` proves the
+ * membership row existed at context-build time for the exact (userId, orgId)
+ * pair stamped on this same frame. Anything else → false, frame unstamped,
+ * org-write-seam writers refuse — fail-closed.
+ */
+export function shouldMintSessionOrgWriteAuthority(input: {
+  delegatedActor: DelegatedMcpActor | null | undefined;
+  userId: string | null | undefined;
+  orgId: string | null | undefined;
+  orgRole: "org_owner" | "org_admin" | "member" | undefined;
+}): boolean {
+  const { delegatedActor, userId, orgId, orgRole } = input;
+  if (delegatedActor && delegatedActor.delegation !== "chat") return false;
+  return Boolean(userId && orgId && orgRole);
+}
+
+/**
  * Read by tool registries (e.g. chat registry, objects layer) to build the actor
  * context. Includes `runId`, `agentId`, `packageVersion`, and `agentSpecVersion`
  * so the objects layer's `getActorExt` can stamp full agent run-context

@@ -11,6 +11,7 @@ import { readAgentRunByTokenHash } from "@cinatra-ai/agents";
 import { verifyChatMcpActorToken } from "./chat-mcp-actor-token";
 import { verifyAgentRunMcpActorToken } from "./agent-run-mcp-actor-token";
 import { verifyWidgetMcpActorToken } from "./widget-mcp-actor-token";
+import { sessionAuthorityFromResolvedRole } from "./org-write/authority";
 import { createObjectsModule } from "@cinatra-ai/objects/module";
 import { createArtifactsModule } from "@/lib/artifacts/mcp";
 import { createContextModule } from "@/lib/artifacts/context-mcp";
@@ -513,4 +514,15 @@ export const mcpServerMount = createMcpServerMount({
     if (agentRunActor) return agentRunActor;
     return verifyWidgetMcpActorToken(input);
   },
+  // cinatra#1939 S3: membership-grounded org-write authority for session /
+  // chat-OBO callers. The transport already resolved the membership role for
+  // this exact frame's (userId, orgId) pair, so the SYNC mint derives the
+  // capability witness from it (content.write = any member; management
+  // capabilities = the mapped authz permission) with no second membership
+  // read. Carried opaquely on the request store; each seam (e.g. the
+  // dashboards org-write seam) narrows it fail-closed. Agent-run OBO callers
+  // never reach this mint — their authority is the run verifier's
+  // (verifyRunAuthority), wired when the run path converts.
+  mintOrgWriteAuthority: ({ orgId, orgRole }) =>
+    sessionAuthorityFromResolvedRole(orgId, orgRole),
 });

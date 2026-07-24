@@ -55,12 +55,27 @@ export async function verifySessionAuthority(
   if (role === undefined) {
     throw new OrgWriteAuthorityError(`user ${userId} is not a member of ${orgId}`);
   }
+  return sessionAuthorityFromResolvedRole(orgId, role);
+}
+
+/**
+ * Sync session-mint for call sites that ALREADY resolved the membership role
+ * for the SAME (userId, orgId) pair they stamp on the surrounding frame — the
+ * MCP transport resolves it once at context-build (cinatra#1939 S3) and must
+ * not pay a second membership read per request. The resolved role's existence
+ * IS the membership proof; capability rules are byte-identical to
+ * `verifySessionAuthority` (this is its extracted body).
+ */
+export function sessionAuthorityFromResolvedRole(
+  orgId: string,
+  role: Role,
+): OrgWriteAuthority {
   return {
     orgId,
     can: (capability) => {
       const rule = SESSION_PERMISSION_FOR[capability];
       if (rule === "member") return true;
-      return roleHasPermission(role as Role, rule);
+      return roleHasPermission(role, rule);
     },
   };
 }
