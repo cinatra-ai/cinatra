@@ -371,6 +371,8 @@
       "@cinatra-ai/skills/skill-packages": ["./packages/skills/src/skill-packages.ts"],
       "@cinatra-ai/skills/store": ["./packages/skills/src/skills-store.ts"],
       "@cinatra-ai/skills/pages": ["./packages/skills/src/plugin-pages.tsx"],
+      "@cinatra-ai/skills/recommendation": ["./packages/skills/src/recommendation/index.ts"],
+      "@cinatra-ai/skills/recommendation-server": ["./packages/skills/src/recommendation/recommend.server.ts"],
       "@cinatra-ai/gemini-connector": ["./extensions/cinatra-ai/gemini-connector/src/index.ts"],
       "@cinatra-ai/gemini-connector/register": ["./extensions/cinatra-ai/gemini-connector/src/register.ts"],
       "@cinatra-ai/gemini-connector/log-directory": ["./extensions/cinatra-ai/gemini-connector/src/log-directory.ts"],

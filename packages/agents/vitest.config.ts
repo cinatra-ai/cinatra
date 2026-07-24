@@ -84,6 +84,18 @@ export default defineConfig({
         root,
         "packages/skills/src/skills-store.ts",
       ),
+      // Request-aware recommendation subpaths (cinatra#2041 S3). Different-
+      // basename targets (index.ts / recommend.server.ts), so — like /store —
+      // they need explicit aliases BEFORE the bare-skills dir alias, which would
+      // otherwise mis-map `/recommendation-server` onto `src/recommendation-server`.
+      "@cinatra-ai/skills/recommendation-server": path.join(
+        root,
+        "packages/skills/src/recommendation/recommend.server.ts",
+      ),
+      "@cinatra-ai/skills/recommendation": path.join(
+        root,
+        "packages/skills/src/recommendation/index.ts",
+      ),
       // Point to src directory (not index.ts) so subpath imports whose basename DOES match the file
       // (graphiti-projector -> graphiti-projector.ts, llm-matching/* etc.) resolve
       // via vite's natural extension resolution. Pointing at index.ts
