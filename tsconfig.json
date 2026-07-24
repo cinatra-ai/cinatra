@@ -214,6 +214,7 @@
       "@cinatra-ai/dashboards/entity-dashboard-toolbar-controls": ["./packages/dashboards/src/components/entity-dashboard-toolbar-controls.tsx"],
       "@cinatra-ai/dashboards/screens": ["./packages/dashboards/src/screens/index.tsx"],
       "@cinatra-ai/dashboards/store": ["./packages/dashboards/src/store/index.ts"],
+      "@cinatra-ai/dashboards/entity-links": ["./packages/dashboards/src/store/entity-links.ts"],
       "@cinatra-ai/dashboards/mcp": ["./packages/dashboards/src/mcp/index.ts"],
       "@cinatra-ai/dashboards/auth": ["./packages/dashboards/src/auth/index.ts"],
       "@cinatra-ai/dashboards/require-dashboard-access": ["./packages/dashboards/src/auth/require-dashboard-access.ts"],

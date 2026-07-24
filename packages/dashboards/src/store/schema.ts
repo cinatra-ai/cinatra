@@ -135,6 +135,59 @@ export const dashboards = cinatraSchema.table(
   }),
 );
 
+/**
+ * Scope-collection SECONDARY LISTINGS (cinatra#1897 B4; ratified design spec at
+ * design@bb9230d9b, `specs/app-artifacts.html` §IX). A dashboard's CANONICAL
+ * HOME stays the singular `(entity_type, entity_id)` on `dashboards` (§VIII);
+ * this junction adds a *separate listing relation* — a dashboard listed on a
+ * scope's Dashboards tab as a reference, never a second home. The canonical home
+ * never moves (a listing opens the same canonical surface / artifact detail), so
+ * Overview protection and the per-entity name-uniqueness index on `dashboards`
+ * are untouched by a listing.
+ *
+ * The scope kinds are the THREE shared add-to-scope scopes only — team, project,
+ * organization (a personal user scope and the whole-workspace scope are not
+ * add-to-scope targets, §IX). One listing per (dashboard, scope) — the UNIQUE
+ * index makes add idempotent and remove exact.
+ */
+export const dashboardEntityLinks = cinatraSchema.table(
+  "dashboard_entity_links",
+  {
+    id: text("id").primaryKey(),
+    /** The listed dashboard — its canonical home is unaffected. */
+    dashboardId: text("dashboard_id")
+      .notNull()
+      .references(() => dashboards.id, { onDelete: "cascade" }),
+    /** The scope kind the dashboard is LISTED in: 'team'|'organization'|'project'
+     *  — the three shared add-to-scope scopes (§IX); enforced by CHECK in DDL. */
+    entityType: text("entity_type").notNull(),
+    /** The scope instance id (team id / org id / project id). */
+    entityId: text("entity_id").notNull(),
+    /** The scope's tenant — denormalized from the dashboard's org at add time so a
+     *  listing query stays tenant-scoped without a join. */
+    organizationId: text("organization_id").notNull(),
+    /** The manager who added the listing (attribution / audit). */
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    // One listing per (dashboard, scope) — makes add idempotent, remove exact.
+    linkUniq: uniqueIndex("dashboard_entity_links_uniq").on(
+      t.dashboardId,
+      t.entityType,
+      t.entityId,
+    ),
+    // Scope-listing lookup: "the dashboards LISTED in this scope".
+    scopeIdx: index("dashboard_entity_links_scope_idx").on(
+      t.entityType,
+      t.entityId,
+      t.organizationId,
+    ),
+    // Reverse lookup: "the scopes a dashboard is listed in" (scope chips / cascade).
+    dashboardIdx: index("dashboard_entity_links_dashboard_idx").on(t.dashboardId),
+  }),
+);
+
 export const dashboardRevisions = cinatraSchema.table(
   "dashboard_revisions",
   {
@@ -157,6 +210,13 @@ export type DashboardRow = typeof dashboards.$inferSelect;
 export type NewDashboardRow = typeof dashboards.$inferInsert;
 export type DashboardRevisionRow = typeof dashboardRevisions.$inferSelect;
 export type NewDashboardRevisionRow = typeof dashboardRevisions.$inferInsert;
+export type DashboardEntityLinkRow = typeof dashboardEntityLinks.$inferSelect;
+export type NewDashboardEntityLinkRow = typeof dashboardEntityLinks.$inferInsert;
+
+/** The three shared scope kinds a dashboard may be LISTED in (§IX add-to-scope).
+ *  A user scope and the whole-workspace scope are not add-to-scope targets. */
+export const LISTING_SCOPE_KINDS = ["team", "organization", "project"] as const;
+export type ListingScopeKind = (typeof LISTING_SCOPE_KINDS)[number];
 
 /** Supported ownership levels. */
 export const OWNER_LEVELS = ["user", "team", "organization", "workspace"] as const;
