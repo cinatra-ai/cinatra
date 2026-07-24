@@ -156,6 +156,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   },
 
   // --- migratable-request-path: request-time stores/reads, signature is sync ---
+  "src/lib/org-write/batch-wrapper.ts": {
+    class: "migratable-request-path",
+    justification:
+      "runGuardedOrgWriteBatchSync — the sole executor of the org-write kernel's guarded batch queries (cinatra#1938 S2, archive epic). Runs the capability-guarded org mutation as ONE transaction through the sync leaf because the org-write substrate lives in the same postgres-sync world as drizzle-store; a dark slice with no production callers yet. Migrates to async pooled access when that substrate converts.",
+  },
   "src/lib/chat-thread-store.ts": {
     class: "migratable-request-path",
     justification:

@@ -1,0 +1,56 @@
+# Org-write kernel boundary + registry gates — cinatra#1938 (archive epic S2).
+#
+# Three checks on every PR + push to main:
+#   1. org-write-boundary-gate.mjs — kernel internals reachable only via the
+#      package root (realpath-canonicalized), mintSystemWriteAuthority is
+#      dispatcher-only, guardedBatchQueries has one consumer.
+#   2. org-write-table-sweep.mjs — no NEW raw org-axis DML outside registered
+#      modules (shrink-only baseline).
+#   3. The kernel + org-write vitest suites (capability table, permits,
+#      leases, tickets, resolvers, registry lockstep, gate self-tests) — run
+#      here because packages/org-write-kernel/tests are not in the root
+#      vitest include set.
+#
+# A dedicated workflow keeps the enforcement heart's gates independent of the
+# build job (mcp-route-gate precedent).
+
+name: Org-Write Boundary Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  org-write-boundary-gate:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+          cache: "pnpm"
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Kernel boundary gate
+        run: node scripts/audit/org-write-boundary-gate.mjs
+      - name: Org-axis raw-SQL sweep
+        run: node scripts/audit/org-write-table-sweep.mjs
+      - name: Kernel test suite
+        run: pnpm --filter @cinatra-ai/org-write-kernel test
+      - name: Org-write resolver, registry and gate self-tests
+        run: npx vitest run src/lib/org-write/__tests__ scripts/audit/__tests__/org-write-boundary-gate.test.ts

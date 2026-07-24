@@ -679,3 +679,8 @@ CREATE INDEX IF NOT EXISTS verification_identifier_idx ON public.verification US
 -- generated DDL on the next scripts/dump-public-schema.mjs refresh and drop
 -- this patch block.
 ALTER TABLE public."organization" ADD COLUMN IF NOT EXISTS "archivedAt" timestamp with time zone;
+-- cinatra#1938 (archive S2): archiveEpoch additionalField — same runtime-model
+-- expectation as archivedAt above; without it the smoke's org bootstrap breaks
+-- identically. Fold into the generated DDL on the next dump-public-schema.mjs
+-- refresh and drop with the archivedAt patch.
+ALTER TABLE public."organization" ADD COLUMN IF NOT EXISTS "archiveEpoch" integer;

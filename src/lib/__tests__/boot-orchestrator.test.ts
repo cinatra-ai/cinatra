@@ -131,6 +131,7 @@ describe("runBoot orchestration", () => {
       "agent-runtime-dep-backfill", // cinatra#1056 — always-on, AWAITED, after marker backfill
       "skills-catalog-rebuild", // cinatra#1364 — explicit rebuild AFTER activation/materialization
       "dashboard-contribution-reconcile", // cinatra#1628 (S11c) — dormant adoption reconcile, AWAITED
+      "dashboard-template-materialize", // cinatra#1896 (Scope 2) — dormant install→materialize trigger, AWAITED (dev + prod)
       "[detached] dev-agents-skills-scan", // dev block 1 — EARLY + detached
       "assistant-bootstrap",
       "otel-tracing",
@@ -169,6 +170,7 @@ describe("runBoot orchestration", () => {
       "agent-runtime-dep-backfill", // cinatra#1056 — runs in PROD too
       "skills-catalog-rebuild", // cinatra#1364 — runs in PROD too (explicit boot rebuild)
       "dashboard-contribution-reconcile", // cinatra#1628 (S11c) — dormant adoption reconcile, runs in PROD too
+      "dashboard-template-materialize", // cinatra#1896 (Scope 2) — dormant install→materialize trigger, runs in PROD too
       "assistant-bootstrap",
       "otel-tracing",
       // no a2a-dev-auto-connect in prod

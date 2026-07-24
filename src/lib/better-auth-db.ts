@@ -6,7 +6,7 @@ import {
 import { toPgTextArrayLiteral } from "@/lib/pg-array";
 import { projectsDb, projects } from "@/lib/projects-store";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { pgTable, pgSchema, text, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, pgSchema, text, timestamp, boolean, integer } from "drizzle-orm/pg-core";
 import { Pool } from "pg";
 
 declare global {
@@ -462,6 +462,10 @@ export const betterAuthOrganizations = pgTable("organization", {
   // until S6) archive transaction; declared in cinatraOrganizationOptions
   // additionalFields so getMigrations() owns the column.
   archivedAt: timestamp("archivedAt", { withTimezone: true, mode: "date" }),
+  // cinatra#1938 (archive S2): epoch bumped per archive/unarchive transition;
+  // NULL (pre-migration rows) reads as 0 in the kernel. Same additionalFields
+  // ownership as archivedAt.
+  archiveEpoch: integer("archiveEpoch"),
 });
 
 // The live Better Auth `member` table has organizationId and userId declared

@@ -5,6 +5,7 @@ import { postgresSchema } from "@/lib/postgres-config";
 import { rawWithParams } from "@/lib/dashboards/raw-with-params";
 import { buildBindingReconcileQueries } from "@/lib/objects/binding-write-path";
 import { buildObjectsWithOutboxQuery, buildSoftDeleteObjectQuery } from "@/lib/objects-store";
+import { buildAssertSemanticTypeQueries } from "@/lib/artifacts/semantic-assertion-store";
 import {
   setDashboardArtifactTwinWriter,
   type DashboardArtifactTwinWriter,
@@ -46,7 +47,16 @@ import {
  *   5. `buildBindingReconcileQueries` — spliced VERBATIM (drift tier a). The
  *      dashboard object type is self-registered + NON-dedicated-claim, so the
  *      winner CTE is empty and this is a no-op; splicing it pins the invariant.
+ *   6. MEANING ASSERTION (cinatra#1896 Scope 2) — ONLY when the MATERIALIZE
+ *      writers explicitly request it (`ctx.mintMeaningAssertion` true) AND a pack
+ *      is named (`ctx.extensionId` non-null). Splices `buildAssertSemanticTypeQueries`
+ *      (the same builder `assertSemanticType` uses) to mint an eligible
+ *      `authoring_skill` (classic-basis) `semantic_assertion` for the twin artifact
+ *      with `extension` = the materializing pack, precedence-guarded + idempotent
+ *      under the held advisory lock. A user/operator/agent dashboard, and every
+ *      non-materialize extension write (archive/restore/adopt/upgrade), mint none.
  *
+
  * === DELETE (operation === "delete", Q2 CONFIRMED) ===
  *   0. `pg_advisory_xact_lock(hashtext(dashboardId))`.
  *   1. `buildSoftDeleteObjectQuery` VERBATIM (drift tier a): objects `deleted_at`
@@ -213,12 +223,73 @@ export function buildDashboardTwinQueries(ctx: DashboardTwinContext): SubstrateQ
     artifactId: ctx.dashboardId,
   });
 
+  // ── MEANING ASSERTION AT MATERIALIZATION (cinatra#1896 Scope 2) ──────────
+  // Mint the pack's meaning as an eligible `authoring_skill` (CLASSIC-basis)
+  // `semantic_assertion` for the twin artifact (`artifact_id = dashboardId`,
+  // `extension = ctx.extensionId`), atomically in THIS twin tx — but ONLY when the
+  // MATERIALIZE writers explicitly request it (`ctx.mintMeaningAssertion`), AND a
+  // pack is named (`ctx.extensionId` non-null). A user/operator/agent dashboard
+  // (extension_id null) and every non-materialize extension write (archive /
+  // restore / adopt / upgrade — which also carry extension_id) take the empty
+  // branch: the pre-#1896 twin behaviour is UNCHANGED for every path but the two
+  // materialize calls. This NARROW gate (codex round adoption) is deliberate — a
+  // broad "any extension_id upsert" gate would RE-MINT an eligible assertion onto
+  // a dashboard being ARCHIVED on uninstall, and would leave both predecessor and
+  // successor eligible after an adopt.
+  //
+  // `buildAssertSemanticTypeQueries` is the single-sourced builder `assertSemanticType`
+  // uses (archive-same-ext-lower-or-equal-rank + precedence-guarded INSERT-RETURNING).
+  // It requires the caller to (a) hold the per-artifact advisory lock and (b) run any
+  // graphiti refresh in the same tx. (a) holds — the twin's query[0] is
+  // `pg_advisory_xact_lock(hashtext(dashboardId))` (dashboardId == the artifact id).
+  // (b) is intentionally a NO-OP here: a dashboard twin is NEVER graphiti-projected
+  // (the projector's source gate rejects `source='dashboards-twin'`), and the meaning
+  // is consumed via DIRECT `semantic_assertion` reads (`listEligibleAssertions`), so
+  // no `buildGraphitiRefreshQueries` tail is appended.
+  //
+  // Idempotency + precedence: on a re-materialize the archive supersedes the prior
+  // equal-rank authoring_skill and the INSERT re-creates it (net one eligible row;
+  // the shared builder's supersede semantics, same as every other materializer that
+  // calls `assertSemanticType`). A `user` pin (rank 3) OUTRANKS authoring_skill
+  // (rank 2) — the INSERT's `WHERE NOT EXISTS` guard leaves it untouched. No binding
+  // collision on `sa_active_unique_idx` is reachable: the twin artifact's object type
+  // is the self-registered NON-dedicated generic `@cinatra-ai/dashboard-artifact:dashboard`,
+  // so `buildBindingReconcileQueries`' winner CTE is always empty ⇒ no active binding
+  // row for this artifact to collide with the classic INSERT.
+  //
+  // No migration: the `semantic_assertion` table + the `authoring_skill` source
+  // already exist (semantic-assertion-schema.ts / semantic-assertion-store.ts).
+  const meaningOps: SubstrateQuery[] =
+    ctx.mintMeaningAssertion === true && ctx.extensionId != null
+      ? buildAssertSemanticTypeQueries({
+          orgId: ctx.orgId,
+          artifactId: ctx.dashboardId,
+          extension: ctx.extensionId,
+          assertedBy: "authoring_skill",
+          principal: ctx.actorId,
+        }).queries
+      : [];
+
+  // ORDER: `meaningOps` BEFORE `bindingOps`. For the real fleet this is
+  // immaterial — a dashboard twin's object type is the self-registered
+  // NON-dedicated generic `dashboard`, so `bindingOps`' winner CTE is empty and
+  // the reconcile is a total no-op (it neither archives nor inserts). The order
+  // only matters in the (grep-verified-absent, hypothetical) case where a pack
+  // holds a DEDICATED cross-claim over the base `dashboard` type AND materializes:
+  // then the binding reconcile is the STRONGER identity, and running it AFTER the
+  // classic mint lets its same-extension supersede archive the just-minted classic
+  // row and install the binding instead — so a first materialize converges on the
+  // binding identity WITHOUT an `sa_active_unique_idx` collision, rather than
+  // rolling back. (A re-materialize of such a cross-claiming pack still fails
+  // closed on the pre-existing binding — an accepted bound for an unsupported
+  // manifest shape, never data corruption.)
   return [
     lock,
     buildDashboardResourceQuery(schema, ctx),
     objectsOutbox,
     buildDashboardRepresentationQuery(schema, ctx),
     buildDashboardAuditQuery(schema, ctx, "upsert"),
+    ...meaningOps,
     ...bindingOps,
   ];
 }

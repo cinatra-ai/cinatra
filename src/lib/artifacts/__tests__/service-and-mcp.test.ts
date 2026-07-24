@@ -377,6 +377,12 @@ describe("Media route purge gate", () => {
       // It is a pure read-only data/types module with NO imports at all;
       // excluded for the same reason as surface-inventory.ts above.
       "postgres-sync-inventory.ts",
+      // NOT an importer: the org-write write-registry (cinatra#1938 S2) NAMES
+      // the writer module as a string-literal `module:` field
+      // ("src/lib/artifacts/artifact-creation.ts") when declaring the semantic-
+      // artifact write site. It is a pure declarative data module with no
+      // import of the write path; excluded like the two inventories above.
+      "write-registry.ts",
     ];
     const root = path.join(__dirname, "../../../..");
     const grepFilter = ALLOW_LIST.map((f) => `grep -v "${f}"`).join(" | ");

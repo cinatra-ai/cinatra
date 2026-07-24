@@ -27,6 +27,7 @@ import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 // ratchet) — the auditor-snapshot-store precedent.
 import {
   readGatePinnedTargets,
+  readReviewGate,
   readReviewGateState,
   commitReviewDecision,
   enforceReviewRunAccess,
@@ -41,11 +42,15 @@ import {
   type PrepareReviewInput,
   type PrepareReviewResult,
   type ResolvedRendererMount,
+  type PreparedReviewTarget,
+  type RunAccessOutcome,
 } from "@/lib/artifacts/artifact-review-preparation";
+import type { ReviewSurfaceModel } from "@/app/artifacts/review/review-surface-model";
 import {
   submitReviewDecisionCore,
   type ArtifactReviewDecision,
   type ReviewRendererProvenance,
+  type ReviewRunAccessOp,
   type SubmitDecisionPorts,
   type SubmitDecisionResult,
 } from "@/lib/artifacts/artifact-review-decision";
@@ -172,4 +177,122 @@ export async function submitReviewDecision(args: {
   actorCtx: ReviewActorContext;
 }): Promise<SubmitDecisionResult> {
   return submitReviewDecisionCore(args.decision, bindSubmitDecisionPorts(args.actorCtx));
+}
+
+/**
+ * The op-appropriate run-access check for a decision (approve/reject →
+ * approveHitl; comment → respondToHitl), enforced against the ACTUAL reviewing
+ * actor. The decision action calls this FIRST — before it reads the gate — so an
+ * unauthorized caller receives a uniform denial regardless of whether the gate is
+ * pending, resolved, or absent (no pending-gate existence oracle; the read=view
+ * boundary is not side-channeled through the decision endpoint).
+ */
+export async function enforceReviewDecisionAccess(args: {
+  runId: string;
+  op: ReviewRunAccessOp;
+  actorCtx: ReviewActorContext;
+}): Promise<RunAccessOutcome> {
+  return enforceReviewRunAccess(args.runId, args.actorCtx.actor, args.op, args.actorCtx.roleHints);
+}
+
+/**
+ * Read a gate's FROZEN pinned target set (the whole gate) — the host reviews
+ * every pinned target, so a terminal decision covers them all (§IV). Returns the
+ * pinned set for ANY existing gate (pending OR resolved), null only when the gate
+ * is ABSENT. Returning the (immutable) set for a RESOLVED gate is load-bearing for
+ * IDEMPOTENCY: a response-lost retry can reconstruct the identical decision and
+ * reach the #1807 core's fingerprint comparison (a matching decision → idempotent
+ * success; a different one → conflict), instead of being short-circuited to a
+ * false "blocked" before the core ever runs. Used by the decision action to
+ * assemble the whole-gate decision — ONLY AFTER the caller passes
+ * `enforceReviewDecisionAccess`.
+ */
+export async function readReviewGatePinnedTargets(
+  runId: string,
+  reviewTaskId: string,
+): Promise<ArtifactReviewTarget[] | null> {
+  const gate = await readReviewGate(runId, reviewTaskId);
+  if (!gate) return null;
+  return gate.pinnedTargets.map((t) => ({
+    artifactId: t.artifactId,
+    representationRevisionId: t.representationRevisionId,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// SURFACE LOADER — the host decision-chrome page's single server entrypoint
+// (cinatra#1795 S12 item 4; spec design@30a0f9c9 §I–VI). Composes the run/gate
+// ports into the discriminated `ReviewSurfaceModel` the page renders: reads the
+// pinned gate, prepares EVERY pinned target (the host reviews the whole gate —
+// the reviewer never supplies targets), and resolves the terminal/comment
+// permission axis (§V). Keeps the agents-store coupling in this one module.
+// ---------------------------------------------------------------------------
+
+/**
+ * Load the review surface for a run's pending gate. Order is security-load-
+ * bearing (§V): read access FIRST (a viewer with none never reaches the
+ * targets), then the gate must still be pending (else a single blocked state,
+ * gate existence never leaked), then prepare the pinned set, then the decision
+ * permissions. Never throws for an authorization/gate-state outcome — those are
+ * modelled states, not errors.
+ */
+export async function loadReviewGateSurface(args: {
+  runId: string;
+  reviewTaskId: string;
+  actorCtx: ReviewActorContext;
+}): Promise<ReviewSurfaceModel> {
+  const { runId, reviewTaskId, actorCtx } = args;
+
+  // 1. Read access (§V) — no run read ⇒ never reach the surface.
+  const readAccess = await enforceReviewRunAccess(runId, actorCtx.actor, "read", actorCtx.roleHints);
+  if (!readAccess.ok) return { kind: "not-authorized" };
+
+  // 2. Gate must be a PENDING gate on this run (§V). resolved / unavailable
+  //    (absent, folded) ⇒ blocked "no-longer-pending"; the pinned set is read
+  //    from the gate, so the client never supplies targets.
+  const gate = await readReviewGateState(runId, reviewTaskId);
+  if (gate.status !== "pending") {
+    return { kind: "blocked", reason: "no-longer-pending" };
+  }
+
+  // 3. Prepare EVERY pinned target through the fully-bound core (never-blank
+  //    floor per target; a substituted/absent gate races to a blocked state).
+  const prepared = await prepareReviewTargets({
+    input: { runId, reviewTaskId, targets: gate.targets },
+    actorCtx,
+  });
+  if (!prepared.ok) {
+    switch (prepared.error.kind) {
+      case "run-access-denied":
+        return { kind: "not-authorized" };
+      case "gate-not-pending":
+        return { kind: "blocked", reason: "no-longer-pending" };
+      case "target-substitution":
+        return { kind: "blocked", reason: "targets-mismatch" };
+      case "invalid-targets":
+        // The gate pinned an invalid set — treat as a stale/mismatched view
+        // rather than crashing the surface.
+        return { kind: "blocked", reason: "targets-mismatch" };
+    }
+  }
+
+  // 4. Decision permissions (§V): terminal Approve/Reject need approve access;
+  //    Comment needs respond access. Resolved against the ACTUAL reviewing actor.
+  const [decide, comment] = await Promise.all([
+    enforceReviewRunAccess(runId, actorCtx.actor, "approveHitl", actorCtx.roleHints),
+    enforceReviewRunAccess(runId, actorCtx.actor, "respondToHitl", actorCtx.roleHints),
+  ]);
+
+  const targets: PreparedReviewTarget[] = prepared.prepared;
+  return {
+    kind: "ready",
+    runId,
+    reviewTaskId,
+    targets,
+    // The producing agent's one-line summary (§I/II) is rendered "when present";
+    // no gate/run column carries it in this slice, so it is absent (the chrome
+    // renders nothing rather than an empty summary).
+    agentSummary: null,
+    permissions: { canDecide: decide.ok, canComment: comment.ok },
+  };
 }
