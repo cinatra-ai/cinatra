@@ -119,8 +119,16 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     return {
       Authorization: `Bearer ${b.auth.citToken}`,
       "X-Cinatra-Widget-User-Token": b.auth.cwuToken,
+      // The turn POST is SAME-ORIGIN to the Cinatra app, so the browser `Origin`
+      // is the Cinatra origin — NOT the CMS site origin the cit_/cwu_ tokens are
+      // bound to (and JS cannot set the forbidden `Origin`). Forward the
+      // server-resolved parent (CMS) origin so the broker validates the token
+      // binding against the right origin — the SAME forwarded seam the capability
+      // negotiation already uses (embed-chat-negotiate.ts). A forged value fails
+      // the consume closed; the tokens, never this header, are the authority.
+      "X-Cinatra-Widget-Origin": props.expectedParentOrigin,
     };
-  }, []);
+  }, [props.expectedParentOrigin]);
 
   // Render assistant text through the S3 packaged renderer (`renderMarkdown`),
   // the EXACT content path `/chat` and the render-parity reference target render

@@ -74,6 +74,14 @@ import { randomUUID } from "node:crypto";
 // site `cit_` transport token stays on `Authorization`; this carries the
 // short-lived `cwu_` user token minted by the hosted /widget-auth PKCE login.
 const USER_TOKEN_HEADER = "X-Cinatra-Widget-User-Token";
+// Lane A (#1998) forwarded seam — mirrors the capabilities route. Post-S5 the
+// turn is issued by the `/embed/assistant` iframe, which is SAME-ORIGIN to the
+// Cinatra app, so the browser `Origin` header is the Cinatra origin (never the
+// CMS site origin) and JS cannot set the forbidden `Origin`. The embed forwards
+// the server-resolved parent (CMS) origin here; it is the origin the cit_/cwu_
+// tokens were minted against and is validated INTRINSICALLY by the consume (a
+// forged value fails closed — the tokens, never this header, are the authority).
+const WIDGET_ORIGIN_HEADER = "X-Cinatra-Widget-Origin";
 // Emitted on a fail-closed per-user 401 so the cross-origin widget can tell
 // "re-login required" from a generic error and swap back to the login window.
 const WIDGET_AUTH_REQUIRED_HEADER = "X-Cinatra-Widget-Auth";
@@ -167,7 +175,12 @@ export async function POST(request: Request) {
 // Branch 2 — the broker-auth widget turn (S5, cinatra#1221).
 // ---------------------------------------------------------------------------
 async function handleWidgetBrokerTurn(request: Request, citToken: string): Promise<Response> {
+  // Browser `Origin` (the SAME-ORIGIN embed→Cinatra request) — used ONLY to
+  // source the CORS response header. The AUTHORITATIVE origin for the token
+  // consume is the CMS site origin the embed forwards (the browser cannot send
+  // it — see WIDGET_ORIGIN_HEADER), matching the capabilities route.
   const requestOrigin = request.headers.get("Origin");
+  const forwardedOrigin = request.headers.get(WIDGET_ORIGIN_HEADER);
 
   const raw = (await request.json().catch(() => null)) as unknown;
   const parsed = assistantChatBodySchema.safeParse(raw);
@@ -222,7 +235,7 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     agentSlug: binding.agentSlug,
     auth: entry.auth,
     routePath: WIDGET_BROKER_ROUTE_PATH,
-    requestOrigin,
+    requestOrigin: forwardedOrigin,
   });
   if (!consumed.ok) {
     console.warn(`[assistant-chat:${binding.handle}] cit_ token rejected:`, consumed.reason);
@@ -274,7 +287,7 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     token: userTokenHeader,
     agentSlug: binding.agentSlug,
     routePath: WIDGET_BROKER_ROUTE_PATH,
-    requestOrigin,
+    requestOrigin: forwardedOrigin,
   });
   if (!consumedUser.ok) {
     return denyUserAuth(consumedUser.reason);

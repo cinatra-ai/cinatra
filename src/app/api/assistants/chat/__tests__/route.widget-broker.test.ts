@@ -114,12 +114,16 @@ const WP_ENTRY = {
 
 function widgetReq(opts: {
   origin?: string | null;
+  widgetOrigin?: string | null;
   cit?: string | null;
   cwu?: string | null;
   body?: unknown;
 }): Request {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (opts.origin !== null) headers["Origin"] = opts.origin ?? ORIGIN;
+  // Post-S5 the embed forwards the CMS site origin here (the browser Origin is the
+  // same-origin Cinatra app). Default it to the same value the tokens bind to.
+  if (opts.widgetOrigin !== null) headers["X-Cinatra-Widget-Origin"] = opts.widgetOrigin ?? ORIGIN;
   if (opts.cit) headers["Authorization"] = `Bearer ${opts.cit}`;
   if (opts.cwu) headers["X-Cinatra-Widget-User-Token"] = opts.cwu;
   return new Request("https://app.test/api/assistants/chat", {
@@ -241,6 +245,25 @@ describe("broker-auth happy path — builds the WidgetPrincipal and drives the s
     // CORS reflected onto the streamed response for the cross-origin widget.
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
     expect(runChatTurn).not.toHaveBeenCalled();
+  });
+
+  it("consumes BOTH tokens against the FORWARDED CMS origin, not the same-origin embed browser Origin (S5 iframe turn)", async () => {
+    // The embed iframe is SAME-ORIGIN to the Cinatra app, so the browser `Origin`
+    // is the Cinatra app origin — never the CMS site origin the cit_/cwu_ tokens
+    // were minted against. That origin arrives on X-Cinatra-Widget-Origin, and
+    // BOTH consumes must validate the token binding against it (mirrors the
+    // capabilities route). Regression guard for the origin_mismatch the S5 iframe
+    // cutover otherwise 401s on.
+    const res = await POST(
+      widgetReq({ origin: "https://app.test", widgetOrigin: ORIGIN, cit: "cit_abc", cwu: "cwu_xyz" }),
+    );
+    expect(res.status).toBe(200);
+    expect(consumeWidgetStreamToken).toHaveBeenCalledWith(
+      expect.objectContaining({ requestOrigin: ORIGIN }),
+    );
+    expect(consumeUserWidgetToken).toHaveBeenCalledWith(
+      expect.objectContaining({ requestOrigin: ORIGIN }),
+    );
   });
 
   it("supplies a mintResumeToken callback that mints a RUN-BOUND resume token from the server-verified principal (S5 #1221)", async () => {
