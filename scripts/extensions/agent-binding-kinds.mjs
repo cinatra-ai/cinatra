@@ -23,6 +23,7 @@
 
 export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze([
   "auditor-review",
+  "blog-idea-selection",
   "campaign-recipients-review",
   "context-selector",
   "cta",
