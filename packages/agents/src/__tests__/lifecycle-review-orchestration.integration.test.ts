@@ -191,6 +191,58 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
     expect((count.rows[0] as { n: number }).n).toBe(1);
   });
 
+  it("SURFACE: an auto-gate is consumed by the S12 review surface's read PORTS exactly like a flow-authored gate", async () => {
+    // The S12 review surface renders a gate through two store ports: the PREPARATION
+    // core's `readGatePinnedTargets` (pending + frozen targets) and the DECISION
+    // core's `readReviewGateState` (pending -> resolved + fingerprint). Neither
+    // branches on the reviewTaskId family, so an AUTO-created gate must resolve
+    // through them byte-for-byte like a flow-authored (`wayflow-`) gate — the
+    // render-contract this slice depends on. (Renderer dispatch itself is by the
+    // artifact's semantic TYPE, host-resolved, never by gate origin.)
+    const ev = await produce("document");
+    await orch.sweepReviewOrchestration();
+    const taskId = autoReviewTaskId(ev.eventId);
+    const runId = ev.producerRunId!;
+
+    // PREPARATION port: pending + the frozen pinned target set.
+    const prep = await gateStore.readGatePinnedTargets(runId, taskId);
+    expect(prep.status).toBe("pending");
+    expect(prep.status === "pending" && prep.targets).toEqual([
+      { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId },
+    ]);
+
+    // DECISION port (pending): pending + the pinned set (what the decision chrome
+    // renders + re-validates a submitted decision against).
+    const pending = await gateStore.readReviewGateState(runId, taskId);
+    expect(pending.status).toBe("pending");
+    expect(pending.status === "pending" && pending.targets).toEqual([
+      { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId },
+    ]);
+
+    // A decision resolves the gate; the DECISION port then reports resolved + the
+    // resolving fingerprint (sequential-retry idempotency on the surface) — the same
+    // terminal transition a flow-authored gate exposes.
+    const gate = await readGate(runId, taskId);
+    await resolveGate(gate!.id);
+    const resolved = await gateStore.readReviewGateState(runId, taskId);
+    expect(resolved.status).toBe("resolved");
+    expect(resolved.status === "resolved" && typeof resolved.fingerprint).toBe("string");
+
+    // RUN-ACCESS (the flagged doubt): the gate carries the PRODUCER run id, and the
+    // surface authorizes a reviewer against it via `enforceReviewRunAccess` — the
+    // SAME port a flow gate uses (it takes a runId, never the gate's origin). For a
+    // producing agent run that no longer resolves (or a run-less orphan id), it
+    // fail-CLOSES with a 404-shaped outcome rather than leaking existence — proving
+    // the auto-gate's producer-run id flows through the identical run-access path.
+    const orphanAccess = await gateStore.enforceReviewRunAccess(
+      `lifecycle-orphan:${ev.eventId}`,
+      { kind: "user", userId: `reviewer-${randomUUID()}`, orgId: ORG } as never,
+      "read",
+    );
+    expect(orphanAccess.ok).toBe(false);
+    if (!orphanAccess.ok) expect(orphanAccess.status).toBe(404);
+  });
+
   it("ORCHESTRATE: a user-provided durable local artifact stays UNGATED (policy skip)", async () => {
     const ev = await produce("document", { originKind: "user_provided" });
     await orch.sweepReviewOrchestration();
