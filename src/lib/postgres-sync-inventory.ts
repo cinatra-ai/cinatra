@@ -276,6 +276,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Records skills used during an agent run — snapshot, exposure telemetry, and per-invocation counting (cinatra#1368). Request/run-time write; migratable to async pooled access.",
   },
+  "src/lib/run-selected-skill-revisions.ts": {
+    class: "migratable-request-path",
+    justification:
+      "The authoritative per-run selected skill-revision store (cinatra#2041 S3): immutable write (execution worker / headless auto-apply) + read (execution-start snapshot, llm-bridge delivery). Mirrors the sync-store shape of agent-run-skills-used.ts so both consumers share one import surface; the reads are best-effort at each call site (a failure falls back to the computed assignment, never failing the run/request). Request/run-time; migratable to async pooled access.",
+  },
   "src/lib/skill-efficacy.ts": {
     class: "migratable-request-path",
     justification:

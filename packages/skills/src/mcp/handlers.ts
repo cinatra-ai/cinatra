@@ -24,6 +24,11 @@ import {
   resolveCustomSkillContent,
 } from "../personal-skills";
 import { getInstalledSkillById, listInstalledSkills, listInstalledSkillPackages, parseFrontmatter } from "../skills-registry";
+// Request-aware recommendation (cinatra#2041 S3): the MCP "what skills fit this
+// task" primitive reuses the SAME server-side scoring entry the run-start
+// interception uses — one implementation, never a parallel one.
+import { recommendSkillsForAgentTask } from "../recommendation/recommend.server";
+import { REQUEST_AWARE_SCORER_VERSION } from "../recommendation/request-aware-scorer";
 import { isWidgetChatSkillId } from "../extension-skill-resolver";
 import { isRuntimeDeliverableLifecycleState } from "../skill-source";
 import { getAssignedSkillIdsForAgent, matchAgentsToSkills } from "@/lib/agents-store";
@@ -181,6 +186,16 @@ export const resolveForAgentSchema = z.object({
 export const listInstalledSkillsInputSchema = z.object({
   cursor: z.string().optional(),
   limit: z.number().int().min(1).max(200).optional(),
+});
+
+// Request-aware recommendation primitive (cinatra#2041 S3). Advisory + read-only:
+// "which of this agent's skills fit THIS task?" scored on the run's intent.
+export const recommendForTaskSchema = z.object({
+  agentId: z.string().min(1).describe("Agent packageId to recommend skills for."),
+  promptText: z.string().optional().describe("The task / prompt text the run will act on — the run intent scored against."),
+  declaredProducedTypes: z.array(z.string()).optional().describe("Artifact types the run declares it will produce."),
+  targetArtifactKind: z.string().optional().describe("Target artifact kind when known (e.g. 'wordpress:post')."),
+  restrictToSkillIds: z.array(z.string()).optional().describe("Restrict candidates to these skill ids (e.g. the agent's assigned set)."),
 });
 
 export const upsertInstalledSkillSchema = z.object({
@@ -923,6 +938,42 @@ export function createSkillsPrimitiveHandlers() {
       });
       const { body } = parseFrontmatter(updated.content);
       return { ...updated, body: body.trim() };
+    },
+
+    // ---------------------------------------------------------------------
+    // Request-aware recommendation (cinatra#2041 S3, Point R).
+    //
+    // "Which of this agent's skills fit THIS task?" — the conversational
+    // access to the SAME core scoring the run-start interception uses (AC-5:
+    // no parallel implementation). Read-only + advisory: returns ranked skill
+    // ids/names/scores + the run-intent features each was scored on. No skill
+    // CONTENT is returned, so this exposes only recommendation metadata over
+    // the matcher signal the agent already surfaces.
+    // ---------------------------------------------------------------------
+    "skills_recommend_for_task": async (request: PrimitiveInvocationRequest<unknown>) => {
+      const input = recommendForTaskSchema.parse(request.input ?? {});
+      const recommendations = await recommendSkillsForAgentTask({
+        agentId: input.agentId,
+        intent: {
+          promptText: input.promptText,
+          declaredProducedTypes: input.declaredProducedTypes,
+          targetArtifactKind: input.targetArtifactKind,
+        },
+        restrictToSkillIds: input.restrictToSkillIds,
+      });
+      return {
+        agentId: input.agentId,
+        scorerVersion: REQUEST_AWARE_SCORER_VERSION,
+        recommendations: recommendations.map((r) => ({
+          skillId: r.skillId,
+          skillRevisionId: r.skillRevisionId,
+          name: r.name,
+          score: r.score,
+          rank: r.rank,
+          recommended: r.recommended,
+          scoredFeatures: r.scoredFeatures,
+        })),
+      };
     },
 
     // ---------------------------------------------------------------------

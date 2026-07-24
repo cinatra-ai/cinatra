@@ -462,6 +462,10 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   skills_personal_list_for_agent:             { resourceType: "skill", action: "list",    status: "enforced" },
   skills_personal_skill_create_or_update:     { resourceType: "skill", action: "update",  status: "enforced" },
   skills_personal_upsert:                     { resourceType: "skill", action: "update",  status: "enforced" },
+  // Request-aware recommendation (#2041 S3): advisory, read-only ranking of an
+  // agent's skills for THIS task. Same read class as skills_installed_resolve_for_agent
+  // — boundary enforces skill.read (member-passable), fail-closed for a no-skill.read actor.
+  skills_recommend_for_task:                  { resourceType: "skill", action: "read",    status: "enforced" },
 
   // ───── social_media ─────
   social_media_publish: { resourceType: "connector_instance", action: "execute", status: "enforced" },

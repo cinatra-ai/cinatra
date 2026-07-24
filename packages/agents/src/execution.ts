@@ -26,6 +26,12 @@ import { isTriggerReleased } from "./trigger-gate";
 import { resolveTemplateInputSchema } from "./input-schema-resolver";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import { snapshotSkillsAtRunStart } from "@/lib/agent-run-skills-used";
+import { readRunSelectedSkillRevisions } from "@/lib/run-selected-skill-revisions";
+import { resolveRunSkillDelivery } from "@cinatra-ai/skills/recommendation";
+import {
+  autoApplyHeadlessRecommendation,
+  parseLifecycleConfig,
+} from "./recommendation-interception";
 import {
   GROUPED_SETUP_FORM_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
@@ -1536,12 +1542,73 @@ async function runAgentBuilderExecutionJobInner(
   // exactly once per dispatch. The write is idempotent (ON CONFLICT DO NOTHING)
   // so re-entry on resume is safe, and best-effort — a ledger write must never
   // fail a run.
+  // ---------------------------------------------------------------------------
+  // Point R — headless skill RECOMMENDATION (cinatra#2041, epic #2037 S3).
+  //
+  // A worker run is HEADLESS (no present human): the recommendation lattice's
+  // core default is `humanPresent:false ⇒ skip`, so this is a NO-OP (writes
+  // nothing; the snapshot below falls back to the computed assignment) UNLESS an
+  // org `required` bound fires the checkpoint — in which case the top
+  // request-aware recommendations are auto-applied into the immutable per-run
+  // selection set BEFORE the ledger snapshot materializes from it. A headless
+  // run NEVER parks. Best-effort: a recommendation write must never fail a run.
   if (template.packageName) {
+    // Resolve the agent's already-assigned, runtime-deliverable skill set ONCE:
+    // it BOUNDS the headless auto-apply (a selection can never introduce a skill
+    // the agent could not already deliver — no archived/excluded/unsynced skill
+    // is auto-applied, which would otherwise fail delivery), AND it is the
+    // computed fallback the snapshot uses when no authoritative set exists.
+    let assignedSkillIds: string[] = [];
     try {
-      const resolvedSkillIds = await getAssignedSkillIdsForAgent(template.packageName);
+      assignedSkillIds = await getAssignedSkillIdsForAgent(template.packageName);
+    } catch (err) {
+      console.warn(
+        `[agent-builder] assigned-skill resolve failed for run ${runId}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+      assignedSkillIds = [];
+    }
+
+    try {
+      let intentPromptText = "";
+      try {
+        intentPromptText = JSON.stringify(run.inputParams ?? {});
+      } catch {
+        intentPromptText = "";
+      }
+      await autoApplyHeadlessRecommendation({
+        runId,
+        orgId: run.orgId,
+        agentId: template.packageName,
+        intent: { promptText: intentPromptText },
+        // Bound candidates to the deliverable assigned set (safety, above).
+        restrictToSkillIds: assignedSkillIds,
+        manifest: parseLifecycleConfig(
+          (template as { lifecycleConfig?: string | null }).lifecycleConfig,
+        ),
+      });
+    } catch (err) {
+      console.warn(
+        `[agent-builder] headless recommendation auto-apply failed for run ${runId}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    try {
+      // S3 (cinatra#2041, epic #2037): when an AUTHORITATIVE per-run selected
+      // skill-revision set exists (Point R confirmed/auto-applied), materialize
+      // the ledger snapshot FROM IT and do NOT recompute the agent-wide
+      // assignment; with NO set, fall back to today's computed assignment so
+      // behavior is unchanged. `resolveRunSkillDelivery` is the single
+      // set-vs-computed seam the llm-bridge also uses.
+      const selectedSet = readRunSelectedSkillRevisions(runId);
+      const { skillIds } = resolveRunSkillDelivery({
+        selectedSet,
+        computedAssignedIds: assignedSkillIds,
+      });
       await snapshotSkillsAtRunStart({
         runId,
-        skills: resolvedSkillIds.map((skillId) => ({
+        skills: skillIds.map((skillId) => ({
           skillId,
           skillKind: "installed" as const,
         })),

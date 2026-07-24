@@ -1095,102 +1095,107 @@
     {
       "primitiveName": "skills_catalog_list",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 26
+      "line": 27
     },
     {
       "primitiveName": "skills_installed_get",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 67
+      "line": 68
     },
     {
       "primitiveName": "skills_installed_list",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 71
+      "line": 72
     },
     {
       "primitiveName": "skills_installed_resolve_for_agent",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 79
+      "line": 80
     },
     {
       "primitiveName": "skills_installed_upsert",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 87
+      "line": 88
     },
     {
       "primitiveName": "skills_library_list",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 63
+      "line": 64
     },
     {
       "primitiveName": "skills_match_batch_run_now",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 100
+      "line": 101
     },
     {
       "primitiveName": "skills_match_evaluate_pair",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 104
+      "line": 105
     },
     {
       "primitiveName": "skills_match_schedule_get",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 92
+      "line": 93
     },
     {
       "primitiveName": "skills_match_schedule_set",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 96
+      "line": 97
     },
     {
       "primitiveName": "skills_matches_refresh",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 75
+      "line": 76
     },
     {
       "primitiveName": "skills_packages_install_from_github",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 55
+      "line": 56
     },
     {
       "primitiveName": "skills_packages_list",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 51
+      "line": 52
     },
     {
       "primitiveName": "skills_packages_uninstall",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 59
+      "line": 60
     },
     {
       "primitiveName": "skills_personal_delete",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 47
+      "line": 48
     },
     {
       "primitiveName": "skills_personal_get",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 39
+      "line": 40
     },
     {
       "primitiveName": "skills_personal_list",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 31
+      "line": 32
     },
     {
       "primitiveName": "skills_personal_list_for_agent",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 35
+      "line": 36
     },
     {
       "primitiveName": "skills_personal_skill_create_or_update",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 83
+      "line": 84
     },
     {
       "primitiveName": "skills_personal_upsert",
       "file": "packages/skills/src/mcp/registry.ts",
-      "line": 43
+      "line": 44
+    },
+    {
+      "primitiveName": "skills_recommend_for_task",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 109
     },
     {
       "primitiveName": "social_media_publish",
