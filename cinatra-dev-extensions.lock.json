@@ -30,7 +30,7 @@
     {
       "packageName": "@cinatra-ai/auditor-agent",
       "repo": "cinatra-ai/auditor-agent",
-      "resolvedSha": "71f6de6bf11dd127b7ef1b5164704a80734f1a0c"
+      "resolvedSha": "dc290a3e1c2b24ce6374a5b744429db0666083f5"
     },
     {
       "packageName": "@cinatra-ai/blog-connector",
@@ -200,12 +200,12 @@
     {
       "packageName": "@cinatra-ai/github-connector",
       "repo": "cinatra-ai/github-connector",
-      "resolvedSha": "cb791b10181f6c13eaa1438c3869f8a13919182b"
+      "resolvedSha": "f269c3976bbdd5124d0554c54faa7060827af7a1"
     },
     {
       "packageName": "@cinatra-ai/gmail-connector",
       "repo": "cinatra-ai/gmail-connector",
-      "resolvedSha": "f7bda0d6dd96f5312d49a86bbf288629a6bc32a3"
+      "resolvedSha": "36b7a06e42e0384022033ce0abee099f05d36e3f"
     },
     {
       "packageName": "@cinatra-ai/google-calendar-connector",
@@ -250,12 +250,12 @@
     {
       "packageName": "@cinatra-ai/mcp-client-connector",
       "repo": "cinatra-ai/mcp-client-registry-connector",
-      "resolvedSha": "d7d701bee4c3cc1ae6288e6e512a231c6bf8908f"
+      "resolvedSha": "9b419ea5ce966ad9249aa4d1319e21a8f280e37f"
     },
     {
       "packageName": "@cinatra-ai/mcp-server-connector",
       "repo": "cinatra-ai/mcp-server-connector",
-      "resolvedSha": "5c26c73c4c576647440326dfa48fdbb3f6b54a7d"
+      "resolvedSha": "a2b5760738c3c0bd4a6134e232246fcf2d4abf20"
     },
     {
       "packageName": "@cinatra-ai/media-feed-lister-agent",
@@ -270,7 +270,7 @@
     {
       "packageName": "@cinatra-ai/media-transcript-agent",
       "repo": "cinatra-ai/media-transcript-agent",
-      "resolvedSha": "ca919275926182732e2294bbebc813fdf9be979a"
+      "resolvedSha": "7d93303ce4f8295c839d85150aa5aacf45d6231a"
     },
     {
       "packageName": "@cinatra-ai/plane-connector",

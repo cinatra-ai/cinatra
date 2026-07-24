@@ -935,11 +935,11 @@ importers:
         version: 3.6.0
     devDependencies:
       '@typescript-eslint/parser':
-        specifier: 8.64.0
-        version: 8.64.0(eslint@10.7.0(jiti@2.7.0))(typescript@5.9.3)
+        specifier: 8.63.0
+        version: 8.63.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
       eslint:
-        specifier: 10.7.0
-        version: 10.7.0(jiti@2.7.0)
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
       typescript:
         specifier: 5.9.3
         version: 5.9.3
@@ -972,11 +972,11 @@ importers:
         version: 3.6.0
     devDependencies:
       '@typescript-eslint/parser':
-        specifier: 8.64.0
-        version: 8.64.0(eslint@10.7.0(jiti@2.7.0))(typescript@5.9.3)
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
       eslint:
-        specifier: 10.7.0
-        version: 10.7.0(jiti@2.7.0)
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
       typescript:
         specifier: 5.9.3
         version: 5.9.3
@@ -1248,11 +1248,11 @@ importers:
         version: 3.6.0
     devDependencies:
       '@typescript-eslint/parser':
-        specifier: 8.64.0
-        version: 8.64.0(eslint@10.7.0(jiti@2.7.0))(typescript@5.9.3)
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
       eslint:
-        specifier: 10.7.0
-        version: 10.7.0(jiti@2.7.0)
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
       typescript:
         specifier: 5.9.3
         version: 5.9.3
@@ -1262,9 +1262,24 @@ importers:
       '@cinatra-ai/sdk-extensions':
         specifier: workspace:*
         version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: 19.2.7
+        version: 19.2.7(react@19.2.7)
       server-only:
         specifier: 0.0.1
         version: 0.0.1
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -15031,6 +15046,18 @@ snapshots:
       debug: 4.4.3
       eslint: 10.7.0(jiti@2.7.0)
       typescript: 6.0.3
+    transitivePeerDependencies:
+      - supports-color
+
+  '@typescript-eslint/parser@8.63.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)':
+    dependencies:
+      '@typescript-eslint/scope-manager': 8.63.0
+      '@typescript-eslint/types': 8.63.0
+      '@typescript-eslint/typescript-estree': 8.63.0(typescript@5.9.3)
+      '@typescript-eslint/visitor-keys': 8.63.0
+      debug: 4.4.3
+      eslint: 10.4.1(jiti@2.7.0)
+      typescript: 5.9.3
     transitivePeerDependencies:
       - supports-color
 
