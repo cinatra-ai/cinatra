@@ -172,6 +172,15 @@ export const BACKGROUND_JOB_NAMES = {
   // service, reached via the boot-registered DI slot; the handler no-ops when
   // the slot is not `ready`.
   ENVIRONMENT_LAYER_GC_REAP: "environment-layer-gc-reap",
+  // Artifact-review RESUME-DELIVERY drain (cinatra#1796, epic #1620 S13). Self-
+  // rescheduling ~30-second loop that leases pending review-decision resume
+  // intents from the #2009 outbox (and reclaims expired `delivering` leases from
+  // a crashed worker) and delivers each typed approve/reject payload to its
+  // paused WayFlow run via the A2A resume. The decision core commits the intent
+  // EXACTLY ONCE inside the decision transaction; this drain is the AT-LEAST-ONCE
+  // delivery to an idempotent-per-gate consumer. Boot only seeds this delayed
+  // loop; the drain never runs at boot.
+  ARTIFACT_REVIEW_RESUME_DELIVERY: "artifact-review-resume-delivery",
 } as const;
 
 export type BackgroundJobName = (typeof BACKGROUND_JOB_NAMES)[keyof typeof BACKGROUND_JOB_NAMES];
@@ -263,3 +272,13 @@ export const ENVIRONMENT_LAYER_GC_REAP_LOOP_JOB_ID = "environment-layer-gc-reap-
  * storm guarded by the perpetual-system-loops CI gate.
  */
 export const UNBOUND_OUTPUT_DERIVE_SWEEP_LOOP_JOB_ID = "unbound-output-derive-sweep-loop";
+/**
+ * Canonical loop-job id for the artifact-review resume-delivery drain
+ * (cinatra#1796, epic #1620 S13). Same contract as the other loop ids above: the
+ * boot seed creates the job under this id and the handler re-delays THIS job via
+ * moveToDelayed each cycle; any other id is a legacy anonymous duplicate that
+ * runs once WITHOUT rescheduling. Drift here re-introduces the per-restart queue
+ * storm guarded by the perpetual-system-loops CI gate.
+ */
+export const ARTIFACT_REVIEW_RESUME_DELIVERY_LOOP_JOB_ID =
+  "artifact-review-resume-delivery-loop";

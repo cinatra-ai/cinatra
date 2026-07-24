@@ -950,6 +950,14 @@ export type CompiledAgentOasStep = {
   // InputMessageNode projection fields.
   inputMessageField?: string;
   inputMessageSchema?: Record<string, unknown>;
+  // Artifact-review gate marker (cinatra#1796, epic #1620 S13). Set ONLY on an
+  // InputMessageNode gate whose `metadata.cinatra.artifactReview.targetsInput`
+  // names the flow input carrying the immutable review targets. At runtime the
+  // `input-required` interrupt reads this to PIN the run's review targets (via
+  // `emitArtifactReviewGate`) and route the human to the generic artifact-review
+  // surface instead of the legacy reviewer envelope. Absent (the default) means
+  // the gate is an ordinary HITL gate and every code path stays byte-identical.
+  artifactReviewTargetsInput?: string;
 };
 
 export type CompiledAgentOas = {
@@ -1314,7 +1322,7 @@ export async function compileOasAgentJson(opts: {
         name?: string;
         outputs?: Array<{ id?: string; title?: string }>;
         inputs?: Array<{ id?: string; schema?: Record<string, unknown> }>;
-        metadata?: { cinatra?: { description?: string; inputRenderers?: Record<string, string>; renderer?: string; inputMessageSchema?: Record<string, unknown> } };
+        metadata?: { cinatra?: { description?: string; inputRenderers?: Record<string, string>; renderer?: string; inputMessageSchema?: Record<string, unknown>; artifactReview?: { targetsInput?: unknown } } };
       };
       const out0 = ime.outputs?.[0] ?? {};
       const field = out0.title ?? out0.id ?? id;
@@ -1327,6 +1335,17 @@ export async function compileOasAgentJson(opts: {
         ime.metadata?.cinatra?.inputRenderers?.[field] ??
         ime.metadata?.cinatra?.renderer ??
         SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+      // Artifact-review gate marker (cinatra#1796): propagate
+      // `metadata.cinatra.artifactReview.targetsInput` — the flow input carrying
+      // the immutable review targets — onto the compiled step so the runtime
+      // interrupt hook can pin the gate + route to the generic review surface.
+      // Only a NON-EMPTY string marks the gate; anything else leaves it unset so
+      // the gate stays an ordinary (byte-identical) HITL gate.
+      const targetsInputRaw = ime.metadata?.cinatra?.artifactReview?.targetsInput;
+      const artifactReviewTargetsInput =
+        typeof targetsInputRaw === "string" && targetsInputRaw.length > 0
+          ? targetsInputRaw
+          : undefined;
       return {
         nodeType: "input_message",
         stepNumber,
@@ -1339,6 +1358,7 @@ export async function compileOasAgentJson(opts: {
         xRenderer: renderer,
         inputMessageField: field,
         inputMessageSchema: inputSchema,
+        ...(artifactReviewTargetsInput ? { artifactReviewTargetsInput } : {}),
       };
     }
 

@@ -334,6 +334,13 @@ export function ensureDefaultFieldRenderersRegistered(): void {
     renderer: GroupedSetupFormRenderer,
   });
 
+  // NOTE (cinatra#1796): the artifact-review REDIRECT card is NOT registered as a
+  // field renderer here. It is rendered INLINE by AgenticRunPanel keyed on
+  // ARTIFACT_REVIEW_REDIRECT_RENDERER_ID (see ArtifactReviewRedirectCard) — a
+  // separate renderer module would add a new node to the run executor's locked
+  // route graph (the route-graph ratchet forbids growth). The inline card is
+  // display-only (no approve affordance) so a marked gate can never double-resume.
+
   fieldRendererRegistry.register({
     id: PERSONAL_SKILL_RENDERER_ID,
     priority: 90,
