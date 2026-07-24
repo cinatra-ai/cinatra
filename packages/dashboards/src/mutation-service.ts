@@ -723,11 +723,16 @@ export async function publishDashboard(
   id: string,
   actor: DashboardActor,
 ): Promise<DashboardRow> {
-  const db = getDashboardsDb();
-  return db.transaction(async (tx) => {
+  // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
+  // lifecycle ruling run BEFORE this body (see org-write-seam.ts).
+  return guardedDashboardsWrite(
+    actor,
+    { schema: backfillSchemaName() },
+    async (guardedTx) => {
+    const tx = guardedTx as unknown as DashboardsDb;
     // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
     await acquireTwinLockFirst(tx as unknown as TwinTx, id);
-    const row = await selectForUpdate(tx as unknown as DashboardsDb, id);
+    const row = await selectForUpdate(tx, id);
     if (!row) throw new DashboardNotFoundError(id);
     const access = resolveDashboardAccess(row, actor);
     if (!access.canWrite) {
@@ -763,7 +768,7 @@ export async function publishDashboard(
       .where(eq(dashboards.id, id))
       .returning();
 
-    await writeAudit(tx as unknown as DashboardsDb, {
+    await writeAudit(tx, {
       operation: "dashboards.publish",
       actor,
       row: updated,
@@ -775,18 +780,24 @@ export async function publishDashboard(
     });
     await pairTwin(tx as unknown as TwinTx, twinCtx(updated, "upsert", actor.userId));
     return updated;
-  });
+    },
+  );
 }
 
 export async function archiveDashboard(
   id: string,
   actor: DashboardActor,
 ): Promise<DashboardRow> {
-  const db = getDashboardsDb();
-  return db.transaction(async (tx) => {
+  // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
+  // lifecycle ruling run BEFORE this body (see org-write-seam.ts).
+  return guardedDashboardsWrite(
+    actor,
+    { schema: backfillSchemaName() },
+    async (guardedTx) => {
+    const tx = guardedTx as unknown as DashboardsDb;
     // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
     await acquireTwinLockFirst(tx as unknown as TwinTx, id);
-    const row = await selectForUpdate(tx as unknown as DashboardsDb, id);
+    const row = await selectForUpdate(tx, id);
     if (!row) throw new DashboardNotFoundError(id);
     const access = resolveDashboardAccess(row, actor);
     if (!access.canWrite) {
@@ -811,7 +822,7 @@ export async function archiveDashboard(
       .where(and(eq(dashboards.id, id), eq(dashboards.status, prevStatus)))
       .returning();
 
-    await writeAudit(tx as unknown as DashboardsDb, {
+    await writeAudit(tx, {
       operation: "dashboards.archive",
       actor,
       row: updated,
@@ -819,7 +830,8 @@ export async function archiveDashboard(
     });
     await pairTwin(tx as unknown as TwinTx, twinCtx(updated, "upsert", actor.userId));
     return updated;
-  });
+    },
+  );
 }
 
 // Exported for read-paths that want type-narrowing. Not used as a writer.
