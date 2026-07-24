@@ -36,6 +36,7 @@ import { ContextSelectorRenderer } from "./context-selector-renderer";
 import { CampaignRecipientsReviewRenderer } from "./campaign-recipients-review-renderer";
 import { EmailDraftsReviewRenderer } from "./email-drafts-review-renderer";
 import { ReviewerAgentOutputRenderer } from "./reviewer-agent-output-renderer";
+import { BlogIdeaSelectionRenderer } from "./blog-idea-selection-renderer";
 import { CtaRenderer } from "./cta-renderer";
 import {
   PersonalSkillRenderer,
@@ -105,6 +106,14 @@ const RENDERER_KIND_TABLE: Record<
   // floor here (AC4 never-blank). Same shape as final-list-review /
   // linkedin-draft-review / wordpress-draft-confirm below.
   "auditor-review": { renderer: SchemaOnlyFloorRenderer },
+  // cinatra#1796 Stage 2: the DEDICATED idea-selection chooser for
+  // blog-pipeline's `idea_selection_gate`, activated by the binding id
+  // `@cinatra-ai/blog-pipeline-agent:idea-selection` (strict-id condition). The
+  // host ships this component (unlike the migrated *-review kinds above): the
+  // gate relocates OFF the shared reviewer-output binding onto this one. The
+  // inline IdeaChooserRenderer in reviewer-agent-output-renderer.tsx stays until
+  // its Stage-3 teardown — this entry is additive.
+  "blog-idea-selection": { renderer: BlogIdeaSelectionRenderer },
   "campaign-recipients-review": {
     renderer: CampaignRecipientsReviewRenderer,
     bareAliases: ["campaign-recipients-review"],
