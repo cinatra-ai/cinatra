@@ -1849,7 +1849,7 @@ export async function archiveExtensionDashboards(
   tx: DashboardsDb | undefined,
   input: { extensionId: string; organizationId: string; actor: DashboardActor; reason?: string },
 ): Promise<number> {
-  return withDashboardsTx(tx, async (q) => {
+  const body = async (q: DashboardsDb): Promise<number> => {
     // Shared predicate so the pre-lock SELECT and the UPDATE can never drift.
     const where = and(
       eq(dashboards.extensionId, input.extensionId),
@@ -1876,14 +1876,22 @@ export async function archiveExtensionDashboards(
     }
     await pairTwinBulk(q as unknown as TwinTx, rows, "upsert", input.actor.userId);
     return rows.length;
-  });
+  };
+  // Org-write kernel guard (cinatra#1939 S3) when this writer opens its own
+  // transaction (every in-repo caller; the lifecycle hook mints the
+  // "extension-dashboard-lifecycle" system purpose). An OUTER tx rides its
+  // caller's guard — that composed path converts with its caller's wave.
+  if (tx) return withDashboardsTx(tx, body);
+  return guardedDashboardsWrite(input.actor, { schema: backfillSchemaName() }, (g) =>
+    body(g as unknown as DashboardsDb),
+  );
 }
 
 export async function restoreExtensionDashboards(
   tx: DashboardsDb | undefined,
   input: { extensionId: string; organizationId: string; actor: DashboardActor },
 ): Promise<number> {
-  return withDashboardsTx(tx, async (q) => {
+  const body = async (q: DashboardsDb): Promise<number> => {
     const where = and(
       eq(dashboards.extensionId, input.extensionId),
       eq(dashboards.organizationId, input.organizationId),
@@ -1902,7 +1910,15 @@ export async function restoreExtensionDashboards(
     }
     await pairTwinBulk(q as unknown as TwinTx, rows, "upsert", input.actor.userId);
     return rows.length;
-  });
+  };
+  // Org-write kernel guard (cinatra#1939 S3) when this writer opens its own
+  // transaction — see archiveExtensionDashboards directly above for the
+  // outer-tx contract. An org archived at the ORG level refuses this restore:
+  // extension restore inside an archived org must not write.
+  if (tx) return withDashboardsTx(tx, body);
+  return guardedDashboardsWrite(input.actor, { schema: backfillSchemaName() }, (g) =>
+    body(g as unknown as DashboardsDb),
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────

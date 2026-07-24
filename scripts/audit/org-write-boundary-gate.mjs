@@ -44,7 +44,11 @@ export const KERNEL_DIR_REL = join("packages", "org-write-kernel");
 
 /** R2: dispatcher-only importers of mintSystemWriteAuthority. S4 adds the
  *  dispatcher module here as a deliberate, reviewed design event. */
-export const SYSTEM_MINT_ALLOWLIST = new Set([]);
+export const SYSTEM_MINT_ALLOWLIST = new Set([
+  // The extension archive/restore lifecycle hook — mints the content-only
+  // "extension-dashboard-lifecycle" purpose (cinatra#1939 wave 1).
+  join("src", "lib", "dashboards", "extension-dashboard-lifecycle.ts"),
+]);
 
 /** R3: the one legal unwrap consumer outside the kernel. */
 export const BATCH_UNWRAP_ALLOWLIST = new Set([

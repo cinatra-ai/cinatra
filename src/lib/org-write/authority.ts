@@ -185,6 +185,13 @@ const SYSTEM_PURPOSE_CAPABILITIES: Record<string, readonly OrgWriteCapability[]>
   "org-lifecycle-transition": ["org.lifecycle"],
   /** The S3/S4 lease-expiry finalizer landing terminal transitions. */
   "lease-expiry-finalizer": ["run.execute", "run.complete"],
+  /** The committed extension archive/restore transition's dashboard hook
+   *  (cinatra#1939 wave 1): archives/restores that org's extension-shipped
+   *  dashboards AFTER install/uninstall authz gated the transition upstream.
+   *  Content-only — the hook can never touch membership/settings/lifecycle.
+   *  Sole minting site: src/lib/dashboards/extension-dashboard-lifecycle.ts
+   *  (R2-allowlisted in the boundary gate). */
+  "extension-dashboard-lifecycle": ["content.write"],
 };
 
 export type SystemWritePurpose = keyof typeof SYSTEM_PURPOSE_CAPABILITIES;

@@ -206,6 +206,16 @@ describe("mintSystemWriteAuthority (#1938)", () => {
     expect(finalizer.can("run.complete")).toBe(true);
     expect(finalizer.can("org.lifecycle")).toBe(false);
   });
+
+  it("the extension-dashboard-lifecycle purpose is CONTENT-ONLY (#1939 wave 1)", () => {
+    const hook = mintSystemWriteAuthority("extension-dashboard-lifecycle", "org-1");
+    expect(hook.orgId).toBe("org-1");
+    expect(hook.can("content.write")).toBe(true);
+    expect(hook.can("run.execute")).toBe(false);
+    expect(hook.can("membership.write")).toBe(false);
+    expect(hook.can("org.settings")).toBe(false);
+    expect(hook.can("org.lifecycle")).toBe(false);
+  });
 });
 
 describe("runGuardedOrgWriteBatchSync (#1938)", () => {
