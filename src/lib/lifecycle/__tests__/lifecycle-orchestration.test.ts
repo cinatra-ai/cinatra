@@ -7,15 +7,19 @@ import { describe, it, expect } from "vitest";
 
 import {
   AUTO_REVIEW_TASK_PREFIX,
+  AUTO_REVIEW_BATCH_PREFIX,
   autoReviewTaskId,
   autoReviewEventId,
   isAutoReviewTaskId,
+  isBatchAutoReviewTaskId,
+  batchPartitionReviewTaskId,
   planReviewForEvent,
   evaluateEffectHold,
   type ProducedEventAxes,
   type ReviewOrchestrationContext,
 } from "../lifecycle-orchestration";
 import type { OrgPolicyRule } from "../lifecycle-policy";
+import type { BatchTarget } from "../lifecycle-batch";
 
 function axes(over: Partial<ProducedEventAxes> = {}): ProducedEventAxes {
   return {
@@ -57,6 +61,43 @@ describe("auto-gate task id", () => {
   it("autoReviewEventId is the exact inverse of autoReviewTaskId", () => {
     expect(autoReviewEventId(autoReviewTaskId("evt-xyz"))).toBe("evt-xyz");
     expect(autoReviewEventId("wayflow-task-1")).toBeNull();
+  });
+});
+
+describe("batch partition gate task id", () => {
+  const t = (a: string, r: string): BatchTarget => ({ artifactId: a, representationRevisionId: r });
+
+  it("carries the batch prefix, which is itself an AUTO task id (superset) but NOT wayflow", () => {
+    const id = batchPartitionReviewTaskId([t("a", "1"), t("b", "2")]);
+    expect(id.startsWith(AUTO_REVIEW_BATCH_PREFIX)).toBe(true);
+    expect(isBatchAutoReviewTaskId(id)).toBe(true);
+    // a batch gate is still an auto-gate (the expiry drain reasons over it; the
+    // resume-delivery worker skips it, being non-wayflow).
+    expect(isAutoReviewTaskId(id)).toBe(true);
+    expect(id.startsWith("wayflow-")).toBe(false);
+  });
+
+  it("is DETERMINISTIC on the target SET — order-independent, replay-stable", () => {
+    const forward = batchPartitionReviewTaskId([t("a", "1"), t("b", "2"), t("c", "3")]);
+    const reversed = batchPartitionReviewTaskId([t("c", "3"), t("b", "2"), t("a", "1")]);
+    expect(forward).toBe(reversed);
+  });
+
+  it("distinct partitions never collide, and injective across the id-join boundary", () => {
+    expect(batchPartitionReviewTaskId([t("a", "1")])).not.toBe(
+      batchPartitionReviewTaskId([t("a", "2")]),
+    );
+    // length-prefixed key: {a, "b:c"} must not collide with {"a:b", c}.
+    expect(batchPartitionReviewTaskId([t("a", "b:c")])).not.toBe(
+      batchPartitionReviewTaskId([t("a:b", "c")]),
+    );
+  });
+
+  it("a batch task id encodes NO single event id (autoReviewEventId returns null)", () => {
+    const id = batchPartitionReviewTaskId([t("a", "1")]);
+    expect(autoReviewEventId(id)).toBeNull();
+    // a plain single-event auto id is NOT a batch id.
+    expect(isBatchAutoReviewTaskId(autoReviewTaskId("evt-1"))).toBe(false);
   });
 });
 

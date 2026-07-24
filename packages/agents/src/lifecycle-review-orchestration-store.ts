@@ -44,7 +44,7 @@ import "server-only";
 // on `origin/main` the whole slice is INERT.
 // ---------------------------------------------------------------------------
 
-import { and, asc, eq, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 
 import { db, agentBuilderPool } from "./db";
@@ -72,12 +72,16 @@ import {
 import {
   autoReviewEventId,
   isAutoReviewTaskId,
+  isBatchAutoReviewTaskId,
+  batchPartitionReviewTaskId,
   evaluateEffectHold,
   planReviewForEvent,
   type ProducedEventAxes,
   type ReviewOrchestrationContext,
+  type ReviewOrchestrationPlan,
   type EffectHoldVerdict,
 } from "@/lib/lifecycle/lifecycle-orchestration";
+import { sealBatch, partitionBatchTargets } from "@/lib/lifecycle/lifecycle-batch";
 import type {
   CompiledManifestLifecycle,
   DestinationClass,
@@ -248,6 +252,111 @@ function toAxes(row: ProducedEventRow): ProducedEventAxes {
   };
 }
 
+/** The full produced-outbox projection every drain reads (single-sourced so the
+ * sweep, the per-run membership fetch, and the expiry re-eval agree). */
+const PRODUCED_OUTBOX_COLUMNS = {
+  eventId: artifactProducedOutbox.eventId,
+  orgId: artifactProducedOutbox.orgId,
+  artifactId: artifactProducedOutbox.artifactId,
+  representationRevisionId: artifactProducedOutbox.representationRevisionId,
+  emitter: artifactProducedOutbox.emitter,
+  producerRunId: artifactProducedOutbox.producerRunId,
+  producerAgentId: artifactProducedOutbox.producerAgentId,
+  originKind: artifactProducedOutbox.originKind,
+  destinationClass: artifactProducedOutbox.destinationClass,
+  continuationMode: artifactProducedOutbox.continuationMode,
+  continuationAddress: artifactProducedOutbox.continuationAddress,
+  status: artifactProducedOutbox.status,
+} as const;
+
+/** The COMPLETE pending membership of ONE production `(orgId, producerRunId)`,
+ * oldest-first, bounded. Fetching a production's full pending set (rather than a
+ * raw-event fetch window) is what makes the batch seal PROVABLE over the whole
+ * production, independent of the per-pass production limit. `MAX_BATCH_MEMBERSHIP`
+ * caps a pathological production; a larger one seals in successor sub-batches. */
+async function fetchPendingByRun(
+  orgId: string,
+  producerRunId: string,
+  cap: number,
+): Promise<ProducedEventRow[]> {
+  return db
+    .select(PRODUCED_OUTBOX_COLUMNS)
+    .from(artifactProducedOutbox)
+    .where(
+      and(
+        eq(artifactProducedOutbox.status, "pending"),
+        eq(artifactProducedOutbox.orgId, orgId),
+        eq(artifactProducedOutbox.producerRunId, producerRunId),
+      ),
+    )
+    .orderBy(asc(artifactProducedOutbox.createdAt))
+    .limit(cap);
+}
+
+/** Sentinel returned when a production's drain was SKIPPED because another worker
+ * holds its lock this pass. */
+const PRODUCTION_CONTENDED = Symbol("production-contended");
+
+/**
+ * Run `fn` under a CLUSTER-WIDE postgres advisory lock keyed on the production
+ * `(orgId, producerRunId)`, so two concurrent passes never seal DIVERGENT
+ * memberships of a still-growing production into overlapping gates: whoever holds
+ * the lock snapshots + seals the membership exclusively; the other pass SKIPS this
+ * production (returns the contended sentinel) and retries next cycle, by when the
+ * holder has marked its members processed (so only genuinely-new revisions remain,
+ * a clean successor batch). The lock is held on a DEDICATED pooled client for the
+ * drain; the drain's own writes go through the shared `db` pool — the advisory lock
+ * is a pure mutex, not tied to the data path. Released in `finally`.
+ */
+async function withProductionLock<T>(
+  orgId: string,
+  producerRunId: string,
+  fn: () => Promise<T>,
+): Promise<T | typeof PRODUCTION_CONTENDED> {
+  const lockKey = `lifecycle-review-production::${orgId}::${producerRunId}`;
+  const client = await agentBuilderPool.connect();
+  try {
+    const acquired = await client.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+      [lockKey],
+    );
+    if (!acquired.rows[0]?.locked) return PRODUCTION_CONTENDED;
+    try {
+      return await fn();
+    } finally {
+      await client.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]);
+    }
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Finish an already-linked (but still pending) event: it was gated by a prior pass
+ * (a crash between the gate emit/link and the mark). Before marking processed,
+ * idempotently ensure a CHECKPOINTED run's park exists — a crash between LINK and
+ * PARK must never let this settle-path mark the event done while the run never
+ * parked (that would bypass the checkpoint). The park is keyed on the SAME gate id
+ * the event is linked to. Best-effort re-plan: an unresolvable context / async run
+ * has no park to ensure, so it just marks.
+ */
+async function settleAlreadyLinkedEvent(row: ProducedEventRow): Promise<void> {
+  if (row.continuationAddress) {
+    const context = await resolveReviewContext(row);
+    if (context.ok) {
+      const plan = planReviewForEvent(toAxes(row), context.ctx);
+      if (plan.action === "create-gate" && plan.continuationMode === "checkpointed" && plan.park) {
+        await maybeParkCheckpoint(plan.park, {
+          runId: row.producerRunId ?? orphanRunId(row.eventId),
+          eventId: row.eventId,
+          policyDecisionId: row.continuationAddress,
+        });
+      }
+    }
+  }
+  await markProducedEventProcessed(row.eventId);
+}
+
 // ---------------------------------------------------------------------------
 // The per-event orchestration (idempotent).
 // ---------------------------------------------------------------------------
@@ -266,6 +375,15 @@ export type OrchestrateOutcome =
  */
 export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<OrchestrateOutcome> {
   if (row.status !== "pending") return "already-processed";
+  // A still-pending event that ALREADY carries a gate linkage was orchestrated by
+  // a prior pass (a gate emitted + linked, but a crash before the mark). It must
+  // NOT be re-gated (which would orphan a second gate); finish it — ensuring a
+  // checkpointed run's park (park-safe) before marking. Keeps the per-event and
+  // batch paths idempotent against each other under a mid-pass crash + re-sweep.
+  if (row.continuationAddress) {
+    await settleAlreadyLinkedEvent(row);
+    return "already-processed";
+  }
 
   const context = await resolveReviewContext(row);
   if (!context.ok) {
@@ -306,16 +424,12 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
     throw err;
   }
 
-  // Link the gate onto the event (the effects-gating join). Only stamp when
-  // unset so a replay never re-points a live linkage.
-  await db
-    .update(artifactProducedOutbox)
-    .set({ continuationAddress: gateId })
-    .where(and(eq(artifactProducedOutbox.eventId, row.eventId), isNull(artifactProducedOutbox.continuationAddress)));
-
   // CHECKPOINTED mode: the producing run PARKS on the review decision. The park's
-  // policy-decision id is the gate id (the maintenance drain releases the park
-  // once the gate resolves). ASYNC mode never parks (`plan.park` is null).
+  // policy-decision id is the gate id (the maintenance drain releases the park once
+  // the gate resolves). ASYNC mode never parks (`plan.park` is null). PARK BEFORE
+  // LINK so `linked ⟹ parked`: a crash between link and park (with the artifact
+  // then tombstoned, so a re-plan can no longer resolve context) must never let the
+  // settle path mark a linked checkpointed event processed without a park.
   if (plan.continuationMode === "checkpointed" && plan.park) {
     await maybeParkCheckpoint(plan.park, {
       runId,
@@ -323,6 +437,13 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
       policyDecisionId: gateId,
     });
   }
+
+  // Link the gate onto the event (the effects-gating join). Only stamp when
+  // unset so a replay never re-points a live linkage.
+  await db
+    .update(artifactProducedOutbox)
+    .set({ continuationAddress: gateId })
+    .where(and(eq(artifactProducedOutbox.eventId, row.eventId), isNull(artifactProducedOutbox.continuationAddress)));
 
   await markProducedEventProcessed(row.eventId);
   return "gate-created";
@@ -338,7 +459,22 @@ export interface ReviewOrchestrationSweepSummary {
   noGate: number;
   notClassifiable: number;
   failed: number;
+  /** How many multi-artifact PRODUCTIONS were coalesced into a sealed batch this
+   * pass (each may fan into several ≤50-target partition gates, counted in
+   * `gatesCreated`). Zero when every pending event is a single-artifact production. */
+  batchesCoalesced: number;
 }
+
+function tallyOutcome(outcome: OrchestrateOutcome, summary: ReviewOrchestrationSweepSummary): void {
+  if (outcome === "gate-created") summary.gatesCreated += 1;
+  else if (outcome === "no-gate" || outcome === "already-processed") summary.noGate += 1;
+  else summary.notClassifiable += 1;
+}
+
+/** Cap on the pending events sealed into ONE production's batch per pass. A
+ * production larger than this seals in successor sub-batches (each a valid sealed
+ * batch); bounds the per-production membership fetch + the pinned-target loops. */
+export const MAX_BATCH_MEMBERSHIP = 1000;
 
 /**
  * Drain a batch of PENDING produced events into review gates. FENCED: a no-op
@@ -346,6 +482,15 @@ export interface ReviewOrchestrationSweepSummary {
  * write no event row, so the pending set is empty, but a manually-enqueued tick
  * still short-circuits). Per-event failures are TALLIED (never rethrown) so one
  * bad row can never poison the drain; the event stays pending for the next cycle.
+ *
+ * COALESCING (S0 batch contract): pending events are grouped by their PRODUCTION —
+ * `(orgId, producerRunId)`. A single-artifact production (a lone event, or a
+ * run-less direct upload) orchestrates per-event, one gate per artifact — the
+ * standard path. A MULTI-artifact production (the same run's several pending
+ * revisions) COALESCES: its fired targets are sealed into one explicit membership,
+ * partitioned into deterministic ≤50-target partitions, and each partition becomes
+ * ONE gate whose terminal decision commits atomically across its targets (a single
+ * aggregate commit). See `orchestrateProducedBatch`.
  */
 export async function sweepReviewOrchestration(opts?: {
   limit?: number;
@@ -356,37 +501,74 @@ export async function sweepReviewOrchestration(opts?: {
     noGate: 0,
     notClassifiable: 0,
     failed: 0,
+    batchesCoalesced: 0,
   };
   if (!isLifecycleReviewOrchestrationActive()) return summary;
 
   const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
-  const rows = await db
+
+  // 1. Run-backed PRODUCTIONS with pending events (oldest production first, bounded
+  //    by the pass budget). Grouping in SQL means the coalescing membership never
+  //    depends on a raw-event fetch window.
+  const productionKeys = await db
     .select({
-      eventId: artifactProducedOutbox.eventId,
       orgId: artifactProducedOutbox.orgId,
-      artifactId: artifactProducedOutbox.artifactId,
-      representationRevisionId: artifactProducedOutbox.representationRevisionId,
-      emitter: artifactProducedOutbox.emitter,
       producerRunId: artifactProducedOutbox.producerRunId,
-      producerAgentId: artifactProducedOutbox.producerAgentId,
-      originKind: artifactProducedOutbox.originKind,
-      destinationClass: artifactProducedOutbox.destinationClass,
-      continuationMode: artifactProducedOutbox.continuationMode,
-      continuationAddress: artifactProducedOutbox.continuationAddress,
-      status: artifactProducedOutbox.status,
     })
     .from(artifactProducedOutbox)
-    .where(eq(artifactProducedOutbox.status, "pending"))
-    .orderBy(asc(artifactProducedOutbox.createdAt))
+    .where(
+      and(
+        eq(artifactProducedOutbox.status, "pending"),
+        isNotNull(artifactProducedOutbox.producerRunId),
+      ),
+    )
+    .groupBy(artifactProducedOutbox.orgId, artifactProducedOutbox.producerRunId)
+    .orderBy(asc(sql`min(${artifactProducedOutbox.createdAt})`))
     .limit(limit);
 
-  for (const row of rows) {
+  for (const key of productionKeys) {
+    if (!key.producerRunId) continue; // isNotNull-filtered; guards the type.
+    const runId = key.producerRunId;
+    try {
+      // Snapshot + seal the production's COMPLETE membership under an exclusive
+      // per-production lock, so a concurrent pass can never seal a divergent
+      // membership of a still-growing production into overlapping gates.
+      await withProductionLock(key.orgId, runId, async () => {
+        const members = await fetchPendingByRun(key.orgId, runId, MAX_BATCH_MEMBERSHIP);
+        if (members.length === 0) return; // raced to processed by a concurrent pass.
+        summary.scanned += members.length;
+        if (members.length > 1) {
+          await orchestrateProducedBatch(members, summary);
+        } else {
+          tallyOutcome(await orchestrateProducedEvent(members[0]), summary);
+        }
+      });
+    } catch (err) {
+      summary.failed += 1;
+      console.error(
+        `[lifecycle-review-orchestration] production drain failed for run=${runId} — left pending:`,
+        err,
+      );
+    }
+  }
+
+  // 2. Run-less pending events (a direct upload, no shared production, never
+  //    coalesces), per-event, bounded by the same pass budget.
+  const orphans = await db
+    .select(PRODUCED_OUTBOX_COLUMNS)
+    .from(artifactProducedOutbox)
+    .where(
+      and(
+        eq(artifactProducedOutbox.status, "pending"),
+        isNull(artifactProducedOutbox.producerRunId),
+      ),
+    )
+    .orderBy(asc(artifactProducedOutbox.createdAt))
+    .limit(limit);
+  for (const row of orphans) {
     summary.scanned += 1;
     try {
-      const outcome = await orchestrateProducedEvent(row);
-      if (outcome === "gate-created") summary.gatesCreated += 1;
-      else if (outcome === "no-gate" || outcome === "already-processed") summary.noGate += 1;
-      else summary.notClassifiable += 1;
+      tallyOutcome(await orchestrateProducedEvent(row), summary);
     } catch (err) {
       summary.failed += 1;
       console.error(
@@ -395,7 +577,180 @@ export async function sweepReviewOrchestration(opts?: {
       );
     }
   }
+
   return summary;
+}
+
+// ---------------------------------------------------------------------------
+// Batch coalescing (multi-artifact production → sealed membership → ≤50-target
+// partition gates, per the S0 lifecycle-batch contract).
+// ---------------------------------------------------------------------------
+
+/** The local equality key joining a produced event / partition target back to its
+ * fired plan. LENGTH-PREFIXES the artifact id (`<len>:<artifactId>:<revisionId>`)
+ * so the join is INJECTIVE for arbitrary opaque ids — a bare separator would
+ * collide `{a, "b:c"}` with `{"a:b", c}` and silently drop a member from
+ * `firedByKey` while the gate still pins it (same guarantee the batch module's key
+ * gives). */
+function targetKey(t: { artifactId: string; representationRevisionId: string }): string {
+  return `${t.artifactId.length}:${t.artifactId}:${t.representationRevisionId}`;
+}
+
+type FiredCreateGate = { row: ProducedEventRow; plan: Extract<ReviewOrchestrationPlan, { action: "create-gate" }> };
+
+/**
+ * Coalesce ONE multi-artifact production (a run's several pending revisions) into
+ * sealed, partitioned aggregate review gates, per the S0 batch contract:
+ *
+ *   1. Per event: resolve context + plan the REVIEW checkpoint. A `no-gate` /
+ *      not-classifiable / already-linked event is SETTLED inline (marked processed);
+ *      only FIRED events (`create-gate`) join the batch — a coalesced review scopes
+ *      exactly the production's gated revisions.
+ *   2. SEAL the fired membership as an EXPLICIT target list (`sealBatch`) — an
+ *      explicit list seals immediately, so the seal is provable (the returned
+ *      `sealed:true` is the proof the set is frozen; a later arrival is a SUCCESSOR
+ *      batch, carry-forward is S2).
+ *   3. PARTITION the sealed set into deterministic ≤50-target partitions
+ *      (`partitionBatchTargets`) — each partition is one per-gate atomicity unit.
+ *   4. Per partition: emit ONE gate pinning the partition's targets (idempotent on
+ *      the deterministic partition task id); then, in ORDER: park every checkpointed
+ *      member, ATOMICALLY link ALL members onto the gate (one UPDATE), and only THEN
+ *      mark every member processed. The gate's terminal decision commits atomically
+ *      across the partition (a single aggregate commit).
+ *
+ * CRASH-IDEMPOTENT by the phase order (park -> link-all -> mark-all): a member is
+ * marked processed ONLY after every member of its partition is linked. So on a
+ * re-sweep a not-yet-finished member is EITHER already linked (settled park-safe,
+ * never re-gated) OR, if unlinked, NO member of its partition was marked -> the whole
+ * partition is still pending -> it reseals to the SAME deterministic gate id (emit is
+ * idempotent on the pinned set), never a duplicate/overlapping gate. `park` precedes
+ * `link` so a linked member is always already parked. A per-partition emit conflict
+ * leaves that partition's events pending for a reconciling sweep.
+ *
+ * DURABILITY BOUNDARY (in-memory seal): the sealed membership lives only for this
+ * call — S1 adds NO schema, so there is no durable batch-epoch row. `withProductionLock`
+ * gives an EXCLUSIVE per-production lease, so two LIVE passes never seal divergent
+ * memberships. The one residual is a crash STRICTLY between a partition's gate emit
+ * and its bulk-link COMBINED with a NEW revision arriving for the same run before the
+ * reconciling sweep: the retry reseals the grown set into a different partition and
+ * emits an overlapping gate, leaving the first as an ORPHAN (it pins targets but no
+ * event links to it, so it holds no effect). Fully closing this needs a durable
+ * sealed-membership epoch persisted before emit — the S0 contract's "the store
+ * persists the sealed membership", which lands with S2's batch-disposition schema
+ * (S1 is migration-free). Non-growth crashes are already fully idempotent (above).
+ */
+async function orchestrateProducedBatch(
+  group: ProducedEventRow[],
+  summary: ReviewOrchestrationSweepSummary,
+): Promise<void> {
+  const orgId = group[0].orgId;
+  const runId = group[0].producerRunId!;
+
+  const fired: FiredCreateGate[] = [];
+  for (const row of group) {
+    // Already linked by a prior (crashed) pass — finish it PARK-SAFE, never re-gate.
+    if (row.continuationAddress) {
+      await settleAlreadyLinkedEvent(row);
+      continue;
+    }
+    const context = await resolveReviewContext(row);
+    if (!context.ok) {
+      await markProducedEventProcessed(row.eventId);
+      summary.notClassifiable += 1;
+      continue;
+    }
+    const plan = planReviewForEvent(toAxes(row), context.ctx);
+    if (plan.action === "no-gate") {
+      await markProducedEventProcessed(row.eventId);
+      summary.noGate += 1;
+      continue;
+    }
+    fired.push({ row, plan });
+  }
+  if (fired.length === 0) return;
+
+  const sealed = sealBatch({
+    kind: "explicit",
+    targets: fired.map((f) => ({
+      artifactId: f.row.artifactId,
+      representationRevisionId: f.row.representationRevisionId,
+    })),
+  });
+  if (!sealed.ok) {
+    // Unreachable for a non-empty explicit list (each fired event names both ids);
+    // fall back to per-event so nothing is dropped.
+    for (const f of fired) tallyOutcome(await orchestrateProducedEvent(f.row), summary);
+    return;
+  }
+
+  const partitions = partitionBatchTargets(sealed.targets);
+  summary.batchesCoalesced += 1;
+
+  const firedByKey = new Map<string, FiredCreateGate>();
+  for (const f of fired) firedByKey.set(targetKey(f.row), f);
+
+  const expiresAt = new Date(Date.now() + AUTO_REVIEW_GATE_TTL_MS);
+  for (const partition of partitions) {
+    const reviewTaskId = batchPartitionReviewTaskId(partition);
+    let gateId: string;
+    try {
+      const emitted = await emitArtifactReviewGate({
+        runId,
+        orgId,
+        reviewTaskId,
+        targets: partition,
+        expiresAt,
+      });
+      gateId = emitted.gateId;
+    } catch (err) {
+      if (err instanceof ArtifactReviewGateError) {
+        console.error(
+          `[lifecycle-review-orchestration] batch partition gate emit conflict for run=${runId} task=${reviewTaskId}: ${err.message} — partition left pending`,
+        );
+        continue; // leave this partition's events pending for a reconciling sweep.
+      }
+      throw err;
+    }
+    summary.gatesCreated += 1;
+
+    const members = partition
+      .map((t) => firedByKey.get(targetKey(t)))
+      .filter((m): m is FiredCreateGate => m !== undefined);
+
+    // Phase 1: PARK every checkpointed member (idempotent on run,event,checkpoint)
+    // BEFORE linking, so a linked member is always already parked (the settle path
+    // can then safely finish a linked-but-unmarked member).
+    for (const m of members) {
+      if (m.plan.continuationMode === "checkpointed" && m.plan.park) {
+        await maybeParkCheckpoint(m.plan.park, {
+          runId,
+          eventId: m.row.eventId,
+          policyDecisionId: gateId,
+        });
+      }
+    }
+    // Phase 2: ATOMICALLY link ALL members onto the gate in ONE update (guard
+    // isNull so a concurrent pass that emitted the SAME deterministic gate never
+    // re-points a live linkage).
+    await db
+      .update(artifactProducedOutbox)
+      .set({ continuationAddress: gateId })
+      .where(
+        and(
+          inArray(
+            artifactProducedOutbox.eventId,
+            members.map((m) => m.row.eventId),
+          ),
+          isNull(artifactProducedOutbox.continuationAddress),
+        ),
+      );
+    // Phase 3: mark every member processed — ONLY now that ALL are linked, so a
+    // crash here leaves each remaining member LINKED (settled next pass), never a
+    // pending subset that would reseal into a duplicate/overlapping gate.
+    for (const m of members) {
+      await markProducedEventProcessed(m.row.eventId);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -581,7 +936,7 @@ async function resolveExpiredAutoGates(limit: number, summary: GateMaintenanceSu
     // Only AUTO gates carry an expiry; a flow-authored gate never does. Skip a
     // non-auto reviewTaskId defensively (it would have no re-evaluable event).
     if (!isAutoReviewTaskId(gate.reviewTaskId)) continue;
-    const required = await isExpiredGateRequired(gate.reviewTaskId);
+    const required = await isExpiredGateRequired(gate.reviewTaskId, gate.id);
     if (required) {
       // BLOCK + NOTIFY: keep the gate pending so its external effect stays held;
       // surface the unactioned required review to ops each cycle.
@@ -613,10 +968,19 @@ async function resolveExpiredAutoGates(limit: number, summary: GateMaintenanceSu
 }
 
 /** Re-derive whether an expired auto-gate's REVIEW is org-REQUIRED, by re-running
- * the pure lattice over the gate's original produced event. Fail-CLOSED: if the
+ * the pure lattice over the gate's original produced event(s). Fail-CLOSED: if the
  * event or its context cannot be resolved, treat the gate as required (keep
- * blocking) rather than risk auto-releasing a required gate. */
-async function isExpiredGateRequired(reviewTaskId: string): Promise<boolean> {
+ * blocking) rather than risk auto-releasing a required gate.
+ *
+ * A BATCH partition gate (`lifecycle-review:batch:`) encodes no single event id, so
+ * it is re-derived from its PINNED target set: the batch is required iff ANY of its
+ * targets' reviews is org-required (fail-closed — any unresolvable target keeps the
+ * whole partition blocking), matching the single-gate posture per target. */
+async function isExpiredGateRequired(reviewTaskId: string, gateId?: string): Promise<boolean> {
+  if (isBatchAutoReviewTaskId(reviewTaskId)) {
+    if (!gateId) return true; // fail-closed: cannot resolve the batch's targets.
+    return isExpiredBatchGateRequired(gateId);
+  }
   const eventId = autoReviewEventId(reviewTaskId);
   if (!eventId) return true; // not an auto-gate → fail-closed (should be unreachable).
   const [row] = await db
@@ -642,6 +1006,52 @@ async function isExpiredGateRequired(reviewTaskId: string): Promise<boolean> {
   if (!context.ok) return true; // fail-closed.
   const plan = planReviewForEvent(toAxes(row), context.ctx);
   return plan.action === "create-gate" && plan.outcome === "required";
+}
+
+/** Re-derive an expired BATCH partition gate's requiredness from its PINNED target
+ * set: required iff ANY target's review is org-required. Fail-CLOSED per target (a
+ * missing event, an unresolvable context, or an un-firing re-eval all keep the
+ * whole partition blocking) — an all-optional expired batch lapses into a release,
+ * exactly like a single optional gate. */
+async function isExpiredBatchGateRequired(gateId: string): Promise<boolean> {
+  const [gate] = await db
+    .select({ pinnedTargets: artifactReviewGates.pinnedTargets })
+    .from(artifactReviewGates)
+    .where(eq(artifactReviewGates.id, gateId))
+    .limit(1);
+  const targets = (gate?.pinnedTargets ?? []) as Array<{
+    artifactId: string;
+    representationRevisionId: string;
+  }>;
+  if (targets.length === 0) return true; // fail-closed: no re-evaluable membership.
+
+  for (const target of targets) {
+    const eventId = producedEventId(target.artifactId, target.representationRevisionId, "artifact_produced");
+    const [row] = await db
+      .select({
+        eventId: artifactProducedOutbox.eventId,
+        orgId: artifactProducedOutbox.orgId,
+        artifactId: artifactProducedOutbox.artifactId,
+        representationRevisionId: artifactProducedOutbox.representationRevisionId,
+        emitter: artifactProducedOutbox.emitter,
+        producerRunId: artifactProducedOutbox.producerRunId,
+        producerAgentId: artifactProducedOutbox.producerAgentId,
+        originKind: artifactProducedOutbox.originKind,
+        destinationClass: artifactProducedOutbox.destinationClass,
+        continuationMode: artifactProducedOutbox.continuationMode,
+        continuationAddress: artifactProducedOutbox.continuationAddress,
+        status: artifactProducedOutbox.status,
+      })
+      .from(artifactProducedOutbox)
+      .where(eq(artifactProducedOutbox.eventId, eventId))
+      .limit(1);
+    if (!row) return true; // fail-closed: a pinned target with no re-derivable event.
+    const context = await resolveReviewContext(row);
+    if (!context.ok) return true; // fail-closed.
+    const plan = planReviewForEvent(toAxes(row), context.ctx);
+    if (plan.action === "create-gate" && plan.outcome === "required") return true;
+  }
+  return false; // all targets resolved + none required → auto-resolvable.
 }
 
 async function releaseResolvedAutoGateParks(limit: number, summary: GateMaintenanceSummary): Promise<void> {

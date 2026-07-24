@@ -22,6 +22,8 @@
  * event row — and applies this plan.
  */
 
+import { createHash } from "node:crypto";
+
 import {
   evaluatePolicy,
   isExternalEffectClass,
@@ -33,6 +35,7 @@ import {
   type RunElevation,
 } from "./lifecycle-policy";
 import { evaluateThenPark, type EvaluateThenParkOutcome } from "./lifecycle-continuation";
+import type { BatchTarget } from "./lifecycle-batch";
 import type { ContinuationMode } from "./lifecycle-produced-event";
 
 // ---------------------------------------------------------------------------
@@ -58,14 +61,58 @@ export function isAutoReviewTaskId(reviewTaskId: string): boolean {
   return reviewTaskId.startsWith(AUTO_REVIEW_TASK_PREFIX);
 }
 
-/** The INVERSE of `autoReviewTaskId`: recover the produced-event id an auto-gate
- * task id encodes, or null when the task id is not an auto-gate. Single-sources
- * the prefix so a store re-deriving the event (e.g. to re-evaluate an expired
- * gate's requiredness) never hardcodes the prefix length. */
+/** The INVERSE of `autoReviewTaskId`: recover the produced-event id a SINGLE-target
+ * auto-gate task id encodes, or null when the task id is not a single-event
+ * auto-gate. Single-sources the prefix so a store re-deriving the event (e.g. to
+ * re-evaluate an expired gate's requiredness) never hardcodes the prefix length. A
+ * BATCH partition gate (`lifecycle-review:batch:` — a coalesced production, see
+ * below) encodes no single event id, so it returns null: the store re-derives a
+ * batch gate's requiredness from its PINNED target set, not from one event. */
 export function autoReviewEventId(reviewTaskId: string): string | null {
+  if (isBatchAutoReviewTaskId(reviewTaskId)) return null;
   return isAutoReviewTaskId(reviewTaskId)
     ? reviewTaskId.slice(AUTO_REVIEW_TASK_PREFIX.length)
     : null;
+}
+
+// ---------------------------------------------------------------------------
+// Batch (coalesced multi-artifact production) partition gate ids.
+// ---------------------------------------------------------------------------
+
+/** The prefix a BATCH PARTITION gate's `reviewTaskId` carries — a coalesced
+ * multi-artifact production, partitioned into ≤50-target atomicity units per the
+ * S0 batch contract (`lifecycle-batch.ts`). A superset of `AUTO_REVIEW_TASK_PREFIX`
+ * so `isAutoReviewTaskId` still recognizes it (the expiry drain reasons over it;
+ * the resume-delivery worker still skips it, being non-`wayflow-`). */
+export const AUTO_REVIEW_BATCH_PREFIX = `${AUTO_REVIEW_TASK_PREFIX}batch:`;
+
+/** The canonical, INJECTIVE key for a batch target — LENGTH-PREFIXES the artifact
+ * id (`<len>:<artifactId>:<representationRevisionId>`) so the hash material is
+ * unambiguous for arbitrary opaque ids (the same guarantee `lifecycle-batch`'s
+ * private `batchTargetKey` gives). */
+function batchTargetHashKey(t: BatchTarget): string {
+  return `${t.artifactId.length}:${t.artifactId}:${t.representationRevisionId}`;
+}
+
+/** Derive the stable, idempotent `reviewTaskId` for one batch PARTITION gate from
+ * its target set. DETERMINISTIC on the SET (sorted by the canonical key, then
+ * hashed), so the same partition membership always yields the same id regardless
+ * of input order — a replay re-emits onto the same gate (idempotent on
+ * `(run, task)`), and two distinct partitions never collide (a target's
+ * `(artifactId, representationRevisionId)` is a globally-unique pinned revision, so
+ * no target appears in two partitions). Total. */
+export function batchPartitionReviewTaskId(partitionTargets: readonly BatchTarget[]): string {
+  const material = [...partitionTargets]
+    .map(batchTargetHashKey)
+    .sort()
+    .join("\u0000");
+  const hash = createHash("sha256").update(material).digest("hex");
+  return `${AUTO_REVIEW_BATCH_PREFIX}${hash}`;
+}
+
+/** Whether a `reviewTaskId` names a BATCH partition (coalesced production) gate. */
+export function isBatchAutoReviewTaskId(reviewTaskId: string): boolean {
+  return reviewTaskId.startsWith(AUTO_REVIEW_BATCH_PREFIX);
 }
 
 // ---------------------------------------------------------------------------

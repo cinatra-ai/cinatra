@@ -30,7 +30,11 @@ import {
   producedEventId,
   type ArtifactProducedEvent,
 } from "@/lib/lifecycle/lifecycle-produced-event";
-import { autoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import {
+  autoReviewTaskId,
+  batchPartitionReviewTaskId,
+} from "@/lib/lifecycle/lifecycle-orchestration";
+import { sealBatch, partitionBatchTargets, MAX_BATCH_PARTITION } from "@/lib/lifecycle/lifecycle-batch";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 
 const TEST_SCHEMA = "cinatra_test_lifecycle_2039";
@@ -334,6 +338,172 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       [dispId],
     );
     expect((disp.rows[0] as { applied_at: Date | null }).applied_at).not.toBeNull();
+  });
+
+  it("BATCH: a >50-target production COALESCES → sealed membership → deterministic ≤50 partitions → one aggregate gate per partition", async () => {
+    // A single production (ONE producerRunId) emits 120 durable agent-produced
+    // artifacts with an EXTERNAL effect — a >50-target production the S0 batch
+    // contract must partition, each partition holding its members' external effect
+    // until the aggregate decision.
+    const runId = `run-batch-${randomUUID()}`;
+    const N = 120;
+    const events: ArtifactProducedEvent[] = [];
+    for (let i = 0; i < N; i++) {
+      events.push(
+        await produce("document", {
+          producerRunId: runId,
+          destinationClass: "external_publish",
+          originKind: "agent_produced",
+        }),
+      );
+    }
+
+    // Drain the whole production in ONE pass (limit > N so nothing spills to a
+    // successor batch) → coalesce.
+    const summary = await orch.sweepReviewOrchestration({ limit: 200 });
+    expect(summary.batchesCoalesced).toBe(1);
+
+    // PROVABLE SEAL + deterministic partitioning: the fired membership seals to
+    // exactly the 120 targets and partitions into ⌈120/50⌉ = 3 stable partitions
+    // (50, 50, 20). We recompute the SAME pure seal+partition and assert the gates
+    // the store created carry byte-identical partition task ids.
+    const sealed = sealBatch({
+      kind: "explicit",
+      targets: events.map((e) => ({
+        artifactId: e.artifactId,
+        representationRevisionId: e.representationRevisionId,
+      })),
+    });
+    expect(sealed.ok && sealed.sealed).toBe(true);
+    if (!sealed.ok) throw new Error("seal failed");
+    expect(sealed.targets.length).toBe(N);
+    const partitions = partitionBatchTargets(sealed.targets);
+    expect(partitions.length).toBe(Math.ceil(N / MAX_BATCH_PARTITION)); // 3
+    for (const p of partitions) expect(p.length).toBeLessThanOrEqual(MAX_BATCH_PARTITION);
+    const expectedTaskIds = new Set(partitions.map((p) => batchPartitionReviewTaskId(p)));
+    expect(summary.gatesCreated).toBe(partitions.length); // one aggregate gate per partition
+
+    // The gates the store actually created for this run.
+    const gateRows = await pool(
+      `SELECT id, review_task_id, pinned_targets, expires_at FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id = $1`,
+      [runId],
+    );
+    const gates = gateRows.rows as Array<{
+      id: string;
+      review_task_id: string;
+      pinned_targets: Array<{ artifactId: string; representationRevisionId: string }>;
+      expires_at: Date | null;
+    }>;
+    expect(gates.length).toBe(partitions.length);
+    // Every gate's task id is one of the deterministically-derived partition ids.
+    expect(new Set(gates.map((g) => g.review_task_id))).toEqual(expectedTaskIds);
+
+    // Each partition gate is a SINGLE aggregate commit unit: ≤50 pinned targets,
+    // an auto-gate expiry, and together the partitions cover EXACTLY the 120
+    // distinct targets (disjoint, complete).
+    const coveredKeys = new Set<string>();
+    for (const g of gates) {
+      expect(g.pinned_targets.length).toBeLessThanOrEqual(MAX_BATCH_PARTITION);
+      expect(g.expires_at).not.toBeNull();
+      for (const t of g.pinned_targets) coveredKeys.add(`${t.artifactId} ${t.representationRevisionId}`);
+    }
+    expect(coveredKeys.size).toBe(N);
+    for (const e of events) {
+      expect(coveredKeys.has(`${e.artifactId} ${e.representationRevisionId}`)).toBe(true);
+    }
+
+    // Every member event is processed AND linked to one of the three partition
+    // gates (the effects-gating join).
+    const gateIds = new Set(gates.map((g) => g.id));
+    for (const e of events) {
+      const row = await readEventRow(e.eventId);
+      expect(row?.status).toBe("processed");
+      expect(row?.continuation_address).not.toBeNull();
+      expect(gateIds.has(row!.continuation_address!)).toBe(true);
+    }
+
+    // Replay: re-emit every event + re-sweep → NO new gate (idempotent on the
+    // deterministic partition task id + the already-processed events).
+    for (const e of events) await outboxStore.emitArtifactProduced(e, dbMod.db);
+    const replay = await orch.sweepReviewOrchestration({ limit: 200 });
+    expect(replay.gatesCreated).toBe(0);
+    expect(replay.batchesCoalesced).toBe(0);
+    const gateCountAfter = await pool(
+      `SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id = $1`,
+      [runId],
+    );
+    expect((gateCountAfter.rows[0] as { n: number }).n).toBe(partitions.length);
+
+    // Before any decision EVERY member's external effect is HELD by its (pending)
+    // partition gate.
+    for (const e of events) {
+      const v = await orch.isArtifactEffectHeld({
+        artifactId: e.artifactId,
+        representationRevisionId: e.representationRevisionId,
+      });
+      expect(v.held).toBe(true);
+    }
+
+    // SINGLE AGGREGATE COMMIT: resolving ONE partition gate releases exactly its
+    // members' effects in one shot; the OTHER partitions' effects stay held.
+    const first = gates[0];
+    const firstKeys = new Set(
+      first.pinned_targets.map((t) => `${t.artifactId} ${t.representationRevisionId}`),
+    );
+    await resolveGate(first.id);
+    for (const e of events) {
+      const key = `${e.artifactId} ${e.representationRevisionId}`;
+      const v = await orch.isArtifactEffectHeld({
+        artifactId: e.artifactId,
+        representationRevisionId: e.representationRevisionId,
+      });
+      // A member of the resolved partition is RELEASED; a member of a still-pending
+      // partition stays HELD — the aggregate commit is per-partition-atomic.
+      expect(v.held).toBe(firstKeys.has(key) ? false : true);
+    }
+  });
+
+  it("BATCH: a >50 CHECKPOINTED production seals COMPLETELY even at limit=1 (per-production budget), and parks every member", async () => {
+    // 55 checkpointed revisions from ONE run. The pass budget is PRODUCTIONS, not
+    // raw events: even limit=1 fetches this production's COMPLETE pending membership
+    // (55) and seals it whole → deterministic ⌈55/50⌉ = 2 partitions (50, 5). This
+    // is the property that makes the seal independent of the fetch window.
+    const runId = `run-cp-batch-${randomUUID()}`;
+    const N = 55;
+    const events: ArtifactProducedEvent[] = [];
+    for (let i = 0; i < N; i++) {
+      events.push(await produce("document", { producerRunId: runId, continuationMode: "checkpointed" }));
+    }
+
+    const summary = await orch.sweepReviewOrchestration({ limit: 1 });
+    expect(summary.batchesCoalesced).toBe(1);
+    expect(summary.gatesCreated).toBe(2); // 50 + 5
+
+    // Every member PARKS on its partition gate (the checkpointed continuation) and
+    // is linked — proving park precedes the atomic link.
+    for (const e of events) {
+      const row = await readEventRow(e.eventId);
+      expect(row?.status).toBe("processed");
+      expect(row?.continuation_address).not.toBeNull();
+      const parked = await pool(
+        `SELECT status, policy_decision_id FROM "${q(TEST_SCHEMA)}"."lifecycle_continuation_park" WHERE run_id=$1 AND event_id=$2 AND checkpoint='review'`,
+        [runId, e.eventId],
+      );
+      const p = parked.rows[0] as { status: string; policy_decision_id: string | null } | undefined;
+      expect(p?.status).toBe("parked");
+      // The park's policyDecisionId is the SAME gate the event is linked to.
+      expect(p?.policy_decision_id).toBe(row!.continuation_address);
+    }
+
+    // The two partition gates cover exactly the 55 distinct targets.
+    const gateRows = await pool(
+      `SELECT id, pinned_targets FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id=$1`,
+      [runId],
+    );
+    const gates = gateRows.rows as Array<{ id: string; pinned_targets: Array<{ artifactId: string }> }>;
+    expect(gates.length).toBe(2);
+    const total = gates.reduce((n, g) => n + g.pinned_targets.length, 0);
+    expect(total).toBe(N);
   });
 
   it("FENCE: every drain is a NO-OP when the S1 activation fence is off", async () => {
