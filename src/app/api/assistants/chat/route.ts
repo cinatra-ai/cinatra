@@ -43,7 +43,7 @@ import { randomUUID } from "node:crypto";
 // runtime (`runChatTurn` — the #1037 P2 producer) through the shared AG-UI
 // streaming harness (`streamAgUiChatTurn`) — the durable Redis-Streams log
 // substrate, turn linkage, TOCTOU-safe thread binding, abort lifecycle, and
-// resume window all live in the harness so the @chatgpt bridge endpoint reuses
+// resume window all live in the harness so any additional AG-UI producer reuses
 // them verbatim (cinatra#1218 predecessor 3). This route owns exactly the
 // producer choice + the validation/auth posture; behavior is byte-identical to
 // before the extraction (the harness is the same code).

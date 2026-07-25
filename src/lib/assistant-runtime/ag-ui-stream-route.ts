@@ -22,13 +22,12 @@ import { WIDGET_CHAT_RESUME_TOKEN_HEADER } from "@/lib/widget-chat-resume-token"
 // Shared AG-UI chat-turn streaming harness (cinatra#1218, epic #1216 S2 —
 // predecessor 3 of the delete stage).
 //
-// Extracted VERBATIM from POST /api/assistants/chat so a second AG-UI
-// consumer (the @chatgpt Codex bridge, POST /api/assistants/chatgpt) reuses
-// the exact durable-log substrate, turn linkage, TOCTOU-safe thread binding,
-// abort lifecycle, terminal-exactly-once guarantee, and resume window — rather
-// than duplicating that security-critical machinery. The ONLY per-producer
-// difference is the `runProducer` callback: the Cinatra endpoint drives
-// `runChatTurn`; the @chatgpt endpoint drives the Codex bridge. Both emit the
+// Extracted VERBATIM from POST /api/assistants/chat as a producer-AGNOSTIC
+// substrate: any AG-UI producer reuses the exact durable-log substrate, turn
+// linkage, TOCTOU-safe thread binding, abort lifecycle, terminal-exactly-once
+// guarantee, and resume window — rather than duplicating that security-critical
+// machinery. The ONLY per-producer difference is the `runProducer` callback: the
+// Cinatra endpoint (the sole in-tree consumer) drives `runChatTurn`, emitting the
 // bespoke sink vocabulary that `createAgUiSinkAdapter` maps onto AG-UI events.
 //
 // The existing `/api/assistants/chat` route tests are the extraction-parity
@@ -37,9 +36,9 @@ import { WIDGET_CHAT_RESUME_TOKEN_HEADER } from "@/lib/widget-chat-resume-token"
 //
 // The caller owns validation + authentication + authorization BEFORE invoking
 // this harness (parse the request once; this harness uses `request` only for
-// cancellation/lifecycle). The `@chatgpt` caller additionally enforces the
-// same-origin + operator-authorization + strict-audit ordering the legacy
-// bespoke route did, all before the body is even read.
+// cancellation/lifecycle). A producer with stricter posture requirements
+// enforces its own same-origin + authorization + audit ordering before the
+// body is even read.
 // ---------------------------------------------------------------------------
 
 const KEEPALIVE_MS = 15_000;
@@ -61,7 +60,7 @@ export type ThreadAuthorization =
 /** Authorize the caller against the thread's PERSISTED ownership axes (the
  *  POST /api/chat/save matrix), never against request-body claims. Shared by
  *  every AG-UI chat producer so the authorization posture cannot drift between
- *  the Cinatra and @chatgpt endpoints. */
+ *  endpoints. */
 export function authorizeThreadForTurn(params: {
   threadId: string;
   callerId: string;
