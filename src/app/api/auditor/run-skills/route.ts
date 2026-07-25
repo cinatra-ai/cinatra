@@ -5,7 +5,7 @@ import "server-only";
 //
 // Two modes driven by the `phase` field:
 //   "resolve" — hybrid skill resolution. If input.skillIds is a
-//               non-empty array (the skill-recommendation HITL's confirmed
+//               non-empty array (a HITL gate's confirmed
 //               selection), returns it verbatim. Otherwise calls
 //               skills_installed_resolve_for_agent with parentPackageName
 //               (the agent's own installed + matched skills).

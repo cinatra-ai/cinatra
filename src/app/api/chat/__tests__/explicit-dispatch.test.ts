@@ -26,10 +26,10 @@ describe("detectExplicitDispatchPackage — chat-mcp fixture prompts", () => {
     expect(
       detectExplicitDispatchPackage(
         u(
-          "Run @cinatra-ai/skill-recommender-agent so I can confirm which installed skills apply to the next step",
+          "Run @cinatra-ai/web-research-agent so I can pull background on the next account",
         ),
       ),
-    ).toBe("@cinatra-ai/skill-recommender-agent");
+    ).toBe("@cinatra-ai/web-research-agent");
   });
 
   it("legacy 'Invoke the cinatra_<slug> tool' → maps to @cinatra-ai/<slug>", () => {

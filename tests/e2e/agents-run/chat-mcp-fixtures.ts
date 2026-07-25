@@ -53,13 +53,6 @@ const REVIEW_OAS_JSON =
 export const CHAT_MCP_FIXTURES: ReadonlyArray<ChatMcpFixture> = [
   // -- HITL-bearing visible agents (Track A + Track B parity) --
   {
-    packageName: "@cinatra-ai/skill-recommender-agent",
-    prompt:
-      "Run @cinatra-ai/skill-recommender-agent so I can confirm which installed skills apply to the next step",
-    agentFixture: fixtureFor("@cinatra-ai/skill-recommender-agent"),
-    runTimeoutMs: 1_200_000,
-  },
-  {
     packageName: "@cinatra-ai/trigger-agent",
     // Explicit tool name nudge — `cinatra_trigger-agent` is registered as a
     // function tool, but the LLM sometimes prefers `agent_run_trigger_set`

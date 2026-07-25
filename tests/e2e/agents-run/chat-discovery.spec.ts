@@ -48,7 +48,7 @@ type DiscoveryFixture = {
  *  description optimization. */
 const DISCOVERY_FIXTURES: ReadonlyArray<DiscoveryFixture> = [
   // Standalone discovery probes. An earlier set used mid-flow agents
-  // (trigger/skill-recommender/reviewer/auditor) that correctly need
+  // (trigger/reviewer/auditor) that correctly need
   // upstream context and can never be discovered from a single standalone
   // chat turn. These are truly-standalone agents whose human display name
   // is unambiguous, so the LLM can resolve display-name

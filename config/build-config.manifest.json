@@ -441,7 +441,6 @@
     { "alias": "@cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer", "target": "./extensions/cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer.tsx" },
     { "alias": "@cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review", "target": "./extensions/cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review.tsx" },
     { "alias": "@cinatra-ai/blog-wordpress-publish-agent/src/renderers/draft-confirm", "target": "./extensions/cinatra-ai/blog-wordpress-publish-agent/src/renderers/draft-confirm.tsx" },
-    { "alias": "@cinatra-ai/skill-recommender-agent/src/skill-recommender-renderer", "target": "./extensions/cinatra-ai/skill-recommender-agent/src/skill-recommender-renderer.tsx" },
     { "alias": "@cinatra-ai/projects", "target": "./packages/projects/src/index.ts" },
     { "alias": "@cinatra-ai/projects/module", "target": "./packages/projects/src/integration/module.ts" },
     { "alias": "@cinatra-ai/projects/mcp-handlers", "target": "./packages/projects/src/mcp/handlers.ts" },

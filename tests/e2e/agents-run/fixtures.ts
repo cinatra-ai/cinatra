@@ -9,7 +9,7 @@
  * exactly which package(s) changed.
  *
  * Classification:
- *  - LIVE-RUNNABLE       (10): no external API key, no real outbound calls
+ *  - LIVE-RUNNABLE       (9):  no external API key, no real outbound calls
  *  - LIVE-WITH-OVERRIDE  (3):  exercises Gmail with the dev recipient
  *                             override at packages/connector-gmail/src/index.ts:312
  *  - DEFER-EXTERNAL      (3):  cannot complete without real LinkedIn/
@@ -69,7 +69,7 @@ export const CANONICAL_VISIBLE_PACKAGES: ReadonlyArray<{
   packageName: string;
   classification: AgentClassification;
 }> = [
-  // Direct HITL (14)
+  // Direct HITL (13)
   { packageName: "@cinatra-ai/auditor-agent", classification: "LIVE-RUNNABLE" },
   { packageName: "@cinatra-ai/blog-linkedin-publish-agent", classification: "DEFER-EXTERNAL" },
   { packageName: "@cinatra-ai/blog-wordpress-publish-agent", classification: "DEFER-EXTERNAL" },
@@ -80,7 +80,6 @@ export const CANONICAL_VISIBLE_PACKAGES: ReadonlyArray<{
   { packageName: "@cinatra-ai/email-recipient-selection-agent", classification: "LIVE-RUNNABLE" },
   { packageName: "@cinatra-ai/email-test-delivery-agent", classification: "LIVE-WITH-OVERRIDE" },
   { packageName: "@cinatra-ai/list-curator-agent", classification: "DEFER-EXTERNAL" },
-  { packageName: "@cinatra-ai/skill-recommender-agent", classification: "LIVE-RUNNABLE" },
   { packageName: "@cinatra-ai/trigger-agent", classification: "LIVE-RUNNABLE" },
   // Sub-agent descendants (1)
   { packageName: "@cinatra-ai/reviewer-agent", classification: "LIVE-RUNNABLE" },
@@ -149,9 +148,8 @@ export type AgentFixture = {
    *  visibly tagged as needing follow-up rather than appearing green. */
   harnessDeferred?: string;
   /** Object-persistence assertions to apply after terminal status.
-   *  Empty/undefined means the agent doesn't persist objects (e.g.
-   *  skill-recommender-agent — pure HITL confirmation, no `objects_save`
-   *  calls). */
+   *  Empty/undefined means the agent doesn't persist objects (e.g. a
+   *  pure HITL-confirmation agent with no `objects_save` calls). */
   expectedOutputs?: ReadonlyArray<ExpectedOutput>;
   /**
    * Optional pre-run seed step for fixtures whose StartNode has
@@ -173,30 +171,6 @@ export type AgentFixture = {
  * Sample fixtures. Confirmed against OAS source 2026-05-13.
  */
 export const AGENT_FIXTURES: ReadonlyArray<AgentFixture> = [
-  {
-    packageName: "@cinatra-ai/skill-recommender-agent",
-    vendor: "cinatra-ai",
-    slug: "skill-recommender-agent",
-    classification: "LIVE-RUNNABLE",
-    startInputs: {},
-    hitlScreens: [
-      {
-        kind: "custom-renderer",
-        xRenderer: "@cinatra-ai/skill-recommender-agent:recommend",
-        expectedTitle: "Review skills",
-        action: { confirmed: true },
-        primaryButtonText: "Continue",
-      },
-    ],
-    expectedTerminalStatus: "completed",
-    // The prior 60_000 budget was too tight vs startAgentRun's documented
-    // 120_000 Turbopack cold-compile waitForURL budget (the test aborted
-    // before waitForURL's own deadline). Aligned to the LIVE-agent norm
-    // so cold-start + real LLM + 1 HITL fits. Not masking a regression:
-    // the run dispatches; this was a fixture-budget bug surfaced by cold
-    // .next startup.
-    runTimeoutMs: 300_000,
-  },
   {
     packageName: "@cinatra-ai/trigger-agent",
     vendor: "cinatra-ai",

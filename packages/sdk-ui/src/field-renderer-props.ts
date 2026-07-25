@@ -135,8 +135,8 @@ export type FieldRendererProps = {
    * declaration with a `params` object, the registration wrapper injects it
    * here verbatim. PUBLIC renderer metadata only (it crosses the server ->
    * client boundary and is validated, size-capped plain JSON) — never
-   * secrets. Renderers that take per-binding configuration (e.g. the
-   * skill-recommend renderer's target package) read it from this prop and
+   * secrets. Renderers that take per-binding configuration read it from this
+   * prop and
    * MUST degrade gracefully when absent/malformed.
    */
   bindingParams?: Readonly<Record<string, unknown>>;
