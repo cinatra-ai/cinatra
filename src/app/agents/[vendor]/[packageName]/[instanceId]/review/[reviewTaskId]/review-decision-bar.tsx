@@ -21,7 +21,7 @@ export type SubmitReviewDecisionAction = (input: {
 }) => Promise<ReviewSubmitOutcome>;
 
 /**
- * The host DECISION BAR (cinatra#1795 S12 item 4; spec design@30a0f9c9 §IV/§V):
+ * The host DECISION BAR (cinatra#1795 S12 item 4; spec design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891 §IV/§V):
  * one bar at the foot of the gate governing EVERY target under it. Exactly three
  * affordances — Approve (primary, terminal), Reject (destructive, terminal),
  * Comment (ghost, non-terminal annotation) — plus one optional rationale field.

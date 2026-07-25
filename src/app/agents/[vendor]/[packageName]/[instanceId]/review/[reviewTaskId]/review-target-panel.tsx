@@ -14,14 +14,14 @@ import {
 } from "@/lib/artifacts/review-surface-model";
 
 /**
- * ONE review target panel (cinatra#1795 S12 item 4; spec design@30a0f9c9 §II/§III):
+ * ONE review target panel (cinatra#1795 S12 item 4; spec design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891 §II/§III):
  * the immutable target HEADER (display title + a mono meta line, inert — no edit
  * control, no revision picker, because the target is versioned and frozen) over
  * the RENDERER-PROVENANCE chip, over the REPRESENTATION SLOT into which the
  * artifact's type renderer mounts (fed host display-only props). Every target is
  * type-agnostic: it keys on the OPAQUE host mount kind only (G1-clean).
  *
- * Conformance anchors (design@30a0f9c9): the panel is `review-target`; the
+ * Conformance anchors (design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891): the panel is `review-target`; the
  * provenance region is `review-provenance-native` (build-time), `review-
  * provenance-marketplace` (runtime), or `review-target-floor` (any floor) — the
  * §III axis derived from the mount kind.
