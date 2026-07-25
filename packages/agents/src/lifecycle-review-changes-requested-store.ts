@@ -45,13 +45,16 @@ import { readProducedEvent } from "./lifecycle-produced-outbox-store";
 import {
   recordChangesRequested,
   readRepair,
+  readRepairBySuccessorGateId,
   type RecordChangesRequestedResult,
 } from "./lifecycle-repair-store";
 
 import {
   isAutoReviewTaskId,
   isRepairSuccessorTaskId,
+  isVerificationReopenTaskId,
   REPAIR_SUCCESSOR_TASK_PREFIX,
+  VERIFICATION_REOPEN_TASK_PREFIX,
 } from "@/lib/lifecycle/lifecycle-orchestration";
 import { producedEventId, type ContinuationMode } from "@/lib/lifecycle/lifecycle-produced-event";
 import type { ChangesRequestedRequest, RepairFinding } from "@/lib/lifecycle/lifecycle-repair";
@@ -122,13 +125,32 @@ async function resolveRepairCapable(producerRunId: string | null): Promise<boole
  * successor. For a first-round auto gate this is undefined (the entry point
  * defaults the lineage to the base gate id). */
 async function resolveLineageId(reviewTaskId: string): Promise<string | undefined> {
-  if (!isRepairSuccessorTaskId(reviewTaskId)) return undefined;
-  // `repairSuccessorReviewTaskId` = `${PREFIX}${repairId}:${attempt}`; repairId is a
-  // UUID (no colon), so the first segment after the prefix is the repair id.
-  const repairId = reviewTaskId.slice(REPAIR_SUCCESSOR_TASK_PREFIX.length).split(":")[0];
-  if (!repairId) return undefined;
-  const repair = await readRepair(repairId);
-  return repair?.lineageId ?? undefined;
+  if (isRepairSuccessorTaskId(reviewTaskId)) {
+    // `repairSuccessorReviewTaskId` = `${PREFIX}${repairId}:${attempt}`; repairId is a
+    // UUID (no colon), so the first segment after the prefix is the repair id.
+    const repairId = reviewTaskId.slice(REPAIR_SUCCESSOR_TASK_PREFIX.length).split(":")[0];
+    if (!repairId) return undefined;
+    const repair = await readRepair(repairId);
+    return repair?.lineageId ?? undefined;
+  }
+  // A post-change VERIFICATION-REOPEN gate (cinatra#2042): a FAILED verification of
+  // a repaired revision reopened this gate. A changes_requested on it must thread the
+  // ORIGINAL repair lineage so the cycle bound counts the verify→reopen→repair loop —
+  // otherwise the bound RESETS to attempt 1 and the loop is unbounded. The reopen
+  // task encodes the verification id `verify:<successorGateId>`; the repair whose
+  // successor gate that is carries the lineage. (An external-change verification has
+  // no repair successor ⇒ undefined ⇒ a fresh lineage, which is correct: a
+  // human-driven external change is not an automated repair cycle.)
+  if (isVerificationReopenTaskId(reviewTaskId)) {
+    const verificationId = reviewTaskId.slice(VERIFICATION_REOPEN_TASK_PREFIX.length);
+    const successorGateId = verificationId.startsWith("verify:")
+      ? verificationId.slice("verify:".length)
+      : verificationId;
+    if (!successorGateId) return undefined;
+    const repair = await readRepairBySuccessorGateId(successorGateId);
+    return repair?.lineageId ?? undefined;
+  }
+  return undefined;
 }
 
 /**

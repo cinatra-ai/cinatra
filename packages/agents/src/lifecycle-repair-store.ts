@@ -381,8 +381,19 @@ export async function submitRepairResponse(
     .limit(1);
   if (!repair) return { ok: false, code: "not-found", error: "repair not found" };
 
-  // Idempotent success: already repaired → return the pinned successor gate.
+  // Idempotent success: already repaired → return the pinned successor gate. RE-RUN
+  // the (fully idempotent) verification trigger here too (cinatra#2042): if a crash
+  // landed the successor but the verification record/reopen never wrote — or wrote
+  // the record but not the reopen gate — a retry of the repair response now heals it
+  // (the record insert is onConflictDoNothing and the reopen emit is idempotent on
+  // run+task). Best-effort: it never fails the (already-committed) repair.
   if (repair.status === "repaired" && repair.successorGateId) {
+    try {
+      const { triggerVerificationForLandedRepair } = await import("./lifecycle-verification-store");
+      await triggerVerificationForLandedRepair({ repairId: repair.id, orgId: repair.orgId });
+    } catch {
+      /* swallowed — verification is an annotation, never a repair-blocking dependency. */
+    }
     return {
       ok: true,
       successorGateId: repair.successorGateId,
@@ -502,6 +513,18 @@ export async function submitRepairResponse(
     return { ok: false, code: "concurrent-finalize", error: "the repair was finalized concurrently" };
   }
 
+  // S4 (cinatra#2042): a landed repair TRIGGERS post-change verification — the
+  // before/after "Core analysis" record the run rail opens, and (on a failed
+  // verdict, within the cycle bound) exactly one reopened bounded gate on the same
+  // run. BEST-EFFORT: a verification error never fails the (already-committed)
+  // repair; the successor gate stands regardless.
+  try {
+    const { triggerVerificationForLandedRepair } = await import("./lifecycle-verification-store");
+    await triggerVerificationForLandedRepair({ repairId: repair.id, orgId: repair.orgId });
+  } catch {
+    // swallowed — verification is an annotation, never a repair-blocking dependency.
+  }
+
   return { ok: true, successorGateId, successorTaskId };
 }
 
@@ -537,6 +560,20 @@ export interface RepairRow {
 
 export async function readRepair(repairId: string): Promise<RepairRow | null> {
   const [r] = await db.select().from(lifecycleRepair).where(eq(lifecycleRepair.id, repairId)).limit(1);
+  if (!r) return null;
+  return toRepairRow(r);
+}
+
+/** Recover the repair whose SUCCESSOR gate is `gateId` — the anchor a post-change
+ * verification-reopen gate uses to thread the ORIGINAL repair lineage (so the cycle
+ * bound counts the verify→reopen→repair loop, cinatra#2042). Null for a gate that is
+ * not a repair successor (e.g. an external-change verification). */
+export async function readRepairBySuccessorGateId(gateId: string): Promise<RepairRow | null> {
+  const [r] = await db
+    .select()
+    .from(lifecycleRepair)
+    .where(eq(lifecycleRepair.successorGateId, gateId))
+    .limit(1);
   if (!r) return null;
   return toRepairRow(r);
 }

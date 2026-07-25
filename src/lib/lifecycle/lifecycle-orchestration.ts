@@ -69,9 +69,16 @@ export function isAutoReviewTaskId(reviewTaskId: string): boolean {
  * below) encodes no single event id, so it returns null: the store re-derives a
  * batch gate's requiredness from its PINNED target set, not from one event. */
 export function autoReviewEventId(reviewTaskId: string): string | null {
-  // A BATCH partition gate or an S2 REPAIR-SUCCESSOR gate encodes no single event
-  // id; the store re-derives their requiredness from the PINNED target set.
-  if (isBatchAutoReviewTaskId(reviewTaskId) || isRepairSuccessorTaskId(reviewTaskId)) return null;
+  // A BATCH partition gate, an S2 REPAIR-SUCCESSOR gate, or an S4 VERIFICATION-
+  // REOPEN gate encodes no single event id; the store re-derives their requiredness
+  // from the PINNED target set.
+  if (
+    isBatchAutoReviewTaskId(reviewTaskId) ||
+    isRepairSuccessorTaskId(reviewTaskId) ||
+    isVerificationReopenTaskId(reviewTaskId)
+  ) {
+    return null;
+  }
   return isAutoReviewTaskId(reviewTaskId)
     ? reviewTaskId.slice(AUTO_REVIEW_TASK_PREFIX.length)
     : null;
@@ -100,6 +107,31 @@ export function repairSuccessorReviewTaskId(repairId: string, attempt: number): 
 /** Whether a `reviewTaskId` names an S2 repair-successor gate. */
 export function isRepairSuccessorTaskId(reviewTaskId: string): boolean {
   return reviewTaskId.startsWith(REPAIR_SUCCESSOR_TASK_PREFIX);
+}
+
+// ---------------------------------------------------------------------------
+// S4 (cinatra#2042) — post-change verification-reopen gate ids.
+// ---------------------------------------------------------------------------
+
+/** The prefix a VERIFICATION-REOPEN gate's `reviewTaskId` carries — the ONE bounded
+ * gate a FAILED post-change verification reopens on the same run (S4, epic spine
+ * item 5). A superset of `AUTO_REVIEW_TASK_PREFIX` so `isAutoReviewTaskId`
+ * recognizes it (the expiry drain reasons over it; the resume-delivery worker skips
+ * it, being non-`wayflow-`), and DISJOINT from the repair-successor + batch
+ * prefixes. It re-derives the repaired target's requiredness from the PINNED set. */
+export const VERIFICATION_REOPEN_TASK_PREFIX = `${AUTO_REVIEW_TASK_PREFIX}verify:`;
+
+/** Derive the verification-reopen gate's `reviewTaskId` from the verification
+ * record id. Deterministic + injective, so a re-driven verification of the SAME
+ * repair re-derives the identical reopen gate (idempotent on `(run, task)`) — a
+ * failed verification reopens EXACTLY ONE bounded gate, never a fresh one per drive. */
+export function verificationReopenReviewTaskId(verificationId: string): string {
+  return `${VERIFICATION_REOPEN_TASK_PREFIX}${verificationId}`;
+}
+
+/** Whether a `reviewTaskId` names an S4 verification-reopen gate. */
+export function isVerificationReopenTaskId(reviewTaskId: string): boolean {
+  return reviewTaskId.startsWith(VERIFICATION_REOPEN_TASK_PREFIX);
 }
 
 // ---------------------------------------------------------------------------

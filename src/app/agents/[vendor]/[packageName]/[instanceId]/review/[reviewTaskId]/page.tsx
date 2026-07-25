@@ -33,6 +33,12 @@ import { ClipboardCheck, Lock } from "lucide-react";
 
 import { readAgentRunById, readAgentTemplateById } from "@cinatra-ai/agents/store";
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "@cinatra-ai/agents/run-stepper-steps";
+import {
+  readReviewGate,
+  readAdvisoryCommentsForGates,
+  enforceReviewRunAccess,
+} from "@cinatra-ai/agents/artifact-review-gate-store";
+import { readVerificationRecordForGate } from "@cinatra-ai/agents/lifecycle-verification-store";
 
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
@@ -50,6 +56,7 @@ import { ReviewDecisionBar } from "./review-decision-bar";
 import { ReviewGateBlocked, ReviewGateLoading } from "./review-gate-states";
 import { ReviewRunSteps, type ReviewRunStep } from "./review-run-steps";
 import { ReviewPromptWindow } from "./review-prompt-window";
+import { VerificationView } from "./verification-view";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +67,7 @@ type PageProps = {
     instanceId: string;
     reviewTaskId: string;
   }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 /**
@@ -93,16 +101,58 @@ async function loadRunStepsContext(
   return { steps, activeStep: reviewIndex, templateId };
 }
 
-export default async function AgentRunReviewPage({ params }: PageProps) {
-  const { instanceId: rawInstanceId, reviewTaskId: rawTaskId } = await params;
+export default async function AgentRunReviewPage({ params, searchParams }: PageProps) {
+  const { vendor, packageName, instanceId: rawInstanceId, reviewTaskId: rawTaskId } = await params;
   // The run instance id IS the review's run id (the review lives under the run).
   const runId = decodeURIComponent(rawInstanceId);
   const reviewTaskId = decodeURIComponent(rawTaskId);
+  const sp = (await searchParams) ?? {};
+  const isVerificationView = sp.view === "verification";
 
   const session = await getAuthSession();
   if (!session) redirect("/sign-in");
   const actorCtx = await resolveReviewActorContext();
   if (!actorCtx) redirect("/sign-in");
+
+  // S4 (cinatra#2042): the run rail's "Core analysis" entry deep-links here with
+  // `?view=verification` — the before/after field diff of a repaired revision. It
+  // is READ-ONLY and works for a resolved gate (unlike the pending-gate decision
+  // surface), so it enforces run READ access directly rather than through the
+  // pending-gate surface loader.
+  if (isVerificationView) {
+    const access = await enforceReviewRunAccess(runId, actorCtx.actor, "read", actorCtx.roleHints);
+    if (!access.ok) return <ReviewNotAuthorizedPanel />;
+    const gate = await readReviewGate(runId, reviewTaskId);
+    if (!gate) {
+      return (
+        <ReviewShell>
+          <ReviewGateBlocked reason="no-longer-pending" />
+        </ReviewShell>
+      );
+    }
+    const [record, advisory] = await Promise.all([
+      readVerificationRecordForGate(gate.id),
+      readAdvisoryCommentsForGates([gate.id]),
+    ]);
+    const backHref = `/agents/${vendor}/${packageName}/${encodeURIComponent(runId)}/review/${encodeURIComponent(reviewTaskId)}`;
+    return (
+      <ReviewShell>
+        {record ? (
+          <VerificationView
+            outcome={record.outcome}
+            reviewedRevisionId={record.reviewedTarget.representationRevisionId}
+            repairedRevisionId={record.repairedTarget.representationRevisionId}
+            fieldDiff={record.fieldDiff}
+            scopePaths={record.scopeManifest.paths}
+            advisoryComments={advisory.map((c) => ({ id: c.id, authorKind: c.authorKind, body: c.body }))}
+            gateHref={backHref}
+          />
+        ) : (
+          <ReviewGateBlocked reason="no-longer-pending" />
+        )}
+      </ReviewShell>
+    );
+  }
 
   const surface = await loadReviewGateSurface({ runId, reviewTaskId, actorCtx });
 

@@ -36,6 +36,18 @@ const DECISION_BAR = routeFile("review-decision-bar.tsx");
 const GATE_STATES = routeFile("review-gate-states.tsx");
 const ACTIONS = routeFile("actions.ts");
 
+// ── Run-embedded render sites (design@5e5c53aff §I–III) ──────────────────────
+// The run-embedded anchors live OUTSIDE the review-route chrome: the run surface +
+// left rail + chip-row (packages/agents), the notification builder (src/lib), and
+// the review route's prompt window. REPO_ROOT is one above SRC_ROOT.
+const REPO_ROOT = path.resolve(SRC_ROOT, "..");
+const readRepo = (rel: string) => read(path.join(REPO_ROOT, rel));
+const RUN_SURFACE = readRepo("packages/agents/src/instance-screens.tsx");
+const RUN_STEP_RAIL = readRepo("packages/agents/src/run-step-rail-panel.tsx");
+const RUN_CHIP_ROW = readRepo("packages/agents/src/run-recommendation-chip-row.tsx");
+const RUN_GATE_NOTIFICATION = readRepo("src/lib/agent-run-wait-notifications.ts");
+const REVIEW_PROMPT_WINDOW = routeFile("review-prompt-window.tsx");
+
 /** Every source file that renders route chrome — the render→spec corpus. */
 const CHROME_SOURCES = [PAGE, TARGET_PANEL, DECISION_BAR, GATE_STATES];
 
@@ -280,6 +292,79 @@ describe("§IV — LIFECYCLE prompt-window wiring (owner ruling 2026-07-25, cina
     // the 'stays open' notice are untouched (the fence-off / non-lifecycle path).
     expect(MODEL).toMatch(/disposition === "comment"[\s\S]*?return \{ kind: "annotated" \}/);
     expect(DECISION_BAR).toMatch(/Comment recorded\. The gate stays open/);
+  });
+});
+
+describe("§I–III — run-embedded anchors: the revised spec's closed set is rendered bidirectionally", () => {
+  // The run-embedded surface (design@5e5c53aff) added five anchors beyond
+  // the review-route chrome. This block asserts the CLOSED set of run-embedded
+  // anchors bidirectionally: every spec anchor has a render site, and each render
+  // site carries only spec anchors. `run-gate-notification` has NO DOM home (it is
+  // a notification) — it is asserted BEHAVIORALLY against its builder.
+  const RUN_EMBEDDED_DOM_ANCHORS: Record<string, string> = {
+    "run-surface": RUN_SURFACE,
+    "run-step-rail": RUN_STEP_RAIL,
+    "run-chip-row": RUN_CHIP_ROW,
+    "review-prompt-window": REVIEW_PROMPT_WINDOW,
+  };
+
+  for (const [id, src] of Object.entries(RUN_EMBEDDED_DOM_ANCHORS)) {
+    it(`spec→render: the "${id}" anchor is rendered at its run-embedded site`, () => {
+      expect(src.includes(`data-conformance-id="${id}"`)).toBe(true);
+    });
+  }
+
+  it('spec→render: the run rail carries the "open-run-step -> step-detail" action (spec §I)', () => {
+    expect(RUN_STEP_RAIL).toMatch(/data-action="open-run-step -> step-detail"/);
+  });
+
+  it('spec→render: the run-start chip-row carries the "confirm-skill -> confirmed" action (spec §II)', () => {
+    expect(RUN_CHIP_ROW).toMatch(/data-action="confirm-skill -> confirmed"/);
+  });
+
+  it('spec→render: the prompt window carries "request-changes -> changes-requested" — the typed request IS how changes are requested (spec §VI)', () => {
+    expect(REVIEW_PROMPT_WINDOW).toMatch(/data-action="request-changes -> changes-requested"/);
+    // And it adds NO fourth decision affordance — the request rides the Comment path.
+    expect(stripComments(REVIEW_PROMPT_WINDOW)).not.toMatch(/request changes<|>Request changes/i);
+  });
+
+  it('spec→render: run-gate-notification is asserted behaviorally — a pending auto-gate deep-links to the RUN, never a detached page (spec §I)', () => {
+    // No DOM anchor — the builder threads an href to the run view + tags the
+    // run-awaiting-human category, deep-linking straight to the gate inside the run.
+    expect(RUN_GATE_NOTIFICATION).toMatch(/RUN_GATE_NOTIFICATION_CONFORMANCE_ID = "run-gate-notification"/);
+    expect(RUN_GATE_NOTIFICATION).toMatch(/buildAutoGateOpenNotificationInput/);
+    expect(RUN_GATE_NOTIFICATION).toMatch(/input\.href \? \{ href: input\.href \}/);
+    expect(RUN_GATE_NOTIFICATION).toMatch(/runAwaitingHuman: \{ runId: input\.runId/);
+  });
+
+  it("render→spec: every run-embedded render site carries ONLY anchors in the revised spec's closed set (no invented affordance)", () => {
+    // The full closed set the spec annotates at design@5e5c53aff (review-route
+    // anchors + the five run-embedded anchors + the documented host-standard panel).
+    const RUN_EMBEDDED_IDS = ["run-surface", "run-step-rail", "run-chip-row", "run-gate-notification", "review-prompt-window"];
+    const closed = new Set<string>([...SPEC_IDS, ...RUN_EMBEDDED_IDS, ...HOST_STANDARD_IDS]);
+    for (const src of [RUN_SURFACE, RUN_STEP_RAIL, RUN_CHIP_ROW, REVIEW_PROMPT_WINDOW]) {
+      for (const foundId of conformanceIdsIn(src)) {
+        expect(closed.has(foundId)).toBe(true);
+      }
+    }
+  });
+
+  it("CHIP-ROW PLACEMENT NUANCE (reported for a spec touch-up): the spec places run-chip-row at the trigger-gate HEAD of the rail; the ship renders it in the run detail with the rail SUPPRESSED pre-execution (#2067's pre-execution hold), so the anchor is asserted on the CARD", () => {
+    // The chip-row anchor is on the chip-row card (its real render home), NOT woven
+    // into the rail at run-start — a not-yet-started run shows no rail. This is the
+    // brief's fallback option: assert the anchor at its real placement + report the
+    // spec nuance rather than silently drop it. The design pair (C3 chip placement)
+    // reconciles the rail-head presentation.
+    expect(RUN_CHIP_ROW).toMatch(/data-conformance-id="run-chip-row"/);
+    // The rail is suppressed for a pending_input (run-start) run in the screen.
+    expect(RUN_SURFACE).toMatch(/run\.status !== "pending_input" && rail\.entries\.length > 0/);
+  });
+
+  it("the decision floor stays LOCKED at Approve/Reject/Comment — the run-embedded anchors add no fourth affordance", () => {
+    expect(DECISION_BAR).toMatch(/data-action="approve-review -> resolved"/);
+    expect(DECISION_BAR).toMatch(/data-action="reject-review -> resolved"/);
+    expect(DECISION_BAR).toMatch(/data-action="comment-review -> annotated"/);
+    expect(stripComments(DECISION_BAR)).not.toMatch(/request changes|request-changes/i);
   });
 });
 

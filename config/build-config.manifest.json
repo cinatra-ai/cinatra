@@ -77,6 +77,7 @@
     { "alias": "@cinatra-ai/agents/llm-provider-policy", "target": "./packages/agents/src/llm-provider-policy.ts" },
     { "alias": "@cinatra-ai/agents/store", "target": "./packages/agents/src/store.ts" },
     { "alias": "@cinatra-ai/agents/artifact-review-gate-store", "target": "./packages/agents/src/artifact-review-gate-store.ts" },
+    { "alias": "@cinatra-ai/agents/lifecycle-verification-store", "target": "./packages/agents/src/lifecycle-verification-store.ts" },
     { "alias": "@cinatra-ai/agents/lifecycle-review-changes-requested", "target": "./packages/agents/src/lifecycle-review-changes-requested-store.ts" },
     { "alias": "@cinatra-ai/agents/mcp-handlers", "target": "./packages/agents/src/mcp/handlers.ts" },
     { "alias": "@cinatra-ai/agents/integration/register-object-types", "target": "./packages/agents/src/integration/register-object-types.ts" },

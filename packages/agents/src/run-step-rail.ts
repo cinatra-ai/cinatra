@@ -47,8 +47,8 @@
 //   placement matches the review surface's synthetic trailing "Review" step).
 // ---------------------------------------------------------------------------
 
-/** Which of the four merge sources contributed to a rail entry. */
-export type RailSource = "template" | "submission" | "message" | "stepResult" | "gate";
+/** Which of the merge sources contributed to a rail entry. */
+export type RailSource = "template" | "submission" | "message" | "stepResult" | "gate" | "verification";
 
 /** A rail entry's lifecycle state, derived purely from the merged evidence. */
 export type RailStatus = "completed" | "pending" | "resolved" | "upcoming";
@@ -59,7 +59,7 @@ export interface RunStepRailEntry {
   key: string;
   /** Sort position (see ORDERING). */
   ordinal: number;
-  kind: "step" | "gate";
+  kind: "step" | "gate" | "verification";
   label: string;
   status: RailStatus;
   /** The union of contributing sources (sorted, stable). */
@@ -72,6 +72,15 @@ export interface RunStepRailEntry {
     disposition: string | null;
     /** resolved ⇒ read-only history; a completed gate submission replays inert. */
     resolved: boolean;
+  };
+  /** Present iff kind==="verification" (S4, cinatra#2042): the linkage the rail
+   * entry deep-links into the review surface's VERIFICATION view with, plus the
+   * verdict the "Core analysis" badge shows. */
+  verification?: {
+    gateId: string;
+    reviewTaskId: string;
+    /** verified | drifted | unmet — drives the rail badge. */
+    outcome: string;
   };
 }
 
@@ -112,12 +121,23 @@ export interface RailGate {
   createdAt: string | number | Date;
 }
 
+/** A post-change verification record, narrowed to what the rail reads (S4,
+ * cinatra#2042). Bound to a gate; deep-links to that gate's verification view. */
+export interface RailVerification {
+  gateId: string;
+  /** The gate's review task id — the deep-link handle. */
+  reviewTaskId: string;
+  outcome: string;
+}
+
 export interface BuildRunStepRailInput {
   templateSteps?: readonly RailTemplateStep[];
   submissions?: readonly RailSubmissionMarker[];
   messages?: readonly RailMessage[];
   stepResults?: readonly unknown[] | null;
   gates?: readonly RailGate[];
+  /** Verification records (S4) — woven in RIGHT AFTER the gate each annotates. */
+  verifications?: readonly RailVerification[];
 }
 
 export interface RunStepRail {
@@ -307,6 +327,36 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
       },
     );
   });
+
+  // (+) VERIFICATIONS (S4, cinatra#2042) — a post-change verification record is
+  //     woven in RIGHT AFTER the gate it annotates: it shares the gate's ordinal
+  //     and keys `verification:<reviewTaskId>` (which sorts after `gate:<…>` at the
+  //     same ordinal), so the "Core analysis" entry sits directly beneath its
+  //     Review entry. A verification is a produced, read-only record ⇒ completed.
+  //     A verification whose gate is not on the rail falls back to trailing.
+  const verifications = input.verifications ?? [];
+  for (const v of verifications) {
+    const gateEntry = byKey.get(`gate:${v.reviewTaskId}`);
+    let maxOrd = 0;
+    for (const { entry } of byKey.values()) maxOrd = Math.max(maxOrd, entry.ordinal);
+    const ordinal = gateEntry ? gateEntry.entry.ordinal : maxOrd + 1;
+    const key = `verification:${v.reviewTaskId}`;
+    upsert(
+      key,
+      () => ({
+        key,
+        ordinal,
+        kind: "verification",
+        label: "Core analysis",
+        status: "completed",
+        verification: { gateId: v.gateId, reviewTaskId: v.reviewTaskId, outcome: v.outcome },
+      }),
+      "verification",
+      (e) => {
+        e.verification = { gateId: v.gateId, reviewTaskId: v.reviewTaskId, outcome: v.outcome };
+      },
+    );
+  }
 
   // Finalize: attach sorted source unions, then total-order sort.
   const entries: RunStepRailEntry[] = [];

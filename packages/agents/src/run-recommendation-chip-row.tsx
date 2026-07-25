@@ -185,6 +185,8 @@ export function RunRecommendationChipRow({
   return (
     <div
       data-run-recommendation-chip-row=""
+      data-conformance-id="run-chip-row"
+      data-action="confirm-skill -> confirmed"
       data-variant={variant}
       className="flex flex-col gap-3 rounded-panel border border-line bg-surface p-4"
     >
