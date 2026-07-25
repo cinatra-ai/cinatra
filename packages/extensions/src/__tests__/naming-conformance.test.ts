@@ -243,6 +243,17 @@ function isAllowedDirShapeForKind(dirBasename: string, kind: Kind, packageName: 
   if (kind === "artifact") {
     return dirBasename.endsWith("-artifact") || dirBasename.endsWith("-artifacts");
   }
+  // Agent kind accepts BOTH the classic `-agent` suffix (compiled-plan / OAS
+  // agents) AND the `-assistant` suffix (assistant-kind agents — the
+  // conversational assistant packages declared via cinatra/config.json's
+  // `assistant` block, epic #1873 W6/W7: @cinatra-ai/{cinatra,claude,drupal,
+  // gemini,openai,wordpress}-assistant). Both are `kind: "agent"` extensions;
+  // the `-assistant` slug is the established naming convention for the
+  // assistant form. `-assistant` does not end with `-agent`, so it needs an
+  // explicit branch (same shape as the artifact singular/plural carve-out).
+  if (kind === "agent") {
+    return dirBasename.endsWith("-agent") || dirBasename.endsWith("-assistant");
+  }
   const suffix = dirSuffixForKind(kind);
   return dirBasename.endsWith(suffix);
 }
@@ -329,7 +340,12 @@ function evaluateAllRules(ext: ExtensionPackage, opts: { skipTopologyForGrandfat
     if (opts.skipTopologyForGrandfathered && inGrandfather) {
       // grandfathered — exclude from results
     } else {
-      const slug = parsed.slug.replace(/-agent$/, "");
+      // Strip the agent-kind dir suffix (`-agent` OR the assistant form
+      // `-assistant`) BEFORE the topology-token check, so the forbidden-token
+      // rules (e.g. `^pipeline$`) cannot be bypassed by the `-assistant`
+      // suffix (a hypothetical `@cinatra-ai/pipeline-assistant` must still trip
+      // `pipeline`, exactly as `pipeline-agent` does).
+      const slug = parsed.slug.replace(/-(agent|assistant)$/, "");
       const hit = hitsTopologyToken(slug);
       out.push({
         rule: "no-topology-tokens",
@@ -433,6 +449,53 @@ describe("naming-conformance policy", () => {
           `grandfatherList entry ${entry.packageName} not found on disk — remove it`,
         ).toBe(true);
       }
+    });
+  });
+
+  // ─── agent-kind suffix policy: -agent AND -assistant (epic #1873 W6/W7) ───
+  // The assistant-kind agent packages ship a `-assistant` dir/slug; the naming
+  // policy admits it alongside the classic `-agent`. Pure-logic regression
+  // tests (no on-disk tree needed) so a future refactor cannot silently drop
+  // either suffix or reopen the topology-token bypass.
+  describe("agent-kind -assistant suffix admission", () => {
+    const synthAgent = (name: string, dirBasename: string): ExtensionPackage => ({
+      dirAbs: `/virtual/cinatra-ai/${dirBasename}`,
+      vendorScope: "cinatra-ai",
+      dirBasename,
+      packageJsonPath: `/virtual/cinatra-ai/${dirBasename}/package.json`,
+      manifest: { name, cinatra: { apiVersion: "cinatra.ai/v1", kind: "agent" } },
+    });
+
+    it("accepts the -assistant dir suffix for kind=agent", () => {
+      expect(isAllowedDirShapeForKind("cinatra-assistant", "agent", "@cinatra-ai/cinatra-assistant")).toBe(true);
+      expect(isAllowedDirShapeForKind("wordpress-assistant", "agent", "@cinatra-ai/wordpress-assistant")).toBe(true);
+    });
+
+    it("still accepts the classic -agent dir suffix for kind=agent", () => {
+      // Synthetic example name (not a real published package) — keeps this a
+      // pure suffix-policy unit assertion, uncoupled from any real extension.
+      expect(isAllowedDirShapeForKind("example-agent", "agent", "@cinatra-ai/example-agent")).toBe(true);
+    });
+
+    it("rejects a non-suffixed dir for kind=agent", () => {
+      expect(isAllowedDirShapeForKind("cinatra", "agent", "@cinatra-ai/cinatra")).toBe(false);
+    });
+
+    it("does NOT leak the -assistant suffix to non-agent kinds", () => {
+      expect(isAllowedDirShapeForKind("foo-assistant", "connector", "@cinatra-ai/foo-assistant")).toBe(false);
+      expect(isAllowedDirShapeForKind("foo-assistant", "artifact", "@cinatra-ai/foo-assistant")).toBe(false);
+    });
+
+    it("passes the full rule-set for a real -assistant agent package", () => {
+      const results = evaluateAllRules(synthAgent("@cinatra-ai/cinatra-assistant", "cinatra-assistant"));
+      const failures = results.filter((r) => !r.ok);
+      expect(failures, JSON.stringify(failures)).toHaveLength(0);
+    });
+
+    it("still catches a topology token behind the -assistant suffix (no bypass)", () => {
+      const results = evaluateAllRules(synthAgent("@cinatra-ai/pipeline-assistant", "pipeline-assistant"));
+      const topology = results.find((r) => r.rule === "no-topology-tokens");
+      expect(topology?.ok, JSON.stringify(topology)).toBe(false);
     });
   });
 });
