@@ -56,6 +56,11 @@ import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { agentUIOverrideRegistry } from "./agent-ui-override-registry";
 import { getFieldRendererContextForAgentBuilderAction, getSkillsForAgentAction, type SkillForChip } from "./server-actions";
 import { HitlSkillChips } from "./hitl-skill-chips";
+import { RunRecommendationChipRow } from "./run-recommendation-chip-row";
+import {
+  getRunRecommendationHoldStateAction,
+  type RunRecommendationHoldState,
+} from "./run-recommendation-actions";
 import { resolveFieldLabel } from "./humanize-field-name";
 
 // Client-safe serialized form of AgentRunMessageRecord — Date becomes ISO string
@@ -402,6 +407,38 @@ export function AgenticRunPanel({
       .then(setHitlSkills)
       .catch(() => setHitlSkills([]));
   }, [isPendingApprovalForEffect, agentPackageName]);
+
+  // Run-start recommendation chip-row (cinatra#2067, C3) — the chat mount of the
+  // SAME shared component the run view uses (item 5). Poll the hold state while
+  // the run is held (pending_input) so the chip-row appears/refreshes; a decided
+  // (released) hold resolves to the read-only summary and stops polling.
+  const [recHold, setRecHold] = useState<RunRecommendationHoldState | null>(null);
+  useEffect(() => {
+    if (!runId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const fetchState = () => {
+      getRunRecommendationHoldStateAction({ runId })
+        .then((s) => {
+          if (cancelled) return;
+          setRecHold(s);
+          // Stop polling once the hold resolves to a terminal (non-held) state.
+          if (s.state !== "held" && timer) {
+            clearInterval(timer);
+            timer = null;
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setRecHold({ state: "none" });
+        });
+    };
+    fetchState();
+    timer = setInterval(fetchState, 4000);
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [runId]);
 
   // Audit visibility is driven by
   // the auditor-agent flow gate; renderer is mounted via field-renderer registry.
@@ -887,6 +924,26 @@ export function AgenticRunPanel({
           <span>{status.replace(/_/g, " ")}</span>
         </Badge>
       </div>
+
+      {/* Run-start recommendation chip-row (cinatra#2067, C3) — chat mount. */}
+      {recHold && recHold.state !== "none" ? (
+        <RunRecommendationChipRow
+          runId={runId}
+          agentPackageName={
+            recHold.state === "held" ? recHold.agentPackageName : (agentPackageName ?? "")
+          }
+          promptText={recHold.state === "held" ? recHold.promptText : undefined}
+          initialRecommendations={recHold.state === "held" ? recHold.recommendations : undefined}
+          decision={
+            recHold.state === "held"
+              ? { kind: "pending" }
+              : recHold.state === "confirmed"
+                ? { kind: "confirmed", skillNames: recHold.skillNames }
+                : { kind: "skipped" }
+          }
+          variant="inline"
+        />
+      ) : null}
 
       {isPendingApproval &&
       effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID ? (

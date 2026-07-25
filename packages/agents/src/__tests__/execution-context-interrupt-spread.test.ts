@@ -99,6 +99,7 @@ function makeRun(inputParams: Record<string, unknown> = {}): AgentRunRecord {
     idempotencyKey: null,
     oboCeiling: null,
     dependentInstallId: null,
+    humanPresent: null, // cinatra#2067 presence discriminator (headless fixture)
   };
 }
 

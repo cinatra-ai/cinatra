@@ -40,3 +40,23 @@ export const LIFECYCLE_REVIEW_ORCHESTRATION_ENV = "CINATRA_LIFECYCLE_REVIEW_ORCH
 export function isLifecycleReviewOrchestrationActive(): boolean {
   return (process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] ?? "").trim().toLowerCase() === "on";
 }
+
+/**
+ * The run-start RECOMMENDATION CHIP-ROW activation fence (cinatra#2067, epic
+ * #2037 C3). The S3 recommendation ENGINE (headless auto-apply) is already live —
+ * inert for a silent org because the lattice default is `humanPresent:false ⇒
+ * skip`. The C3 human surface is different: it PARKS every human-present run
+ * whose recommendation checkpoint fires (the lattice default for humanPresent),
+ * a real behaviour change on the interactive run-start path. So the pre-execution
+ * HOLD ships behind this SINGLE global fence that DEFAULTS OFF: on `origin/main`
+ * `maybeHoldRunForRecommendation` returns `held:false` and every run dispatches
+ * exactly as today (headless auto-apply byte-identical), until an operator flips
+ * it on. `"on"` (case-insensitive, trimmed) activates; anything else — including
+ * unset — leaves it OFF. Read each call (never memoised) so a boot flip / a test
+ * override take effect without a module reload.
+ */
+export const LIFECYCLE_RECOMMENDATION_CHIP_ROW_ENV = "CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW";
+
+export function isRecommendationChipRowHoldActive(): boolean {
+  return (process.env[LIFECYCLE_RECOMMENDATION_CHIP_ROW_ENV] ?? "").trim().toLowerCase() === "on";
+}

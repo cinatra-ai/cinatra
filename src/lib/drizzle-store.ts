@@ -1703,12 +1703,12 @@ END $$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS run_token_hash text` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_run_token_hash_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (run_token_hash) WHERE run_token_hash IS NOT NULL` },
     // cinatra#1392 Gap 2 — dependent_install_id: the installed_extension row id a
-    // run executes AS, carried onto the run's signed lineage (ActorContext) so
-    // the A2A dispatch seam resolves edge-bound serving against a TRUSTED
-    // dependent id (never client-supplied). Additive nullable; mirrors schema.ts
-    // + migration core__0030. No index (read as part of the run row, never
-    // queried by it).
+    // run executes AS, carried onto the run's signed lineage (ActorContext) so the
+    // A2A dispatch seam resolves edge-bound serving against a TRUSTED dependent id
+    // (never client-supplied). Additive nullable; mirrors schema.ts + core__0030.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS dependent_install_id text` },
+    // human_present: cinatra#2067 run-start presence discriminator (additive nullable; NULL=headless). No migration — schema-migration-gate scopes a new nullable column additive (timeout_seconds/streamed_text precedent).
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS human_present boolean` },
     // Delegated execution-actor snapshot.
     // Captured at instantiate from the requesting user's ActorContext and
     // replayed at run-start re-authz + mid-run authz checks. Nullable JSON
