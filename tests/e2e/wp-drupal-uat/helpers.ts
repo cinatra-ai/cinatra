@@ -255,6 +255,70 @@ async function completeRequiredLogin(page: Page): Promise<void> {
   ]);
 }
 
+/**
+ * Collapse the assistant panel via the launcher toggle so the plugin TEARS DOWN
+ * the current conversation iframe — the way a real visitor closes the assistant
+ * between conversations. The teardown is the point: a fresh re-open
+ * ({@link resumeWidget}) then re-enters conversation and mounts a NEW iframe with
+ * a FRESH single-use bridge nonce.
+ *
+ * WHY A FRESH PLUGIN MOUNT, NOT A BARE IFRAME RELOAD. The parent→iframe bootstrap
+ * is bound to the frame's single-use nonce gate (bridge-protocol.ts
+ * `selectParentBootstrapTransport` / `createSingleUseGate`): by design "a
+ * replacement document cannot re-open the handshake" — a `frame.goto()` reload of
+ * the SAME iframe posts a READY the parent IGNORES (downgrade defense), leaving
+ * the embed stuck pre-bootstrap. Only a fresh plugin conversation-entry arms a
+ * new gate. So the render-parity leg re-renders each fixture by collapse→resume,
+ * never by reloading the embed document in place.
+ *
+ * Fails LOUD if the panel does not actually tear the iframe down (the `.cw-frame`
+ * never detaches) — surfaced on the gated stack rather than silently comparing a
+ * stale render.
+ */
+export async function collapseWidget(page: Page): Promise<void> {
+  // Toggle the launcher closed (the same circle that opened it).
+  await page.waitForSelector(SEL.circle, { state: "visible", timeout: 15_000 });
+  await page.click(SEL.circle);
+  // The conversation iframe must be torn down so the next entry re-mounts fresh.
+  await page.locator(SEL.frame).first().waitFor({ state: "detached", timeout: 15_000 });
+}
+
+/**
+ * Re-open the assistant panel WITHIN an already-authenticated session and return
+ * the freshly-mounted embed FrameLocator. Unlike {@link openWidget}, this does
+ * NOT assume a login gate: with the session's `cwu_` still held in the widget's
+ * memory (the host page was never reloaded) the panel re-enters conversation
+ * DIRECTLY — a fresh iframe mount + fresh bridge bootstrap over the held token,
+ * with NO `POST /api/widget-auth/init`. Only if the `cwu_` GENUINELY EXPIRED does
+ * the login gate reappear, in which case we re-drive the single hosted login
+ * (cinatra#1998 (c): re-login only on genuine expiry, never per fixture).
+ */
+export async function resumeWidget(page: Page): Promise<FrameLocator> {
+  await page.waitForSelector(SEL.circle, { state: "visible", timeout: 30_000 });
+  await page.click(SEL.circle);
+  await page.waitForSelector(SEL.panel, { timeout: 15_000 });
+
+  // Race the two legitimate outcomes: the conversation iframe mounts straight
+  // away (held cwu_ valid) OR the login gate reappears (cwu_ expired). A short
+  // probe distinguishes them without a blanket timeout.
+  const mountedFast = await page
+    .locator(SEL.frame)
+    .first()
+    .waitFor({ state: "attached", timeout: 5_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!mountedFast) {
+    // Genuine expiry (or a slow first entry) — the gate is showing; re-login once.
+    await completeRequiredLogin(page);
+    await page.waitForSelector(SEL.frame, { state: "attached", timeout: 30_000 });
+  }
+
+  const frame = page.frameLocator(SEL.frame);
+  await frame.locator(SEL.embedActive).waitFor({ state: "visible", timeout: 30_000 });
+  await frame.locator(SEL.embedComposerInput).waitFor({ state: "visible", timeout: 30_000 });
+  return frame;
+}
+
 export async function sendPrompt(page: Page, text: string): Promise<void> {
   // The composer lives INSIDE the sandboxed cross-origin embed iframe now; type
   // + submit through the frame (openWidget() has already waited it `active`).
