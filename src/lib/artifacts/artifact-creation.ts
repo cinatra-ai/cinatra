@@ -19,6 +19,7 @@ type ResolvedObjectTypeDef = ReturnType<typeof objectTypeRegistry.resolve>;
 import { createLocalDiskBlobStore } from "./local-disk-blob-store";
 import { deriveSubstanceKey } from "./resource-store";
 import { buildObjectsWithOutboxQuery } from "@/lib/objects-store";
+import { maybeBuildProducedEventInsertOp } from "@/lib/lifecycle/lifecycle-emit";
 import {
   type OwnerLevel,
   normalizeOwnerLevel,
@@ -1074,6 +1075,28 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
         ...(input.additionalTx2Queries
           ? input.additionalTx2Queries({ artifactId, representationRevisionId })
           : []),
+        // Lifecycle-interceptions S1 (cinatra#2039, epic #2037): the transactional
+        // ArtifactProduced event, written in THIS same held-lock tx as the
+        // artifact/representation so review is driven by a durable, same-tx
+        // idempotent event (deterministic event_id → ON CONFLICT DO NOTHING).
+        // FENCED default-OFF: `maybeBuildProducedEventInsertOp` returns null when
+        // the S1 activation fence is off, so this splices NOTHING and the tx is
+        // byte-identical to origin/main. Appended LAST so every fixed result
+        // offset above (PRODUCER_OPS_OFFSET + the producer splice) is untouched;
+        // its result is never parsed. `originKind` is the physical
+        // ArtifactOriginKind — the emitter maps it onto the lattice axis.
+        ...(() => {
+          const op = maybeBuildProducedEventInsertOp(schema, {
+            orgId: input.orgId,
+            artifactId,
+            representationRevisionId,
+            emitter: "createSemanticArtifact",
+            originKind,
+            producerRunId: persistedRunId,
+            producerAgentId: null,
+          });
+          return op ? [op] : [];
+        })(),
       ],
     });
   } catch (err) {

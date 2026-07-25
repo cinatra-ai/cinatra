@@ -430,6 +430,81 @@ export function systemLoopPhases(): BootPhase[] {
       },
     },
     {
+      name: "seed-lifecycle-review-orchestration",
+      policy: "retryable",
+      run: async () => {
+        // Seed the lifecycle-interceptions S1 loops (cinatra#2039, epic #2037):
+        // the ~30s review-orchestration drain (ArtifactProduced outbox → policy-
+        // matched review gates) and the ~60s gate-maintenance drain (reject
+        // tombstones, TTL expiry, checkpointed-park release). Neither runs at
+        // boot — boot only creates the delayed loop jobs.
+        //
+        // FENCED default-OFF: the whole slice is behind the S1 activation fence
+        // (CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION). When the fence is OFF (the
+        // default, and origin/main), the runner slot is NEVER registered and the
+        // loops are NEVER seeded — so no new BullMQ loop appears and the emitters
+        // (already fenced) add no outbox row. This keeps the slice INERT until an
+        // operator flips the fence on.
+        const { isLifecycleReviewOrchestrationActive } = await import(
+          "@/lib/lifecycle/lifecycle-activation"
+        );
+        if (!isLifecycleReviewOrchestrationActive()) {
+          console.log(
+            "[lifecycle-review-orchestration] S1 activation fence OFF (default) — not seeding the orchestration/maintenance loops",
+          );
+          return;
+        }
+        // The drain IMPLEMENTATIONS are registered here (boot-only graph) through
+        // the runner slot rather than imported into background-jobs-registry —
+        // same route-graph-ratchet posture as the sweep runners above: the
+        // registry sits in the LOCKED dev-perf routes' graph, so the agents
+        // gate/park/outbox + objects-store graph must not be reachable (even
+        // dynamically) from it. Register BEFORE seeding so neither loop observes
+        // an empty slot on a healthy fence-on boot.
+        const { registerLifecycleReviewRunner } = await import(
+          "@/lib/background-jobs-registry"
+        );
+        const { sweepReviewOrchestration, sweepLifecycleGateMaintenance } = await import(
+          "@cinatra-ai/agents/lifecycle-review-orchestration"
+        );
+        registerLifecycleReviewRunner({
+          orchestrate: () => sweepReviewOrchestration(),
+          maintain: () => sweepLifecycleGateMaintenance(),
+        });
+        const {
+          enqueueBackgroundJob,
+          BACKGROUND_JOB_NAMES,
+          LIFECYCLE_REVIEW_ORCHESTRATION_LOOP_JOB_ID,
+          LIFECYCLE_GATE_MAINTENANCE_LOOP_JOB_ID,
+        } = await import("@/lib/background-jobs");
+        await enqueueBackgroundJob(
+          BACKGROUND_JOB_NAMES.LIFECYCLE_REVIEW_ORCHESTRATION,
+          {},
+          {
+            jobId: LIFECYCLE_REVIEW_ORCHESTRATION_LOOP_JOB_ID,
+            delay: 30 * 1000, // 30s
+            overwriteIfStale: true,
+            skipWorker: true,
+            inheritActorContext: false,
+          },
+        );
+        await enqueueBackgroundJob(
+          BACKGROUND_JOB_NAMES.LIFECYCLE_GATE_MAINTENANCE,
+          {},
+          {
+            jobId: LIFECYCLE_GATE_MAINTENANCE_LOOP_JOB_ID,
+            delay: 60 * 1000, // 60s
+            overwriteIfStale: true,
+            skipWorker: true,
+            inheritActorContext: false,
+          },
+        );
+        console.log(
+          "[lifecycle-review-orchestration] S1 fence ON — review-orchestration (30s) + gate-maintenance (60s) loops scheduled",
+        );
+      },
+    },
+    {
       name: "eager-background-worker",
       policy: "degraded",
       run: async () => {

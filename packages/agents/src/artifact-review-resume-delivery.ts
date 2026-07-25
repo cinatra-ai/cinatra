@@ -52,6 +52,7 @@ import {
   markResumeIntentDelivered,
   type ResumeIntentRow,
 } from "./artifact-review-gate-store";
+import { isAutoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 
 /** The per-intent delivery outcome. */
 export type ResumeDeliveryOutcome =
@@ -87,6 +88,22 @@ export async function deliverArtifactReviewResumeIntent(
   intent: ResumeIntentRow,
 ): Promise<ResumeDeliveryOutcome> {
   const { gateId, reviewTaskId, leaseToken, kind, responseText } = intent;
+
+  // S1 AUTO-created review gate (cinatra#2039, epic #2037): a `lifecycle-review:`
+  // reviewTaskId names a policy-created gate whose producing run continuation is
+  // the lifecycle CONTINUATION PARK (released by the gate-maintenance drain once
+  // the gate resolves), NOT a WayFlow resume. The decision core still commits a
+  // resume-outbox intent for every terminal decision; for an auto-gate that intent
+  // has no WayFlow wire, so mark it done here (idempotent, lease-guarded) instead
+  // of churning it toward dead-letter down a route it can never travel.
+  if (isAutoReviewTaskId(reviewTaskId)) {
+    if (!leaseToken) return "retryable";
+    const ok = await markResumeIntentDelivered(gateId, leaseToken);
+    console.log(
+      `[artifact-review-resume] gate=${gateId} is an S1 auto-gate (task=${reviewTaskId}); run continuation is the lifecycle park — marked ${ok ? "done" : "LEASE-LOST"}`,
+    );
+    return ok ? "already-advanced" : "lease-lost";
+  }
 
   // Every pinned artifact-review gate uses a `wayflow-<taskId>` reviewTaskId
   // (execution.ts marked-gate branch). A row with any other shape has no

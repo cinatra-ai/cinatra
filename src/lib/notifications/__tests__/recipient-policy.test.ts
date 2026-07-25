@@ -158,6 +158,8 @@ describe("getRecipientForJob", () => {
       "agent-run-trigger-release",
       "skill-match-batch-submit",
       "skill-match-batch-poll",
+      "lifecycle-review-orchestration",
+      "lifecycle-gate-maintenance",
     ]) {
       const out = getRecipientForJob({
         jobName,
@@ -175,6 +177,8 @@ describe("getRecipientForJob", () => {
       "artifact-provider-cache-evict",
       "audit-retention-enforce",
       "registry-poll",
+      "lifecycle-review-orchestration",
+      "lifecycle-gate-maintenance",
     ]) {
       const out = getRecipientForJob({
         jobName,

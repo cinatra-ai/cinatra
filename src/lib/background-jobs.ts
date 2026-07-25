@@ -16,6 +16,10 @@ import "@/lib/notifications-host";
 import "@/lib/register-run-wait-notifier";
 import { getActorContext, withActorContext } from "@cinatra-ai/llm/actor-context";
 import { dispatchRegisteredJob } from "@/lib/background-jobs-registry";
+// Job-lifecycle notification splices for the BullMQ worker.on hooks. Extracted
+// to the leaf module `background-jobs-notify.ts` (cinatra#2039 S1 ratchet slice)
+// to keep this runtime module under its file-size ceiling; behaviour unchanged.
+import { notifyJobLifecycle, notifyJobStarted } from "@/lib/background-jobs-notify";
 
 // The background-job NAME constants, the `BackgroundJobName` type, and the
 // canonical recurring-loop jobIds now live in the leaf module
@@ -33,6 +37,7 @@ export {
   MARKETPLACE_CATALOG_SYNC_LOOP_JOB_ID,
   VENDOR_APPLICATION_STATE_RECONCILE_LOOP_JOB_ID,
   PM_SCHEDULE_RECONCILE_LOOP_JOB_ID, EXTENSION_STORE_GC_REAP_LOOP_JOB_ID, EXTENSION_AUTO_UPDATE_LOOP_JOB_ID, ENVIRONMENT_LAYER_GC_REAP_LOOP_JOB_ID, UNBOUND_OUTPUT_DERIVE_SWEEP_LOOP_JOB_ID, ARTIFACT_REVIEW_RESUME_DELIVERY_LOOP_JOB_ID,
+  LIFECYCLE_REVIEW_ORCHESTRATION_LOOP_JOB_ID, LIFECYCLE_GATE_MAINTENANCE_LOOP_JOB_ID,
 } from "@/lib/background-jobs-names";
 import type { BackgroundJobName } from "@/lib/background-jobs-names";
 
@@ -784,125 +789,3 @@ export function unregisterBackgroundJobAbortController(jobId: string) {
   clearBackgroundJobCancellationRequested(normalizedJobId);
 }
 
-// ---------------------------------------------------------------------------
-// Notify on job lifecycle.
-//
-// Called from the BullMQ worker.on('completed' | 'failed') hooks. Resolves a
-// recipient via the policy in packages/notifications/src/recipient-policy.ts and
-// fans out to per-user rows. Defensive in every direction: any thrown error
-// is swallowed; helper failures must never kill the worker.
-// ---------------------------------------------------------------------------
-async function notifyJobLifecycle(
-  job:
-    | { id?: string | number | null; name?: string; data?: unknown }
-    | undefined,
-  err: unknown,
-  status: "completed" | "failed",
-): Promise<void> {
-  try {
-    const {
-      getRecipientForJob,
-      createNotificationForRecipient,
-      resolveAgentRunHref,
-    } = await import("@cinatra-ai/notifications/server");
-    const recipient = getRecipientForJob({
-      jobName: job?.name,
-      jobData: job?.data,
-      status,
-    });
-    if (!recipient) return;
-
-    // Resolve the agent-run deep-link from job.data BEFORE the INSERT. The
-    // LISTEN/NOTIFY trigger is AFTER INSERT only and the dedupe index is ON
-    // CONFLICT DO NOTHING (first write wins, no UPDATE/repair path) — the href
-    // must be correct on this first terminal insert. Resolver returns
-    // undefined for non-agent jobs (link-less, unchanged).
-    const href = await resolveAgentRunHref(job?.data);
-
-    const isError = status === "failed";
-    const title = isError
-      ? `${prettyJobName(job?.name)} failed`
-      : `${prettyJobName(job?.name)} completed`;
-    const body = isError ? errorToBody(err) : "Background job finished.";
-    await createNotificationForRecipient(recipient, {
-      title,
-      body,
-      kind: isError ? "error" : "success",
-      href,
-      sourceJobId: job?.id != null ? String(job.id) : undefined,
-      sourceJobName: job?.name,
-    });
-  } catch (notifyErr) {
-    console.warn(
-      "[background-jobs] notifyJobLifecycle skipped:",
-      notifyErr instanceof Error ? notifyErr.message : notifyErr,
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Notify on job start (BullMQ worker.on("active")).
-//
-// Inserts an `info`-kind, auto-read notification row carrying
-// `metadata.progress.status = "running"`. The flyout's In-progress tab
-// renders this row with a spinner; once `notifyJobLifecycle` fires for the
-// same `sourceJobId` (different `kind`, dedupe-safe per the partial unique
-// index), `collapseByJobId` in the client replaces the running row with
-// the terminal one.
-//
-// active fires on every "picked by worker" event, including BullMQ retries
-// and waiting-children re-entry. The partial idx makes that idempotent: the
-// second running insert for the same (user, jobId, kind="info") is a no-op
-// via ON CONFLICT DO NOTHING.
-// ---------------------------------------------------------------------------
-async function notifyJobStarted(
-  job: { id?: string | number | null; name?: string; data?: unknown } | undefined,
-): Promise<void> {
-  try {
-    if (!job?.id || !job?.name) return;
-    const {
-      getRecipientForJob,
-      createBackgroundProgressNotification,
-      resolveAgentRunHref,
-    } = await import("@cinatra-ai/notifications/server");
-    const recipient = getRecipientForJob({
-      jobName: job.name,
-      jobData: job.data,
-      status: "started",
-    });
-    if (!recipient) return;
-    // Resolve the agent-run deep-link from job.data and set it inline on the
-    // running INSERT (worker.on("active") fires before the dispatcher;
-    // resolution is awaited so the href is present on the first — and only —
-    // running row, since ON CONFLICT DO NOTHING means there is no later repair
-    // path). Non-agent jobs resolve to undefined -> link-less, unchanged.
-    const href = await resolveAgentRunHref(job.data);
-    await createBackgroundProgressNotification({
-      recipient,
-      jobId: String(job.id),
-      jobName: job.name,
-      title: `${prettyJobName(job.name)} in progress`,
-      body: "Started.",
-      href,
-    });
-  } catch (notifyErr) {
-    console.warn(
-      "[background-jobs] notifyJobStarted skipped:",
-      notifyErr instanceof Error ? notifyErr.message : notifyErr,
-    );
-  }
-}
-
-function prettyJobName(name: string | undefined): string {
-  if (!name) return "Background job";
-  return name
-    .split("-")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function errorToBody(err: unknown): string {
-  if (err instanceof Error) return err.message || err.name || "Unknown error";
-  if (typeof err === "string") return err;
-  return "Unknown error";
-}
