@@ -24,10 +24,6 @@ import {
   filterRenderableDashboards,
   type ExtensionLivenessOracle,
 } from "@cinatra-ai/dashboards/extension-dashboard-reads";
-import {
-  filterReadableDashboards,
-  type DashboardAuthzActor,
-} from "@/lib/dashboards/authz";
 import type { ScopeLevel } from "@/components/scope-badge";
 
 /**
@@ -62,10 +58,6 @@ export type DashboardArtifactRow = {
   readonly ownerLevel: string;
   readonly ownerId: string;
   readonly organizationId: string;
-  // Read by the dual-auth gate (`resolveDashboardAccess` intersects ownership
-  // with the dashboard row's OWN visibility). Not used by the pure projection,
-  // but present so the gate the resolvers delegate to has every field it reads.
-  readonly visibility: string;
   readonly projectId: string | null;
   readonly updatedAt: Date | string | null;
   readonly entityType: string | null;
@@ -155,35 +147,35 @@ export function buildDashboardArtifactPointer(
 }
 
 /**
- * Phase-1 DUAL AUTHORIZATION + liveness selection over the org's dashboard rows,
- * keyed to the artifact ids actually present on the library page. PURE (no I/O):
- * the caller supplies the org rows, the resolved liveness oracle, and the
- * dashboard authz actor.
+ * Phase-2 SINGLE-GATE + liveness selection over the org's dashboard rows, keyed
+ * to the artifact ids actually present on the library page. PURE (no I/O): the
+ * caller supplies the org rows and the resolved liveness oracle.
  *
- * A dashboard artifact row survives ONLY when BOTH gates pass:
- *   1. the object-store `object.read` gate — ALREADY applied by `listArtifacts`,
- *      hence the row's presence in `artifactIds`; and
- *   2. the dashboard resolver's owner + project gate (`filterReadableDashboards`
- *      → `resolveDashboardAccess`) — the additional gate cinatra#1895 layers on
- *      dashboard-typed rows so the twin's conservative visibility floor is safe.
+ * Phase-2 ACL cutover (cinatra#1898, epic #1883 §D7): the Phase-1 dual
+ * authorization is GONE. The canonical `object.read` filter — ALREADY applied by
+ * `listArtifacts`, hence a row's presence in `artifactIds` — is now the SOLE
+ * authorization gate for dashboard-typed rows, because the twin stamps the
+ * canonical scope tuple (`deriveDashboardScopeTuple`) so the object row's
+ * ownership IS the dashboard's ACL. The library and every /dashboards surface
+ * therefore agree row-for-row (pinned by `library-dashboard-agreement.test.ts`).
  *
- * Orphaned/archived extension rows and project-scope templates are dropped by
- * the SAME liveness/template gates the /dashboards surfaces apply, so the
- * library agrees with /dashboards on exactly which dashboards are visible.
+ * This function no longer authorizes — it only projects the object-gated rows
+ * into §VIII pointers, after dropping the rows that are not an operational
+ * surface on BOTH sides: orphaned/archived extension rows and project-scope
+ * templates (the SAME liveness/template gates the /dashboards surfaces apply, so
+ * the two still agree on exactly which dashboards render).
  */
 export function selectReadableDashboardArtifactPointers(input: {
   readonly rows: readonly DashboardArtifactRow[];
   readonly artifactIds: ReadonlySet<string>;
-  readonly actor: DashboardAuthzActor;
   readonly isPackageLive: ExtensionLivenessOracle;
 }): Map<string, DashboardArtifactPointer> {
   const renderable = filterRenderableDashboards(
     excludeProjectTemplates([...input.rows]),
     input.isPackageLive,
   );
-  const readable = filterReadableDashboards(renderable, input.actor);
   const out = new Map<string, DashboardArtifactPointer>();
-  for (const row of readable) {
+  for (const row of renderable) {
     if (!input.artifactIds.has(row.id)) continue;
     out.set(row.id, buildDashboardArtifactPointer(row));
   }

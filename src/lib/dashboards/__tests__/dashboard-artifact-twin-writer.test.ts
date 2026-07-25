@@ -21,8 +21,8 @@ import { rawWithParams } from "@/lib/dashboards/raw-with-params";
 import {
   DASHBOARD_OBJECT_TYPE,
   buildDashboardTwinQueries,
-  deriveConservativeVisibility,
 } from "@/lib/dashboards/dashboard-artifact-twin-writer";
+import { deriveDashboardScopeTuple } from "@/lib/dashboards/dashboard-scope-tuple";
 import type { DashboardTwinContext } from "@cinatra-ai/dashboards/twin-writer-seam";
 
 const dialect = new PgDialect();
@@ -60,19 +60,41 @@ const extensionUpsertCtx: DashboardTwinContext = {
  *  set but no mint intent ⇒ the base 7 writes only, no meaning assertion. */
 const lifecycleExtensionCtx: DashboardTwinContext = { ...upsertCtx, extensionId: MEANING_PACK };
 
-describe("twin writer — conservative visibility derivation", () => {
-  it("floors a project-scoped dashboard to private regardless of owner tier", () => {
-    expect(deriveConservativeVisibility("organization", "proj-1")).toBe("private");
-    expect(deriveConservativeVisibility("team", "proj-1")).toBe("private");
+describe("twin writer — canonical Phase-2 scope-tuple mapping (cinatra#1898)", () => {
+  const tuple = (ownerLevel: string, projectId: string | null) =>
+    deriveDashboardScopeTuple({ ownerLevel, ownerId: "own-1", organizationId: "org-1", projectId });
+
+  it("re-owns a project-scoped dashboard to organization-owned + private (project-refined)", () => {
+    // Regardless of the underlying owner tier: the object row carries NO
+    // user/team owner clause, so the object.read filter admits it ONLY via the
+    // project clause (project membership is the gate).
+    expect(tuple("organization", "proj-1")).toEqual({
+      ownerLevel: "organization",
+      ownerId: "org-1",
+      visibility: "private",
+      projectId: "proj-1",
+    });
+    expect(tuple("team", "proj-1")).toEqual({
+      ownerLevel: "organization",
+      ownerId: "org-1",
+      visibility: "private",
+      projectId: "proj-1",
+    });
   });
-  it("maps the owner tier to its natural share axis when unscoped", () => {
-    expect(deriveConservativeVisibility("user", null)).toBe("private");
-    expect(deriveConservativeVisibility("team", null)).toBe("team");
-    expect(deriveConservativeVisibility("organization", null)).toBe("organization");
+  it("maps each owner tier to its scope-visible share axis when unscoped", () => {
+    expect(tuple("user", null).visibility).toBe("private");
+    expect(tuple("team", null).visibility).toBe("team");
+    expect(tuple("organization", null).visibility).toBe("organization");
+    // Workspace is org-local PUBLIC now (was the conservative 'private' floor).
+    expect(tuple("workspace", null).visibility).toBe("public");
   });
-  it("takes the conservative floor for workspace / unknown tiers", () => {
-    expect(deriveConservativeVisibility("workspace", null)).toBe("private");
-    expect(deriveConservativeVisibility("something-new", null)).toBe("private");
+  it("fails an unknown owner tier closed to private (no admitting clause)", () => {
+    expect(tuple("something-new", null)).toEqual({
+      ownerLevel: "something-new",
+      ownerId: "own-1",
+      visibility: "private",
+      projectId: null,
+    });
   });
 });
 
@@ -105,11 +127,12 @@ describe("twin writer — upsert query list (shape + gating)", () => {
     expect(rep.text).toContain("'dashboard'");
   });
 
-  it("objects write is a gated upsert (delta D3) copying the scope axis verbatim", () => {
+  it("objects write is a gated upsert (delta D3) stamping the canonical scope tuple", () => {
     const objects = queries.find((q) => q.text.includes(`"cinatra"."objects"`))!;
     expect(objects.text).toContain("ON CONFLICT (id) DO UPDATE SET");
     expect(objects.text).toContain("IS DISTINCT FROM EXCLUDED"); // the no-op change gate
-    // scope axis: ownerLevel/ownerId + visibility(derived team) + projectId(null)
+    // Canonical Phase-2 tuple for a team/no-project dashboard: team-owned,
+    // team-visible (ownerLevel/ownerId/visibility/projectId).
     expect(objects.values).toEqual(
       expect.arrayContaining(["team", "team-9", "team", null]),
     );
