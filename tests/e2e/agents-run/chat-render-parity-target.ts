@@ -16,12 +16,32 @@
 // fixture markdown — through `POST /api/assistants/threads`, the exact
 // first-class persistence route the `/chat` client itself writes
 // (`saveChatThreadViaFetch`, packages/chat/src/ag-ui-chat-client.ts) — then
-// navigates `/chat/<threadId>`. The page's `initialThreadId` fetches the thread
-// (`GET /api/assistants/threads/<id>`) and renders the assistant message through
-// the legacy content path (chat-messages-view: a single
-// `renderMarkdown(content, theme, detectWidgets)` div), which is the SAME
-// `renderMarkdown` the reference target calls. Seed + view run as the SAME
-// authenticated user, so owner access is granted.
+// navigates the thread's CANONICAL `/chat/<vendor>/<slug>/<titleSlug>` URL, the
+// exact shape the app itself links a thread by (`chatPathForThread` →
+// `buildChatPath`, packages/chat/src/chat-client-url.ts). The page's route guard
+// (`resolveChatRouteForCurrentActor`, cinatra#1878 W3) resolves that URL back to
+// the thread id and passes it as `initialThreadId`, which the client fetches
+// (`GET /api/assistants/threads/<id>`) and renders through the legacy content
+// path (chat-messages-view: a single `renderMarkdown(content, theme,
+// detectWidgets)` div), which is the SAME `renderMarkdown` the reference target
+// calls. Seed + view run as the SAME authenticated user, so owner access is
+// granted.
+//
+// WHY WE BIND + SLUG THE SEEDED ROW (cinatra#1878 W3 drift, fixed here). The bare
+// `POST /api/assistants/threads` mirror-save writes the thread row WITHOUT an
+// `assistant_package` binding or a `title_slug` (`buildAssistantThreadMirrorUpsertQuery`
+// projects neither), so the W3 route guard — which resolves a titleSlug URL via
+// `getAssistantThreadBySlug(<package>, <instance>, <titleSlug>)` — could never
+// map any URL back to the seeded thread, and the pre-#1878 bare-UUID URL this
+// target used is now a dead legacy path the guard 404s (chat-path-codec
+// `splitChatSegments`: a lone segment is `invalid`). So, using the harness's
+// established test-only direct-DB seam (see ag-ui-chat.ts / seed.ts), we stamp
+// the row with the builtin assistant's package + the app's own
+// `slugifyTitle`-minted slug — reproducing exactly what the app's W3 store
+// primitives (`bindAssistantThread` + `ensureThreadSlug`) would persist — then
+// address the thread by the canonical URL `buildChatPath` yields for that
+// binding. No product code is touched; the seeded state is what a bound, titled
+// thread looks like at rest.
 //
 // WHY THE CONTENT MATCHES THE GOLDEN. Ten of the eleven content/hostile
 // fixtures produce byte-identical inner HTML on the live surface: the corpus is
@@ -38,12 +58,28 @@
 import { randomUUID } from "node:crypto";
 
 import type { APIRequestContext, Page } from "@playwright/test";
+import { Client } from "pg";
+
+// The canonical /chat URL builder + the default (builtin) assistant route —
+// the SAME zero-dep codec the app links a thread with (cinatra#1878 W3).
+import { buildChatPath, DEFAULT_ASSISTANT_PACKAGE, DEFAULT_CHAT_ROUTE } from "@cinatra-ai/chat/chat-path-codec";
+// The app's own pure title→slug normalizer (the base an atomic slug mint uses).
+import { slugifyTitle } from "@cinatra-ai/chat/thread-slug";
 
 import type {
   AsyncRenderTarget,
   ContentRenderResult,
   RenderTheme,
 } from "../design/conformance/render-parity/targets/target";
+
+// Test-only direct-DB seam, identical to the one ag-ui-chat.ts / seed.ts use to
+// stage fixture rows the running app then serves. Used here ONLY to stamp the
+// seeded thread's binding + title-slug (the app's W3 store primitives at rest),
+// never to bypass any product path under test.
+const DATABASE_URL =
+  process.env.SUPABASE_DB_URL ??
+  "postgresql://postgres:postgres@127.0.0.1:5434/postgres";
+const SCHEMA = process.env.SUPABASE_SCHEMA ?? "cinatra";
 
 // The assistant content block chat-messages-view renders for a legacy
 // (no-`parts`) message: `renderMarkdown(...)` inside this div. `max-w-none` /
@@ -88,6 +124,9 @@ export function createChatLiveTarget(deps: ChatLiveTargetDeps): AsyncRenderTarge
     async renderContent(source: string, theme: RenderTheme): Promise<ContentRenderResult> {
       const threadId = randomUUID();
       const nowIso = new Date().toISOString();
+      // The thread title carries the thread id, so every fixture×theme render
+      // gets a globally-unique title-slug (no container collision to resolve).
+      const title = `render-parity ${threadId}`;
 
       // 1. Seed the thread through the real persistence route the /chat client
       //    itself writes. The authenticated caller owns the new thread, so the
@@ -95,7 +134,7 @@ export function createChatLiveTarget(deps: ChatLiveTargetDeps): AsyncRenderTarge
       const seed = await request.post("/api/assistants/threads", {
         data: {
           id: threadId,
-          title: `render-parity ${threadId}`,
+          title,
           createdAt: nowIso,
           updatedAt: nowIso,
           messages: [
@@ -119,6 +158,46 @@ export function createChatLiveTarget(deps: ChatLiveTargetDeps): AsyncRenderTarge
         );
       }
 
+      // 1b. Bind the seeded row to the builtin assistant + mint its title-slug so
+      //     the W3 route guard can resolve the canonical URL back to this thread.
+      //     The bare mirror-save (step 1) writes neither `assistant_package` nor
+      //     `title_slug`, so without this the route guard's slug→thread lookup
+      //     (`getAssistantThreadBySlug`) finds nothing and every fixture 404s.
+      //     We reproduce the app's own at-rest state: the package the builtin
+      //     assistant registers under (DEFAULT_ASSISTANT_PACKAGE — the resolver
+      //     matches the URL's `<vendor>/<slug>` to this entry) and the slug the
+      //     app's `slugifyTitle` mints. Local (builtin) assistant → no instance.
+      const titleSlug = slugifyTitle(title);
+      const db = new Client({
+        connectionString: DATABASE_URL,
+        connectionTimeoutMillis: 5_000,
+      });
+      await db.connect();
+      try {
+        const res = await db.query(
+          `UPDATE ${SCHEMA}.assistant_threads
+             SET assistant_package = $1, instance_id = NULL, title_slug = $2, updated_at = now()
+           WHERE id = $3`,
+          [DEFAULT_ASSISTANT_PACKAGE, titleSlug, threadId],
+        );
+        if (res.rowCount !== 1) {
+          throw new Error(
+            `binding the seeded thread failed (updated ${res.rowCount ?? 0} rows for id ${threadId}) — ` +
+              `the /chat render-parity target cannot address an unbound/unslugged thread`,
+          );
+        }
+      } finally {
+        await db.end();
+      }
+
+      // The canonical `/chat/<vendor>/<slug>/<titleSlug>` path the app itself
+      // links this thread by (buildChatPath, the codec-owned URL builder).
+      const chatPath = buildChatPath({
+        vendor: DEFAULT_CHAT_ROUTE.vendor,
+        slug: DEFAULT_CHAT_ROUTE.slug,
+        titleSlug,
+      });
+
       // 2. Pin the app theme BEFORE any page script runs, so the surface renders
       //    at the golden's theme (github-light ⟺ "cinatra", github-dark ⟺ "dark").
       //    CONTRACT: one renderContent call per FRESH page — the spec gives each
@@ -135,8 +214,8 @@ export function createChatLiveTarget(deps: ChatLiveTargetDeps): AsyncRenderTarge
         }
       }, wantTheme.storage);
 
-      // 3. Drive the real surface.
-      await page.goto(`/chat/${threadId}`, { waitUntil: "domcontentloaded" });
+      // 3. Drive the real surface via the thread's canonical /chat URL.
+      await page.goto(chatPath, { waitUntil: "domcontentloaded" });
 
       // The content is client-rendered (ChatMessagesView is dynamic, ssr:false,
       // and the thread is fetched client-side) — wait for the assistant content

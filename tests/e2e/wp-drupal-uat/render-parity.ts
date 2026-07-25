@@ -13,6 +13,39 @@
 // compares each rendered content block against the S3 packaged-renderer reference
 // — the SAME reference the committed goldens and target 1 are anchored to.
 //
+// ONE FRESH DOCUMENT PER FIXTURE — the plugin's proven normal page-load path.
+// Rendering the next fixture needs a NEW embed iframe (a new `parityThread` src +
+// a fresh single-use bridge nonce), and the LIVE plugin (wordpress-plugin
+// `assets/cinatra-widget.js` @ current main, drupal-module `js/cinatra-widget.js`
+// @ current main) mounts that iframe EXACTLY ONCE per document: `mountBridgeIframe`
+// is guarded `if (iframeEl) return` and is reached ONLY from `enterConversation`,
+// itself reached ONLY from `redeemCode` right after a hosted-login handshake. The
+// launcher circle / close-button `collapseWidget` merely toggles
+// `cwWidget.style.display` — it NEVER tears the iframe down (only `forceReLogin`
+// does, via `teardownBridge`, and that drops the token too), and re-opening just
+// un-hides the SAME already-bootstrapped frame. So there is NO in-session re-mount
+// affordance: a held `cwu_` cannot be re-used to mount a second frame. The only
+// paths to a fresh iframe are a full document reload or a re-login — both re-drive
+// the hosted-login handshake (the `cwu_`/`cit_` tokens are in-memory only,
+// dropped on navigation). An earlier form of this leg tried collapse→re-open to
+// re-mount within one session; grounding against the real plugin (cinatra#1998
+// issuecomment) disproved it — the launcher toggle never produced a second
+// `/embed/assistant` mount and the click hung unbounded. So each fixture reloads
+// the CMS host page, re-stages its seam, and re-drives the launcher → required-
+// login → sandboxed cross-origin `<iframe class="cw-frame">` bootstrap (the exact
+// path fixture 0 already proved live). That reload DOES re-charge the connect-
+// token limiter (connect-rate-limit.ts), which has TWO buckets. The BINDING one is
+// the per-code-key bucket: `/widget-auth/init` keys it on the FIXED per-CMS site
+// credential hash, so all 22 reloads share ONE bucket capped at 5/min — the
+// tightest limit (the 30/min per-IP bucket is slacker: `/widget-auth/token` keys
+// its code bucket on the unique per-login PKCE code, never binding). The limiter
+// is the real security control and is left UNTOUCHED; instead the leg PACES fixture
+// starts (MIN_FIXTURE_INTERVAL_MS ≥ 15s ⇒ ≤4 inits/min, under 5, with the 30/min
+// IP bucket well clear too), so reload-per-fixture never triggers the 429 storm a
+// prior form produced. (We never re-`goto` the embed frame in place: the parent
+// bootstrap is bound to a single-use nonce, so a bare embed reload's READY is
+// ignored by design — bridge-protocol.ts.)
+//
 // HOW THE CORPUS REACHES THE CMS IFRAME (the three moving parts, all landed):
 //   (a) Lane A — `/api/assistants/chat/capabilities` advertises `token-broker`
 //       and serves the sessionless broker-auth embed, so the embed's client-side
@@ -24,9 +57,11 @@
 //       `?parityTheme=` (cinatra#1998 (b)).
 //   (c) The plugin TEST-ONLY route-rewrite — the CMS widget's iframe `src` is
 //       hardcoded to `instanceId`+`assistant`; the plugin now appends the seam
-//       params when a test stages a `cinatra_parity_*` sessionStorage signal
-//       (inert in prod — the server ignores `parityThread` unless its gate is on;
-//       wordpress-plugin / drupal-module #1998 (c)). This leg stages that signal.
+//       params when a test stages the STORAGE-FREE `window.__cinatraParitySeam`
+//       global (or the `cinatra_parity_*` query-param fallback) — never storage,
+//       to honor the widget's token non-disclosure invariant (inert in prod — the
+//       server ignores `parityThread` unless its gate is on; wordpress-plugin /
+//       drupal-module #1998 (c)). This leg stages that global (stageSeamSignal).
 //
 // READ-ONLY RENDER LEG. This leg drives NO edit turn, so it is NOT the #1214
 // no-direct-egress positive control — that assertion stays where it already is,
@@ -210,6 +245,41 @@ async function scrapeEmbedContent(
 }
 
 /**
+ * Render one fixture through a FRESH document — the plugin's proven normal
+ * page-load path (the exact flow fixture 0 verified live). Reloading the CMS host
+ * page is the ONLY harness-reachable way to obtain a fresh embed iframe (a new
+ * `parityThread` src + a fresh single-use bridge nonce): the live plugin mounts
+ * its iframe exactly once per document (`mountBridgeIframe`'s `if (iframeEl)
+ * return` guard, reached only from a post-login `enterConversation`), and
+ * `collapseWidget` only hides the panel (`display:none`) — it never tears the
+ * frame down, so a held `cwu_` can never be re-used to mount a second frame in the
+ * same document.
+ *
+ * The seam MUST be staged AFTER the reload (so `window.__cinatraParitySeam` exists
+ * on the fresh window) and BEFORE the login handshake drives `enterConversation`
+ * (which reads it at iframe-mount time). The reload drops the in-memory
+ * `cwu_`/`cit_`, so `openWidget` re-drives the real hosted-login → sandboxed
+ * cross-origin `<iframe class="cw-frame">` bootstrap. Fails LOUD (openWidget's
+ * bounded login/mount/`embedActive` waits) if the widget does not re-mount — never
+ * a silent stale compare. We never `frame.goto` the embed in place: its bootstrap
+ * is bound to a single-use nonce, so a bare embed reload's READY is ignored by
+ * design (bridge-protocol.ts).
+ */
+async function renderFixtureFresh(
+  page: Page,
+  hostPage: string,
+  threadId: string,
+  theme: RenderTheme,
+): Promise<FrameLocator> {
+  // Fresh document = fresh plugin IIFE = fresh login gate = fresh iframe mount.
+  await page.goto(hostPage, { waitUntil: "domcontentloaded" });
+  // Stage THIS fixture's seam on the fresh window before login → enterConversation.
+  await stageSeamSignal(page, threadId, theme);
+  // Drive the REAL plugin launcher → required-login → cross-origin iframe bootstrap.
+  return openWidget(page);
+}
+
+/**
  * Register the CMS-iframe render-parity spec for one CMS. Frames the SAME
  * `/embed/assistant` inside the live CMS admin, renders the 11-fixture corpus
  * (both themes) through the (b) seam, and asserts full DOM-normalized parity with
@@ -236,46 +306,79 @@ export function registerCmsRenderParitySpec(cms: Cms): void {
           `LOUD on any drift. #1216 S6 / #1222 / #1998 (c).`,
       );
 
-      // 11 fixtures × 2 themes, each a REAL plugin login + iframe bootstrap cycle
-      // (the cwu_ per-user token is in-memory only, lost on navigation), so give
-      // the leg a generous budget well beyond the suite's per-test default.
+      // 11 fixtures × 2 themes, each rendered through a FRESH document + real
+      // plugin login+bootstrap (renderFixtureFresh — the only way to a fresh embed
+      // iframe/nonce, see its doc). Generous budget well beyond the suite's
+      // per-test default (22 paced logins + live bootstraps).
       test.setTimeout(20 * 60 * 1000);
 
       const seed = readSeed();
       const hostPage = hostPageFor(cms, seed);
       await loginFor(cms, page);
 
+      // Flatten fixtures × themes into one ordered render plan — each entry reloads
+      // the CMS host page and drives a full plugin login+bootstrap for a fresh
+      // embed iframe carrying that entry's seam.
+      const plan: Array<{ testCase: (typeof ALL_CONTENT_CASES)[number]; theme: RenderTheme }> = [];
+      for (const testCase of ALL_CONTENT_CASES) {
+        for (const theme of THEMES) plan.push({ testCase, theme });
+      }
+
       const reference: NormalizedRender[] = [];
       const candidate: NormalizedRender[] = [];
 
-      for (const testCase of ALL_CONTENT_CASES) {
-        for (const theme of THEMES) {
-          // Reference: the S3 packaged renderer (sync, deterministic) — the exact
-          // path /chat renders through and the goldens snapshot.
-          const { html: refHtml } = REFERENCE_TARGET.renderContent(testCase.source, theme);
-          reference.push({
-            targetId: REFERENCE_TARGET.id,
-            targetLabel: REFERENCE_TARGET.label,
-            fixtureName: testCase.name,
-            theme,
-            normalized: await normalizeForCompare(page, refHtml),
-          });
+      // Each fresh-document render re-drives the hosted login. The BINDING rate
+      // limit (connect-rate-limit.ts, UNTOUCHED) is the per-code-key bucket:
+      // `/widget-auth/init` keys it on the FIXED per-CMS site credential, so every
+      // reload shares ONE bucket capped at 5 inits/min — i.e. ≥ 12s between actual
+      // init calls. Pace fixture starts at 15s (the marker is recorded BEFORE
+      // seed+navigation+login, so the real init lands a few seconds later; 15s
+      // markers keep actual inits comfortably ≥ 12s apart ⇒ ≤ 4/min, under 5, and
+      // the 30/min per-IP bucket well clear). Only the residual gap is slept —
+      // natural per-fixture work already spends part of the interval. This is the
+      // honest reload-per-fixture pacing that avoids the 429 storm a prior form of
+      // this leg produced (which the once-per-CMS collapse→resume attempt could not
+      // fix because the plugin has no in-session re-mount — see renderFixtureFresh).
+      const MIN_FIXTURE_INTERVAL_MS = 15_000;
+      let previousFixtureStartMs = 0;
 
-          // Candidate: seed the fixture as a thread, stage the seam signal, drive
-          // the REAL plugin bootstrap, and scrape the seam-rendered block.
-          const threadId = await seedFixtureThread(request, testCase.source);
-          await page.goto(hostPage, { waitUntil: "domcontentloaded" });
-          await stageSeamSignal(page, threadId, theme);
-          const frame = await openWidget(page);
-          const liveHtml = await scrapeEmbedContent(frame, testCase.name, cms);
-          candidate.push({
-            targetId: `${cms}-iframe`,
-            targetLabel: label,
-            fixtureName: testCase.name,
-            theme,
-            normalized: await normalizeForCompare(page, liveHtml),
-          });
+      for (let i = 0; i < plan.length; i += 1) {
+        const { testCase, theme } = plan[i];
+
+        // Reference: the S3 packaged renderer (sync, deterministic) — the exact
+        // path /chat renders through and the goldens snapshot. (Pure CPU; no
+        // rate-limited network, so it runs before the throttle below.)
+        const { html: refHtml } = REFERENCE_TARGET.renderContent(testCase.source, theme);
+        reference.push({
+          targetId: REFERENCE_TARGET.id,
+          targetLabel: REFERENCE_TARGET.label,
+          fixtureName: testCase.name,
+          theme,
+          normalized: await normalizeForCompare(page, refHtml),
+        });
+
+        // Throttle to honor the connect-token IP limiter before the next full
+        // login. Sleep only the residual since the previous fixture's login start.
+        if (previousFixtureStartMs > 0) {
+          const elapsed = Date.now() - previousFixtureStartMs;
+          if (elapsed < MIN_FIXTURE_INTERVAL_MS) {
+            await page.waitForTimeout(MIN_FIXTURE_INTERVAL_MS - elapsed);
+          }
         }
+        previousFixtureStartMs = Date.now();
+
+        // Candidate: seed the fixture as a thread, then render it through a fresh
+        // document + real plugin login+bootstrap (fixture 0's proven live path).
+        const threadId = await seedFixtureThread(request, testCase.source);
+        const frame = await renderFixtureFresh(page, hostPage, threadId, theme);
+        const liveHtml = await scrapeEmbedContent(frame, testCase.name, cms);
+        candidate.push({
+          targetId: `${cms}-iframe`,
+          targetLabel: label,
+          fixtureName: testCase.name,
+          theme,
+          normalized: await normalizeForCompare(page, liveHtml),
+        });
       }
 
       const report = compareToReference(reference, candidate);

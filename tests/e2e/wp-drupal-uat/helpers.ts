@@ -255,6 +255,19 @@ async function completeRequiredLogin(page: Page): Promise<void> {
   ]);
 }
 
+// NO in-session re-mount helper (collapse→resume) exists: grounding against the
+// LIVE plugin (wordpress-plugin `assets/cinatra-widget.js` / drupal-module
+// `js/cinatra-widget.js`, current mains) disproved that model — `collapseWidget`
+// only toggles `cwWidget.style.display`, it NEVER tears the conversation iframe
+// down (only `forceReLogin`→`teardownBridge` does, and that drops the token), and
+// re-opening merely un-hides the SAME already-bootstrapped frame. The iframe is
+// mounted exactly once per document (`mountBridgeIframe`'s `if (iframeEl) return`
+// guard, reached only from a post-login `enterConversation`), so a held `cwu_`
+// cannot be re-used to mount a second frame. A fresh embed iframe (fresh nonce +
+// fresh `parityThread` src) therefore requires a full document reload + real
+// hosted login — {@link openWidget} on a freshly-`goto`'d host page (see
+// render-parity.ts `renderFixtureFresh`).
+
 export async function sendPrompt(page: Page, text: string): Promise<void> {
   // The composer lives INSIDE the sandboxed cross-origin embed iframe now; type
   // + submit through the frame (openWidget() has already waited it `active`).
