@@ -253,6 +253,19 @@ export async function strandPark(parkId: string): Promise<void> {
   await db.delete(lifecycleContinuationPark).where(eq(lifecycleContinuationPark.id, parkId));
 }
 
+/** Run-scoped park reader (cinatra#2066, C0). Lists EVERY checkpointed
+ * continuation park a run owns — parked, released, or policy_unresolved — so the
+ * canonical run-detail aggregate can surface a run's parked continuations
+ * alongside its gates. Ordered by creation for a stable rail projection. */
+export async function readContinuationParksForRun(runId: string): Promise<ParkRow[]> {
+  const rows = await db
+    .select()
+    .from(lifecycleContinuationPark)
+    .where(eq(lifecycleContinuationPark.runId, runId))
+    .orderBy(lifecycleContinuationPark.createdAt);
+  return rows.map(toParkRow);
+}
+
 /** Ops visibility: the parks the sweeper fail-closed into a terminal
  * `policy_unresolved` block (their protected effect is blocked pending an
  * explicit policy decision). */

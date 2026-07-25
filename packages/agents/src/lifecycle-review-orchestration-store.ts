@@ -61,6 +61,7 @@ import {
   ArtifactReviewGateError,
 } from "./artifact-review-gate-store";
 import { markProducedEventProcessed } from "./lifecycle-produced-outbox-store";
+import { dispatchAutoGateOpen } from "./run-wait-notifier";
 import { resolveOrgPolicyRule } from "./lifecycle-policy-store";
 import { maybeParkCheckpoint, sweepParks } from "./lifecycle-continuation-park-store";
 
@@ -417,6 +418,16 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
       expiresAt: new Date(Date.now() + AUTO_REVIEW_GATE_TTL_MS),
     });
     gateId = emitted.gateId;
+    // cinatra#2066 C2 — a NEW auto-gate just opened: fire the run-view
+    // notification for its reviewer-resolvable audience. Only on a genuinely new
+    // emit (`!idempotent`) so a replay / re-sweep never re-notifies, and only for
+    // a REAL producing run (a synthetic orphan id resolves to no run, so the host
+    // seam skips it — but gating here keeps the intent explicit). Best-effort by
+    // construction: `dispatchAutoGateOpen` swallows every error so a notification
+    // failure can never fail orchestration.
+    if (!emitted.idempotent && row.producerRunId) {
+      await dispatchAutoGateOpen({ runId, reviewTaskId: plan.reviewTaskId });
+    }
   } catch (err) {
     // A pin-conflict means a DIFFERENT gate already occupies (run, task) — an
     // invariant violation for a deterministic auto-task id. Leave the event
