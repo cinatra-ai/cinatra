@@ -48,10 +48,13 @@ describe("detail page: no tablist, no Permissions tab (#1733)", () => {
 });
 
 describe("settings page hosts the permissions surface (#1733)", () => {
-  it("renders the permissions client under the same 404-hide read gate", () => {
+  it("renders the permissions client under the same sealed-room 404-hide read gate (#1898)", () => {
     expect(SETTINGS_SOURCE).toContain("ProjectPermissionsTabClient");
-    expect(SETTINGS_SOURCE).toContain("enforceResourceAccess");
-    expect(SETTINGS_SOURCE).toContain('"project.read"');
+    // Canonical sealed-room project-grant gate — the SAME gate the detail page
+    // uses — replacing the grant-less `enforceResourceAccess`/`can()` primitive.
+    expect(SETTINGS_SOURCE).toContain("actorHoldsProjectGrant");
+    expect(SETTINGS_SOURCE).not.toContain("enforceResourceAccess");
+    expect(SETTINGS_SOURCE).not.toContain("actorFromSession");
     expect(SETTINGS_SOURCE).toContain("AccessVsOwnershipNote");
   });
 

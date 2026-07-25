@@ -22,7 +22,28 @@ vi.mock("../../permissions/guest-actions", () => ({
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: vi.fn(),
+  requireActorContext: vi.fn(),
+  getActorContext: vi.fn(),
+  isPlatformAdmin: vi.fn(() => false),
 }));
+
+// The sealed-room read gate (#1898) consults `requireActorContext().projectGrants`.
+// This helper wires BOTH the session (isPlatformAdmin probe) and the resolved
+// actor (the grant gate) for a given user + optional grant on proj-1.
+async function primeActor(userId: string, opts: { granted: boolean }) {
+  const authSession = await import("@/lib/auth-session");
+  (authSession.requireAuthSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+    user: { id: userId },
+    session: { activeOrganizationId: ORG_A },
+  });
+  (authSession.requireActorContext as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+    principalId: userId,
+    organizationId: ORG_A,
+    projectGrants: opts.granted
+      ? [{ projectId: "proj-1", effectiveRole: "owner", accessSource: "owner" }]
+      : [],
+  });
+}
 vi.mock("@/lib/projects-store", () => ({
   readProjectById: vi.fn(),
   readProjectCoOwners: vi.fn().mockResolvedValue([]),
@@ -56,11 +77,7 @@ describe("project settings page RSC (#1733)", () => {
   it("404-hides when actor lacks project.read", async () => {
     const { default: SettingsPage } = await import("../page");
 
-    const { requireAuthSession } = await import("@/lib/auth-session");
-    (requireAuthSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
-      user: { id: STRANGER },
-      session: { activeOrganizationId: ORG_A },
-    });
+    await primeActor(STRANGER, { granted: false });
     const projectsStore = (await import("@/lib/projects-store")) as unknown as {
       readProjectById: ReturnType<typeof vi.fn>;
     };
@@ -74,11 +91,7 @@ describe("project settings page RSC (#1733)", () => {
   it("renders ScopeBadge + ProjectSharingPanel + grants section when allowed — no subnav, Settings crumb pinned", async () => {
     const { default: SettingsPage } = await import("../page");
 
-    const { requireAuthSession } = await import("@/lib/auth-session");
-    (requireAuthSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
-      user: { id: OWNER },
-      session: { activeOrganizationId: ORG_A },
-    });
+    await primeActor(OWNER, { granted: true });
     const projectsStore = (await import("@/lib/projects-store")) as unknown as {
       readProjectById: ReturnType<typeof vi.fn>;
     };
@@ -106,11 +119,7 @@ describe("project settings page RSC (#1733)", () => {
   it("names the owner in the badge when resolution succeeds (#1905)", async () => {
     const { default: SettingsPage } = await import("../page");
 
-    const { requireAuthSession } = await import("@/lib/auth-session");
-    (requireAuthSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
-      user: { id: OWNER },
-      session: { activeOrganizationId: ORG_A },
-    });
+    await primeActor(OWNER, { granted: true });
     const projectsStore = (await import("@/lib/projects-store")) as unknown as {
       readProjectById: ReturnType<typeof vi.fn>;
     };
@@ -132,11 +141,7 @@ describe("project settings page RSC (#1733)", () => {
   it("shows the Archived badge on an archived project (detail-header parity)", async () => {
     const { default: SettingsPage } = await import("../page");
 
-    const { requireAuthSession } = await import("@/lib/auth-session");
-    (requireAuthSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
-      user: { id: OWNER },
-      session: { activeOrganizationId: ORG_A },
-    });
+    await primeActor(OWNER, { granted: true });
     const projectsStore = (await import("@/lib/projects-store")) as unknown as {
       readProjectById: ReturnType<typeof vi.fn>;
       projectsDb: { execute: ReturnType<typeof vi.fn> };
