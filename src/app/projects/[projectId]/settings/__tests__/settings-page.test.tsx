@@ -90,7 +90,9 @@ describe("project settings page RSC (#1733)", () => {
     const html = renderToStaticMarkup(ui);
 
     expect(html).toMatch(/<main/);
-    expect(html).toMatch(/Project settings — Demo project/);
+    // The entity page h1 is the project name + kind label (spec §IX); "settings"
+    // is communicated by the active Settings tab, not the heading.
+    expect(html).toMatch(/Demo project/);
     expect(html).toMatch(/data-testid="scope-badge"/);
     expect(html).not.toMatch(/data-testid="access-combobox"/);
     expect(html).toMatch(/data-testid="project-sharing-panel"/);

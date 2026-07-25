@@ -15,6 +15,7 @@ import { PageContent } from "@/components/page-content";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 import { CrumbContributions } from "@/components/crumb-contributions";
+import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 
 import { TeamSettingsForm } from "./team-settings-form";
 import { TeamMembersSection, type TeamMemberView } from "./team-members-section";
@@ -175,10 +176,19 @@ export default async function TeamSettingsPage({
         ]}
       />
       <PageHeader
-        title={`Team settings — ${team.name}`}
+        label="Team"
+        title={team.name}
         description={`Organization: ${team.org_name} (${team.org_slug})`}
+        divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
+        {/* The entity-page tablist: this Settings pane is the second tab (spec
+            §IX); Dashboards is the first, at the sibling scope route. */}
+        <EntityScopeTabs
+          dashboardsHref={`/teams/${encodeURIComponent(team.id)}/dashboards`}
+          settingsHref={`/teams/${encodeURIComponent(team.id)}/settings`}
+          active="settings"
+        />
         <Card>
           <CardHeader>
             <CardTitle>Team details</CardTitle>

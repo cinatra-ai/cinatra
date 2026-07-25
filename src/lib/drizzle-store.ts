@@ -1269,24 +1269,19 @@ END $$` },
         CHECK (template_scope IS NULL OR template_scope IN ('organization','team','workspace','user','project'));
     EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
     { text: `CREATE INDEX IF NOT EXISTS dashboards_project_id_idx ON "${schemaName.replaceAll('"', '""')}"."dashboards" (project_id)` },
-    // One TEMPLATE per (extension, org).
+    // One TEMPLATE per (extension, org); one INSTANCE per (extension, org, project).
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_ext_template_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (extension_id, organization_id) WHERE extension_id IS NOT NULL AND is_template = true` },
-    // One INSTANCE per (extension, org, project).
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_ext_instance_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (extension_id, organization_id, project_id) WHERE extension_id IS NOT NULL AND project_id IS NOT NULL` },
     // dashboardContribution lineage + baseline snapshot (cinatra#1628, S11a).
-    // Additive columns + partial indexes only (bootstrap owns additive evolution
-    // per migrations/README.md); the TRANSFORMATIONAL one-time legacy→lineage
-    // backfill + the durable-absence orphan sweep are versioned migration
-    // core__0051, which runs AFTER this bootstrap so these partial unique indexes
-    // already exist + enforce when it commits.
-    //   - contribution_id: carrier-independent immutable lineage id — survives the
-    //     workflow→agent package re-home. A template + its 0..N per-project
-    //     instances SHARE one contribution_id (NOT globally row-unique).
-    //   - applied_default_json / _hash / applied_contribution_version: the
-    //     extension-owned default SNAPSHOT (the baseline-backed 3-way merge base,
-    //     S11b) + a fast change-detector + the applied version provenance.
-    //   - archive_reason: why an extension row was archived (orphan sweep /
-    //     committed-uninstall hook), for auditability + restore decisions.
+    // Additive columns + partial indexes only (the TRANSFORMATIONAL legacy→lineage
+    // backfill + orphan sweep are migration core__0051, run AFTER this bootstrap so
+    // these partial unique indexes already exist + enforce when it commits).
+    // contribution_id: carrier-independent immutable lineage id (survives the
+    // workflow→agent re-home; a template + its 0..N per-project instances SHARE
+    // one, NOT globally row-unique). applied_default_json/_hash/
+    // applied_contribution_version: the extension-owned default SNAPSHOT (the
+    // 3-way merge base, S11b) + change-detector + version provenance.
+    // archive_reason: why an extension row was archived (orphan sweep / uninstall).
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS contribution_id text` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS applied_contribution_version integer` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS applied_default_json jsonb` },
@@ -1306,6 +1301,11 @@ END $$` },
     { text: `CREATE INDEX IF NOT EXISTS dashboards_entity_idx ON "${schemaName.replaceAll('"', '""')}"."dashboards" (organization_id, entity_type, entity_id, owner_level, owner_id) WHERE entity_type IS NOT NULL` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_entity_default_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (organization_id, entity_type, entity_id, owner_level, owner_id) WHERE is_default = true AND entity_type IS NOT NULL` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_entity_name_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (organization_id, entity_type, entity_id, owner_level, owner_id, name) WHERE entity_type IS NOT NULL` },
+    // dashboard_entity_links — cinatra#1897 B4 scope-collection SECONDARY LISTINGS (additive; mirrors migration core__0080; the canonical home stays the singular entityRef on dashboards, so Overview + name-uniqueness are untouched).
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" (id text PRIMARY KEY, dashboard_id text NOT NULL REFERENCES "${schemaName.replaceAll('"', '""')}"."dashboards"(id) ON DELETE CASCADE, entity_type text NOT NULL CHECK (entity_type IN ('team','organization','project')), entity_id text NOT NULL, organization_id text NOT NULL, created_by text NOT NULL, created_at timestamptz NOT NULL DEFAULT now())` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboard_entity_links_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" (dashboard_id, entity_type, entity_id)` },
+    { text: `CREATE INDEX IF NOT EXISTS dashboard_entity_links_scope_idx ON "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" (entity_type, entity_id, organization_id)` },
+    { text: `CREATE INDEX IF NOT EXISTS dashboard_entity_links_dashboard_idx ON "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" (dashboard_id)` },
     // agent_registry_entries, agent_share_bindings, agent_forks for @cinatra/agent-builder registry
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_registry_entries" (
       id text PRIMARY KEY,

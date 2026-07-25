@@ -13,6 +13,7 @@ import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 import { projectsDb, readProjectById, readProjectCoOwners } from "@/lib/projects-store";
 import { readOwnerDisplayName } from "@/lib/owner-display-names";
 import { CrumbContributions } from "@/components/crumb-contributions";
+import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
@@ -214,7 +215,8 @@ export default async function ProjectSettingsPage({ params }: Props) {
         ]}
       />
       <PageHeader
-        title={`Project settings — ${project.name}`}
+        label="Project"
+        title={project.name}
         description="Choose who can access this project and manage its owners."
         actions={
           <div className="flex items-center gap-2">
@@ -235,6 +237,13 @@ export default async function ProjectSettingsPage({ params }: Props) {
         divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
+        {/* The entity-page tablist: this Settings pane is the second tab (spec
+            §IX); Dashboards is the first, at the sibling scope route. */}
+        <EntityScopeTabs
+          dashboardsHref={`/projects/${encodeURIComponent(project.id)}/dashboards`}
+          settingsHref={`/projects/${encodeURIComponent(project.id)}/settings`}
+          active="settings"
+        />
         {/* Clarify ownership vs access. */}
         <AccessVsOwnershipNote />
         <ProjectPermissionsTabClient

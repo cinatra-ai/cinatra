@@ -7,7 +7,7 @@ import "server-only";
 import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 
-import { dashboards, dashboardRevisions } from "./schema";
+import { dashboards, dashboardRevisions, dashboardEntityLinks } from "./schema";
 import { auditEvents } from "./audit-events-schema";
 
 declare global {
@@ -35,6 +35,7 @@ export function getDashboardsPool(): Pool {
 const SCHEMA_OBJECT = {
   dashboards,
   dashboardRevisions,
+  dashboardEntityLinks,
   auditEvents,
 };
 
@@ -46,4 +47,4 @@ export function getDashboardsDb() {
 }
 
 export type DashboardsDb = ReturnType<typeof getDashboardsDb>;
-export { dashboards, dashboardRevisions, auditEvents };
+export { dashboards, dashboardRevisions, dashboardEntityLinks, auditEvents };

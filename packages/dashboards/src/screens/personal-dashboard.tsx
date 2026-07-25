@@ -31,6 +31,7 @@ import { redirect } from "next/navigation";
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
+import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 
 import { getAuthSession } from "@/lib/auth-session";
 
@@ -89,11 +90,15 @@ export async function PersonalDashboardPage() {
   return (
     <Main className="min-h-screen">
       <PageHeader
+        label="Your scope"
         title="Personal"
         description="Your private dashboards, built from the cards you add."
         divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
+        {/* Personal has no Settings pane (#1904), so its entity-page tablist is
+            Dashboards alone (spec §IX). */}
+        <EntityScopeTabs dashboardsHref="/personal" active="dashboards" />
         <EntityDashboardsShell
           dataSource={dataSource}
           pageAnchor="personal"
