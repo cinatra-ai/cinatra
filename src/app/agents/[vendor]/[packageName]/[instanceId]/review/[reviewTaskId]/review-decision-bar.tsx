@@ -11,7 +11,7 @@ import {
   reviewDecideDisabledReason,
   type ReviewDecisionPermissions,
   type ReviewSubmitOutcome,
-} from "@/app/artifacts/review/review-surface-model";
+} from "@/lib/artifacts/review-surface-model";
 
 import { ReviewGateBlocked } from "./review-gate-states";
 

@@ -83,6 +83,8 @@
     { "alias": "@cinatra-ai/agents/verdaccio/client", "target": "./packages/agents/src/verdaccio/client.ts" },
     { "alias": "@cinatra-ai/agents/verdaccio/publish-metadata", "target": "./packages/agents/src/verdaccio/publish-metadata.ts" },
     { "alias": "@cinatra-ai/agents/artifact-binding", "target": "./packages/agents/src/artifact-binding.ts" },
+    { "alias": "@cinatra-ai/agents/run-stepper-steps", "target": "./packages/agents/src/run-stepper-steps.ts" },
+    { "alias": "@cinatra-ai/agents/hitl-conversation-panel", "target": "./packages/agents/src/hitl-conversation-panel.tsx" },
     { "alias": "@cinatra-ai/connectors", "target": "./packages/connectors/src/index.ts" },
     { "alias": "@cinatra-ai/connectors/pages", "target": "./packages/connectors/src/pages.tsx" },
     { "alias": "@cinatra-ai/connectors/connectors-client", "target": "./packages/connectors/src/connectors-client.tsx" },

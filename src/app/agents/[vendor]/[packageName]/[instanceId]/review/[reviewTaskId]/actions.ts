@@ -16,7 +16,7 @@ import {
   mapSubmitResultToOutcome,
   mapChangesRequestedToOutcome,
   type ReviewSubmitOutcome,
-} from "@/app/artifacts/review/review-surface-model";
+} from "@/lib/artifacts/review-surface-model";
 import { isLifecycleReviewOrchestrationActive } from "@/lib/lifecycle/lifecycle-activation";
 import { isAutoReviewTaskId, isBatchAutoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 

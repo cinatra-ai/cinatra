@@ -95,6 +95,8 @@
       "@cinatra-ai/agents/verdaccio/client": ["./packages/agents/src/verdaccio/client.ts"],
       "@cinatra-ai/agents/verdaccio/publish-metadata": ["./packages/agents/src/verdaccio/publish-metadata.ts"],
       "@cinatra-ai/agents/artifact-binding": ["./packages/agents/src/artifact-binding.ts"],
+      "@cinatra-ai/agents/run-stepper-steps": ["./packages/agents/src/run-stepper-steps.ts"],
+      "@cinatra-ai/agents/hitl-conversation-panel": ["./packages/agents/src/hitl-conversation-panel.tsx"],
       "@cinatra-ai/connectors": ["./packages/connectors/src/index.ts"],
       "@cinatra-ai/connectors/pages": ["./packages/connectors/src/pages.tsx"],
       "@cinatra-ai/connectors/connectors-client": ["./packages/connectors/src/connectors-client.tsx"],

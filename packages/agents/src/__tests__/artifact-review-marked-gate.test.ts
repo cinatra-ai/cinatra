@@ -234,7 +234,12 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     expect(xRenderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
     expect(invocationId).toBe("wayflow-task-rev-1");
     const v = values as Record<string, unknown>;
-    expect(v.reviewSurfaceUrl).toBe("/artifacts/review/run-rev-1/wayflow-task-rev-1");
+    // Owner ruling 2026-07-25 (3): the review surface lives UNDER the agent run.
+    // The template packageName (@cinatra-ai/reviewer-agent) → the run base
+    // /agents/cinatra-ai/reviewer-agent/run-rev-1, then the review sub-path.
+    expect(v.reviewSurfaceUrl).toBe(
+      "/agents/cinatra-ai/reviewer-agent/run-rev-1/review/wayflow-task-rev-1",
+    );
     expect(v.reviewTaskId).toBe("wayflow-task-rev-1");
     expect(v.targetCount).toBe(2);
     expect(v.agentSummary).toBe("Two items ready for your review.");

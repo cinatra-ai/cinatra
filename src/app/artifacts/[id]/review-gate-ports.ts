@@ -49,7 +49,7 @@ import {
   type PreparedReviewTarget,
   type RunAccessOutcome,
 } from "@/lib/artifacts/artifact-review-preparation";
-import type { ReviewSurfaceModel } from "@/app/artifacts/review/review-surface-model";
+import type { ReviewSurfaceModel } from "@/lib/artifacts/review-surface-model";
 import {
   submitReviewDecisionCore,
   type ArtifactReviewDecision,

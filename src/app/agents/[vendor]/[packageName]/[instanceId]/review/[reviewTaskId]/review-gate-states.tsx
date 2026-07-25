@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import {
   reviewBlockedCopy,
   type ReviewBlockedReason,
-} from "@/app/artifacts/review/review-surface-model";
+} from "@/lib/artifacts/review-surface-model";
 
 /**
  * The gate-level BLOCKED state (cinatra#1795 S12 item 4; spec design@30a0f9c9 §V):

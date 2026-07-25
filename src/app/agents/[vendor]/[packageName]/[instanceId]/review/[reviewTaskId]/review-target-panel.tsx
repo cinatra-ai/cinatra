@@ -11,7 +11,7 @@ import {
   reviewProvenanceLabel,
   reviewRevisionMarker,
   reviewTypeLabel,
-} from "@/app/artifacts/review/review-surface-model";
+} from "@/lib/artifacts/review-surface-model";
 
 /**
  * ONE review target panel (cinatra#1795 S12 item 4; spec design@30a0f9c9 §II/§III):

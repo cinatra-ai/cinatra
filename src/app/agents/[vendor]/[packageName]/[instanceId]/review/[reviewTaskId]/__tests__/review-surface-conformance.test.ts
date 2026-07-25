@@ -19,12 +19,17 @@ import { describe, expect, it } from "vitest";
 
 const SPEC_COMMIT = "design@30a0f9c9"; // specs/app-artifact-review.html (ratified)
 
-const ROUTE = path.resolve(__dirname, "..", "[runId]", "[reviewTaskId]");
-const REVIEW_ROOT = path.resolve(__dirname, "..");
+// The chrome now lives under the agent-run route
+// `src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]`
+// (owner ruling 2026-07-25 (3): the review is part of an agent run). __dirname is
+// that route's `__tests__`; ROUTE is its parent; the shared surface model was
+// relocated to `src/lib/artifacts` (SRC_ROOT is seven levels above ROUTE).
+const ROUTE = path.resolve(__dirname, "..");
+const SRC_ROOT = path.resolve(ROUTE, "..", "..", "..", "..", "..", "..", "..");
 const read = (abs: string) => readFileSync(abs, "utf8");
 const routeFile = (rel: string) => read(path.join(ROUTE, rel));
 
-const MODEL = read(path.join(REVIEW_ROOT, "review-surface-model.ts"));
+const MODEL = read(path.join(SRC_ROOT, "lib", "artifacts", "review-surface-model.ts"));
 const PAGE = routeFile("page.tsx");
 const TARGET_PANEL = routeFile("review-target-panel.tsx");
 const DECISION_BAR = routeFile("review-decision-bar.tsx");

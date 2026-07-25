@@ -50,6 +50,8 @@
     "./verdaccio/client": "./src/verdaccio/client.ts",
     "./verdaccio/publish-metadata": "./src/verdaccio/publish-metadata.ts",
     "./artifact-binding": "./src/artifact-binding.ts",
+    "./run-stepper-steps": "./src/run-stepper-steps.ts",
+    "./hitl-conversation-panel": "./src/hitl-conversation-panel.tsx",
   "./owner-containment-port": "./src/owner-containment-port.ts"
   },
   "scripts": {
