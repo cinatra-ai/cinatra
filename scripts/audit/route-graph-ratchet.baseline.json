@@ -12,31 +12,31 @@
       "from": 1578,
       "to": 1583,
       "reason": "#2067 C3 (epic #2037 lifecycle-interceptions): the run-start skill-recommendation chip-row finishes the #2041 S3 human surface. The universally-registered agent screens path (packages/agents/src/instance-screens.tsx SetupScreen) and the chat run panel (packages/agents/src/agentic-run-panel.tsx) now reach FIVE new first-party modules every tracked route transitively hits: packages/agents/src/recommendation-hold.ts (the pre-dispatch hold/release helper), packages/agents/src/run-recommendation-actions.ts (the confirm/adjust/skip decision + dispatch actions), packages/agents/src/run-recommendation-chip-row.tsx (the shared chip-row component), and the two engine modules they newly pull onto these routes (packages/agents/src/recommendation-interception.ts scorer seam + packages/agents/src/lifecycle-continuation-park-store.ts park store). Accepted dev-perf growth for the ratified run-embedding correction; mirrors the #2066 C0/C1 absorb it builds on.",
-      "pr": 2067
+      "pr": 2070
     },
     "/api/mcp": {
       "from": 1574,
       "to": 1579,
       "reason": "#2067 C3 (epic #2037 lifecycle-interceptions): the run-start skill-recommendation chip-row finishes the #2041 S3 human surface. The universally-registered agent screens path (packages/agents/src/instance-screens.tsx SetupScreen) and the chat run panel (packages/agents/src/agentic-run-panel.tsx) now reach FIVE new first-party modules every tracked route transitively hits: packages/agents/src/recommendation-hold.ts (the pre-dispatch hold/release helper), packages/agents/src/run-recommendation-actions.ts (the confirm/adjust/skip decision + dispatch actions), packages/agents/src/run-recommendation-chip-row.tsx (the shared chip-row component), and the two engine modules they newly pull onto these routes (packages/agents/src/recommendation-interception.ts scorer seam + packages/agents/src/lifecycle-continuation-park-store.ts park store). Accepted dev-perf growth for the ratified run-embedding correction; mirrors the #2066 C0/C1 absorb it builds on.",
-      "pr": 2067
+      "pr": 2070
     },
     "/chat": {
       "from": 1648,
       "to": 1653,
       "reason": "#2067 C3 (epic #2037 lifecycle-interceptions): the run-start skill-recommendation chip-row finishes the #2041 S3 human surface. The universally-registered agent screens path (packages/agents/src/instance-screens.tsx SetupScreen) and the chat run panel (packages/agents/src/agentic-run-panel.tsx) now reach FIVE new first-party modules every tracked route transitively hits: packages/agents/src/recommendation-hold.ts (the pre-dispatch hold/release helper), packages/agents/src/run-recommendation-actions.ts (the confirm/adjust/skip decision + dispatch actions), packages/agents/src/run-recommendation-chip-row.tsx (the shared chip-row component), and the two engine modules they newly pull onto these routes (packages/agents/src/recommendation-interception.ts scorer seam + packages/agents/src/lifecycle-continuation-park-store.ts park store). Accepted dev-perf growth for the ratified run-embedding correction; mirrors the #2066 C0/C1 absorb it builds on.",
-      "pr": 2067
+      "pr": 2070
     },
     "/api/a2a": {
       "from": 1579,
       "to": 1584,
       "reason": "#2067 C3 (epic #2037 lifecycle-interceptions): the run-start skill-recommendation chip-row finishes the #2041 S3 human surface. The universally-registered agent screens path (packages/agents/src/instance-screens.tsx SetupScreen) and the chat run panel (packages/agents/src/agentic-run-panel.tsx) now reach FIVE new first-party modules every tracked route transitively hits: packages/agents/src/recommendation-hold.ts (the pre-dispatch hold/release helper), packages/agents/src/run-recommendation-actions.ts (the confirm/adjust/skip decision + dispatch actions), packages/agents/src/run-recommendation-chip-row.tsx (the shared chip-row component), and the two engine modules they newly pull onto these routes (packages/agents/src/recommendation-interception.ts scorer seam + packages/agents/src/lifecycle-continuation-park-store.ts park store). Accepted dev-perf growth for the ratified run-embedding correction; mirrors the #2066 C0/C1 absorb it builds on.",
-      "pr": 2067
+      "pr": 2070
     },
     "/api/llm-bridge": {
       "from": 1589,
       "to": 1594,
       "reason": "#2067 C3 (epic #2037 lifecycle-interceptions): the run-start skill-recommendation chip-row finishes the #2041 S3 human surface. The universally-registered agent screens path (packages/agents/src/instance-screens.tsx SetupScreen) and the chat run panel (packages/agents/src/agentic-run-panel.tsx) now reach FIVE new first-party modules every tracked route transitively hits: packages/agents/src/recommendation-hold.ts (the pre-dispatch hold/release helper), packages/agents/src/run-recommendation-actions.ts (the confirm/adjust/skip decision + dispatch actions), packages/agents/src/run-recommendation-chip-row.tsx (the shared chip-row component), and the two engine modules they newly pull onto these routes (packages/agents/src/recommendation-interception.ts scorer seam + packages/agents/src/lifecycle-continuation-park-store.ts park store). Accepted dev-perf growth for the ratified run-embedding correction; mirrors the #2066 C0/C1 absorb it builds on.",
-      "pr": 2067
+      "pr": 2070
     }
   }
 }
