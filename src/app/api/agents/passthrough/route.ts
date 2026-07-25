@@ -86,16 +86,6 @@ const ALLOWED_TOOLS = new Set([
   // run-bound frame established below (never the request body).
   "email_test_delivery_run_send",
   "email_test_delivery_parse_action",
-  // Deterministic pre-interrupt skills resolution (cinatra#1625 S8/M3). The
-  // skill-recommender agent's `prep_skills` ApiNode calls this to resolve the
-  // skills assigned to its target drafting agent, wiring `{ skillIds }` into
-  // the skill-recommend HITL gate payload (a DataFlowEdge) so the extension's
-  // now-pure-DISPLAY renderer reads them off `value` — the authenticated read
-  // that the in-core renderer used to do at mount moved here (the public
-  // field-renderer props contract can't reach a host action). Actor-derived
-  // (a `skill` read scoped by the run's resolved actor authority), so it stays
-  // in the GENERIC set and NOT in RUN_SCOPED_CONTEXT_TOOLS.
-  "skills_installed_resolve_for_agent",
   // Run-scoped drafts-review PERSIST primitive (cinatra#1959) — the re-entrant
   // drafts / follow-ups gate's post-resume `apply` node dispatches this to write
   // the operator's reviewed per-recipient edits onto the run's own draft-bundle

@@ -46,19 +46,10 @@ const CREATION_AGENTS_WITH_THIN_OAS = new Set([
  *     preserved: this agent
  *     receives skill ids AS DATA from the catalog; it does not embed
  *     methodology into OAS.
- *   - `skill-recommender-agent` — same DataFlowEdge-thread rationale as
- *     `auditor-agent` after the cinatra#1625 S8/M3 renderer relocation: the
- *     extension's `prep_skills` ApiNode resolves the target agent's INSTALLED
- *     skills via the actor-scoped `skills_installed_resolve_for_agent`
- *     passthrough (a catalog read) and threads `{skillIds}` into the HITL gate
- *     payload as a DataFlowEdge source_output/destination_input + I/O schema
- *     field. That is catalog-resolved DATA, not methodology prose — the OAS
- *     never embeds skill bodies; skills stay owned by the catalog/skills layer.
  */
 const SKIP_NO_SKILL_IDS_SCAN = new Set([
   "lint-policy-agent",
   "auditor-agent",
-  "skill-recommender-agent",
 ]);
 
 type OasEntry = { dir: string; oasPath: string; oas: Record<string, unknown> };

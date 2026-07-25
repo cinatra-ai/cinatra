@@ -168,23 +168,6 @@ describe("resolution parity with the retired hand map", () => {
     },
   );
 
-  it("migrated skill-recommend binding resolves to the extension wrapper at the pre-cutover priority", () => {
-    // The COMPONENT relocated into @cinatra-ai/skill-recommender-agent
-    // (cinatra#1625 S8/M3): the binding is present in the generated component
-    // map, so it registers as the ExtensionFieldRenderer wrapper (lazy-loads the
-    // extension module, floors on any degrade) — NOT the retired host component,
-    // and no longer a WithBindingParams wrapper (the 4636be97 manifest dropped
-    // `params.skillsTargetPackage`; the extension renderer is now pure display
-    // over the prep-node-gathered `value`). The id + priority (60) are unchanged,
-    // so stored/in-flight runs still resolve the SAME binding.
-    const id = "@cinatra-ai/skill-recommender-agent:recommend";
-    const entry = resolveWith(id);
-    expect(entry).toBeTruthy();
-    expect(entry!.priority).toBe(60);
-    const resolved = entry!.renderer as ComponentType & { displayName?: string };
-    expect(resolved.displayName).toBe(`ExtensionFieldRenderer(${id})`);
-  });
-
   it.each([
     ["@cinatra-ai/list-curator-agent:scrape-schema-review", 90],
     ["@cinatra-ai/list-curator-agent:final-list-review", 90],

@@ -180,7 +180,7 @@
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
       "repo": "cinatra-ai/email-outreach-agent",
-      "resolvedSha": "aa891a642bfb2dcf9cc8d49bc45781aa4b81b39d"
+      "resolvedSha": "8e60be166a1cfcb56badecb0882e88f500b66687"
     },
     {
       "packageName": "@cinatra-ai/email-recipient-selection-agent",
@@ -306,11 +306,6 @@
       "packageName": "@cinatra-ai/skill-creator-skills",
       "repo": "cinatra-ai/skill-creator-skills",
       "resolvedSha": "0379b74602ea263210ff03cc5e6a83d9a279f1b6"
-    },
-    {
-      "packageName": "@cinatra-ai/skill-recommender-agent",
-      "repo": "cinatra-ai/skill-recommender-agent",
-      "resolvedSha": "11994309a2666ea07223f2d54ca573e98f7c58b6"
     },
     {
       "packageName": "@cinatra-ai/slide-deck-artifact",

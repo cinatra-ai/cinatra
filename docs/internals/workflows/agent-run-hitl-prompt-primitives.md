@@ -8,8 +8,8 @@ renderer reaching an authenticated host action.
 - Status: normative authoring guidance (epic #1620, owner action-boundary ruling
   2026-07-18; the enabling primitives landed with #1794).
 - Audience: authors of `kind:"agent"` workflow extensions (`cinatra/oas.json`)
-  whose HITL screens used to depend on host server actions — the auditor and
-  skill-recommender families, and the generic review surface built on top.
+  whose HITL screens used to depend on host server actions — the auditor
+  family, and the generic review surface built on top.
 
 ## Why this exists
 

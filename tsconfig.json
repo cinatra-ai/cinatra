@@ -453,7 +453,6 @@
       "@cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer": ["./extensions/cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer.tsx"],
       "@cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review": ["./extensions/cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review.tsx"],
       "@cinatra-ai/blog-wordpress-publish-agent/src/renderers/draft-confirm": ["./extensions/cinatra-ai/blog-wordpress-publish-agent/src/renderers/draft-confirm.tsx"],
-      "@cinatra-ai/skill-recommender-agent/src/skill-recommender-renderer": ["./extensions/cinatra-ai/skill-recommender-agent/src/skill-recommender-renderer.tsx"],
       "@cinatra-ai/projects": ["./packages/projects/src/index.ts"],
       "@cinatra-ai/projects/module": ["./packages/projects/src/integration/module.ts"],
       "@cinatra-ai/projects/mcp-handlers": ["./packages/projects/src/mcp/handlers.ts"],

@@ -36,7 +36,6 @@ export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze([
   "reviewer-output",
   "scrape-schema-review",
   "send-confirmation",
-  "skill-recommend",
   "test-delivery-input",
   "wayflow-setup-form",
   "wordpress-draft-confirm",

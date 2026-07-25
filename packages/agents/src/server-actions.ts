@@ -31,7 +31,7 @@ import { actorFromSession, type ActorRoleHints } from "@/lib/authz/build-actor-c
 import type { FieldRendererBindingInput } from "./register-default-renderers";
 import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
 // Request-aware recommendation (cinatra#2041 S3): the CORE chip-row surface,
-// re-homed off the retiring skill-recommender-agent binding.
+// re-homed into core off the now-retired recommender agent binding.
 import {
   getRunRecommendations,
   confirmRunSkillSelection,
@@ -221,7 +221,7 @@ export async function getSkillsForAgentAction(
 // Point R — request-aware skill recommendation CORE surface (cinatra#2041 S3).
 //
 // getRunRecommendedSkillsAction / confirmRunSkillSelectionAction are the CORE
-// chip-row surface, re-homed off the retiring skill-recommender-agent binding.
+// chip-row surface, re-homed into core off the now-retired recommender agent binding.
 // The chip-row fetches request-aware recommendations for the run's intent, and
 // the human's confirm/adjust writes the immutable per-run selection set (which
 // every delivery path — execution snapshot + llm-bridge — then consumes).

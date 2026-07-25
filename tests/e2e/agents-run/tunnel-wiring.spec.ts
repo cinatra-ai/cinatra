@@ -74,7 +74,7 @@ test.describe("tunnel-wiring", () => {
 
       // Agents with zero llm-bridge nodes are trivially compliant and
       // surface as PASS — that's the expected case for HITL-only agents
-      // like skill-recommender-agent or trigger-agent's setup-only flow.
+      // like a HITL-only agent or trigger-agent's setup-only flow.
       expect(
         offenders,
         offenders.length > 0

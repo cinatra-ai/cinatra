@@ -243,9 +243,6 @@ async function driveCustomRenderer(
   }
 
   switch (screen.xRenderer) {
-    case "@cinatra-ai/skill-recommender-agent:recommend":
-      await advanceSkillRecommenderRecommend(page);
-      break;
     case "@cinatra-ai/trigger-agent:configure":
       await advanceTriggerAgentConfigure(page, screen.action);
       break;
@@ -600,38 +597,6 @@ async function advanceListCuratorApprove(page: Page): Promise<void> {
     .last();
   await expect(outerContinue).toBeEnabled({ timeout: 15_000 });
   await outerContinue.click();
-}
-
-async function advanceSkillRecommenderRecommend(page: Page): Promise<void> {
-  // Renderer source: packages/agents/src/skill-recommender-agent-renderers.tsx
-  // Continue button is disabled until `loaded === true` (skill fetch resolves).
-  // Use 90s for the orchestrator context where the skill fetch can lag
-  // behind LLM-bridge load on the run-page.
-  // Keep the button-enabled wait (networkidle is unreliable under
-  // SSE/server-actions); on timeout, dump the page's
-  // visible buttons + the Agentic-Run-Progress status text so a future
-  // transient flake is diagnosable from the trace instead of opaque.
-  const continueButton = page.getByRole("button", { name: /^Continue$/ }).first();
-  try {
-    await expect(continueButton).toBeEnabled({ timeout: 90_000 });
-  } catch (err) {
-    const buttons = await page
-      .getByRole("button")
-      .allInnerTexts()
-      .catch(() => [] as string[]);
-    const statusText = await page
-      .locator("text=/pending approval|running|queued|completed|failed/i")
-      .first()
-      .innerText()
-      .catch(() => "(no status text found)");
-    console.error(
-      `[skill-recommender] Continue never enabled within 90s. ` +
-        `Run status text: "${statusText}". Visible buttons: ` +
-        `[${buttons.join(" | ")}]`,
-    );
-    throw err;
-  }
-  await continueButton.click();
 }
 
 async function advanceTriggerAgentConfigure(
