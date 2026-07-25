@@ -110,6 +110,9 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     // dependent_install_id surfaced onto the record so buildActorContextFromRun
     // carries it onto the ActorContext for edge-bound serving (cinatra#1392 Gap 2).
     dependentInstallId: row.dependentInstallId ?? null,
+    // run-start presence discriminator (cinatra#2067). Drizzle returns the typed
+    // boolean column directly; null on pre-backfill / headless rows.
+    humanPresent: row.humanPresent ?? null,
   };
 }
 

@@ -253,6 +253,7 @@ export type AgentRunRecord = {
   // column; re-derived + containment-checked at mint.
   oboCeiling: OboCeilingChain | null;
   dependentInstallId: string | null; // installed_extension row id this run executes AS (cinatra#1392 Gap 2)
+  humanPresent: boolean | null; // cinatra#2067 run-start presence discriminator; true only for interactive UI/chat runs, null/false headless
 };
 
 export type CreateAgentTemplateInput = {
@@ -351,6 +352,7 @@ export type CreateAgentRunInput = {
   // schema-only paths) omit; new MCP handlers populate it from the actor.
   delegatedActorSnapshot?: string | null;
   dependentInstallId?: string | null; // SERVER-ONLY trusted dispatch id (cinatra#1392 Gap 2) — never from client input
+  humanPresent?: boolean | null; // cinatra#2067 presence discriminator; true only from interactive UI/chat run-start callers
 };
 
 // ---------------------------------------------------------------------------
@@ -1461,6 +1463,7 @@ export async function createAgentRun(
     // anchor → fails closed at mint).
     oboCeiling: oboCeilingJson,
     dependentInstallId: input.dependentInstallId ?? null, // server-only trusted id (cinatra#1392 Gap 2)
+    humanPresent: input.humanPresent ?? null, // cinatra#2067 presence discriminator
   } as const;
 
   // Fast path: no idempotency key → plain insert, legacy behavior unchanged.
@@ -3074,21 +3077,12 @@ export async function resolveDefaultOrgId(): Promise<string | null> {
 // ---------------------------------------------------------------------------
 
 /**
- * create an agent_runs row in `pending_input` status with the
- * supplied (typically empty) inputParams. The dispatcher's setup-interrupt
- * loop emits AG-UI INTERRUPTs for any required schema fields
- * once the run is triggered. versionId is pinned to the latest snapshot so
- * the run stays consistent across template recompiles after creation.
- *
- * Replaces the legacy `createAgentRunForSetup` + `findAgentRunBySetupNonce`
- * pair. Idempotency was nonce-based and only mattered
- * for the wizard's per-step save loop, which no longer exists.
- *
- * Added `orgId` so callers can clone
- * the originating run's organization onto the pending row.
- * `orgId` is now required — every caller must resolve it before insert.
- * run-actions.ts + 1 in trigger-release-job.ts) now populates it, and the
- * underlying column is NOT NULL.
+ * Create an agent_runs row in `pending_input` status with the supplied
+ * (typically empty) inputParams. The dispatcher's setup-interrupt loop emits
+ * AG-UI INTERRUPTs for any required schema fields once the run is triggered.
+ * versionId is pinned to the latest snapshot so the run stays consistent across
+ * template recompiles. `orgId` is required (NOT NULL column) — every caller
+ * resolves it before insert.
  */
 export async function createAgentRunPendingInput(input: {
   templateId: string;
@@ -3099,6 +3093,7 @@ export async function createAgentRunPendingInput(input: {
   // runs inherit projectId from the same boundary as createAgentRun (chat
   // path / server action). Set NULL for non-project invocations.
   projectId?: string | null;
+  humanPresent?: boolean | null; // cinatra#2067 presence discriminator (interactive callers pass true)
 }): Promise<AgentRunRecord> {
   const id = randomUUID();
   const versionIdToPin = await readLatestAgentVersionIdForTemplate(input.templateId);
@@ -3128,6 +3123,7 @@ export async function createAgentRunPendingInput(input: {
     // the same project frame.
     projectId: input.projectId ?? null,
     oboCeiling: oboCeilingJson,
+    humanPresent: input.humanPresent ?? null, // cinatra#2067 presence discriminator
   });
   const created = await readAgentRunById(id);
   if (!created) throw new Error(`Failed to create pending_input agent run: ${id}`);

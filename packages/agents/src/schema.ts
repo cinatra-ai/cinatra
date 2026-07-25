@@ -337,6 +337,20 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // reads run.dependentInstallId to carry it onto the ActorContext.
   // Migration: src/lib/drizzle-store.ts dependent_install_id entry + core__0030.
   dependentInstallId: text("dependent_install_id"),
+  // human_present: the run-start presence discriminator (cinatra#2067, epic
+  // #2037 C3). TRUE only for runs interactively started by a present human from
+  // the UI/chat (the run-actions.ts + chat run-start seams); NULL/false for
+  // every headless origin (scheduled/recurring triggers, A2A/API dispatch,
+  // worker child dispatch). ONLY a human-present run may PARK at the run-start
+  // recommendation interception for the confirm/adjust/skip chip-row; a headless
+  // run auto-applies and never parks (the S3 engine behavior stays byte-
+  // identical — NULL reads as "not present"). Nullable + additive: pre-existing
+  // rows read NULL (headless-safe default; unchanged behavior).
+  // Migration: additive nullable column via src/lib/drizzle-store.ts
+  //   (ADD COLUMN IF NOT EXISTS human_present boolean) — the timeout_seconds /
+  //   streamed_text precedent; no numbered migration (schema-migration-gate
+  //   classifies a new nullable column as additive).
+  humanPresent: boolean("human_present"),
 }, (t) => ({
   templateIdIdx:    index("agent_runs_template_id_idx").on(t.templateId),
   statusIdx:        index("agent_runs_status_idx").on(t.status),
