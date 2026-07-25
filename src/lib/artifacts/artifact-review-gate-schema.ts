@@ -73,8 +73,10 @@ export function artifactReviewGateSchemaQueries(schemaName: string): QueryInput[
                     CHECK (status IN ('pending','resolved')),
   pinned_targets  jsonb NOT NULL,
   -- Only a TERMINAL disposition ever lands on the gate (a 'comment' is
-  -- audit-only and never resolves the gate).
-  disposition     text CHECK (disposition IN ('approve','reject')),
+  -- audit-only and never resolves the gate). S2 (cinatra#2040) adds
+  -- 'changes_requested' as a terminal disposition that closes the review attempt
+  -- and opens a repair (its effect stays HELD until the successor gate approves).
+  disposition     text CHECK (disposition IN ('approve','reject','changes_requested')),
   fingerprint     text,
   resolved_by     text,
   resolved_at     timestamptz,
@@ -83,7 +85,7 @@ export function artifactReviewGateSchemaQueries(schemaName: string): QueryInput[
   -- fingerprint + resolution time the CAS stamps; a pending gate carries none.
   CONSTRAINT artifact_review_gates_resolved_chk CHECK (
     status = 'pending'
-    OR (disposition IN ('approve','reject') AND fingerprint IS NOT NULL AND resolved_at IS NOT NULL)
+    OR (disposition IN ('approve','reject','changes_requested') AND fingerprint IS NOT NULL AND resolved_at IS NOT NULL)
   )
 )`,
     },
@@ -105,7 +107,7 @@ export function artifactReviewGateSchemaQueries(schemaName: string): QueryInput[
   decision_fingerprint       text NOT NULL,
   artifact_id                text NOT NULL,
   representation_revision_id text NOT NULL,
-  disposition                text NOT NULL CHECK (disposition IN ('approve','reject','comment')),
+  disposition                text NOT NULL CHECK (disposition IN ('approve','reject','comment','changes_requested')),
   renderer_kind              text NOT NULL CHECK (renderer_kind IN ('build-map','runtime','floor')),
   renderer_package           text,
   renderer_digest            text,
@@ -413,5 +415,196 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
     // COMPILED MANIFEST — agent_templates.lifecycle_config (JSON-as-text).
     // -----------------------------------------------------------------------
     { text: `ALTER TABLE "${q}"."agent_templates" ADD COLUMN IF NOT EXISTS lifecycle_config text` },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// lifecycle-interceptions S2 (cinatra#2040, epic #2037) bootstrap DDL — the
+// REPAIR LOOP + the two routed schema additions. Co-located in this already-
+// route-reachable schema module (the S0 precedent) so drizzle-store gains NO new
+// first-party route-graph node. The operator-upgrade twin is migration
+// core__0081; the two DDLs mirror each other.
+//
+// Four brand-new tables + additive CHECK-expansions on the #1796 gate/audit
+// tables (so 'changes_requested' is a terminal gate disposition + an audit
+// disposition):
+//
+//   lifecycle_batch_epoch        — the DURABLE sealed-membership epoch that
+//                                  REPLACES S1's in-memory seal. The frozen
+//                                  membership is persisted BEFORE any gate emit +
+//                                  keyed on (org, run, membership_hash), so a
+//                                  re-sweep after a crash recovers the FROZEN set
+//                                  (never re-snapshots a grown pending set) —
+//                                  closing S1's documented crash-window residual.
+//   lifecycle_batch_disposition  — the durable per-epoch AGGREGATE disposition
+//                                  (approved / changes_requested / rejected /
+//                                  partially_approved) S2 owns (S1 left it pure).
+//   lifecycle_repair             — the repair LINEAGE: a changes_requested request
+//                                  (base target + CAS witness + structured
+//                                  findings), the cycle-guard attempt counter, the
+//                                  route, and the successor gate + repaired
+//                                  revision the producer returns.
+//   run_rejected_recommendations — the routed AC-6 rejected-recommendation efficacy
+//                                  row (S3 computed it transiently in
+//                                  summarizeRecommendationEfficacy and DROPPED it).
+//
+// The CHECK-expansions are idempotent DROP CONSTRAINT IF EXISTS + ADD CONSTRAINT
+// (postgres names a column CHECK `<table>_<column>_check` deterministically), so
+// running them on a fresh (already-expanded) schema is a no-op and on an existing
+// deployment they widen the constraint. Run AFTER the S0/#1796 gate tables exist.
+// ---------------------------------------------------------------------------
+
+export function lifecycleRepairSchemaQueries(schemaName: string): QueryInput[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    // -----------------------------------------------------------------------
+    // CHECK-expansions on the existing gate/audit tables — 'changes_requested'
+    // becomes a terminal gate disposition + an audit disposition.
+    // -----------------------------------------------------------------------
+    { text: `ALTER TABLE "${q}"."artifact_review_gates" DROP CONSTRAINT IF EXISTS artifact_review_gates_disposition_check` },
+    {
+      text: `ALTER TABLE "${q}"."artifact_review_gates" ADD CONSTRAINT artifact_review_gates_disposition_check
+  CHECK (disposition IN ('approve','reject','changes_requested'))`,
+    },
+    { text: `ALTER TABLE "${q}"."artifact_review_gates" DROP CONSTRAINT IF EXISTS artifact_review_gates_resolved_chk` },
+    {
+      text: `ALTER TABLE "${q}"."artifact_review_gates" ADD CONSTRAINT artifact_review_gates_resolved_chk CHECK (
+    status = 'pending'
+    OR (disposition IN ('approve','reject','changes_requested') AND fingerprint IS NOT NULL AND resolved_at IS NOT NULL)
+  )`,
+    },
+    { text: `ALTER TABLE "${q}"."artifact_review_audit" DROP CONSTRAINT IF EXISTS artifact_review_audit_disposition_check` },
+    {
+      text: `ALTER TABLE "${q}"."artifact_review_audit" ADD CONSTRAINT artifact_review_audit_disposition_check
+  CHECK (disposition IN ('approve','reject','comment','changes_requested'))`,
+    },
+
+    // -----------------------------------------------------------------------
+    // DURABLE sealed-membership epoch (replaces S1's in-memory seal).
+    // -----------------------------------------------------------------------
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."lifecycle_batch_epoch" (
+  id               text PRIMARY KEY,
+  org_id           text NOT NULL,
+  producer_run_id  text NOT NULL,
+  -- The DETERMINISTIC content hash of the sealed membership (batchMembershipHash).
+  -- A re-seal of the identical membership lands on THIS row (idempotent); a GROWN
+  -- membership hashes differently → a distinct SUCCESSOR epoch.
+  membership_hash  text NOT NULL,
+  -- The FROZEN [{artifactId, representationRevisionId}] set — recovered verbatim on
+  -- a re-sweep, never re-snapshotted from a (possibly grown) pending set.
+  membership       jsonb NOT NULL,
+  target_count     integer NOT NULL,
+  -- 'sealed' (frozen, still being partitioned/linked) → 'partitioned' (all members
+  -- gated+linked+marked; CLOSED — a new revision seals a successor epoch).
+  status           text NOT NULL DEFAULT 'sealed'
+                     CHECK (status IN ('sealed','partitioned')),
+  sealed_at        timestamptz NOT NULL DEFAULT now(),
+  partitioned_at   timestamptz,
+  CONSTRAINT lifecycle_batch_epoch_uniq UNIQUE (org_id, producer_run_id, membership_hash)
+)`,
+    },
+    {
+      // At most ONE 'sealed' (open) epoch per production — the anchor that stops a
+      // re-sweep sealing a NEW epoch over a still-growing production (the frozen
+      // epoch is resumed instead). Partial unique index (only 'sealed' rows).
+      text: `CREATE UNIQUE INDEX IF NOT EXISTS lifecycle_batch_epoch_open_uniq
+  ON "${q}"."lifecycle_batch_epoch" (org_id, producer_run_id) WHERE status = 'sealed'`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS lifecycle_batch_epoch_run_idx
+  ON "${q}"."lifecycle_batch_epoch" (org_id, producer_run_id)`,
+    },
+
+    // -----------------------------------------------------------------------
+    // DURABLE per-epoch AGGREGATE disposition (S2 owns the repair-side aggregate).
+    // -----------------------------------------------------------------------
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."lifecycle_batch_disposition" (
+  id                  text PRIMARY KEY,
+  epoch_id            text NOT NULL
+                        REFERENCES "${q}"."lifecycle_batch_epoch" (id) ON DELETE CASCADE,
+  aggregate           text NOT NULL
+                        CHECK (aggregate IN ('approved','changes_requested','rejected','partially_approved')),
+  terminal            boolean NOT NULL,
+  effects_releasable  boolean NOT NULL,
+  repair_scope        jsonb NOT NULL DEFAULT '[]'::jsonb,
+  union_findings      jsonb NOT NULL DEFAULT '[]'::jsonb,
+  per_target_outcomes jsonb NOT NULL DEFAULT '[]'::jsonb,
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT lifecycle_batch_disposition_epoch_uniq UNIQUE (epoch_id)
+)`,
+    },
+
+    // -----------------------------------------------------------------------
+    // The repair LINEAGE (changes_requested request → producer response).
+    // -----------------------------------------------------------------------
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."lifecycle_repair" (
+  id                                   text PRIMARY KEY,
+  -- Stable across the whole reopen CHAIN (base + every successor gate that itself
+  -- receives changes_requested) — the cycle guard counts attempts per lineage.
+  lineage_id                           text NOT NULL,
+  -- The gate that RECEIVED the changes_requested decision (one repair per gate).
+  gate_id                              text NOT NULL,
+  org_id                               text NOT NULL,
+  producer_run_id                      text,
+  producer_agent_id                    text,
+  base_artifact_id                     text NOT NULL,
+  base_representation_revision_id      text NOT NULL,
+  -- The reviewer's CAS witness: the base MUST still be this revision at repair.
+  expected_base_revision_id            text NOT NULL,
+  findings                             jsonb NOT NULL,
+  continuation_mode                    text NOT NULL
+                                         CHECK (continuation_mode IN ('checkpointed','async_effects_gated')),
+  continuation_address                 text,
+  -- 1-based ordinal in the lineage (the cycle-guard counter).
+  attempt                              integer NOT NULL,
+  route                                text NOT NULL
+                                         CHECK (route IN ('producer_repair','org_repair_route','human_escalation')),
+  status                               text NOT NULL DEFAULT 'requested'
+                                         CHECK (status IN ('requested','dispatched','repaired','stale','escalated','superseded')),
+  successor_gate_id                    text,
+  successor_artifact_id                text,
+  successor_representation_revision_id text,
+  finding_outcomes                     jsonb,
+  change_summary                       text,
+  idempotency_key                      text NOT NULL,
+  created_at                           timestamptz NOT NULL DEFAULT now(),
+  updated_at                           timestamptz NOT NULL DEFAULT now(),
+  -- One repair per gate — a gate receives changes_requested at most once
+  -- (recordChangesRequested is idempotent on it).
+  CONSTRAINT lifecycle_repair_gate_uniq UNIQUE (gate_id)
+)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS lifecycle_repair_lineage_idx
+  ON "${q}"."lifecycle_repair" (lineage_id)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS lifecycle_repair_status_idx
+  ON "${q}"."lifecycle_repair" (status, created_at)`,
+    },
+
+    // -----------------------------------------------------------------------
+    // ROUTED ADDITION — the AC-6 rejected-recommendation efficacy row (S3).
+    // -----------------------------------------------------------------------
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."run_rejected_recommendations" (
+  id                    text PRIMARY KEY,
+  run_id                text NOT NULL,
+  skill_id              text NOT NULL,
+  -- A rejected recommendation may carry no pinned revision (never selected).
+  skill_revision_id     text,
+  recommendation_source text NOT NULL,
+  recommended_rank      integer,
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT run_rejected_recommendations_uniq UNIQUE (run_id, skill_id)
+)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS run_rejected_recommendations_run_idx
+  ON "${q}"."run_rejected_recommendations" (run_id)`,
+    },
   ];
 }

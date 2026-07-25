@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Check, X, CheckCheck } from "lucide-react";
+import { Check, X, CheckCheck, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,7 +11,7 @@ import {
   reviewDecideDisabledReason,
   type ReviewDecisionPermissions,
   type ReviewSubmitOutcome,
-} from "@/app/artifacts/review/review-surface-model";
+} from "@/lib/artifacts/review-surface-model";
 
 import { ReviewGateBlocked } from "./review-gate-states";
 
@@ -55,6 +55,9 @@ export function ReviewDecisionBar({
 
   const disabledReason = reviewDecideDisabledReason(permissions);
   const decided = outcome?.kind === "decided";
+  // A landed `changes-requested` (the lifecycle prompt-window path) also RESOLVES
+  // the gate, so it settles the bar exactly like a terminal decision.
+  const settled = decided || outcome?.kind === "changes-requested";
 
   function submit(disposition: ReviewDisposition) {
     setOutcome(null);
@@ -64,8 +67,9 @@ export function ReviewDecisionBar({
         comment: comment.trim() === "" ? null : comment.trim(),
       });
       setOutcome(result);
-      // A landed terminal decision resolves the gate — reflect the live state.
-      if (result.kind === "decided") router.refresh();
+      // A landed terminal decision — or a changes-requested that resolved the gate
+      // into a repair — resolves the gate; reflect the live (now blocked) state.
+      if (result.kind === "decided" || result.kind === "changes-requested") router.refresh();
     });
   }
 
@@ -94,14 +98,18 @@ export function ReviewDecisionBar({
           data-testid="review-rationale"
           value={comment}
           onChange={(e) => setComment(e.target.value)}
-          disabled={pending || decided}
+          disabled={pending || settled}
           placeholder="Add a note for the run and the audit trail…"
           className="min-h-[44px] text-xs"
         />
       </div>
 
-      {decided ? (
-        <ReviewDecidedNotice outcome={outcome} />
+      {settled ? (
+        outcome.kind === "decided" ? (
+          <ReviewDecidedNotice outcome={outcome} />
+        ) : (
+          <ReviewChangesRequestedNotice outcome={outcome} />
+        )
       ) : (
         <>
           <div className="flex flex-wrap items-center justify-between gap-2.5 px-4 pb-3 pt-3">
@@ -207,6 +215,33 @@ function ReviewDecidedNotice({
         ? "Approved. The gate is resolved and the run has been released to continue."
         : "Rejected. The gate is resolved and the reviewed work has been turned back."}
       {outcome.idempotent ? " (This decision had already been recorded.)" : ""}
+    </p>
+  );
+}
+
+/** The lifecycle prompt-window notice (cinatra#2063): the typed feedback closed the
+ * gate as `changes_requested` and opened a repair. `requested` — a repair-capable
+ * producer's repair is in flight; `escalated` — routed to a human / org route (or
+ * the cycle bound tripped). Either way the gate is resolved and the held effect
+ * stays held until the repair's successor is approved. NOT a fourth decision
+ * affordance — it is the Comment path's outcome on a lifecycle gate. */
+function ReviewChangesRequestedNotice({
+  outcome,
+}: {
+  outcome: Extract<ReviewSubmitOutcome, { kind: "changes-requested" }>;
+}) {
+  return (
+    <p
+      role="status"
+      data-review-outcome="changes-requested"
+      data-changes-status={outcome.status}
+      className="flex items-center gap-2 border-t border-line px-4 py-3 text-xs text-foreground"
+    >
+      <RotateCcw aria-hidden="true" className="size-4 text-mustard-ink" />
+      {outcome.status === "requested"
+        ? "Changes requested. The gate is resolved and the reviewed work has been turned back for repair — a repair is now in flight."
+        : "Changes requested. The gate is resolved and the reviewed work has been turned back — escalated because no automatic repair is available; the effect stays held."}
+      {outcome.idempotent ? " (This had already been recorded.)" : ""}
     </p>
   );
 }

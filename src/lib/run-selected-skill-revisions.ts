@@ -143,3 +143,89 @@ export function hasRunSelectedSkillRevisions(runId: string): boolean {
   });
   return (result?.rows?.length ?? 0) > 0;
 }
+
+// ---------------------------------------------------------------------------
+// The REJECTED half of the efficacy split (cinatra#2040 S2, routed from S3 AC-6).
+//
+// S3 computed accepted vs rejected in `summarizeRecommendationEfficacy` but only
+// persisted the ACCEPTED selections (above); the REJECTED recommendations were
+// dropped. S2 owns the durable rejected row (`run_rejected_recommendations`, the
+// schema sibling of the batch-disposition table). It lives HERE — beside the
+// accepted-half writer, both sync-pg — so the confirm path writes both halves
+// through the SAME already-reachable module (no new first-party route-graph node,
+// no coupling to the heavier repair store).
+// ---------------------------------------------------------------------------
+
+export type RunRejectedRecommendation = {
+  skillId: string;
+  skillRevisionId: string | null;
+  recommendationSource: string;
+  recommendedRank: number | null;
+};
+
+/**
+ * Persist the REJECTED half of the recommendation efficacy split (the accepted
+ * half rode `writeRunSelectedSkillRevisions`). Idempotent on (run_id, skill_id) —
+ * first write wins. No-op on an empty set; best-effort at the call site (a
+ * telemetry write must never fail a run).
+ */
+export function writeRunRejectedRecommendations(input: {
+  runId: string;
+  rejected: Array<{ skillId: string; skillRevisionId?: string | null; recommendationSource: string; recommendedRank?: number | null }>;
+}): void {
+  if (input.rejected.length === 0) return;
+  const connectionString = getPostgresConnectionString();
+  const schema = postgresSchema;
+  const table = `"${schema.replaceAll('"', '""')}"."run_rejected_recommendations"`;
+  const valuesSql: string[] = [];
+  const params: unknown[] = [];
+  let p = 1;
+  for (const r of input.rejected) {
+    valuesSql.push(`($${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`);
+    params.push(
+      randomUUID(),
+      input.runId,
+      r.skillId,
+      r.skillRevisionId ?? null,
+      r.recommendationSource,
+      r.recommendedRank ?? null,
+    );
+  }
+  runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `INSERT INTO ${table}
+                 (id, run_id, skill_id, skill_revision_id, recommendation_source, recommended_rank)
+               VALUES ${valuesSql.join(", ")}
+               ON CONFLICT (run_id, skill_id) DO NOTHING`,
+        values: params,
+      },
+    ],
+  });
+}
+
+/** Read the durable rejected-recommendation rows for a run (ordered by skill_id). */
+export function readRunRejectedRecommendations(runId: string): RunRejectedRecommendation[] {
+  const connectionString = getPostgresConnectionString();
+  const schema = postgresSchema;
+  const [result] = runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `SELECT skill_id, skill_revision_id, recommendation_source, recommended_rank
+               FROM "${schema.replaceAll('"', '""')}"."run_rejected_recommendations"
+               WHERE run_id = $1
+               ORDER BY skill_id ASC`,
+        values: [runId],
+      },
+    ],
+  });
+  const rows = (result?.rows ?? []) as Array<Record<string, unknown>>;
+  return rows.map((r) => ({
+    skillId: String(r.skill_id),
+    skillRevisionId: r.skill_revision_id == null ? null : String(r.skill_revision_id),
+    recommendationSource: String(r.recommendation_source),
+    recommendedRank: r.recommended_rank == null ? null : Number(r.recommended_rank),
+  }));
+}

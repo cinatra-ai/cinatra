@@ -69,10 +69,37 @@ export function isAutoReviewTaskId(reviewTaskId: string): boolean {
  * below) encodes no single event id, so it returns null: the store re-derives a
  * batch gate's requiredness from its PINNED target set, not from one event. */
 export function autoReviewEventId(reviewTaskId: string): string | null {
-  if (isBatchAutoReviewTaskId(reviewTaskId)) return null;
+  // A BATCH partition gate or an S2 REPAIR-SUCCESSOR gate encodes no single event
+  // id; the store re-derives their requiredness from the PINNED target set.
+  if (isBatchAutoReviewTaskId(reviewTaskId) || isRepairSuccessorTaskId(reviewTaskId)) return null;
   return isAutoReviewTaskId(reviewTaskId)
     ? reviewTaskId.slice(AUTO_REVIEW_TASK_PREFIX.length)
     : null;
+}
+
+// ---------------------------------------------------------------------------
+// S2 (cinatra#2040) — repair-successor gate ids.
+// ---------------------------------------------------------------------------
+
+/** The prefix a REPAIR-SUCCESSOR gate's `reviewTaskId` carries — the NEW gate that
+ * pins a producer's repaired (successor) revision after a `changes_requested`
+ * decision (never re-pinned under the reviewer; always a fresh gate). A superset of
+ * `AUTO_REVIEW_TASK_PREFIX` so `isAutoReviewTaskId` recognizes it (the expiry drain
+ * reasons over it; the resume-delivery worker still skips it, being non-`wayflow-`),
+ * and DISJOINT from the batch prefix. */
+export const REPAIR_SUCCESSOR_TASK_PREFIX = `${AUTO_REVIEW_TASK_PREFIX}repair:`;
+
+/** Derive the successor gate's `reviewTaskId` from the repair lineage id + the
+ * attempt ordinal. Deterministic + injective on `(repairId, attempt)`, so a
+ * re-driven pin of the SAME successor is idempotent on `(run, task)` and two
+ * distinct repair attempts never collide. */
+export function repairSuccessorReviewTaskId(repairId: string, attempt: number): string {
+  return `${REPAIR_SUCCESSOR_TASK_PREFIX}${repairId}:${attempt}`;
+}
+
+/** Whether a `reviewTaskId` names an S2 repair-successor gate. */
+export function isRepairSuccessorTaskId(reviewTaskId: string): boolean {
+  return reviewTaskId.startsWith(REPAIR_SUCCESSOR_TASK_PREFIX);
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +276,12 @@ export interface EffectHoldFacts {
   /** The gate the event's `continuationAddress` points at, resolved by the store
    * (null when the address is unset or the gate row is gone). */
   gateStatus: "pending" | "resolved" | null;
+  /** The terminal disposition of a RESOLVED gate (S2, cinatra#2040). A gate
+   * resolved as `changes_requested` has NOT released its held effect — a repair is
+   * in flight; the effect stays held until the successor gate approves. `approve`
+   * releases; `reject` terminates the effect (still not held — a tombstoned
+   * artifact publishes nothing). Null/absent for a pending gate or a pre-S2 gate. */
+  gateDisposition?: "approve" | "reject" | "changes_requested" | null;
 }
 
 export interface EffectHoldVerdict {
@@ -285,6 +318,14 @@ export function evaluateEffectHold(facts: EffectHoldFacts): EffectHoldVerdict {
   }
   if (gateStatus === "pending") {
     return { held: true, reason: "external effect held by a pending review gate" };
+  }
+  // S2 (cinatra#2040): a gate resolved as `changes_requested` has NOT released —
+  // the repair is in flight. The effect stays HELD until the store re-points the
+  // event to the successor gate (which then holds it while pending, releases on
+  // its approval). Fail-closed: without this, `changes_requested` would look like
+  // any resolved gate and release the external effect on an unrepaired artifact.
+  if (gateStatus === "resolved" && facts.gateDisposition === "changes_requested") {
+    return { held: true, reason: "external effect held pending repair (changes_requested)" };
   }
   return { held: false, reason: "review gate resolved — effect released" };
 }

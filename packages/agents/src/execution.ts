@@ -680,6 +680,20 @@ export type HandleWayflowTaskStateArgs = {
   };
 };
 
+/**
+ * Build the run's canonical `/agents/{vendor}/{pkg}/{runId}` base path from a
+ * scoped package name. A VERBATIM copy of `src/lib/agent-url.ts`'s
+ * `buildAgentInstancePath` (4 lines, zero deps) — inlined so the universally-
+ * reachable execution path grows no new first-party module edge (the route-graph
+ * ratchet guards this hot path), mirroring the same duplication precedent in
+ * packages/notifications/src/agent-run-href.ts.
+ */
+function buildReviewRunBasePath(agentPackageName: string, instanceId: string): string {
+  const match = agentPackageName.match(/^@([^/]+)\/(.+)$/);
+  if (match) return `/agents/${match[1]}/${match[2]}/${instanceId}`;
+  return `/agents/${agentPackageName}/${instanceId}`;
+}
+
 export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): Promise<void> {
   const { runId, run, fromStatus, task } = args;
   const taskState = task.status?.state;
@@ -952,7 +966,27 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         }
       }
       if (routeToReviewSurface) {
-        const reviewSurfaceUrl = `/artifacts/review/${encodeURIComponent(runId)}/${encodeURIComponent(reviewTaskId)}`;
+        // The review surface lives UNDER the agent run (owner ruling 2026-07-25
+        // (3), cinatra#2063): `/agents/[vendor]/[packageName]/[instanceId]/review/
+        // [reviewTaskId]`, where instanceId == this run. Build the run's canonical
+        // `/agents/{vendor}/{pkg}/{runId}` base from the template packageName (the
+        // same resolution the notification deep-link + run-detail redirect use),
+        // then append the review sub-path. packageName is present for a marked
+        // reviewer gate (a published orchestrator/flow template); the fallback must
+        // still emit the route's FIVE-segment shape (…/[vendor]/[packageName]/
+        // [instanceId]/review/[reviewTaskId]) with the runId in the instanceId slot,
+        // because the review page keys ONLY on instanceId (== runId) — a shorter
+        // `/agents/{runId}/…` would 404. So an unresolved/absent package degrades to
+        // placeholder vendor+package segments, never a dead/misrouted link.
+        const reviewTemplate = await readAgentTemplateById(run.templateId).catch(() => null);
+        const reviewPackageName =
+          typeof reviewTemplate?.packageName === "string" && reviewTemplate.packageName.trim().length > 0
+            ? reviewTemplate.packageName.trim()
+            : null;
+        const reviewRunBase = reviewPackageName
+          ? buildReviewRunBasePath(reviewPackageName, runId)
+          : `/agents/unknown/unknown/${encodeURIComponent(runId)}`;
+        const reviewSurfaceUrl = `${reviewRunBase}/review/${encodeURIComponent(reviewTaskId)}`;
         // Route: emit the display-only redirect interrupt (the review-surface
         // link) — NOT the legacy reviewer envelope. The card carries no approve
         // affordance, so the paused run stays in pending_approval and the human's
