@@ -240,9 +240,12 @@ export async function runBlogPostImageRegenerationJob(
     });
 
     const workerActor = getActorContext();
+    // Without an actor we can't resolve the specific dashboard-detail row; fall
+    // back to `/artifacts` (the retired `/dashboards` directory page has no
+    // redirect — cinatra#2058), where the dashboard is discoverable.
     const dashboardHref = workerActor
       ? await resolveBlogDashboardUrl(workerActor, project.id)
-      : "/dashboards";
+      : "/artifacts";
     await createNotification({
       title: "Blog post image regenerated",
       body: `Generated a new hero image for "${post.title}".`,
