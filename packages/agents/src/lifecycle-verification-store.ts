@@ -309,14 +309,14 @@ export async function recordVerificationForExternalChange(input: {
  * writes a real verification record the run rail can open.
  */
 export function defaultRepresentationFieldProjector(orgId: string): VerificationFieldProjector {
-  return async (target: VerificationTargetRef) => {
+  return async (target: VerificationTargetRef): Promise<Record<string, string>> => {
     const mod = await import("@/lib/artifacts/representation-store");
     const rep = mod.getRepresentationByIdForReplay(orgId, target.representationRevisionId);
     if (!rep) return {};
     return {
       "representation.revision": String(rep.revision),
-      "representation.resource": rep.resourceId,
-      "representation.form": rep.form,
+      "representation.resource": String(rep.resourceId),
+      "representation.form": String(rep.form),
     };
   };
 }
