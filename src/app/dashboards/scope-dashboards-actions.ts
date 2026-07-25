@@ -1,7 +1,7 @@
 "use server";
 /**
  * Server actions for the scope Dashboards tab (cinatra#1897 B4; the ratified
- * design spec at design@bb9230d9b, `specs/app-artifacts.html` §IX). Each is
+ * design spec at design@0ead5d0c5, `specs/app-artifacts.html` §IX). Each is
  * bound (server-side) to the scope the hosting entity page derived, so the scope
  * crosses the client boundary already server-authored — the client never
  * supplies (or forges) the scope's owner axis. Every action RE-RESOLVES the live

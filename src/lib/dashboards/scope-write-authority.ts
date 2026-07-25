@@ -1,6 +1,6 @@
 /**
  * The scope-WRITE gate for the Dashboards-tab collection (cinatra#1897 B4; the
- * ratified design spec at design@bb9230d9b, `specs/app-artifacts.html` §IX.2).
+ * ratified design spec at design@0ead5d0c5, `specs/app-artifacts.html` §IX.2).
  *
  * This is gate 2 of the collection-add contract (cinatra#1886 C2): "may this
  * actor WRITE (curate) the scope's Dashboards collection". The contract

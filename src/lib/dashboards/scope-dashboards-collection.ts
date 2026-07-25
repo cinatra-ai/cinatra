@@ -1,6 +1,6 @@
 /**
  * The scope Dashboards tab — PURE collection model (cinatra#1897 B4; the ratified
- * design spec at design@bb9230d9b, `specs/app-artifacts.html` §IX / §IX.1).
+ * design spec at design@0ead5d0c5, `specs/app-artifacts.html` §IX / §IX.1).
  *
  * No I/O. Given the acting principal, the scope, the scope-write decision and a
  * pool of candidate dashboards (each with its CANONICAL ownership tuple, sourced

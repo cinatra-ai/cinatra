@@ -1,6 +1,6 @@
 /**
  * Client/server seam types for the scope Dashboards tab (cinatra#1897 B4; the
- * ratified design spec at design@bb9230d9b, `specs/app-artifacts.html` §IX).
+ * ratified design spec at design@0ead5d0c5, `specs/app-artifacts.html` §IX).
  *
  * Provider-neutral (no `"use client"` / `"use server"`): the server page derives
  * the row/candidate view models + binds the server-action callbacks, and the
@@ -9,20 +9,17 @@
  * neither read nor forge the write gate.
  */
 
-/** The defining-extension label every dashboard row shows (§IX, mirrors §VIII). */
-export const DASHBOARD_EXTENSION_LABEL = "Dashboards";
-
 /** One row on a scope's Dashboards tab — a homed dashboard OR a secondary
  *  listing. Already projected + authorized server-side. */
 export type ScopeDashboardTabRow = {
   readonly dashboardId: string;
   readonly name: string;
-  /** The muted meta line: "canonical home · updated 20 minutes ago" for a Home
-   *  row, or "home: Organization: Acme Corp · updated 2 hours ago" for a listing
-   *  (naming the listing's OWN canonical home, §VIII entity-named form). */
+  /** The muted meta line: "updated 20 minutes ago". The home / listing
+   *  distinction is NOT surfaced here (spec §IX — no `home:` provenance). */
   readonly metaLine: string;
-  /** 'home' → the Home badge, no Remove; 'listed' → the Listed badge + Remove
-   *  (when the viewer manages the scope). */
+  /** 'home' vs 'listed' — not surfaced to the viewer (no relation badge); drives
+   *  `canRemove` only (a listing is removable by a manager; a homed row is not).
+   *  Also the React list key discriminator. */
   readonly relation: "home" | "listed";
   /** The dashboard's canonical surface (opens there — never rendered inline). */
   readonly canonicalHref: string;
@@ -46,10 +43,10 @@ export type ScopeDashboardsTabData = {
 export type AddPickerCandidateView = {
   readonly dashboardId: string;
   readonly name: string;
-  /** The mono meta note under the name: the candidate's home + scope-visibility
-   *  for an addable row ("home: Team: Growth-EMEA · team-visible"), or the
-   *  scope-invisible note for a recourse row ("private — the team can't see it
-   *  yet"). */
+  /** The mono meta note under the name — visibility eligibility ONLY (spec §IX.1
+   *  dropped the `home: <entity>` provenance): "the team can already see this"
+   *  for an addable row, or the scope-invisible note for a recourse row
+   *  ("private — the team can't see it yet"). */
   readonly homeNote: string;
   /**
    *  addable      → a direct Add;

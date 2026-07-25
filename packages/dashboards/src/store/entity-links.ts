@@ -1,6 +1,6 @@
 /**
  * Scope-collection SECONDARY LISTINGS store (cinatra#1897 B4; the ratified design
- * spec at design@bb9230d9b, `specs/app-artifacts.html` §IX).
+ * spec at design@0ead5d0c5, `specs/app-artifacts.html` §IX).
  *
  * The low-level I/O for the `dashboard_entity_links` junction plus the two reads
  * a scope's Dashboards tab needs: the dashboards HOMED in the scope (§VIII — a

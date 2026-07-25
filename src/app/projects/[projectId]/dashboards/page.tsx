@@ -8,13 +8,17 @@ import { PageHeader } from "@/components/page-header";
 import { CrumbContributions } from "@/components/crumb-contributions";
 import { requireActorContext } from "@/lib/auth-session";
 import { projectsDb, projects } from "@/lib/projects-store";
+import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 import { ScopeDashboardsSection } from "@/components/dashboards/scope-dashboards-section";
 
 type Props = { params: Promise<{ projectId: string }> };
 
 /**
- * The PROJECT scope Dashboards tab (cinatra#1897 B4; the ratified design spec at
- * design@bb9230d9b §IX). Mounts at `/projects/[projectId]/dashboards`, alongside
+ * The PROJECT entity page's Dashboards tab (cinatra#1897 B4; the ratified design
+ * spec at design@0ead5d0c5 §IX). The page IS the entity — h1 = the project name +
+ * kind label, with the canonical underline tablist (Dashboards · Settings)
+ * beneath (Settings mounts the existing `/projects/[projectId]/settings`
+ * surface). Mounts at `/projects/[projectId]/dashboards`, alongside
  * the project-detail dashboards shell (#706) — a dedicated scope-collection
  * route. View is gated to a member of the project's sealed room (any project
  * grant); Add/Remove are gated to a project admin/owner (§IX.2). A PROJECT tab
@@ -64,12 +68,13 @@ export default async function ProjectScopeDashboardsPage({ params }: Props) {
           },
         ]}
       />
-      <PageHeader
-        title={project.name}
-        description="Project dashboards"
-        divider={false}
-      />
-      <PageContent className="pb-8">
+      <PageHeader label="Project" title={project.name} divider={false} />
+      <PageContent className="flex flex-col gap-5 pb-8">
+        <EntityScopeTabs
+          dashboardsHref={`/projects/${encodeURIComponent(project.id)}/dashboards`}
+          settingsHref={`/projects/${encodeURIComponent(project.id)}/settings`}
+          active="dashboards"
+        />
         <ScopeDashboardsSection
           actor={actor}
           scope={scope}

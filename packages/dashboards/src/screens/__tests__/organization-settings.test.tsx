@@ -137,7 +137,9 @@ describe("organization settings screen (#1734)", () => {
     h.resolveCaps.mockResolvedValue(NO_CAPS);
 
     const html = await renderScreen();
-    expect(html).toContain("Organization settings — Acme Inc");
+    // The entity page h1 is the org name + kind label (spec §IX); "settings"
+    // is communicated by the active Settings tab, not the heading.
+    expect(html).toContain("Acme Inc");
     expect(html).toContain('data-cinatra-org-permissions="true"');
     expect(html).not.toContain("data-cinatra-org-manage");
     expect(html).not.toContain("settings-form");

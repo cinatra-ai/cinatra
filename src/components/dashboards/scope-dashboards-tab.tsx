@@ -1,35 +1,41 @@
 "use client";
 /**
- * The scope Dashboards tab (cinatra#1897 B4) — team / project / organization.
- * Renders the ratified design spec at design@bb9230d9b,
- * `specs/app-artifacts.html` §IX exactly:
+ * The scope Dashboards tab (cinatra#1897 B4) — the content of the entity page's
+ * first tablist entry on a team / project / organization page. Renders the
+ * ratified design spec at design@0ead5d0c5, `specs/app-artifacts.html` §IX
+ * exactly:
  *
  *   - conformance id `scope-dashboards-tab` (field name=identity.displayName;
  *     actions open-add-picker, open-dashboard, remove-listing; the closed
  *     data-state set empty / error / loading / kind:artifact);
- *   - two kinds of row — a Home badge on a dashboard canonically homed here, a
- *     Listed badge on a secondary reference listing (whose own home is named in
- *     the meta line); ONLY a Listed row carries Remove; every row Opens the
- *     dashboard's CANONICAL surface (the tab points, never renders inline);
+ *   - a plain row anatomy — a leading dashboard glyph, the name, the updated
+ *     time, an Open affordance. NO per-row "Dashboards" type label (every row is
+ *     a dashboard) and NO Home / Listed relation badge, no `home:` provenance —
+ *     whether a row is homed or merely listed here is NOT surfaced. The single
+ *     place the difference shows is the Remove control: it appears ONLY on a
+ *     removable secondary listing (`row.canRemove`) and never on a homed row.
+ *     Every row Opens the dashboard's CANONICAL surface (the tab points, never
+ *     renders inline);
  *   - `scope-dashboards-write-access` (field manage-controls=
  *     collectionAdd.actorMayWriteScope): Add + Remove appear ONLY to a scope
  *     manager — a member without write authority sees the tab and every row and
  *     opens any of them, with no Add and no Remove (suppression, §IX.2).
  *
- * The add-to-scope picker (§IX.1) lives in `<AddToScopePicker>`.
+ * The entity h1 + kind label + the underline tablist (Dashboards · Settings)
+ * live on the hosting entity page; this component renders the Dashboards tab
+ * CONTENT (subtitle + Add + list). The add-to-scope picker (§IX.1) lives in
+ * `<AddToScopePicker>`.
  */
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { LayoutDashboard, House, Link2, Plus } from "lucide-react";
+import { LayoutDashboard, Plus } from "lucide-react";
 import { toast } from "@/lib/cinatra-toast";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
 import { AddToScopePicker } from "./add-to-scope-picker";
 import {
-  DASHBOARD_EXTENSION_LABEL,
   SCOPE_LISTING_REASON_COPY,
   type ScopeDashboardsDataSource,
   type ScopeDashboardsTabData,
@@ -70,21 +76,15 @@ export function ScopeDashboardsTab({
       data-state={hasRows ? "kind:artifact" : "empty"}
       className="flex flex-col gap-3"
     >
-      {/* Header — title + subtitle + the manager-only Add affordance (§IX.2). On
-          a narrow viewport the header STACKS (flex-col) so the Add affordance
-          drops beneath the title/subtitle (spec §X responsive); at ≥sm it is an
-          inline row with Add pushed to the right. */}
+      {/* Dashboards tab content: the scope subtitle + the manager-only Add
+          affordance (§IX.2). On a narrow viewport this row STACKS (flex-col) so
+          the Add affordance drops beneath the subtitle (spec §X responsive); at
+          ≥sm it is an inline row with Add pushed to the right. */}
       <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
-        <div className="min-w-0 flex-1">
-          <h1 className="text-2xl font-extrabold tracking-tight text-foreground">
-            Dashboards
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            The dashboards in{" "}
-            <b className="font-semibold text-foreground">{data.scopeLabel}</b> —
-            homed here or listed here.
-          </p>
-        </div>
+        <p className="min-w-0 flex-1 text-sm leading-normal text-muted-foreground">
+          The dashboards in{" "}
+          <b className="font-semibold text-foreground">{data.scopeLabel}</b>.
+        </p>
         {/* scope-dashboards-write-access: the Add affordance is rendered ONLY for
             a scope manager (actorMayWriteScope) — suppression, not a disabled
             control. */}
@@ -106,8 +106,8 @@ export function ScopeDashboardsTab({
         ) : null}
       </div>
 
-      {/* The row list — Home + Listed. Empty vs populated is the SSR state;
-          loading / error surface on a client refresh (below). */}
+      {/* The row list. Empty vs populated is the SSR state; loading / error
+          surface on a client refresh (below). */}
       {hasRows ? (
         <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line bg-card">
           {data.rows.map((row) => (
@@ -144,7 +144,6 @@ function ScopeRow({
   removing: boolean;
   onRemove: (dashboardId: string) => void;
 }) {
-  const isHome = row.relation === "home";
   return (
     <li className="flex flex-wrap items-center gap-3 px-3.5 py-3">
       <span
@@ -154,34 +153,14 @@ function ScopeRow({
         <LayoutDashboard className="size-[17px]" />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-semibold text-foreground">
-            {row.name}
-          </span>
-          <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
-            {DASHBOARD_EXTENSION_LABEL}
-          </span>
-        </div>
+        <span className="text-sm font-semibold text-foreground">
+          {row.name}
+        </span>
         <p className="mt-0.5 text-xs text-muted-foreground">{row.metaLine}</p>
       </div>
-      {/* Relation badge — the §VIII home / listing distinction, per row. */}
-      <span
-        className={cn(
-          "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-badge-2xs font-semibold",
-          isHome
-            ? "border-primary/30 bg-primary/10 text-primary"
-            : "border-line bg-muted text-muted-foreground",
-        )}
-      >
-        {isHome ? (
-          <House className="size-[11px]" aria-hidden />
-        ) : (
-          <Link2 className="size-[11px]" aria-hidden />
-        )}
-        {isHome ? "Home" : "Listed"}
-      </span>
-      {/* Only a Listed row carries Remove, and only when the viewer manages the
-          scope (§IX.2). A Home row is never removable. */}
+      {/* Removability is read from the presence of Remove ALONE (spec §IX):
+          it renders only on a removable secondary listing (`row.canRemove` —
+          listed AND manager) and never on a homed row. No Home / Listed badge. */}
       {row.canRemove ? (
         <Button
           type="button"

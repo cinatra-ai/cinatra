@@ -1,7 +1,7 @@
 import "server-only";
 /**
  * Server-component wiring for the scope Dashboards tab (cinatra#1897 B4; the
- * ratified design spec at design@bb9230d9b, `specs/app-artifacts.html` §IX).
+ * ratified design spec at design@0ead5d0c5, `specs/app-artifacts.html` §IX).
  * One mount point the three entity `/dashboards` routes share: it reads the
  * tab data server-side (Home + Listed rows, the write gate), binds the
  * scope-bound server actions, and hands both to the client tab. The actor never

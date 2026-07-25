@@ -1,7 +1,7 @@
 import "server-only";
 /**
  * The scope Dashboards tab — SERVER service (cinatra#1897 B4; the ratified design
- * spec at design@bb9230d9b, `specs/app-artifacts.html` §IX). The I/O adapter that
+ * spec at design@0ead5d0c5, `specs/app-artifacts.html` §IX). The I/O adapter that
  * composes the pure pieces:
  *
  *   - the junction store (`@cinatra-ai/dashboards/entity-links`) — Home +
@@ -16,14 +16,12 @@ import "server-only";
  * Every mutation RE-AUTHORIZES here (the render gate cannot protect a later
  * server-action invocation), fail-closed.
  */
-import { sql, type SQL } from "drizzle-orm";
 import { formatDistanceToNow } from "date-fns";
 
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { actorMaySeeRow } from "@/lib/derived-store-ownership";
 import { readObjectsByType } from "@/lib/objects-store";
 import { requestArtifactPromotion } from "@/lib/artifacts/artifact-promotion-request";
-import { betterAuthDb } from "@/lib/better-auth-db";
 import { canonicalDashboardPath } from "@cinatra-ai/dashboards/canonical-path";
 import {
   addDashboardEntityLink,
@@ -56,107 +54,6 @@ const SCOPE_WORD: Record<ListingScopeKind, string> = {
   project: "project",
 };
 
-const ENTITY_LABEL_PREFIX: Record<string, string> = {
-  team: "Team",
-  organization: "Organization",
-  project: "Project",
-  user: "Personal",
-  workspace: "Workspace",
-};
-
-/** The home descriptor a row resolves to (its canonical anchor). */
-type HomeDescriptor = { kind: string; id: string | null };
-
-function homeDescriptorOf(row: ScopeDashboardRow): HomeDescriptor {
-  if (row.projectId) return { kind: "project", id: row.projectId };
-  if (row.entityType && row.entityId)
-    return { kind: row.entityType, id: row.entityId };
-  return { kind: row.ownerLevel, id: row.ownerId };
-}
-
-/**
- * Build a Drizzle SQL fragment for a Postgres `ARRAY[...]` literal of text
- * values, one bind parameter per element.
- *
- * Drizzle's `sql` tag spreads a JS array `${arr}` as a tuple of positional
- * parameters (`($1, $2, ...)`), NOT as a single array bind. Inside `ANY(...)`
- * Postgres then parses that tuple as a row-expression and rejects it at runtime
- * (`malformed array literal` / `42809 op ANY/ALL (array) requires array on right
- * side`), and a trailing `::text[]` cast does NOT save you — a record cannot be
- * cast to an array. This helper emits `ARRAY[$1, $2, ..., $N]` — a real Postgres
- * array on the RHS, no injection surface. Callers MUST guard on a non-empty set
- * (`ARRAY[]` is ambiguous without an element type). Mirrors the converged idiom
- * in `packages/skills/src/skill-paths.ts` and `packages/agents/src/store.ts`.
- */
-function buildTextArraySql(ids: readonly string[]): SQL {
-  return sql`ARRAY[${sql.join(
-    ids.map((id) => sql`${id}`),
-    sql`, `,
-  )}]`;
-}
-
-/** The better-auth `public."team"` name query — the exact SQL sent to
- *  node-postgres, exported as a test seam (see
- *  scope-entity-labels-any-binding.test.ts). The ids MUST be non-empty
- *  (buildTextArraySql invariant). */
-export function _teamNamesQuery(ids: readonly string[]): SQL {
-  return sql`SELECT id, name FROM public."team" WHERE id = ANY(${buildTextArraySql(ids)})`;
-}
-
-/** The better-auth `public."organization"` name query — the exact SQL sent to
- *  node-postgres, exported as a test seam. The ids MUST be non-empty. */
-export function _orgNamesQuery(ids: readonly string[]): SQL {
-  return sql`SELECT id, name FROM public."organization" WHERE id = ANY(${buildTextArraySql(ids)})`;
-}
-
-/**
- * Batch-resolve entity-named labels ("Team: Growth", "Organization: Acme Corp")
- * for a set of (kind, id) homes. Team + organization names come from the
- * better-auth tables; a project degrades to the bare "Project" prefix when its
- * name is not resolved here (documented; the tenant fence still holds). A missing
- * name falls back to the tier prefix.
- *
- * Exported so the REAL node-postgres betterAuthDb path is covered by an
- * integration test (resolve-entity-labels.integration.test.ts) — the unit
- * conformance + app-db migration proofs do not exercise betterAuthDb.
- */
-export async function resolveEntityLabels(
-  homes: readonly HomeDescriptor[],
-): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  const teamIds = new Set<string>();
-  const orgIds = new Set<string>();
-  for (const h of homes) {
-    if (!h.id) continue;
-    if (h.kind === "team") teamIds.add(h.id);
-    else if (h.kind === "organization") orgIds.add(h.id);
-  }
-  const nameByKey = new Map<string, string>();
-  if (teamIds.size > 0) {
-    const rows = await betterAuthDb.execute<{ id: string; name: string }>(
-      _teamNamesQuery([...teamIds]),
-    );
-    for (const r of rows.rows ?? []) nameByKey.set(`team:${r.id}`, r.name);
-  }
-  if (orgIds.size > 0) {
-    const rows = await betterAuthDb.execute<{ id: string; name: string }>(
-      _orgNamesQuery([...orgIds]),
-    );
-    for (const r of rows.rows ?? [])
-      nameByKey.set(`organization:${r.id}`, r.name);
-  }
-  for (const h of homes) {
-    const prefix = ENTITY_LABEL_PREFIX[h.kind] ?? h.kind;
-    const name = h.id ? nameByKey.get(`${h.kind}:${h.id}`) : undefined;
-    out.set(labelKey(h), name ? `${prefix}: ${name}` : prefix);
-  }
-  return out;
-}
-
-function labelKey(h: HomeDescriptor): string {
-  return `${h.kind}:${h.id ?? ""}`;
-}
-
 function updatedRel(updatedAt: Date | string | null): string {
   if (!updatedAt) return "recently";
   const d = updatedAt instanceof Date ? updatedAt : new Date(updatedAt);
@@ -169,6 +66,11 @@ function updatedRel(updatedAt: Date | string | null): string {
  * Build the tab's data: the Home rows (canonically homed here) followed by the
  * Listed rows (secondary listings), each projected to the client row model. Home
  * first, then by name (case-insensitive) — matching the §IX example order.
+ *
+ * Whether a row is homed here or merely listed here is NOT surfaced (spec §IX —
+ * no Home / Listed badge, no `home:` provenance): every row reads the same and
+ * differs only in the Remove control, which a listing carries and a homed row
+ * does not (`canRemove`).
  */
 export async function getScopeDashboardsTabData(input: {
   actor: ActorContext;
@@ -181,25 +83,9 @@ export async function getScopeDashboardsTabData(input: {
     listScopeListedDashboards(input.scope),
   ]);
 
-  // Resolve the entity-named home label for every LISTED row (its own home may be
-  // a different entity). Home rows read "canonical home", no name needed.
-  const labels = await resolveEntityLabels(listed.map(homeDescriptorOf));
-
   const rows: ScopeDashboardTabRow[] = [
-    ...homed
-      .map((r) => projectRow(r, canManage, "canonical home", updatedRel(r.updatedAt)))
-      .sort(byName),
-    ...listed
-      .map((r) => {
-        const label = labels.get(labelKey(homeDescriptorOf(r))) ?? "Dashboard";
-        return projectRow(
-          r,
-          canManage,
-          `home: ${label}`,
-          updatedRel(r.updatedAt),
-        );
-      })
-      .sort(byName),
+    ...homed.map((r) => projectRow(r, canManage)).sort(byName),
+    ...listed.map((r) => projectRow(r, canManage)).sort(byName),
   ];
 
   return { scopeLabel: input.scopeLabel, rows, canManage };
@@ -208,13 +94,11 @@ export async function getScopeDashboardsTabData(input: {
 function projectRow(
   r: ScopeDashboardRow,
   canManage: boolean,
-  homePart: string,
-  rel: string,
 ): ScopeDashboardTabRow {
   return {
     dashboardId: r.dashboardId,
     name: r.name,
-    metaLine: `${homePart} · updated ${rel}`,
+    metaLine: `updated ${updatedRel(r.updatedAt)}`,
     relation: r.relation,
     canonicalHref: canonicalDashboardPath({
       id: r.dashboardId,
@@ -263,28 +147,22 @@ export async function listScopeAddCandidates(input: {
   );
   if (visibleRows.length === 0) return [];
 
-  // Names + home descriptors from the dashboards rows for these ids.
+  // Names from the dashboards rows for these ids.
   const ids = visibleRows.map((o) => o.id);
   const nameById = await dashboardNamesByIds(ids);
-  const homeDescriptors = visibleRows.map((o) => ({
-    id: o.id,
-    home: homeOfObject(o),
-  }));
-  const labels = await resolveEntityLabels(homeDescriptors.map((h) => h.home));
 
-  const candidates: ScopeAddCandidate[] = visibleRows.map((o) => {
-    const home = homeOfObject(o);
-    return {
-      id: o.id,
-      ownerLevel: o.ownerLevel,
-      ownerId: o.ownerId,
-      visibility: o.visibility,
-      projectId: o.projectId,
-      orgId: o.orgId,
-      name: nameById.get(o.id) ?? "Untitled dashboard",
-      homeLabel: labels.get(labelKey(home)) ?? null,
-    };
-  });
+  const candidates: ScopeAddCandidate[] = visibleRows.map((o) => ({
+    id: o.id,
+    ownerLevel: o.ownerLevel,
+    ownerId: o.ownerId,
+    visibility: o.visibility,
+    projectId: o.projectId,
+    orgId: o.orgId,
+    name: nameById.get(o.id) ?? "Untitled dashboard",
+    // The candidate's own home is no longer surfaced (spec §IX.1 dropped the
+    // `home: <entity>` provenance) — the picker states visibility eligibility only.
+    homeLabel: null,
+  }));
 
   const model = buildAddPickerModel({
     actor: input.actor,
@@ -293,16 +171,16 @@ export async function listScopeAddCandidates(input: {
     candidates,
   });
 
+  // The candidate note states visibility eligibility only (spec §IX.1): an
+  // addable candidate the scope can already see, a scope-invisible candidate's
+  // promotion recourse, or a plain not-addable — never `home: <entity>`.
   const scopeWord = SCOPE_WORD[input.scope.kind];
   return model.map((m) => {
     if (m.disposition.kind === "addable") {
-      const visWord = visibilityWord(
-        candidates.find((c) => c.id === m.dashboardId)?.visibility ?? null,
-      );
       return {
         dashboardId: m.dashboardId,
         name: m.name,
-        homeNote: `home: ${m.homeLabel ?? "Dashboard"} · ${visWord}-visible`,
+        homeNote: `the ${scopeWord} can already see this`,
         disposition: "addable" as const,
       };
     }
@@ -324,28 +202,6 @@ export async function listScopeAddCandidates(input: {
       disposition: "not-addable" as const,
     };
   });
-}
-
-function homeOfObject(o: {
-  projectId: string | null;
-  ownerLevel: string;
-  ownerId: string | null;
-}): HomeDescriptor {
-  if (o.projectId) return { kind: "project", id: o.projectId };
-  return { kind: o.ownerLevel, id: o.ownerId };
-}
-
-function visibilityWord(visibility: string | null): string {
-  switch (visibility) {
-    case "team":
-      return "team";
-    case "organization":
-      return "org";
-    case "public":
-      return "public";
-    default:
-      return "scope";
-  }
 }
 
 /**

@@ -3,11 +3,14 @@
  * source-text conformance (cinatra#1897 B4).
  *
  * Pins the build to the RATIFIED design spec `specs/app-artifacts.html` §IX at
- * design@bb9230d9b19e3ea632911ae94b4a6d0561292dab (the Artifacts spec;
+ * design@0ead5d0c549115aca4e21c21b53dc2d2269dbd84 (the Artifacts spec, v0.8.0;
  * `conformance/app-artifacts.json` contentHash
- * sha256:6079f4afd6c106373c154fee7d016ca139c753c0ae4adad7b6948db02b6c6502 — the
+ * sha256:ee23ebf07b4f61405398cd05ca5045ec7b4103e501a0fde4392fa3a17c8380d7 — the
  * three §IX surfaces scope-dashboards-tab, scope-dashboards-add-picker,
- * scope-dashboards-write-access). The repo runs vitest in node without
+ * scope-dashboards-write-access; a contentHash-only move from the prior
+ * design@bb9230d9b — the conformance id/field/action/state contract is
+ * UNCHANGED, only the removed pills/badges/provenance, which carried no
+ * conformance annotation). The repo runs vitest in node without
  * @testing-library/react, so the component wiring is pinned via SOURCE
  * assertions (the established pattern — see dashboard-surface-conformance.test.ts);
  * the live bidirectional Playwright walk on the staged stack is the
@@ -18,8 +21,10 @@
  *     ratified surfaces name is realized by the components; AND
  *   render → spec — the components introduce NO conformance id the spec does not
  *     specify, and the tab is a POINTER (Open navigates to the canonical surface;
- *     no inline dashboard render), a Home row carries no Remove, and the write
- *     controls are SUPPRESSED (not disabled) for a non-manager.
+ *     no inline dashboard render); removability is read from the Remove control
+ *     ALONE — no Home / Listed relation badge, no per-row "Dashboards" pill, no
+ *     `home:` provenance (a homed row shows no Remove); and the write controls
+ *     are SUPPRESSED (not disabled) for a non-manager.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -33,9 +38,16 @@ const code = (s: string) =>
 
 const TAB = read("scope-dashboards-tab.tsx");
 const PICKER = read("add-to-scope-picker.tsx");
+/** The SERVER service is where a row's meta line and a picker candidate's note
+ *  are BUILT — so the "no `home:` provenance" ruling is guarded at its source,
+ *  not only at the components that render the projected strings. */
+const SERVICE = readFileSync(
+  path.resolve(__dirname, "../../../lib/dashboards/scope-dashboards-service.ts"),
+  "utf8",
+);
 
 /** The §IX surface contract, transcribed from conformance/app-artifacts.json at
- *  design@bb9230d9b — the pinned source of truth this test checks BOTH ways. */
+ *  design@0ead5d0c5 — the pinned source of truth this test checks BOTH ways. */
 const SURFACES = {
   "scope-dashboards-tab": {
     field: "name=identity.displayName",
@@ -92,25 +104,33 @@ describe("§IX conformance id: scope-dashboards-tab (the scope's Dashboards tab)
     expect(TAB).not.toMatch(/pickArtifactRenderer/);
   });
 
-  it("responsive (§X): the header STACKS on a narrow viewport so Add drops beneath the title, and is an inline row at ≥sm (render → spec)", () => {
-    // §X: "its header Add dashboard affordance drops beneath the title". The
-    // header must be a column at narrow width (Add beneath title/subtitle) and a
-    // row only at ≥sm — NOT a bare `flex flex-wrap` (which keeps Add inline-right
-    // because the flex-1 title shrinks, never wrapping — the walk's finding).
-    const header = TAB.match(/<div className="flex[^"]*">\s*<div className="min-w-0 flex-1">/);
-    expect(header, "header container not found").not.toBeNull();
+  it("responsive (§X): the subtitle+Add row STACKS on a narrow viewport so Add drops beneath the subtitle, and is an inline row at ≥sm (render → spec)", () => {
+    // §X: the "Add dashboard affordance drops beneath the tab strip". The
+    // subtitle+Add row must be a column at narrow width (Add beneath the
+    // subtitle) and a row only at ≥sm — NOT a bare `flex flex-wrap` (which keeps
+    // Add inline-right because the flex-1 subtitle shrinks, never wrapping — the
+    // walk's finding).
+    const header = TAB.match(/<div className="flex[^"]*">\s*<p className="min-w-0 flex-1/);
+    expect(header, "subtitle+Add row container not found").not.toBeNull();
     const headerClasses = header![0];
     expect(headerClasses).toContain("flex-col");
     expect(headerClasses).toMatch(/sm:flex-row/);
-    // A bare non-responsive `flex flex-wrap items-center` header (the pre-fix
-    // shape) is rejected — the stack must be viewport-conditional.
+    // A bare non-responsive `flex flex-wrap items-center` row (the pre-fix shape)
+    // is rejected — the stack must be viewport-conditional.
     expect(headerClasses).not.toMatch(/"flex flex-wrap items-center gap/);
   });
 
-  it("Home vs Listed: both badges render; ONLY a Listed row carries Remove (render → spec)", () => {
-    expect(TAB).toMatch(/["'>]Home[<"']/);
-    expect(TAB).toMatch(/["'>]Listed[<"']/);
-    // Remove is gated on `row.canRemove` (listed AND manager) — a Home row, whose
+  it("no Home/Listed relation badge, no per-row Dashboards pill, no home: provenance; Remove ALONE marks a removable row (spec §IX, render → spec)", () => {
+    // The owner rulings (design@0ead5d0c5): every row on this tab is a dashboard,
+    // so no row repeats a "Dashboards" type label, and a row does NOT advertise
+    // where the dashboard lives. Removability is read from the Remove control
+    // alone — there is no Home or Listed badge and no `home:` provenance.
+    const c = code(TAB);
+    expect(c).not.toMatch(/["'>]Home[<"']/);
+    expect(c).not.toMatch(/["'>]Listed[<"']/);
+    expect(c).not.toMatch(/DASHBOARD_EXTENSION_LABEL/);
+    expect(c).not.toMatch(/home:/);
+    // Remove is gated on `row.canRemove` (listed AND manager) — a homed row, whose
     // canRemove is false, therefore never renders Remove.
     expect(TAB).toMatch(/row\.canRemove\s*\?/);
     expect(TAB).toMatch(/remove-listing -> listing-removed/);
@@ -170,6 +190,19 @@ describe("§IX conformance id: scope-dashboards-add-picker (add to scope)", () =
 });
 
 // ── render → spec: no surface the spec does not specify ─────────────────────
+describe("§IX render → spec: the service builds NO `home:` provenance", () => {
+  it("a row meta line is `updated <rel>` ONLY and a picker note states visibility eligibility — never `home: <entity>` (spec §IX/§IX.1)", () => {
+    const s = code(SERVICE);
+    // The rulings removed the `home: <entity>` provenance from BOTH the tab row
+    // meta line and the picker candidate note; the service must not build it.
+    expect(s).not.toMatch(/home:/);
+    // The meta line is the updated time alone.
+    expect(s).toContain("updated ${updatedRel");
+    // The addable candidate note states scope-visibility eligibility.
+    expect(s).toContain("can already see this");
+  });
+});
+
 describe("§IX render → spec: no unspecified conformance id leaks in", () => {
   it("every data-conformance-id in the §IX components is one the ratified spec names", () => {
     const found = new Set<string>();

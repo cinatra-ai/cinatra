@@ -137,7 +137,7 @@ export const dashboards = cinatraSchema.table(
 
 /**
  * Scope-collection SECONDARY LISTINGS (cinatra#1897 B4; ratified design spec at
- * design@bb9230d9b, `specs/app-artifacts.html` §IX). A dashboard's CANONICAL
+ * design@0ead5d0c5, `specs/app-artifacts.html` §IX). A dashboard's CANONICAL
  * HOME stays the singular `(entity_type, entity_id)` on `dashboards` (§VIII);
  * this junction adds a *separate listing relation* — a dashboard listed on a
  * scope's Dashboards tab as a reference, never a second home. The canonical home
