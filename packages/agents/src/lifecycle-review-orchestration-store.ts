@@ -81,7 +81,13 @@ import {
   type ReviewOrchestrationPlan,
   type EffectHoldVerdict,
 } from "@/lib/lifecycle/lifecycle-orchestration";
-import { sealBatch, partitionBatchTargets } from "@/lib/lifecycle/lifecycle-batch";
+import { partitionBatchTargets } from "@/lib/lifecycle/lifecycle-batch";
+import {
+  sealBatchEpoch,
+  closeBatchEpoch,
+  resolveOpenBatchEpoch,
+  listOpenBatchEpochs,
+} from "./lifecycle-repair-store";
 import type {
   CompiledManifestLifecycle,
   DestinationClass,
@@ -537,7 +543,13 @@ export async function sweepReviewOrchestration(opts?: {
         const members = await fetchPendingByRun(key.orgId, runId, MAX_BATCH_MEMBERSHIP);
         if (members.length === 0) return; // raced to processed by a concurrent pass.
         summary.scanned += members.length;
-        if (members.length > 1) {
+        // Route through the DURABLE-epoch batch path when the production is a
+        // multi-artifact one OR an OPEN epoch already exists — a SOLE remaining
+        // frozen member (a crash left one unlinked) MUST resume via the frozen
+        // membership, never via the single-event path (which would emit an
+        // overlapping per-event gate instead of the frozen partition gate).
+        const open = await resolveOpenBatchEpoch(key.orgId, runId);
+        if (members.length > 1 || open) {
           await orchestrateProducedBatch(members, summary);
         } else {
           tallyOutcome(await orchestrateProducedEvent(members[0]), summary);
@@ -576,6 +588,26 @@ export async function sweepReviewOrchestration(opts?: {
         err,
       );
     }
+  }
+
+  // 3. Independent OPEN-EPOCH drain: close any sealed epoch whose members are ALL
+  //    processed (a crash between the final member mark and `closeBatchEpoch` leaves
+  //    the production with NO pending events, so the pending-keyed sweep above never
+  //    revisits it — the stranded open epoch would otherwise block a successor epoch
+  //    forever via the open-uniq index). Under the production lock so it never races
+  //    a live seal/recovery.
+  try {
+    for (const epoch of await listOpenBatchEpochs(limit)) {
+      await withProductionLock(epoch.orgId, epoch.producerRunId, async () => {
+        // Re-read under the lock — a concurrent recovery may have just closed it.
+        const stillOpen = await resolveOpenBatchEpoch(epoch.orgId, epoch.producerRunId);
+        if (stillOpen && stillOpen.id === epoch.id && (await epochFullyProcessed(epoch.membership))) {
+          await closeBatchEpoch(epoch.id);
+        }
+      });
+    }
+  } catch (err) {
+    console.error(`[lifecycle-review-orchestration] open-epoch drain failed:`, err);
   }
 
   return summary;
@@ -627,17 +659,17 @@ type FiredCreateGate = { row: ProducedEventRow; plan: Extract<ReviewOrchestratio
  * `link` so a linked member is always already parked. A per-partition emit conflict
  * leaves that partition's events pending for a reconciling sweep.
  *
- * DURABILITY BOUNDARY (in-memory seal): the sealed membership lives only for this
- * call — S1 adds NO schema, so there is no durable batch-epoch row. `withProductionLock`
- * gives an EXCLUSIVE per-production lease, so two LIVE passes never seal divergent
- * memberships. The one residual is a crash STRICTLY between a partition's gate emit
- * and its bulk-link COMBINED with a NEW revision arriving for the same run before the
- * reconciling sweep: the retry reseals the grown set into a different partition and
- * emits an overlapping gate, leaving the first as an ORPHAN (it pins targets but no
- * event links to it, so it holds no effect). Fully closing this needs a durable
- * sealed-membership epoch persisted before emit — the S0 contract's "the store
- * persists the sealed membership", which lands with S2's batch-disposition schema
- * (S1 is migration-free). Non-growth crashes are already fully idempotent (above).
+ * DURABLE SEAL (cinatra#2040 S2): the sealed membership is now PERSISTED as a
+ * `lifecycle_batch_epoch` row BEFORE any gate emit — this CLOSES S1's documented
+ * crash-window. Under the exclusive `withProductionLock`, `sealBatchEpoch` either
+ * finds an OPEN epoch (a prior pass sealed it, then crashed mid-partition) and
+ * returns its FROZEN membership, or seals the current fired candidate. The
+ * partition ids are derived from the FROZEN membership, so a re-sweep processes
+ * EXACTLY the sealed set — never a grown pending snapshot. A NEW revision that
+ * arrived after the seal is NOT in the frozen membership; it stays pending and
+ * seals a SUCCESSOR epoch once this one CLOSES (`closeBatchEpoch`, after every
+ * frozen member is gated+linked+marked). So the S1 residual (a crash between emit
+ * and link + a new same-run revision → an overlapping gate) can no longer occur.
  */
 async function orchestrateProducedBatch(
   group: ProducedEventRow[],
@@ -667,32 +699,41 @@ async function orchestrateProducedBatch(
     }
     fired.push({ row, plan });
   }
-  if (fired.length === 0) return;
+  if (fired.length === 0) {
+    // No firing members this pass, but a prior epoch may be fully processed yet
+    // still open (a crash between the last mark and the close) — close it so the
+    // next new revision seals a successor. Cheap: at most one open epoch per run.
+    await closeOpenEpochIfDrained(orgId, runId);
+    return;
+  }
 
-  const sealed = sealBatch({
-    kind: "explicit",
-    targets: fired.map((f) => ({
+  // DURABLE SEAL: persist (or recover) the sealed membership BEFORE any gate emit.
+  const { epoch, reused } = await sealBatchEpoch({
+    orgId,
+    producerRunId: runId,
+    candidateMembers: fired.map((f) => ({
       artifactId: f.row.artifactId,
       representationRevisionId: f.row.representationRevisionId,
     })),
   });
-  if (!sealed.ok) {
-    // Unreachable for a non-empty explicit list (each fired event names both ids);
-    // fall back to per-event so nothing is dropped.
-    for (const f of fired) tallyOutcome(await orchestrateProducedEvent(f.row), summary);
-    return;
-  }
+  const frozenMembership = epoch.membership;
+  const partitions = partitionBatchTargets(frozenMembership);
+  if (!reused) summary.batchesCoalesced += 1;
 
-  const partitions = partitionBatchTargets(sealed.targets);
-  summary.batchesCoalesced += 1;
-
+  // Map the FROZEN membership targets → their current fired plan (only the
+  // still-pending members carry one; already-processed members on a crash-recovery
+  // pass are absent → their partition gate re-emits idempotently but nothing to
+  // park/link/mark). A NEW revision that fired but is NOT in the frozen membership
+  // stays pending (it seals a successor epoch after this one closes).
   const firedByKey = new Map<string, FiredCreateGate>();
   for (const f of fired) firedByKey.set(targetKey(f.row), f);
 
   const expiresAt = new Date(Date.now() + AUTO_REVIEW_GATE_TTL_MS);
+  let anyConflict = false;
   for (const partition of partitions) {
     const reviewTaskId = batchPartitionReviewTaskId(partition);
     let gateId: string;
+    let gateIdempotent: boolean;
     try {
       const emitted = await emitArtifactReviewGate({
         runId,
@@ -702,8 +743,10 @@ async function orchestrateProducedBatch(
         expiresAt,
       });
       gateId = emitted.gateId;
+      gateIdempotent = emitted.idempotent;
     } catch (err) {
       if (err instanceof ArtifactReviewGateError) {
+        anyConflict = true;
         console.error(
           `[lifecycle-review-orchestration] batch partition gate emit conflict for run=${runId} task=${reviewTaskId}: ${err.message} — partition left pending`,
         );
@@ -711,15 +754,17 @@ async function orchestrateProducedBatch(
       }
       throw err;
     }
-    summary.gatesCreated += 1;
+    // Count a gate only on a FRESH emit (a re-sweep re-emitting the same frozen
+    // partition is idempotent — never double-count).
+    if (!gateIdempotent) summary.gatesCreated += 1;
 
     const members = partition
-      .map((t) => firedByKey.get(targetKey(t)))
+      .map((t) => firedByKey.get(targetKeyOf(t)))
       .filter((m): m is FiredCreateGate => m !== undefined);
+    if (members.length === 0) continue; // all this partition's members already processed.
 
     // Phase 1: PARK every checkpointed member (idempotent on run,event,checkpoint)
-    // BEFORE linking, so a linked member is always already parked (the settle path
-    // can then safely finish a linked-but-unmarked member).
+    // BEFORE linking, so a linked member is always already parked.
     for (const m of members) {
       if (m.plan.continuationMode === "checkpointed" && m.plan.park) {
         await maybeParkCheckpoint(m.plan.park, {
@@ -744,13 +789,52 @@ async function orchestrateProducedBatch(
           isNull(artifactProducedOutbox.continuationAddress),
         ),
       );
-    // Phase 3: mark every member processed — ONLY now that ALL are linked, so a
-    // crash here leaves each remaining member LINKED (settled next pass), never a
-    // pending subset that would reseal into a duplicate/overlapping gate.
+    // Phase 3: mark every member processed — ONLY now that ALL are linked.
     for (const m of members) {
       await markProducedEventProcessed(m.row.eventId);
     }
   }
+
+  // CLOSE the epoch once every frozen member is processed (no partition conflict
+  // left one pending). A conflict leaves the epoch OPEN so the next sweep retries
+  // (idempotently, onto the same frozen membership).
+  if (!anyConflict && (await epochFullyProcessed(frozenMembership))) {
+    await closeBatchEpoch(epoch.id);
+  }
+}
+
+/** Whether every target in a frozen membership has a NON-pending produced event
+ * (all gated+linked+marked). Bounds the IN by MAX_BATCH_MEMBERSHIP. */
+async function epochFullyProcessed(membership: Array<{ artifactId: string; representationRevisionId: string }>): Promise<boolean> {
+  if (membership.length === 0) return true;
+  const eventIds = membership.map((t) => producedEventId(t.artifactId, t.representationRevisionId, "artifact_produced"));
+  const [row] = await db
+    .select({ pending: sql<number>`count(*)::int` })
+    .from(artifactProducedOutbox)
+    .where(
+      and(
+        inArray(artifactProducedOutbox.eventId, eventIds),
+        eq(artifactProducedOutbox.status, "pending"),
+      ),
+    );
+  return (row?.pending ?? 0) === 0;
+}
+
+/** Close a still-open epoch whose members are all processed (a crash between the
+ * last mark and the close). No-op when there is no open epoch or it still has
+ * pending members. */
+async function closeOpenEpochIfDrained(orgId: string, producerRunId: string): Promise<void> {
+  const open = await resolveOpenBatchEpoch(orgId, producerRunId);
+  if (!open) return;
+  if (await epochFullyProcessed(open.membership)) {
+    await closeBatchEpoch(open.id);
+  }
+}
+
+/** The canonical INJECTIVE target key (length-prefixed) for a batch target — the
+ * same construction as the module-private `targetKey`, over a plain target. */
+function targetKeyOf(t: { artifactId: string; representationRevisionId: string }): string {
+  return `${t.artifactId.length}:${t.artifactId}:${t.representationRevisionId}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -788,13 +872,18 @@ export async function isArtifactEffectHeld(input: {
   if (!event) return evaluateEffectHold({ event: null, gateStatus: null });
 
   let gateStatus: "pending" | "resolved" | null = null;
+  let gateDisposition: "approve" | "reject" | "changes_requested" | null = null;
   if (event.continuationAddress) {
     const [gate] = await db
-      .select({ status: artifactReviewGates.status })
+      .select({ status: artifactReviewGates.status, disposition: artifactReviewGates.disposition })
       .from(artifactReviewGates)
       .where(eq(artifactReviewGates.id, event.continuationAddress))
       .limit(1);
     gateStatus = gate ? (gate.status === "resolved" ? "resolved" : "pending") : null;
+    // S2 (cinatra#2040): a gate resolved as `changes_requested` keeps HOLDING the
+    // effect (a repair is in flight) — thread the terminal disposition so the pure
+    // verdict can distinguish it from an approve/reject resolution.
+    gateDisposition = (gate?.disposition as "approve" | "reject" | "changes_requested" | null) ?? null;
   }
 
   return evaluateEffectHold({
@@ -804,6 +893,7 @@ export async function isArtifactEffectHeld(input: {
       continuationAddress: event.continuationAddress,
     },
     gateStatus,
+    gateDisposition,
   });
 }
 

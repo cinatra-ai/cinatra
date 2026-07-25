@@ -750,6 +750,101 @@ export const suggestionDecisionLedger = cinatraSchema.table("suggestion_decision
 }));
 
 // ---------------------------------------------------------------------------
+// lifecycle-interceptions S2 (cinatra#2040, epic #2037) — the repair loop tables
+// + the routed rejected-recommendation efficacy row. DDL twin: the
+// lifecycleRepairSchemaQueries function in
+// src/lib/artifacts/artifact-review-gate-schema.ts + migration core__0081.
+// ---------------------------------------------------------------------------
+
+/** The DURABLE sealed-membership epoch (replaces S1's in-memory seal). The frozen
+ * membership is persisted BEFORE any gate emit + keyed on (org, run,
+ * membershipHash), so a re-sweep after a crash recovers the FROZEN set (never
+ * re-snapshots a grown pending set). At most ONE 'sealed' (open) epoch per
+ * production (the partial-unique open index). */
+export const lifecycleBatchEpoch = cinatraSchema.table("lifecycle_batch_epoch", {
+  id:             text("id").primaryKey(),
+  orgId:          text("org_id").notNull(),
+  producerRunId:  text("producer_run_id").notNull(),
+  membershipHash: text("membership_hash").notNull(),
+  membership:     jsonb("membership").notNull(),
+  targetCount:    integer("target_count").notNull(),
+  status:         text("status").notNull().default("sealed"), // sealed | partitioned
+  sealedAt:       timestamp("sealed_at", { withTimezone: true }).notNull().defaultNow(),
+  partitionedAt:  timestamp("partitioned_at", { withTimezone: true }),
+}, (t) => ({
+  membershipUniq: uniqueIndex("lifecycle_batch_epoch_uniq").on(t.orgId, t.producerRunId, t.membershipHash),
+  openUniq:       uniqueIndex("lifecycle_batch_epoch_open_uniq")
+    .on(t.orgId, t.producerRunId)
+    .where(sql`status = 'sealed'`),
+  runIdx:         index("lifecycle_batch_epoch_run_idx").on(t.orgId, t.producerRunId),
+}));
+
+/** The durable per-epoch AGGREGATE disposition (S2 owns the repair-side aggregate:
+ * approved / changes_requested / rejected / partially_approved). One per epoch. */
+export const lifecycleBatchDisposition = cinatraSchema.table("lifecycle_batch_disposition", {
+  id:                text("id").primaryKey(),
+  epochId:           text("epoch_id").notNull().references(() => lifecycleBatchEpoch.id, { onDelete: "cascade" }),
+  aggregate:         text("aggregate").notNull(),
+  terminal:          boolean("terminal").notNull(),
+  effectsReleasable: boolean("effects_releasable").notNull(),
+  repairScope:       jsonb("repair_scope").notNull().default(sql`'[]'::jsonb`),
+  unionFindings:     jsonb("union_findings").notNull().default(sql`'[]'::jsonb`),
+  perTargetOutcomes: jsonb("per_target_outcomes").notNull().default(sql`'[]'::jsonb`),
+  createdAt:         timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  epochUniq: uniqueIndex("lifecycle_batch_disposition_epoch_uniq").on(t.epochId),
+}));
+
+/** The repair LINEAGE: a changes_requested request (base target + CAS witness +
+ * structured findings), the cycle-guard attempt counter, the route, and the
+ * successor gate + repaired revision the producer returns. One repair per gate. */
+export const lifecycleRepair = cinatraSchema.table("lifecycle_repair", {
+  id:                              text("id").primaryKey(),
+  lineageId:                       text("lineage_id").notNull(),
+  gateId:                          text("gate_id").notNull(),
+  orgId:                           text("org_id").notNull(),
+  producerRunId:                   text("producer_run_id"),
+  producerAgentId:                 text("producer_agent_id"),
+  baseArtifactId:                  text("base_artifact_id").notNull(),
+  baseRepresentationRevisionId:    text("base_representation_revision_id").notNull(),
+  expectedBaseRevisionId:          text("expected_base_revision_id").notNull(),
+  findings:                        jsonb("findings").notNull(),
+  continuationMode:                text("continuation_mode").notNull(),
+  continuationAddress:             text("continuation_address"),
+  attempt:                         integer("attempt").notNull(),
+  route:                           text("route").notNull(),
+  status:                          text("status").notNull().default("requested"),
+  successorGateId:                 text("successor_gate_id"),
+  successorArtifactId:             text("successor_artifact_id"),
+  successorRepresentationRevisionId: text("successor_representation_revision_id"),
+  findingOutcomes:                 jsonb("finding_outcomes"),
+  changeSummary:                   text("change_summary"),
+  idempotencyKey:                  text("idempotency_key").notNull(),
+  createdAt:                       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:                       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  gateUniq:    uniqueIndex("lifecycle_repair_gate_uniq").on(t.gateId),
+  lineageIdx:  index("lifecycle_repair_lineage_idx").on(t.lineageId),
+  statusIdx:   index("lifecycle_repair_status_idx").on(t.status, t.createdAt),
+}));
+
+/** ROUTED ADDITION — the AC-6 rejected-recommendation efficacy row (S3 computed it
+ * transiently in summarizeRecommendationEfficacy and DROPPED it). Mirrors
+ * run_selected_skill_revisions (the ACCEPTED half). */
+export const runRejectedRecommendations = cinatraSchema.table("run_rejected_recommendations", {
+  id:                   text("id").primaryKey(),
+  runId:                text("run_id").notNull(),
+  skillId:              text("skill_id").notNull(),
+  skillRevisionId:      text("skill_revision_id"),
+  recommendationSource: text("recommendation_source").notNull(),
+  recommendedRank:      integer("recommended_rank"),
+  createdAt:            timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  runSkillUniq: uniqueIndex("run_rejected_recommendations_uniq").on(t.runId, t.skillId),
+  runIdx:       index("run_rejected_recommendations_run_idx").on(t.runId),
+}));
+
+// ---------------------------------------------------------------------------
 // agent_run_messages — per-run LLM conversation thread checkpoint
 // ---------------------------------------------------------------------------
 // Structured fields support tool-call replay after HITL pause/resume.

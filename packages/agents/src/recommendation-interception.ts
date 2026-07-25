@@ -42,7 +42,7 @@ import { evaluatePolicy } from "@/lib/lifecycle/lifecycle-policy";
 import type { CompiledManifestLifecycle } from "@/lib/lifecycle/lifecycle-policy";
 
 import { resolveOrgPolicyRule, POLICY_ARTIFACT_TYPE_WILDCARD } from "./lifecycle-policy-store";
-import { writeRunSelectedSkillRevisions } from "@/lib/run-selected-skill-revisions";
+import { writeRunSelectedSkillRevisions, writeRunRejectedRecommendations } from "@/lib/run-selected-skill-revisions";
 
 /** Parse the compiled `agent_templates.lifecycle_config` JSON-as-text. Returns
  * null on absence / malformed JSON (never throws). */
@@ -212,5 +212,30 @@ export async function confirmRunSkillSelection(
     recommendations,
     selectedSkillIds: selection.map((s) => s.skillId),
   });
+  // ROUTED into S2 (cinatra#2040): persist the REJECTED half of the efficacy split
+  // durably (the accepted half rode `run_selected_skill_revisions` above; the
+  // rejected half was computed by `summarizeRecommendationEfficacy` and DROPPED).
+  // Best-effort by contract — a telemetry write must never fail the confirm path.
+  const rejectedSet = new Set(efficacy.rejected);
+  const rejectedRows = recommendations
+    .filter((r) => r.recommended && rejectedSet.has(r.skillId))
+    .map((r) => ({
+      skillId: r.skillId,
+      skillRevisionId: r.skillRevisionId,
+      recommendationSource: "recommended_not_kept",
+      recommendedRank: r.rank,
+    }));
+  try {
+    writeRunRejectedRecommendations({ runId: input.runId, rejected: rejectedRows });
+  } catch (err) {
+    // The run id is a FORMAT ARGUMENT (`%s`), never spliced into the format-string
+    // position — a tainted value in the format string could be (mis)interpreted by
+    // console.error's printf-style substitution (js/tainted-format-string).
+    console.error(
+      "[recommendation-interception] rejected-recommendation efficacy write failed for run=%s — continuing:",
+      input.runId,
+      err,
+    );
+  }
   return { written: selection.length, selection, efficacy };
 }
