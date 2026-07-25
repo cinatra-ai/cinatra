@@ -138,15 +138,19 @@ describe("§VIII routing — library rows render as dashboard pointers, dual-aut
   });
 });
 
-// ── Phase-1 DUAL AUTHORIZATION (issue #1895 scope) ─────────────────────────
-describe("§VIII dual authorization — resolveDashboardAccess gates list + detail", () => {
-  it("the list selection layers the dashboard owner+project gate on object.read", () => {
-    // filterReadableDashboards → resolveDashboardAccess (the second gate).
-    expect(SURFACE).toMatch(/filterReadableDashboards/);
-    expect(SURFACE).toMatch(/filterRenderableDashboards/); // liveness gate too
+// ── Phase-2 SINGLE-GATE cutover (issue #1898 scope) ────────────────────────
+describe("§VIII single-gate — object.read is the sole list authorization", () => {
+  it("the list selection NO LONGER re-authorizes (the Phase-1 dual gate is gone)", () => {
+    // Phase-2 (cinatra#1898): object.read (applied by listArtifacts, reflected in
+    // artifactIds) is the SOLE gate. The surface only projects + drops non-surface
+    // rows, so the second dashboard-resolver pass is removed.
+    expect(SURFACE).not.toMatch(/filterReadableDashboards/);
+    expect(SURFACE).toMatch(/filterRenderableDashboards/); // liveness/template gate stays
   });
 
-  it("the detail resolver requires dashboard read access via the sanctioned actor", () => {
+  it("the detail resolver gates read via the single scope resolver + sanctioned actor", () => {
+    // The detail page still gates via requireDashboardAccess — now the flipped
+    // scope-only resolver, which AGREES with the object filter row-for-row.
     expect(RESOLVERS).toMatch(/requireDashboardAccess/);
     expect(RESOLVERS).toMatch(/buildDashboardActorFromSession/);
     // denied vs not-found split (spec §III: list-visible-but-read-denied panel).

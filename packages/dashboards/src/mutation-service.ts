@@ -1235,6 +1235,12 @@ export async function getEntityDashboard(
   const rows = await db.select().from(dashboards).where(eq(dashboards.id, id)).limit(1);
   const row = rows[0];
   if (!row) return undefined;
+  // This is the ENTITY-dashboard fetch (personal/team/org surfaces); entity
+  // dashboards are never project-scoped. Exclude project rows explicitly:
+  // `resolveDashboardAccess` returns canRead: true for a project row at the owner
+  // tier (the project GRANT is the real gate, applied only by the project-aware
+  // callers), so a bare canRead check here must NOT serve a project instance.
+  if (row.projectId) return undefined;
   if (!resolveDashboardAccess(row, actor).canRead) return undefined;
   return row;
 }
