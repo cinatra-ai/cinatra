@@ -3,7 +3,7 @@
  * source-text conformance (cinatra#1897 B4).
  *
  * Pins the build to the RATIFIED design spec `specs/app-artifacts.html` §IX at
- * design@0ead5d0c549115aca4e21c21b53dc2d2269dbd84 (the Artifacts spec, v0.8.0;
+ * design@0ead5d0c549115aca4e21c21b53dc2d2269dbd84 (the Artifacts spec, version 0.8.0;
  * `conformance/app-artifacts.json` contentHash
  * sha256:ee23ebf07b4f61405398cd05ca5045ec7b4103e501a0fde4392fa3a17c8380d7 — the
  * three §IX surfaces scope-dashboards-tab, scope-dashboards-add-picker,
