@@ -13,6 +13,9 @@ import { randomUUID } from "node:crypto";
 import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "./run-stepper-steps";
+import { listReviewGatesForRun } from "./artifact-review-gate-store";
+import { buildRunStepRail, type RailMessage } from "./run-step-rail";
+import { RunStepRailPanel } from "./run-step-rail-panel";
 import { AuthzError } from "@/lib/authz";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 // agent_run mounts the generic ExtensionPermissionsClient.
@@ -26,7 +29,7 @@ import { removeRunOwner } from "./run-sharing-actions";
 import { RunAgentButton } from "./run-dialog";
 import { createAndTriggerRunWithContext, buildSubmissionMapByStepIndex, type SubmissionMapEntries } from "./run-actions";
 import { SetupCompletionWatcher } from "./setup-completion-watcher";
-import { AgenticRunPanel, type SerializedAgentRunMessage } from "./agentic-run-panel";
+import { type SerializedAgentRunMessage } from "./agentic-run-panel";
 import { AgentPageLayout } from "./agent-page-layout";
 import { OrchestratorStepperPanel } from "./orchestrator-stepper-panel";
 import { TriggerScreenClient } from "./trigger-screen-client";
@@ -69,12 +72,6 @@ function buildExtensionHeaderLink(packageName: string | null | undefined) {
     extensionIdentifier: packageName,
     extensionHref: `/configuration/marketplace/${encodeURIComponent(match[1])}/${encodeURIComponent(match[2])}`,
   };
-}
-
-async function shouldShowTriggerTabForRun(runId: string | null): Promise<boolean> {
-  if (!runId) return false;
-  const trigger = await readRunTriggerByRunId(runId);
-  return trigger !== null && (trigger.triggerType === "scheduled" || trigger.triggerType === "recurring");
 }
 
 async function resolveTemplateForActor(agentId: string) {
@@ -279,6 +276,57 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       : run?.title ?? "";
   const extensionHeaderLink = buildExtensionHeaderLink(template.packageName);
 
+  // ── Canonical run view LEFT RAIL (cinatra#2066, C1) ──────────────────────
+  // ONE run-detail contract for BOTH template classes: the merged step rail on
+  // the left, the run detail (stepper / transcript panel) on the right. The rail
+  // merges the three step sources (template-derived steps + captured submissions;
+  // transcript messages; stepResults JSON) and weaves in the run's review gates
+  // from C0's `listReviewGatesForRun` — INCLUDING resolved gates as read-only
+  // history. Access is already enforced above (readAgentRunById with the actor);
+  // `listReviewGatesForRun` is a plain run-scoped read behind that door.
+  const railGates = run ? await listReviewGatesForRun(run.id) : [];
+  const railTemplateSteps = hitlSteps.map((h) => ({
+    index: h.index,
+    stepNumber: h.stepNumber,
+    label: h.label,
+  }));
+  const railStepResults = (run?.stepResults ?? []) as unknown[];
+  // Transcript only forms the rail spine for a single-agent/leaf run — no policy
+  // steps AND no stepResults. Skip the extra read for orchestrator-shaped runs.
+  const transcriptFormsSpine = railTemplateSteps.length === 0 && railStepResults.length === 0;
+  const railMessages: RailMessage[] =
+    run && transcriptFormsSpine
+      ? (await readAgentRunMessages(run.id)).map((m) => ({
+          id: m.id,
+          sequence: m.sequence,
+          role: m.role,
+          messageType: m.messageType,
+          text:
+            m.body && (m.body.messageType === "text" || m.body.messageType === "final")
+              ? m.body.text
+              : null,
+        }))
+      : [];
+  const rail = run
+    ? buildRunStepRail({
+        templateSteps: railTemplateSteps,
+        submissions: submissionMap.map(([stepIndex, entry]) => ({
+          stepIndex,
+          answered: entry.submittedValues != null,
+        })),
+        messages: railMessages,
+        stepResults: railStepResults,
+        gates: railGates.map((g) => ({
+          gateId: g.id,
+          reviewTaskId: g.reviewTaskId,
+          status: g.status,
+          disposition: g.disposition,
+          createdAt: g.createdAt,
+        })),
+      })
+    : { entries: [], activeOrdinal: null };
+  const reviewHrefBase = run ? `/agents/${agentId}/${encodeURIComponent(run.id)}/review` : "";
+
   return (
     <Main className="min-h-screen">
       <AgentPageLayout
@@ -306,46 +354,58 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
         }
       >
         {run ? (
-          <>
-            {/* Render setup INTERRUPT events inline on the Setup tab.
-                Only rendered once the run has been triggered (status !== pending_input). */}
-            {run.status !== "pending_input" && (
-              ((template.type === "orchestrator" || template.type === "flow") || stepperSteps.length > 0) && template.sourceType !== "external" ? (
-                <OrchestratorStepperPanel
-                  runId={run.id}
-                  initialStatus={run.status}
-                  initialError={run.error ?? null}
-                  agUiEnabled={run.agUiEnabled ?? null}
-                  agentPackageName={template.packageName ?? undefined}
-                  inputParams={(run.inputParams ?? undefined) as Record<string, unknown> | undefined}
-                  stepperSteps={stepperSteps}
-                  agentId={agentId}
-                  lgThreadId={run.lgThreadId}
-                  templateId={template.id}
-                  templateName={template.name}
-                  submissionMap={submissionMap}
-                  policySteps={policySteps as ReadonlyArray<{ stepNumber: number; gateCount?: number; hitlOwnedBy?: string; xRenderer?: string; firesRendererGate?: boolean }>}
-                />
-              ) : (
-                <SetupCompletionWatcher
-                  runId={run.id}
-                  agentId={agentId}
-                  instanceId={instanceId}
-                  initialStatus={run.status}
-                  initialError={run.error ?? null}
-                  initialMessages={serializeRunMessages(completedRunMessages)}
-                  agUiEnabled={run.agUiEnabled}
-                  agentPackageName={agentId}
-                  traceId={run.traceId ?? undefined}
-                  requiredFields={required}
-                  initialInputParams={(run.inputParams ?? {}) as Record<string, unknown>}
-                  noRedirect={template.type === "orchestrator" || template.type === "flow" || !!run.parentRunId}
-                  runHasExecuted={runHasExecuted}
-                  initialStreamedText={run.streamedText ?? ""}
-                />
-              )
+          // Canonical run view (cinatra#2066, C1): the merged step rail on the
+          // LEFT (owner ruling 2026-07-25), the run detail on the RIGHT — one
+          // contract for both template classes.
+          <div className="flex items-start gap-6" data-run-detail-contract="">
+            {run.status !== "pending_input" && rail.entries.length > 0 && (
+              <RunStepRailPanel
+                entries={rail.entries}
+                activeOrdinal={rail.activeOrdinal}
+                reviewHrefBase={reviewHrefBase}
+              />
             )}
-          </>
+            <div className="min-w-0 flex-1">
+              {/* Render setup INTERRUPT events inline on the Setup tab.
+                  Only rendered once the run has been triggered (status !== pending_input). */}
+              {run.status !== "pending_input" && (
+                ((template.type === "orchestrator" || template.type === "flow") || stepperSteps.length > 0) && template.sourceType !== "external" ? (
+                  <OrchestratorStepperPanel
+                    runId={run.id}
+                    initialStatus={run.status}
+                    initialError={run.error ?? null}
+                    agUiEnabled={run.agUiEnabled ?? null}
+                    agentPackageName={template.packageName ?? undefined}
+                    inputParams={(run.inputParams ?? undefined) as Record<string, unknown> | undefined}
+                    stepperSteps={stepperSteps}
+                    agentId={agentId}
+                    lgThreadId={run.lgThreadId}
+                    templateId={template.id}
+                    templateName={template.name}
+                    submissionMap={submissionMap}
+                    policySteps={policySteps as ReadonlyArray<{ stepNumber: number; gateCount?: number; hitlOwnedBy?: string; xRenderer?: string; firesRendererGate?: boolean }>}
+                  />
+                ) : (
+                  <SetupCompletionWatcher
+                    runId={run.id}
+                    agentId={agentId}
+                    instanceId={instanceId}
+                    initialStatus={run.status}
+                    initialError={run.error ?? null}
+                    initialMessages={serializeRunMessages(completedRunMessages)}
+                    agUiEnabled={run.agUiEnabled}
+                    agentPackageName={agentId}
+                    traceId={run.traceId ?? undefined}
+                    requiredFields={required}
+                    initialInputParams={(run.inputParams ?? {}) as Record<string, unknown>}
+                    noRedirect={template.type === "orchestrator" || template.type === "flow" || !!run.parentRunId}
+                    runHasExecuted={runHasExecuted}
+                    initialStreamedText={run.streamedText ?? ""}
+                  />
+                )
+              )}
+            </div>
+          </div>
         ) : (
           <div className="soft-panel rounded-card p-6">
             <p className="text-sm text-muted-foreground">No run selected.</p>
@@ -356,85 +416,11 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   );
 }
 
-export async function RunScreen({ agentId, instanceId }: ScreenProps) {
-  const session = await getAuthSession();
-  const actorUserId = session?.user?.id ?? null;
-  // Admin override for cross-screen consistency.
-  const isAdmin = isPlatformAdmin(session);
-  const template = await readAgentTemplateBySlug(agentId, {
-    actorUserId,
-    includeNonPublished: true,
-  });
-  if (!template) notFound();
-
-  // Pass actor + roles so readAgentRunById
-  // enforces effectivePolicy (runDataVisibility). The manual co-owner gate
-  // is replaced by enforceRunAccess("read") inside readAgentRunById.
-  const runScreenActor: PrimitiveActorContext = { actorType: "human", source: "ui", userId: actorUserId ?? undefined };
-  const runScreenRoles: ActorRoleHints = {
-    platformRole: isAdmin ? "platform_admin" : "member",
-    // admin-parity P4 (cinatra#1129): thread the actor's active-org role so the
-    // owner-aware run "admin" visibility tier recognizes an org admin/owner.
-    orgRole: session
-      ? await resolveOrgRoleForSession({ user: { id: session.user.id }, session: session.session })
-      : undefined,
-    actorOrganizationId: session?.session?.activeOrganizationId ?? undefined,
-  };
-  let run: Awaited<ReturnType<typeof readAgentRunById>> = null;
-  if (instanceId !== "new") {
-    try {
-      run = await readAgentRunById(instanceId, runScreenActor, runScreenRoles);
-      if (!run) notFound();
-    } catch (err) {
-      if (err instanceof AuthzError) notFound();
-      throw err;
-    }
-  }
-
-  const rawMessages = run ? await readAgentRunMessages(run.id) : [];
-  const initialMessages: SerializedAgentRunMessage[] = serializeRunMessages(rawMessages);
-
-  const runName = run ? await ensureRunTitle(run, template.name) : "";
-  const extensionHeaderLink = buildExtensionHeaderLink(template.packageName);
-
-  return (
-    <Main className="min-h-screen">
-      <AgentPageLayout
-        agentId={agentId}
-        instanceId={instanceId}
-        activeTab="run"
-        templateName={template.name}
-        initialRunName={runName}
-        runId={run?.id ?? null}
-        isPublished={template.status === "published"}
-        showTriggerTab={await shouldShowTriggerTabForRun(run?.id ?? null)}
-        extensionIdentifier={extensionHeaderLink?.extensionIdentifier}
-        extensionHref={extensionHeaderLink?.extensionHref}
-      >
-        {run ? (
-          <AgenticRunPanel
-            runId={run.id}
-            initialStatus={run.status}
-            initialError={run.error ?? null}
-            initialMessages={initialMessages}
-            agUiEnabled={run.agUiEnabled}
-            agentPackageName={template.packageName ?? agentId}
-            traceId={run.traceId ?? undefined}
-            inputParams={(run.inputParams ?? {}) as Record<string, unknown>}
-            templateId={template.id}
-            initialStreamedText={run.streamedText ?? ""}
-          />
-        ) : (
-          <div className="soft-panel rounded-card p-6">
-            <p className="text-sm text-muted-foreground">No run selected.</p>
-          </div>
-        )}
-      </AgentPageLayout>
-    </Main>
-  );
-}
-
-
+// cinatra#2066 C1 / AC-4: `RunScreen` (the old `instanceRun` mapping) was the
+// transcript-only run screen with NO consuming route. The canonical run view is
+// now `SetupScreen` above — ONE run-detail contract with the left step rail for
+// BOTH template classes — so this dead screen and its dead mapping are removed
+// (see agentPluginScreens in screens.tsx).
 
 export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
   const template = await resolveTemplateForActor(agentId);

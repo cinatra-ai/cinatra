@@ -817,7 +817,6 @@ export async function RegistryPermissionsScreen() {
 
 import {
   SetupScreen as InstanceSetupScreen,
-  RunScreen as InstanceRunScreen,
   DataScreen as InstanceDataScreen,
   PermissionsScreen as InstancePermissionsScreen,
   TriggerScreen as InstanceTriggerScreen,
@@ -917,7 +916,11 @@ export const agentPluginScreens = {
   sourceRuns: undefined,
   agentOptimization: undefined,
   instanceSetup: (props: AgentScreenProps) => withResolvedProps(InstanceSetupScreen, props),
-  instanceRun: (props: AgentScreenProps) => withResolvedProps(InstanceRunScreen, props),
+  // cinatra#2066 C1 / AC-4: the `instanceRun` mapping (RunScreen) was the dead
+  // transcript-only run screen with NO consuming route — the run-embedding audit's
+  // dead `screens.instanceRun`. The canonical run view is now `instanceSetup`
+  // (SetupScreen: one run-detail contract with the left step rail for BOTH
+  // template classes), so the dead mapping is removed rather than routed.
   instanceData: (props: AgentScreenProps) => withResolvedProps(InstanceDataScreen, props),
   instanceResults: undefined,
   instanceOptimization: undefined,
