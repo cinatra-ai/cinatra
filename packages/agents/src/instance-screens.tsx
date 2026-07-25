@@ -16,6 +16,18 @@ import { buildRunStepperSteps, type RunStepperPolicyStep } from "./run-stepper-s
 import { listReviewGatesForRun } from "./artifact-review-gate-store";
 import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
+import { readRecommendationParkForRun } from "./recommendation-hold";
+import { getRunRecommendations } from "./recommendation-interception";
+import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
+import {
+  readRunSelectedSkillRevisions,
+  hasRunRecommendationSkip,
+} from "@/lib/run-selected-skill-revisions";
+import {
+  RunRecommendationChipRow,
+  type RunRecommendationDecision,
+} from "./run-recommendation-chip-row";
+import type { RecommendedSkillForChip } from "./server-actions";
 import { AuthzError } from "@/lib/authz";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 // agent_run mounts the generic ExtensionPermissionsClient.
@@ -327,6 +339,59 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     : { entries: [], activeOrdinal: null };
   const reviewHrefBase = run ? `/agents/${agentId}/${encodeURIComponent(run.id)}/review` : "";
 
+  // ── Run-start recommendation chip-row (cinatra#2067, epic #2037 C3) ──────
+  // The chip-row appears ONLY when the run holds at the recommendation
+  // interception (a parked continuation) — or, once decided, as a read-only
+  // summary (a released park). No park ⇒ no row (policy-forbidden / skipped /
+  // empty-candidate / headless runs proceed with nothing shown). The park is a
+  // plain run-scoped read behind the access door already cleared above.
+  const recommendationPark = run ? await readRecommendationParkForRun(run.id) : null;
+  const recommendationHeld = recommendationPark?.status === "parked";
+  let recommendationDecision: RunRecommendationDecision | null = null;
+  let initialRecommendations: RecommendedSkillForChip[] = [];
+  if (run && recommendationPark) {
+    if (recommendationHeld) {
+      // Server-prefetch the candidates so the chip-row renders them immediately.
+      recommendationDecision = { kind: "pending" };
+      const packageName = template.packageName ?? undefined;
+      if (packageName) {
+        try {
+          const assigned = await getAssignedSkillIdsForAgent(packageName);
+          let intentPromptText = "";
+          try {
+            intentPromptText = JSON.stringify(run.inputParams ?? {});
+          } catch {
+            intentPromptText = "";
+          }
+          const recs = await getRunRecommendations({
+            agentId: packageName,
+            intent: { promptText: intentPromptText },
+            restrictToSkillIds: assigned,
+          });
+          initialRecommendations = recs.map((r) => ({
+            skillId: r.skillId,
+            skillRevisionId: r.skillRevisionId,
+            name: r.name,
+            score: r.score,
+            rank: r.rank,
+            recommended: r.recommended,
+            scoredFeatures: r.scoredFeatures,
+          }));
+        } catch {
+          initialRecommendations = [];
+        }
+      }
+    } else {
+      // Released — a decided hold. Confirmed (selection rows) vs skipped.
+      const selected = readRunSelectedSkillRevisions(run.id);
+      if (selected.length > 0) {
+        recommendationDecision = { kind: "confirmed", skillNames: selected.map((s) => s.skillId) };
+      } else if (hasRunRecommendationSkip(run.id)) {
+        recommendationDecision = { kind: "skipped" };
+      }
+    }
+  }
+
   return (
     <Main className="min-h-screen">
       <AgentPageLayout
@@ -341,7 +406,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
         extensionIdentifier={extensionHeaderLink?.extensionIdentifier}
         extensionHref={extensionHeaderLink?.extensionHref}
         actions={
-          run && run.status === "pending_input" ? (
+          run && run.status === "pending_input" && !recommendationHeld ? (
             <RunAgentButton
               runId={run.id}
               templateSlug={agentId}
@@ -366,6 +431,27 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
               />
             )}
             <div className="min-w-0 flex-1">
+              {/* Run-start recommendation chip-row (cinatra#2067, C3). A held run
+                  (parked recommendation continuation) shows the interactive
+                  confirm/adjust/skip chip-row at the run-start position, before
+                  any work; a released hold shows the read-only decided summary. */}
+              {recommendationDecision && template.packageName ? (
+                <div className="mb-4">
+                  <RunRecommendationChipRow
+                    runId={run.id}
+                    agentPackageName={template.packageName}
+                    promptText={(() => {
+                      try {
+                        return JSON.stringify(run.inputParams ?? {});
+                      } catch {
+                        return "";
+                      }
+                    })()}
+                    initialRecommendations={initialRecommendations}
+                    decision={recommendationDecision}
+                  />
+                </div>
+              ) : null}
               {/* Render setup INTERRUPT events inline on the Setup tab.
                   Only rendered once the run has been triggered (status !== pending_input). */}
               {run.status !== "pending_input" && (
