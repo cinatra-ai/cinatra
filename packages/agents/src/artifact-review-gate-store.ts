@@ -49,6 +49,7 @@ import { and, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
 import { db } from "./db";
+import { dispatchAutoGateResolved } from "./run-wait-notifier";
 import {
   artifactReviewGates,
   artifactReviewAudit,
@@ -456,7 +457,7 @@ export async function readReviewGateState(
 export async function commitReviewDecision(
   plan: ReviewDecisionCommitPlan,
 ): Promise<ReviewCommitOutcome> {
-  return db.transaction(async (tx) => {
+  const outcome: ReviewCommitOutcome = await db.transaction(async (tx): Promise<ReviewCommitOutcome> => {
     let gateId: string;
     let orgId: string;
 
@@ -586,6 +587,20 @@ export async function commitReviewDecision(
 
     return { status: "committed" };
   });
+  // cinatra#2066 C2 — a TERMINAL decision resolved this gate: clear the
+  // auto-gate-open run-view notification (if this gate minted one). Fired AFTER
+  // the transaction commits — best-effort and OUTSIDE the tx so a notification
+  // failure can never roll back a committed decision. Idempotent by
+  // (runId, reviewTaskId): a delete that names no row (a flow-authored gate, an
+  // initiator-less run, or an `already-resolved` race that minted nothing new) is
+  // a harmless no-op.
+  if (plan.terminal && outcome.status === "committed") {
+    await dispatchAutoGateResolved({
+      runId: plan.runId,
+      reviewTaskId: plan.reviewTaskId,
+    });
+  }
+  return outcome;
 }
 
 async function readReviewGateWithinTx(
