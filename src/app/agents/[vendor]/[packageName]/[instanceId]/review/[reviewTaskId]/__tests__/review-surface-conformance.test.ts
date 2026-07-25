@@ -296,7 +296,7 @@ describe("§IV — LIFECYCLE prompt-window wiring (owner ruling 2026-07-25, cina
 });
 
 describe("§I–III — run-embedded anchors: the revised spec's closed set is rendered bidirectionally", () => {
-  // The run-embedded surface (design@5e5c53aff, v0.2.0) added five anchors beyond
+  // The run-embedded surface (design@5e5c53aff) added five anchors beyond
   // the review-route chrome. This block asserts the CLOSED set of run-embedded
   // anchors bidirectionally: every spec anchor has a render site, and each render
   // site carries only spec anchors. `run-gate-notification` has NO DOM home (it is
