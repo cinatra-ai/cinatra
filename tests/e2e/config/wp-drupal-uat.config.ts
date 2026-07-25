@@ -54,6 +54,15 @@ export default defineConfig({
   use: {
     baseURL: BASE_URL,
     ...baseUse,
+    // Bound every individual action/navigation so a step that never becomes
+    // actionable ERRORS instead of hanging to the per-test timeout. Playwright's
+    // default actionTimeout is 0 (unbounded): a stuck `page.click` on a launcher
+    // toggle otherwise waits the full 20-min render-parity budget with no output
+    // (cinatra#1998 — the target-3 stall root cause). These are generous relative
+    // to the live CMS + hosted-login round-trips (openWidget's own waits are 30s)
+    // yet still fail LOUD long before the per-test ceiling.
+    actionTimeout: 30_000,
+    navigationTimeout: 60_000,
   },
 
   webServer: {

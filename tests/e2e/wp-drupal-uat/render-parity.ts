@@ -13,20 +13,38 @@
 // compares each rendered content block against the S3 packaged-renderer reference
 // — the SAME reference the committed goldens and target 1 are anchored to.
 //
-// ONE SESSION FOR THE WHOLE CORPUS (cinatra#1998 (c) fix). The plugin login +
-// iframe bootstrap runs ONCE; every fixture after the first re-mounts the widget
-// iframe WITHIN that session — collapse the panel → stage the next seam → re-open
-// (renderNextFixtureInSession) — reusing the session's held `cwu_` (a fresh
-// short-lived `cit_` is minted per mount) with no new login. A prior form
-// re-loaded the whole CMS host page per fixture, which
-// dropped the in-memory `cwu_` and forced a fresh hosted login each time — 22
-// `POST /api/widget-auth/init` per CMS that (correctly) exhausted the shared
-// 30/min IP limiter (connect-rate-limit.ts). The limiter is the real security
-// control and is left untouched; only the harness's wasteful per-fixture
-// re-login is removed, matching how a real visitor's session persists across
-// successive conversations. (Re-mount is a fresh plugin conversation-entry, NOT
-// an in-place embed reload: the parent bootstrap is bound to a single-use bridge
-// nonce, so a bare reload's READY is ignored by design — bridge-protocol.ts.)
+// ONE FRESH DOCUMENT PER FIXTURE — the plugin's proven normal page-load path.
+// Rendering the next fixture needs a NEW embed iframe (a new `parityThread` src +
+// a fresh single-use bridge nonce), and the LIVE plugin (wordpress-plugin
+// `assets/cinatra-widget.js` @ current main, drupal-module `js/cinatra-widget.js`
+// @ current main) mounts that iframe EXACTLY ONCE per document: `mountBridgeIframe`
+// is guarded `if (iframeEl) return` and is reached ONLY from `enterConversation`,
+// itself reached ONLY from `redeemCode` right after a hosted-login handshake. The
+// launcher circle / close-button `collapseWidget` merely toggles
+// `cwWidget.style.display` — it NEVER tears the iframe down (only `forceReLogin`
+// does, via `teardownBridge`, and that drops the token too), and re-opening just
+// un-hides the SAME already-bootstrapped frame. So there is NO in-session re-mount
+// affordance: a held `cwu_` cannot be re-used to mount a second frame. The only
+// paths to a fresh iframe are a full document reload or a re-login — both re-drive
+// the hosted-login handshake (the `cwu_`/`cit_` tokens are in-memory only,
+// dropped on navigation). An earlier form of this leg tried collapse→re-open to
+// re-mount within one session; grounding against the real plugin (cinatra#1998
+// issuecomment) disproved it — the launcher toggle never produced a second
+// `/embed/assistant` mount and the click hung unbounded. So each fixture reloads
+// the CMS host page, re-stages its seam, and re-drives the launcher → required-
+// login → sandboxed cross-origin `<iframe class="cw-frame">` bootstrap (the exact
+// path fixture 0 already proved live). That reload DOES re-charge the connect-
+// token limiter (connect-rate-limit.ts), which has TWO buckets. The BINDING one is
+// the per-code-key bucket: `/widget-auth/init` keys it on the FIXED per-CMS site
+// credential hash, so all 22 reloads share ONE bucket capped at 5/min — the
+// tightest limit (the 30/min per-IP bucket is slacker: `/widget-auth/token` keys
+// its code bucket on the unique per-login PKCE code, never binding). The limiter
+// is the real security control and is left UNTOUCHED; instead the leg PACES fixture
+// starts (MIN_FIXTURE_INTERVAL_MS ≥ 15s ⇒ ≤4 inits/min, under 5, with the 30/min
+// IP bucket well clear too), so reload-per-fixture never triggers the 429 storm a
+// prior form produced. (We never re-`goto` the embed frame in place: the parent
+// bootstrap is bound to a single-use nonce, so a bare embed reload's READY is
+// ignored by design — bridge-protocol.ts.)
 //
 // HOW THE CORPUS REACHES THE CMS IFRAME (the three moving parts, all landed):
 //   (a) Lane A — `/api/assistants/chat/capabilities` advertises `token-broker`
@@ -39,9 +57,11 @@
 //       `?parityTheme=` (cinatra#1998 (b)).
 //   (c) The plugin TEST-ONLY route-rewrite — the CMS widget's iframe `src` is
 //       hardcoded to `instanceId`+`assistant`; the plugin now appends the seam
-//       params when a test stages a `cinatra_parity_*` sessionStorage signal
-//       (inert in prod — the server ignores `parityThread` unless its gate is on;
-//       wordpress-plugin / drupal-module #1998 (c)). This leg stages that signal.
+//       params when a test stages the STORAGE-FREE `window.__cinatraParitySeam`
+//       global (or the `cinatra_parity_*` query-param fallback) — never storage,
+//       to honor the widget's token non-disclosure invariant (inert in prod — the
+//       server ignores `parityThread` unless its gate is on; wordpress-plugin /
+//       drupal-module #1998 (c)). This leg stages that global (stageSeamSignal).
 //
 // READ-ONLY RENDER LEG. This leg drives NO edit turn, so it is NOT the #1214
 // no-direct-egress positive control — that assertion stays where it already is,
@@ -88,12 +108,10 @@ import {
   DRUPAL_BASE,
   SEL,
   WP_BASE,
-  collapseWidget,
   loginDrupal,
   loginWordPress,
   openWidget,
   readSeed,
-  resumeWidget,
 } from "./helpers";
 
 /** Opt-in flag ENABLING the live CMS-iframe render-parity leg (target 3). Default
@@ -227,38 +245,38 @@ async function scrapeEmbedContent(
 }
 
 /**
- * Render the NEXT fixture in the SAME authenticated widget session — WITHOUT a
- * per-fixture re-login. Rather than reloading the whole CMS host page (which
- * drops the in-memory `cwu_` and forces a fresh hosted-login handshake — the
- * `POST /api/widget-auth/init` per fixture that exhausts the correct 30/min IP
- * limiter, cinatra#1998 (c)), we collapse the assistant panel and re-open it: the
- * plugin tears the conversation iframe down and re-enters conversation, mounting
- * a FRESH iframe (with a fresh single-use bridge nonce) that reads the just-staged
- * seam signal — reusing the session's held `cwu_` (a fresh `cit_` per mount)
- * with no new login.
+ * Render one fixture through a FRESH document — the plugin's proven normal
+ * page-load path (the exact flow fixture 0 verified live). Reloading the CMS host
+ * page is the ONLY harness-reachable way to obtain a fresh embed iframe (a new
+ * `parityThread` src + a fresh single-use bridge nonce): the live plugin mounts
+ * its iframe exactly once per document (`mountBridgeIframe`'s `if (iframeEl)
+ * return` guard, reached only from a post-login `enterConversation`), and
+ * `collapseWidget` only hides the panel (`display:none`) — it never tears the
+ * frame down, so a held `cwu_` can never be re-used to mount a second frame in the
+ * same document.
  *
- * WHY collapse→resume AND NOT an in-place `frame.goto` reload of the embed: the
- * parent→iframe bootstrap is bound to the frame's single-use nonce gate
- * (bridge-protocol.ts) — BY DESIGN "a replacement document cannot re-open the
- * handshake", so a bare reload's READY is ignored (a downgrade defense) and the
- * embed would hang pre-bootstrap. Only a fresh plugin conversation-entry arms a
- * new gate. This mirrors a real visitor collapsing/expanding the assistant across
- * successive conversations. Fails LOUD (collapse's detach wait, or the resume's
- * `embedActive` wait) if the widget does not re-mount — never a silent stale
- * compare.
+ * The seam MUST be staged AFTER the reload (so `window.__cinatraParitySeam` exists
+ * on the fresh window) and BEFORE the login handshake drives `enterConversation`
+ * (which reads it at iframe-mount time). The reload drops the in-memory
+ * `cwu_`/`cit_`, so `openWidget` re-drives the real hosted-login → sandboxed
+ * cross-origin `<iframe class="cw-frame">` bootstrap. Fails LOUD (openWidget's
+ * bounded login/mount/`embedActive` waits) if the widget does not re-mount — never
+ * a silent stale compare. We never `frame.goto` the embed in place: its bootstrap
+ * is bound to a single-use nonce, so a bare embed reload's READY is ignored by
+ * design (bridge-protocol.ts).
  */
-async function renderNextFixtureInSession(
+async function renderFixtureFresh(
   page: Page,
+  hostPage: string,
   threadId: string,
   theme: RenderTheme,
 ): Promise<FrameLocator> {
-  // Tear down the current conversation iframe (real-visitor panel collapse).
-  await collapseWidget(page);
-  // Stage the NEXT fixture's seam BEFORE re-entry (the plugin reads it at mount).
+  // Fresh document = fresh plugin IIFE = fresh login gate = fresh iframe mount.
+  await page.goto(hostPage, { waitUntil: "domcontentloaded" });
+  // Stage THIS fixture's seam on the fresh window before login → enterConversation.
   await stageSeamSignal(page, threadId, theme);
-  // Re-open — a fresh iframe mount reusing the held cwu_ (re-login only on genuine
-  // expiry), reading the seam just staged above.
-  return resumeWidget(page);
+  // Drive the REAL plugin launcher → required-login → cross-origin iframe bootstrap.
+  return openWidget(page);
 }
 
 /**
@@ -288,19 +306,19 @@ export function registerCmsRenderParitySpec(cms: Cms): void {
           `LOUD on any drift. #1216 S6 / #1222 / #1998 (c).`,
       );
 
-      // 11 fixtures × 2 themes render inside ONE authenticated widget session: a
-      // single plugin login + iframe bootstrap, then a per-fixture in-session
-      // iframe re-mount (renderNextFixtureInSession). Generous budget well beyond
-      // the suite's per-test default.
+      // 11 fixtures × 2 themes, each rendered through a FRESH document + real
+      // plugin login+bootstrap (renderFixtureFresh — the only way to a fresh embed
+      // iframe/nonce, see its doc). Generous budget well beyond the suite's
+      // per-test default (22 paced logins + live bootstraps).
       test.setTimeout(20 * 60 * 1000);
 
       const seed = readSeed();
       const hostPage = hostPageFor(cms, seed);
       await loginFor(cms, page);
 
-      // Flatten fixtures × themes into one ordered render plan — the FIRST entry
-      // mounts the widget through the real plugin login+bootstrap ONCE, and every
-      // subsequent entry re-mounts the iframe in that same authenticated session.
+      // Flatten fixtures × themes into one ordered render plan — each entry reloads
+      // the CMS host page and drives a full plugin login+bootstrap for a fresh
+      // embed iframe carrying that entry's seam.
       const plan: Array<{ testCase: (typeof ALL_CONTENT_CASES)[number]; theme: RenderTheme }> = [];
       for (const testCase of ALL_CONTENT_CASES) {
         for (const theme of THEMES) plan.push({ testCase, theme });
@@ -309,17 +327,27 @@ export function registerCmsRenderParitySpec(cms: Cms): void {
       const reference: NormalizedRender[] = [];
       const candidate: NormalizedRender[] = [];
 
-      // Navigate the CMS host page ONCE. The single hosted-login handshake below
-      // (one POST /api/widget-auth/init + one cwu_ mint) then serves the whole
-      // corpus — every later fixture reuses that session (cinatra#1998 (c): the
-      // 30/min IP limiter is CORRECT; a per-fixture re-login was the waste).
-      await page.goto(hostPage, { waitUntil: "domcontentloaded" });
+      // Each fresh-document render re-drives the hosted login. The BINDING rate
+      // limit (connect-rate-limit.ts, UNTOUCHED) is the per-code-key bucket:
+      // `/widget-auth/init` keys it on the FIXED per-CMS site credential, so every
+      // reload shares ONE bucket capped at 5 inits/min — i.e. ≥ 12s between actual
+      // init calls. Pace fixture starts at 15s (the marker is recorded BEFORE
+      // seed+navigation+login, so the real init lands a few seconds later; 15s
+      // markers keep actual inits comfortably ≥ 12s apart ⇒ ≤ 4/min, under 5, and
+      // the 30/min per-IP bucket well clear). Only the residual gap is slept —
+      // natural per-fixture work already spends part of the interval. This is the
+      // honest reload-per-fixture pacing that avoids the 429 storm a prior form of
+      // this leg produced (which the once-per-CMS collapse→resume attempt could not
+      // fix because the plugin has no in-session re-mount — see renderFixtureFresh).
+      const MIN_FIXTURE_INTERVAL_MS = 15_000;
+      let previousFixtureStartMs = 0;
 
       for (let i = 0; i < plan.length; i += 1) {
         const { testCase, theme } = plan[i];
 
         // Reference: the S3 packaged renderer (sync, deterministic) — the exact
-        // path /chat renders through and the goldens snapshot.
+        // path /chat renders through and the goldens snapshot. (Pure CPU; no
+        // rate-limited network, so it runs before the throttle below.)
         const { html: refHtml } = REFERENCE_TARGET.renderContent(testCase.source, theme);
         reference.push({
           targetId: REFERENCE_TARGET.id,
@@ -329,20 +357,20 @@ export function registerCmsRenderParitySpec(cms: Cms): void {
           normalized: await normalizeForCompare(page, refHtml),
         });
 
-        // Candidate: seed the fixture as a thread, then render it in the widget.
-        const threadId = await seedFixtureThread(request, testCase.source);
-        let frame: FrameLocator;
-        if (i === 0) {
-          // First fixture: stage the seam signal and drive the REAL plugin
-          // login + bootstrap ONCE — the sole hosted-login handshake.
-          await stageSeamSignal(page, threadId, theme);
-          frame = await openWidget(page);
-        } else {
-          // Every subsequent fixture: re-mount the widget iframe in the SAME
-          // authenticated session (collapse → stage seam → re-open), reusing the
-          // held cwu_ (fresh cit_ per mount) with no per-fixture login.
-          frame = await renderNextFixtureInSession(page, threadId, theme);
+        // Throttle to honor the connect-token IP limiter before the next full
+        // login. Sleep only the residual since the previous fixture's login start.
+        if (previousFixtureStartMs > 0) {
+          const elapsed = Date.now() - previousFixtureStartMs;
+          if (elapsed < MIN_FIXTURE_INTERVAL_MS) {
+            await page.waitForTimeout(MIN_FIXTURE_INTERVAL_MS - elapsed);
+          }
         }
+        previousFixtureStartMs = Date.now();
+
+        // Candidate: seed the fixture as a thread, then render it through a fresh
+        // document + real plugin login+bootstrap (fixture 0's proven live path).
+        const threadId = await seedFixtureThread(request, testCase.source);
+        const frame = await renderFixtureFresh(page, hostPage, threadId, theme);
         const liveHtml = await scrapeEmbedContent(frame, testCase.name, cms);
         candidate.push({
           targetId: `${cms}-iframe`,
