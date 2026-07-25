@@ -210,8 +210,14 @@ export async function skipRunRecommendationAction(input: {
       writeRunRejectedRecommendations({ runId: input.runId, rejected: rejectedRows });
     }
   } catch (err) {
+    // The run id is a request-controlled value; keep it OUT of the console
+    // format-string position (pass it as a discrete argument) so a `%`-bearing
+    // id can never be interpreted as a util.format specifier (CodeQL
+    // js/tainted-format-string).
     console.warn(
-      `[skipRunRecommendationAction] skip-evidence write failed for run ${input.runId}; continuing:`,
+      "[skipRunRecommendationAction] skip-evidence write failed for run",
+      input.runId,
+      "— continuing:",
       err instanceof Error ? err.message : String(err),
     );
   }
