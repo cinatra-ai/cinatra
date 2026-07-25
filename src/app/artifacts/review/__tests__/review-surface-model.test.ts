@@ -14,6 +14,7 @@ import type {
 } from "@/lib/artifacts/artifact-review-decision";
 import {
   mapSubmitResultToOutcome,
+  mapChangesRequestedToOutcome,
   reviewBlockedCopy,
   reviewDecideDisabledReason,
   reviewProvenanceConformanceId,
@@ -22,6 +23,7 @@ import {
   reviewTypeLabel,
   REVIEW_DISPOSITIONS,
 } from "../review-surface-model";
+import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
 
 const buildMap: ReviewTargetMount = {
   kind: "build-map",
@@ -169,5 +171,83 @@ describe("§IV/§V — FAIL-CLOSED submit-result → visible outcome", () => {
     expect(mapSubmitResultToOutcome(err({ kind: "commit-failed", message: "db" }), "approve")).toMatchObject({
       kind: "error",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The LIFECYCLE prompt-window path (cinatra#2063; owner ruling 2026-07-25):
+// mapChangesRequestedToOutcome maps the S2 recordChangesRequested store result to
+// the surface outcome — a committed request is `changes-requested`; every failure
+// reuses the SAME fail-closed blocked/error states as the base decision (never a
+// silent success on a settled gate).
+// ---------------------------------------------------------------------------
+
+describe("mapChangesRequestedToOutcome — lifecycle prompt-window path (§IV/§V fail-closed)", () => {
+  const ok = (
+    over: Partial<Extract<RecordChangesRequestedResult, { ok: true }>> = {},
+  ): RecordChangesRequestedResult => ({
+    ok: true,
+    repairId: "rep-1",
+    route: { kind: "producer_repair", continuationMode: "async_effects_gated" },
+    attempt: 1,
+    status: "requested",
+    idempotent: false,
+    ...over,
+  });
+  const fail = (code: string): RecordChangesRequestedResult => ({ ok: false, code, error: code });
+
+  it("a repair-capable producer's request is `changes-requested` (requested, gate resolved into a repair)", () => {
+    expect(mapChangesRequestedToOutcome(ok())).toEqual({
+      kind: "changes-requested",
+      status: "requested",
+      idempotent: false,
+    });
+  });
+
+  it("an escalated request (non-repairing / cycle bound) is `changes-requested` (escalated)", () => {
+    expect(mapChangesRequestedToOutcome(ok({ status: "escalated" }))).toMatchObject({
+      kind: "changes-requested",
+      status: "escalated",
+    });
+  });
+
+  it("a response-lost idempotent re-drive carries idempotent:true", () => {
+    expect(mapChangesRequestedToOutcome(ok({ idempotent: true }))).toMatchObject({
+      kind: "changes-requested",
+      idempotent: true,
+    });
+  });
+
+  it("FAIL-CLOSED: a settled / conflicting / non-lifecycle gate is a BLOCK (no-longer-pending), never a silent success", () => {
+    for (const code of ["gate-conflict", "gate-not-pending", "not-a-lifecycle-gate"]) {
+      expect(mapChangesRequestedToOutcome(fail(code))).toMatchObject({
+        kind: "blocked",
+        reason: "no-longer-pending",
+      });
+    }
+  });
+
+  it("a tombstoned / moved base blocks as revision-not-live (the review no longer applies)", () => {
+    expect(mapChangesRequestedToOutcome(fail("tombstoned-base"))).toMatchObject({
+      kind: "blocked",
+      reason: "revision-not-live",
+    });
+    expect(mapChangesRequestedToOutcome(fail("stale-base"))).toMatchObject({
+      kind: "blocked",
+      reason: "revision-not-live",
+    });
+  });
+
+  it("a mismatched pinned set blocks as targets-mismatch", () => {
+    expect(mapChangesRequestedToOutcome(fail("targets-mismatch"))).toMatchObject({
+      kind: "blocked",
+      reason: "targets-mismatch",
+    });
+  });
+
+  it("any other failure (invalid-request / idempotency-key-reuse / empty-feedback) is a retryable error", () => {
+    for (const code of ["invalid-request", "idempotency-key-reuse", "empty-feedback"]) {
+      expect(mapChangesRequestedToOutcome(fail(code))).toMatchObject({ kind: "error" });
+    }
   });
 });

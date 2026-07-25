@@ -24,6 +24,7 @@ import type {
   ReviewDisposition,
   SubmitDecisionResult,
 } from "@/lib/artifacts/artifact-review-decision";
+import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
 
 // ---------------------------------------------------------------------------
 // The closed blocked axis (§V) — the gate can no longer be prepared or decided.
@@ -202,6 +203,13 @@ export type ReviewSubmitOutcome =
   | { kind: "decided"; disposition: ReviewDisposition; idempotent: boolean }
   /** A non-terminal comment landed; the gate stays pending. */
   | { kind: "annotated" }
+  /** LIFECYCLE prompt-window path (cinatra#2063): the typed feedback closed the
+   * gate as `changes_requested` and opened a repair. `requested` — a repair-capable
+   * producer's repair is in flight; `escalated` — routed to a human / org route (or
+   * the cycle bound tripped). Either way the gate is RESOLVED and the held effect
+   * stays held pending the repair. Reached ONLY on a lifecycle gate with the fence
+   * on; the plain Comment path is unchanged. */
+  | { kind: "changes-requested"; status: "requested" | "escalated"; idempotent: boolean }
   /** The gate changed under the reviewer (§IV/V) — blocked, never a silent
    * slip-through; the reviewer refreshes to the live gate. */
   | { kind: "blocked"; reason: ReviewBlockedReason }
@@ -258,5 +266,43 @@ export function mapSubmitResultToOutcome(
       return { kind: "error", message: result.error.message };
     case "commit-failed":
       return { kind: "error", message: "The decision could not be recorded." };
+  }
+}
+
+/**
+ * Map the S2 `recordChangesRequested` store result (the LIFECYCLE prompt-window
+ * path, cinatra#2063) to the surface's visible outcome (§IV/§V). A committed
+ * request — `requested` (a producer repair is in flight) or `escalated` (routed to
+ * a human / org route, or the cycle bound tripped) — is the `changes-requested`
+ * outcome; the gate is RESOLVED, so the surface refreshes to the (now blocked)
+ * live gate exactly as a terminal decision does.
+ *
+ * FAIL-CLOSED, reusing the SAME blocked/error states the base decision maps to: a
+ * gate that resolved under the reviewer (`gate-conflict` / `gate-not-pending`) is a
+ * BLOCK, never a silent success; a tombstoned/moved base is a `revision-not-live`
+ * block; a mismatched pinned set is a `targets-mismatch` block; anything else is a
+ * retryable error. Pure — no React / DB — so the whole mapping is unit-tested.
+ */
+export function mapChangesRequestedToOutcome(
+  result: RecordChangesRequestedResult,
+): ReviewSubmitOutcome {
+  if (result.ok) {
+    return { kind: "changes-requested", status: result.status, idempotent: result.idempotent };
+  }
+  switch (result.code) {
+    // FAIL-CLOSED: a conflicting / settled gate is a block, never a silent success.
+    case "gate-conflict":
+    case "gate-not-pending":
+    case "not-a-lifecycle-gate":
+      return { kind: "blocked", reason: "no-longer-pending" };
+    case "tombstoned-base":
+    case "stale-base":
+      return { kind: "blocked", reason: "revision-not-live" };
+    case "targets-mismatch":
+      return { kind: "blocked", reason: "targets-mismatch" };
+    default:
+      // invalid-request / idempotency-key-reuse / empty-feedback / a transient
+      // failure — the decision did not commit; safe to retry.
+      return { kind: "error", message: "The change request could not be recorded." };
   }
 }

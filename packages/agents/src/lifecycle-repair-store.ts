@@ -74,7 +74,6 @@ import {
   type BatchDisposition,
 } from "@/lib/lifecycle/lifecycle-batch";
 import { repairSuccessorReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
-import { producedEventId } from "@/lib/lifecycle/lifecycle-produced-event";
 
 // ---------------------------------------------------------------------------
 // changes_requested — close the review attempt, open the repair.
@@ -457,13 +456,20 @@ export async function submitRepairResponse(
   // FIRST response finalizes (a concurrent second response re-emits the SAME
   // deterministic successor gate — idempotent — but its finalize CAS matches 0
   // rows, so it never overwrites the first's outcomes; it returns idempotently
-  // below). The base produced event's held effect re-points onto the successor gate
-  // so the disposition-aware effect-hold stays HELD until the successor APPROVES.
-  const baseEventId = producedEventId(
-    repair.baseArtifactId,
-    repair.baseRepresentationRevisionId,
-    "artifact_produced",
-  );
+  // below). The held effect re-points onto the successor gate so the
+  // disposition-aware effect-hold stays HELD until the successor APPROVES.
+  //
+  // The re-point matches the outbox row by its LIVE gate LINKAGE
+  // (`continuation_address == repair.gateId`), NOT by the current repair's base
+  // event id. This is load-bearing for a MULTI-CYCLE repair chain (cinatra#2063):
+  // the effect that a repair gate holds is always the ORIGINAL producing event
+  // (e.g. an external-publish artifact), which the round-1 re-point already moved
+  // onto this gate — a round-2+ base is the round-1 SUCCESSOR artifact, whose
+  // event id is NOT the one linked to this gate, so keying on the base event id
+  // would match zero rows and strand the original effect on the resolved gate
+  // FOREVER. A repair gate is single-target, so exactly one outbox row is ever
+  // linked to it; keying on the linkage is precise (never re-points an unrelated
+  // event).
   const finalized = await db.transaction(async (tx) => {
     const cas = await tx
       .update(lifecycleRepair)
@@ -479,16 +485,12 @@ export async function submitRepairResponse(
       .where(and(eq(lifecycleRepair.id, repair.id), eq(lifecycleRepair.status, repair.status)))
       .returning({ id: lifecycleRepair.id });
     if (cas.length !== 1) return false; // a concurrent response finalized first.
-    // Re-point ONLY a live linkage still pointing at the base gate (idempotent).
+    // Re-point the held-effect linkage still pointing at the base gate onto the
+    // successor gate (idempotent; follows the chain across multi-cycle repairs).
     await tx
       .update(artifactProducedOutbox)
       .set({ continuationAddress: successorGateId })
-      .where(
-        and(
-          eq(artifactProducedOutbox.eventId, baseEventId),
-          eq(artifactProducedOutbox.continuationAddress, repair.gateId),
-        ),
-      );
+      .where(eq(artifactProducedOutbox.continuationAddress, repair.gateId));
     return true;
   });
   if (!finalized) {

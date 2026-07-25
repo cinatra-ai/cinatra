@@ -37,6 +37,7 @@
     "./artifact-review-gate-seam": "./src/artifact-review-gate-seam.ts",
     "./artifact-review-resume-delivery": "./src/artifact-review-resume-delivery.ts",
     "./lifecycle-review-orchestration": "./src/lifecycle-review-orchestration-store.ts",
+    "./lifecycle-review-changes-requested": "./src/lifecycle-review-changes-requested-store.ts",
     "./auditor-snapshot-errors": "./src/auditor-snapshot-errors.ts",
     "./db": "./src/db.ts",
     "./pm-link-store": "./src/pm-link-store.ts",

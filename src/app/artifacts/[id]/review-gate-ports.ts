@@ -33,6 +33,10 @@ import {
   enforceReviewRunAccess,
 } from "@cinatra-ai/agents/artifact-review-gate-store";
 import {
+  recordReviewSurfaceChangesRequested,
+  type RecordChangesRequestedResult,
+} from "@cinatra-ai/agents/lifecycle-review-changes-requested";
+import {
   buildActorContextFromPrimitive,
   type ActorRoleHints,
 } from "@/lib/authz/build-actor-context";
@@ -193,6 +197,56 @@ export async function enforceReviewDecisionAccess(args: {
   actorCtx: ReviewActorContext;
 }): Promise<RunAccessOutcome> {
   return enforceReviewRunAccess(args.runId, args.actorCtx.actor, args.op, args.actorCtx.roleHints);
+}
+
+/**
+ * The LIFECYCLE `changes_requested` binder (cinatra#2063; owner ruling 2026-07-25).
+ * The review surface's prompt-window feedback (the existing Comment path) drives a
+ * `changes_requested` decision on a LIFECYCLE review gate: the base gate closes and
+ * a repair opens through the S2 store's `recordChangesRequested` entry point (via
+ * the surface composer) — no parallel write path.
+ *
+ * The ONE fact the composer needs that the surface holds is the base-revision CAS
+ * witness (`currentBaseRevisionId`). It is resolved HERE through the SAME
+ * `revisionMember` (liveOnly) port the preparation core uses: the reviewer decides
+ * on the exact pinned revision, so the witness is that revision WHEN it is still a
+ * live member, and null when it was tombstoned between prepare and submit (a
+ * fail-closed `tombstoned-base`). No new artifact read path is introduced.
+ *
+ * Authorization is the CALLER's job and is UNCHANGED from the base Comment
+ * decision: the action enforces `respondToHitl` on the run for the comment op
+ * BEFORE this binder is reached, exactly as it does for a plain comment.
+ */
+export async function submitReviewSurfaceChangesRequested(args: {
+  runId: string;
+  reviewTaskId: string;
+  baseTarget: ArtifactReviewTarget;
+  /** The reviewer's typed prompt-window feedback (trimmed, non-empty). */
+  feedback: string;
+  actorCtx: ReviewActorContext;
+}): Promise<RecordChangesRequestedResult> {
+  const kernelActor = buildActorContextFromPrimitive(
+    args.actorCtx.actor,
+    args.actorCtx.orgId,
+    args.actorCtx.roleHints,
+  );
+  const artifactPorts = bindArtifactReviewPorts({ orgId: args.actorCtx.orgId, actor: kernelActor });
+  const member = await artifactPorts.revisionMember(
+    args.baseTarget.artifactId,
+    args.baseTarget.representationRevisionId,
+  );
+  const currentBaseRevisionId = member ? args.baseTarget.representationRevisionId : null;
+
+  return recordReviewSurfaceChangesRequested({
+    runId: args.runId,
+    reviewTaskId: args.reviewTaskId,
+    baseTarget: {
+      artifactId: args.baseTarget.artifactId,
+      representationRevisionId: args.baseTarget.representationRevisionId,
+    },
+    currentBaseRevisionId,
+    feedback: args.feedback,
+  });
 }
 
 /**

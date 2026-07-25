@@ -53,6 +53,7 @@ let outboxStore: typeof import("../lifecycle-produced-outbox-store");
 let gateStore: typeof import("../artifact-review-gate-store");
 let orch: typeof import("../lifecycle-review-orchestration-store");
 let repairStore: typeof import("../lifecycle-repair-store");
+let crStore: typeof import("../lifecycle-review-changes-requested-store");
 let dbMod: typeof import("../db");
 
 async function pool(text: string, values: unknown[] = []) {
@@ -168,8 +169,27 @@ beforeAll(async () => {
   gateStore = await import("../artifact-review-gate-store");
   orch = await import("../lifecycle-review-orchestration-store");
   repairStore = await import("../lifecycle-repair-store");
+  crStore = await import("../lifecycle-review-changes-requested-store");
   dbMod = await import("../db");
 }, 90_000);
+
+/** Seed a repair-capable producing run + template so the surface composer resolves
+ * `repairCapable: true` from `agent_templates.lifecycle_config` (the route → a live
+ * producer repair). Minimal NOT-NULL columns only. */
+async function seedRepairCapableProducer(runId: string): Promise<void> {
+  const templateId = `tmpl-${randomUUID()}`;
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."agent_templates"
+       (id, org_id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name, lifecycle_config)
+     VALUES ($1,$2,'seed','seed','[]','{}','{}',$3,$4) ON CONFLICT (id) DO NOTHING`,
+    [templateId, ORG, `@cinatra-ai/seed-${templateId}`, JSON.stringify({ repairCapable: true })],
+  );
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs" (id, template_id, org_id, input_params)
+     VALUES ($1,$2,$3,'{}') ON CONFLICT (id) DO NOTHING`,
+    [runId, templateId, ORG],
+  );
+}
 
 beforeEach(() => {
   if (!HAS_DB) return;
@@ -608,4 +628,224 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
     expect((await eventRow(ev.eventId))?.status).toBe("pending");
     process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "on";
   });
+
+  // -------------------------------------------------------------------------
+  // SURFACE — the S12 review-surface prompt-window changes_requested composer
+  // (cinatra#2063; owner ruling 2026-07-25). The typed feedback becomes ONE
+  // finding; the base gate closes as changes_requested through the SAME S2 entry
+  // point; the repair opens; the CAS is fail-closed. currentBaseRevisionId is the
+  // value the surface binder resolves via its revisionMember port — passed here
+  // directly (the pinned revision when live, null when tombstoned).
+  // -------------------------------------------------------------------------
+  it("SURFACE: prompt-window feedback closes the base gate as changes_requested + opens a repair (repair-capable → requested)", async () => {
+    const ev = await produce("document", { destinationClass: "external_publish" });
+    await seedRepairCapableProducer(ev.producerRunId!);
+    await orch.sweepReviewOrchestration();
+    const taskId = autoReviewTaskId(ev.eventId);
+    const baseGate = await gateStore.readReviewGate(ev.producerRunId!, taskId);
+    expect(baseGate).not.toBeNull();
+
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId: ev.producerRunId!,
+      reviewTaskId: taskId,
+      baseTarget: { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId },
+      currentBaseRevisionId: ev.representationRevisionId, // the pinned revision, still live
+      feedback: "  Tighten the headline and add a CTA.  ",
+    });
+    expect(cr.ok).toBe(true);
+    if (!cr.ok) return;
+    expect(cr.status).toBe("requested");
+    expect(cr.route.kind).toBe("producer_repair");
+    expect(cr.attempt).toBe(1);
+
+    // The base gate is RESOLVED as changes_requested — the review attempt closed.
+    const closed = await gateStore.readReviewGate(ev.producerRunId!, taskId);
+    expect(closed!.status).toBe("resolved");
+    expect(closed!.disposition).toBe("changes_requested");
+
+    // The typed feedback became exactly ONE finding, TRIMMED.
+    const repair = await repairStore.readRepair(cr.repairId);
+    expect(repair!.findings).toHaveLength(1);
+    expect(repair!.findings[0].message).toBe("Tighten the headline and add a CTA.");
+
+    // The external effect stays HELD (repair in flight) despite the resolved gate.
+    const held = await orch.isArtifactEffectHeld({
+      artifactId: ev.artifactId,
+      representationRevisionId: ev.representationRevisionId,
+    });
+    expect(held.held).toBe(true);
+
+    // Idempotent on the gate: a response-lost re-drive with the SAME feedback
+    // returns the SAME repair (never a second).
+    const again = await crStore.recordReviewSurfaceChangesRequested({
+      runId: ev.producerRunId!,
+      reviewTaskId: taskId,
+      baseTarget: { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId },
+      currentBaseRevisionId: ev.representationRevisionId,
+      feedback: "Tighten the headline and add a CTA.",
+    });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.idempotent).toBe(true);
+    expect(again.repairId).toBe(cr.repairId);
+  });
+
+  it("SURFACE: a non-repairing producer (no repair capability) still closes the gate + opens a repair, ESCALATED (never drops)", async () => {
+    const ev = await produce("document", { destinationClass: "external_publish" });
+    // No producer template seeded ⇒ repairCapable resolves false ⇒ human escalation.
+    await orch.sweepReviewOrchestration();
+    const taskId = autoReviewTaskId(ev.eventId);
+
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId: ev.producerRunId!,
+      reviewTaskId: taskId,
+      baseTarget: { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId },
+      currentBaseRevisionId: ev.representationRevisionId,
+      feedback: "please revise",
+    });
+    expect(cr.ok).toBe(true);
+    if (!cr.ok) return;
+    expect(cr.status).toBe("escalated");
+    expect(cr.route.kind).toBe("human_escalation");
+    const closed = await gateStore.readReviewGate(ev.producerRunId!, taskId);
+    expect(closed!.disposition).toBe("changes_requested");
+  });
+
+  it("SURFACE: FAIL-CLOSED — a tombstoned base (currentBaseRevisionId null) is rejected; the gate stays pending", async () => {
+    const ev = await produce("document", { destinationClass: "external_publish" });
+    await orch.sweepReviewOrchestration();
+    const taskId = autoReviewTaskId(ev.eventId);
+
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId: ev.producerRunId!,
+      reviewTaskId: taskId,
+      baseTarget: { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId },
+      currentBaseRevisionId: null, // the pinned revision no longer resolves live
+      feedback: "please revise",
+    });
+    expect(cr.ok).toBe(false);
+    if (cr.ok) return;
+    expect(cr.code).toBe("tombstoned-base");
+    // The gate was NOT closed — the change request never committed.
+    const gate = await gateStore.readReviewGate(ev.producerRunId!, taskId);
+    expect(gate!.status).toBe("pending");
+  });
+
+  it("SURFACE: a NON-lifecycle (flow-authored wayflow-) gate is rejected — the composer only closes lifecycle gates", async () => {
+    const runId = `run-wf-${randomUUID()}`;
+    const artifactId = `art-${randomUUID()}`;
+    const rev = `rev-${randomUUID()}`;
+    await insertObject(artifactId, "document");
+    const wf = await gateStore.emitArtifactReviewGate({
+      runId,
+      orgId: ORG,
+      reviewTaskId: `wayflow-${randomUUID()}`,
+      targets: [{ artifactId, representationRevisionId: rev }],
+      expiresAt: null,
+    });
+    expect(wf.gateId).toBeTruthy();
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId,
+      reviewTaskId: (await gatesForRun(runId))[0].reviewTaskId,
+      baseTarget: { artifactId, representationRevisionId: rev },
+      currentBaseRevisionId: rev,
+      feedback: "please revise",
+    });
+    expect(cr.ok).toBe(false);
+    if (cr.ok) return;
+    expect(cr.code).toBe("not-a-lifecycle-gate");
+  });
+
+  it("SURFACE: MULTI-CYCLE — a 2-round repair chain does NOT strand the held effect; approve of the final successor releases it (cinatra#2063 codex fix)", async () => {
+    // Round 1: auto gate on an external-publish artifact; the surface requests
+    // changes; the producer repairs into a successor gate (the ORIGINAL event
+    // re-points onto it, effect still held).
+    const ev = await produce("document", { destinationClass: "external_publish" });
+    await seedRepairCapableProducer(ev.producerRunId!);
+    await orch.sweepReviewOrchestration();
+    const baseTaskId = autoReviewTaskId(ev.eventId);
+
+    const cr1 = await crStore.recordReviewSurfaceChangesRequested({
+      runId: ev.producerRunId!,
+      reviewTaskId: baseTaskId,
+      baseTarget: { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId },
+      currentBaseRevisionId: ev.representationRevisionId,
+      feedback: "round 1 — tighten",
+    });
+    expect(cr1.ok).toBe(true);
+    if (!cr1.ok) return;
+    const rev2 = `rev-r1-${randomUUID()}`;
+    const rr1 = await repairStore.submitRepairResponse({
+      repairId: cr1.repairId,
+      currentBaseRevisionId: ev.representationRevisionId,
+      reauthorized: true,
+      response: {
+        gateId: (await gateStore.readReviewGate(ev.producerRunId!, baseTaskId))!.id,
+        baseTarget: { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId },
+        successorTarget: { artifactId: ev.artifactId, representationRevisionId: rev2 },
+        findingOutcomes: [{ findingId: "prompt-window", applied: true }],
+        changeSummary: "r1",
+        producerProvenance: { runId: ev.producerRunId, agentId: null },
+      },
+    });
+    expect(rr1.ok).toBe(true);
+    if (!rr1.ok) return;
+
+    // Round 2: the surface requests changes AGAIN on the SUCCESSOR gate (a repair
+    // chain). The cycle lineage is the original (attempt 2). The ORIGINAL event is
+    // still the one linked to the successor gate — the effect stays held.
+    const cr2 = await crStore.recordReviewSurfaceChangesRequested({
+      runId: ev.producerRunId!,
+      reviewTaskId: rr1.successorTaskId,
+      baseTarget: { artifactId: ev.artifactId, representationRevisionId: rev2 },
+      currentBaseRevisionId: rev2,
+      feedback: "round 2 — add a CTA",
+    });
+    expect(cr2.ok).toBe(true);
+    if (!cr2.ok) return;
+    expect(cr2.attempt).toBe(2); // the cycle guard counts the whole chain
+    const heldDuringR2 = await orch.isArtifactEffectHeld({
+      artifactId: ev.artifactId,
+      representationRevisionId: ev.representationRevisionId,
+    });
+    expect(heldDuringR2.held).toBe(true);
+
+    // The producer repairs round 2 into a THIRD gate. The re-point must follow the
+    // ORIGINAL event (linked to the round-2 base gate) onto this new gate — NOT the
+    // round-2 base event, which would strand the original effect forever.
+    const rev3 = `rev-r2-${randomUUID()}`;
+    const rr2 = await repairStore.submitRepairResponse({
+      repairId: cr2.repairId,
+      currentBaseRevisionId: rev2,
+      reauthorized: true,
+      response: {
+        gateId: (await gateStore.readReviewGate(ev.producerRunId!, rr1.successorTaskId))!.id,
+        baseTarget: { artifactId: ev.artifactId, representationRevisionId: rev2 },
+        successorTarget: { artifactId: ev.artifactId, representationRevisionId: rev3 },
+        findingOutcomes: [{ findingId: "prompt-window", applied: true }],
+        changeSummary: "r2",
+        producerProvenance: { runId: ev.producerRunId, agentId: null },
+      },
+    });
+    expect(rr2.ok).toBe(true);
+    if (!rr2.ok) return;
+
+    // The ORIGINAL event re-pointed onto the round-2 successor gate (the fix): the
+    // effect is STILL held (round-2 successor pending), NOT stranded.
+    expect((await eventRow(ev.eventId))?.continuation_address).toBe(rr2.successorGateId);
+    const heldAwaitingFinal = await orch.isArtifactEffectHeld({
+      artifactId: ev.artifactId,
+      representationRevisionId: ev.representationRevisionId,
+    });
+    expect(heldAwaitingFinal.held).toBe(true);
+
+    // Approve the final successor → the effect RELEASES (proving no strand).
+    await resolveGateApprove(rr2.successorGateId);
+    const released = await orch.isArtifactEffectHeld({
+      artifactId: ev.artifactId,
+      representationRevisionId: ev.representationRevisionId,
+    });
+    expect(released.held).toBe(false);
+  });
+
 });

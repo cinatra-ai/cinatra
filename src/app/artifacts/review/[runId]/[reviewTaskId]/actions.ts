@@ -10,11 +10,15 @@ import {
   submitReviewDecision,
   readReviewGatePinnedTargets,
   enforceReviewDecisionAccess,
+  submitReviewSurfaceChangesRequested,
 } from "@/app/artifacts/[id]/review-gate-ports";
 import {
   mapSubmitResultToOutcome,
+  mapChangesRequestedToOutcome,
   type ReviewSubmitOutcome,
 } from "@/app/artifacts/review/review-surface-model";
+import { isLifecycleReviewOrchestrationActive } from "@/lib/lifecycle/lifecycle-activation";
+import { isAutoReviewTaskId, isBatchAutoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 
 import { resolveReviewActorContext } from "./review-actor";
 
@@ -72,6 +76,33 @@ export async function submitReviewDecisionAction(
   const pinnedTargets = await readReviewGatePinnedTargets(runId, reviewTaskId);
   if (!pinnedTargets) {
     return { kind: "blocked", reason: "no-longer-pending" };
+  }
+
+  // LIFECYCLE prompt-window path (cinatra#2063; owner ruling 2026-07-25). When the
+  // review-orchestration fence is ON and this is a single-target LIFECYCLE review
+  // gate, typed prompt-window feedback (the Comment path) is a `changes_requested`
+  // decision: it CLOSES the base gate and OPENS a repair through the S2 store entry
+  // point (no parallel write path). The authorization is UNCHANGED — the
+  // `respondToHitl` check above already ran for the comment op. With the fence off,
+  // on a non-lifecycle / batch / multi-target gate, or with empty feedback, the
+  // Comment path falls through to the byte-identical annotation below.
+  const trimmedComment = comment?.trim() ?? "";
+  if (
+    disposition === "comment" &&
+    trimmedComment.length > 0 &&
+    isLifecycleReviewOrchestrationActive() &&
+    isAutoReviewTaskId(reviewTaskId) &&
+    !isBatchAutoReviewTaskId(reviewTaskId) &&
+    pinnedTargets.length === 1
+  ) {
+    const result = await submitReviewSurfaceChangesRequested({
+      runId,
+      reviewTaskId,
+      baseTarget: pinnedTargets[0],
+      feedback: trimmedComment,
+      actorCtx,
+    });
+    return mapChangesRequestedToOutcome(result);
   }
 
   const decision: ArtifactReviewDecision = {

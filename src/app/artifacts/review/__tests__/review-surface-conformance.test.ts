@@ -231,6 +231,53 @@ describe("§VI — reject semantics: tombstone, never a destructive delete", () 
   });
 });
 
+describe("§IV — LIFECYCLE prompt-window wiring (owner ruling 2026-07-25, cinatra#2063)", () => {
+  // The ruling: the prompt window (the Comment path) IS where the user requests
+  // changes — no dedicated 'request changes' field. On a lifecycle review gate with
+  // the fence on, the typed Comment feedback drives a `changes_requested` decision
+  // through the S2 store entry point; otherwise the Comment path is byte-identical.
+
+  it("adds NO fourth decision affordance — the three-button conformance lock is unchanged", () => {
+    // Still exactly the three data-action affordances; no 'request changes' button.
+    expect(DECISION_BAR).toMatch(/data-action="approve-review -> resolved"/);
+    expect(DECISION_BAR).toMatch(/data-action="reject-review -> resolved"/);
+    expect(DECISION_BAR).toMatch(/data-action="comment-review -> annotated"/);
+    expect(stripComments(DECISION_BAR)).not.toMatch(/request changes|request-changes/i);
+    // The disposition set the bar offers stays approve/reject/comment (no
+    // changes_requested affordance on the surface — it rides the Comment path).
+    expect(MODEL).toMatch(/REVIEW_DISPOSITIONS[\s\S]*?"approve",\s*"reject",\s*"comment",?\s*\]/);
+    expect(stripComments(MODEL)).not.toMatch(/"changes_requested"/);
+  });
+
+  it("the action routes the Comment path to changes_requested ONLY when fenced + a single-target lifecycle gate", () => {
+    // The fence gate + the lifecycle-gate class check + single-target guard.
+    expect(ACTIONS).toMatch(/isLifecycleReviewOrchestrationActive\(\)/);
+    expect(ACTIONS).toMatch(/isAutoReviewTaskId\(reviewTaskId\)/);
+    expect(ACTIONS).toMatch(/!isBatchAutoReviewTaskId\(reviewTaskId\)/);
+    expect(ACTIONS).toMatch(/pinnedTargets\.length === 1/);
+    // Only the Comment disposition with non-empty feedback takes the path.
+    expect(ACTIONS).toMatch(/disposition === "comment"/);
+    expect(ACTIONS).toMatch(/submitReviewSurfaceChangesRequested/);
+    expect(ACTIONS).toMatch(/mapChangesRequestedToOutcome/);
+  });
+
+  it("the changes_requested outcome renders as a status notice (data-review-outcome), NOT a new conformance anchor", () => {
+    expect(DECISION_BAR).toMatch(/data-review-outcome="changes-requested"/);
+    // It must NOT introduce a new data-conformance-id (render→spec closed set).
+    const ids = conformanceIdsIn(DECISION_BAR);
+    for (const id of ids) expect(new Set<string>([...SPEC_IDS, ...HOST_STANDARD_IDS]).has(id)).toBe(true);
+    // The gate is RESOLVED on this path — the notice reads as turned back for repair.
+    expect(DECISION_BAR).toMatch(/turned back for repair/);
+  });
+
+  it("the base Comment path stays byte-identical — a plain comment is still annotated, gate stays pending", () => {
+    // The changes_requested branch is ADDITIVE: the comment→annotated mapping and
+    // the 'stays open' notice are untouched (the fence-off / non-lifecycle path).
+    expect(MODEL).toMatch(/disposition === "comment"[\s\S]*?return \{ kind: "annotated" \}/);
+    expect(DECISION_BAR).toMatch(/Comment recorded\. The gate stays open/);
+  });
+});
+
 describe("meta — the surface pins exactly one spec commit and no stray fixture route", () => {
   it("the route directory contains only the review chrome (no design-fixture leakage)", () => {
     const entries = readdirSync(ROUTE);
