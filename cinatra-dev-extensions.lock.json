@@ -100,7 +100,7 @@
     {
       "packageName": "@cinatra-ai/cinatra-assistant",
       "repo": "cinatra-ai/cinatra-assistant",
-      "resolvedSha": "747d308c25bcefa71b0e87e60533360193f4b5a2"
+      "resolvedSha": "dbb5f83ba9e75f112c4a5b2888e75e92f710022e"
     },
     {
       "packageName": "@cinatra-ai/claude-assistant",
