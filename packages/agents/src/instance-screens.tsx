@@ -12,7 +12,7 @@ import { readAgentTemplateBySlug, readAgentRunById, readAgentRunMessages, readAg
 import { randomUUID } from "node:crypto";
 import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
-import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
+import { buildRunStepperSteps, type RunStepperPolicyStep } from "./run-stepper-steps";
 import { AuthzError } from "@/lib/authz";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 // agent_run mounts the generic ExtensionPermissionsClient.
@@ -199,19 +199,9 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // replay submission map (run-actions.ts); a mismatch shifts every prompt→step
   // mapping by one slot.
   const policySteps = template.approvalPolicy?.steps ?? [];
-  const hitlSteps = policySteps
-    .filter((s) => stepFiresRendererGate(s as { xRenderer?: string; firesRendererGate?: boolean }))
-    .map((s, i) => ({
-      index: i + 1,
-      stepNumber: s.stepNumber,
-      xRenderer: (s as { xRenderer?: string }).xRenderer,
-      childAgentPackageName: (s as { childAgent?: { packageName?: string } }).childAgent?.packageName,
-      label:
-        (s as { name?: string }).name ??
-        (s as { description?: string }).description ??
-        `Step ${s.stepNumber}`,
-      _policyDescription: (s as { description?: string }).description ?? null,
-    }));
+  // Shared with the agent-run review surface via buildRunStepperSteps (cinatra#2063)
+  // so both surfaces render the identical step list in lockstep.
+  const hitlSteps = buildRunStepperSteps(policySteps as ReadonlyArray<RunStepperPolicyStep>);
 
   // Batch-fetch sub-agent descriptions for tooltip content.
   const childPackages = Array.from(new Set(
