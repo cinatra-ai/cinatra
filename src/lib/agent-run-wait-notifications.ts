@@ -94,6 +94,13 @@ export function autoGateOpenDedupeKey(
  * `pending_approval` reason payload (an auto-gate always awaits an approval
  * decision). The copy names the review explicitly.
  */
+/** Conformance handle for the design spec's `run-gate-notification` anchor
+ * (design@5e5c53aff §I): a pending auto-gate raises a notification that DEEP-LINKS
+ * straight to the gate inside the run (the `href` below → the run view), never to a
+ * detached page. The run-embedded conformance test asserts this behavior against
+ * this builder (the anchor has no DOM home — it is a notification). */
+export const RUN_GATE_NOTIFICATION_CONFORMANCE_ID = "run-gate-notification";
+
 export function buildAutoGateOpenNotificationInput(input: {
   runId: string;
   reviewTaskId: string;

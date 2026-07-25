@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Check, ClipboardCheck } from "lucide-react";
+import { Check, ClipboardCheck, ScanSearch } from "lucide-react";
 
 import {
   Stepper,
@@ -51,6 +51,8 @@ export function RunStepRailPanel({
   return (
     <div
       data-run-step-rail=""
+      data-conformance-id="run-step-rail"
+      data-action="open-run-step -> step-detail"
       className="flex w-52 shrink-0 flex-col pt-1"
       aria-label="Agent run steps"
     >
@@ -63,6 +65,7 @@ export function RunStepRailPanel({
           {entries.map((entry, i) => {
             const displayStep = i + 1;
             const isGate = entry.kind === "gate";
+            const isVerification = entry.kind === "verification";
             const isResolved = entry.status === "resolved";
             const isPending = entry.status === "pending";
             const isCompleted = entry.status === "completed" || isResolved;
@@ -75,10 +78,12 @@ export function RunStepRailPanel({
                 data-rail-kind={entry.kind}
                 data-rail-status={entry.status}
                 // Anchors for the live proof: the active gated step + resolved
-                // read-only history are each addressable.
+                // read-only history + the S4 verification entry are each addressable.
                 data-rail-gated-step={isGate ? "true" : undefined}
                 data-rail-gate-history={isGate && isResolved ? "true" : undefined}
                 data-rail-gate-pending={isGate && isPending ? "true" : undefined}
+                data-rail-verification={isVerification ? "true" : undefined}
+                data-rail-verification-outcome={isVerification ? entry.verification?.outcome : undefined}
               >
                 {entry.label}
                 {isGate && isResolved ? (
@@ -86,12 +91,17 @@ export function RunStepRailPanel({
                     {entry.gate?.disposition ?? "resolved"}
                   </span>
                 ) : null}
+                {isVerification ? (
+                  <span className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground">
+                    {entry.verification?.outcome ?? "verified"}
+                  </span>
+                ) : null}
               </StepperTitle>
             );
 
             const indicatorNode = (
               <StepperIndicator className="data-[state=inactive]:bg-muted-foreground/40 data-[state=inactive]:text-background">
-                {isGate ? <ClipboardCheck className="h-3 w-3" /> : displayStep}
+                {isVerification ? <ScanSearch className="h-3 w-3" /> : isGate ? <ClipboardCheck className="h-3 w-3" /> : displayStep}
               </StepperIndicator>
             );
 
@@ -100,7 +110,7 @@ export function RunStepRailPanel({
                 key={entry.key}
                 step={displayStep}
                 completed={isCompleted}
-                disabled={!isGate && entry.status === "upcoming" && !isActive}
+                disabled={!isGate && !isVerification && entry.status === "upcoming" && !isActive}
                 className="items-start !flex-none"
               >
                 <div className="flex items-center gap-1">
@@ -113,6 +123,17 @@ export function RunStepRailPanel({
                       href={`${reviewHrefBase}/${encodeURIComponent(entry.gate.reviewTaskId)}`}
                       className="flex items-center gap-2 rounded-sm px-0 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       data-rail-gate-link={entry.gate.reviewTaskId}
+                    >
+                      {indicatorNode}
+                      {titleNode}
+                    </Link>
+                  ) : isVerification && entry.verification ? (
+                    // A verification row (S4) deep-links into the same review
+                    // surface's VERIFICATION view — the before/after "Core analysis".
+                    <Link
+                      href={`${reviewHrefBase}/${encodeURIComponent(entry.verification.reviewTaskId)}?view=verification`}
+                      className="flex items-center gap-2 rounded-sm px-0 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      data-rail-verification-link={entry.verification.reviewTaskId}
                     >
                       {indicatorNode}
                       {titleNode}

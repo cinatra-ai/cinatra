@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "./run-stepper-steps";
-import { listReviewGatesForRun } from "./artifact-review-gate-store";
+import { listReviewGatesForRun, readVerificationRecordsForGates } from "./artifact-review-gate-store";
 import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { readRecommendationParkForRun } from "./recommendation-hold";
@@ -297,6 +297,12 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // history. Access is already enforced above (readAgentRunById with the actor);
   // `listReviewGatesForRun` is a plain run-scoped read behind that door.
   const railGates = run ? await listReviewGatesForRun(run.id) : [];
+  // S4 (cinatra#2042): the run's post-change verification records, keyed to their
+  // gate — woven into the rail as "Core analysis" entries beneath each gate.
+  const railVerifications = railGates.length
+    ? await readVerificationRecordsForGates(railGates.map((g) => g.id))
+    : [];
+  const gateTaskById = new Map(railGates.map((g) => [g.id, g.reviewTaskId]));
   const railTemplateSteps = hitlSteps.map((h) => ({
     index: h.index,
     stepNumber: h.stepNumber,
@@ -335,6 +341,13 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
           disposition: g.disposition,
           createdAt: g.createdAt,
         })),
+        verifications: railVerifications
+          .filter((v) => gateTaskById.has(v.gateId))
+          .map((v) => ({
+            gateId: v.gateId,
+            reviewTaskId: gateTaskById.get(v.gateId)!,
+            outcome: v.outcome,
+          })),
       })
     : { entries: [], activeOrdinal: null };
   const reviewHrefBase = run ? `/agents/${agentId}/${encodeURIComponent(run.id)}/review` : "";
@@ -422,7 +435,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
           // Canonical run view (cinatra#2066, C1): the merged step rail on the
           // LEFT (owner ruling 2026-07-25), the run detail on the RIGHT — one
           // contract for both template classes.
-          <div className="flex items-start gap-6" data-run-detail-contract="">
+          <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
             {run.status !== "pending_input" && rail.entries.length > 0 && (
               <RunStepRailPanel
                 entries={rail.entries}

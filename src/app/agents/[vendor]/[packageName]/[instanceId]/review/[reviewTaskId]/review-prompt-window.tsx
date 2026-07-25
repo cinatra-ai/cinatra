@@ -82,14 +82,22 @@ export function ReviewPromptWindow({
   };
 
   return (
-    <HitlConversationPanel
-      portalTarget={portalTarget}
-      visible={canComment && !!portalTarget}
-      conversation={conversation}
-      promptPending={promptPending}
-      storageKey={storageKey}
-      onSubmit={handleSubmit}
-    />
+    // The conversational prompt window (owner ruling 2026-07-25, cinatra#2063): the
+    // typed change request IS how changes are requested — there is no dedicated
+    // "request changes" button (the three-affordance decision floor is unchanged).
+    // The anchor marks this mount for the run-embedded conformance closed set;
+    // `handleSubmit` routes the typed feedback through the Comment path, which on a
+    // fenced single-target lifecycle gate resolves as `changes_requested`.
+    <div data-conformance-id="review-prompt-window" data-action="request-changes -> changes-requested">
+      <HitlConversationPanel
+        portalTarget={portalTarget}
+        visible={canComment && !!portalTarget}
+        conversation={conversation}
+        promptPending={promptPending}
+        storageKey={storageKey}
+        onSubmit={handleSubmit}
+      />
+    </div>
   );
 }
 
