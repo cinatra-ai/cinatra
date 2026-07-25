@@ -2,7 +2,7 @@
  * Source-text conformance for the generic artifact-review surface — the host
  * decision chrome (cinatra#1795, epic #1620 S12 item 4), pinned to the RATIFIED
  * design spec `specs/app-artifact-review.html`
- * @ design@30a0f9c9 (owner-approved). Every conformance id the
+ * @ design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891 (owner-approved). Every conformance id the
  * spec annotates is mapped BIDIRECTIONALLY: spec→render (every spec anchor is
  * rendered by the route) and render→spec (every anchor the route renders is in
  * the spec's closed set — no invented affordance).
@@ -17,7 +17,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const SPEC_COMMIT = "design@30a0f9c9"; // specs/app-artifact-review.html (ratified)
+const SPEC_COMMIT = "design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891"; // specs/app-artifact-review.html (ratified)
 
 // The chrome now lives under the agent-run route
 // `src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]`
@@ -48,7 +48,7 @@ function stripComments(src: string): string {
 const CODE_SOURCES = CHROME_SOURCES.map(stripComments);
 
 /**
- * The CLOSED set of conformance ids the spec annotates at design@30a0f9c9, with
+ * The CLOSED set of conformance ids the spec annotates at design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891, with
  * the state axes it declares. Extracted from the ratified `data-conformance-id` /
  * `data-state` annotations (§II review-target; §III provenance × floor; §IV
  * decision bar; §V disabled / loading / blocked). This is the map every id is
