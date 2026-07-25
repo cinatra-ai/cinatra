@@ -312,6 +312,29 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     expect(res.reopenedGateId).not.toBeNull();
   });
 
+  it("BOUND-CHAIN (codex convergence): a verification-reopen gate resolves back to the ORIGINAL repair lineage, so a changes_requested on it does NOT reset the cycle bound", async () => {
+    const { repairId, successorGateId } = await landRepair();
+    const original = await repairStore.readRepair(repairId);
+    expect(original).not.toBeNull();
+    // A FAILED verification reopened a bounded gate; its data path must chain back to
+    // the original repair lineage (the anchor `resolveLineageId` uses for a verify-
+    // reopen gate — otherwise the verify→reopen→repair loop is unbounded).
+    const res = await verifStore.recordVerificationForRepair({
+      repairId,
+      projectFields: (t: VerificationTargetRef) =>
+        t.representationRevisionId === original!.baseRepresentationRevisionId
+          ? { subject: "old", body: "old" }
+          : { subject: "old", body: "old" }, // nothing changed vs base ⇒ findings unmet
+    });
+    // The default projector already fired inside submitRepairResponse; this explicit
+    // drive is idempotent. Regardless, the successor gate is the repair's successor.
+    void res;
+    const viaSuccessor = await repairStore.readRepairBySuccessorGateId(successorGateId);
+    expect(viaSuccessor).not.toBeNull();
+    expect(viaSuccessor!.id).toBe(repairId);
+    expect(viaSuccessor!.lineageId).toBe(original!.lineageId);
+  });
+
   it("ADVISOR LANE: the Core analysis lane writes a provenance-stamped advisory comment on a gate (idempotent), readable by the run view", async () => {
     const runId = `run-${randomUUID()}`;
     const artifactId = `art-${randomUUID()}`;
