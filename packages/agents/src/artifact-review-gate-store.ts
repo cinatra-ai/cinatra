@@ -45,7 +45,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, lte, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
 import { db } from "./db";
@@ -540,11 +540,16 @@ export async function claimPendingResumeIntents(opts?: {
       .select({ gateId: artifactReviewResumeOutbox.gateId })
       .from(artifactReviewResumeOutbox)
       .where(
-        or(
-          eq(artifactReviewResumeOutbox.status, "pending"),
-          and(
-            eq(artifactReviewResumeOutbox.status, "delivering"),
-            lte(artifactReviewResumeOutbox.leaseExpiresAt, sql`now()`),
+        and(
+          // Gate-store extension (cinatra#2038 S0): a DEAD-LETTERED intent is
+          // never re-claimed — its attempts were exhausted; it awaits ops.
+          isNull(artifactReviewResumeOutbox.deadLetteredAt),
+          or(
+            eq(artifactReviewResumeOutbox.status, "pending"),
+            and(
+              eq(artifactReviewResumeOutbox.status, "delivering"),
+              lte(artifactReviewResumeOutbox.leaseExpiresAt, sql`now()`),
+            ),
           ),
         ),
       )
@@ -602,6 +607,107 @@ export async function markResumeIntentDelivered(
     )
     .returning({ gateId: artifactReviewResumeOutbox.gateId });
   return done.length === 1;
+}
+
+// ---------------------------------------------------------------------------
+// Gate-store extension: resume DEAD-LETTER (cinatra#2038, epic #2037 S0).
+//
+// The 0072 lease drain re-claims a delivering row whenever its lease expires —
+// with no ceiling, a permanently-undeliverable resume would be re-leased forever.
+// This slice adds a `max_attempts` ceiling + a `dead_lettered_at` STATE marker: a
+// row whose `attempts` reached its `max_attempts` and is not `done` is
+// DEAD-LETTERED (removed from the claim set — see `claimPendingResumeIntents` —
+// and surfaced to ops), never silently retried into oblivion.
+// ---------------------------------------------------------------------------
+
+/**
+ * Dead-letter every resume intent that has EXHAUSTED its delivery attempts
+ * (`attempts >= max_attempts`), is not yet `done` / already dead-lettered, AND is
+ * NOT actively in-flight. A `delivering` row with a LIVE lease is left alone — its
+ * current attempt may still succeed; only once that lease EXPIRES (the worker
+ * crashed / gave up) is the exhausted row dead-lettered instead of re-claimed. A
+ * `pending` row (no live lease) with exhausted attempts is dead-lettered directly.
+ * Sets `dead_lettered_at = now()` (+ an optional `last_error`) so the row leaves
+ * the claim set and appears in ops visibility. Bounded to `limit` per pass via a
+ * LIMIT subquery; returns the ACTUAL count transitioned. Idempotent.
+ */
+export async function deadLetterExhaustedResumeIntents(opts?: {
+  lastError?: string;
+  limit?: number;
+}): Promise<number> {
+  const limit = Math.max(1, Math.min(opts?.limit ?? 100, 500));
+  // The FULL eligibility predicate: exhausted, not delivered/dead, and NOT
+  // actively in-flight (a `delivering` row with a LIVE lease is left to finish).
+  const eligibleCond = and(
+    isNull(artifactReviewResumeOutbox.deadLetteredAt),
+    gte(artifactReviewResumeOutbox.attempts, artifactReviewResumeOutbox.maxAttempts),
+    or(
+      // A pending (un-leased) exhausted row.
+      eq(artifactReviewResumeOutbox.status, "pending"),
+      // A delivering row with NO LIVE lease — expired OR never set (NULL). Either
+      // way no worker is in-flight, so an exhausted strand is dead-letterable; a
+      // NULL-lease delivering row would otherwise be un-claimable AND
+      // un-dead-letterable (stuck forever). A LIVE lease (future, non-null) matches
+      // neither branch, so the "leave an in-flight attempt to finish" rule holds.
+      and(
+        eq(artifactReviewResumeOutbox.status, "delivering"),
+        or(
+          isNull(artifactReviewResumeOutbox.leaseExpiresAt),
+          lte(artifactReviewResumeOutbox.leaseExpiresAt, sql`now()`),
+        ),
+      ),
+    ),
+  );
+  const eligible = db
+    .select({ gateId: artifactReviewResumeOutbox.gateId })
+    .from(artifactReviewResumeOutbox)
+    .where(eligibleCond)
+    .limit(limit);
+  const dead = await db
+    .update(artifactReviewResumeOutbox)
+    .set({
+      deadLetteredAt: sql`now()`,
+      lastError: opts?.lastError ?? "resume delivery attempts exhausted",
+      updatedAt: sql`now()`,
+    })
+    // RE-ASSERT the FULL eligibility predicate under the UPDATE (a proper CAS), not
+    // just `dead_lettered_at IS NULL`: between the subquery select and this update a
+    // concurrent claim could re-lease the row (fresh future lease) or a delivery
+    // could mark it `done` — neither may be dead-lettered.
+    .where(and(inArray(artifactReviewResumeOutbox.gateId, eligible), eligibleCond))
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return dead.length;
+}
+
+export interface DeadLetteredResumeRow {
+  gateId: string;
+  runId: string;
+  reviewTaskId: string;
+  kind: "approve" | "reject";
+  attempts: number;
+  maxAttempts: number;
+  lastError: string | null;
+  deadLetteredAt: Date | null;
+}
+
+/** Ops visibility: the dead-lettered resume intents (delivery attempts
+ * exhausted). The surface the AC's "surfaced in ops visibility" requires. */
+export async function readDeadLetteredResumeIntents(limit = 100): Promise<DeadLetteredResumeRow[]> {
+  const rows = await db
+    .select()
+    .from(artifactReviewResumeOutbox)
+    .where(isNotNull(artifactReviewResumeOutbox.deadLetteredAt))
+    .limit(Math.max(1, Math.min(limit, 500)));
+  return rows.map((r) => ({
+    gateId: r.gateId,
+    runId: r.runId,
+    reviewTaskId: r.reviewTaskId,
+    kind: r.kind as "approve" | "reject",
+    attempts: r.attempts,
+    maxAttempts: r.maxAttempts,
+    lastError: r.lastError,
+    deadLetteredAt: r.deadLetteredAt,
+  }));
 }
 
 // ---------------------------------------------------------------------------

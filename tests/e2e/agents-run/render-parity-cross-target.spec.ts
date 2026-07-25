@@ -53,7 +53,13 @@ import {
   isFullParity,
   type NormalizedRender,
 } from "../design/conformance/render-parity/cross-target-compare";
-import { createEmbeddedViewTarget } from "./render-parity-live-targets";
+import {
+  createEmbedBootstrapDriver,
+  createEmbeddedViewTarget,
+  installEmbedParitySyntheticParent,
+  PARITY_BROKER_TOKENS_ENV,
+  resolveParityBrokerTokens,
+} from "./render-parity-live-targets";
 
 const BASE_URL = process.env.E2E_AGENTS_RUN_BASE_URL ?? "http://localhost:3000";
 
@@ -70,12 +76,31 @@ test.describe("live three-target render-parity — embedded view vs the S3 refer
     page,
     request,
   }) => {
-    const embedded = createEmbeddedViewTarget({ page, request, baseUrl: BASE_URL });
+    // Wire the REAL parent-bootstrap driver (cinatra#1998 (c)). Install the
+    // synthetic-parent READY listener BEFORE any navigation, then supply the
+    // driver only when the operator/stack provisioned the broker token pair (a
+    // parity connect-site at the embed origin + its cit_/cwu_). Absent them the
+    // probe reports a loud, tracked skip naming the missing env — never a silent
+    // skip, never a synthesized token.
+    await installEmbedParitySyntheticParent(page);
+    const tokens = resolveParityBrokerTokens();
+    const embedded = createEmbeddedViewTarget({
+      page,
+      request,
+      baseUrl: BASE_URL,
+      bootstrapEmbed: tokens ? createEmbedBootstrapDriver(tokens) : undefined,
+    });
 
     const probe = await embedded.probe();
     test.skip(
       !probe.available,
-      probe.available ? "" : `embedded-view target unavailable — ${probe.reason}`,
+      probe.available
+        ? ""
+        : `embedded-view target unavailable — ${probe.reason}` +
+            (tokens
+              ? ""
+              : ` (provision the parent-bootstrap broker tokens via ${PARITY_BROKER_TOKENS_ENV} once a ` +
+                `render-parity connect-site bound to the embed origin exists)`),
     );
 
     // Build the reference + embedded normalized renders over the whole corpus,

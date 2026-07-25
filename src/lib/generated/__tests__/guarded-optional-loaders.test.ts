@@ -149,7 +149,6 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_CONNECTOR_SETUP_PAGES", key: "linkedin-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETUP_PAGES", key: "linkedin-oauth-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETUP_PAGES", key: "mcp-client-connector", resolution: "guardedOptional" },
-  { map: "GENERATED_CONNECTOR_SETUP_PAGES", key: "mcp-server-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETUP_PAGES", key: "plane-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETUP_PAGES", key: "tailscale-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETUP_PAGES", key: "twenty-connector", resolution: "guardedOptional" },

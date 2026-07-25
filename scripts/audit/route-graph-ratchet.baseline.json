@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1558,
-    "/api/mcp": 1554,
-    "/chat": 1628,
-    "/api/a2a": 1559,
-    "/api/llm-bridge": 1566
+    "/sign-in": 1574,
+    "/api/mcp": 1570,
+    "/chat": 1644,
+    "/api/a2a": 1575,
+    "/api/llm-bridge": 1585
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1557,
-      "to": 1558,
-      "reason": "#1796 Stage 2 (PR #2033): the dedicated BlogIdeaSelectionRenderer module (packages/agents/src/blog-idea-selection-renderer.tsx) enters RENDERER_KIND_TABLE via register-default-renderers.ts, making it first-party-reachable from every tracked route that reaches the renderer kind table - a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned. Temporary cohort cost of the idea-chooser relocation out of the reviewer dispatcher: the Stage-3 teardown deletes the reviewer contentType dispatcher (including the inline IdeaChooserRenderer) and is expected to reclaim this slot. Replaces the base branch's carried record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2033
+      "from": 1571,
+      "to": 1574,
+      "reason": "#2041 S3 (epic #2037 lifecycle-interceptions): request-aware skill recommendation wires THREE new first-party feature modules into the universally-reachable agent execution path (packages/agents/src/execution.ts, Point R at run start): src/lib/run-selected-skill-revisions.ts (the immutable per-run selected-skill-revision store read), @cinatra-ai/skills/recommendation's resolveRunSkillDelivery (the single set-vs-computed delivery seam the /api/llm-bridge run path also uses), and packages/agents/src/recommendation-interception.ts (the headless auto-apply + lifecycle-config parse). All three are statically reachable from execution.ts, which every tracked route transitively hits, so the CI-measured delta is a UNIFORM +3 first-party modules (extensions cloned pinned, 0 missing). The growth is intrinsic to wiring the feature into the run-start snapshot path and irreducible: the three files are distinct feature seams the execution path must reach, and dynamic-importing them purely to dodge the ratchet would game the metric on a hot path at net zero. Raise is on top of origin/main's carried #2048 ceiling 1571 for this route; 1571 + 3 = 1574. Replaces the base branch's carried #2048 record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2041
     },
     "/api/mcp": {
-      "from": 1553,
-      "to": 1554,
-      "reason": "#1796 Stage 2 (PR #2033): the dedicated BlogIdeaSelectionRenderer module (packages/agents/src/blog-idea-selection-renderer.tsx) enters RENDERER_KIND_TABLE via register-default-renderers.ts, making it first-party-reachable from every tracked route that reaches the renderer kind table - a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned. Temporary cohort cost of the idea-chooser relocation out of the reviewer dispatcher: the Stage-3 teardown deletes the reviewer contentType dispatcher (including the inline IdeaChooserRenderer) and is expected to reclaim this slot. Replaces the base branch's carried record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2033
+      "from": 1567,
+      "to": 1570,
+      "reason": "#2041 S3 (epic #2037 lifecycle-interceptions): request-aware skill recommendation wires THREE new first-party feature modules into the universally-reachable agent execution path (packages/agents/src/execution.ts, Point R at run start): src/lib/run-selected-skill-revisions.ts (the immutable per-run selected-skill-revision store read), @cinatra-ai/skills/recommendation's resolveRunSkillDelivery (the single set-vs-computed delivery seam the /api/llm-bridge run path also uses), and packages/agents/src/recommendation-interception.ts (the headless auto-apply + lifecycle-config parse). All three are statically reachable from execution.ts, which every tracked route transitively hits, so the CI-measured delta is a UNIFORM +3 first-party modules (extensions cloned pinned, 0 missing). The growth is intrinsic to wiring the feature into the run-start snapshot path and irreducible: the three files are distinct feature seams the execution path must reach, and dynamic-importing them purely to dodge the ratchet would game the metric on a hot path at net zero. Raise is on top of origin/main's carried #2048 ceiling 1567 for this route; 1567 + 3 = 1570. Replaces the base branch's carried #2048 record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2041
     },
     "/chat": {
-      "from": 1627,
-      "to": 1628,
-      "reason": "#1796 Stage 2 (PR #2033): the dedicated BlogIdeaSelectionRenderer module (packages/agents/src/blog-idea-selection-renderer.tsx) enters RENDERER_KIND_TABLE via register-default-renderers.ts, making it first-party-reachable from every tracked route that reaches the renderer kind table - a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned. Temporary cohort cost of the idea-chooser relocation out of the reviewer dispatcher: the Stage-3 teardown deletes the reviewer contentType dispatcher (including the inline IdeaChooserRenderer) and is expected to reclaim this slot. Replaces the base branch's carried record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2033
+      "from": 1641,
+      "to": 1644,
+      "reason": "#2041 S3 (epic #2037 lifecycle-interceptions): request-aware skill recommendation wires THREE new first-party feature modules into the universally-reachable agent execution path (packages/agents/src/execution.ts, Point R at run start): src/lib/run-selected-skill-revisions.ts (the immutable per-run selected-skill-revision store read), @cinatra-ai/skills/recommendation's resolveRunSkillDelivery (the single set-vs-computed delivery seam the /api/llm-bridge run path also uses), and packages/agents/src/recommendation-interception.ts (the headless auto-apply + lifecycle-config parse). All three are statically reachable from execution.ts, which every tracked route transitively hits, so the CI-measured delta is a UNIFORM +3 first-party modules (extensions cloned pinned, 0 missing). The growth is intrinsic to wiring the feature into the run-start snapshot path and irreducible: the three files are distinct feature seams the execution path must reach, and dynamic-importing them purely to dodge the ratchet would game the metric on a hot path at net zero. Raise is on top of origin/main's carried #2048 ceiling 1641 for this route; 1641 + 3 = 1644. Replaces the base branch's carried #2048 record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2041
     },
     "/api/a2a": {
-      "from": 1558,
-      "to": 1559,
-      "reason": "#1796 Stage 2 (PR #2033): the dedicated BlogIdeaSelectionRenderer module (packages/agents/src/blog-idea-selection-renderer.tsx) enters RENDERER_KIND_TABLE via register-default-renderers.ts, making it first-party-reachable from every tracked route that reaches the renderer kind table - a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned. Temporary cohort cost of the idea-chooser relocation out of the reviewer dispatcher: the Stage-3 teardown deletes the reviewer contentType dispatcher (including the inline IdeaChooserRenderer) and is expected to reclaim this slot. Replaces the base branch's carried record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2033
+      "from": 1572,
+      "to": 1575,
+      "reason": "#2041 S3 (epic #2037 lifecycle-interceptions): request-aware skill recommendation wires THREE new first-party feature modules into the universally-reachable agent execution path (packages/agents/src/execution.ts, Point R at run start): src/lib/run-selected-skill-revisions.ts (the immutable per-run selected-skill-revision store read), @cinatra-ai/skills/recommendation's resolveRunSkillDelivery (the single set-vs-computed delivery seam the /api/llm-bridge run path also uses), and packages/agents/src/recommendation-interception.ts (the headless auto-apply + lifecycle-config parse). All three are statically reachable from execution.ts, which every tracked route transitively hits, so the CI-measured delta is a UNIFORM +3 first-party modules (extensions cloned pinned, 0 missing). The growth is intrinsic to wiring the feature into the run-start snapshot path and irreducible: the three files are distinct feature seams the execution path must reach, and dynamic-importing them purely to dodge the ratchet would game the metric on a hot path at net zero. Raise is on top of origin/main's carried #2048 ceiling 1572 for this route; 1572 + 3 = 1575. Replaces the base branch's carried #2048 record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2041
     },
     "/api/llm-bridge": {
-      "from": 1565,
-      "to": 1566,
-      "reason": "#1796 Stage 2 (PR #2033): the dedicated BlogIdeaSelectionRenderer module (packages/agents/src/blog-idea-selection-renderer.tsx) enters RENDERER_KIND_TABLE via register-default-renderers.ts, making it first-party-reachable from every tracked route that reaches the renderer kind table - a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned. Temporary cohort cost of the idea-chooser relocation out of the reviewer dispatcher: the Stage-3 teardown deletes the reviewer contentType dispatcher (including the inline IdeaChooserRenderer) and is expected to reclaim this slot. Replaces the base branch's carried record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 2033
+      "from": 1582,
+      "to": 1585,
+      "reason": "#2041 S3 (epic #2037 lifecycle-interceptions): request-aware skill recommendation wires THREE new first-party feature modules into the universally-reachable agent execution path (packages/agents/src/execution.ts, Point R at run start): src/lib/run-selected-skill-revisions.ts (the immutable per-run selected-skill-revision store read), @cinatra-ai/skills/recommendation's resolveRunSkillDelivery (the single set-vs-computed delivery seam the /api/llm-bridge run path also uses), and packages/agents/src/recommendation-interception.ts (the headless auto-apply + lifecycle-config parse). All three are statically reachable from execution.ts, which every tracked route transitively hits, so the CI-measured delta is a UNIFORM +3 first-party modules (extensions cloned pinned, 0 missing). The growth is intrinsic to wiring the feature into the run-start snapshot path and irreducible: the three files are distinct feature seams the execution path must reach, and dynamic-importing them purely to dodge the ratchet would game the metric on a hot path at net zero. Raise is on top of origin/main's carried #2035 ceiling 1582 for this route; 1582 + 3 = 1585. Replaces the base branch's carried #2035 record for this route via this new annotated raise. If CI measures a different count, update this ceiling + the absorb to.",
+      "pr": 2041
     }
   }
 }

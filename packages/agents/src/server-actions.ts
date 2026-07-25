@@ -9,7 +9,12 @@
 import "@/lib/register-host-connector-services";
 
 import { requireActorContext, requireAuthSession } from "@/lib/auth-session";
-import { buildSkillResourceRef, requireResourceAccess } from "./auth-policy";
+import {
+  buildSkillResourceRef,
+  enforceRunAccess,
+  requireResourceAccess,
+  resolveEffectivePolicy,
+} from "./auth-policy";
 import { listEmailSenderIdentities } from "@/lib/email-sender-identities";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import {
@@ -19,9 +24,22 @@ import {
 } from "@cinatra-ai/skills";
 import {
   readAgentRunById,
+  readAgentTemplateById,
+  readRunCoOwners,
 } from "./store";
+import { actorFromSession, type ActorRoleHints } from "@/lib/authz/build-actor-context";
 import type { FieldRendererBindingInput } from "./register-default-renderers";
 import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
+// Request-aware recommendation (cinatra#2041 S3): the CORE chip-row surface,
+// re-homed off the retiring skill-recommender-agent binding.
+import {
+  getRunRecommendations,
+  confirmRunSkillSelection,
+} from "./recommendation-interception";
+import type {
+  RankedRecommendation,
+  RecommendationEfficacy,
+} from "@cinatra-ai/skills/recommendation";
 
 // ---------------------------------------------------------------------------
 // SkillForChip — serialisable subset of SkillManifest safe to cross the
@@ -196,5 +214,173 @@ export async function getSkillsForAgentAction(
       }));
   } catch {
     return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Point R — request-aware skill recommendation CORE surface (cinatra#2041 S3).
+//
+// getRunRecommendedSkillsAction / confirmRunSkillSelectionAction are the CORE
+// chip-row surface, re-homed off the retiring skill-recommender-agent binding.
+// The chip-row fetches request-aware recommendations for the run's intent, and
+// the human's confirm/adjust writes the immutable per-run selection set (which
+// every delivery path — execution snapshot + llm-bridge — then consumes).
+//
+// Security: both require a valid session (unauthenticated → empty result / no
+// write). The scored set is advisory metadata (ids/names/scores + the intent
+// features scored) — no skill CONTENT crosses the boundary.
+// ---------------------------------------------------------------------------
+
+export type RecommendedSkillForChip = {
+  skillId: string;
+  skillRevisionId: string;
+  name: string;
+  score: number;
+  rank: number;
+  recommended: boolean;
+  scoredFeatures: RankedRecommendation["scoredFeatures"];
+};
+
+export async function getRunRecommendedSkillsAction(input: {
+  agentPackageName: string;
+  promptText?: string;
+  declaredProducedTypes?: string[];
+  targetArtifactKind?: string;
+  restrictToSkillIds?: string[];
+}): Promise<RecommendedSkillForChip[]> {
+  const session = await requireAuthSession().catch(() => null);
+  if (!session?.user?.id) return [];
+  try {
+    if (!input.agentPackageName) return [];
+    const recs = await getRunRecommendations({
+      agentId: input.agentPackageName,
+      intent: {
+        promptText: input.promptText,
+        declaredProducedTypes: input.declaredProducedTypes,
+        targetArtifactKind: input.targetArtifactKind,
+      },
+      restrictToSkillIds: input.restrictToSkillIds,
+    });
+    return recs.map((r) => ({
+      skillId: r.skillId,
+      skillRevisionId: r.skillRevisionId,
+      name: r.name,
+      score: r.score,
+      rank: r.rank,
+      recommended: r.recommended,
+      scoredFeatures: r.scoredFeatures,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export type ConfirmRunSkillSelectionActionResult = {
+  ok: boolean;
+  written: number;
+  efficacy: RecommendationEfficacy;
+};
+
+export async function confirmRunSkillSelectionAction(input: {
+  runId: string;
+  agentPackageName: string;
+  confirmedSkillIds: string[];
+  promptText?: string;
+  declaredProducedTypes?: string[];
+  targetArtifactKind?: string;
+  forcedRevisions?: Record<string, string>;
+  restrictToSkillIds?: string[];
+}): Promise<ConfirmRunSkillSelectionActionResult> {
+  const empty: ConfirmRunSkillSelectionActionResult = {
+    ok: false,
+    written: 0,
+    efficacy: { accepted: [], rejected: [] },
+  };
+  const session = await requireAuthSession().catch(() => null);
+  if (!session?.user?.id) return empty;
+  try {
+    if (!input.runId) return empty;
+
+    // AUTHORIZE the caller against THIS run before writing its authoritative
+    // selection set (cinatra#2041 S3). The set the bridge/snapshot later trust
+    // is keyed by the server-vetted run id, so an un-authorized write would
+    // poison another run's delivery. Writing the set MUTATES what the run
+    // delivers, so it requires EXECUTE-tier authority — not merely read (a
+    // workspace-READ / owner-EXECUTE run must deny a non-owner reader). Mirror
+    // the run_resume execute gate: load the bare run, build the write-tier
+    // enforcement context (co-owners + effective policy), and enforce "execute".
+    // Deny (empty) on any failure.
+    const kernel = await requireActorContext().catch(() => null);
+    if (!kernel) return empty;
+    const roleHints: ActorRoleHints = {
+      ...(kernel.platformRole ? { platformRole: kernel.platformRole } : {}),
+      ...(kernel.orgRole ? { orgRole: kernel.orgRole } : {}),
+      ...(kernel.teamRoles ? { teamRoles: kernel.teamRoles } : {}),
+      ...(kernel.teamIds ? { teamIds: kernel.teamIds } : {}),
+      ...(kernel.projectGrants ? { projectGrants: kernel.projectGrants } : {}),
+      actorOrganizationId: kernel.organizationId ?? null,
+    };
+    const run = await readAgentRunById(input.runId).catch(() => null);
+    if (!run) return empty;
+    const runTemplate = await readAgentTemplateById(run.templateId).catch(() => null);
+    const coOwnerUserIds = (await readRunCoOwners(run.id).catch(() => [])).map((r) => r.userId);
+    // Resolve the CONCRETE effective policy — `resolveEffectivePolicy` always
+    // installs the owner-only `DEFAULT_AGENT_AUTH_POLICY` when neither the run
+    // nor the template declares one. A bare `?? null` would leave the policy
+    // undefined, and `enforceRunAccess` then SKIPS the policy gate — an ordinary
+    // same-org member (kernel `run.resume`) would pass the execute check and be
+    // able to write another user's default (owner-only) run's selection set.
+    const runWithCoOwners = {
+      ...run,
+      effectivePolicy: resolveEffectivePolicy(run, runTemplate),
+      coOwnerUserIds,
+    };
+    try {
+      await enforceRunAccess(runWithCoOwners, actorFromSession(session), "execute", roleHints);
+    } catch {
+      return empty;
+    }
+
+    // Derive the agent package from the RUN'S template — NEVER the caller-
+    // supplied `agentPackageName` (a caller with execute on their OWN run A
+    // could otherwise confirm agent B's skill under run A, bypassing A's agent's
+    // assigned-set restriction, and the bridge would deliver it unverified).
+    const agentPackageName = runTemplate?.packageName;
+    if (!agentPackageName) return empty;
+
+    // Bound the write to the agent's already-assigned, runtime-deliverable
+    // skills (resolved with the caller's actor scope). The confirmed set — and
+    // any FORCED (non-recommended) skill the human added — is therefore always a
+    // subset of what the agent could already deliver; a caller cannot force an
+    // archived / excluded / unassigned skill into the run's authoritative set.
+    const assignedIds = await getAssignedSkillIdsForAgent(agentPackageName, {
+      principalId: kernel.principalId,
+      teamIds: kernel.teamIds,
+      projectIds: kernel.projectIds,
+      organizationId: kernel.organizationId ?? undefined,
+    }).catch(() => [] as string[]);
+    const allowed = new Set(assignedIds);
+    const forcedRevisions = input.forcedRevisions
+      ? Object.fromEntries(
+          Object.entries(input.forcedRevisions).filter(([skillId]) => allowed.has(skillId)),
+        )
+      : undefined;
+
+    const result = await confirmRunSkillSelection({
+      runId: input.runId,
+      agentId: agentPackageName,
+      intent: {
+        promptText: input.promptText,
+        declaredProducedTypes: input.declaredProducedTypes,
+        targetArtifactKind: input.targetArtifactKind,
+      },
+      confirmedSkillIds: input.confirmedSkillIds,
+      forcedRevisions,
+      // A true restriction (candidates ⊆ the assigned deliverable set).
+      restrictToSkillIds: assignedIds,
+    });
+    return { ok: true, written: result.written, efficacy: result.efficacy };
+  } catch {
+    return empty;
   }
 }
