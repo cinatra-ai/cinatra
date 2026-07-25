@@ -205,6 +205,40 @@ export function writeRunRejectedRecommendations(input: {
   });
 }
 
+/**
+ * The recommendation_source stamp a DURABLE SKIP writes (cinatra#2067 item 4).
+ * A human who SKIPS the run-start chip-row makes an explicit decision — "use the
+ * computed default set" — that must be distinguishable from "no decision" (no
+ * rows) AND from a confirm (which writes selection rows + `recommended_not_kept`
+ * rejected rows). A skip writes NO selection row (the run falls back to the
+ * computed default) and one `user_skipped` rejected row per recommended
+ * candidate — the durable, queryable skip evidence.
+ */
+export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
+
+/**
+ * Whether a run carries durable SKIP evidence (at least one `user_skipped`
+ * rejected-recommendation row). Distinguishes an explicit skip from a no-decision
+ * run (issue #2067 AC-3 store evidence).
+ */
+export function hasRunRecommendationSkip(runId: string): boolean {
+  const connectionString = getPostgresConnectionString();
+  const schema = postgresSchema;
+  const [result] = runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `SELECT 1
+               FROM "${schema.replaceAll('"', '""')}"."run_rejected_recommendations"
+               WHERE run_id = $1 AND recommendation_source = $2
+               LIMIT 1`,
+        values: [runId, SKIP_RECOMMENDATION_SOURCE],
+      },
+    ],
+  });
+  return (result?.rows?.length ?? 0) > 0;
+}
+
 /** Read the durable rejected-recommendation rows for a run (ordered by skill_id). */
 export function readRunRejectedRecommendations(runId: string): RunRejectedRecommendation[] {
   const connectionString = getPostgresConnectionString();
