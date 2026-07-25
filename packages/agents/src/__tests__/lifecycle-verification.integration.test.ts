@@ -42,6 +42,8 @@ let gateStore: typeof import("../artifact-review-gate-store");
 let orch: typeof import("../lifecycle-review-orchestration-store");
 let repairStore: typeof import("../lifecycle-repair-store");
 let verifStore: typeof import("../lifecycle-verification-store");
+let laneStore: typeof import("../lifecycle-core-analysis-lane");
+let advisoryStore: typeof import("../lifecycle-advisory-store");
 let dbMod: typeof import("../db");
 
 async function pool(text: string, values: unknown[] = []) {
@@ -175,6 +177,8 @@ beforeAll(async () => {
   orch = await import("../lifecycle-review-orchestration-store");
   repairStore = await import("../lifecycle-repair-store");
   verifStore = await import("../lifecycle-verification-store");
+  laneStore = await import("../lifecycle-core-analysis-lane");
+  advisoryStore = await import("../lifecycle-advisory-store");
   dbMod = await import("../db");
 }, 90_000);
 
@@ -306,6 +310,49 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     expect(res.verdict.outcome).toBe("drifted");
     expect(res.verdict.outOfScopePaths).toEqual(["cc"]);
     expect(res.reopenedGateId).not.toBeNull();
+  });
+
+  it("ADVISOR LANE: the Core analysis lane writes a provenance-stamped advisory comment on a gate (idempotent), readable by the run view", async () => {
+    const runId = `run-${randomUUID()}`;
+    const artifactId = `art-${randomUUID()}`;
+    const rev = `rev-${randomUUID()}`;
+    const gateId = await seedGate(runId, artifactId, rev);
+    const run1 = await laneStore.runCoreAnalysisLane({
+      gateId,
+      target: { artifactId, representationRevisionId: rev },
+      projection: { includedFields: { subject: "Hello", body: "text" }, excludedFields: ["ssn"] },
+      authzDecision: "partial",
+      runCausation: runId,
+    });
+    expect(run1.created).toBe(true);
+    // Full provenance is stamped.
+    expect(run1.provenance.laneId).toBe("core-analysis-lane");
+    expect(run1.provenance.targetRevisionId).toBe(rev);
+    expect(run1.provenance.includedFields).toEqual(["body", "subject"]);
+    expect(run1.provenance.excludedFields).toEqual(["ssn"]);
+    expect(run1.provenance.authzDecision).toBe("partial");
+
+    // The comment is readable via the gate store reader the run view / verification
+    // view consume — authored by a core SERVICE lane, decision-free.
+    const comments = await advisoryStore.listAdvisoryComments(gateId);
+    expect(comments).toHaveLength(1);
+    expect(comments[0].authorKind).toBe("service");
+    expect(comments[0].authorId).toBe("core-analysis-lane");
+    expect(comments[0].body).toMatch(/Core analysis of 2 disclosed field\(s\)/);
+    expect(comments[0].body).toMatch(/\[provenance\] lane=core-analysis-lane/);
+    // The withheld field value is never in the output.
+    expect(comments[0].body).not.toMatch(/ssn=/);
+
+    // Idempotent per (gate, projection digest): a re-run is a no-op.
+    const run2 = await laneStore.runCoreAnalysisLane({
+      gateId,
+      target: { artifactId, representationRevisionId: rev },
+      projection: { includedFields: { subject: "Hello", body: "text" }, excludedFields: ["ssn"] },
+      authzDecision: "partial",
+    });
+    expect(run2.created).toBe(false);
+    expect(run2.advisoryCommentId).toBe(run1.advisoryCommentId);
+    expect(await advisoryStore.listAdvisoryComments(gateId)).toHaveLength(1);
   });
 
   it("BOUND: a failed verification at the cycle bound ESCALATES — records the verdict, reopens nothing", async () => {

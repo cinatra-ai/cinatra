@@ -140,6 +140,23 @@ async function writeVerificationRecordAndMaybeReopen(
     representationMatches: input.representationMatches,
   });
 
+  // S4 core advisor lane: attach a provenance-stamped "Core analysis" advisory
+  // comment over the repaired target's DISCLOSED projection (the same fields the
+  // verification projected — already host-authorized). Idempotent per (gate,
+  // projection digest); best-effort so it never fails the verification write.
+  try {
+    const { runCoreAnalysisLane } = await import("./lifecycle-core-analysis-lane");
+    await runCoreAnalysisLane({
+      gateId: input.gateId,
+      target: input.repairedTarget,
+      projection: { includedFields: input.repairedFields, excludedFields: [] },
+      authzDecision: "authorized",
+      runCausation: input.runId,
+    });
+  } catch {
+    // swallowed — the advisory annotation never blocks the verification record.
+  }
+
   const id = verificationId(input.gateId);
   const inserted = await db
     .insert(artifactVerificationRecords)
