@@ -467,20 +467,20 @@ describe("driveAssistantChatTurn", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/api/assistants/chat");
   });
 
-  it("routes the @chatgpt built-in to its own AG-UI producer endpoint", async () => {
+  it("routes to a custom producer endpoint when one is given", async () => {
     const fetchMock = vi.fn(async (_url: string) => new Response(sseBody(turnFrames()), { status: 200 }));
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     const f = fakePort();
     await driveAssistantChatTurn({
       threadId: "th1",
       assistantId: "a1",
-      messages: [{ role: "user", content: "hi @chatgpt" }],
+      messages: [{ role: "user", content: "hi" }],
       slack: false,
-      endpoint: "/api/assistants/chatgpt",
+      endpoint: "/api/assistants/custom-producer",
       signal: new AbortController().signal,
       ui: f.port,
     });
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/assistants/chatgpt");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/assistants/custom-producer");
     expect(f.messages[0].content).toBe("Hello");
   });
 
@@ -500,17 +500,17 @@ describe("driveAssistantChatTurn", () => {
         assistantId: "a1",
         messages: [{ role: "user", content: "retry me" }],
         slack: false,
-        endpoint: "/api/assistants/chatgpt",
+        endpoint: "/api/assistants/custom-producer",
         signal: new AbortController().signal,
         ui: f.port,
       });
       await vi.advanceTimersByTimeAsync(3000); // the retry-once backoff
       await pending;
       expect(fetchMock).toHaveBeenCalledTimes(2);
-      // BOTH the initial attempt and the retry target the @chatgpt endpoint —
-      // never a silent downgrade to the Cinatra endpoint.
-      expect(fetchMock.mock.calls[0][0]).toBe("/api/assistants/chatgpt");
-      expect(fetchMock.mock.calls[1][0]).toBe("/api/assistants/chatgpt");
+      // BOTH the initial attempt and the retry target the custom endpoint —
+      // never a silent downgrade to the Cinatra default endpoint.
+      expect(fetchMock.mock.calls[0][0]).toBe("/api/assistants/custom-producer");
+      expect(fetchMock.mock.calls[1][0]).toBe("/api/assistants/custom-producer");
     } finally {
       vi.useRealTimers();
     }
