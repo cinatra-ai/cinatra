@@ -39,6 +39,7 @@ import {
   previewDispositionFor,
 } from "@/lib/artifacts/artifact-read";
 import { isInlineTransportEligible } from "@/app/artifacts/[id]/renderer-resolution";
+import { ensureActivatedRepresentationProviders } from "@/lib/artifacts/activated-artifact-renderer-binder";
 import { getArtifact } from "@/lib/artifacts/artifact-service";
 import { isRepresentationPinned } from "@/lib/artifacts/artifact-refs-store";
 import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store";
@@ -177,6 +178,15 @@ export async function GET(request: Request, { params }: Params): Promise<Respons
   // remain downloadable, `attachment`, via `/content`). Fails closed when the
   // resolving provider is no longer effective (archived/retired base ⇒ no
   // binding ⇒ 415 on a stale preview URL).
+  // ACTIVATION-COUPLED BINDING (cinatra#2044 L-A3): the byte request can land on a
+  // DIFFERENT worker than the page render, so the org's activated (non-system,
+  // build-bundled) representation providers are reconciled from the canonical
+  // install rows HERE too — otherwise a pack whose `preview` provider legitimately
+  // opens the byte route would 415 on half the workers, and a pack whose install
+  // was torn down could keep serving on a worker that missed the teardown. The
+  // reconcile binds the governed and RETIRES the ungoverned, so this is the
+  // fail-closed direction as well.
+  await ensureActivatedRepresentationProviders(orgId);
   if (!isInlineTransportEligible(orgId, resolved.mime)) {
     return Response.json(
       { ok: false, error: "Preview unsupported for this MIME type" },

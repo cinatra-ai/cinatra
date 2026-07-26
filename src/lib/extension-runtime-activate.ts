@@ -1004,6 +1004,50 @@ export async function runHostExtensionInstallAndActivate(
         }
       }
 
+      // ACTIVATION-COUPLED REPRESENTATION BINDING (cinatra#2044 S6 L-A3): a
+      // build-bundled NON-SYSTEM (`resolution: "guardedOptional"`) artifact
+      // renderer is deliberately NOT projected by the system registrar — that
+      // filter is the ratified cinatra#1630 isolation guardrail (no auto-bind for
+      // every org, no teardown exemption). Its org-scoped representation providers
+      // therefore bind HERE: at the install/activation transaction, for THIS
+      // install's org only, under a generation that a later reinstall/restore
+      // strictly supersedes. Uninstall retires them through the SAME
+      // `invalidateArtifactRenderersForPackage` chokepoint the semantic renderers
+      // use (the system-package early-return does not apply to a guardedOptional
+      // pack), and every resolve surface re-reconciles from the canonical rows —
+      // so this is the FAST path, not the only one. Best-effort + non-throwing:
+      // it never un-finalizes a committed install.
+      if (bridgeRegistered && result.rolledBack !== true) {
+        try {
+          const { bindActivatedRepresentationProvidersForInstall } = await import(
+            "@/lib/artifacts/activated-artifact-renderer-binder"
+          );
+          const boundCount = bindActivatedRepresentationProvidersForInstall({
+            packageName,
+            row: {
+              id: row.id,
+              kind: row.kind,
+              status: row.status,
+              version: result.version ?? row.version ?? null,
+              organizationId: row.organizationId,
+              updatedAt: new Date(),
+            },
+          });
+          if (boundCount > 0) {
+            console.info(
+              `[extension-runtime-activate] activation-coupled representation binding for ` +
+                `"${packageName}": ${boundCount} provider(s) bound for org ${row.organizationId}`,
+            );
+          }
+        } catch (err) {
+          console.warn(
+            `[extension-runtime-activate] activation-coupled representation binding threw for ` +
+              `"${packageName}" (non-fatal):`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+
       // INSTALL-ANCHOR CLAIM ACTIVATION (cinatra#1493, epic #1424): tie the
       // finalized artifact install's manifest `objectTypes` claims to the
       // durable claim registry. Runs ONLY after the rescan actually registered

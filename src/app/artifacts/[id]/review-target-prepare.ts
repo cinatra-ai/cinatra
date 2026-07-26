@@ -40,6 +40,7 @@ import {
   classifyLoadablePath,
 } from "./renderer-resolution";
 import { resolveRuntimeRendererForRoute } from "./runtime-renderer-route";
+import { ensureActivatedRepresentationProviders } from "@/lib/artifacts/activated-artifact-renderer-binder";
 
 /** The two run/gate ports the caller supplies (the agents-domain seam). */
 export type ReviewRunGatePorts = Pick<
@@ -138,6 +139,13 @@ export function bindArtifactReviewPorts(ctx: {
     // (coupling-ban G1). A first-party host handler is NOT a mountable review
     // target (there is no such mount kind) and, like a no-provider MIME, falls
     // through to the unchanged generic floor below.
+    // ACTIVATION-COUPLED BINDING (cinatra#2044 L-A3): the org-scoped providers of
+    // build-bundled NON-SYSTEM (`guardedOptional`) renderer packs are bound/retired
+    // from the canonical install rows before the SYNC resolve below. Without this
+    // the CMS-snapshot pack — bundled and dev-enrolled, but deliberately NOT a
+    // system base (cinatra#1630: no auto-bind for every org, no teardown exemption)
+    // — has no production binding path at all and this fallback resolves null.
+    await ensureActivatedRepresentationProviders(orgId);
     const representation = resolveRepresentationDispatch(orgId, input.mime, "detail");
     if (representation && representation.tier === "extension") {
       return mountLoadable(
