@@ -11,6 +11,18 @@ export default defineConfig({
   resolve: {
     alias: [
       { find: "server-only", replacement: serverOnlyStub },
+      // cinatra#2088 — `src/lib/skill-bundle-store.ts` (reachable from
+      // `src/lib/database.ts`, which this project's MCP-cube tests load) needs
+      // four PURE helpers from @cinatra-ai/llm: the bundle digest, the one-hop
+      // router lint, the bundled-path normalizer, and the router path constant.
+      // Resolving the package BARREL here drags its entire graph in and breaks
+      // module resolution for unrelated packages; nothing in packages/dashboards
+      // uses the barrel itself, so map it to the leaf that actually holds those
+      // helpers (node:crypto only). Must precede the generic patterns below.
+      {
+        find: /^@cinatra-ai\/llm$/,
+        replacement: path.join(root, "packages/llm/src/tools/anthropic-skill-content-hash.ts"),
+      },
       { find: /^@cinatra\/mcp-server$/, replacement: mcpServerStub },
       // Stub `@/lib/better-auth-db` before the generic `@/` pattern below;
       // otherwise the real module eagerly opens a Postgres pool and chains

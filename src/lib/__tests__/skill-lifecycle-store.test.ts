@@ -122,6 +122,7 @@ describe("buildSkillRollbackQuery — atomic compare-and-swap (#1362)", () => {
     skillId: "s1", expectedActiveRevisionId: "head0", newRevisionId: "roll1",
     targetRevisionId: "revPrior", restoredContent: "prior body", restoredContentDigest: "shaPrior",
     restoredPayloadJson: "{\"id\":\"s1\"}", authorUserId: "u1",
+    targetBundleDigest: "bundle-digest-prior",
   });
 
   it("swaps payload + pointer ONLY while active_revision_id still equals the expected head", () => {
@@ -131,12 +132,28 @@ describe("buildSkillRollbackQuery — atomic compare-and-swap (#1362)", () => {
   it("gates the blob + rollback-revision inserts on the CAS (SELECT ... FROM upd) so a miss writes NOTHING", () => {
     expect(q.text).toMatch(/WITH upd AS \(/);
     expect(q.text).toMatch(/INSERT INTO "cinatra"\."skill_revision_contents"[\s\S]*SELECT \$5, \$6, octet_length\(\$6\) FROM upd[\s\S]*ON CONFLICT \(content_digest\) DO NOTHING/);
-    expect(q.text).toMatch(/INSERT INTO "cinatra"\."skill_revisions"[\s\S]*SELECT \$2, \$3, \$5, 'rollback', \$7, \$8 FROM upd/);
+    expect(q.text).toMatch(/INSERT INTO "cinatra"\."skill_revisions"[\s\S]*SELECT \$2, \$3, \$5, 'rollback', \$7, \$8,/);
     expect(q.text).toMatch(/RETURNING id/);
   });
 
-  it("orders params: payload, newRev, skill, expectedHead, digest, content, target, author", () => {
-    expect(q.values).toEqual(["{\"id\":\"s1\"}", "roll1", "s1", "head0", "shaPrior", "prior body", "revPrior", "u1"]);
+  it("whole-bundle rollback: copies the target revision's file manifest onto the new rollback revision, gated on the CAS", () => {
+    expect(q.text).toMatch(/files AS \(/);
+    expect(q.text).toMatch(/INSERT INTO "cinatra"\."skill_revision_files"[\s\S]*SELECT \$2, \$3, f\.path, f\.content_digest, f\.byte_length, f\.mode, f\.is_router[\s\S]*WHERE f\.revision_id = \$7 AND f\.skill_id = \$3 AND EXISTS \(SELECT 1 FROM upd\)/);
+    expect(q.text).toMatch(/ON CONFLICT \(revision_id, path\) DO NOTHING/);
+  });
+
+  it("whole-bundle rollback: advances the current-bundle head to the rollback revision, gated on the CAS", () => {
+    expect(q.text).toMatch(/head AS \(/);
+    expect(q.text).toMatch(/INSERT INTO "cinatra"\."skill_bundle_heads" \(skill_id, revision_id, bundle_digest, updated_at\)/);
+    expect(q.text).toMatch(/SELECT \$3, \$2, COALESCE\(\$9::text, tr\.bundle_digest\), now\(\)/);
+    expect(q.text).toMatch(/AND EXISTS \(SELECT 1 FROM upd\)/);
+    expect(q.text).toMatch(/ON CONFLICT \(skill_id\) DO UPDATE/);
+  });
+
+  it("orders params: payload, newRev, skill, expectedHead, digest, content, target, author, targetBundleDigest", () => {
+    expect(q.values).toEqual([
+      "{\"id\":\"s1\"}", "roll1", "s1", "head0", "shaPrior", "prior body", "revPrior", "u1", "bundle-digest-prior",
+    ]);
   });
 });
 
