@@ -31,6 +31,10 @@ export interface PinnedCaptureRegionView {
   topPct: number;
   widthPct: number;
   heightPct: number;
+  /** L-D: this region is one the S4 read-back flagged as changed OUTSIDE the
+   * reviewed scope. Set only on the verification pair, from the verification
+   * record's own out-of-scope path list — never inferred from the picture. */
+  drifted?: boolean;
 }
 
 export interface PinnedCaptureView {
@@ -51,6 +55,15 @@ export interface PinnedCaptureView {
   removedConstructs: number;
   /** Cross-origin subresources the isolated renderer refused. */
   blockedSubresources: number;
+  /**
+   * L-D — set ONLY on a COMPOSED picture (the proposal): the adapter-marked
+   * regions the proposed values were placed into, and the proposed fields the
+   * adapter marked no region for. `null` on a straight fetched render. The
+   * surface uses this to tell the reviewer, without hedging, which picture is a
+   * photograph of the site and which is the proposal inside that photograph's
+   * chrome.
+   */
+  composition: { substitutedRegions: string[]; unmatchedFields: string[] } | null;
 }
 
 /** The host byte route for a pinned capture. Same-origin, version-pinned, and
@@ -106,8 +119,89 @@ export function buildPinnedCaptureViews(
       captureDigest: capture.data.captureDigest,
       removedConstructs: removed,
       blockedSubresources: capture.data.network?.blockedRequests ?? 0,
+      composition: capture.data.composition ?? null,
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// L-D — the PAIR. #2044's "visual before/after" is not two independent pictures
+// stacked; it is one comparison with a fixed reading order, in which either side
+// may be honestly missing. This projection makes the ORDER and the MISSING-SIDE
+// states data, so the surface renders a comparison and the whole matrix is
+// unit-tested without React.
+// ---------------------------------------------------------------------------
+
+/** Which comparison a pair renders. */
+export type PinnedCapturePairKind =
+  /** Gate creation: the live page vs the proposal composed into its chrome. */
+  | "review"
+  /** S4 read-back: the reviewed proposal vs the page as it actually landed. */
+  | "verification";
+
+export interface PinnedCapturePairView {
+  kind: PinnedCapturePairKind;
+  /** The left-hand ("before") picture — absent when no capture exists at all. */
+  left: PinnedCaptureView | null;
+  /** The right-hand ("after") picture — absent when no capture exists at all. */
+  right: PinnedCaptureView | null;
+  leftLabel: string;
+  rightLabel: string;
+}
+
+/** Role → the picture that plays each side, per comparison. */
+const PAIR_ROLES: Record<
+  PinnedCapturePairKind,
+  { left: CmsPreviewCaptureRole; right: CmsPreviewCaptureRole; leftLabel: string; rightLabel: string }
+> = {
+  review: {
+    left: "before",
+    right: "current",
+    leftLabel: "Now — the published page",
+    rightLabel: "After this change — proposed",
+  },
+  verification: {
+    left: "current",
+    right: "applied",
+    leftLabel: "Reviewed — what you approved",
+    rightLabel: "Applied — what the site now shows",
+  },
+};
+
+/**
+ * Project the stored captures into ONE comparison.
+ *
+ * `driftedRegions` marks region outlines on the RIGHT-hand picture that the S4
+ * read-back reported as out-of-scope changes. It comes from the verification
+ * record's own `outOfScopePaths` — the surface never infers drift from pixels.
+ */
+export function buildPinnedCapturePair(
+  views: readonly PinnedCaptureView[],
+  kind: PinnedCapturePairKind,
+  driftedRegions: readonly string[] = [],
+): PinnedCapturePairView | null {
+  const spec = PAIR_ROLES[kind];
+  const pick = (role: CmsPreviewCaptureRole) => views.find((v) => v.role === role) ?? null;
+  const left = pick(spec.left);
+  const rightRaw = pick(spec.right);
+  if (!left && !rightRaw) return null;
+  const drift = new Set(driftedRegions);
+  const right =
+    rightRaw && drift.size > 0
+      ? {
+          ...rightRaw,
+          regions: rightRaw.regions.map((r) =>
+            drift.has(r.region) ? { ...r, drifted: true } : r,
+          ),
+        }
+      : rightRaw;
+  return {
+    kind,
+    left,
+    right,
+    leftLabel: spec.leftLabel,
+    rightLabel: spec.rightLabel,
+  };
 }
 
 /**
