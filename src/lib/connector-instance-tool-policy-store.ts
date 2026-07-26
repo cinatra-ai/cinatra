@@ -104,7 +104,7 @@ function toIso(value: string | Date): string {
  * `'{}'::jsonb`) is PASSED THROUGH raw (cast) so the pure evaluator's
  * `isValidInstanceToolPolicyRecord` REJECTS the whole record → fail-closed
  * deny-all (§10-A3). Never silently coerce malformed persisted data to "none"
- * (that would fail OPEN — codex R1 blocker). The evaluator re-validates each
+ * (that would fail OPEN — a real fail-open regression). The evaluator re-validates each
  * entry, so this only shapes; it never trusts. */
 function toRefArray(value: unknown): ToolRef[] | undefined {
   if (value === null || value === undefined) return undefined;

@@ -248,7 +248,7 @@ describe("invokeConnectorInstanceTool — duplicate-name routing (§3.6)", () =>
   });
 });
 
-describe("invokeConnectorInstanceTool — serverId is NOT caller-mintable (codex R1 blocker fix, §10-A1)", () => {
+describe("invokeConnectorInstanceTool — serverId is NOT caller-mintable (cache-miss forged-serverId guard)", () => {
   it("on a cache MISS, a forged serverId cannot mint the default catalog under that id → tool_not_found (no policy bypass)", async () => {
     const { deps, callWireTool } = makeDeps();
     deps.cache.invalidate("inst-1"); // force a miss so loadServerSnapshot runs

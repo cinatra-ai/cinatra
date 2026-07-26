@@ -5,8 +5,8 @@ import "server-only";
 // through the MCP SDK `Client` + Streamable HTTP, with a single host-side auth
 // source, structuredContent-preferring unwrap, and TYPED errors.
 //
-// Follows the proven `packages/marketplace-mcp-client/src/http-client.ts`
-// (`callMarketplaceTool`) shape: connect → callTool → unwrap → close-in-finally.
+// Follows the proven marketplace MCP HTTP-client (`callMarketplaceTool`) shape:
+// connect → callTool → unwrap → close-in-finally.
 // The SESSION HANDSHAKE is a hard requirement (S1 §B2): a bare tools/list returns
 // HTTP 400 `-32600 "Missing Mcp-Session-Id header"`; `Client.connect` performs
 // the `initialize` handshake (protocolVersion 2025-06-18) and carries

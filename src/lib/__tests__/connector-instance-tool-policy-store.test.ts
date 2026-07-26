@@ -7,6 +7,7 @@ import {
   writeInstanceToolPolicy,
   SYSTEM_POLICY_BACKFILL_ACTOR,
   type PolicyStoreDeps,
+  type PolicyStoreQuery,
 } from "@/lib/connector-instance-tool-policy-store";
 import { evaluateInstanceToolPolicy } from "@cinatra-ai/mcp-server/instance-tool-policy";
 
@@ -61,7 +62,7 @@ function makeStore(): { deps: PolicyStoreDeps; audit: ReturnType<typeof vi.fn>; 
     return [];
   });
   const audit = vi.fn(async () => {});
-  return { deps: { query, audit }, audit, rows };
+  return { deps: { query: query as unknown as PolicyStoreQuery, audit }, audit, rows };
 }
 
 describe("ensureDefaultOpenPolicy — create-if-absent, never clobber", () => {
@@ -116,7 +117,7 @@ describe("reconcileConnectorInstanceToolPolicies (R2-B2)", () => {
   });
 });
 
-describe("malformed persisted policy → fail-closed deny-all, NEVER hidden (codex R1 blocker fix)", () => {
+describe("malformed persisted policy → fail-closed deny-all, NEVER hidden", () => {
   it("a row with a non-array deny_refs is passed through raw so the evaluator rejects the whole record", async () => {
     // An `open` row whose deny_refs is a stray object (not an array) must NOT be
     // read as `deny: undefined` (which would fail OPEN). It is passed through so
@@ -137,7 +138,7 @@ describe("malformed persisted policy → fail-closed deny-all, NEVER hidden (cod
       }
       return [];
     });
-    const rec = await readInstanceToolPolicy("wordpress", "corrupt", { query });
+    const rec = await readInstanceToolPolicy("wordpress", "corrupt", { query: query as unknown as PolicyStoreQuery });
     expect(rec).not.toBeNull();
     expect(rec!.deny).toEqual({}); // passed through raw (a non-array), NOT undefined
     const decision = evaluateInstanceToolPolicy(rec, { serverId: "mcp-adapter-default", name: "any" });
