@@ -101,10 +101,38 @@ export interface ActivatedRepresentationProviderSpec {
   slot: ArtifactUiSlot;
 }
 
-/** The generated build-map entries that are NON-SYSTEM renderer packs. */
+/**
+ * The package names the build map carries at least one `resolution: "required"`
+ * entry for — the SYSTEM bases, owned exclusively by the system registrar.
+ */
+function packagesWithRequiredEntries(): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const entry of Object.values(GENERATED_ARTIFACT_RENDERERS)) {
+    if (entry.resolution === "required") names.add(entry.packageName);
+  }
+  return names;
+}
+
+/**
+ * The generated build-map entries that are NON-SYSTEM renderer packs.
+ *
+ * PACKAGE-PURITY GUARD (Codex closure finding): a package is excluded outright if
+ * the map carries ANY `required` entry for it, even when some of its entries are
+ * `guardedOptional`. Retirement is necessarily PACKAGE-scoped
+ * (`retireOrgProvider(orgId, packageName)` — the registry has no per-(pattern,
+ * slot) retire), so admitting a MIXED package would let this module retire that
+ * package's SYSTEM bindings and strand the host's own MIME families. The
+ * generator classifies resolution per PACKAGE today
+ * (`systemExtensions.has(pkg) ? "required" : "guardedOptional"`), so no mixed
+ * package exists — but this ENFORCES that invariant rather than assuming it,
+ * exactly as the system registrar's own `required` filter does in the other
+ * direction (cinatra#1630).
+ */
 function guardedOptionalRendererEntries(): GeneratedArtifactRendererEntry[] {
+  const systemPackages = packagesWithRequiredEntries();
   return Object.values(GENERATED_ARTIFACT_RENDERERS).filter(
-    (entry) => entry.resolution === "guardedOptional",
+    (entry) =>
+      entry.resolution === "guardedOptional" && !systemPackages.has(entry.packageName),
   );
 }
 
@@ -238,6 +266,37 @@ export function generationForEpoch(orgId: string, packageName: string, token: st
   return generation;
 }
 
+/**
+ * A token that can never equal a real epoch token (a real one is built from
+ * `installEpochToken`, whose parts never contain a NUL). Parking this on the
+ * allocator entry keeps the allocated GENERATION but guarantees the next bind
+ * takes the "token changed" branch.
+ */
+const RETIRED_EPOCH_TOKEN = " retired";
+
+/**
+ * Invalidate the process-local epoch allocation for `(orgId, packageName)` after
+ * THIS module retired its bindings.
+ *
+ * WHY (Codex closure finding — a recovery deadlock): the registry KEEPS the
+ * generation floor as a tombstone when bindings are retired. If the allocator
+ * then handed back the SAME generation for an UNCHANGED install row — which is
+ * exactly what happens after a fail-closed retire on a transient canonical-store
+ * outage — `registerProvider` would see `generation === floor` with no live
+ * binding, classify the write as a delayed straggler from a torn-down epoch, and
+ * REJECT it. The provider could never come back until the install row itself
+ * changed. Keeping the generation but clearing the token means the next bind
+ * mints `previous + 1`, which is strictly above the tombstone floor, so a
+ * transient outage recovers on the very next reconcile while a genuine
+ * torn-down-epoch straggler (which does NOT go through this allocator) still
+ * cannot resurrect anything.
+ */
+function invalidateEpochAllocation(orgId: string, packageName: string): void {
+  const key = generationKey(orgId, packageName);
+  const prior = allocatedGenerations.get(key);
+  if (prior) allocatedGenerations.set(key, { ...prior, token: RETIRED_EPOCH_TOKEN });
+}
+
 /** @internal test-only reset of the process-local generation allocator. */
 export function _resetActivatedGenerationsForTests(): void {
   allocatedGenerations.clear();
@@ -299,9 +358,23 @@ function bindSpecs(orgId: string, packageName: string, generation: number): numb
 export interface ActivatedReconcileResult {
   bound: string[];
   retired: string[];
-  /** True when the canonical store could not be read — every candidate was
-   *  retired (fail-closed) rather than left effective. */
+  /** True when the reconcile could not PROVE the install state — every candidate
+   *  was retired (fail-closed) rather than left effective. */
   degraded: boolean;
+}
+
+/** Retire every activatable package for `orgId` and invalidate their epoch
+ *  allocations so the next PROVEN reconcile can rebind above the tombstone
+ *  floor. The single fail-closed degrade used by every unprovable path. */
+function retireAllForOrg(orgId: string, packages: readonly string[]): string[] {
+  const retired: string[] = [];
+  for (const packageName of packages) {
+    if (representationProviderRegistry.retireOrgProvider(orgId, packageName) > 0) {
+      retired.push(packageName);
+    }
+    invalidateEpochAllocation(orgId, packageName);
+  }
+  return retired;
 }
 
 /**
@@ -335,24 +408,23 @@ export async function reconcileActivatedRepresentationProviders(
   } catch (err) {
     // FAIL-CLOSED: an unreadable canonical store cannot prove the install is still
     // live, so no activated provider stays effective. The generic floor renders.
-    for (const packageName of packages) {
-      if (representationProviderRegistry.retireOrgProvider(orgId, packageName) > 0) {
-        retired.push(packageName);
-      }
-    }
     console.warn(
       "[activated-artifact-renderers] canonical-store read failed — retired every activated " +
         `provider for org (fail-closed): ${err instanceof Error ? err.message : String(err)}`,
     );
-    return { bound: [], retired, degraded: true };
+    return { bound: [], retired: retireAllForOrg(orgId, packages), degraded: true };
   }
 
   for (const packageName of packages) {
     const governing = pickGoverningRow(byPackage.get(packageName) ?? [], orgId);
     if (!governing) {
+      // A genuine uninstall/archive (or another org's row). Invalidate the epoch
+      // allocation too, so a later REINSTALL that happens to reuse the same
+      // durable epoch still binds above the tombstone floor.
       if (representationProviderRegistry.retireOrgProvider(orgId, packageName) > 0) {
         retired.push(packageName);
       }
+      invalidateEpochAllocation(orgId, packageName);
       continue;
     }
     const generation = generationForEpoch(orgId, packageName, installEpochToken(governing));
@@ -370,10 +442,21 @@ export async function ensureActivatedRepresentationProviders(orgId: string): Pro
   try {
     await reconcileActivatedRepresentationProviders(orgId);
   } catch (err) {
+    // FAIL-CLOSED, NOT FAIL-OPEN (Codex closure finding): a throw AFTER the
+    // canonical read — a malformed row, a registry write error — would otherwise
+    // leave already-bound providers effective, which is fail-open for revocation.
+    // An unprovable reconcile retires exactly like an unreadable store does, so
+    // the ONLY outcome of any failure is the never-blank generic floor.
     console.warn(
-      "[activated-artifact-renderers] reconcile threw (non-fatal — the row falls to the floor):",
+      "[activated-artifact-renderers] reconcile threw — retired every activated provider for " +
+        "org (fail-closed; the row falls to the floor):",
       err instanceof Error ? err.message : err,
     );
+    try {
+      retireAllForOrg(orgId, activatableRendererPackages());
+    } catch {
+      // Total by contract — a resolve path must always be able to call this.
+    }
   }
 }
 

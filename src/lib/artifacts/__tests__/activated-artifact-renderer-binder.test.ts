@@ -344,3 +344,101 @@ describe("no regression for the required (system) path", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Codex closure-round findings (all three were real; each is pinned here).
+// ---------------------------------------------------------------------------
+
+describe("codex R1 — package purity: a MIXED package is never activatable", () => {
+  it("no activatable package also carries a `required` build-map entry", () => {
+    const requiredPackages = new Set(
+      Object.values(GENERATED_ARTIFACT_RENDERERS)
+        .filter((e) => e.resolution === "required")
+        .map((e) => e.packageName),
+    );
+    for (const pkg of activatableRendererPackages()) {
+      expect(requiredPackages.has(pkg)).toBe(false);
+    }
+  });
+
+  it("retirement is package-scoped, so a system package must never be a candidate", async () => {
+    // Retiring is `retireOrgProvider(orgId, packageName)` — whole-package. Bind
+    // the system bases, then reconcile with NO install rows: the reconcile must
+    // retire only its own candidates and leave every system binding intact.
+    reconcileSystemRepresentationProviders(ORG);
+    const systemBefore = representationProviderRegistry
+      ._snapshotOrgProviders(ORG)
+      .filter((d) => d.generation === 1).length;
+    expect(systemBefore).toBeGreaterThan(0);
+
+    readByNames.mockResolvedValue(new Map());
+    await reconcileActivatedRepresentationProviders(ORG);
+
+    const systemAfter = representationProviderRegistry
+      ._snapshotOrgProviders(ORG)
+      .filter((d) => d.generation === 1).length;
+    expect(systemAfter).toBe(systemBefore);
+    expect(representationProviderRegistry.resolve(ORG, "application/pdf", "detail")).toMatchObject({
+      tier: "extension",
+    });
+  });
+});
+
+describe("codex R1 — a transient store outage RECOVERS on the next reconcile", () => {
+  it("rebinds after a fail-closed retire even though the install row is UNCHANGED", async () => {
+    const row = liveRow();
+    readByNames.mockResolvedValue(rowsFor([row]));
+    await reconcileActivatedRepresentationProviders(ORG);
+    expect(representationProviderRegistry.resolve(ORG, CMS_MIME, "detail")).not.toBeNull();
+
+    // Transient outage → fail-closed retire (the registry keeps the tombstone floor).
+    readByNames.mockRejectedValue(new Error("transient outage"));
+    expect((await reconcileActivatedRepresentationProviders(ORG)).degraded).toBe(true);
+    expect(representationProviderRegistry.resolve(ORG, CMS_MIME, "detail")).toBeNull();
+
+    // The store comes back. The row never changed, so a naive allocator would
+    // hand back the tombstoned generation and the registry would reject the
+    // write as a straggler — the provider would never return.
+    readByNames.mockResolvedValue(rowsFor([row]));
+    await reconcileActivatedRepresentationProviders(ORG);
+    expect(representationProviderRegistry.resolve(ORG, CMS_MIME, "detail")).toMatchObject({
+      tier: "extension",
+      packageName: CMS_PKG,
+    });
+  });
+
+  it("an uninstall → REINSTALL of the very same durable epoch still rebinds", async () => {
+    const row = liveRow();
+    readByNames.mockResolvedValue(rowsFor([row]));
+    await reconcileActivatedRepresentationProviders(ORG);
+
+    readByNames.mockResolvedValue(rowsFor([liveRow({ status: "archived" })]));
+    await reconcileActivatedRepresentationProviders(ORG);
+    expect(representationProviderRegistry.resolve(ORG, CMS_MIME, "detail")).toBeNull();
+
+    readByNames.mockResolvedValue(rowsFor([row]));
+    await reconcileActivatedRepresentationProviders(ORG);
+    expect(representationProviderRegistry.resolve(ORG, CMS_MIME, "detail")).not.toBeNull();
+  });
+});
+
+describe("codex R1 — a POST-READ throw is fail-CLOSED, not fail-open", () => {
+  it("retires the org's providers when the reconcile throws after binding once", async () => {
+    readByNames.mockResolvedValue(rowsFor([liveRow()]));
+    await ensureActivatedRepresentationProviders(ORG);
+    expect(representationProviderRegistry.resolve(ORG, CMS_MIME, "detail")).not.toBeNull();
+
+    // A throw that is NOT the canonical read (so the inner fail-closed arm is
+    // bypassed) — e.g. a malformed row or a registry write error.
+    readByNames.mockImplementation(() => {
+      throw new Error("post-read explosion");
+    });
+    await expect(ensureActivatedRepresentationProviders(ORG)).resolves.toBeUndefined();
+    expect(representationProviderRegistry.resolve(ORG, CMS_MIME, "detail")).toBeNull();
+
+    // …and it still recovers once the fault clears.
+    readByNames.mockImplementation(async () => rowsFor([liveRow()]));
+    await ensureActivatedRepresentationProviders(ORG);
+    expect(representationProviderRegistry.resolve(ORG, CMS_MIME, "detail")).not.toBeNull();
+  });
+});
