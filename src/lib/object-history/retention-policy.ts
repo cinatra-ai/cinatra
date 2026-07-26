@@ -82,6 +82,12 @@ const RETENTION_POLICIES: Record<string, RetentionPolicy> = {
   // gate must still show its ORIGINAL picture, which is the whole immutability
   // guarantee the capture exists to provide.
   "@cinatra-ai/objects:cms-preview-capture": { kind: "indefinite" },
+  // The immutable CMS content snapshot (cinatra#2043 S5 capture / cinatra#2044
+  // S6 review). Same reasoning as the preview capture above and the same
+  // immutability contract the type declares (snapshotPolicy "none", mutability
+  // "record"): the review decision BINDS to these exact fields, so the snapshot
+  // a reviewer acted on must remain readable for as long as the decision does.
+  "@cinatra-ai/objects:cms-content-snapshot": { kind: "indefinite" },
 };
 
 const DEFAULT_POLICY: RetentionPolicy = { kind: "indefinite" };
