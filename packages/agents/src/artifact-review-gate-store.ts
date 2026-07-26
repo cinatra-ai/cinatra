@@ -129,6 +129,17 @@ export class ArtifactReviewGateError extends Error {
   }
 }
 
+// A drizzle query executor — the module-level `db` OR a `tx` handle from
+// `db.transaction`. Both expose the identical query-builder surface, so the emit
+// primitive can run STANDALONE (its own implicit statement) or ENLISTED in a
+// caller's open transaction. The enlisted form is what makes the repair
+// successor-gate emit + finalize ATOMIC (cinatra#2065 Seam A): a rollback before
+// the caller's commit leaves NO gate row, so a fresh-target retry never strands a
+// gate or hits a pin conflict.
+type GateStoreExecutor =
+  | typeof db
+  | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 // ---------------------------------------------------------------------------
 // The emitting gate.
 // ---------------------------------------------------------------------------
@@ -162,6 +173,13 @@ export interface EmitReviewGateResult {
  * set AND org returns the existing gate; a re-emit with a DIFFERENT set or a
  * DIFFERENT org is fail-closed (throws pin-conflict) — the gate is never silently
  * re-pinned, and never re-tagged to another org, under a reviewer.
+ *
+ * `executor` (cinatra#2065): the query handle the emit runs through — the
+ * module-level `db` by default, or a caller's open `tx` so the emit is ATOMIC
+ * with the caller's other writes (the repair successor-gate emit + finalize; the
+ * insert AND the conflict reconcile read both run on it, so an in-transaction
+ * re-emit sees the caller's own uncommitted rows). Existing callers pass none and
+ * keep the standalone semantics unchanged.
  */
 export async function emitArtifactReviewGate(input: {
   runId: string;
@@ -174,7 +192,7 @@ export async function emitArtifactReviewGate(input: {
    * none (null — the expiry drain never touches it). Set only on the INSERT: a
    * re-emit onto an existing gate never re-stamps the expiry (idempotent pin). */
   expiresAt?: Date | null;
-}): Promise<EmitReviewGateResult> {
+}, executor: GateStoreExecutor = db): Promise<EmitReviewGateResult> {
   const normalized = normalizeReviewTargets(input.targets);
   if (!normalized.ok) {
     throw new ArtifactReviewGateError("invalid-targets", normalized.error);
@@ -182,7 +200,7 @@ export async function emitArtifactReviewGate(input: {
   const pinned = canonicalPinnedSet(normalized.targets);
 
   const gateId = randomUUID();
-  const [inserted] = await db
+  const [inserted] = await executor
     .insert(artifactReviewGates)
     .values({
       id: gateId,
@@ -204,8 +222,10 @@ export async function emitArtifactReviewGate(input: {
   }
 
   // Conflict: a gate already exists for this (run, task). Idempotent iff the
-  // pinned set AND org match; otherwise fail closed (never re-pin / re-tag).
-  const existing = await readReviewGate(input.runId, input.reviewTaskId);
+  // pinned set AND org match; otherwise fail closed (never re-pin / re-tag). The
+  // reconcile read runs on the SAME executor as the insert so an in-transaction
+  // re-emit resolves against the caller's own (possibly uncommitted) row.
+  const existing = await readReviewGateVia(executor, input.runId, input.reviewTaskId);
   if (!existing) {
     // Extremely narrow race (row vanished between insert-conflict and read).
     throw new ArtifactReviewGateError(
@@ -251,7 +271,18 @@ export async function readReviewGate(
   runId: string,
   reviewTaskId: string,
 ): Promise<ReviewGateRow | null> {
-  const rows = await db
+  return readReviewGateVia(db, runId, reviewTaskId);
+}
+
+/** `readReviewGate` through an explicit executor — used by `emitArtifactReviewGate`
+ * so an enlisted (in-transaction) re-emit reconciles against the caller's own
+ * uncommitted row. Identical projection to `readReviewGate`. */
+async function readReviewGateVia(
+  executor: GateStoreExecutor,
+  runId: string,
+  reviewTaskId: string,
+): Promise<ReviewGateRow | null> {
+  const rows = await executor
     .select()
     .from(artifactReviewGates)
     .where(

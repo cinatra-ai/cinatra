@@ -80,8 +80,10 @@ import { repairSuccessorReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestra
 // ---------------------------------------------------------------------------
 
 /** The synthetic run id a successor gate carries when the repair names no
- * producing run (mirrors the orchestration store's orphan fallback). */
-function orphanRepairRunId(repairId: string): string {
+ * producing run (mirrors the orchestration store's orphan fallback). Exported so
+ * the recovery store re-derives the SAME deterministic (run, task) slot a legacy
+ * orphan occupies (cinatra#2065). */
+export function orphanRepairRunId(repairId: string): string {
   return `lifecycle-repair-orphan:${repairId}`;
 }
 
@@ -364,6 +366,21 @@ export type SubmitRepairResponseResult =
   | { ok: true; successorGateId: string; successorTaskId: string }
   | { ok: false; code: string; error: string };
 
+/** Sentinel that forces the atomic emit+finalize transaction to ROLL BACK (drizzle
+ * rolls back only on a throw) while carrying the non-finalized outcome out to the
+ * caller — so a freshly-emitted successor gate is never committed without its
+ * finalize (cinatra#2065). */
+class FinalizeRollback extends Error {
+  constructor(
+    readonly outcome:
+      | { kind: "concurrent" }
+      | { kind: "pin-conflict"; message: string },
+  ) {
+    super("lifecycle-repair finalize rollback");
+    this.name = "FinalizeRollback";
+  }
+}
+
 /**
  * Submit a producer's repair RESPONSE. Validates the lineage + base-revision CAS
  * (a moved/tombstoned base ⇒ the repair is STALE) + live re-authorization, then
@@ -441,34 +458,25 @@ export async function submitRepairResponse(
   // task id ⇒ a re-drive is idempotent on (run, task).
   const runId = repair.producerRunId ?? orphanRepairRunId(repair.id);
   const successorTaskId = repairSuccessorReviewTaskId(repair.id, repair.attempt);
-  let successorGateId: string;
-  try {
-    const emitted = await emitArtifactReviewGate({
-      runId,
-      orgId: repair.orgId,
-      reviewTaskId: successorTaskId,
-      targets: [
-        {
-          artifactId: input.response.successorTarget.artifactId,
-          representationRevisionId: input.response.successorTarget.representationRevisionId,
-        },
-      ],
-      expiresAt: input.expiresAt ?? null,
-    });
-    successorGateId = emitted.gateId;
-  } catch (err) {
-    if (err instanceof ArtifactReviewGateError) {
-      return { ok: false, code: "successor-pin-conflict", error: err.message };
-    }
-    throw err;
-  }
 
-  // Finalize + re-point ATOMICALLY, CAS-guarded on the repair status so only the
-  // FIRST response finalizes (a concurrent second response re-emits the SAME
-  // deterministic successor gate — idempotent — but its finalize CAS matches 0
-  // rows, so it never overwrites the first's outcomes; it returns idempotently
-  // below). The held effect re-points onto the successor gate so the
-  // disposition-aware effect-hold stays HELD until the successor APPROVES.
+  // ATOMIC successor-gate emit + finalize + re-point (cinatra#2065 Seam A). The
+  // emit is ENLISTED in the SAME transaction as the finalize CAS and the outbox
+  // re-point, so the three commit or roll back as ONE unit. This closes the
+  // pre-#2065 crash-window: the OLD code emitted the successor gate in its own
+  // statement BEFORE the finalize transaction, so an interruption between the two
+  // stranded a pinned gate (gate row exists, repair never finalized, effect never
+  // re-pointed) — and a subsequent retry that minted a FRESH successor target then
+  // hit a successor-pin conflict on the deterministic (run, task) slot instead of
+  // converging. With one transaction a fault before commit leaves NOTHING, so a
+  // fresh-target retry emits cleanly. Pre-#2065 strands are converged by
+  // `recoverOrphanedRepairSuccessor` (lifecycle-repair-recovery-store).
+  //
+  // CAS-guarded on the repair status so only the FIRST response finalizes (a
+  // concurrent second response re-emits the SAME deterministic successor gate —
+  // idempotent when its target matches — but its finalize CAS matches 0 rows, so
+  // it never overwrites the first's outcomes; it returns idempotently below). The
+  // held effect re-points onto the successor gate so the disposition-aware
+  // effect-hold stays HELD until the successor APPROVES.
   //
   // The re-point matches the outbox row by its LIVE gate LINKAGE
   // (`continuation_address == repair.gateId`), NOT by the current repair's base
@@ -481,30 +489,85 @@ export async function submitRepairResponse(
   // FOREVER. A repair gate is single-target, so exactly one outbox row is ever
   // linked to it; keying on the linkage is precise (never re-points an unrelated
   // event).
-  const finalized = await db.transaction(async (tx) => {
-    const cas = await tx
-      .update(lifecycleRepair)
-      .set({
-        status: "repaired",
-        successorGateId,
-        successorArtifactId: input.response.successorTarget.artifactId,
-        successorRepresentationRevisionId: input.response.successorTarget.representationRevisionId,
-        findingOutcomes: input.response.findingOutcomes as unknown,
-        changeSummary: input.response.changeSummary,
-        updatedAt: sql`now()`,
-      })
-      .where(and(eq(lifecycleRepair.id, repair.id), eq(lifecycleRepair.status, repair.status)))
-      .returning({ id: lifecycleRepair.id });
-    if (cas.length !== 1) return false; // a concurrent response finalized first.
-    // Re-point the held-effect linkage still pointing at the base gate onto the
-    // successor gate (idempotent; follows the chain across multi-cycle repairs).
-    await tx
-      .update(artifactProducedOutbox)
-      .set({ continuationAddress: successorGateId })
-      .where(eq(artifactProducedOutbox.continuationAddress, repair.gateId));
-    return true;
-  });
-  if (!finalized) {
+  type FinalizeOutcome =
+    | { kind: "finalized"; successorGateId: string }
+    | { kind: "concurrent" }
+    | { kind: "pin-conflict"; message: string };
+  // Any NON-finalized outcome must ROLL BACK the transaction, not commit it —
+  // drizzle rolls back only on a THROW. This is load-bearing: on the finalize
+  // CAS-zero path (the repair status moved between the pre-tx read and the CAS —
+  // a concurrent finalize, or a requested→dispatched transition) the enlisted emit
+  // may already have INSERTED a fresh successor gate; returning normally would
+  // COMMIT that gate despite the repair never finalizing, stranding it and making a
+  // later fresh-target retry hit a pin conflict — the exact defect #2065 closes. So
+  // the non-finalized outcomes are carried out on a sentinel throw that discards the
+  // emit. (Pin-conflict inserts nothing — the rollback is then a harmless no-op —
+  // but throwing uniformly keeps the invariant "a gate persists ⟺ the repair
+  // finalized in the same commit".)
+  const outcome: FinalizeOutcome = await db
+    .transaction(async (tx): Promise<FinalizeOutcome> => {
+      let successorGateId: string;
+      try {
+        const emitted = await emitArtifactReviewGate(
+          {
+            runId,
+            orgId: repair.orgId,
+            reviewTaskId: successorTaskId,
+            targets: [
+              {
+                artifactId: input.response.successorTarget.artifactId,
+                representationRevisionId: input.response.successorTarget.representationRevisionId,
+              },
+            ],
+            expiresAt: input.expiresAt ?? null,
+          },
+          tx,
+        );
+        successorGateId = emitted.gateId;
+      } catch (err) {
+        // A pin conflict aborts with nothing written (only a read ran on the
+        // conflict path). Surface it so the caller maps it to successor-pin-conflict
+        // — a LEGACY orphan occupying this slot is converged by the recovery path,
+        // not by silently re-pinning.
+        if (err instanceof ArtifactReviewGateError) {
+          throw new FinalizeRollback({ kind: "pin-conflict", message: err.message });
+        }
+        throw err;
+      }
+
+      const cas = await tx
+        .update(lifecycleRepair)
+        .set({
+          status: "repaired",
+          successorGateId,
+          successorArtifactId: input.response.successorTarget.artifactId,
+          successorRepresentationRevisionId: input.response.successorTarget.representationRevisionId,
+          findingOutcomes: input.response.findingOutcomes as unknown,
+          changeSummary: input.response.changeSummary,
+          updatedAt: sql`now()`,
+        })
+        .where(and(eq(lifecycleRepair.id, repair.id), eq(lifecycleRepair.status, repair.status)))
+        .returning({ id: lifecycleRepair.id });
+      // A concurrent response finalized first (or the status otherwise moved): roll
+      // back so the freshly-emitted gate is DISCARDED, never committed stranded.
+      if (cas.length !== 1) throw new FinalizeRollback({ kind: "concurrent" });
+      // Re-point the held-effect linkage still pointing at the base gate onto the
+      // successor gate (idempotent; follows the chain across multi-cycle repairs).
+      await tx
+        .update(artifactProducedOutbox)
+        .set({ continuationAddress: successorGateId })
+        .where(eq(artifactProducedOutbox.continuationAddress, repair.gateId));
+      return { kind: "finalized", successorGateId };
+    })
+    .catch((err: unknown): FinalizeOutcome => {
+      if (err instanceof FinalizeRollback) return err.outcome;
+      throw err;
+    });
+
+  if (outcome.kind === "pin-conflict") {
+    return { ok: false, code: "successor-pin-conflict", error: outcome.message };
+  }
+  if (outcome.kind === "concurrent") {
     // A concurrent response won; return its (the same, deterministic) successor gate.
     const winner = await readRepair(repair.id);
     if (winner?.status === "repaired" && winner.successorGateId) {
@@ -512,6 +575,7 @@ export async function submitRepairResponse(
     }
     return { ok: false, code: "concurrent-finalize", error: "the repair was finalized concurrently" };
   }
+  const successorGateId = outcome.successorGateId;
 
   // S4 (cinatra#2042): a landed repair TRIGGERS post-change verification — the
   // before/after "Core analysis" record the run rail opens, and (on a failed

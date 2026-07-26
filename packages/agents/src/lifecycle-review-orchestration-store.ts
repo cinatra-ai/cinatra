@@ -457,6 +457,19 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
 
   // Link the gate onto the event (the effects-gating join). Only stamp when
   // unset so a replay never re-points a live linkage.
+  //
+  // RETRY-CONVERGENT SEAM (cinatra#2065 Seam B). The create-gate and this link are
+  // two statements; an interruption between them leaves the event PENDING and
+  // UNLINKED (the gate exists, `continuation_address` still null,
+  // `markProducedEventProcessed` never ran). Unlike the repair successor seam
+  // (Seam A), this does NOT need one transaction: the event stays pending, so the
+  // next orchestration sweep RE-PLANS it → `emitArtifactReviewGate` re-emits
+  // IDEMPOTENTLY onto the SAME deterministic (run, task) with the SAME single
+  // target (returns the existing gate) → this link stamps (still null) → the event
+  // is marked processed. The re-emit carries no caller-varying target (the target
+  // is the event's own artifact/revision), so no pin conflict is reachable and no
+  // gate is stranded — the strand self-heals on the very next sweep. Proven by the
+  // orchestration integration suite's create→link crash-window case.
   await db
     .update(artifactProducedOutbox)
     .set({ continuationAddress: gateId })
