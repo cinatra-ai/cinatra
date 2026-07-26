@@ -26,6 +26,9 @@ vi.mock("../mutation-service", async (importOriginal) => {
 
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: async () => ({ user: { id: "user-1" } }),
+  // cinatra#1939 S3: the save actions mint a session org-write authority from
+  // the resolved membership role before calling the (mocked) writer.
+  resolveOrgRoleForUser: async () => "member",
 }));
 vi.mock("../auth/security-context", () => ({
   buildSecurityContextFromSession: () => ({

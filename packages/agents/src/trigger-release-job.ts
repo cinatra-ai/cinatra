@@ -20,6 +20,11 @@ import {
   readAgentTemplateById,
   createAgentRunPendingInput,
 } from "./store";
+// cinatra#1939 wave 2 (§2b): this scheduler has NO session — it mints the
+// SYSTEM `agent-run-dispatch` authority (run.execute + run.complete) per fire to
+// ground the run's armed/pending→queued/stopped transitions, scoped to the run's
+// own org.
+import { mintTriggerReleaseAuthority } from "@/lib/org-write/agent-run-authority-mint";
 
 // ---------------------------------------------------------------------------
 // runAgentRunTriggerReleaseJob
@@ -172,8 +177,10 @@ export async function runAgentRunTriggerReleaseJob(
       jobSchedulerId: null,
     });
     await markTriggerReleased(newRun.id);
+    // The clone shares sourceRun.orgId (non-null, checked above == newRun.orgId).
+    const releaseAuthority = mintTriggerReleaseAuthority(sourceRun.orgId);
     try {
-      await transitionRunStatus(newRun.id, "pending_input", "queued");
+      await transitionRunStatus(newRun.id, "pending_input", "queued", undefined, releaseAuthority);
     } catch (err) {
       if (
         !(err instanceof RunTransitionError && err.code === "stale_from_status")
@@ -197,8 +204,15 @@ export async function runAgentRunTriggerReleaseJob(
   await markTriggerReleased(data.runId);
   console.log(`[trigger-release] released gate for run ${data.runId}`);
 
+  // A vanished run row (the old CAS tolerated this as a 0-row stale) means there
+  // is nothing to fire — skip cleanly (matches the prior stale-swallow return).
+  if (!runForFire) {
+    console.log(`[trigger-release] run ${data.runId} row absent — skipping fire`);
+    return;
+  }
+  const releaseAuthority = mintTriggerReleaseAuthority(runForFire.orgId);
   try {
-    await transitionRunStatus(data.runId, "armed", "queued");
+    await transitionRunStatus(data.runId, "armed", "queued", undefined, releaseAuthority);
   } catch (err) {
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
       // Run was not armed (e.g. immediate trigger fired without going through
@@ -377,18 +391,25 @@ async function checkPmStateBeforeFire(
         // schedule must not leave the run stuck in `armed` with no trigger row
         // or job to ever release it (codex#319). Transition armed → stopped;
         // swallow stale_from_status (the run was never armed / already moved on,
-        // e.g. a recurring schedule-defining run that is queued/terminal).
-        try {
-          await transitionRunStatus(runId, "armed", "stopped");
-        } catch (err) {
-          if (
-            !(err instanceof RunTransitionError && err.code === "stale_from_status")
-          ) {
-            throw err;
+        // e.g. a recurring schedule-defining run that is queued/terminal). A
+        // vanished run row (null) means nothing to stop — skip (the old CAS
+        // tolerated this as a 0-row stale-swallow). cinatra#1939: mint the
+        // per-fire system authority scoped to this run's org.
+        const runRow = await readAgentRunById(runId);
+        if (runRow) {
+          const teardownAuthority = mintTriggerReleaseAuthority(runRow.orgId);
+          try {
+            await transitionRunStatus(runId, "armed", "stopped", undefined, teardownAuthority);
+          } catch (err) {
+            if (
+              !(err instanceof RunTransitionError && err.code === "stale_from_status")
+            ) {
+              throw err;
+            }
+            console.log(
+              `[trigger-release] run ${runId} not armed on PM-delete — leaving status as-is`,
+            );
           }
-          console.log(
-            `[trigger-release] run ${runId} not armed on PM-delete — leaving status as-is`,
-          );
         }
       } catch (err) {
         // A local teardown glitch must not strand the run — fall through to FIRE.

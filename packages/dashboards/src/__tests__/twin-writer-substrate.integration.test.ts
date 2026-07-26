@@ -46,6 +46,8 @@ const actor: DashboardActor = {
   teamIds: ["team-1894"],
   orgRole: "owner",
   teamRoles: { "team-1894": "admin" },
+  // cinatra#1939 S3 — createDashboard runs under the org-write kernel guard.
+  authority: { orgId: "org-1894", can: (c) => c === "content.write" },
 };
 
 const bareConfig = {
@@ -81,12 +83,31 @@ d("twin writer — substrate atomicity (cinatra#1894 kill-tests)", () => {
     // per-thread "already initialized" guard to make that call a fast no-op — the
     // schema is provably ready, exactly the invariant the guard represents.
     (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
+    // cinatra#1939 S3: the org-write kernel guard reads public."organization"
+    // FOR SHARE before every guarded write — seed the test org. Tolerates any
+    // db shape: creates the minimal table when this lane db carries no
+    // better-auth schema, adds the archive columns when an older real table
+    // exists, and falls back to a richer insert if NOT NULL columns demand it.
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS public."organization" (id text PRIMARY KEY, name text, "archivedAt" timestamptz, "archiveEpoch" int)`,
+    );
+    await pool.query(`ALTER TABLE public."organization" ADD COLUMN IF NOT EXISTS "archivedAt" timestamptz`);
+    await pool.query(`ALTER TABLE public."organization" ADD COLUMN IF NOT EXISTS "archiveEpoch" int`);
+    await pool
+      .query(`INSERT INTO public."organization" (id, name) VALUES ($1, $1) ON CONFLICT (id) DO NOTHING`, [actor.organizationId])
+      .catch(() =>
+        pool.query(
+          `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $1, $1, now()) ON CONFLICT (id) DO NOTHING`,
+          [actor.organizationId],
+        ),
+      );
   }, 120_000);
 
   afterAll(async () => {
     resetDashboardArtifactTwinWriter();
     if (pool) {
       await pool.query(`DROP SCHEMA IF EXISTS "${SCHEMA}" CASCADE`).catch(() => {});
+      await pool.query(`DELETE FROM public."organization" WHERE id = $1`, [actor.organizationId]).catch(() => {});
       await pool.end();
     }
   });

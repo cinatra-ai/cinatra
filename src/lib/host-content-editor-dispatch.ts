@@ -12,6 +12,11 @@ import {
 import { resolveContentEditorIdentityForInstance } from "@/lib/content-editor-run-identity";
 import { resolveWidgetActorFromFrame } from "@/lib/widget-actor-frame";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
+// cinatra#1939 wave 2 (§2b / D-HOST): the host-driven content-editor dispatch has
+// no session and its service identity may not be an org member, so it uses the
+// SYSTEM `agent-run-dispatch` authority (one fail-safe path for the whole carrier
+// run lifecycle), scoped to the OBO-carrier run's org.
+import { mintContentEditorDispatchAuthority } from "@/lib/org-write/agent-run-authority-mint";
 
 // Host-side A2A blocking-dispatch helper shared by the Drupal + WordPress
 // content-editor connectors. The non-SDK runtime edges — `@cinatra-ai/llm`
@@ -192,7 +197,7 @@ async function assertWidgetPreCreateAuthorized(
  */
 async function prepareDispatch(
   input: ContentEditorDispatchInput,
-): Promise<{ text: string; runId: string | null }> {
+): Promise<{ text: string; runId: string | null; orgId: string | null }> {
   // S5-W1 §5 ATOMICITY GUARD (host-side, fail-loud). When the active MCP frame
   // carries a verified `public_site_widget` delegation, the content-editor
   // dispatch MUST run AS THE END USER — i.e. the connector MUST have resolved
@@ -275,7 +280,7 @@ async function prepareDispatch(
           "refusing anonymous fallback for a per-user widget dispatch.",
       );
     }
-    return { text: anonymousText, runId: null };
+    return { text: anonymousText, runId: null, orgId: null };
   }
 
   // cinatra#408 — EXPLICIT per-user identity override (interactive widget path).
@@ -328,7 +333,7 @@ async function prepareDispatch(
       ...payloadObject,
       cinatra_run_id: overrideRun.id,
     });
-    return { text: overrideText, runId: overrideRun.id };
+    return { text: overrideText, runId: overrideRun.id, orgId: input.actorOverride.orgId };
   }
 
   // A connector release predating cinatra#246 omits packageName. Without it we
@@ -339,7 +344,7 @@ async function prepareDispatch(
       "[content-editor-dispatch] no packageName supplied (pre-#246 connector); " +
         "dispatching anonymously (CMS write will fail closed at the MCP boundary).",
     );
-    return { text: anonymousText, runId: null };
+    return { text: anonymousText, runId: null, orgId: null };
   }
 
   // Resolve the OBO identity: PREFER this install's persisted {orgId, runBy}
@@ -357,7 +362,7 @@ async function prepareDispatch(
       `[content-editor-dispatch] no content-editor identity resolved for ${input.packageName}; ` +
         `dispatching anonymously (CMS write will fail closed at the MCP boundary).`,
     );
-    return { text: anonymousText, runId: null };
+    return { text: anonymousText, runId: null, orgId: null };
   }
 
   const template = await readAgentTemplateByPackageName(input.packageName);
@@ -366,7 +371,7 @@ async function prepareDispatch(
       `[content-editor-dispatch] agent template not installed for ${input.packageName}; ` +
         `dispatching anonymously (CMS write will fail closed at the MCP boundary).`,
     );
-    return { text: anonymousText, runId: null };
+    return { text: anonymousText, runId: null, orgId: null };
   }
 
   // Pin the run to the latest published version snapshot (mirrors the
@@ -393,7 +398,7 @@ async function prepareDispatch(
 
   // Inject cinatra_run_id into the message text (mirrors execution.ts:1332).
   const text = JSON.stringify({ ...payloadObject, cinatra_run_id: run.id });
-  return { text, runId: run.id };
+  return { text, runId: run.id, orgId: identity.orgId };
 }
 
 export async function dispatchContentEditorViaA2A(
@@ -405,7 +410,12 @@ export async function dispatchContentEditorViaA2A(
   // run exists and is recorded even when that card fetch fails (cinatra#246). The
   // try/catch below then transitions that recorded run queued→failed so the
   // failure can never leave it orphaned in `queued`.
-  const { text, runId } = await prepareDispatch(input);
+  const { text, runId, orgId } = await prepareDispatch(input);
+  // D-HOST: one SYSTEM dispatch authority for the carrier run's whole lifecycle.
+  // runId present ⟺ a real OBO-carrier run was created ⟺ orgId present, so the
+  // authority is non-null exactly when the transitions below run.
+  const dispatchAuthority =
+    runId !== null && orgId !== null ? mintContentEditorDispatchAuthority(orgId) : null;
 
   // Token-build + client-creation happen AFTER the carrier run is created (in
   // prepareDispatch), and either can throw — buildA2aBearerToken on a mint
@@ -424,12 +434,12 @@ export async function dispatchContentEditorViaA2A(
       timeoutMs: input.timeoutMs,
     });
   } catch (err) {
-    if (runId) {
+    if (runId && dispatchAuthority) {
       try {
         await transitionRunStatus(runId, "queued", "failed", {
           error: err instanceof Error ? err.message : String(err),
           completedAt: new Date(),
-        });
+        }, dispatchAuthority);
       } catch (txErr) {
         console.warn(`[content-editor-dispatch] run ${runId} queued→failed failed:`, txErr);
       }
@@ -441,12 +451,12 @@ export async function dispatchContentEditorViaA2A(
   // blocking dispatch; →completed on success, →failed on dispatch error. This
   // keeps the synthetic run off "stuck queued run" surfaces. Transition errors
   // are non-fatal — the run row is auxiliary to the actual dispatch.
-  if (runId) {
+  if (runId && dispatchAuthority) {
     try {
       await transitionRunStatus(runId, "queued", "running", {
         startedAt: new Date(),
         dispatch: { attemptId: randomUUID() },
-      });
+      }, dispatchAuthority);
     } catch (err) {
       console.warn(`[content-editor-dispatch] run ${runId} queued→running failed:`, err);
     }
@@ -464,12 +474,12 @@ export async function dispatchContentEditorViaA2A(
       configuration: { acceptedOutputModes: ["text"] },
     });
   } catch (err) {
-    if (runId) {
+    if (runId && dispatchAuthority) {
       try {
         await transitionRunStatus(runId, "running", "failed", {
           error: err instanceof Error ? err.message : String(err),
           completedAt: new Date(),
-        });
+        }, dispatchAuthority);
       } catch (txErr) {
         console.warn(`[content-editor-dispatch] run ${runId} running→failed failed:`, txErr);
       }
@@ -477,9 +487,9 @@ export async function dispatchContentEditorViaA2A(
     throw err;
   }
 
-  if (runId) {
+  if (runId && dispatchAuthority) {
     try {
-      await transitionRunStatus(runId, "running", "completed", { completedAt: new Date() });
+      await transitionRunStatus(runId, "running", "completed", { completedAt: new Date() }, dispatchAuthority);
     } catch (err) {
       console.warn(`[content-editor-dispatch] run ${runId} running→completed failed:`, err);
     }

@@ -43,6 +43,20 @@ let client: Client;
 
 const sha = (s: string) => createHash("sha256").update(s, "utf8").digest("hex");
 
+// cinatra#1939 wave 2: transitionRunStatus now runs under guardOrgMutation and
+// REQUIRES a host-minted authority. A member-shaped authority for this fixture
+// org grounds the guarded terminal writes; the local wrapper threads it so every
+// call site below stays a 4-arg call. NOTE (integration-harness): the guard also
+// reads the org's lifecycle from `public."organization"` — this DB-gated suite
+// must have an ACTIVE org row for ORG for the guarded writes to pass at runtime.
+const AUTH = { orgId: ORG, can: () => true };
+const transitionRunStatus = (
+  runId: string,
+  from: import("../store").AgentRunStatus,
+  to: import("../store").AgentRunStatus,
+  meta?: Parameters<typeof store.transitionRunStatus>[3],
+) => store.transitionRunStatus(runId, from, to, meta, AUTH);
+
 /** Seed a template + a run FORCED to `running` (the legal terminal-success
  *  `from`), returning the run id. Uses the real store writers, then a direct
  *  status flip (the queued→running dispatch path is not under test here). */
@@ -162,7 +176,7 @@ describe.skipIf(!HAS_DB)(
         runBy: "user-owner",
       });
       const content = JSON.stringify({ headline: "captured", n: 7 });
-      await store.transitionRunStatus(runId, "running", "completed", {
+      await transitionRunStatus(runId, "running", "completed", {
         completedAt: new Date(),
         stepResults: [{ kind: "wayflow_response", output: content }],
         derivationOutbox: {
@@ -194,7 +208,7 @@ describe.skipIf(!HAS_DB)(
     it("is idempotent under a stop/retry re-drive — ON CONFLICT (run_id) DO NOTHING keeps the FIRST capture", async () => {
       const { runId, templateId } = await seedRunningRun();
       const first = "first output";
-      await store.transitionRunStatus(runId, "running", "completed", {
+      await transitionRunStatus(runId, "running", "completed", {
         completedAt: new Date(),
         derivationOutbox: {
           orgId: ORG,
@@ -214,7 +228,7 @@ describe.skipIf(!HAS_DB)(
         [runId],
       );
       const second = "second output — must NOT overwrite the capture";
-      await store.transitionRunStatus(runId, "running", "completed", {
+      await transitionRunStatus(runId, "running", "completed", {
         completedAt: new Date(),
         derivationOutbox: {
           orgId: ORG,
@@ -242,7 +256,7 @@ describe.skipIf(!HAS_DB)(
       );
       let threw: unknown = null;
       try {
-        await store.transitionRunStatus(runId, "running", "completed", {
+        await transitionRunStatus(runId, "running", "completed", {
           completedAt: new Date(),
           derivationOutbox: {
             orgId: ORG,
@@ -269,7 +283,7 @@ describe.skipIf(!HAS_DB)(
       const { runId, templateId } = await seedRunningRun();
       let threw: unknown = null;
       try {
-        await store.transitionRunStatus(runId, "running", "failed", {
+        await transitionRunStatus(runId, "running", "failed", {
           error: "boom",
           derivationOutbox: {
             orgId: ORG,
@@ -293,7 +307,7 @@ describe.skipIf(!HAS_DB)(
 
     it("the historical two-write path (no derivationOutbox) writes no outbox row", async () => {
       const { runId } = await seedRunningRun();
-      await store.transitionRunStatus(runId, "running", "completed", {
+      await transitionRunStatus(runId, "running", "completed", {
         completedAt: new Date(),
       });
       expect(await readRunStatus(runId)).toBe("completed");

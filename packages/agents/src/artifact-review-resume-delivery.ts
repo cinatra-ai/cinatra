@@ -1,4 +1,5 @@
 import "server-only";
+import { mintAgentRunExecutionAuthority } from "@/lib/org-write/agent-run-authority-mint";
 
 // ---------------------------------------------------------------------------
 // Artifact-review RESUME-DELIVERY worker (cinatra#1796, epic #1620 S13).
@@ -220,7 +221,11 @@ export async function deliverArtifactReviewResumeIntent(
   // run past the gate — to the next gate or to terminal). fromStatus is the
   // literal "pending_approval" (guarded above), matching the human resume path.
   const { handleWayflowTaskState } = await import("./execution");
-  await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task });
+  // cinatra#1939 wave 2: the delivery worker advances the run with no session in
+  // scope — it grounds the transition on the system dispatch mint, scoped to the
+  // run's org (the human approval already happened when the intent row was written).
+  const authority = mintAgentRunExecutionAuthority(run.orgId);
+  await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority });
 
   const marked = await markResumeIntentDelivered(gateId, leaseToken);
   console.log(

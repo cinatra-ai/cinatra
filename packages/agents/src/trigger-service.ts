@@ -29,6 +29,11 @@ import {
   readAgentRunById,
   readAgentTemplateById,
 } from "./store";
+// cinatra#1939 wave 2 (§2a): the acting owner/org-admin member session grounds
+// the trigger's run-status flips. A member mint fail-closes for a non-member
+// principal (e.g. a cross-org platform admin) — the design's deliberate
+// member-session choice for trigger ops (not a §2d′ non-member site).
+import { verifySessionAuthority } from "@/lib/org-write/authority";
 // Schedule↔PM-task sync (cinatra#317). packages/agents calls OUT to the
 // host-owned PM provider bridge via the Next.js "@/lib/*" alias (Option 2 / the
 // host-owned PM provider bridge); it NEVER imports the SDK PM registry or any
@@ -361,6 +366,9 @@ export async function setRunTriggerForActor(
     jobSchedulerId: scheduleResult.jobSchedulerId,
   });
 
+  // Owner/org-admin member session grounds the status flips (§2a).
+  const authority = await verifySessionAuthority(actor.userId, run.orgId);
+
   // Flip status based on trigger type:
   //   scheduled / recurring → pending_input (or pending_trigger) → armed
   //                           (gate will be opened later by the release job)
@@ -369,14 +377,14 @@ export async function setRunTriggerForActor(
   //                           can pick up the run.
   if (args.triggerType === "scheduled" || args.triggerType === "recurring") {
     try {
-      await transitionRunStatus(args.runId, "pending_input", "armed");
+      await transitionRunStatus(args.runId, "pending_input", "armed", undefined, authority);
     } catch (err) {
       if (
         err instanceof RunTransitionError &&
         err.code === "stale_from_status"
       ) {
         try {
-          await transitionRunStatus(args.runId, "pending_trigger", "armed");
+          await transitionRunStatus(args.runId, "pending_trigger", "armed", undefined, authority);
         } catch (err2) {
           if (
             err2 instanceof RunTransitionError &&
@@ -396,7 +404,7 @@ export async function setRunTriggerForActor(
   } else if (args.triggerType === "immediate") {
     // Gate is already open; transition directly to queued.
     try {
-      await transitionRunStatus(args.runId, "pending_input", "queued");
+      await transitionRunStatus(args.runId, "pending_input", "queued", undefined, authority);
     } catch (err) {
       if (
         !(err instanceof RunTransitionError && err.code === "stale_from_status")
@@ -518,8 +526,10 @@ export async function deleteRunTriggerForActor(
     trigger.triggerType === "scheduled" ||
     trigger.triggerType === "recurring"
   ) {
+    // Owner/org-admin member session grounds the armed→stopped teardown (§2a).
+    const authority = await verifySessionAuthority(actor.userId, run.orgId);
     try {
-      await transitionRunStatus(args.runId, "armed", "stopped");
+      await transitionRunStatus(args.runId, "armed", "stopped", undefined, authority);
     } catch (err) {
       if (
         err instanceof RunTransitionError &&

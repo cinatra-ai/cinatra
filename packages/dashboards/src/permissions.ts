@@ -44,6 +44,9 @@ import {
   type OboCeilingChain,
   type CeilingResource,
 } from "@cinatra-ai/mcp-server/obo-ceiling";
+// Structural authority contract only (type import — the kernel checks it
+// INDEPENDENTLY of the lifecycle table inside guardOrgMutation).
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
 /** Actor envelope. Subset of PrimitiveActorContext to keep this module Cinatra-decoupled. */
 export type DashboardActor = {
@@ -64,6 +67,15 @@ export type DashboardActor = {
    * access is denied outright — checked before the owner/member/visibility gates.
    */
   readonly oboCeiling?: OboCeilingChain;
+  /**
+   * Kernel org-write authority (cinatra#1939 S3) — minted HOST-side by the
+   * org-write authority resolvers (session / verified-run / system) and
+   * threaded here at actor construction. Writers converted onto the
+   * org-write seam REQUIRE it fail-closed (`requireOrgWriteAuthority`);
+   * optional on the type only because writers convert one at a time — each
+   * conversion lands with its callers threading this in the same commit.
+   */
+  readonly authority?: OrgWriteAuthority;
 };
 
 export type DashboardAccess = {

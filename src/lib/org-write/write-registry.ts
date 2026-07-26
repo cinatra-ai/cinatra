@@ -31,6 +31,14 @@ export interface OrgWriteRegistryEntry {
   readonly module: string;
   readonly exportName: string;
   readonly capability: OrgWriteCapability;
+  /** Capabilities a writer needs on SOME transitions IN ADDITION to
+   *  `capability` — e.g. `transitionRunStatus` is a `run.execute` writer that
+   *  additionally needs `run.complete` on its terminal edges (cinatra#1939
+   *  wave 2, §3/§5.5). OPTIONAL so existing registry-shape validators and
+   *  lockstep readers are unaffected; the capability-completeness audit is the
+   *  consumer that reads it. Per-row values land in the writer-conversion
+   *  commit. */
+  readonly conditionalCapabilities?: readonly OrgWriteCapability[];
   readonly orgIdExtractor: string;
   readonly storageReferences: readonly string[];
   readonly cascadeOwnership: CascadeOwnership;
@@ -153,17 +161,41 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
   {
     module: "packages/agents/src/store.ts",
     exportName: "transitionRunStatus",
+    // The writer's DEFINING capability is dispatch (run.execute); terminal edges
+    // land a run's outputs and require run.complete (cinatra#1939 wave 2 §3 —
+    // per-transition split). conditionalCapabilities exposes the full surface so
+    // the capability-completeness audit sees run.complete, not just run.execute.
     capability: "run.execute",
-    orgIdExtractor: "agent_runs.org_id (row-derived; NOT NULL)",
-    storageReferences: ["agent_runs"],
+    conditionalCapabilities: ["run.complete"],
+    orgIdExtractor: "agent_runs.org_id (authority.orgId; row CAS is org-scoped, NOT NULL)",
+    // The terminal-success derivationOutbox branch writes agent_run_output_derivations
+    // under the SAME guarded transaction (§1e).
+    storageReferences: ["agent_runs", "agent_run_output_derivations"],
     cascadeOwnership: "inert-history",
     importBanned: false,
   },
   {
     module: "packages/agents/src/store.ts",
     exportName: "updateAgentRunStatus",
+    // Delegate: runs inside transitionRunStatus's guard on the passed tx; the
+    // capability is inherited per-transition (run.complete on terminal edges).
     capability: "run.execute",
+    conditionalCapabilities: ["run.complete"],
     orgIdExtractor: "agent_runs.org_id (row-derived)",
+    storageReferences: ["agent_runs"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+  },
+  {
+    // The HITL setup-resume CAS (cinatra#1939 wave 2 §7.1): the setup-{runId}
+    // approval's inputParams merge + pending_approval->queued flip, run inside
+    // the org-write kernel guard. A dispatch edge (pending_approval->queued is
+    // non-terminal), so run.execute only — no conditionalCapabilities. The CAS
+    // is org-scoped to the authority's org.
+    module: "packages/agents/src/resume-run-from-setup-approval.ts",
+    exportName: "resumeRunFromSetupApproval",
+    capability: "run.execute",
+    orgIdExtractor: "agent_runs.org_id (authority.orgId; row CAS is org-scoped, NOT NULL)",
     storageReferences: ["agent_runs"],
     cascadeOwnership: "inert-history",
     importBanned: false,

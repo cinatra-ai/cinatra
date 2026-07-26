@@ -384,3 +384,50 @@ describe("agent-run-mcp-actor-token verify", () => {
     ]);
   });
 });
+
+describe("`att` execution-attempt claim (cinatra#1939 S3)", () => {
+  it("round-trips the attempt id when the actor carries one", () => {
+    const token = issueAgentRunMcpActorToken({
+      ...AGENT_RUN_ACTOR,
+      executionAttemptId: "attempt-7",
+    });
+    const payload = decodePayload(token) as { att?: string };
+    expect(payload.att).toBe("attempt-7");
+    const verified = verifyAgentRunMcpActorToken({
+      authHeader: `Bearer ${token}`,
+      request: new Request(PUBLIC_MCP_URL),
+      expectedAudience: PUBLIC_MCP_URL,
+      expectedIssuer: PUBLIC_AUTH_URL,
+    });
+    expect(verified?.executionAttemptId).toBe("attempt-7");
+  });
+
+  it("tolerates a pre-claim token: no `att` → valid actor WITHOUT executionAttemptId (never a rejection)", () => {
+    const token = issueAgentRunMcpActorToken(AGENT_RUN_ACTOR);
+    const payload = decodePayload(token) as { att?: string };
+    expect(payload.att).toBeUndefined();
+    const verified = verifyAgentRunMcpActorToken({
+      authHeader: `Bearer ${token}`,
+      request: new Request(PUBLIC_MCP_URL),
+      expectedAudience: PUBLIC_MCP_URL,
+      expectedIssuer: PUBLIC_AUTH_URL,
+    });
+    expect(verified).not.toBeNull();
+    expect(verified && "executionAttemptId" in verified ? verified.executionAttemptId : undefined).toBeUndefined();
+  });
+
+  it("an empty-string att reads as absent (the run mint can never fire on it)", () => {
+    const token = issueAgentRunMcpActorToken({
+      ...AGENT_RUN_ACTOR,
+      executionAttemptId: "",
+    });
+    const verified = verifyAgentRunMcpActorToken({
+      authHeader: `Bearer ${token}`,
+      request: new Request(PUBLIC_MCP_URL),
+      expectedAudience: PUBLIC_MCP_URL,
+      expectedIssuer: PUBLIC_AUTH_URL,
+    });
+    expect(verified).not.toBeNull();
+    expect(verified?.executionAttemptId).toBeUndefined();
+  });
+});

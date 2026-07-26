@@ -19,16 +19,32 @@ import {
   excludeAssistantTemplates,
 } from "./a2a-publication-guard";
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
-import { dispatchRunWaitTransition } from "./run-wait-notifier"; // #1559/E9: zero-dep leaf seam
-import { LEGAL_TRANSITIONS, TERMINAL_RUN_STATUSES, CannotReassignAfterFirstRun, RunTransitionError, __LEGAL_TRANSITIONS__ } from "./run-status";
+import { TERMINAL_RUN_STATUSES, CannotReassignAfterFirstRun, RunTransitionError, __LEGAL_TRANSITIONS__ } from "./run-status";
 import type { AgentRunStatus } from "./run-status";
-// cinatra#1893 (epic #1883 A5): terminal-success-with-derivation-outbox seam extracted from store.ts (file-size ratchet #1893); transitionRunStatus delegates its `derivationOutbox` branch here (option type re-used in the unchanged public signature).
-import { transitionRunToCompletedWithDerivationOutbox, type DerivationOutboxCapture } from "./run-terminal-derivation-outbox";
+// cinatra#1893 (epic #1883 A5): terminal-success-with-derivation-outbox seam
+// (file-size ratchet #1893). Its producer transitionRunStatus now lives in
+// ./run-transition; only the option TYPE is re-exported for `./store` importers.
+import type { DerivationOutboxCapture } from "./run-terminal-derivation-outbox";
 // Re-export the run-status state machine (extracted to ./run-status, #1037 P1
 // file-size ratchet) so store.ts's public surface is unchanged for existing
 // `./store` importers.
 export { TERMINAL_RUN_STATUSES, CannotReassignAfterFirstRun, RunTransitionError, __LEGAL_TRANSITIONS__ };
 export type { AgentRunStatus, DerivationOutboxCapture };
+// Re-export the run-transition primitives (transitionRunStatus + its two
+// CAS/meta helpers + the dispatch-fields type) extracted to ./run-transition
+// (cinatra#1939 wave 2 file-size ratchet). Grouped with the other seam
+// re-exports per the SSR export-hoisting note below. Public surface unchanged.
+import {
+  updateAgentRunStatus,
+  updateAgentRunStatusConditional,
+  transitionRunStatus,
+} from "./run-transition";
+export {
+  updateAgentRunStatus,
+  updateAgentRunStatusConditional,
+  transitionRunStatus,
+};
+export type { AgentRunDispatchFields } from "./run-transition";
 // Re-export the agent_run_hitl_prompts persistence seam (extracted to
 // ./agent-run-hitl-prompts, file-size ratchet #1803 repair). Grouped with the
 // other extracted-seam re-exports at the top: an interspersed `export … from`
@@ -253,6 +269,12 @@ export type AgentRunRecord = {
   // column; re-derived + containment-checked at mint.
   oboCeiling: OboCeilingChain | null;
   dependentInstallId: string | null; // installed_extension row id this run executes AS (cinatra#1392 Gap 2)
+  // The CURRENT execution attempt id (set by the queued→running dispatch CAS,
+  // re-minted on every resume). Carried so the llm-bridge can stamp the
+  // attempt onto the agent-run MCP OBO token (`att` claim, cinatra#1939 S3) —
+  // the org-write run mint refuses a claimed attempt that no longer matches
+  // this column (stale-worker refusal). NULL pre-dispatch.
+  executionAttemptId: string | null;
   humanPresent: boolean | null; // cinatra#2067 run-start presence discriminator; true only for interactive UI/chat runs, null/false headless
 };
 
@@ -1512,47 +1534,6 @@ export async function createAgentRun(
   }
 }
 
-export async function updateAgentRunStatus(
-  id: string,
-  status: string,
-  patch?: Partial<AgentRunRecord>,
-): Promise<void> {
-  // unified terminal-status detection via TERMINAL_RUN_STATUSES
-  // (defined below). This was once a local `terminalStatuses` array;
-  // unifying prevents drift if a new terminal state is ever added.
-  const isTerminal = TERMINAL_RUN_STATUSES.has(status as AgentRunStatus);
-  const updates: Partial<typeof agentRuns.$inferInsert> = { status };
-
-  if (isTerminal) {
-    updates.completedAt = new Date();
-  }
-
-  if (patch?.stepResults !== undefined) {
-    updates.stepResults = JSON.stringify(patch.stepResults);
-  }
-  if (patch?.error !== undefined) {
-    updates.error = patch.error;
-  }
-  if (patch?.startedAt !== undefined) {
-    updates.startedAt = patch.startedAt ?? undefined;
-  }
-
-  await db.update(agentRuns).set(updates).where(eq(agentRuns.id, id));
-
-  // centralized Redis Streams TTL cleanup. Every terminal
-  // transition (completed/failed/stopped) schedules a 1h EXPIRE on the
-  // per-run stream key so durable event logs are bounded. Fire-and-forget:
-  // a Redis outage must NEVER block terminal status propagation to callers.
-  // This is the SINGLE hook for all terminal paths in the agent-builder
-  // package — every worker (agentic-execution, execution, langgraph-
-  // execution, orchestrator-execution, agentic-resume, resume) and the
-  // MCP cancel handler funnel through this function, so new paths inherit
-  // TTL scheduling automatically without additional patches.
-  if (isTerminal) {
-    void expireRunStream(id).catch(() => { /* best-effort */ });
-  }
-}
-
 // ---------------------------------------------------------------------------
 // OTel trace ID setter.
 // Called by agentic-execution.ts  after a root span is started.
@@ -1566,141 +1547,6 @@ export async function updateAgentRunTraceId(
     .update(agentRuns)
     .set({ traceId })
     .where(eq(agentRuns.id, runId));
-}
-
-/**
- * Atomically transition an agent run's status from a specific expected
- * state to a new state. Returns true if exactly one row was updated
- * (i.e. the previous status matched), false otherwise.
- *
- * This is the compare-and-swap primitive that triggerAgentRun uses to
- * guarantee that two concurrent "Run" clicks cannot both enqueue a job:
- * only the first request whose UPDATE matches `pending_input` succeeds.
- */
-export async function updateAgentRunStatusConditional(
-  id: string,
-  expectedStatus: string,
-  nextStatus: string,
-  dispatch?: AgentRunDispatchFields,
-): Promise<boolean> {
-  // cinatra#1937: a queued→running CAS IS a dispatch — it stamps per-dispatch
-  // bookkeeping ATOMICALLY with the status flip at the deepest layer, so no
-  // caller can bypass it and `running` rows never carry stale attempt ids.
-  const isDispatchTransition = expectedStatus === "queued" && nextStatus === "running";
-  if (isDispatchTransition && !dispatch) {
-    throw new Error(
-      `updateAgentRunStatusConditional: queued→running for run ${id} requires dispatch fields (executionAttemptId; the deadline is computed in SQL)`,
-    );
-  }
-  // Inverse guard: dispatch bookkeeping belongs ONLY to the dispatch edge.
-  if (!isDispatchTransition && dispatch) {
-    throw new Error(
-      `updateAgentRunStatusConditional: dispatch fields supplied for non-dispatch transition ${expectedStatus}→${nextStatus} on run ${id}`,
-    );
-  }
-  const result = await db
-    .update(agentRuns)
-    .set({
-      status: nextStatus,
-      ...(dispatch
-        ? {
-            executionAttemptId: dispatch.attemptId,
-            // DB clock: the row's own timeout (COALESCE default 24h) from now().
-            executionDeadlineAt: sql`now() + make_interval(secs => COALESCE(${agentRuns.timeoutSeconds}, 86400))`,
-            humanWaitAttemptId: null, // #1938: a fresh dispatch drops any wait marker
-          }
-        : {}),
-      // cinatra#1938: durable in-attempt wait marker (rationale on the agent_runs
-      // column). running→pending_approval stamps the attempt id; else clears.
-      ...(nextStatus === "pending_approval"
-        ? { humanWaitAttemptId: expectedStatus === "running" ? sql`${agentRuns.executionAttemptId}` : null }
-        : {}),
-    })
-    .where(and(eq(agentRuns.id, id), eq(agentRuns.status, expectedStatus)))
-    .returning({ id: agentRuns.id });
-  return result.length === 1;
-}
-
-/** Per-dispatch bookkeeping stamped by the queued→running CAS (cinatra#1937). */
-export type AgentRunDispatchFields = {
-  /** Fresh per-dispatch id — mint with crypto.randomUUID() at each dispatch. */
-  attemptId: string;
-};
-
-// ---------------------------------------------------------------------------
-// canonical run-status transition primitive
-// ---------------------------------------------------------------------------
-//
-// transitionRunStatus is the single entry point for every agent_runs.status
-// change. It enforces:
-//   (1) the from→to edge is one of LEGAL_TRANSITIONS (illegal → throws);
-//   (2) the DB row is still in the expected `from` state (stale → throws);
-//   (3) terminal-state side-effects fire exactly once (delegates to
-//       updateAgentRunStatus, which owns expireRunStream in that helper).
-//
-// DO NOT call updateAgentRunStatusConditional directly from any other file.
-// DO NOT call updateAgentRunStatus for status CHANGES from any other file —
-// use transitionRunStatus. updateAgentRunStatus is still the correct call for
-// the narrow meta-only case handled by updateAgentRunMeta below.
-
-/**
- * single canonical entry point for agent_runs.status changes.
- *
- * @throws {RunTransitionError} code="illegal_transition" when (from, to) ∉ LEGAL_TRANSITIONS
- * @throws {RunTransitionError} code="stale_from_status" when CAS row-count is 0
- */
-export async function transitionRunStatus(
-  runId: string,
-  from: AgentRunStatus,
-  to: AgentRunStatus,
-  meta?: {
-    error?: string;
-    startedAt?: Date;
-    completedAt?: Date;
-    stepResults?: unknown[];
-    /** Flags the ONE genuine human-wait `→pending_input` (stop-run-hitl, #1058) so it notifies; every other `pending_input` reason leaves it unset. Not a DB column — only feeds the run-wait-notifier classification below. (The archive program's durable in-attempt marker is edge-derived on `→pending_approval` inside the CAS — cinatra#1938 — and deliberately independent of this flag: the #1058 wait fires pre-dispatch from `queued`, so it is parked, not in-flight.) */
-    humanWaitGate?: boolean;
-    /** REQUIRED on queued→running (cinatra#1937): per-dispatch bookkeeping stamped atomically with the CAS. The primitive below throws without it. */
-    dispatch?: AgentRunDispatchFields;
-    /** cinatra#1893 (epic #1883 A5): when present, delegate to transitionRunToCompletedWithDerivationOutbox — terminal CAS + final-output snapshot + derivation-outbox INSERT in ONE transaction (legal ONLY for `to === "completed"`). Absent for every other caller — the historical two-write path is unchanged. */
-    derivationOutbox?: DerivationOutboxCapture;
-  },
-): Promise<void> {
-  if (!LEGAL_TRANSITIONS.has(`${from}->${to}` as const)) {
-    throw new RunTransitionError({ code: "illegal_transition", runId, from, to });
-  }
-
-  // cinatra#1893: delegate the terminal-success-with-derivation-outbox path (atomic CAS + snapshot + outbox INSERT, then side-effects; asserts to==="completed"; legality checked above) to ./run-terminal-derivation-outbox.
-  if (meta?.derivationOutbox) {
-    await transitionRunToCompletedWithDerivationOutbox(runId, from, to, meta, meta.derivationOutbox);
-    return;
-  }
-
-  const won = await updateAgentRunStatusConditional(runId, from, to, meta?.dispatch);
-  if (!won) {
-    throw new RunTransitionError({ code: "stale_from_status", runId, from, to });
-  }
-  try {
-    // Delegate terminal-state side-effects + meta patching to
-    // updateAgentRunStatus. The CAS already wrote the status column; re-writing
-    // it here is a no-op that still runs the terminal-detection branch
-    // (expireRunStream) and meta-patch logic. The CONTROL keys (`dispatch` —
-    // written BY the CAS — and `humanWaitGate` — not a DB column) are stripped
-    // first: only genuine DB meta reaches the delegated write.
-    const { dispatch: _dispatch, humanWaitGate: _humanWaitGate, ...dbMeta } = meta ?? {};
-    const hasDelegatedMeta =
-      dbMeta.error !== undefined ||
-      dbMeta.startedAt !== undefined ||
-      dbMeta.completedAt !== undefined ||
-      dbMeta.stepResults !== undefined;
-    if (hasDelegatedMeta || TERMINAL_RUN_STATUSES.has(to)) {
-      await updateAgentRunStatus(runId, to, dbMeta as Partial<AgentRunRecord>);
-    }
-  } finally {
-    // Run human-wait notify (#1559/E9) in `finally` so a terminal clear still fires
-    // if the side-effect above throws (status CAS already committed). Best-effort no-op.
-    await dispatchRunWaitTransition({ runId, from, to, humanWaitGate: meta?.humanWaitGate === true });
-  }
 }
 
 /**

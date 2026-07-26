@@ -26,6 +26,10 @@ import "server-only";
 // The transactional single-writer (heavy — pulls the dashboards store). Imported
 // as the DEFAULT adopter; injectable so a unit test needs no DB.
 import { adoptExtensionDashboards } from "@cinatra-ai/dashboards/extension-materialization";
+// R2-allowlisted minting site (scripts/audit/org-write-boundary-gate.mjs):
+// the content-only "dashboard-contribution-reconciler" purpose grounds the
+// adoption writes on the org-write kernel (cinatra#1939 wave 1).
+import { mintSystemWriteAuthority } from "@/lib/org-write/authority";
 // The PURE planner + claim type (light — no store), on their own stable subpath.
 import {
   planContributionAdoptions,
@@ -144,6 +148,12 @@ export async function reconcileDashboardContributionAdoptions(
     teamIds: [] as string[],
     orgRole: "owner" as const,
     teamRoles: {} as Record<string, "admin" | "member">,
+    // Purpose-scoped system authority (content.write only): the kernel rules
+    // adoption against the ORG lifecycle — an archived org refuses it.
+    authority: mintSystemWriteAuthority(
+      "dashboard-contribution-reconciler",
+      organizationId,
+    ),
   };
 
   const claims = await resolveLiveClaims(organizationId);

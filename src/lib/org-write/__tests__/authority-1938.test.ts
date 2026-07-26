@@ -27,6 +27,7 @@ vi.mock("@/lib/postgres-config", () => ({
 
 import {
   verifySessionAuthority,
+  sessionAuthorityFromResolvedRole,
   verifyRunAuthority,
   isVerifiedRunRef,
   mintSystemWriteAuthority,
@@ -79,6 +80,35 @@ describe("verifySessionAuthority (#1938)", () => {
     expect(auth.can("membership.write")).toBe(false);
     expect(auth.can("org.settings")).toBe(true);
     expect(auth.can("org.lifecycle")).toBe(false);
+  });
+});
+
+describe("sessionAuthorityFromResolvedRole (#1939 S3, sync transport mint)", () => {
+  const CAPABILITIES = [
+    "content.write",
+    "run.execute",
+    "run.complete",
+    "membership.write",
+    "org.settings",
+    "org.lifecycle",
+  ] as const;
+
+  it("answers capability-for-capability identically to verifySessionAuthority for every org role", async () => {
+    for (const role of ["member", "org_admin", "org_owner"] as const) {
+      shared.role = role;
+      const viaMembershipRead = await verifySessionAuthority("u1", "org-1");
+      const viaResolvedRole = sessionAuthorityFromResolvedRole("org-1", role);
+      expect(viaResolvedRole.orgId).toBe("org-1");
+      for (const capability of CAPABILITIES) {
+        expect(viaResolvedRole.can(capability)).toBe(viaMembershipRead.can(capability));
+      }
+    }
+  });
+
+  it("membership-only capabilities hold for ANY resolved role — the role's existence is the membership proof", () => {
+    const auth = sessionAuthorityFromResolvedRole("org-1", "member");
+    expect(auth.can("content.write")).toBe(true);
+    expect(auth.can("membership.write")).toBe(false);
   });
 });
 
@@ -175,6 +205,36 @@ describe("mintSystemWriteAuthority (#1938)", () => {
     expect(finalizer.can("run.execute")).toBe(true);
     expect(finalizer.can("run.complete")).toBe(true);
     expect(finalizer.can("org.lifecycle")).toBe(false);
+  });
+
+  it("the extension-dashboard-lifecycle purpose is CONTENT-ONLY (#1939 wave 1)", () => {
+    const hook = mintSystemWriteAuthority("extension-dashboard-lifecycle", "org-1");
+    expect(hook.orgId).toBe("org-1");
+    expect(hook.can("content.write")).toBe(true);
+    expect(hook.can("run.execute")).toBe(false);
+    expect(hook.can("membership.write")).toBe(false);
+    expect(hook.can("org.settings")).toBe(false);
+    expect(hook.can("org.lifecycle")).toBe(false);
+  });
+
+  it("the dashboard-contribution-reconciler purpose is CONTENT-ONLY (#1939 wave 1)", () => {
+    const reconciler = mintSystemWriteAuthority("dashboard-contribution-reconciler", "org-1");
+    expect(reconciler.orgId).toBe("org-1");
+    expect(reconciler.can("content.write")).toBe(true);
+    expect(reconciler.can("run.execute")).toBe(false);
+    expect(reconciler.can("membership.write")).toBe(false);
+    expect(reconciler.can("org.settings")).toBe(false);
+    expect(reconciler.can("org.lifecycle")).toBe(false);
+  });
+
+  it("the dashboard-twin-backfill purpose is CONTENT-ONLY (#1939 wave 1)", () => {
+    const backfill = mintSystemWriteAuthority("dashboard-twin-backfill", "org-1");
+    expect(backfill.orgId).toBe("org-1");
+    expect(backfill.can("content.write")).toBe(true);
+    expect(backfill.can("run.execute")).toBe(false);
+    expect(backfill.can("membership.write")).toBe(false);
+    expect(backfill.can("org.settings")).toBe(false);
+    expect(backfill.can("org.lifecycle")).toBe(false);
   });
 });
 

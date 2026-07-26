@@ -22,7 +22,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 // DB mock — captures Drizzle update calls for assertion
 // ---------------------------------------------------------------------------
-const dbWrites: Array<{ op: string; table: string; set: any; where: any }> = [];
+const dbWrites: Array<{ op: string; table: string; set: Record<string, unknown>; where: unknown }> = [];
 
 // Failure injection for the #76 regression tests:
 //  - `rejectNextUpdate`: the next UPDATE rejects BEFORE recording the write —
@@ -33,31 +33,56 @@ const dbWrites: Array<{ op: string; table: string; set: any; where: any }> = [];
 //    and the write), again without recording a write.
 const dbFail = vi.hoisted(() => ({ rejectNextUpdate: false, staleNextUpdate: false }));
 
-const dbMock = vi.hoisted(() => {
-  const update = vi.fn((_table: any) => ({
-    set: vi.fn((payload: any) => ({
-      where: vi.fn((condition: any) => ({
-        returning: vi.fn(async () => {
-          if (dbFail.rejectNextUpdate) {
-            dbFail.rejectNextUpdate = false;
-            throw new Error("__db_write_failed__");
-          }
-          if (dbFail.staleNextUpdate) {
-            dbFail.staleNextUpdate = false;
-            return [];
-          }
-          dbWrites.push({ op: "update", table: "agent_runs", set: payload, where: condition });
-          return [{ id: "updated-row" }];
-        }),
-      })),
-    })),
-  }));
-  return { update };
-});
-vi.mock("../db", () => ({
-  db: dbMock,
-  agentBuilderPool: { on: () => {}, listenerCount: () => 1 },
+// cinatra#1939 wave 2 (§7.1): the setup CAS now runs INSIDE the org-write kernel
+// guard (resumeRunFromSetupApproval). `../db` hands the guard a fake transaction
+// that answers its own lock / lifecycle-state / lease queries from
+// `kernelAnswers` (active org by default) and records the writer's OWN CAS
+// UPDATE on dbWrites — so the existing merge-shape assertions below still hold
+// against the guarded write.
+const kernelAnswers = vi.hoisted(() => ({
+  organization: { archivedAt: null as string | null, archiveEpoch: 0 } as
+    | { archivedAt: string | null; archiveEpoch: number }
+    | null,
+  leaseHeld: false,
 }));
+
+const dbMock = vi.hoisted(() => {
+  const state = { updateCalls: 0 };
+  const update = () => {
+    state.updateCalls += 1;
+    return {
+      set: (payload: Record<string, unknown>) => ({
+        where: (condition: unknown) => ({
+          returning: async () => {
+            if (dbFail.rejectNextUpdate) {
+              dbFail.rejectNextUpdate = false;
+              throw new Error("__db_write_failed__");
+            }
+            if (dbFail.staleNextUpdate) {
+              dbFail.staleNextUpdate = false;
+              return [];
+            }
+            dbWrites.push({ op: "update", table: "agent_runs", set: payload, where: condition });
+            return [{ id: "updated-row" }];
+          },
+        }),
+      }),
+    };
+  };
+  return { state, baseTx: { update, execute: async () => ({ rows: [] }) } };
+});
+vi.mock("../db", async () => {
+  // Sanctioned kernel fakes (test-file /testing import): answer the guard's own
+  // queries from kernelAnswers; the writer's CAS delegates to baseTx.
+  const { wrapTxWithOrgWriteKernel } = await import(
+    "@cinatra-ai/org-write-kernel/testing"
+  );
+  const tx = wrapTxWithOrgWriteKernel(dbMock.baseTx, kernelAnswers);
+  return {
+    db: { transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx) },
+    agentBuilderPool: { on: () => {}, listenerCount: () => 1 },
+  };
+});
 
 const bgJobs = vi.hoisted(() => ({
   enqueueBackgroundJob: vi.fn(),
@@ -87,7 +112,17 @@ vi.mock("../wayflow-url", () => ({
   WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
 }));
 
+// cinatra#1939 wave 2 (§7.1): the setup path grounds the guarded write on the
+// resuming principal via resolveOrgRoleForUser; stub that membership read so the
+// (real) session mint succeeds. Each setup test re-arms it to "member" in the
+// beforeEach (resetAllMocks clears the implementation otherwise).
+vi.mock("@/lib/auth-session", async (orig) => ({
+  ...(await orig<typeof import("@/lib/auth-session")>()),
+  resolveOrgRoleForUser: vi.fn(async () => "member"),
+}));
+
 import { approveReviewTaskInternal } from "../review-task-actions";
+import { resolveOrgRoleForUser } from "@/lib/auth-session";
 
 // Circular-safe stringify for inspecting Drizzle SQL condition trees (they
 // reference table/column objects with back-references). Used to pin the
@@ -116,6 +151,11 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     dbWrites.length = 0;
     dbFail.rejectNextUpdate = false;
     dbFail.staleNextUpdate = false;
+    dbMock.state.updateCalls = 0;
+    kernelAnswers.organization = { archivedAt: null, archiveEpoch: 0 };
+    // resetAllMocks cleared the implementation — re-arm the membership read so
+    // the resuming principal is a member (the guarded write's happy path).
+    vi.mocked(resolveOrgRoleForUser).mockResolvedValue("member");
   });
 
   it("merges single-field value into inputParams and re-enqueues AGENT_BUILDER_EXECUTION", async () => {
@@ -209,8 +249,8 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
 
     await approveReviewTaskInternal("setup-run-a1", "actor-1", { name: "Alice" }, "name");
 
-    // Exactly one statement hit the DB...
-    expect(dbMock.update).toHaveBeenCalledTimes(1);
+    // Exactly one CAS UPDATE hit the guarded tx...
+    expect(dbMock.state.updateCalls).toBe(1);
     expect(dbWrites).toHaveLength(1);
     // ...and it carries BOTH effects in the same .set payload.
     expect(dbWrites[0].set.inputParams).toBeDefined();
@@ -234,7 +274,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       senderEmail: "a@b.com",
     });
 
-    expect(dbMock.update).toHaveBeenCalledTimes(1);
+    expect(dbMock.state.updateCalls).toBe(1);
     expect(dbWrites).toHaveLength(1);
     expect(dbWrites[0].set.inputParams).toBeDefined();
     expect(dbWrites[0].set.status).toBe("queued");
@@ -256,9 +296,9 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     // The single statement failed atomically: neither the inputParams merge
     // nor the status flip was committed...
     expect(dbWrites).toHaveLength(0);
-    // ...and only one statement was ever attempted (nothing committed before
+    // ...and only one CAS UPDATE was ever attempted (nothing committed before
     // the failing write either).
-    expect(dbMock.update).toHaveBeenCalledTimes(1);
+    expect(dbMock.state.updateCalls).toBe(1);
     // Redis enqueue must only fire after the DB commit succeeds.
     expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
   });
@@ -281,6 +321,8 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     // reject/stop/fail landing between the early read and this write would be
     // silently clobbered back to "queued".
     expect(whereStr).toContain("pending_approval");
+    // ...plus the wave-2 org axis: the CAS is org-scoped to the authority's org.
+    expect(whereStr).toContain("org_id");
   });
 
   it("REGRESSION (#76): CAS loses to a concurrent transition — zero rows updated throws stale, nothing enqueued", async () => {
@@ -296,7 +338,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     dbFail.staleNextUpdate = true;
     await expect(
       approveReviewTaskInternal("setup-run-a5", "actor-1", { name: "Alice" }, "name"),
-    ).rejects.toThrow(/left pending_approval before the approval committed/);
+    ).rejects.toMatchObject({ name: "RunTransitionError", code: "stale_from_status" });
 
     // Nothing was committed and the resume job must NOT be enqueued — the
     // concurrent transition (e.g. reject -> failed) owns the run now.

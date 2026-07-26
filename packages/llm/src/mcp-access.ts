@@ -136,6 +136,12 @@ export type AgentRunMcpActor = {
    * mirrors the app-layer `AgentRunMcpActor` (agent-run-mcp-actor-token.ts).
    */
   oboCeiling: OboCeilingChain;
+  /**
+   * The run's CURRENT execution attempt id (`att` claim, cinatra#1939 S3) —
+   * threaded from the run row at the bridge so the org-write run authority
+   * can refuse stale attempts. Optional; mirrors the app-layer type.
+   */
+  executionAttemptId?: string;
 };
 
 export type AgentRunMcpActorTokenIssuer = (actor: AgentRunMcpActor) => string;

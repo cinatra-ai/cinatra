@@ -73,6 +73,29 @@ describe("org-write-boundary-gate rules (#1938)", () => {
     expect(v[0].rule).toBe("R1-relative-reach");
   });
 
+  it("R1: the /testing subpath is legal FROM TEST FILES only (cinatra#1939 S3 fakes)", () => {
+    const importLine =
+      'import { fakeOrgWriteDb } from "@cinatra-ai/org-write-kernel/testing";';
+    // Test files (both layouts) may import the fakes.
+    expect(check("packages/dashboards/src/__tests__/x.test.ts", importLine)).toHaveLength(0);
+    expect(check("src/lib/org-write/__tests__/y.test.ts", importLine)).toHaveLength(0);
+    // A PRODUCTION file importing the fakes is still a violation — test
+    // fakes must never answer real queries.
+    const v = check("src/lib/some-writer.ts", importLine);
+    expect(v.map((x) => x.rule)).toContain("R1-deep-subpath");
+  });
+
+  it("the /testing subpath from a test file stays legal in its OPAQUE (dynamic-import) form — vi.mock factories can only reach the fakes that way", () => {
+    const dynamicLine =
+      'const fakes = await import("@cinatra-ai/org-write-kernel/testing");';
+    // Sanctioned from test files: R1 admits the subpath and R3's opaque net
+    // must not re-flag the same sanctioned edge.
+    expect(check("packages/dashboards/src/__tests__/x.test.ts", dynamicLine)).toHaveLength(0);
+    // From a PRODUCTION file the same dynamic import is still red (R1).
+    const v = check("src/lib/some-writer.ts", dynamicLine);
+    expect(v.map((x) => x.rule)).toContain("R1-deep-subpath");
+  });
+
   it("R1: the bare package root stays legal everywhere", () => {
     expect(
       check(
@@ -179,3 +202,78 @@ describe("opaque access forms are fail-closed", () => {
     ).toEqual([]);
   });
 });
+
+describe("R2/R5: the agent-run mint file and its NAMED consumers (#1939 wave 2)", () => {
+  const MINT = "@/lib/org-write/agent-run-authority-mint";
+  const RESOLVE_TO_MINT = () => "src/lib/org-write/agent-run-authority-mint.ts";
+
+  it("R2 allowlist: the mint file may import mintSystemWriteAuthority (sole minting site)", () => {
+    expect(
+      check(
+        "src/lib/org-write/agent-run-authority-mint.ts",
+        'import { mintSystemWriteAuthority } from "./authority";',
+        () => "src/lib/org-write/authority.ts",
+      ),
+    ).toEqual([]);
+  });
+
+  it("a sanctioned job context may NAME a dispatch mint wrapper (green)", () => {
+    expect(
+      check(
+        "packages/agents/src/execution.ts",
+        `import { mintAgentRunExecutionAuthority } from "${MINT}";`,
+      ),
+    ).toEqual([]);
+    expect(
+      check(
+        "src/lib/host-content-editor-dispatch.ts",
+        `import { mintContentEditorDispatchAuthority } from "${MINT}";`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("shape=alias: a non-consumer aliasing a wrapper is red (R5)", () => {
+    const v = check(
+      "src/lib/rogue-job.ts",
+      `import { mintAgentRunExecutionAuthority as run } from "${MINT}";`,
+    );
+    expect(v.map((x) => x.rule)).toContain("R5-run-dispatch-mint");
+  });
+
+  it("shape=re-export: a non-consumer re-exporting a wrapper is red at the re-export site (R5)", () => {
+    const v = check(
+      "src/lib/rogue-index.ts",
+      `export { mintTriggerReleaseAuthority } from "${MINT}";`,
+    );
+    expect(v.map((x) => x.rule)).toContain("R5-run-dispatch-mint");
+  });
+
+  it("shape=path-variant: a relative import resolving into the mint file is red (R5)", () => {
+    const v = check(
+      "src/lib/rogue-path.ts",
+      'import { mintContentEditorDispatchAuthority } from "../org-write/agent-run-authority-mint";',
+      RESOLVE_TO_MINT,
+    );
+    expect(v.map((x) => x.rule)).toContain("R5-run-dispatch-mint");
+  });
+
+  it("shape=import*: a namespace import of the mint file is red (opaque; caught by R2's org-write net)", () => {
+    const v = check("src/lib/rogue-ns.ts", `import * as m from "${MINT}";`);
+    expect(v.map((x) => x.rule)).toContain("R2-system-mint-opaque");
+  });
+
+  it("shape=dynamic import(): a dynamic import of the mint file is red (opaque)", () => {
+    const v = check("src/lib/rogue-dyn.ts", `const m = await import("${MINT}");`);
+    expect(v.map((x) => x.rule)).toContain("R2-system-mint-opaque");
+  });
+
+  it("shape=require: a require() of the mint file is red (opaque)", () => {
+    const v = check("src/lib/rogue-req.ts", `const m = require("${MINT}");`);
+    expect(v.map((x) => x.rule)).toContain("R2-system-mint-opaque");
+  });
+});
+
+// The R5 runManagementAuthority consumer-allowlist self-test was REMOVED with
+// the mint itself (owner ruling 2026-07-26, ruling 2: cross-org run management is
+// unsupported). authority.ts now carries no R5 named-consumer restriction; the
+// R5 mechanism stays covered end-to-end by the run-dispatch-mint suite above.

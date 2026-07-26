@@ -110,6 +110,7 @@ describe("AgentRunRecord type surface", () => {
       oboCeiling: null,
       dependentInstallId: null,
       humanPresent: null, // cinatra#2067 presence discriminator (headless fixture)
+      executionAttemptId: null,
     };
     expect(sample.packageVersion).toBeNull();
 
