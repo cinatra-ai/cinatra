@@ -142,3 +142,37 @@ test("invalid JSON capture is a hard error", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("dropping a canonical hash key from a capture is a hard error (drift cannot hide)", () => {
+  const root = makeTree();
+  try {
+    // Capture omits pinsLockSha256. Even with pins.lock unchanged the gate MUST
+    // fail: a capture that does not carry every canonical hash could hide a
+    // future pins.lock drift by simply not declaring the key that changed.
+    writeCapture(root, "annotations-a-raw-tools-list.json", [
+      "fixturePluginSha256",
+      "producerSha256",
+      "apiMapSha256",
+    ]);
+    const { ok, errors } = checkFreshness(root);
+    assert.equal(ok, false);
+    assert.match(errors.join("\n"), /missing or invalid for required canonical hash\(es\): pinsLockSha256/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("verify-verdicts.json without equivalenceSha256 is a hard error", () => {
+  const root = makeTree();
+  try {
+    // verify-verdicts is captured against the equivalence suite, so it must carry
+    // equivalenceSha256 — otherwise an equivalence.spec.ts edit could ship without
+    // a fresh verdict capture. Default keys = the 4 canonical (no equivalence).
+    writeCapture(root, "verify-verdicts.json");
+    const { ok, errors } = checkFreshness(root);
+    assert.equal(ok, false);
+    assert.match(errors.join("\n"), /verify-verdicts\.json: must carry equivalenceSha256/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

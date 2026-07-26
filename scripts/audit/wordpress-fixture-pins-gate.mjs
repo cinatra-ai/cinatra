@@ -145,16 +145,14 @@ export function checkPins(root = REPO_ROOT_DEFAULT) {
     }
     return readFileSync(p, "utf8");
   };
-  const mustInclude = (text, rel, needle, why) => {
-    if (text !== null && !text.includes(needle)) {
-      errors.push(`${rel}: expected to contain \`${needle}\` (${why}); pin drift vs ${PINS_LOCK_REL}`);
-    }
-  };
-  // The "must NOT contain" bans target ACTIVE code, not prose — an explanatory
-  // comment may freely say "the abilities-api plugin is dropped" / "the
-  // no-`composer install` path". So strip `#`-line/trailing comments first
-  // (Dockerfile / shell / YAML all use `#`; none of our pin literals — sha256,
-  // URLs, versions, digest — contain a `#`, so this never elides a real pin).
+  // Both the pin-PRESENCE assertions and the drop BANS target ACTIVE code, not
+  // prose: an explanatory comment may freely quote a pin value or say "the
+  // abilities-api plugin is dropped", and — crucially — a stale/drifted ACTIVE
+  // pin must NOT be able to hide behind a comment that happens to carry the
+  // expected literal (codex round-1). So strip `#`-line/trailing comments first,
+  // then match against the active content only. (Dockerfile / shell / YAML all
+  // use `#`; none of our pin literals — sha256, URLs, versions, digest, image
+  // tag — contain a `#`, so this never elides a real pin.)
   const stripComments = (text) =>
     text
       .split("\n")
@@ -163,6 +161,11 @@ export function checkPins(root = REPO_ROOT_DEFAULT) {
         return m ? line.slice(0, m.index + m[1].length) : line;
       })
       .join("\n");
+  const mustInclude = (text, rel, needle, why) => {
+    if (text !== null && !stripComments(text).includes(needle)) {
+      errors.push(`${rel}: expected to contain \`${needle}\` in active (non-comment) content (${why}); pin drift vs ${PINS_LOCK_REL}`);
+    }
+  };
   const mustNotInclude = (text, rel, needle, why) => {
     if (text !== null && stripComments(text).includes(needle)) {
       errors.push(`${rel}: must NOT contain \`${needle}\` in active (non-comment) content (${why})`);
@@ -218,14 +221,17 @@ export function checkPins(root = REPO_ROOT_DEFAULT) {
   mustNotInclude(entrypoint, ENTRYPOINT_REL, "abilities-api", "the abilities-api plugin is dropped on WP 6.9");
 
   // activate_plugins deterministic order: mcp-adapter -> fixture -> eafm -> cinatra.
+  // Match on active (comment-stripped) content so a comment listing the plugins
+  // can't satisfy or reorder the check.
   if (entrypoint !== null) {
+    const activeEntrypoint = stripComments(entrypoint);
     const order = [
       "plugin activate mcp-adapter",
       "plugin activate fixture-thirdparty-mcp",
       "plugin activate enable-abilities-for-mcp",
       "plugin activate cinatra",
     ];
-    const idx = order.map((needle) => entrypoint.indexOf(needle));
+    const idx = order.map((needle) => activeEntrypoint.indexOf(needle));
     const missing = order.filter((_, i) => idx[i] < 0);
     if (missing.length > 0) {
       errors.push(`${ENTRYPOINT_REL}: activate_plugins missing activation for: ${missing.join(", ")}`);

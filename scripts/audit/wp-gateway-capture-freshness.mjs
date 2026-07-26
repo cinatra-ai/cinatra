@@ -37,11 +37,20 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { computeProvenanceHashes, PROVENANCE_INPUTS } from "../../tests/e2e/wp-mcp-gateway/provenance.mjs";
+import {
+  computeProvenanceHashes,
+  PROVENANCE_INPUTS,
+  CANONICAL_PROVENANCE_KEYS,
+} from "../../tests/e2e/wp-mcp-gateway/provenance.mjs";
 
 const REPO_ROOT_DEFAULT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CAPTURES_REL = "tests/e2e/wp-mcp-gateway/captures";
 const HASH_KEYS = Object.keys(PROVENANCE_INPUTS); // the recognised provenance hash keys
+const SHA256_RE = /^[0-9a-f]{64}$/;
+// Captures that must additionally carry equivalenceSha256 (they are captured
+// against the live equivalence suite, so an equivalence.spec.ts edit must force
+// a fresh verdict capture rather than being silently droppable).
+const EQUIVALENCE_REQUIRED = new Set(["verify-verdicts.json"]);
 
 /**
  * Recompute the provenance hashes from `root` and compare every provenanced
@@ -82,6 +91,31 @@ export function checkFreshness(root = REPO_ROOT_DEFAULT) {
   const current = computeProvenanceHashes(root);
 
   for (const { name, provenance } of provenanced) {
+    // Every provenanced capture MUST carry the full canonical hash set (valid
+    // 64-hex). The gate only COMPARES the keys a capture declares, so without
+    // this presence check a stale capture could be hidden by simply deleting the
+    // one key that drifted (e.g. edit pins.lock, then drop pinsLockSha256 from
+    // every provenance block) — the gate would then have nothing to compare and
+    // stay green. Requiring the canonical set closes that false-negative and
+    // enforces the design §3 provenance shape (codex round-1 BLOCKER).
+    const missingCanonical = CANONICAL_PROVENANCE_KEYS.filter(
+      (k) => !(typeof provenance[k] === "string" && SHA256_RE.test(provenance[k])),
+    );
+    if (missingCanonical.length > 0) {
+      errors.push(
+        `${CAPTURES_REL}/${name}: provenance is missing or invalid for required canonical hash(es): ${missingCanonical.join(", ")}. ` +
+          `Every committed capture must carry the full canonical provenance set (${CANONICAL_PROVENANCE_KEYS.join(", ")}) so drift cannot be hidden by dropping a key.`,
+      );
+    }
+    if (
+      EQUIVALENCE_REQUIRED.has(name) &&
+      !(typeof provenance.equivalenceSha256 === "string" && SHA256_RE.test(provenance.equivalenceSha256))
+    ) {
+      errors.push(
+        `${CAPTURES_REL}/${name}: must carry equivalenceSha256 (it is captured against equivalence.spec.ts) so an equivalence-suite edit forces a fresh verdict capture.`,
+      );
+    }
+
     const declared = HASH_KEYS.filter((k) => typeof provenance[k] === "string" && provenance[k].length > 0);
     if (declared.length === 0) {
       errors.push(
