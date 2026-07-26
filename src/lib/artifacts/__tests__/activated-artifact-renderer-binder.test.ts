@@ -346,10 +346,10 @@ describe("no regression for the required (system) path", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Codex closure-round findings (all three were real; each is pinned here).
+// Closure-review findings (all three were real defects; each is pinned here).
 // ---------------------------------------------------------------------------
 
-describe("codex R1 — package purity: a MIXED package is never activatable", () => {
+describe("package purity — a MIXED package is never activatable", () => {
   it("no activatable package also carries a `required` build-map entry", () => {
     const requiredPackages = new Set(
       Object.values(GENERATED_ARTIFACT_RENDERERS)
@@ -384,7 +384,7 @@ describe("codex R1 — package purity: a MIXED package is never activatable", ()
   });
 });
 
-describe("codex R1 — a transient store outage RECOVERS on the next reconcile", () => {
+describe("a transient store outage RECOVERS on the next reconcile", () => {
   it("rebinds after a fail-closed retire even though the install row is UNCHANGED", async () => {
     const row = liveRow();
     readByNames.mockResolvedValue(rowsFor([row]));
@@ -422,7 +422,7 @@ describe("codex R1 — a transient store outage RECOVERS on the next reconcile",
   });
 });
 
-describe("codex R1 — a POST-READ throw is fail-CLOSED, not fail-open", () => {
+describe("a POST-READ throw is fail-CLOSED, not fail-open", () => {
   it("retires the org's providers when the reconcile throws after binding once", async () => {
     readByNames.mockResolvedValue(rowsFor([liveRow()]));
     await ensureActivatedRepresentationProviders(ORG);

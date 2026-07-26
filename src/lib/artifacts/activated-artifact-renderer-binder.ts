@@ -116,7 +116,7 @@ function packagesWithRequiredEntries(): ReadonlySet<string> {
 /**
  * The generated build-map entries that are NON-SYSTEM renderer packs.
  *
- * PACKAGE-PURITY GUARD (Codex closure finding): a package is excluded outright if
+ * PACKAGE-PURITY GUARD (closure-review finding): a package is excluded outright if
  * the map carries ANY `required` entry for it, even when some of its entries are
  * `guardedOptional`. Retirement is necessarily PACKAGE-scoped
  * (`retireOrgProvider(orgId, packageName)` — the registry has no per-(pattern,
@@ -215,7 +215,7 @@ export function activatableRendererPackages(): string[] {
 // A wall-clock generation (`updatedAt.getTime()`) is NOT a safe source: two
 // lifecycle events inside one millisecond collide, and an application-clock
 // rollback or cross-worker skew can mint a generation BELOW the tombstone —
-// permanently suppressing a legitimate reinstall (Codex R0 finding Q3).
+// permanently suppressing a legitimate reinstall (design-review finding).
 //
 // The floor is PROCESS-LOCAL (an in-memory Map), so the generation only has to be
 // monotonic with respect to what THIS process itself bound. So we allocate it
@@ -278,7 +278,7 @@ const RETIRED_EPOCH_TOKEN = " retired";
  * Invalidate the process-local epoch allocation for `(orgId, packageName)` after
  * THIS module retired its bindings.
  *
- * WHY (Codex closure finding — a recovery deadlock): the registry KEEPS the
+ * WHY (closure-review finding — a recovery deadlock): the registry KEEPS the
  * generation floor as a tombstone when bindings are retired. If the allocator
  * then handed back the SAME generation for an UNCHANGED install row — which is
  * exactly what happens after a fail-closed retire on a transient canonical-store
@@ -442,7 +442,7 @@ export async function ensureActivatedRepresentationProviders(orgId: string): Pro
   try {
     await reconcileActivatedRepresentationProviders(orgId);
   } catch (err) {
-    // FAIL-CLOSED, NOT FAIL-OPEN (Codex closure finding): a throw AFTER the
+    // FAIL-CLOSED, NOT FAIL-OPEN (closure-review finding): a throw AFTER the
     // canonical read — a malformed row, a registry write error — would otherwise
     // leave already-bound providers effective, which is fail-open for revocation.
     // An unprovable reconcile retires exactly like an unreadable store does, so
