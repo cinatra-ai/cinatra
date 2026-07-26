@@ -186,6 +186,20 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     cascadeOwnership: "inert-history",
     importBanned: false,
   },
+  {
+    // The HITL setup-resume CAS (cinatra#1939 wave 2 §7.1): the setup-{runId}
+    // approval's inputParams merge + pending_approval->queued flip, run inside
+    // the org-write kernel guard. A dispatch edge (pending_approval->queued is
+    // non-terminal), so run.execute only — no conditionalCapabilities. The CAS
+    // is org-scoped to the authority's org.
+    module: "packages/agents/src/resume-run-from-setup-approval.ts",
+    exportName: "resumeRunFromSetupApproval",
+    capability: "run.execute",
+    orgIdExtractor: "agent_runs.org_id (authority.orgId; row CAS is org-scoped, NOT NULL)",
+    storageReferences: ["agent_runs"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+  },
 
   // — artifact substrate (postgres-sync world entry point) —
   {
