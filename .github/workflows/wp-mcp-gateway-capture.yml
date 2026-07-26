@@ -154,13 +154,18 @@ jobs:
         # the pinned ZIPs runs during --build (fail-closed).
         run: docker compose --profile wordpress up -d --build wordpress wordpress-db
       - name: Wait for MCP adapter default server ready
-        # HEAD → 200/405 per classifyStatus (src/lib/wordpress-mcp-connection.ts)
-        # + core version == 6.9.*.
+        # Route-up signal: 200/405 per classifyStatus (src/lib/wordpress-mcp-connection.ts),
+        # OR 401. mcp-adapter 0.5.0's default server rejects the UNAUTHENTICATED
+        # readiness probe (User ID 0 lacks the 'read' cap; transport permission
+        # callback defaults to is_user_logged_in) with 401 — which still proves
+        # the MCP server is registered + serving (a missing route 404s; a
+        # plain-permalink site 301-redirects). The producer authenticates with the
+        # minted app-password in the next steps. Also require core == 6.9.*.
         run: |
           ok=""
           for i in $(seq 1 90); do
             code=$(curl -s -o /dev/null -w '%{http_code}' -I "http://localhost:8080/wp-json/mcp/mcp-adapter-default-server" --max-time 5 || echo 000)
-            if [ "$code" = "200" ] || [ "$code" = "405" ]; then ok="1"; echo "MCP default server ready after ${i} tries (HTTP ${code})"; break; fi
+            if [ "$code" = "200" ] || [ "$code" = "405" ] || [ "$code" = "401" ]; then ok="1"; echo "MCP default server ready after ${i} tries (HTTP ${code})"; break; fi
             sleep 5
           done
           if [ -z "$ok" ]; then echo "::error::MCP default server not ready in ~7.5 min"; docker compose --profile wordpress logs wordpress | tail -200; exit 1; fi
