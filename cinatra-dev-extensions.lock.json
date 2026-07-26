@@ -150,7 +150,7 @@
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "3775184987a5966df4b959c9cfe1738873ae6ba0"
+      "resolvedSha": "2b8c18de5c6a466d09177d0cacfe79503f43bd3b"
     },
     {
       "packageName": "@cinatra-ai/drupal-skills",
