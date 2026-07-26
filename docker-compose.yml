@@ -244,18 +244,22 @@ services:
     # rather than forcing a global COMPOSE_PROJECT_NAME (which would rename every
     # project-scoped volume). Container names are host-global → one dev stack.
     container_name: cinatra-wordpress-1
-    # Custom dev image (docker/wordpress/Dockerfile) bakes git/composer/wp-cli +
-    # WordPress/abilities-api + WordPress/mcp-adapter at BUILD time, so the slow
-    # clone+composer work no longer runs inside the uat-gate's ~5-min readiness
-    # window (#260 Step 6). `docker compose up` builds a missing image before the
-    # readiness poll begins; pull_policy: build prevents a stale registry image
-    # from shadowing a rebuild. Mirrors the docker/drupal/Dockerfile bake pattern.
+    # Custom dev image (docker/wordpress/Dockerfile) bakes git/wp-cli + the pinned,
+    # checksummed MCP plugins (mcp-adapter + enable-abilities-for-mcp) at BUILD
+    # time, so the slow network work no longer runs inside the uat-gate's ~5-min
+    # readiness window (#260 Step 6). `docker compose up` builds a missing image
+    # before the readiness poll begins; pull_policy: build prevents a stale
+    # registry image from shadowing a rebuild. Mirrors docker/drupal/Dockerfile.
+    # WP 6.9 ships the Abilities API in core, so the abilities-api plugin is
+    # dropped. Version build-args MUST match docker/wordpress/pins.lock
+    # (scripts/audit/wordpress-fixture-pins-gate.mjs enforces lockstep).
     build:
       context: ./docker/wordpress
       args:
-        ABILITIES_API_VERSION: "0.4.0"
-        MCP_ADAPTER_VERSION: "0.4.1"
-    image: cinatra-wordpress-dev:6.8-php8.3
+        MCP_ADAPTER_VERSION: "0.5.0"
+        EAFM_VERSION: "2.0.20"
+        WP_CLI_VERSION: "2.12.0"
+    image: cinatra-wordpress-dev:6.9-php8.3
     pull_policy: build
     ports:
       - "8080:80"
@@ -266,7 +270,6 @@ services:
       WORDPRESS_DB_NAME: wordpress
       WORDPRESS_CONFIG_EXTRA: |
         define( 'WP_ENVIRONMENT_TYPE', 'local' );
-      MCP_ADAPTER_REF: v0.4.1
       WP_DEV_URL: http://localhost:8080
       WP_DEV_ADMIN_USER: admin
       WP_DEV_ADMIN_PASS: admin

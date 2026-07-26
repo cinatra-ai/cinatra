@@ -728,6 +728,23 @@ jobs:
       - name: Extension license-field gate tests
         run: pnpm exec vitest run scripts/extensions/__tests__/license-cleanup.test.mjs
 
+      # WP MCP gateway pinned-fixture pin-integrity gate (#2016 S1). Pure static
+      # consistency check (no download): the pinned version/URL/sha256/digest
+      # literals in docker/wordpress/Dockerfile + docker-compose.yml +
+      # scripts/wordpress-entrypoint.sh MUST agree with docker/wordpress/pins.lock,
+      # no pin may be a placeholder, and the mcp-adapter bundlesVendor path must
+      # match the Dockerfile. The REMOTE-artifact hashes are actually verified at
+      # image-build time on runners (the Dockerfile sha256sum -c + digest pull);
+      # this closes the pin-DRIFT gap. It rides this already-required job so it
+      # inherits required-ness with no branch-protection change, and no-ops
+      # cleanly (exit 0) when docker/wordpress/pins.lock is absent, so unrelated
+      # PRs are unaffected. Pure node (no pnpm) — like actions-pinned-gate.
+      - name: WP MCP gateway fixture pin-integrity gate
+        run: node scripts/audit/wordpress-fixture-pins-gate.mjs
+
+      - name: WP MCP gateway fixture pin-integrity gate tests
+        run: node --test scripts/audit/__tests__/wordpress-fixture-pins-gate.test.mjs
+
       # Every extension must declare its cross-kind dependency edges in
       # cinatra.dependencies, kept in sync with the confident graph re-derived
       # from source (so the marketplace can dependency-order extraction). STRICT

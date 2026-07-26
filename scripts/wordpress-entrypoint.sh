@@ -2,44 +2,56 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# Cinatra WordPress dev container entrypoint wrapper.
+# Cinatra WordPress dev container entrypoint wrapper — pinned MCP gateway fixture
+# (#2016 S1).
 #
 # Runs BEFORE the official wordpress image's docker-entrypoint.sh, then
 # backgrounds a watcher that waits for core files + DB, runs `wp core install`
-# if needed, ENSURES the WordPress Abilities API + MCP adapter plugins are
-# present at the pinned refs, and activates abilities-api, cinatra, and
-# mcp-adapter (abilities-api first — mcp-adapter requires wp_register_ability()).
-# Finally exec's the original docker-entrypoint.sh so Apache boots normally.
+# if needed, ENSURES the pinned MCP plugins (mcp-adapter + enable-abilities-for-mcp)
+# are present, and activates: mcp-adapter, the fixture third-party plugin,
+# enable-abilities-for-mcp, and cinatra. Finally exec's the original
+# docker-entrypoint.sh so Apache boots normally.
+#
+# WP 6.9 ships the WordPress Abilities API in CORE (wp_register_ability() is
+# always loaded before plugins), so the separate WordPress/abilities-api plugin
+# is DROPPED — and with it the old "abilities-api MUST activate before
+# mcp-adapter" ordering constraint. Abilities/servers register per-request on the
+# `wp_abilities_api_init` / `mcp_adapter_init` actions.
 #
 # BOOT SPEED (#260 Step 6): the cinatra dev image (docker/wordpress/Dockerfile)
-# BAKES git/composer/wp-cli + both plugins (clone + `composer install`) at build
-# time, into the /usr/src/wordpress staging tree. On a fresh volume the official
-# entrypoint tars them into /var/www/html, so by the time this watcher runs the
-# plugins already exist + `composer install` is done — the slow network/composer
-# work never competes with the uat-gate's ~5-min readiness window. install_tools
-# + ensure_plugin below are then fast no-ops (guarded on what already exists).
-#
-# The ensure_plugin clone-if-missing/repair-if-incomplete path is the FALLBACK
-# for (a) warm named volumes created before this image existed (the bake never
-# reaches an already-populated volume), and (b) the stock `wordpress:` image if
-# someone runs compose without building. It is idempotent: a complete plugin dir
-# at the pinned ref is left untouched; an incomplete or wrong-ref dir is
-# re-cloned + re-composed.
+# BAKES git/wp-cli + the pinned plugins at build time into the /usr/src/wordpress
+# staging tree. On a fresh volume the official entrypoint tars them into
+# /var/www/html, so by the time this watcher runs the plugins already exist —
+# install_tools + ensure_* below are then fast no-ops (guarded on what already
+# exists). The ensure_* fetch-if-missing/repair-if-incomplete path is the
+# FALLBACK for (a) warm named volumes created before this image existed (the bake
+# never reaches an already-populated volume), and (b) the stock `wordpress:`
+# image if someone runs compose without building. It is idempotent: a complete
+# plugin dir is left untouched; an incomplete/absent dir is re-fetched from the
+# pinned, checksummed release ZIP.
 # -----------------------------------------------------------------------------
 
-# Version pins are bare (no leading "v"); the git tag is derived as v<version>.
-# This keeps the source-leak-gate SLG_MILESTONE_VERSION rule (which flags net-new
-# vX.Y.Z literals as internal milestone markers) from tripping on third-party
-# release pins, while preserving the *_REF override (callers may still pass a
-# branch / SHA / full ref via *_REF).
-MCP_ADAPTER_VERSION="${MCP_ADAPTER_VERSION:-0.4.1}"
-MCP_ADAPTER_REF="${MCP_ADAPTER_REF:-v${MCP_ADAPTER_VERSION}}"
-# WordPress/mcp-adapter REQUIRES the WordPress Abilities API (it provides
-# wp_register_ability(); without it mcp-adapter's DefaultServerFactory cannot
-# create the `mcp/mcp-adapter-default-server` REST route, so /wp-json/mcp 404s
-# and the external-MCP toolbox resolves 0 tools). Pin the matching release line.
-ABILITIES_API_VERSION="${ABILITIES_API_VERSION:-0.4.0}"
-ABILITIES_API_REF="${ABILITIES_API_REF:-v${ABILITIES_API_VERSION}}"
+# Pinned third-party artifacts. Versions are bare (no leading "v"); the release
+# URL is derived as v<version>. This keeps the source-leak-gate
+# SLG_MILESTONE_VERSION rule (net-new vX.Y.Z literals read as internal milestone
+# markers) from tripping on third-party release pins, while preserving *_URL /
+# *_SHA256 overrides. The version + sha256 values MUST equal
+# docker/wordpress/pins.lock (scripts/audit/wordpress-fixture-pins-gate.mjs
+# enforces lockstep). The Dockerfile bakes these; this is the warm-volume /
+# stock-image fallback that resolves the identical, checksum-verified artifact.
+MCP_ADAPTER_VERSION="${MCP_ADAPTER_VERSION:-0.5.0}"
+MCP_ADAPTER_SHA256="${MCP_ADAPTER_SHA256:-a13f253c7bf4314b6cce7e238be2d5857eee66242bfe5ff5cb5576f74dc41593}"
+MCP_ADAPTER_URL="${MCP_ADAPTER_URL:-https://github.com/WordPress/mcp-adapter/releases/download/v${MCP_ADAPTER_VERSION}/mcp-adapter.zip}"
+# enable-abilities-for-mcp exposes WP-core `ewpa/*` + registered abilities as MCP
+# tools; the WordPress.org distribution ships built (no vendor tree required).
+EAFM_VERSION="${EAFM_VERSION:-2.0.20}"
+EAFM_SHA256="${EAFM_SHA256:-5c3a2b287c73d85503e5118957475fbec598c548f50bc873f05f0293a131553a}"
+EAFM_URL="${EAFM_URL:-https://downloads.wordpress.org/plugin/enable-abilities-for-mcp.${EAFM_VERSION}.zip}"
+# wp-cli pinned to a tagged release + sha256 (was the unpinned builds channel).
+WP_CLI_VERSION="${WP_CLI_VERSION:-2.12.0}"
+WP_CLI_SHA256="${WP_CLI_SHA256:-ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c}"
+WP_CLI_URL="${WP_CLI_URL:-https://github.com/wp-cli/wp-cli/releases/download/v${WP_CLI_VERSION}/wp-cli-${WP_CLI_VERSION}.phar}"
+
 WP_DEV_URL="${WP_DEV_URL:-http://localhost:8080}"
 WP_DEV_ADMIN_USER="${WP_DEV_ADMIN_USER:-admin}"
 WP_DEV_ADMIN_PASS="${WP_DEV_ADMIN_PASS:-admin}"
@@ -53,13 +65,13 @@ WP_DEV_ADMIN_EMAIL="${WP_DEV_ADMIN_EMAIL:-dev@example.com}"
 WP_PATH=/var/www/html
 PLUGINS_DIR="$WP_PATH/wp-content/plugins"
 ADAPTER_DIR="$PLUGINS_DIR/mcp-adapter"
-ABILITIES_DIR="$PLUGINS_DIR/abilities-api"
+EAFM_DIR="$PLUGINS_DIR/enable-abilities-for-mcp"
 
 log() { printf "[cinatra-wp] %s\n" "$*"; }
 
 install_tools() {
-  # Install wp-cli, git, composer, unzip if missing. apt updates on first boot
-  # of a fresh container (not volume — these live in the image layer).
+  # Install wp-cli, git, unzip if missing. apt updates on first boot of a fresh
+  # container (not volume — these live in the image layer).
   local need_apt=0
   command -v git >/dev/null 2>&1 || need_apt=1
   command -v unzip >/dev/null 2>&1 || need_apt=1
@@ -72,14 +84,10 @@ install_tools() {
     rm -rf /var/lib/apt/lists/*
   fi
 
-  if ! command -v composer >/dev/null 2>&1; then
-    log "Installing composer..."
-    curl -sSLf https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
-  fi
-
   if ! command -v wp >/dev/null 2>&1; then
-    log "Installing wp-cli..."
-    curl -sSLfo /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+    log "Installing pinned wp-cli ${WP_CLI_VERSION}..."
+    curl -fsSLo /usr/local/bin/wp "$WP_CLI_URL"
+    echo "${WP_CLI_SHA256}  /usr/local/bin/wp" | sha256sum -c -
     chmod +x /usr/local/bin/wp
   fi
 }
@@ -143,11 +151,11 @@ install_wp_core_if_needed() {
 }
 
 plugin_is_complete() {
-  # Completeness signal for a baked/copied/cloned plugin dir. A dir is COMPLETE
+  # Completeness signal for a baked/copied/fetched plugin dir. A dir is COMPLETE
   # when its main plugin file exists AND (if it needs a composer vendor tree)
-  # vendor/autoload.php exists. This is what the .git-only check missed: a baked
-  # image may strip .git, and an interrupted clone can leave .git present but
-  # vendor/ absent. Args: <dir> <main-file-basename> <needs-vendor:0|1>.
+  # vendor/autoload.php exists. A baked image may strip provenance, and an
+  # interrupted fetch can leave a partial dir. Args: <dir> <main-file-basename>
+  # <needs-vendor:0|1>.
   local dir="$1" main_file="$2" needs_vendor="$3"
   [ -f "$dir/$main_file" ] || return 1
   if [ "$needs_vendor" = "1" ] && [ ! -f "$dir/vendor/autoload.php" ]; then
@@ -157,90 +165,86 @@ plugin_is_complete() {
 }
 
 ensure_plugin() {
-  # Idempotent ensure-at-pinned-ref. FAST-PATH: when the cinatra dev image baked
-  # the plugin (docker/wordpress/Dockerfile) the official entrypoint has already
-  # copied a COMPLETE dir into the volume — and if .git survived, it is at the
-  # pinned ref — so we skip without any network call. FALLBACK (warm pre-bake
-  # volume, or stock `wordpress:` image): clone --depth 1 --single-branch + run
-  # composer install. A wrong-ref or INCOMPLETE dir is removed and re-cloned.
+  # Idempotent ensure-at-pinned-artifact via a checksummed release ZIP. FAST-PATH:
+  # when the cinatra dev image baked the plugin, the official entrypoint has
+  # already copied a COMPLETE dir into the volume, so we skip without any network
+  # call. FALLBACK (warm pre-bake volume, or stock `wordpress:` image): download
+  # the pinned ZIP, verify sha256 (fail-closed), unzip, and — only when the ZIP
+  # does NOT bundle a vendor tree AND one is required — run composer install. An
+  # incomplete/absent dir is removed and re-fetched.
   #
-  # Args: <name> <dir> <repo-url> <ref> <main-file-basename> <needs-vendor:0|1>
-  local name="$1" dir="$2" repo="$3" ref="$4" main_file="$5" needs_vendor="$6"
+  # Args: <name> <dir> <url> <sha256> <main-file-basename> <needs-vendor:0|1> <bundles-vendor:0|1>
+  local name="$1" dir="$2" url="$3" sha256="$4" main_file="$5" needs_vendor="$6" bundles_vendor="$7"
 
-  if [ -d "$dir/.git" ]; then
-    # The entrypoint runs as root but a baked/copied plugin is owned by www-data,
-    # so git 2.35+ refuses to operate ("dubious ownership") and `describe` would
-    # report the wrong ref. Mark it safe (idempotent, --add is harmless to repeat)
-    # so the ref check is meaningful instead of always falling to "unknown".
-    git config --global --add safe.directory "$dir" 2>/dev/null || true
-    local current_ref
-    current_ref=$(git -C "$dir" describe --tags --always 2>/dev/null || echo "unknown")
-    if plugin_is_complete "$dir" "$main_file" "$needs_vendor" \
-       && { [ "$current_ref" = "$ref" ] || [ "$current_ref" = "unknown" ]; }; then
-      # Skip when complete AND (at the pinned ref OR the ref is unresolvable on a
-      # shallow/baked clone — completeness already proves it is the baked, pinned
-      # copy; re-cloning a good dir would just burn readiness time).
-      log "$name complete (ref=$current_ref), skipping clone."
-      return 0
-    fi
-    log "$name at ref=$current_ref (incomplete or wrong ref) — removing and re-cloning $ref..."
-    rm -rf "$dir"
-  elif [ -d "$dir" ]; then
-    # Dir exists without .git — either a baked plugin whose .git was stripped, or
-    # a leftover partial. If complete, trust it (the baked image is ref-pinned);
-    # otherwise remove + re-clone.
-    if plugin_is_complete "$dir" "$main_file" "$needs_vendor"; then
-      log "$name present (baked, complete), skipping clone."
-      return 0
-    fi
-    log "$name dir exists but is incomplete — removing and re-cloning $ref..."
-    rm -rf "$dir"
+  if plugin_is_complete "$dir" "$main_file" "$needs_vendor"; then
+    log "$name complete (baked/warm), skipping fetch."
+    return 0
   fi
 
-  log "Cloning $name@$ref..."
-  git -c advice.detachedHead=false clone --depth 1 --single-branch --branch "$ref" \
-    "$repo" "$dir"
+  log "$name incomplete or absent — fetching pinned ZIP $url ..."
+  rm -rf "$dir"
+  local tmpzip tmpdir inner
+  tmpzip="$(mktemp)"
+  tmpdir="$(mktemp -d)"
+  curl -fsSLo "$tmpzip" "$url"
+  # Fail-closed checksum verification (the authoritative remote-artifact check
+  # also runs in the Dockerfile bake; this covers the fallback path).
+  echo "${sha256}  ${tmpzip}" | sha256sum -c -
+  unzip -q "$tmpzip" -d "$tmpdir"
+  # The release ZIP contains a single top-level plugin dir; move it into place so
+  # the target slug is correct regardless of the archive's inner dir name.
+  inner="$(find "$tmpdir" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+  mv "$inner" "$dir"
+  rm -rf "$tmpzip" "$tmpdir"
 
-  log "Running composer install inside $name..."
-  # Mirror the build-time flags: --prefer-dist (zip, no per-package git clones),
-  # --no-scripts (neither plugin defines composer install-event scripts at these
-  # pins — only dev lint/test commands). (No --no-audit: `composer install` runs
-  # no audit by default and rejects the flag — it is update/require-only.)
-  (cd "$dir" && COMPOSER_ALLOW_SUPERUSER=1 composer install \
-    --no-dev --no-interaction --no-progress --prefer-dist --no-scripts)
+  if [ "$needs_vendor" = "1" ] && [ "$bundles_vendor" != "1" ] && [ ! -f "$dir/vendor/autoload.php" ]; then
+    log "Running composer install inside $name (ZIP did not bundle vendor)..."
+    # --prefer-dist (zip, no per-package git clones), --no-scripts (no install-event
+    # scripts at these pins). (No --no-audit: `composer install` runs no audit by
+    # default and rejects the flag — it is update/require-only.)
+    (cd "$dir" && COMPOSER_ALLOW_SUPERUSER=1 composer install \
+      --no-dev --no-interaction --no-progress --prefer-dist --no-scripts)
+  fi
 
   chown -R www-data:www-data "$dir"
 }
 
-ensure_abilities_api() {
-  # WordPress/abilities-api is a hard prerequisite for mcp-adapter (it provides
-  # wp_register_ability()). It must be present + activated BEFORE mcp-adapter so
-  # the `mcp_adapter_init` action can register the default MCP server route.
-  # Its main file loads includes/bootstrap.php directly (not vendor/autoload),
-  # so vendor is not strictly required for runtime — needs_vendor=0.
-  ensure_plugin "abilities-api" "$ABILITIES_DIR" \
-    "https://github.com/WordPress/abilities-api.git" "$ABILITIES_API_REF" \
-    "abilities-api.php" "0"
+ensure_mcp_adapter() {
+  # mcp-adapter's Autoloader fatals if vendor/autoload.php is missing, so vendor
+  # IS required — needs_vendor=1. The 0.5.0 release ZIP bundles vendor/autoload.php
+  # (pins.lock mcpAdapter.bundlesVendor=true), so bundles_vendor=1 → no composer.
+  ensure_plugin "mcp-adapter" "$ADAPTER_DIR" \
+    "$MCP_ADAPTER_URL" "$MCP_ADAPTER_SHA256" \
+    "mcp-adapter.php" "1" "1"
 }
 
-ensure_mcp_adapter() {
-  # mcp-adapter's Autoloader fatals if vendor/autoload.php is missing ("make sure
-  # to run composer install"), so vendor IS required — needs_vendor=1.
-  ensure_plugin "mcp-adapter" "$ADAPTER_DIR" \
-    "https://github.com/WordPress/mcp-adapter.git" "$MCP_ADAPTER_REF" \
-    "mcp-adapter.php" "1"
+ensure_enable_abilities_for_mcp() {
+  # enable-abilities-for-mcp loads its includes directly (no vendor tree needed —
+  # needs_vendor=0); the WordPress.org distribution ships built (bundles_vendor=1).
+  ensure_plugin "enable-abilities-for-mcp" "$EAFM_DIR" \
+    "$EAFM_URL" "$EAFM_SHA256" \
+    "enable-abilities-for-mcp.php" "0" "1"
 }
 
 activate_plugins() {
-  log "Activating abilities-api + cinatra + mcp-adapter..."
-  # Activate individually so one failure doesn't block the other; log result.
-  # abilities-api MUST activate before mcp-adapter — mcp-adapter's
-  # `mcp_adapter_init` registration needs wp_register_ability() to exist.
-  wp --path="$WP_PATH" --allow-root plugin activate abilities-api 2>&1 \
+  log "Activating mcp-adapter + fixture-thirdparty-mcp + enable-abilities-for-mcp + cinatra..."
+  # Deterministic order (WP 6.9 core Abilities API is always loaded before
+  # plugins, so there is no abilities-api-before-adapter constraint):
+  #   1. mcp-adapter                — MCP server infrastructure / route factory
+  #   2. fixture-thirdparty-mcp     — registers fixturelabs/* abilities + a
+  #                                    dedicated MCP server (activated BEFORE eafm
+  #                                    so its abilities pre-exist regardless of
+  #                                    eafm's discovery lifecycle — #2016 S1)
+  #   3. enable-abilities-for-mcp   — exposes WP-core + registered abilities as MCP tools
+  #   4. cinatra                    — companion glue (bind-mounted)
+  # Activate individually so one failure doesn't block the rest; log result.
+  wp --path="$WP_PATH" --allow-root plugin activate mcp-adapter 2>&1 \
+    | grep -v "already active" || true
+  wp --path="$WP_PATH" --allow-root plugin activate fixture-thirdparty-mcp 2>&1 \
+    | grep -v "already active" || true
+  wp --path="$WP_PATH" --allow-root plugin activate enable-abilities-for-mcp 2>&1 \
     | grep -v "already active" || true
   wp --path="$WP_PATH" --allow-root plugin activate cinatra 2>&1 \
-    | grep -v "already active" || true
-  wp --path="$WP_PATH" --allow-root plugin activate mcp-adapter 2>&1 \
     | grep -v "already active" || true
 }
 
@@ -266,8 +270,8 @@ bootstrap() {
   wait_for_config || return 0
   wait_for_db || return 0
   install_wp_core_if_needed || log "WARN: wp core install failed"
-  ensure_abilities_api || log "WARN: abilities-api ensure failed"
   ensure_mcp_adapter || log "WARN: mcp-adapter ensure failed"
+  ensure_enable_abilities_for_mcp || log "WARN: enable-abilities-for-mcp ensure failed"
   activate_plugins
   seed_content
   log "Bootstrap complete."
