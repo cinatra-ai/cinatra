@@ -350,7 +350,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",
       "repo": "cinatra-ai/wordpress-mcp-connector",
-      "resolvedSha": "ff29da33489924d4814ee73ae37abd39d6905a18"
+      "resolvedSha": "9414cd8a539a8739e361b64817e4626c3114de61"
     },
     {
       "packageName": "@cinatra-ai/youtube-connector",
