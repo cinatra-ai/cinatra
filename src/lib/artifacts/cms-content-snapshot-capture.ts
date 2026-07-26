@@ -517,3 +517,64 @@ export async function captureCmsContentSnapshot(
       : null,
   };
 }
+
+/**
+ * Read back the PROPOSED CMS field map a capture persisted, by its snapshot
+ * representation revision id. The snapshot bytes are the connector's canonical
+ * CMS-fields serialization (`application/vnd.cinatra.cms-fields+json` — a flat
+ * `{path: value}` JSON of the reviewed post state), so the read-back verifier can
+ * project the REVIEWED (base) fields for the apply-verification diff WITHOUT the
+ * connector ever re-sending them (the connector hands the host only the
+ * post-apply re-read; the approved proposal is the durable base, read here).
+ *
+ * Resolves the representation → its content-addressed blob (via the resource
+ * row's `metadata.storageKey`) and parses the JSON object to a string→string
+ * field map. Returns `null` when the revision, its resource, its storage key, or
+ * the blob content cannot be resolved / parsed (the caller fails closed — an
+ * unreadable base authorizes NO change, so every post-apply field reads as
+ * out-of-scope drift). Server-only; the blob read is async.
+ */
+export async function readCmsSnapshotProposedFields(
+  orgId: string,
+  snapshotRevisionId: string,
+): Promise<Record<string, string> | null> {
+  ensurePostgresSchema();
+  const schema = q();
+  const [res] = runPostgresQueriesSync({
+    connectionString: conn(),
+    queries: [
+      {
+        text: `SELECT r.metadata->>'storageKey' AS storage_key
+FROM "${schema}"."representation" rep
+JOIN "${schema}"."resource" r ON r.id = rep.resource_id
+WHERE rep.org_id = $1 AND rep.id = $2
+LIMIT 1`,
+        values: [orgId, snapshotRevisionId],
+      },
+    ],
+  });
+  const storageKey = (res?.rows?.[0] as { storage_key?: string | null } | undefined)?.storage_key;
+  if (!storageKey) return null;
+
+  let text: string;
+  try {
+    const handle = await createLocalDiskBlobStore().openByStorageKey({ orgId, storageKey });
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of handle.stream) chunks.push(chunk);
+    text = Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8");
+  } catch {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === "string") out[k] = v;
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
