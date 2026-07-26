@@ -109,12 +109,30 @@ export function normalizeOrigin(value: string): string | null {
   return `${parsed.protocol}//${host}${isDefaultPort ? "" : `:${parsed.port}`}`;
 }
 
-/** Validate the adapter's external id as an addressable post id. Strict decimal
- * (no sign, no whitespace, no exponent, no leading `+`), 1..2^31-1. */
+/**
+ * Validate the adapter's external id as an addressable post id.
+ *
+ * TWO accepted forms, both closed and strictly decimal (no sign, no whitespace,
+ * no exponent, no leading `+`), 1..2^31-1:
+ *
+ *   `<id>`                 — a bare post id.
+ *   `<instanceId>:<id>`    — the connector's SITE-SCOPED composition
+ *                            (`cmsExternalId(instanceId, cmsResourceId)`), which
+ *                            is what a real staged CMS write actually carries on
+ *                            its pointer. Only the segment after the LAST colon
+ *                            is read, and it must satisfy the same strict decimal
+ *                            grammar; the instance segment contributes nothing to
+ *                            the fetched URL.
+ *
+ * ANYTHING else is refused (`null`) — including an empty instance segment, a
+ * trailing colon, or a non-decimal tail. There is no lenient extraction: the
+ * whole string must match one of the two grammars.
+ */
 export function parsePostId(externalId: string | null | undefined): number | null {
   if (typeof externalId !== "string") return null;
-  if (!/^[0-9]{1,10}$/.test(externalId)) return null;
-  const id = Number(externalId);
+  const match = /^(?:[^:\s]+:)?([0-9]{1,10})$/.exec(externalId);
+  if (!match) return null;
+  const id = Number(match[1]);
   if (!Number.isSafeInteger(id) || id < 1 || id > MAX_POST_ID) return null;
   return id;
 }
