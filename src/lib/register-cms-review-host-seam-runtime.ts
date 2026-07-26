@@ -69,6 +69,19 @@ function createCmsReviewHostSeamDeps(): CmsReviewHostSeamDeps {
     },
     captureCmsContentSnapshot: async (i) =>
       (await import("@/lib/artifacts/cms-content-snapshot-capture")).captureCmsContentSnapshot(i),
+    // S6 (#2044 L-B): the pinned fetched-render capture. Lazy exactly like the
+    // stores above — the capture module reaches the connect-site store, the
+    // webhook secret service, and (through a SPAWNED script, never an import) a
+    // headless browser, so it must never appear in a route-reachable graph.
+    capturePinnedPreview: async (i) => {
+      const { capturePinnedPreviewForGate } = await import(
+        "@/lib/artifacts/cms-preview-capture"
+      );
+      const outcome = await capturePinnedPreviewForGate(i);
+      return outcome.status === "captured"
+        ? { status: "captured" }
+        : { status: "degraded", reason: outcome.reason };
+    },
     resolveArtifactEffectDisposition: async (i) =>
       (await import("@cinatra-ai/agents/lifecycle-review-orchestration")).resolveArtifactEffectDisposition(i),
     readCmsSnapshotTargetByOperation: async (operationId) => {

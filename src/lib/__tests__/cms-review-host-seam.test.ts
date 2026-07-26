@@ -386,4 +386,81 @@ describe("cinatra#2043 — host cms-review capability binding", () => {
     });
     expect(res).toEqual({ ok: false, code: "gate-target-mismatch", error: "gate does not pin the snapshot" });
   });
+  // -------------------------------------------------------------------------
+  // S6 (#2044 L-B) — the PINNED preview capture step.
+  // -------------------------------------------------------------------------
+
+  it("pins the preview capture at gate creation, with the gate's pinned target and frame identity", async () => {
+    const capturePreview = vi.fn<NonNullable<CmsReviewHostSeamDeps["capturePinnedPreview"]>>(
+      async () => ({ status: "captured" as const }),
+    );
+    const seam = buildCmsReviewHostSeam(
+      makeDeps({
+        resolveIdentity: async () => ({ orgId: "org-42", runId: "run-42", createdBy: "user-42" }),
+        capturePinnedPreview: capturePreview,
+      }),
+    );
+    await seam.captureStagedWrite(captureInput());
+    expect(capturePreview).toHaveBeenCalledTimes(1);
+    expect(capturePreview.mock.calls[0][0]).toEqual({
+      orgId: "org-42",
+      // The pair the gate PINS — so the capture is retrievable from the gate.
+      boundArtifactId: "art-1",
+      boundSnapshotRevisionId: "rev-1",
+      role: "current",
+      // The pointer's url is a SELECTOR handed to the capture policy, which
+      // resolves the actual address from the connect-registered origins.
+      sourceUrl: POINTER.url,
+      externalId: POINTER.externalId,
+      title: "New Title",
+      createdBy: "user-42",
+      producerRunId: "run-42",
+    });
+  });
+
+  it("a FAILING capture never fails the staged write (the gate is unaffected)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const seam = buildCmsReviewHostSeam(
+      makeDeps({
+        capturePinnedPreview: async () => {
+          throw new Error("the site is down");
+        },
+      }),
+    );
+    await expect(seam.captureStagedWrite(captureInput())).resolves.toMatchObject({
+      artifactId: "art-1",
+      snapshotRevisionId: "rev-1",
+    });
+    warn.mockRestore();
+  });
+
+  it("a DEGRADED capture is not an error either — the write returns unchanged", async () => {
+    const seam = buildCmsReviewHostSeam(
+      makeDeps({
+        capturePinnedPreview: async () => ({
+          status: "degraded" as const,
+          reason: "preview-unreachable",
+        }),
+      }),
+    );
+    await expect(seam.captureStagedWrite(captureInput())).resolves.toMatchObject({
+      artifactId: "art-1",
+      operationId: "op-1",
+    });
+  });
+
+  it("with NO capture dep the write path is byte-identical to S5 (no capture step runs)", async () => {
+    const capture = vi.fn<CmsReviewHostSeamDeps["captureCmsContentSnapshot"]>(async () => ({
+      artifactId: "art-1",
+      snapshotRevisionId: "rev-1",
+      snapshotTargetId: "tgt-1",
+      producedEventId: "ev-1",
+    }));
+    const deps = makeDeps({ captureCmsContentSnapshot: capture });
+    expect(deps.capturePinnedPreview).toBeUndefined();
+    await expect(buildCmsReviewHostSeam(deps).captureStagedWrite(captureInput())).resolves.toMatchObject({
+      artifactId: "art-1",
+    });
+    expect(capture).toHaveBeenCalledTimes(1);
+  });
 });
