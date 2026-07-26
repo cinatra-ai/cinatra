@@ -436,6 +436,8 @@
       "@cinatra-ai/objects": ["./packages/objects/src/index.ts"],
       "@cinatra-ai/artifacts": ["./packages/artifacts/src/index.ts"],
       "@cinatra-ai/chart-artifact/src/views/chart": ["./extensions/cinatra-ai/chart-artifact/src/views/chart.tsx"],
+      "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail": ["./extensions/cinatra-ai/cms-snapshot-artifact/src/renderers/detail.tsx"],
+      "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview": ["./extensions/cinatra-ai/cms-snapshot-artifact/src/renderers/preview.tsx"],
       "@cinatra-ai/image-artifact/src/renderers/detail": ["./extensions/cinatra-ai/image-artifact/src/renderers/detail.tsx"],
       "@cinatra-ai/image-artifact/src/renderers/preview": ["./extensions/cinatra-ai/image-artifact/src/renderers/preview.tsx"],
       "@cinatra-ai/pdf-artifact/src/renderers/pdf-detail": ["./extensions/cinatra-ai/pdf-artifact/src/renderers/pdf-detail.tsx"],
