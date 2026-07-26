@@ -232,3 +232,67 @@ describe("buildExternalMcpServerTools — manifest capability-marker selection",
     warn.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-entry collision scope (cinatra#2015 S0) — one colliding row never drops
+// the batch, and managed connector entries win over BYO registry rows.
+// ---------------------------------------------------------------------------
+
+describe("buildExternalMcpServerTools — collision resolution", () => {
+  it("a BYO registry row colliding with a managed toolbox label is suppressed with a warning; the managed tool injects", async () => {
+    h.fixtureRecord.providesExternalMcpToolbox = true;
+    h.builderRecord.providesExternalMcpToolbox = true;
+    // Managed first-party toolbox emits "Fixture Builder"; the BYO registry row
+    // for the other slug normalizes to the same name ("fixture_builder").
+    h.toolboxEntries[builderSlug] = {
+      load: async () => ({
+        createFixtureExternalMcpToolbox: () => ({ buildTools: async () => [builderTool] }),
+      }),
+      factory: "createFixtureExternalMcpToolbox",
+    };
+    vi.mocked(buildSingleExternalMcpTool).mockResolvedValueOnce({
+      ...registryTool,
+      serverLabel: "Fixture builder",
+      serverUrl: "https://byo-collider.example.com/mcp",
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const tools = await buildExternalMcpServerTools("openai");
+
+    // Managed wins regardless of enumeration order; the BYO collider is gone.
+    expect(tools).toEqual([builderTool]);
+    expect(
+      warn.mock.calls.some((c) => String(c[0]).includes("suppressed")),
+    ).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("the non-colliding rest of the batch still injects alongside a suppressed collider", async () => {
+    h.fixtureRecord.providesExternalMcpToolbox = true;
+    h.builderRecord.providesExternalMcpToolbox = true;
+    h.toolboxEntries[builderSlug] = {
+      load: async () => ({
+        createFixtureExternalMcpToolbox: () => ({
+          buildTools: async () => [
+            builderTool,
+            { ...builderTool, serverLabel: "Unrelated Survivor", serverUrl: "https://s.example.com/mcp" },
+          ],
+        }),
+      }),
+      factory: "createFixtureExternalMcpToolbox",
+    };
+    vi.mocked(buildSingleExternalMcpTool).mockResolvedValueOnce({
+      ...registryTool,
+      serverLabel: "fixture-builder", // collides with builderTool only
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const tools = await buildExternalMcpServerTools("openai");
+
+    expect(tools.map((t) => t.serverLabel).sort()).toEqual([
+      "Unrelated Survivor",
+      "fixture-builder",
+    ].sort());
+    warn.mockRestore();
+  });
+});

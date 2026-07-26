@@ -216,6 +216,23 @@ info "Nango is ready."
 # own demo content from their entrypoints; Twenty + Plane content is seeded from
 # the app-side demo path once their connections converge.
 if [ "$DEMO" = "1" ]; then
+  # The `wordpress` + `drupal` profiles below ALSO bring up the shared `wayflow`
+  # runtime container (docker-compose.yml: the wayflow service declares
+  # `profiles: [wayflow, drupal, wordpress]`). That container authenticates every
+  # callback to /api/llm-bridge with CINATRA_BRIDGE_TOKEN, which it reads from the
+  # NARROW generated file docker/wayflow/.wayflow.env (its `env_file`,
+  # `required: false`). `npm run services` regenerates that file on every
+  # bring-up (gen-wayflow-env.mjs); the demo/setup path never did, so a fresh
+  # `make setup-demo` started wayflow with NO token and agent_loader.py
+  # crash-looped ("FATAL: CINATRA_BRIDGE_TOKEN is unset or empty") — widget agent
+  # replies then stayed empty until the token was populated by hand
+  # (cinatra#2075). Generate the file HERE, from the per-install random token
+  # minted into .env.local above (never a shared constant, never printed), BEFORE
+  # the bring-up. `--require-bridge-token` mirrors `npm run services` and turns a
+  # missing token into a loud, actionable failure instead of a silent 403.
+  info "Provisioning the WayFlow bridge-token env (docker/wayflow/.wayflow.env) from .env.local..."
+  node scripts/gen-wayflow-env.mjs --require-bridge-token
+
   info "Bringing up the four demo app profiles (wordpress, drupal, twenty, plane)..."
   docker compose -f docker-compose.yml -f docker-compose.dev.yml \
     --profile wordpress --profile drupal --profile twenty --profile plane up -d

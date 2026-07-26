@@ -183,6 +183,18 @@ async function writeVerificationRecordAndMaybeReopen(
   // A failed verification reopens EXACTLY ONE bounded gate on the same run, WITHIN
   // the S2 cycle bound. Past the bound it escalates (records the verdict, reopens
   // nothing — never an unbounded reopen loop).
+  //
+  // NOT the Seam A class (cinatra#2065 grounding). The record insert above and this
+  // reopen emit are two statements, but the reopen does NOT share the repair
+  // successor-gate seam's defect, so it needs no one-transaction fix: (1) the
+  // reopen target is DURABLY DETERMINISTIC — always `repairedTarget`, derived from
+  // the persisted verification record / repair row, never a caller-varying fresh
+  // target — so a retry re-emits the IDENTICAL (run, task, target) and converges
+  // idempotently, never a pin conflict; and (2) the record insert is itself
+  // idempotent on a deterministic id, so a crash between the two heals on any
+  // re-drive. `submitRepairResponse`'s idempotent-replay branch RE-RUNS this exact
+  // trigger for precisely that reason. Fail-closed either way (an unwritten reopen
+  // leaves the effect HELD, never released).
   const maxCycles = input.maxCycles ?? MAX_REPAIR_CYCLES;
   if (input.attempt >= maxCycles) {
     return { ok: true, verificationId: id, gateId: input.gateId, verdict, idempotent, reopenedGateId: null, escalated: true };

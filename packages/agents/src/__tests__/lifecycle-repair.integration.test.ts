@@ -38,6 +38,7 @@ import {
   autoReviewTaskId,
   batchPartitionReviewTaskId,
   isBatchAutoReviewTaskId,
+  repairSuccessorReviewTaskId,
 } from "@/lib/lifecycle/lifecycle-orchestration";
 import { partitionBatchTargets, type BatchTarget } from "@/lib/lifecycle/lifecycle-batch";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
@@ -53,6 +54,7 @@ let outboxStore: typeof import("../lifecycle-produced-outbox-store");
 let gateStore: typeof import("../artifact-review-gate-store");
 let orch: typeof import("../lifecycle-review-orchestration-store");
 let repairStore: typeof import("../lifecycle-repair-store");
+let recoveryStore: typeof import("../lifecycle-repair-recovery-store");
 let crStore: typeof import("../lifecycle-review-changes-requested-store");
 let dbMod: typeof import("../db");
 
@@ -169,6 +171,7 @@ beforeAll(async () => {
   gateStore = await import("../artifact-review-gate-store");
   orch = await import("../lifecycle-review-orchestration-store");
   repairStore = await import("../lifecycle-repair-store");
+  recoveryStore = await import("../lifecycle-repair-recovery-store");
   crStore = await import("../lifecycle-review-changes-requested-store");
   dbMod = await import("../db");
 }, 90_000);
@@ -846,6 +849,248 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
       representationRevisionId: ev.representationRevisionId,
     });
     expect(released.held).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // SEAM A hardening (cinatra#2065) — the successor-gate emit + repair finalize
+  // is now ONE transaction (the enlisted emit), and pre-fix orphaned strands are
+  // converged by orphan-recovery.
+  // -------------------------------------------------------------------------
+
+  /** Drive a repair to the `requested` state on a fresh external-publish artifact. */
+  async function openRepair(): Promise<{ ev: ArtifactProducedEvent; repairId: string; attempt: number; req: ChangesRequestedRequest }> {
+    const ev = await produce("document", { destinationClass: "external_publish" });
+    await orch.sweepReviewOrchestration();
+    const baseTaskId = autoReviewTaskId(ev.eventId);
+    const baseGate = await gateStore.readReviewGate(ev.producerRunId!, baseTaskId);
+    const req = mkChangesRequested(ev, baseGate!.id);
+    const cr = await repairStore.recordChangesRequested({
+      runId: ev.producerRunId!,
+      reviewTaskId: baseTaskId,
+      orgId: ORG,
+      request: req,
+      repairCapable: true,
+      producerRunId: ev.producerRunId,
+      currentBaseRevisionId: ev.representationRevisionId,
+    });
+    if (!cr.ok) throw new Error(`openRepair: ${cr.code}`);
+    return { ev, repairId: cr.repairId, attempt: cr.attempt, req };
+  }
+
+  it("SEAM A: a fault between successor emit and finalize strands NOTHING; a FRESH-target retry converges (no pin conflict)", async () => {
+    const { ev, repairId, attempt, req } = await openRepair();
+    const runId = ev.producerRunId!;
+    const successorTaskId = repairSuccessorReviewTaskId(repairId, attempt);
+    const faultedTarget = { artifactId: ev.artifactId, representationRevisionId: `rev-faulted-${randomUUID()}` };
+
+    // FAULT INJECTION — emit the successor gate ENLISTED on a transaction (exactly
+    // as the atomic submit does), then throw BEFORE the finalize so the unit rolls
+    // back. This is the "crash between emit and finalize" the AC demands; with the
+    // atomic fix it must leave NOTHING behind.
+    await expect(
+      dbMod.db.transaction(async (tx) => {
+        await gateStore.emitArtifactReviewGate(
+          { runId, orgId: ORG, reviewTaskId: successorTaskId, targets: [faultedTarget], expiresAt: null },
+          tx,
+        );
+        throw new Error("injected fault after successor emit, before finalize");
+      }),
+    ).rejects.toThrow("injected fault");
+
+    // NO stranded gate (the enlisted emit rolled back with the transaction); the
+    // repair is still open (never finalized).
+    expect(await gateStore.readReviewGate(runId, successorTaskId)).toBeNull();
+    expect((await repairStore.readRepair(repairId))?.status).toBe("requested");
+
+    // FRESH-target retry (a DIFFERENT successor revision than the faulted attempt)
+    // converges — no successor-pin conflict, because nothing was stranded.
+    const freshRev = `rev-fresh-${randomUUID()}`;
+    const rr = await repairStore.submitRepairResponse({
+      repairId,
+      currentBaseRevisionId: ev.representationRevisionId,
+      reauthorized: true,
+      response: {
+        gateId: req.gateId,
+        baseTarget: req.baseTarget,
+        successorTarget: { artifactId: ev.artifactId, representationRevisionId: freshRev },
+        findingOutcomes: [
+          { findingId: "f1", applied: true },
+          { findingId: "f2", applied: true },
+        ],
+        changeSummary: "fresh retry after fault",
+        producerProvenance: { runId, agentId: null },
+      },
+    });
+    expect(rr.ok).toBe(true);
+    if (!rr.ok) return;
+
+    // The successor gate pins the FRESH revision (not the faulted one); exactly ONE
+    // gate occupies the deterministic (run, task) slot.
+    const succ = await pool(
+      `SELECT pinned_targets FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE id=$1`,
+      [rr.successorGateId],
+    );
+    expect((succ.rows[0] as { pinned_targets: BatchTarget[] }).pinned_targets).toEqual([
+      { artifactId: ev.artifactId, representationRevisionId: freshRev },
+    ]);
+    const cnt = await pool(
+      `SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id=$1 AND review_task_id=$2`,
+      [runId, successorTaskId],
+    );
+    expect((cnt.rows[0] as { n: number }).n).toBe(1);
+
+    // The held effect re-pointed onto the fresh successor and releases ONLY by a
+    // genuine approve (a same-target retry passing would not have proven this).
+    expect((await eventRow(ev.eventId))?.continuation_address).toBe(rr.successorGateId);
+    expect(
+      (await orch.isArtifactEffectHeld({ artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId })).held,
+    ).toBe(true);
+    await resolveGateApprove(rr.successorGateId);
+    expect(
+      (await orch.isArtifactEffectHeld({ artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId })).held,
+    ).toBe(false);
+  });
+
+  it("SEAM A LEGACY: a pre-fix orphaned successor gate is CONVERGED by orphan-recovery (adopt); a naive fresh-target retry conflicts; idempotent", async () => {
+    const { ev, repairId, attempt, req } = await openRepair();
+    const runId = ev.producerRunId!;
+    const successorTaskId = repairSuccessorReviewTaskId(repairId, attempt);
+    const legacyRev = `rev-legacy-${randomUUID()}`;
+
+    // SEED the pre-fix strand DIRECTLY: the OLD non-atomic code emitted the successor
+    // gate in its OWN committed statement, then crashed before the separate finalize.
+    // Emit the orphan (committed) with the repair still 'requested' and the effect
+    // still linked to the BASE gate — a state the atomic fix can never mint.
+    const orphan = await gateStore.emitArtifactReviewGate({
+      runId,
+      orgId: ORG,
+      reviewTaskId: successorTaskId,
+      targets: [{ artifactId: ev.artifactId, representationRevisionId: legacyRev }],
+      expiresAt: null,
+    });
+    expect((await repairStore.readRepair(repairId))?.status).toBe("requested");
+    expect((await repairStore.readRepair(repairId))?.successorGateId).toBeNull();
+    expect((await eventRow(ev.eventId))?.continuation_address).toBe(req.gateId); // still on the base gate
+
+    // A naive FRESH-target retry cannot converge past the strand — the orphan occupies
+    // the deterministic slot → successor-pin-conflict. This is why recovery, not a
+    // same-slot re-emit, is the convergence path.
+    const conflict = await repairStore.submitRepairResponse({
+      repairId,
+      currentBaseRevisionId: ev.representationRevisionId,
+      reauthorized: true,
+      response: {
+        gateId: req.gateId,
+        baseTarget: req.baseTarget,
+        successorTarget: { artifactId: ev.artifactId, representationRevisionId: `rev-conflict-${randomUUID()}` },
+        findingOutcomes: [
+          { findingId: "f1", applied: true },
+          { findingId: "f2", applied: true },
+        ],
+        changeSummary: "x",
+        producerProvenance: { runId, agentId: null },
+      },
+    });
+    expect(conflict.ok).toBe(false);
+    if (!conflict.ok) expect(conflict.code).toBe("successor-pin-conflict");
+    // The strand did not finalize the repair.
+    expect((await repairStore.readRepair(repairId))?.status).toBe("requested");
+
+    // RECOVERY converges the strand: ADOPT the orphan gate as the successor.
+    const rec = await recoveryStore.recoverOrphanedRepairSuccessor(repairId);
+    expect(rec.ok).toBe(true);
+    if (!rec.ok) return;
+    expect(rec.status).toBe("recovered");
+    if (rec.status !== "recovered") return;
+    expect(rec.successorGateId).toBe(orphan.gateId);
+
+    const repaired = await repairStore.readRepair(repairId);
+    expect(repaired?.status).toBe("repaired");
+    expect(repaired?.successorGateId).toBe(orphan.gateId);
+    expect(repaired?.successorRepresentationRevisionId).toBe(legacyRev);
+    // The held effect re-pointed onto the adopted successor gate; still held.
+    expect((await eventRow(ev.eventId))?.continuation_address).toBe(orphan.gateId);
+    expect(
+      (await orch.isArtifactEffectHeld({ artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId })).held,
+    ).toBe(true);
+
+    // Idempotent: a second recovery is a no-op (already-repaired).
+    const rec2 = await recoveryStore.recoverOrphanedRepairSuccessor(repairId);
+    expect(rec2.ok).toBe(true);
+    if (!rec2.ok) return;
+    expect(rec2.status).toBe("already-repaired");
+
+    // The effect releases ONLY by a genuine approve of the adopted successor.
+    await resolveGateApprove(orphan.gateId);
+    expect(
+      (await orch.isArtifactEffectHeld({ artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId })).held,
+    ).toBe(false);
+  });
+
+  it("SEAM A: two CONCURRENT responses finalize exactly once — one successor gate, no strand, no duplicate (throw-rollback of the loser)", async () => {
+    const { ev, repairId, attempt, req } = await openRepair();
+    const runId = ev.producerRunId!;
+    const successorTaskId = repairSuccessorReviewTaskId(repairId, attempt);
+    const rev = `rev-concurrent-${randomUUID()}`;
+    const mkResp = () => ({
+      repairId,
+      currentBaseRevisionId: ev.representationRevisionId,
+      reauthorized: true,
+      response: {
+        gateId: req.gateId,
+        baseTarget: req.baseTarget,
+        successorTarget: { artifactId: ev.artifactId, representationRevisionId: rev },
+        findingOutcomes: [
+          { findingId: "f1", applied: true },
+          { findingId: "f2", applied: true },
+        ],
+        changeSummary: "concurrent",
+        producerProvenance: { runId, agentId: null },
+      },
+    });
+
+    // Both responses race the SAME deterministic (run, task) slot. The unique index
+    // serializes the emit; the loser's finalize CAS matches 0 rows → it THROWS
+    // FinalizeRollback → its transaction rolls back (discarding any work) → it
+    // returns the winner's successor gate idempotently. No strand, no duplicate.
+    const [a, b] = await Promise.all([
+      repairStore.submitRepairResponse(mkResp()),
+      repairStore.submitRepairResponse(mkResp()),
+    ]);
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    expect(a.successorGateId).toBe(b.successorGateId); // the SAME gate
+
+    const cnt = await pool(
+      `SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id=$1 AND review_task_id=$2`,
+      [runId, successorTaskId],
+    );
+    expect((cnt.rows[0] as { n: number }).n).toBe(1); // exactly one gate at the slot
+    const repaired = await repairStore.readRepair(repairId);
+    expect(repaired?.status).toBe("repaired");
+    expect(repaired?.successorGateId).toBe(a.successorGateId);
+    // The held effect re-pointed exactly once onto the single successor gate.
+    expect((await eventRow(ev.eventId))?.continuation_address).toBe(a.successorGateId);
+  });
+
+  it("SEAM A LEGACY: the bounded recovery SWEEP converges a seeded orphan (autonomous recovery)", async () => {
+    const { ev, repairId, attempt } = await openRepair();
+    const runId = ev.producerRunId!;
+    const successorTaskId = repairSuccessorReviewTaskId(repairId, attempt);
+    await gateStore.emitArtifactReviewGate({
+      runId,
+      orgId: ORG,
+      reviewTaskId: successorTaskId,
+      targets: [{ artifactId: ev.artifactId, representationRevisionId: `rev-sweep-${randomUUID()}` }],
+      expiresAt: null,
+    });
+    expect((await repairStore.readRepair(repairId))?.status).toBe("requested");
+
+    const summary = await recoveryStore.recoverOrphanedRepairSuccessors(500);
+    expect(summary.recovered).toBeGreaterThanOrEqual(1);
+    // The seeded orphan's repair converged autonomously.
+    expect((await repairStore.readRepair(repairId))?.status).toBe("repaired");
   });
 
 });

@@ -86,7 +86,7 @@ export type {
   McpTransport,
   McpMaterializerInput,
   MaterializedMcpServer,
-  McpMaterializerError,
+  McpMaterializerSkip,
   McpMaterializerResult,
 } from "./mcp-materializer";
 
@@ -186,11 +186,20 @@ export {
 export {
   computeSkillContentHash,
   normalizeBundledRelPath,
+  ANTHROPIC_SKILL_MAX_UPLOAD_BYTES,
+  buildCanonicalSkillZip,
+  checkSkillBoundary,
+  deriveAnthropicDisplayTitle,
+  deriveSkillRootDir,
   type SkillBundledFile,
+  type CanonicalSkillZip,
+  type SkillZipFile,
+  type SkillBoundaryCheck,
 } from "./tools/anthropic-skill-content-hash";
 export {
   FetchAnthropicCustomSkillsClient,
   ANTHROPIC_SKILLS_BETAS,
+  isDisplayTitleConflict,
   type AnthropicCustomSkillsClient,
   type AnthropicSkillUpload,
   type CreateSkillResult,
@@ -209,6 +218,8 @@ export {
 } from "./tools/anthropic-skill-gc-engine";
 export {
   AnthropicSkillSyncEngine,
+  AnthropicSkillSyncFailedError,
+  AnthropicSkillExpectedSetError,
   preflightAnthropicSkillSyncSizes,
   preflightSkillRequestSet,
   ANTHROPIC_SKILL_MAX_BYTES,
@@ -216,6 +227,7 @@ export {
   type SyncRow,
   type SyncResult,
   type SyncOutcome,
+  type ExpectedSetVerification,
   type AnthropicSkillSyncStatePort,
 } from "./tools/anthropic-skill-sync-engine";
 export {

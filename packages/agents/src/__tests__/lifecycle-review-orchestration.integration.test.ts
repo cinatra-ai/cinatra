@@ -575,4 +575,50 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
     const row = await readEventRow(ev.eventId);
     expect(row?.status).toBe("pending");
   });
+
+  // -------------------------------------------------------------------------
+  // SEAM B (cinatra#2065) — the orchestration create-gate → link seam is
+  // RETRY-CONVERGENT: an interruption AFTER the gate is created but BEFORE the
+  // event is linked + marked processed leaves the event PENDING + UNLINKED, and
+  // the next sweep converges it with NO duplicate gate and NO pin conflict. This
+  // is the documented alternative to one-transaction closure — proven here.
+  // -------------------------------------------------------------------------
+  it("SEAM B: a gate created but not yet linked (crash-window) converges on the next sweep — no duplicate gate, event linked", async () => {
+    process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "on";
+    const ev = await produce("document");
+    const taskId = autoReviewTaskId(ev.eventId);
+
+    // Simulate the PRE-#2065 crash window: the gate was CREATED (the emit
+    // committed) but the process died before the link + markProcessed ran. Emit
+    // the deterministic auto gate directly with the event's own target.
+    const orphan = await gateStore.emitArtifactReviewGate({
+      runId: ev.producerRunId!,
+      orgId: ORG,
+      reviewTaskId: taskId,
+      targets: [{ artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId }],
+      expiresAt: null,
+    });
+    expect(orphan.idempotent).toBe(false);
+
+    // The strand: the event is still PENDING and UNLINKED (continuation_address null).
+    const stranded = await readEventRow(ev.eventId);
+    expect(stranded?.status).toBe("pending");
+    expect(stranded?.continuation_address).toBeNull();
+
+    // The reconciling sweep RE-PLANS the still-pending event: the re-emit is
+    // idempotent onto the SAME (run, task, target), the link stamps, the event is
+    // marked processed — the strand self-heals.
+    await orch.sweepReviewOrchestration();
+    const converged = await readEventRow(ev.eventId);
+    expect(converged?.status).toBe("processed");
+    expect(converged?.continuation_address).toBe(orphan.gateId); // the SAME gate, adopted
+
+    // No DUPLICATE gate was minted for the deterministic (run, task).
+    const count = await pool(
+      `SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."artifact_review_gates"
+       WHERE run_id=$1 AND review_task_id=$2`,
+      [ev.producerRunId!, taskId],
+    );
+    expect((count.rows[0] as { n: number }).n).toBe(1);
+  });
 });

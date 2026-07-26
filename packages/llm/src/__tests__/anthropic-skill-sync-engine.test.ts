@@ -26,7 +26,10 @@ import {
   type SyncRow,
   type AnthropicSkillSyncStatePort,
 } from "../tools/anthropic-skill-sync-engine";
-import { computeSkillContentHash } from "../tools/anthropic-skill-content-hash";
+import {
+  computeSkillContentHash,
+  deriveAnthropicDisplayTitle,
+} from "../tools/anthropic-skill-content-hash";
 import { defaultAnthropicSkillUploadGate } from "../tools/anthropic-skill-upload-gate";
 import { AnthropicSkillPreflightError } from "../errors";
 import type { AnthropicCustomSkillsClient } from "../tools/anthropic-custom-skills-client";
@@ -154,9 +157,17 @@ describe("AnthropicSkillSyncEngine — first sync & drift", () => {
     const result = await engine.sync([c], () => true);
 
     expect(client.createSkill).not.toHaveBeenCalled();
+    // The upload payload is now the canonical rooted-zip form. This drift
+    // candidate's SKILL.md has no frontmatter, so the root falls back to the
+    // normalized catalog name ("Skill A" → "skill-a"); the display title is the
+    // stable workspace-unique title.
     expect(client.createSkillVersion).toHaveBeenCalledWith(
       "skill_existing",
-      expect.objectContaining({ displayName: "Skill A" }),
+      expect.objectContaining({
+        rootDir: "skill-a",
+        displayTitle: deriveAnthropicDisplayTitle("Skill A", "skill-a"),
+        zipBytes: expect.any(Buffer),
+      }),
     );
     const row = state.rows.get("skill-a")!;
     expect(row.anthropicSkillId).toBe("skill_existing"); // skill id never changes

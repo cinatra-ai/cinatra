@@ -34,7 +34,11 @@ import {
   type RevisionMemberOutcome,
 } from "@/lib/artifacts/artifact-review-preparation";
 
-import { resolveSemanticDispatch, classifyLoadablePath } from "./renderer-resolution";
+import {
+  resolveSemanticDispatch,
+  resolveRepresentationDispatch,
+  classifyLoadablePath,
+} from "./renderer-resolution";
 import { resolveRuntimeRendererForRoute } from "./runtime-renderer-route";
 
 /** The two run/gate ports the caller supplies (the agents-domain seam). */
@@ -78,37 +82,75 @@ export function bindArtifactReviewPorts(ctx: {
     mime: string;
     propsApiVersion: number;
   }): Promise<ResolvedRendererMount> => {
-    // Semantic detail slot this release — resolve the type's winner-bound semantic
-    // renderer. No semantic renderer ⇒ the generic floor.
+    // Classify a resolved (packageName, generatedKey, `built`) tuple — from EITHER
+    // dispatch path below — into a host mount descriptor exactly like the detail
+    // route: the build-map SSR fast path, the runtime dynamic seam, or the
+    // never-blank floor (requires-rebuild when the resolved key is not loadable in
+    // THIS build). Keyed only on the opaque `generatedKey`; no concrete package
+    // identity is branched on here (coupling-ban G1).
+    const mountLoadable = async (
+      packageName: string,
+      generatedKey: string,
+      built: boolean,
+    ): Promise<ResolvedRendererMount> => {
+      if (!built) {
+        // Runtime-installed but absent from THIS build.
+        return { kind: "floor", packageName, reason: "requires-rebuild" };
+      }
+      const path = classifyLoadablePath(generatedKey);
+      if (path === "build-map") {
+        return { kind: "build-map", packageName, generatedKey };
+      }
+      if (path === "runtime") {
+        const descriptor = await resolveRuntimeRendererForRoute(generatedKey, input.propsApiVersion);
+        if (!descriptor) {
+          return { kind: "floor", packageName, reason: "requires-rebuild" };
+        }
+        // Pass the descriptor through even when it carries a pre-import `reason`
+        // (peer/abi/archived) — the client loader renders its floor from the reason,
+        // exactly as the detail route does. Never blank.
+        return { kind: "runtime", packageName, descriptor };
+      }
+      return { kind: "floor", packageName, reason: "requires-rebuild" };
+    };
+
+    // 1) SEMANTIC detail slot — the type's winner-bound semantic renderer takes
+    // precedence (mirrors `pickArtifactRenderer`: semantic wins over
+    // representation). Winner-binding (defensive): the resolved claimant must BE
+    // the row's effective-identity extension winner.
     const semantic = resolveSemanticDispatch(input.artifact.objectType, input.artifact.effectiveIdentity);
-    // Winner-binding (defensive, mirrors pickArtifactRenderer): the resolved
-    // claimant must BE the row's effective-identity extension winner.
     const winnerBound =
       semantic !== null &&
       input.artifact.effectiveIdentity.kind === "extension" &&
       input.artifact.effectiveIdentity.extension === semantic.packageName;
-    if (!semantic || !winnerBound) {
-      return { kind: "floor", packageName: semantic?.packageName ?? null, reason: "no-semantic-renderer" };
+    if (semantic && winnerBound) {
+      return mountLoadable(semantic.packageName, semantic.generatedKey, semantic.built);
     }
-    if (!semantic.built) {
-      // Runtime-installed but absent from THIS build.
-      return { kind: "floor", packageName: semantic.packageName, reason: "requires-rebuild" };
+
+    // 2) REPRESENTATION fallback (the S6-L-A slice) — when no semantic renderer
+    // wins, consult the org-scoped representation-provider dispatch at the `detail`
+    // slot, exactly as the non-review detail route does
+    // (`resolveArtifactDispatchInputs`). An EXTENSION representation provider can
+    // therefore serve a review target — e.g. a CMS-snapshot MIME that has no
+    // semantic renderer now renders through its representation renderer instead of
+    // flooring to "review target unavailable". Keyed purely on `(orgId, mime)` +
+    // the opaque `generatedKey` — never on an extension package identity
+    // (coupling-ban G1). A first-party host handler is NOT a mountable review
+    // target (there is no such mount kind) and, like a no-provider MIME, falls
+    // through to the unchanged generic floor below.
+    const representation = resolveRepresentationDispatch(orgId, input.mime, "detail");
+    if (representation && representation.tier === "extension") {
+      return mountLoadable(
+        representation.packageName,
+        representation.generatedKey,
+        representation.built,
+      );
     }
-    const path = classifyLoadablePath(semantic.generatedKey);
-    if (path === "build-map") {
-      return { kind: "build-map", packageName: semantic.packageName, generatedKey: semantic.generatedKey };
-    }
-    if (path === "runtime") {
-      const descriptor = await resolveRuntimeRendererForRoute(semantic.generatedKey, input.propsApiVersion);
-      if (!descriptor) {
-        return { kind: "floor", packageName: semantic.packageName, reason: "requires-rebuild" };
-      }
-      // Pass the descriptor through even when it carries a pre-import `reason`
-      // (peer/abi/archived) — the client loader renders its floor from the reason,
-      // exactly as the detail route does. Never blank.
-      return { kind: "runtime", packageName: semantic.packageName, descriptor };
-    }
-    return { kind: "floor", packageName: semantic.packageName, reason: "requires-rebuild" };
+
+    // 3) FLOOR (unchanged) — no semantic winner and no extension representation
+    // provider. `packageName` still reports the semantic claimant when one exists
+    // (a losing non-winner claimant), else null.
+    return { kind: "floor", packageName: semantic?.packageName ?? null, reason: "no-semantic-renderer" };
   };
 
   const buildProps = (input: {

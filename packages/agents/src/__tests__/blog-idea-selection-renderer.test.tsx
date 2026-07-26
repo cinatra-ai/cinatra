@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * cinatra#1796 Stage 2 — coverage for the DEDICATED, host-bundled
+ * cinatra#1796 — coverage for the DEDICATED, host-bundled
  * BlogIdeaSelectionRenderer (kind "blog-idea-selection", binding id
  * `@cinatra-ai/blog-pipeline-agent:idea-selection`) that the blog OAS's
  * idea_selection_gate relocates onto (off the shared reviewer-output binding).
@@ -10,8 +10,9 @@
  * components.idea_selection_gate.outputs[0].title) which becomes the WayFlow
  * resume text `userResponse`; the downstream `selected_idea` passthrough seam
  * consumes `selectedIdeaJson` + `ideas`. The chosen idea is committed as
- * JSON.stringify(idea) into BOTH keys — byte-identical to the inline
- * IdeaChooserRenderer's #839 contract (reviewer-agent-output-idea-chooser.test).
+ * JSON.stringify(idea) into BOTH keys — the #839 chooser contract, which now
+ * lives solely on this dedicated renderer (the former inline chooser on the
+ * shared reviewer-output binding was removed in the #1796 Stage-3 teardown).
  *
  * Asserts:
  *   - a radio-per-idea chooser renders and commits ideas[0] on mount as
