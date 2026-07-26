@@ -173,6 +173,40 @@ describe("classifyGeneratedReferences (generator-owned resolution metadata)", ()
     expect(bootable.size).toBe(0);
   });
 
+  // cinatra#2044 L-A: `GENERATED_ARTIFACT_RENDERERS` carries dispatch metadata
+  // (packageName / slot / representations / propsApiVersion) BETWEEN `resolution`
+  // and `load`. The entry regex must tolerate it, or the specifier goes
+  // unclassified and the fail-closed net forces an already-guardedOptional
+  // package bootable — wrongly demanding a cinatra.extensions + required-lock
+  // entry for a dev-enrolled renderer.
+  it("guardedOptional + metadata BETWEEN resolution and load (artifact-renderer shape) ⇒ acquirable", () => {
+    const source = loaderMap([
+      '  "@scope/opt-connector::detail": { resolution: "guardedOptional", "packageName":"@scope/opt-connector","slot":"detail","representations":["application/vnd.x+json"],"propsApiVersion":1, load: guardedExtensionImport("@scope/opt-connector/src/renderers/detail", () => import("@scope/opt-connector/src/renderers/detail")) },',
+    ]);
+    const test =
+      'const EXPECTED = [\n  { map: "GENERATED_TEST_MAP", key: "@scope/opt-connector::detail", resolution: "guardedOptional" },\n];\n';
+    const { bootable, acquirable } = classifyGeneratedReferences({
+      generatedSources: [{ rel: "g.ts", source }],
+      generatedTestSource: test,
+      extensionNames,
+    });
+    expect([...acquirable]).toEqual(["@scope/opt-connector"]);
+    expect(bootable.size).toBe(0);
+  });
+
+  it("the metadata-tolerant match still fail-closes an UNPROVEN artifact-renderer-shaped entry", () => {
+    const source = loaderMap([
+      '  "@scope/unproven-connector::detail": { resolution: "guardedOptional", "packageName":"@scope/unproven-connector","slot":"detail","propsApiVersion":1, load: guardedExtensionImport("@scope/unproven-connector/src/renderers/detail", () => import("@scope/unproven-connector/src/renderers/detail")) },',
+    ]);
+    const { bootable, acquirable } = classifyGeneratedReferences({
+      generatedSources: [{ rel: "g.ts", source }],
+      generatedTestSource: "const EXPECTED = [];",
+      extensionNames,
+    });
+    expect([...bootable]).toEqual(["@scope/unproven-connector"]);
+    expect(acquirable.size).toBe(0);
+  });
+
   it("guardedOptional NOT covered by the generated test ⇒ bootable (fail-closed)", () => {
     const source = loaderMap([
       '  "unproven-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@scope/unproven-connector", () => import("@scope/unproven-connector")) },',
