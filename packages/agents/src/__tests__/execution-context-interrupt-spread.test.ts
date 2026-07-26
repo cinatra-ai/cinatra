@@ -66,6 +66,10 @@ vi.mock("@cinatra-ai/a2a", async (orig) => {
 });
 
 import { handleWayflowTaskState } from "../execution";
+// cinatra#1939 wave 2: handleWayflowTaskState now requires an org-write authority
+// (§2d). transitionRunStatus is mocked here (no-op), so an inert member-shaped
+// authority satisfies the type without affecting behavior.
+const TEST_AUTHORITY = { orgId: "org-1", can: () => true };
 import type { AgentRunRecord } from "../store";
 
 function makeRun(inputParams: Record<string, unknown> = {}): AgentRunRecord {
@@ -157,7 +161,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
       selectedRefs: [],
       slotMeta: { slotId: "offeringContext", resolutionMode: "accumulate", selectionMode: "interactive" },
     };
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -175,7 +179,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
 
   it("is generic: an arbitrary JSON object's keys are spread (not context-specific)", async () => {
     const run = makeRun();
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -200,7 +204,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
         },
       ],
     };
-    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task });
     const values = onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>;
     // No top-level confirmedRecipients spread — only `output` carries the prose.
     expect(values.confirmedRecipients).toBeUndefined();
@@ -209,7 +213,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
 
   it("parsed output does NOT clobber reserved `output`/`stepNumber`", async () => {
     const run = makeRun();
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -238,7 +242,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
         { role: "agent", parts: [{ kind: "text", text: "Ideas are ready for review." }] },
       ],
     };
-    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task });
     const values = onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>;
     expect(values.ideas).toEqual(ideas);
     expect(values.agent_run_id).toBe("run-ctx-1");
@@ -264,7 +268,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
         { role: "agent", parts: [{ kind: "text", text: "prose only" }] },
       ],
     };
-    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task });
     const values = onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>;
     expect(values.ideas).toBeDefined();
     // Reserved envelope keys from pendingApproval must NOT leak in (they would
@@ -293,7 +297,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
       },
       history: [], // EMPTY → spreadFromOutput = parsed pendingApproval (unfiltered)
     };
-    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task });
     const values = onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>;
     expect(values.ideas).toEqual([{ title: "Alpha" }]);
     expect(values.contentType).not.toBe("evil");
@@ -319,7 +323,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
       defaultSpecificInitialDraftIds: ["d1"],
       defaultSpecificFollowUpDraftIds: [],
     };
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -344,7 +348,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
       defaultSpecificInitialDraftIds: null,
       defaultSpecificFollowUpDraftIds: null,
     };
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",

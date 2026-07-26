@@ -22,6 +22,12 @@ import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
 import { dispatchRunWaitTransition } from "./run-wait-notifier"; // #1559/E9: zero-dep leaf seam
 import { LEGAL_TRANSITIONS, TERMINAL_RUN_STATUSES, CannotReassignAfterFirstRun, RunTransitionError, __LEGAL_TRANSITIONS__ } from "./run-status";
 import type { AgentRunStatus } from "./run-status";
+// cinatra#1939 wave 2 — the agent-run org-write seam. transitionRunStatus runs
+// its CAS + delegated meta write inside guardOrgMutation's org-locked
+// transaction; the required `authority` param is the compile-time ratchet that
+// forces every caller to thread a host-minted authority in the SAME commit.
+import { guardedRunWrite, AgentRunOrgWriteAuthorityError, type GuardedRunTx } from "./org-write-run-seam";
+import type { OrgWriteAuthority, OrgWriteCapability } from "@cinatra-ai/org-write-kernel";
 // cinatra#1893 (epic #1883 A5): terminal-success-with-derivation-outbox seam extracted from store.ts (file-size ratchet #1893); transitionRunStatus delegates its `derivationOutbox` branch here (option type re-used in the unchanged public signature).
 import { transitionRunToCompletedWithDerivationOutbox, type DerivationOutboxCapture } from "./run-terminal-derivation-outbox";
 // Re-export the run-status state machine (extracted to ./run-status, #1037 P1
@@ -1518,7 +1524,8 @@ export async function createAgentRun(
 export async function updateAgentRunStatus(
   id: string,
   status: string,
-  patch?: Partial<AgentRunRecord>,
+  patch: Partial<AgentRunRecord> | undefined,
+  tx: GuardedRunTx,
 ): Promise<void> {
   // unified terminal-status detection via TERMINAL_RUN_STATUSES
   // (defined below). This was once a local `terminalStatuses` array;
@@ -1540,20 +1547,17 @@ export async function updateAgentRunStatus(
     updates.startedAt = patch.startedAt ?? undefined;
   }
 
-  await db.update(agentRuns).set(updates).where(eq(agentRuns.id, id));
-
-  // centralized Redis Streams TTL cleanup. Every terminal
-  // transition (completed/failed/stopped) schedules a 1h EXPIRE on the
-  // per-run stream key so durable event logs are bounded. Fire-and-forget:
-  // a Redis outage must NEVER block terminal status propagation to callers.
-  // This is the SINGLE hook for all terminal paths in the agent-builder
-  // package — every worker (agentic-execution, execution, langgraph-
-  // execution, orchestrator-execution, agentic-resume, resume) and the
-  // MCP cancel handler funnel through this function, so new paths inherit
-  // TTL scheduling automatically without additional patches.
-  if (isTerminal) {
-    void expireRunStream(id).catch(() => { /* best-effort */ });
-  }
+  // cinatra#1939 wave 2: DB-ONLY, and REQUIRED to run inside transitionRunStatus's
+  // guarded transaction on the passed `tx` (no `?? db` fallback — the org-write
+  // seam is the only supplier, so the un-guarded API is closed). The terminal
+  // Redis Streams TTL sweep (`expireRunStream`) that used to fire here is
+  // relocated to transitionRunStatus's POST-COMMIT side-effects: no non-
+  // transactional side-effect runs inside the guard, and the "single terminal
+  // hook" invariant is preserved one level up (all status changes flow through
+  // transitionRunStatus). The tx is cast to the drizzle surface (kernel hands
+  // back its minimal contract type; the runtime tx is the real drizzle tx).
+  const dtx = tx as unknown as typeof db;
+  await dtx.update(agentRuns).set(updates).where(eq(agentRuns.id, id));
 }
 
 // ---------------------------------------------------------------------------
@@ -1584,7 +1588,9 @@ export async function updateAgentRunStatusConditional(
   id: string,
   expectedStatus: string,
   nextStatus: string,
-  dispatch?: AgentRunDispatchFields,
+  dispatch: AgentRunDispatchFields | undefined,
+  orgId: string,
+  tx: GuardedRunTx,
 ): Promise<boolean> {
   // cinatra#1937: a queued→running CAS IS a dispatch — it stamps per-dispatch
   // bookkeeping ATOMICALLY with the status flip at the deepest layer, so no
@@ -1601,7 +1607,13 @@ export async function updateAgentRunStatusConditional(
       `updateAgentRunStatusConditional: dispatch fields supplied for non-dispatch transition ${expectedStatus}→${nextStatus} on run ${id}`,
     );
   }
-  const result = await db
+  // cinatra#1939 wave 2: runs inside transitionRunStatus's guarded transaction on
+  // the passed `tx` (cast to the drizzle surface). The CAS `WHERE` is ORG-SCOPED
+  // (`AND org_id = orgId`, G1 Finding F): a mismatched-org runId returns 0 rows →
+  // `stale_from_status` (fail-closed) instead of mutating another org's row under
+  // org A's lock + permit. Dispatch bookkeeping (set clause) unchanged.
+  const dtx = tx as unknown as typeof db;
+  const result = await dtx
     .update(agentRuns)
     .set({
       status: nextStatus,
@@ -1619,7 +1631,7 @@ export async function updateAgentRunStatusConditional(
         ? { humanWaitAttemptId: expectedStatus === "running" ? sql`${agentRuns.executionAttemptId}` : null }
         : {}),
     })
-    .where(and(eq(agentRuns.id, id), eq(agentRuns.status, expectedStatus)))
+    .where(and(eq(agentRuns.id, id), eq(agentRuns.status, expectedStatus), eq(agentRuns.orgId, orgId)))
     .returning({ id: agentRuns.id });
   return result.length === 1;
 }
@@ -1636,74 +1648,129 @@ export type AgentRunDispatchFields = {
 //
 // transitionRunStatus is the single entry point for every agent_runs.status
 // change. It enforces:
-//   (1) the from→to edge is one of LEGAL_TRANSITIONS (illegal → throws);
-//   (2) the DB row is still in the expected `from` state (stale → throws);
-//   (3) terminal-state side-effects fire exactly once (delegates to
-//       updateAgentRunStatus, which owns expireRunStream in that helper).
+//   (1) the from→to edge is one of LEGAL_TRANSITIONS (illegal → throws, pre-guard);
+//   (2) a host-minted org-write authority grounds the transition under the
+//       org-write kernel guard (cinatra#1939 wave 2): org locks → per-transition
+//       lifecycle ruling (run.complete for terminal edges, else run.execute) →
+//       permit — the CAS + delegated meta write land as ONE guarded transaction;
+//   (3) the DB row is still in the expected `from` state (stale → throws, rolls
+//       back the tx);
+//   (4) terminal-state side-effects fire exactly once, POST-COMMIT (after the
+//       guarded tx returns): expireRunStream on terminal + dispatchRunWaitTransition.
 //
+// The `authority` param is REQUIRED (the compile-time per-writer ratchet): every
+// caller threads a host-minted authority in the SAME commit as this conversion.
 // DO NOT call updateAgentRunStatusConditional directly from any other file.
 // DO NOT call updateAgentRunStatus for status CHANGES from any other file —
 // use transitionRunStatus. updateAgentRunStatus is still the correct call for
-// the narrow meta-only case handled by updateAgentRunMeta below.
+// the narrow meta-only case handled by updateAgentRunMeta below (now tx-scoped).
 
 /**
  * single canonical entry point for agent_runs.status changes.
  *
- * @throws {RunTransitionError} code="illegal_transition" when (from, to) ∉ LEGAL_TRANSITIONS
- * @throws {RunTransitionError} code="stale_from_status" when CAS row-count is 0
+ * @throws {RunTransitionError} code="illegal_transition" when (from, to) ∉ LEGAL_TRANSITIONS (pre-guard)
+ * @throws {AgentRunOrgWriteAuthorityError} when `authority` is missing / for another org / bound to another run (seam)
+ * @throws {OrgWriteRefusedError} when the kernel refuses the per-transition capability (e.g. archived org)
+ * @throws {RunTransitionError} code="stale_from_status" when the org-scoped CAS row-count is 0 (rolls back the tx)
  */
 export async function transitionRunStatus(
   runId: string,
   from: AgentRunStatus,
   to: AgentRunStatus,
-  meta?: {
-    error?: string;
-    startedAt?: Date;
-    completedAt?: Date;
-    stepResults?: unknown[];
-    /** Flags the ONE genuine human-wait `→pending_input` (stop-run-hitl, #1058) so it notifies; every other `pending_input` reason leaves it unset. Not a DB column — only feeds the run-wait-notifier classification below. (The archive program's durable in-attempt marker is edge-derived on `→pending_approval` inside the CAS — cinatra#1938 — and deliberately independent of this flag: the #1058 wait fires pre-dispatch from `queued`, so it is parked, not in-flight.) */
-    humanWaitGate?: boolean;
-    /** REQUIRED on queued→running (cinatra#1937): per-dispatch bookkeeping stamped atomically with the CAS. The primitive below throws without it. */
-    dispatch?: AgentRunDispatchFields;
-    /** cinatra#1893 (epic #1883 A5): when present, delegate to transitionRunToCompletedWithDerivationOutbox — terminal CAS + final-output snapshot + derivation-outbox INSERT in ONE transaction (legal ONLY for `to === "completed"`). Absent for every other caller — the historical two-write path is unchanged. */
-    derivationOutbox?: DerivationOutboxCapture;
-  },
+  meta:
+    | {
+        error?: string;
+        startedAt?: Date;
+        completedAt?: Date;
+        stepResults?: unknown[];
+        /** Flags the ONE genuine human-wait `→pending_input` (stop-run-hitl, #1058) so it notifies; every other `pending_input` reason leaves it unset. Not a DB column — only feeds the run-wait-notifier classification below. (The archive program's durable in-attempt marker is edge-derived on `→pending_approval` inside the CAS — cinatra#1938 — and deliberately independent of this flag: the #1058 wait fires pre-dispatch from `queued`, so it is parked, not in-flight.) */
+        humanWaitGate?: boolean;
+        /** REQUIRED on queued→running (cinatra#1937): per-dispatch bookkeeping stamped atomically with the CAS. The primitive below throws without it. */
+        dispatch?: AgentRunDispatchFields;
+        /** cinatra#1893 (epic #1883 A5): when present, delegate to transitionRunToCompletedWithDerivationOutbox — terminal CAS + final-output snapshot + derivation-outbox INSERT in ONE transaction (legal ONLY for `to === "completed"`). Absent for every other caller — the historical two-write path is unchanged. */
+        derivationOutbox?: DerivationOutboxCapture;
+      }
+    | undefined,
+  // cinatra#1939 wave 2 — REQUIRED host-minted authority (the compile-time
+  // per-writer ratchet: no default, no `?`, so every caller must thread one in
+  // this commit). Typed `| undefined` because the ONE frame-forwarded caller
+  // (mcp/handlers.ts agent_run_stop, §2e) threads its possibly-absent frame
+  // authority so the seam fail-closes it uniformly; every other caller passes a
+  // concrete host-side mint (§2a session / runManagementAuthority, §2b system).
+  authority: OrgWriteAuthority | undefined,
 ): Promise<void> {
+  // (1) Legal-transition pre-guard — an illegal edge is a programmer error, not
+  // an authority refusal, so it throws BEFORE any org-write work.
   if (!LEGAL_TRANSITIONS.has(`${from}->${to}` as const)) {
     throw new RunTransitionError({ code: "illegal_transition", runId, from, to });
   }
+  // (2) Fail-closed: every status transition requires a host-minted authority.
+  // The org (lock + CAS scope) is the authority's org — a wrong-org authority
+  // fails closed as `stale_from_status` via the §1d org-scoped CAS.
+  if (!authority) throw new AgentRunOrgWriteAuthorityError("missing");
+  const orgId = authority.orgId;
+  const isTerminal = TERMINAL_RUN_STATUSES.has(to);
+  // Per-transition capability (§3): terminal edges LAND a run's outputs
+  // (`run.complete`); every other edge is a dispatch / lifecycle move
+  // (`run.execute`). Combined with the seam's §1a run-binding, a run/OBO
+  // authority (run.complete only, self-bound) can land its OWN terminal state
+  // but can never dispatch, park, or drive another same-org run.
+  const capability: OrgWriteCapability = isTerminal ? "run.complete" : "run.execute";
 
-  // cinatra#1893: delegate the terminal-success-with-derivation-outbox path (atomic CAS + snapshot + outbox INSERT, then side-effects; asserts to==="completed"; legality checked above) to ./run-terminal-derivation-outbox.
+  // cinatra#1893 terminal-success-with-derivation-outbox branch (to==="completed"):
+  // the CAS + final-output snapshot + derivation-outbox INSERT commit as ONE
+  // guarded transaction on the guarded tx (org-scoped inside the delegate).
   if (meta?.derivationOutbox) {
-    await transitionRunToCompletedWithDerivationOutbox(runId, from, to, meta, meta.derivationOutbox);
+    const derivationOutbox = meta.derivationOutbox;
+    await guardedRunWrite(authority, { orgId, runId, capability }, async (guardedTx) => {
+      await transitionRunToCompletedWithDerivationOutbox(
+        runId,
+        from,
+        to,
+        meta,
+        derivationOutbox,
+        orgId,
+        guardedTx,
+      );
+    });
+    // POST-COMMIT (codex #2/#13): the guarded tx committed ⇒ the transition
+    // happened. Best-effort Redis TTL sweep on terminal. NO dispatchRunWaitTransition
+    // — parity with today's derivationOutbox path (it returned before the notify).
+    if (isTerminal) void expireRunStream(runId).catch(() => { /* best-effort */ });
     return;
   }
 
-  const won = await updateAgentRunStatusConditional(runId, from, to, meta?.dispatch);
-  if (!won) {
-    throw new RunTransitionError({ code: "stale_from_status", runId, from, to });
-  }
-  try {
-    // Delegate terminal-state side-effects + meta patching to
-    // updateAgentRunStatus. The CAS already wrote the status column; re-writing
-    // it here is a no-op that still runs the terminal-detection branch
-    // (expireRunStream) and meta-patch logic. The CONTROL keys (`dispatch` —
-    // written BY the CAS — and `humanWaitGate` — not a DB column) are stripped
-    // first: only genuine DB meta reaches the delegated write.
+  await guardedRunWrite(authority, { orgId, runId, capability }, async (guardedTx) => {
+    const won = await updateAgentRunStatusConditional(runId, from, to, meta?.dispatch, orgId, guardedTx);
+    if (!won) {
+      // Rolls back the guarded tx; the meta write below never runs and the
+      // post-commit side-effects never fire (codex #2 — the transition did not
+      // commit, so no waiter wakeup / stream expiry).
+      throw new RunTransitionError({ code: "stale_from_status", runId, from, to });
+    }
+    // Delegate the meta patch to updateAgentRunStatus on the SAME guarded tx. The
+    // CAS already wrote the status column; re-writing it is a no-op that still
+    // runs the meta-patch logic. The CONTROL keys (`dispatch` — written BY the
+    // CAS — and `humanWaitGate` — not a DB column) are stripped first: only
+    // genuine DB meta reaches the delegated write.
     const { dispatch: _dispatch, humanWaitGate: _humanWaitGate, ...dbMeta } = meta ?? {};
     const hasDelegatedMeta =
       dbMeta.error !== undefined ||
       dbMeta.startedAt !== undefined ||
       dbMeta.completedAt !== undefined ||
       dbMeta.stepResults !== undefined;
-    if (hasDelegatedMeta || TERMINAL_RUN_STATUSES.has(to)) {
-      await updateAgentRunStatus(runId, to, dbMeta as Partial<AgentRunRecord>);
+    if (hasDelegatedMeta || isTerminal) {
+      await updateAgentRunStatus(runId, to, dbMeta as Partial<AgentRunRecord>, guardedTx);
     }
-  } finally {
-    // Run human-wait notify (#1559/E9) in `finally` so a terminal clear still fires
-    // if the side-effect above throws (status CAS already committed). Best-effort no-op.
-    await dispatchRunWaitTransition({ runId, from, to, humanWaitGate: meta?.humanWaitGate === true });
-  }
+  });
+
+  // POST-COMMIT side-effects only (codex #2/#13): the guarded tx committed ⇒ the
+  // transition happened. A meta-write failure would have rolled the tx back and
+  // thrown, so reaching here means the write is durable. `expireRunStream` is the
+  // single terminal Redis-TTL hook (relocated up from updateAgentRunStatus);
+  // `dispatchRunWaitTransition` is the run-wait notify (#1559/E9), best-effort.
+  if (isTerminal) void expireRunStream(runId).catch(() => { /* best-effort */ });
+  await dispatchRunWaitTransition({ runId, from, to, humanWaitGate: meta?.humanWaitGate === true });
 }
 
 /**

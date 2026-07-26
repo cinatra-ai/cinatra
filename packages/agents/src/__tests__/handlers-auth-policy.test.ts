@@ -56,6 +56,11 @@ const authSessionMock = vi.hoisted(() => ({
   getAuthSession: vi.fn(async (): Promise<unknown> => null),
   isPlatformAdmin: vi.fn(() => false),
   requireAuthSession: vi.fn(),
+  // cinatra#1939 wave 2: the run_resume handler mints the resuming-principal
+  // authority (§2d D-OBO-RESUME) via resolveOrgRoleForUser after the approveHitl
+  // gate. Stub it to a member so the mint stays DB-free (the downstream
+  // sessionAuthorityFromResolvedRole is a pure function).
+  resolveOrgRoleForUser: vi.fn(async () => "member"),
 }));
 vi.mock("@/lib/auth-session", () => authSessionMock);
 

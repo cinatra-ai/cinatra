@@ -8,6 +8,12 @@ import { db } from "./db";
 import { agentRuns } from "./schema";
 import { enforceRunAccess, type ActorRoleHints } from "./auth-policy";
 import type { AgentAuthPolicy } from "./auth-policy-types";
+import { resolveOrgRoleForUser } from "@/lib/auth-session";
+// cinatra#1939 wave 2 (§2d): the WayFlow resume below is grounded by the RESUMING
+// PRINCIPAL (actorId — authorized by the caller: the admin-session approve action
+// or this helper's own actorContext gate), NEVER the run's own RUN authority.
+// Member session, else the authorized-non-member run-management authority.
+import { sessionAuthorityFromResolvedRole, runManagementAuthority } from "@/lib/org-write/authority";
 import {
   readAgentRunById,
   readAgentRunByTaskId,
@@ -531,8 +537,16 @@ export async function approveReviewTaskInternal(
     // index.ts ← @cinatra-ai/a2a). fromStatus is the literal "pending_approval"
     // because the guard at line 180 already enforced run.status === "pending_approval"
     // before we reached here.
+    // §2d: mint the resuming-principal authority (actorId re-authorized by the
+    // caller / this helper's actorContext gate); member session, else the
+    // authorized-non-member run-management authority.
+    const resumeRole = await resolveOrgRoleForUser(run.orgId, actorId);
+    const resumeAuthority =
+      resumeRole !== undefined
+        ? sessionAuthorityFromResolvedRole(run.orgId, resumeRole)
+        : runManagementAuthority(run.orgId);
     const { handleWayflowTaskState } = await import("./execution");
-    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task });
+    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority: resumeAuthority });
 
     console.log(
       `[approveReviewTaskInternal] wayflow-path resumed run=${run.id} task=${taskId} ` +

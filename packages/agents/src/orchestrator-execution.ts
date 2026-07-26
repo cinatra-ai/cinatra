@@ -44,6 +44,10 @@ import {
   type AgentRunStatus,
 } from "./store";
 import { publishAgUiEvent } from "@cinatra-ai/agent-ui-protocol/server";
+// cinatra#1939 wave 2: cancelOrchestratorRun's terminal transition is grounded by
+// an authority threaded from its sole caller (cancelOrchestratorAction, which
+// mints it §2d′ immediately after canActOnRun).
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
 // ---------------------------------------------------------------------------
 // TERMINAL_STATUSES — shared constant used by rollup + cancel paths.
@@ -168,6 +172,7 @@ export type CancelOrchestratorActor = {
 
 export async function cancelOrchestratorRun(
   orchRunId: string,
+  authority: OrgWriteAuthority,
   _actor?: CancelOrchestratorActor,
 ): Promise<void> {
   const run = await readAgentRunById(orchRunId);
@@ -266,6 +271,7 @@ export async function cancelOrchestratorRun(
     orch.status as AgentRunStatus,
     "stopped",
     { stepResults: toStepResults(ledger) },
+    authority,
   ).catch((err) => {
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
       // Race: someone else terminated the orchestrator run between our read and

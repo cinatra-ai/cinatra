@@ -79,6 +79,10 @@ vi.mock("@cinatra-ai/a2a", async (orig) => {
 });
 
 import { runAgentBuilderExecutionJob, handleWayflowTaskState } from "../execution";
+// cinatra#1939 wave 2: handleWayflowTaskState now requires an org-write authority
+// (§2d). Its internal transitionRunStatus is mocked here (no-op), so an inert
+// member-shaped authority satisfies the type without affecting behavior.
+const TEST_AUTHORITY = { orgId: "org-1", can: () => true };
 import type { AgentRunRecord } from "../store";
 
 // ---------------------------------------------------------------------------
@@ -296,7 +300,7 @@ describe("execution.ts — enrichment call sites", () => {
       history: [],
     };
 
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",

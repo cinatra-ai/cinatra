@@ -161,16 +161,26 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
   {
     module: "packages/agents/src/store.ts",
     exportName: "transitionRunStatus",
+    // The writer's DEFINING capability is dispatch (run.execute); terminal edges
+    // land a run's outputs and require run.complete (cinatra#1939 wave 2 §3 —
+    // per-transition split). conditionalCapabilities exposes the full surface so
+    // the capability-completeness audit sees run.complete, not just run.execute.
     capability: "run.execute",
-    orgIdExtractor: "agent_runs.org_id (row-derived; NOT NULL)",
-    storageReferences: ["agent_runs"],
+    conditionalCapabilities: ["run.complete"],
+    orgIdExtractor: "agent_runs.org_id (authority.orgId; row CAS is org-scoped, NOT NULL)",
+    // The terminal-success derivationOutbox branch writes agent_run_output_derivations
+    // under the SAME guarded transaction (§1e).
+    storageReferences: ["agent_runs", "agent_run_output_derivations"],
     cascadeOwnership: "inert-history",
     importBanned: false,
   },
   {
     module: "packages/agents/src/store.ts",
     exportName: "updateAgentRunStatus",
+    // Delegate: runs inside transitionRunStatus's guard on the passed tx; the
+    // capability is inherited per-transition (run.complete on terminal edges).
     capability: "run.execute",
+    conditionalCapabilities: ["run.complete"],
     orgIdExtractor: "agent_runs.org_id (row-derived)",
     storageReferences: ["agent_runs"],
     cascadeOwnership: "inert-history",

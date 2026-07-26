@@ -82,6 +82,15 @@ vi.mock("../execution", () => ({
   handleWayflowTaskState: vi.fn(async () => undefined),
 }));
 
+// cinatra#1939 wave 2: the wayflow resume now mints the resuming-principal
+// authority (§2d) via resolveOrgRoleForUser. Stub only that membership read (a
+// DB call) so the mint stays DB-free; sessionAuthorityFromResolvedRole /
+// runManagementAuthority remain the real (pure) functions.
+vi.mock("@/lib/auth-session", async (orig) => ({
+  ...(await orig<typeof import("@/lib/auth-session")>()),
+  resolveOrgRoleForUser: vi.fn(async () => "member"),
+}));
+
 import { approveReviewTaskInternal } from "../review-task-actions";
 
 const REF = {

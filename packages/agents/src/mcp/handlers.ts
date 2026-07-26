@@ -284,7 +284,15 @@ import { assertProjectReadAccess } from "@/lib/sealed-room";
 // `agent_run_move_with_outputs` cascade.
 import { assertProjectWritable } from "@/lib/project-writable";
 import { runResourceProjectMove, runAgentRunMoveWithOutputs } from "@/lib/resource-project-move";
-import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
+import { getAuthSession, isPlatformAdmin, resolveOrgRoleForUser } from "@/lib/auth-session";
+// cinatra#1939 wave 2: run_stop threads the FORWARDED FRAME authority (§2e —
+// chat/session SESSION auth, or agent_run OBO RUN auth self-bound to its own
+// run); resume grounds on the RESUMING PRINCIPAL (§2d D-OBO-RESUME), minting a
+// member session or the authorized-non-member run-management authority AFTER the
+// resume handler's own enforceRunAccess re-authorization — NEVER the frame's RUN
+// authority (a lifecycle-driving resume must never be grounded by a run's own OBO).
+import { sessionAuthorityFromResolvedRole, runManagementAuthority } from "@/lib/org-write/authority";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import {
   readTeamsForUser,
   readProjectGrantsForUser,
@@ -1965,6 +1973,27 @@ async function handleAgentBuilderRunResume(
     // includes an explicit response payload.
     await enforceRunAccess(runWithCoOwners, actor, "approveHitl", roles);
 
+    // §2d D-OBO-RESUME: resume is a lifecycle-DRIVING action (it can move a run
+    // → pending_approval = run.execute), which a run's OWN OBO/RUN authority must
+    // NEVER hold. Ground the WayFlow resume below on the RESUMING PRINCIPAL —
+    // re-authorized just above via enforceRunAccess execute + approveHitl —
+    // resolved from the frame's delegating user (member session, else the
+    // authorized-non-member run-management authority), NEVER
+    // request.actor.orgWriteAuthority (which for an agent_run OBO frame is a RUN
+    // authority). §8.1 (verified against the MCP transport, src/lib/mcp-server.ts):
+    // the agent_run OBO token ALWAYS carries the run owner's identity (userId), so
+    // a pure autonomous no-principal resume does NOT exist as a live path — this
+    // refusal is the explicit defense-in-depth contract (an autonomous run can
+    // never self-drive its lifecycle; it can never obtain run.execute as a run).
+    if (!actor.userId) {
+      return { error: "Resume requires a delegating principal; an autonomous run cannot self-drive its own lifecycle." };
+    }
+    const resumeRole = await resolveOrgRoleForUser(run.orgId, actor.userId);
+    const resumeAuthority: OrgWriteAuthority =
+      resumeRole !== undefined
+        ? sessionAuthorityFromResolvedRole(run.orgId, resumeRole)
+        : runManagementAuthority(run.orgId);
+
     // Detect explicit hitl response payload in the input. If a typed field
     // (e.g. hitlResponse) is added, branch on its presence here.
     // For now we look for any non-undefined hitl* field beyond the
@@ -2086,7 +2115,7 @@ async function handleAgentBuilderRunResume(
       // because run.a2aTaskId was set, which only happens when the run paused at
       // an A2A gate (status === "pending_approval").
       const { handleWayflowTaskState } = await import("../execution");
-      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task });
+      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority: resumeAuthority });
 
       const finalState = task.status?.state;
       return {
@@ -2210,7 +2239,15 @@ async function handleAgentBuilderRunStop(
     if (["stopped", "completed", "failed"].includes(run.status)) {
       return { runId, status: run.status, message: `Run already in terminal state: ${run.status}` };
     }
-    await transitionRunStatus(runId, run.status as AgentRunStatus, "stopped").catch((err) => {
+    // §2e: run_stop USES the forwarded frame authority (buildActorFromMcpContext
+    // forwards McpRequestContext.orgWriteAuthority). chat/session → a SESSION
+    // authority (run.complete = member); agent_run OBO → a RUN authority
+    // (run.complete only, self-bound via §1a) — so an OBO agent can stop/complete
+    // ITS OWN run but never another. →stopped is terminal ⇒ run.complete. Absent
+    // (e.g. public_site_widget, which does not call run_stop) ⇒ the seam
+    // fail-closes with AgentRunOrgWriteAuthorityError("missing").
+    const frameAuthority = (request.actor as { orgWriteAuthority?: OrgWriteAuthority }).orgWriteAuthority;
+    await transitionRunStatus(runId, run.status as AgentRunStatus, "stopped", undefined, frameAuthority).catch((err) => {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
         // Race: status changed between our read and the CAS. Safe to ignore — the
         // run is terminal either way by the time this path unwinds.
