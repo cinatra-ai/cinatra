@@ -192,6 +192,22 @@ jobs:
           CAPTURE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           CAPTURE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node tests/e2e/wp-mcp-gateway/capture-annotations.mjs
+      - name: Run equivalence suite (four VERIFY verdicts)
+        # The live layer (design §5): drives the four ewpa/* VERIFY abilities via
+        # the gateway execute triad and writes captures/verify-verdicts.json. Runs
+        # via `node --test` — Node 24 strips the .ts type annotations, so no
+        # vitest/toolchain install is needed (keeps this the lean wordpress-only
+        # boot job). A FAIL verdict is a valid deliverable (recorded with its
+        # fallback); the suite only reds the run if the gateway is unreachable, so
+        # a FAIL never blocks harvesting. Runs even if the producer step reported a
+        # soft failure so the verdicts are always produced.
+        if: ${{ !cancelled() }}
+        env:
+          WP_BASE_URL: http://localhost:8080
+          WP_MCP_BASIC_AUTH: ${{ env.WP_MCP_BASIC_AUTH }}
+          CAPTURE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CAPTURE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node --test tests/e2e/wp-mcp-gateway/equivalence.spec.ts
       - name: Upload captures
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
