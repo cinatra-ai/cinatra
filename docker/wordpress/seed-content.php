@@ -147,18 +147,79 @@ function cinatra_wp_seed_post(array $post, int $version): string {
   return 'replaced';
 }
 
+/**
+ * Seed the WP MCP gateway acceptance-suite posts (#2016 §5): two PUBLISHED posts
+ * with distinct, ordered timestamps + one DRAFT. Independent of the content
+ * manifest so it always runs. These give the ewpa/get-posts VERIFY a decisive
+ * seed — newest-published-first ordering + publish-status filtering cannot
+ * false-PASS on a single post. Idempotent: keyed by the fixture-id meta and left
+ * untouched once created (respecting later user edits/trash via the same
+ * provenance the manifest seeder uses).
+ */
+function cinatra_wp_seed_gateway_posts(int $version): void {
+  $now = (int) current_time('timestamp');
+  $day = defined('DAY_IN_SECONDS') ? DAY_IN_SECONDS : 86400;
+  // Distinct, clearly-ordered, always-in-the-past timestamps (avoids tie /
+  // timezone / future-scheduling ambiguity regardless of when the capture runs).
+  $specs = [
+    [
+      'fixtureId' => 'wp-mcp-gateway-published-older',
+      'title'     => 'WP MCP Gateway — Older Published Post',
+      'content'   => 'Older published fixture post for the ewpa/get-posts ordering + status-filter VERIFY (#2016).',
+      'status'    => 'publish',
+      'offset'    => 40 * $day,
+    ],
+    [
+      'fixtureId' => 'wp-mcp-gateway-published-newer',
+      'title'     => 'WP MCP Gateway — Newer Published Post',
+      'content'   => 'Newer published fixture post — must sort FIRST under newest-first ordering (#2016).',
+      'status'    => 'publish',
+      'offset'    => 5 * $day,
+    ],
+    [
+      'fixtureId' => 'wp-mcp-gateway-draft',
+      'title'     => 'WP MCP Gateway — Draft Post',
+      'content'   => 'Draft fixture post — must be EXCLUDED by a publish-status filter (#2016).',
+      'status'    => 'draft',
+      'offset'    => 20 * $day,
+    ],
+  ];
+
+  foreach ($specs as $spec) {
+    if (cinatra_wp_seed_find($spec['fixtureId']) !== NULL) {
+      continue; // idempotent — already seeded (or now user-owned); leave it.
+    }
+    $local = gmdate('Y-m-d H:i:s', $now - $spec['offset']);
+    $new_id = wp_insert_post([
+      'post_type'     => 'post',
+      'post_title'    => $spec['title'],
+      'post_content'  => $spec['content'],
+      'post_status'   => $spec['status'],
+      'post_date'     => $local,
+      'post_date_gmt' => get_gmt_from_date($local),
+    ], TRUE);
+    if (!is_wp_error($new_id) && $new_id) {
+      cinatra_wp_seed_mark((int) $new_id, $spec['fixtureId'], $version);
+      cinatra_wp_seed_log(sprintf('gateway post seeded: %s (%s, %s)', $spec['fixtureId'], $spec['status'], $local));
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
 $manifest = cinatra_wp_seed_load_manifest();
+$version = (int) ($manifest['version'] ?? 1);
+
+// Always seed the WP MCP gateway acceptance posts (independent of the manifest).
+cinatra_wp_seed_gateway_posts($version);
+
 $posts = $manifest['wordpress']['posts'] ?? [];
 if (empty($posts)) {
-  cinatra_wp_seed_log('no wordpress fixtures in manifest — nothing to do');
+  cinatra_wp_seed_log('no wordpress fixtures in manifest — gateway posts seeded, nothing else to do');
   return;
 }
-
-$version = (int) ($manifest['version'] ?? 1);
 $counts = ['created' => 0, 'replaced' => 0, 'skipped' => 0, 'error' => 0];
 foreach ($posts as $post) {
   $action = cinatra_wp_seed_post($post, $version);

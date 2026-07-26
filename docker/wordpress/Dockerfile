@@ -100,6 +100,13 @@ RUN set -eux; \
     chown -R www-data:www-data \
         "$plugins_dir/mcp-adapter" "$plugins_dir/enable-abilities-for-mcp"
 
+# Bake the fixture-only third-party plugin (#2016 §2) into the STAGING tree. It
+# is committed in-repo source (integrity is the repo itself — no download), so a
+# plain COPY into the same /usr/src/wordpress staging tree is the whole bake.
+# The build context is ./docker/wordpress, so the source path is context-relative.
+COPY --chown=www-data:www-data fixture-plugin/ \
+    /usr/src/wordpress/wp-content/plugins/fixture-thirdparty-mcp/
+
 # Re-assert the official image defaults — FROM resets nothing here, but being
 # explicit documents that our entrypoint is layered on by docker-compose
 # (entrypoint: cinatra-wp-entrypoint.sh), which still exec's docker-entrypoint.sh.
