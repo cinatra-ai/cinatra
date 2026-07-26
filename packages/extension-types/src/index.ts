@@ -267,3 +267,59 @@ export function visibleManifestPackageNames(
   }
   return names;
 }
+
+// ---------------------------------------------------------------------------
+// Skill ROLE — the manifest-carried cinatra semantics (cinatra#2089, epic
+// #2086 S2).
+//
+// An Anthropic-clean `SKILL.md` carries only Anthropic-valid frontmatter, so
+// every cinatra semantic that used to live there moves to the extension
+// manifest. The role is the first of them and the one the injection contract
+// (S4, cinatra#2091) binds to:
+//
+//   - `injectable` — a knowledge/behaviour skill. Counts toward the hard
+//     injection cap and is eligible for upload to a provider.
+//   - `matcher`    — consumed by artifact/agent MATCHING, never injected as
+//     prose into a run.
+//   - `internal`   — pipeline-consumed (e.g. the HITL prompt drive core reads
+//     by path). NEVER injected, NEVER uploaded.
+//
+// Declared as `cinatra.skillRole` on a `kind:"skill"` package. The shared
+// packaging verdict rejects any other value at CI, store install and publish.
+// ---------------------------------------------------------------------------
+
+/** The three roles a skill extension may declare. */
+export const SKILL_EXTENSION_ROLES = ["injectable", "matcher", "internal"] as const;
+
+export type SkillExtensionRole = (typeof SKILL_EXTENSION_ROLES)[number];
+
+/**
+ * Resolve a skill extension's role from its `cinatra` manifest block.
+ *
+ * DEFAULT is `injectable`: a skill extension exists to be used by a run, and
+ * defaulting to the most restricted role would silently stop today's skills
+ * from being delivered. The two restricted roles are opt-in and explicit.
+ *
+ * TRANSITIONAL: the pre-S2 convention was a boolean `internal: true` on the
+ * manifest (core consumes `chat-hitl-prompt-drive` by exact repository path).
+ * That flag is honoured as `internal` so a package that has not yet migrated
+ * keeps its meaning; an explicit `skillRole` always wins.
+ *
+ * An UNKNOWN `skillRole` value resolves to `null` — the caller decides, and the
+ * packaging verdict has already refused such a package at every install and
+ * publish point, so a null here means a manifest that bypassed the gate.
+ */
+export function resolveSkillExtensionRole(
+  cinatra: Record<string, unknown> | null | undefined,
+): SkillExtensionRole | null {
+  if (!cinatra || typeof cinatra !== "object") return "injectable";
+  const declared = (cinatra as { skillRole?: unknown }).skillRole;
+  if (typeof declared === "string") {
+    return (SKILL_EXTENSION_ROLES as readonly string[]).includes(declared)
+      ? (declared as SkillExtensionRole)
+      : null;
+  }
+  if (declared !== undefined) return null;
+  if ((cinatra as { internal?: unknown }).internal === true) return "internal";
+  return "injectable";
+}
