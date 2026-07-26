@@ -242,6 +242,7 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#2043 CMS capture writer (real DB + disk)"
       storageKey: `orgs/${ORG}/sha256/de/${nextId("k")}.bin`,
       sha256: nextId("sha"),
       mimeDetected: "text/html",
+      declaredMime: "application/vnd.cinatra.cms-fields+json",
       sizeBytes: 10,
       createdBy: null,
       producerRunId: nextId("run"),

@@ -99,6 +99,7 @@ export function registerAllObjectTypes(): void {
   // system-base pack (pdf/audio/video/image) or is refused.
   registerArtifactRefObjectType();
   registerCmsPreviewCaptureObjectType();
+  registerCmsContentSnapshotObjectType();
 }
 
 /**
@@ -174,6 +175,81 @@ function registerCmsPreviewCaptureObjectType(): void {
       onMatch: "skip",
       onNoMatch: "hitl",
       requiredFields: ["boundArtifactId", "boundSnapshotRevisionId"],
+    },
+  });
+}
+
+// The CMS content-snapshot type (cinatra#2043 S5 capture / cinatra#2044 S6
+// review). `captureCmsContentSnapshot` writes its immutable snapshot identity
+// row under `@cinatra-ai/objects:cms-content-snapshot` — a HOST-owned type (core
+// is the writer; no extension pack owns it). Nothing registered it, so
+// `artifactObjectTypeIds()` did not admit it and `readArtifactForDetail` answered
+// `not-found` for every captured snapshot: the review gate floored at
+// "review target unavailable — unknown-or-tombstoned" BEFORE the renderer
+// dispatch (`resolveMount`) was ever consulted. Found by the #2044 L-A3 live
+// walk; registering the type is what makes the captured snapshot a readable,
+// reviewable artifact row at all.
+//
+// It declares BOTH admission signals, because they are DIFFERENT gates (each was
+// a distinct floor in the live walk): the `isArtifact` DESCRIPTOR is what the
+// version-pinned SERVE resolver reads (`objectTypeRegistry.listArtifacts()`) —
+// without it the pinned revision is unresolvable ("revision-not-member"); the
+// `artifact-safe` DISPOSITION is the epic #1785 A1 library/type-admission seam
+// the projector / rebuild / recall also read, so every surface agrees. Sibling of
+// the L-B `cms-preview-capture` type above, which registers for the same reason.
+// `snapshotPolicy: "none"` + `mutability: "record"` mirror the capture's own
+// immutability contract (a snapshot is frozen at capture and never re-snapshotted).
+function registerCmsContentSnapshotObjectType(): void {
+  objectTypeRegistry.register({
+    type: "@cinatra-ai/objects:cms-content-snapshot",
+    category: "report",
+    // The identity row's data is the capture's own envelope (pointer, capturedAt,
+    // scope manifest, representation binding); the reviewed BYTES live in the
+    // representation, not here. Permissive by design — the capture writer is the
+    // schema authority and a stricter shape here could only reject its own rows.
+    schema: z.object({}).passthrough(),
+    lifecycle: {
+      // Capture is driven by the connector staged-write adapter on an agent run.
+      sources: ["agent"],
+      // A captured snapshot is IMMUTABLE — the review decision binds to it.
+      mutableBy: [],
+    },
+    renderers: {
+      listRow: null,
+      card: null,
+      // No SEMANTIC renderer: the snapshot renders through the org-scoped
+      // REPRESENTATION provider for its MIME
+      // (`application/vnd.cinatra.cms-fields+json`), which is exactly the
+      // dispatch path #2100's review fallback + this lane's activation-coupled
+      // binding resolve.
+      detail: null,
+    },
+    // ARTIFACT BY DESCRIPTOR (not merely by disposition): the SERVE path
+    // (`resolveArtifactVersionForServe`) admits a representation only for a type
+    // in `objectTypeRegistry.listArtifacts()` (the epic #1785 wave A4 pack-typed
+    // arm) — a disposition alone leaves the pinned revision unresolvable
+    // ("revision-not-member" on the review gate). The descriptor states the ONE
+    // representation form a captured snapshot ever has: the connector's canonical
+    // CMS-fields serialization. It declares NO renderer `ui` block — presentation
+    // is the extension pack's, resolved through the org-scoped representation
+    // provider, so core stays type-generic.
+    isArtifact: {
+      accepts: {
+        file: { mimeTypes: ["application/vnd.cinatra.cms-fields+json"] },
+      },
+    },
+    dispositions: {
+      projection: "artifact-safe",
+      pinnable: true,
+      snapshotPolicy: "none",
+      sensitivity: "normal",
+      mutability: "record",
+    },
+    crudPolicy: {
+      // Never auto-mapped: a snapshot is minted only by the capture transaction.
+      onMatch: "skip",
+      onNoMatch: "hitl",
+      requiredFields: [],
     },
   });
 }
