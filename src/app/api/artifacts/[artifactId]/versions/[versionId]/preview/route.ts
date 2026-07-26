@@ -39,7 +39,7 @@ import {
   previewDispositionFor,
 } from "@/lib/artifacts/artifact-read";
 import { isInlineTransportEligible } from "@/app/artifacts/[id]/renderer-resolution";
-import { ensureActivatedRepresentationProviders } from "@/lib/artifacts/activated-artifact-renderer-binder";
+import { ensureActivatedRepresentationProviders } from "@/lib/artifacts/system-artifact-renderer-registrar";
 import { getArtifact } from "@/lib/artifacts/artifact-service";
 import { isRepresentationPinned } from "@/lib/artifacts/artifact-refs-store";
 import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store";

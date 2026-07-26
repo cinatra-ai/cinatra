@@ -26,7 +26,7 @@ import {
   reconcileActivatedRepresentationProviders,
   _resetActivatedGenerationsForTests,
   type GoverningInstallRow,
-} from "@/lib/artifacts/activated-artifact-renderer-binder";
+} from "@/lib/artifacts/system-artifact-renderer-registrar";
 import {
   systemRepresentationProviderSpecs,
   reconcileSystemRepresentationProviders,

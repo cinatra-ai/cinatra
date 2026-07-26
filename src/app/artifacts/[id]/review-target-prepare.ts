@@ -40,7 +40,7 @@ import {
   classifyLoadablePath,
 } from "./renderer-resolution";
 import { resolveRuntimeRendererForRoute } from "./runtime-renderer-route";
-import { ensureActivatedRepresentationProviders } from "@/lib/artifacts/activated-artifact-renderer-binder";
+import { ensureActivatedRepresentationProviders } from "@/lib/artifacts/system-artifact-renderer-registrar";
 
 /** The two run/gate ports the caller supplies (the agents-domain seam). */
 export type ReviewRunGatePorts = Pick<

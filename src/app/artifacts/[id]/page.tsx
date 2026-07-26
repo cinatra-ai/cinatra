@@ -60,7 +60,7 @@ import {
   type ArtifactRenderDispatch,
 } from "./renderer-dispatch";
 import { resolveArtifactDispatchInputs } from "./renderer-resolution";
-import { ensureActivatedRepresentationProviders } from "@/lib/artifacts/activated-artifact-renderer-binder";
+import { ensureActivatedRepresentationProviders } from "@/lib/artifacts/system-artifact-renderer-registrar";
 import { ExtensionRendererMount } from "./extension-renderer-mount";
 import { RendererDegradedNotice } from "./renderer-degraded-notice";
 import { MarkdownHandler } from "./handlers/markdown-handler";

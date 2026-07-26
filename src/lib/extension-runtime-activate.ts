@@ -1020,7 +1020,7 @@ export async function runHostExtensionInstallAndActivate(
       if (bridgeRegistered && result.rolledBack !== true) {
         try {
           const { bindActivatedRepresentationProvidersForInstall } = await import(
-            "@/lib/artifacts/activated-artifact-renderer-binder"
+            "@/lib/artifacts/system-artifact-renderer-registrar"
           );
           const boundCount = bindActivatedRepresentationProvidersForInstall({
             packageName,
