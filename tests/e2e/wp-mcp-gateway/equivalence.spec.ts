@@ -131,23 +131,34 @@ async function ensureSession(): Promise<void> {
 }
 
 /** Unwrap an execute-ability / get-ability-info tools/call response. */
-function unwrap(resp: any): { ok: boolean; data: any; error: any; isError: boolean; raw: any } {
+function unwrap(resp: any): { ok: boolean; data: any; error: any; isError: boolean; raw: any; contentText: string | null } {
   const r = resp?.parsed?.result;
-  if (!r) return { ok: false, data: null, error: resp?.parsed?.error || resp?.error || "no result", isError: true, raw: resp };
+  if (!r) return { ok: false, data: null, error: resp?.parsed?.error || resp?.error || "no result", isError: true, raw: resp, contentText: null };
+  const txt = r.content?.[0]?.text;
+  const contentText = typeof txt === "string" ? txt : null;
   const sc = r.structuredContent;
   if (sc && typeof sc === "object") {
-    return { ok: sc.success !== false && !r.isError, data: sc.data ?? sc, error: sc.error ?? null, isError: Boolean(r.isError), raw: r };
+    return { ok: sc.success !== false && !r.isError, data: sc.data ?? sc, error: sc.error ?? (r.isError ? contentText : null), isError: Boolean(r.isError), raw: r, contentText };
   }
-  const txt = r.content?.[0]?.text;
   let parsed: any = null;
-  if (typeof txt === "string") {
+  if (contentText) {
     try {
-      parsed = JSON.parse(txt);
+      parsed = JSON.parse(contentText);
     } catch {
-      parsed = txt;
+      parsed = contentText;
     }
   }
-  return { ok: !r.isError, data: parsed?.data ?? parsed, error: parsed?.error ?? null, isError: Boolean(r.isError), raw: r };
+  return { ok: !r.isError, data: parsed?.data ?? parsed, error: parsed?.error ?? (r.isError ? contentText : null), isError: Boolean(r.isError), raw: r, contentText };
+}
+
+/** Pull a posts array out of whatever shape ewpa/get-posts returns. */
+function extractPosts(data: any): any[] {
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === "object") {
+    for (const k of ["posts", "items", "results", "data", "rows"]) if (Array.isArray(data[k])) return data[k];
+    for (const v of Object.values(data)) if (Array.isArray(v) && v.length && typeof v[0] === "object") return v;
+  }
+  return [];
 }
 
 async function execAbility(abilityId: string, params: Record<string, unknown>): Promise<any> {
@@ -360,31 +371,59 @@ test("VERIFY ewpa/get-posts supports publish-status filter + newest-first orderi
   const statusK = pickProp(info.props, ["status", "post_status"], "status");
   const orderbyK = pickProp(info.props, ["orderby", "order_by"], "orderby");
   const orderK = pickProp(info.props, ["order"], "order");
-  const perPageK = pickProp(info.props, ["per_page", "perpage", "limit", "number", "posts_per_page"], "per_page");
-  const params: Record<string, unknown> = {};
-  params[statusK] = "publish";
-  params[orderbyK] = "date";
-  params[orderK] = "desc";
-  params[perPageK] = 20;
-  const resp = await execAbility("ewpa/get-posts", params);
-  assert.notEqual(resp.status, 0, "gateway unreachable for ewpa/get-posts");
-  const u = unwrap(resp);
-  const data = u.data;
-  const list: any[] = Array.isArray(data) ? data : Array.isArray(data?.posts) ? data.posts : Array.isArray(data?.items) ? data.items : [];
-  const titleOf = (p: any) => String(p?.title?.rendered ?? p?.post_title ?? p?.title ?? "");
+  const countK = pickProp(info.props, ["numberposts", "posts_per_page", "per_page", "perpage", "limit", "number"], "numberposts");
+  const titleOf = (p: any) => String(p?.title?.rendered ?? p?.post_title ?? p?.title ?? p?.name ?? "");
   const statusOf = (p: any) => String(p?.status ?? p?.post_status ?? "");
+  // Try the discovered params in a few value-forms (string vs array status,
+  // numeric vs string count) — same params, correct value shape — and use the
+  // first attempt that returns published posts. A plain {} call is recorded as a
+  // diagnostic (does the ability return ANY posts at all?).
+  const base = { [orderbyK]: "date", [orderK]: "desc" } as Record<string, unknown>;
+  const attempts: Array<Record<string, unknown>> = [
+    { ...base, [statusK]: "publish", [countK]: 20 },
+    { ...base, [statusK]: "publish", [countK]: "20" },
+    { ...base, [statusK]: ["publish"], [countK]: 20 },
+    { ...base, [statusK]: "publish" },
+  ];
+  const diag = unwrap(await execAbility("ewpa/get-posts", {}));
+  const tried: any[] = [];
+  let chosen: { params: Record<string, unknown>; u: any; list: any[] } | null = null;
+  for (const params of attempts) {
+    const resp = await execAbility("ewpa/get-posts", params);
+    assert.notEqual(resp.status, 0, "gateway unreachable for ewpa/get-posts");
+    const u = unwrap(resp);
+    const list = extractPosts(u.data);
+    tried.push({ params, ok: u.ok, isError: u.isError, error: u.error, count: list.length, contentText: (u.contentText || "").slice(0, 400) });
+    if (list.length > 0) {
+      chosen = { params, u, list };
+      break;
+    }
+  }
+  const list = chosen?.list ?? [];
   const titles = list.map(titleOf);
   const idxNewer = titles.findIndex((t) => /newer published/i.test(t));
   const idxOlder = titles.findIndex((t) => /older published/i.test(t));
   const draftIncluded = titles.some((t) => /gateway — draft post/i.test(t)) || list.some((p) => statusOf(p) === "draft");
   const orderingOk = idxNewer >= 0 && idxOlder >= 0 && idxNewer < idxOlder;
-  const filterOk = !draftIncluded;
-  const pass = u.ok && orderingOk && filterOk;
+  const filterOk = list.length > 0 && !draftIncluded;
+  const pass = Boolean(chosen?.u.ok) && orderingOk && filterOk;
   record({
     item: "ewpa/get-posts",
     verdict: pass ? "PASS" : "FAIL",
     evidence: "captures/verify-verdicts.json",
-    detail: { schemaProps: info.props, sentParams: params, returnedTitles: titles, idxNewer, idxOlder, draftExcluded: !draftIncluded, orderingOk, filterOk, ok: u.ok, error: u.error },
+    detail: {
+      schemaProps: info.props,
+      chosenParams: chosen?.params ?? null,
+      attempts: tried,
+      diagnosticNoFilterCount: extractPosts(diag.data).length,
+      diagnosticContentText: (diag.contentText || "").slice(0, 400),
+      returnedTitles: titles,
+      idxNewer,
+      idxOlder,
+      draftExcluded: !draftIncluded,
+      orderingOk,
+      filterOk,
+    },
     ...(pass ? {} : { fallback: FALLBACK.getPosts }),
   });
 });
