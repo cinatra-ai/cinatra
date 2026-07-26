@@ -86,7 +86,7 @@ export type {
   McpTransport,
   McpMaterializerInput,
   MaterializedMcpServer,
-  McpMaterializerError,
+  McpMaterializerSkip,
   McpMaterializerResult,
 } from "./mcp-materializer";
 

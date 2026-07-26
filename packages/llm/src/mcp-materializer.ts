@@ -42,6 +42,14 @@ export type McpMaterializerInput = {
   allowedTools?: string[] | null;
   approval?: McpToolboxApproval;
   transport?: McpTransport;
+  /**
+   * Where the entry came from (cinatra#2015 S0): "managed" = a first-party
+   * connector toolbox / capability provider; "byo" = an `external_mcp_servers`
+   * registry row a user registered. On a normalized-name collision the managed
+   * entry wins over the BYO row; an omitted origin ranks as "byo" so an
+   * untagged call site can never displace a managed connector's tool.
+   */
+  origin?: "managed" | "byo";
 };
 
 /**
@@ -65,15 +73,30 @@ export type MaterializedMcpServer = {
   transport?: McpTransport;
 };
 
-export type McpMaterializerError =
-  | { code: "invalid_url"; label: string; message: string }
-  | { code: "empty_label"; label: string; message: string }
-  | { code: "authorization_conflict"; label: string; message: string }
-  | { code: "name_collision"; message: string; normalized: string; labels: string[] };
+/**
+ * One per-entry suppression record (cinatra#2015 S0). A conflicting or invalid
+ * entry suppresses ITSELF — never the batch — and the caller audit-warns each
+ * record. `winnerLabel` is set only for `name_collision` and names the entry
+ * that kept the normalized name.
+ */
+export type McpMaterializerSkip = {
+  code: "invalid_url" | "empty_label" | "authorization_conflict" | "name_collision";
+  label: string;
+  message: string;
+  winnerLabel?: string;
+};
 
-export type McpMaterializerResult =
-  | { ok: true; servers: MaterializedMcpServer[]; attribution: Record<string, string> }
-  | { ok: false; error: McpMaterializerError };
+/**
+ * Per-entry semantics (cinatra#2015 S0 — was whole-batch abort): the batch
+ * ALWAYS materializes; individually invalid or colliding entries land in
+ * `skipped` instead of aborting every other server. One bad row must never
+ * drop every site's tools.
+ */
+export type McpMaterializerResult = {
+  servers: MaterializedMcpServer[];
+  attribution: Record<string, string>;
+  skipped: McpMaterializerSkip[];
+};
 
 // ---------------------------------------------------------------------------
 // Name normalization
@@ -212,56 +235,55 @@ export function resolveSingleAuthorization(
 
 /**
  * Materialize a batch of external MCP server inputs into the validated
- * serialization shape. Fail-closed: the FIRST per-server validation failure
- * (URL, empty label, authorization conflict) aborts with that error, and a
- * normalized-name collision across the batch aborts with `name_collision`.
- * On success returns the materialized servers (in input order) plus the
- * `normalized → original label` attribution map.
+ * serialization shape.
+ *
+ * PER-ENTRY semantics (cinatra#2015 S0 — was whole-batch abort): an entry that
+ * fails validation (URL, empty label, authorization conflict) suppresses
+ * ITSELF into `skipped`; the rest of the batch materializes. A normalized-name
+ * collision keeps exactly one entry per name — the first MANAGED entry if any,
+ * else the first in input order (managed connector entries win over BYO rows;
+ * an untagged origin ranks as BYO) — and suppresses the others into `skipped`
+ * with the winner named. Returns the surviving servers in input order plus
+ * the `normalized → original label` attribution map.
  */
 export function materializeExternalMcpServers(
   inputs: readonly McpMaterializerInput[],
 ): McpMaterializerResult {
-  const servers: MaterializedMcpServer[] = [];
-  const attribution: Record<string, string> = {};
-  // Track every original label seen per normalized name to report collisions.
-  const labelsByNormalized = new Map<string, string[]>();
+  const skipped: McpMaterializerSkip[] = [];
 
+  // Pass 1 — per-entry validation; individually invalid entries drop out here.
+  type Candidate = {
+    input: McpMaterializerInput;
+    normalized: string;
+    server: MaterializedMcpServer;
+  };
+  const candidates: Candidate[] = [];
   for (const input of inputs) {
     const normalized = normalizeMcpServerName(input.serverLabel);
     if (normalized === "") {
-      return {
-        ok: false,
-        error: {
-          code: "empty_label",
-          label: input.serverLabel,
-          message: `server label "${input.serverLabel}" normalizes to an empty name.`,
-        },
-      };
+      skipped.push({
+        code: "empty_label",
+        label: input.serverLabel,
+        message: `server label "${input.serverLabel}" normalizes to an empty name.`,
+      });
+      continue;
     }
 
     const url = validateMcpServerUrl(input.serverUrl);
     if (!url.ok) {
-      return {
-        ok: false,
-        error: { code: "invalid_url", label: input.serverLabel, message: url.message },
-      };
+      skipped.push({ code: "invalid_url", label: input.serverLabel, message: url.message });
+      continue;
     }
 
     const auth = resolveSingleAuthorization(input);
     if (!auth.ok) {
-      return {
-        ok: false,
-        error: {
-          code: "authorization_conflict",
-          label: input.serverLabel,
-          message: auth.message,
-        },
-      };
+      skipped.push({
+        code: "authorization_conflict",
+        label: input.serverLabel,
+        message: auth.message,
+      });
+      continue;
     }
-
-    const seen = labelsByNormalized.get(normalized) ?? [];
-    seen.push(input.serverLabel);
-    labelsByNormalized.set(normalized, seen);
 
     const server: MaterializedMcpServer = {
       serverLabel: normalized,
@@ -273,25 +295,51 @@ export function materializeExternalMcpServers(
     if (input.allowedTools !== undefined) server.allowedTools = input.allowedTools;
     if (input.approval !== undefined) server.approval = input.approval;
     if (input.transport !== undefined) server.transport = input.transport;
-    servers.push(server);
-    attribution[normalized] = input.serverLabel;
+    candidates.push({ input, normalized, server });
   }
 
-  for (const [normalized, labels] of labelsByNormalized) {
-    if (labels.length > 1) {
-      return {
-        ok: false,
-        error: {
-          code: "name_collision",
-          normalized,
-          labels,
-          message:
-            `MCP server labels [${labels.map((l) => `"${l}"`).join(", ")}] all normalize ` +
-            `to "${normalized}" — labels must normalize to distinct names.`,
-        },
-      };
+  // Pass 2 — collision resolution per normalized name: first managed wins,
+  // else first in input order. Losers suppress themselves with the winner named.
+  const winnerByNormalized = new Map<string, Candidate>();
+  for (const candidate of candidates) {
+    const incumbent = winnerByNormalized.get(candidate.normalized);
+    if (!incumbent) {
+      winnerByNormalized.set(candidate.normalized, candidate);
+      continue;
+    }
+    const incumbentManaged = incumbent.input.origin === "managed";
+    const candidateManaged = candidate.input.origin === "managed";
+    if (!incumbentManaged && candidateManaged) {
+      // The managed entry displaces the earlier BYO/untagged one.
+      winnerByNormalized.set(candidate.normalized, candidate);
+      skipped.push(collisionSkip(incumbent, candidate));
+    } else {
+      skipped.push(collisionSkip(candidate, incumbent));
     }
   }
 
-  return { ok: true, servers, attribution };
+  const servers: MaterializedMcpServer[] = [];
+  const attribution: Record<string, string> = {};
+  for (const candidate of candidates) {
+    if (winnerByNormalized.get(candidate.normalized) !== candidate) continue;
+    servers.push(candidate.server);
+    attribution[candidate.normalized] = candidate.input.serverLabel;
+  }
+
+  return { servers, attribution, skipped };
+}
+
+function collisionSkip(
+  loser: { input: McpMaterializerInput; normalized: string },
+  winner: { input: McpMaterializerInput },
+): McpMaterializerSkip {
+  return {
+    code: "name_collision",
+    label: loser.input.serverLabel,
+    winnerLabel: winner.input.serverLabel,
+    message:
+      `MCP server label "${loser.input.serverLabel}" normalizes to "${loser.normalized}", ` +
+      `already taken by "${winner.input.serverLabel}"` +
+      `${winner.input.origin === "managed" ? " (managed connector entry wins)" : ""} — suppressed.`,
+  };
 }
