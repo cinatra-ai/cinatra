@@ -290,7 +290,7 @@ import { getAuthSession, isPlatformAdmin, resolveOrgRoleForUser } from "@/lib/au
 // run); resume grounds on the RESUMING PRINCIPAL (§2d D-OBO-RESUME), minting a
 // member session AFTER the resume handler's own enforceRunAccess re-authorization
 // — NEVER the frame's RUN authority (a lifecycle-driving resume must never be
-// grounded by a run's own OBO). Owner ruling eng#562 (ruling 2) DROPPED cross-org
+// grounded by a run's own OBO). Owner ruling 2026-07-26 (ruling 2) DROPPED cross-org
 // run management: a resuming principal who is NOT a member of the run's org fails
 // closed (Run access denied) instead of minting a non-member run-management authority.
 import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
@@ -1989,7 +1989,7 @@ async function handleAgentBuilderRunResume(
     if (!actor.userId) {
       return { error: "Resume requires a delegating principal; an autonomous run cannot self-drive its own lifecycle." };
     }
-    // Owner ruling eng#562 (ruling 2): cross-org run management is unsupported.
+    // Owner ruling 2026-07-26 (ruling 2): cross-org run management is unsupported.
     // A resuming principal who is authorized on the run but NOT a member of the
     // run's org fails closed here rather than driving the resume.
     const resumeRole = await resolveOrgRoleForUser(run.orgId, actor.userId);

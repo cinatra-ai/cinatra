@@ -9,7 +9,7 @@
  * self-binding.
  *
  * The authorized-non-member `runManagementAuthority` mint (and its pins) was
- * REMOVED — owner ruling eng#562 (ruling 2): cross-org run management is
+ * REMOVED — owner ruling 2026-07-26 (ruling 2): cross-org run management is
  * unsupported.
  */
 import { describe, it, expect } from "vitest";

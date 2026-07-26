@@ -274,6 +274,6 @@ describe("R2/R5: the agent-run mint file and its NAMED consumers (#1939 wave 2)"
 });
 
 // The R5 runManagementAuthority consumer-allowlist self-test was REMOVED with
-// the mint itself (owner ruling eng#562, ruling 2: cross-org run management is
+// the mint itself (owner ruling 2026-07-26, ruling 2: cross-org run management is
 // unsupported). authority.ts now carries no R5 named-consumer restriction; the
 // R5 mechanism stays covered end-to-end by the run-dispatch-mint suite above.

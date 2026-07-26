@@ -12,7 +12,7 @@ import { resolveOrgRoleForUser } from "@/lib/auth-session";
 // the RESUMING PRINCIPAL (actorId — authorized by the caller: the admin-session
 // approve action, the A2A resume route's verified actor, or the MCP resume
 // frame's delegating user), NEVER the run's own RUN authority. Owner ruling
-// eng#562 (ruling 2) DROPPED cross-org run management: a member mints a session
+// 2026-07-26 (ruling 2) DROPPED cross-org run management: a member mints a session
 // authority; an authorized NON-member fails closed (no non-member mint).
 import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import {
@@ -24,7 +24,7 @@ import {
 } from "./store";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
-// kernel guard instead of directly on the module `db` (owner ruling eng#562,
+// kernel guard instead of directly on the module `db` (owner ruling 2026-07-26,
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import {
@@ -280,7 +280,7 @@ export async function approveReviewTaskInternal(
     //
     // Ground the write on the RESUMING PRINCIPAL (actorId — the approving admin
     // session, the A2A resume route's verified actor, or the MCP resume frame's
-    // delegating user). Owner ruling eng#562 (ruling 2): cross-org run
+    // delegating user). Owner ruling 2026-07-26 (ruling 2): cross-org run
     // management is unsupported, so an authorized NON-member of the run's org
     // fails closed here rather than resuming. The member path mints a session
     // authority and its merge + enqueue are byte-for-byte unchanged.
@@ -288,7 +288,7 @@ export async function approveReviewTaskInternal(
     if (setupRole === undefined) {
       throw new Error(
         `[approveReviewTaskInternal] actor ${actorId} is not a member of org ${run.orgId}; ` +
-          `cross-org run management is unsupported (owner ruling eng#562)`,
+          `cross-org run management is unsupported`,
       );
     }
     await resumeRunFromSetupApproval(
@@ -398,14 +398,14 @@ export async function approveReviewTaskInternal(
 
     // §2d: ground the resume on the RESUMING PRINCIPAL (actorId), resolved
     // BEFORE any side-effect (writeHitlPrompt / sendTask / the status
-    // transition). Owner ruling eng#562 (ruling 2): cross-org run management is
+    // transition). Owner ruling 2026-07-26 (ruling 2): cross-org run management is
     // unsupported, so an authorized NON-member of the run's org fails closed
     // here — no WayFlow message is dispatched — rather than driving the resume.
     const resumeRole = await resolveOrgRoleForUser(run.orgId, actorId);
     if (resumeRole === undefined) {
       throw new Error(
         `[approveReviewTaskInternal] actor ${actorId} is not a member of org ${run.orgId}; ` +
-          `cross-org run management is unsupported (owner ruling eng#562)`,
+          `cross-org run management is unsupported`,
       );
     }
     const resumeAuthority = sessionAuthorityFromResolvedRole(run.orgId, resumeRole);

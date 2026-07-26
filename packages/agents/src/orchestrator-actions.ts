@@ -21,7 +21,7 @@ import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 import { getAuthSession, isPlatformAdmin, resolveOrgRoleForUser } from "@/lib/auth-session";
 // cinatra#1939 wave 2: run-management transitions are grounded on the acting
-// principal's member SESSION authority. Owner ruling eng#562 (ruling 2) DROPPED
+// principal's member SESSION authority. Owner ruling 2026-07-26 (ruling 2) DROPPED
 // cross-org run management: an actor cleared by canActOnRun who is NOT a member
 // of the run's org (a cross-org co-owner or a platform admin) now fails closed
 // with the action's Forbidden idiom — never a non-member run-management mint.
@@ -87,7 +87,7 @@ export async function cancelOrchestratorAction(
 
   // Ground the terminal armed/…→stopped transition on the actor's member
   // SESSION authority (canActOnRun just cleared this actor). Owner ruling
-  // eng#562 (ruling 2): cross-org run management is unsupported, so an
+  // 2026-07-26 (ruling 2): cross-org run management is unsupported, so an
   // authorized NON-member (cross-org co-owner / platform admin) fails closed
   // here — before any child fan-out — rather than driving the cancel.
   const role = await resolveOrgRoleForUser(run.orgId, actorUserId);
@@ -193,7 +193,7 @@ export async function resumeStoppedOrchestratorAction(
   }
 
   // Ground every transition in this resume on the actor's member SESSION
-  // authority (canActOnRun just cleared this actor). Owner ruling eng#562
+  // authority (canActOnRun just cleared this actor). Owner ruling 2026-07-26
   // (ruling 2): cross-org run management is unsupported, so an authorized
   // NON-member (cross-org co-owner / platform admin) fails closed here — before
   // any state change or WayFlow send — rather than driving the resume.

@@ -26,7 +26,7 @@
 //       its three sanctioned job-file consumers. Opaque access to that module is
 //       already covered by R2's org-write net; R5 closes the
 //       named/aliased/re-exported path. (The runManagementAuthority named-
-//       consumer rule was REMOVED with the mint itself — owner ruling eng#562,
+//       consumer rule was REMOVED with the mint itself — owner ruling 2026-07-26,
 //       ruling 2: cross-org run management is unsupported. R4 = the registry
 //       `importBanned` ratchet, deliberately unimplemented — see
 //       write-registry.ts.)

@@ -85,7 +85,7 @@ vi.mock("../execution", () => ({
 // cinatra#1939 wave 2: the wayflow resume mints the resuming-principal
 // authority (§2d) via resolveOrgRoleForUser. Stub only that membership read (a
 // DB call) so the mint stays DB-free; sessionAuthorityFromResolvedRole remains
-// the real (pure) function. Owner ruling eng#562 (ruling 2): a non-member
+// the real (pure) function. Owner ruling 2026-07-26 (ruling 2): a non-member
 // principal (resolveOrgRoleForUser → undefined) now fails closed.
 vi.mock("@/lib/auth-session", async (orig) => ({
   ...(await orig<typeof import("@/lib/auth-session")>()),
@@ -180,7 +180,7 @@ describe("agent-run resume + WayFlow text-only envelope", () => {
     expect(call?.message?.parts?.[0]?.text).toBe("[Approved by operator]");
   });
 
-  // Owner ruling eng#562 (ruling 2): cross-org run management is unsupported.
+  // Owner ruling 2026-07-26 (ruling 2): cross-org run management is unsupported.
   // A resuming principal who is NOT a member of the run's org (resolveOrgRoleForUser
   // → undefined) fails closed BEFORE any WayFlow send — no non-member mint.
   it("non-member principal (ruling 2): refuses and dispatches NO WayFlow send", async () => {

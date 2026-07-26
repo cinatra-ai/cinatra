@@ -1700,7 +1700,7 @@ export async function transitionRunStatus(
   // (mcp/handlers.ts agent_run_stop, §2e) threads its possibly-absent frame
   // authority so the seam fail-closes it uniformly; every other caller passes a
   // concrete host-side mint (§2a member session, §2b system). Cross-org
-  // run management was dropped (owner ruling eng#562) — non-member run-management
+  // run management was dropped (owner ruling 2026-07-26) — non-member run-management
   // flows fail closed at their call site / the seam, never via a special mint.
   authority: OrgWriteAuthority | undefined,
 ): Promise<void> {

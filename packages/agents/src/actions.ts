@@ -15,7 +15,7 @@ import {
   resolveOrgRoleForUser,
 } from "@/lib/auth-session";
 // cinatra#1939 wave 2: rejectReviewTask mints a member SESSION authority for
-// the setup-run→failed transition. Owner ruling eng#562 (ruling 2) DROPPED
+// the setup-run→failed transition. Owner ruling 2026-07-26 (ruling 2) DROPPED
 // cross-org run management: an actor cleared by requireAdminSession who is NOT
 // a member of the run's org (a pure platform admin) now fails closed here.
 import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
@@ -401,7 +401,7 @@ export async function rejectReviewTask(taskId: string, reason?: string): Promise
     const run = await readAgentRunById(runId);
     if (!run) throw new Error(`[rejectReviewTask] run ${runId} not found`);
     // Ground the setup-run→failed transition on the acting principal's member
-    // SESSION authority. Owner ruling eng#562 (ruling 2): cross-org run
+    // SESSION authority. Owner ruling 2026-07-26 (ruling 2): cross-org run
     // management is unsupported, so an admin-cleared actor who is NOT a member
     // of the run's org fails closed here rather than driving the run.
     const role = await resolveOrgRoleForUser(run.orgId, session.user.id);
@@ -411,7 +411,7 @@ export async function rejectReviewTask(taskId: string, reason?: string): Promise
         reason: "forbidden",
         message:
           `[rejectReviewTask] actor ${session.user.id} is not a member of org ${run.orgId}; ` +
-          `cross-org run management is unsupported (owner ruling eng#562)`,
+          `cross-org run management is unsupported`,
       });
     }
     const authority = sessionAuthorityFromResolvedRole(run.orgId, role);

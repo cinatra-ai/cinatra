@@ -23,7 +23,7 @@ import {
 // ONE statement (#76 single-statement atomicity). That was the last registered-
 // surface agent_runs status write that bypassed transitionRunStatus AND the
 // org-write kernel (it is inline drizzle, invisible to the boundary gate).
-// Owner ruling eng#562 (groganz, 2026-07-26, ruling 1: "now") routes it through
+// Owner ruling 2026-07-26 (groganz, ruling 1: "now") routes it through
 // the SAME guard as transitionRunStatus in wave 2.
 //
 // pending_approval -> queued is a NON-terminal dispatch edge, so the capability

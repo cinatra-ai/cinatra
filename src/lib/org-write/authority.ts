@@ -80,8 +80,8 @@ export function sessionAuthorityFromResolvedRole(
   };
 }
 
-// cinatra#1939 wave 2 (§2d′) DROPPED — owner ruling eng#562 (groganz,
-// 2026-07-26, ruling 2): cross-org run management is UNSUPPORTED. The
+// cinatra#1939 wave 2 (§2d′) DROPPED — owner ruling 2026-07-26 (groganz,
+// ruling 2): cross-org run management is UNSUPPORTED. The
 // authorized-non-member mint `runManagementAuthority` was removed end-to-end;
 // authorized-non-member run-management flows (a cross-org co-owner / platform
 // admin who is NOT a member of the run's org) now fail closed — the seam
