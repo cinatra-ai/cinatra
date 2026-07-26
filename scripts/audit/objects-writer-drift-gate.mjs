@@ -61,6 +61,13 @@ const WRITER_ALLOWLIST = new Set([
   "src/lib/artifacts/artifact-creation.ts",
   "src/lib/artifacts/artifact-retention.ts",
   "src/lib/artifacts/semantic-assertion-store.ts",
+  // cinatra#2043 (epic #2037 S5) CMS content-snapshot capture writer — same
+  // class as the artifact stores above: a CTE-atomic writer that inserts the
+  // snapshot artifact's own objects identity row alongside resource /
+  // artifact_blobs / representation and its transactional ArtifactProduced
+  // event (own graphiti_projection_outbox row + version bump) in one tx.
+  // Migration to the canonical writer is a follow-up.
+  "src/lib/artifacts/cms-content-snapshot-capture.ts",
   // cinatra#1432 uninstall-operation store — does NOT write the objects table;
   // it writes semantic_assertion (archive UPDATE / replay INSERT) and only
   // READS objects in the replay existence guard (INSERT INTO semantic_assertion
