@@ -634,6 +634,17 @@ export function buildUpsertRevisionWrite(
     // content and its digest. When they disagree the DB CHECK aborts the write
     // (fail-closed) — a revision can never claim a digest it did not hash to.
     content: typeof skill.content === "string" && digest != null ? skill.content : null,
+    // Bundle-aware content authority (cinatra#2088, epic #2086 S1): an authored/
+    // chat-captured skill becomes a BUNDLE OF ONE — the SKILL.md router — so it
+    // enters the same revision-file manifest + content-addressed blob authority
+    // as a multi-file package skill and can grow references later (closing the
+    // "custom skills can never carry references" gap). The router's per-file
+    // digest is sha256(utf8 content) — the SAME value as `computeSkillSourceRevision`,
+    // so the manifest agrees with the source revision digest by construction.
+    bundleFiles:
+      typeof skill.content === "string" && digest != null
+        ? [{ path: "SKILL.md", bytes: Buffer.from(skill.content, "utf8"), isRouter: true }]
+        : null,
     initialState: INITIAL_LIFECYCLE_STATE,
   };
 }

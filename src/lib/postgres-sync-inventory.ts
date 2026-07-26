@@ -251,6 +251,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Skill-lifecycle DB write primitives (cinatra#1361): records an immutable skill_revisions row on the custom/personal upsertSkill write path and applies the audited lifecycle-state compare-and-swap transition. Built as a sync leaf mirroring skills-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf) so it composes into the synchronous store graph; migrates to async typed writes with the skills subsystem.",
   },
+  "src/lib/skill-bundle-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Bundle-aware skill content authority DB primitives (cinatra#2088): the content-addressed blob + revision-file manifest write, the atomic bundle read, and the current-bundle head read. Built as a sync leaf mirroring skill-lifecycle-store.ts's synchronous access pattern so its query BUILDER can be appended to the same synchronous catalog/lifecycle transaction (the reason it cannot be async today); the standalone read/write entry points migrate to async typed access together with the skills subsystem.",
+  },
   "packages/skills/src/llm-matching/skill-matches-store.ts": {
     class: "migratable-request-path",
     justification:

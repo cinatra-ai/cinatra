@@ -13,6 +13,7 @@
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+import { buildRevisionBundleQueries, bundleDigestForFiles, type BundleFileInput } from "@/lib/skill-bundle-store";
 
 /** An immutable revision to record atomically with a skills catalog write. The
  * `source` value is validated by the pure lifecycle policy before it arrives. */
@@ -33,6 +34,17 @@ export interface SkillLifecycleRevisionWrite {
    * resolves to durable authoritative content. The DB CHECK enforces
    * `contentDigest == sha256(content)`, so a mismatched pair aborts the write. */
   content?: string | null;
+  /** The bundle-aware content authority (cinatra#2088, epic #2086 S1): the
+   * revision's FILE SET. When present (non-empty) this records the immutable
+   * revision-file manifest (`skill_revision_files`) + content-addressed blobs
+   * (`skill_bundle_blobs`) atomically with the revision, and stamps the
+   * revision identity (`skill_revisions.bundle_digest`) at INSERT. An authored/
+   * chat-captured skill passes a bundle-of-one (`[{path:'SKILL.md', bytes,
+   * isRouter:true}]`) — closing the "custom skills can never carry references"
+   * gap: the skill is now a bundle it can grow. Structurally a
+   * `BundleFileInput[]`; typed inline so this write stays free of a value
+   * import at its many call sites. */
+  bundleFiles?: Array<{ path: string; bytes: Buffer; mode?: number; isRouter?: boolean }> | null;
   /** State to INITIALIZE the skill to when it has none yet ('active' for a new
    * custom skill). An existing state is preserved (COALESCE) — a content
    * re-save of a deprecated skill records a revision but stays deprecated. */
@@ -68,6 +80,16 @@ export function buildSkillLifecycleRevisionQueries(
         values: [w.contentDigest, w.content],
       });
     }
+    // Bundle-aware content authority (cinatra#2088): the revision identity is
+    // the digest over the sorted (path, per-file-digest) set. Stamped at INSERT
+    // (skill_revisions is append-only — the pointer is the only mutable element,
+    // so a digest a revision was born with can never be UPDATED afterward). NULL
+    // for a lifecycle write that carries no file set (a pure state re-record).
+    const bundleFiles = (w.bundleFiles && w.bundleFiles.length > 0
+      ? (w.bundleFiles as BundleFileInput[])
+      : null);
+    const bundleDigest = bundleFiles ? bundleDigestForFiles(bundleFiles) : null;
+
     // PLAIN insert (no ON CONFLICT): a live revision id is a fresh distinct UUID
     // so it never collides — and if one ever did, the collision must ABORT the
     // whole transaction (fail-closed) rather than silently retain a stale
@@ -75,8 +97,8 @@ export function buildSkillLifecycleRevisionQueries(
     // lives only in the core__0029 backfill, not here.
     queries.push({
       text: `INSERT INTO "${s}"."skill_revisions"
-        (id, skill_id, content_digest, source, based_on_skill_ids, base_digests, author_user_id, restores_revision_id)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8)`,
+        (id, skill_id, content_digest, source, based_on_skill_ids, base_digests, author_user_id, restores_revision_id, bundle_digest)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9)`,
       values: [
         w.revisionId,
         w.skillId,
@@ -86,6 +108,7 @@ export function buildSkillLifecycleRevisionQueries(
         w.baseDigests ? JSON.stringify(w.baseDigests) : null,
         w.authorUserId,
         w.restoresRevisionId ?? null,
+        bundleDigest,
       ],
     });
     queries.push({
@@ -95,6 +118,17 @@ export function buildSkillLifecycleRevisionQueries(
         WHERE id = $1`,
       values: [w.skillId, w.initialState, w.revisionId],
     });
+    // APPEND the bundle blob + manifest inserts LAST so a caller that
+    // destructures the leading [revisionInsert, pointerUpdate] (or
+    // [contentBlob, revisionInsert, pointerUpdate]) is unaffected, and the
+    // manifest's revision_id already exists in the same transaction.
+    if (bundleFiles) {
+      queries.push(...buildRevisionBundleQueries(schemaName, {
+        revisionId: w.revisionId,
+        skillId: w.skillId,
+        files: bundleFiles,
+      }));
+    }
   }
   return queries;
 }
@@ -130,6 +164,14 @@ export interface SkillRollbackWrite {
   /** Full JSON payload with the restored content + recomputed source digest. */
   restoredPayloadJson: string;
   authorUserId: string | null;
+  /** The TARGET revision's bundle identity (cinatra#2088), resolved from its
+   * manifest by the caller. When present the current-bundle head advances to
+   * the rollback revision carrying this digest, so the authority's current
+   * bundle IS the restored file set. Null/absent falls back to the target
+   * revision's stamped `bundle_digest`; when that is also NULL (a pre-S1
+   * revision that was never captured) the head is left alone and the next
+   * capture reconciles it from disk. */
+  targetBundleDigest?: string | null;
 }
 
 /**
@@ -166,10 +208,42 @@ export function buildSkillRollbackQuery(
         INSERT INTO "${s}"."skill_revision_contents" (content_digest, content, byte_length)
         SELECT $5, $6, octet_length($6) FROM upd
         ON CONFLICT (content_digest) DO NOTHING
+      ), files AS (
+        -- Whole-bundle rollback (cinatra#2088): copy the TARGET revision's file
+        -- manifest onto the NEW rollback revision so a rollback restores the
+        -- complete prior FILE SET, not just SKILL.md. The content-addressed
+        -- blobs already exist (shared by digest), so only the manifest rows are
+        -- copied. Gated on the CAS (EXISTS ... FROM upd) so a CAS miss copies
+        -- nothing; ON CONFLICT keeps it idempotent.
+        INSERT INTO "${s}"."skill_revision_files"
+          (revision_id, skill_id, path, content_digest, byte_length, mode, is_router)
+        SELECT $2, $3, f.path, f.content_digest, f.byte_length, f.mode, f.is_router
+          FROM "${s}"."skill_revision_files" f
+         WHERE f.revision_id = $7 AND f.skill_id = $3 AND EXISTS (SELECT 1 FROM upd)
+        ON CONFLICT (revision_id, path) DO NOTHING
+      ), head AS (
+        -- Advance the CURRENT-BUNDLE pointer to the rollback revision, so the
+        -- authority's "current bundle" IS the restored file set (otherwise the
+        -- head would still name the superseded revision and byte-bound sync
+        -- would keep mirroring the rolled-back content). Skipped when the target
+        -- carries no bundle identity (a pre-S1 revision) — the next capture
+        -- reconciles the head from disk.
+        INSERT INTO "${s}"."skill_bundle_heads" (skill_id, revision_id, bundle_digest, updated_at)
+        SELECT $3, $2, COALESCE($9::text, tr.bundle_digest), now()
+          FROM "${s}"."skill_revisions" tr
+         WHERE tr.id = $7 AND tr.skill_id = $3
+           AND COALESCE($9::text, tr.bundle_digest) IS NOT NULL
+           AND EXISTS (SELECT 1 FROM upd)
+        ON CONFLICT (skill_id) DO UPDATE
+          SET revision_id = EXCLUDED.revision_id,
+              bundle_digest = EXCLUDED.bundle_digest,
+              updated_at = now()
       )
       INSERT INTO "${s}"."skill_revisions"
-        (id, skill_id, content_digest, source, restores_revision_id, author_user_id)
-      SELECT $2, $3, $5, 'rollback', $7, $8 FROM upd
+        (id, skill_id, content_digest, source, restores_revision_id, author_user_id, bundle_digest)
+      SELECT $2, $3, $5, 'rollback', $7, $8,
+             (SELECT tr.bundle_digest FROM "${s}"."skill_revisions" tr WHERE tr.id = $7 AND tr.skill_id = $3)
+        FROM upd
       RETURNING id`,
     values: [
       input.restoredPayloadJson,
@@ -180,6 +254,7 @@ export function buildSkillRollbackQuery(
       input.restoredContent,
       input.targetRevisionId,
       input.authorUserId,
+      input.targetBundleDigest ?? null,
     ],
   };
 }

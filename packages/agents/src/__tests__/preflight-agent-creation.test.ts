@@ -223,18 +223,22 @@ describe("preflightAgentCreation — anthropic-specific checks", () => {
     }
   });
 
-  it("skills_content_drift when current content hash differs from row hash", async () => {
+  it("skills_content_drift when the candidate's revision+bundle binding differs from the row's (byte-bound, cinatra#2088)", async () => {
     daoMock.readSyncRow.mockImplementation(async (_fp, _env, catalogSkillId) => ({
       catalogSkillId,
       anthropicSkillId: "skill_abc",
       anthropicVersion: "v1",
-      contentHash: "stale_hash",
+      contentHash: "irrelevant",
+      revisionId: "rev-old",
+      bundleDigest: "bundle-old",
       stale: false,
     }));
     svcMock.buildSyncCandidates.mockResolvedValue([
       {
         catalogSkillId: "sec-skill",
         name: "sec",
+        revisionId: "rev-new",
+        bundleDigest: "bundle-new",
         skillMd: Buffer.from("# fresh content"),
         bundledFiles: [],
         allowAnthropicUpload: true,
@@ -242,6 +246,8 @@ describe("preflightAgentCreation — anthropic-specific checks", () => {
       {
         catalogSkillId: "code-skill",
         name: "code",
+        revisionId: "rev-new",
+        bundleDigest: "bundle-new",
         skillMd: Buffer.from("# fresh content code"),
         bundledFiles: [],
         allowAnthropicUpload: true,
@@ -249,6 +255,8 @@ describe("preflightAgentCreation — anthropic-specific checks", () => {
       {
         catalogSkillId: "design-skill",
         name: "design",
+        revisionId: "rev-new",
+        bundleDigest: "bundle-new",
         skillMd: Buffer.from("# fresh content design"),
         bundledFiles: [],
         allowAnthropicUpload: true,

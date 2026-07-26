@@ -88,6 +88,8 @@ describe("upsertSyncRow — reactivation resets stale_at", () => {
       anthropicSkillId: "skill_1",
       anthropicVersion: "v1",
       contentHash: "h1",
+      revisionId: "rev-1",
+      bundleDigest: "bundle-1",
     });
     const set = h.captured.onConflictSet!;
     expect(set.stale).toBe(false);

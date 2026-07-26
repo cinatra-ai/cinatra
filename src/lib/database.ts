@@ -28,6 +28,7 @@ import { shadowUpsertObject } from "./objects-dual-write";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { buildSkillLifecycleRevisionQueries, buildSkillRollbackQuery, type SkillLifecycleRevisionWrite, type SkillRollbackWrite } from "@/lib/skill-lifecycle-store";
+import { buildRevisionBundleQueries, readRevisionBundleFromDatabase } from "@/lib/skill-bundle-store";
 import {
   canonicalizeSealedFields,
   hasSecretFields,
@@ -658,12 +659,21 @@ export function updateSkillPrefillTextInDatabase(skillId: string, prefillText: s
  */
 export function applySkillRollbackInDatabase(input: SkillRollbackWrite): { changed: boolean } {
   ensurePostgresSchema();
+  // Whole-bundle rollback (cinatra#2088): the TARGET revision's bundle identity, so the rollback advances the
+  // current-bundle head to the restored FILE SET. A pre-S1 target has no manifest — then the ROLLBACK revision is
+  // recorded as a bundle-of-one from the restored content in the SAME transaction (restored either way).
+  const targetBundle = readRevisionBundleFromDatabase(input.skillId, input.targetRevisionId);
+  const targetBundleDigest = input.targetBundleDigest ?? targetBundle?.bundleDigest ?? null;
+  const preS1TargetQueries = targetBundle ? [] : buildRevisionBundleQueries(postgresSchema, {
+    revisionId: input.newRevisionId, skillId: input.skillId,
+    files: [{ path: "SKILL.md", bytes: Buffer.from(input.restoredContent, "utf8"), isRouter: true }],
+  });
   const results = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     transaction: true,
     // The payload changes — bump the cross-process generation token in the
     // SAME transaction (cinatra#1364). A CAS miss bumps too; harmless refetch.
-    queries: [buildSkillRollbackQuery(postgresSchema, input), buildBumpSkillCatalogGenerationQuery(postgresSchema)],
+    queries: [buildSkillRollbackQuery(postgresSchema, { ...input, targetBundleDigest }), ...preS1TargetQueries, buildBumpSkillCatalogGenerationQuery(postgresSchema)],
   });
   return { changed: (results[0]?.rows?.length ?? 0) > 0 };
 }
