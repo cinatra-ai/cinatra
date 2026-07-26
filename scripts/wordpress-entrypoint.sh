@@ -150,6 +150,22 @@ install_wp_core_if_needed() {
     --skip-email
 }
 
+configure_permalinks() {
+  # WordPress serves pretty /wp-json/ REST URLs only when a NON-plain permalink
+  # structure is active. A fresh `wp core install` defaults to PLAIN, so
+  # /wp-json/mcp/mcp-adapter-default-server 301-redirects (canonical) instead of
+  # routing to the REST API — the MCP adapter route is then unreachable at its
+  # pretty URL. (The widget uat-gate only avoided this because the cinatra
+  # companion plugin flushed rewrites; the light capture boot has no cinatra
+  # plugin, so the entrypoint must set the structure itself.) Idempotent + safe
+  # for every consumer of this entrypoint.
+  log "Configuring pretty permalinks (so /wp-json/ REST routes serve)..."
+  wp --path="$WP_PATH" --allow-root rewrite structure '/%postname%/' --hard \
+    >/dev/null 2>&1 || log "WARN: rewrite structure failed"
+  wp --path="$WP_PATH" --allow-root rewrite flush --hard \
+    >/dev/null 2>&1 || log "WARN: rewrite flush failed"
+}
+
 plugin_is_complete() {
   # Completeness signal for a baked/copied/fetched plugin dir. A dir is COMPLETE
   # when its main plugin file exists AND (if it needs a composer vendor tree)
@@ -270,6 +286,7 @@ bootstrap() {
   wait_for_config || return 0
   wait_for_db || return 0
   install_wp_core_if_needed || log "WARN: wp core install failed"
+  configure_permalinks || log "WARN: permalink config failed"
   ensure_mcp_adapter || log "WARN: mcp-adapter ensure failed"
   ensure_enable_abilities_for_mcp || log "WARN: enable-abilities-for-mcp ensure failed"
   activate_plugins
