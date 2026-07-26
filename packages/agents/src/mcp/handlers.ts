@@ -288,10 +288,12 @@ import { getAuthSession, isPlatformAdmin, resolveOrgRoleForUser } from "@/lib/au
 // cinatra#1939 wave 2: run_stop threads the FORWARDED FRAME authority (§2e —
 // chat/session SESSION auth, or agent_run OBO RUN auth self-bound to its own
 // run); resume grounds on the RESUMING PRINCIPAL (§2d D-OBO-RESUME), minting a
-// member session or the authorized-non-member run-management authority AFTER the
-// resume handler's own enforceRunAccess re-authorization — NEVER the frame's RUN
-// authority (a lifecycle-driving resume must never be grounded by a run's own OBO).
-import { sessionAuthorityFromResolvedRole, runManagementAuthority } from "@/lib/org-write/authority";
+// member session AFTER the resume handler's own enforceRunAccess re-authorization
+// — NEVER the frame's RUN authority (a lifecycle-driving resume must never be
+// grounded by a run's own OBO). Owner ruling eng#562 (ruling 2) DROPPED cross-org
+// run management: a resuming principal who is NOT a member of the run's org fails
+// closed (Run access denied) instead of minting a non-member run-management authority.
+import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import {
   readTeamsForUser,
@@ -1977,22 +1979,24 @@ async function handleAgentBuilderRunResume(
     // → pending_approval = run.execute), which a run's OWN OBO/RUN authority must
     // NEVER hold. Ground the WayFlow resume below on the RESUMING PRINCIPAL —
     // re-authorized just above via enforceRunAccess execute + approveHitl —
-    // resolved from the frame's delegating user (member session, else the
-    // authorized-non-member run-management authority), NEVER
-    // request.actor.orgWriteAuthority (which for an agent_run OBO frame is a RUN
-    // authority). §8.1 (verified against the MCP transport, src/lib/mcp-server.ts):
-    // the agent_run OBO token ALWAYS carries the run owner's identity (userId), so
-    // a pure autonomous no-principal resume does NOT exist as a live path — this
-    // refusal is the explicit defense-in-depth contract (an autonomous run can
-    // never self-drive its lifecycle; it can never obtain run.execute as a run).
+    // resolved from the frame's delegating user (a member SESSION authority),
+    // NEVER request.actor.orgWriteAuthority (which for an agent_run OBO frame is a
+    // RUN authority). §8.1 (verified against the MCP transport,
+    // src/lib/mcp-server.ts): the agent_run OBO token ALWAYS carries the run
+    // owner's identity (userId), so a pure autonomous no-principal resume does NOT
+    // exist as a live path — this refusal is the explicit defense-in-depth
+    // contract (an autonomous run can never self-drive its lifecycle).
     if (!actor.userId) {
       return { error: "Resume requires a delegating principal; an autonomous run cannot self-drive its own lifecycle." };
     }
+    // Owner ruling eng#562 (ruling 2): cross-org run management is unsupported.
+    // A resuming principal who is authorized on the run but NOT a member of the
+    // run's org fails closed here rather than driving the resume.
     const resumeRole = await resolveOrgRoleForUser(run.orgId, actor.userId);
-    const resumeAuthority: OrgWriteAuthority =
-      resumeRole !== undefined
-        ? sessionAuthorityFromResolvedRole(run.orgId, resumeRole)
-        : runManagementAuthority(run.orgId);
+    if (resumeRole === undefined) {
+      return { error: "Run access denied." };
+    }
+    const resumeAuthority: OrgWriteAuthority = sessionAuthorityFromResolvedRole(run.orgId, resumeRole);
 
     // Detect explicit hitl response payload in the input. If a typed field
     // (e.g. hitlResponse) is added, branch on its presence here.

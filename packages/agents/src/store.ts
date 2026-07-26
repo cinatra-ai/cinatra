@@ -1696,7 +1696,9 @@ export async function transitionRunStatus(
   // this commit). Typed `| undefined` because the ONE frame-forwarded caller
   // (mcp/handlers.ts agent_run_stop, §2e) threads its possibly-absent frame
   // authority so the seam fail-closes it uniformly; every other caller passes a
-  // concrete host-side mint (§2a session / runManagementAuthority, §2b system).
+  // concrete host-side mint (§2a member session, §2b system). Cross-org
+  // run management was dropped (owner ruling eng#562) — non-member run-management
+  // flows fail closed at their call site / the seam, never via a special mint.
   authority: OrgWriteAuthority | undefined,
 ): Promise<void> {
   // (1) Legal-transition pre-guard — an illegal edge is a programmer error, not

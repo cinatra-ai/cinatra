@@ -82,16 +82,18 @@ vi.mock("../execution", () => ({
   handleWayflowTaskState: vi.fn(async () => undefined),
 }));
 
-// cinatra#1939 wave 2: the wayflow resume now mints the resuming-principal
+// cinatra#1939 wave 2: the wayflow resume mints the resuming-principal
 // authority (§2d) via resolveOrgRoleForUser. Stub only that membership read (a
-// DB call) so the mint stays DB-free; sessionAuthorityFromResolvedRole /
-// runManagementAuthority remain the real (pure) functions.
+// DB call) so the mint stays DB-free; sessionAuthorityFromResolvedRole remains
+// the real (pure) function. Owner ruling eng#562 (ruling 2): a non-member
+// principal (resolveOrgRoleForUser → undefined) now fails closed.
 vi.mock("@/lib/auth-session", async (orig) => ({
   ...(await orig<typeof import("@/lib/auth-session")>()),
   resolveOrgRoleForUser: vi.fn(async () => "member"),
 }));
 
 import { approveReviewTaskInternal } from "../review-task-actions";
+import { resolveOrgRoleForUser } from "@/lib/auth-session";
 
 const REF = {
   artifactId: "art-1",
@@ -176,5 +178,16 @@ describe("agent-run resume + WayFlow text-only envelope", () => {
       message?: { parts?: Array<{ kind?: string; text?: string }> };
     };
     expect(call?.message?.parts?.[0]?.text).toBe("[Approved by operator]");
+  });
+
+  // Owner ruling eng#562 (ruling 2): cross-org run management is unsupported.
+  // A resuming principal who is NOT a member of the run's org (resolveOrgRoleForUser
+  // → undefined) fails closed BEFORE any WayFlow send — no non-member mint.
+  it("non-member principal (ruling 2): refuses and dispatches NO WayFlow send", async () => {
+    (resolveOrgRoleForUser as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined);
+    await expect(
+      approveReviewTaskInternal("wayflow-task-r1", "actor-1", { userResponse: "approve" }),
+    ).rejects.toThrow(/cross-org run management is unsupported/);
+    expect(sendTaskMock).not.toHaveBeenCalled();
   });
 });

@@ -20,13 +20,12 @@
 import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 import { getAuthSession, isPlatformAdmin, resolveOrgRoleForUser } from "@/lib/auth-session";
-// cinatra#1939 wave 2 (§2d′): run-management actors here may be authorized
-// NON-members (a cross-org co-owner or a platform admin cleared by canActOnRun).
-// Mint a member session when the actor is an org member, else the authorized-
-// non-member run-management authority — INLINE, immediately after the
-// canActOnRun gate (the §2d′ adjacency invariant: the mint's safety rests on
-// that gate having just run in this same function).
-import { sessionAuthorityFromResolvedRole, runManagementAuthority } from "@/lib/org-write/authority";
+// cinatra#1939 wave 2: run-management transitions are grounded on the acting
+// principal's member SESSION authority. Owner ruling eng#562 (ruling 2) DROPPED
+// cross-org run management: an actor cleared by canActOnRun who is NOT a member
+// of the run's org (a cross-org co-owner or a platform admin) now fails closed
+// with the action's Forbidden idiom — never a non-member run-management mint.
+import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import {
   readAgentRunById,
   readAgentRunsByParent,
@@ -86,14 +85,16 @@ export async function cancelOrchestratorAction(
     return { ok: false, error: "Forbidden" };
   }
 
-  // §2d′ adjacency: member session, else authorized-non-member run-management
-  // authority (canActOnRun just cleared this actor). Threaded into
-  // cancelOrchestratorRun for its terminal armed/…→stopped transition.
+  // Ground the terminal armed/…→stopped transition on the actor's member
+  // SESSION authority (canActOnRun just cleared this actor). Owner ruling
+  // eng#562 (ruling 2): cross-org run management is unsupported, so an
+  // authorized NON-member (cross-org co-owner / platform admin) fails closed
+  // here — before any child fan-out — rather than driving the cancel.
   const role = await resolveOrgRoleForUser(run.orgId, actorUserId);
-  const authority =
-    role !== undefined
-      ? sessionAuthorityFromResolvedRole(run.orgId, role)
-      : runManagementAuthority(run.orgId);
+  if (role === undefined) {
+    return { ok: false, error: "Forbidden" };
+  }
+  const authority = sessionAuthorityFromResolvedRole(run.orgId, role);
 
   // Pass an actor descriptor including the user id as `source` so the inner
   // function logs and audits the cancelling actor.
@@ -191,15 +192,16 @@ export async function resumeStoppedOrchestratorAction(
     return { ok: false, error: "Forbidden" };
   }
 
-  // §2d′ adjacency: member session, else authorized-non-member run-management
-  // authority (canActOnRun just cleared this actor). Grounds every transition in
-  // this resume — including the canonical queued→running dispatch (:258), which a
-  // run's own OBO authority could never ground (no live attempt + no run.execute).
+  // Ground every transition in this resume on the actor's member SESSION
+  // authority (canActOnRun just cleared this actor). Owner ruling eng#562
+  // (ruling 2): cross-org run management is unsupported, so an authorized
+  // NON-member (cross-org co-owner / platform admin) fails closed here — before
+  // any state change or WayFlow send — rather than driving the resume.
   const role = await resolveOrgRoleForUser(run.orgId, actorUserId);
-  const authority =
-    role !== undefined
-      ? sessionAuthorityFromResolvedRole(run.orgId, role)
-      : runManagementAuthority(run.orgId);
+  if (role === undefined) {
+    return { ok: false, error: "Forbidden" };
+  }
+  const authority = sessionAuthorityFromResolvedRole(run.orgId, role);
 
   if (run.status !== "stopped") return { ok: false, error: "run is not in stopped state" };
 

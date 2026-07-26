@@ -80,38 +80,14 @@ export function sessionAuthorityFromResolvedRole(
   };
 }
 
-/** The run-lifecycle capabilities a run-management authority grants — EXACTLY
- *  the two run capabilities, never membership / settings / lifecycle. */
-const RUN_MANAGEMENT_CAPABILITIES: ReadonlySet<OrgWriteCapability> = new Set([
-  "run.execute",
-  "run.complete",
-]);
-
-/**
- * The authorized-NON-MEMBER run-management mint — cinatra#1939 wave 2 (§2d′).
- *
- * Grounds run-management transitions for an actor who is ALREADY authorized on
- * the target run (a `canActOnRun` co-owner / owner, or a platform-admin cleared
- * by `requireAdminSession`) but is NOT an org member — a cross-org co-owner
- * (`addRunCoOwner` enforces no same-org check) or a platform admin. Grants ONLY
- * the two run-lifecycle capabilities and carries NO `runId`, so it can never
- * satisfy a lease-gated (archived-org) ruling.
- *
- * SAFETY RESTS ENTIRELY on the caller's prior authorization. It MUST be minted
- * INLINE, immediately after the `canActOnRun` / `requireAdminSession` gate in
- * the SAME function (the §2d′ adjacency invariant) — never behind a reusable
- * "resolve-the-run-authority" helper that would hide the precondition and let a
- * future caller mint it without the authz check. The
- * `resolveOrgRoleForUser === undefined ⇒ authorized-non-member` inference is
- * only sound BECAUSE that gate already ran. The boundary gate additionally
- * restricts WHO may import this (§5.2) — belt and suspenders.
- */
-export function runManagementAuthority(orgId: string): OrgWriteAuthority {
-  return {
-    orgId,
-    can: (capability) => RUN_MANAGEMENT_CAPABILITIES.has(capability),
-  };
-}
+// cinatra#1939 wave 2 (§2d′) DROPPED — owner ruling eng#562 (groganz,
+// 2026-07-26, ruling 2): cross-org run management is UNSUPPORTED. The
+// authorized-non-member mint `runManagementAuthority` was removed end-to-end;
+// authorized-non-member run-management flows (a cross-org co-owner / platform
+// admin who is NOT a member of the run's org) now fail closed — the seam
+// refuses a missing authority, and each run-management call site maps that to
+// its own denied/forbidden idiom. Org-member paths are unaffected (they mint a
+// session authority via sessionAuthorityFromResolvedRole).
 
 // ---------------------------------------------------------------------------
 // Verified run authority

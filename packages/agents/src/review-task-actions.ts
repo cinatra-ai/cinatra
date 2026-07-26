@@ -9,11 +9,13 @@ import { agentRuns } from "./schema";
 import { enforceRunAccess, type ActorRoleHints } from "./auth-policy";
 import type { AgentAuthPolicy } from "./auth-policy-types";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
-// cinatra#1939 wave 2 (§2d): the WayFlow resume below is grounded by the RESUMING
-// PRINCIPAL (actorId — authorized by the caller: the admin-session approve action
-// or this helper's own actorContext gate), NEVER the run's own RUN authority.
-// Member session, else the authorized-non-member run-management authority.
-import { sessionAuthorityFromResolvedRole, runManagementAuthority } from "@/lib/org-write/authority";
+// cinatra#1939 wave 2 (§2d): the setup + WayFlow resumes below are grounded by
+// the RESUMING PRINCIPAL (actorId — authorized by the caller: the admin-session
+// approve action, the A2A resume route's verified actor, or the MCP resume
+// frame's delegating user), NEVER the run's own RUN authority. Owner ruling
+// eng#562 (ruling 2) DROPPED cross-org run management: a member mints a session
+// authority; an authorized NON-member fails closed (no non-member mint).
+import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import {
   readAgentRunById,
   readAgentRunByTaskId,
@@ -386,6 +388,20 @@ export async function approveReviewTaskInternal(
     // packageName or unset WAYFLOW_BASE_URL.
     const wayflowUrl = resolveWayflowUrl(template.packageName);
 
+    // §2d: ground the resume on the RESUMING PRINCIPAL (actorId), resolved
+    // BEFORE any side-effect (writeHitlPrompt / sendTask / the status
+    // transition). Owner ruling eng#562 (ruling 2): cross-org run management is
+    // unsupported, so an authorized NON-member of the run's org fails closed
+    // here — no WayFlow message is dispatched — rather than driving the resume.
+    const resumeRole = await resolveOrgRoleForUser(run.orgId, actorId);
+    if (resumeRole === undefined) {
+      throw new Error(
+        `[approveReviewTaskInternal] actor ${actorId} is not a member of org ${run.orgId}; ` +
+          `cross-org run management is unsupported (owner ruling eng#562)`,
+      );
+    }
+    const resumeAuthority = sessionAuthorityFromResolvedRole(run.orgId, resumeRole);
+
     // Precedence for the WayFlow resume message:
     //   1. values.userResponse (string, non-empty after trim)  — structured-form path
     //      Renderers wanting structured round-trip MUST set this to JSON.stringify
@@ -536,15 +552,7 @@ export async function approveReviewTaskInternal(
     // Lazy import to avoid circular dep (review-task-actions ← actions.ts ←
     // index.ts ← @cinatra-ai/a2a). fromStatus is the literal "pending_approval"
     // because the guard at line 180 already enforced run.status === "pending_approval"
-    // before we reached here.
-    // §2d: mint the resuming-principal authority (actorId re-authorized by the
-    // caller / this helper's actorContext gate); member session, else the
-    // authorized-non-member run-management authority.
-    const resumeRole = await resolveOrgRoleForUser(run.orgId, actorId);
-    const resumeAuthority =
-      resumeRole !== undefined
-        ? sessionAuthorityFromResolvedRole(run.orgId, resumeRole)
-        : runManagementAuthority(run.orgId);
+    // before we reached here. resumeAuthority was minted above (before sendTask).
     const { handleWayflowTaskState } = await import("./execution");
     await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority: resumeAuthority });
 

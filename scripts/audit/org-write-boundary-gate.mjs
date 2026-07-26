@@ -21,14 +21,15 @@
 //   R3  single unwrap consumer: a value import of the `guardedBatchQueries`
 //       binding outside the kernel itself is legal ONLY in
 //       src/lib/org-write/batch-wrapper.ts (the transaction-forcing wrapper).
-//   R5  named-consumer allowlists (cinatra#1939 wave 2, §5.2): a value import
-//       that NAMES a run-management authority helper is restricted to its
-//       sanctioned consumers — the agent-run system-dispatch mint wrappers to
-//       the three job files, `runManagementAuthority` to the run-management
-//       modules + their tests. Opaque access to those modules is already
-//       covered by R2's org-write net; R5 closes the named/aliased/re-exported
-//       path. (R4 = the registry `importBanned` ratchet, deliberately
-//       unimplemented — see write-registry.ts.)
+//   R5  named-consumer allowlist (cinatra#1939 wave 2, §5.2): a value import
+//       that NAMES an agent-run system-dispatch mint wrapper is restricted to
+//       its three sanctioned job-file consumers. Opaque access to that module is
+//       already covered by R2's org-write net; R5 closes the
+//       named/aliased/re-exported path. (The runManagementAuthority named-
+//       consumer rule was REMOVED with the mint itself — owner ruling eng#562,
+//       ruling 2: cross-org run management is unsupported. R4 = the registry
+//       `importBanned` ratchet, deliberately unimplemented — see
+//       write-registry.ts.)
 //
 // Zero-baseline gate: there is no ratchet file — the honest surface is empty
 // and must stay empty. Scan scope is src/ + packages/ + scripts/ (extensions
@@ -84,20 +85,6 @@ export const RUN_DISPATCH_MINT_CONSUMER_ALLOWLIST = new Set([
   join("src", "lib", "host-content-editor-dispatch.ts"),
 ]);
 
-/** R5 (cinatra#1939 wave 2, §5.2): the run-management modules allowed to NAME
- *  `runManagementAuthority` (the authorized-non-member session-tier mint). Its
- *  safety rests on the caller's prior canActOnRun / requireAdminSession gate,
- *  so only the modules that run that gate — plus their tests — may import it. */
-export const RUN_MANAGEMENT_AUTHORITY_ALLOWLIST = new Set([
-  join("packages", "agents", "src", "orchestrator-actions.ts"),
-  join("packages", "agents", "src", "orchestrator-execution.ts"),
-  join("packages", "agents", "src", "run-actions.ts"),
-  join("packages", "agents", "src", "trigger-service.ts"),
-  join("packages", "agents", "src", "review-task-actions.ts"),
-  join("packages", "agents", "src", "actions.ts"),
-  join("packages", "agents", "src", "mcp", "handlers.ts"),
-]);
-
 /**
  * R5 named-consumer rules. The R2 mechanism already fail-closes the OPAQUE
  * forms (namespace / bare / dynamic import() / require()) across the whole
@@ -119,14 +106,6 @@ const NAMED_CONSUMER_RULES = [
     aliasSpecifier: "@/lib/org-write/agent-run-authority-mint",
     allowlist: RUN_DISPATCH_MINT_CONSUMER_ALLOWLIST,
     testsExempt: false,
-  },
-  {
-    rule: "R5-run-management-authority",
-    bindings: new Set(["runManagementAuthority"]),
-    moduleRel: join("src", "lib", "org-write", "authority.ts"),
-    aliasSpecifier: "@/lib/org-write/authority",
-    allowlist: RUN_MANAGEMENT_AUTHORITY_ALLOWLIST,
-    testsExempt: true, // "+ their tests" (§5.2)
   },
 ];
 

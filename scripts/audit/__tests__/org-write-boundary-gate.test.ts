@@ -273,46 +273,7 @@ describe("R2/R5: the agent-run mint file and its NAMED consumers (#1939 wave 2)"
   });
 });
 
-describe("R5: runManagementAuthority consumer allowlist (#1939 wave 2)", () => {
-  const AUTH = "@/lib/org-write/authority";
-  const line = `import { runManagementAuthority } from "${AUTH}";`;
-
-  it("a run-management module may NAME runManagementAuthority (green)", () => {
-    expect(check("packages/agents/src/orchestrator-actions.ts", line)).toEqual([]);
-    expect(
-      check(
-        "packages/agents/src/mcp/handlers.ts",
-        `import { runManagementAuthority, sessionAuthorityFromResolvedRole } from "${AUTH}";`,
-      ),
-    ).toEqual([]);
-  });
-
-  it("a test file may NAME runManagementAuthority (test-exempt, §5.2)", () => {
-    expect(
-      check("packages/agents/src/__tests__/orchestrator-actions.test.ts", line),
-    ).toEqual([]);
-  });
-
-  it("a non-run-management module NAMING runManagementAuthority is red (R5)", () => {
-    const v = check("src/lib/rogue-mgmt.ts", line);
-    expect(v).toHaveLength(1);
-    expect(v[0].rule).toBe("R5-run-management-authority");
-  });
-
-  it("an aliased runManagementAuthority import from a non-consumer is red (R5)", () => {
-    const v = check(
-      "src/lib/rogue-alias.ts",
-      `import { runManagementAuthority as rm } from "${AUTH}";`,
-    );
-    expect(v.map((x) => x.rule)).toContain("R5-run-management-authority");
-  });
-
-  it("session-authority NAMED imports stay green everywhere (only runManagementAuthority is restricted)", () => {
-    expect(
-      check(
-        "src/lib/some-other-consumer.ts",
-        `import { sessionAuthorityFromResolvedRole, verifySessionAuthority } from "${AUTH}";`,
-      ),
-    ).toEqual([]);
-  });
-});
+// The R5 runManagementAuthority consumer-allowlist self-test was REMOVED with
+// the mint itself (owner ruling eng#562, ruling 2: cross-org run management is
+// unsupported). authority.ts now carries no R5 named-consumer restriction; the
+// R5 mechanism stays covered end-to-end by the run-dispatch-mint suite above.
