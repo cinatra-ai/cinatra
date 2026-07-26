@@ -256,11 +256,17 @@ if [ "$DEMO" = "1" ]; then
   # ready / unsupported version) writes no env file — the bridge waits for a
   # later re-run and the connector still auto-connects its REST config.
   if [ -f docker/plane-mcp/.plane-mcp.env ] && grep -q '^PLANE_API_KEY=.' docker/plane-mcp/.plane-mcp.env; then
-    info "Bringing up the Plane MCP bridge (--profile plane-mcp)..."
-    docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile plane-mcp up -d --build \
-      || warn "Plane MCP bridge failed to start — the connector still auto-connects its REST config; re-run \`docker compose --profile plane-mcp up -d --build\` to expose Plane tools to agents."
+    info "Bringing up the Plane MCP bridge (--profile plane --profile plane-mcp)..."
+    # The bridge (profile `plane-mcp`) declares `depends_on: plane-api`, which
+    # lives in the `plane` profile. Activating `plane-mcp` alone leaves plane-api
+    # an undefined service, so the bridge's dependency can't resolve and it fails
+    # on the first pass (cinatra#1238 finding). Activate BOTH profiles in one set
+    # so the dependency is defined; the already-running `plane` containers from the
+    # bring-up above are left in place (up -d is a no-op for healthy services).
+    docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile plane --profile plane-mcp up -d --build \
+      || warn "Plane MCP bridge failed to start — the connector still auto-connects its REST config; re-run \`docker compose --profile plane --profile plane-mcp up -d --build\` to expose Plane tools to agents."
   else
-    warn "Plane PAT not provisioned yet (Plane still booting or version mismatch) — skipping the MCP bridge. Re-run \`node scripts/fixtures/provision-plane.mjs\` once Plane is healthy, then \`docker compose --profile plane-mcp up -d --build\`."
+    warn "Plane PAT not provisioned yet (Plane still booting or version mismatch) — skipping the MCP bridge. Re-run \`node scripts/fixtures/provision-plane.mjs\` once Plane is healthy, then \`docker compose --profile plane --profile plane-mcp up -d --build\`."
   fi
 
   info "Demo app profiles up. Connections converge at the first \`pnpm dev\` boot."
