@@ -1,8 +1,7 @@
 import "server-only";
 
 import { createHash, createHmac } from "node:crypto";
-import { readFile, readdir, lstat } from "node:fs/promises";
-import path from "node:path";
+import { lstat } from "node:fs/promises";
 
 import {
   AnthropicSkillSyncEngine,
@@ -27,6 +26,10 @@ import {
 } from "@cinatra-ai/skills";
 
 import { readAnthropicConnectionFromDatabase, readSkillLifecycleStates } from "@/lib/database";
+import {
+  captureSkillBundleFromDisk,
+  readCurrentSkillBundleFromDatabase,
+} from "@/lib/skill-bundle-store";
 import { isAnthropicSkillUploadAllowedFromConfig } from "@/lib/anthropic-skill-upload-governance";
 import { readAnthropicSkillSyncEnabledFromDatabase } from "@/lib/database";
 import {
@@ -117,10 +120,22 @@ export function deriveEnvironmentNamespace(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Catalog → sync candidates (read off disk)
+// Catalog → sync candidates — BYTE-BOUND in two explicitly separated phases
+// (cinatra#2088, epic #2086 S1):
+//
+//   1. CAPTURE (`captureSkillBundlesFromDisk`) — the ONLY disk boundary. Reads
+//      each syncable skill's directory behind the containment/symlink guards and
+//      records it into the bundle content authority (immutable manifest +
+//      content-addressed blobs + the current-bundle head). Idempotent: unchanged
+//      bytes write nothing.
+//   2. CANDIDATES (`buildSyncCandidates`) — ZERO disk access. Resolves each
+//      syncable skill's current bundle from the authority alone, so the bytes
+//      handed to the uploader are provably the STORED bytes and `revisionId` +
+//      `bundleDigest` travel with them as the upload's binding.
+//
+// The sync entry point runs (1) then (2). The agent preflight runs (2) only —
+// which is precisely how disk re-hashing left the preflight path.
 // ---------------------------------------------------------------------------
-
-const SKIP_DIR_NAMES = new Set([".git", "node_modules"]);
 
 /** A skill whose on-disk content could not be safely read (fail-closed). */
 export class SkillDiskReadError extends Error {
@@ -138,73 +153,16 @@ export class SkillDiskReadError extends Error {
   }
 }
 
-/**
- * Read a skill's bundled directory. Disk-read failures are NOT swallowed — a
- * permission/transient error must NOT yield a
- * partial bundle that passes size preflight and uploads missing content.
- * Symlinks (incl. symlinked dirs) are excluded.
- */
-async function readBundledDir(
-  catalogSkillId: string,
-  dir: string,
-  skillMdPath: string,
-): Promise<{ relPath: string; bytes: Buffer }[]> {
-  const out: { relPath: string; bytes: Buffer }[] = [];
-  async function walk(current: string) {
-    let entries: import("node:fs").Dirent[];
-    try {
-      entries = await readdir(current, { withFileTypes: true });
-    } catch (err) {
-      throw new SkillDiskReadError(
-        catalogSkillId,
-        current,
-        `readdir failed (${err instanceof Error ? err.message : String(err)})`,
-      );
-    }
-    for (const e of entries) {
-      const full = path.join(current, e.name);
-      // Exclude symlinks entirely. lstat MUST succeed — a failure here is
-      // fail-closed, not "skip silently".
-      let st: Awaited<ReturnType<typeof lstat>>;
-      try {
-        st = await lstat(full);
-      } catch (err) {
-        throw new SkillDiskReadError(
-          catalogSkillId,
-          full,
-          `lstat failed (${err instanceof Error ? err.message : String(err)})`,
-        );
-      }
-      if (st.isSymbolicLink()) continue;
-      if (e.isDirectory()) {
-        if (SKIP_DIR_NAMES.has(e.name)) continue;
-        await walk(full);
-        continue;
-      }
-      if (!e.isFile()) continue;
-      if (path.resolve(full) === path.resolve(skillMdPath)) continue; // SKILL.md framed separately
-      const rel = path.relative(dir, full);
-      try {
-        out.push({ relPath: rel, bytes: await readFile(full) });
-      } catch (err) {
-        throw new SkillDiskReadError(
-          catalogSkillId,
-          full,
-          `readFile failed (${err instanceof Error ? err.message : String(err)})`,
-        );
-      }
-    }
-  }
-  await walk(dir);
-  return out;
-}
+/** A catalog skill eligible for the mirror: its id, name, and on-disk router. */
+type SyncableCatalogSkill = { id: string; name: string; sourcePath: string };
 
 /**
- * Build sync candidates from the catalog (single source of truth). Only skills
- * with an on-disk `sourcePath` are syncable; others are skipped (cannot upload
- * a body that does not exist on disk).
+ * Resolve the syncable catalog subset — every catalog skill with an on-disk
+ * `sourcePath` whose lifecycle state is runtime-deliverable. PURE of the
+ * filesystem (the `sourcePath` is a stored string here; it is validated and read
+ * only in the capture phase).
  *
- * The candidate set is DELIBERATELY the FULL recommendable skill pool — every
+ * The subset is DELIBERATELY the FULL recommendable skill pool — every
  * catalog skill with an on-disk `sourcePath` — NOT a narrowed per-agent
  * creation allowlist. The general-selectable Anthropic recommendation agent
  * may dynamically pick ANY catalog skill, so every such skill must be
@@ -216,7 +174,7 @@ async function readBundledDir(
  * engine's default-OFF global opt-in), namespace scoping, and leased GC still
  * apply unchanged — this function is purely upstream of the gated engine.
  */
-export async function buildSyncCandidates(): Promise<SyncCandidateSkill[]> {
+async function resolveSyncableCatalogSkills(): Promise<SyncableCatalogSkill[]> {
   const catalog = await readSkillsCatalogSnapshot();
   // A3 (cinatra#1363): exclude non-runtime-deliverable (archived/draft) skills
   // from the mirror. An excluded skill drops out of the current-catalog set, so
@@ -235,7 +193,7 @@ export async function buildSyncCandidates(): Promise<SyncCandidateSkill[]> {
       "Anthropic skill sync aborted: lifecycle_state read failed — refusing to sync on an ambiguous lifecycle read (fail-safe: never over-reclaim the mirror).",
     );
   }
-  const candidates: SyncCandidateSkill[] = [];
+  const syncable: SyncableCatalogSkill[] = [];
   for (const skill of catalog.skills) {
     // Drop a skill with a DEFINITIVE non-deliverable lifecycle state so its
     // remote mirror is reclaimed (see the header comment). A NULL (derived) or
@@ -251,6 +209,45 @@ export async function buildSyncCandidates(): Promise<SyncCandidateSkill[]> {
     // exist). This is not an error — it's a non-syncable catalog entry.
     if (!sourcePath) continue;
 
+    syncable.push({ id: skill.id, name: skill.name, sourcePath });
+  }
+  return syncable;
+}
+
+/** What one capture pass recorded — used for reporting, not for uploading. */
+export type SkillBundleCaptureReport = {
+  /** Skills whose bytes changed (or were captured for the first time). */
+  captured: string[];
+  /** Skills already at their on-disk bytes (no write performed). */
+  unchanged: string[];
+  /** Skills whose head is AUTHORITY-OWNED (a lifecycle revision) and disagrees
+   * with disk — the stored revision wins and capture left the head alone. */
+  authorityOwnedDivergences: string[];
+  /** One-hop router references that resolve to no bundled file (diagnostic). */
+  danglingReferences: { catalogSkillId: string; missing: string[] }[];
+};
+
+/**
+ * CAPTURE phase — the ONLY disk boundary of the byte-bound sync path. For every
+ * syncable catalog skill: validate the stored `sourcePath` (strict containment +
+ * no symlink + regular file), read the skill DIRECTORY, and record it into the
+ * bundle content authority, advancing the skill's bundle head when the bytes
+ * differ from what is already stored. Idempotent — unchanged content performs no
+ * write.
+ *
+ * Fail-closed: any unreadable/unsafe path throws {@link SkillDiskReadError}, so
+ * sync aborts rather than mirroring a partial or wrong bundle.
+ */
+export async function captureSkillBundlesFromDisk(): Promise<SkillBundleCaptureReport> {
+  const syncable = await resolveSyncableCatalogSkills();
+  const report: SkillBundleCaptureReport = {
+    captured: [],
+    unchanged: [],
+    authorityOwnedDivergences: [],
+    danglingReferences: [],
+  };
+  for (const skill of syncable) {
+    const sourcePath = skill.sourcePath;
     // STRICT-CONTAINMENT: the stored `sourcePath` MUST resolve
     // inside the configured skills root before we lstat / readFile it. Without
     // this, a payload-injected or stale row pointing at `/etc/passwd` would
@@ -293,23 +290,63 @@ export async function buildSyncCandidates(): Promise<SyncCandidateSkill[]> {
       throw new SkillDiskReadError(skill.id, sourcePath, "SKILL.md sourcePath is not a regular file");
     }
 
-    let skillMd: Buffer;
+    // Record the on-disk bundle into the content authority. Content-addressed
+    // and idempotent: identical bytes advance nothing.
+    let capture: Awaited<ReturnType<typeof captureSkillBundleFromDisk>>;
     try {
-      skillMd = await readFile(sourcePath);
+      capture = await captureSkillBundleFromDisk(skill.id, sourcePath);
     } catch (err) {
       throw new SkillDiskReadError(
         skill.id,
         sourcePath,
-        `readFile failed (${err instanceof Error ? err.message : String(err)})`,
+        `bundle capture failed (${err instanceof Error ? err.message : String(err)})`,
       );
     }
-    const dir = path.dirname(sourcePath);
-    const bundledFiles = await readBundledDir(skill.id, dir, sourcePath);
+    (capture.changed ? report.captured : report.unchanged).push(skill.id);
+    if (capture.authorityOwnedDivergence) report.authorityOwnedDivergences.push(skill.id);
+    if (!capture.lint.ok) {
+      // DIAGNOSTIC at S1 — a dangling one-hop router reference is reported, not
+      // a hard rejection (fail-closed packaging enforcement is S2's gate).
+      report.danglingReferences.push({ catalogSkillId: skill.id, missing: capture.lint.missing });
+    }
+  }
+  return report;
+}
+
+/**
+ * CANDIDATES phase — build the byte-bound sync candidate set with ZERO disk
+ * access. Every candidate's bytes are read from the content authority (its
+ * current bundle head → immutable manifest → content-addressed blobs), so the
+ * canonical zip the engine builds is provably derived from the stored revision,
+ * and `revisionId` + `bundleDigest` are the binding persisted on the mirror row.
+ *
+ * A syncable skill that has never been captured has no bundle in the authority
+ * and is skipped (it cannot be byte-bound); the capture phase is what makes it
+ * a candidate.
+ */
+export async function buildSyncCandidates(): Promise<SyncCandidateSkill[]> {
+  const syncable = await resolveSyncableCatalogSkills();
+  const candidates: SyncCandidateSkill[] = [];
+  for (const skill of syncable) {
+    const bundle = readCurrentSkillBundleFromDatabase(skill.id);
+    if (!bundle) continue; // never captured ⇒ nothing byte-bound to upload
+
+    const router =
+      bundle.files.find((f) => f.isRouter) ?? bundle.files.find((f) => f.path === "SKILL.md");
+    if (!router) {
+      throw new Error(
+        `Anthropic skill sync: stored bundle for skill "${skill.id}" (revision ${bundle.revisionId}) has no SKILL.md router`,
+      );
+    }
     candidates.push({
       catalogSkillId: skill.id,
       name: skill.name,
-      skillMd,
-      bundledFiles,
+      revisionId: bundle.revisionId,
+      bundleDigest: bundle.bundleDigest,
+      skillMd: router.bytes,
+      bundledFiles: bundle.files
+        .filter((f) => f !== router)
+        .map((f) => ({ relPath: f.path, bytes: f.bytes })),
       allowAnthropicUpload: getSkillAnthropicUploadFlag(skill.id),
     });
   }
@@ -341,6 +378,13 @@ export type AppSyncResult = SyncResult & {
   diskReadError?: string;
   /** Informational: opt-in ON but no Anthropic API key configured. */
   noApiKey?: boolean;
+  /** Byte-bound capture diagnostics (cinatra#2088) — surfaced, never swallowed:
+   * skills whose stored (authority-owned) revision disagrees with their on-disk
+   * copy, and routers whose one-hop references resolve to no bundled file. */
+  captureDiagnostics?: {
+    authorityOwnedDivergences: string[];
+    danglingReferences: { catalogSkillId: string; missing: string[] }[];
+  };
 };
 
 /** Live, fail-closed read of the default-OFF global opt-in. */
@@ -396,15 +440,49 @@ export async function syncCatalogSkillsToAnthropic(): Promise<AppSyncResult> {
     defaultAnthropicSkillUploadGate,
   );
 
-  const candidates = await buildSyncCandidates();
+  // Serialize concurrent admin-saves per namespace. CAPTURE + candidate
+  // construction run INSIDE the lock (cinatra#2088): two concurrent syncs
+  // observing different on-disk states must not interleave their head advances,
+  // and an older invocation must never upload after a newer one. Pass the LIVE
+  // fail-closed reader (not a captured boolean) so an admin toggling sync OFF
+  // while this call is queued/running is honoured race-safely — the engine
+  // re-reads it after acquiring the lock and before every upload.
+  return withNamespaceSyncLock(fp, env, async () => {
+    // Byte-bound sync: CAPTURE the on-disk bundles into the content authority
+    // first (the only disk boundary), THEN build candidates purely from the
+    // authority. What gets zipped and uploaded is therefore provably the stored
+    // bytes, and the mirror row records the revision + bundle identity it was
+    // derived from.
+    const capture = await captureSkillBundlesFromDisk();
+    const candidates = await buildSyncCandidates();
 
-  // Serialize concurrent admin-saves per namespace. Pass the LIVE fail-closed
-  // reader (not a captured boolean) so an admin toggling sync OFF while this
-  // call is queued/running is honoured race-safely — the engine re-reads it
-  // after acquiring the namespace lock and before every upload.
-  return withNamespaceSyncLock(fp, env, () =>
-    engine.sync(candidates, readGlobalEnabled),
-  );
+    // FAIL-CLOSED completeness check: the engine treats the candidate id set as
+    // the CURRENT catalog and marks every absent mirror row stale (→ GC
+    // reclaims it). A syncable skill that was captured but produced no
+    // candidate would therefore have its remote copy reclaimed. That must never
+    // happen silently.
+    const candidateIds = new Set(candidates.map((c) => c.catalogSkillId));
+    const dropped = [...capture.captured, ...capture.unchanged].filter((id) => !candidateIds.has(id));
+    if (dropped.length > 0) {
+      throw new Error(
+        `Anthropic skill sync aborted: ${dropped.length} captured skill(s) resolved to no byte-bound candidate ` +
+          `(${dropped.join(", ")}) — refusing to sync a partial catalog (the absent ids would be reclaimed as stale).`,
+      );
+    }
+
+    const result = await engine.sync(candidates, readGlobalEnabled);
+    const hasDiagnostics =
+      capture.authorityOwnedDivergences.length > 0 || capture.danglingReferences.length > 0;
+    return hasDiagnostics
+      ? {
+          ...result,
+          captureDiagnostics: {
+            authorityOwnedDivergences: capture.authorityOwnedDivergences,
+            danglingReferences: capture.danglingReferences,
+          },
+        }
+      : result;
+  });
 }
 
 // ---------------------------------------------------------------------------

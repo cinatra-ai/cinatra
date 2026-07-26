@@ -45,15 +45,27 @@ import { AnthropicSkillDeliveryError, AnthropicSkillPreflightError } from "../er
  */
 export const ANTHROPIC_SKILL_MAX_BYTES = ANTHROPIC_SKILL_MAX_UPLOAD_BYTES;
 
-/** A catalog skill prepared for sync (already read off disk by the app layer). */
+/**
+ * A catalog skill prepared for sync. As of byte-bound sync (cinatra#2088, epic
+ * #2086 S1) the bytes are read atomically FROM the content authority (the
+ * revision-file manifest + content-addressed blobs), NOT off disk — so the
+ * uploaded zip is provably derived from the stored revision. `revisionId` +
+ * `bundleDigest` are that revision's identity; they are persisted on the sync
+ * row so drift and preflight are a pure manifest comparison, never a disk
+ * re-hash.
+ */
 export type SyncCandidateSkill = {
   /** Cinatra catalog skill id. */
   catalogSkillId: string;
   /** Display name. */
   name: string;
-  /** Raw SKILL.md bytes. */
+  /** The stored revision the bytes below were resolved from (byte-bound sync). */
+  revisionId: string;
+  /** The revision's bundle identity — digest over the sorted (path, digest) set. */
+  bundleDigest: string;
+  /** Raw SKILL.md bytes (from the authority, not disk). */
   skillMd: Buffer;
-  /** Bundled files (relPath + raw bytes); symlinks already excluded by caller. */
+  /** Bundled files (relPath + raw bytes, from the authority); no symlinks. */
   bundledFiles: { relPath: string; bytes: Buffer }[];
   /**
    * The per-skill `allowAnthropicUpload` flag value AS STORED (passed through
@@ -69,6 +81,11 @@ export type SyncRow = {
   anthropicSkillId: string;
   anthropicVersion: string;
   contentHash: string;
+  /** Byte-bound sync binding (cinatra#2088): the stored revision the uploaded
+   * bytes derived from + its bundle identity. NULL on a pre-S1 row that has not
+   * yet been re-baselined (a null binding forces exactly one re-upload). */
+  revisionId: string | null;
+  bundleDigest: string | null;
   stale: boolean;
 };
 
@@ -80,12 +97,15 @@ export type SyncRow = {
 export interface AnthropicSkillSyncStatePort {
   /** Read the row for a catalog skill in the current namespace, or null. */
   readRow(catalogSkillId: string): Promise<SyncRow | null>;
-  /** Insert/update the row for a catalog skill (clears stale). */
+  /** Insert/update the row for a catalog skill (clears stale). Persists the
+   * byte-bound sync binding (revisionId + bundleDigest) alongside the hash. */
   upsertRow(row: {
     catalogSkillId: string;
     anthropicSkillId: string;
     anthropicVersion: string;
     contentHash: string;
+    revisionId: string;
+    bundleDigest: string;
   }): Promise<void>;
   /** Mark a single catalog skill's row stale (governance exclusion). */
   markStale(catalogSkillId: string): Promise<void>;
@@ -386,7 +406,18 @@ export class AnthropicSkillSyncEngine {
         zipBytes: m.zip.zipBytes,
       };
 
-      if (row && row.contentHash === hash && !row.stale) {
+      // Unchanged only when BOTH the content hash AND the byte-bound binding
+      // (revision + bundle identity) match. A pre-S1 row carries a NULL
+      // binding, so `row.bundleDigest === c.bundleDigest` is false and the skill
+      // is re-uploaded exactly ONCE to record its binding — the one-time remote
+      // re-baseline (the superseded remote version is reclaimed by GC).
+      if (
+        row &&
+        row.contentHash === hash &&
+        row.bundleDigest === c.bundleDigest &&
+        row.revisionId === c.revisionId &&
+        !row.stale
+      ) {
         outcomes.push({ catalogSkillId: c.catalogSkillId, action: "unchanged" });
         continue;
       }
@@ -430,6 +461,8 @@ export class AnthropicSkillSyncEngine {
           anthropicSkillId,
           anthropicVersion,
           contentHash: hash,
+          revisionId: c.revisionId,
+          bundleDigest: c.bundleDigest,
         });
       } catch (err) {
         return {
@@ -524,14 +557,14 @@ export class AnthropicSkillSyncEngine {
         stale.push(id);
         continue;
       }
-      let hash: string;
-      try {
-        hash = computeSkillContentHash(c.skillMd, c.bundledFiles);
-      } catch {
+      // Byte-bound verification (cinatra#2088): the expected revision is
+      // satisfied only when the remote row's binding matches the candidate's
+      // stored revision + bundle identity — a pure manifest comparison, NO disk
+      // re-hash. A pre-S1 row with a NULL binding is `mismatched` (not yet
+      // re-baselined), forcing the caller to converge before relying on it.
+      if (row.bundleDigest !== c.bundleDigest || row.revisionId !== c.revisionId) {
         mismatched.push(id);
-        continue;
       }
-      if (row.contentHash !== hash) mismatched.push(id);
     }
     return {
       ok: missing.length === 0 && stale.length === 0 && mismatched.length === 0,
