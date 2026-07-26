@@ -378,12 +378,14 @@ test("VERIFY ewpa/get-posts supports publish-status filter + newest-first orderi
   // numeric vs string count) — same params, correct value shape — and use the
   // first attempt that returns published posts. A plain {} call is recorded as a
   // diagnostic (does the ability return ANY posts at all?).
-  const base = { [orderbyK]: "date", [orderK]: "desc" } as Record<string, unknown>;
+  // The ability validates `order` against ASC/DESC (uppercase) — confirmed by the
+  // C5 run's raw error 'input[order] is not one of ASC and DESC'. Use the correct
+  // discovered-param value forms; count is `numberposts` (WP_Query style). Try a
+  // couple of shapes in case `orderby` is also enum-constrained.
   const attempts: Array<Record<string, unknown>> = [
-    { ...base, [statusK]: "publish", [countK]: 20 },
-    { ...base, [statusK]: "publish", [countK]: "20" },
-    { ...base, [statusK]: ["publish"], [countK]: 20 },
-    { ...base, [statusK]: "publish" },
+    { [statusK]: "publish", [orderbyK]: "date", [orderK]: "DESC", [countK]: 50 },
+    { [statusK]: "publish", [orderK]: "DESC", [countK]: 50 },
+    { [statusK]: "publish", [countK]: 50 },
   ];
   const diag = unwrap(await execAbility("ewpa/get-posts", {}));
   const tried: any[] = [];
