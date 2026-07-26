@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyAnnotations, coerceAnnotationBool } from "./annotation-classifier";
+import { classifyAnnotations, coerceAnnotationBool } from "../annotation-classifier";
 
 // cinatra#2017 S2 slice K3 — annotation classifier (design §3.4 / D5).
 

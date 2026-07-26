@@ -3,7 +3,7 @@ import {
   evaluateInstanceToolPolicy,
   isValidInstanceToolPolicyRecord,
   type InstanceToolPolicyRecord,
-} from "./instance-tool-policy";
+} from "../instance-tool-policy";
 
 // cinatra#2017 S2 slice K4 — policy EVALUATION (§2.6 / D4 / §10-A3).
 
