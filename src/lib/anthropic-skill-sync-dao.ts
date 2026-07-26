@@ -82,6 +82,12 @@ export async function upsertSyncRow(
         anthropicVersion: row.anthropicVersion,
         contentHash: row.contentHash,
         stale: false,
+        // Reactivation MUST clear stale_at. Otherwise a later stale transition
+        // (which COALESCE-preserves an existing stale_at) would inherit the OLD
+        // pre-reactivation timestamp and could age past the GC grace window
+        // immediately — bypassing the grace clock. A row that is active again
+        // has no staleness; the next stale event stamps a fresh now().
+        staleAt: null,
         updatedAt: new Date(),
       },
     });

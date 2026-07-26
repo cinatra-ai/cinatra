@@ -111,3 +111,318 @@ export function computeSkillContentHash(
   }
   return hash.digest("hex");
 }
+
+// ===========================================================================
+// Canonical upload artifact — the SAME bundle framed as the single ZIP the
+// Anthropic Skills API accepts. Co-located with the drift hash (and its shared
+// `normalizeBundledRelPath`) so the two canonical framings of one bundle agree
+// on the file set, and so this leaf carries no separate module.
+//
+// The Skills API (`POST /v1/skills`, skills-2025-10-02) requires every uploaded
+// file to live under a common root directory whose name matches the SKILL.md
+// frontmatter `name`; the docs let you upload that directory as a single ZIP
+// (`files[]=@example_skill.zip`). The previous client sent a bare `SKILL.md`
+// plus raw relative paths with NO common root, which violated the contract.
+// ===========================================================================
+
+/**
+ * Anthropic Custom Skills upload boundary. The docs say uploads must be "under
+ * 30 MB"; we conservatively REJECT at exactly 30,000,000 bytes (decimal MB, the
+ * strict reading) measured against BOTH the archive bytes AND the uncompressed
+ * file total. The value changes ONLY on evidence from the gated upstream
+ * boundary contract test (`anthropic-skill-boundary.contract.test.ts`).
+ */
+export const ANTHROPIC_SKILL_MAX_UPLOAD_BYTES = 30_000_000;
+
+/** A bundled file: path relative to the skill source dir + raw bytes. */
+export type SkillZipFile = { relPath: string; bytes: Buffer };
+
+/** The canonical upload artifact + its two measured size dimensions. */
+export type CanonicalSkillZip = {
+  /** Common root directory the archive is rooted at (frontmatter name). */
+  rootDir: string;
+  /** The deterministic STORE zip bytes — the single uploaded artifact. */
+  zipBytes: Buffer;
+  /** Byte length of the archive itself. */
+  archiveBytes: number;
+  /** Sum of the uncompressed entry byte lengths (SKILL.md + bundled files). */
+  uncompressedTotal: number;
+  /** Sorted in-archive entry paths (each rooted under `rootDir`). */
+  entryPaths: string[];
+};
+
+/**
+ * Derive the archive root directory. The Anthropic contract requires it to
+ * EXACTLY match the SKILL.md frontmatter `name`, so we read that first; only
+ * when the frontmatter has no usable `name` do we fall back to a normalized
+ * form of the catalog display name (defensive — S2 enforces a clean
+ * frontmatter `name` at publish/CI time). Never empty.
+ */
+export function deriveSkillRootDir(skillMd: Buffer, fallbackName: string): string {
+  const fmName = readTopLevelFrontmatterName(skillMd.toString("utf8"));
+  if (fmName) return fmName;
+  return normalizeRootFallback(fallbackName);
+}
+
+/**
+ * Read the TOP-LEVEL `name:` scalar from the SKILL.md YAML frontmatter (between
+ * the first two `---` fences). Deliberately line-based and column-0-anchored so
+ * a `name:` nested under `metadata:` (indented) is never picked up, and so this
+ * module needs no YAML dependency. Anthropic's frontmatter `name` is a simple
+ * scalar slug, so this is sufficient; the full validator lives in the skills
+ * package (S2 enforces frontmatter cleanliness). Returns "" when absent.
+ */
+function readTopLevelFrontmatterName(content: string): string {
+  // Frontmatter block = between a leading `---\n` and the next `\n---`. Located
+  // with indexOf (linear, no regex on the input bytes).
+  if (!content.startsWith("---\n")) return "";
+  const end = content.indexOf("\n---", 4);
+  if (end < 0) return "";
+  const block = content.slice(4, end);
+  for (const line of block.split("\n")) {
+    // Top-level key only: exactly `name:` at column 0 (an indented `name:`
+    // nested under `metadata:` is skipped). String ops only — no backtracking
+    // regex on the SKILL.md bytes (ReDoS-safe).
+    if (!line.startsWith("name:")) continue;
+    let value = line.slice("name:".length).trim();
+    // Strip an inline comment on an UNQUOTED scalar (YAML requires whitespace
+    // before `#`). Linear scan for the first whitespace-preceded `#`.
+    if (value && value[0] !== '"' && value[0] !== "'") {
+      for (let i = 1; i < value.length; i++) {
+        const prev = value[i - 1];
+        if (value[i] === "#" && (prev === " " || prev === "\t")) {
+          value = value.slice(0, i).trimEnd();
+          break;
+        }
+      }
+    }
+    // Strip matching surrounding quotes.
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    return value.trim();
+  }
+  return "";
+}
+
+/** Normalize a fallback name to a non-empty single-segment slug. */
+function normalizeRootFallback(name: string): string {
+  const slug = (typeof name === "string" ? name : "")
+    .trim()
+    .toLowerCase()
+    // Collapse every run of non-alphanumerics to ONE dash — so the result can
+    // never contain `--`, which lets the leading/trailing strip below use a
+    // single-character (non-quantified, ReDoS-safe) pattern.
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-/, "")
+    .replace(/-$/, "");
+  return slug || "skill";
+}
+
+// --- CRC-32 (IEEE 802.3), table-based ---------------------------------------
+
+const CRC_TABLE: number[] = (() => {
+  const t = new Array<number>(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf: Buffer): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+/** Fixed DOS date/time = 1980-01-01 00:00:00 (the zip epoch) for determinism. */
+const DOS_DATE = 0x0021; // year 1980, month 1, day 1
+const DOS_TIME = 0x0000;
+/**
+ * General-purpose bit 11 — declares the filename is UTF-8 so a strict reader
+ * decodes non-ASCII paths correctly (bit 0 = STORE has no other flags).
+ */
+const UTF8_FLAG = 0x0800;
+/** Classic (non-ZIP64) 16-bit field ceilings. */
+const MAX_UINT16 = 0xffff;
+
+type ZipEntry = { path: string; bytes: Buffer; crc: number };
+
+/**
+ * Build the canonical STORE zip for a skill bundle. Bundled paths are
+ * normalized + de-duplicated by {@link normalizeBundledRelPath} (throws on
+ * absolute / `..` / duplicate paths — the same rejection the drift hash makes),
+ * so the archive can never carry a path the hash would refuse.
+ *
+ * @throws when a bundled path is absolute, escapes the root, or collides.
+ */
+export function buildCanonicalSkillZip(input: {
+  skillMd: Buffer;
+  bundledFiles: SkillZipFile[];
+  rootDir: string;
+}): CanonicalSkillZip {
+  const rootDir = input.rootDir;
+  if (!rootDir || rootDir.includes("\0")) {
+    throw new Error(`[anthropic-skill-bundle-zip] invalid root directory: ${JSON.stringify(rootDir)}`);
+  }
+
+  const seen = new Set<string>();
+  const entries: ZipEntry[] = [];
+  const addEntry = (relInRoot: string, bytes: Buffer) => {
+    const path = `${rootDir}/${relInRoot}`;
+    if (seen.has(path)) {
+      throw new Error(`[anthropic-skill-bundle-zip] duplicate archive path: ${path}`);
+    }
+    seen.add(path);
+    entries.push({ path, bytes, crc: crc32(bytes) });
+  };
+
+  addEntry("SKILL.md", input.skillMd);
+  for (const f of input.bundledFiles) {
+    addEntry(normalizeBundledRelPath(f.relPath), f.bytes);
+  }
+
+  // Deterministic order: sort every entry bytewise by its in-archive path.
+  entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+
+  // Classic-ZIP 16-bit ceilings — reject explicitly rather than let a later
+  // writeUInt16LE throw a raw RangeError mid-build (we emit STORE, not ZIP64).
+  if (entries.length > MAX_UINT16) {
+    throw new Error(
+      `[anthropic-skill-bundle-zip] too many bundle entries (${entries.length} > ${MAX_UINT16}); ` +
+        `split or shrink the skill bundle`,
+    );
+  }
+
+  const localChunks: Buffer[] = [];
+  const centralChunks: Buffer[] = [];
+  let offset = 0;
+  let uncompressedTotal = 0;
+
+  for (const e of entries) {
+    const nameBuf = Buffer.from(e.path, "utf8");
+    if (nameBuf.length > MAX_UINT16) {
+      throw new Error(
+        `[anthropic-skill-bundle-zip] entry path too long (${nameBuf.length} bytes > ${MAX_UINT16}): ${e.path}`,
+      );
+    }
+    uncompressedTotal += e.bytes.length;
+
+    // Local file header (30 bytes + name), STORE, sizes known up front.
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0); // signature
+    local.writeUInt16LE(20, 4); // version needed
+    local.writeUInt16LE(UTF8_FLAG, 6); // general purpose flag (UTF-8 names)
+    local.writeUInt16LE(0, 8); // method = store
+    local.writeUInt16LE(DOS_TIME, 10);
+    local.writeUInt16LE(DOS_DATE, 12);
+    local.writeUInt32LE(e.crc, 14);
+    local.writeUInt32LE(e.bytes.length, 18); // compressed size (== uncompressed, store)
+    local.writeUInt32LE(e.bytes.length, 22); // uncompressed size
+    local.writeUInt16LE(nameBuf.length, 26);
+    local.writeUInt16LE(0, 28); // extra length
+    localChunks.push(local, nameBuf, e.bytes);
+
+    // Central directory header (46 bytes + name).
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0); // signature
+    central.writeUInt16LE(20, 4); // version made by
+    central.writeUInt16LE(20, 6); // version needed
+    central.writeUInt16LE(UTF8_FLAG, 8); // flags (UTF-8 names)
+    central.writeUInt16LE(0, 10); // method
+    central.writeUInt16LE(DOS_TIME, 12);
+    central.writeUInt16LE(DOS_DATE, 14);
+    central.writeUInt32LE(e.crc, 16);
+    central.writeUInt32LE(e.bytes.length, 20);
+    central.writeUInt32LE(e.bytes.length, 24);
+    central.writeUInt16LE(nameBuf.length, 28);
+    central.writeUInt16LE(0, 30); // extra length
+    central.writeUInt16LE(0, 32); // comment length
+    central.writeUInt16LE(0, 34); // disk number start
+    central.writeUInt16LE(0, 36); // internal attributes
+    central.writeUInt32LE(0, 38); // external attributes
+    central.writeUInt32LE(offset, 42); // local header offset
+    centralChunks.push(central, nameBuf);
+
+    offset += local.length + nameBuf.length + e.bytes.length;
+  }
+
+  const centralDir = Buffer.concat(centralChunks);
+  const centralSize = centralDir.length;
+  const centralOffset = offset;
+
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0); // signature
+  eocd.writeUInt16LE(0, 4); // disk number
+  eocd.writeUInt16LE(0, 6); // central dir start disk
+  eocd.writeUInt16LE(entries.length, 8); // entries on this disk
+  eocd.writeUInt16LE(entries.length, 10); // total entries
+  eocd.writeUInt32LE(centralSize, 12);
+  eocd.writeUInt32LE(centralOffset, 16);
+  eocd.writeUInt16LE(0, 20); // comment length
+
+  const zipBytes = Buffer.concat([...localChunks, centralDir, eocd]);
+
+  return {
+    rootDir,
+    zipBytes,
+    archiveBytes: zipBytes.length,
+    uncompressedTotal,
+    entryPaths: entries.map((e) => e.path),
+  };
+}
+
+/** A boundary-check outcome over the canonical artifact's two dimensions. */
+export type SkillBoundaryCheck =
+  | { exceeded: false }
+  | { exceeded: true; dimension: "archive" | "uncompressed"; bytes: number };
+
+/**
+ * Reject when EITHER the archive bytes OR the uncompressed file total reaches
+ * `maxBytes` (default {@link ANTHROPIC_SKILL_MAX_UPLOAD_BYTES}). `>=` — at the
+ * boundary is rejected (the docs say "under 30 MB").
+ */
+export function checkSkillBoundary(
+  zip: CanonicalSkillZip,
+  maxBytes: number = ANTHROPIC_SKILL_MAX_UPLOAD_BYTES,
+): SkillBoundaryCheck {
+  if (zip.uncompressedTotal >= maxBytes) {
+    return { exceeded: true, dimension: "uncompressed", bytes: zip.uncompressedTotal };
+  }
+  if (zip.archiveBytes >= maxBytes) {
+    return { exceeded: true, dimension: "archive", bytes: zip.archiveBytes };
+  }
+  return { exceeded: false };
+}
+
+/**
+ * Stable, workspace-unique, non-sensitive `display_title` for a catalog skill.
+ *
+ * Anthropic requires an explicitly-passed `display_title` to be unique among a
+ * workspace's custom skills. The title must ALSO be STABLE for the same local
+ * skill across retries and re-baselines — a lost create response or a re-run
+ * must never mint a duplicate remote identity — so it is derived from the
+ * immutable `catalogSkillId`, NOT from content (content changes create new
+ * versions, never a new title) and NOT from any secret (the discriminator is a
+ * hash of the public catalog id, never the API key / fingerprint).
+ *
+ * Two distinct catalog skills whose display names collide get distinct titles
+ * because the discriminator differs; the same catalog skill always maps to the
+ * one title, so create-time collision reconciliation can adopt the existing
+ * remote skill instead of duplicating it.
+ */
+export function deriveAnthropicDisplayTitle(name: string, catalogSkillId: string): string {
+  const raw = typeof name === "string" && name.trim() ? name.trim() : catalogSkillId;
+  // Bound the human-readable prefix so the title stays a sane length.
+  const base = raw.length > 90 ? raw.slice(0, 90).trimEnd() : raw;
+  const disc = createHash("sha256")
+    .update(`anthropic-display-title:v1\0${catalogSkillId}`)
+    .digest("hex")
+    .slice(0, 12);
+  return `${base} [${disc}]`;
+}
