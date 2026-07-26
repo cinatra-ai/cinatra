@@ -99,13 +99,16 @@ function toIso(value: string | Date): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
-/** Normalise a jsonb array column into a `ToolRef[]` or `undefined`. The pure
- * evaluator re-validates each entry (an invalid entry makes the whole record
- * fail-closed deny-all, §10-A3), so this only shapes, never trusts. */
+/** Normalise a jsonb array column. NULL jsonb (absent list) → `undefined` (a
+ * valid "no list"). A PRESENT-but-MALFORMED value (non-array, e.g. a stray
+ * `'{}'::jsonb`) is PASSED THROUGH raw (cast) so the pure evaluator's
+ * `isValidInstanceToolPolicyRecord` REJECTS the whole record → fail-closed
+ * deny-all (§10-A3). Never silently coerce malformed persisted data to "none"
+ * (that would fail OPEN — codex R1 blocker). The evaluator re-validates each
+ * entry, so this only shapes; it never trusts. */
 function toRefArray(value: unknown): ToolRef[] | undefined {
   if (value === null || value === undefined) return undefined;
-  if (Array.isArray(value)) return value as ToolRef[];
-  return undefined;
+  return value as ToolRef[];
 }
 
 function rowToRecord(row: PolicyRow): InstanceToolPolicyRecord {

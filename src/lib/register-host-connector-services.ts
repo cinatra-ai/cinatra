@@ -423,6 +423,25 @@ function buildConnectorInstanceInvokerDeps(boundConnectorKey: string): Connector
           `compatibility fallback OPEN (transient; reconcile + first-touch converge it).`,
       );
     },
+    // Fail-closed INVALID policy (§10-A3): denies-all AND emits an audit warn —
+    // an invalid/malformed persisted record is a security signal, not the benign
+    // absent-fallback. Loud + audited so an operator sees a corrupt policy row.
+    warnInvalidPolicy: (connectorKey, instanceId) => {
+      console.error(
+        `[connector-instance-invoker] INVALID policy record for ${connectorKey}/${instanceId} — ` +
+          `evaluating as DENY-ALL (fail-closed). A malformed policy row must be repaired.`,
+      );
+      void logAuditEvent({
+        resourceType: "connector_instance",
+        resourceId: instanceId,
+        actorPrincipalType: "system",
+        authSource: "worker",
+        operation: "policy_invalid_deny_all",
+        decision: "denied",
+        policyVersion: "connector-instance-tool-policy",
+        metadata: { connectorKey, reason: "invalid_policy_deny_all" },
+      });
+    },
   };
 }
 

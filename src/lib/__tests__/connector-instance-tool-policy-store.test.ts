@@ -8,6 +8,7 @@ import {
   SYSTEM_POLICY_BACKFILL_ACTOR,
   type PolicyStoreDeps,
 } from "@/lib/connector-instance-tool-policy-store";
+import { evaluateInstanceToolPolicy } from "@cinatra-ai/mcp-server/instance-tool-policy";
 
 // cinatra#2017 S2 slice K4 — persisted policy store (R2-B2 / R3-B2). Injected
 // query + audit → no real DB (design §6.1 store test).
@@ -112,6 +113,35 @@ describe("reconcileConnectorInstanceToolPolicies (R2-B2)", () => {
     }
     expect(await readInstanceToolPolicy("wordpress", "a", deps)).not.toBeNull();
     expect(await readInstanceToolPolicy("wordpress", "b", deps)).not.toBeNull();
+  });
+});
+
+describe("malformed persisted policy → fail-closed deny-all, NEVER hidden (codex R1 blocker fix)", () => {
+  it("a row with a non-array deny_refs is passed through raw so the evaluator rejects the whole record", async () => {
+    // An `open` row whose deny_refs is a stray object (not an array) must NOT be
+    // read as `deny: undefined` (which would fail OPEN). It is passed through so
+    // evaluateInstanceToolPolicy → invalid → deny-all.
+    const query = vi.fn(async (text: string) => {
+      if (text.includes("SELECT")) {
+        return [
+          {
+            connector_key: "wordpress",
+            instance_id: "corrupt",
+            mode: "open",
+            allow_refs: null,
+            deny_refs: {}, // MALFORMED (jsonb object, not an array)
+            updated_by: "u",
+            updated_at: "2026-07-26T00:00:00Z",
+          },
+        ];
+      }
+      return [];
+    });
+    const rec = await readInstanceToolPolicy("wordpress", "corrupt", { query });
+    expect(rec).not.toBeNull();
+    expect(rec!.deny).toEqual({}); // passed through raw (a non-array), NOT undefined
+    const decision = evaluateInstanceToolPolicy(rec, { serverId: "mcp-adapter-default", name: "any" });
+    expect(decision).toEqual({ status: "denied", warn: "invalid_policy_deny_all" });
   });
 });
 

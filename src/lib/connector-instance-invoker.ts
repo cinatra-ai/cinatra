@@ -124,6 +124,10 @@ export type ConnectorInstanceInvokerDeps = {
   };
   /** Warn-once sink for the absent-policy compatibility fallback (§10-A3). */
   warnAbsentPolicy?: (connectorKey: string, instanceId: string) => void;
+  /** Audit-warn sink for a fail-closed INVALID policy record (§10-A3): a
+   * malformed/unknown-mode record denies-all AND emits an audit warn. Distinct
+   * from the absent (compatibility) fallback — invalid is a security signal. */
+  warnInvalidPolicy?: (connectorKey: string, instanceId: string) => void;
   now?: () => number;
   /** Governed list page size (§3.5 uncapped pagination — this bounds a single
    * page, not the total). Default 100. */
@@ -231,15 +235,23 @@ async function runSharedGate(
  * server on a miss). Runs ONLY after the gate (B2). Conservative freshness — S3
  * owns TTL/invalidation (N6). */
 async function acquireSnapshots(
-  input: { connectorKey: string; instanceId: string; serverId?: string; endpoint: string; authHeader: string },
+  input: { connectorKey: string; instanceId: string; endpoint: string; authHeader: string },
   deps: ConnectorInstanceInvokerDeps,
 ): Promise<CatalogServerSnapshot[]> {
   const cached = deps.cache.listForInstance(input.instanceId);
   if (cached.length > 0) return cached;
+  // SECURITY (§10-A1 / R3-M3): the snapshot identity is the STABLE, host-owned
+  // `CATALOG_DEFAULT_SERVER_ID` — NEVER a caller-supplied `serverId`. Minting the
+  // default catalog under a caller-picked id would let a caller forge a
+  // `{serverId,name}` policy key that no deny entry matches (policy bypass). A
+  // caller `serverId` is a downstream FILTER only (resolveToolAcrossServers /
+  // the list `scoped` filter); an unenrolled id therefore resolves to
+  // `tool_not_found`, never a mis-tagged catalog. S3 owns real multi-server
+  // enrollment + host-generated ids.
   const snap = await deps.loadServerSnapshot({
     connectorKey: input.connectorKey,
     instanceId: input.instanceId,
-    serverId: input.serverId ?? CATALOG_DEFAULT_SERVER_ID,
+    serverId: CATALOG_DEFAULT_SERVER_ID,
     endpoint: input.endpoint,
     authHeader: input.authHeader,
   });
@@ -278,7 +290,6 @@ export async function invokeConnectorInstanceTool(
     {
       connectorKey: input.connectorKey,
       instanceId: effectiveInstanceId,
-      serverId: input.serverId,
       endpoint: resolved.endpoint,
       authHeader: resolved.authHeader,
     },
@@ -302,6 +313,8 @@ export async function invokeConnectorInstanceTool(
   const decision = evaluateInstanceToolPolicy(policy, ref);
   if (decision.warn === "absent_policy_fallback_open") {
     deps.warnAbsentPolicy?.(input.connectorKey, effectiveInstanceId);
+  } else if (decision.warn === "invalid_policy_deny_all") {
+    deps.warnInvalidPolicy?.(input.connectorKey, effectiveInstanceId);
   }
   if (decision.status === "denied") {
     throw new InvokerError(
@@ -446,7 +459,6 @@ export async function listConnectorInstanceTools(
     {
       connectorKey: input.connectorKey,
       instanceId: effectiveInstanceId,
-      serverId: input.serverId,
       endpoint: resolved.endpoint,
       authHeader: resolved.authHeader,
     },
@@ -473,6 +485,7 @@ export async function listConnectorInstanceTools(
   // — §2.6 / §3.5 / N9). Report-never-drop mirrors S0's skipped[] shape.
   const policy = await deps.readPolicy(input.connectorKey, effectiveInstanceId);
   let warnedAbsent = false;
+  let warnedInvalid = false;
   const sorted = composeSortedCatalog(scoped);
   const now = deps.now?.() ?? Date.now();
   const snapshotById = new Map(scoped.map((s) => [s.serverId, s]));
@@ -483,6 +496,9 @@ export async function listConnectorInstanceTools(
     if (decision.warn === "absent_policy_fallback_open" && !warnedAbsent) {
       warnedAbsent = true;
       deps.warnAbsentPolicy?.(input.connectorKey, effectiveInstanceId);
+    } else if (decision.warn === "invalid_policy_deny_all" && !warnedInvalid) {
+      warnedInvalid = true;
+      deps.warnInvalidPolicy?.(input.connectorKey, effectiveInstanceId);
     }
     return {
       name: entry.name,

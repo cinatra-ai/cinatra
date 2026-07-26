@@ -248,6 +248,26 @@ describe("invokeConnectorInstanceTool — duplicate-name routing (§3.6)", () =>
   });
 });
 
+describe("invokeConnectorInstanceTool — serverId is NOT caller-mintable (codex R1 blocker fix, §10-A1)", () => {
+  it("on a cache MISS, a forged serverId cannot mint the default catalog under that id → tool_not_found (no policy bypass)", async () => {
+    const { deps, callWireTool } = makeDeps();
+    deps.cache.invalidate("inst-1"); // force a miss so loadServerSnapshot runs
+    // loadServerSnapshot ALWAYS tags the snapshot with CATALOG_DEFAULT_SERVER_ID
+    // (the host-owned id), never the caller's serverId. So a call with a forged
+    // serverId filters to nothing → tool_not_found, never a mis-tagged catalog.
+    await expect(
+      invokeConnectorInstanceTool(
+        { connectorKey: "wordpress", toolName: "ewpa/create-post", args: {}, serverId: "attacker-picked", actor: ACTOR },
+        deps,
+      ),
+    ).rejects.toMatchObject({ code: "tool_not_found" });
+    expect(callWireTool).not.toHaveBeenCalled();
+    // The minted snapshot carries the host-owned id, not the forged one.
+    expect(deps.cache.get("inst-1", CATALOG_DEFAULT_SERVER_ID)).toBeDefined();
+    expect(deps.cache.get("inst-1", "attacker-picked")).toBeUndefined();
+  });
+});
+
 describe("invokeConnectorInstanceTool — destructive hook (step 3, S5 seam)", () => {
   it("fires the hook only when enabled AND the resolved tool classifies destructive", async () => {
     const fire = vi.fn(async () => {});
