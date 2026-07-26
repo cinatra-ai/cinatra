@@ -98,6 +98,84 @@ export function registerAllObjectTypes(): void {
   // generic any-form type to register — an upload maps its MIME to a concrete
   // system-base pack (pdf/audio/video/image) or is refused.
   registerArtifactRefObjectType();
+  registerCmsPreviewCaptureObjectType();
+}
+
+/**
+ * The PINNED CMS preview-capture type (cinatra#2044 S6, sub-lane L-B).
+ *
+ * A capture is a screenshot of a staged page, taken server-side at gate
+ * creation and stored as an ordinary immutable artifact so the host's EXISTING
+ * version-pinned byte route serves it under the same session/actor/tenant/
+ * tombstone gating as everything else. That route admits a row only when its
+ * `objects.type` is a registered artifact-eligible type, so the type must be
+ * declared HERE — an unregistered capture type would make the reviewer's own
+ * pinned picture 404, which is precisely the "the artifact exists but nothing
+ * can serve it" failure the registration gate exists to prevent.
+ *
+ * Dispositions:
+ *  - `projection: "artifact-safe"` — the capture participates as an artifact
+ *    (what opens the byte route), and only its METADATA is ever projected. The
+ *    picture is a remote site's rendered page, so it must never flow into the
+ *    derived index as raw content.
+ *  - `snapshotPolicy: "metadata"` for the same reason.
+ *  - `pinnable: false` — a capture is already immutable and gate-bound; it is
+ *    not an independently pinnable reference.
+ *  - `mutability: "record"` — WRITE-ONCE. A capture is the page as it was when
+ *    the gate opened; re-viewing an old gate must show the ORIGINAL even after
+ *    the site theme changes (#2044), so nothing may edit one.
+ *
+ * Host-owned, not extension-owned: core writes these rows on the review path,
+ * and the type carries no renderer — the review surface renders the picture
+ * itself through the generic byte route, so the host stays type-generic.
+ */
+function registerCmsPreviewCaptureObjectType(): void {
+  objectTypeRegistry.register({
+    type: "@cinatra-ai/objects:cms-preview-capture",
+    category: "report",
+    // The capture IS an artifact: a stored PNG with an immutable
+    // representation. `isArtifact` is what admits it to the host's
+    // version-pinned byte-serving resolver (which reads
+    // `objectTypeRegistry.listArtifacts()`), so the reviewer's own pinned
+    // picture resolves — the disposition below governs PROJECTION, not serving,
+    // and declaring only the disposition leaves the image 404ing.
+    isArtifact: { accepts: { file: { mimeTypes: ["image/png"] } } },
+    dispositions: {
+      projection: "artifact-safe",
+      pinnable: false,
+      snapshotPolicy: "metadata",
+      sensitivity: "normal",
+      mutability: "record",
+    },
+    schema: z
+      .object({
+        role: z.string(),
+        status: z.string(),
+        boundArtifactId: z.string(),
+        boundSnapshotRevisionId: z.string(),
+        capturedAt: z.string(),
+      })
+      .passthrough(),
+    lifecycle: {
+      // Written only by the host capture pipeline on the review path.
+      sources: ["agent"],
+      mutableBy: [],
+    },
+    renderers: {
+      listRow: null,
+      card: null,
+      detail: null,
+    },
+    // Never auto-created or auto-updated by the agent auto-mapping dispatcher:
+    // a capture is produced by the capture pipeline together with its blob and
+    // is immutable afterwards, so a match is SKIPPED and a non-match can only
+    // ever reach a human (the dispatcher has no `skip` on the no-match arm).
+    crudPolicy: {
+      onMatch: "skip",
+      onNoMatch: "hitl",
+      requiredFields: ["boundArtifactId", "boundSnapshotRevisionId"],
+    },
+  });
 }
 
 // Typed artifact-ref reference contract.

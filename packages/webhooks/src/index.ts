@@ -15,7 +15,7 @@ export * from "./types";
 export { verifyInbound, verifyLegacyHmac, WebhookVerifyFailedError } from "./verify";
 export type { VerifiedInbound } from "./verify";
 
-export { signOutbound } from "./sign";
+export { signOutbound, signOutboundRaw } from "./sign";
 export type { SignedOutbound } from "./sign";
 
 export { deliverOutbound } from "./outbound";

@@ -493,3 +493,54 @@ export const webhookSecretService: WebhookSecretService = {
     );
   },
 };
+
+// ---------------------------------------------------------------------------
+// TUPLE-scoped read for the S6 preview capture (cinatra#2044, sub-lane L-B).
+//
+// The capture pipeline authenticates its server-side preview fetch with the
+// SAME connect-provisioned shared credential the publish emitter already uses —
+// it has the (vendor, slug, hook, site) tuple, never a bindingId (the plugin
+// holds that, the host addresses the site). This resolves the tuple's ACTIVE
+// binding id and delegates to `resolveByBindingId`, so decryption, the
+// field-scoped AAD, the revoked check, and the rotation window all stay in ONE
+// place — this adds a lookup, never a second crypto path.
+//
+// It is exported from the HOST module deliberately: `WebhookSecretService` is
+// the package's route-facing contract (bindingId-addressed by design), and
+// widening it for a host-internal read would push a capability the inbound route
+// must never use into every implementor.
+// ---------------------------------------------------------------------------
+
+/**
+ * Candidate shared secrets for a site's ACTIVE binding, in priority order —
+ * the same order the inbound route verifies in (current, then a non-expired
+ * previous during a rotation window), or the single bridged legacy secret.
+ *
+ * Returns an EMPTY array for an unknown / revoked / misprovisioned binding
+ * (fail closed — the caller records a named "no preview credential" degrade).
+ * NEVER logs or returns anything but the secret material the caller signs with.
+ */
+export async function resolvePreviewSharedSecrets(input: {
+  vendor: string;
+  slug: string;
+  hook: string;
+  siteId: string;
+}): Promise<string[]> {
+  const pool = getPool();
+  const { rows } = await pool.query<{ binding_id: string }>(
+    `SELECT binding_id FROM ${table()}
+      WHERE vendor = $1 AND slug = $2 AND hook = $3 AND site_id = $4 AND revoked_at IS NULL
+      LIMIT 1`,
+    [input.vendor, input.slug, input.hook, input.siteId],
+  );
+  const bindingId = rows[0]?.binding_id;
+  if (!bindingId) return [];
+  const binding = await webhookSecretService.resolveByBindingId(bindingId);
+  if (!binding) return [];
+  if (binding.legacyEnabled) {
+    return typeof binding.legacySecret === "string" && binding.legacySecret.length > 0
+      ? [binding.legacySecret]
+      : [];
+  }
+  return [...binding.secrets];
+}

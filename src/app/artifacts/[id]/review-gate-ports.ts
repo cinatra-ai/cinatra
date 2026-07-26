@@ -49,7 +49,15 @@ import {
   type PreparedReviewTarget,
   type RunAccessOutcome,
 } from "@/lib/artifacts/artifact-review-preparation";
-import type { ReviewSurfaceModel } from "@/lib/artifacts/review-surface-model";
+import {
+  pinnedCaptureKey,
+  type ReviewSurfaceModel,
+} from "@/lib/artifacts/review-surface-model";
+import { readPinnedPreviewCaptures } from "@/lib/artifacts/cms-preview-capture-store";
+import {
+  buildPinnedCaptureViews,
+  type PinnedCaptureView,
+} from "@/lib/artifacts/cms-preview-capture-view";
 import {
   submitReviewDecisionCore,
   type ArtifactReviewDecision,
@@ -343,10 +351,56 @@ export async function loadReviewGateSurface(args: {
     runId,
     reviewTaskId,
     targets,
+    // S6 (#2044 L-B) — the PINNED captures for each pinned target. A STORE read
+    // only: the surface shows the picture taken at gate creation and performs no
+    // network fetch at view time (the inert-by-contract rule, asserted by
+    // `cms-preview-capture-view.test.ts`). A target with no capture yields an
+    // empty list and renders nothing.
+    pinnedCaptures: loadPinnedCapturesForTargets(actorCtx.orgId, targets),
     // The producing agent's one-line summary (§I/II) is rendered "when present";
     // no gate/run column carries it in this slice, so it is absent (the chrome
     // renders nothing rather than an empty summary).
     agentSummary: null,
     permissions: { canDecide: decide.ok, canComment: comment.ok },
   };
+}
+
+// ---------------------------------------------------------------------------
+// PINNED CAPTURES (cinatra#2044 S6, sub-lane L-B).
+//
+// The whole point of the capture pipeline is that the reviewer sees the page as
+// it was WHEN THE GATE WAS CREATED. This read is therefore deliberately dumb: a
+// single store lookup per pinned target and a pure projection — no fetch, no
+// resolver, no remote URL anywhere in the produced model. The only URL it emits
+// is the host's own version-pinned artifact byte route for the stored PNG, which
+// applies the same session/actor/tenant/tombstone gating as every other artifact
+// and serves under the host's sandbox CSP.
+//
+// A store failure degrades to "no capture" rather than failing the surface: a
+// reviewer must always be able to decide the DATA even when the context picture
+// is unavailable (#2044's honest-fallback rule).
+// ---------------------------------------------------------------------------
+
+function loadPinnedCapturesForTargets(
+  orgId: string,
+  targets: readonly PreparedReviewTarget[],
+): Record<string, PinnedCaptureView[]> {
+  const out: Record<string, PinnedCaptureView[]> = {};
+  for (const prepared of targets) {
+    const key = pinnedCaptureKey(prepared.target);
+    try {
+      const stored = readPinnedPreviewCaptures({
+        orgId,
+        boundArtifactId: prepared.target.artifactId,
+        boundSnapshotRevisionId: prepared.target.representationRevisionId,
+      });
+      if (stored.length > 0) out[key] = buildPinnedCaptureViews(stored);
+    } catch (err) {
+      console.warn(
+        "[review-gate-ports] pinned capture lookup failed (the review is unaffected):",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  return out;
 }
