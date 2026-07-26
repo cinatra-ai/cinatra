@@ -745,6 +745,22 @@ jobs:
       - name: WP MCP gateway fixture pin-integrity gate tests
         run: node --test scripts/audit/__tests__/wordpress-fixture-pins-gate.test.mjs
 
+      # WP MCP gateway capture-freshness gate (#2016 S1). Offline anti-staleness
+      # check: for every committed capture under tests/e2e/wp-mcp-gateway/captures/
+      # that carries a `provenance` block, it recomputes the recorded hashes from
+      # the CURRENT tree (pins.lock, the fixture-plugin tree, the capture
+      # producer, the api-map) and FAILS if any drifts — so a pins/plugin/producer
+      # change committed WITHOUT re-capturing can no longer keep PR CI green. Shares
+      # its hashing verbatim with the producer (tests/e2e/wp-mcp-gateway/
+      # provenance.mjs). Rides this already-required job so it inherits
+      # required-ness with no branch-protection change, and no-ops cleanly (exit 0)
+      # when there are no provenanced captures yet. Pure node (no pnpm).
+      - name: WP MCP gateway capture-freshness gate
+        run: node scripts/audit/wp-gateway-capture-freshness.mjs
+
+      - name: WP MCP gateway capture-freshness gate tests
+        run: node --test scripts/audit/__tests__/wp-gateway-capture-freshness.test.mjs
+
       # Every extension must declare its cross-kind dependency edges in
       # cinatra.dependencies, kept in sync with the confident graph re-derived
       # from source (so the marketplace can dependency-order extraction). STRICT

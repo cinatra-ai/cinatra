@@ -174,10 +174,23 @@ jobs:
         run: |
           APPPW=$(docker exec cinatra-wordpress-1 wp user application-password create admin capture --porcelain --allow-root)
           echo "WP_MCP_BASIC_AUTH=$(printf 'admin:%s' "$APPPW" | base64 -w0)" >> "$GITHUB_ENV"
+      - name: Provision MCP SDK for capture sub-claim (b)
+        # Sub-claim (b) uses the official @modelcontextprotocol/sdk Client to
+        # prove the SDK layer preserves annotation hints. Install ONLY the SDK
+        # (root dep range ^1.29.0) into the producer's own dir — node resolves it
+        # from tests/e2e/wp-mcp-gateway/node_modules upward — so we keep this the
+        # cheap wordpress-only boot job (NO full monorepo `pnpm install`). If it
+        # hiccups, the producer degrades sub-claim (b) to a recorded finding (the
+        # raw path (a) carries the authoritative annotation proof) — so this step
+        # is best-effort and never reds the run.
+        continue-on-error: true
+        run: npm install --no-audit --no-fund --prefix tests/e2e/wp-mcp-gateway "@modelcontextprotocol/sdk@^1.29.0"
       - name: Run capture producer
         env:
           WP_BASE_URL: http://localhost:8080
           WP_MCP_BASIC_AUTH: ${{ env.WP_MCP_BASIC_AUTH }}
+          CAPTURE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CAPTURE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node tests/e2e/wp-mcp-gateway/capture-annotations.mjs
       - name: Upload captures
         if: ${{ always() }}
