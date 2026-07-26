@@ -45,6 +45,23 @@ import "server-only";
 // — an org-scoped grant must NOT control this global store. All runtime-arm
 // lookups FAIL CLOSED on any error (the baked arm is unaffected; a swallowed
 // runtime-grant error is logged).
+//
+// MARKETPLACE-INSTALL-PROVENANCE ARM (arm (c), owner ruling 2026-07-23 — the
+// widget-auth delivery fix, path B). The grant arm (b) still fails closed for a
+// real released-image rider: the host loader reconstructs the connector's live
+// provider + trusted-signed + trusted install anchor on EVERY boot, but the
+// admin ownership GRANT row is written only by the interactive install
+// pipeline's auto-approve — an auto-staged rider never gets one, so arm (b)
+// resolves nothing forever. Arm (c) closes this by deriving ownership from
+// SANCTIONED marketplace-install provenance rooted OUTSIDE the writable store:
+// the UNIQUE signed+activated, live-provider package whose TRUSTED
+// `installed_extension` anchor + integrity-verified materialized manifest
+// DECLARES the `wordpress_widget_auth` store key (full rule P1–P6 + the
+// write-/data/extensions threat model in `widget-auth-install-provenance.ts`).
+// It is a FALLBACK: consulted ONLY when the build ∪ grant union is EMPTY, so the
+// baked (dev) path is provably unchanged and a rogue provenance declarer can
+// never DoS a legitimate baked/granted owner into ambiguity. Same fail-closed,
+// error-logged posture as arm (b); same GLOBAL org-agnostic scope.
 
 import type { HostWordPressWidgetAuthService } from "@cinatra-ai/sdk-extensions";
 import {
@@ -54,19 +71,27 @@ import {
 import { GENERATED_WIDGET_STREAM_AGENTS } from "@/lib/generated/extensions.server";
 import {
   resolveOwnershipOwner,
+  readOwnershipGrant,
   type OwnershipGrantDeps,
 } from "@/lib/extension-capability-ownership-grants";
+import {
+  resolveInstallProvenanceOwner,
+  type InstallProvenanceDeps,
+} from "@/lib/widget-auth-install-provenance";
 
 // Inlined string literal (the SAME id the connector registers under and
 // `HOST_CONNECTOR_SERVICE_CAPABILITIES.wordpressWidgetAuth` holds) — a literal,
 // never an import specifier, so it carries no vendor-import coupling and no
-// barrel-init edge.
-const WORDPRESS_WIDGET_AUTH_CAPABILITY = "@cinatra-ai/host:wordpress-widget-auth";
+// barrel-init edge. EXPORTED so the widget-stream ownership surface (slice 2)
+// can name the SAME (capability, tokenConfigKey, providerGuard) triple honestly
+// as its install-provenance P1-candidate for this store — never a second,
+// drift-prone copy of the wordpress widget-auth descriptor.
+export const WORDPRESS_WIDGET_AUTH_CAPABILITY = "@cinatra-ai/host:wordpress-widget-auth";
 
 // The connector_config key of the EXACT store this capability wraps (the
 // UUID-pair api key + webhook secret row `connector_config:wordpress_widget_auth`)
 // — a persisted DATA key, never an extension package name.
-const WORDPRESS_WIDGET_AUTH_TOKEN_CONFIG_KEY = "wordpress_widget_auth";
+export const WORDPRESS_WIDGET_AUTH_TOKEN_CONFIG_KEY = "wordpress_widget_auth";
 
 /** Optional dependency injection for the runtime ownership-grant lookup so the
  * unauthenticated-surface resolver is unit-testable without a live pg pool. The
@@ -74,6 +99,10 @@ const WORDPRESS_WIDGET_AUTH_TOKEN_CONFIG_KEY = "wordpress_widget_auth";
 export type WidgetAuthResolveDeps = {
   /** Threaded straight into `resolveOwnershipOwner` (S0) for tests. */
   ownershipGrantDeps?: OwnershipGrantDeps;
+  /** Threaded into the marketplace-install-PROVENANCE fallback arm (arm (c),
+   * owner ruling 2026-07-23) so the unauthenticated resolver is unit-testable
+   * without a pg pool / on-disk store. Production callers pass nothing. */
+  installProvenanceDeps?: InstallProvenanceDeps;
 };
 
 /**
@@ -144,12 +173,87 @@ async function resolveRuntimeWidgetAuthOwner(
 }
 
 /**
- * The SOLE sanctioned owner of the widget-auth credential store — the UNIQUE
- * member of the UNION of the build-time (baked) declarer and the runtime
- * (marketplace-installed, admin-granted, trusted-signed) owner. 0 or >1 distinct
- * owners → null → resolution fails closed. Both arms retain anti-spoof: arm (a)
- * pins to the reviewed generated tree; arm (b) requires a signed, approved-grant,
- * live-provider package.
+ * ARM (c) — the marketplace-install-PROVENANCE owner (owner ruling 2026-07-23,
+ * the widget-auth delivery fix). A FALLBACK consulted ONLY when neither the
+ * baked declarer (arm (a)) nor an admin ownership grant (arm (b)) resolves an
+ * owner — i.e. exactly the released-image gap where the wordpress connector is a
+ * runtime-installed marketplace rider that the loader activated (live provider +
+ * trusted-signed + trusted install anchor) but for which no ownership grant was
+ * ever recorded. Ownership derives from SANCTIONED install provenance rooted
+ * OUTSIDE the writable store (the canonical `installed_extension` anchor +
+ * store integrity + trusted-signed + the verified manifest's own store
+ * declaration), never from arbitrary runtime registration and never from
+ * path-scanning trust — see `widget-auth-install-provenance.ts` for the full
+ * fail-closed rule (P1–P6) and threat model. FAIL CLOSED on any lookup error
+ * (a swallowed error is logged so a DB/store-IO failure never silently masks the
+ * provenance arm; the baked / grant arms are unaffected).
+ */
+async function resolveInstallProvenanceWidgetAuthOwner(
+  deps?: WidgetAuthResolveDeps,
+): Promise<string | null> {
+  try {
+    const resolved = await resolveInstallProvenanceOwner(
+      {
+        capability: WORDPRESS_WIDGET_AUTH_CAPABILITY,
+        tokenConfigKey: WORDPRESS_WIDGET_AUTH_TOKEN_CONFIG_KEY,
+        providerGuard: isWordPressWidgetAuthProvider,
+      },
+      deps?.installProvenanceDeps,
+    );
+    if (!resolved) return null;
+    const { packageName: owner, orgId: ownerOrgId } = resolved;
+    // GRANT-DECISION VETO (codex final round + org-scope fix, owner ruling
+    // 2026-07-23). Arm (c) runs whenever the build ∪ grant union is EMPTY — but
+    // arm (b) also returns null for a grant that is explicitly `revoked` (an admin
+    // killed this package's ownership) or `pending` (an admin has not approved
+    // it). Provenance MUST NOT override such an explicit admin decision.
+    //
+    // ORG SCOPE. Ownership grants for an org-anchored install are written at the
+    // install's ORG, but the runtime arm (b) reads the GLOBAL (`org_id IS NULL`)
+    // row — so an org-scoped revoke/pending decision was previously MISSED by a
+    // global-only veto. Veto at BOTH the anchor's derived org (surfaced by the
+    // provenance resolver) AND global: if a grant row exists at EITHER scope that
+    // is NOT `approved`, fail closed. Only the NO-ROW-at-either-scope case (the
+    // auto-staged rider that never had a grant recorded) is honored. A same-scope
+    // `approved` row would have made arm (b) resolve, so arm (c) would not be
+    // consulted — the `approved` pass here is defensive.
+    const vetoScopes: (string | null)[] = ownerOrgId != null ? [ownerOrgId, null] : [null];
+    for (const scope of vetoScopes) {
+      const grant = await readOwnershipGrant(
+        {
+          packageName: owner,
+          orgId: scope,
+          tokenConfigKey: WORDPRESS_WIDGET_AUTH_TOKEN_CONFIG_KEY,
+        },
+        deps?.ownershipGrantDeps,
+      );
+      if (grant && grant.status !== "approved") return null;
+    }
+    return owner;
+  } catch (err) {
+    console.error(
+      "[widget-auth-provider] marketplace-install-provenance lookup failed (failing closed on the " +
+        "provenance arm; the build-time and grant owner arms are unaffected):",
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+/**
+ * The SOLE sanctioned owner of the widget-auth credential store. The UNION of
+ * the build-time (baked) declarer (arm (a)) and the runtime admin-granted owner
+ * (arm (b)) is resolved FIRST: exactly one distinct owner → that owner; >1 (a
+ * baked/grant conflict) → null (fail closed, unchanged). ONLY when that union is
+ * EMPTY — neither baked nor admin-granted, the released-image rider gap — is the
+ * marketplace-install-PROVENANCE fallback (arm (c)) consulted, itself
+ * unique-or-fail-closed. Every arm retains anti-spoof: arm (a) pins to the
+ * reviewed generated tree; arm (b) requires a signed, approved-grant,
+ * live-provider package; arm (c) requires a signed, trusted-anchor +
+ * integrity-verified, store-declaring, live-provider package (P1–P6). The
+ * fallback ordering means the baked (dev) path is provably unchanged — arm (c)
+ * never runs while a baked owner resolves — and a legitimate baked/granted owner
+ * can never be DoS'd into ambiguity by a rogue install-provenance declarer.
  */
 async function resolveWordPressWidgetAuthOwner(
   deps?: WidgetAuthResolveDeps,
@@ -159,13 +263,19 @@ async function resolveWordPressWidgetAuthOwner(
   if (buildTime) owners.add(buildTime);
   const runtime = await resolveRuntimeWidgetAuthOwner(deps);
   if (runtime) owners.add(runtime);
-  if (owners.size !== 1) return null; // absent or ambiguous → fail closed
-  return owners.values().next().value ?? null;
+  if (owners.size === 1) return owners.values().next().value ?? null;
+  if (owners.size > 1) return null; // baked/grant conflict → fail closed
+  // Union empty → the released-image rider gap: consult the install-provenance
+  // fallback (arm (c)), unique-or-fail-closed.
+  return resolveInstallProvenanceWidgetAuthOwner(deps);
 }
 
 // Structural guard: a capability impl is `unknown` by contract (the registry
 // stores `unknown`; the runtime trust boundary is HERE, not the compile type).
-function isWordPressWidgetAuthProvider(
+// EXPORTED so the widget-stream ownership surface (slice 2) reuses the SINGLE
+// canonical wordpress widget-auth provider guard as its install-provenance P1
+// candidate guard — never a divergent duplicate.
+export function isWordPressWidgetAuthProvider(
   impl: unknown,
 ): impl is HostWordPressWidgetAuthService {
   const candidate = impl as Partial<HostWordPressWidgetAuthService> | null;
@@ -218,8 +328,10 @@ export async function requireWordPressWidgetAuth(
             "surfaces can resolve widget credentials."
           : "no unique trusted owner for the wordpress widget-auth token store " +
             "(`cinatra.widgetStream.auth.tokenConfigKey`) — neither a baked " +
-            "manifest declarer nor a signed, admin-granted runtime connector — " +
-            "so no provider can be trusted (fail-closed)."),
+            "manifest declarer, nor a signed admin-granted runtime connector, " +
+            "nor a signed marketplace-installed connector with a trusted install " +
+            "anchor + integrity-verified store declaring the token key — so no " +
+            "provider can be trusted (fail-closed)."),
     );
   }
   return provider;

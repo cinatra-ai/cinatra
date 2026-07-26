@@ -448,6 +448,60 @@ describe("recordFromManifest — agent assistant declaration carry", () => {
   });
 });
 
+// --- dashboardContribution runtime-store carry (cinatra#1896) ------------------
+// A MARKETPLACE-INSTALLED meaning pack surfaces its `cinatra.dashboardContribution`
+// claim on its store record through the SAME artifact-kind gate the generator emits
+// through, so the host contribution/template reconcilers see a runtime-installed
+// pack exactly as they see a static-manifest one. Carried UNVALIDATED — host parses
+// it fail-closed at consumption.
+describe("recordFromManifest — dashboardContribution runtime-store carry", () => {
+  const CLAIM = {
+    abiVersion: 1,
+    sdkAbiRange: "^2.4.0",
+    contributionVersion: 1,
+    contributionKey: "web-analytics",
+    sidecar: "./cinatra/dashboard.json",
+  };
+
+  it("carries the RAW claim for a kind:artifact pack that declares one", () => {
+    const rec = recordFromManifest(
+      "/d/wa",
+      manifest("@x/web-analytics", { kind: "artifact", dashboardContribution: CLAIM }),
+    );
+    expect(rec?.dashboardContribution).toEqual(CLAIM);
+  });
+
+  it("does NOT carry for a kind:artifact pack with no claim", () => {
+    const rec = recordFromManifest("/d/plain", manifest("@x/plain-art", { kind: "artifact" }));
+    expect(rec?.dashboardContribution).toBeUndefined();
+  });
+
+  it("does NOT carry a non-object claim (array / string) — fail-closed to absent", () => {
+    const arr = recordFromManifest("/d/arr", manifest("@x/arr", { kind: "artifact", dashboardContribution: [CLAIM] }));
+    expect(arr?.dashboardContribution).toBeUndefined();
+    const str = recordFromManifest("/d/str", manifest("@x/str", { kind: "artifact", dashboardContribution: "x" }));
+    expect(str?.dashboardContribution).toBeUndefined();
+  });
+
+  it("CARRIER-KIND GATED: does NOT carry on a non-artifact kind even when a claim is present", () => {
+    for (const kind of ["agent", "connector", "skill", "workflow"]) {
+      const rec = recordFromManifest(`/d/${kind}`, manifest(`@x/${kind}`, { kind, dashboardContribution: CLAIM }));
+      expect(rec?.dashboardContribution).toBeUndefined();
+    }
+  });
+
+  it("discoverPackageStoreRecords surfaces the carried claim end-to-end", async () => {
+    const root = "/store";
+    const fs = makeFs(
+      { [`${root}/wa/package.json`]: manifest("@x/web-analytics", { kind: "artifact", dashboardContribution: CLAIM }) },
+      [root, `${root}/wa`],
+    );
+    const recs = await discoverPackageStoreRecords(root, fs);
+    expect(recs.map((r) => r.packageName)).toEqual(["@x/web-analytics"]);
+    expect(recs[0].dashboardContribution).toEqual(CLAIM);
+  });
+});
+
 // --- the activation proof -----------------------------------------------------
 describe("runRuntimePackageActivation (PNP proof: store -> activate via shared driver)", () => {
   const fakeCtx = { __ctx: true } as never;

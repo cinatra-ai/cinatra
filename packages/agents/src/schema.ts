@@ -173,6 +173,12 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
   // used by other "JSON-as-text" columns in this table (compiledPlan, hitlScreens,
   // agentDependencies). Nullable; default null.
   gatedSteps:        text("gated_steps"),
+  // lifecycleConfig: the agent-manifest LIFECYCLE declarations (cinatra#2038,
+  // epic #2037 S0) compiled onto the template trigger-style (like trigger_mode /
+  // gated_steps): requestedSkips / producedTypes / repairCapable as JSON-as-text.
+  // Nullable; null = the agent declares no lifecycle refinements. Physical column
+  // added additively (ADD COLUMN IF NOT EXISTS) by artifact-review-gate-schema.ts + core__0079.
+  lifecycleConfig:   text("lifecycle_config"),
   // agentAuthPolicy: template-level AgentAuthPolicy (JSON-as-text). Nullable;
   // null = use DEFAULT_AGENT_AUTH_POLICY. See packages/agent-builder/src/auth-policy.ts.
   agentAuthPolicy:   text("agent_auth_policy"),
@@ -331,6 +337,20 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // reads run.dependentInstallId to carry it onto the ActorContext.
   // Migration: src/lib/drizzle-store.ts dependent_install_id entry + core__0030.
   dependentInstallId: text("dependent_install_id"),
+  // human_present: the run-start presence discriminator (cinatra#2067, epic
+  // #2037 C3). TRUE only for runs interactively started by a present human from
+  // the UI/chat (the run-actions.ts + chat run-start seams); NULL/false for
+  // every headless origin (scheduled/recurring triggers, A2A/API dispatch,
+  // worker child dispatch). ONLY a human-present run may PARK at the run-start
+  // recommendation interception for the confirm/adjust/skip chip-row; a headless
+  // run auto-applies and never parks (the S3 engine behavior stays byte-
+  // identical — NULL reads as "not present"). Nullable + additive: pre-existing
+  // rows read NULL (headless-safe default; unchanged behavior).
+  // Migration: additive nullable column via src/lib/drizzle-store.ts
+  //   (ADD COLUMN IF NOT EXISTS human_present boolean) — the timeout_seconds /
+  //   streamed_text precedent; no numbered migration (schema-migration-gate
+  //   classifies a new nullable column as additive).
+  humanPresent: boolean("human_present"),
 }, (t) => ({
   templateIdIdx:    index("agent_runs_template_id_idx").on(t.templateId),
   statusIdx:        index("agent_runs_status_idx").on(t.status),
@@ -504,6 +524,11 @@ export const artifactReviewGates = cinatraSchema.table("artifact_review_gates", 
   resolvedBy:    text("resolved_by"),
   resolvedAt:    timestamp("resolved_at", { withTimezone: true }),
   createdAt:     timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  // Gate-store extensions (cinatra#2038, epic #2037 S0). expiresAt: optional TTL
+  // for the gate. reopenCount: lineage attempt counter (bounded reopen cycles).
+  // Added additively by artifact-review-gate-schema.ts + core__0079.
+  expiresAt:     timestamp("expires_at", { withTimezone: true }),
+  reopenCount:   integer("reopen_count").notNull().default(0),
 }, (t) => ({
   // One gate per (run, task) — makes emit idempotent + is the pending anchor.
   runTaskUniq: uniqueIndex("artifact_review_gates_run_task_uniq").on(t.runId, t.reviewTaskId),
@@ -568,8 +593,269 @@ export const artifactReviewResumeOutbox = cinatraSchema.table("artifact_review_r
   leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
   createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt:      timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  // Gate-store extensions (cinatra#2038, epic #2037 S0). maxAttempts: the resume
+  // delivery cap; deadLetteredAt: the DEAD-LETTER state marker (NULL = live;
+  // non-null = exhausted its attempts, ops-surfaced); lastError: the last delivery
+  // error (ops). Added additively by artifact-review-gate-schema.ts + core__0079.
+  maxAttempts:    integer("max_attempts").notNull().default(20),
+  deadLetteredAt: timestamp("dead_lettered_at", { withTimezone: true }),
+  lastError:      text("last_error"),
 }, (t) => ({
   statusIdx: index("artifact_review_resume_outbox_status_idx").on(t.status, t.createdAt),
+  deadIdx:   index("artifact_review_resume_outbox_dead_idx").on(t.deadLetteredAt).where(sql`dead_lettered_at IS NOT NULL`),
+}));
+
+// ---------------------------------------------------------------------------
+// lifecycle-interceptions S0 (cinatra#2038, epic #2037) — the FOUNDATION tables
+// every later slice (S1–S7b) builds against. DDL twin: the
+// lifecycleInterceptionsSchemaQueries function in
+// src/lib/artifacts/artifact-review-gate-schema.ts + migration core__0079.
+// ---------------------------------------------------------------------------
+
+/** The org-scoped policy LATTICE bounds. A row is a `required`/`forbidden` bound
+ * per (checkpoint, artifact type, destination class, origin kind); the ABSENCE of
+ * a row is `silent` (unconstrained) and is never stored. */
+export const lifecyclePolicyRules = cinatraSchema.table("lifecycle_policy_rules", {
+  id:                text("id").primaryKey(),
+  orgId:             text("org_id").notNull(),
+  checkpoint:        text("checkpoint").notNull(),        // recommendation | review | verification
+  artifactType:      text("artifact_type").notNull(),
+  destinationClass:  text("destination_class").notNull(), // none | external_publish | visibility_promotion | pipeline_handoff
+  originKind:        text("origin_kind").notNull(),       // agent_produced | user_provided | intermediate
+  bound:             text("bound").notNull(),             // required | forbidden
+  selfApprovalOptIn: boolean("self_approval_opt_in").notNull().default(false),
+  createdAt:         timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:         timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  keyUniq: uniqueIndex("lifecycle_policy_rules_key_uniq")
+    .on(t.orgId, t.checkpoint, t.artifactType, t.destinationClass, t.originKind),
+  orgIdx:  index("lifecycle_policy_rules_org_idx").on(t.orgId),
+}));
+
+/** The transactional ArtifactProduced outbox. `eventId` is the DETERMINISTIC id
+ * (sha256 of the gate key) so a same-tx re-emit under replay is idempotent. */
+export const artifactProducedOutbox = cinatraSchema.table("artifact_produced_outbox", {
+  eventId:                  text("event_id").primaryKey(),
+  orgId:                    text("org_id").notNull(),
+  artifactId:               text("artifact_id").notNull(),
+  representationRevisionId: text("representation_revision_id").notNull(),
+  eventKind:                text("event_kind").notNull().default("artifact_produced"),
+  emitter:                  text("emitter").notNull(),
+  producerRunId:            text("producer_run_id"),
+  producerAgentId:          text("producer_agent_id"),
+  originKind:               text("origin_kind").notNull(),
+  destinationClass:         text("destination_class").notNull(),
+  continuationMode:         text("continuation_mode").notNull(),
+  continuationAddress:      text("continuation_address"),
+  status:                   text("status").notNull().default("pending"), // pending | processed | reconciled
+  createdAt:                timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  processedAt:              timestamp("processed_at", { withTimezone: true }),
+}, (t) => ({
+  revisionUniq: uniqueIndex("artifact_produced_outbox_revision_uniq")
+    .on(t.artifactId, t.representationRevisionId, t.eventKind),
+  statusIdx:    index("artifact_produced_outbox_status_idx").on(t.status, t.createdAt),
+  orgIdx:       index("artifact_produced_outbox_org_idx").on(t.orgId),
+}));
+
+/** Checkpointed-mode continuation park (evaluate-then-park). A parked run always
+ * resumes by `ttlExpiresAt` (terminal policy_unresolved on the protected effect
+ * when unresolved). */
+export const lifecycleContinuationPark = cinatraSchema.table("lifecycle_continuation_park", {
+  id:                 text("id").primaryKey(),
+  runId:              text("run_id").notNull(),
+  eventId:            text("event_id").notNull(),
+  checkpoint:         text("checkpoint").notNull(),
+  policyDecisionId:   text("policy_decision_id"),
+  protectedEffect:    text("protected_effect").notNull(),
+  reevaluationIntent: boolean("reevaluation_intent").notNull().default(false),
+  status:             text("status").notNull().default("parked"), // parked | released | policy_unresolved
+  ttlExpiresAt:       timestamp("ttl_expires_at", { withTimezone: true }).notNull(),
+  createdAt:          timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  resolvedAt:         timestamp("resolved_at", { withTimezone: true }),
+}, (t) => ({
+  runEventUniq: uniqueIndex("lifecycle_continuation_park_run_event_uniq")
+    .on(t.runId, t.eventId, t.checkpoint),
+  dueIdx:       index("lifecycle_continuation_park_due_idx").on(t.status, t.ttlExpiresAt),
+}));
+
+/** The zero-authority advisory seam — gate-bound, provenance-stamped, idempotent,
+ * DECISION-FREE (no decision columns exist). Rows live WITH the gate. */
+export const gateAdvisoryComments = cinatraSchema.table("gate_advisory_comments", {
+  id:             text("id").primaryKey(),
+  gateId:         text("gate_id").notNull().references(() => artifactReviewGates.id, { onDelete: "cascade" }),
+  authorId:       text("author_id").notNull(),
+  authorKind:     text("author_kind").notNull(), // user | agent | service
+  body:           text("body").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  runCausation:   text("run_causation"),
+  createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idemUniq: uniqueIndex("gate_advisory_comments_idem_uniq").on(t.gateId, t.idempotencyKey),
+  gateIdx:  index("gate_advisory_comments_gate_idx").on(t.gateId, t.createdAt),
+}));
+
+/** DECIDED SCHEMA (S4): post-change verification records. */
+export const artifactVerificationRecords = cinatraSchema.table("artifact_verification_records", {
+  id:                              text("id").primaryKey(),
+  gateId:                          text("gate_id").notNull().references(() => artifactReviewGates.id, { onDelete: "cascade" }),
+  reviewedArtifactId:              text("reviewed_artifact_id").notNull(),
+  reviewedRepresentationRevisionId:text("reviewed_representation_revision_id").notNull(),
+  repairedArtifactId:              text("repaired_artifact_id").notNull(),
+  repairedRepresentationRevisionId:text("repaired_representation_revision_id").notNull(),
+  scopeManifest:                   jsonb("scope_manifest").notNull().default(sql`'{"paths":[]}'::jsonb`),
+  fieldDiff:                       jsonb("field_diff").notNull().default(sql`'[]'::jsonb`),
+  visualDiff:                      jsonb("visual_diff"),
+  outcome:                         text("outcome").notNull(), // verified | drifted | unmet
+  createdAt:                       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  gateIdx: index("artifact_verification_records_gate_idx").on(t.gateId),
+}));
+
+/** DECIDED SCHEMA (S3): the immutable per-run selected skill-revision set. */
+export const runSelectedSkillRevisions = cinatraSchema.table("run_selected_skill_revisions", {
+  id:              text("id").primaryKey(),
+  runId:           text("run_id").notNull(),
+  skillId:         text("skill_id").notNull(),
+  skillRevisionId: text("skill_revision_id").notNull(),
+  selectionSource: text("selection_source").notNull(),
+  selectedAt:      timestamp("selected_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  runSkillUniq: uniqueIndex("run_selected_skill_revisions_uniq").on(t.runId, t.skillId),
+  runIdx:       index("run_selected_skill_revisions_run_idx").on(t.runId),
+}));
+
+/** DECIDED SCHEMA (S5): a CMS snapshot-as-target + its apply binding. */
+export const cmsSnapshotTargets = cinatraSchema.table("cms_snapshot_targets", {
+  id:                   text("id").primaryKey(),
+  artifactId:           text("artifact_id").notNull(),
+  snapshotRevisionId:   text("snapshot_revision_id").notNull(),
+  scopeManifest:        jsonb("scope_manifest").notNull().default(sql`'{"paths":[]}'::jsonb`),
+  connectorInstance:    text("connector_instance").notNull(),
+  resourceType:         text("resource_type").notNull(),
+  resourceId:           text("resource_id"),
+  baseRemoteRevisionRef:text("base_remote_revision_ref"),
+  operationId:          text("operation_id").notNull(),
+  createdAt:            timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  operationUniq: uniqueIndex("cms_snapshot_targets_operation_uniq").on(t.operationId),
+  artifactIdx:   index("cms_snapshot_targets_artifact_idx").on(t.artifactId),
+}));
+
+/** DECIDED SCHEMA (S4 auditor re-home): gate-bound immutable suggestion snapshots. */
+export const gateSuggestionSnapshots = cinatraSchema.table("gate_suggestion_snapshots", {
+  id:        text("id").primaryKey(),
+  gateId:    text("gate_id").notNull().references(() => artifactReviewGates.id, { onDelete: "cascade" }),
+  payload:   jsonb("payload").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  gateIdx: index("gate_suggestion_snapshots_gate_idx").on(t.gateId),
+}));
+
+/** DECIDED SCHEMA (S4 auditor re-home): the suggestion decision-application ledger. */
+export const suggestionDecisionLedger = cinatraSchema.table("suggestion_decision_ledger", {
+  id:           text("id").primaryKey(),
+  suggestionId: text("suggestion_id").notNull().references(() => gateSuggestionSnapshots.id, { onDelete: "cascade" }),
+  gateId:       text("gate_id").notNull(),
+  decision:     text("decision").notNull(), // applied | dismissed
+  decidedBy:    text("decided_by").notNull(),
+  decidedAt:    timestamp("decided_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  suggestionUniq: uniqueIndex("suggestion_decision_ledger_uniq").on(t.suggestionId),
+}));
+
+// ---------------------------------------------------------------------------
+// lifecycle-interceptions S2 (cinatra#2040, epic #2037) — the repair loop tables
+// + the routed rejected-recommendation efficacy row. DDL twin: the
+// lifecycleRepairSchemaQueries function in
+// src/lib/artifacts/artifact-review-gate-schema.ts + migration core__0081.
+// ---------------------------------------------------------------------------
+
+/** The DURABLE sealed-membership epoch (replaces S1's in-memory seal). The frozen
+ * membership is persisted BEFORE any gate emit + keyed on (org, run,
+ * membershipHash), so a re-sweep after a crash recovers the FROZEN set (never
+ * re-snapshots a grown pending set). At most ONE 'sealed' (open) epoch per
+ * production (the partial-unique open index). */
+export const lifecycleBatchEpoch = cinatraSchema.table("lifecycle_batch_epoch", {
+  id:             text("id").primaryKey(),
+  orgId:          text("org_id").notNull(),
+  producerRunId:  text("producer_run_id").notNull(),
+  membershipHash: text("membership_hash").notNull(),
+  membership:     jsonb("membership").notNull(),
+  targetCount:    integer("target_count").notNull(),
+  status:         text("status").notNull().default("sealed"), // sealed | partitioned
+  sealedAt:       timestamp("sealed_at", { withTimezone: true }).notNull().defaultNow(),
+  partitionedAt:  timestamp("partitioned_at", { withTimezone: true }),
+}, (t) => ({
+  membershipUniq: uniqueIndex("lifecycle_batch_epoch_uniq").on(t.orgId, t.producerRunId, t.membershipHash),
+  openUniq:       uniqueIndex("lifecycle_batch_epoch_open_uniq")
+    .on(t.orgId, t.producerRunId)
+    .where(sql`status = 'sealed'`),
+  runIdx:         index("lifecycle_batch_epoch_run_idx").on(t.orgId, t.producerRunId),
+}));
+
+/** The durable per-epoch AGGREGATE disposition (S2 owns the repair-side aggregate:
+ * approved / changes_requested / rejected / partially_approved). One per epoch. */
+export const lifecycleBatchDisposition = cinatraSchema.table("lifecycle_batch_disposition", {
+  id:                text("id").primaryKey(),
+  epochId:           text("epoch_id").notNull().references(() => lifecycleBatchEpoch.id, { onDelete: "cascade" }),
+  aggregate:         text("aggregate").notNull(),
+  terminal:          boolean("terminal").notNull(),
+  effectsReleasable: boolean("effects_releasable").notNull(),
+  repairScope:       jsonb("repair_scope").notNull().default(sql`'[]'::jsonb`),
+  unionFindings:     jsonb("union_findings").notNull().default(sql`'[]'::jsonb`),
+  perTargetOutcomes: jsonb("per_target_outcomes").notNull().default(sql`'[]'::jsonb`),
+  createdAt:         timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  epochUniq: uniqueIndex("lifecycle_batch_disposition_epoch_uniq").on(t.epochId),
+}));
+
+/** The repair LINEAGE: a changes_requested request (base target + CAS witness +
+ * structured findings), the cycle-guard attempt counter, the route, and the
+ * successor gate + repaired revision the producer returns. One repair per gate. */
+export const lifecycleRepair = cinatraSchema.table("lifecycle_repair", {
+  id:                              text("id").primaryKey(),
+  lineageId:                       text("lineage_id").notNull(),
+  gateId:                          text("gate_id").notNull(),
+  orgId:                           text("org_id").notNull(),
+  producerRunId:                   text("producer_run_id"),
+  producerAgentId:                 text("producer_agent_id"),
+  baseArtifactId:                  text("base_artifact_id").notNull(),
+  baseRepresentationRevisionId:    text("base_representation_revision_id").notNull(),
+  expectedBaseRevisionId:          text("expected_base_revision_id").notNull(),
+  findings:                        jsonb("findings").notNull(),
+  continuationMode:                text("continuation_mode").notNull(),
+  continuationAddress:             text("continuation_address"),
+  attempt:                         integer("attempt").notNull(),
+  route:                           text("route").notNull(),
+  status:                          text("status").notNull().default("requested"),
+  successorGateId:                 text("successor_gate_id"),
+  successorArtifactId:             text("successor_artifact_id"),
+  successorRepresentationRevisionId: text("successor_representation_revision_id"),
+  findingOutcomes:                 jsonb("finding_outcomes"),
+  changeSummary:                   text("change_summary"),
+  idempotencyKey:                  text("idempotency_key").notNull(),
+  createdAt:                       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:                       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  gateUniq:    uniqueIndex("lifecycle_repair_gate_uniq").on(t.gateId),
+  lineageIdx:  index("lifecycle_repair_lineage_idx").on(t.lineageId),
+  statusIdx:   index("lifecycle_repair_status_idx").on(t.status, t.createdAt),
+}));
+
+/** ROUTED ADDITION — the AC-6 rejected-recommendation efficacy row (S3 computed it
+ * transiently in summarizeRecommendationEfficacy and DROPPED it). Mirrors
+ * run_selected_skill_revisions (the ACCEPTED half). */
+export const runRejectedRecommendations = cinatraSchema.table("run_rejected_recommendations", {
+  id:                   text("id").primaryKey(),
+  runId:                text("run_id").notNull(),
+  skillId:              text("skill_id").notNull(),
+  skillRevisionId:      text("skill_revision_id"),
+  recommendationSource: text("recommendation_source").notNull(),
+  recommendedRank:      integer("recommended_rank"),
+  createdAt:            timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  runSkillUniq: uniqueIndex("run_rejected_recommendations_uniq").on(t.runId, t.skillId),
+  runIdx:       index("run_rejected_recommendations_run_idx").on(t.runId),
 }));
 
 // ---------------------------------------------------------------------------

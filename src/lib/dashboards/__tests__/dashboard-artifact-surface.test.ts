@@ -1,9 +1,15 @@
-// §VIII "Dashboards as artifacts" — PURE surface unit tests (cinatra#1895).
-// Exercises the projection + the Phase-1 DUAL AUTHORIZATION on rows shaped like
-// the #1894 twin writer's output (an `objects` row of type
-// `@cinatra-ai/dashboard-artifact:dashboard` paired with its dashboards row).
-// DB-FREE: the dual-auth/liveness gates + the pointer projection are pure, so
-// the "real-surface" row shape drives them directly.
+// §VIII "Dashboards as artifacts" — PURE surface unit tests (cinatra#1895,
+// Phase-2 ACL cutover cinatra#1898). Exercises the pointer projection + the
+// Phase-2 SINGLE-GATE selection on rows shaped like the #1894 twin writer's
+// output (an `objects` row of type `@cinatra-ai/dashboard-artifact:dashboard`
+// paired with its dashboards row). DB-FREE: the projection + the
+// liveness/template selection are pure.
+//
+// Phase-2: the surface no longer AUTHORIZES. The canonical `object.read` filter
+// (applied by `listArtifacts`) is the SOLE authorization gate — a row's presence
+// in `artifactIds` already means the actor may read it. This module only projects
+// the object-gated rows and drops the ones that are not an operational surface
+// (orphaned/archived extensions, project-scope templates).
 import { describe, expect, it, vi } from "vitest";
 
 // Hermetic import of the twin writer's own object-type constant (its substrate
@@ -24,18 +30,7 @@ import {
   type DashboardArtifactRow,
 } from "@/lib/dashboards/dashboard-artifact-surface";
 import { DASHBOARD_OBJECT_TYPE } from "@/lib/dashboards/dashboard-artifact-twin-writer";
-import type { DashboardAuthzActor } from "@/lib/dashboards/authz";
 import type { ExtensionLivenessOracle } from "@cinatra-ai/dashboards/extension-dashboard-reads";
-
-// A team MEMBER of "team-growth"; org "member" (not admin); one project grant.
-const actor: DashboardAuthzActor = {
-  userId: "user-me",
-  organizationId: "org-1",
-  teamIds: ["team-growth"],
-  orgRole: "member",
-  teamRoles: {},
-  projectGrants: [{ projectId: "proj-open", effectiveRole: "write" }],
-};
 
 /** All extensions live EXCEPT a deliberately-dead package (orphan gate). */
 const isPackageLive: ExtensionLivenessOracle = (id) => id !== "@x/dead";
@@ -47,9 +42,6 @@ function row(overrides: Partial<DashboardArtifactRow>): DashboardArtifactRow {
     ownerLevel: "team",
     ownerId: "team-growth",
     organizationId: "org-1",
-    // "members" — the owner-entity's members may read (the gate intersects
-    // ownership with the dashboard row's own visibility).
-    visibility: "members",
     projectId: null,
     updatedAt: new Date("2026-07-20T12:00:00.000Z"),
     entityType: "team",
@@ -62,17 +54,8 @@ function row(overrides: Partial<DashboardArtifactRow>): DashboardArtifactRow {
   };
 }
 
-// A team dashboard the member CAN read (isMember team-growth).
+// A team dashboard the object filter admitted (present in artifactIds).
 const readable = row({ id: "dash-team", name: "Pipeline health — Q3" });
-// A personal dashboard owned by someone else — the member CANNOT read it.
-const foreign = row({
-  id: "dash-foreign",
-  name: "Someone else's board",
-  ownerLevel: "user",
-  ownerId: "user-other",
-  entityType: null,
-  entityId: null,
-});
 // An orphaned extension dashboard (its package is not live) — liveness drops it.
 const orphan = row({
   id: "dash-orphan",
@@ -146,79 +129,41 @@ describe("§VIII — the pointer projection (row → pointer)", () => {
   });
 });
 
-describe("§VIII — Phase-1 dual authorization + liveness selection", () => {
-  const allRows = [readable, foreign, orphan, template];
-  const artifactIds = new Set(allRows.map((r) => r.id));
-
-  it("keeps ONLY the dashboard both gates admit (readable + live + not a template)", () => {
+describe("§VIII — Phase-2 single-gate + liveness selection (cinatra#1898)", () => {
+  it("projects the object-gated rows, dropping only orphan + project-template", () => {
+    // artifactIds is the object.read-gated set (what listArtifacts returned) — its
+    // membership IS the authorization. The surface keeps those, minus the rows
+    // that are not an operational surface on either side.
+    const allRows = [readable, orphan, template];
     const picked = selectReadableDashboardArtifactPointers({
       rows: allRows,
-      artifactIds,
-      actor,
+      artifactIds: new Set(allRows.map((r) => r.id)),
       isPackageLive,
     });
     expect([...picked.keys()]).toEqual(["dash-team"]);
-    expect(picked.get("dash-foreign")).toBeUndefined(); // owner+project gate denies
     expect(picked.get("dash-orphan")).toBeUndefined(); // liveness gate drops
     expect(picked.get("dash-tmpl")).toBeUndefined(); // project template dropped
   });
 
-  it("never surfaces a readable dashboard that is not on the page (keyed to artifactIds)", () => {
+  it("does NOT re-authorize: a row absent from artifactIds (object filter excluded it) is dropped", () => {
+    // A dashboard the actor may NOT read is never in artifactIds — the object
+    // filter excluded it upstream — so it never reaches a pointer here.
+    const foreign = row({ id: "dash-foreign", ownerLevel: "user", ownerId: "user-other" });
+    const picked = selectReadableDashboardArtifactPointers({
+      rows: [readable, foreign],
+      artifactIds: new Set(["dash-team"]), // foreign was object-gated OUT
+      isPackageLive,
+    });
+    expect([...picked.keys()]).toEqual(["dash-team"]);
+    expect(picked.has("dash-foreign")).toBe(false);
+  });
+
+  it("never surfaces a dashboard that is not on the page (keyed to artifactIds)", () => {
     const picked = selectReadableDashboardArtifactPointers({
       rows: [readable],
       artifactIds: new Set(["some-other-artifact"]),
-      actor,
       isPackageLive,
     });
     expect(picked.size).toBe(0);
-  });
-
-  it("owner-gate proof: an OWNERS-ONLY org dashboard denies a plain member, admits an org admin", () => {
-    // visibility "owners" ⇒ only org owners/admins may read (a plain member may
-    // BE in the org but is not an owner).
-    const orgRow = row({
-      id: "dash-org",
-      ownerLevel: "organization",
-      ownerId: "org-1",
-      entityType: "organization",
-      entityId: "org-1",
-      visibility: "owners",
-    });
-    const ids = new Set(["dash-org"]);
-    // The plain member (orgRole "member") is DENIED — a members-visibility
-    // regression would wrongly admit them.
-    const asMember = selectReadableDashboardArtifactPointers({
-      rows: [orgRow],
-      artifactIds: ids,
-      actor,
-      isPackageLive,
-    });
-    expect(asMember.has("dash-org")).toBe(false);
-    // An org ADMIN (org_admin normalizes to admin) IS admitted.
-    const adminActor: DashboardAuthzActor = { ...actor, orgRole: "org_admin" };
-    const asAdmin = selectReadableDashboardArtifactPointers({
-      rows: [orgRow],
-      artifactIds: ids,
-      actor: adminActor,
-      isPackageLive,
-    });
-    expect(asAdmin.has("dash-org")).toBe(true);
-  });
-
-  it("denies a dashboard whose owner entity the actor does not belong to", () => {
-    const otherTeam = row({
-      id: "dash-other-team",
-      ownerLevel: "team",
-      ownerId: "team-secret",
-      entityType: "team",
-      entityId: "team-secret",
-    });
-    const denied = selectReadableDashboardArtifactPointers({
-      rows: [otherTeam],
-      artifactIds: new Set(["dash-other-team"]),
-      actor,
-      isPackageLive,
-    });
-    expect(denied.size).toBe(0);
   });
 });

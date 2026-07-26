@@ -5,21 +5,39 @@
  * All four code paths import THIS module — verified by integration tests
  * across all four surfaces.
  *
- * 4-level ownership doctrine: user / team / organization / workspace.
- * Visibility is a separate axis: private / owners / members.
+ * Phase-2 ACL cutover (cinatra#1898, epic #1883 §D7; owner ruling 2026-07-20
+ * "ruling 5"): a dashboard is ALWAYS visible to everyone in its scope. Access
+ * derives PURELY from scope (owner tier + project refinement) — the retired
+ * dashboard-local `{private, owners, members}` visibility vocabulary no longer
+ * participates in the decision (the `visibility` column is demoted/write-only,
+ * dropped in Phase-3 after this resolver soaks). Read = "member of the owning
+ * scope" (owner OR member); write = "owner of the owning scope". This mapping is
+ * the row projection of the SAME canonical `object.read` filter the library uses
+ * — the library/dashboard AGREEMENT is pinned by a property-style conformance
+ * test (`library-dashboard-agreement.test.ts`).
  *
- * "Owners" per owner_level:
+ * 4-level ownership doctrine: user / team / organization / workspace.
+ *
+ * "Owners" (WRITE authority) per owner_level:
  *   - user    → owner_id itself (creator)
  *   - team    → team admins (Better Auth role 'admin' in the owner team)
  *   - org     → org admins/owners (Better Auth role 'admin'|'owner' in the owner org)
  *   - workspace → workspace admins (same Better Auth role lookup, against the
  *                 workspace organization id)
  *
+ * "Members" (READ visibility) per owner_level: any member of the owning scope —
+ * the user themselves / any team member / any org member / any org member for a
+ * workspace row. A project-refined dashboard reads as "any in-scope actor" at the
+ * owner tier (canRead true) and is narrowed to project members by the project
+ * grant the callers (`requireDashboardAccess` / `filterReadableDashboards`) apply
+ * on top — matching the object filter, whose project row is org-owned+private and
+ * so admits only via the project clause.
+ *
  * Workspace-owned rows are stored at the DB layer like org-owned rows because
  * there is no dedicated `cinatra.workspaces` table. The row shape is kept so
  * workspace ownership can split when the Workspace tier lands.
  */
-import type { DashboardRow, OwnerLevel, Visibility } from "./store/schema";
+import type { DashboardRow, OwnerLevel } from "./store/schema";
 // Pure OBO scope-ceiling helper (zero-dep subpath — no transport runtime pulled).
 import {
   resourceWithinCeiling,
@@ -121,15 +139,21 @@ function isMember(row: DashboardRow, actor: DashboardActor): boolean {
 /**
  * Compute the access verdict for `actor` against `row`. The result is the
  * same regardless of which surface called (list filter, MCP handler, etc.).
+ *
+ * Phase-2 (cinatra#1898): scope-only, `visibility`-column-free. Read = owner OR
+ * member of the owning scope; write = owner. A project-refined row reads as "any
+ * in-scope actor" at the owner tier — the project grant the callers apply narrows
+ * it to project members (see the module header). This is the exact row projection
+ * of the canonical `object.read` filter over the dashboard's scope tuple.
  */
 export function resolveDashboardAccess(
   row: DashboardRow,
   actor: DashboardActor,
 ): DashboardAccess {
   // OBO scope-ceiling containment — evaluated FIRST, before the cross-org gate
-  // and every owner/member/visibility short-circuit below, so a delegated agent
-  // run cannot read/write a dashboard outside the agent's anchored scope even
-  // when the invoking user is the row's owner. Set only for agent-run OBO actors;
+  // and every owner/member short-circuit below, so a delegated agent run cannot
+  // read/write a dashboard outside the agent's anchored scope even when the
+  // invoking user is the row's owner. Set only for agent-run OBO actors;
   // undefined ⇒ no-op for human/session callers.
   if (
     actor.oboCeiling &&
@@ -143,29 +167,30 @@ export function resolveDashboardAccess(
     return { canRead: false, canWrite: false };
   }
 
+  // Project-refined rows: the object tuple is organization-owned + private +
+  // project-refined (deriveDashboardScopeTuple), so the canonical object.read
+  // filter admits it ONLY via the project clause. Mirror that here — any in-org
+  // actor passes the owner-tier read gate (canRead: true); the project GRANT that
+  // `requireDashboardAccess` / `filterReadableDashboards` apply on top is the
+  // effective read gate. WRITE stays owner-axis (the project WRITE grant those
+  // callers additionally require narrows it). Callers that do NOT apply a project
+  // grant (the MCP list/get, listDashboardsForEntity, getEntityDashboard) exclude
+  // project rows structurally, so canRead: true here never over-shares.
+  //
+  // TRUTHINESS (not `!= null`) is load-bearing: every grant/exclusion layer keys
+  // on `if (row.projectId)` (filterReadableDashboards, requireDashboardAccess
+  // step-2, getEntityDashboard, the MCP `isNull(projectId)` SQL treats '' as a
+  // value). A `project_id = ''` row (no non-empty DB constraint) must therefore
+  // NOT take this canRead:true branch — else it would skip the grant gate AND
+  // never match the object filter's project clause. Treating '' as unscoped keeps
+  // this resolver in lockstep with the grant layers and the scope-tuple mapping.
+  if (row.projectId) {
+    return { canRead: true, canWrite: isOwner(row, actor) };
+  }
+
+  // Non-project rows: scope-visible read (owner OR member), owner-only write.
+  // (User rows: member === owner, so canRead collapses to "the owning user".)
   const owner = isOwner(row, actor);
   const member = isMember(row, actor);
-
-  // User-owned rows: only the owning user can read/write — visibility ignored.
-  if (row.ownerLevel === "user") {
-    return { canRead: owner, canWrite: owner };
-  }
-
-  // For team/org/workspace, intersect ownership with visibility:
-  const visibility = row.visibility as Visibility;
-  switch (visibility) {
-    case "private":
-      // Only owners (per level) can read/write.
-      return { canRead: owner, canWrite: owner };
-    case "owners":
-      // Same as private from the kernel's perspective; semantic distinction
-      // is whether other "members" can see it exists (they cannot, in both).
-      return { canRead: owner, canWrite: owner };
-    case "members":
-      // Any member of the owner entity can read; only owners write.
-      return { canRead: owner || member, canWrite: owner };
-    default:
-      // Unknown visibility — fail closed.
-      return { canRead: false, canWrite: false };
-  }
+  return { canRead: owner || member, canWrite: owner };
 }

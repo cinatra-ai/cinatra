@@ -282,14 +282,15 @@ function getDefaultStore(): BlogPostsStore {
 
 function revalidateBlogPostPaths(_projectIds: string[] = [], _postIds: Array<{ projectId: string; postId: string }> = []) {
   // The blog operator surface lives on the blog-content-workflow extension's
-  // dashboard at `/dashboards/{id}`. Without an actor in scope here we can't
-  // resolve the specific row id synchronously, so we revalidate the dashboard
-  // INDEX (catches the dashboard list page + any same-org operator viewing
-  // /dashboards). Per-row revalidation is the caller's responsibility when
-  // it has the actor (e.g. `generation.ts` resolves via
+  // dashboard, discoverable under `/artifacts` (the workspace-wide `/dashboards`
+  // directory page was retired with no redirect — cinatra#2058). Without an
+  // actor in scope here we can't resolve the specific dashboard-detail row id
+  // synchronously, so we revalidate the `/artifacts` surface (catches the
+  // artifacts list + any same-org operator viewing it). Per-row revalidation of
+  // the preserved `/dashboards/{id}` detail route is the caller's responsibility
+  // when it has the actor (e.g. `generation.ts` resolves via
   // `resolveBlogDashboardUrl(actor, projectId)`).
   safeRevalidatePath("/artifacts");
-  safeRevalidatePath("/dashboards");
 }
 
 // Canonical-backed read. Lists all blog project, idea, and post rows from

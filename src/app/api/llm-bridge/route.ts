@@ -33,6 +33,8 @@ import {
   incrementSkillInvocation,
   type SkillKind,
 } from "@/lib/agent-run-skills-used";
+import { readRunSelectedSkillRevisions } from "@/lib/run-selected-skill-revisions";
+import { resolveRunSkillDelivery } from "@cinatra-ai/skills/recommendation";
 import {
   readAgentRunByContextId,
   readAgentRunById,
@@ -1245,6 +1247,31 @@ export async function POST(req: Request): Promise<Response> {
       typeof runForPorts?.runBy === "string" && runForPorts.runBy.length > 0
         ? runForPorts.runBy
         : undefined;
+    // S3 (cinatra#2041, epic #2037): read the AUTHORITATIVE per-run selected
+    // skill-revision set for the vetted run FIRST. When a set exists (Point R
+    // confirmed / headless auto-applied), the bridge delivers FROM IT and never
+    // recomputes the agent-wide assignment; with no set (or an unattributable
+    // call with no vetted run), delivery falls back to today's computed
+    // assignment — behavior unchanged. Only the server-vetted `runForPorts.id`
+    // keys the set (never a caller-supplied id).
+    //
+    // BEST-EFFORT (matches the execution-start read in
+    // packages/agents/src/execution.ts, and the store's own contract: "throws
+    // only on a genuine DB error, which the caller wraps"): a selection-read
+    // failure must never fail the bridge request — it falls back to today's
+    // computed assignment (empty set ⇒ no override), behavior unchanged.
+    let runSelectedSet: ReturnType<typeof readRunSelectedSkillRevisions> = [];
+    if (runForPorts?.id) {
+      try {
+        runSelectedSet = readRunSelectedSkillRevisions(runForPorts.id);
+      } catch (err) {
+        console.warn(
+          `[llm-bridge] selected-skill-revision read failed for run ${runForPorts.id}:`,
+          err instanceof Error ? err.message : String(err),
+        );
+        runSelectedSet = [];
+      }
+    }
     const [personalSkill, assignedSkillIds] = body.agent_id
       ? await Promise.all([
           getCustomSkillForCurrentUserAndAgent(
@@ -1264,8 +1291,11 @@ export async function POST(req: Request): Promise<Response> {
           // Derived lazily inside this Promise.all member so the membership
           // expansion runs CONCURRENTLY with the personal-delta lookup above.
           // Actor present ⇒ scope-aware resolution; absent (fail-closed) ⇒ the
-          // exact actor-less call delivered today (arity preserved).
+          // exact actor-less call delivered today (arity preserved). S3: when an
+          // authoritative selection set exists, SKIP the recompute entirely —
+          // the bridge never recomputes when a set exists.
           (async () => {
+            if (runSelectedSet.length > 0) return [] as string[];
             const assignedSkillsActor =
               await resolveAssignedSkillsActorForRun(runForPorts);
             return assignedSkillsActor
@@ -1274,6 +1304,12 @@ export async function POST(req: Request): Promise<Response> {
           })(),
         ])
       : [null, [] as string[]];
+    // The single set-vs-computed delivery seam (shared with the execution
+    // snapshot). Selected set wins; else the computed assignment.
+    const { skillIds: deliverySkillIds } = resolveRunSkillDelivery({
+      selectedSet: runSelectedSet,
+      computedAssignedIds: assignedSkillIds,
+    });
 
     // Provider dispatch overrides.
     // When kind === "dispatch", the helper picked an explicit
@@ -1564,7 +1600,9 @@ export async function POST(req: Request): Promise<Response> {
         runtime: resolvedRuntime,
         model: body.model_id,
         declaredToolboxIds: mcpToolboxIds,
-        skillIds: assignedSkillIds,
+        // S3 (cinatra#2041): the authoritative per-run selection set when one
+        // exists, else the computed assignment (resolved above).
+        skillIds: deliverySkillIds,
         // This is the general selectable path (WayFlow
         // ApiNodes / Python containers; any admin-selected provider incl.
         // Anthropic). The recommendation agent may resolve >8 skills here, so

@@ -19,7 +19,7 @@ fi
 # Batch groupings — HITL fixtures grouped together so the dev server is
 # fresh when driving multi-gate flows. Non-HITL fixtures bundled in
 # subsequent batches since they're faster.
-BATCH1_FILTER="@cinatra-ai/(skill-recommender-agent|trigger-agent)"
+BATCH1_FILTER="@cinatra-ai/(trigger-agent)"
 BATCH2_FILTER="@cinatra-ai/(web-scrape-agent|web-research-agent|media-feed-lister-agent|media-transcript-agent)"
 BATCH3_FILTER="@cinatra-ai/(blog-idea-generator-agent|blog-draft-writer-agent|blog-image-prompt-agent)"
 BATCH4_FILTER="@cinatra-ai/(company-discovery-agent|contact-discovery-agent|planner-agent)"

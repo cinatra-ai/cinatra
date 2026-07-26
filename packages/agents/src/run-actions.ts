@@ -30,6 +30,10 @@ import {
 import type { TriggerType } from "./trigger-store";
 import { readRunTriggerByRunId } from "./trigger-store";
 import { markTriggerReleased } from "./trigger-gate";
+import {
+  maybeHoldRunForRecommendation,
+  readRecommendationParkForRun,
+} from "./recommendation-hold";
 
 export type TriggerAgentRunArgs = {
   runId: string;
@@ -82,6 +86,44 @@ export async function triggerAgentRun(
     return { ok: false, error: "template mismatch" };
   }
 
+  // 5b. Run-start recommendation HOLD (cinatra#2067, epic #2037 C3). A
+  //     human-present run parks at the recommendation interception until the
+  //     chip-row confirm/adjust/skip decision releases it. If a live park
+  //     already exists, the run is awaiting that decision — the Run button must
+  //     not re-dispatch (the run view shows the chip-row instead). If no
+  //     decision yet AND the checkpoint fires with candidates, park now and
+  //     return ok WITHOUT dispatching (the run stays pending_input; the run
+  //     view renders the chip-row). Best-effort: any failure fails OPEN to a
+  //     normal dispatch — a recommendation hold must never block a run.
+  const livePark = await readRecommendationParkForRun(args.runId).catch(() => null);
+  if (livePark?.status === "parked") {
+    return { ok: true };
+  }
+  try {
+    const hold = await maybeHoldRunForRecommendation({
+      run,
+      template: {
+        packageName: template.packageName,
+        lifecycleConfig: (template as { lifecycleConfig?: string | null }).lifecycleConfig,
+      },
+    });
+    if (hold.held) {
+      // Parked — the chip-row (via confirm/skipRunRecommendationAction) releases
+      // it and dispatches. Do NOT transition or enqueue here.
+      return { ok: true };
+    }
+  } catch (err) {
+    // The run id is a request-controlled value; keep it OUT of the console
+    // format-string position (pass it as a discrete argument) so a `%`-bearing
+    // id can never be interpreted as a util.format specifier (CodeQL
+    // js/tainted-format-string).
+    console.warn(
+      "[triggerAgentRun] recommendation hold evaluation failed for run",
+      args.runId,
+      "— dispatching normally:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
   // Owner's member session grounds both the dispatch and its compensation.
   const authority = await verifySessionAuthority(userId, run.orgId);
 
@@ -180,6 +222,8 @@ export async function createPendingRunForZeroInputTemplate(
     runBy: userId,
     inputParams: {},
     orgId,
+    // Interactive UI/chat run-start → human-present (cinatra#2067).
+    humanPresent: true,
   });
 
   return { ok: true, runId: created.id };
@@ -200,8 +244,32 @@ async function createAndTriggerRunCore(
     runBy: userId,
     inputParams: {},
     orgId,
+    // Interactive UI/chat run-start → human-present (cinatra#2067). This run may
+    // park at the recommendation chip-row before it dispatches.
+    humanPresent: true,
   });
 
+  // Run-start recommendation HOLD (cinatra#2067). A human-present run parks at
+  // the recommendation interception before dispatch; the chip-row decision
+  // releases it. Best-effort — a hold failure fails OPEN to normal dispatch.
+  try {
+    const hold = await maybeHoldRunForRecommendation({
+      run: created,
+      template: {
+        packageName: template.packageName,
+        lifecycleConfig: (template as { lifecycleConfig?: string | null }).lifecycleConfig,
+      },
+    });
+    if (hold.held) {
+      // Parked — do NOT transition/enqueue. The run view shows the chip-row.
+      return { ok: true, runId: created.id };
+    }
+  } catch (err) {
+    console.warn(
+      `[createAndTriggerRun] recommendation hold evaluation failed for run ${created.id}; dispatching normally:`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
   // The caller-resolved member session (same userId/orgId the run is created
   // under) grounds both the dispatch and its compensation revert.
   const authority = await verifySessionAuthority(userId, orgId);
@@ -511,6 +579,8 @@ export async function startDevChildPreviewRun(
     runBy: userId,
     inputParams: {},
     orgId,
+    // Dev Stepper preview is an interactive, present-human run (cinatra#2067).
+    humanPresent: true,
   });
 
   const authority = await verifySessionAuthority(userId, orgId);

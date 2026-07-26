@@ -61,6 +61,39 @@ export function isDashboardContributionCarrierKind(kind: unknown): kind is Dashb
   return typeof kind === "string" && (DASHBOARD_CONTRIBUTION_CARRIER_KINDS as readonly string[]).includes(kind);
 }
 
+/** Plain-object guard (leaf-local; mirrors the generator's `isObj`). */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+/**
+ * Resolve the RAW `cinatra.dashboardContribution` pass-through a normalized
+ * extension record carries, given the package's `cinatra.kind` and its whole
+ * `cinatra` manifest block. CARRIER-KIND GATED: only `kind:"artifact"` (the sole
+ * allowlisted carrier — {@link isDashboardContributionCarrierKind}) may author the
+ * claim, so any other kind resolves to `null` even if a stray
+ * `cinatra.dashboardContribution` is present; an artifact pack that declares a
+ * non-object (or nothing) resolves to `null` too.
+ *
+ * THE SINGLE SOURCE OF TRUTH for the emission gate, shared by BOTH build paths so
+ * they can never drift (identical layering to
+ * {@link resolveExecutionEnvironmentClaim} in `./execution-environment`): the
+ * BUILD-TIME generator (`scripts/extensions/generate-extension-manifest.mjs`, which
+ * keeps a byte-mirror copy pinned by a parity test) AND the RUNTIME package loader
+ * (`./runtime-loader`, so a MARKETPLACE-INSTALLED meaning pack surfaces the same
+ * claim on its store record). The value is carried UNVALIDATED — the host parses it
+ * FAIL-CLOSED + field-tolerantly via {@link parseDashboardContribution} at
+ * consumption (never a looser runtime parse); this resolver only pins WHICH kind
+ * may carry a claim and that the carried value is an object.
+ */
+export function resolveDashboardContributionClaim(
+  kind: unknown,
+  cin: { dashboardContribution?: unknown } | null | undefined,
+): Record<string, unknown> | null {
+  if (!isDashboardContributionCarrierKind(kind)) return null;
+  return isPlainObject(cin?.dashboardContribution) ? cin.dashboardContribution : null;
+}
+
 /**
  * Author-local contribution KEY grammar: strict lowercase kebab (a leading alnum
  * segment, hyphen-joined alnum segments) — the SAME slug grammar the registry

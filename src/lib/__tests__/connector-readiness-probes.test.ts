@@ -41,6 +41,19 @@ vi.mock("@cinatra-ai/google-oauth-connection", () => ({
 vi.mock("@/lib/widget-auth-provider", () => ({
   resolveWordPressWidgetAuth: vi.fn(async () => null),
 }));
+// cinatra#2073: Twenty + Plane are WORKSPACE-scoped connectors. Their readiness
+// signals are HOST-owned and workspace-scoped — the Twenty instance-global
+// external-MCP singleton and the Plane instance-global connector-config row —
+// so the probes NEVER consult the viewer's personal Nango scope. Mocked here so
+// each test drives the workspace connection state directly and the heavy
+// external-mcp-registry import stays out of this unit.
+vi.mock("@/lib/external-mcp-registry", () => ({
+  TWENTY_WORKSPACE_ROW_ID: "twenty-workspace",
+  getExternalMcpServerById: vi.fn(() => null),
+}));
+vi.mock("@/lib/database", () => ({
+  readConnectorConfigFromDatabase: vi.fn((): unknown => null),
+}));
 
 // Manifest-resolved connector modules — the probe consumes each module's
 // status export through the generated entry-module map.
@@ -62,6 +75,8 @@ import {
   listConnectorRegistryEntries,
 } from "@/lib/connectors-registry.server";
 import { resolveWordPressWidgetAuth } from "@/lib/widget-auth-provider";
+import { getExternalMcpServerById } from "@/lib/external-mcp-registry";
+import { readConnectorConfigFromDatabase } from "@/lib/database";
 
 const CTX = { userId: "user-1" };
 
@@ -126,6 +141,61 @@ describe("built-in connector readiness probes", () => {
     // connector not installed / no unique trusted owner (resolver null) → not connected
     mocked.mockResolvedValueOnce(null);
     await expect(wp!.readinessProbe(CTX)).resolves.toEqual({ connected: false });
+  });
+
+  // cinatra#2073: WORKSPACE-scoped connectors resolve the grid badge from the
+  // scope the connection actually lives in — an instance-global workspace row —
+  // NOT the viewer's personal Nango scope. These behavioral cases pin AC1 (a
+  // healthy workspace connection → Connected even when the viewer has no
+  // personal connection row) and AC2 (no connection in any applicable scope →
+  // Not connected).
+  it("Twenty (workspace-scoped) is Connected from the workspace row, ignoring personal scope (AC1)", async () => {
+    const twenty = getConnectorRegistryEntryBySlug("twenty-connector");
+    expect(twenty).toBeDefined();
+    const mocked = vi.mocked(getExternalMcpServerById);
+    const row = (over: Record<string, unknown>) =>
+      ({
+        id: "twenty-workspace",
+        scope: "workspace",
+        enabled: true,
+        nangoConnectionId: "twenty-workspace-conn",
+        ...over,
+      }) as unknown as ReturnType<typeof getExternalMcpServerById>;
+
+    // Enabled + healthy instance-global WORKSPACE row → Connected, even for a
+    // viewer whose PERSONAL scope holds no connection row (userId: null, and the
+    // probe never reads userId at all).
+    mocked.mockReturnValueOnce(row({}));
+    await expect(twenty!.readinessProbe({ userId: null })).resolves.toEqual({ connected: true });
+
+    // No workspace row → Not connected (AC2).
+    mocked.mockReturnValueOnce(null);
+    await expect(twenty!.readinessProbe(CTX)).resolves.toEqual({ connected: false });
+
+    // A disabled workspace row → Not connected.
+    mocked.mockReturnValueOnce(row({ enabled: false }));
+    await expect(twenty!.readinessProbe(CTX)).resolves.toEqual({ connected: false });
+
+    // FAIL-CLOSED (codex): a spoofed PERSONAL row squatting the fixed id must
+    // NOT light the workspace badge, even when enabled + connection-bound.
+    mocked.mockReturnValueOnce(row({ scope: "user", userId: "attacker" }));
+    await expect(twenty!.readinessProbe({ userId: null })).resolves.toEqual({ connected: false });
+  });
+
+  it("Plane (workspace-scoped) is Connected from the connector-config row, ignoring personal scope (AC1/AC2)", async () => {
+    const plane = getConnectorRegistryEntryBySlug("plane-connector");
+    expect(plane).toBeDefined();
+    const mocked = vi.mocked(readConnectorConfigFromDatabase);
+
+    // A persisted instance-global connector-config row (the same signal the
+    // Plane setup page reflects) → Connected regardless of the viewer's
+    // personal scope.
+    mocked.mockReturnValueOnce({ instanceId: "plane-workspace" });
+    await expect(plane!.readinessProbe({ userId: null })).resolves.toEqual({ connected: true });
+
+    // No configured Plane instance → Not connected (AC2).
+    mocked.mockReturnValueOnce(null);
+    await expect(plane!.readinessProbe(CTX)).resolves.toEqual({ connected: false });
   });
 
   it("every registry entry carries a manifest-resolved vendor + setup href", () => {

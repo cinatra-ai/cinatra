@@ -187,6 +187,19 @@ const SYSTEM_JOBS = new Set<string>([
   // to admins.
   "unbound-output-derive",
   "unbound-output-derive-sweep",
+  // Artifact-review resume-delivery drain (cinatra#1796): a boot-seeded system
+  // loop that delivers committed review decisions to their paused runs. Silent
+  // on success; an unexpected cycle failure fans out to admins.
+  "artifact-review-resume-delivery",
+  // Lifecycle review-orchestration + gate-maintenance loops (cinatra#2039,
+  // epic #2037 S1). Boot-seeded ONLY when the S1 activation fence is on
+  // (CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION); canonical-id re-delay. The
+  // orchestration loop drains the PENDING ArtifactProduced outbox into review
+  // gates; the maintenance loop applies reject tombstones and expires due
+  // gates. Both are system-initiated (no user initiator). Silent on success;
+  // an unexpected cycle failure fans out to admins.
+  "lifecycle-review-orchestration",
+  "lifecycle-gate-maintenance",
 ]);
 
 // `started` is included so worker.on("active") can resolve a recipient for

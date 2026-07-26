@@ -1,10 +1,11 @@
 /**
- * cinatra#1905 source locks: the four owner-answering ScopeBadge mounts pass
- * a resolved `ownerName` (project detail, project settings, dashboards list,
- * dashboard detail) — and the two deliberately-excluded mounts do NOT (grant
- * principals show grant subjects, not owners; skill levels have no owning
- * entity). The dashboards mounts have no render tests, so these pins keep
- * the wiring from silently regressing.
+ * cinatra#1905 source locks: the owner-answering ScopeBadge mounts pass a
+ * resolved `ownerName` (project detail, project settings, dashboard detail) —
+ * and the two deliberately-excluded mounts do NOT (grant principals show grant
+ * subjects, not owners; skill levels have no owning entity). The dashboards-list
+ * mount was dropped when the workspace-wide `/dashboards` directory page was
+ * retired (cinatra#2058); the surviving mounts have no render tests, so these
+ * pins keep the wiring from silently regressing.
  */
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
@@ -12,11 +13,10 @@ import { describe, it, expect } from "vitest";
 const read = (p: string) => readFileSync(p, "utf-8");
 
 describe("ScopeBadge owner-name wiring (#1905)", () => {
-  it("project detail, project settings, dashboards list and dashboard detail pass ownerName", () => {
+  it("project detail, project settings and dashboard detail pass ownerName", () => {
     for (const path of [
       "src/app/projects/[projectId]/page.tsx",
       "src/app/projects/[projectId]/settings/page.tsx",
-      "src/app/dashboards/page.tsx",
       "src/app/dashboards/[id]/dashboard-detail-screen.tsx",
     ]) {
       const source = read(path);

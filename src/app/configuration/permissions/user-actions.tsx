@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Eye, Pencil, Trash2, UserRoundCog } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,6 +24,7 @@ export function UserActions(props: {
   currentUserId: string;
   canImpersonate: boolean;
 }) {
+  const router = useRouter();
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const isCurrentUser = props.userId === props.currentUserId;
@@ -38,6 +39,29 @@ export function UserActions(props: {
         return;
       }
       window.location.href = "/";
+    });
+  }
+
+  // Deletion goes through the result-returning server action so a REFUSAL (the
+  // extension-owned / builtin / self guards, cinatra#1880 W5 AC#3) renders its
+  // directing message inline — a thrown Server Action error is digest-masked in
+  // production. The server action is the enforcement point; this only surfaces
+  // the message it returns.
+  function handleDelete() {
+    setErrorMessage(null);
+    startTransition(async () => {
+      const fd = new FormData();
+      fd.set("userId", props.userId);
+      try {
+        const result = await deleteUserAction(fd);
+        if (!result.ok) {
+          setErrorMessage(result.error);
+          return;
+        }
+        router.refresh();
+      } catch {
+        setErrorMessage("Could not delete the user. Please try again.");
+      }
     });
   }
 
@@ -91,10 +115,9 @@ export function UserActions(props: {
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <form action={deleteUserAction}>
-                <Input type="hidden" name="userId" value={props.userId} />
-                <AlertDialogAction type="submit">Delete user</AlertDialogAction>
-              </form>
+              <AlertDialogAction type="button" disabled={isPending} onClick={handleDelete}>
+                Delete user
+              </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>

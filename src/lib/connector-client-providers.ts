@@ -391,6 +391,47 @@ export function resolveWordPressInstanceAdmin(): WordPressInstanceAdminClient | 
   );
 }
 
+/**
+ * Vendor-neutral enumeration of every MCP endpoint URL a managed connector
+ * instance owns (cinatra#2015 S0 managed-endpoint containment). The host
+ * publishes ONE merged service object on the wordpress-mcp capability id —
+ * the typed admin-client members plus the host-side endpoint resolvers
+ * (`resolveEndpoint` pretty form, `resolveServerUrl` query-string form; see
+ * register-host-connector-services.ts) — so the resolvers are probed
+ * structurally off the same resolution instead of importing vendor modules
+ * into consumers (vendor-token-core-gate: core owns mechanism, not vendor
+ * code). Returns BOTH URL forms per instance; extend per managed CMS as more
+ * managed MCP surfaces appear. Never throws — enumeration failure degrades to
+ * an empty list (the consumer's containment simply protects fewer endpoints
+ * this process).
+ */
+export function listManagedExternalMcpEndpointUrls(): string[] {
+  const out: string[] = [];
+  try {
+    const admin = resolveWordPressInstanceAdmin();
+    if (!admin) return out;
+    const svc = admin as unknown as {
+      resolveEndpoint?: (siteUrl: string) => string;
+      resolveServerUrl?: (siteUrl: string) => string;
+    };
+    const resolvers = [svc.resolveEndpoint, svc.resolveServerUrl].filter(
+      (fn): fn is (siteUrl: string) => string => typeof fn === "function",
+    );
+    if (resolvers.length === 0) return out;
+    for (const instance of admin.listInstances()) {
+      const siteUrl = (instance as { siteUrl?: unknown }).siteUrl;
+      if (typeof siteUrl !== "string" || siteUrl === "") continue;
+      for (const resolve of resolvers) out.push(resolve(siteUrl));
+    }
+  } catch (err) {
+    console.warn(
+      "[connector-client-providers] managed MCP endpoint enumeration failed",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+  return out;
+}
+
 /** Fail-loud resolution for the surfaces that cannot proceed without the
  * WordPress client (the admin save action, the nango materializer, the blog
  * publish/status/delete flows, the host wordpress-mcp delegation). */

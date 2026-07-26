@@ -6,16 +6,13 @@ import { eq, sql } from "drizzle-orm";
 import { Settings } from "lucide-react";
 
 import * as authSession from "@/lib/auth-session";
-const { requireAuthSession } = authSession;
+const { getActorContext, requireActorContext } = authSession;
 import { projectsDb, projects } from "@/lib/projects-store";
 import { betterAuthDb } from "@/lib/better-auth-db";
 import { readOwnerDisplayName } from "@/lib/owner-display-names";
-import { readProjectCoOwners } from "@/lib/project-co-owners-store";
 import { CrumbContributions } from "@/components/crumb-contributions";
-import { actorFromSession } from "@/lib/authz/build-actor-context";
-import { enforceResourceAccess } from "@/lib/authz/enforce-resource-access";
+import { actorHoldsProjectGrant } from "@/lib/authz/project-read-gate";
 import { AuthzError } from "@/lib/authz/errors";
-import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 
 import { buildProjectOverviewConfig } from "@cinatra-ai/dashboards/overview-config";
 import {
@@ -61,21 +58,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       .limit(1);
     const project = rows[0];
     if (!project) return { title: "Project" };
-    const actor = actorFromSession(session);
-    const coOwners = await readProjectCoOwners(project.id);
-    await enforceResourceAccess(
-      {
-        resourceType: "project",
-        resourceId: project.id,
-        organizationId: project.organizationId,
-        ownerLevel: normalizeOwnerLevel(project.ownerLevel),
-        ownerId: project.ownerId,
-        visibility: null,
-        coOwnerUserIds: coOwners.map((c) => c.userId),
-      },
-      actor,
-      "project.read",
-    );
+    // Sealed-room read gate (#1898): the caller must hold a resolved project
+    // grant for THIS project. `getActorContext` resolves the canonical
+    // `projectGrants` axis (owned ∪ accessed) via `readProjectGrantsForUser`.
+    const actor = await getActorContext();
+    if (!actor || !actorHoldsProjectGrant(actor, project.id)) {
+      return { title: "Project" };
+    }
     return { title: project.name };
   } catch {
     return { title: "Project" };
@@ -131,7 +120,7 @@ function assertOwnerLevel(value: string): ScopeLevel {
 }
 
 export default async function ProjectDetailPage({ params }: Props) {
-  const session = await requireAuthSession();
+  const actor = await requireActorContext();
   const { projectId } = await params;
 
   // (1) Load the project row. `archived_at` lives outside the Drizzle
@@ -152,29 +141,19 @@ export default async function ProjectDetailPage({ params }: Props) {
   `);
   const archivedAt = archivedResult.rows[0]?.archived_at ?? null;
 
-  // (2) Read gate. Grants are resolved on the actor inside
-  // `enforceResourceAccess` via the kernel's membership lookup; passing the
-  // resource envelope is sufficient.
-  const actor = actorFromSession(session);
-  const userId = actor.userId!;
-  const coOwners = await readProjectCoOwners(project.id);
-  try {
-    await enforceResourceAccess(
-      {
-        resourceType: "project",
-        resourceId: project.id,
-        organizationId: project.organizationId,
-        ownerLevel: normalizeOwnerLevel(project.ownerLevel),
-        ownerId: project.ownerId,
-        visibility: null,
-        coOwnerUserIds: coOwners.map((c) => c.userId),
-      },
-      actor,
-      "project.read",
-    );
-  } catch (err) {
-    if (err instanceof AuthzError) notFound();
-    throw err;
+  // (2) Sealed-room read gate (#1898). Access is N:M via `project_access`; the
+  // actor must hold a resolved project grant for THIS project (owned ∪
+  // accessed). `requireActorContext` populates the canonical `projectGrants`
+  // axis via `readProjectGrantsForUser` (Source 1 implicit-owned incl.
+  // org-owned member read, Source 2 explicit user/team/org grants, Source 3
+  // co-owner). 404-hide on a miss so existence is never leaked. This is the
+  // SAME resolved-grant source the `/dashboards` tab route, the `/projects`
+  // cube, and the `/artifacts` project dashboard gate on — NOT the kernel
+  // `can(project.read)` path, whose `member` role would grant blanket org-wide
+  // read and defeat the sealed room.
+  const userId = actor.principalId;
+  if (!actorHoldsProjectGrant(actor, project.id)) {
+    notFound();
   }
 
   const ownerLevel = assertOwnerLevel(project.ownerLevel);

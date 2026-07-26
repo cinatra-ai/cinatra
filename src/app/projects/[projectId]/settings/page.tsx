@@ -3,16 +3,15 @@ import { notFound } from "next/navigation";
 import { sql } from "drizzle-orm";
 
 import * as authSession from "@/lib/auth-session";
-const { requireAuthSession } = authSession;
-import { actorFromSession } from "@/lib/authz/build-actor-context";
-import { enforceResourceAccess } from "@/lib/authz/enforce-resource-access";
+const { requireAuthSession, getActorContext, requireActorContext } = authSession;
+import { actorHoldsProjectGrant } from "@/lib/authz/project-read-gate";
 import { AuthzError } from "@/lib/authz/errors";
-import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 // Re-exported from `@/lib/projects-store` so tests that mock the
 // surface keep working (see settings-page.test.tsx).
 import { projectsDb, readProjectById, readProjectCoOwners } from "@/lib/projects-store";
 import { readOwnerDisplayName } from "@/lib/owner-display-names";
 import { CrumbContributions } from "@/components/crumb-contributions";
+import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
@@ -46,23 +45,14 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     // Non-throwing session read (see the detail page's generateMetadata).
     const session = await authSession.getAuthSession();
     if (!session) return { title: "Project settings" };
-    const actor = actorFromSession(session);
     const project = await readProjectById(projectId);
     if (!project) return { title: "Project settings" };
-    const coOwners = await readProjectCoOwners(project.id);
-    await enforceResourceAccess(
-      {
-        resourceType: "project",
-        resourceId: project.id,
-        organizationId: project.organizationId,
-        ownerLevel: normalizeOwnerLevel(project.ownerLevel),
-        ownerId: project.ownerId,
-        visibility: null,
-        coOwnerUserIds: coOwners.map((c) => c.userId),
-      },
-      actor,
-      "project.read",
-    );
+    // Sealed-room read gate (#1898) — repeats the page's own project-grant
+    // gate before disclosing the project name (see the detail page).
+    const actor = await getActorContext();
+    if (!actor || !actorHoldsProjectGrant(actor, project.id)) {
+      return { title: "Project settings" };
+    }
     return { title: `Project settings — ${project.name}` };
   } catch {
     return { title: "Project settings" };
@@ -97,9 +87,11 @@ function assertOwnerLevel(value: string): ScopeLevel {
 export default async function ProjectSettingsPage({ params }: Props) {
   const [{ projectId }] = await Promise.all([params]);
 
+  // `session` is retained for the platform-admin probe below; `actor` carries
+  // the canonical resolved `projectGrants` axis for the read gate.
   const session = await requireAuthSession();
-  const actor = actorFromSession(session);
-  const userId = actor.userId!;
+  const actor = await requireActorContext();
+  const userId = actor.principalId;
   const orgId = actor.organizationId ?? null;
 
   const project = await readProjectById(projectId);
@@ -107,25 +99,12 @@ export default async function ProjectSettingsPage({ params }: Props) {
 
   const coOwners = await readProjectCoOwners(project.id);
 
-  // 404-hide on ACL miss — never reveal existence to actors lacking access.
-  try {
-    await enforceResourceAccess(
-      {
-        resourceType: "project",
-        resourceId: project.id,
-        // row tenant id, not actor's. See projects/[projectId]/page.tsx.
-        organizationId: project.organizationId,
-        ownerLevel: normalizeOwnerLevel(project.ownerLevel),
-        ownerId: project.ownerId,
-        visibility: null,
-        coOwnerUserIds: coOwners.map((c) => c.userId),
-      },
-      actor,
-      "project.read",
-    );
-  } catch (err) {
-    if (err instanceof AuthzError) notFound();
-    throw err;
+  // Sealed-room read gate (#1898): the actor must hold a resolved project grant
+  // (owned ∪ accessed) for THIS project — the SAME `readProjectGrantsForUser`
+  // source the detail page and the other project surfaces gate on. 404-hide on
+  // a miss so existence is never leaked to an actor lacking access.
+  if (!actorHoldsProjectGrant(actor, project.id)) {
+    notFound();
   }
 
   const ownerLevel = assertOwnerLevel(project.ownerLevel);
@@ -214,7 +193,8 @@ export default async function ProjectSettingsPage({ params }: Props) {
         ]}
       />
       <PageHeader
-        title={`Project settings — ${project.name}`}
+        label="Project"
+        title={project.name}
         description="Choose who can access this project and manage its owners."
         actions={
           <div className="flex items-center gap-2">
@@ -235,6 +215,13 @@ export default async function ProjectSettingsPage({ params }: Props) {
         divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
+        {/* The entity-page tablist: this Settings pane is the second tab (spec
+            §IX); Dashboards is the first, at the sibling scope route. */}
+        <EntityScopeTabs
+          dashboardsHref={`/projects/${encodeURIComponent(project.id)}/dashboards`}
+          settingsHref={`/projects/${encodeURIComponent(project.id)}/settings`}
+          active="settings"
+        />
         {/* Clarify ownership vs access. */}
         <AccessVsOwnershipNote />
         <ProjectPermissionsTabClient

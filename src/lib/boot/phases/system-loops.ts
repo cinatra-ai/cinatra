@@ -364,6 +364,173 @@ export function systemLoopPhases(): BootPhase[] {
       },
     },
     {
+      name: "bind-artifact-review-gate-seam",
+      policy: "retryable",
+      run: async () => {
+        // Bind the run executor's artifact-review gate seam (cinatra#1796) to the
+        // live #2009 store, BEFORE any run can reach a marked gate. execution.ts
+        // reads this seam off globalThis (never importing the store — that would
+        // grow every locked route's reachable graph and trip the route-graph
+        // ratchet); the binder lives in the boot graph so the store rides only
+        // boot, never a route. Idempotent (last write wins).
+        const { bindArtifactReviewGateSeam } = await import(
+          "@cinatra-ai/agents/artifact-review-gate-seam"
+        );
+        bindArtifactReviewGateSeam();
+        console.log("[artifact-review-gate] gate seam bound to the #2009 store at boot");
+      },
+    },
+    {
+      name: "bind-cms-review-host-seam",
+      policy: "retryable",
+      run: async () => {
+        // Bind the `@cinatra-ai/host:cms-review` capability's runtime deps
+        // (cinatra#2043 S5) to the globalThis DI slot, BEFORE any run can reach
+        // the wordpress-mcp-connector's staged-write trigger. The capability
+        // PROVIDER is published from register-host-connector-services.ts (a
+        // route-reachable module) as a DEFERRED wrapper; the REAL deps — whose
+        // members lazy-import the heavy capture / read-back / effect-disposition
+        // stores — live in the boot-only register-cms-review-host-seam-runtime
+        // module, resolved off globalThis here so those stores ride only boot,
+        // never a route (a literal dynamic-import specifier in the seam module
+        // still grows every locked route's reachable graph and trips the
+        // route-graph ratchet — the same posture as bind-artifact-review-gate-seam
+        // above and the background-jobs-registry runner slots). UNCONDITIONAL:
+        // capability publication is fence-independent (the fence is read per-call
+        // by isReviewActive), so a fence-off host stays byte-identical while the
+        // capability is present. Idempotent (last write wins).
+        const { bindCmsReviewHostSeamRuntime } = await import(
+          "@/lib/register-cms-review-host-seam-runtime"
+        );
+        bindCmsReviewHostSeamRuntime();
+        console.log("[cms-review] host seam runtime deps bound to the S5 stores at boot");
+      },
+    },
+    {
+      name: "seed-artifact-review-resume-delivery",
+      policy: "retryable",
+      run: async () => {
+        // Seed the artifact-review resume-delivery drain (cinatra#1796, epic
+        // #1620 S13). The drain NEVER runs at boot — boot only creates this
+        // delayed job; the worker handler leases pending review-decision resume
+        // intents from the #2009 outbox (reclaiming expired `delivering` leases)
+        // and delivers each typed approve/reject payload to its paused WayFlow run
+        // via the A2A resume, self-rescheduling at ~30-second cadence via
+        // moveToDelayed. It is the AT-LEAST-ONCE delivery backstop for the
+        // exactly-once-persisted decision intent.
+        //
+        // The drain IMPLEMENTATION is registered here (boot-only graph) through
+        // the runner slot rather than imported into background-jobs-registry —
+        // same route-graph-ratchet posture as the sweep runners above: the
+        // registry sits in the LOCKED dev-perf routes' graph, so the A2A/execution
+        // drain must not be reachable (even dynamically) from it. Register BEFORE
+        // seeding so the loop never observes an empty slot on a healthy boot.
+        const { registerArtifactReviewResumeDeliveryRunner } = await import(
+          "@/lib/background-jobs-registry"
+        );
+        const { sweepArtifactReviewResumeIntents } = await import(
+          "@cinatra-ai/agents/artifact-review-resume-delivery"
+        );
+        registerArtifactReviewResumeDeliveryRunner({
+          sweep: () => sweepArtifactReviewResumeIntents(),
+        });
+        const {
+          enqueueBackgroundJob,
+          BACKGROUND_JOB_NAMES,
+          ARTIFACT_REVIEW_RESUME_DELIVERY_LOOP_JOB_ID,
+        } = await import("@/lib/background-jobs");
+        await enqueueBackgroundJob(
+          BACKGROUND_JOB_NAMES.ARTIFACT_REVIEW_RESUME_DELIVERY,
+          {},
+          {
+            jobId: ARTIFACT_REVIEW_RESUME_DELIVERY_LOOP_JOB_ID,
+            delay: 30 * 1000, // 30s
+            overwriteIfStale: true,
+            skipWorker: true,
+            inheritActorContext: false,
+          },
+        );
+        console.log(
+          "[artifact-review-resume-delivery] ~30-second resume-delivery drain scheduled (30s delay)",
+        );
+      },
+    },
+    {
+      name: "seed-lifecycle-review-orchestration",
+      policy: "retryable",
+      run: async () => {
+        // Seed the lifecycle-interceptions S1 loops (cinatra#2039, epic #2037):
+        // the ~30s review-orchestration drain (ArtifactProduced outbox → policy-
+        // matched review gates) and the ~60s gate-maintenance drain (reject
+        // tombstones, TTL expiry, checkpointed-park release). Neither runs at
+        // boot — boot only creates the delayed loop jobs.
+        //
+        // FENCED default-OFF: the whole slice is behind the S1 activation fence
+        // (CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION). When the fence is OFF (the
+        // default, and origin/main), the runner slot is NEVER registered and the
+        // loops are NEVER seeded — so no new BullMQ loop appears and the emitters
+        // (already fenced) add no outbox row. This keeps the slice INERT until an
+        // operator flips the fence on.
+        const { isLifecycleReviewOrchestrationActive } = await import(
+          "@/lib/lifecycle/lifecycle-activation"
+        );
+        if (!isLifecycleReviewOrchestrationActive()) {
+          console.log(
+            "[lifecycle-review-orchestration] S1 activation fence OFF (default) — not seeding the orchestration/maintenance loops",
+          );
+          return;
+        }
+        // The drain IMPLEMENTATIONS are registered here (boot-only graph) through
+        // the runner slot rather than imported into background-jobs-registry —
+        // same route-graph-ratchet posture as the sweep runners above: the
+        // registry sits in the LOCKED dev-perf routes' graph, so the agents
+        // gate/park/outbox + objects-store graph must not be reachable (even
+        // dynamically) from it. Register BEFORE seeding so neither loop observes
+        // an empty slot on a healthy fence-on boot.
+        const { registerLifecycleReviewRunner } = await import(
+          "@/lib/background-jobs-registry"
+        );
+        const { sweepReviewOrchestration, sweepLifecycleGateMaintenance } = await import(
+          "@cinatra-ai/agents/lifecycle-review-orchestration"
+        );
+        registerLifecycleReviewRunner({
+          orchestrate: () => sweepReviewOrchestration(),
+          maintain: () => sweepLifecycleGateMaintenance(),
+        });
+        const {
+          enqueueBackgroundJob,
+          BACKGROUND_JOB_NAMES,
+          LIFECYCLE_REVIEW_ORCHESTRATION_LOOP_JOB_ID,
+          LIFECYCLE_GATE_MAINTENANCE_LOOP_JOB_ID,
+        } = await import("@/lib/background-jobs");
+        await enqueueBackgroundJob(
+          BACKGROUND_JOB_NAMES.LIFECYCLE_REVIEW_ORCHESTRATION,
+          {},
+          {
+            jobId: LIFECYCLE_REVIEW_ORCHESTRATION_LOOP_JOB_ID,
+            delay: 30 * 1000, // 30s
+            overwriteIfStale: true,
+            skipWorker: true,
+            inheritActorContext: false,
+          },
+        );
+        await enqueueBackgroundJob(
+          BACKGROUND_JOB_NAMES.LIFECYCLE_GATE_MAINTENANCE,
+          {},
+          {
+            jobId: LIFECYCLE_GATE_MAINTENANCE_LOOP_JOB_ID,
+            delay: 60 * 1000, // 60s
+            overwriteIfStale: true,
+            skipWorker: true,
+            inheritActorContext: false,
+          },
+        );
+        console.log(
+          "[lifecycle-review-orchestration] S1 fence ON — review-orchestration (30s) + gate-maintenance (60s) loops scheduled",
+        );
+      },
+    },
+    {
       name: "eager-background-worker",
       policy: "degraded",
       run: async () => {

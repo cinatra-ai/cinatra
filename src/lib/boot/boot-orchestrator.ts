@@ -26,6 +26,7 @@ import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfi
 import { skillsCatalogRebuildPhases } from "@/lib/boot/phases/skills-catalog-rebuild";
 import { agentRuntimeDepBackfillPhases } from "@/lib/boot/phases/agent-runtime-dep-backfill";
 import { dashboardContributionReconcilePhases } from "@/lib/boot/phases/dashboard-contribution-reconcile";
+import { dashboardTemplateMaterializePhases } from "@/lib/boot/phases/dashboard-template-materialize";
 import { agentMountProjectionPhases } from "@/lib/boot/phases/agent-mount-projection";
 import { requiredEnvNotePhases } from "@/lib/boot/phases/required-env-note";
 import { userStoreMountCheckPhases } from "@/lib/boot/phases/user-store-mount-check";
@@ -170,6 +171,15 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // a legacy orphan exists AND a successor ships;
   // `retryable` (idempotent, soft-failing, kill-switchable).
   await run(dashboardContributionReconcilePhases());
+
+  // -- dashboard-template materialize (cinatra#1896 Scope 2 install trigger) -----
+  // The LIVE TRIGGER for materializeExtensionTemplate (which had no app-side caller
+  // on main). AFTER extension activation + the adoption reconcile above, so a
+  // kind:"artifact" pack shipping a form:"dashboard" template materializes its
+  // dashboard — with the paired substrate twin + the #1896 meaning assertion — on
+  // the first boot after it ships. DORMANT until such a pack is installed;
+  // `retryable` (idempotent, soft-failing, kill-switchable).
+  await run(dashboardTemplateMaterializePhases());
 
 
   // ── dev block 1 (DETACHED in the original — agents/skills scan ~18s) ─────────

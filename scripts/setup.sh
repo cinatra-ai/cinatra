@@ -216,6 +216,23 @@ info "Nango is ready."
 # own demo content from their entrypoints; Twenty + Plane content is seeded from
 # the app-side demo path once their connections converge.
 if [ "$DEMO" = "1" ]; then
+  # The `wordpress` + `drupal` profiles below ALSO bring up the shared `wayflow`
+  # runtime container (docker-compose.yml: the wayflow service declares
+  # `profiles: [wayflow, drupal, wordpress]`). That container authenticates every
+  # callback to /api/llm-bridge with CINATRA_BRIDGE_TOKEN, which it reads from the
+  # NARROW generated file docker/wayflow/.wayflow.env (its `env_file`,
+  # `required: false`). `npm run services` regenerates that file on every
+  # bring-up (gen-wayflow-env.mjs); the demo/setup path never did, so a fresh
+  # `make setup-demo` started wayflow with NO token and agent_loader.py
+  # crash-looped ("FATAL: CINATRA_BRIDGE_TOKEN is unset or empty") — widget agent
+  # replies then stayed empty until the token was populated by hand
+  # (cinatra#2075). Generate the file HERE, from the per-install random token
+  # minted into .env.local above (never a shared constant, never printed), BEFORE
+  # the bring-up. `--require-bridge-token` mirrors `npm run services` and turns a
+  # missing token into a loud, actionable failure instead of a silent 403.
+  info "Provisioning the WayFlow bridge-token env (docker/wayflow/.wayflow.env) from .env.local..."
+  node scripts/gen-wayflow-env.mjs --require-bridge-token
+
   info "Bringing up the four demo app profiles (wordpress, drupal, twenty, plane)..."
   docker compose -f docker-compose.yml -f docker-compose.dev.yml \
     --profile wordpress --profile drupal --profile twenty --profile plane up -d
@@ -237,6 +254,38 @@ if [ "$DEMO" = "1" ]; then
   wait_for_app "Drupal"    "http://localhost:8082/"         300
   wait_for_app "Twenty"    "http://localhost:3300/healthz"  300
   wait_for_app "Plane"     "http://localhost:3400/api/instances/" 420
+
+  # ── Plane automatic connect (cinatra#1238; owner ruling 2026-07-23 (groganz)) ──
+  # Plane has no headless CLI mint, so — unlike Twenty — its dev auto-connect
+  # can't just `docker exec` a keygen. Provision a dev/demo PAT over Plane's CSRF
+  # sign-in sequence (version-pinned to Plane CE 1.3.1, reuse-first, loopback +
+  # reserved-TLD creds — NOT secrets), then bring up the official Plane MCP bridge
+  # (makeplane/plane-mcp-server via mcp-proxy) holding that PAT. The provision
+  # script writes the bridge env + PLANE_MCP_URL (+ the connector's demo admin
+  # creds) into .env.local, so the connector's dev-setup hook auto-connects the
+  # connector config AND wires the MCP row at the first `pnpm dev`. NON-FATAL:
+  # a not-ready/unsupported Plane warns and continues (re-attempted next boot).
+  info "Provisioning Plane (headless dev/demo PAT mint; version-pinned to Plane CE 1.3.1)..."
+  node scripts/fixtures/provision-plane.mjs \
+    || warn "Plane provisioning reported an error (see above) — the connector re-attempts its REST auto-connect at boot; re-run \`node scripts/fixtures/provision-plane.mjs\` once Plane is healthy."
+  # Bring up the MCP bridge ONLY when a PAT was actually provisioned (the bridge
+  # crashes on boot without PLANE_API_KEY). A "skipped" provision (Plane not
+  # ready / unsupported version) writes no env file — the bridge waits for a
+  # later re-run and the connector still auto-connects its REST config.
+  if [ -f docker/plane-mcp/.plane-mcp.env ] && grep -q '^PLANE_API_KEY=.' docker/plane-mcp/.plane-mcp.env; then
+    info "Bringing up the Plane MCP bridge (--profile plane --profile plane-mcp)..."
+    # The bridge (profile `plane-mcp`) declares `depends_on: plane-api`, which
+    # lives in the `plane` profile. Activating `plane-mcp` alone leaves plane-api
+    # an undefined service, so the bridge's dependency can't resolve and it fails
+    # on the first pass (cinatra#1238 finding). Activate BOTH profiles in one set
+    # so the dependency is defined; the already-running `plane` containers from the
+    # bring-up above are left in place (up -d is a no-op for healthy services).
+    docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile plane --profile plane-mcp up -d --build \
+      || warn "Plane MCP bridge failed to start — the connector still auto-connects its REST config; re-run \`docker compose --profile plane --profile plane-mcp up -d --build\` to expose Plane tools to agents."
+  else
+    warn "Plane PAT not provisioned yet (Plane still booting or version mismatch) — skipping the MCP bridge. Re-run \`node scripts/fixtures/provision-plane.mjs\` once Plane is healthy, then \`docker compose --profile plane --profile plane-mcp up -d --build\`."
+  fi
+
   info "Demo app profiles up. Connections converge at the first \`pnpm dev\` boot."
 fi
 

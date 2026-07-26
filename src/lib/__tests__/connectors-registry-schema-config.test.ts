@@ -33,10 +33,11 @@ vi.mock("@/lib/generated/extensions.server", () => ({
       requestedHostPorts: [],
     },
     // The real catalog's schema-config conversions (openai 0.1.6; anthropic,
-    // gemini, apollo 0.1.4; apify 0.1.4): mirror them here so the parity
-    // assertion (which iterates the REAL catalog + REAL generated map) sees
-    // them exempt from needing a loader, matching the regenerated setup-pages
-    // map that no longer carries their loaders.
+    // gemini, apollo 0.1.4; apify 0.1.4; mcp-server 0.1.1 — dropped its React
+    // setup-page at pin 5c26c73c): mirror them here so the parity assertion
+    // (which iterates the REAL catalog + REAL generated map) sees them exempt
+    // from needing a loader, matching the regenerated setup-pages map that no
+    // longer carries their loaders.
     ...Object.fromEntries(
       [
         "@cinatra-ai/openai-connector",
@@ -44,6 +45,7 @@ vi.mock("@/lib/generated/extensions.server", () => ({
         "@cinatra-ai/gemini-connector",
         "@cinatra-ai/apollo-connector",
         "@cinatra-ai/apify-connector",
+        "@cinatra-ai/mcp-server-connector",
       ].map((packageName) => [
         packageName,
         {

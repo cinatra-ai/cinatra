@@ -21,8 +21,8 @@ import { rawWithParams } from "@/lib/dashboards/raw-with-params";
 import {
   DASHBOARD_OBJECT_TYPE,
   buildDashboardTwinQueries,
-  deriveConservativeVisibility,
 } from "@/lib/dashboards/dashboard-artifact-twin-writer";
+import { deriveDashboardScopeTuple } from "@/lib/dashboards/dashboard-scope-tuple";
 import type { DashboardTwinContext } from "@cinatra-ai/dashboards/twin-writer-seam";
 
 const dialect = new PgDialect();
@@ -47,19 +47,54 @@ const upsertCtx: DashboardTwinContext = {
 
 const deleteCtx: DashboardTwinContext = { ...upsertCtx, operation: "delete" };
 
-describe("twin writer — conservative visibility derivation", () => {
-  it("floors a project-scoped dashboard to private regardless of owner tier", () => {
-    expect(deriveConservativeVisibility("organization", "proj-1")).toBe("private");
-    expect(deriveConservativeVisibility("team", "proj-1")).toBe("private");
+/** An EXTENSION-materialized upsert (cinatra#1896 Scope 2): the row carries the
+ *  materializing pack in `extension_id` AND the explicit materialize mint intent,
+ *  so the twin mints the pack's meaning assertion in addition to the base writes. */
+const MEANING_PACK = "@cinatra-ai/web-analytics-dashboard-artifact";
+const extensionUpsertCtx: DashboardTwinContext = {
+  ...upsertCtx,
+  extensionId: MEANING_PACK,
+  mintMeaningAssertion: true,
+};
+/** The same extension row on a NON-materialize (lifecycle) upsert: extension_id
+ *  set but no mint intent ⇒ the base 7 writes only, no meaning assertion. */
+const lifecycleExtensionCtx: DashboardTwinContext = { ...upsertCtx, extensionId: MEANING_PACK };
+
+describe("twin writer — canonical Phase-2 scope-tuple mapping (cinatra#1898)", () => {
+  const tuple = (ownerLevel: string, projectId: string | null) =>
+    deriveDashboardScopeTuple({ ownerLevel, ownerId: "own-1", organizationId: "org-1", projectId });
+
+  it("re-owns a project-scoped dashboard to organization-owned + private (project-refined)", () => {
+    // Regardless of the underlying owner tier: the object row carries NO
+    // user/team owner clause, so the object.read filter admits it ONLY via the
+    // project clause (project membership is the gate).
+    expect(tuple("organization", "proj-1")).toEqual({
+      ownerLevel: "organization",
+      ownerId: "org-1",
+      visibility: "private",
+      projectId: "proj-1",
+    });
+    expect(tuple("team", "proj-1")).toEqual({
+      ownerLevel: "organization",
+      ownerId: "org-1",
+      visibility: "private",
+      projectId: "proj-1",
+    });
   });
-  it("maps the owner tier to its natural share axis when unscoped", () => {
-    expect(deriveConservativeVisibility("user", null)).toBe("private");
-    expect(deriveConservativeVisibility("team", null)).toBe("team");
-    expect(deriveConservativeVisibility("organization", null)).toBe("organization");
+  it("maps each owner tier to its scope-visible share axis when unscoped", () => {
+    expect(tuple("user", null).visibility).toBe("private");
+    expect(tuple("team", null).visibility).toBe("team");
+    expect(tuple("organization", null).visibility).toBe("organization");
+    // Workspace is org-local PUBLIC now (was the conservative 'private' floor).
+    expect(tuple("workspace", null).visibility).toBe("public");
   });
-  it("takes the conservative floor for workspace / unknown tiers", () => {
-    expect(deriveConservativeVisibility("workspace", null)).toBe("private");
-    expect(deriveConservativeVisibility("something-new", null)).toBe("private");
+  it("fails an unknown owner tier closed to private (no admitting clause)", () => {
+    expect(tuple("something-new", null)).toEqual({
+      ownerLevel: "something-new",
+      ownerId: "own-1",
+      visibility: "private",
+      projectId: null,
+    });
   });
 });
 
@@ -92,11 +127,12 @@ describe("twin writer — upsert query list (shape + gating)", () => {
     expect(rep.text).toContain("'dashboard'");
   });
 
-  it("objects write is a gated upsert (delta D3) copying the scope axis verbatim", () => {
+  it("objects write is a gated upsert (delta D3) stamping the canonical scope tuple", () => {
     const objects = queries.find((q) => q.text.includes(`"cinatra"."objects"`))!;
     expect(objects.text).toContain("ON CONFLICT (id) DO UPDATE SET");
     expect(objects.text).toContain("IS DISTINCT FROM EXCLUDED"); // the no-op change gate
-    // scope axis: ownerLevel/ownerId + visibility(derived team) + projectId(null)
+    // Canonical Phase-2 tuple for a team/no-project dashboard: team-owned,
+    // team-visible (ownerLevel/ownerId/visibility/projectId).
     expect(objects.values).toEqual(
       expect.arrayContaining(["team", "team-9", "team", null]),
     );
@@ -117,6 +153,47 @@ describe("twin writer — upsert query list (shape + gating)", () => {
       // No unspliced placeholder survives in the rendered SQL beyond Drizzle's own
       // renumbered $n (which the dialect produced).
       expect(typeof render(q.text, q.values).sql).toBe("string");
+    }
+  });
+});
+
+describe("twin writer — extension-materialized upsert mints the pack meaning assertion (cinatra#1896 Scope 2)", () => {
+  const base = buildDashboardTwinQueries(upsertCtx);
+  const queries = buildDashboardTwinQueries(extensionUpsertCtx);
+
+  it("appends exactly 2 classic authoring_skill assertion ops to the base 7 (archive + insert)", () => {
+    // Base (no extension_id) = 7; the meaning assertion adds the archive-UPDATE +
+    // precedence-guarded INSERT-RETURNING pair = 9.
+    expect(base).toHaveLength(7);
+    expect(queries).toHaveLength(9);
+    // A lifecycle upsert (extension_id set, no mint intent) stays at the base 7 —
+    // the narrow gate means only a materialize mints.
+    expect(buildDashboardTwinQueries(lifecycleExtensionCtx)).toHaveLength(7);
+  });
+
+  it("the INSERT is an eligible authoring_skill assertion for the materializing pack", () => {
+    const joined = queries.map((q) => q.text).join("\n---\n");
+    const values = queries.flatMap((q) => [...q.values]);
+    // The CLASSIC insert (distinct from the binding reconcile's INSERT by its
+    // column signature) names the pack as the asserting extension, authoring_skill
+    // source, targeting the twin artifact.
+    expect(joined).toContain("asserted_by, eligibility, confidence, asserted_by_principal");
+    expect(values).toContain("authoring_skill");
+    expect(values).toContain(MEANING_PACK);
+    expect(values).toContain("dash-1"); // artifact_id == dashboardId
+    expect(values).toContain("eligible");
+  });
+
+  it("the archive step is precedence-guarded and excludes binding rows", () => {
+    const joined = queries.map((q) => q.text).join("\n---\n");
+    expect(joined).toContain("assertion_basis <> 'binding'");
+    expect(joined).toContain("SET eligibility='archived'");
+  });
+
+  it("every extension-materialized query round-trips through the bridge", () => {
+    for (const q of queries) {
+      const { params } = render(q.text, q.values);
+      expect(params.every((p) => p !== undefined)).toBe(true);
     }
   });
 });

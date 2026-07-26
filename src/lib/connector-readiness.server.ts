@@ -31,6 +31,16 @@ import { resolveWordPressWidgetAuth } from "@/lib/widget-auth-provider";
 import { countExternalMcpOAuthClients } from "@/lib/better-auth-oauth-client";
 import { getGoogleOAuthStatus } from "@cinatra-ai/google-oauth-connection";
 import { loadConnectorModule } from "@/lib/connector-modules.server";
+// cinatra#2073: Twenty + Plane are WORKSPACE-scoped connectors — their
+// connection lives in an instance-global workspace row, NOT the viewer's
+// personal Nango scope. Both readiness signals are HOST-owned (the same reads
+// the connectors' own status pages reflect), so the grid badge resolves from
+// the scope the connection actually lives in.
+import {
+  getExternalMcpServerById,
+  TWENTY_WORKSPACE_ROW_ID,
+} from "@/lib/external-mcp-registry";
+import { readConnectorConfigFromDatabase } from "@/lib/database";
 import {
   registerConnectorReadinessProbe,
   type ConnectorReadiness,
@@ -133,6 +143,46 @@ const BUILT_IN_PROBES: Record<string, ConnectorReadinessProbe> = {
   "drupal-mcp-connector": async () =>
     countReadiness(resolveDrupalInstanceAdmin()?.listInstances().length ?? 0),
   "a2a-server-connector": async () => countReadiness(listSavedNangoConnections("a2aServer").length),
+  // Twenty CRM (cinatra#2073): a WORKSPACE-scoped external-MCP connector. Its
+  // connection is the instance-global `external_mcp_servers` singleton
+  // (TWENTY_WORKSPACE_ROW_ID), resolved by fixed row id — NEVER the viewer's
+  // personal scope. `enabled` + a bound Nango connection = healthy (the same
+  // signal `getTwentyConnectionState` reads for the connector's status page), so
+  // an org member with no personal connection row still sees Connected.
+  //
+  // Fail-CLOSED on scope (codex): the fixed id is NOT reserved — the generic
+  // external-MCP write handler accepts a caller-supplied `id` with a personal
+  // (`user`) scope, so a spoofed personal row named `twenty-workspace` could
+  // otherwise light the WORKSPACE badge for other viewers. Require the row be
+  // genuinely `scope === "workspace"` (what `saveTwentyConnection` always
+  // writes), so a personal row can never resolve the workspace badge.
+  "twenty-connector": async () => {
+    const row = getExternalMcpServerById(TWENTY_WORKSPACE_ROW_ID);
+    return connectedWhen(
+      row?.scope === "workspace" && row.enabled && Boolean(row.nangoConnectionId),
+    );
+  },
+  // Plane (cinatra#2073): a WORKSPACE-scoped connector whose connection is the
+  // instance-global connector-config row (encrypted PAT + workspace/project),
+  // the SAME signal its setup page reflects via `loadInstanceConfig()`. Read
+  // that row through the host connector-config store on the connector's OWN
+  // namespaced key (`<packageId>:instance` — the exact path the connector's
+  // `register(ctx)` deps bind to). The package id is DERIVED from the catalog
+  // slug via the registry (never a hardcoded extension-instance literal — the
+  // core-extension-instance-coupling-ban), so the badge stays workspace-scoped,
+  // never personal, with no cross-org fail-open.
+  "plane-connector": async () => {
+    const descriptor = getConnectorDescriptorBySlug("plane-connector");
+    if (!descriptor) return connectedWhen(false);
+    return connectedWhen(
+      Boolean(
+        readConnectorConfigFromDatabase<{ instanceId?: string } | null>(
+          `${descriptor.packageId}:instance`,
+          null,
+        ),
+      ),
+    );
+  },
   "google-oauth-connector": async () =>
     connectedWhen((await getGoogleOAuthStatus()).status === "connected"),
 };

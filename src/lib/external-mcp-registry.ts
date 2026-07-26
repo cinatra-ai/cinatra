@@ -17,6 +17,7 @@ import {
 } from "@/lib/nango-system";
 import { getMcpPublicBaseUrl } from "@cinatra-ai/mcp-server/credentials";
 import type { LlmMcpServerTool } from "@cinatra-ai/llm";
+import { listManagedExternalMcpEndpointUrls } from "@/lib/connector-client-providers";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -182,6 +183,148 @@ function q(text: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Managed-endpoint containment (cinatra#2015 S0 deliverable 3)
+//
+// Managed and BYO registrations of the same site endpoint must not coexist:
+// a BYO `external_mcp_servers` row pointed at an endpoint a managed connector
+// instance already owns would inject the same server twice (label collision at
+// best, a second credential path at worst). Every registry write refuses such
+// a row, and a once-per-process sweep disables pre-existing matches
+// (audit-warn + admin notification). BYO rows for unrelated servers are
+// untouched — this is containment, not capability-hiding.
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonicalize an MCP endpoint URL so equivalent forms compare equal:
+ * scheme+host lower-cased, default ports dropped, trailing slashes trimmed,
+ * and the WordPress query-string endpoint form
+ * (`/index.php?rest_route=/R`) folded onto its pretty-permalink twin
+ * (`/wp-json/R`). Paths stay case-sensitive. Returns null for anything that
+ * is not an absolute http(s) URL.
+ */
+export function canonicalizeMcpEndpointUrl(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  const scheme = url.protocol.slice(0, -1);
+  const host = url.hostname.toLowerCase();
+  const defaultPort = scheme === "https" ? "443" : "80";
+  const port = url.port && url.port !== defaultPort ? `:${url.port}` : "";
+  let path = url.pathname.replace(/\/+$/, "");
+  const params = new URLSearchParams(url.search);
+  const restRoute = params.get("rest_route");
+  if (restRoute && path.endsWith("/index.php")) {
+    path = `${path.slice(0, -"/index.php".length)}/wp-json${restRoute.replace(/\/+$/, "")}`;
+    params.delete("rest_route");
+  }
+  params.sort();
+  const query = params.toString();
+  return `${scheme}://${host}${port}${path}${query ? `?${query}` : ""}`;
+}
+
+export class ExternalMcpServerManagedEndpointError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ExternalMcpServerManagedEndpointError";
+  }
+}
+
+/**
+ * Canonical URLs of every endpoint a managed connector instance owns —
+ * enumerated through the vendor-neutral capability surface
+ * (`listManagedExternalMcpEndpointUrls`; both URL forms per instance
+ * canonicalize onto one key). Absent provider (extension not active) or a
+ * failed enumeration ⇒ empty set — fail-open for ENUMERATION only: a broken
+ * provider must not take the whole BYO registry down; the write-path check
+ * simply sees fewer managed endpoints and the sweep re-runs next process.
+ */
+function managedConnectorEndpointCanonicalUrls(): Set<string> {
+  const out = new Set<string>();
+  for (const endpoint of listManagedExternalMcpEndpointUrls()) {
+    const canonical = canonicalizeMcpEndpointUrl(endpoint);
+    if (canonical) out.add(canonical);
+  }
+  return out;
+}
+
+/** Refuse a BYO row targeting an endpoint a managed connector instance owns. */
+function assertNotManagedConnectorEndpoint(serverUrl: string): void {
+  const canonical = canonicalizeMcpEndpointUrl(serverUrl);
+  if (canonical === null) return; // URL validity is the callers' concern
+  if (managedConnectorEndpointCanonicalUrls().has(canonical)) {
+    throw new ExternalMcpServerManagedEndpointError(
+      "This endpoint is already managed by a connected site's connector instance — " +
+        "it cannot also be registered as an external MCP server. Manage it through the connector instead.",
+    );
+  }
+}
+
+let managedEndpointSweepDone = false;
+
+/** TEST-ONLY: re-arm the once-per-process managed-endpoint sweep so each test
+ *  exercises the fresh-sweep path deterministically (module state survives
+ *  across tests in one worker). Mirrors the `_reset*ForTests` convention. */
+export function _resetManagedEndpointSweepForTests(): void {
+  managedEndpointSweepDone = false;
+}
+
+/**
+ * Once-per-process migration sweep: disable pre-existing ENABLED rows whose
+ * canonical URL matches a managed connector endpoint. Each disabled row is
+ * audit-warned; platform admins get one notification naming the rows. Runs
+ * lazily off the first uncached list read; a failure is warned and retried on
+ * the next process, never thrown into the read path.
+ */
+function sweepManagedEndpointRows(rows: ExternalMcpServerRecord[]): void {
+  const managed = managedConnectorEndpointCanonicalUrls();
+  if (managed.size === 0) return;
+  const matches = rows.filter((row) => {
+    if (!row.enabled) return false;
+    const canonical = canonicalizeMcpEndpointUrl(row.serverUrl);
+    return canonical !== null && managed.has(canonical);
+  });
+  if (matches.length === 0) return;
+  runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `UPDATE "${q(postgresSchema)}"."external_mcp_servers" SET enabled = false, updated_at = now() WHERE id = ANY($1)`,
+        values: [matches.map((row) => row.id)],
+      },
+    ],
+  });
+  for (const row of matches) {
+    (row as { enabled: boolean }).enabled = false;
+    console.warn(
+      `[external-mcp-registry] AUDIT: disabled BYO external MCP server "${row.label}" (${row.id}) — ` +
+        `its endpoint ${row.serverUrl} is owned by a managed connector instance (cinatra#2015 S0 sweep).`,
+    );
+  }
+  // Session-less context → createNotification falls back to platform admins.
+  void import("@/lib/notifications")
+    .then(({ createNotification }) =>
+      createNotification({
+        title: "External MCP servers disabled",
+        body:
+          `${matches.length} externally registered MCP server${matches.length === 1 ? " was" : "s were"} ` +
+          `disabled because ${matches.length === 1 ? "its endpoint is" : "their endpoints are"} already ` +
+          `managed by a connected site: ${matches.map((row) => `"${row.label}"`).join(", ")}. ` +
+          "Manage those sites through their connector instead.",
+      }),
+    )
+    .catch((err) => {
+      console.warn(
+        "[external-mcp-registry] sweep notification failed",
+        err instanceof Error ? err.message : String(err),
+      );
+    });
+}
+
+// ---------------------------------------------------------------------------
 // CRUD
 // ---------------------------------------------------------------------------
 
@@ -200,6 +343,17 @@ export function listExternalMcpServers(): ExternalMcpServerRecord[] {
     ],
   });
   const rows = ((result?.rows ?? []) as RawRow[]).map(toRecord);
+  if (!managedEndpointSweepDone) {
+    managedEndpointSweepDone = true;
+    try {
+      sweepManagedEndpointRows(rows);
+    } catch (err) {
+      console.warn(
+        "[external-mcp-registry] managed-endpoint sweep failed — retried next process",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
   setCache({ rows, fetchedAt: Date.now() });
   return rows;
 }
@@ -493,6 +647,7 @@ export function resolveInjectedMcpServerUrl(
 }
 
 export function upsertExternalMcpServer(input: ExternalMcpServerUpsertInput): void {
+  assertNotManagedConnectorEndpoint(input.serverUrl);
   ensurePostgresSchema();
   runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
@@ -603,6 +758,7 @@ export type ExternalMcpServerGuard = {
  * without relying on the sync worker to propagate the pg duplicate-key code.)
  */
 export function insertExternalMcpServerStrict(input: ExternalMcpServerUpsertInput): void {
+  assertNotManagedConnectorEndpoint(input.serverUrl);
   ensurePostgresSchema();
   const [result] = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
@@ -655,6 +811,7 @@ export function updateExternalMcpServerGuarded(
   input: ExternalMcpServerUpsertInput,
   expected: ExternalMcpServerGuard,
 ): void {
+  assertNotManagedConnectorEndpoint(input.serverUrl);
   ensurePostgresSchema();
   const witnessNango = expected.nangoConnectionId !== undefined;
   const values: unknown[] = [

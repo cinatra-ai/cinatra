@@ -4,7 +4,9 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 // Role-driven blog dashboard URL resolution (cinatra#151 Stage 6): the
 // dashboard-owning extension comes from the manifest-declared
 // "blog-operator-dashboard" role; absence (reduced universes) degrades to the
-// dashboards index — never a hard-coded package name, never a throw.
+// `/artifacts` surface — never a hard-coded package name, never a throw. The
+// workspace-wide `/dashboards` directory page was retired with no redirect
+// (cinatra#2058), so the degrade target is `/artifacts`, not a dead index link.
 vi.mock("@/lib/extension-roles", () => ({
   resolveExtensionRole: vi.fn(),
 }));
@@ -53,24 +55,24 @@ describe("resolveBlogDashboardUrl — role-resolved owner", () => {
     expect(await resolveBlogDashboardUrl(actor)).toBe("/dashboards/row-blog-org");
   });
 
-  it("degrades to the dashboards index when NO present extension claims the role (reduced universe)", async () => {
+  it("degrades to the /artifacts fallback when NO present extension claims the role (reduced universe)", async () => {
     vi.mocked(resolveExtensionRole).mockReturnValue(undefined);
-    expect(await resolveBlogDashboardUrl(actor, "proj-1")).toBe("/dashboards");
+    expect(await resolveBlogDashboardUrl(actor, "proj-1")).toBe("/artifacts");
     // No row lookup needed when the role is unclaimed.
     expect(vi.mocked(listOrgDashboardRows)).not.toHaveBeenCalled();
   });
 
-  it("degrades to the dashboards index when the claimant has no materialized row", async () => {
+  it("degrades to the /artifacts fallback when the claimant has no materialized row", async () => {
     vi.mocked(resolveExtensionRole).mockReturnValue("@cinatra-ai/fixture-unmaterialized-workflow");
-    expect(await resolveBlogDashboardUrl(actor)).toBe("/dashboards");
+    expect(await resolveBlogDashboardUrl(actor)).toBe("/artifacts");
   });
 
-  it("degrades to the dashboards index when the claimant's rows are ORPHANED (reader gate, cinatra#1628)", async () => {
+  it("degrades to the /artifacts fallback when the claimant's rows are ORPHANED (reader gate, cinatra#1628)", async () => {
     vi.mocked(resolveExtensionRole).mockReturnValue("@cinatra-ai/fixture-blog-workflow");
     // Liveness oracle denies the (now-uninstalled) blog package → its rows are
     // orphaned + filtered, so the deep-link never resolves to a would-404 detail.
     vi.mocked(resolveLiveExtensionPredicate).mockResolvedValue(() => false);
-    expect(await resolveBlogDashboardUrl(actor, "proj-1")).toBe("/dashboards");
-    expect(await resolveBlogDashboardUrl(actor)).toBe("/dashboards");
+    expect(await resolveBlogDashboardUrl(actor, "proj-1")).toBe("/artifacts");
+    expect(await resolveBlogDashboardUrl(actor)).toBe("/artifacts");
   });
 });

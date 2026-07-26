@@ -25,6 +25,7 @@ import { ArrowLeft } from "lucide-react";
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
+import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 import { Button } from "@/components/ui/button";
 import { getAuthSession } from "@/lib/auth-session";
 import { CrumbContributions } from "@/components/crumb-contributions";
@@ -160,7 +161,8 @@ export async function OrganizationSettingsPage({
         ]}
       />
       <PageHeader
-        title={`Organization settings — ${orgName || "Organization"}`}
+        label="Organization"
+        title={orgName || "Organization"}
         description="Who has access to this organization, and its management controls."
         divider={false}
         actions={
@@ -173,6 +175,13 @@ export async function OrganizationSettingsPage({
         }
       />
       <PageContent className="flex flex-col gap-6 pb-8">
+        {/* The entity-page tablist: this Settings pane is the second tab (spec
+            §IX); Dashboards is the first, at the sibling scope route. */}
+        <EntityScopeTabs
+          dashboardsHref={`/organizations/${encodeURIComponent(id)}/dashboards`}
+          settingsHref={`/organizations/${encodeURIComponent(id)}/settings`}
+          active="settings"
+        />
         <OrganizationPermissionsPanel orgName={orgName} accessModel={accessModel} />
         {manage.canManageSettings ? (
           <OrganizationManagePanel

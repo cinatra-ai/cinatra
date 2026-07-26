@@ -48,6 +48,37 @@ export interface DashboardTwinContext {
   readonly projectId: string | null;
   /** The acting principal (attributes the substrate audit / change event). */
   readonly actorId: string | null;
+  /**
+   * The MATERIALIZING extension package name (cinatra#1896 Scope 2), copied
+   * verbatim from `dashboards.extension_id`. Present (non-null) ONLY on an
+   * extension-materialized row (template / per-project instance / adopt / upgrade
+   * / lifecycle archive|restore of an extension-owned dashboard); `null` for every
+   * user/operator/agent-authored dashboard. It is the CHANNEL through which the
+   * twin names the meaning pack whose claim it asserts: when set on an `upsert`,
+   * the host twin mints an eligible `authoring_skill` (classic-basis)
+   * `semantic_assertion` for the twin artifact with `extension` = this package
+   * (see `dashboard-artifact-twin-writer`). Absent (undefined) on a context built
+   * before this field existed ⇒ treated as `null` (no meaning assertion), so the
+   * addition is backward-compatible for every existing `pairTwin` call site.
+   */
+  readonly extensionId?: string | null;
+  /**
+   * EXPLICIT mint-intent (cinatra#1896 Scope 2 — codex round adoption). The host
+   * twin mints the pack's `authoring_skill` meaning assertion ONLY when this is
+   * `true` (AND `extensionId` is non-null AND `operation === "upsert"`). Set true
+   * by exactly the two MATERIALIZE writers (`materializeExtensionTemplate` /
+   * `materializeExtensionInstanceForProject`) — the operations the issue's Scope 2
+   * names ("at materialization … lands as an eligible assertion").
+   *
+   * It is deliberately NOT set by the lifecycle bulk writers even though those
+   * rows also carry `extension_id`: an `archive`/`restore` upsert must never
+   * RE-MINT an eligible assertion onto an uninstalled/archived dashboard, and
+   * `adopt`/`upgrade` re-homing of the meaning assertion (which would also need to
+   * archive the predecessor's assertion to avoid two eligible extensions) is a
+   * separate lifecycle concern outside this materialize-mint delta. Absent ⇒
+   * `false` (no mint), so every non-materialize `pairTwin` call site is unchanged.
+   */
+  readonly mintMeaningAssertion?: boolean;
 }
 
 /** The minimal transaction surface the twin needs: run a spliced host builder

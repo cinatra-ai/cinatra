@@ -172,6 +172,26 @@ export const BACKGROUND_JOB_NAMES = {
   // service, reached via the boot-registered DI slot; the handler no-ops when
   // the slot is not `ready`.
   ENVIRONMENT_LAYER_GC_REAP: "environment-layer-gc-reap",
+  // Artifact-review RESUME-DELIVERY drain (cinatra#1796, epic #1620 S13). Self-
+  // rescheduling ~30-second loop that leases pending review-decision resume
+  // intents from the #2009 outbox (and reclaims expired `delivering` leases from
+  // a crashed worker) and delivers each typed approve/reject payload to its
+  // paused WayFlow run via the A2A resume. The decision core commits the intent
+  // EXACTLY ONCE inside the decision transaction; this drain is the AT-LEAST-ONCE
+  // delivery to an idempotent-per-gate consumer. Boot only seeds this delayed
+  // loop; the drain never runs at boot.
+  ARTIFACT_REVIEW_RESUME_DELIVERY: "artifact-review-resume-delivery",
+  // Lifecycle-interceptions S1 (cinatra#2039, epic #2037). Two self-rescheduling
+  // loops, boot-seeded ONLY when the S1 activation fence is on (default OFF), so
+  // on origin/main neither is created:
+  //   LIFECYCLE_REVIEW_ORCHESTRATION — drains PENDING ArtifactProduced outbox
+  //     events into policy-matched review gates (+ checkpointed parks + the
+  //     effect-gating linkage). Idempotent per event (deterministic gate key).
+  //   LIFECYCLE_GATE_MAINTENANCE — applies reject tombstones, expires due
+  //     auto-gates (optional auto-resolve / required block+notify), and releases
+  //     checkpointed parks whose auto-gate resolved.
+  LIFECYCLE_REVIEW_ORCHESTRATION: "lifecycle-review-orchestration",
+  LIFECYCLE_GATE_MAINTENANCE: "lifecycle-gate-maintenance",
 } as const;
 
 export type BackgroundJobName = (typeof BACKGROUND_JOB_NAMES)[keyof typeof BACKGROUND_JOB_NAMES];
@@ -263,3 +283,25 @@ export const ENVIRONMENT_LAYER_GC_REAP_LOOP_JOB_ID = "environment-layer-gc-reap-
  * storm guarded by the perpetual-system-loops CI gate.
  */
 export const UNBOUND_OUTPUT_DERIVE_SWEEP_LOOP_JOB_ID = "unbound-output-derive-sweep-loop";
+/**
+ * Canonical loop-job id for the artifact-review resume-delivery drain
+ * (cinatra#1796, epic #1620 S13). Same contract as the other loop ids above: the
+ * boot seed creates the job under this id and the handler re-delays THIS job via
+ * moveToDelayed each cycle; any other id is a legacy anonymous duplicate that
+ * runs once WITHOUT rescheduling. Drift here re-introduces the per-restart queue
+ * storm guarded by the perpetual-system-loops CI gate.
+ */
+export const ARTIFACT_REVIEW_RESUME_DELIVERY_LOOP_JOB_ID =
+  "artifact-review-resume-delivery-loop";
+/**
+ * Canonical loop-job ids for the lifecycle-interceptions S1 loops (cinatra#2039,
+ * epic #2037). Same contract as the other loop ids above: the boot seed creates
+ * each job under this id (ONLY when the S1 activation fence is on — default OFF,
+ * never seeded otherwise) and the handler re-delays THIS job via moveToDelayed
+ * each cycle; any other id is a legacy anonymous duplicate that runs once WITHOUT
+ * rescheduling. Drift here re-introduces the per-restart queue storm guarded by
+ * the perpetual-system-loops CI gate.
+ */
+export const LIFECYCLE_REVIEW_ORCHESTRATION_LOOP_JOB_ID =
+  "lifecycle-review-orchestration-loop";
+export const LIFECYCLE_GATE_MAINTENANCE_LOOP_JOB_ID = "lifecycle-gate-maintenance-loop";

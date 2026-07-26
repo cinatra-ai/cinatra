@@ -104,7 +104,6 @@
       "@cinatra-ai/screenshot-artifact": "https://github.com/cinatra-ai/screenshot-artifact.git",
       "@cinatra-ai/security-reviewer-agent": "https://github.com/cinatra-ai/security-reviewer-agent.git",
       "@cinatra-ai/skill-creator-skills": "https://github.com/cinatra-ai/skill-creator-skills.git",
-      "@cinatra-ai/skill-recommender-agent": "https://github.com/cinatra-ai/skill-recommender-agent.git",
       "@cinatra-ai/slide-deck-artifact": "https://github.com/cinatra-ai/slide-deck-artifact.git",
       "@cinatra-ai/social-media-connector": "https://github.com/cinatra-ai/social-media-connector.git",
       "@cinatra-ai/tailscale-connector": "https://github.com/cinatra-ai/tailscale-connector.git",

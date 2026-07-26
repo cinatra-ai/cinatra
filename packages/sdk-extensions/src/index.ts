@@ -555,6 +555,7 @@ export {
   isDashboardContributionCarrierKind,
   isValidContributionKey,
   parseDashboardContribution,
+  resolveDashboardContributionClaim,
   validateDashboardContributionForPublish,
 } from "./dashboard-contribution-contract";
 export type {

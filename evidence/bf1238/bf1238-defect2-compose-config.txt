@@ -1,0 +1,11 @@
+# cinatra#1238 Defect 2 — Plane MCP bridge profile wiring
+
+## BEFORE (setup.sh line 260: --profile plane-mcp alone):
+$ docker compose ... --profile plane-mcp config
+service "plane-mcp" depends on undefined service "plane-api": invalid compose project
+  -> compose refuses the project; bridge fails on the first pass.
+
+## AFTER (fix: --profile plane --profile plane-mcp):
+plane-api: PRESENT
+plane-mcp: PRESENT
+config: VALID (plane-mcp depends_on plane-api resolves in one activation set)
