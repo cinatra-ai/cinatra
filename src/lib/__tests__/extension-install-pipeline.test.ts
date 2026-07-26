@@ -40,6 +40,12 @@ describe("resolveInstallAnchor (closes the runtime-loader trust loop)", () => {
       // cinatra#1040 S4: the anchor now surfaces the row's default flag; a row
       // view omitting `isDefault` counts as the default (single-version/legacy).
       isDefault: true,
+      // owner ruling 2026-07-23: the derived org (falls back to deps.orgId —
+      // null here) and the recorded widget-auth token keys (null — this row view
+      // omits the column) ride the anchor for the marketplace-install-provenance
+      // arm's org-scope veto + P5.
+      orgId: null,
+      widgetAuthTokenKeys: null,
     });
   });
 

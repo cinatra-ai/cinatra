@@ -30,9 +30,15 @@ import {
 
 /**
  * Resolve §VIII pointers for the dashboard-typed artifact ids on a library page,
- * applying the Phase-1 dual authorization + liveness. Returns ONLY the readable
- * ones (keyed by dashboard/artifact id). A dashboards-store failure fails CLOSED
- * (empty map) — a dashboard row is never rendered un-gated.
+ * applying liveness/template selection over the object-gated ids. Returns the
+ * renderable pointers (keyed by dashboard/artifact id). A dashboards-store
+ * failure fails CLOSED (empty map) — a dashboard row is never rendered un-gated.
+ *
+ * Phase-2 (cinatra#1898): the `artifactIds` were ALREADY authorized by the
+ * canonical `object.read` filter inside `listArtifacts` — the SOLE gate now. The
+ * Phase-1 dual authorization (a second dashboard-resolver pass) is gone, so no
+ * session actor is built here; the projection only drops orphaned/archived and
+ * project-template rows that are not an operational surface on either side.
  */
 export async function resolveLibraryDashboardPointers(
   orgId: string | null,
@@ -41,7 +47,6 @@ export async function resolveLibraryDashboardPointers(
   if (!orgId || artifactIds.length === 0)
     return new Map<string, DashboardArtifactPointer>();
   try {
-    const { actor } = await buildDashboardActorFromSession();
     const [rows, isPackageLive] = await Promise.all([
       listOrgDashboardRows(orgId),
       resolveLiveExtensionPredicate(orgId),
@@ -49,7 +54,6 @@ export async function resolveLibraryDashboardPointers(
     return selectReadableDashboardArtifactPointers({
       rows,
       artifactIds: new Set(artifactIds),
-      actor,
       isPackageLive,
     });
   } catch (e) {

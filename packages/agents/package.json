@@ -34,6 +34,11 @@
     "./auditor-apply": "./src/auditor-apply.ts",
     "./auditor-snapshot-store": "./src/auditor-snapshot-store.ts",
     "./artifact-review-gate-store": "./src/artifact-review-gate-store.ts",
+    "./lifecycle-verification-store": "./src/lifecycle-verification-store.ts",
+    "./artifact-review-gate-seam": "./src/artifact-review-gate-seam.ts",
+    "./artifact-review-resume-delivery": "./src/artifact-review-resume-delivery.ts",
+    "./lifecycle-review-orchestration": "./src/lifecycle-review-orchestration-store.ts",
+    "./lifecycle-review-changes-requested": "./src/lifecycle-review-changes-requested-store.ts",
     "./auditor-snapshot-errors": "./src/auditor-snapshot-errors.ts",
     "./db": "./src/db.ts",
     "./pm-link-store": "./src/pm-link-store.ts",
@@ -46,6 +51,8 @@
     "./verdaccio/client": "./src/verdaccio/client.ts",
     "./verdaccio/publish-metadata": "./src/verdaccio/publish-metadata.ts",
     "./artifact-binding": "./src/artifact-binding.ts",
+    "./run-stepper-steps": "./src/run-stepper-steps.ts",
+    "./hitl-conversation-panel": "./src/hitl-conversation-panel.tsx",
   "./owner-containment-port": "./src/owner-containment-port.ts"
   },
   "scripts": {

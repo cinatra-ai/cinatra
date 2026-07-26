@@ -15,7 +15,7 @@ import {
   widgetStreamMetadataGrantSchemaQueries,
 } from "@/lib/extension-grant-schema";
 import { assistantThreadSchemaQueries, assistantHandleSchemaQueries } from "@/lib/assistant-thread-schema";
-import { assistantRegistrySchemaQueries } from "@/lib/assistant-registry-schema";
+import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema";
 import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries } from "@/lib/skill-lifecycle-schema";
@@ -28,7 +28,7 @@ import {
 import { publicationOperationLedgerSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
 import { environmentLayerStoreSchemaQueries } from "@/lib/execution/environment-layer-schema";
 import { auditorSnapshotSchemaQueries } from "@/lib/auditor-snapshot-schema";
-import { artifactReviewGateSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
+import { artifactReviewGateSchemaQueries, lifecycleInterceptionsSchemaQueries, lifecycleRepairSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
 import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
@@ -229,9 +229,6 @@ export function buildEmailCorrelationIndexQueries(schemaName: string): QueryInpu
   ];
 }
 
-// ---------------------------------------------------------------------------
-// public."member" dedup ranking
-// ---------------------------------------------------------------------------
 export function buildCreateStoreSchemaQueries(schemaName: string): QueryInput[] {
   const queries: QueryInput[] = [
     { text: `CREATE SCHEMA IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"` },
@@ -894,6 +891,7 @@ $body$` },
     ...assistantThreadSchemaQueries(schemaName), // structured assistant threads + turns (cinatra#1037 P2a), additive
     ...assistantHandleSchemaQueries(schemaName), // assistant handle registry (cinatra#1037 P1.2/P5.1) + origin/package_name (#1874 W1), additive — mirrors core__0046/0065
     ...assistantRegistrySchemaQueries(schemaName), // assistant audience + tag-alias registry (cinatra#1874 W1), additive — mirrors core__0065
+    ...assistantPauseSchemaQueries(schemaName), // installation-wide assistant pause, principal-keyed (cinatra#1880 W5), additive — mirrors core__0076
     // usage_events table for @cinatra-ai/metric-cost-api
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."usage_events" (
       id text PRIMARY KEY,
@@ -1201,6 +1199,9 @@ END $$` },
     // converge via migration core__0072. Self-contained (child tables FK to the
     // gate; no cross-block bootstrap ordering).
     ...artifactReviewGateSchemaQueries(schemaName),
+    // lifecycle-interceptions S0 (cinatra#2038, epic #2037): policy lattice bounds, ArtifactProduced outbox, continuation park, advisory seam, decided S3/S4/S5 schemas + gate-store extensions. DDL co-located in artifact-review-gate-schema.ts (already route-reachable, so no new route-graph node); migration twin core__0079. Spread AFTER artifactReviewGateSchemaQueries so its additive ALTERs land on the existing gate tables.
+    ...lifecycleInterceptionsSchemaQueries(schemaName),
+    ...lifecycleRepairSchemaQueries(schemaName), // S2 (cinatra#2040): repair loop (durable batch epoch, per-epoch aggregate, repair lineage) + changes_requested CHECK-widen + rejected-efficacy row; migration twin core__0081. AFTER the S0 spread (its CHECK-expansions land on the existing gate/audit tables).
     // dashboards + dashboard_revisions for @cinatra-ai/dashboards.
     // Idempotent — ALTERs below handle older schemas that lack CHECK constraints + lifecycle columns.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."dashboards" (
@@ -1269,24 +1270,19 @@ END $$` },
         CHECK (template_scope IS NULL OR template_scope IN ('organization','team','workspace','user','project'));
     EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
     { text: `CREATE INDEX IF NOT EXISTS dashboards_project_id_idx ON "${schemaName.replaceAll('"', '""')}"."dashboards" (project_id)` },
-    // One TEMPLATE per (extension, org).
+    // One TEMPLATE per (extension, org); one INSTANCE per (extension, org, project).
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_ext_template_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (extension_id, organization_id) WHERE extension_id IS NOT NULL AND is_template = true` },
-    // One INSTANCE per (extension, org, project).
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_ext_instance_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (extension_id, organization_id, project_id) WHERE extension_id IS NOT NULL AND project_id IS NOT NULL` },
     // dashboardContribution lineage + baseline snapshot (cinatra#1628, S11a).
-    // Additive columns + partial indexes only (bootstrap owns additive evolution
-    // per migrations/README.md); the TRANSFORMATIONAL one-time legacy→lineage
-    // backfill + the durable-absence orphan sweep are versioned migration
-    // core__0051, which runs AFTER this bootstrap so these partial unique indexes
-    // already exist + enforce when it commits.
-    //   - contribution_id: carrier-independent immutable lineage id — survives the
-    //     workflow→agent package re-home. A template + its 0..N per-project
-    //     instances SHARE one contribution_id (NOT globally row-unique).
-    //   - applied_default_json / _hash / applied_contribution_version: the
-    //     extension-owned default SNAPSHOT (the baseline-backed 3-way merge base,
-    //     S11b) + a fast change-detector + the applied version provenance.
-    //   - archive_reason: why an extension row was archived (orphan sweep /
-    //     committed-uninstall hook), for auditability + restore decisions.
+    // Additive columns + partial indexes only (the TRANSFORMATIONAL legacy→lineage
+    // backfill + orphan sweep are migration core__0051, run AFTER this bootstrap so
+    // these partial unique indexes already exist + enforce when it commits).
+    // contribution_id: carrier-independent immutable lineage id (survives the
+    // workflow→agent re-home; a template + its 0..N per-project instances SHARE
+    // one, NOT globally row-unique). applied_default_json/_hash/
+    // applied_contribution_version: the extension-owned default SNAPSHOT (the
+    // 3-way merge base, S11b) + change-detector + version provenance.
+    // archive_reason: why an extension row was archived (orphan sweep / uninstall).
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS contribution_id text` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS applied_contribution_version integer` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS applied_default_json jsonb` },
@@ -1306,6 +1302,11 @@ END $$` },
     { text: `CREATE INDEX IF NOT EXISTS dashboards_entity_idx ON "${schemaName.replaceAll('"', '""')}"."dashboards" (organization_id, entity_type, entity_id, owner_level, owner_id) WHERE entity_type IS NOT NULL` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_entity_default_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (organization_id, entity_type, entity_id, owner_level, owner_id) WHERE is_default = true AND entity_type IS NOT NULL` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_entity_name_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (organization_id, entity_type, entity_id, owner_level, owner_id, name) WHERE entity_type IS NOT NULL` },
+    // dashboard_entity_links — cinatra#1897 B4 scope-collection SECONDARY LISTINGS (additive; mirrors migration core__0080; the canonical home stays the singular entityRef on dashboards, so Overview + name-uniqueness are untouched).
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" (id text PRIMARY KEY, dashboard_id text NOT NULL REFERENCES "${schemaName.replaceAll('"', '""')}"."dashboards"(id) ON DELETE CASCADE, entity_type text NOT NULL CHECK (entity_type IN ('team','organization','project')), entity_id text NOT NULL, organization_id text NOT NULL, created_by text NOT NULL, created_at timestamptz NOT NULL DEFAULT now())` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboard_entity_links_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" (dashboard_id, entity_type, entity_id)` },
+    { text: `CREATE INDEX IF NOT EXISTS dashboard_entity_links_scope_idx ON "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" (entity_type, entity_id, organization_id)` },
+    { text: `CREATE INDEX IF NOT EXISTS dashboard_entity_links_dashboard_idx ON "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" (dashboard_id)` },
     // agent_registry_entries, agent_share_bindings, agent_forks for @cinatra/agent-builder registry
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_registry_entries" (
       id text PRIMARY KEY,
@@ -1702,12 +1703,12 @@ END $$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS run_token_hash text` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_run_token_hash_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (run_token_hash) WHERE run_token_hash IS NOT NULL` },
     // cinatra#1392 Gap 2 — dependent_install_id: the installed_extension row id a
-    // run executes AS, carried onto the run's signed lineage (ActorContext) so
-    // the A2A dispatch seam resolves edge-bound serving against a TRUSTED
-    // dependent id (never client-supplied). Additive nullable; mirrors schema.ts
-    // + migration core__0030. No index (read as part of the run row, never
-    // queried by it).
+    // run executes AS, carried onto the run's signed lineage (ActorContext) so the
+    // A2A dispatch seam resolves edge-bound serving against a TRUSTED dependent id
+    // (never client-supplied). Additive nullable; mirrors schema.ts + core__0030.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS dependent_install_id text` },
+    // human_present: cinatra#2067 run-start presence discriminator (additive nullable; NULL=headless). No migration — schema-migration-gate scopes a new nullable column additive (timeout_seconds/streamed_text precedent).
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS human_present boolean` },
     // Delegated execution-actor snapshot.
     // Captured at instantiate from the requesting user's ActorContext and
     // replayed at run-start re-authz + mid-run authz checks. Nullable JSON
@@ -2853,6 +2854,12 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
     // an assistant (agent-kind) package (cinatra#1874 W1); NULL for every other
     // kind. Additive → bootstrap ADD COLUMN + twin migration core__0065.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."installed_extension" ADD COLUMN IF NOT EXISTS assistant_declaration jsonb` },
+    // The widget-auth token keys the SRI-verified manifest DECLARES, recorded at
+    // install (owner ruling 2026-07-23 — widget-auth delivery fix, path B); the
+    // TAMPER-PROOF declaration source arm (c) reads for P5. NULL = legacy row
+    // (arm (c) fails closed). Additive → bootstrap ADD COLUMN + twin migration
+    // core__0075.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."installed_extension" ADD COLUMN IF NOT EXISTS widget_auth_token_keys jsonb` },
     // Identity is (organization_id, owner_level, owner_id, package_name, VERSION).
     // organization_id may be NULL for platform-wide rows (sentinel '__platform__'
     // in owner_id). Postgres treats NULLs as distinct in unique constraints by

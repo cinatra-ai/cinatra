@@ -16,6 +16,7 @@ import {
   createOrUpdateCustomSkillSchema,
   listInstalledSkillsInputSchema,
   upsertInstalledSkillSchema,
+  recommendForTaskSchema,
   // Admin-gated skill-match handler schemas.
   skillMatchScheduleGetSchema,
   skillMatchScheduleSetSchema,
@@ -104,6 +105,10 @@ const TOOL_META: Record<string, { description: string; inputSchema: z.ZodTypeAny
   "skills_match_evaluate_pair": {
     description: "Synchronously re-evaluate a single (agent, skill) pair via the LLM matcher (admin only).",
     inputSchema: skillMatchEvaluatePairSchema,
+  },
+  "skills_recommend_for_task": {
+    description: "Request-aware skill recommendation: rank an agent's skills by how well they fit THIS task (prompt / declared produced types / target artifact kind). Returns ranked skill ids + names + deterministic scores + the run-intent features each was scored on — the same core scoring the run-start recommendation uses.",
+    inputSchema: recommendForTaskSchema,
   },
 };
 

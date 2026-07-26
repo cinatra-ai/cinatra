@@ -5,6 +5,10 @@ import {
   listAssistantWidgetBindings,
 } from "@/lib/assistant-widget-handles";
 import { GENERATED_WIDGET_STREAM_AGENTS } from "@/lib/generated/extensions.server";
+import {
+  BUILT_IN_WORDPRESS_ASSISTANT_PACKAGE_NAME,
+  BUILT_IN_DRUPAL_ASSISTANT_PACKAGE_NAME,
+} from "@cinatra-ai/agents";
 
 // OQ2 (S5 design §7) — the CLOSED handle↔widget-stream binding table must be a
 // fixed literal and must AGREE with the generated cinatra.widgetStream
@@ -34,5 +38,18 @@ describe("assistant-widget-handles — the OQ2 closed table", () => {
       // The handle IS the instances-config key IS the connector kind for these.
       expect(binding.handle).toBe(binding.instancesConfigKey);
     }
+  });
+
+  it("each binding's builtinPackageName equals the reserved first-party built-in package (cinatra#2031)", () => {
+    // The inlined literals in the (import-light) host leaf MUST agree with
+    // `@cinatra-ai/agents`' reserved-name constants — the boot seeder registers
+    // the built-in agent_templates row under these exact package names, and the
+    // widget audience closure recognizes the bound built-in by them.
+    expect(resolveAssistantWidgetBinding("wordpress")?.builtinPackageName).toBe(
+      BUILT_IN_WORDPRESS_ASSISTANT_PACKAGE_NAME,
+    );
+    expect(resolveAssistantWidgetBinding("drupal")?.builtinPackageName).toBe(
+      BUILT_IN_DRUPAL_ASSISTANT_PACKAGE_NAME,
+    );
   });
 });

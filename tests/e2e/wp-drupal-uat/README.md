@@ -5,17 +5,27 @@ WordPress (`:8080`) + Drupal (`:8082`) stacks against a **real cinatra dev
 backend**, with only the LLM provider swapped for the deterministic scripted
 provider (`CINATRA_TEST_LLM_PROVIDER=scripted` — offline, key-free).
 
-Scope: this proves the widget → stream → SSE-frame integration (button → mount →
-prompt → `text`/`changes` frames). It does **not** exercise a real CMS mutation
-via WayFlow — the scripted provider stands in for the content-editor agent.
+Scope: after the S5 iframe cutover (`wordpress-plugin`/`drupal-module` #1221) the
+CMS bundle mounts the Cinatra-served AG-UI surface (`/embed/assistant`) in a
+sandboxed cross-origin `<iframe class="cw-frame">`; the composer + streaming
+render live INSIDE the iframe. This suite proves that integration end-to-end
+(button → panel → required-login → iframe bootstrap → prompt → in-frame AG-UI
+reply). The unified `/api/assistants/chat` stream carries **no** field-level
+`changes` diff card (retired in #87); an edit turn's content-edit signal is the
+`*_content_editor_run` `TOOL_CALL_START` on the wire. It does **not** exercise a
+real CMS mutation via WayFlow — the scripted provider stands in for the
+content-editor agent.
 
 ## Scenarios (12)
 
 Per CMS (`wordpress/` + `drupal/`): (1) admin config page renders, (2) assistant
-button renders on seeded content, (3) click → `#cinatra-root` mounts + panel
-opens, (4) prompt → SSE reply (asserts the `CINATRA_UAT_OK` sentinel), (5) edit
-prompt → `changes` diff card round-trips against the seeded page/node,
-(6) invalid API key → graceful non-500 admin-facing error.
+button renders on seeded content, (3) click → panel opens + the in-frame composer
+goes active (also the live frame-ancestors check), (4) prompt → in-frame AG-UI
+reply (asserts the `CINATRA_UAT_OK` sentinel in `[data-embed-content]`), (5) edit
+prompt → a `*_content_editor_run` tool round-trip against the seeded page/node
+with **no direct CMS egress** (cinatra#1214), fenced on the client-consumed
+`RUN_FINISHED` terminal, (6) invalid API key → graceful non-500 admin-facing
+error.
 
 ## Operator runbook (live green)
 
@@ -59,5 +69,8 @@ marker) and writes their IDs to `.uat/seed.json` (gitignored).
 | `UAT_WP_ADMIN_USER` / `_PASS` | `admin` / `admin` | WP admin login (matches compose `WP_DEV_ADMIN_PASS`) |
 | `UAT_DRUPAL_ADMIN_USER` / `_PASS` | `admin` / `cinatra` | Drupal admin login |
 
-If the widget DOM selectors drift, refine them in `helpers.ts` (`SEL`) — they
-mirror the bundle's frozen `#cinatra-root` + `.cw-*` contract.
+If the widget DOM selectors drift, refine them in `helpers.ts` (`SEL`). The
+CMS-origin shell contract is `#cinatra-root` + the `.cw-*` launcher/panel/login
+chrome + the `.cw-frame` iframe; the composer/output contract lives INSIDE the
+iframe (`[data-embed-assistant]`, `[data-embed-content]`, the `Message` input) —
+drive it via `page.frameLocator(SEL.frame)`.

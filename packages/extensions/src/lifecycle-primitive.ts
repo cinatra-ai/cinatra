@@ -685,3 +685,47 @@ export async function recordExtensionAccessDeclaration(
   }
   return _internalUpdateInstalledExtensionMetadata(id, { accessDeclaration: declaration });
 }
+
+/**
+ * Record the widget-auth token keys the SRI-verified manifest DECLARES on a
+ * canonical row (owner ruling 2026-07-23 — widget-auth delivery fix, path B).
+ * The install pipeline computes the declared keys from the integrity-verified
+ * materialized manifest and calls this at the ownership-grant seam, so the
+ * marketplace-install-PROVENANCE owner arm (arm (c)) reads its P5 declaration
+ * from THIS tamper-proof canonical column rather than re-reading the mutable
+ * `/data/extensions` store. Always writes the CURRENT declaration (including the
+ * empty array) so a re-install that DROPS a key clears a stale non-empty value.
+ * Status / provenance are untouched (a metadata write, not a lifecycle
+ * transition); the value is re-validated structurally (an array of non-empty
+ * strings) so a malformed declaration can never reach the row, no matter the
+ * caller.
+ */
+export async function recordExtensionWidgetAuthTokenKeys(
+  id: string,
+  tokenKeys: readonly string[],
+  opts: TransitionOpts,
+): Promise<InstalledExtension> {
+  const ext = await readInstalledExtensionById(id);
+  if (!ext) {
+    throw new LifecycleTransitionError(
+      "EXT_NOT_FOUND",
+      `installed_extension '${id}' not found`,
+    );
+  }
+  if (
+    !Array.isArray(tokenKeys) ||
+    tokenKeys.some((k) => typeof k !== "string" || k.trim().length === 0)
+  ) {
+    throw new LifecycleTransitionError(
+      "INVALID_INPUT",
+      `recordExtensionWidgetAuthTokenKeys refused for ${ext.packageName} — malformed ` +
+        `token keys ${JSON.stringify(tokenKeys)} (actor: ${opts.actor.source}, reason: ${opts.reason})`,
+      { tokenKeys },
+    );
+  }
+  // Normalize (trim + de-dup + sort) so the recorded declaration is canonical
+  // regardless of manifest ordering — the resolver's `includes` check is
+  // order-insensitive, but a stable value avoids spurious write churn.
+  const normalized = Array.from(new Set(tokenKeys.map((k) => k.trim()))).sort();
+  return _internalUpdateInstalledExtensionMetadata(id, { widgetAuthTokenKeys: normalized });
+}

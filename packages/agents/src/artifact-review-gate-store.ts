@@ -45,15 +45,19 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, lte, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
 import { db } from "./db";
+import { dispatchAutoGateResolved } from "./run-wait-notifier";
 import {
   artifactReviewGates,
   artifactReviewAudit,
   artifactReviewDispositions,
   artifactReviewResumeOutbox,
+  gateAdvisoryComments,
+  artifactVerificationRecords,
+  gateSuggestionSnapshots,
   type PinnedReviewTargetRow,
 } from "./schema";
 import {
@@ -164,6 +168,12 @@ export async function emitArtifactReviewGate(input: {
   orgId: string;
   reviewTaskId: string;
   targets: unknown;
+  /** Optional gate TTL (cinatra#2039, epic #2037 S1). An AUTO-created review gate
+   * passes an expiry so the lifecycle maintenance drain can resolve it per policy
+   * (optional auto-resolve / required block+notify); a flow-authored gate passes
+   * none (null — the expiry drain never touches it). Set only on the INSERT: a
+   * re-emit onto an existing gate never re-stamps the expiry (idempotent pin). */
+  expiresAt?: Date | null;
 }): Promise<EmitReviewGateResult> {
   const normalized = normalizeReviewTargets(input.targets);
   if (!normalized.ok) {
@@ -181,6 +191,7 @@ export async function emitArtifactReviewGate(input: {
       reviewTaskId: input.reviewTaskId,
       status: "pending",
       pinnedTargets: pinned,
+      expiresAt: input.expiresAt ?? null,
     })
     // One gate per (run, task) — the run_task_uniq index.
     .onConflictDoNothing({
@@ -267,6 +278,130 @@ export async function readReviewGate(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Run-scoped gate reader (cinatra#2066, C0). Every OTHER gate reader is pair- or
+// gate-keyed — a run could not enumerate its own gates, so a RESOLVED gate was
+// invisible from any run surface (the run-embedding audit's lack #2). This is the
+// missing run-scoped reader: it lists EVERY gate a run owns (pending AND
+// resolved), ordered by creation so the canonical run view can weave them into
+// the step rail as live steps and as read-only history. It reads the SAME table
+// through the SAME run-scoped index the emit path anchors on
+// (`artifact_review_gates_run_task_uniq`); no schema change. Access enforcement
+// is the aggregate reader's job (readRunDetailAggregate) — this port is a plain
+// read, exactly like `readReviewGate`.
+// ---------------------------------------------------------------------------
+export async function listReviewGatesForRun(runId: string): Promise<ReviewGateRow[]> {
+  const rows = await db
+    .select()
+    .from(artifactReviewGates)
+    .where(eq(artifactReviewGates.runId, runId))
+    .orderBy(artifactReviewGates.createdAt);
+  return rows.map((row) => ({
+    id: row.id,
+    runId: row.runId,
+    orgId: row.orgId,
+    reviewTaskId: row.reviewTaskId,
+    status: row.status as "pending" | "resolved",
+    pinnedTargets: row.pinnedTargets as PinnedReviewTargetRow[],
+    disposition: row.disposition,
+    fingerprint: row.fingerprint,
+    resolvedBy: row.resolvedBy,
+    resolvedAt: row.resolvedAt,
+    createdAt: row.createdAt,
+  }));
+}
+
+/** One advisory-seam comment attached to a gate (zero-authority, decision-free). */
+export interface GateAdvisoryCommentRow {
+  id: string;
+  gateId: string;
+  authorId: string;
+  authorKind: string;
+  body: string;
+  createdAt: Date;
+}
+
+/** One post-change verification record bound to a gate. */
+export interface GateVerificationRecordRow {
+  id: string;
+  gateId: string;
+  reviewedArtifactId: string;
+  reviewedRepresentationRevisionId: string;
+  repairedArtifactId: string;
+  repairedRepresentationRevisionId: string;
+  outcome: string;
+  createdAt: Date;
+}
+
+/** One immutable auditor-re-home suggestion snapshot bound to a gate. */
+export interface GateSuggestionSnapshotRow {
+  id: string;
+  gateId: string;
+  payload: unknown;
+  createdAt: Date;
+}
+
+/** Batch-read the advisory comments for a set of gates (run-scoped fan-out from
+ * `listReviewGatesForRun`). Empty gate set ⇒ no query. Ordered by (gate, time). */
+export async function readAdvisoryCommentsForGates(
+  gateIds: readonly string[],
+): Promise<GateAdvisoryCommentRow[]> {
+  if (gateIds.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(gateAdvisoryComments)
+    .where(inArray(gateAdvisoryComments.gateId, gateIds as string[]))
+    .orderBy(gateAdvisoryComments.gateId, gateAdvisoryComments.createdAt);
+  return rows.map((r) => ({
+    id: r.id,
+    gateId: r.gateId,
+    authorId: r.authorId,
+    authorKind: r.authorKind,
+    body: r.body,
+    createdAt: r.createdAt,
+  }));
+}
+
+/** Batch-read the verification records for a set of gates (run-scoped fan-out). */
+export async function readVerificationRecordsForGates(
+  gateIds: readonly string[],
+): Promise<GateVerificationRecordRow[]> {
+  if (gateIds.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(artifactVerificationRecords)
+    .where(inArray(artifactVerificationRecords.gateId, gateIds as string[]))
+    .orderBy(artifactVerificationRecords.gateId, artifactVerificationRecords.createdAt);
+  return rows.map((r) => ({
+    id: r.id,
+    gateId: r.gateId,
+    reviewedArtifactId: r.reviewedArtifactId,
+    reviewedRepresentationRevisionId: r.reviewedRepresentationRevisionId,
+    repairedArtifactId: r.repairedArtifactId,
+    repairedRepresentationRevisionId: r.repairedRepresentationRevisionId,
+    outcome: r.outcome,
+    createdAt: r.createdAt,
+  }));
+}
+
+/** Batch-read the suggestion snapshots for a set of gates (run-scoped fan-out). */
+export async function readSuggestionSnapshotsForGates(
+  gateIds: readonly string[],
+): Promise<GateSuggestionSnapshotRow[]> {
+  if (gateIds.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(gateSuggestionSnapshots)
+    .where(inArray(gateSuggestionSnapshots.gateId, gateIds as string[]))
+    .orderBy(gateSuggestionSnapshots.gateId, gateSuggestionSnapshots.createdAt);
+  return rows.map((r) => ({
+    id: r.id,
+    gateId: r.gateId,
+    payload: r.payload,
+    createdAt: r.createdAt,
+  }));
+}
+
 /** The PREPARATION core's `readGatePinnedTargets` port. */
 export async function readGatePinnedTargets(
   runId: string,
@@ -322,7 +457,7 @@ export async function readReviewGateState(
 export async function commitReviewDecision(
   plan: ReviewDecisionCommitPlan,
 ): Promise<ReviewCommitOutcome> {
-  return db.transaction(async (tx) => {
+  const outcome: ReviewCommitOutcome = await db.transaction(async (tx): Promise<ReviewCommitOutcome> => {
     let gateId: string;
     let orgId: string;
 
@@ -452,6 +587,20 @@ export async function commitReviewDecision(
 
     return { status: "committed" };
   });
+  // cinatra#2066 C2 — a TERMINAL decision resolved this gate: clear the
+  // auto-gate-open run-view notification (if this gate minted one). Fired AFTER
+  // the transaction commits — best-effort and OUTSIDE the tx so a notification
+  // failure can never roll back a committed decision. Idempotent by
+  // (runId, reviewTaskId): a delete that names no row (a flow-authored gate, an
+  // initiator-less run, or an `already-resolved` race that minted nothing new) is
+  // a harmless no-op.
+  if (plan.terminal && outcome.status === "committed") {
+    await dispatchAutoGateResolved({
+      runId: plan.runId,
+      reviewTaskId: plan.reviewTaskId,
+    });
+  }
+  return outcome;
 }
 
 async function readReviewGateWithinTx(
@@ -540,11 +689,16 @@ export async function claimPendingResumeIntents(opts?: {
       .select({ gateId: artifactReviewResumeOutbox.gateId })
       .from(artifactReviewResumeOutbox)
       .where(
-        or(
-          eq(artifactReviewResumeOutbox.status, "pending"),
-          and(
-            eq(artifactReviewResumeOutbox.status, "delivering"),
-            lte(artifactReviewResumeOutbox.leaseExpiresAt, sql`now()`),
+        and(
+          // Gate-store extension (cinatra#2038 S0): a DEAD-LETTERED intent is
+          // never re-claimed — its attempts were exhausted; it awaits ops.
+          isNull(artifactReviewResumeOutbox.deadLetteredAt),
+          or(
+            eq(artifactReviewResumeOutbox.status, "pending"),
+            and(
+              eq(artifactReviewResumeOutbox.status, "delivering"),
+              lte(artifactReviewResumeOutbox.leaseExpiresAt, sql`now()`),
+            ),
           ),
         ),
       )
@@ -602,6 +756,107 @@ export async function markResumeIntentDelivered(
     )
     .returning({ gateId: artifactReviewResumeOutbox.gateId });
   return done.length === 1;
+}
+
+// ---------------------------------------------------------------------------
+// Gate-store extension: resume DEAD-LETTER (cinatra#2038, epic #2037 S0).
+//
+// The 0072 lease drain re-claims a delivering row whenever its lease expires —
+// with no ceiling, a permanently-undeliverable resume would be re-leased forever.
+// This slice adds a `max_attempts` ceiling + a `dead_lettered_at` STATE marker: a
+// row whose `attempts` reached its `max_attempts` and is not `done` is
+// DEAD-LETTERED (removed from the claim set — see `claimPendingResumeIntents` —
+// and surfaced to ops), never silently retried into oblivion.
+// ---------------------------------------------------------------------------
+
+/**
+ * Dead-letter every resume intent that has EXHAUSTED its delivery attempts
+ * (`attempts >= max_attempts`), is not yet `done` / already dead-lettered, AND is
+ * NOT actively in-flight. A `delivering` row with a LIVE lease is left alone — its
+ * current attempt may still succeed; only once that lease EXPIRES (the worker
+ * crashed / gave up) is the exhausted row dead-lettered instead of re-claimed. A
+ * `pending` row (no live lease) with exhausted attempts is dead-lettered directly.
+ * Sets `dead_lettered_at = now()` (+ an optional `last_error`) so the row leaves
+ * the claim set and appears in ops visibility. Bounded to `limit` per pass via a
+ * LIMIT subquery; returns the ACTUAL count transitioned. Idempotent.
+ */
+export async function deadLetterExhaustedResumeIntents(opts?: {
+  lastError?: string;
+  limit?: number;
+}): Promise<number> {
+  const limit = Math.max(1, Math.min(opts?.limit ?? 100, 500));
+  // The FULL eligibility predicate: exhausted, not delivered/dead, and NOT
+  // actively in-flight (a `delivering` row with a LIVE lease is left to finish).
+  const eligibleCond = and(
+    isNull(artifactReviewResumeOutbox.deadLetteredAt),
+    gte(artifactReviewResumeOutbox.attempts, artifactReviewResumeOutbox.maxAttempts),
+    or(
+      // A pending (un-leased) exhausted row.
+      eq(artifactReviewResumeOutbox.status, "pending"),
+      // A delivering row with NO LIVE lease — expired OR never set (NULL). Either
+      // way no worker is in-flight, so an exhausted strand is dead-letterable; a
+      // NULL-lease delivering row would otherwise be un-claimable AND
+      // un-dead-letterable (stuck forever). A LIVE lease (future, non-null) matches
+      // neither branch, so the "leave an in-flight attempt to finish" rule holds.
+      and(
+        eq(artifactReviewResumeOutbox.status, "delivering"),
+        or(
+          isNull(artifactReviewResumeOutbox.leaseExpiresAt),
+          lte(artifactReviewResumeOutbox.leaseExpiresAt, sql`now()`),
+        ),
+      ),
+    ),
+  );
+  const eligible = db
+    .select({ gateId: artifactReviewResumeOutbox.gateId })
+    .from(artifactReviewResumeOutbox)
+    .where(eligibleCond)
+    .limit(limit);
+  const dead = await db
+    .update(artifactReviewResumeOutbox)
+    .set({
+      deadLetteredAt: sql`now()`,
+      lastError: opts?.lastError ?? "resume delivery attempts exhausted",
+      updatedAt: sql`now()`,
+    })
+    // RE-ASSERT the FULL eligibility predicate under the UPDATE (a proper CAS), not
+    // just `dead_lettered_at IS NULL`: between the subquery select and this update a
+    // concurrent claim could re-lease the row (fresh future lease) or a delivery
+    // could mark it `done` — neither may be dead-lettered.
+    .where(and(inArray(artifactReviewResumeOutbox.gateId, eligible), eligibleCond))
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return dead.length;
+}
+
+export interface DeadLetteredResumeRow {
+  gateId: string;
+  runId: string;
+  reviewTaskId: string;
+  kind: "approve" | "reject";
+  attempts: number;
+  maxAttempts: number;
+  lastError: string | null;
+  deadLetteredAt: Date | null;
+}
+
+/** Ops visibility: the dead-lettered resume intents (delivery attempts
+ * exhausted). The surface the AC's "surfaced in ops visibility" requires. */
+export async function readDeadLetteredResumeIntents(limit = 100): Promise<DeadLetteredResumeRow[]> {
+  const rows = await db
+    .select()
+    .from(artifactReviewResumeOutbox)
+    .where(isNotNull(artifactReviewResumeOutbox.deadLetteredAt))
+    .limit(Math.max(1, Math.min(limit, 500)));
+  return rows.map((r) => ({
+    gateId: r.gateId,
+    runId: r.runId,
+    reviewTaskId: r.reviewTaskId,
+    kind: r.kind as "approve" | "reject",
+    attempts: r.attempts,
+    maxAttempts: r.maxAttempts,
+    lastError: r.lastError,
+    deadLetteredAt: r.deadLetteredAt,
+  }));
 }
 
 // ---------------------------------------------------------------------------

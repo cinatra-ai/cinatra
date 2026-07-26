@@ -1168,6 +1168,17 @@ export interface PackageMetadata {
   license: string | null;
   marketplaceAssets: MarketplaceAsset[];
   readmeMarkdown: string | null;
+  /**
+   * SHIPS-A-DASHBOARD marketplace facet (cinatra#1896 / #2005 carrier re-home).
+   * True iff the package is a `kind:"artifact"` meaning pack that declares a
+   * `cinatra.dashboardContribution` claim (a ready-made dashboard) — the signal
+   * the marketplace catalog surfaces as the "ships a dashboard" facet. Derived by
+   * the sync-side mapper through the SAME artifact-kind + object gate the sdk leaf's
+   * `resolveDashboardContributionClaim` applies (never a looser parse). OPTIONAL /
+   * fail-closed: absent or false = does not ship a dashboard (older catalog builds
+   * and non-dashboard packages simply omit it; a consumer treats absent as false).
+   */
+  shipsDashboard?: boolean;
 }
 
 export interface MarketplacePackageSyncFromRegistryInput {

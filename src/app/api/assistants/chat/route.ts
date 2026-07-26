@@ -10,6 +10,7 @@ import {
 import { runAssistantTurn } from "@/lib/assistant-runtime/runtime";
 import { resolveAssistantRuntimeConfigByPrincipal } from "@/lib/assistant-runtime/resolve-runtime-config";
 import { resolveAssistantHandles } from "@/lib/better-auth-db";
+import { isBuiltinAssistantByPackage } from "@/lib/assistant-registry-reader";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import type { WidgetPrincipal } from "@/lib/assistant-runtime/widget-principal";
 import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
@@ -42,7 +43,7 @@ import { randomUUID } from "node:crypto";
 // runtime (`runChatTurn` — the #1037 P2 producer) through the shared AG-UI
 // streaming harness (`streamAgUiChatTurn`) — the durable Redis-Streams log
 // substrate, turn linkage, TOCTOU-safe thread binding, abort lifecycle, and
-// resume window all live in the harness so the @chatgpt bridge endpoint reuses
+// resume window all live in the harness so any additional AG-UI producer reuses
 // them verbatim (cinatra#1218 predecessor 3). This route owns exactly the
 // producer choice + the validation/auth posture; behavior is byte-identical to
 // before the extraction (the harness is the same code).
@@ -74,6 +75,14 @@ import { randomUUID } from "node:crypto";
 // site `cit_` transport token stays on `Authorization`; this carries the
 // short-lived `cwu_` user token minted by the hosted /widget-auth PKCE login.
 const USER_TOKEN_HEADER = "X-Cinatra-Widget-User-Token";
+// Lane A (#1998) forwarded seam — mirrors the capabilities route. Post-S5 the
+// turn is issued by the `/embed/assistant` iframe, which is SAME-ORIGIN to the
+// Cinatra app, so the browser `Origin` header is the Cinatra origin (never the
+// CMS site origin) and JS cannot set the forbidden `Origin`. The embed forwards
+// the server-resolved parent (CMS) origin here; it is the origin the cit_/cwu_
+// tokens were minted against and is validated INTRINSICALLY by the consume (a
+// forged value fails closed — the tokens, never this header, are the authority).
+const WIDGET_ORIGIN_HEADER = "X-Cinatra-Widget-Origin";
 // Emitted on a fail-closed per-user 401 so the cross-origin widget can tell
 // "re-login required" from a generic error and swap back to the login window.
 const WIDGET_AUTH_REQUIRED_HEADER = "X-Cinatra-Widget-Auth";
@@ -167,7 +176,12 @@ export async function POST(request: Request) {
 // Branch 2 — the broker-auth widget turn (S5, cinatra#1221).
 // ---------------------------------------------------------------------------
 async function handleWidgetBrokerTurn(request: Request, citToken: string): Promise<Response> {
+  // Browser `Origin` (the SAME-ORIGIN embed→Cinatra request) — used ONLY to
+  // source the CORS response header. The AUTHORITATIVE origin for the token
+  // consume is the CMS site origin the embed forwards (the browser cannot send
+  // it — see WIDGET_ORIGIN_HEADER), matching the capabilities route.
   const requestOrigin = request.headers.get("Origin");
+  const forwardedOrigin = request.headers.get(WIDGET_ORIGIN_HEADER);
 
   const raw = (await request.json().catch(() => null)) as unknown;
   const parsed = assistantChatBodySchema.safeParse(raw);
@@ -222,7 +236,7 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     agentSlug: binding.agentSlug,
     auth: entry.auth,
     routePath: WIDGET_BROKER_ROUTE_PATH,
-    requestOrigin,
+    requestOrigin: forwardedOrigin,
   });
   if (!consumed.ok) {
     console.warn(`[assistant-chat:${binding.handle}] cit_ token rejected:`, consumed.reason);
@@ -274,7 +288,7 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     token: userTokenHeader,
     agentSlug: binding.agentSlug,
     routePath: WIDGET_BROKER_ROUTE_PATH,
-    requestOrigin,
+    requestOrigin: forwardedOrigin,
   });
   if (!consumedUser.ok) {
     return denyUserAuth(consumedUser.reason);
@@ -369,14 +383,30 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     return Response.json({ error: "Assistant not found" }, { status: 404, headers: corsHeaders });
   }
 
-  // AC#3 audience closure (cinatra#1875 W2). Site auth is NOT the installation's
-  // audience: the dual-token sequence proved the end user is a legit member of the
-  // bound org for this SITE, but the verified end user must ALSO be IN the
-  // assistant installation's audience. The widget principal is floored to `member`
-  // and carries its own cwu_-claim org, so its audience closes through the SAME
-  // registry-reader decision the browser selector uses (#1848). An out-of-audience
-  // end user 404-HIDES (opaque, real reason server-side only) and starts NO run.
-  if (!(await isSelectedAssistantVisible(assistantUserId, widgetSelectorCaller(widgetPrincipal)))) {
+  // AC#3 audience closure (cinatra#1875 W2) + the FIRST-PARTY BUILT-IN exception
+  // (cinatra#2031). Site auth is NOT an installed assistant's audience: the
+  // dual-token sequence proved the end user is a legit member of the bound org for
+  // this SITE, but for an INSTALLED assistant the verified end user must ALSO be IN
+  // its audience — an out-of-audience end user 404-HIDES.
+  //
+  // The bound widget assistant here, however, is a boot-seeded FIRST-PARTY BUILT-IN
+  // (WordPress / Drupal siblings of the @cinatra builtin, cinatra#1823): it carries
+  // NO `assistant_audience` rows and has NO `installed_extension` row, so the W1
+  // registry reader (installed-extension assistants + the single @cinatra builtin)
+  // never lists it — the audience gate alone would 404 EVERY widget turn. The
+  // CLOSED binding names the built-in's reserved package; recognizing the resolved
+  // principal AS that first-party built-in admits it (it is the platform's own
+  // always-available widget assistant), fail-closed and scoped to the EXACT
+  // reserved package — never a global audience widen, never an installed assistant.
+  // An installed (non-built-in) assistant still closes through the audience gate.
+  const isBoundBuiltinAssistant = await isBuiltinAssistantByPackage(
+    assistantUserId,
+    binding.builtinPackageName,
+  );
+  if (
+    !isBoundBuiltinAssistant &&
+    !(await isSelectedAssistantVisible(assistantUserId, widgetSelectorCaller(widgetPrincipal)))
+  ) {
     emitWidgetAuthAudit("assistant_chat_widget_out_of_audience", {
       actor: widgetPrincipal.userId,
       orgId: widgetPrincipal.orgId,

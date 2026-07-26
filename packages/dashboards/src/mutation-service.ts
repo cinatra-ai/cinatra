@@ -241,6 +241,11 @@ function twinCtx(
   row: DashboardRow,
   operation: "upsert" | "delete",
   actorId: string | null,
+  // cinatra#1896 Scope 2 (codex round adoption): the two MATERIALIZE writers pass
+  // `{ mintMeaningAssertion: true }` to request the pack's meaning assertion; every
+  // other call site omits it (default false) so the mint is NARROW to
+  // materialization — never an archive/restore re-mint or an adopt/upgrade path.
+  opts?: { readonly mintMeaningAssertion?: boolean },
 ): DashboardTwinContext {
   return {
     operation,
@@ -250,6 +255,14 @@ function twinCtx(
     ownerId: row.ownerId,
     projectId: row.projectId ?? null,
     actorId,
+    // Thread the materializing pack's package name VERBATIM from the just-written
+    // row. Non-null ONLY for an extension-materialized row; the host twin uses it
+    // as the `extension` of the minted assertion. A user/operator/agent dashboard
+    // carries `extension_id = null` (unchanged pre-#1896 twin behaviour).
+    extensionId: row.extensionId ?? null,
+    // Mint the meaning assertion ONLY on an `upsert` AND when the caller is a
+    // materialize writer. Never on `delete`.
+    mintMeaningAssertion: operation === "upsert" && opts?.mintMeaningAssertion === true,
   };
 }
 
@@ -1222,6 +1235,12 @@ export async function getEntityDashboard(
   const rows = await db.select().from(dashboards).where(eq(dashboards.id, id)).limit(1);
   const row = rows[0];
   if (!row) return undefined;
+  // This is the ENTITY-dashboard fetch (personal/team/org surfaces); entity
+  // dashboards are never project-scoped. Exclude project rows explicitly:
+  // `resolveDashboardAccess` returns canRead: true for a project row at the owner
+  // tier (the project GRANT is the real gate, applied only by the project-aware
+  // callers), so a bare canRead check here must NOT serve a project instance.
+  if (row.projectId) return undefined;
   if (!resolveDashboardAccess(row, actor).canRead) return undefined;
   return row;
 }
@@ -1684,7 +1703,9 @@ export async function materializeExtensionTemplate(
       }
     }
     await writeAudit(q, { operation: "dashboards.materialize_template", actor: input.actor, row, metadata: { extensionId: input.extensionId, templateScope } });
-    await pairTwin(q as unknown as TwinTx, twinCtx(row, "upsert", input.actor.userId));
+    // cinatra#1896 Scope 2: a materialize mints the pack's `authoring_skill`
+    // meaning assertion on the twin artifact (explicit intent — see `twinCtx`).
+    await pairTwin(q as unknown as TwinTx, twinCtx(row, "upsert", input.actor.userId, { mintMeaningAssertion: true }));
     return row;
   });
 }
@@ -1772,7 +1793,9 @@ export async function materializeExtensionInstanceForProject(
       return winner[0];
     }
     await writeAudit(q, { operation: "dashboards.materialize_instance", actor: input.actor, row: inserted, metadata: { extensionId: input.extensionId, projectId: input.projectId } });
-    await pairTwin(q as unknown as TwinTx, twinCtx(inserted, "upsert", input.actor.userId));
+    // cinatra#1896 Scope 2: the per-project instance materialize likewise mints
+    // the pack's `authoring_skill` meaning assertion (explicit intent).
+    await pairTwin(q as unknown as TwinTx, twinCtx(inserted, "upsert", input.actor.userId, { mintMeaningAssertion: true }));
     return inserted;
   });
 }

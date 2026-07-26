@@ -23,6 +23,11 @@ import {
   type ConnectorAccessDeclarationInstallDeps,
 } from "@/lib/connector-access-config-host";
 import {
+  persistWidgetAuthTokenKeysAtFinalize,
+  restorePriorWidgetAuthTokenKeys,
+  type WidgetAuthTokenKeysInstallDeps,
+} from "@/lib/extension-install-canonical-row-deps";
+import {
   enforceAssistantInstallGateInertly,
   type AssistantDeclarationInstallDeps,
 } from "@/lib/assistant-declaration-host";
@@ -390,7 +395,7 @@ export type InstallPipelineDeps = {
   // The assistant-declaration install-gate slice (cinatra#1874 W1) lives in
   // assistant-declaration-host.ts: readAssistantInstallSignals (pre-finalize
   // XOR + platform-scope gate).
-} & ConnectorAccessDeclarationInstallDeps & AssistantDeclarationInstallDeps & OwnershipGrantInstallHooks;
+} & ConnectorAccessDeclarationInstallDeps & AssistantDeclarationInstallDeps & OwnershipGrantInstallHooks & WidgetAuthTokenKeysInstallDeps;
 
 /**
  * Structured operational event for a FAILED durable-restore step (cinatra#158).
@@ -401,7 +406,7 @@ export type InstallDurableRestoreFailureEvent = {
   packageName: string;
   orgId: string | null;
   /** Which durable axis failed to restore. */
-  step: "provenance" | "grant" | "ownership-grant" | "dependencies" | "journal" | "access-declaration";
+  step: "provenance" | "grant" | "ownership-grant" | "dependencies" | "journal" | "access-declaration" | "widget-auth-token-keys";
   /** Which unwind path raised it. */
   scope: "pre-finalize" | "post-commit-rollback";
   reason: string;
@@ -829,6 +834,11 @@ export async function installExtensionFromRegistry(
   const priorAccessDeclaration = isUpdate
     ? (await deps.readCurrentAccessDeclaration?.(input.packageName, input.orgId)) ?? null
     : null;
+  // (f) the prior canonical row's recorded widget-auth token keys (owner ruling
+  // 2026-07-23), restored on BOTH unwind paths (see restorePriorWidgetAuthTokenKeys).
+  const priorWidgetAuthTokenKeys = isUpdate
+    ? (await deps.readCurrentWidgetAuthTokenKeys?.(input.packageName, input.orgId)) ?? null
+    : null;
 
   let grantStatus: "approved" | "pending" = "pending";
   try {
@@ -967,6 +977,19 @@ export async function installExtensionFromRegistry(
       declaration: accessDeclaration,
     });
 
+    // WIDGET-AUTH DECLARED TOKEN KEYS at the FINALIZE SEAM (owner ruling
+    // 2026-07-23) — recorded AFTER recordProvenance so the column is
+    // crash-consistent with the NEW source: a crash between here and the journal
+    // finalize leaves the row un-anchorable (selectActiveDigest mismatch), so an
+    // OLD finalized anchor can never pair with the NEW version's keys. Always
+    // writes (incl []) so a re-install that DROPS a key clears the stale value;
+    // a null column then reliably means "legacy row" (arm (c) fails closed).
+    await persistWidgetAuthTokenKeysAtFinalize(deps, {
+      packageName: input.packageName,
+      orgId: input.orgId,
+      tokenKeys: declaredTokenKeys,
+    });
+
     // FORWARD INSTALL GATE (#180 item 5) — FRESH installs only: with the
     // candidate's edges persisted, refuse to finalize when an
     // install-blocking edge's target is not installed (edgeType-aware: peer
@@ -1057,6 +1080,27 @@ export async function installExtensionFromRegistry(
           });
         }
       }
+      // RESTORE THE OLD RECORDED WIDGET-AUTH TOKEN KEYS **BEFORE** the provenance
+      // restore below (owner ruling 2026-07-23, codex round-2). Re-pinning the OLD
+      // provenance makes the OLD digest anchorable again (its finalized journal op
+      // still matches); if the column still held the NEW version's keys at that
+      // instant, arm (c) could authorize the OLD signed provider for a key its OLD
+      // manifest never declared. Restoring the keys FIRST (while the row is still
+      // un-anchorable — NEW activeDigest vs OLD journal) guarantees the column is
+      // OLD by the time the OLD source becomes resolvable. A captured NULL prior
+      // (legacy row) restores to [] — arm (c) fail-closed, never a stale value.
+      await restorePriorWidgetAuthTokenKeys(
+        deps,
+        { packageName: input.packageName, orgId: input.orgId, isUpdate, prior: priorWidgetAuthTokenKeys },
+        (reason) =>
+          emitDurableRestoreFailure(deps, {
+            packageName: input.packageName,
+            orgId: input.orgId,
+            step: "widget-auth-token-keys",
+            scope: "pre-finalize",
+            reason,
+          }),
+      );
       // ALSO restore the OLD provenance + dependency EDGES (#180). The tail of the
       // try block is `recordProvenance` → `persistDependencyEdges` → forward gate →
       // finalize, so a throw in that window can leave the NEW version's source/edges
@@ -1183,6 +1227,7 @@ export async function installExtensionFromRegistry(
         });
       };
       // (i-a) re-record the OLD provenance/source so the canonical row points to OLD.
+      let sourceRepinnedToOld = false;
       if (priorSource) {
         try {
           await deps.recordProvenance({
@@ -1200,9 +1245,39 @@ export async function installExtensionFromRegistry(
             digest: priorSource.activeDigest ?? priorOp?.digest ?? null,
             ...(input.storeRoot ? { storeRoot: input.storeRoot } : {}),
           });
+          sourceRepinnedToOld = true;
         } catch (e) {
           recordFailure("provenance", e);
         }
+      }
+      // (i-a2) RESTORE THE OLD WIDGET-AUTH TOKEN KEYS — AFTER the OLD provenance
+      // re-record (i-a) but BEFORE the journal re-pin (i-b) (owner ruling
+      // 2026-07-23, codex rounds 3-4). Post-commit the anchored state starts as
+      // the consistent NEW (NEW source + NEW finalized journal + NEW keys); (i-a)
+      // re-points the source to OLD, which makes the row UN-ANCHORABLE (row
+      // activeDigest OLD vs the still-NEW finalized journal — selectActiveDigest
+      // mismatch), so restoring the keys HERE has no exposure; (i-b) then
+      // re-finalizes the OLD journal, re-anchoring an OLD source + OLD keys +
+      // OLD journal that all agree.
+      //
+      // GATED on the source re-pin SUCCEEDING (codex round-4): if (i-a) failed —
+      // or there was no prior source to restore — the row still anchors the NEW
+      // source, so re-pinning the OLD keys would expose NEW source + OLD keys.
+      // Leaving the keys as the NEW version's (which the finalize seam wrote)
+      // keeps them CONSISTENT with the still-anchored NEW source (arm (c) then
+      // honors the NEW provider for a key its NEW manifest actually declares —
+      // correct, not fail-open); the journal re-pin below then either makes the
+      // row un-anchorable (activeDigest NEW vs journal OLD → fail-closed) or, if it
+      // too fails, leaves a fully-consistent NEW anchor. When (i-a) succeeded, the
+      // key restore itself FAILS CLOSED to [] on a write error (see
+      // restorePriorWidgetAuthTokenKeys) so a re-anchored OLD source never pairs
+      // with stale NEW keys. A captured NULL prior (legacy row) restores to [].
+      if (sourceRepinnedToOld) {
+        await restorePriorWidgetAuthTokenKeys(
+          deps,
+          { packageName: input.packageName, orgId: input.orgId, isUpdate, prior: priorWidgetAuthTokenKeys },
+          (reason) => recordFailure("widget-auth-token-keys", reason),
+        );
       }
       // (i-b) JOURNAL re-pin (cinatra#158): terminalize the NEW op, then re-promote
       // the OLD `superseded` op back to `finalized`. With the append-only journal the

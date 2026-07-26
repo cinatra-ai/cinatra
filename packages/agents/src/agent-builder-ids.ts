@@ -55,5 +55,19 @@ export const SKILL_SELECTOR_RENDERER_ID = id("skill-selector");
 /** x-renderer id: the trigger wait-status field renderer. */
 export const TRIGGER_WAIT_STATUS_RENDERER_ID = id("trigger-wait-status");
 
+/** x-renderer id: the artifact-review REDIRECT card (cinatra#1796, epic #1620
+ * S13). Emitted at an `input-required` interrupt whose gate carries the
+ * `cinatra.artifactReview.targetsInput` marker — the host has PINNED the run's
+ * immutable review targets and routes the human to the agent-run review surface
+ * (`/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]`, the #2014
+ * chrome mounted under the agent run per owner ruling 2026-07-25 (3)) instead
+ * of the legacy in-panel reviewer envelope. The card is display-only: a link to
+ * the pinned review surface, NO approve/continue affordance (the typed decision
+ * is taken on the review surface and delivered by the resume-delivery worker), so
+ * the legacy in-panel approve path can never double-resume a marked gate. The id
+ * deliberately does NOT end in `:output` so the run panel never classifies it
+ * mid-run (no auto-emitted Continue row). */
+export const ARTIFACT_REVIEW_REDIRECT_RENDERER_ID = id("artifact-review-redirect");
+
 /** Skill id: the agentic agent-builder compiler skill. */
 export const COMPILER_AGENTIC_SKILL_ID = id("agent-builder-compiler-agentic");

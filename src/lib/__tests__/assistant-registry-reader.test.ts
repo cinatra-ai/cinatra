@@ -7,6 +7,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   matchesAssistantAudience,
   resolveAssistantAudienceContext,
+  isBuiltinAssistantByPackage,
   type AssistantAudienceContext,
   type AssistantAudienceContextDeps,
 } from "@/lib/assistant-registry-reader";
@@ -126,5 +127,44 @@ describe("resolveAssistantAudienceContext — four-seam wiring", () => {
     expect(out.projectIds.size).toBe(0);
     expect(d.readTeamsForUser).not.toHaveBeenCalled();
     expect(d.readProjectGrantsForUser).not.toHaveBeenCalled();
+  });
+});
+
+describe("isBuiltinAssistantByPackage — first-party built-in recognition (cinatra#2031)", () => {
+  // Minimal fake of the drizzle read chain used by the reader:
+  // db.select({...}).from(t).where(c).limit(1) → Promise<rows>.
+  function fakeDb(rows: Array<{ id: string }>) {
+    const where = vi.fn();
+    const chain = {
+      select: () => chain,
+      from: () => chain,
+      where: (...a: unknown[]) => {
+        where(...a);
+        return chain;
+      },
+      limit: () => Promise.resolve(rows),
+    };
+    return { db: chain as unknown as Parameters<typeof isBuiltinAssistantByPackage>[2], whereSpy: where };
+  }
+
+  it("true when an agent_kind='assistant' template links the principal to the reserved package", async () => {
+    const { db } = fakeDb([{ id: "tmpl-1" }]);
+    await expect(
+      isBuiltinAssistantByPackage("wp-principal", "@cinatra-ai/wordpress-assistant", db),
+    ).resolves.toBe(true);
+  });
+
+  it("false when no matching template row exists (installed / unknown principal)", async () => {
+    const { db } = fakeDb([]);
+    await expect(
+      isBuiltinAssistantByPackage("installed-principal", "@cinatra-ai/wordpress-assistant", db),
+    ).resolves.toBe(false);
+  });
+
+  it("fails closed for an empty principal id or package (no query issued)", async () => {
+    const { db, whereSpy } = fakeDb([{ id: "tmpl-1" }]);
+    await expect(isBuiltinAssistantByPackage("", "@cinatra-ai/wordpress-assistant", db)).resolves.toBe(false);
+    await expect(isBuiltinAssistantByPackage("wp-principal", "", db)).resolves.toBe(false);
+    expect(whereSpy).not.toHaveBeenCalled();
   });
 });

@@ -40,6 +40,19 @@ export type InstallAnchorRow = {
    * pure unit tests can omit it (treated as unbound — no kind assertion).
    */
   kind?: string;
+  /**
+   * The canonical row's `organization_id` (owner ruling 2026-07-23) — surfaced on
+   * the resolved anchor (`orgId`) so the marketplace-install-provenance arm can
+   * veto a non-approved ownership grant at the install's ACTUAL org. Optional
+   * (pure unit fixtures omit it → the resolver falls back to `deps.orgId`).
+   */
+  organizationId?: string | null;
+  /**
+   * The canonical row's `widget_auth_token_keys` (owner ruling 2026-07-23) — the
+   * tamper-proof declaration surfaced on the anchor for arm (c)'s P5. Optional
+   * (legacy row / unit fixtures omit it → null → arm (c) fails closed).
+   */
+  widgetAuthTokenKeys?: string[] | null;
   source: {
     type?: string;
     registryUrl?: string;
@@ -266,6 +279,13 @@ export async function resolveInstallAnchor(
     // record's PATH kind (fail-closed on mismatch). Unbound when the row view
     // omits it (pure unit tests).
     kind: row.kind ?? null,
+    // Owner ruling 2026-07-23: the DERIVED org scope this anchor resolved (the
+    // row's org, or the resolution scope `deps.orgId` when the row view omits
+    // it) — arm (c) vetoes a non-approved ownership grant at this org AND global.
+    orgId: row.organizationId ?? deps.orgId ?? null,
+    // Owner ruling 2026-07-23: the canonical row's RECORDED widget-auth declared
+    // token keys (tamper-proof P5 source for arm (c)). null on a legacy row.
+    widgetAuthTokenKeys: row.widgetAuthTokenKeys ?? null,
     // cinatra#181: the recorded closureHash rides the anchor into the boot/
     // activation v2 signature verdict. The recorded SIGNATURE authenticates it:
     // a tampered hash fails v2 verification, and a NULLED hash flips the
@@ -332,7 +352,17 @@ export async function makeDefaultInstallAnchorResolver(
         // this still resolves exactly that one row.
         const active = pickSingleActiveRow(rows, oid);
         return active
-          ? { id: active.id, status: active.status, kind: active.kind, source: active.source as InstallAnchorRow["source"] }
+          ? {
+              id: active.id,
+              status: active.status,
+              kind: active.kind,
+              // Owner ruling 2026-07-23: surface the row's org + recorded
+              // widget-auth token keys so the anchor carries the veto org + the
+              // tamper-proof P5 declaration.
+              organizationId: active.organizationId ?? null,
+              widgetAuthTokenKeys: active.widgetAuthTokenKeys ?? null,
+              source: active.source as InstallAnchorRow["source"],
+            }
           : null;
       },
       readGrant: async (pkg, oid) => {
@@ -442,6 +472,8 @@ export async function makeDefaultInstallAnchorsResolver(
           status: versionRow.status,
           kind: versionRow.kind,
           isDefault: versionRow.isDefault,
+          organizationId: versionRow.organizationId ?? null,
+          widgetAuthTokenKeys: versionRow.widgetAuthTokenKeys ?? null,
           source: versionRow.source as InstallAnchorRow["source"],
         }),
         readGrant: async (pkg, oid) => {

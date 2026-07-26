@@ -67,6 +67,62 @@ export function runAwaitingHumanDedupeKey(runId: string): string {
 }
 
 /**
+ * cinatra#2066 C2 — dedupeKey prefix for a LIFECYCLE AUTO-GATE's run-view
+ * notification. A SUBFAMILY of the run-awaiting-human family (so a future family
+ * sweep catches it), but keyed per (run, reviewTaskId) rather than per-run: a run
+ * can own several auto-gates at once and each is cleared independently when ITS
+ * gate resolves. Distinct from the per-run `runAwaitingHumanDedupeKey` above, so
+ * an auto-gate row and a flow-authored human-wait row on the same run never
+ * collapse onto each other.
+ */
+export const RUN_AUTO_GATE_OPEN_DEDUPE_PREFIX = `${RUN_AWAITING_HUMAN_DEDUPE_PREFIX}auto:`;
+
+/** Stable per-user idempotency key for one auto-gate's run-view notification. */
+export function autoGateOpenDedupeKey(
+  runId: string,
+  reviewTaskId: string,
+): string {
+  return `${RUN_AUTO_GATE_OPEN_DEDUPE_PREFIX}${runId}:${reviewTaskId}`;
+}
+
+/**
+ * PURE: build the notification input for a run on which a lifecycle AUTO-GATE
+ * opened (cinatra#2066 C2). Same actionable-`warning` shape + run-awaiting-human
+ * category as `buildRunAwaitingHumanNotificationInput` — so the unified feed
+ * renders and routes it identically (the "Open" action deep-links to the run
+ * view via `href`) — but with the per-(run, task) auto-gate dedupeKey and a
+ * `pending_approval` reason payload (an auto-gate always awaits an approval
+ * decision). The copy names the review explicitly.
+ */
+/** Conformance handle for the design spec's `run-gate-notification` anchor
+ * (design@5e5c53aff §I): a pending auto-gate raises a notification that DEEP-LINKS
+ * straight to the gate inside the run (the `href` below → the run view), never to a
+ * detached page. The run-embedded conformance test asserts this behavior against
+ * this builder (the anchor has no DOM home — it is a notification). */
+export const RUN_GATE_NOTIFICATION_CONFORMANCE_ID = "run-gate-notification";
+
+export function buildAutoGateOpenNotificationInput(input: {
+  runId: string;
+  reviewTaskId: string;
+  runTitle?: string | null;
+  href?: string;
+}): NotificationInput {
+  const name = input.runTitle?.trim();
+  const subject = name ? `"${name}"` : "A run";
+  return {
+    title: `${subject} produced an artifact awaiting review`,
+    body: "Open the run to review the auto-gated step.",
+    kind: "warning",
+    ...(input.href ? { href: input.href } : {}),
+    dedupeKey: autoGateOpenDedupeKey(input.runId, input.reviewTaskId),
+    metadata: {
+      category: RUN_AWAITING_HUMAN_CATEGORY,
+      runAwaitingHuman: { runId: input.runId, reason: "pending_approval" },
+    },
+  };
+}
+
+/**
  * PURE: build the notification input for a run parked on a human gate.
  *
  * `warning` kind puts it in the Unread filter + bell badge as an actionable
@@ -155,6 +211,79 @@ export const runWaitNotifier: RunWaitNotifier = {
     } catch (err) {
       console.warn(
         "[run-awaiting-human] could not emit notification:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  },
+
+  // cinatra#2066 C2 — a lifecycle auto-gate opened. Mirror of onEnterHumanWait
+  // but WITHOUT the wait-status guard: an auto-gate's producing run is NOT parked
+  // on `pending_approval` (the orchestration path creates the gate + a
+  // continuation park and leaves the run's status untouched), so re-deriving
+  // "still waiting?" from run status would wrongly suppress the emit. Best-effort.
+  //
+  // Concurrency posture matches the run-awaiting-human family above (idempotent,
+  // NOT linearized against the gate row): the open emit is AWAITED at gate
+  // creation by the orchestration sweep (before the gate is linked/processed), and
+  // a reviewer cannot resolve a gate that was born microseconds earlier and not
+  // yet surfaced — so the resolve-before-open ordering that would strand a row is
+  // practically unreachable. In that theoretical window a benign stale row could
+  // linger; fully closing it would need a durable open/resolve discriminator read
+  // here (a new cross-package gate-status export) — deliberately out of this
+  // slice's scope, exactly as the E9 header above scopes out its analogous race.
+  async onAutoGateOpen({ runId, reviewTaskId }) {
+    try {
+      await import("@/lib/notifications-host");
+      // No actor argument → the store's access-gate is bypassed (this runs on the
+      // orchestration sweep, which has no session). Reads `runBy` (the initiator,
+      // the reviewer-resolvable audience) + `title` to address + name the row.
+      const { readAgentRunById } = await import("@cinatra-ai/agents");
+      const run = await readAgentRunById(runId);
+      const userId = run?.runBy;
+      // No initiator (a system-/trigger-launched or synthetic orphan run) → no one
+      // to notify.
+      if (!userId) return;
+      const { resolveAgentRunHref, createNotificationForRecipient } =
+        await import("@cinatra-ai/notifications/server");
+      // Canonical run deep-link (templateId → packageName). Undefined for an
+      // unresolvable run → a still-durable but link-less notification.
+      const href = await resolveAgentRunHref({ runId });
+      await createNotificationForRecipient(
+        { kind: "user", userId },
+        buildAutoGateOpenNotificationInput({
+          runId,
+          reviewTaskId,
+          runTitle: run.title,
+          href,
+        }),
+      );
+    } catch (err) {
+      console.warn(
+        "[run-awaiting-human] could not emit auto-gate-open notification:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  },
+
+  // cinatra#2066 C2 — the auto-gate reached a terminal decision: hard-delete the
+  // per-(run, task) row. Idempotent (a delete that names no row is a no-op).
+  async onAutoGateResolved({ runId, reviewTaskId }) {
+    try {
+      await import("@/lib/notifications-host");
+      const { readAgentRunById } = await import("@cinatra-ai/agents");
+      const run = await readAgentRunById(runId);
+      const userId = run?.runBy;
+      if (!userId) return;
+      const { deleteNotificationsByDedupeKeyForUser } = await import(
+        "@cinatra-ai/notifications/server"
+      );
+      deleteNotificationsByDedupeKeyForUser({
+        userId,
+        dedupeKey: autoGateOpenDedupeKey(runId, reviewTaskId),
+      });
+    } catch (err) {
+      console.warn(
+        "[run-awaiting-human] could not clear auto-gate-open notification:",
         err instanceof Error ? err.message : err,
       );
     }

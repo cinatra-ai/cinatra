@@ -53,6 +53,28 @@ export interface RunWaitNotifier {
   }): void | Promise<void>;
   /** A run left a human-wait state — hard-delete the notification (idempotent). */
   onLeaveHumanWait(input: { runId: string }): void | Promise<void>;
+  /**
+   * cinatra#2066 C2 — a LIFECYCLE AUTO-GATE opened on a run. Distinct from
+   * `onEnterHumanWait`: an auto-gate (the #2039 review-orchestration path) is
+   * created via `emitArtifactReviewGate` + a continuation park and NEVER moves
+   * the producing run to `pending_approval`, so the human-wait classifier above
+   * never fires for it. This seam mints a durable, actionable notification to
+   * the run's reviewer-resolvable audience (its initiator) deep-linking to the
+   * RUN VIEW, so an auto-gated run is discoverable off the run panel exactly like
+   * a flow-authored gate. Keyed per (runId, reviewTaskId) so several gates on one
+   * run never collide. OPTIONAL: a host that wires no auto-gate notifier (or a
+   * unit-test double) simply skips the emit. */
+  onAutoGateOpen?(input: {
+    runId: string;
+    reviewTaskId: string;
+  }): void | Promise<void>;
+  /** The auto-gate reached a terminal review decision — hard-delete the
+   * `onAutoGateOpen` row by its (runId, reviewTaskId) key (idempotent; a no-op
+   * when none was minted, e.g. a flow-authored gate or an initiator-less run). */
+  onAutoGateResolved?(input: {
+    runId: string;
+    reviewTaskId: string;
+  }): void | Promise<void>;
 }
 
 // Module singleton behind a global symbol slot (same idiom as
@@ -147,6 +169,52 @@ export async function dispatchRunWaitTransition(args: {
   } catch (err) {
     console.warn(
       "[run-wait-notifier] transition side-effect failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
+ * cinatra#2066 C2 — drive the wired notifier for a lifecycle AUTO-GATE opening.
+ * Called by the review-orchestration store when it emits a NEW auto-gate (not an
+ * idempotent re-emit). No-op when no host wired a notifier or the host wired one
+ * without the optional `onAutoGateOpen`. Best-effort: a thrown port is swallowed
+ * so a notification failure can NEVER fail orchestration (matching every other
+ * emitter in this codebase). NOT exported from the package index — an
+ * intra-package leaf the store imports directly, so it adds no public surface. */
+export async function dispatchAutoGateOpen(input: {
+  runId: string;
+  reviewTaskId: string;
+}): Promise<void> {
+  const notifier = notifierHolder().notifier;
+  if (!notifier?.onAutoGateOpen) return;
+  try {
+    await notifier.onAutoGateOpen(input);
+  } catch (err) {
+    console.warn(
+      "[run-wait-notifier] auto-gate-open side-effect failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
+ * cinatra#2066 C2 — drive the wired notifier to CLEAR an auto-gate-open row when
+ * the gate reaches a terminal review decision. Called by the gate-decision commit
+ * on a terminal (approve/reject) resolution. Idempotent + best-effort: a delete
+ * by (runId, reviewTaskId) that names no row is a harmless no-op (a flow-authored
+ * gate or an initiator-less run never minted one). */
+export async function dispatchAutoGateResolved(input: {
+  runId: string;
+  reviewTaskId: string;
+}): Promise<void> {
+  const notifier = notifierHolder().notifier;
+  if (!notifier?.onAutoGateResolved) return;
+  try {
+    await notifier.onAutoGateResolved(input);
+  } catch (err) {
+    console.warn(
+      "[run-wait-notifier] auto-gate-resolved side-effect failed:",
       err instanceof Error ? err.message : err,
     );
   }

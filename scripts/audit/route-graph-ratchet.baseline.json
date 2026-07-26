@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1557,
-    "/api/mcp": 1553,
-    "/chat": 1627,
-    "/api/a2a": 1558,
-    "/api/llm-bridge": 1565
+    "/sign-in": 1583,
+    "/api/mcp": 1579,
+    "/chat": 1653,
+    "/api/a2a": 1584,
+    "/api/llm-bridge": 1594
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1556,
-      "to": 1557,
-      "reason": "#1938 (PR #1992): the org-write kernel's archive-tables bootstrap DDL leaf (src/lib/org-write-schema.ts, the fresh-install home of the S2 org_archive_lease + org_write_completion_ticket creates) is statically imported by src/lib/drizzle-store.ts and spread into the same DDL array \u2014 a file-size-ratchet-driven extraction (drizzle-store sits at its line ceiling), so the pure-strings leaf becomes first-party-reachable from every tracked route that reaches drizzle-store.ts \u2014 a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned (origin/main ceiling 1556 -> measured 1557). Retires/replaces the base branch's carried #1796/PR-2009 record via this new annotated raise (the org-write schema leaf is a module DISJOINT from the artifact-review gate-schema leaf; it re-anchors the same +1 slot onto origin/main's current ceiling). The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 1992
+      "from": 1578,
+      "to": 1583,
+      "reason": "#2067 C3 (epic #2037 lifecycle-interceptions): the run-start skill-recommendation chip-row finishes the #2041 S3 human surface. The universally-registered agent screens path (packages/agents/src/instance-screens.tsx SetupScreen) and the chat run panel (packages/agents/src/agentic-run-panel.tsx) now reach FIVE new first-party modules every tracked route transitively hits: packages/agents/src/recommendation-hold.ts (the pre-dispatch hold/release helper), packages/agents/src/run-recommendation-actions.ts (the confirm/adjust/skip decision + dispatch actions), packages/agents/src/run-recommendation-chip-row.tsx (the shared chip-row component), and the two engine modules they newly pull onto these routes (packages/agents/src/recommendation-interception.ts scorer seam + packages/agents/src/lifecycle-continuation-park-store.ts park store). Accepted dev-perf growth for the ratified run-embedding correction; mirrors the #2066 C0/C1 absorb it builds on.",
+      "pr": 2070
     },
     "/api/mcp": {
-      "from": 1552,
-      "to": 1553,
-      "reason": "#1938 (PR #1992): the org-write kernel's archive-tables bootstrap DDL leaf (src/lib/org-write-schema.ts, the fresh-install home of the S2 org_archive_lease + org_write_completion_ticket creates) is statically imported by src/lib/drizzle-store.ts and spread into the same DDL array \u2014 a file-size-ratchet-driven extraction (drizzle-store sits at its line ceiling), so the pure-strings leaf becomes first-party-reachable from every tracked route that reaches drizzle-store.ts \u2014 a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned (origin/main ceiling 1552 -> measured 1553). Retires/replaces the base branch's carried #1796/PR-2009 record via this new annotated raise (the org-write schema leaf is a module DISJOINT from the artifact-review gate-schema leaf; it re-anchors the same +1 slot onto origin/main's current ceiling). The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 1992
+      "from": 1574,
+      "to": 1579,
+      "reason": "#2067 C3 (epic #2037 lifecycle-interceptions): the run-start skill-recommendation chip-row finishes the #2041 S3 human surface. The universally-registered agent screens path (packages/agents/src/instance-screens.tsx SetupScreen) and the chat run panel (packages/agents/src/agentic-run-panel.tsx) now reach FIVE new first-party modules every tracked route transitively hits: packages/agents/src/recommendation-hold.ts (the pre-dispatch hold/release helper), packages/agents/src/run-recommendation-actions.ts (the confirm/adjust/skip decision + dispatch actions), packages/agents/src/run-recommendation-chip-row.tsx (the shared chip-row component), and the two engine modules they newly pull onto these routes (packages/agents/src/recommendation-interception.ts scorer seam + packages/agents/src/lifecycle-continuation-park-store.ts park store). Accepted dev-perf growth for the ratified run-embedding correction; mirrors the #2066 C0/C1 absorb it builds on.",
+      "pr": 2070
     },
     "/chat": {
-      "from": 1626,
-      "to": 1627,
-      "reason": "#1938 (PR #1992): the org-write kernel's archive-tables bootstrap DDL leaf (src/lib/org-write-schema.ts, the fresh-install home of the S2 org_archive_lease + org_write_completion_ticket creates) is statically imported by src/lib/drizzle-store.ts and spread into the same DDL array \u2014 a file-size-ratchet-driven extraction (drizzle-store sits at its line ceiling), so the pure-strings leaf becomes first-party-reachable from every tracked route that reaches drizzle-store.ts \u2014 a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned (origin/main ceiling 1626 -> measured 1627). Retires/replaces the base branch's carried #1796/PR-2009 record via this new annotated raise (the org-write schema leaf is a module DISJOINT from the artifact-review gate-schema leaf; it re-anchors the same +1 slot onto origin/main's current ceiling). The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 1992
+      "from": 1648,
+      "to": 1653,
+      "reason": "#2067 C3 (epic #2037 lifecycle-interceptions): the run-start skill-recommendation chip-row finishes the #2041 S3 human surface. The universally-registered agent screens path (packages/agents/src/instance-screens.tsx SetupScreen) and the chat run panel (packages/agents/src/agentic-run-panel.tsx) now reach FIVE new first-party modules every tracked route transitively hits: packages/agents/src/recommendation-hold.ts (the pre-dispatch hold/release helper), packages/agents/src/run-recommendation-actions.ts (the confirm/adjust/skip decision + dispatch actions), packages/agents/src/run-recommendation-chip-row.tsx (the shared chip-row component), and the two engine modules they newly pull onto these routes (packages/agents/src/recommendation-interception.ts scorer seam + packages/agents/src/lifecycle-continuation-park-store.ts park store). Accepted dev-perf growth for the ratified run-embedding correction; mirrors the #2066 C0/C1 absorb it builds on.",
+      "pr": 2070
     },
     "/api/a2a": {
-      "from": 1557,
-      "to": 1558,
-      "reason": "#1938 (PR #1992): the org-write kernel's archive-tables bootstrap DDL leaf (src/lib/org-write-schema.ts, the fresh-install home of the S2 org_archive_lease + org_write_completion_ticket creates) is statically imported by src/lib/drizzle-store.ts and spread into the same DDL array \u2014 a file-size-ratchet-driven extraction (drizzle-store sits at its line ceiling), so the pure-strings leaf becomes first-party-reachable from every tracked route that reaches drizzle-store.ts \u2014 a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned (origin/main ceiling 1557 -> measured 1558). Retires/replaces the base branch's carried #1796/PR-2009 record via this new annotated raise (the org-write schema leaf is a module DISJOINT from the artifact-review gate-schema leaf; it re-anchors the same +1 slot onto origin/main's current ceiling). The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 1992
+      "from": 1579,
+      "to": 1584,
+      "reason": "#2067 C3 (epic #2037 lifecycle-interceptions): the run-start skill-recommendation chip-row finishes the #2041 S3 human surface. The universally-registered agent screens path (packages/agents/src/instance-screens.tsx SetupScreen) and the chat run panel (packages/agents/src/agentic-run-panel.tsx) now reach FIVE new first-party modules every tracked route transitively hits: packages/agents/src/recommendation-hold.ts (the pre-dispatch hold/release helper), packages/agents/src/run-recommendation-actions.ts (the confirm/adjust/skip decision + dispatch actions), packages/agents/src/run-recommendation-chip-row.tsx (the shared chip-row component), and the two engine modules they newly pull onto these routes (packages/agents/src/recommendation-interception.ts scorer seam + packages/agents/src/lifecycle-continuation-park-store.ts park store). Accepted dev-perf growth for the ratified run-embedding correction; mirrors the #2066 C0/C1 absorb it builds on.",
+      "pr": 2070
     },
     "/api/llm-bridge": {
-      "from": 1564,
-      "to": 1565,
-      "reason": "#1938 (PR #1992): the org-write kernel's archive-tables bootstrap DDL leaf (src/lib/org-write-schema.ts, the fresh-install home of the S2 org_archive_lease + org_write_completion_ticket creates) is statically imported by src/lib/drizzle-store.ts and spread into the same DDL array \u2014 a file-size-ratchet-driven extraction (drizzle-store sits at its line ceiling), so the pure-strings leaf becomes first-party-reachable from every tracked route that reaches drizzle-store.ts \u2014 a CI-measured UNIFORM +1 first-party module per route with the companion extensions cloned pinned (origin/main ceiling 1564 -> measured 1565). Retires/replaces the base branch's carried #1796/PR-2009 record via this new annotated raise (the org-write schema leaf is a module DISJOINT from the artifact-review gate-schema leaf; it re-anchors the same +1 slot onto origin/main's current ceiling). The CI route-graph-ratchet gate re-verifies the reachable counts with the companion extension repos cloned pinned; if CI measures a different count, update this ceiling + the absorb to.",
-      "pr": 1992
+      "from": 1589,
+      "to": 1594,
+      "reason": "#2067 C3 (epic #2037 lifecycle-interceptions): the run-start skill-recommendation chip-row finishes the #2041 S3 human surface. The universally-registered agent screens path (packages/agents/src/instance-screens.tsx SetupScreen) and the chat run panel (packages/agents/src/agentic-run-panel.tsx) now reach FIVE new first-party modules every tracked route transitively hits: packages/agents/src/recommendation-hold.ts (the pre-dispatch hold/release helper), packages/agents/src/run-recommendation-actions.ts (the confirm/adjust/skip decision + dispatch actions), packages/agents/src/run-recommendation-chip-row.tsx (the shared chip-row component), and the two engine modules they newly pull onto these routes (packages/agents/src/recommendation-interception.ts scorer seam + packages/agents/src/lifecycle-continuation-park-store.ts park store). Accepted dev-perf growth for the ratified run-embedding correction; mirrors the #2066 C0/C1 absorb it builds on.",
+      "pr": 2070
     }
   }
 }

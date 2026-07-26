@@ -1,34 +1,36 @@
 /**
- * cinatra#1988 — the shared dashboards session→actor builder must thread
- * `teamRoles`, so a team admin is recognized as an "owner" of a team-owned,
- * `owners`/`private`-visibility dashboard on every read surface that resolves
- * its actor through the shared builder's adapter path.
+ * cinatra#1988 (updated for the #1898 Phase-2 ACL cutover) — the shared
+ * dashboards session→actor builder must thread `teamRoles` + `teamIds`, so the
+ * REAL resolver recognizes a team admin as an OWNER and a team member as a
+ * MEMBER of a team-owned dashboard on the /dashboards list surface.
  *
- * REAL-STORE regression (AC2/AC3). It drives the shared builder END-TO-END: the
- * team membership + role is resolved from REAL, SEEDED store data via the REAL
+ * REAL-STORE regression. It drives the shared builder END-TO-END: the team
+ * membership + role is resolved from REAL, SEEDED store data via the REAL
  * `readTeamsForUser` (NOT a hand-built actor, and NOT the dashboards-package
  * Vitest stub of `@/lib/better-auth-db` that returns an empty membership list),
  * and the produced actor is passed through the REAL adapter (`toDashboardActor`)
- * and the REAL resolver (`resolveDashboardAccess`) via the two shared-builder
- * consumers that exist on `origin/main` today:
- *   - the canonical `/dashboards` list  → `filterReadableDashboards`
- *   - the `/artifacts` pointer surface (#1895) → `selectReadableDashboardArtifactPointers`
- * (the detail screen resolves the SAME actor through the SAME adapter path).
+ * and the REAL resolver (`resolveDashboardAccess`) via the canonical /dashboards
+ * list consumer `filterReadableDashboards`.
  *
- * Only the unavoidable HTTP session boundary is mocked (`@/lib/auth`
- * getSession + next/headers/navigation — the session-actor-teamids pattern) and
- * the project-grant read is stubbed to `[]` (project grants are IRRELEVANT to a
- * team-owned, `projectId: null` verdict — the denied case is engineered so only
- * the team-role owner gate is in play). `readTeamsForUser` and
- * `resolveOrgRoleForSession` run for REAL against the seeded lane database.
+ * Phase-2 (cinatra#1898): a dashboard is ALWAYS visible to everyone in its scope,
+ * so BOTH the team admin AND the plain team member READ a team-owned row (the
+ * demoted `owners`/`private` column no longer restricts read — the admin-only
+ * states deliberately WIDEN here). A stranger (no team, no org membership) is
+ * still denied. The #1988 regression — the builder actually threads `teamRoles`
+ * (owner recognition, which now governs WRITE) + `teamIds` (member recognition,
+ * which governs READ) — is asserted directly against the real store.
  *
- * RED on `origin/main` (before the fix): `buildDashboardActorFromSession` drops
- * the role — the actor's `teamRoles` is undefined → the adapter normalizes it to
- * `{}` → `isOwner` is false for the team-owned row → the team admin is DENIED
- * read of BOTH the `owners` and the `private` row. GREEN after the fix: the
- * builder threads `teamRoles` from the same `readTeamsForUser` rows, the resolver
- * recognizes the team admin as an owner, and read is GRANTED — identically on
- * both surfaces (parity).
+ * The library `/artifacts` surface no longer AUTHORIZES dashboard rows (Phase-2:
+ * the single canonical `object.read` filter is its gate), so its agreement with
+ * the /dashboards resolver is proven by the object-tuple property test
+ * (`library-dashboard-agreement.test.ts`) and the core__0082 real-store proof —
+ * not re-derived here.
+ *
+ * Only the unavoidable HTTP session boundary is mocked (`@/lib/auth` getSession +
+ * next/headers/navigation) and the project-grant read is stubbed to `[]` (project
+ * grants are IRRELEVANT to a team-owned, `projectId: null` verdict).
+ * `readTeamsForUser` and `resolveOrgRoleForSession` run for REAL against the
+ * seeded lane database.
  *
  * Runner (real DB required — else the suite self-skips; NEVER fail-vacuous):
  *   CINATRA_DB_INTEGRATION_TESTS=1 \
@@ -81,10 +83,7 @@ vi.mock("@/lib/better-auth-db", async (importOriginal) => {
 // the module graph is evaluated with the mocks in place).
 import { buildDashboardActorFromSession } from "@/lib/dashboards/dashboard-actor";
 import { filterReadableDashboards } from "@/lib/dashboards/authz";
-import {
-  selectReadableDashboardArtifactPointers,
-  type DashboardArtifactRow,
-} from "@/lib/dashboards/dashboard-artifact-surface";
+import type { DashboardArtifactRow } from "@/lib/dashboards/dashboard-artifact-surface";
 import { betterAuthPool } from "@/lib/better-auth-db";
 
 // ---------------------------------------------------------------------------
@@ -113,6 +112,7 @@ const ORG = `org-1988-${randomUUID().slice(0, 8)}`;
 const TEAM = `team-1988-${randomUUID().slice(0, 8)}`;
 const ADMIN_USER = `user-admin-1988-${randomUUID().slice(0, 8)}`;
 const MEMBER_USER = `user-member-1988-${randomUUID().slice(0, 8)}`;
+const STRANGER_USER = `user-stranger-1988-${randomUUID().slice(0, 8)}`;
 
 // Fast-path session shape (avatar + non-"user" role + activeOrganizationId).
 function sessionFor(userId: string) {
@@ -122,19 +122,19 @@ function sessionFor(userId: string) {
   } as Record<string, unknown>;
 }
 
-// A team-owned dashboard row at the given visibility. `projectId: null` +
-// `organizationId: ORG` (same active org) isolates the verdict to the team-role
-// owner gate. `extensionId: null` + `isTemplate: false` keep it past the
-// artifacts-surface renderability/template gates so the two surfaces compare on
-// the owner gate alone.
-function teamRow(visibility: "owners" | "private"): DashboardArtifactRow {
+// A team-owned dashboard row. `projectId: null` + `organizationId: ORG` (same
+// active org) isolates the verdict to the team owner/member gate. The demoted
+// `visibility` value is set to the most restrictive retired token ('private') to
+// prove it no longer restricts read. `extensionId: null` + `isTemplate: false`
+// keep it past the artifacts-surface renderability/template gates.
+function teamRow(): DashboardArtifactRow & { visibility: string } {
   return {
-    id: `dash-1988-${visibility}-${randomUUID().slice(0, 8)}`,
-    name: `Team ${visibility} dashboard`,
+    id: `dash-1988-${randomUUID().slice(0, 8)}`,
+    name: "Team dashboard",
     ownerLevel: "team",
     ownerId: TEAM,
     organizationId: ORG,
-    visibility,
+    visibility: "private",
     projectId: null,
     updatedAt: new Date("2026-07-20T00:00:00.000Z"),
     entityType: null,
@@ -146,45 +146,19 @@ function teamRow(visibility: "owners" | "private"): DashboardArtifactRow {
   };
 }
 
-// The two shared-builder read surfaces, each fed the SAME builder-produced actor
-// and the SAME row. Both must agree (parity, AC3).
-function listSurfaceCanRead(
-  row: DashboardArtifactRow,
-  actor: Awaited<ReturnType<typeof buildDashboardActorFromSession>>["actor"],
-): boolean {
-  return filterReadableDashboards([row], actor).length === 1;
-}
-function artifactSurfaceCanRead(
-  row: DashboardArtifactRow,
-  actor: Awaited<ReturnType<typeof buildDashboardActorFromSession>>["actor"],
-): boolean {
-  const map = selectReadableDashboardArtifactPointers({
-    rows: [row],
-    artifactIds: new Set([row.id]),
-    actor,
-    isPackageLive: () => true,
-  });
-  return map.has(row.id);
-}
-
-/** Resolve BOTH shared-builder surfaces for a session user + row, asserting the
- *  two surfaces agree, and return that agreed verdict. */
-async function canReadOnBothSurfaces(
+/** The canonical /dashboards list read verdict for a session user + row, via the
+ *  shared-builder actor through the REAL adapter + resolver. */
+async function canReadViaList(
   userId: string,
   row: DashboardArtifactRow,
 ): Promise<boolean> {
   state.session = sessionFor(userId);
   const { actor } = await buildDashboardActorFromSession();
-  const list = listSurfaceCanRead(row, actor);
-  const artifacts = artifactSurfaceCanRead(row, actor);
-  // Parity (AC3): both derive their actor solely from the shared builder, so a
-  // divergence would be a real regression, not a test artifact.
-  expect(artifacts, "list vs artifacts surface parity").toBe(list);
-  return list;
+  return filterReadableDashboards([row], actor).length === 1;
 }
 
 describe.skipIf(!HAS_REAL_DB)(
-  "cinatra#1988 — shared builder threads teamRoles end-to-end (real store)",
+  "cinatra#1988/#1898 — shared builder threads teamRoles/teamIds end-to-end (real store)",
   () => {
     let laneBetterAuthPool: Pool | undefined;
 
@@ -250,6 +224,7 @@ describe.skipIf(!HAS_REAL_DB)(
           `INSERT INTO public."teamMember" (id, "teamId", "userId", role) VALUES ($1,$2,$3,$4)`,
           [randomUUID(), TEAM, MEMBER_USER, "member"],
         );
+        // STRANGER_USER is intentionally NOT inserted into any team.
       } finally {
         await seed.end().catch(() => {});
       }
@@ -283,31 +258,21 @@ describe.skipIf(!HAS_REAL_DB)(
       void laneBetterAuthPool;
     }, 120_000);
 
-    it("team ADMIN can read a team-owned 'owners' row (RED before fix: denied)", async () => {
-      expect(await canReadOnBothSurfaces(ADMIN_USER, teamRow("owners"))).toBe(
-        true,
-      );
+    it("team ADMIN reads a team-owned dashboard (owner)", async () => {
+      expect(await canReadViaList(ADMIN_USER, teamRow())).toBe(true);
     });
 
-    it("team ADMIN can read a team-owned 'private' row (owners≡private for the kernel)", async () => {
-      expect(await canReadOnBothSurfaces(ADMIN_USER, teamRow("private"))).toBe(
-        true,
-      );
+    it("WIDENED: plain team MEMBER now reads the team-owned dashboard (was owner-only)", async () => {
+      // Phase-2 (#1898): everyone in the team scope reads — the retired
+      // 'private'/'owners' vocabulary no longer restricts a member's read.
+      expect(await canReadViaList(MEMBER_USER, teamRow())).toBe(true);
     });
 
-    it("plain team MEMBER cannot read the team-owned 'owners' row", async () => {
-      expect(await canReadOnBothSurfaces(MEMBER_USER, teamRow("owners"))).toBe(
-        false,
-      );
+    it("a STRANGER (no team, no org membership) is still denied read", async () => {
+      expect(await canReadViaList(STRANGER_USER, teamRow())).toBe(false);
     });
 
-    it("plain team MEMBER cannot read the team-owned 'private' row", async () => {
-      expect(await canReadOnBothSurfaces(MEMBER_USER, teamRow("private"))).toBe(
-        false,
-      );
-    });
-
-    it("the shared builder actually threads teamRoles from the real store (admin='admin', member='member')", async () => {
+    it("the shared builder actually threads teamRoles + teamIds from the real store (admin='admin', member='member')", async () => {
       state.session = sessionFor(ADMIN_USER);
       const { actor: adminActor } = await buildDashboardActorFromSession();
       expect(adminActor.teamIds).toContain(TEAM);

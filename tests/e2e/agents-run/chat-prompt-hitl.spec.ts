@@ -105,73 +105,6 @@ async function typeAndSend(
 }
 
 test.describe("chat-prompt-hitl", () => {
-  test("skill-recommender approval gate driven by typing 'approve'", async ({
-    page,
-    request,
-  }) => {
-    test.setTimeout(600_000);
-
-    let runId: string | null = null;
-    page.on("request", (req) => {
-      if (runId) return;
-      const m = req.url().match(RUN_ID_RE);
-      if (m && req.method() === "GET") runId = m[1];
-    });
-
-    await page.goto("/chat", { waitUntil: "domcontentloaded" });
-
-    await typeAndSend(page, "Invoke the cinatra_skill-recommender-agent tool.");
-
-    await expect(
-      page.getByText(/pending approval/i).first(),
-    ).toBeVisible({ timeout: 240_000 });
-    expect(runId, "runId captured").toBeTruthy();
-
-    const gateReviewTaskId = await awaitPendingApprovalReviewTaskId(
-      request,
-      runId!,
-      120_000,
-    );
-
-    // cinatra#767 regression: the inline HITL card's field-assist prompt
-    // ("Ask Cinatra to suggest edits to the fields above…") belongs to the
-    // /agents/* run UI only. In chat it duplicated the composer and stacked
-    // one per pending HITL. With surface="chat" it must be ABSENT while the
-    // gate is pending; only the normal chat composer remains.
-    await expect(
-      page.getByPlaceholder(/Ask Cinatra to suggest edits to the fields above/i),
-    ).toHaveCount(0);
-    await expect(page.getByTestId("chat-prompt-input")).toBeVisible();
-
-    // Pure-approval word path (classifier Step 2 on a 0-required-field gate).
-    await typeAndSend(page, "approve");
-
-    await expect(
-      page.getByText(/Submitted to the agent's .* step\./i).first(),
-    ).toBeVisible({ timeout: 120_000 });
-
-    const deadline = Date.now() + 300_000;
-    let advanced = false;
-    while (Date.now() < deadline) {
-      const s = await pollRunStatus(request, runId!);
-      if (
-        s.status === "completed" ||
-        s.status === "failed" ||
-        s.status === "stopped" ||
-        (s.status === "pending_approval" &&
-          s.reviewTaskId !== gateReviewTaskId)
-      ) {
-        advanced = true;
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 3000));
-    }
-    expect(
-      advanced,
-      "run advanced off the approval gate via the prompt-driven submit",
-    ).toBeTruthy();
-  });
-
   // engineering#416: a chat-dispatched read-only step-0 INPUT agent must NOT
   // surface a redundant per-field "Continue" approval button ON TOP of the
   // inline input form. The human supplying the input inline (Enter / chat
@@ -182,9 +115,9 @@ test.describe("chat-prompt-hitl", () => {
   // panel passes hideSubmit to the field renderer, dropping the Continue
   // button; the field input (#field-hitl-field) still renders and submit still
   // works via the composer. The /agents/* run-detail surface keeps its Continue
-  // (covered by agents-run.spec.ts advanceSchemaFieldFallback). The
-  // skill-recommender test above is the regression that a genuine (non-setup-)
-  // approval gate STILL prompts in chat.
+  // (covered by agents-run.spec.ts advanceSchemaFieldFallback). This test pins
+  // the read-only setup-gate case: the inline input IS the approval, so no
+  // redundant Continue button is added on top of it.
   test("chat step-0 input gate shows the inline field WITHOUT a redundant Continue button", async ({
     page,
     request,

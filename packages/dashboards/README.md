@@ -6,7 +6,7 @@ Cinatra-specific glue for the Dashboards Platform. Owns:
 - Single mutation service that emits global `audit_events`
 - MCP handlers (`dashboards_list`, `dashboards_get`, `dashboards_create`, `dashboards_update`, `dashboards_archive`, plus cube/AI primitives)
 - Better-auth session -> Cinatra `SecurityContext` binding
-- Server-side route helpers and screens (`/dashboards`, `/dashboards/[id]`, `/configuration/dashboards`)
+- Server-side route helpers and screens (`/dashboards/[id]` — plus its nested canonical `/teams/[teamId]/dashboards/[id]` + `/organizations/[id]/dashboards/[id]` — and `/configuration/dashboards`; the workspace-wide `/dashboards` directory page was retired in cinatra#2058, dashboards now surface under `/artifacts`)
 - Audit-event integration
 - BullMQ provider wiring for async AI dashboard generation
 

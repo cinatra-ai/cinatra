@@ -26,10 +26,53 @@ import { isTriggerReleased } from "./trigger-gate";
 import { resolveTemplateInputSchema } from "./input-schema-resolver";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import { snapshotSkillsAtRunStart } from "@/lib/agent-run-skills-used";
+import { readRunSelectedSkillRevisions } from "@/lib/run-selected-skill-revisions";
+import { resolveRunSkillDelivery } from "@cinatra-ai/skills/recommendation";
+import {
+  autoApplyHeadlessRecommendation,
+  parseLifecycleConfig,
+} from "./recommendation-interception";
 import {
   GROUPED_SETUP_FORM_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
 } from "./agent-builder-ids";
+
+// ---------------------------------------------------------------------------
+// Artifact-review gate SEAM (cinatra#1796) — a boot-injected slot, NOT a static
+// import of `./artifact-review-gate-store`. The store module pulls the review
+// pure-cores (artifact-review-target etc.) + db/schema; importing it here (even
+// type-only) would make it reachable from every locked route that reaches this
+// run executor (/api/a2a, /api/mcp, /api/llm-bridge, /chat, /sign-in) and grow
+// their dev-perf reachable graph (the route-graph ratchet forbids growth). So
+// execution.ts reads the seam off `globalThis` (no import edge); a boot phase
+// binds it to the store's `emitArtifactReviewGate` / `readReviewGate` (the store
+// then rides ONLY the boot graph, never a route). The seam's `emit` returns a
+// RESULT (never throws the store's typed error) so this file needs no store type
+// either. An unbound slot (boot hasn't run in this bundle — near-impossible)
+// makes a marked gate FAIL CLOSED to the review surface (never the legacy gate,
+// which could dual-path an already-pinned gate); see the branch below.
+type ArtifactReviewGateSeam = {
+  emit(input: {
+    runId: string;
+    orgId: string;
+    reviewTaskId: string;
+    targets: unknown;
+  }): Promise<
+    | { ok: true }
+    | { ok: false; code: "invalid-targets" | "pin-conflict"; message: string }
+  >;
+  readGate(
+    runId: string,
+    reviewTaskId: string,
+  ): Promise<{ orgId: string; status: string } | null>;
+};
+function resolveArtifactReviewGateSeam(): ArtifactReviewGateSeam | null {
+  return (
+    (globalThis as { __cinatraArtifactReviewGateSeam?: ArtifactReviewGateSeam })
+      .__cinatraArtifactReviewGateSeam ?? null
+  );
+}
 // The run-worker entry reads `run.projectId`
 // from the DB row and wraps the execution body in a fresh
 // mcpRequestContextStorage frame whose `projectContext.projectId` is the
@@ -448,8 +491,8 @@ function isContextSelectorInterruptPayload(
 async function resolveWayflowXRenderer(
   runId: string,
   taskId: string,
-  approvalPolicySteps: Array<{ stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; skipLlm?: boolean; firesRendererGate?: boolean }>,
-): Promise<{ xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null }> {
+  approvalPolicySteps: Array<{ stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; skipLlm?: boolean; firesRendererGate?: boolean; artifactReviewTargetsInput?: string }>,
+): Promise<{ xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null; artifactReviewTargetsInput: string | null }> {
   const fallback = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
   // All WayFlow-gated steps ordered by appearance: both self-owned (orchestrator
   // InputMessageNode gates) and child-agent steps. Steps without xRenderer still
@@ -489,7 +532,7 @@ async function resolveWayflowXRenderer(
   // (blog-pipeline's idea_selection_gate) onto a phantom's null schema. Shared
   // predicate keeps this walk in lockstep with run-actions + instance-screens.
   const childSteps = approvalPolicySteps.filter(stepFiresRendererGate);
-  if (childSteps.length === 0) return { xRenderer: fallback, stepNumber: null, schema: null };
+  if (childSteps.length === 0) return { xRenderer: fallback, stepNumber: null, schema: null, artifactReviewTargetsInput: null };
 
   // #1625 — SINGLE-RENDERER-GATE SHORT-CIRCUIT (contract (1)).
   // When the flow has EXACTLY ONE xRenderer-bearing gate, resolution is
@@ -523,6 +566,8 @@ async function resolveWayflowXRenderer(
       xRenderer: typeof step.xRenderer === "string" ? step.xRenderer : fallback,
       stepNumber: typeof step.stepNumber === "number" ? step.stepNumber : null,
       schema: step.schema ?? step.inputMessageSchema ?? null,
+      artifactReviewTargetsInput:
+        typeof step.artifactReviewTargetsInput === "string" ? step.artifactReviewTargetsInput : null,
     };
   }
 
@@ -558,11 +603,13 @@ async function resolveWayflowXRenderer(
         xRenderer,
         stepNumber: typeof step.stepNumber === "number" ? step.stepNumber : null,
         schema: step.schema ?? step.inputMessageSchema ?? null,
+        artifactReviewTargetsInput:
+          typeof step.artifactReviewTargetsInput === "string" ? step.artifactReviewTargetsInput : null,
       };
     }
     accumulated += gateCount;
   }
-  return { xRenderer: fallback, stepNumber: null, schema: null };
+  return { xRenderer: fallback, stepNumber: null, schema: null, artifactReviewTargetsInput: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -632,6 +679,20 @@ export type HandleWayflowTaskStateArgs = {
     metadata?: unknown;
   };
 };
+
+/**
+ * Build the run's canonical `/agents/{vendor}/{pkg}/{runId}` base path from a
+ * scoped package name. A VERBATIM copy of `src/lib/agent-url.ts`'s
+ * `buildAgentInstancePath` (4 lines, zero deps) — inlined so the universally-
+ * reachable execution path grows no new first-party module edge (the route-graph
+ * ratchet guards this hot path), mirroring the same duplication precedent in
+ * packages/notifications/src/agent-run-href.ts.
+ */
+function buildReviewRunBasePath(agentPackageName: string, instanceId: string): string {
+  const match = agentPackageName.match(/^@([^/]+)\/(.+)$/);
+  if (match) return `/agents/${match[1]}/${match[2]}/${instanceId}`;
+  return `/agents/${agentPackageName}/${instanceId}`;
+}
 
 export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): Promise<void> {
   const { runId, run, fromStatus, task } = args;
@@ -756,13 +817,18 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     let wayflowXRenderer: string = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
     let wayflowStepNumber: number | null = null;
     let wayflowSchema: Record<string, unknown> | null = null;
+    // cinatra#1796 — the resolved gate's artifact-review marker (the flow input
+    // that carries the immutable review targets), or null for an ordinary HITL
+    // gate. Drives the marked-gate branch below (pin + route to the generic
+    // review surface); null leaves every path byte-identical.
+    let wayflowArtifactReviewTargetsInput: string | null = null;
     // #1625 (contract (1)) — SAFE CATCH: the sole renderer gate (when
     // the flow has exactly one xRenderer-bearing gate) is the unambiguous
     // resolution under ANY resolver fault. Computed up-front from the template so
     // the catch below never falls to the schema-field fallback for a
     // single-renderer-gate agent — the "never fallback for a sole-renderer gate"
     // guarantee holds even when the positional resolve throws (e.g. Redis fault).
-    let soleRendererGate: { xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null } | null = null;
+    let soleRendererGate: { xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null; artifactReviewTargetsInput: string | null } | null = null;
     try {
       if (isContextSelectorInterruptPayload(spreadFromOutput)) {
         wayflowXRenderer =
@@ -771,7 +837,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       } else {
         const tmpl = await readAgentTemplateById(run.templateId);
         const policySteps = (tmpl?.approvalPolicy?.steps ?? []) as Array<{
-          stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; firesRendererGate?: boolean;
+          stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; firesRendererGate?: boolean; artifactReviewTargetsInput?: string;
         }>;
         const rendererGateSteps = policySteps.filter(stepFiresRendererGate);
         if (rendererGateSteps.length === 1) {
@@ -780,9 +846,11 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
             xRenderer: typeof s.xRenderer === "string" ? s.xRenderer : SCHEMA_FIELD_FALLBACK_RENDERER_ID,
             stepNumber: typeof s.stepNumber === "number" ? s.stepNumber : null,
             schema: s.schema ?? s.inputMessageSchema ?? null,
+            artifactReviewTargetsInput:
+              typeof s.artifactReviewTargetsInput === "string" ? s.artifactReviewTargetsInput : null,
           };
         }
-        ({ xRenderer: wayflowXRenderer, stepNumber: wayflowStepNumber, schema: wayflowSchema } =
+        ({ xRenderer: wayflowXRenderer, stepNumber: wayflowStepNumber, schema: wayflowSchema, artifactReviewTargetsInput: wayflowArtifactReviewTargetsInput } =
           await resolveWayflowXRenderer(runId, task.id, policySteps));
       }
     } catch {
@@ -793,7 +861,163 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         wayflowXRenderer = soleRendererGate.xRenderer;
         wayflowStepNumber = soleRendererGate.stepNumber;
         wayflowSchema = soleRendererGate.schema;
+        wayflowArtifactReviewTargetsInput = soleRendererGate.artifactReviewTargetsInput;
       }
+    }
+    // ------------------------------------------------------------------------
+    // cinatra#1796 (epic #1620 S13) — MARKED artifact-review gate: pin + route.
+    //
+    // When the resolved gate carries the `cinatra.artifactReview.targetsInput`
+    // marker, the run PINS its immutable review targets and routes the human to
+    // the generic artifact-review surface (the #2014 chrome) instead of emitting
+    // the legacy in-panel reviewer envelope. The targets are the FLOW input the
+    // marker names — resolved ONCE, at run start, by the caller (the immutability
+    // contract: a reviewer approves the exact revision the gate froze) — read
+    // here from `run.inputParams` (or, defensively, the gate's own propagated
+    // pendingApproval inputs). STRICTLY gated on the marker: an unmarked gate
+    // never enters this branch, so every non-review gate stays byte-identical.
+    //
+    // Fail-OPEN to the legacy HITL path ONLY on a genuinely unusable marker
+    // (missing/malformed targets, or a pin conflict) so a misconfigured flow
+    // degrades to a normal gate rather than a dead-ended run; the happy path pins
+    // then routes and returns before the legacy envelope synthesis runs.
+    if (
+      typeof wayflowArtifactReviewTargetsInput === "string" &&
+      wayflowArtifactReviewTargetsInput.length > 0
+    ) {
+      const reviewTaskId = `wayflow-${task.id}`;
+      const rawTargets =
+        (run.inputParams as Record<string, unknown> | null | undefined)?.[
+          wayflowArtifactReviewTargetsInput
+        ] ?? interruptPayload[wayflowArtifactReviewTargetsInput];
+      // routeToReviewSurface is true when a USABLE pending gate for THIS run+org
+      // is (or already was) pinned — so exactly ONE decision path exists (the
+      // review surface + resume-delivery worker). On an emit failure we do NOT
+      // trust the failure CODE to decide (a pin-conflict is reported for a same-run
+      // re-emit with a different SET — a usable gate — but ALSO for a DIFFERENT
+      // ORG or an unreconcilable vanished row, neither of which is usable here).
+      // Instead we RE-READ the gate and route only when a pending gate for this
+      // exact run+org actually exists: that both (a) avoids a DUAL decision path
+      // (legacy gate + review surface) when a usable gate exists, and (b) avoids
+      // redirecting to a gate that isn't this run's — an invalid-targets error (no
+      // gate), a different-org conflict, or a vanished row all fall open to the
+      // legacy HITL gate so the run degrades rather than dead-ends.
+      let routeToReviewSurface = false;
+      const gateSeam = resolveArtifactReviewGateSeam();
+      if (!gateSeam) {
+        // Boot has not bound the gate store in this bundle (a near-impossible
+        // degraded state — the bind phase is a trivial boot step). We cannot pin
+        // NOR read the gate here. FAIL CLOSED against a DUAL decision path: route
+        // to the review surface (which reads the store on its own route) rather
+        // than ALSO emitting the legacy in-panel gate — if a PRIOR execution
+        // already pinned this gate, emitting the legacy gate now would create a
+        // SECOND resume path into the same paused context. A first-visit run whose
+        // gate was never pinned simply sees the review surface's graceful
+        // unavailable/blocked state until boot re-binds the seam; it can never
+        // double-resume. Mirrors the read-failure fail-closed branch below.
+        console.warn(
+          `[artifact-review-gate] run=${runId} task=${task.id} gate seam not bound — ` +
+            `routing to the review surface (fail-closed against a dual path)`,
+        );
+        routeToReviewSurface = true;
+      } else {
+        const emitResult = await gateSeam.emit({
+          runId,
+          orgId: run.orgId,
+          reviewTaskId,
+          targets: rawTargets,
+        });
+        if (emitResult.ok) {
+          routeToReviewSurface = true;
+        } else {
+          // Route by the ACTUAL gate state, never the failure code alone. FAIL
+          // CLOSED against a dual decision path: if the re-read itself THROWS we
+          // cannot prove the gate absent, so we still route to the review surface
+          // (which renders its own graceful blocked/unavailable state for a
+          // missing gate) rather than ALSO emitting the legacy gate. Only a re-read
+          // that DEFINITIVELY resolves to no usable gate for THIS run (null,
+          // resolved, or a foreign org) falls open to the legacy HITL gate.
+          let reread: { orgId: string; status: string } | null | "read-failed";
+          try {
+            reread = await gateSeam.readGate(runId, reviewTaskId);
+          } catch {
+            reread = "read-failed";
+          }
+          if (reread === "read-failed") {
+            console.warn(
+              `[artifact-review-gate] run=${runId} task=${task.id} emit ${emitResult.code} ` +
+                `(${emitResult.message}) — gate re-read failed; routing to the review surface ` +
+                `(fail-closed against a dual path)`,
+            );
+            routeToReviewSurface = true;
+          } else if (reread && reread.orgId === run.orgId && reread.status === "pending") {
+            console.warn(
+              `[artifact-review-gate] run=${runId} task=${task.id} emit ${emitResult.code} ` +
+                `(${emitResult.message}) — a usable pending gate for this run already exists; ` +
+                `routing to it (no legacy gate)`,
+            );
+            routeToReviewSurface = true;
+          } else {
+            console.warn(
+              `[artifact-review-gate] run=${runId} task=${task.id} emit ${emitResult.code} ` +
+                `(${emitResult.message}) — no usable pinned gate for this run; falling back to the legacy HITL gate`,
+            );
+          }
+        }
+      }
+      if (routeToReviewSurface) {
+        // The review surface lives UNDER the agent run (owner ruling 2026-07-25
+        // (3), cinatra#2063): `/agents/[vendor]/[packageName]/[instanceId]/review/
+        // [reviewTaskId]`, where instanceId == this run. Build the run's canonical
+        // `/agents/{vendor}/{pkg}/{runId}` base from the template packageName (the
+        // same resolution the notification deep-link + run-detail redirect use),
+        // then append the review sub-path. packageName is present for a marked
+        // reviewer gate (a published orchestrator/flow template); the fallback must
+        // still emit the route's FIVE-segment shape (…/[vendor]/[packageName]/
+        // [instanceId]/review/[reviewTaskId]) with the runId in the instanceId slot,
+        // because the review page keys ONLY on instanceId (== runId) — a shorter
+        // `/agents/{runId}/…` would 404. So an unresolved/absent package degrades to
+        // placeholder vendor+package segments, never a dead/misrouted link.
+        const reviewTemplate = await readAgentTemplateById(run.templateId).catch(() => null);
+        const reviewPackageName =
+          typeof reviewTemplate?.packageName === "string" && reviewTemplate.packageName.trim().length > 0
+            ? reviewTemplate.packageName.trim()
+            : null;
+        const reviewRunBase = reviewPackageName
+          ? buildReviewRunBasePath(reviewPackageName, runId)
+          : `/agents/unknown/unknown/${encodeURIComponent(runId)}`;
+        const reviewSurfaceUrl = `${reviewRunBase}/review/${encodeURIComponent(reviewTaskId)}`;
+        // Route: emit the display-only redirect interrupt (the review-surface
+        // link) — NOT the legacy reviewer envelope. The card carries no approve
+        // affordance, so the paused run stays in pending_approval and the human's
+        // typed decision is taken on the review surface, then delivered to this
+        // paused run by the resume-delivery worker.
+        adapter.onInterrupt(
+          { type: "object" },
+          ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
+          {
+            reviewSurfaceUrl,
+            reviewTaskId,
+            targetCount: Array.isArray(rawTargets) ? rawTargets.length : null,
+            agentSummary: historyText ?? "",
+          },
+          reviewTaskId,
+        );
+        console.log(
+          `[artifact-review-gate] run=${runId} task=${task.id} pinned review targets + routed to ${reviewSurfaceUrl}`,
+        );
+        // Same transition tail as the legacy interrupt path below.
+        if (fromStatus === "pending_approval") {
+          return;
+        }
+        await transitionRunStatus(runId, fromStatus, "pending_approval").catch((e) => {
+          if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+          throw e;
+        });
+        return;
+      }
+      // invalid-targets (no gate pinned) → fall through to the legacy HITL
+      // interrupt below so a misconfigured flow degrades rather than dead-ends.
     }
     // #839: Surface an InputMessageNode gate's declared DFE inputs — which the
     // WayFlow runtime propagates through task.metadata.pendingApproval
@@ -1352,12 +1576,73 @@ async function runAgentBuilderExecutionJobInner(
   // exactly once per dispatch. The write is idempotent (ON CONFLICT DO NOTHING)
   // so re-entry on resume is safe, and best-effort — a ledger write must never
   // fail a run.
+  // ---------------------------------------------------------------------------
+  // Point R — headless skill RECOMMENDATION (cinatra#2041, epic #2037 S3).
+  //
+  // A worker run is HEADLESS (no present human): the recommendation lattice's
+  // core default is `humanPresent:false ⇒ skip`, so this is a NO-OP (writes
+  // nothing; the snapshot below falls back to the computed assignment) UNLESS an
+  // org `required` bound fires the checkpoint — in which case the top
+  // request-aware recommendations are auto-applied into the immutable per-run
+  // selection set BEFORE the ledger snapshot materializes from it. A headless
+  // run NEVER parks. Best-effort: a recommendation write must never fail a run.
   if (template.packageName) {
+    // Resolve the agent's already-assigned, runtime-deliverable skill set ONCE:
+    // it BOUNDS the headless auto-apply (a selection can never introduce a skill
+    // the agent could not already deliver — no archived/excluded/unsynced skill
+    // is auto-applied, which would otherwise fail delivery), AND it is the
+    // computed fallback the snapshot uses when no authoritative set exists.
+    let assignedSkillIds: string[] = [];
     try {
-      const resolvedSkillIds = await getAssignedSkillIdsForAgent(template.packageName);
+      assignedSkillIds = await getAssignedSkillIdsForAgent(template.packageName);
+    } catch (err) {
+      console.warn(
+        `[agent-builder] assigned-skill resolve failed for run ${runId}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+      assignedSkillIds = [];
+    }
+
+    try {
+      let intentPromptText = "";
+      try {
+        intentPromptText = JSON.stringify(run.inputParams ?? {});
+      } catch {
+        intentPromptText = "";
+      }
+      await autoApplyHeadlessRecommendation({
+        runId,
+        orgId: run.orgId,
+        agentId: template.packageName,
+        intent: { promptText: intentPromptText },
+        // Bound candidates to the deliverable assigned set (safety, above).
+        restrictToSkillIds: assignedSkillIds,
+        manifest: parseLifecycleConfig(
+          (template as { lifecycleConfig?: string | null }).lifecycleConfig,
+        ),
+      });
+    } catch (err) {
+      console.warn(
+        `[agent-builder] headless recommendation auto-apply failed for run ${runId}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    try {
+      // S3 (cinatra#2041, epic #2037): when an AUTHORITATIVE per-run selected
+      // skill-revision set exists (Point R confirmed/auto-applied), materialize
+      // the ledger snapshot FROM IT and do NOT recompute the agent-wide
+      // assignment; with NO set, fall back to today's computed assignment so
+      // behavior is unchanged. `resolveRunSkillDelivery` is the single
+      // set-vs-computed seam the llm-bridge also uses.
+      const selectedSet = readRunSelectedSkillRevisions(runId);
+      const { skillIds } = resolveRunSkillDelivery({
+        selectedSet,
+        computedAssignedIds: assignedSkillIds,
+      });
       await snapshotSkillsAtRunStart({
         runId,
-        skills: resolvedSkillIds.map((skillId) => ({
+        skills: skillIds.map((skillId) => ({
           skillId,
           skillKind: "installed" as const,
         })),

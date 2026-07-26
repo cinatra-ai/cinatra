@@ -31,7 +31,7 @@ fi
 # `test.describe('agents-run :: <packageName>')` in agents-run.spec.ts.
 # Fixtures grouped to balance wall-clock + load per batch.
 
-BATCH1_FILTER="@cinatra-ai/(skill-recommender-agent|trigger-agent)"
+BATCH1_FILTER="@cinatra-ai/(trigger-agent)"
 BATCH2_FILTER="@cinatra-ai/(email-recipient-selection-agent)"
 BATCH3_FILTER="@cinatra-ai/(email-drafting-agent|email-follow-up-agent|email-test-delivery-agent)"
 

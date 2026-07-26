@@ -16,6 +16,8 @@
     "./mcp-handlers": "./src/mcp/handlers.ts",
     "./mcp-module": "./src/mcp/module.ts",
     "./pages": "./src/plugin-pages.tsx",
+    "./recommendation": "./src/recommendation/index.ts",
+    "./recommendation-server": "./src/recommendation/recommend.server.ts",
     "./skill-packages": "./src/skill-packages.ts",
     "./store": "./src/skills-store.ts"
   },

@@ -34,6 +34,11 @@ docker/wayflow/.wayflow.env
 # from .env.local by scripts/gen-nango-env.mjs on every `npm run services`.
 docker/nango/.nango.env
 
+# Same pattern for the Plane MCP bridge (cinatra#1238): the minted dev/demo Plane
+# PAT + workspace slug the bridge holds, written by scripts/fixtures/provision-plane.mjs.
+# The `.env*` glob above does NOT match this basename, so it is listed explicitly.
+docker/plane-mcp/.plane-mcp.env
+
 # --- OS / misc ---
 .DS_Store
 

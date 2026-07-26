@@ -44,16 +44,46 @@ vi.mock("sonner", () => ({
 // a module-namespace object (not a Proxy) avoids a vitest mock-hoist crash
 // ("Cannot create proxy with a non-object as target or handler").
 vi.mock("lucide-react", () => {
+  // Vitest/Vite verifies named-export presence at module load time, so the
+  // former fixed-list object broke when the run-start chip-row (cinatra#2067)
+  // pulled `Check`/`ChevronDown` (direct) plus the transitive
+  // orchestrator-sub-agent-node icon set (Circle, CircleDot, CheckCircle2,
+  // XCircle, Loader2) into this panel's import graph. Mirror the robust Proxy
+  // stub the sibling panel tests use (no-audit-button, email-drafts): every
+  // named import resolves to a null-render StubIcon, so no future icon added to
+  // the graph can break this mock. The `{}` object target + factory-local
+  // StubIcon avoid the vi.mock hoist crash a bare-function Proxy target hits.
   const StubIcon = () => null;
-  return {
-    ArrowRight: StubIcon,
-    ChevronDown: StubIcon,
-    ClipboardList: StubIcon,
-    ExternalLink: StubIcon,
-    Loader2: StubIcon,
-    // Fallback default — guards against the renderer expecting a default export.
-    default: StubIcon,
-  };
+  return new Proxy(
+    {} as Record<string, () => null>,
+    {
+      get: (_t, prop) => {
+        if (prop === "__esModule") return true;
+        if (prop === "then") return undefined;
+        if (typeof prop === "symbol") return undefined;
+        return StubIcon;
+      },
+      has: () => true,
+      ownKeys: () => [
+        "ArrowRight",
+        "Check",
+        "CheckCircle2",
+        "ChevronDown",
+        "Circle",
+        "CircleDot",
+        "ClipboardList",
+        "ExternalLink",
+        "Loader2",
+        "XCircle",
+        "default",
+      ],
+      getOwnPropertyDescriptor: () => ({
+        enumerable: true,
+        configurable: true,
+        value: StubIcon,
+      }),
+    },
+  );
 });
 
 vi.mock("../hitl-actions", () => ({

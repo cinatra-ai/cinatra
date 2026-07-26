@@ -36,6 +36,7 @@ import { ContextSelectorRenderer } from "./context-selector-renderer";
 import { CampaignRecipientsReviewRenderer } from "./campaign-recipients-review-renderer";
 import { EmailDraftsReviewRenderer } from "./email-drafts-review-renderer";
 import { ReviewerAgentOutputRenderer } from "./reviewer-agent-output-renderer";
+import { BlogIdeaSelectionRenderer } from "./blog-idea-selection-renderer";
 import { CtaRenderer } from "./cta-renderer";
 import {
   PersonalSkillRenderer,
@@ -105,6 +106,14 @@ const RENDERER_KIND_TABLE: Record<
   // floor here (AC4 never-blank). Same shape as final-list-review /
   // linkedin-draft-review / wordpress-draft-confirm below.
   "auditor-review": { renderer: SchemaOnlyFloorRenderer },
+  // cinatra#1796 Stage 2: the DEDICATED idea-selection chooser for
+  // blog-pipeline's `idea_selection_gate`, activated by the binding id
+  // `@cinatra-ai/blog-pipeline-agent:idea-selection` (strict-id condition). The
+  // host ships this component (unlike the migrated *-review kinds above): the
+  // gate relocates OFF the shared reviewer-output binding onto this one. The
+  // inline IdeaChooserRenderer in reviewer-agent-output-renderer.tsx stays until
+  // its Stage-3 teardown — this entry is additive.
+  "blog-idea-selection": { renderer: BlogIdeaSelectionRenderer },
   "campaign-recipients-review": {
     renderer: CampaignRecipientsReviewRenderer,
     bareAliases: ["campaign-recipients-review"],
@@ -188,16 +197,6 @@ const RENDERER_KIND_TABLE: Record<
     renderer: SchemaOnlyFloorRenderer,
     bareAliases: ["send-confirmation"],
   },
-  // MIGRATED (cinatra#1625 S8/M3): the skill-recommender component moved into
-  // @cinatra-ai/skill-recommender-agent. The KIND stays (the manifest still
-  // declares it — kind-vocabulary set-equality; conditionFor() reads its bare
-  // aliases), but the host ships no component: a bundled binding resolves
-  // map-first to the extension wrapper (hasFieldRendererComponent →
-  // makeExtensionFieldRenderer), and a not-in-build binding of this kind degrades
-  // to the SchemaFieldRenderer floor here (AC4 never-blank). Same shape as
-  // final-list-review / scrape-schema-review / linkedin-draft-review /
-  // wordpress-draft-confirm above.
-  "skill-recommend": { renderer: SchemaOnlyFloorRenderer },
   // MIGRATED (cinatra#1958, S8 successor of #1625): the pure snapshot->onChange
   // test-delivery input form COMPONENT moved into @cinatra-ai/email-artifacts
   // (src/renderers/test-delivery-input.tsx), declared there with declaredBy=
@@ -206,7 +205,7 @@ const RENDERER_KIND_TABLE: Record<
   // binding resolves map-first to the extension wrapper (hasFieldRendererComponent
   // -> makeExtensionFieldRenderer), and a not-in-build binding of this kind
   // degrades to the SchemaFieldRenderer floor here (AC4 never-blank). Same shape
-  // as final-list-review / skill-recommend above.
+  // as final-list-review above.
   "test-delivery-input": { renderer: SchemaOnlyFloorRenderer },
   "wayflow-setup-form": { renderer: GroupedSetupFormRenderer },
   // MIGRATED (cinatra#1625 S8/M3): the blog-wordpress draft-confirm component
@@ -333,6 +332,13 @@ export function ensureDefaultFieldRenderersRegistered(): void {
     condition: isGroupedSetupFormField,
     renderer: GroupedSetupFormRenderer,
   });
+
+  // NOTE (cinatra#1796): the artifact-review REDIRECT card is NOT registered as a
+  // field renderer here. It is rendered INLINE by AgenticRunPanel keyed on
+  // ARTIFACT_REVIEW_REDIRECT_RENDERER_ID (see ArtifactReviewRedirectCard) — a
+  // separate renderer module would add a new node to the run executor's locked
+  // route graph (the route-graph ratchet forbids growth). The inline card is
+  // display-only (no approve affordance) so a marked gate can never double-resume.
 
   fieldRendererRegistry.register({
     id: PERSONAL_SKILL_RENDERER_ID,
