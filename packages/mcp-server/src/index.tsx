@@ -31,7 +31,8 @@ import {
   createMcpRuntimeServer,
   type McpRuntimeToolServer,
 } from "./runtime-server";
-import { mcpRequestContextStorage, resolveRequestRunContext, selectDelegatedToolPolicy, shouldMintSessionOrgWriteAuthority, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy } from "./request-context";
+import { mcpRequestContextStorage, resolveRequestRunContext, selectDelegatedToolPolicy, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy } from "./request-context";
+import { resolveFrameOrgWriteAuthority, type OrgWriteAuthorityForwardOptions } from "./org-write-authority-forward";
 import { buildMcpHandshakeUrls } from "./handshake-urls";
 import { replaceOriginInValue } from "./origin-rewrite";
 import { McpAuthFlowBridge } from "./components/mcp-auth-flow-bridge";
@@ -159,37 +160,7 @@ export type CreateMcpServerMountOptions = {
     expectedAudience: string;
     expectedIssuer: string;
   }) => DelegatedMcpActor | null | Promise<DelegatedMcpActor | null>;
-  /**
-   * Host-side session mint for the org-write authority (cinatra#1939 S3).
-   * Called at most once per request, AFTER the full identity chain has
-   * settled and ONLY when `shouldMintSessionOrgWriteAuthority` admits the
-   * caller (cookie session or chat-OBO with a resolved membership role — an
-   * agent-run delegation is grounded in the RUN and gets its authority from
-   * the host run verifier instead). The returned value is carried OPAQUELY
-   * on the request store (`orgWriteAuthority`); this package never inspects
-   * it. Optional — omitting it leaves every frame unstamped and org-write
-   * seam writers fail closed.
-   */
-  mintOrgWriteAuthority?: (input: {
-    userId: string;
-    orgId: string;
-    orgRole: "org_owner" | "org_admin" | "member";
-  }) => unknown;
-  /**
-   * Host-side RUN mint for the org-write authority (cinatra#1939 S3) — the
-   * agent-run counterpart of `mintOrgWriteAuthority`. Called ONLY for an
-   * `agent_run` delegation whose token carried the `att` (execution attempt)
-   * claim; the host implementation verifies the triple against the run row
-   * (live-attempt predicate, claimed-vs-current attempt match) and returns
-   * the authority or undefined. A rejected promise reads as undefined — the
-   * frame stays unstamped, never a transport failure.
-   */
-  mintRunOrgWriteAuthority?: (input: {
-    runId: string;
-    orgId: string;
-    executionAttemptId: string;
-  }) => Promise<unknown>;
-};
+} & OrgWriteAuthorityForwardOptions;
 
 export type McpServerSettings = {
   publicBaseUrl: string | null;
@@ -1263,54 +1234,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       headerAgentSpecVersion: request.headers.get("x-cinatra-agent-spec-version") ?? undefined,
     });
     options.onRunContextServedBy?.(runContext.servedBy, { runId: runContext.runId, suppressed: runContext.suppressed });
-    // Org-write authority for this frame (cinatra#1939 S3), by caller class:
-    //   - agent_run delegation → the RUN mint (host verifies the token's
-    //     `att` triple against the run row's live attempt); no `att` claim or
-    //     no wired mint → unstamped. A rejected mint promise also reads as
-    //     unstamped — never a transport failure.
-    //   - session / chat-OBO → the membership mint, gated by
-    //     `shouldMintSessionOrgWriteAuthority` (which is what excludes the
-    //     run/widget delegations from THIS branch).
-    // Either way, absence just means seam writers refuse — fail-closed.
-    const orgWriteAuthority = await (async (): Promise<unknown> => {
-      if (delegatedActor?.delegation === "agent_run") {
-        if (!options.mintRunOrgWriteAuthority || !delegatedActor.executionAttemptId) {
-          return undefined;
-        }
-        try {
-          return await options.mintRunOrgWriteAuthority({
-            runId: delegatedActor.runId,
-            orgId: delegatedActor.orgId,
-            executionAttemptId: delegatedActor.executionAttemptId,
-          });
-        } catch (error) {
-          console.warn("[mcp-server] run org-write mint rejected — frame stays unstamped", {
-            runId: delegatedActor.runId,
-            reason: error instanceof Error ? error.message : String(error),
-          });
-          return undefined;
-        }
-      }
-      if (
-        options.mintOrgWriteAuthority &&
-        resolvedUserId &&
-        resolvedOrgId &&
-        resolvedOrgRole &&
-        shouldMintSessionOrgWriteAuthority({
-          delegatedActor,
-          userId: resolvedUserId,
-          orgId: resolvedOrgId,
-          orgRole: resolvedOrgRole,
-        })
-      ) {
-        return options.mintOrgWriteAuthority({
-          userId: resolvedUserId,
-          orgId: resolvedOrgId,
-          orgRole: resolvedOrgRole,
-        });
-      }
-      return undefined;
-    })();
+    const orgWriteAuthority = await resolveFrameOrgWriteAuthority({ delegatedActor, options, resolvedUserId, resolvedOrgId, resolvedOrgRole });
     const requestStore: McpRequestContext = {
       clientId: requestClientId,
       orgId: resolvedOrgId,
@@ -1334,8 +1258,6 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
         delegatedActor?.delegation === "agent_run"
           ? delegatedActor.oboCeiling
           : undefined,
-      // Opaque host-minted org-write authority (undefined for ineligible or
-      // mint-less callers) — trust-boundary contract in request-context.ts.
       orgWriteAuthority,
     };
     const response = await mcpRequestContextStorage.run(
