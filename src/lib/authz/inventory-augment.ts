@@ -492,6 +492,13 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   wordpress_post_update:           { resourceType: "connector_instance", action: "execute", status: "enforced" },
   wordpress_post_update_meta:      { resourceType: "connector_instance", action: "execute", status: "enforced" },
   wordpress_posts_list:            { resourceType: "connector_instance", action: "list",    status: "enforced" },
+  // ───── wordpress governed invoker primitives (cinatra#2017 S2) ─────
+  // Both classify connector_instance/execute (§2.8). This is the STATIC boundary
+  // classification (keeps connector_instance W4 cannot-express) — orthogonal to
+  // the RUNTIME per-instance USE gate the invoker runs (B2). Ship-dark: delegated
+  // chat/widget deny-by-default keeps them off every live perimeter until S7.
+  wordpress_site_tool_call:        { resourceType: "connector_instance", action: "execute", status: "enforced" },
+  wordpress_site_tools_list:       { resourceType: "connector_instance", action: "execute", status: "enforced" },
   wordpress_status:                { resourceType: "connector_instance", action: "read",    status: "enforced" },
 };
 

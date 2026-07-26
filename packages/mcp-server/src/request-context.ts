@@ -49,6 +49,14 @@ export type DelegatedMcpActor =
        * closed at the verifier (never reconstructs this actor).
        */
       oboCeiling: OboCeilingChain;
+      /**
+       * The NORMALIZED connector-instance pin (cinatra#2017 S2 / B1), from the
+       * agent-run token's signed `pin:{ck,iid}` claim. OPTIONAL — absent ⇒ org
+       * scope. The governed invoker reads THIS one field regardless of token type
+       * (the widget branch normalizes its `inst`/`knd` into the same shape). The
+       * transport boundary is the only writer.
+       */
+      connectorInstancePin?: { connectorKey: string; instanceId: string };
     }
   | {
       delegation: "public_site_widget";
@@ -83,6 +91,14 @@ export type DelegatedMcpActor =
        * a widget delegation (the platform-admin suppression, imposed at mint).
        */
       platformRole: "member";
+      /**
+       * The NORMALIZED connector-instance pin (cinatra#2017 S2 / B1), composed at
+       * the transport boundary from the widget token's native `inst` (instanceId)
+       * + `knd` (connectorKey) — a widget turn is ALWAYS instance-pinned. The
+       * governed invoker reads this same field for both token types. The transport
+       * boundary is the only writer.
+       */
+      connectorInstancePin?: { connectorKey: string; instanceId: string };
     };
 
 /**

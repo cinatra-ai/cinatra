@@ -1288,6 +1288,16 @@
       "line": 41
     },
     {
+      "primitiveName": "wordpress_site_tool_call",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 80
+    },
+    {
+      "primitiveName": "wordpress_site_tools_list",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 85
+    },
+    {
       "primitiveName": "wordpress_status",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
       "line": 14
