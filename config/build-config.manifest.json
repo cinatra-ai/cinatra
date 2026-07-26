@@ -424,6 +424,8 @@
     { "alias": "@cinatra-ai/objects", "target": "./packages/objects/src/index.ts" },
     { "alias": "@cinatra-ai/artifacts", "target": "./packages/artifacts/src/index.ts" },
     { "alias": "@cinatra-ai/chart-artifact/src/views/chart", "target": "./extensions/cinatra-ai/chart-artifact/src/views/chart.tsx" },
+    { "alias": "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail", "target": "./extensions/cinatra-ai/cms-snapshot-artifact/src/renderers/detail.tsx" },
+    { "alias": "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview", "target": "./extensions/cinatra-ai/cms-snapshot-artifact/src/renderers/preview.tsx" },
     { "alias": "@cinatra-ai/image-artifact/src/renderers/detail", "target": "./extensions/cinatra-ai/image-artifact/src/renderers/detail.tsx" },
     { "alias": "@cinatra-ai/image-artifact/src/renderers/preview", "target": "./extensions/cinatra-ai/image-artifact/src/renderers/preview.tsx" },
     { "alias": "@cinatra-ai/pdf-artifact/src/renderers/pdf-detail", "target": "./extensions/cinatra-ai/pdf-artifact/src/renderers/pdf-detail.tsx" },

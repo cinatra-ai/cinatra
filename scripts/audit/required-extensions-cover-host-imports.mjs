@@ -166,8 +166,21 @@ export function scanHostImportedExtensions(
 // ---------------------------------------------------------------------------
 
 const LOADER_BLOCK_RE = /export const ([A-Z0-9_]+)\s*:\s*Record<[^=]+=\s*\{([\s\S]*?)\n\};/g;
+// TOLERANT of per-entry metadata between `resolution` and `load` (cinatra#2044
+// L-A). Most generated loader maps emit `{ resolution, load }` adjacently, but
+// `GENERATED_ARTIFACT_RENDERERS` carries the dispatch metadata the resolver reads
+// (packageName / slot / representations / propsApiVersion) in between. The old
+// strict `"…"\s*,\s*load:` form silently failed to match those entries, so their
+// specifiers never entered `classifiedSpecs` and the fail-closed net at the end
+// forced the package bootable — i.e. the gate demanded a `cinatra.extensions` +
+// required-lock entry for a package the generator had classified guardedOptional.
+// The gap was INVISIBLE while every artifact-renderer entry was `required` (that
+// classification is bootable either way); the first `guardedOptional` artifact
+// renderer exposed it. `[^}]*?` cannot cross the entry's closing brace, so the
+// match stays within one entry object — the same tolerance CLIENT_LOADER_ENTRY_RE
+// already applies for the field-renderer map's extra metadata.
 const LOADER_ENTRY_RE =
-  /"([^"]+)":\s*\{\s*resolution:\s*"([^"]+)"\s*,\s*load:\s*(?:guardedExtensionImport\(\s*"([^"]+)"|\(\)\s*=>\s*import\(\s*"([^"]+)")/g;
+  /"([^"]+)":\s*\{\s*resolution:\s*"([^"]+)"[^}]*?load:\s*(?:guardedExtensionImport\(\s*"([^"]+)"|\(\)\s*=>\s*import\(\s*"([^"]+)")/g;
 
 // CLIENT-safe degradable loader maps (cinatra#1625, epic #1620 S8 — M3): the
 // field-renderer component map is consumed by the interactive CLIENT
