@@ -1,0 +1,210 @@
+{
+  "schemaVersion": 1,
+  "description": "WP MCP gateway VERIFY verdicts (#2016 S1 §5) — ewpa/* abilities driven via the gateway execute triad against the booted pinned fixture; a FAIL names its fallback, never a cinatra ability.",
+  "exposureMode": "triad-only",
+  "determinedAt": "2026-07-26T13:13:38.260Z",
+  "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30203573327",
+  "verdicts": [
+    {
+      "item": "ewpa/create-post",
+      "verdict": "PASS",
+      "evidence": "captures/verify-verdicts.json",
+      "detail": {
+        "inputSchemaProps": [
+          "title",
+          "content",
+          "excerpt",
+          "status",
+          "categories",
+          "tags",
+          "featured_image_id",
+          "post_date",
+          "author_id",
+          "slug",
+          "meta_title",
+          "meta_description",
+          "language",
+          "translation_of"
+        ],
+        "sentParams": {
+          "title": "WP MCP gateway VERIFY — draft-at-creation (#2016)",
+          "content": "Created via ewpa/create-post with status=draft to prove draft-at-creation parity.",
+          "status": "draft"
+        },
+        "postId": 10,
+        "readBackStatus": "draft",
+        "ok": true,
+        "error": null,
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"success\":true,\"data\":{\"post_id\":10,\"permalink\":\"http:\\/\\/localhost:8080\\/?p=10\",\"status\":\"draft\",\"message\":\"Post created successfully.\"}}"
+            }
+          ],
+          "structuredContent": {
+            "success": true,
+            "data": {
+              "post_id": 10,
+              "permalink": "http://localhost:8080/?p=10",
+              "status": "draft",
+              "message": "Post created successfully."
+            }
+          },
+          "isError": false
+        }
+      }
+    },
+    {
+      "item": "ewpa/upload-image",
+      "verdict": "FAIL",
+      "evidence": "captures/verify-verdicts.json",
+      "detail": {
+        "gate": "schema",
+        "reason": "inputSchema lacks base64-bytes and/or MIME-type inputs (internal contract requires uploadMedia({imageBase64,imageMimeType}))",
+        "urlOnly": true,
+        "inputSchemaProps": [
+          "url",
+          "title",
+          "alt_text",
+          "caption",
+          "description",
+          "post_id"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "url"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Image URL to download (required)"
+            },
+            "title": {
+              "type": "string",
+              "description": "Title for the image in the media library (optional)"
+            },
+            "alt_text": {
+              "type": "string",
+              "description": "Image alt text (optional)"
+            },
+            "caption": {
+              "type": "string",
+              "description": "Image caption (optional)"
+            },
+            "description": {
+              "type": "string",
+              "description": "Image description (optional)"
+            },
+            "post_id": {
+              "type": "integer",
+              "description": "Post ID to attach the image to. If provided, also sets it as featured image (optional)"
+            }
+          }
+        }
+      },
+      "fallback": {
+        "kind": "upstream-contribution",
+        "rationale": "if the ewpa/upload-image schema is URL-only, contribute base64+MIME input upstream to enable-abilities-for-mcp, or add an S6 site-side config filter — never by adding a cinatra ability"
+      }
+    },
+    {
+      "item": "ewpa/update-post-meta",
+      "verdict": "PASS",
+      "evidence": "captures/verify-verdicts.json",
+      "detail": {
+        "postId": 10,
+        "metaKey": "_elementor_data",
+        "schemaProps": [
+          "post_id",
+          "meta_key",
+          "meta_value"
+        ],
+        "ok": true,
+        "isError": false,
+        "error": null,
+        "blocklisted": false,
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"success\":true,\"data\":{\"post_id\":10,\"meta_key\":\"_elementor_data\",\"meta_value\":\"[{\\\"id\\\":\\\"a1b2c3d\\\",\\\"elType\\\":\\\"section\\\",\\\"settings\\\":{},\\\"elements\\\":[{\\\"id\\\":\\\"e4f5g6h\\\",\\\"elType\\\":\\\"column\\\",\\\"settings\\\":{\\\"_column_size\\\":100},\\\"elements\\\":[{\\\"id\\\":\\\"i7j8k9l\\\",\\\"elType\\\":\\\"widget\\\",\\\"widgetType\\\":\\\"heading\\\",\\\"settings\\\":{\\\"title\\\":\\\"Fixture heading (#2016)\\\"}}]}]}]\",\"message\":\"Meta field updated successfully.\"}}"
+            }
+          ],
+          "structuredContent": {
+            "success": true,
+            "data": {
+              "post_id": 10,
+              "meta_key": "_elementor_data",
+              "meta_value": "[{\"id\":\"a1b2c3d\",\"elType\":\"section\",\"settings\":{},\"elements\":[{\"id\":\"e4f5g6h\",\"elType\":\"column\",\"settings\":{\"_column_size\":100},\"elements\":[{\"id\":\"i7j8k9l\",\"elType\":\"widget\",\"widgetType\":\"heading\",\"settings\":{\"title\":\"Fixture heading (#2016)\"}}]}]}]",
+              "message": "Meta field updated successfully."
+            }
+          },
+          "isError": false
+        }
+      }
+    },
+    {
+      "item": "ewpa/get-posts",
+      "verdict": "PASS",
+      "evidence": "captures/verify-verdicts.json",
+      "detail": {
+        "schemaProps": [
+          "numberposts",
+          "status",
+          "category_name",
+          "tag",
+          "orderby",
+          "order",
+          "s"
+        ],
+        "chosenParams": {
+          "status": "publish",
+          "orderby": "date",
+          "order": "DESC",
+          "numberposts": 50
+        },
+        "attempts": [
+          {
+            "params": {
+              "status": "publish",
+              "orderby": "date",
+              "order": "DESC",
+              "numberposts": 50
+            },
+            "ok": true,
+            "isError": false,
+            "error": null,
+            "count": 5,
+            "contentText": "{\"success\":true,\"data\":[{\"ID\":8,\"post_title\":\"Brightwater Logistics streamlines publishing\",\"post_status\":\"publish\",\"post_date\":\"2026-07-26 13:13:31\",\"post_excerpt\":\"\",\"post_author\":\"\",\"permalink\":\"http:\\/\\/localhost:8080\\/brightwater-logistics-streamlines-publishing\\/\",\"categories\":[\"Uncategorized\"],\"tags\":[]},{\"ID\":7,\"post_title\":\"Welcome to your demo blog\",\"post_status\":\"publish\",\"post_date\":\"2"
+          }
+        ],
+        "diagnosticNoFilterCount": 5,
+        "diagnosticContentText": "{\"success\":true,\"data\":[{\"ID\":8,\"post_title\":\"Brightwater Logistics streamlines publishing\",\"post_status\":\"publish\",\"post_date\":\"2026-07-26 13:13:31\",\"post_excerpt\":\"\",\"post_author\":\"\",\"permalink\":\"http:\\/\\/localhost:8080\\/brightwater-logistics-streamlines-publishing\\/\",\"categories\":[\"Uncategorized\"],\"tags\":[]},{\"ID\":7,\"post_title\":\"Welcome to your demo blog\",\"post_status\":\"publish\",\"post_date\":\"2",
+        "returnedTitles": [
+          "Brightwater Logistics streamlines publishing",
+          "Welcome to your demo blog",
+          "Hello world!",
+          "WP MCP Gateway — Newer Published Post",
+          "WP MCP Gateway — Older Published Post"
+        ],
+        "idxNewer": 3,
+        "idxOlder": 4,
+        "draftExcluded": true,
+        "orderingOk": true,
+        "filterOk": true
+      }
+    }
+  ],
+  "provenance": {
+    "capturedAtCommit": "1346373e4f0f1c316446bd0e5056f5754b8701ea",
+    "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30203573327",
+    "capturedAt": "2026-07-26T13:13:38.260Z",
+    "pinsLockSha256": "7bddc5015bbbf794a15229a4753d7973b40dfd364e0050e578e7121bab72ad7a",
+    "fixturePluginSha256": "435ff97d89701d402398d589aa5b4570cc77b6ac65e8fa8c74be0e9c07195231",
+    "producerSha256": "9f81bb67bd5eb378ea498c379dca7bd8eacc0dc25bc578d8d6ae8d1973545a81",
+    "apiMapSha256": "55749cb32fb96c5443510eb61a353bb63a9277c1600af212e25846b997c2dac8",
+    "equivalenceSha256": "db2c5e968cd9d20cc071f5abeb6696c47322b2d92a499e98f2b8838060e114e6"
+  }
+}

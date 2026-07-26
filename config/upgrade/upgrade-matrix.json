@@ -176,10 +176,11 @@
       "migrationMechanism": "app-managed-boot-migration",
       "appManagedSchema": true,
       "upstreamDictated": false,
-      "baselinePin": { "image": "cinatra-wordpress-dev:6.8-php8.3", "major": "6.8", "digest": null },
+      "baselinePin": { "image": "cinatra-wordpress-dev:6.9-php8.3", "major": "6.9", "digest": null },
       "notes": "The WordPress content root (/var/www/html): uploads + installed plugins/themes (the cinatra plugin is bind-mounted separately). File-tree state, not a DB engine; a WordPress core/PHP major re-runs WP's own DB upgrade against wordpress-db and rewrites the content tree in place (no engine dump/restore). The `family: mariadb` tag groups it with its coupled DB; classified object-store because the durable state is the uploads tree.",
       "transitions": [
-        { "from": "6.8", "to": "6.8", "supported": true, "mechanism": "app-managed-boot-migration", "skippedMajor": "n-a", "downgrade": false, "notes": "Baseline hold. WP 6.9 / 7.0 + php 8.5 each ride their own reviewable image-tag bump; WP performs its own in-place content/schema upgrade at boot." }
+        { "from": "6.8", "to": "6.9", "supported": true, "mechanism": "app-managed-boot-migration", "skippedMajor": "n-a", "downgrade": false, "notes": "Executed by the #2016 S1 pinned-fixture bump (PR #2083): the dev image moves to WP 6.9 / php 8.3 in one reviewable tag bump; WP performs its own in-place content/schema upgrade against wordpress-db at boot (app-managed, no engine dump/restore)." },
+        { "from": "6.9", "to": "6.9", "supported": true, "mechanism": "app-managed-boot-migration", "skippedMajor": "n-a", "downgrade": false, "notes": "Baseline hold. WP 7.0 + php 8.5 each ride their own reviewable image-tag bump; WP performs its own in-place content/schema upgrade at boot." }
       ]
     },
     {
