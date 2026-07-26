@@ -376,6 +376,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "CMS content-snapshot capture (cinatra#2043, epic #2037 S5): persists fetched CMS content as a real artifact (resource + artifact_blobs + append-only representation) and, in the SAME transaction (the S0 same-tx ordering), splices the transactional ArtifactProduced event and the cms_snapshot_targets apply-binding row. Driven by the connector staged-write adapter (a follow-up lane); sync leaf mirroring object-content-snapshot/representation-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
   },
+  "src/lib/artifacts/cms-preview-capture-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Pinned CMS preview-capture store (cinatra#2044, epic #2037 S6): writes ONE immutable capture record per (pinned review target, role) — the capture objects row plus, for a captured record, the resource + artifact_blobs + representation triple for the screenshot — in a single transaction whose deterministic objects PK makes a re-drive roll back rather than duplicate; plus the two gate-scoped reads the review surface serves from. Runs on the staged-write/gate-creation path and on the review view path; sync leaf mirroring cms-content-snapshot-capture/representation-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
+  },
   "src/lib/artifacts/semantic-assertion-store.ts": {
     class: "migratable-request-path",
     justification:

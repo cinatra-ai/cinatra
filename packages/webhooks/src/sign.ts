@@ -44,7 +44,39 @@ export function signOutbound(
   timestamp: Date,
   payload: unknown,
 ): SignedOutbound {
-  const body = JSON.stringify(payload);
+  return signOutboundRaw(secret, messageId, timestamp, JSON.stringify(payload));
+}
+
+/**
+ * Sign an EXACT signed-content string (no JSON envelope).
+ *
+ * The Standard-Webhooks signature is computed over `<id>.<ts>.<body>` where
+ * `body` is an opaque byte string — the spec does not require JSON. Some
+ * receivers authenticate a REQUEST rather than a payload by agreeing on a
+ * canonical signed content that is NOT the request body: the WordPress plugin's
+ * authenticated preview route (wordpress-plugin#94) verifies a GET by
+ * recomputing the signature over the canonical string `preview.<postId>` and
+ * comparing constant-time, so the signature is bound to that post id and there
+ * is no body to send at all.
+ *
+ * {@link signOutbound} JSON-encodes its payload, so signing `"preview.7"`
+ * through it would sign the seven-byte-longer quoted form `"\"preview.7\""` and
+ * never verify. This is the same primitive with the encoding step removed: the
+ * caller supplies the exact bytes both ends agreed on.
+ *
+ * @param secret    The per-binding Standard-Webhooks secret (`whsec_`-prefixed
+ *                  or bare base64).
+ * @param messageId A unique message id (the `webhook-id`; also the receiver's
+ *                  replay key — mint a fresh one per attempt).
+ * @param timestamp The signing timestamp (the receiver enforces freshness).
+ * @param body      The EXACT canonical signed content.
+ */
+export function signOutboundRaw(
+  secret: string,
+  messageId: string,
+  timestamp: Date,
+  body: string,
+): SignedOutbound {
   const signature = new Webhook(secret).sign(messageId, timestamp, body);
   return {
     body,
