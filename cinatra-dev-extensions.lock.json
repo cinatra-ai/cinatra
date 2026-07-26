@@ -98,6 +98,11 @@
       "resolvedSha": "e01e1d5a166aac7c7e66994a3df391aeae981dbc"
     },
     {
+      "packageName": "@cinatra-ai/cms-snapshot-artifact",
+      "repo": "cinatra-ai/cms-snapshot-artifact",
+      "resolvedSha": "7ee981724bcc8db20fa3f5ec4bdb7fb0dfec5531"
+    },
+    {
       "packageName": "@cinatra-ai/company-discovery-agent",
       "repo": "cinatra-ai/company-discovery-agent",
       "resolvedSha": "72cf120fc157beeb812651255c4863e4973e4d60"

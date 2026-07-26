@@ -51,6 +51,7 @@
       "@cinatra-ai/blog-wordpress-publish-agent": "https://github.com/cinatra-ai/blog-wordpress-publish-agent.git",
       "@cinatra-ai/brand-voice-artifact": "https://github.com/cinatra-ai/brand-voice-artifact.git",
       "@cinatra-ai/chart-artifact": "https://github.com/cinatra-ai/chart-artifact.git",
+      "@cinatra-ai/cms-snapshot-artifact": "https://github.com/cinatra-ai/cms-snapshot-artifact.git",
       "@cinatra-ai/code-reviewer-agent": "https://github.com/cinatra-ai/code-reviewer-agent.git",
       "@cinatra-ai/company-discovery-agent": "https://github.com/cinatra-ai/company-discovery-agent.git",
       "@cinatra-ai/competitive-analysis-artifact": "https://github.com/cinatra-ai/competitive-analysis-artifact.git",

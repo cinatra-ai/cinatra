@@ -6,6 +6,7 @@
 // remains the registration source for filesystem-loaded extension kinds;
 // parity is checked against the connector catalog descriptors.
 import "server-only";
+import { guardedExtensionImport } from "../extension-load-guard";
 import type { ExtensionResolution } from "@cinatra-ai/sdk-extensions";
 
 // Literal dynamic-import map (Turbopack rejects computed import templates).
@@ -28,6 +29,8 @@ export type GeneratedArtifactRendererEntry = {
 
 export const GENERATED_ARTIFACT_RENDERERS: Record<string, GeneratedArtifactRendererEntry> = {
   "@cinatra-ai/audio-artifact::detail": { resolution: "required", "packageName":"@cinatra-ai/audio-artifact","slot":"detail","representations":["audio/*"],"propsApiVersion":1, load: () => import("@cinatra-ai/audio-artifact/src/renderers/detail") },
+  "@cinatra-ai/cms-snapshot-artifact::detail": { resolution: "guardedOptional", "packageName":"@cinatra-ai/cms-snapshot-artifact","slot":"detail","representations":["application/vnd.cinatra.cms-fields+json"],"propsApiVersion":1, load: guardedExtensionImport("@cinatra-ai/cms-snapshot-artifact/src/renderers/detail", () => import("@cinatra-ai/cms-snapshot-artifact/src/renderers/detail")) },
+  "@cinatra-ai/cms-snapshot-artifact::preview": { resolution: "guardedOptional", "packageName":"@cinatra-ai/cms-snapshot-artifact","slot":"preview","representations":["application/vnd.cinatra.cms-fields+json"],"propsApiVersion":1, load: guardedExtensionImport("@cinatra-ai/cms-snapshot-artifact/src/renderers/preview", () => import("@cinatra-ai/cms-snapshot-artifact/src/renderers/preview")) },
   "@cinatra-ai/document-artifact::detail": { resolution: "required", "packageName":"@cinatra-ai/document-artifact","slot":"detail","representations":["application/vnd.openxmlformats-officedocument.wordprocessingml.document","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","application/vnd.openxmlformats-officedocument.presentationml.presentation","application/vnd.oasis.opendocument.text"],"propsApiVersion":1, load: () => import("@cinatra-ai/document-artifact/src/renderers/detail") },
   "@cinatra-ai/image-artifact::detail": { resolution: "required", "packageName":"@cinatra-ai/image-artifact","slot":"detail","representations":["image/*"],"propsApiVersion":1, load: () => import("@cinatra-ai/image-artifact/src/renderers/detail") },
   "@cinatra-ai/image-artifact::preview": { resolution: "required", "packageName":"@cinatra-ai/image-artifact","slot":"preview","representations":["image/*"],"propsApiVersion":1, load: () => import("@cinatra-ai/image-artifact/src/renderers/preview") },
