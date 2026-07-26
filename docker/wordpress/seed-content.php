@@ -105,6 +105,7 @@ function cinatra_wp_seed_post(array $post, int $version): string {
       'post_status' => $status,
     ], TRUE);
     if (is_wp_error($new_id) || !$new_id) {
+      cinatra_wp_seed_log(sprintf('seed insert FAILED for %s: %s', $fixture_id, is_wp_error($new_id) ? $new_id->get_error_message() : 'no post id'));
       return 'error';
     }
     cinatra_wp_seed_mark((int) $new_id, $fixture_id, $version);
@@ -201,6 +202,8 @@ function cinatra_wp_seed_gateway_posts(int $version): void {
     if (!is_wp_error($new_id) && $new_id) {
       cinatra_wp_seed_mark((int) $new_id, $spec['fixtureId'], $version);
       cinatra_wp_seed_log(sprintf('gateway post seeded: %s (%s, %s)', $spec['fixtureId'], $spec['status'], $local));
+    } else {
+      cinatra_wp_seed_log(sprintf('gateway post seed FAILED for %s: %s', $spec['fixtureId'], is_wp_error($new_id) ? $new_id->get_error_message() : 'no post id'));
     }
   }
 }

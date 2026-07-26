@@ -198,18 +198,25 @@ ensure_plugin() {
   fi
 
   log "$name incomplete or absent — fetching pinned ZIP $url ..."
-  rm -rf "$dir"
   local tmpzip tmpdir inner
   tmpzip="$(mktemp)"
   tmpdir="$(mktemp -d)"
   curl -fsSLo "$tmpzip" "$url"
   # Fail-closed checksum verification (the authoritative remote-artifact check
-  # also runs in the Dockerfile bake; this covers the fallback path).
+  # also runs in the Dockerfile bake; this covers the fallback path). The
+  # existing dir is only replaced AFTER download + checksum + unzip succeed, so
+  # a failed fetch leaves any partially-usable plugin tree in place.
   echo "${sha256}  ${tmpzip}" | sha256sum -c -
   unzip -q "$tmpzip" -d "$tmpdir"
   # The release ZIP contains a single top-level plugin dir; move it into place so
   # the target slug is correct regardless of the archive's inner dir name.
   inner="$(find "$tmpdir" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+  if [ -z "$inner" ]; then
+    log "ERROR: $name ZIP contained no top-level directory — leaving existing tree untouched."
+    rm -rf "$tmpzip" "$tmpdir"
+    return 1
+  fi
+  rm -rf "$dir"
   mv "$inner" "$dir"
   rm -rf "$tmpzip" "$tmpdir"
 

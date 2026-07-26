@@ -51,6 +51,12 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
 // against the live equivalence suite, so an equivalence.spec.ts edit must force
 // a fresh verdict capture rather than being silently droppable).
 const EQUIVALENCE_REQUIRED = new Set(["verify-verdicts.json"]);
+// The ONLY capture allowed to omit a provenance block: the upstream api-map is
+// a captured third-party artifact, and ITS integrity is pinned by apiMapSha256
+// inside every produced capture's provenance. Everything else MUST carry a
+// block — a capture without one is otherwise INVISIBLE to this gate (the
+// drop-the-block bypass).
+const PROVENANCE_EXEMPT = new Set(["adapter-0.5.0-api-map.json"]);
 
 /**
  * Recompute the provenance hashes from `root` and compare every provenanced
@@ -80,6 +86,11 @@ export function checkFreshness(root = REPO_ROOT_DEFAULT) {
     }
     if (json && typeof json === "object" && json.provenance && typeof json.provenance === "object") {
       provenanced.push({ name, provenance: json.provenance });
+    } else if (!PROVENANCE_EXEMPT.has(name)) {
+      errors.push(
+        `${CAPTURES_REL}/${name}: missing provenance block — a committed capture without one is invisible to this gate. ` +
+          `Every produced capture must carry provenance; only ${[...PROVENANCE_EXEMPT].join(", ")} (upstream artifact) is exempt.`,
+      );
     }
   }
 

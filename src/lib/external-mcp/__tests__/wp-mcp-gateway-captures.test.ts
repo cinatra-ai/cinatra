@@ -27,6 +27,14 @@ const CANONICAL_HASHES = ["pinsLockSha256", "fixturePluginSha256", "producerSha2
 const read = (name: string): any => JSON.parse(readFileSync(path.join(CAPTURES_DIR, name), "utf8"));
 
 describe("WP MCP gateway captures — provenance (drift-proof)", () => {
+  it("every capture EXCEPT the upstream api-map carries a provenance block (no drop-the-block bypass)", () => {
+    const exempt = new Set(["adapter-0.5.0-api-map.json"]);
+    for (const n of readdirSync(CAPTURES_DIR).filter((f) => f.endsWith(".json"))) {
+      if (exempt.has(n)) continue;
+      expect(read(n)?.provenance, `${n} must carry a provenance block`).toBeTruthy();
+    }
+  });
+
   it("every committed capture carries a provenance block with the four canonical sha256s", () => {
     const provenanced = readdirSync(CAPTURES_DIR)
       .filter((n) => n.endsWith(".json"))
