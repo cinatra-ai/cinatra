@@ -172,6 +172,19 @@ export default defineConfig({
         root,
         "packages/mcp-server/src/obo-ceiling.ts",
       ),
+      // cinatra#2017 S2: the governed connector-instance invoker (loaded via the
+      // host connector-service registration these agent tests exercise) imports the
+      // pure per-instance tool-policy evaluator + annotation classifier by subpath.
+      // Both are PURE (no React/host deps) — alias to REAL source, BEFORE the barrel
+      // stub, so vite's prefix matcher resolves them instead of the stub swallowing them.
+      "@cinatra-ai/mcp-server/instance-tool-policy": path.join(
+        root,
+        "packages/mcp-server/src/instance-tool-policy.ts",
+      ),
+      "@cinatra-ai/mcp-server/annotation-classifier": path.join(
+        root,
+        "packages/mcp-server/src/annotation-classifier.ts",
+      ),
       // Stub the mcp-server barrel itself. The real index.tsx imports React UI components from the host app
       // (`@/components/ui/*`), which are out of reach for this package's
       // vitest config. Our stub exports the runtime values used by
