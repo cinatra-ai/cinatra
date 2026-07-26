@@ -35,6 +35,7 @@
     "./auditor-snapshot-store": "./src/auditor-snapshot-store.ts",
     "./artifact-review-gate-store": "./src/artifact-review-gate-store.ts",
     "./lifecycle-verification-store": "./src/lifecycle-verification-store.ts",
+    "./cms-snapshot-readback-store": "./src/cms-snapshot-readback-store.ts",
     "./artifact-review-gate-seam": "./src/artifact-review-gate-seam.ts",
     "./artifact-review-resume-delivery": "./src/artifact-review-resume-delivery.ts",
     "./lifecycle-review-orchestration": "./src/lifecycle-review-orchestration-store.ts",

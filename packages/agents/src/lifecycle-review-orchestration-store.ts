@@ -457,6 +457,19 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
 
   // Link the gate onto the event (the effects-gating join). Only stamp when
   // unset so a replay never re-points a live linkage.
+  //
+  // RETRY-CONVERGENT SEAM (cinatra#2065 Seam B). The create-gate and this link are
+  // two statements; an interruption between them leaves the event PENDING and
+  // UNLINKED (the gate exists, `continuation_address` still null,
+  // `markProducedEventProcessed` never ran). Unlike the repair successor seam
+  // (Seam A), this does NOT need one transaction: the event stays pending, so the
+  // next orchestration sweep RE-PLANS it → `emitArtifactReviewGate` re-emits
+  // IDEMPOTENTLY onto the SAME deterministic (run, task) with the SAME single
+  // target (returns the existing gate) → this link stamps (still null) → the event
+  // is marked processed. The re-emit carries no caller-varying target (the target
+  // is the event's own artifact/revision), so no pin conflict is reachable and no
+  // gate is stranded — the strand self-heals on the very next sweep. Proven by the
+  // orchestration integration suite's create→link crash-window case.
   await db
     .update(artifactProducedOutbox)
     .set({ continuationAddress: gateId })
@@ -906,6 +919,104 @@ export async function isArtifactEffectHeld(input: {
     gateStatus,
     gateDisposition,
   });
+}
+
+/** The disposition-aware verdict of a captured external effect (cinatra#2043 S5
+ * — the connector CMS-review seam's apply gate). A plain held/not-held cannot
+ * tell `approve` from `reject` (both are "not held", but a rejected effect must
+ * NEVER be applied), so this widens `isArtifactEffectHeld` into the five states
+ * the connector's `resolveDisposition` seam consumes:
+ *   - `held`     — the review gate is pending (or a repair is in flight); HOLD.
+ *   - `approved` — the gate resolved `approve`; the effect is released → APPLY.
+ *   - `rejected` — the gate resolved `reject`; the effect is tombstoned → REFUSE.
+ *   - `ungated`  — the org lattice permitted the effect without a gate → APPLY.
+ *   - `unknown`  — no capture / an incoherent resolved state → fail-closed REFUSE. */
+export type ArtifactEffectDisposition = "held" | "approved" | "rejected" | "ungated" | "unknown";
+
+/**
+ * Resolve the disposition of an artifact revision's downstream EXTERNAL effect —
+ * the disposition-aware companion of `isArtifactEffectHeld`. Reads the SAME facts
+ * (the produced-event outbox row + its linked review gate) and reuses the pure
+ * `evaluateEffectHold` verdict for the hold decision, then distinguishes an
+ * approved release from a rejected tombstone via the gate's terminal disposition.
+ * The connector's `@cinatra-ai/host:cms-review` `resolveDisposition` seam binds
+ * this: the effect is held while the gate is pending, applied only on an
+ * `approve`, and refused (fail-closed) on a `reject` / an indeterminate state.
+ */
+export async function resolveArtifactEffectDisposition(input: {
+  artifactId: string;
+  representationRevisionId: string;
+  eventKind?: ProducedEventKind;
+}): Promise<{ disposition: ArtifactEffectDisposition; gate: { gateId: string; runId: string } | null }> {
+  const eventId = producedEventId(
+    input.artifactId,
+    input.representationRevisionId,
+    input.eventKind ?? "artifact_produced",
+  );
+  const [event] = await db
+    .select({
+      destinationClass: artifactProducedOutbox.destinationClass,
+      status: artifactProducedOutbox.status,
+      continuationAddress: artifactProducedOutbox.continuationAddress,
+    })
+    .from(artifactProducedOutbox)
+    .where(eq(artifactProducedOutbox.eventId, eventId))
+    .limit(1);
+
+  // No produced event for this revision — nothing was captured. Fail-closed:
+  // the connector treats `unknown` as REFUSE (never a silent apply on a phantom).
+  if (!event) return { disposition: "unknown", gate: null };
+
+  let gateStatus: "pending" | "resolved" | null = null;
+  let gateDisposition: "approve" | "reject" | "changes_requested" | null = null;
+  let gateRef: { gateId: string; runId: string } | null = null;
+  if (event.continuationAddress) {
+    const [gate] = await db
+      .select({
+        id: artifactReviewGates.id,
+        runId: artifactReviewGates.runId,
+        status: artifactReviewGates.status,
+        disposition: artifactReviewGates.disposition,
+      })
+      .from(artifactReviewGates)
+      .where(eq(artifactReviewGates.id, event.continuationAddress))
+      .limit(1);
+    if (gate) {
+      gateRef = { gateId: gate.id, runId: gate.runId };
+      gateStatus = gate.status === "resolved" ? "resolved" : "pending";
+      gateDisposition = (gate.disposition as "approve" | "reject" | "changes_requested" | null) ?? null;
+    }
+  }
+
+  const verdict = evaluateEffectHold({
+    event: {
+      destinationClass: event.destinationClass as DestinationClass,
+      status: event.status,
+      continuationAddress: event.continuationAddress,
+    },
+    gateStatus,
+    gateDisposition,
+  });
+
+  // HELD: the gate is pending (or a repair is in flight, `changes_requested`), or
+  // an external effect awaits orchestration (fail-closed) — the connector holds.
+  if (verdict.held) return { disposition: "held", gate: gateRef };
+
+  // NOT held. An event with no continuation address is either non-external or
+  // org-`forbidden` (the lattice permitted the effect without a gate) → ungated.
+  if (!event.continuationAddress) return { disposition: "ungated", gate: null };
+
+  // A continuation address that no longer resolves to a gate row is incoherent —
+  // never apply on a vanished gate.
+  if (!gateRef) return { disposition: "unknown", gate: null };
+
+  // A resolved gate: approve releases (apply), reject tombstones (refuse).
+  if (gateDisposition === "approve") return { disposition: "approved", gate: gateRef };
+  if (gateDisposition === "reject") return { disposition: "rejected", gate: gateRef };
+
+  // Resolved-but-no-terminal-disposition (or a value the effect-hold verdict did
+  // not classify as still-held) is indeterminate → fail-closed.
+  return { disposition: "unknown", gate: gateRef };
 }
 
 // ---------------------------------------------------------------------------

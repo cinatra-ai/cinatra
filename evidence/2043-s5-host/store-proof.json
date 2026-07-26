@@ -1,0 +1,107 @@
+{
+  "W1": {
+    "action": "hold",
+    "wordpressPostId": 23,
+    "reviewedPaths": [
+      "title"
+    ],
+    "objectsRow": {
+      "id": "cecd33b5-9de1-4002-bfa3-e87ca18df24e",
+      "type": "@cinatra-ai/objects:cms-content-snapshot"
+    },
+    "representationRow": {
+      "id": "d5d50c49-4eb2-4a42-b0a6-f50cfe82571f",
+      "artifact_id": "cecd33b5-9de1-4002-bfa3-e87ca18df24e",
+      "resource_id": "620e1700-ee6b-442a-98a1-4ac13a3770a9"
+    },
+    "cmsSnapshotTargetRow": {
+      "operation_id": "bafa2205911397e9cee07c8330f96bdef0960f5ffaed9125530b681156d9853f",
+      "scope_manifest": {
+        "paths": [
+          "title"
+        ]
+      },
+      "connector_instance": "inst-s5live",
+      "resource_type": "post",
+      "resource_id": "23",
+      "base_remote_revision_ref": "e53812723f70ac9f9554ab5fdc050e4406acef2bc939091e4515bd05b7c5f616"
+    },
+    "producedEventRow": {
+      "emitter": "object_cms_snapshot_capture",
+      "destination_class": "external_publish",
+      "status": "pending"
+    },
+    "wordpressBefore": {
+      "title": "W1 Original Title",
+      "content": "W1 original body.",
+      "excerpt": "W1 excerpt.",
+      "status": "publish"
+    },
+    "wordpressWhilePending": {
+      "title": "W1 Original Title",
+      "content": "W1 original body.",
+      "excerpt": "W1 excerpt.",
+      "status": "publish"
+    },
+    "wordpressUnchanged": true
+  },
+  "W4a": {
+    "approveOutcome": {
+      "status": "committed"
+    },
+    "applyAction": "apply",
+    "wordpressAfterApply": {
+      "title": "Approved Title",
+      "content": "Original body content.",
+      "excerpt": "Original excerpt.",
+      "status": "publish"
+    },
+    "wordpressChanged": true,
+    "readback": {
+      "ok": true,
+      "outcome": "verified",
+      "outOfScope": []
+    },
+    "verificationRecord": {
+      "outcome": "verified",
+      "scope_manifest": {
+        "paths": [
+          "title"
+        ]
+      }
+    }
+  },
+  "W4b": {
+    "wordpressAfterApply": {
+      "title": "W4b Approved",
+      "content": "W4b body. [edited-on-save-by-plugin]",
+      "excerpt": "W4b excerpt.",
+      "status": "publish"
+    },
+    "pluginRewroteContent": true,
+    "readback": {
+      "ok": true,
+      "outcome": "drifted",
+      "outOfScope": [
+        "content"
+      ]
+    },
+    "verificationRecord": {
+      "outcome": "drifted"
+    },
+    "gatesOnRun": [
+      {
+        "id": "4954d8c8-d23b-4150-a6ce-25216961298f",
+        "reviewTaskId": "lifecycle-review:3d034aac850759c4853973d50a5d9c338a984b2435f9ab98eab8043992a34789",
+        "status": "resolved",
+        "disposition": "approve"
+      },
+      {
+        "id": "a06e3fc6-b89f-4030-9b40-9de8da68f915",
+        "reviewTaskId": "lifecycle-review:verify:verify:4954d8c8-d23b-4150-a6ce-25216961298f",
+        "status": "pending",
+        "disposition": null
+      }
+    ]
+  }
+}

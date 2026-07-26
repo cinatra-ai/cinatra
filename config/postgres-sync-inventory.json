@@ -81,7 +81,7 @@
     },
     {
       "file": "src/lib/artifacts/cms-content-snapshot-capture.ts",
-      "calls": 3
+      "calls": 4
     },
     {
       "file": "src/lib/artifacts/context-mcp.ts",
