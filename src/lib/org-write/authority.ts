@@ -80,6 +80,39 @@ export function sessionAuthorityFromResolvedRole(
   };
 }
 
+/** The run-lifecycle capabilities a run-management authority grants — EXACTLY
+ *  the two run capabilities, never membership / settings / lifecycle. */
+const RUN_MANAGEMENT_CAPABILITIES: ReadonlySet<OrgWriteCapability> = new Set([
+  "run.execute",
+  "run.complete",
+]);
+
+/**
+ * The authorized-NON-MEMBER run-management mint — cinatra#1939 wave 2 (§2d′).
+ *
+ * Grounds run-management transitions for an actor who is ALREADY authorized on
+ * the target run (a `canActOnRun` co-owner / owner, or a platform-admin cleared
+ * by `requireAdminSession`) but is NOT an org member — a cross-org co-owner
+ * (`addRunCoOwner` enforces no same-org check) or a platform admin. Grants ONLY
+ * the two run-lifecycle capabilities and carries NO `runId`, so it can never
+ * satisfy a lease-gated (archived-org) ruling.
+ *
+ * SAFETY RESTS ENTIRELY on the caller's prior authorization. It MUST be minted
+ * INLINE, immediately after the `canActOnRun` / `requireAdminSession` gate in
+ * the SAME function (the §2d′ adjacency invariant) — never behind a reusable
+ * "resolve-the-run-authority" helper that would hide the precondition and let a
+ * future caller mint it without the authz check. The
+ * `resolveOrgRoleForUser === undefined ⇒ authorized-non-member` inference is
+ * only sound BECAUSE that gate already ran. The boundary gate additionally
+ * restricts WHO may import this (§5.2) — belt and suspenders.
+ */
+export function runManagementAuthority(orgId: string): OrgWriteAuthority {
+  return {
+    orgId,
+    can: (capability) => RUN_MANAGEMENT_CAPABILITIES.has(capability),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Verified run authority
 // ---------------------------------------------------------------------------
@@ -185,6 +218,14 @@ const SYSTEM_PURPOSE_CAPABILITIES: Record<string, readonly OrgWriteCapability[]>
   "org-lifecycle-transition": ["org.lifecycle"],
   /** The S3/S4 lease-expiry finalizer landing terminal transitions. */
   "lease-expiry-finalizer": ["run.execute", "run.complete"],
+  /** The agent-run job contexts driving a run's FULL lifecycle with no session
+   *  (cinatra#1939 wave 2): dispatch (`run.execute`) + terminal finalize
+   *  (`run.complete`). Kept SEPARATE from `lease-expiry-finalizer` (same grant
+   *  shape) so the finalizer's archive/lease audit domain is not conflated with
+   *  normal execution. Sole minting site:
+   *  src/lib/org-write/agent-run-authority-mint.ts (R2-allowlisted in the
+   *  boundary gate); §5.2 further restricts its consumers to the three jobs. */
+  "agent-run-dispatch": ["run.execute", "run.complete"],
   /** The committed extension archive/restore transition's dashboard hook
    *  (cinatra#1939 wave 1): archives/restores that org's extension-shipped
    *  dashboards AFTER install/uninstall authz gated the transition upstream.

@@ -202,3 +202,117 @@ describe("opaque access forms are fail-closed", () => {
     ).toEqual([]);
   });
 });
+
+describe("R2/R5: the agent-run mint file and its NAMED consumers (#1939 wave 2)", () => {
+  const MINT = "@/lib/org-write/agent-run-authority-mint";
+  const RESOLVE_TO_MINT = () => "src/lib/org-write/agent-run-authority-mint.ts";
+
+  it("R2 allowlist: the mint file may import mintSystemWriteAuthority (sole minting site)", () => {
+    expect(
+      check(
+        "src/lib/org-write/agent-run-authority-mint.ts",
+        'import { mintSystemWriteAuthority } from "./authority";',
+        () => "src/lib/org-write/authority.ts",
+      ),
+    ).toEqual([]);
+  });
+
+  it("a sanctioned job context may NAME a dispatch mint wrapper (green)", () => {
+    expect(
+      check(
+        "packages/agents/src/execution.ts",
+        `import { mintAgentRunExecutionAuthority } from "${MINT}";`,
+      ),
+    ).toEqual([]);
+    expect(
+      check(
+        "src/lib/host-content-editor-dispatch.ts",
+        `import { mintContentEditorDispatchAuthority } from "${MINT}";`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("shape=alias: a non-consumer aliasing a wrapper is red (R5)", () => {
+    const v = check(
+      "src/lib/rogue-job.ts",
+      `import { mintAgentRunExecutionAuthority as run } from "${MINT}";`,
+    );
+    expect(v.map((x) => x.rule)).toContain("R5-run-dispatch-mint");
+  });
+
+  it("shape=re-export: a non-consumer re-exporting a wrapper is red at the re-export site (R5)", () => {
+    const v = check(
+      "src/lib/rogue-index.ts",
+      `export { mintTriggerReleaseAuthority } from "${MINT}";`,
+    );
+    expect(v.map((x) => x.rule)).toContain("R5-run-dispatch-mint");
+  });
+
+  it("shape=path-variant: a relative import resolving into the mint file is red (R5)", () => {
+    const v = check(
+      "src/lib/rogue-path.ts",
+      'import { mintContentEditorDispatchAuthority } from "../org-write/agent-run-authority-mint";',
+      RESOLVE_TO_MINT,
+    );
+    expect(v.map((x) => x.rule)).toContain("R5-run-dispatch-mint");
+  });
+
+  it("shape=import*: a namespace import of the mint file is red (opaque; caught by R2's org-write net)", () => {
+    const v = check("src/lib/rogue-ns.ts", `import * as m from "${MINT}";`);
+    expect(v.map((x) => x.rule)).toContain("R2-system-mint-opaque");
+  });
+
+  it("shape=dynamic import(): a dynamic import of the mint file is red (opaque)", () => {
+    const v = check("src/lib/rogue-dyn.ts", `const m = await import("${MINT}");`);
+    expect(v.map((x) => x.rule)).toContain("R2-system-mint-opaque");
+  });
+
+  it("shape=require: a require() of the mint file is red (opaque)", () => {
+    const v = check("src/lib/rogue-req.ts", `const m = require("${MINT}");`);
+    expect(v.map((x) => x.rule)).toContain("R2-system-mint-opaque");
+  });
+});
+
+describe("R5: runManagementAuthority consumer allowlist (#1939 wave 2)", () => {
+  const AUTH = "@/lib/org-write/authority";
+  const line = `import { runManagementAuthority } from "${AUTH}";`;
+
+  it("a run-management module may NAME runManagementAuthority (green)", () => {
+    expect(check("packages/agents/src/orchestrator-actions.ts", line)).toEqual([]);
+    expect(
+      check(
+        "packages/agents/src/mcp/handlers.ts",
+        `import { runManagementAuthority, sessionAuthorityFromResolvedRole } from "${AUTH}";`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("a test file may NAME runManagementAuthority (test-exempt, §5.2)", () => {
+    expect(
+      check("packages/agents/src/__tests__/orchestrator-actions.test.ts", line),
+    ).toEqual([]);
+  });
+
+  it("a non-run-management module NAMING runManagementAuthority is red (R5)", () => {
+    const v = check("src/lib/rogue-mgmt.ts", line);
+    expect(v).toHaveLength(1);
+    expect(v[0].rule).toBe("R5-run-management-authority");
+  });
+
+  it("an aliased runManagementAuthority import from a non-consumer is red (R5)", () => {
+    const v = check(
+      "src/lib/rogue-alias.ts",
+      `import { runManagementAuthority as rm } from "${AUTH}";`,
+    );
+    expect(v.map((x) => x.rule)).toContain("R5-run-management-authority");
+  });
+
+  it("session-authority NAMED imports stay green everywhere (only runManagementAuthority is restricted)", () => {
+    expect(
+      check(
+        "src/lib/some-other-consumer.ts",
+        `import { sessionAuthorityFromResolvedRole, verifySessionAuthority } from "${AUTH}";`,
+      ),
+    ).toEqual([]);
+  });
+});

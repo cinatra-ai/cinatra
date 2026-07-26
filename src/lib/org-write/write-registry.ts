@@ -31,6 +31,14 @@ export interface OrgWriteRegistryEntry {
   readonly module: string;
   readonly exportName: string;
   readonly capability: OrgWriteCapability;
+  /** Capabilities a writer needs on SOME transitions IN ADDITION to
+   *  `capability` — e.g. `transitionRunStatus` is a `run.execute` writer that
+   *  additionally needs `run.complete` on its terminal edges (cinatra#1939
+   *  wave 2, §3/§5.5). OPTIONAL so existing registry-shape validators and
+   *  lockstep readers are unaffected; the capability-completeness audit is the
+   *  consumer that reads it. Per-row values land in the writer-conversion
+   *  commit. */
+  readonly conditionalCapabilities?: readonly OrgWriteCapability[];
   readonly orgIdExtractor: string;
   readonly storageReferences: readonly string[];
   readonly cascadeOwnership: CascadeOwnership;

@@ -2,7 +2,7 @@
 // CI gate: the org-write kernel boundary — cinatra#1938 (archive epic S2).
 //
 // The kernel's enforcement value rests on writers being UNCALLABLE except
-// through the guarded entry points. This gate pins three structural rules
+// through the guarded entry points. This gate pins four structural rules
 // over the real import graph (TypeScript compiler API — the same parser-based
 // classifier discipline as host-peer-value-import-ban.mjs, covering static
 // imports, runtime re-exports, `import()`, `require()` and
@@ -16,11 +16,19 @@
 //       cannot dodge the prefix check) are violations.
 //   R2  system-mint restriction: a value import of the
 //       `mintSystemWriteAuthority` binding is dispatcher-only. The allowlist
-//       is EMPTY until S4 wires the dispatcher (tests under
-//       src/lib/org-write/__tests__/ are exempt by scope rule).
+//       carries the wave-1 lifecycle hooks + the wave-2 agent-run mint (tests
+//       under src/lib/org-write/__tests__/ are exempt by scope rule).
 //   R3  single unwrap consumer: a value import of the `guardedBatchQueries`
 //       binding outside the kernel itself is legal ONLY in
 //       src/lib/org-write/batch-wrapper.ts (the transaction-forcing wrapper).
+//   R5  named-consumer allowlists (cinatra#1939 wave 2, §5.2): a value import
+//       that NAMES a run-management authority helper is restricted to its
+//       sanctioned consumers — the agent-run system-dispatch mint wrappers to
+//       the three job files, `runManagementAuthority` to the run-management
+//       modules + their tests. Opaque access to those modules is already
+//       covered by R2's org-write net; R5 closes the named/aliased/re-exported
+//       path. (R4 = the registry `importBanned` ratchet, deliberately
+//       unimplemented — see write-registry.ts.)
 //
 // Zero-baseline gate: there is no ratchet file — the honest surface is empty
 // and must stay empty. Scan scope is src/ + packages/ + scripts/ (extensions
@@ -54,12 +62,73 @@ export const SYSTEM_MINT_ALLOWLIST = new Set([
   // The boot phase — mints the content-only "dashboard-twin-backfill"
   // purpose per org for the artifact-twin backfill (cinatra#1939 wave 1).
   join("src", "lib", "boot", "phases", "core-boot.ts"),
+  // The agent-run system-dispatch mint — the SOLE importer of
+  // mintSystemWriteAuthority for the "agent-run-dispatch" purpose; exposes the
+  // three context-named wrappers (cinatra#1939 wave 2). Its OWN consumers are
+  // restricted separately by RUN_DISPATCH_MINT_CONSUMER_ALLOWLIST below.
+  join("src", "lib", "org-write", "agent-run-authority-mint.ts"),
 ]);
 
 /** R3: the one legal unwrap consumer outside the kernel. */
 export const BATCH_UNWRAP_ALLOWLIST = new Set([
   join("src", "lib", "org-write", "batch-wrapper.ts"),
 ]);
+
+/** R5 (cinatra#1939 wave 2, §5.2): the three job contexts allowed to NAME the
+ *  agent-run system-dispatch mint wrappers. Being the sole minting site is not
+ *  being the sole authorized caller — the wrappers grant org-wide run caps and
+ *  are otherwise freely importable, so their consumers are restricted here. */
+export const RUN_DISPATCH_MINT_CONSUMER_ALLOWLIST = new Set([
+  join("packages", "agents", "src", "execution.ts"),
+  join("packages", "agents", "src", "trigger-release-job.ts"),
+  join("src", "lib", "host-content-editor-dispatch.ts"),
+]);
+
+/** R5 (cinatra#1939 wave 2, §5.2): the run-management modules allowed to NAME
+ *  `runManagementAuthority` (the authorized-non-member session-tier mint). Its
+ *  safety rests on the caller's prior canActOnRun / requireAdminSession gate,
+ *  so only the modules that run that gate — plus their tests — may import it. */
+export const RUN_MANAGEMENT_AUTHORITY_ALLOWLIST = new Set([
+  join("packages", "agents", "src", "orchestrator-actions.ts"),
+  join("packages", "agents", "src", "orchestrator-execution.ts"),
+  join("packages", "agents", "src", "run-actions.ts"),
+  join("packages", "agents", "src", "trigger-service.ts"),
+  join("packages", "agents", "src", "review-task-actions.ts"),
+  join("packages", "agents", "src", "actions.ts"),
+  join("packages", "agents", "src", "mcp", "handlers.ts"),
+]);
+
+/**
+ * R5 named-consumer rules. The R2 mechanism already fail-closes the OPAQUE
+ * forms (namespace / bare / dynamic import() / require()) across the whole
+ * @/lib/org-write/ surface; these rules add the missing NAMED-import
+ * restriction so a freely-importable wrapper helper can only be named by its
+ * sanctioned consumers. The SAME classifier as R2 does the heavy lifting:
+ * aliased names resolve to the ORIGINAL imported name and re-exports are value
+ * edges, so alias / re-export / path-variant are all caught here.
+ */
+const NAMED_CONSUMER_RULES = [
+  {
+    rule: "R5-run-dispatch-mint",
+    bindings: new Set([
+      "mintAgentRunExecutionAuthority",
+      "mintTriggerReleaseAuthority",
+      "mintContentEditorDispatchAuthority",
+    ]),
+    moduleRel: join("src", "lib", "org-write", "agent-run-authority-mint.ts"),
+    aliasSpecifier: "@/lib/org-write/agent-run-authority-mint",
+    allowlist: RUN_DISPATCH_MINT_CONSUMER_ALLOWLIST,
+    testsExempt: false,
+  },
+  {
+    rule: "R5-run-management-authority",
+    bindings: new Set(["runManagementAuthority"]),
+    moduleRel: join("src", "lib", "org-write", "authority.ts"),
+    aliasSpecifier: "@/lib/org-write/authority",
+    allowlist: RUN_MANAGEMENT_AUTHORITY_ALLOWLIST,
+    testsExempt: true, // "+ their tests" (§5.2)
+  },
+];
 
 const SCAN_ROOTS = ["src", "packages", "scripts"];
 const SKIP_DIRS = new Set(["node_modules", "dist", ".next", "__generated__"]);
@@ -264,6 +333,27 @@ export function evaluateBoundaryRules(fileRel, edges, resolveSpecifier) {
         fileRel,
         ...edge,
       });
+    }
+
+    // R5 — named-consumer allowlists (§5.2, cinatra#1939 wave 2). The OPAQUE
+    // forms (namespace / bare / dynamic import() / require()) are already
+    // fail-closed by R2's org-write net above; this adds the NAMED-import
+    // restriction — named, aliased (resolves to the original name), re-exported
+    // (a value edge) and path-variant (relative resolving into the module) —
+    // so a freely-importable wrapper helper can only be NAMED by its sanctioned
+    // consumers.
+    for (const spec of NAMED_CONSUMER_RULES) {
+      if (isOrgWriteTest) continue; // org-write __tests__ exempt (mirrors R2)
+      if (spec.testsExempt && isTestFile) continue; // "+ their tests" (§5.2)
+      if (spec.allowlist.has(fileRel)) continue; // sanctioned consumer
+      const touchesSpecModule =
+        edge.specifier === spec.aliasSpecifier ||
+        (edge.specifier.startsWith(".") &&
+          resolveSpecifier(edge.specifier) === spec.moduleRel);
+      if (!touchesSpecModule) continue;
+      if (edge.valueBindings.some((b) => spec.bindings.has(b))) {
+        violations.push({ rule: spec.rule, fileRel, ...edge });
+      }
     }
   }
   return violations;
