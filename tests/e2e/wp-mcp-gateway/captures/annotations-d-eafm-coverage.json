@@ -1,0 +1,321 @@
+{
+  "schemaVersion": 1,
+  "subClaim": "d",
+  "description": "eafm annotation coverage incl delete / search-replace / code-snippet (2.0.20)",
+  "coverageHints": [
+    "delete",
+    "search-replace",
+    "search_replace",
+    "code-snippet",
+    "code_snippet"
+  ],
+  "exposureNote": "triad-only exposure: coverage abilities are not first-class tools; their annotations are captured via get-ability-info",
+  "firstClassMatches": [],
+  "coverageViaGetInfo": {
+    "ewpa/delete-post": {
+      "found": true,
+      "annotations": {
+        "readonly": null,
+        "destructive": null,
+        "idempotent": null
+      },
+      "response": {
+        "request": {
+          "jsonrpc": "2.0",
+          "id": 11,
+          "method": "tools/call",
+          "params": {
+            "name": "mcp-adapter-get-ability-info",
+            "arguments": {
+              "ability_name": "ewpa/delete-post"
+            }
+          }
+        },
+        "status": 200,
+        "contentType": "application/json; charset=UTF-8",
+        "rawText": "{\"jsonrpc\":\"2.0\",\"id\":11,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"name\\\":\\\"ewpa\\\\\\/delete-post\\\",\\\"label\\\":\\\"Delete Post\\\",\\\"description\\\":\\\"Sends a post to trash or permanently deletes it. Defaults to trash.\\\",\\\"input_schema\\\":{\\\"type\\\":\\\"object\\\",\\\"required\\\":[\\\"post_id\\\"],\\\"properties\\\":{\\\"post_id\\\":{\\\"type\\\":\\\"integer\\\",\\\"description\\\":\\\"Post ID to delete (required)\\\"},\\\"force_delete\\\":{\\\"type\\\":\\\"boolean\\\",\\\"description\\\":\\\"true = permanently delete, false = trash\\\",\\\"default\\\":false}}},\\\"output_schema\\\":{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"post_id\\\":{\\\"type\\\":\\\"integer\\\"},\\\"deleted\\\":{\\\"type\\\":\\\"boolean\\\"},\\\"message\\\":{\\\"type\\\":\\\"string\\\"}}},\\\"meta\\\":{\\\"annotations\\\":{\\\"readonly\\\":null,\\\"destructive\\\":null,\\\"idempotent\\\":null},\\\"show_in_rest\\\":true,\\\"mcp\\\":{\\\"public\\\":true}}}\"}],\"structuredContent\":{\"name\":\"ewpa\\/delete-post\",\"label\":\"Delete Post\",\"description\":\"Sends a post to trash or permanently deletes it. Defaults to trash.\",\"input_schema\":{\"type\":\"object\",\"required\":[\"post_id\"],\"properties\":{\"post_id\":{\"type\":\"integer\",\"description\":\"Post ID to delete (required)\"},\"force_delete\":{\"type\":\"boolean\",\"description\":\"true = permanently delete, false = trash\",\"default\":false}}},\"output_schema\":{\"type\":\"object\",\"properties\":{\"post_id\":{\"type\":\"integer\"},\"deleted\":{\"type\":\"boolean\"},\"message\":{\"type\":\"string\"}}},\"meta\":{\"annotations\":{\"readonly\":null,\"destructive\":null,\"idempotent\":null},\"show_in_rest\":true,\"mcp\":{\"public\":true}}},\"isError\":false}}",
+        "parsed": {
+          "jsonrpc": "2.0",
+          "id": 11,
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"name\":\"ewpa\\/delete-post\",\"label\":\"Delete Post\",\"description\":\"Sends a post to trash or permanently deletes it. Defaults to trash.\",\"input_schema\":{\"type\":\"object\",\"required\":[\"post_id\"],\"properties\":{\"post_id\":{\"type\":\"integer\",\"description\":\"Post ID to delete (required)\"},\"force_delete\":{\"type\":\"boolean\",\"description\":\"true = permanently delete, false = trash\",\"default\":false}}},\"output_schema\":{\"type\":\"object\",\"properties\":{\"post_id\":{\"type\":\"integer\"},\"deleted\":{\"type\":\"boolean\"},\"message\":{\"type\":\"string\"}}},\"meta\":{\"annotations\":{\"readonly\":null,\"destructive\":null,\"idempotent\":null},\"show_in_rest\":true,\"mcp\":{\"public\":true}}}"
+              }
+            ],
+            "structuredContent": {
+              "name": "ewpa/delete-post",
+              "label": "Delete Post",
+              "description": "Sends a post to trash or permanently deletes it. Defaults to trash.",
+              "input_schema": {
+                "type": "object",
+                "required": [
+                  "post_id"
+                ],
+                "properties": {
+                  "post_id": {
+                    "type": "integer",
+                    "description": "Post ID to delete (required)"
+                  },
+                  "force_delete": {
+                    "type": "boolean",
+                    "description": "true = permanently delete, false = trash",
+                    "default": false
+                  }
+                }
+              },
+              "output_schema": {
+                "type": "object",
+                "properties": {
+                  "post_id": {
+                    "type": "integer"
+                  },
+                  "deleted": {
+                    "type": "boolean"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                }
+              },
+              "meta": {
+                "annotations": {
+                  "readonly": null,
+                  "destructive": null,
+                  "idempotent": null
+                },
+                "show_in_rest": true,
+                "mcp": {
+                  "public": true
+                }
+              }
+            },
+            "isError": false
+          }
+        },
+        "sessionId": "a1706ecf-c63e-4d18-b0dc-d757f18dd1b3"
+      }
+    },
+    "ewpa/search-replace": {
+      "found": true,
+      "annotations": {
+        "readonly": null,
+        "destructive": null,
+        "idempotent": null
+      },
+      "response": {
+        "request": {
+          "jsonrpc": "2.0",
+          "id": 12,
+          "method": "tools/call",
+          "params": {
+            "name": "mcp-adapter-get-ability-info",
+            "arguments": {
+              "ability_name": "ewpa/search-replace"
+            }
+          }
+        },
+        "status": 200,
+        "contentType": "application/json; charset=UTF-8",
+        "rawText": "{\"jsonrpc\":\"2.0\",\"id\":12,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"name\\\":\\\"ewpa\\\\\\/search-replace\\\",\\\"label\\\":\\\"Search and Replace\\\",\\\"description\\\":\\\"Searches for text in a specific post content and replaces it with another. Useful for corrections and updates.\\\",\\\"input_schema\\\":{\\\"type\\\":\\\"object\\\",\\\"required\\\":[\\\"post_id\\\",\\\"search\\\",\\\"replace\\\"],\\\"properties\\\":{\\\"post_id\\\":{\\\"type\\\":\\\"integer\\\",\\\"description\\\":\\\"Post ID to search and replace in\\\"},\\\"search\\\":{\\\"type\\\":\\\"string\\\",\\\"description\\\":\\\"Text to search for\\\"},\\\"replace\\\":{\\\"type\\\":\\\"string\\\",\\\"description\\\":\\\"Replacement text\\\"}}},\\\"output_schema\\\":{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"post_id\\\":{\\\"type\\\":\\\"integer\\\"},\\\"replacements\\\":{\\\"type\\\":\\\"integer\\\"},\\\"message\\\":{\\\"type\\\":\\\"string\\\"}}},\\\"meta\\\":{\\\"annotations\\\":{\\\"readonly\\\":null,\\\"destructive\\\":null,\\\"idempotent\\\":null},\\\"show_in_rest\\\":true,\\\"mcp\\\":{\\\"public\\\":true}}}\"}],\"structuredContent\":{\"name\":\"ewpa\\/search-replace\",\"label\":\"Search and Replace\",\"description\":\"Searches for text in a specific post content and replaces it with another. Useful for corrections and updates.\",\"input_schema\":{\"type\":\"object\",\"required\":[\"post_id\",\"search\",\"replace\"],\"properties\":{\"post_id\":{\"type\":\"integer\",\"description\":\"Post ID to search and replace in\"},\"search\":{\"type\":\"string\",\"description\":\"Text to search for\"},\"replace\":{\"type\":\"string\",\"description\":\"Replacement text\"}}},\"output_schema\":{\"type\":\"object\",\"properties\":{\"post_id\":{\"type\":\"integer\"},\"replacements\":{\"type\":\"integer\"},\"message\":{\"type\":\"string\"}}},\"meta\":{\"annotations\":{\"readonly\":null,\"destructive\":null,\"idempotent\":null},\"show_in_rest\":true,\"mcp\":{\"public\":true}}},\"isError\":false}}",
+        "parsed": {
+          "jsonrpc": "2.0",
+          "id": 12,
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"name\":\"ewpa\\/search-replace\",\"label\":\"Search and Replace\",\"description\":\"Searches for text in a specific post content and replaces it with another. Useful for corrections and updates.\",\"input_schema\":{\"type\":\"object\",\"required\":[\"post_id\",\"search\",\"replace\"],\"properties\":{\"post_id\":{\"type\":\"integer\",\"description\":\"Post ID to search and replace in\"},\"search\":{\"type\":\"string\",\"description\":\"Text to search for\"},\"replace\":{\"type\":\"string\",\"description\":\"Replacement text\"}}},\"output_schema\":{\"type\":\"object\",\"properties\":{\"post_id\":{\"type\":\"integer\"},\"replacements\":{\"type\":\"integer\"},\"message\":{\"type\":\"string\"}}},\"meta\":{\"annotations\":{\"readonly\":null,\"destructive\":null,\"idempotent\":null},\"show_in_rest\":true,\"mcp\":{\"public\":true}}}"
+              }
+            ],
+            "structuredContent": {
+              "name": "ewpa/search-replace",
+              "label": "Search and Replace",
+              "description": "Searches for text in a specific post content and replaces it with another. Useful for corrections and updates.",
+              "input_schema": {
+                "type": "object",
+                "required": [
+                  "post_id",
+                  "search",
+                  "replace"
+                ],
+                "properties": {
+                  "post_id": {
+                    "type": "integer",
+                    "description": "Post ID to search and replace in"
+                  },
+                  "search": {
+                    "type": "string",
+                    "description": "Text to search for"
+                  },
+                  "replace": {
+                    "type": "string",
+                    "description": "Replacement text"
+                  }
+                }
+              },
+              "output_schema": {
+                "type": "object",
+                "properties": {
+                  "post_id": {
+                    "type": "integer"
+                  },
+                  "replacements": {
+                    "type": "integer"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                }
+              },
+              "meta": {
+                "annotations": {
+                  "readonly": null,
+                  "destructive": null,
+                  "idempotent": null
+                },
+                "show_in_rest": true,
+                "mcp": {
+                  "public": true
+                }
+              }
+            },
+            "isError": false
+          }
+        },
+        "sessionId": "a1706ecf-c63e-4d18-b0dc-d757f18dd1b3"
+      }
+    },
+    "ewpa/create-code-snippet": {
+      "found": true,
+      "annotations": {
+        "readonly": null,
+        "destructive": null,
+        "idempotent": null
+      },
+      "response": {
+        "request": {
+          "jsonrpc": "2.0",
+          "id": 13,
+          "method": "tools/call",
+          "params": {
+            "name": "mcp-adapter-get-ability-info",
+            "arguments": {
+              "ability_name": "ewpa/create-code-snippet"
+            }
+          }
+        },
+        "status": 200,
+        "contentType": "application/json; charset=UTF-8",
+        "rawText": "{\"jsonrpc\":\"2.0\",\"id\":13,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"name\\\":\\\"ewpa\\\\\\/create-code-snippet\\\",\\\"label\\\":\\\"Create Code Snippet\\\",\\\"description\\\":\\\"Creates a PHP code snippet via the Code Snippets plugin. The snippet is always saved as inactive \\\\u2014 it must be activated manually from wp-admin \\\\u203a Snippets. Validates PHP syntax, blocks dangerous functions, and fires an audit action hook after saving.\\\",\\\"input_schema\\\":{\\\"type\\\":\\\"object\\\",\\\"required\\\":[\\\"title\\\",\\\"code\\\"],\\\"properties\\\":{\\\"title\\\":{\\\"type\\\":\\\"string\\\",\\\"description\\\":\\\"Display name for the snippet.\\\"},\\\"code\\\":{\\\"type\\\":\\\"string\\\",\\\"description\\\":\\\"PHP code to save. Do not include the opening <?php tag.\\\"},\\\"description\\\":{\\\"type\\\":\\\"string\\\",\\\"description\\\":\\\"Optional description of what the snippet does.\\\"},\\\"scope\\\":{\\\"type\\\":\\\"string\\\",\\\"enum\\\":[\\\"global\\\",\\\"admin\\\",\\\"frontend\\\"],\\\"description\\\":\\\"Where the snippet runs: global (frontend + admin), admin, or frontend. Defaults to global.\\\",\\\"default\\\":\\\"global\\\"},\\\"tags\\\":{\\\"type\\\":\\\"array\\\",\\\"items\\\":{\\\"type\\\":\\\"string\\\"},\\\"description\\\":\\\"Optional list of tags for organisation.\\\"}}},\\\"output_schema\\\":{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"snippet_id\\\":{\\\"type\\\":\\\"integer\\\"},\\\"title\\\":{\\\"type\\\":\\\"string\\\"},\\\"scope\\\":{\\\"type\\\":\\\"string\\\"},\\\"active\\\":{\\\"type\\\":\\\"boolean\\\",\\\"description\\\":\\\"Always false. Activate manually from wp-admin.\\\"},\\\"edit_url\\\":{\\\"type\\\":\\\"string\\\"},\\\"message\\\":{\\\"type\\\":\\\"string\\\"}}},\\\"meta\\\":{\\\"annotations\\\":{\\\"readonly\\\":null,\\\"destructive\\\":null,\\\"idempotent\\\":null},\\\"show_in_rest\\\":true,\\\"mcp\\\":{\\\"public\\\":true}}}\"}],\"structuredContent\":{\"name\":\"ewpa\\/create-code-snippet\",\"label\":\"Create Code Snippet\",\"description\":\"Creates a PHP code snippet via the Code Snippets plugin. The snippet is always saved as inactive \\u2014 it must be activated manually from wp-admin \\u203a Snippets. Validates PHP syntax, blocks dangerous functions, and fires an audit action hook after saving.\",\"input_schema\":{\"type\":\"object\",\"required\":[\"title\",\"code\"],\"properties\":{\"title\":{\"type\":\"string\",\"description\":\"Display name for the snippet.\"},\"code\":{\"type\":\"string\",\"description\":\"PHP code to save. Do not include the opening <?php tag.\"},\"description\":{\"type\":\"string\",\"description\":\"Optional description of what the snippet does.\"},\"scope\":{\"type\":\"string\",\"enum\":[\"global\",\"admin\",\"frontend\"],\"description\":\"Where the snippet runs: global (frontend + admin), admin, or frontend. Defaults to global.\",\"default\":\"global\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Optional list of tags for organisation.\"}}},\"output_schema\":{\"type\":\"object\",\"properties\":{\"snippet_id\":{\"type\":\"integer\"},\"title\":{\"type\":\"string\"},\"scope\":{\"type\":\"string\"},\"active\":{\"type\":\"boolean\",\"description\":\"Always false. Activate manually from wp-admin.\"},\"edit_url\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"}}},\"meta\":{\"annotations\":{\"readonly\":null,\"destructive\":null,\"idempotent\":null},\"show_in_rest\":true,\"mcp\":{\"public\":true}}},\"isError\":false}}",
+        "parsed": {
+          "jsonrpc": "2.0",
+          "id": 13,
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"name\":\"ewpa\\/create-code-snippet\",\"label\":\"Create Code Snippet\",\"description\":\"Creates a PHP code snippet via the Code Snippets plugin. The snippet is always saved as inactive \\u2014 it must be activated manually from wp-admin \\u203a Snippets. Validates PHP syntax, blocks dangerous functions, and fires an audit action hook after saving.\",\"input_schema\":{\"type\":\"object\",\"required\":[\"title\",\"code\"],\"properties\":{\"title\":{\"type\":\"string\",\"description\":\"Display name for the snippet.\"},\"code\":{\"type\":\"string\",\"description\":\"PHP code to save. Do not include the opening <?php tag.\"},\"description\":{\"type\":\"string\",\"description\":\"Optional description of what the snippet does.\"},\"scope\":{\"type\":\"string\",\"enum\":[\"global\",\"admin\",\"frontend\"],\"description\":\"Where the snippet runs: global (frontend + admin), admin, or frontend. Defaults to global.\",\"default\":\"global\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Optional list of tags for organisation.\"}}},\"output_schema\":{\"type\":\"object\",\"properties\":{\"snippet_id\":{\"type\":\"integer\"},\"title\":{\"type\":\"string\"},\"scope\":{\"type\":\"string\"},\"active\":{\"type\":\"boolean\",\"description\":\"Always false. Activate manually from wp-admin.\"},\"edit_url\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"}}},\"meta\":{\"annotations\":{\"readonly\":null,\"destructive\":null,\"idempotent\":null},\"show_in_rest\":true,\"mcp\":{\"public\":true}}}"
+              }
+            ],
+            "structuredContent": {
+              "name": "ewpa/create-code-snippet",
+              "label": "Create Code Snippet",
+              "description": "Creates a PHP code snippet via the Code Snippets plugin. The snippet is always saved as inactive — it must be activated manually from wp-admin › Snippets. Validates PHP syntax, blocks dangerous functions, and fires an audit action hook after saving.",
+              "input_schema": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "code"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "description": "Display name for the snippet."
+                  },
+                  "code": {
+                    "type": "string",
+                    "description": "PHP code to save. Do not include the opening <?php tag."
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Optional description of what the snippet does."
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "global",
+                      "admin",
+                      "frontend"
+                    ],
+                    "description": "Where the snippet runs: global (frontend + admin), admin, or frontend. Defaults to global.",
+                    "default": "global"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Optional list of tags for organisation."
+                  }
+                }
+              },
+              "output_schema": {
+                "type": "object",
+                "properties": {
+                  "snippet_id": {
+                    "type": "integer"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "scope": {
+                    "type": "string"
+                  },
+                  "active": {
+                    "type": "boolean",
+                    "description": "Always false. Activate manually from wp-admin."
+                  },
+                  "edit_url": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                }
+              },
+              "meta": {
+                "annotations": {
+                  "readonly": null,
+                  "destructive": null,
+                  "idempotent": null
+                },
+                "show_in_rest": true,
+                "mcp": {
+                  "public": true
+                }
+              }
+            },
+            "isError": false
+          }
+        },
+        "sessionId": "a1706ecf-c63e-4d18-b0dc-d757f18dd1b3"
+      }
+    }
+  },
+  "allDefaultToolNames": [
+    "mcp-adapter-discover-abilities",
+    "mcp-adapter-get-ability-info",
+    "mcp-adapter-execute-ability"
+  ],
+  "provenance": {
+    "capturedAtCommit": "e062837f5976e49eb0a22812cf744a7dc2c26f10",
+    "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30202762361",
+    "capturedAt": "2026-07-26T12:49:46.192Z",
+    "pinsLockSha256": "7bddc5015bbbf794a15229a4753d7973b40dfd364e0050e578e7121bab72ad7a",
+    "fixturePluginSha256": "435ff97d89701d402398d589aa5b4570cc77b6ac65e8fa8c74be0e9c07195231",
+    "producerSha256": "9f81bb67bd5eb378ea498c379dca7bd8eacc0dc25bc578d8d6ae8d1973545a81",
+    "apiMapSha256": "55749cb32fb96c5443510eb61a353bb63a9277c1600af212e25846b997c2dac8"
+  }
+}

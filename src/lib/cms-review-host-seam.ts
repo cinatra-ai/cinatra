@@ -170,6 +170,24 @@ export interface CmsReviewHostSeamDeps {
     snapshotTargetId: string;
     producedEventId: string | null;
   }>;
+  /**
+   * S6 (#2044 L-B) — the PINNED fetched-render capture, taken at gate creation.
+   * OPTIONAL and best-effort by contract: the binding awaits it (the capture
+   * must be pinned WITH the gate, never fetched later), but a rejection or a
+   * degraded outcome can never fail the staged write. Absent ⇒ no capture step
+   * runs and the write path is byte-identical to S5.
+   */
+  capturePinnedPreview?: (input: {
+    orgId: string;
+    boundArtifactId: string;
+    boundSnapshotRevisionId: string;
+    role: "current";
+    sourceUrl: string | null;
+    externalId: string | null;
+    title?: string;
+    createdBy?: string | null;
+    producerRunId?: string | null;
+  }) => Promise<{ status: "captured" | "degraded"; reason?: string }>;
   resolveArtifactEffectDisposition: (input: {
     artifactId: string;
     representationRevisionId: string;
@@ -228,6 +246,31 @@ export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHo
         emitProducedEvent: deps.isReviewActive(),
         ...(input.title !== undefined ? { title: input.title } : {}),
       });
+      // S6 (#2044 L-B): PIN the fetched render alongside the snapshot, at gate
+      // creation. Awaited so an old gate can always show its ORIGINAL capture
+      // (a later fetch would show a later page), but wrapped so NOTHING about
+      // the capture can fail the staged write — a capture is additive context,
+      // and its absence is recorded as a degraded capture the surface states.
+      if (deps.capturePinnedPreview) {
+        try {
+          await deps.capturePinnedPreview({
+            orgId,
+            boundArtifactId: res.artifactId,
+            boundSnapshotRevisionId: res.snapshotRevisionId,
+            role: "current",
+            sourceUrl: input.pointer.url ?? null,
+            externalId: input.pointer.externalId ?? null,
+            ...(input.title !== undefined ? { title: input.title } : {}),
+            createdBy,
+            producerRunId: runId,
+          });
+        } catch (err) {
+          console.warn(
+            "[cms-review] pinned preview capture failed (the gate is unaffected):",
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
       return {
         artifactId: res.artifactId,
         snapshotRevisionId: res.snapshotRevisionId,

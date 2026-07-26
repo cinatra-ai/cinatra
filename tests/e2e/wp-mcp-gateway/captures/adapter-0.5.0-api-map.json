@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Bring-up-resolved pins + adapter API map for the WP MCP gateway pinned fixture (issue #2016, S1). Downstream commits (Dockerfile, compose, entrypoint, pins.lock, capture producer) consume ONLY these resolved values. No placeholder tokens (design §0.1 hard rule).",
+  "pinnedTuple": {
+    "wp": "6.9",
+    "mcpAdapter": "0.5.0",
+    "eafm": "2.0.20"
+  },
+  "resolvedBy": {
+    "mode": "bringup",
+    "boot": false,
+    "note": "STAGE-1 static resolution (design §0.1 adapted): the 6.9 image does not exist yet at C0, so pins are resolved by download+sha256, registry digest query, and static grep of the unzipped adapter — not by booting.",
+    "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30199282018",
+    "commit": "bf13d78051882122ae6c45ec47b180b4b5adaf72",
+    "resolvedAt": "2026-07-26T10:59:56.814Z"
+  },
+  "baseImage": {
+    "ref": "wordpress:6.9-php8.3-apache",
+    "digest": "sha256:5d2c212561c4b5442ebc4d98933a9cbadcf3dee8888ed3fd9ed44667c27cc905",
+    "resolvedVia": "docker buildx imagetools inspect wordpress:6.9-php8.3-apache → 'Digest:' line"
+  },
+  "mcpAdapter": {
+    "version": "0.5.0",
+    "tag": "v0.5.0",
+    "commit": "7bfc49f46b3ea7544dded49d5a606089f825a80b",
+    "url": "https://github.com/WordPress/mcp-adapter/releases/download/v0.5.0/mcp-adapter.zip",
+    "sha256": "a13f253c7bf4314b6cce7e238be2d5857eee66242bfe5ff5cb5576f74dc41593",
+    "sizeBytes": 372587,
+    "bundlesVendor": true,
+    "bundlesVendorResolvedVia": "unzip mcp-adapter.zip; search for a path ending vendor/autoload.php",
+    "resolvedVia": "curl release asset; sha256 of the downloaded ZIP"
+  },
+  "enableAbilitiesForMcp": {
+    "version": "2.0.20",
+    "url": "https://downloads.wordpress.org/plugin/enable-abilities-for-mcp.2.0.20.zip",
+    "sha256": "5c3a2b287c73d85503e5118957475fbec598c548f50bc873f05f0293a131553a",
+    "sizeBytes": 123755,
+    "resolvedVia": "curl downloads.wordpress.org ZIP; sha256"
+  },
+  "wpCli": {
+    "version": "2.12.0",
+    "tag": "v2.12.0",
+    "url": "https://github.com/wp-cli/wp-cli/releases/download/v2.12.0/wp-cli-2.12.0.phar",
+    "sha256": "ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c",
+    "resolvedVia": "GET api.github.com/repos/wp-cli/wp-cli/releases/latest → .phar asset; curl + sha256"
+  },
+  "gatewayTriad": {
+    "triadResolved": true,
+    "note": "Ability ids registered under the mcp-adapter/ namespace; the MCP tool wire-name mapping (RegisterAbilityAsMcpTool) and the exact tools/list shape are confirmed at boot (C3). Statically resolved here — no boot.",
+    "tools": [
+      {
+        "toolAbilityId": "mcp-adapter/discover-abilities",
+        "role": "discover",
+        "label": "Discover Abilities",
+        "registeredIn": "mcp-adapter/includes/Abilities/DiscoverAbilitiesAbility.php:34",
+        "inputSchemaSource": null
+      },
+      {
+        "toolAbilityId": "mcp-adapter/execute-ability",
+        "role": "execute",
+        "label": "Execute Ability",
+        "registeredIn": "mcp-adapter/includes/Abilities/ExecuteAbilityAbility.php:36",
+        "inputSchemaSource": "'input_schema'        => array(\n\t\t\t\t\t'type'       => 'object',\n\t\t\t\t\t'properties' => array(\n\t\t\t\t\t\t'ability_name' => array(\n\t\t\t\t\t\t\t'type'        => 'string',\n\t\t\t\t\t\t\t'description' => 'The full name of the ability to execute',\n\t\t\t\t\t\t),\n\t\t\t\t\t\t'parameters'   => array(\n\t\t\t\t\t\t\t'type'        => 'object',\n\t\t\t\t\t\t\t'description' => 'Parameters to pass to the ability',\n\t\t\t\t\t\t),\n\t\t\t\t\t),\n\t\t\t\t\t'required'   => array( 'ability_name', 'parameters' ),\n\t\t\t\t),\n\t\t\t\t'output_schema'       => array(\n\t\t\t\t\t'type'       => 'object',\n\t\t\t\t\t'properties' => array(\n\t\t\t\t\t\t'success' => array( 'type' => 'boolean' ),\n\t\t\t\t\t\t'data'    => array(\n\t\t\t\t\t\t\t'type'        => array(\n\t\t\t\t\t\t\t\t'object',\n\t\t\t\t\t\t\t\t'array',\n\t\t\t\t\t\t\t\t'string',\n\t\t\t\t\t\t\t\t'number',\n\t\t\t\t\t\t\t\t'integer',\n\t\t\t\t\t\t\t\t'boolean',\n\t\t\t\t\t\t\t\t'null',\n\t\t\t\t\t\t\t),\n\t\t\t\t\t\t\t'description' => 'The result data from the ability execution',\n\t\t\t\t\t\t),\n\t\t\t\t\t\t'error'   => array(\n\t\t\t\t\t\t\t'type'        => 'string',\n\t\t\t\t\t\t\t'description' => 'Error message if execution failed',\n\t\t\t\t\t\t),\n\t\t\t\t\t),\n\t\t\t\t\t'required'   => array( 'success' ),\n\t\t\t\t),\n\t\t\t\t'permission_callback' => array( self::class, 'check_permission' ),\n\t\t\t\t'execute_callback'    => array( self::class, 'execute' ),\n\t\t\t\t'meta'                => array("
+      },
+      {
+        "toolAbilityId": "mcp-adapter/get-ability-info",
+        "role": "get-info",
+        "label": "Get Ability Info",
+        "registeredIn": "mcp-adapter/includes/Abilities/GetAbilityInfoAbility.php:34",
+        "inputSchemaSource": "'input_schema'        => array(\n\t\t\t\t\t'type'       => 'object',\n\t\t\t\t\t'properties' => array(\n\t\t\t\t\t\t'ability_name' => array(\n\t\t\t\t\t\t\t'type'        => 'string',\n\t\t\t\t\t\t\t'description' => 'The full name of the ability to get information about',\n\t\t\t\t\t\t),\n\t\t\t\t\t),\n\t\t\t\t\t'required'   => array( 'ability_name' ),\n\t\t\t\t),\n\t\t\t\t'output_schema'       => array(\n\t\t\t\t\t'type'       => 'object',\n\t\t\t\t\t'properties' => array(\n\t\t\t\t\t\t'name'          => array( 'type' => 'string' ),\n\t\t\t\t\t\t'label'         => array( 'type' => 'string' ),\n\t\t\t\t\t\t'description'   => array( 'type' => 'string' ),\n\t\t\t\t\t\t'input_schema'  => array(\n\t\t\t\t\t\t\t'type'        => 'object',\n\t\t\t\t\t\t\t'description' => 'JSON Schema for the ability input parameters',\n\t\t\t\t\t\t),\n\t\t\t\t\t\t'output_schema' => array(\n\t\t\t\t\t\t\t'type'        => 'object',\n\t\t\t\t\t\t\t'description' => 'JSON Schema for the ability output structure',\n\t\t\t\t\t\t),\n\t\t\t\t\t\t'meta'          => array(\n\t\t\t\t\t\t\t'type'        => 'object',\n\t\t\t\t\t\t\t'description' => 'Additional metadata about the ability',\n\t\t\t\t\t\t),\n\t\t\t\t\t),\n\t\t\t\t\t'required'   => array( 'name', 'label', 'description', 'input_schema' ),\n\t\t\t\t),\n\t\t\t\t'permission_callback' => array( self::class, 'check_permission' ),\n\t\t\t\t'execute_callback'    => array( self::class, 'execute' ),\n\t\t\t\t'meta'                => array(\n\t\t\t\t\t'annotations' => array(\n\t\t\t\t\t\t'readonly'    => true,\n\t\t\t\t\t\t'destructive' => false,\n\t\t\t\t\t\t'idempotent'  => true,\n\t\t\t\t\t),\n\t\t\t\t),"
+      }
+    ]
+  },
+  "annotationCarrier": {
+    "field": "ability.meta.annotations",
+    "mapsToToolField": "tool.annotations",
+    "mapper": "McpAnnotationMapper::map(meta.annotations,'tool')",
+    "resolved": true,
+    "resolvedVia": "static grep of mcp-adapter/includes/Domain/Tools/RegisterAbilityAsMcpTool.php for get_meta()/['annotations']/McpAnnotationMapper",
+    "evidence": [
+      "mcp-adapter/includes/Domain/Tools/RegisterAbilityAsMcpTool.php:13  use WP\\MCP\\Domain\\Utils\\McpAnnotationMapper;",
+      "mcp-adapter/includes/Domain/Tools/RegisterAbilityAsMcpTool.php:142  $ability_meta = $this->ability->get_meta();",
+      "mcp-adapter/includes/Domain/Tools/RegisterAbilityAsMcpTool.php:143  if ( ! empty( $ability_meta['annotations'] ) && is_array( $ability_meta['annotations'] ) ) {",
+      "mcp-adapter/includes/Domain/Tools/RegisterAbilityAsMcpTool.php:144  $mcp_annotations = McpAnnotationMapper::map( $ability_meta['annotations'], 'tool' );",
+      "mcp-adapter/includes/Domain/Tools/RegisterAbilityAsMcpTool.php:146  $tool_data['annotations'] = $mcp_annotations;",
+      "mcp-adapter/includes/Domain/Tools/RegisterAbilityAsMcpTool.php:151  if ( ! empty( $label ) && isset( $tool_data['annotations'] ) && ! isset( $tool_data['annotations']['title'] ) ) {",
+      "mcp-adapter/includes/Domain/Tools/RegisterAbilityAsMcpTool.php:152  $tool_data['annotations']['title'] = $label;",
+      "mcp-adapter/includes/Domain/Tools/RegisterAbilityAsMcpTool.php:175  $mcp_meta = $ability_meta['mcp'] ?? array();"
+    ]
+  },
+  "defaultServer": {
+    "serverId": "mcp-adapter-default-server",
+    "routeNamespace": "mcp",
+    "route": "mcp-adapter-default-server",
+    "restRoute": "/wp-json/mcp/mcp-adapter-default-server",
+    "resolved": true,
+    "resolvedVia": "static grep of mcp-adapter/includes/Servers/DefaultServerFactory.php"
+  }
+}

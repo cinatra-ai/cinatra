@@ -28,6 +28,12 @@ export const anthropicSkillSync = cinatraSchema.table(
     anthropicSkillId: text("anthropic_skill_id").notNull(),
     anthropicVersion: text("anthropic_version").notNull(),
     contentHash: text("content_hash").notNull(),
+    // Byte-bound sync binding (cinatra#2088, epic #2086 S1): the stored revision
+    // the uploaded bytes derived from + its bundle identity. Nullable so an
+    // already-provisioned namespace upgrades additively (a null binding forces a
+    // one-time re-baseline that records it).
+    revisionId: text("revision_id"),
+    bundleDigest: text("bundle_digest"),
     stale: boolean("stale").notNull().default(false),
     // Set false->true only by the mark-stale DAO ops; the GC stale-age GRACE
     // anchor. Nullable rows are GC-ineligible, fail-closed.

@@ -6,6 +6,9 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import type { PreparedReviewTarget } from "@/lib/artifacts/artifact-review-preparation";
 import { ReviewTargetMount } from "@/app/artifacts/[id]/review-target-mount";
+import type { PinnedCaptureView } from "@/lib/artifacts/cms-preview-capture-view";
+
+import { ReviewPinnedCapture } from "./review-pinned-capture";
 import {
   reviewProvenanceConformanceId,
   reviewProvenanceLabel,
@@ -26,7 +29,16 @@ import {
  * provenance-marketplace` (runtime), or `review-target-floor` (any floor) — the
  * §III axis derived from the mount kind.
  */
-export function ReviewTargetPanel({ prepared }: { prepared: PreparedReviewTarget }): ReactNode {
+export function ReviewTargetPanel({
+  prepared,
+  pinnedCaptures = [],
+}: {
+  prepared: PreparedReviewTarget;
+  /** S6 (#2044 L-B): the page captures PINNED at gate creation for this target.
+   * Empty for every target that has none, which renders nothing — the capture is
+   * additive context beneath the decided representation, never a substitute. */
+  pinnedCaptures?: PinnedCaptureView[];
+}): ReactNode {
   const { target, props, mount } = prepared;
   const title = props?.artifact.title ?? target.artifactId;
   const objectType = props?.artifact.objectType ?? "";
@@ -97,9 +109,11 @@ export function ReviewTargetPanel({ prepared }: { prepared: PreparedReviewTarget
         </span>
       </div>
 
-      {/* The representation slot — the type renderer mounts here, or the floor. */}
+      {/* The representation slot — the type renderer mounts here, or the floor.
+          S6: the PINNED page capture follows as non-decisional visual context. */}
       <div className="p-4" data-review-representation-slot="">
         <ReviewTargetMount mount={mount} props={props} fallback={genericFloor} />
+        <ReviewPinnedCapture captures={pinnedCaptures} />
       </div>
     </div>
   );

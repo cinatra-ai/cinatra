@@ -1,0 +1,390 @@
+{
+  "schemaVersion": 1,
+  "subClaim": "f",
+  "description": "HARD: every fixturelabs/* trio ability discoverable through the eafm/default aggregator",
+  "defaultServerUrl": "http://localhost:8080/wp-json/mcp/mcp-adapter-default-server",
+  "discover": {
+    "abilityId": "mcp-adapter/discover-abilities",
+    "toolName": "mcp-adapter-discover-abilities",
+    "response": {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "method": "tools/call",
+        "params": {
+          "name": "mcp-adapter-discover-abilities",
+          "arguments": {}
+        }
+      },
+      "status": 200,
+      "contentType": "application/json; charset=UTF-8",
+      "rawText": "{\"jsonrpc\":\"2.0\",\"id\":14,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"abilities\\\":[{\\\"name\\\":\\\"core\\\\\\/get-site-info\\\",\\\"label\\\":\\\"Get Site Information\\\",\\\"description\\\":\\\"Returns site information configured in WordPress. By default returns all fields, or optionally a filtered subset.\\\"},{\\\"name\\\":\\\"core\\\\\\/get-user-info\\\",\\\"label\\\":\\\"Get User Information\\\",\\\"description\\\":\\\"Returns basic profile details for the current authenticated user to support personalization, auditing, and access-aware behavior.\\\"},{\\\"name\\\":\\\"core\\\\\\/get-environment-info\\\",\\\"label\\\":\\\"Get Environment Info\\\",\\\"description\\\":\\\"Returns core details about the site's runtime context for diagnostics and compatibility (environment, PHP runtime, database server info, WordPress version).\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-posts\\\",\\\"label\\\":\\\"Get Posts\\\",\\\"description\\\":\\\"Retrieves a list of blog posts with optional filters by status, category, count, and order.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-post\\\",\\\"label\\\":\\\"Get Single Post\\\",\\\"description\\\":\\\"Retrieves all details of a specific post by ID, including full content, metadata, and featured image.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-page\\\",\\\"label\\\":\\\"Get Single Page\\\",\\\"description\\\":\\\"Retrieves all details of a specific page by ID, including full content, template, hierarchy, and SEO metadata.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-categories\\\",\\\"label\\\":\\\"Get Categories\\\",\\\"description\\\":\\\"Retrieves all blog categories with their ID, name, slug, description, and post count.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-tags\\\",\\\"label\\\":\\\"Get Tags\\\",\\\"description\\\":\\\"Retrieves all blog tags with their ID, name, slug, and post count.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-pages\\\",\\\"label\\\":\\\"Get Pages\\\",\\\"description\\\":\\\"Retrieves site pages with their title, status, content, and hierarchy (parent\\\\\\/child).\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-comments\\\",\\\"label\\\":\\\"Get Comments\\\",\\\"description\\\":\\\"Retrieves blog comments with optional filters by status, post, and count. Useful for moderation and analysis.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-media\\\",\\\"label\\\":\\\"Get Media\\\",\\\"description\\\":\\\"Retrieves media library files (images, videos, documents) with filters by MIME type and search.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-users\\\",\\\"label\\\":\\\"Get Users\\\",\\\"description\\\":\\\"Retrieves the list of site users with their ID, name, email, and role. Useful for assigning post authors.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/create-post\\\",\\\"label\\\":\\\"Create Post\\\",\\\"description\\\":\\\"Creates a new blog post. Accepts title, HTML content, excerpt, categories, tags, featured image, and status. Defaults to draft.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/update-post\\\",\\\"label\\\":\\\"Update Post\\\",\\\"description\\\":\\\"Updates an existing post. Only the provided fields are modified, others remain unchanged.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/delete-post\\\",\\\"label\\\":\\\"Delete Post\\\",\\\"description\\\":\\\"Sends a post to trash or permanently deletes it. Defaults to trash.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/create-category\\\",\\\"label\\\":\\\"Create Category\\\",\\\"description\\\":\\\"Creates a new blog category with name, slug, description, and parent category (optional).\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/create-tag\\\",\\\"label\\\":\\\"Create Tag\\\",\\\"description\\\":\\\"Creates a new blog tag with name, slug, and description.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/create-page\\\",\\\"label\\\":\\\"Create Page\\\",\\\"description\\\":\\\"Creates a new WordPress page with title, content, status, and parent page (for hierarchy).\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/moderate-comment\\\",\\\"label\\\":\\\"Moderate Comment\\\",\\\"description\\\":\\\"Changes a comment status: approve, hold, mark as spam, or send to trash.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/reply-comment\\\",\\\"label\\\":\\\"Reply to Comment\\\",\\\"description\\\":\\\"Replies to an existing comment on a post or page. The reply is published as the current authenticated user.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/update-comment\\\",\\\"label\\\":\\\"Update Comment\\\",\\\"description\\\":\\\"Updates an existing comment. Allows changing the content, author name, author email, and the WordPress user associated with the comment.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/upload-image\\\",\\\"label\\\":\\\"Upload Image from URL\\\",\\\"description\\\":\\\"Downloads an image from an external URL and registers it in the WordPress media library. Optionally assigns it as featured image for a post. Returns the attachment ID and local URL.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-rankmath\\\",\\\"label\\\":\\\"Get Rank Math Metadata\\\",\\\"description\\\":\\\"Retrieves all Rank Math SEO metadata for a post or page: title, description, keywords, robots, advanced robots, Open Graph, Twitter Card, schema, breadcrumb, cornerstone, and SEO score.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/update-rankmath\\\",\\\"label\\\":\\\"Update Rank Math SEO \\\\\\/ Focus Keyword\\\",\\\"description\\\":\\\"Updates Rank Math SEO metadata on a post or page (rank_math_focus_keyword, rank_math_title, rank_math_description, etc). Use this ability to set or change the focus keyword, SEO title, meta description, canonical URL, robots, Open Graph, Twitter Card, breadcrumb, schema snippet, cornerstone, and pillar content. Only the provided fields are modified.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/update-rankmath-schema\\\",\\\"label\\\":\\\"Update Rank Math Schema\\\",\\\"description\\\":\\\"Writes a structured-data schema block (e.g. FAQPage, Article, Product) to a Rank Math schema meta key. The schema_data object is sanitized and stored as a PHP-serialized array, exactly as Rank Math expects, so it renders as JSON-LD in <head>. Use this to add or replace a schema block on any post or page.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-seopress\\\",\\\"label\\\":\\\"Get SEOPress Metadata\\\",\\\"description\\\":\\\"Retrieves all SEOPress metadata for a post or page: title, description, focus keyword, robots directives, canonical URL, Open Graph, and Twitter Card.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/update-seopress\\\",\\\"label\\\":\\\"Update SEOPress Metadata\\\",\\\"description\\\":\\\"Updates SEOPress metadata on a post or page (_seopress_titles_title, _seopress_titles_desc, etc). Use this to set or change the SEO title, meta description, focus keyword, canonical URL, robots directives, and Open Graph \\\\\\/ Twitter Card fields. Only the provided fields are modified.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-seopress-content-analysis\\\",\\\"label\\\":\\\"Get SEOPress Content Analysis\\\",\\\"description\\\":\\\"Retrieves the SEOPress content analysis for a post or page: every check (meta title, meta description, headings, internal links, structured data, image alt texts, etc.) with its impact level and recommendation text. Set refresh=true to run a fresh analysis of the rendered page before reading the results \\\\u2014 recommended after updating content or metadata. Requires SEOPress 7.5+.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/yoast-get-seo\\\",\\\"label\\\":\\\"Get Yoast SEO Metadata\\\",\\\"description\\\":\\\"Retrieves all Yoast SEO metadata for a post or page: title, description, focus keyphrase, canonical URL, robots (noindex\\\\\\/nofollow\\\\\\/advanced), Open Graph, and Twitter Card.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/yoast-update-seo\\\",\\\"label\\\":\\\"Update Yoast SEO Metadata\\\",\\\"description\\\":\\\"Updates Yoast SEO metadata on a post or page (_yoast_wpseo_title, _yoast_wpseo_metadesc, etc). Use this to set or change the SEO title, meta description, focus keyphrase, canonical URL, robots, and Open Graph \\\\\\/ Twitter Card fields. Only the provided fields are modified.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/create-code-snippet\\\",\\\"label\\\":\\\"Create Code Snippet\\\",\\\"description\\\":\\\"Creates a PHP code snippet via the Code Snippets plugin. The snippet is always saved as inactive \\\\u2014 it must be activated manually from wp-admin \\\\u203a Snippets. Validates PHP syntax, blocks dangerous functions, and fires an audit action hook after saving.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/yoast-get-sitemap-index\\\",\\\"label\\\":\\\"Get Yoast Sitemap Index\\\",\\\"description\\\":\\\"Fetches and parses the Yoast SEO sitemap index for this site, returning the list of all sitemap URLs and their last modification date.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/search-replace\\\",\\\"label\\\":\\\"Search and Replace\\\",\\\"description\\\":\\\"Searches for text in a specific post content and replaces it with another. Useful for corrections and updates.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/site-stats\\\",\\\"label\\\":\\\"Site Statistics\\\",\\\"description\\\":\\\"Returns a summary with the total posts, pages, categories, tags, comments, and users of the site.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/update-post-meta\\\",\\\"label\\\":\\\"Update Post Meta\\\",\\\"description\\\":\\\"Writes any post meta field by exact key. Use this when you know the exact meta key required by a specific SEO plugin or custom field (e.g. _genesis_title for The SEO Framework, _seopress_titles_title for SEOPress). Requires edit_post capability on the target post.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-post-meta\\\",\\\"label\\\":\\\"Get Post Meta\\\",\\\"description\\\":\\\"Reads any single post meta field by exact key. Useful for SEO plugins and custom fields not covered by dedicated sections (e.g. _genesis_title for The SEO Framework, _aioseo_title for AIOSEO). Requires edit_post capability on the target post.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-active-plugins\\\",\\\"label\\\":\\\"Get Active Plugins\\\",\\\"description\\\":\\\"Returns a list of all currently active plugins on the site, including name, version, and detected capabilities (multilanguage, SEO, WooCommerce, etc.).\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/list-post-types\\\",\\\"label\\\":\\\"List Post Types\\\",\\\"description\\\":\\\"Lists all custom post types registered on the site, with their configuration, supported features, and associated taxonomies.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-cpt-items\\\",\\\"label\\\":\\\"Get CPT Items\\\",\\\"description\\\":\\\"Retrieves a list of items from a specific custom post type with filtering, search, and taxonomy query support.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-cpt-item\\\",\\\"label\\\":\\\"Get CPT Item\\\",\\\"description\\\":\\\"Retrieves full details of a single custom post type item, including all meta fields, taxonomies, and content.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/create-cpt-item\\\",\\\"label\\\":\\\"Create CPT Item\\\",\\\"description\\\":\\\"Creates a new item in a custom post type. Content is optional as some CPTs store data in custom fields instead.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/update-cpt-item\\\",\\\"label\\\":\\\"Update CPT Item\\\",\\\"description\\\":\\\"Updates an existing custom post type item. Only provided fields are modified (partial update).\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/delete-cpt-item\\\",\\\"label\\\":\\\"Delete CPT Item\\\",\\\"description\\\":\\\"Deletes a custom post type item. By default moves to trash; use force_delete to permanently remove.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-cpt-taxonomies\\\",\\\"label\\\":\\\"Get CPT Taxonomies\\\",\\\"description\\\":\\\"Retrieves all taxonomies associated with a custom post type, including their terms.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/assign-cpt-terms\\\",\\\"label\\\":\\\"Assign CPT Terms\\\",\\\"description\\\":\\\"Assigns taxonomy terms to a custom post type item. Can replace or append terms.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/set-post-language\\\",\\\"label\\\":\\\"Set Post Language\\\",\\\"description\\\":\\\"Assigns a language to an existing post via Polylang or WPML. Does nothing if no multilanguage plugin is active.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/link-post-translation\\\",\\\"label\\\":\\\"Link Post Translation\\\",\\\"description\\\":\\\"Links two posts as translations of each other via Polylang or WPML. Both posts must already have a language assigned.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/get-post-translations\\\",\\\"label\\\":\\\"Get Post Translations\\\",\\\"description\\\":\\\"Returns the full translation map for a post: language codes, post IDs, titles, and permalink for each available translation. Requires Polylang or WPML.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/je-list-options-pages\\\",\\\"label\\\":\\\"List Options Pages\\\",\\\"description\\\":\\\"Lists all registered JetEngine Options Pages with their field schema. Does not return field values. Requires JetEngine with the Options Pages module enabled.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/je-get-options-page\\\",\\\"label\\\":\\\"Get Options Page\\\",\\\"description\\\":\\\"Returns all fields with their current stored values for a given JetEngine Options Page slug. Requires JetEngine with the Options Pages module enabled.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/je-update-options-page-field\\\",\\\"label\\\":\\\"Update Options Page Field\\\",\\\"description\\\":\\\"Writes a new value to a single field of a JetEngine Options Page. Supports text, number, select, checkbox, repeater, and most other field types. UI-only types (html, tab, accordion, endpoint) are rejected. For repeater fields call ewpa\\\\\\/je-get-options-page first to see the repeater_fields structure, then pass an array of row objects. Requires JetEngine with the Options Pages module enabled.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/elementor-bind-dynamic-field\\\",\\\"label\\\":\\\"Elementor: Bind Dynamic Field\\\",\\\"description\\\":\\\"Binds a single Elementor widget setting to a dynamic tag. source=post_title uses the native Post Title tag; source=meta uses a JetEngine dynamic field reading the given meta_key. Edits _elementor_data server-side, validates the tree, injects the __dynamic__ binding using Elementor own tag encoder, saves, and clears Elementor cache. Requires Elementor (Elementor Pro for post_title, JetEngine for meta).\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/elementor-get-structure\\\",\\\"label\\\":\\\"Elementor: Get Structure\\\",\\\"description\\\":\\\"Returns a compact, flattened tree of an Elementor page\\\\\\/template: every element with its id, depth, type, and a short text preview. Read-only. Use this to locate element ids before editing.\\\"},{\\\"name\\\":\\\"ewpa\\\\\\/elementor-update-element\\\",\\\"label\\\":\\\"Elementor: Update Element\\\",\\\"description\\\":\\\"Updates the settings of a single Elementor element by id (static content or styles). Provided keys are merged into the element settings; other keys are preserved. Examples: {\\\\\\\"title\\\\\\\":\\\\\\\"New heading\\\\\\\"} for a heading, {\\\\\\\"text\\\\\\\":\\\\\\\"Click\\\\\\\"} for a button, {\\\\\\\"editor\\\\\\\":\\\\\\\"<p>HTML<\\\\\\/p>\\\\\\\"} for a text-editor. Saves and clears Elementor cache. Batch mode: pass an edits[] array to update multiple elements in a single call.\\\"},{\\\"name\\\":\\\"fixturelabs\\\\\\/note-get\\\",\\\"label\\\":\\\"Get Note\\\",\\\"description\\\":\\\"Return the note stored by the Fixture Labs fixture plugin.\\\"},{\\\"name\\\":\\\"fixturelabs\\\\\\/note-set\\\",\\\"label\\\":\\\"Set Note\\\",\\\"description\\\":\\\"Create or update the Fixture Labs note.\\\"},{\\\"name\\\":\\\"fixturelabs\\\\\\/note-delete\\\",\\\"label\\\":\\\"Delete Note\\\",\\\"description\\\":\\\"Delete the Fixture Labs note.\\\"},{\\\"name\\\":\\\"fixturelabs\\\\\\/note-get-unannotated\\\",\\\"label\\\":\\\"Get Note (unannotated)\\\",\\\"description\\\":\\\"Read variant with NO MCP annotations declared \\\\u2014 proves absent-annotation behavior.\\\"},{\\\"name\\\":\\\"fixturelabs\\\\\\/note-get-malformed\\\",\\\"label\\\":\\\"Get Note (malformed annotations)\\\",\\\"description\\\":\\\"Read variant whose annotation values are malformed types \\\\u2014 proves malformed-annotation handling.\\\"},{\\\"name\\\":\\\"fixturelabs\\\\\\/note-get-contradictory\\\",\\\"label\\\":\\\"Get Note (contradictory annotations)\\\",\\\"description\\\":\\\"Read variant declaring readOnly AND destructive both true \\\\u2014 proves contradictory-annotation behavior.\\\"}]}\"}],\"structuredContent\":{\"abilities\":[{\"name\":\"core\\/get-site-info\",\"label\":\"Get Site Information\",\"description\":\"Returns site information configured in WordPress. By default returns all fields, or optionally a filtered subset.\"},{\"name\":\"core\\/get-user-info\",\"label\":\"Get User Information\",\"description\":\"Returns basic profile details for the current authenticated user to support personalization, auditing, and access-aware behavior.\"},{\"name\":\"core\\/get-environment-info\",\"label\":\"Get Environment Info\",\"description\":\"Returns core details about the site's runtime context for diagnostics and compatibility (environment, PHP runtime, database server info, WordPress version).\"},{\"name\":\"ewpa\\/get-posts\",\"label\":\"Get Posts\",\"description\":\"Retrieves a list of blog posts with optional filters by status, category, count, and order.\"},{\"name\":\"ewpa\\/get-post\",\"label\":\"Get Single Post\",\"description\":\"Retrieves all details of a specific post by ID, including full content, metadata, and featured image.\"},{\"name\":\"ewpa\\/get-page\",\"label\":\"Get Single Page\",\"description\":\"Retrieves all details of a specific page by ID, including full content, template, hierarchy, and SEO metadata.\"},{\"name\":\"ewpa\\/get-categories\",\"label\":\"Get Categories\",\"description\":\"Retrieves all blog categories with their ID, name, slug, description, and post count.\"},{\"name\":\"ewpa\\/get-tags\",\"label\":\"Get Tags\",\"description\":\"Retrieves all blog tags with their ID, name, slug, and post count.\"},{\"name\":\"ewpa\\/get-pages\",\"label\":\"Get Pages\",\"description\":\"Retrieves site pages with their title, status, content, and hierarchy (parent\\/child).\"},{\"name\":\"ewpa\\/get-comments\",\"label\":\"Get Comments\",\"description\":\"Retrieves blog comments with optional filters by status, post, and count. Useful for moderation and analysis.\"},{\"name\":\"ewpa\\/get-media\",\"label\":\"Get Media\",\"description\":\"Retrieves media library files (images, videos, documents) with filters by MIME type and search.\"},{\"name\":\"ewpa\\/get-users\",\"label\":\"Get Users\",\"description\":\"Retrieves the list of site users with their ID, name, email, and role. Useful for assigning post authors.\"},{\"name\":\"ewpa\\/create-post\",\"label\":\"Create Post\",\"description\":\"Creates a new blog post. Accepts title, HTML content, excerpt, categories, tags, featured image, and status. Defaults to draft.\"},{\"name\":\"ewpa\\/update-post\",\"label\":\"Update Post\",\"description\":\"Updates an existing post. Only the provided fields are modified, others remain unchanged.\"},{\"name\":\"ewpa\\/delete-post\",\"label\":\"Delete Post\",\"description\":\"Sends a post to trash or permanently deletes it. Defaults to trash.\"},{\"name\":\"ewpa\\/create-category\",\"label\":\"Create Category\",\"description\":\"Creates a new blog category with name, slug, description, and parent category (optional).\"},{\"name\":\"ewpa\\/create-tag\",\"label\":\"Create Tag\",\"description\":\"Creates a new blog tag with name, slug, and description.\"},{\"name\":\"ewpa\\/create-page\",\"label\":\"Create Page\",\"description\":\"Creates a new WordPress page with title, content, status, and parent page (for hierarchy).\"},{\"name\":\"ewpa\\/moderate-comment\",\"label\":\"Moderate Comment\",\"description\":\"Changes a comment status: approve, hold, mark as spam, or send to trash.\"},{\"name\":\"ewpa\\/reply-comment\",\"label\":\"Reply to Comment\",\"description\":\"Replies to an existing comment on a post or page. The reply is published as the current authenticated user.\"},{\"name\":\"ewpa\\/update-comment\",\"label\":\"Update Comment\",\"description\":\"Updates an existing comment. Allows changing the content, author name, author email, and the WordPress user associated with the comment.\"},{\"name\":\"ewpa\\/upload-image\",\"label\":\"Upload Image from URL\",\"description\":\"Downloads an image from an external URL and registers it in the WordPress media library. Optionally assigns it as featured image for a post. Returns the attachment ID and local URL.\"},{\"name\":\"ewpa\\/get-rankmath\",\"label\":\"Get Rank Math Metadata\",\"description\":\"Retrieves all Rank Math SEO metadata for a post or page: title, description, keywords, robots, advanced robots, Open Graph, Twitter Card, schema, breadcrumb, cornerstone, and SEO score.\"},{\"name\":\"ewpa\\/update-rankmath\",\"label\":\"Update Rank Math SEO \\/ Focus Keyword\",\"description\":\"Updates Rank Math SEO metadata on a post or page (rank_math_focus_keyword, rank_math_title, rank_math_description, etc). Use this ability to set or change the focus keyword, SEO title, meta description, canonical URL, robots, Open Graph, Twitter Card, breadcrumb, schema snippet, cornerstone, and pillar content. Only the provided fields are modified.\"},{\"name\":\"ewpa\\/update-rankmath-schema\",\"label\":\"Update Rank Math Schema\",\"description\":\"Writes a structured-data schema block (e.g. FAQPage, Article, Product) to a Rank Math schema meta key. The schema_data object is sanitized and stored as a PHP-serialized array, exactly as Rank Math expects, so it renders as JSON-LD in <head>. Use this to add or replace a schema block on any post or page.\"},{\"name\":\"ewpa\\/get-seopress\",\"label\":\"Get SEOPress Metadata\",\"description\":\"Retrieves all SEOPress metadata for a post or page: title, description, focus keyword, robots directives, canonical URL, Open Graph, and Twitter Card.\"},{\"name\":\"ewpa\\/update-seopress\",\"label\":\"Update SEOPress Metadata\",\"description\":\"Updates SEOPress metadata on a post or page (_seopress_titles_title, _seopress_titles_desc, etc). Use this to set or change the SEO title, meta description, focus keyword, canonical URL, robots directives, and Open Graph \\/ Twitter Card fields. Only the provided fields are modified.\"},{\"name\":\"ewpa\\/get-seopress-content-analysis\",\"label\":\"Get SEOPress Content Analysis\",\"description\":\"Retrieves the SEOPress content analysis for a post or page: every check (meta title, meta description, headings, internal links, structured data, image alt texts, etc.) with its impact level and recommendation text. Set refresh=true to run a fresh analysis of the rendered page before reading the results \\u2014 recommended after updating content or metadata. Requires SEOPress 7.5+.\"},{\"name\":\"ewpa\\/yoast-get-seo\",\"label\":\"Get Yoast SEO Metadata\",\"description\":\"Retrieves all Yoast SEO metadata for a post or page: title, description, focus keyphrase, canonical URL, robots (noindex\\/nofollow\\/advanced), Open Graph, and Twitter Card.\"},{\"name\":\"ewpa\\/yoast-update-seo\",\"label\":\"Update Yoast SEO Metadata\",\"description\":\"Updates Yoast SEO metadata on a post or page (_yoast_wpseo_title, _yoast_wpseo_metadesc, etc). Use this to set or change the SEO title, meta description, focus keyphrase, canonical URL, robots, and Open Graph \\/ Twitter Card fields. Only the provided fields are modified.\"},{\"name\":\"ewpa\\/create-code-snippet\",\"label\":\"Create Code Snippet\",\"description\":\"Creates a PHP code snippet via the Code Snippets plugin. The snippet is always saved as inactive \\u2014 it must be activated manually from wp-admin \\u203a Snippets. Validates PHP syntax, blocks dangerous functions, and fires an audit action hook after saving.\"},{\"name\":\"ewpa\\/yoast-get-sitemap-index\",\"label\":\"Get Yoast Sitemap Index\",\"description\":\"Fetches and parses the Yoast SEO sitemap index for this site, returning the list of all sitemap URLs and their last modification date.\"},{\"name\":\"ewpa\\/search-replace\",\"label\":\"Search and Replace\",\"description\":\"Searches for text in a specific post content and replaces it with another. Useful for corrections and updates.\"},{\"name\":\"ewpa\\/site-stats\",\"label\":\"Site Statistics\",\"description\":\"Returns a summary with the total posts, pages, categories, tags, comments, and users of the site.\"},{\"name\":\"ewpa\\/update-post-meta\",\"label\":\"Update Post Meta\",\"description\":\"Writes any post meta field by exact key. Use this when you know the exact meta key required by a specific SEO plugin or custom field (e.g. _genesis_title for The SEO Framework, _seopress_titles_title for SEOPress). Requires edit_post capability on the target post.\"},{\"name\":\"ewpa\\/get-post-meta\",\"label\":\"Get Post Meta\",\"description\":\"Reads any single post meta field by exact key. Useful for SEO plugins and custom fields not covered by dedicated sections (e.g. _genesis_title for The SEO Framework, _aioseo_title for AIOSEO). Requires edit_post capability on the target post.\"},{\"name\":\"ewpa\\/get-active-plugins\",\"label\":\"Get Active Plugins\",\"description\":\"Returns a list of all currently active plugins on the site, including name, version, and detected capabilities (multilanguage, SEO, WooCommerce, etc.).\"},{\"name\":\"ewpa\\/list-post-types\",\"label\":\"List Post Types\",\"description\":\"Lists all custom post types registered on the site, with their configuration, supported features, and associated taxonomies.\"},{\"name\":\"ewpa\\/get-cpt-items\",\"label\":\"Get CPT Items\",\"description\":\"Retrieves a list of items from a specific custom post type with filtering, search, and taxonomy query support.\"},{\"name\":\"ewpa\\/get-cpt-item\",\"label\":\"Get CPT Item\",\"description\":\"Retrieves full details of a single custom post type item, including all meta fields, taxonomies, and content.\"},{\"name\":\"ewpa\\/create-cpt-item\",\"label\":\"Create CPT Item\",\"description\":\"Creates a new item in a custom post type. Content is optional as some CPTs store data in custom fields instead.\"},{\"name\":\"ewpa\\/update-cpt-item\",\"label\":\"Update CPT Item\",\"description\":\"Updates an existing custom post type item. Only provided fields are modified (partial update).\"},{\"name\":\"ewpa\\/delete-cpt-item\",\"label\":\"Delete CPT Item\",\"description\":\"Deletes a custom post type item. By default moves to trash; use force_delete to permanently remove.\"},{\"name\":\"ewpa\\/get-cpt-taxonomies\",\"label\":\"Get CPT Taxonomies\",\"description\":\"Retrieves all taxonomies associated with a custom post type, including their terms.\"},{\"name\":\"ewpa\\/assign-cpt-terms\",\"label\":\"Assign CPT Terms\",\"description\":\"Assigns taxonomy terms to a custom post type item. Can replace or append terms.\"},{\"name\":\"ewpa\\/set-post-language\",\"label\":\"Set Post Language\",\"description\":\"Assigns a language to an existing post via Polylang or WPML. Does nothing if no multilanguage plugin is active.\"},{\"name\":\"ewpa\\/link-post-translation\",\"label\":\"Link Post Translation\",\"description\":\"Links two posts as translations of each other via Polylang or WPML. Both posts must already have a language assigned.\"},{\"name\":\"ewpa\\/get-post-translations\",\"label\":\"Get Post Translations\",\"description\":\"Returns the full translation map for a post: language codes, post IDs, titles, and permalink for each available translation. Requires Polylang or WPML.\"},{\"name\":\"ewpa\\/je-list-options-pages\",\"label\":\"List Options Pages\",\"description\":\"Lists all registered JetEngine Options Pages with their field schema. Does not return field values. Requires JetEngine with the Options Pages module enabled.\"},{\"name\":\"ewpa\\/je-get-options-page\",\"label\":\"Get Options Page\",\"description\":\"Returns all fields with their current stored values for a given JetEngine Options Page slug. Requires JetEngine with the Options Pages module enabled.\"},{\"name\":\"ewpa\\/je-update-options-page-field\",\"label\":\"Update Options Page Field\",\"description\":\"Writes a new value to a single field of a JetEngine Options Page. Supports text, number, select, checkbox, repeater, and most other field types. UI-only types (html, tab, accordion, endpoint) are rejected. For repeater fields call ewpa\\/je-get-options-page first to see the repeater_fields structure, then pass an array of row objects. Requires JetEngine with the Options Pages module enabled.\"},{\"name\":\"ewpa\\/elementor-bind-dynamic-field\",\"label\":\"Elementor: Bind Dynamic Field\",\"description\":\"Binds a single Elementor widget setting to a dynamic tag. source=post_title uses the native Post Title tag; source=meta uses a JetEngine dynamic field reading the given meta_key. Edits _elementor_data server-side, validates the tree, injects the __dynamic__ binding using Elementor own tag encoder, saves, and clears Elementor cache. Requires Elementor (Elementor Pro for post_title, JetEngine for meta).\"},{\"name\":\"ewpa\\/elementor-get-structure\",\"label\":\"Elementor: Get Structure\",\"description\":\"Returns a compact, flattened tree of an Elementor page\\/template: every element with its id, depth, type, and a short text preview. Read-only. Use this to locate element ids before editing.\"},{\"name\":\"ewpa\\/elementor-update-element\",\"label\":\"Elementor: Update Element\",\"description\":\"Updates the settings of a single Elementor element by id (static content or styles). Provided keys are merged into the element settings; other keys are preserved. Examples: {\\\"title\\\":\\\"New heading\\\"} for a heading, {\\\"text\\\":\\\"Click\\\"} for a button, {\\\"editor\\\":\\\"<p>HTML<\\/p>\\\"} for a text-editor. Saves and clears Elementor cache. Batch mode: pass an edits[] array to update multiple elements in a single call.\"},{\"name\":\"fixturelabs\\/note-get\",\"label\":\"Get Note\",\"description\":\"Return the note stored by the Fixture Labs fixture plugin.\"},{\"name\":\"fixturelabs\\/note-set\",\"label\":\"Set Note\",\"description\":\"Create or update the Fixture Labs note.\"},{\"name\":\"fixturelabs\\/note-delete\",\"label\":\"Delete Note\",\"description\":\"Delete the Fixture Labs note.\"},{\"name\":\"fixturelabs\\/note-get-unannotated\",\"label\":\"Get Note (unannotated)\",\"description\":\"Read variant with NO MCP annotations declared \\u2014 proves absent-annotation behavior.\"},{\"name\":\"fixturelabs\\/note-get-malformed\",\"label\":\"Get Note (malformed annotations)\",\"description\":\"Read variant whose annotation values are malformed types \\u2014 proves malformed-annotation handling.\"},{\"name\":\"fixturelabs\\/note-get-contradictory\",\"label\":\"Get Note (contradictory annotations)\",\"description\":\"Read variant declaring readOnly AND destructive both true \\u2014 proves contradictory-annotation behavior.\"}]},\"isError\":false}}",
+      "parsed": {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"abilities\":[{\"name\":\"core\\/get-site-info\",\"label\":\"Get Site Information\",\"description\":\"Returns site information configured in WordPress. By default returns all fields, or optionally a filtered subset.\"},{\"name\":\"core\\/get-user-info\",\"label\":\"Get User Information\",\"description\":\"Returns basic profile details for the current authenticated user to support personalization, auditing, and access-aware behavior.\"},{\"name\":\"core\\/get-environment-info\",\"label\":\"Get Environment Info\",\"description\":\"Returns core details about the site's runtime context for diagnostics and compatibility (environment, PHP runtime, database server info, WordPress version).\"},{\"name\":\"ewpa\\/get-posts\",\"label\":\"Get Posts\",\"description\":\"Retrieves a list of blog posts with optional filters by status, category, count, and order.\"},{\"name\":\"ewpa\\/get-post\",\"label\":\"Get Single Post\",\"description\":\"Retrieves all details of a specific post by ID, including full content, metadata, and featured image.\"},{\"name\":\"ewpa\\/get-page\",\"label\":\"Get Single Page\",\"description\":\"Retrieves all details of a specific page by ID, including full content, template, hierarchy, and SEO metadata.\"},{\"name\":\"ewpa\\/get-categories\",\"label\":\"Get Categories\",\"description\":\"Retrieves all blog categories with their ID, name, slug, description, and post count.\"},{\"name\":\"ewpa\\/get-tags\",\"label\":\"Get Tags\",\"description\":\"Retrieves all blog tags with their ID, name, slug, and post count.\"},{\"name\":\"ewpa\\/get-pages\",\"label\":\"Get Pages\",\"description\":\"Retrieves site pages with their title, status, content, and hierarchy (parent\\/child).\"},{\"name\":\"ewpa\\/get-comments\",\"label\":\"Get Comments\",\"description\":\"Retrieves blog comments with optional filters by status, post, and count. Useful for moderation and analysis.\"},{\"name\":\"ewpa\\/get-media\",\"label\":\"Get Media\",\"description\":\"Retrieves media library files (images, videos, documents) with filters by MIME type and search.\"},{\"name\":\"ewpa\\/get-users\",\"label\":\"Get Users\",\"description\":\"Retrieves the list of site users with their ID, name, email, and role. Useful for assigning post authors.\"},{\"name\":\"ewpa\\/create-post\",\"label\":\"Create Post\",\"description\":\"Creates a new blog post. Accepts title, HTML content, excerpt, categories, tags, featured image, and status. Defaults to draft.\"},{\"name\":\"ewpa\\/update-post\",\"label\":\"Update Post\",\"description\":\"Updates an existing post. Only the provided fields are modified, others remain unchanged.\"},{\"name\":\"ewpa\\/delete-post\",\"label\":\"Delete Post\",\"description\":\"Sends a post to trash or permanently deletes it. Defaults to trash.\"},{\"name\":\"ewpa\\/create-category\",\"label\":\"Create Category\",\"description\":\"Creates a new blog category with name, slug, description, and parent category (optional).\"},{\"name\":\"ewpa\\/create-tag\",\"label\":\"Create Tag\",\"description\":\"Creates a new blog tag with name, slug, and description.\"},{\"name\":\"ewpa\\/create-page\",\"label\":\"Create Page\",\"description\":\"Creates a new WordPress page with title, content, status, and parent page (for hierarchy).\"},{\"name\":\"ewpa\\/moderate-comment\",\"label\":\"Moderate Comment\",\"description\":\"Changes a comment status: approve, hold, mark as spam, or send to trash.\"},{\"name\":\"ewpa\\/reply-comment\",\"label\":\"Reply to Comment\",\"description\":\"Replies to an existing comment on a post or page. The reply is published as the current authenticated user.\"},{\"name\":\"ewpa\\/update-comment\",\"label\":\"Update Comment\",\"description\":\"Updates an existing comment. Allows changing the content, author name, author email, and the WordPress user associated with the comment.\"},{\"name\":\"ewpa\\/upload-image\",\"label\":\"Upload Image from URL\",\"description\":\"Downloads an image from an external URL and registers it in the WordPress media library. Optionally assigns it as featured image for a post. Returns the attachment ID and local URL.\"},{\"name\":\"ewpa\\/get-rankmath\",\"label\":\"Get Rank Math Metadata\",\"description\":\"Retrieves all Rank Math SEO metadata for a post or page: title, description, keywords, robots, advanced robots, Open Graph, Twitter Card, schema, breadcrumb, cornerstone, and SEO score.\"},{\"name\":\"ewpa\\/update-rankmath\",\"label\":\"Update Rank Math SEO \\/ Focus Keyword\",\"description\":\"Updates Rank Math SEO metadata on a post or page (rank_math_focus_keyword, rank_math_title, rank_math_description, etc). Use this ability to set or change the focus keyword, SEO title, meta description, canonical URL, robots, Open Graph, Twitter Card, breadcrumb, schema snippet, cornerstone, and pillar content. Only the provided fields are modified.\"},{\"name\":\"ewpa\\/update-rankmath-schema\",\"label\":\"Update Rank Math Schema\",\"description\":\"Writes a structured-data schema block (e.g. FAQPage, Article, Product) to a Rank Math schema meta key. The schema_data object is sanitized and stored as a PHP-serialized array, exactly as Rank Math expects, so it renders as JSON-LD in <head>. Use this to add or replace a schema block on any post or page.\"},{\"name\":\"ewpa\\/get-seopress\",\"label\":\"Get SEOPress Metadata\",\"description\":\"Retrieves all SEOPress metadata for a post or page: title, description, focus keyword, robots directives, canonical URL, Open Graph, and Twitter Card.\"},{\"name\":\"ewpa\\/update-seopress\",\"label\":\"Update SEOPress Metadata\",\"description\":\"Updates SEOPress metadata on a post or page (_seopress_titles_title, _seopress_titles_desc, etc). Use this to set or change the SEO title, meta description, focus keyword, canonical URL, robots directives, and Open Graph \\/ Twitter Card fields. Only the provided fields are modified.\"},{\"name\":\"ewpa\\/get-seopress-content-analysis\",\"label\":\"Get SEOPress Content Analysis\",\"description\":\"Retrieves the SEOPress content analysis for a post or page: every check (meta title, meta description, headings, internal links, structured data, image alt texts, etc.) with its impact level and recommendation text. Set refresh=true to run a fresh analysis of the rendered page before reading the results \\u2014 recommended after updating content or metadata. Requires SEOPress 7.5+.\"},{\"name\":\"ewpa\\/yoast-get-seo\",\"label\":\"Get Yoast SEO Metadata\",\"description\":\"Retrieves all Yoast SEO metadata for a post or page: title, description, focus keyphrase, canonical URL, robots (noindex\\/nofollow\\/advanced), Open Graph, and Twitter Card.\"},{\"name\":\"ewpa\\/yoast-update-seo\",\"label\":\"Update Yoast SEO Metadata\",\"description\":\"Updates Yoast SEO metadata on a post or page (_yoast_wpseo_title, _yoast_wpseo_metadesc, etc). Use this to set or change the SEO title, meta description, focus keyphrase, canonical URL, robots, and Open Graph \\/ Twitter Card fields. Only the provided fields are modified.\"},{\"name\":\"ewpa\\/create-code-snippet\",\"label\":\"Create Code Snippet\",\"description\":\"Creates a PHP code snippet via the Code Snippets plugin. The snippet is always saved as inactive \\u2014 it must be activated manually from wp-admin \\u203a Snippets. Validates PHP syntax, blocks dangerous functions, and fires an audit action hook after saving.\"},{\"name\":\"ewpa\\/yoast-get-sitemap-index\",\"label\":\"Get Yoast Sitemap Index\",\"description\":\"Fetches and parses the Yoast SEO sitemap index for this site, returning the list of all sitemap URLs and their last modification date.\"},{\"name\":\"ewpa\\/search-replace\",\"label\":\"Search and Replace\",\"description\":\"Searches for text in a specific post content and replaces it with another. Useful for corrections and updates.\"},{\"name\":\"ewpa\\/site-stats\",\"label\":\"Site Statistics\",\"description\":\"Returns a summary with the total posts, pages, categories, tags, comments, and users of the site.\"},{\"name\":\"ewpa\\/update-post-meta\",\"label\":\"Update Post Meta\",\"description\":\"Writes any post meta field by exact key. Use this when you know the exact meta key required by a specific SEO plugin or custom field (e.g. _genesis_title for The SEO Framework, _seopress_titles_title for SEOPress). Requires edit_post capability on the target post.\"},{\"name\":\"ewpa\\/get-post-meta\",\"label\":\"Get Post Meta\",\"description\":\"Reads any single post meta field by exact key. Useful for SEO plugins and custom fields not covered by dedicated sections (e.g. _genesis_title for The SEO Framework, _aioseo_title for AIOSEO). Requires edit_post capability on the target post.\"},{\"name\":\"ewpa\\/get-active-plugins\",\"label\":\"Get Active Plugins\",\"description\":\"Returns a list of all currently active plugins on the site, including name, version, and detected capabilities (multilanguage, SEO, WooCommerce, etc.).\"},{\"name\":\"ewpa\\/list-post-types\",\"label\":\"List Post Types\",\"description\":\"Lists all custom post types registered on the site, with their configuration, supported features, and associated taxonomies.\"},{\"name\":\"ewpa\\/get-cpt-items\",\"label\":\"Get CPT Items\",\"description\":\"Retrieves a list of items from a specific custom post type with filtering, search, and taxonomy query support.\"},{\"name\":\"ewpa\\/get-cpt-item\",\"label\":\"Get CPT Item\",\"description\":\"Retrieves full details of a single custom post type item, including all meta fields, taxonomies, and content.\"},{\"name\":\"ewpa\\/create-cpt-item\",\"label\":\"Create CPT Item\",\"description\":\"Creates a new item in a custom post type. Content is optional as some CPTs store data in custom fields instead.\"},{\"name\":\"ewpa\\/update-cpt-item\",\"label\":\"Update CPT Item\",\"description\":\"Updates an existing custom post type item. Only provided fields are modified (partial update).\"},{\"name\":\"ewpa\\/delete-cpt-item\",\"label\":\"Delete CPT Item\",\"description\":\"Deletes a custom post type item. By default moves to trash; use force_delete to permanently remove.\"},{\"name\":\"ewpa\\/get-cpt-taxonomies\",\"label\":\"Get CPT Taxonomies\",\"description\":\"Retrieves all taxonomies associated with a custom post type, including their terms.\"},{\"name\":\"ewpa\\/assign-cpt-terms\",\"label\":\"Assign CPT Terms\",\"description\":\"Assigns taxonomy terms to a custom post type item. Can replace or append terms.\"},{\"name\":\"ewpa\\/set-post-language\",\"label\":\"Set Post Language\",\"description\":\"Assigns a language to an existing post via Polylang or WPML. Does nothing if no multilanguage plugin is active.\"},{\"name\":\"ewpa\\/link-post-translation\",\"label\":\"Link Post Translation\",\"description\":\"Links two posts as translations of each other via Polylang or WPML. Both posts must already have a language assigned.\"},{\"name\":\"ewpa\\/get-post-translations\",\"label\":\"Get Post Translations\",\"description\":\"Returns the full translation map for a post: language codes, post IDs, titles, and permalink for each available translation. Requires Polylang or WPML.\"},{\"name\":\"ewpa\\/je-list-options-pages\",\"label\":\"List Options Pages\",\"description\":\"Lists all registered JetEngine Options Pages with their field schema. Does not return field values. Requires JetEngine with the Options Pages module enabled.\"},{\"name\":\"ewpa\\/je-get-options-page\",\"label\":\"Get Options Page\",\"description\":\"Returns all fields with their current stored values for a given JetEngine Options Page slug. Requires JetEngine with the Options Pages module enabled.\"},{\"name\":\"ewpa\\/je-update-options-page-field\",\"label\":\"Update Options Page Field\",\"description\":\"Writes a new value to a single field of a JetEngine Options Page. Supports text, number, select, checkbox, repeater, and most other field types. UI-only types (html, tab, accordion, endpoint) are rejected. For repeater fields call ewpa\\/je-get-options-page first to see the repeater_fields structure, then pass an array of row objects. Requires JetEngine with the Options Pages module enabled.\"},{\"name\":\"ewpa\\/elementor-bind-dynamic-field\",\"label\":\"Elementor: Bind Dynamic Field\",\"description\":\"Binds a single Elementor widget setting to a dynamic tag. source=post_title uses the native Post Title tag; source=meta uses a JetEngine dynamic field reading the given meta_key. Edits _elementor_data server-side, validates the tree, injects the __dynamic__ binding using Elementor own tag encoder, saves, and clears Elementor cache. Requires Elementor (Elementor Pro for post_title, JetEngine for meta).\"},{\"name\":\"ewpa\\/elementor-get-structure\",\"label\":\"Elementor: Get Structure\",\"description\":\"Returns a compact, flattened tree of an Elementor page\\/template: every element with its id, depth, type, and a short text preview. Read-only. Use this to locate element ids before editing.\"},{\"name\":\"ewpa\\/elementor-update-element\",\"label\":\"Elementor: Update Element\",\"description\":\"Updates the settings of a single Elementor element by id (static content or styles). Provided keys are merged into the element settings; other keys are preserved. Examples: {\\\"title\\\":\\\"New heading\\\"} for a heading, {\\\"text\\\":\\\"Click\\\"} for a button, {\\\"editor\\\":\\\"<p>HTML<\\/p>\\\"} for a text-editor. Saves and clears Elementor cache. Batch mode: pass an edits[] array to update multiple elements in a single call.\"},{\"name\":\"fixturelabs\\/note-get\",\"label\":\"Get Note\",\"description\":\"Return the note stored by the Fixture Labs fixture plugin.\"},{\"name\":\"fixturelabs\\/note-set\",\"label\":\"Set Note\",\"description\":\"Create or update the Fixture Labs note.\"},{\"name\":\"fixturelabs\\/note-delete\",\"label\":\"Delete Note\",\"description\":\"Delete the Fixture Labs note.\"},{\"name\":\"fixturelabs\\/note-get-unannotated\",\"label\":\"Get Note (unannotated)\",\"description\":\"Read variant with NO MCP annotations declared \\u2014 proves absent-annotation behavior.\"},{\"name\":\"fixturelabs\\/note-get-malformed\",\"label\":\"Get Note (malformed annotations)\",\"description\":\"Read variant whose annotation values are malformed types \\u2014 proves malformed-annotation handling.\"},{\"name\":\"fixturelabs\\/note-get-contradictory\",\"label\":\"Get Note (contradictory annotations)\",\"description\":\"Read variant declaring readOnly AND destructive both true \\u2014 proves contradictory-annotation behavior.\"}]}"
+            }
+          ],
+          "structuredContent": {
+            "abilities": [
+              {
+                "name": "core/get-site-info",
+                "label": "Get Site Information",
+                "description": "Returns site information configured in WordPress. By default returns all fields, or optionally a filtered subset."
+              },
+              {
+                "name": "core/get-user-info",
+                "label": "Get User Information",
+                "description": "Returns basic profile details for the current authenticated user to support personalization, auditing, and access-aware behavior."
+              },
+              {
+                "name": "core/get-environment-info",
+                "label": "Get Environment Info",
+                "description": "Returns core details about the site's runtime context for diagnostics and compatibility (environment, PHP runtime, database server info, WordPress version)."
+              },
+              {
+                "name": "ewpa/get-posts",
+                "label": "Get Posts",
+                "description": "Retrieves a list of blog posts with optional filters by status, category, count, and order."
+              },
+              {
+                "name": "ewpa/get-post",
+                "label": "Get Single Post",
+                "description": "Retrieves all details of a specific post by ID, including full content, metadata, and featured image."
+              },
+              {
+                "name": "ewpa/get-page",
+                "label": "Get Single Page",
+                "description": "Retrieves all details of a specific page by ID, including full content, template, hierarchy, and SEO metadata."
+              },
+              {
+                "name": "ewpa/get-categories",
+                "label": "Get Categories",
+                "description": "Retrieves all blog categories with their ID, name, slug, description, and post count."
+              },
+              {
+                "name": "ewpa/get-tags",
+                "label": "Get Tags",
+                "description": "Retrieves all blog tags with their ID, name, slug, and post count."
+              },
+              {
+                "name": "ewpa/get-pages",
+                "label": "Get Pages",
+                "description": "Retrieves site pages with their title, status, content, and hierarchy (parent/child)."
+              },
+              {
+                "name": "ewpa/get-comments",
+                "label": "Get Comments",
+                "description": "Retrieves blog comments with optional filters by status, post, and count. Useful for moderation and analysis."
+              },
+              {
+                "name": "ewpa/get-media",
+                "label": "Get Media",
+                "description": "Retrieves media library files (images, videos, documents) with filters by MIME type and search."
+              },
+              {
+                "name": "ewpa/get-users",
+                "label": "Get Users",
+                "description": "Retrieves the list of site users with their ID, name, email, and role. Useful for assigning post authors."
+              },
+              {
+                "name": "ewpa/create-post",
+                "label": "Create Post",
+                "description": "Creates a new blog post. Accepts title, HTML content, excerpt, categories, tags, featured image, and status. Defaults to draft."
+              },
+              {
+                "name": "ewpa/update-post",
+                "label": "Update Post",
+                "description": "Updates an existing post. Only the provided fields are modified, others remain unchanged."
+              },
+              {
+                "name": "ewpa/delete-post",
+                "label": "Delete Post",
+                "description": "Sends a post to trash or permanently deletes it. Defaults to trash."
+              },
+              {
+                "name": "ewpa/create-category",
+                "label": "Create Category",
+                "description": "Creates a new blog category with name, slug, description, and parent category (optional)."
+              },
+              {
+                "name": "ewpa/create-tag",
+                "label": "Create Tag",
+                "description": "Creates a new blog tag with name, slug, and description."
+              },
+              {
+                "name": "ewpa/create-page",
+                "label": "Create Page",
+                "description": "Creates a new WordPress page with title, content, status, and parent page (for hierarchy)."
+              },
+              {
+                "name": "ewpa/moderate-comment",
+                "label": "Moderate Comment",
+                "description": "Changes a comment status: approve, hold, mark as spam, or send to trash."
+              },
+              {
+                "name": "ewpa/reply-comment",
+                "label": "Reply to Comment",
+                "description": "Replies to an existing comment on a post or page. The reply is published as the current authenticated user."
+              },
+              {
+                "name": "ewpa/update-comment",
+                "label": "Update Comment",
+                "description": "Updates an existing comment. Allows changing the content, author name, author email, and the WordPress user associated with the comment."
+              },
+              {
+                "name": "ewpa/upload-image",
+                "label": "Upload Image from URL",
+                "description": "Downloads an image from an external URL and registers it in the WordPress media library. Optionally assigns it as featured image for a post. Returns the attachment ID and local URL."
+              },
+              {
+                "name": "ewpa/get-rankmath",
+                "label": "Get Rank Math Metadata",
+                "description": "Retrieves all Rank Math SEO metadata for a post or page: title, description, keywords, robots, advanced robots, Open Graph, Twitter Card, schema, breadcrumb, cornerstone, and SEO score."
+              },
+              {
+                "name": "ewpa/update-rankmath",
+                "label": "Update Rank Math SEO / Focus Keyword",
+                "description": "Updates Rank Math SEO metadata on a post or page (rank_math_focus_keyword, rank_math_title, rank_math_description, etc). Use this ability to set or change the focus keyword, SEO title, meta description, canonical URL, robots, Open Graph, Twitter Card, breadcrumb, schema snippet, cornerstone, and pillar content. Only the provided fields are modified."
+              },
+              {
+                "name": "ewpa/update-rankmath-schema",
+                "label": "Update Rank Math Schema",
+                "description": "Writes a structured-data schema block (e.g. FAQPage, Article, Product) to a Rank Math schema meta key. The schema_data object is sanitized and stored as a PHP-serialized array, exactly as Rank Math expects, so it renders as JSON-LD in <head>. Use this to add or replace a schema block on any post or page."
+              },
+              {
+                "name": "ewpa/get-seopress",
+                "label": "Get SEOPress Metadata",
+                "description": "Retrieves all SEOPress metadata for a post or page: title, description, focus keyword, robots directives, canonical URL, Open Graph, and Twitter Card."
+              },
+              {
+                "name": "ewpa/update-seopress",
+                "label": "Update SEOPress Metadata",
+                "description": "Updates SEOPress metadata on a post or page (_seopress_titles_title, _seopress_titles_desc, etc). Use this to set or change the SEO title, meta description, focus keyword, canonical URL, robots directives, and Open Graph / Twitter Card fields. Only the provided fields are modified."
+              },
+              {
+                "name": "ewpa/get-seopress-content-analysis",
+                "label": "Get SEOPress Content Analysis",
+                "description": "Retrieves the SEOPress content analysis for a post or page: every check (meta title, meta description, headings, internal links, structured data, image alt texts, etc.) with its impact level and recommendation text. Set refresh=true to run a fresh analysis of the rendered page before reading the results — recommended after updating content or metadata. Requires SEOPress 7.5+."
+              },
+              {
+                "name": "ewpa/yoast-get-seo",
+                "label": "Get Yoast SEO Metadata",
+                "description": "Retrieves all Yoast SEO metadata for a post or page: title, description, focus keyphrase, canonical URL, robots (noindex/nofollow/advanced), Open Graph, and Twitter Card."
+              },
+              {
+                "name": "ewpa/yoast-update-seo",
+                "label": "Update Yoast SEO Metadata",
+                "description": "Updates Yoast SEO metadata on a post or page (_yoast_wpseo_title, _yoast_wpseo_metadesc, etc). Use this to set or change the SEO title, meta description, focus keyphrase, canonical URL, robots, and Open Graph / Twitter Card fields. Only the provided fields are modified."
+              },
+              {
+                "name": "ewpa/create-code-snippet",
+                "label": "Create Code Snippet",
+                "description": "Creates a PHP code snippet via the Code Snippets plugin. The snippet is always saved as inactive — it must be activated manually from wp-admin › Snippets. Validates PHP syntax, blocks dangerous functions, and fires an audit action hook after saving."
+              },
+              {
+                "name": "ewpa/yoast-get-sitemap-index",
+                "label": "Get Yoast Sitemap Index",
+                "description": "Fetches and parses the Yoast SEO sitemap index for this site, returning the list of all sitemap URLs and their last modification date."
+              },
+              {
+                "name": "ewpa/search-replace",
+                "label": "Search and Replace",
+                "description": "Searches for text in a specific post content and replaces it with another. Useful for corrections and updates."
+              },
+              {
+                "name": "ewpa/site-stats",
+                "label": "Site Statistics",
+                "description": "Returns a summary with the total posts, pages, categories, tags, comments, and users of the site."
+              },
+              {
+                "name": "ewpa/update-post-meta",
+                "label": "Update Post Meta",
+                "description": "Writes any post meta field by exact key. Use this when you know the exact meta key required by a specific SEO plugin or custom field (e.g. _genesis_title for The SEO Framework, _seopress_titles_title for SEOPress). Requires edit_post capability on the target post."
+              },
+              {
+                "name": "ewpa/get-post-meta",
+                "label": "Get Post Meta",
+                "description": "Reads any single post meta field by exact key. Useful for SEO plugins and custom fields not covered by dedicated sections (e.g. _genesis_title for The SEO Framework, _aioseo_title for AIOSEO). Requires edit_post capability on the target post."
+              },
+              {
+                "name": "ewpa/get-active-plugins",
+                "label": "Get Active Plugins",
+                "description": "Returns a list of all currently active plugins on the site, including name, version, and detected capabilities (multilanguage, SEO, WooCommerce, etc.)."
+              },
+              {
+                "name": "ewpa/list-post-types",
+                "label": "List Post Types",
+                "description": "Lists all custom post types registered on the site, with their configuration, supported features, and associated taxonomies."
+              },
+              {
+                "name": "ewpa/get-cpt-items",
+                "label": "Get CPT Items",
+                "description": "Retrieves a list of items from a specific custom post type with filtering, search, and taxonomy query support."
+              },
+              {
+                "name": "ewpa/get-cpt-item",
+                "label": "Get CPT Item",
+                "description": "Retrieves full details of a single custom post type item, including all meta fields, taxonomies, and content."
+              },
+              {
+                "name": "ewpa/create-cpt-item",
+                "label": "Create CPT Item",
+                "description": "Creates a new item in a custom post type. Content is optional as some CPTs store data in custom fields instead."
+              },
+              {
+                "name": "ewpa/update-cpt-item",
+                "label": "Update CPT Item",
+                "description": "Updates an existing custom post type item. Only provided fields are modified (partial update)."
+              },
+              {
+                "name": "ewpa/delete-cpt-item",
+                "label": "Delete CPT Item",
+                "description": "Deletes a custom post type item. By default moves to trash; use force_delete to permanently remove."
+              },
+              {
+                "name": "ewpa/get-cpt-taxonomies",
+                "label": "Get CPT Taxonomies",
+                "description": "Retrieves all taxonomies associated with a custom post type, including their terms."
+              },
+              {
+                "name": "ewpa/assign-cpt-terms",
+                "label": "Assign CPT Terms",
+                "description": "Assigns taxonomy terms to a custom post type item. Can replace or append terms."
+              },
+              {
+                "name": "ewpa/set-post-language",
+                "label": "Set Post Language",
+                "description": "Assigns a language to an existing post via Polylang or WPML. Does nothing if no multilanguage plugin is active."
+              },
+              {
+                "name": "ewpa/link-post-translation",
+                "label": "Link Post Translation",
+                "description": "Links two posts as translations of each other via Polylang or WPML. Both posts must already have a language assigned."
+              },
+              {
+                "name": "ewpa/get-post-translations",
+                "label": "Get Post Translations",
+                "description": "Returns the full translation map for a post: language codes, post IDs, titles, and permalink for each available translation. Requires Polylang or WPML."
+              },
+              {
+                "name": "ewpa/je-list-options-pages",
+                "label": "List Options Pages",
+                "description": "Lists all registered JetEngine Options Pages with their field schema. Does not return field values. Requires JetEngine with the Options Pages module enabled."
+              },
+              {
+                "name": "ewpa/je-get-options-page",
+                "label": "Get Options Page",
+                "description": "Returns all fields with their current stored values for a given JetEngine Options Page slug. Requires JetEngine with the Options Pages module enabled."
+              },
+              {
+                "name": "ewpa/je-update-options-page-field",
+                "label": "Update Options Page Field",
+                "description": "Writes a new value to a single field of a JetEngine Options Page. Supports text, number, select, checkbox, repeater, and most other field types. UI-only types (html, tab, accordion, endpoint) are rejected. For repeater fields call ewpa/je-get-options-page first to see the repeater_fields structure, then pass an array of row objects. Requires JetEngine with the Options Pages module enabled."
+              },
+              {
+                "name": "ewpa/elementor-bind-dynamic-field",
+                "label": "Elementor: Bind Dynamic Field",
+                "description": "Binds a single Elementor widget setting to a dynamic tag. source=post_title uses the native Post Title tag; source=meta uses a JetEngine dynamic field reading the given meta_key. Edits _elementor_data server-side, validates the tree, injects the __dynamic__ binding using Elementor own tag encoder, saves, and clears Elementor cache. Requires Elementor (Elementor Pro for post_title, JetEngine for meta)."
+              },
+              {
+                "name": "ewpa/elementor-get-structure",
+                "label": "Elementor: Get Structure",
+                "description": "Returns a compact, flattened tree of an Elementor page/template: every element with its id, depth, type, and a short text preview. Read-only. Use this to locate element ids before editing."
+              },
+              {
+                "name": "ewpa/elementor-update-element",
+                "label": "Elementor: Update Element",
+                "description": "Updates the settings of a single Elementor element by id (static content or styles). Provided keys are merged into the element settings; other keys are preserved. Examples: {\"title\":\"New heading\"} for a heading, {\"text\":\"Click\"} for a button, {\"editor\":\"<p>HTML</p>\"} for a text-editor. Saves and clears Elementor cache. Batch mode: pass an edits[] array to update multiple elements in a single call."
+              },
+              {
+                "name": "fixturelabs/note-get",
+                "label": "Get Note",
+                "description": "Return the note stored by the Fixture Labs fixture plugin."
+              },
+              {
+                "name": "fixturelabs/note-set",
+                "label": "Set Note",
+                "description": "Create or update the Fixture Labs note."
+              },
+              {
+                "name": "fixturelabs/note-delete",
+                "label": "Delete Note",
+                "description": "Delete the Fixture Labs note."
+              },
+              {
+                "name": "fixturelabs/note-get-unannotated",
+                "label": "Get Note (unannotated)",
+                "description": "Read variant with NO MCP annotations declared — proves absent-annotation behavior."
+              },
+              {
+                "name": "fixturelabs/note-get-malformed",
+                "label": "Get Note (malformed annotations)",
+                "description": "Read variant whose annotation values are malformed types — proves malformed-annotation handling."
+              },
+              {
+                "name": "fixturelabs/note-get-contradictory",
+                "label": "Get Note (contradictory annotations)",
+                "description": "Read variant declaring readOnly AND destructive both true — proves contradictory-annotation behavior."
+              }
+            ]
+          },
+          "isError": false
+        }
+      },
+      "sessionId": "a1706ecf-c63e-4d18-b0dc-d757f18dd1b3"
+    }
+  },
+  "surfacing": {
+    "fixturelabs/note-get": {
+      "firstClassOnDefault": false,
+      "toolName": null,
+      "viaDiscoverAbilities": true,
+      "discoverable": true
+    },
+    "fixturelabs/note-set": {
+      "firstClassOnDefault": false,
+      "toolName": null,
+      "viaDiscoverAbilities": true,
+      "discoverable": true
+    },
+    "fixturelabs/note-delete": {
+      "firstClassOnDefault": false,
+      "toolName": null,
+      "viaDiscoverAbilities": true,
+      "discoverable": true
+    },
+    "fixturelabs/note-get-unannotated": {
+      "firstClassOnDefault": false,
+      "toolName": null,
+      "viaDiscoverAbilities": true,
+      "discoverable": true
+    },
+    "fixturelabs/note-get-malformed": {
+      "firstClassOnDefault": false,
+      "toolName": null,
+      "viaDiscoverAbilities": true,
+      "discoverable": true
+    },
+    "fixturelabs/note-get-contradictory": {
+      "firstClassOnDefault": false,
+      "toolName": null,
+      "viaDiscoverAbilities": true,
+      "discoverable": true
+    }
+  },
+  "hardFailures": [],
+  "provenance": {
+    "capturedAtCommit": "e062837f5976e49eb0a22812cf744a7dc2c26f10",
+    "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30202762361",
+    "capturedAt": "2026-07-26T12:49:46.212Z",
+    "pinsLockSha256": "7bddc5015bbbf794a15229a4753d7973b40dfd364e0050e578e7121bab72ad7a",
+    "fixturePluginSha256": "435ff97d89701d402398d589aa5b4570cc77b6ac65e8fa8c74be0e9c07195231",
+    "producerSha256": "9f81bb67bd5eb378ea498c379dca7bd8eacc0dc25bc578d8d6ae8d1973545a81",
+    "apiMapSha256": "55749cb32fb96c5443510eb61a353bb63a9277c1600af212e25846b997c2dac8"
+  }
+}

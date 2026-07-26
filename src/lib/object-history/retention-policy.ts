@@ -77,6 +77,11 @@ const RETENTION_POLICIES: Record<string, RetentionPolicy> = {
   "@cinatra-ai/assets:blog-post": { kind: "indefinite" },
   "@cinatra-ai/artifacts:artifact-ref": { kind: "indefinite" },
   "@cinatra-ai/artifact:object": { kind: "indefinite" },
+  // The pinned CMS preview capture (cinatra#2044 S6): the page as it stood when
+  // a review gate was opened. Kept INDEFINITELY on purpose — re-opening an old
+  // gate must still show its ORIGINAL picture, which is the whole immutability
+  // guarantee the capture exists to provide.
+  "@cinatra-ai/objects:cms-preview-capture": { kind: "indefinite" },
 };
 
 const DEFAULT_POLICY: RetentionPolicy = { kind: "indefinite" };

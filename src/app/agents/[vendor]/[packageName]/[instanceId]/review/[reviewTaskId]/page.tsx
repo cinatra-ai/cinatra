@@ -47,7 +47,10 @@ import { getAuthSession } from "@/lib/auth-session";
 
 import { loadReviewGateSurface } from "@/app/artifacts/[id]/review-gate-ports";
 import type { ReviewDisposition } from "@/lib/artifacts/artifact-review-decision";
-import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
+import {
+  pinnedCaptureKey,
+  type ReviewSubmitOutcome,
+} from "@/lib/artifacts/review-surface-model";
 
 import { resolveReviewActorContext } from "./review-actor";
 import { submitReviewDecisionAction } from "./actions";
@@ -219,7 +222,10 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
                 key={`${prepared.target.artifactId}:${prepared.target.representationRevisionId}`}
                 fallback={<ReviewGateLoading />}
               >
-                <ReviewTargetPanel prepared={prepared} />
+                <ReviewTargetPanel
+                  prepared={prepared}
+                  pinnedCaptures={surface.pinnedCaptures[pinnedCaptureKey(prepared.target)] ?? []}
+                />
               </Suspense>
             ))}
           </div>

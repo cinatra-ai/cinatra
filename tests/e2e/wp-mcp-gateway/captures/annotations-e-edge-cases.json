@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "subClaim": "e",
+  "description": "fixturelabs-server unannotated / malformed / contradictory tools, as emitted (raw)",
+  "edgeReport": {
+    "fixturelabs/note-get-unannotated": {
+      "toolName": "fixturelabs-note-get-unannotated",
+      "annotationsAsEmitted": null,
+      "source": "fixturelabs-server"
+    },
+    "fixturelabs/note-get-malformed": {
+      "toolName": "fixturelabs-note-get-malformed",
+      "annotationsAsEmitted": {
+        "title": "Get Note (malformed annotations)",
+        "readOnlyHint": true
+      },
+      "source": "fixturelabs-server"
+    },
+    "fixturelabs/note-get-contradictory": {
+      "toolName": "fixturelabs-note-get-contradictory",
+      "annotationsAsEmitted": {
+        "title": "Get Note (contradictory annotations)",
+        "readOnlyHint": true,
+        "destructiveHint": true
+      },
+      "source": "fixturelabs-server"
+    }
+  },
+  "provenance": {
+    "capturedAtCommit": "e062837f5976e49eb0a22812cf744a7dc2c26f10",
+    "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30202762361",
+    "capturedAt": "2026-07-26T12:49:46.192Z",
+    "pinsLockSha256": "7bddc5015bbbf794a15229a4753d7973b40dfd364e0050e578e7121bab72ad7a",
+    "fixturePluginSha256": "435ff97d89701d402398d589aa5b4570cc77b6ac65e8fa8c74be0e9c07195231",
+    "producerSha256": "9f81bb67bd5eb378ea498c379dca7bd8eacc0dc25bc578d8d6ae8d1973545a81",
+    "apiMapSha256": "55749cb32fb96c5443510eb61a353bb63a9277c1600af212e25846b997c2dac8"
+  }
+}
