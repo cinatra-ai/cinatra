@@ -27,6 +27,7 @@ function facts(over: Partial<CmsSnapshotCaptureFacts> = {}): CmsSnapshotCaptureF
     storageKey: "orgs/org-1/sha256/de/deadbeef.bin",
     sha256: "deadbeef",
     mimeDetected: "text/html",
+    declaredMime: "application/vnd.cinatra.cms-fields+json",
     sizeBytes: 1234,
     createdBy: "user-1",
     producerRunId: "run-1",
@@ -131,5 +132,50 @@ describe("cinatra#2043 - buildCmsSnapshotCaptureQueries", () => {
     );
     const targetOp = ops.find((o) => o.text.includes("cms_snapshot_targets"))!;
     expect(targetOp.values).toContain(JSON.stringify({ paths: [] }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The representation's MIME IDENTITY (cinatra#2044 S6 L-A3 live-walk finding).
+//
+// `resource.mime` is the key EVERY downstream MIME-keyed consumer reads:
+// `resolveArtifactVersionForServe` (and therefore the review target's
+// `revisionMember`), the renderer representation dispatch, and the preview
+// route's transport eligibility. It must be the connector's DECLARED
+// serialization mime, never the blob store's sniff — a CMS-fields snapshot is
+// JSON TEXT, so the sniffer reports `text/plain`, and writing that made every
+// captured snapshot resolve as `text/plain`: the CMS representation renderer
+// could never be selected for a review target, whatever provider was bound.
+// `artifact_blobs.mime_detected` keeps the sniff — that column IS the sniff.
+// ---------------------------------------------------------------------------
+describe("representation mime identity vs blob sniff", () => {
+  function contentWriteOp() {
+    const ops = buildCmsSnapshotCaptureQueries(SCHEMA, facts());
+    const op = ops.find((o) => o.text.includes('INSERT INTO "cinatra_test"."resource"'));
+    if (!op) throw new Error("content-write op not found");
+    return op;
+  }
+
+  it("writes the DECLARED mime into resource.mime", () => {
+    const op = contentWriteOp();
+    // $4 is the resource insert's `mime` column.
+    expect(op.values[3]).toBe("application/vnd.cinatra.cms-fields+json");
+  });
+
+  it("writes the SNIFFED mime into artifact_blobs.mime_detected", () => {
+    const op = contentWriteOp();
+    // $13 is the blob insert's `mime_detected` column.
+    expect(op.values[12]).toBe("text/html");
+    expect(op.text).toContain("$13::text");
+  });
+
+  it("the two are independent — a sniff change never moves the representation identity", () => {
+    const ops = buildCmsSnapshotCaptureQueries(
+      SCHEMA,
+      facts({ mimeDetected: "application/octet-stream" }),
+    );
+    const op = ops.find((o) => o.text.includes('INSERT INTO "cinatra_test"."resource"'));
+    expect(op?.values[3]).toBe("application/vnd.cinatra.cms-fields+json");
+    expect(op?.values[12]).toBe("application/octet-stream");
   });
 });

@@ -112,7 +112,18 @@ export interface CmsSnapshotCaptureFacts {
   substanceKey: string;
   storageKey: string;
   sha256: string;
+  /** The blob store's SNIFFED mime — provenance only, written to
+   *  `artifact_blobs.mime_detected`. NEVER the representation's identity. */
   mimeDetected: string;
+  /**
+   * The DECLARED representation mime — the connector's canonical CMS-fields
+   * serialization (`application/vnd.cinatra.cms-fields+json`). This is the
+   * representation's IDENTITY and the key every downstream MIME-keyed consumer
+   * reads: `resolveArtifactVersionForServe` (and therefore the review target's
+   * `revisionMember`), the renderer representation dispatch, and the preview
+   * route's transport eligibility. It must be written to `resource.mime`.
+   */
+  declaredMime: string;
   sizeBytes: number;
   createdBy: string | null;
   producerRunId: string | null;
@@ -178,7 +189,7 @@ VALUES ($1::text, $2::text, $3::jsonb, $4::text, $5::text, $6::text,
 blob_insert AS (
   INSERT INTO "${schema}"."artifact_blobs"
     (id, org_id, storage_backend, storage_key, sha256, size_bytes, mime_detected, created_by)
-  SELECT $8::text, $2::text, 'local-disk', $7::text, $9::text, $5::bigint, $4::text, $6::text
+  SELECT $8::text, $2::text, 'local-disk', $7::text, $9::text, $5::bigint, $13::text, $6::text
   WHERE EXISTS (SELECT 1 FROM resource_op WHERE is_new)
   RETURNING id
 ),
@@ -196,7 +207,14 @@ SELECT (SELECT id FROM rep_insert) AS representation_revision_id,
       f.resourceId, // $1
       f.orgId, // $2
       f.substanceKey, // $3
-      f.mimeDetected, // $4
+      // $4 — the resource's mime is the DECLARED representation mime, not the
+      // blob store's sniff. A CMS-fields snapshot is JSON TEXT, so the sniffer
+      // reports `text/plain`; writing that here made every captured snapshot
+      // resolve as `text/plain` downstream, so the CMS representation renderer
+      // could never be selected for a review target (cinatra#2044 L-A3 live-walk
+      // finding). `artifact_blobs.mime_detected` keeps the sniff below ($13) —
+      // that column is the provenance record, this one is the identity.
+      f.declaredMime,
       f.sizeBytes, // $5
       f.createdBy, // $6
       f.storageKey, // $7
@@ -205,6 +223,7 @@ SELECT (SELECT id FROM rep_insert) AS representation_revision_id,
       f.representationRevisionId, // $10
       f.artifactId, // $11
       f.producerRunId, // $12
+      f.mimeDetected, // $13 — the blob store's SNIFF (provenance only).
     ],
   };
 
@@ -427,6 +446,7 @@ export async function captureCmsContentSnapshot(
     storageKey: newBlob.storageKey,
     sha256: newBlob.sha256,
     mimeDetected: newBlob.mimeDetected,
+    declaredMime: spec.mime,
     sizeBytes,
     createdBy: input.createdBy ?? null,
     producerRunId: input.producerRunId ?? null,
