@@ -17,7 +17,6 @@ import {
   type SyncRow,
   type AnthropicSkillSyncStatePort,
 } from "../tools/anthropic-skill-sync-engine";
-import { computeSkillContentHash } from "../tools/anthropic-skill-content-hash";
 import { defaultAnthropicSkillUploadGate } from "../tools/anthropic-skill-upload-gate";
 import type { AnthropicCustomSkillsClient } from "../tools/anthropic-custom-skills-client";
 
@@ -25,6 +24,10 @@ function candidate(over: Partial<SyncCandidateSkill> = {}): SyncCandidateSkill {
   return {
     catalogSkillId: "skill-a",
     name: "Skill A",
+    // Byte-bound sync (cinatra#2088): candidates carry the stored revision +
+    // bundle identity resolved from the content authority.
+    revisionId: "rev-a",
+    bundleDigest: "bundle-a",
     skillMd: Buffer.from("---\nname: a\n---\nbody"),
     bundledFiles: [],
     allowAnthropicUpload: true,
@@ -37,7 +40,14 @@ class FakeState implements AnthropicSkillSyncStatePort {
   async readRow(id: string) {
     return this.rows.get(id) ?? null;
   }
-  async upsertRow(r: { catalogSkillId: string; anthropicSkillId: string; anthropicVersion: string; contentHash: string }) {
+  async upsertRow(r: {
+    catalogSkillId: string;
+    anthropicSkillId: string;
+    anthropicVersion: string;
+    contentHash: string;
+    revisionId: string;
+    bundleDigest: string;
+  }) {
     this.rows.set(r.catalogSkillId, { ...r, stale: false });
   }
   async markStale(id: string) {
@@ -102,37 +112,44 @@ describe("syncStrict — expected-set verification", () => {
   });
 });
 
-describe("verifyExpectedSet — read-only categorization", () => {
-  it("classifies missing / stale / mismatched / satisfied", async () => {
+describe("verifyExpectedSet — read-only byte-bound categorization", () => {
+  it("classifies missing / stale / mismatched / satisfied by the revision+bundle binding", async () => {
     const state = new FakeState();
     const c = candidate();
-    const good = computeSkillContentHash(c.skillMd, c.bundledFiles);
+    // Satisfied: the row's byte-bound binding matches the candidate's.
     state.rows.set("skill-a", {
       catalogSkillId: "skill-a",
       anthropicSkillId: "skill_1",
       anthropicVersion: "v1",
-      contentHash: good,
+      contentHash: "irrelevant",
+      revisionId: "rev-a",
+      bundleDigest: "bundle-a",
       stale: false,
     });
     state.rows.set("skill-stale", {
       catalogSkillId: "skill-stale",
       anthropicSkillId: "skill_2",
       anthropicVersion: "v1",
-      contentHash: good,
+      contentHash: "irrelevant",
+      revisionId: "rev-a",
+      bundleDigest: "bundle-a",
       stale: true,
     });
+    // Drift: the row's bundle identity no longer matches the candidate's.
     state.rows.set("skill-drift", {
       catalogSkillId: "skill-drift",
       anthropicSkillId: "skill_3",
       anthropicVersion: "v1",
-      contentHash: "OLD",
+      contentHash: "irrelevant",
+      revisionId: "rev-OLD",
+      bundleDigest: "bundle-OLD",
       stale: false,
     });
     const engine = new AnthropicSkillSyncEngine(fakeClient(), state, defaultAnthropicSkillUploadGate);
     const cands = [
       c,
       candidate({ catalogSkillId: "skill-stale" }),
-      candidate({ catalogSkillId: "skill-drift", skillMd: Buffer.from("changed") }),
+      candidate({ catalogSkillId: "skill-drift" }),
     ];
     const v = await engine.verifyExpectedSet(
       ["skill-a", "skill-stale", "skill-drift", "skill-never-offered"],

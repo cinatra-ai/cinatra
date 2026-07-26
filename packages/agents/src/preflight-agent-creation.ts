@@ -29,7 +29,6 @@
 import "server-only";
 
 import {
-  computeSkillContentHash,
   preflightAnthropicSkillSyncSizes,
   preflightSkillRequestSet,
   type SyncCandidateSkill,
@@ -192,7 +191,7 @@ export async function preflightAgentCreation(
   // Read each sync row.
   const missingCatalogSkillIds: string[] = [];
   const staleCatalogSkillIds: string[] = [];
-  const rowsByCatalogSkillId = new Map<string, { contentHash: string }>();
+  const rowsByCatalogSkillId = new Map<string, { bundleDigest: string | null; revisionId: string | null }>();
   for (const catalogSkillId of input.requiredCatalogSkillIds) {
     const row = await dao.readSyncRow(fingerprint, environment, catalogSkillId);
     if (!row) {
@@ -203,7 +202,7 @@ export async function preflightAgentCreation(
       staleCatalogSkillIds.push(catalogSkillId);
       continue;
     }
-    rowsByCatalogSkillId.set(catalogSkillId, { contentHash: row.contentHash });
+    rowsByCatalogSkillId.set(catalogSkillId, { bundleDigest: row.bundleDigest, revisionId: row.revisionId });
   }
   if (missingCatalogSkillIds.length > 0) {
     errors.push({
@@ -235,14 +234,26 @@ export async function preflightAgentCreation(
   const requiredSet = new Set(input.requiredCatalogSkillIds);
   const requiredCandidates = allCandidates.filter((c) => requiredSet.has(c.catalogSkillId));
 
-  // Content-hash drift.
+  // Byte-bound drift (cinatra#2088): compare the candidate's stored revision +
+  // bundle identity (resolved FROM the content authority by buildSyncCandidates)
+  // against the mirror row's binding — a pure manifest comparison, NO disk
+  // re-hash. A pre-S1 row with a NULL binding is DRIFTED (not yet re-baselined).
   const driftedCatalogSkillIds: string[] = [];
+  const candidateIds = new Set(allCandidates.map((c) => c.catalogSkillId));
   for (const candidate of requiredCandidates) {
     const row = rowsByCatalogSkillId.get(candidate.catalogSkillId);
     if (!row) continue; // missing or stale already accounted for.
-    const currentHash = computeSkillContentHash(candidate.skillMd, candidate.bundledFiles);
-    if (currentHash !== row.contentHash) {
+    if (row.bundleDigest !== candidate.bundleDigest || row.revisionId !== candidate.revisionId) {
       driftedCatalogSkillIds.push(candidate.catalogSkillId);
+    }
+  }
+  // FAIL-CLOSED: a required skill that HAS a live mirror row but resolves to NO
+  // byte-bound candidate cannot be verified at all (its bundle is not in the
+  // content authority yet — the normal pre-S1 upgrade state). Treat it as
+  // drifted rather than silently passing an unverifiable required skill.
+  for (const catalogSkillId of rowsByCatalogSkillId.keys()) {
+    if (!candidateIds.has(catalogSkillId) && !driftedCatalogSkillIds.includes(catalogSkillId)) {
+      driftedCatalogSkillIds.push(catalogSkillId);
     }
   }
   if (driftedCatalogSkillIds.length > 0) {
