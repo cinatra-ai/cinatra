@@ -218,17 +218,23 @@ async function rawToolsList(url, auth) {
   };
 }
 
-/** Normalize a tool identifier for fuzzy matching (lowercase, strip separators). */
+/** Normalize a tool identifier (lowercase, strip separators) for EXACT matching. */
 const norm = (s) => String(s || "").toLowerCase().replace(/[\s_/-]+/g, "");
 
-/** Does a tools/list entry correspond to ability id `abilityId`? */
+/**
+ * Does a tools/list entry correspond to ability id `abilityId`? EXACT
+ * normalized-equality of the FULL id vs the FULL tool name (the mcp-adapter wire
+ * convention maps `ns/ability` → `ns-ability`, so norm collapses both to the
+ * same token). Substring/prefix matching is DELIBERATELY avoided: `note-get` is
+ * a prefix of `note-get-unannotated`, so a loose matcher would mis-bind the
+ * edge-case tools to the plain read tool (§3e).
+ */
 function toolMatchesAbility(tool, abilityId) {
-  const n = norm(abilityId);
-  const slug = norm(abilityId.split("/").pop());
-  const candidates = [tool?.name, tool?.title, tool?.annotations?.title, tool?._meta?.ability, tool?.meta?.ability];
+  const target = norm(abilityId);
+  const candidates = [tool?.name, tool?._meta?.ability, tool?.meta?.ability];
   return candidates.some((c) => {
     const cn = norm(c);
-    return cn && (cn === n || cn.includes(slug) || n.includes(cn));
+    return cn && cn === target;
   });
 }
 
@@ -400,15 +406,52 @@ async function main() {
   });
 
   // --- (d) eafm annotation coverage incl delete / search-replace / code-snippet
-  const coverage = defaultTools
-    .filter((t) => EAFM_COVERAGE_HINTS.some((h) => norm(t?.name).includes(norm(h)) || norm(t?.annotations?.title).includes(norm(h))))
+  // Any first-class tool whose name matches a coverage hint (present only under
+  // first-class exposure)...
+  const coverageFirstClass = defaultTools
+    .filter((t) => EAFM_COVERAGE_HINTS.some((h) => norm(t?.name).includes(norm(h))))
     .map((t) => ({ name: t.name, annotations: t.annotations || null }));
-  if (coverage.length === 0) note("(d) FINDING: no delete/search-replace/code-snippet tools found in the default/eafm tools/list");
+  // ...plus, in triad-only exposure, the coverage abilities' annotations live
+  // behind get-ability-info — fetch them directly so coverage is captured
+  // regardless of exposure mode (design §3d).
+  const getInfoTool =
+    defaultTools.find((t) => toolMatchesAbility(t, "mcp-adapter/get-ability-info"))?.name || "mcp-adapter-get-ability-info";
+  const COVERAGE_ABILITIES = ["ewpa/delete-post", "ewpa/search-replace", "ewpa/create-code-snippet"];
+  const coverageViaGetInfo = {};
+  for (const abilityId of COVERAGE_ABILITIES) {
+    const resp = await postJsonRpc(
+      defaultServerUrl,
+      auth,
+      { jsonrpc: "2.0", id: nextId(), method: "tools/call", params: { name: getInfoTool, arguments: { ability_name: abilityId } } },
+      defSession,
+    );
+    let info = resp.parsed?.result?.structuredContent || null;
+    if (!info) {
+      const txt = resp.parsed?.result?.content?.[0]?.text;
+      if (txt) {
+        try {
+          info = JSON.parse(txt);
+        } catch {
+          info = null;
+        }
+      }
+    }
+    coverageViaGetInfo[abilityId] = {
+      found: Boolean(info),
+      annotations: info?.meta?.annotations ?? null,
+      response: resp,
+    };
+  }
+  const anyCoverage = coverageFirstClass.length > 0 || Object.values(coverageViaGetInfo).some((c) => c.found);
+  if (!anyCoverage) note("(d) FINDING: no delete/search-replace/code-snippet coverage resolved (neither first-class nor via get-ability-info)");
   writeCapture("annotations-d-eafm-coverage.json", {
     subClaim: "d",
     description: "eafm annotation coverage incl delete / search-replace / code-snippet (2.0.20)",
     coverageHints: EAFM_COVERAGE_HINTS,
-    matchedTools: coverage,
+    exposureNote:
+      "triad-only exposure: coverage abilities are not first-class tools; their annotations are captured via get-ability-info",
+    firstClassMatches: coverageFirstClass,
+    coverageViaGetInfo,
     allDefaultToolNames: defaultTools.map((t) => t.name),
   });
 
