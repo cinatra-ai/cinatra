@@ -366,6 +366,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Context-selection finalization (cinatra#1430): one transaction that re-validates the selection triple's coherence in SQL, appends the run_context_selections audit row, and writes a real artifact_refs retention pin — all under the SAME resource-level advisory lock the resource GC takes, closing the pin-vs-GC race. Request-time (context-agent) finalization; sync leaf composing into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
   },
+  "src/lib/artifacts/cms-content-snapshot-capture.ts": {
+    class: "migratable-request-path",
+    justification:
+      "CMS content-snapshot capture (cinatra#2043, epic #2037 S5): persists fetched CMS content as a real artifact (resource + artifact_blobs + append-only representation) and, in the SAME transaction (the S0 same-tx ordering), splices the transactional ArtifactProduced event and the cms_snapshot_targets apply-binding row. Driven by the connector staged-write adapter (a follow-up lane); sync leaf mirroring object-content-snapshot/representation-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
+  },
   "src/lib/artifacts/semantic-assertion-store.ts": {
     class: "migratable-request-path",
     justification:
