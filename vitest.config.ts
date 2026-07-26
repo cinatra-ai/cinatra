@@ -403,6 +403,11 @@ export default defineConfig({
       // route-graph-ratchet, crm-pointer-gate, schema-migration-gate,
       // sdk-abi-readme-gate), NOT as vitest tests.
       "scripts/audit/__tests__/gatekept-install-no-direct-registry.test.mjs",
+      // wordpress-fixture-pins-gate + wp-gateway-capture-freshness are the S1
+      // (#2016) node:test companions — each has its own dedicated `node --test`
+      // step in build-image.yml, same convention as the entries above.
+      "scripts/audit/__tests__/wordpress-fixture-pins-gate.test.mjs",
+      "scripts/audit/__tests__/wp-gateway-capture-freshness.test.mjs",
       "scripts/audit/__tests__/actions-pinned-gate.test.mjs",
       "scripts/audit/__tests__/workspace-phantom-deps.test.mjs",
       "scripts/audit/__tests__/workspace-dep-cycles.test.mjs",
