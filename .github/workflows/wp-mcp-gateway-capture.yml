@@ -1,0 +1,196 @@
+# WP MCP gateway — pinned-fixture capture workflow (issue #2016, S1).
+#
+# TWO MODES, one file (design §0.1 + §3):
+#
+#   * bringup — resolve every pin value the S1 commits must consume
+#     DETERMINISTICALLY, on a runner, WITHOUT booting the (not-yet-built) 6.9
+#     fixture: sha256 of the mcp-adapter 0.5.0 + enable-abilities-for-mcp 2.0.20
+#     release ZIPs, whether the adapter ZIP bundles vendor/autoload.php, the
+#     wp-cli phar version+sha256, the wordpress:6.9-php8.3-apache base-image
+#     digest, and — by static-grepping the unzipped adapter source (no boot) —
+#     the gateway triad tool ids + input schemas and the Abilities-API
+#     annotation-carrier field. Output: tests/e2e/wp-mcp-gateway/captures/
+#     adapter-0.5.0-api-map.json (committed as the C0 tail). Every value records
+#     HOW it was resolved. This is the STAGE-1 adaptation of design §0.1's boot:
+#     at C0 the pinned image does not exist yet, so the bring-up resolves pins
+#     statically instead of booting (deterministic; recorded as boot:false).
+#
+#   * capture — boot the pinned fixture (wordpress profile only: WordPress +
+#     wordpress-db, no Next app / Playwright / postgres / redis) and run the
+#     live JSON-RPC capture producer. ACTIVATES once docker/wordpress/pins.lock
+#     lands (C1) — the `preflight` job detects it. Neutrally skipped before then
+#     (i.e. on this C0 run). The full producer lands in C3.
+#
+# TRIGGERS (design §3):
+#   * pull_request (path-filtered) — the ONLY way a net-new workflow that is not
+#     yet on the default branch can fire (workflow_dispatch is default-branch
+#     only). The filter includes the workflow file itself + the capture
+#     producers + the whole WP substrate, so every S1 push that touches them
+#     re-fires the run on the PR (that is how the C0 api-map is harvested).
+#   * schedule — weekly drift check.
+#   * workflow_dispatch — on-demand, for post-merge use once this file is on the
+#     default branch (mode input: bringup | capture | both).
+#
+# NOT a required status check. The pin gate (scripts/audit/
+# wordpress-fixture-pins-gate.mjs, C1) and the capture-freshness gate (scripts/
+# audit/wp-gateway-capture-freshness.mjs, C3) are the required teeth; they are
+# nested into an already-required audit workflow (build-image.yml) in C1/C3 so
+# pin drift / stale captures cannot merge. This workflow proves boot-ability and
+# produces the committed artifacts those gates check.
+
+name: WP MCP Gateway Capture
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "bringup (resolve pins, no boot) | capture (boot fixture + live capture) | both"
+        type: choice
+        options: [bringup, capture, both]
+        default: both
+  schedule:
+    - cron: "23 5 * * 1" # weekly Monday 05:23 UTC — pin/exposure drift check
+  pull_request:
+    paths:
+      - ".github/workflows/wp-mcp-gateway-capture.yml"
+      - "docker/wordpress/**" # includes docker/wordpress/pins.lock
+      - "docker-compose.yml"
+      - "scripts/wordpress-entrypoint.sh"
+      - "tests/e2e/wp-mcp-gateway/capture-*.mjs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Resolve pins statically (no stack boot). Runs on every PR-triggered run
+  # (design §0.1: "bring-up outputs INCLUDED in every PR-triggered run"), the
+  # weekly schedule, and dispatch unless mode=capture.
+  bringup:
+    name: Bring-up (resolve pins, no boot)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'bringup' || inputs.mode == 'both' }}
+    runs-on: ${{ vars.WP_DRUPAL_UAT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+      - name: Resolve pins + adapter API map (static — no fixture boot)
+        env:
+          BRINGUP_OUT: ${{ github.workspace }}/bringup-out
+          BRINGUP_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BRINGUP_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          GH_TOKEN: ${{ github.token }} # unauthenticated API is rate-limited; use the run token for release lookups
+        run: node tests/e2e/wp-mcp-gateway/capture-bringup.mjs
+      - name: Upload api-map artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wp-mcp-gateway-api-map
+          path: bringup-out/adapter-0.5.0-api-map.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Job summary
+        if: ${{ always() }}
+        run: cat bringup-out/adapter-0.5.0-api-map.summary.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+  # Cheap gate: has the pinned fixture landed yet? Drives the live-capture job's
+  # activation without relying on hashFiles() inside a job `if:` (which is easy
+  # to get subtly wrong across event types). Before C1 there is no pins.lock, so
+  # the live capture neutrally skips.
+  preflight:
+    name: Preflight (is the pinned fixture built?)
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      fixture_ready: ${{ steps.check.outputs.fixture_ready }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - id: check
+        run: |
+          if [ -f docker/wordpress/pins.lock ]; then
+            echo "fixture_ready=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::docker/wordpress/pins.lock present — pinned fixture available; live capture will boot."
+          else
+            echo "fixture_ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::docker/wordpress/pins.lock absent (pre-C1) — live capture job skipped; bring-up carries this run."
+          fi
+
+  # Boot the pinned fixture (wordpress profile only) and run the live capture.
+  # Activates from C1 (pins.lock present). The producer is a scaffold until C3;
+  # before then this job proves the pinned image builds + boots + the MCP
+  # default server answers, then the scaffold producer exits cleanly.
+  capture:
+    name: Live capture (boot pinned fixture)
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.fixture_ready == 'true' && (github.event_name != 'workflow_dispatch' || inputs.mode == 'capture' || inputs.mode == 'both') }}
+    runs-on: ${{ vars.WP_DRUPAL_UAT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pinned tuple. A pin bump adds a row ⇒ one exposure-mode record per row.
+        include:
+          - wp: "6.9"
+            mcpAdapter: "0.5.0"
+            eafm: "2.0.20"
+    steps:
+      - name: Reclaim runner disk (image build can exhaust ubuntu-latest)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          df -h /
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+      - name: Boot pinned WordPress fixture (wordpress profile — WP + db only)
+        # `wordpress` depends only on `wordpress-db` (docker-compose.yml), so
+        # naming both services boots the light pair without the shared wayflow
+        # runtime / Next app / postgres / redis. The Dockerfile sha256sum -c on
+        # the pinned ZIPs runs during --build (fail-closed).
+        run: docker compose --profile wordpress up -d --build wordpress wordpress-db
+      - name: Wait for MCP adapter default server ready
+        # HEAD → 200/405 per classifyStatus (src/lib/wordpress-mcp-connection.ts)
+        # + core version == 6.9.*.
+        run: |
+          ok=""
+          for i in $(seq 1 90); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -I "http://localhost:8080/wp-json/mcp/mcp-adapter-default-server" --max-time 5 || echo 000)
+            if [ "$code" = "200" ] || [ "$code" = "405" ]; then ok="1"; echo "MCP default server ready after ${i} tries (HTTP ${code})"; break; fi
+            sleep 5
+          done
+          if [ -z "$ok" ]; then echo "::error::MCP default server not ready in ~7.5 min"; docker compose --profile wordpress logs wordpress | tail -200; exit 1; fi
+          docker exec cinatra-wordpress-1 wp core version --allow-root | grep -E '^6\.9\.' || { echo "::error::core version is not 6.9.*"; exit 1; }
+      - name: Mint per-run app password (no committed secret)
+        run: |
+          APPPW=$(docker exec cinatra-wordpress-1 wp user application-password create admin capture --porcelain --allow-root)
+          echo "WP_MCP_BASIC_AUTH=$(printf 'admin:%s' "$APPPW" | base64 -w0)" >> "$GITHUB_ENV"
+      - name: Run capture producer
+        env:
+          WP_BASE_URL: http://localhost:8080
+          WP_MCP_BASIC_AUTH: ${{ env.WP_MCP_BASIC_AUTH }}
+        run: node tests/e2e/wp-mcp-gateway/capture-annotations.mjs
+      - name: Upload captures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wp-mcp-gateway-captures
+          path: tests/e2e/wp-mcp-gateway/captures/**
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Compose logs (always)
+        if: ${{ always() }}
+        run: |
+          docker compose --profile wordpress logs > compose-logs.txt 2>&1 || true
+      - name: Upload compose logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wp-mcp-gateway-compose-logs
+          path: compose-logs.txt
+          if-no-files-found: warn
+          retention-days: 7
