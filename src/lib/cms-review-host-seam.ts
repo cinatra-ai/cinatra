@@ -38,7 +38,6 @@ import "server-only";
 // faithful apply that matches the approved proposal reads `verified`.
 // ---------------------------------------------------------------------------
 
-import { isLifecycleReviewOrchestrationActive } from "@/lib/lifecycle/lifecycle-activation";
 import type {
   ConnectorRefPointer,
   ConnectorRefResolvedContent,
@@ -327,63 +326,31 @@ export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHo
   };
 }
 
-/**
- * Bind the host CMS-review seam to the REAL core seams. Every write-driving
- * member resolves its heavy store LAZILY at call time (dynamic `import()`) so
- * this module never pulls the produced-event / gate / blob graph onto the boot
- * path — the `register-host-connector-services` publication does no I/O and no
- * resolution (probe-safe), mirroring the anthropic-skill-config / skills-catalog
- * lazy-bind precedents. `isReviewActive` is the pure env fence (no import cost).
- */
-export function createCmsReviewHostSeam(): CmsReviewHostSeam {
-  return buildCmsReviewHostSeam({
-    isReviewActive: () => isLifecycleReviewOrchestrationActive(),
-    resolveIdentity: async (): Promise<CmsReviewIdentity> => {
-      const [{ resolveExtensionActorSummary }, mcp] = await Promise.all([
-        import("@/lib/extension-host-actor"),
-        import("@cinatra-ai/mcp-server"),
-      ]);
-      const summary = await resolveExtensionActorSummary();
-      const runId = mcp.mcpRequestContextStorage.getStore()?.runId ?? null;
-      return {
-        orgId: summary?.organizationId ?? null,
-        runId: typeof runId === "string" && runId.length > 0 ? runId : null,
-        createdBy: summary?.userId ?? null,
-      };
-    },
-    captureCmsContentSnapshot: async (i) =>
-      (await import("@/lib/artifacts/cms-content-snapshot-capture")).captureCmsContentSnapshot(i),
-    resolveArtifactEffectDisposition: async (i) =>
-      (await import("@cinatra-ai/agents/lifecycle-review-orchestration")).resolveArtifactEffectDisposition(i),
-    readCmsSnapshotTargetByOperation: async (operationId) => {
-      const row = await (
-        await import("@cinatra-ai/agents/cms-snapshot-readback-store")
-      ).readCmsSnapshotTargetByOperation(operationId);
-      return row
-        ? {
-            artifactId: row.artifactId,
-            snapshotRevisionId: row.snapshotRevisionId,
-            scopeManifest: { paths: [...(row.scopeManifest?.paths ?? [])] },
-          }
-        : null;
-    },
-    readCmsSnapshotProposedFields: async (orgId, snapshotRevisionId) =>
-      (await import("@/lib/artifacts/cms-content-snapshot-capture")).readCmsSnapshotProposedFields(
-        orgId,
-        snapshotRevisionId,
-      ),
-    recordCmsApplyVerification: async (i) => {
-      const res = await (
-        await import("@cinatra-ai/agents/cms-snapshot-readback-store")
-      ).recordCmsApplyVerification(i);
-      if (!res.ok) return { ok: false, code: res.code, error: res.error };
-      return {
-        ok: true,
-        verdict: { outcome: res.verdict.outcome, outOfScopePaths: res.verdict.outOfScopePaths },
-      };
-    },
-  });
+// ---------------------------------------------------------------------------
+// Boot-registered BUILT seam (route-graph ratchet posture).
+//
+// The REAL seam (`buildCmsReviewHostSeam(deps)` with the deps whose members
+// lazy-import the heavy core stores) is constructed and installed into this
+// globalThis slot by the BOOT-ONLY `register-cms-review-host-seam-runtime`
+// module, called from the system-loops `bind-cms-review-host-seam` phase. The
+// heavy store bindings are kept OUT of any route-reachable module because
+// `scripts/route-graph.mjs` follows a literal dynamic-import specifier exactly
+// like a static import — so binding the stores in a route-reachable file (even
+// lazily) dragged ~16 modules onto every locked route and tripped the ratchet
+// (the same reason `background-jobs-registry` resolves its heavy runners through
+// boot-registered globalThis slots, never importing them even dynamically). The
+// route-reachable `register-host-connector-services` publication imports NO value
+// from this module — only the `CmsReviewHostSeam` TYPE (erased) — and reads this
+// slot off globalThis, so nothing cms-review pulls a module onto a route.
+// ---------------------------------------------------------------------------
+
+declare global {
+  var __cinatraCmsReviewHostSeam: CmsReviewHostSeam | undefined;
 }
 
-/** The published capability id the connector resolves. */
-export const CMS_REVIEW_CAPABILITY = "@cinatra-ai/host:cms-review";
+/** Boot-time registration (system-loops `bind-cms-review-host-seam` phase).
+ * Idempotent (last write wins). globalThis-backed so a worker dispatching from a
+ * different bundle's module instance still sees the boot registration. */
+export function registerBuiltCmsReviewHostSeam(seam: CmsReviewHostSeam): void {
+  globalThis.__cinatraCmsReviewHostSeam = seam;
+}

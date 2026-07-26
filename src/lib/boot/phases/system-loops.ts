@@ -381,6 +381,32 @@ export function systemLoopPhases(): BootPhase[] {
       },
     },
     {
+      name: "bind-cms-review-host-seam",
+      policy: "retryable",
+      run: async () => {
+        // Bind the `@cinatra-ai/host:cms-review` capability's runtime deps
+        // (cinatra#2043 S5) to the globalThis DI slot, BEFORE any run can reach
+        // the wordpress-mcp-connector's staged-write trigger. The capability
+        // PROVIDER is published from register-host-connector-services.ts (a
+        // route-reachable module) as a DEFERRED wrapper; the REAL deps — whose
+        // members lazy-import the heavy capture / read-back / effect-disposition
+        // stores — live in the boot-only register-cms-review-host-seam-runtime
+        // module, resolved off globalThis here so those stores ride only boot,
+        // never a route (a literal dynamic-import specifier in the seam module
+        // still grows every locked route's reachable graph and trips the
+        // route-graph ratchet — the same posture as bind-artifact-review-gate-seam
+        // above and the background-jobs-registry runner slots). UNCONDITIONAL:
+        // capability publication is fence-independent (the fence is read per-call
+        // by isReviewActive), so a fence-off host stays byte-identical while the
+        // capability is present. Idempotent (last write wins).
+        const { bindCmsReviewHostSeamRuntime } = await import(
+          "@/lib/register-cms-review-host-seam-runtime"
+        );
+        bindCmsReviewHostSeamRuntime();
+        console.log("[cms-review] host seam runtime deps bound to the S5 stores at boot");
+      },
+    },
+    {
       name: "seed-artifact-review-resume-delivery",
       policy: "retryable",
       run: async () => {

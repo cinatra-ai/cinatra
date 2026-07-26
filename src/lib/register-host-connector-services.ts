@@ -90,7 +90,13 @@ import {
   resolveTrustedSessionBinding,
 } from "@/lib/instance-connection-actor";
 import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
-import { createCmsReviewHostSeam, CMS_REVIEW_CAPABILITY } from "@/lib/cms-review-host-seam";
+// TYPE-ONLY (erased at compile; NOT a route-graph edge) — the concrete seam is
+// built at boot by register-cms-review-host-seam-runtime and read off globalThis
+// below, so this route-reachable binder pulls no cms-review module onto a route.
+import type { CmsReviewHostSeam } from "@/lib/cms-review-host-seam";
+// The review fence is a PURE env leaf (no import cost; already reachable from
+// every route) — read directly so `isReviewActive` needs no runtime slot.
+import { isLifecycleReviewOrchestrationActive } from "@/lib/lifecycle/lifecycle-activation";
 import {
   type NangoConnectionMaterializer,
   type NangoConnectionMaterializerInput,
@@ -700,12 +706,39 @@ export function registerHostConnectorServices(): void {
   // (`isReviewActive` / `captureStagedWrite` / `resolveDisposition` /
   // `recordApplyVerification`) delegate to the core capture + read-back +
   // effect-disposition, deriving org/run/actor from the trusted MCP request
-  // frame — never connector input. Publication is UNCONDITIONAL (the connector
-  // no-ops on the fence-off path); the capability reports the review fence
-  // truthfully. Building the seam does NO host-service resolution and NO I/O
-  // (every write-driving member lazy-imports its heavy store at call time), so it
-  // stays boot-safe and probe-safe like the other lazy binds above.
-  register(CMS_REVIEW_CAPABILITY, createCmsReviewHostSeam());
+  // frame — never connector input. Publication is UNCONDITIONAL at module load
+  // (the connector no-ops on the fence-off path); the capability reports the
+  // review fence truthfully. This is a thin DEFERRED wrapper that does NO
+  // host-service resolution and NO I/O here: `isReviewActive` is the pure fence,
+  // and the three write-driving members delegate to the REAL seam built at boot
+  // by register-cms-review-host-seam-runtime and installed into the globalThis
+  // slot by the system-loops `bind-cms-review-host-seam` phase. The heavy store
+  // bindings are deliberately kept OUT of this route-reachable binder — a literal
+  // dynamic-import specifier here would still grow every locked route's reachable
+  // graph (route-graph ratchet), so the runtime rides only the boot graph, never
+  // a route (the background-jobs-registry runner-slot precedent). If the boot
+  // phase never bound the slot (a swallowed boot-phase failure), a write-driving
+  // member fails CLOSED with a loud error rather than silently dropping a
+  // capture — but it is only reached when `isReviewActive()` is true, which on a
+  // healthy boot implies the slot is bound. A host-LOCAL capability id defined
+  // INLINE (the anthropic-skill-config precedent above) so this binder imports no
+  // value from the seam module — a value import would pull it onto a route.
+  const CMS_REVIEW_CAPABILITY = "@cinatra-ai/host:cms-review";
+  const requireBoundCmsReviewSeam = (): CmsReviewHostSeam => {
+    const seam = globalThis.__cinatraCmsReviewHostSeam;
+    if (!seam) {
+      throw new Error(
+        "[cms-review] the host seam was not bound at boot (system-loops `bind-cms-review-host-seam` phase) — refusing to capture/verify a staged CMS write fail-closed.",
+      );
+    }
+    return seam;
+  };
+  register(CMS_REVIEW_CAPABILITY, {
+    isReviewActive: () => isLifecycleReviewOrchestrationActive(),
+    captureStagedWrite: (input) => requireBoundCmsReviewSeam().captureStagedWrite(input),
+    resolveDisposition: (input) => requireBoundCmsReviewSeam().resolveDisposition(input),
+    recordApplyVerification: (input) => requireBoundCmsReviewSeam().recordApplyVerification(input),
+  } satisfies CmsReviewHostSeam);
 
   // The wordpress widget auth-config store INVERTED to the
   // wordpress-mcp-connector (cinatra#975 Wave 2): it now registers
