@@ -90,6 +90,7 @@ import {
   resolveTrustedSessionBinding,
 } from "@/lib/instance-connection-actor";
 import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
+import { createCmsReviewHostSeam, CMS_REVIEW_CAPABILITY } from "@/lib/cms-review-host-seam";
 import {
   type NangoConnectionMaterializer,
   type NangoConnectionMaterializerInput,
@@ -690,6 +691,21 @@ export function registerHostConnectorServices(): void {
   // audit row). `selectForConnector` maps the connector KIND to BOTH the package
   // id and the instance reader host-side — neither is ever caller-supplied.
   register(svc.instanceWriteAuthority, createInstanceWriteAuthorityService() satisfies HostInstanceWriteAuthorityService);
+
+  // cinatra#2043 S5 — the CMS review-before-publish capability. A NEW host-local
+  // capability id (the anthropic-skill-config precedent — an arbitrary string,
+  // NOT a HOST_CONNECTOR_SERVICE_CAPABILITIES / sdk-extensions ABI entry). The
+  // wordpress-mcp-connector's staged-write trigger resolves it OPTIONALLY +
+  // lazily and is INERT until it is published here; the four bound seams
+  // (`isReviewActive` / `captureStagedWrite` / `resolveDisposition` /
+  // `recordApplyVerification`) delegate to the core capture + read-back +
+  // effect-disposition, deriving org/run/actor from the trusted MCP request
+  // frame — never connector input. Publication is UNCONDITIONAL (the connector
+  // no-ops on the fence-off path); the capability reports the review fence
+  // truthfully. Building the seam does NO host-service resolution and NO I/O
+  // (every write-driving member lazy-imports its heavy store at call time), so it
+  // stays boot-safe and probe-safe like the other lazy binds above.
+  register(CMS_REVIEW_CAPABILITY, createCmsReviewHostSeam());
 
   // The wordpress widget auth-config store INVERTED to the
   // wordpress-mcp-connector (cinatra#975 Wave 2): it now registers
