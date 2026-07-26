@@ -78,6 +78,10 @@ vi.mock("@cinatra-ai/a2a", async (orig) => {
 });
 
 import { handleWayflowTaskState } from "../execution";
+// cinatra#1939 wave 2: handleWayflowTaskState now requires an org-write authority.
+// transitionRunStatus is mocked here (../store is a full mock), so an inert
+// member-shaped authority satisfies the type without affecting behavior.
+const TEST_AUTHORITY = { orgId: "org-1", can: () => true };
 import type { AgentRunRecord } from "../store";
 
 // The boot-bound gate seam execution.ts reads off globalThis. Spied per test.
@@ -213,6 +217,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -251,6 +256,8 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       "run-rev-1",
       "running",
       "pending_approval",
+      undefined,
+      TEST_AUTHORITY,
     );
   });
 
@@ -259,6 +266,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -282,6 +290,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -301,6 +310,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -314,6 +324,8 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       "run-rev-1",
       "running",
       "pending_approval",
+      undefined,
+      TEST_AUTHORITY,
     );
   });
 
@@ -324,6 +336,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -342,6 +355,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -364,6 +378,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const run = makeRun({ reviewTargets: [] });
 
     await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -377,6 +392,8 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       "run-rev-1",
       "running",
       "pending_approval",
+      undefined,
+      TEST_AUTHORITY,
     );
   });
 
@@ -385,6 +402,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "pending_approval",

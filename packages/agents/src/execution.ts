@@ -1027,7 +1027,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         if (fromStatus === "pending_approval") {
           return;
         }
-        await transitionRunStatus(runId, fromStatus, "pending_approval").catch((e) => {
+        await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
         });

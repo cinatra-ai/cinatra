@@ -9,6 +9,7 @@
  * kernel test fakes via the seam's TEST-ONLY `db` option (no module mock, no
  * live Postgres).
  */
+import { sql } from "drizzle-orm";
 import { describe, it, expect, vi } from "vitest";
 import { fakeOrgWriteDb } from "@cinatra-ai/org-write-kernel/testing";
 import {
@@ -76,7 +77,7 @@ describe("guardedRunWrite fail-closed envelope (#1939 wave 2)", () => {
       { orgId: ORG, runId: RUN, capability: "run.execute", db: fake.db },
       async (tx) => {
         received.push(tx);
-        await tx.execute({ text: "UPDATE agent_runs SET status = 'queued'" });
+        await tx.execute(sql`UPDATE agent_runs SET status = 'queued'`);
         return "ok";
       },
     );

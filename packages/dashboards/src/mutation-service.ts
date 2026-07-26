@@ -970,7 +970,7 @@ export async function upsertDashboardConfig(
     //     the save (cinatra#326 §3c). The effective ownerLevel used for a fresh
     //     wrap's scopeLevel matches the row's resolved ownerLevel.
     const effectiveOwnerLevel: OwnerLevel =
-      patch.ownerLevel ?? existing?.ownerLevel ?? "user";
+      patch.ownerLevel ?? (existing?.ownerLevel as OwnerLevel | undefined) ?? "user";
     const { config: nextConfig, configVersion } = await normalizeConfigForWrite({
       config: patch.config,
       hasConfig: true,
