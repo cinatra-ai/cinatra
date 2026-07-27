@@ -133,6 +133,44 @@ describe("closeIdleJobs", () => {
     expect(removedVolumes).toEqual([]);
   });
 
+  it("NEVER closes a job with a command in flight, however idle the clock looks", async () => {
+    const clock = { now: 5_000_000 };
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const slowWorker: SandboxWorker = {
+      async runCommand(): Promise<SandboxCommandResult> {
+        await gate;
+        return {
+          exitCode: 0, stdout: "ok", stderr: "",
+          stdoutTruncated: false, stderrTruncated: false,
+          termination: "exited", wallMs: 1, imageDigest: "sha256:test", workspaceKb: 8,
+        };
+      },
+    };
+    const broker = new ExecutionBroker({
+      worker: slowWorker,
+      auditSink: () => {},
+      livenessProbe: async () => "alive",
+      egressPolicyResolver: () => ({ mode: "none" }),
+      docker: fakeDocker,
+      nowMs: () => clock.now,
+    });
+    const opened = await broker.openJob(carrier("run-slow", clock.now));
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+
+    const running = broker.exec(opened.jobId, "sleep-forever");
+    await new Promise((r) => setTimeout(r, 10));
+    // The command is still dispatched; push the clock far past the window.
+    clock.now += 60 * 60 * 1000;
+    expect(await broker.closeIdleJobs(15 * 60 * 1000)).toBe(0);
+
+    release();
+    await running;
+    // Once the command settles the job becomes reapable again.
+    expect(await broker.closeIdleJobs(15 * 60 * 1000)).toBe(1);
+  });
+
   it("frees room under the per-org open-job ceiling", async () => {
     const clock = { now: 4_000_000 };
     const broker = new ExecutionBroker({
