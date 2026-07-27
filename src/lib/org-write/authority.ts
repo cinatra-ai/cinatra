@@ -37,6 +37,11 @@ const SESSION_PERMISSION_FOR: Record<OrgWriteCapability, Permission | "member"> 
   "membership.write": "organization.manageMembers",
   "org.settings": "organization.update",
   "org.lifecycle": "organization.archive",
+  // cinatra#1939 wave 3: org.delete maps to organization.delete, NEVER
+  // organization.archive — the org STATE (kernel capability) decides whether a
+  // delete may proceed, the ACTOR's organization.delete decides whether THIS
+  // actor may delete. An "archive" permission can never stand in for "delete".
+  "org.delete": "organization.delete",
 };
 
 export class OrgWriteAuthorityError extends Error {
