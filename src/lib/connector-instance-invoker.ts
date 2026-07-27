@@ -390,22 +390,36 @@ async function acquireSnapshots(
     // Miss/expired → per-server reload. The default server reuses the already-
     // resolved instance endpoint (behavior-identical to S2); a dedicated server
     // resolves its own enrolled route.
+    let target: ResolvedInstanceEndpoint | null = null;
+    let resolutionThrew = false;
+    if (server.serverId === CATALOG_DEFAULT_SERVER_ID) {
+      target = { endpoint: input.endpoint, authHeader: input.authHeader };
+    } else {
+      try {
+        target = await deps.resolveInstanceEndpoint(
+          input.connectorKey,
+          input.instanceId,
+          server.serverId,
+        );
+      } catch {
+        resolutionThrew = true;
+      }
+    }
+    if (!target) {
+      // No VALID endpoint exists for this server, so nothing may be served —
+      // NOT even a stale snapshot. A returned null is the FRESHER store read
+      // saying the server is no longer enrolled (or the instance is broken):
+      // store beats cache, so the stale snapshot is evicted with it. A thrown
+      // resolution is indeterminate — serve nothing this call (the cache entry
+      // stays for the next acquire to settle). Serve-stale is reserved for
+      // WIRE refresh failures after a valid endpoint was resolved; explicit
+      // targeting of this server surfaces as catalog_unavailable below.
+      if (!resolutionThrew) deps.cache.invalidate(input.instanceId, server.serverId);
+      continue;
+    }
+
     let loadError: unknown;
     try {
-      const target =
-        server.serverId === CATALOG_DEFAULT_SERVER_ID
-          ? { endpoint: input.endpoint, authHeader: input.authHeader }
-          : await deps.resolveInstanceEndpoint(
-              input.connectorKey,
-              input.instanceId,
-              server.serverId,
-            );
-      if (!target) {
-        throw new InvokerError(
-          "network_error",
-          "per-server endpoint could not be resolved for an enrolled server",
-        );
-      }
       const snap = await deps.loadServerSnapshot({
         connectorKey: input.connectorKey,
         instanceId: input.instanceId,
@@ -420,8 +434,9 @@ async function acquireSnapshots(
       loadError = err;
     }
 
-    // Reload FAILED: record per-server health, then serve-stale-within-window
-    // or omit (fail closed past max-stale).
+    // WIRE reload FAILED (valid endpoint, refresh did not): record per-server
+    // health, then serve-stale-within-window or omit (fail closed past
+    // max-stale).
     if (deps.recordServerCatalogStatus) {
       try {
         await deps.recordServerCatalogStatus({

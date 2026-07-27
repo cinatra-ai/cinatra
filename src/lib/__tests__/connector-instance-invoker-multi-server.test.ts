@@ -231,6 +231,51 @@ describe("acquire — store beats cache (removed-server fail-closed, layer 1)", 
   });
 });
 
+describe("acquire — endpoint-resolution null beats the stale cache (no serve-stale without a valid endpoint)", () => {
+  it("a null per-server endpoint (fresher store says not enrolled) omits AND evicts the stale snapshot", async () => {
+    const { deps, cache, loadServerSnapshot, recordServerCatalogStatus, resolveInstanceEndpoint } = makeDeps();
+    cache.set("inst-1", snapshot(CATALOG_DEFAULT_SERVER_ID, ["core/get-site-info"], NOW, "triad-only"));
+    cache.set("inst-1", snapshot(DEDICATED_ID, ["vendor_tool"], NOW - 10_000)); // expired, WITHIN max-stale
+    resolveInstanceEndpoint.mockImplementation(async (_ck: string, _iid: string, serverId?: string) =>
+      serverId && serverId !== CATALOG_DEFAULT_SERVER_ID
+        ? null // authoritative: the enrolled row vanished after the list read
+        : { endpoint: DEFAULT_ENDPOINT, authHeader: "Basic def" },
+    );
+    const page = await listConnectorInstanceTools(LIST_INPUT, deps);
+    expect(page.tools.some((t) => t.serverId === DEDICATED_ID)).toBe(false); // NOT stale-served
+    expect(cache.get("inst-1", DEDICATED_ID)).toBeUndefined(); // store beats cache — evicted
+    expect(loadServerSnapshot).not.toHaveBeenCalled();
+    expect(recordServerCatalogStatus).not.toHaveBeenCalled(); // no wire verdict was produced
+    // Without an explicit target its tool is simply absent…
+    await expect(
+      invokeConnectorInstanceTool(
+        { connectorKey: "wordpress", toolName: "vendor_tool", args: {}, actor: ACTOR },
+        deps,
+      ),
+    ).rejects.toMatchObject({ code: "tool_not_found" });
+    // …and explicit targeting surfaces the typed unavailability.
+    await expect(
+      invokeConnectorInstanceTool(
+        { connectorKey: "wordpress", toolName: "vendor_tool", args: {}, serverId: DEDICATED_ID, actor: ACTOR },
+        deps,
+      ),
+    ).rejects.toMatchObject({ code: "catalog_unavailable" });
+  });
+
+  it("a THROWN per-server endpoint resolution serves nothing but leaves the cache entry for the next acquire", async () => {
+    const { deps, cache, resolveInstanceEndpoint } = makeDeps();
+    cache.set("inst-1", snapshot(CATALOG_DEFAULT_SERVER_ID, ["core/get-site-info"], NOW, "triad-only"));
+    cache.set("inst-1", snapshot(DEDICATED_ID, ["vendor_tool"], NOW - 10_000));
+    resolveInstanceEndpoint.mockImplementation(async (_ck: string, _iid: string, serverId?: string) => {
+      if (serverId && serverId !== CATALOG_DEFAULT_SERVER_ID) throw new Error("store blip");
+      return { endpoint: DEFAULT_ENDPOINT, authHeader: "Basic def" };
+    });
+    const page = await listConnectorInstanceTools(LIST_INPUT, deps);
+    expect(page.tools.some((t) => t.serverId === DEDICATED_ID)).toBe(false);
+    expect(cache.get("inst-1", DEDICATED_ID)).toBeDefined(); // indeterminate — not evicted
+  });
+});
+
 describe("acquire — explicit serverId targeting", () => {
   it("an explicitly-targeted enrolled server with no obtainable snapshot → catalog_unavailable (NOT tool_not_found)", async () => {
     const { deps, loadServerSnapshot } = makeDeps();
