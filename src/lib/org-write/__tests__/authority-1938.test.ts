@@ -221,9 +221,12 @@ describe("mintSystemWriteAuthority (#1938)", () => {
     expect(lifecycle.can("org.lifecycle")).toBe(true);
     expect(lifecycle.can("content.write")).toBe(false);
 
+    // cinatra#1940: lease-expiry-finalizer narrowed to ONLY run.lease-expire
+    // (from the never-exercised S2 placeholder run.execute/run.complete grant).
     const finalizer = mintSystemWriteAuthority("lease-expiry-finalizer", "org-1");
-    expect(finalizer.can("run.execute")).toBe(true);
-    expect(finalizer.can("run.complete")).toBe(true);
+    expect(finalizer.can("run.lease-expire")).toBe(true);
+    expect(finalizer.can("run.execute")).toBe(false);
+    expect(finalizer.can("run.complete")).toBe(false);
     expect(finalizer.can("org.lifecycle")).toBe(false);
   });
 
@@ -388,5 +391,66 @@ describe("no system purpose grants org.delete (#1939 wave 3 — delete is human-
     const lifecycle = mintSystemWriteAuthority("org-lifecycle-transition", "org-1");
     expect(lifecycle.can("org.lifecycle")).toBe(true);
     expect(lifecycle.can("org.delete")).toBe(false);
+  });
+});
+
+describe("run.lease-expire vocab (#1940) — system-only, fence-only", () => {
+  it("the lease-expiry-finalizer purpose grants EXACTLY run.lease-expire (narrowed from the S2 placeholder)", () => {
+    const finalizer = mintSystemWriteAuthority("lease-expiry-finalizer", "org-1");
+    expect(finalizer.orgId).toBe("org-1");
+    // Iterating the FULL kernel set pins "exactly one" — narrowed AWAY from the
+    // never-exercised S2 placeholder ["run.execute","run.complete"].
+    for (const capability of ORG_WRITE_CAPABILITIES) {
+      expect(finalizer.can(capability)).toBe(capability === "run.lease-expire");
+    }
+  });
+
+  it('NO session authority, at ANY role, can mint run.lease-expire (the "never" marker)', () => {
+    for (const role of ["member", "org_admin", "org_owner"] as const) {
+      const auth = sessionAuthorityFromResolvedRole("org-1", role);
+      expect(auth.can("run.lease-expire")).toBe(false);
+    }
+  });
+
+  it("NO run authority can hold run.lease-expire (a run never expires its own lease)", async () => {
+    const NOW = Date.parse("2026-07-27T00:00:00Z");
+    const ref = await verifyRunAuthority(
+      { runId: "run-1", orgId: "org-1", claimedAttemptId: "att-1" },
+      {
+        readRunRow: async () => ({
+          orgId: "org-1",
+          status: "running",
+          executionAttemptId: "att-1",
+          executionDeadlineAt: new Date(NOW + 60_000).toISOString(),
+          humanWaitAttemptId: null,
+        }),
+        nowMs: () => NOW,
+      },
+    );
+    // Not in RUN_CAPABILITIES: a run may land its OWN outputs (run.complete),
+    // never force-settle a lease.
+    expect(ref.can("run.lease-expire")).toBe(false);
+    expect(ref.can("run.complete")).toBe(true); // sanity: own-completion still holds
+  });
+
+  it("EXACTLY the lease-expiry-finalizer purpose grants run.lease-expire — no other, ever", () => {
+    // Full SYSTEM_PURPOSE_CAPABILITIES key set (mintSystemWriteAuthority's typed
+    // purpose param compile-forces these to stay real keys — same discipline as
+    // the org.delete purpose sweep above). Asserting exactly-one, WITH the
+    // finalizer in the loop, means a future purpose that wrongly granted
+    // run.lease-expire — or a regression un-granting the finalizer — red-lines.
+    const ALL_PURPOSES = [
+      "org-lifecycle-transition",
+      "lease-expiry-finalizer",
+      "agent-run-dispatch",
+      "extension-dashboard-lifecycle",
+      "dashboard-contribution-reconciler",
+      "dashboard-twin-backfill",
+    ] as const;
+    for (const purpose of ALL_PURPOSES) {
+      expect(mintSystemWriteAuthority(purpose, "org-1").can("run.lease-expire")).toBe(
+        purpose === "lease-expiry-finalizer",
+      );
+    }
   });
 });
