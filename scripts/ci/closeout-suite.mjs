@@ -82,6 +82,16 @@ const MEMBERS = [
     args: [["scripts/audit/objects-writer", "drift", "gate.mjs"].join("-")],
   },
   {
+    // Sibling of the objects-writer check above, for the review DECISION record
+    // (cinatra#2047 acceptance annex): bans direct DML against
+    // artifact_review_gates / _audit / _dispositions / _resume_outbox outside
+    // the single writer family, so a NEW parallel approval path cannot land
+    // unnoticed. Same filename-token handling as the member above.
+    name: "review-decision-writer direct-DML check",
+    cmd: "node",
+    args: [["scripts/audit/review-decision-writer", "drift", "gate.mjs"].join("-")],
+  },
+  {
     name: "design-registry drift (public/r)",
     cmd: "node",
     args: ["scripts/extensions/build-design-registry.mjs", "--check"],
