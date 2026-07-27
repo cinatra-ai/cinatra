@@ -1,22 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
-
-// next/link needs no app-router context to render an anchor, but stub it to a
-// bare anchor so this presentational test never reaches into Next internals.
-// Built via `createElement` (not raw JSX `<a>`) to satisfy the shadcn-link
-// lint rule in a test double.
-vi.mock("next/link", () => ({
-  default: ({
-    href,
-    children,
-    ...rest
-  }: {
-    href: string;
-    children: React.ReactNode;
-  }) => React.createElement("a", { href, ...rest }, children),
-}));
 
 import { OrganizationPermissionsPanel } from "../organization-permissions-panel";
 import type { OrganizationAccessModel } from "../../screens/organization-detail-model";
@@ -39,7 +24,13 @@ const MODEL: OrganizationAccessModel = {
 
 describe("OrganizationPermissionsPanel", () => {
   test("renders each member with a normalized role label", () => {
-    render(<OrganizationPermissionsPanel orgName="Acme" accessModel={MODEL} />);
+    render(
+      <OrganizationPermissionsPanel
+        orgName="Acme"
+        accessModel={MODEL}
+        viewerCanManageMembers={false}
+      />,
+    );
     expect(screen.getByText("Ann Owner")).toBeTruthy();
     expect(screen.getByText("Owner")).toBeTruthy();
     expect(screen.getByText("Al Admin")).toBeTruthy();
@@ -49,20 +40,62 @@ describe("OrganizationPermissionsPanel", () => {
   });
 
   test("renders the org's teams", () => {
-    render(<OrganizationPermissionsPanel orgName="Acme" accessModel={MODEL} />);
+    render(
+      <OrganizationPermissionsPanel
+        orgName="Acme"
+        accessModel={MODEL}
+        viewerCanManageMembers={false}
+      />,
+    );
     expect(screen.getByText("Platform")).toBeTruthy();
     expect(screen.getByText("Research")).toBeTruthy();
   });
 
-  test("links to Workspace settings for membership management (no in-tab management)", () => {
-    render(<OrganizationPermissionsPanel orgName="Acme" accessModel={MODEL} />);
-    const link = screen.getByRole("link", { name: /workspace settings/i });
-    expect(link.getAttribute("href")).toBe("/configuration/workspace");
+  test("manager copy points at the Members & invitations card below — no workspace-settings link (cinatra#1510)", () => {
+    render(
+      <OrganizationPermissionsPanel
+        orgName="Acme"
+        accessModel={MODEL}
+        viewerCanManageMembers={true}
+      />,
+    );
+    expect(screen.getByText("Members & invitations")).toBeTruthy();
+    expect(screen.getByText(/card below/)).toBeTruthy();
+    // The old copy sent every viewer to the platform-admin-gated
+    // /configuration/workspace — a dead end for org members. Gone entirely:
+    // the read-only panel carries NO links at all.
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.queryByText(/workspace settings/i)).toBeNull();
   });
 
-  test("shows NO customer-invite affordance (issue: no customer invite)", () => {
-    render(<OrganizationPermissionsPanel orgName="Acme" accessModel={MODEL} />);
-    // No invite / add-member / customer controls anywhere in the read-only tab.
+  test("non-manager copy names the owning role instead of dead-end instructions (cinatra#1510 AC: explanatory copy for viewers)", () => {
+    render(
+      <OrganizationPermissionsPanel
+        orgName="Acme"
+        accessModel={MODEL}
+        viewerCanManageMembers={false}
+      />,
+    );
+    expect(
+      screen.getByText(/managed by this organization's owners/),
+    ).toBeTruthy();
+    // No pointer to a management card the viewer cannot see…
+    expect(screen.queryByText(/card below/)).toBeNull();
+    // …and no link anywhere (the workspace-settings dead end stays gone).
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.queryByText(/workspace settings/i)).toBeNull();
+  });
+
+  test("shows NO management controls in either branch (read-only panel)", () => {
+    render(
+      <OrganizationPermissionsPanel
+        orgName="Acme"
+        accessModel={MODEL}
+        viewerCanManageMembers={true}
+      />,
+    );
+    // Even for a manager the panel stays a pure read: the pointer copy is
+    // text-only — no invite / add-member / customer controls, no inputs.
     expect(screen.queryByRole("button", { name: /invite/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /add member/i })).toBeNull();
     expect(screen.queryByText(/customer/i)).toBeNull();
@@ -74,6 +107,7 @@ describe("OrganizationPermissionsPanel", () => {
       <OrganizationPermissionsPanel
         orgName="Solo"
         accessModel={{ members: MODEL.members, teams: [], memberCount: 3, teamCount: 0 }}
+        viewerCanManageMembers={false}
       />,
     );
     expect(screen.getByText("No teams yet.")).toBeTruthy();
@@ -81,7 +115,11 @@ describe("OrganizationPermissionsPanel", () => {
 
   test("surfaces the member and team counts", () => {
     const { container } = render(
-      <OrganizationPermissionsPanel orgName="Acme" accessModel={MODEL} />,
+      <OrganizationPermissionsPanel
+        orgName="Acme"
+        accessModel={MODEL}
+        viewerCanManageMembers={false}
+      />,
     );
     const panel = container.querySelector(
       '[data-cinatra-org-permissions="true"]',

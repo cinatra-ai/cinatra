@@ -2,8 +2,8 @@
 
 // ---------------------------------------------------------------------------
 // OrganizationMembersManager — the member role/remove + invitation
-// create/cancel controls of the `/organizations/[id]` Manage tab
-// (cinatra#1510). Mirrors the team-members-section idiom: a per-row role
+// create/cancel controls of the `/organizations/[id]/settings` management
+// section (cinatra#1510). Mirrors the team-members-section idiom: a per-row role
 // Select, a confirmed remove via AlertDialog, and a toast on the discriminated
 // action result.
 //
