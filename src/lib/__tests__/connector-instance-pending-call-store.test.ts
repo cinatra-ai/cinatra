@@ -486,7 +486,7 @@ describe("parkPendingCall — insert / dedup arbiter / cap", () => {
     if (dup.outcome === "parked") expect(dup.reused).toBe(true);
   });
 
-  it("counts only LIVE pendings for the cap — expired distinct-args rows never force cap_exceeded (codex r1)", async () => {
+  it("counts only LIVE pendings for the cap — expired distinct-args rows never force cap_exceeded", async () => {
     const { deps, advance } = makeStore();
     for (let i = 0; i < PENDING_CALL_CAP; i += 1) {
       const r = await parkPendingCall(parkInput({ args: { id: i } }), deps);
@@ -708,7 +708,7 @@ describe("confirmation policy store", () => {
 });
 
 // ---------------------------------------------------------------------------
-// bootstrap DDL invariants (design §3 / codex r0 #10 / r1 M4)
+// bootstrap DDL invariants (design §3)
 // ---------------------------------------------------------------------------
 
 describe("bootstrap DDL invariants", () => {

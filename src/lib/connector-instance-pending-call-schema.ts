@@ -22,7 +22,7 @@
 // walks this edge from the drizzle-store entrypoint and fails closed if this
 // leaf ever reaches an async-root import).
 //
-// INVARIANTS ENFORCED IN THE DDL (design §3 / codex r0 #10 / r1 M4):
+// INVARIANTS ENFORCED IN THE DDL (design §3):
 //   - args CAP: `args_bytes <= 262144` (256 KB canonical JSON) — an
 //     uninspectable blob must never be one-click-approved.
 //   - status↔args COUPLING: `((status IN ('pending','executing')) = (args IS
@@ -39,7 +39,7 @@
 //     require-surface is visible in the user's cinatra chat panel).
 //   - expires_at index — the on-write lazy-expiry sweep (the widget-tables
 //     precedent: no external cron).
-//   - the DB-ENFORCED park-dedup arbiter (codex r0 #1): a PARTIAL UNIQUE index
+//   - the DB-ENFORCED park-dedup arbiter: a PARTIAL UNIQUE index
 //     over (org_id, connector_key, instance_id, server_id, user_id, surface,
 //     tool_name, args_hash) WHERE status = 'pending'. Concurrency-proof (two
 //     racing parks cannot both insert) and scoped so identical tool/args on

@@ -17,7 +17,7 @@ import "server-only";
 // land later — the destructive hook that calls `parkPendingCall` (PR-3) and the
 // resume executor that calls `consumePendingCall` / `recordOutcome` (PR-4). The
 // pure fingerprint/digest/redaction helpers are EXPORTED so park (here) and
-// resume (PR-4) share ONE implementation (codex r2 discipline pin: the endpoint
+// resume (PR-4) share ONE implementation (the endpoint
 // fingerprint is computed by the same helper at both sites).
 //
 // DB access mirrors connector-instance-tool-policy-store / -server-store: an
@@ -53,7 +53,7 @@ const CONFIRMATION_POLICY_TABLE = "connector_instance_confirmation_policy";
 export const CONFIRMATION_POLICY_VERSION = "connector-instance-confirmation";
 
 // ---------------------------------------------------------------------------
-// Constants (single source; the design's exported knobs — codex r1 M3)
+// Constants (single source; the design's exported knobs)
 // ---------------------------------------------------------------------------
 
 /** Hard cap on the canonical-JSON byte size of parked args (256 KB). An
@@ -63,13 +63,13 @@ export const ARGS_MAX_BYTES = 262144;
 export const ARGS_PREVIEW_MAX_BYTES = 8192;
 /** A parked call is actionable for this long (`expires_at = created_at + this`). */
 export const PENDING_CALL_EXPIRY_MS = 15 * 60 * 1000;
-/** The ONE 15-min hard deadline (codex r1 M3): a reader may flip `executing →
+/** The ONE 15-min hard deadline: a reader may flip `executing →
  * failed('execution_interrupted')` only PAST `consumed_at + this` — no
  * in-process execution (2-min abort + transport timeouts) can outlive it, so the
  * flip only ever hits a CRASHED executor. */
 export const EXECUTING_HARD_DEADLINE_MS = 15 * 60 * 1000;
 /** ≥ this many `pending` rows for one (viewer, instance, tool) refuses further
- * parks — spam bounded at the durable layer (codex r0 #9c). */
+ * parks — spam bounded at the durable layer. */
 export const PENDING_CALL_CAP = 3;
 /** Terminal rows are swept this long after their last update (30 days, §3). */
 export const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -205,7 +205,7 @@ export function computeArgsDigest(args: Record<string, unknown> | null | undefin
   };
 }
 
-/** Park-time TOOL fingerprint (codex r0 #3/#8): sha256 over the canonical
+/** Park-time TOOL fingerprint: sha256 over the canonical
  * `{name, serverId, inputSchema, rawAnnotations}`. Resume (PR-4) recomputes from
  * the CURRENT catalog and denies `tool_changed` on mismatch — annotations are
  * INSIDE the hash, so a destructive→write relabel also denies. */
@@ -226,12 +226,12 @@ export function computeToolFingerprint(input: {
   return createHash("sha256").update(canonical, "utf8").digest("hex");
 }
 
-/** Park-time execution-TARGET fingerprint (codex r1 High): sha256 over the
+/** Park-time execution-TARGET fingerprint: sha256 over the
  * resolved endpoint URL string ONLY (siteUrl + rest_route path; the auth header
  * is NEVER part of the hash input). Resume (PR-4) re-resolves via the SAME
  * `deps.resolveInstanceEndpoint` and denies `target_changed` on mismatch (an
  * instance siteUrl repoint invalidates consent). No canonicalization — a missing
- * one can only cause SAFE false-denials (codex r2). */
+ * one can only cause SAFE false-denials. */
 export function computeTargetFingerprint(endpointUrl: string): string {
   return createHash("sha256").update(endpointUrl, "utf8").digest("hex");
 }
@@ -492,7 +492,7 @@ async function auditFlips(
 
 // The lazy-flip UPDATE shared by the viewer list + the point read. Scoped by the
 // caller's WHERE tail. Terminalizes stale rows the DB clock proves are past
-// their boundary (readers never flip a LIVE execution — codex r0 #2): a
+// their boundary (readers never flip a LIVE execution): a
 // `pending` row past `expires_at` → `expired`; an `executing` row past the
 // 15-min hard `executing_deadline` (only a CRASHED executor) → `failed
 // ('execution_interrupted')`. Both null `args` (the status↔args CHECK).
@@ -542,7 +542,7 @@ export type ParkPendingCallResult =
 
 /**
  * Park a destructive call pending confirmation. ONE transaction, serialized per
- * cap key (codex r1 M1): advisory-lock → flip THIS dedup key's expired pendings
+ * cap key: advisory-lock → flip THIS dedup key's expired pendings
  * → EXACT-DUP COLLAPSE (a duplicate retry returns the existing id, BYPASSING the
  * cap) → cap check → `INSERT … ON CONFLICT (<dedup cols>) WHERE status='pending'
  * DO NOTHING RETURNING` (a cross-lock loser selects the winner). Args over the
@@ -602,7 +602,7 @@ export async function parkPendingCall(
     );
     await auditFlips(audit, flipped);
 
-    // (3) EXACT-DUP COLLAPSE FIRST (codex r1 M1): a live duplicate returns its
+    // (3) EXACT-DUP COLLAPSE FIRST: a live duplicate returns its
     // id and BYPASSES the cap — a retry at cap must collapse, never refuse.
     const dup = await tx<{ id: string; expires_at: string | Date }>(
       `SELECT id, expires_at FROM ${pendingCallTable}
@@ -619,8 +619,7 @@ export async function parkPendingCall(
     // (4) Cap check: ≥ PENDING_CALL_CAP LIVE pending rows for this (viewer,
     // instance, tool) refuses further parks. `expires_at > now()` excludes
     // expired-but-not-yet-flipped rows of OTHER dedup keys (step 2 only flips
-    // THIS key) so a stale card can never spuriously force `cap_exceeded`
-    // (codex r1).
+    // THIS key) so a stale card can never spuriously force `cap_exceeded`.
     const capRows = await tx<{ n: number | string }>(
       `SELECT count(*)::int AS n FROM ${pendingCallTable}
         WHERE org_id = $1 AND user_id = $2 AND connector_key = $3 AND instance_id = $4
@@ -795,7 +794,7 @@ export type RecordOutcomeResult = {
  * Primary CAS: `WHERE status='executing'`. On 0 rows, a LATE-UPGRADE fallback
  * (`WHERE status='failed' AND failure_code='execution_interrupted'`) turns a
  * pessimistic reader flip into the real outcome — so "the wire ran exactly once"
- * survives a slow execution that outlived a reader flip (codex r0 #2), audited
+ * survives a slow execution that outlived a reader flip, audited
  * `pending_call_outcome_late`. Returns `null` when neither matched (already
  * terminal in another state). The normal-path `pending_call_executed` /
  * `pending_call_execution_failed` audit is the executor's (PR-4).
