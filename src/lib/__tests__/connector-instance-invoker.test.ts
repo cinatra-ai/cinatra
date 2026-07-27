@@ -292,6 +292,50 @@ describe("invokeConnectorInstanceTool — destructive hook (step 3, S5 seam)", (
   });
 });
 
+describe("invokeConnectorInstanceTool — audit-sink failures never mask execution outcome", () => {
+  it("success path: audit rejection is swallowed — the completed wire result is still returned", async () => {
+    const { deps, audit, callWireTool } = makeDeps();
+    audit.mockRejectedValueOnce(new Error("sink down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await invokeConnectorInstanceTool(
+        { connectorKey: "wordpress", toolName: "ewpa/create-post", args: { title: "t" }, actor: ACTOR },
+        deps,
+      );
+      expect(result).toEqual({ success: true, data: { ok: 1 } });
+      expect(callWireTool).toHaveBeenCalledTimes(1);
+      // The audit was still attempted exactly once (M4), as a success row.
+      expect(audit).toHaveBeenCalledTimes(1);
+      expect(audit.mock.calls[0][0]).toMatchObject({ decision: "allowed" });
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("failure path: audit rejection is swallowed — the typed InvokerError still propagates", async () => {
+    const { deps, audit, callWireTool } = makeDeps();
+    const wireErr = new InvokerError("tool_error", "site-side tool failed");
+    callWireTool.mockRejectedValueOnce(wireErr);
+    audit.mockRejectedValueOnce(new Error("sink down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        invokeConnectorInstanceTool(
+          { connectorKey: "wordpress", toolName: "ewpa/create-post", args: {}, actor: ACTOR },
+          deps,
+        ),
+      ).rejects.toBe(wireErr);
+      // The denial audit was still attempted exactly once.
+      expect(audit).toHaveBeenCalledTimes(1);
+      expect(audit.mock.calls[0][0]).toMatchObject({ decision: "denied" });
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+});
+
 // Guard the InvokerError type surface is used (import-level).
 it("InvokerError carries a typed code", () => {
   expect(new InvokerError("tool_not_found").code).toBe("tool_not_found");

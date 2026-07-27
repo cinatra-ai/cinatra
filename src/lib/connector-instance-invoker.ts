@@ -342,8 +342,20 @@ export async function invokeConnectorInstanceTool(
     snapshot.exposureMode === "triad-only"
       ? { name: TRIAD_EXECUTE_ABILITY, arguments: { ability_name: name, parameters: input.args } }
       : { name, arguments: input.args };
+  // Execution-audit failures (both step-5 sites below) are logged and
+  // swallowed: by then the wire call has already run and cannot be rolled
+  // back or safely replayed, so audit persistence must never turn a completed
+  // non-idempotent call into a caller-visible failure (retry → double
+  // execution) nor replace the typed InvokerError callers branch on. Durable
+  // audit delivery is a future hardening concern, deliberately not this seam's.
+  const auditSafely = async (event: Parameters<ConnectorInstanceInvokerDeps["audit"]>[0]) => {
+    try {
+      await deps.audit(event);
+    } catch (auditErr) {
+      console.error("[connector-instance-invoker] execution-audit sink failed", auditErr);
+    }
+  };
   let result: unknown;
-  let outcome: "allowed" | "denied" = "allowed";
   try {
     result = await deps.callWireTool({
       endpoint: resolved.endpoint,
@@ -352,9 +364,8 @@ export async function invokeConnectorInstanceTool(
       arguments: wire.arguments,
     });
   } catch (err) {
-    outcome = "denied";
     // Step 5 — execution audit (failure). Then re-throw the typed error.
-    await deps.audit({
+    await auditSafely({
       resourceType: "connector_instance",
       resourceId: effectiveInstanceId,
       operation: primitiveName,
@@ -376,11 +387,11 @@ export async function invokeConnectorInstanceTool(
 
   // Step 5 — execution audit (success). Distinct from step-1's authorization-
   // decision audit — exactly one of each per invocation (M4).
-  await deps.audit({
+  await auditSafely({
     resourceType: "connector_instance",
     resourceId: effectiveInstanceId,
     operation: primitiveName,
-    decision: outcome,
+    decision: "allowed",
     actorPrincipalId: input.actor.userId,
     organizationId: input.actor.orgId,
     ...(input.causation ? { causation: input.causation } : {}),
