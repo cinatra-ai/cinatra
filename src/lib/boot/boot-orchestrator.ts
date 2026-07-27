@@ -24,7 +24,10 @@ import { extensionActivationPhases } from "@/lib/boot/phases/extension-activatio
 import { requiredExtensionMaterializePhases } from "@/lib/boot/phases/required-extension-materialize";
 import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfill";
 import { skillsCatalogRebuildPhases } from "@/lib/boot/phases/skills-catalog-rebuild";
-import { agentRuntimeDepBackfillPhases } from "@/lib/boot/phases/agent-runtime-dep-backfill";
+import {
+  agentRuntimeDepBackfillPhases,
+  lifecycleConfigProjectionPhases,
+} from "@/lib/boot/phases/agent-runtime-dep-backfill";
 import { dashboardContributionReconcilePhases } from "@/lib/boot/phases/dashboard-contribution-reconcile";
 import { dashboardTemplateMaterializePhases } from "@/lib/boot/phases/dashboard-template-materialize";
 import { agentMountProjectionPhases } from "@/lib/boot/phases/agent-mount-projection";
@@ -149,6 +152,14 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // canonical rows are loaded. `retryable`: a backfill failure logs and boot
   // continues (the pass is idempotent and retries next boot).
   await run(agentRuntimeDepBackfillPhases());
+
+  // ── core lifecycle-declaration projection (cinatra#2047 defect D-1) ──────────
+  // Land the CORE-owned lifecycle declarations (epic #2037 S2's first repairing
+  // producer) on `agent_templates.lifecycle_config`, so a `changes_requested` on
+  // one of those producers ROUTES to the producer instead of escalating. AFTER the
+  // dep backfill for the same reason: the installed template rows exist by now.
+  // `retryable` + idempotent + kill-switchable.
+  await run(lifecycleConfigProjectionPhases());
 
   // ── skills-catalog explicit rebuild (cinatra#1364) ────────────────────────────
   // AFTER extension activation + the materialize/projection phases above, so the

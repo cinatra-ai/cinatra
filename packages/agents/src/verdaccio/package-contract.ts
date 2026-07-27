@@ -136,6 +136,29 @@ export const agentProducesSchema = z.array(
     .strict(),
 );
 
+// The `lifecycle` block (cinatra#2038 S0 → cinatra#2047 D-1) — the agent
+// manifest's LIFECYCLE declarations, compiled onto `agent_templates.lifecycle_config`
+// exactly as `trigger_mode` / `gated_steps` are (epic #2037's "agent-manifest
+// declarations (`metadata.cinatra` block compiled onto `agent_templates`,
+// trigger-style)"). STRICT: an unknown key or a bad checkpoint name REFUSES the
+// manifest at parse time rather than silently laundering a typo into an absent
+// declaration — a silently-dropped `repairCapable` is exactly the D-1 failure.
+export const agentLifecycleDeclarationSchema = z
+  .object({
+    /** Checkpoints the agent requests SKIPPED. Honored ONLY where the org is
+     * silent AND the class is non-external (the lattice enforces both). */
+    requestedSkips: z.array(z.enum(["recommendation", "review", "verification"])).optional(),
+    /** Artifact types this agent declares it produces. */
+    producedTypes: z.array(z.string().min(1)).optional(),
+    /** Whether this producer implements the typed repair round-trip (S2). The
+     * `changes_requested` route keys on it: true ⇒ the repair is dispatched to
+     * the producer; absent/false ⇒ an org route or a human escalation. */
+    repairCapable: z.boolean().optional(),
+  })
+  .strict();
+
+export type AgentLifecycleDeclaration = z.infer<typeof agentLifecycleDeclarationSchema>;
+
 export const cinatraAgentPackageMetadataSchema = z.object({
   packageType: z.literal(CINATRA_AGENT_PACKAGE_TYPE),
   manifestVersion: z.literal(CINATRA_AGENT_MANIFEST_VERSION),
@@ -181,6 +204,10 @@ export const cinatraAgentPackageMetadataSchema = z.object({
   // `packages/extensions/src/__tests__/agent-produces-reader.test.ts`, which
   // parses against both schemas and asserts byte-equivalent acceptance.
   produces: agentProducesSchema.optional(),
+  // The manifest LIFECYCLE declaration (cinatra#2047 D-1). Optional for
+  // back-compat with every already-published package; when present it compiles
+  // onto `agent_templates.lifecycle_config` at install, trigger-style.
+  lifecycle: agentLifecycleDeclarationSchema.optional(),
 });
 
 export type CinatraAgentPackageMetadata = z.infer<typeof cinatraAgentPackageMetadataSchema>;

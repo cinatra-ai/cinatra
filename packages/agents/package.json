@@ -42,6 +42,8 @@
     "./lifecycle-continuation-park-store": "./src/lifecycle-continuation-park-store.ts",
     "./lifecycle-policy-store": "./src/lifecycle-policy-store.ts",
     "./lifecycle-review-changes-requested": "./src/lifecycle-review-changes-requested-store.ts",
+    "./lifecycle-config-projection": "./src/lifecycle-config-projection.ts",
+    "./lifecycle-repair-dispatch-store": "./src/lifecycle-repair-dispatch-store.ts",
     "./auditor-snapshot-errors": "./src/auditor-snapshot-errors.ts",
     "./db": "./src/db.ts",
     "./pm-link-store": "./src/pm-link-store.ts",

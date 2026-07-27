@@ -89,6 +89,7 @@ import {
   resolveOpenBatchEpoch,
   listOpenBatchEpochs,
 } from "./lifecycle-repair-store";
+import { dispatchPendingProducerRepairs, repairIdFromRunId } from "./lifecycle-repair-dispatch-store";
 import type {
   CompiledManifestLifecycle,
   DestinationClass,
@@ -390,6 +391,17 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
   if (row.continuationAddress) {
     await settleAlreadyLinkedEvent(row);
     return "already-processed";
+  }
+
+  // A production ON A DISPATCHED REPAIR RUN (cinatra#2047 D-1) is a repair
+  // SUCCESSOR, not a fresh production: its review gate is the repair's successor
+  // gate, pinned by `submitRepairResponse` (never repinned under the reviewer).
+  // Opening an auto-gate here would double-gate the same revision. Settle the
+  // event instead — the base event's re-pointed continuation is what holds the
+  // artifact's effect until the successor gate resolves.
+  if (repairIdFromRunId(row.producerRunId)) {
+    await markProducedEventProcessed(row.eventId);
+    return "no-gate";
   }
 
   const context = await resolveReviewContext(row);
@@ -1097,6 +1109,10 @@ export interface GateMaintenanceSummary {
   /** Parks the TTL sweep fail-closed into a terminal `policy_unresolved` block
    * this pass (cinatra#2047 D-7) — the ops-surfaced blocked-effect count. */
   parksPolicyUnresolved: number;
+  /** Repairs DELIVERED to their producer this pass (cinatra#2047 D-1). */
+  repairsDispatched: number;
+  /** Repairs escalated because no producer could be resolved to deliver to. */
+  repairsEscalated: number;
 }
 
 /**
@@ -1124,6 +1140,8 @@ export async function sweepLifecycleGateMaintenance(opts?: {
     requiredExpiredBlocked: 0,
     parksReleased: 0,
     parksPolicyUnresolved: 0,
+    repairsDispatched: 0,
+    repairsEscalated: 0,
   };
   if (!isLifecycleReviewOrchestrationActive()) return summary;
   const limit = Math.max(1, Math.min(opts?.limit ?? 100, 500));
@@ -1136,8 +1154,30 @@ export async function sweepLifecycleGateMaintenance(opts?: {
   // 3. Park release for resolved auto-gates + the TTL fail-close of DUE parks
   //    (one sweep, both effects — see releaseResolvedAutoGateParks).
   await releaseResolvedAutoGateParks(limit, summary);
+  // 4. Repair DELIVERY (cinatra#2047 defect D-1). A routed `producer_repair` sat
+  //    at `requested` forever because nothing delivered it; this drain dispatches
+  //    the typed request to the producing agent (or escalates when there is no
+  //    producer to deliver to).
+  await dispatchRepairs(summary);
 
   return summary;
+}
+
+/** Run the repair-delivery drain, folding its counters into the maintenance
+ * summary. Best-effort: a delivery failure must never abort the maintenance pass
+ * (the repairs stay `requested` and the next pass retries). */
+async function dispatchRepairs(summary: GateMaintenanceSummary): Promise<void> {
+  try {
+    const dispatch = await dispatchPendingProducerRepairs();
+    summary.repairsDispatched += dispatch.dispatched;
+    summary.repairsEscalated += dispatch.escalated;
+  } catch (err) {
+    console.error(
+      `[lifecycle-review-orchestration] repair dispatch drain failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
 }
 
 async function applyPendingTombstones(limit: number, summary: GateMaintenanceSummary): Promise<void> {
