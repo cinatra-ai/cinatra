@@ -59,18 +59,23 @@ jobs:
     uses: cinatra-ai/ci/.github/workflows/skills-drift-gate.yml@72d0b1caa9b11e33a9ba3e65e55aae46ad844bf1 # v0.1.2-next.72d0b1c
     with:
       # assistant-skills pin: points at the commit that carries the skills'
-      # `cinatra-watches` declarations. Re-pinned at the release-closeout
-      # skills-drift reconciliation (docs/internals/decisions/skills-drift-decisions.md, newest
-      # section) to the lock-resolved assistant-skills ref — back in
-      # STRICT LOCKSTEP with the @cinatra-ai/assistant-skills resolvedSha in
-      # cinatra-required-extensions.lock.json (both e9d5a7e, written into the
-      # lock by the #1086 required-extension lock refresh). The prior pin
-      # (538a817) lagged that lock by seventeen assistant-skills commits,
-      # which among other things GREW the watched surface (the
-      # chat-extension-discovery skill's watch block). Keep them in
-      # lockstep: at each required-extensions lock refresh, re-pin this
-      # skills_ref to the new assistant-skills resolvedSha now written into
-      # the lock.
-      skills_ref: e9d5a7eae98b750d934fdb9acdcde7d49af70484
+      # `cinatra-watches` declarations. Kept in STRICT LOCKSTEP with the
+      # @cinatra-ai/assistant-skills resolvedSha in
+      # cinatra-required-extensions.lock.json — at each required-extensions
+      # lock refresh, re-pin this skills_ref to the new resolvedSha written
+      # into the lock, in the SAME change.
+      #
+      # cinatra#2047 (row 8, final): re-pinned from e9d5a7e to 92fb85a
+      # alongside the lock bump in the same PR. e9d5a7e was the v0.1.7 closeout
+      # reconciliation pin (#1086's lock refresh); it lagged the pre-bump lock
+      # (36b55a1) by eight assistant-skills commits and would otherwise lag the
+      # newly bumped lock by nine, including the #55 removal of the two
+      # archived lifecycle-helper agents. Enumerated at both snapshots the lag
+      # was a pure SHRINK — 90 watch entries at e9d5a7e, 89 at 92fb85a, one
+      # removal (chat-assistant-core no longer watching a retired package) and
+      # ZERO additions — so on the ENFORCED declared-watch surface the stale
+      # pin could only over-report, never miss drift. This restores the
+      # documented lockstep rather than fixing an observed miss.
+      skills_ref: 92fb85a67733d419632c2dc160413b54ffedc434
       mode: enforce
       ref: 72d0b1caa9b11e33a9ba3e65e55aae46ad844bf1 # same SHA as the workflow @ref
