@@ -49,19 +49,34 @@ describe("capability table (#1938)", () => {
     }
   });
 
-  it("archived denies everything except lease-gated completion and lifecycle exit", () => {
+  it("archived denies everything except lease-gated completion and lifecycle exits", () => {
     expect(ruleFor("archived", "content.write")).toBe("deny");
     expect(ruleFor("archived", "run.execute")).toBe("deny");
     expect(ruleFor("archived", "membership.write")).toBe("deny");
     expect(ruleFor("archived", "org.settings")).toBe("deny");
     expect(ruleFor("archived", "run.complete")).toBe("lease-gated");
     expect(ruleFor("archived", "org.lifecycle")).toBe("allow");
+    expect(ruleFor("archived", "org.delete")).toBe("allow");
   });
 
-  it("active allows every capability", () => {
+  it("active allows every capability except org.delete (delete is archived-only, #1939)", () => {
     for (const capability of ORG_WRITE_CAPABILITIES) {
-      expect(ruleFor("active", capability)).toBe("allow");
+      expect(ruleFor("active", capability)).toBe(
+        capability === "org.delete" ? "deny" : "allow",
+      );
     }
+  });
+
+  it("org.delete is archived-only and distinct from org.lifecycle (#1939 wave 3)", () => {
+    // The whole reason org.delete is a SEPARATE capability: org.lifecycle is
+    // active-allow (it authorizes archiving an active org), so one capability
+    // could never express "archive active: yes, delete active: no".
+    expect(ruleFor("active", "org.delete")).toBe("deny");
+    expect(ruleFor("archived", "org.delete")).toBe("allow");
+    expect(ruleFor("active", "org.lifecycle")).toBe("allow");
+    expect(ruleFor("active", "org.delete")).not.toBe(
+      ruleFor("active", "org.lifecycle"),
+    );
   });
 
   it("derives state from the archive marker", () => {

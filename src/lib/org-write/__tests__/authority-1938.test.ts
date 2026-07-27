@@ -24,6 +24,30 @@ vi.mock("@/lib/postgres-sync", () => ({
 vi.mock("@/lib/postgres-config", () => ({
   getPostgresConnectionString: () => "postgres://test",
 }));
+// Real policy table for real roles; two synthetic roles are injected to isolate
+// the mappings from each other (no REAL role holds archive-without-delete or
+// delete-without-archive — org_owner holds both): "archive_only_test_role"
+// holds ONLY organization.archive, "delete_only_test_role" holds ONLY
+// organization.delete. Together they pin org.delete↔organization.delete and
+// org.lifecycle↔organization.archive with no cross-satisfaction (#1939 wave 3,
+// Decision 1).
+vi.mock("@/lib/authz/policies", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/authz/policies")>();
+  const realRoleHasPermission = actual.roleHasPermission as (
+    role: unknown,
+    permission: unknown,
+  ) => boolean;
+  return {
+    ...actual,
+    roleHasPermission: (role: unknown, permission: unknown): boolean => {
+      if (role === "archive_only_test_role")
+        return permission === "organization.archive";
+      if (role === "delete_only_test_role")
+        return permission === "organization.delete";
+      return realRoleHasPermission(role, permission);
+    },
+  };
+});
 
 import {
   verifySessionAuthority,
@@ -38,8 +62,10 @@ import {
 import { runGuardedOrgWriteBatchSync } from "../batch-wrapper";
 import {
   buildGuardedOrgWriteBatch,
+  ORG_WRITE_CAPABILITIES,
   type GuardedOrgWriteBatch,
 } from "@cinatra-ai/org-write-kernel";
+import type { Role } from "@/lib/authz/policies";
 
 beforeEach(() => {
   shared.role = undefined;
@@ -84,22 +110,16 @@ describe("verifySessionAuthority (#1938)", () => {
 });
 
 describe("sessionAuthorityFromResolvedRole (#1939 S3, sync transport mint)", () => {
-  const CAPABILITIES = [
-    "content.write",
-    "run.execute",
-    "run.complete",
-    "membership.write",
-    "org.settings",
-    "org.lifecycle",
-  ] as const;
-
-  it("answers capability-for-capability identically to verifySessionAuthority for every org role", async () => {
+  it("answers capability-for-capability identically to verifySessionAuthority for every org role, across the FULL kernel capability set", async () => {
+    // Iterating ORG_WRITE_CAPABILITIES (not a hand-copied list) pins
+    // SESSION_PERMISSION_FOR totality: every capability — org.delete included —
+    // resolves through BOTH mint paths consistently, or this red-lines.
     for (const role of ["member", "org_admin", "org_owner"] as const) {
       shared.role = role;
       const viaMembershipRead = await verifySessionAuthority("u1", "org-1");
       const viaResolvedRole = sessionAuthorityFromResolvedRole("org-1", role);
       expect(viaResolvedRole.orgId).toBe("org-1");
-      for (const capability of CAPABILITIES) {
+      for (const capability of ORG_WRITE_CAPABILITIES) {
         expect(viaResolvedRole.can(capability)).toBe(viaMembershipRead.can(capability));
       }
     }
@@ -292,5 +312,81 @@ describe("run-capability ceiling hook", () => {
     expect(ref.can("run.complete")).toBe(false); // floor allows, ceiling denies
     expect(ref.can("org.lifecycle")).toBe(false); // floor denies regardless
     expect(consulted).toContain("run.complete");
+  });
+});
+
+describe("org.delete session mapping (#1939 wave 3, stage B)", () => {
+  it("owners can delete — org.delete maps to the owner-held organization.delete", async () => {
+    shared.role = "org_owner";
+    const auth = await verifySessionAuthority("u1", "org-1");
+    expect(auth.can("org.delete")).toBe(true);
+  });
+
+  it("non-owners cannot delete (organization.delete is owner-only)", async () => {
+    for (const role of ["member", "org_admin"] as const) {
+      shared.role = role;
+      const auth = await verifySessionAuthority("u1", "org-1");
+      expect(auth.can("org.delete")).toBe(false);
+    }
+  });
+
+  it("delete is a MANAGEMENT capability, never a membership-only grant", async () => {
+    // A plain member holds membership-only capabilities but must not inherit
+    // delete just by being a member.
+    shared.role = "member";
+    const auth = await verifySessionAuthority("u1", "org-1");
+    expect(auth.can("content.write")).toBe(true); // membership-only
+    expect(auth.can("org.delete")).toBe(false); // permission-gated
+  });
+
+  it("org.delete is NEVER satisfiable by organization.archive (the Decision-1 invariant)", () => {
+    // Synthetic role holds organization.archive but NOT organization.delete. If
+    // org.delete were (wrongly) mapped to organization.archive, this actor would
+    // pass the delete gate. It must not — archive permission can never stand in
+    // for delete permission.
+    const archiveOnly = sessionAuthorityFromResolvedRole(
+      "org-1",
+      "archive_only_test_role" as Role,
+    );
+    expect(archiveOnly.can("org.lifecycle")).toBe(true); // has organization.archive
+    expect(archiveOnly.can("org.delete")).toBe(false); // lacks organization.delete
+  });
+
+  it("org.delete IS satisfied specifically by organization.delete (converse pin)", () => {
+    // Synthetic role holds organization.delete but NOT organization.archive: it
+    // CAN delete but CANNOT archive/unarchive. Proves the mapping is EXACTLY
+    // organization.delete — not merely "some owner-only permission" that a
+    // future non-delete grant could accidentally satisfy.
+    const deleteOnly = sessionAuthorityFromResolvedRole(
+      "org-1",
+      "delete_only_test_role" as Role,
+    );
+    expect(deleteOnly.can("org.delete")).toBe(true); // has organization.delete
+    expect(deleteOnly.can("org.lifecycle")).toBe(false); // lacks organization.archive
+  });
+});
+
+describe("no system purpose grants org.delete (#1939 wave 3 — delete is human-only)", () => {
+  // The full current purpose set (SYSTEM_PURPOSE_CAPABILITIES); mintSystemWriteAuthority's
+  // typed purpose param compile-forces these to stay real keys.
+  const PURPOSES = [
+    "org-lifecycle-transition",
+    "lease-expiry-finalizer",
+    "agent-run-dispatch",
+    "extension-dashboard-lifecycle",
+    "dashboard-contribution-reconciler",
+    "dashboard-twin-backfill",
+  ] as const;
+
+  it("every system write purpose denies org.delete", () => {
+    for (const purpose of PURPOSES) {
+      expect(mintSystemWriteAuthority(purpose, "org-1").can("org.delete")).toBe(false);
+    }
+  });
+
+  it("org-lifecycle-transition keeps EXACTLY org.lifecycle — the archive tx, not delete", () => {
+    const lifecycle = mintSystemWriteAuthority("org-lifecycle-transition", "org-1");
+    expect(lifecycle.can("org.lifecycle")).toBe(true);
+    expect(lifecycle.can("org.delete")).toBe(false);
   });
 });
