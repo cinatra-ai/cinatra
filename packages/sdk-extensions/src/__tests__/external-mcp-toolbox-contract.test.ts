@@ -78,6 +78,35 @@ const pinKeyPin: Record<
   instanceId: true,
 };
 
+// (3d) FULL exact-type equality probes (adopted from review): the Record pins
+// above catch key drift but not in-place WIDENING — e.g. `surface` relaxing to
+// `string`, or pin members turning optional, would slip through them. `Equal`
+// resolves to `true` only when the two types are IDENTICAL (literal unions,
+// optionality, and nested shapes included), so either assignment below stops
+// compiling the moment the published type drifts from the pinned literal.
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
+    ? true
+    : false;
+
+const contextShapeIsExact: Equal<
+  ExtensionToolboxBuildContext,
+  {
+    surface: "chat" | "agent_run" | "public_site_widget" | "session";
+    connectorInstancePin?: { connectorKey: string; instanceId: string };
+  }
+> = true;
+
+const toolboxShapeIsExact: Equal<
+  ExtensionExternalMcpToolbox,
+  {
+    buildTools: (
+      provider: string,
+      context?: ExtensionToolboxBuildContext,
+    ) => Promise<ExtensionExternalMcpTool[]>;
+  }
+> = true;
+
 describe("external-MCP toolbox build-context widening (#2019 S4)", () => {
   it("keeps one-parameter implementations and no-context call sites type-valid (compile proof) and the no-op signal intact", async () => {
     // Call-site backward compatibility: the pre-widening single-argument call
@@ -119,5 +148,10 @@ describe("external-MCP toolbox build-context widening (#2019 S4)", () => {
       "surface",
     ]);
     expect(Object.keys(pinKeyPin).sort()).toEqual(["connectorKey", "instanceId"]);
+  });
+
+  it("pins the FULL exact type shapes (compile-level equality probes)", () => {
+    expect(contextShapeIsExact).toBe(true);
+    expect(toolboxShapeIsExact).toBe(true);
   });
 });
