@@ -6,12 +6,16 @@
  * (returning kernel-internal paths for symlinked detours).
  */
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   collectModuleEdges,
   evaluateBoundaryRules,
   extractR4Rules,
   evaluateR4,
   isTestFileRel,
+  makeTsResolver,
 } from "../org-write-boundary-gate.mjs";
 
 type Edge = {
@@ -521,5 +525,32 @@ describe("R4 writer import ban (evaluateR4)", () => {
       { "@cinatra-ai/dashboards": MUT },
     );
     expect(v).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// makeTsResolver — fail closed when its foundational tsconfig can't be trusted
+// (cinatra#1939 wave 3). A swallowed config error yields default options with no
+// `paths`, so aliased specifiers resolve to null and their opaque-access edges
+// are skipped — the gate would pass for the wrong reason. Both TS error channels
+// must turn the gate red instead.
+// ---------------------------------------------------------------------------
+describe("makeTsResolver is fail-closed on a broken tsconfig", () => {
+  it("throws on a MISSING tsconfig instead of degrading to paths-less resolution", () => {
+    // readConfigFile sets `.error` (TS5083) — the missing/unreadable channel.
+    const root = mkdtempSync(join(tmpdir(), "owbg-no-tsconfig-"));
+    expect(() => makeTsResolver(root)).toThrow(/cannot read|tsconfig/i);
+  });
+
+  it("throws on a tsconfig with a resolver-relevant option error (not a silent default)", () => {
+    // Valid JSON, bogus compiler option → parseJsonConfigFileContent reports it
+    // (TS6046) and yields degraded options; the file-list diagnostics
+    // (TS18002/18003) are filtered out, so this must still fail closed.
+    const root = mkdtempSync(join(tmpdir(), "owbg-bad-tsconfig-"));
+    writeFileSync(
+      join(root, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { moduleResolution: "not-a-real-value" } }),
+    );
+    expect(() => makeTsResolver(root)).toThrow(/invalid tsconfig|fail-closed/i);
   });
 });

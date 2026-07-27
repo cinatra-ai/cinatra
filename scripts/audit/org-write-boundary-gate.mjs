@@ -651,7 +651,31 @@ export function extractR4Rules(registryText) {
 export function makeTsResolver(repoRoot = REPO_ROOT) {
   const configPath = join(repoRoot, "tsconfig.json");
   const configFile = ts.readConfigFile(configPath, ts.sys.readFile);
+  // Fail-closed on a missing/unreadable/malformed tsconfig. A swallowed error
+  // here yields default options with NO `paths`, so every aliased specifier
+  // resolves to null and its OPAQUE-access edges (namespace / bare / dynamic /
+  // require) are silently skipped — the gate would go green for the wrong
+  // reason. Surface both TS error channels, exactly as main() already fails
+  // closed on an unreadable registry.
+  if (configFile.error) {
+    throw new Error(
+      `org-write-boundary-gate: cannot read ${configPath} (fail-closed) — ${ts.flattenDiagnosticMessageText(configFile.error.messageText, " ")}`,
+    );
+  }
   const parsed = ts.parseJsonConfigFileContent(configFile.config, ts.sys, repoRoot);
+  // TS18002 (empty files list) / TS18003 (no inputs found) describe the compile
+  // FILE LIST, not module resolution — irrelevant to a resolver that never
+  // compiles. Any OTHER diagnostic (bad `extends`, invalid `paths`, a bogus
+  // option value, …) means the compilerOptions the resolver trusts are
+  // unreliable → fail closed.
+  const optionErrors = parsed.errors.filter((d) => d.code !== 18002 && d.code !== 18003);
+  if (optionErrors.length > 0) {
+    throw new Error(
+      `org-write-boundary-gate: invalid tsconfig (fail-closed) — ${optionErrors
+        .map((d) => ts.flattenDiagnosticMessageText(d.messageText, " "))
+        .join("; ")}`,
+    );
+  }
   const options = parsed.options;
   const cache = ts.createModuleResolutionCache(repoRoot, (x) => x, options);
   return (specifier, containingFileAbs) => {
