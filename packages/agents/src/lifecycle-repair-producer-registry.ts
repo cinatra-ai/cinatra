@@ -1,73 +1,83 @@
 // ---------------------------------------------------------------------------
 // lifecycle-repair-producer-registry (cinatra#2047 defect D-1, epic #2037 S2)
 //
-// The CORE-side half of the "which producers declare a lifecycle" question.
+// The CORE-side half of "which productions are repair-capable".
 //
 // Epic #2037 compiles an agent's lifecycle declaration onto
-// `agent_templates.lifecycle_config` from its manifest, trigger-style
-// (the compile helpers in `@/lib/lifecycle/lifecycle-policy`). That covers every
-// producer whose repair
-// implementation ships INSIDE its own package. It does NOT cover the epic's
-// FIRST repairing producer: S2 (#2040) put the blog pipeline's repair
-// implementation in CORE (`blog-post-repair-producer.ts`) precisely because the
-// materializer + the repair-response ingress are core modules — so the blog
-// agent's own package cannot honestly declare a capability core implements.
+// `agent_templates.lifecycle_config` from its own manifest, trigger-style (the
+// compile helpers in `@/lib/lifecycle/lifecycle-policy`). That covers every
+// producer whose repair implementation ships INSIDE its own package. It does NOT
+// cover the epic's FIRST repairing producer: S2 (#2040) put that repair
+// implementation in CORE (`blog-post-repair-producer`) precisely because the
+// materializer and the repair-response ingress are core modules — so no package
+// manifest can honestly declare a capability core implements.
 //
-// This registry is that declaration: a small, explicit, core-owned overlay of
-// `{ packageName -> CompiledManifestLifecycle }` projected onto the matching
-// installed templates (`lifecycle-config-projection`). It is NOT a parallel
-// storage path — the projected value lands on the SAME
-// `agent_templates.lifecycle_config` column the manifest path writes and the
-// SAME readers (`resolveRepairCapable`, `parseCompiledManifest`) consume.
+// KEYED ON THE PRODUCED ARTIFACT ROLE, NEVER ON A PACKAGE. Core implements the
+// repair for a TYPE of artifact, so the capability belongs to that type, and a
+// role is HOST-NEUTRAL vocabulary (`src/lib/extension-roles.ts`: "a role is not a
+// package name") resolved to its single claimant through the generated manifest
+// bindings at call time. Core therefore never names an extension instance — the
+// `core-extension-instance-coupling-ban` gate's zero floor holds — and ANY agent
+// that produces the role's artifact type becomes repair-capable, not one blessed
+// package.
 //
-// Precedence: the core overlay wins per KEY over a manifest declaration for the
-// same package (a core-implemented capability is not overridable by a manifest
-// edit); every other manifest key carries forward (`mergeLifecycle`).
-// ---------------------------------------------------------------------------
-
 // PURE by construction: no db, no `server-only`, no artifact/materializer graph.
 // The blog producer module (which DOES pull the materializer graph) re-exports
 // `BLOG_POST_LIFECYCLE` from here, so the declaration and the implementation stay
-// one source of truth without the projection having to load the implementation.
+// one source of truth without a consumer having to load the implementation.
+// ---------------------------------------------------------------------------
 
 import type { CompiledManifestLifecycle } from "@/lib/lifecycle/lifecycle-policy";
 
+/** The produced-artifact ROLES core itself implements a typed repair for. A role
+ * here means: "when a reviewer requests changes on an artifact of this role's
+ * type, core can carry out the repair", so the `changes_requested` route
+ * dispatches to the producer instead of escalating to a human.
+ *
+ * Host-neutral role names only. A producer that implements its OWN repair
+ * declares it in its manifest (`cinatra.lifecycle.repairCapable`) instead — this
+ * list is exclusively for capabilities CORE implements. */
+export const CORE_REPAIRABLE_PRODUCED_ROLES = ["artifact-blog-post-body"] as const;
+
+export type CoreRepairableProducedRole = (typeof CORE_REPAIRABLE_PRODUCED_ROLES)[number];
+
 /** The compiled lifecycle declaration for the blog pipeline — it PRODUCES blog
- * post body artifacts and CAN REPAIR them, so the `changes_requested` route
- * dispatches the repair to the producer instead of escalating to a human. */
+ * post body artifacts and CAN REPAIR them. `producedTypes` carries the ROLE, the
+ * same host-neutral vocabulary the blog materializer resolves through. */
 export const BLOG_POST_LIFECYCLE: CompiledManifestLifecycle = {
   producedTypes: ["artifact-blog-post-body"],
   repairCapable: true,
 };
 
-export interface CoreLifecycleProducer {
-  /** The installed package whose `agent_templates` row receives the overlay. */
-  packageName: string;
-  /** The lifecycle declaration core makes on that producer's behalf. */
-  lifecycle: CompiledManifestLifecycle;
-  /** Why core (not the package manifest) carries this declaration. */
-  rationale: string;
-}
-
 /**
- * Every producer whose lifecycle declaration is core-owned. Deliberately a short,
- * explicit list — a package that can declare its own lifecycle MUST do so through
- * its manifest (`cinatra.lifecycle`), not by being added here.
+ * Does CORE implement the typed repair for this artifact's object type?
+ *
+ * `objectType` is a namespaced object-type id (`@scope/package:local-id`); the
+ * claimant of each core-repairable ROLE is resolved by the caller-supplied
+ * `resolveRole` (the generated role bindings), so the only literal in core is the
+ * role name. An unresolvable role (a reduced universe shipping no claimant) is
+ * simply not repair-capable — the route then escalates, the correct fail-soft
+ * answer.
+ *
+ * PURE: no I/O, fully injectable, so the capability is unit-testable without the
+ * generated bindings.
  */
-export const CORE_LIFECYCLE_PRODUCERS: readonly CoreLifecycleProducer[] = [
-  {
-    packageName: "@cinatra-ai/blog-draft-writer-agent",
-    lifecycle: BLOG_POST_LIFECYCLE,
-    rationale:
-      "epic #2037 S2's first repairing producer — the repair implementation " +
-      "(blog-post-repair-producer) and the body materializer are CORE modules, so " +
-      "the declaration is core-owned.",
-  },
-] as const;
-
-/** The core overlay for one package, or null when the package is not core-declared. */
-export function coreLifecycleForPackage(packageName: string | null | undefined): CompiledManifestLifecycle | null {
-  if (!packageName) return null;
-  const hit = CORE_LIFECYCLE_PRODUCERS.find((p) => p.packageName === packageName);
-  return hit ? hit.lifecycle : null;
+export function coreRepairsObjectType(
+  objectType: string | null | undefined,
+  resolveRole: (role: CoreRepairableProducedRole) => string | undefined,
+): boolean {
+  if (!objectType) return false;
+  const colon = objectType.indexOf(":");
+  if (colon <= 0) return false;
+  const claimingPackage = objectType.slice(0, colon);
+  for (const role of CORE_REPAIRABLE_PRODUCED_ROLES) {
+    let claimant: string | undefined;
+    try {
+      claimant = resolveRole(role);
+    } catch {
+      claimant = undefined;
+    }
+    if (claimant && claimant === claimingPackage) return true;
+  }
+  return false;
 }

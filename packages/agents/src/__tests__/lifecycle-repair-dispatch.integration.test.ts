@@ -13,9 +13,10 @@
  *
  * These cases drive the SHIPPED entry points against a real Postgres:
  *
- *   SEED      — the core lifecycle projection lands `repairCapable:true` on the
- *               blog producer's template row; idempotent; MERGE-not-clear.
- *   REPRO-1   — the acceptance repro with the seeding in place: the SAME
+ *   CORE CAP  — an artifact whose type CORE implements the repair for routes to
+ *               the producer with no row declaration at all (the capability is
+ *               keyed on the produced ROLE, never on a package).
+ *   REPRO-1   — the acceptance repro with the declaration in place: the SAME
  *               `recordReviewSurfaceChangesRequested` call now yields
  *               `route=producer_repair, status=requested` (not human_escalation).
  *   DELIVER   — the dispatch drain delivers the typed request on a deterministic
@@ -45,7 +46,9 @@ const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2047-d1";
-const BLOG_PKG = "@cinatra-ai/blog-draft-writer-agent";
+/** The MANIFEST-declared form of the capability (an extension that implements its
+ * own repair) — the shape `installAgentFromPackage` now compiles onto the row. */
+const MANIFEST_REPAIR_CAPABLE = JSON.stringify({ repairCapable: true });
 
 let outboxStore: typeof import("../lifecycle-produced-outbox-store");
 let gateStore: typeof import("../artifact-review-gate-store");
@@ -53,13 +56,12 @@ let orch: typeof import("../lifecycle-review-orchestration-store");
 let repairStore: typeof import("../lifecycle-repair-store");
 let crStore: typeof import("../lifecycle-review-changes-requested-store");
 let dispatchStore: typeof import("../lifecycle-repair-dispatch-store");
-let projection: typeof import("../lifecycle-config-projection");
 let verifStore: typeof import("../lifecycle-verification-store");
 let dbMod: typeof import("../db");
-/** The single blog-producer template row. `agent_templates.package_name` is
- * UNIQUE, so the blog package can exist exactly once per schema; every case here
- * shares it and creates its own producing run. */
-let blogTemplateId: string;
+/** The object type of an artifact CORE implements the repair for — derived from
+ * the core-repairable ROLE through the generated role bindings, never a hardcoded
+ * package (mirrors what `resolveCoreRepairCapable` does at runtime). */
+let coreRepairableObjectType: string;
 
 async function pool(text: string, values: unknown[] = []) {
   return dbMod.agentBuilderPool.query(text, values);
@@ -95,7 +97,10 @@ async function seedRun(templateId: string): Promise<string> {
   return runId;
 }
 
-async function produce(over: Partial<ArtifactProducedEvent> = {}): Promise<ArtifactProducedEvent> {
+async function produce(
+  over: Partial<ArtifactProducedEvent> = {},
+  objectType = "document",
+): Promise<ArtifactProducedEvent> {
   const artifactId = over.artifactId ?? `art-${randomUUID()}`;
   const representationRevisionId = over.representationRevisionId ?? `rev-${randomUUID()}`;
   const ev: ArtifactProducedEvent = {
@@ -113,7 +118,7 @@ async function produce(over: Partial<ArtifactProducedEvent> = {}): Promise<Artif
     continuationAddress: null,
     ...over,
   };
-  await insertObject(ev.artifactId, "document", ev.orgId);
+  await insertObject(ev.artifactId, objectType, ev.orgId);
   await outboxStore.emitArtifactProduced(ev, dbMod.db);
   return ev;
 }
@@ -182,11 +187,12 @@ beforeAll(async () => {
   repairStore = await import("../lifecycle-repair-store");
   crStore = await import("../lifecycle-review-changes-requested-store");
   dispatchStore = await import("../lifecycle-repair-dispatch-store");
-  projection = await import("../lifecycle-config-projection");
   verifStore = await import("../lifecycle-verification-store");
   dbMod = await import("../db");
 
-  blogTemplateId = await seedTemplate(BLOG_PKG, null);
+  const { resolveExtensionRole } = await import("@/lib/extension-roles");
+  const claimant = resolveExtensionRole("artifact-blog-post-body");
+  coreRepairableObjectType = `${claimant ?? "@unresolved/role"}:post`;
 }, 90_000);
 
 beforeEach(() => {
@@ -206,38 +212,33 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("cinatra#2047 D-1 — the repair round-trip is reachable for a merged producer", () => {
-  it("SEED: the core projection lands repairCapable on the blog producer's template; idempotent; MERGE-not-clear", async () => {
-    const unrelated = await seedTemplate(`@cinatra-ai/unrelated-${randomUUID()}-agent`, null);
+  it("CORE CAPABILITY: an artifact whose type core implements the repair for routes to the producer with NO row declaration", async () => {
+    // The blog pipeline's repair implementation lives in CORE, so no package
+    // manifest can declare it. Core declares the capability against the produced
+    // artifact ROLE, resolved to its claimant through the generated bindings — so
+    // a template carrying NO `lifecycle_config` at all still routes to the
+    // producer when the artifact under review is one core can repair.
+    const templateId = await seedTemplate(`@cinatra-ai/core-repairable-${randomUUID()}-agent`, null);
+    expect(await templateLifecycleConfig(templateId)).toBeNull();
+    const producerRunId = await seedRun(templateId);
+    const ev = await produce({ producerRunId }, coreRepairableObjectType);
+    await orch.sweepReviewOrchestration({ limit: 50 });
+    const baseTaskId = autoReviewTaskId(ev.eventId);
 
-    // The acceptance state: the blog template carries NO lifecycle declaration.
-    expect(await templateLifecycleConfig(blogTemplateId)).toBeNull();
-
-    const first = await projection.projectCoreLifecycleConfig();
-    expect(first.updated).toBe(1);
-    // The row now declares the capability the repair route keys on.
-    expect(JSON.parse((await templateLifecycleConfig(blogTemplateId))!)).toMatchObject({
-      repairCapable: true,
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId: producerRunId,
+      reviewTaskId: baseTaskId,
+      baseTarget: {
+        artifactId: ev.artifactId,
+        representationRevisionId: ev.representationRevisionId,
+      },
+      currentBaseRevisionId: ev.representationRevisionId,
+      feedback: "tighten the headline",
     });
-    // A package core does not declare is never touched.
-    expect(await templateLifecycleConfig(unrelated)).toBeNull();
-
-    // Idempotent: a second pass writes nothing.
-    const second = await projection.projectCoreLifecycleConfig();
-    expect(second.updated).toBe(0);
-    expect(second.unchanged).toBe(1);
-
-    // MERGE-not-clear: a manifest-declared key survives the projection; the
-    // CORE-declared key wins over a conflicting manifest value.
-    await pool(
-      `UPDATE "${q(TEST_SCHEMA)}"."agent_templates" SET lifecycle_config=$2 WHERE id=$1`,
-      [blogTemplateId, JSON.stringify({ requestedSkips: ["recommendation"], repairCapable: false })],
-    );
-    const third = await projection.projectCoreLifecycleConfig();
-    expect(third.updated).toBe(1);
-    expect(JSON.parse((await templateLifecycleConfig(blogTemplateId))!)).toMatchObject({
-      repairCapable: true,
-      requestedSkips: ["recommendation"],
-    });
+    expect(cr.ok).toBe(true);
+    if (!cr.ok) return;
+    expect(cr.route.kind).toBe("producer_repair");
+    expect((await repairRow(cr.repairId))!.route).toBe("producer_repair");
   });
 
   it("REPRO (unseeded): a producer with NO lifecycle declaration still escalates — exactly the acceptance row", async () => {
@@ -271,14 +272,25 @@ describe.skipIf(!HAS_DB)("cinatra#2047 D-1 — the repair round-trip is reachabl
     expect(row!.route).toBe("human_escalation");
     expect(row!.successor_gate_id).toBeNull();
     expect(row!.successor_artifact_id).toBeNull();
-    // And the dispatch drain never touches a human_escalation row.
-    expect((await dispatchStore.dispatchPendingProducerRepairs()).scanned).toBe(0);
+    // And the dispatch drain never touches a human_escalation row: after a pass,
+    // this repair is untouched (no repair run minted for it).
+    await dispatchStore.dispatchPendingProducerRepairs();
+    expect((await repairRow(cr.repairId))!.status).toBe("escalated");
+    const runs = await pool(`SELECT id FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`, [
+      dispatchStore.repairRunId(cr.repairId),
+    ]);
+    expect(runs.rows.length).toBe(0);
   });
 
   it("REPRO INVERTED + DELIVER + CHAIN: changes_requested to repair to successor gate to verification record", async () => {
-    // A blog producer template whose row carries the CORE-projected declaration.
-    const templateId = blogTemplateId;
-    await projection.projectCoreLifecycleConfig();
+    // A producer whose MANIFEST declares the capability — the ingestion path this
+    // PR opens (`installAgentFromPackage` compiles `cinatra.lifecycle` onto the
+    // row). The artifact type is deliberately NOT one core repairs, so this case
+    // exercises the manifest half in isolation.
+    const templateId = await seedTemplate(
+      `@cinatra-ai/declared-${randomUUID()}-agent`,
+      MANIFEST_REPAIR_CAPABLE,
+    );
     const producerRunId = await seedRun(templateId);
 
     // 1. Produce + auto-gate (the shipped emitters/sweeper).
@@ -420,8 +432,11 @@ describe.skipIf(!HAS_DB)("cinatra#2047 D-1 — the repair round-trip is reachabl
   });
 
   it("ESCALATE: a producer_repair with no resolvable producing run is escalated with a recorded reason (nothing silently drops)", async () => {
-    await projection.projectCoreLifecycleConfig();
-    const producerRunId = await seedRun(blogTemplateId);
+    const templateId = await seedTemplate(
+      `@cinatra-ai/declared-${randomUUID()}-agent`,
+      MANIFEST_REPAIR_CAPABLE,
+    );
+    const producerRunId = await seedRun(templateId);
     const ev = await produce({ producerRunId });
     await orch.sweepReviewOrchestration({ limit: 50 });
     const baseTaskId = autoReviewTaskId(ev.eventId);
@@ -460,8 +475,11 @@ describe.skipIf(!HAS_DB)("cinatra#2047 D-1 — the repair round-trip is reachabl
   });
 
   it("CHECKPOINTED: the delivery is a resume, which this drain does not implement — escalated, never mis-delivered", async () => {
-    await projection.projectCoreLifecycleConfig();
-    const producerRunId = await seedRun(blogTemplateId);
+    const templateId = await seedTemplate(
+      `@cinatra-ai/declared-${randomUUID()}-agent`,
+      MANIFEST_REPAIR_CAPABLE,
+    );
+    const producerRunId = await seedRun(templateId);
     const ev = await produce({ producerRunId, continuationMode: "checkpointed" });
     await orch.sweepReviewOrchestration({ limit: 50 });
     const baseTaskId = autoReviewTaskId(ev.eventId);

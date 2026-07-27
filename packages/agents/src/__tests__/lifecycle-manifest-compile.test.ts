@@ -23,7 +23,11 @@ import {
   serializeLifecycleConfig,
 } from "@/lib/lifecycle/lifecycle-policy";
 import { agentLifecycleDeclarationSchema } from "../verdaccio/package-contract";
-import { BLOG_POST_LIFECYCLE, coreLifecycleForPackage } from "../lifecycle-repair-producer-registry";
+import {
+  BLOG_POST_LIFECYCLE,
+  CORE_REPAIRABLE_PRODUCED_ROLES,
+  coreRepairsObjectType,
+} from "../lifecycle-repair-producer-registry";
 
 describe("cinatra#2047 D-1 — manifest lifecycle declaration schema", () => {
   it("admits a well-formed block", () => {
@@ -95,11 +99,15 @@ describe("cinatra#2047 D-1 — core overlay precedence", () => {
     expect(mergeLifecycle(null, null)).toBeNull();
   });
 
-  it("the blog pipeline is the core-declared first repairing producer", () => {
-    expect(coreLifecycleForPackage("@cinatra-ai/blog-draft-writer-agent")).toEqual(BLOG_POST_LIFECYCLE);
+  it("the blog post body is the core-implemented first repair, declared by ROLE not by package", () => {
     expect(BLOG_POST_LIFECYCLE.repairCapable).toBe(true);
-    expect(coreLifecycleForPackage("@cinatra-ai/some-other-agent")).toBeNull();
-    expect(coreLifecycleForPackage(null)).toBeNull();
+    expect(CORE_REPAIRABLE_PRODUCED_ROLES).toContain("artifact-blog-post-body");
+    // Every entry is a host-neutral role name, never a package name — the
+    // core→extension instance-coupling ban has a zero floor.
+    for (const role of CORE_REPAIRABLE_PRODUCED_ROLES) {
+      expect(role.startsWith("@")).toBe(false);
+      expect(role.includes("/")).toBe(false);
+    }
   });
 });
 
@@ -130,5 +138,34 @@ describe("cinatra#2047 D-1 — persisted JSON-as-text form", () => {
     // `resolveRepairCapable` does `JSON.parse(text).repairCapable === true`.
     const text = serializeLifecycleConfig(BLOG_POST_LIFECYCLE)!;
     expect((JSON.parse(text) as { repairCapable?: unknown }).repairCapable).toBe(true);
+  });
+});
+
+describe("cinatra#2047 D-1 — core repair capability keys on the produced ROLE", () => {
+  /** A stub role registry: the role's claimant package, resolved at call time
+   * exactly as the generated bindings do. */
+  const resolve = (claimant: string | undefined) => () => claimant;
+
+  it("an artifact whose type is claimed by a core-repairable role IS core-repairable", () => {
+    expect(coreRepairsObjectType("@vendor/some-artifact:post", resolve("@vendor/some-artifact"))).toBe(true);
+  });
+
+  it("an artifact from a DIFFERENT claimant is not", () => {
+    expect(coreRepairsObjectType("@vendor/other-artifact:post", resolve("@vendor/some-artifact"))).toBe(false);
+  });
+
+  it("an unresolvable role (reduced universe) is fail-soft, not repair-capable", () => {
+    expect(coreRepairsObjectType("@vendor/some-artifact:post", resolve(undefined))).toBe(false);
+    expect(
+      coreRepairsObjectType("@vendor/some-artifact:post", () => {
+        throw new Error("bindings stale");
+      }),
+    ).toBe(false);
+  });
+
+  it("a non-namespaced / absent object type is not repair-capable", () => {
+    expect(coreRepairsObjectType("document", resolve("@vendor/some-artifact"))).toBe(false);
+    expect(coreRepairsObjectType(null, resolve("@vendor/some-artifact"))).toBe(false);
+    expect(coreRepairsObjectType(":post", resolve("@vendor/some-artifact"))).toBe(false);
   });
 });

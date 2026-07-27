@@ -37,9 +37,14 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
+import { pgSchema, text } from "drizzle-orm/pg-core";
 
 import { db } from "./db";
 import { agentRuns, agentTemplates } from "./schema";
+import {
+  coreRepairsObjectType,
+  type CoreRepairableProducedRole,
+} from "./lifecycle-repair-producer-registry";
 import { readReviewGate } from "./artifact-review-gate-store";
 import { readProducedEvent } from "./lifecycle-produced-outbox-store";
 import {
@@ -91,6 +96,45 @@ export interface RecordReviewSurfaceChangesRequestedInput {
    * a `changes_requested` decision carries the same decider of record an
    * approve/reject does. */
   decidedBy?: string | null;
+}
+
+// A minimal read-only projection of `objects` — the artifact TYPE the core
+// repair capability keys on. Defined LOCALLY (a second pgSchema instance over the
+// SAME app schema), exactly as the orchestration store does for its own context
+// read, so this agents-package store reads `objects.type` without depending on
+// the host objects-store drizzle table.
+const appSchemaRef = pgSchema(process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra");
+const objectsTypeRef = appSchemaRef.table("objects", {
+  id: text("id").primaryKey(),
+  type: text("type").notNull(),
+});
+
+/**
+ * Does CORE implement the repair for the artifact under review (cinatra#2047
+ * D-1)? Core's repair capability is keyed on the produced-artifact ROLE it
+ * implements, never on a package (see `lifecycle-repair-producer-registry`), so
+ * this reads the base artifact's object type and asks the pure predicate,
+ * resolving each role's claimant through the generated role bindings.
+ *
+ * Best-effort + fail-soft in the same direction as the manifest read: an
+ * unreadable artifact, an unresolvable role, or a reduced universe with no
+ * claimant all yield FALSE (route to a human — the safe default).
+ */
+async function resolveCoreRepairCapable(artifactId: string): Promise<boolean> {
+  try {
+    const [row] = await db
+      .select({ type: objectsTypeRef.type })
+      .from(objectsTypeRef)
+      .where(eq(objectsTypeRef.id, artifactId))
+      .limit(1);
+    if (!row?.type) return false;
+    const { resolveExtensionRole } = await import("@/lib/extension-roles");
+    return coreRepairsObjectType(row.type, (role: CoreRepairableProducedRole) =>
+      resolveExtensionRole(role),
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -209,7 +253,13 @@ export async function recordReviewSurfaceChangesRequested(
   const producerRunId = event?.producerRunId ?? gate.runId;
   const producerAgentId = event?.producerAgentId ?? null;
 
-  const repairCapable = await resolveRepairCapable(producerRunId);
+  // A producer is repair-capable when it DECLARES the capability in its compiled
+  // manifest, OR when CORE implements the repair for the artifact type under
+  // review (the first repairing producer's implementation lives in core, so no
+  // package manifest can declare it — cinatra#2047 D-1).
+  const repairCapable =
+    (await resolveRepairCapable(producerRunId)) ||
+    (await resolveCoreRepairCapable(baseTarget.artifactId));
   const lineageId = await resolveLineageId(reviewTaskId);
 
   // A stable idempotency key over the gate + the EXACT feedback: a response-lost
