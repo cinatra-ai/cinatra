@@ -120,3 +120,46 @@ describe("per-function write-site ratchet + R4 seed", () => {
     }
   });
 });
+
+describe("org.delete capability vocab — delete row swap (#1939 wave 3, stage B)", () => {
+  const DELETE_MODULE = "src/lib/organization-delete.ts";
+  const deleteRow = ORG_WRITE_REGISTRY.find(
+    (e) =>
+      e.module === DELETE_MODULE &&
+      e.exportName === "deleteOrganizationReferenceGuarded",
+  )!;
+
+  it("the guarded delete writer demands org.delete, not org.lifecycle", () => {
+    expect(deleteRow).toBeDefined();
+    expect(deleteRow.capability).toBe("org.delete");
+  });
+
+  it("discloses org.lifecycle as the pre-activation transitional demand (Decision 1)", () => {
+    // The transitional fallback lives ONLY here (and in the writer's own
+    // module-private gate helper, stage C) — a reviewed, per-surface disclosure
+    // that the S6 closeout removes.
+    expect(deleteRow.conditionalCapabilities).toEqual(["org.lifecycle"]);
+  });
+
+  it("swaps ONLY the capability — the rest of the delete row is untouched", () => {
+    // importBanned flips in stage C, not here; the delete-furniture taxonomy and
+    // org-axis extractor are unchanged by the vocab stage.
+    expect(deleteRow.importBanned).toBe(false);
+    expect(deleteRow.cascadeOwnership).toBe("app-furniture");
+    expect(deleteRow.storageReferences).toEqual([
+      "organization",
+      "member",
+      "invitation",
+      "session",
+      "dashboards",
+    ]);
+  });
+
+  it("the archive lease-snapshot writer KEEPS org.lifecycle (only the delete row swapped)", () => {
+    const leaseRow = ORG_WRITE_REGISTRY.find(
+      (e) => e.exportName === "snapshotLeasesQuery",
+    )!;
+    expect(leaseRow.capability).toBe("org.lifecycle");
+    expect(leaseRow.conditionalCapabilities).toBeUndefined();
+  });
+});
