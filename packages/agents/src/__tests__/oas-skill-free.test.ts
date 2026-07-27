@@ -5,32 +5,37 @@ import path from "node:path";
 /**
  * HARD INVARIANT regression test.
  *
- * Agent methodology lives in the catalog
- * (`@cinatra-ai/skills` upsertSkill / `skills_installed_resolve_for_agent`),
- * never in `oas.json`. Inline reviewer `system` bodies belong
- * out of `extensions/cinatra-ai/{security,code,planner}-reviewer-agent/cinatra/oas.json`
- * into per-agent catalog skills. This test gates the invariant so any future
- * regression that puts methodology back into an OAS (or smuggles a `skillIds`
- * field into one) fails CI.
+ * SURVIVING invariant (universal): an OAS never carries a `skillIds` /
+ * `skill_ids` field. Skills are resolved by the skills layer, never named in
+ * `oas.json`.
+ *
+ * REVERSED invariant (cinatra#2090, epic #2086 S3): this file used to also
+ * require the four creation agents to keep a THIN OAS, because their
+ * methodology had been lifted into per-agent catalog skills that shipped
+ * INSIDE the agent extension. The separation rule reverses that direction by
+ * ratified decision: a non-skill extension must not ship a skill bundle at
+ * all, and an agent's own self-instruction is configuration, not a shareable
+ * skill — so it belongs in the agent's OAS prompt. The scoped check below is
+ * inverted accordingly: those four agents must now carry their methodology
+ * INLINE, so a regression that pushes it back into a bundled SKILL.md fails
+ * here (and, independently, at the skill-packaging gate's
+ * SKILL.md-in-a-non-skill-package ban).
  */
 
 const REPO_ROOT = path.resolve(__dirname, "../../../..");
 const EXT_DIR = path.join(REPO_ROOT, "extensions/cinatra-ai");
-const SYSTEM_USER_THRESHOLD = 400; // chars — thin dispatchers fit; methodology bodies do not.
+const SYSTEM_USER_THRESHOLD = 400; // chars — a thin dispatcher fits; a methodology body does not.
 
 /**
- * Scope of the length-check (system/user ≤ THRESHOLD): the 4 agents whose
- * methodology was lifted out of OAS into per-agent catalog
- * skills. Existing non-creation agents carry legitimate domain prose in OAS
- * (e.g. email-recipient-selection ~2.8k, web-scrape ~700) that is NOT
- * catalog-managed methodology; migrating those is out of scope for this
- * invariant. Future extensions of the catalog-skill pattern to additional
- * agents MUST add them to this set (anti-regression).
+ * The 4 creation agents whose methodology cinatra#2090 folded OUT of a bundled
+ * skill and INTO their own OAS prompt configuration. Each must carry a
+ * methodology-sized `system` body; a thin OAS here means the methodology went
+ * back into a bundle (the exact regression S3 removed).
  *
- * The `no-skillIds anywhere` check below applies to EVERY OAS — no scoping —
- * because the no-skills-in-OAS rule is universal.
+ * The `no-skillIds anywhere` check applies to EVERY OAS — no scoping —
+ * because that rule is universal.
  */
-const CREATION_AGENTS_WITH_THIN_OAS = new Set([
+const CREATION_AGENTS_WITH_INLINE_METHODOLOGY = new Set([
   "security-reviewer-agent",
   "code-reviewer-agent",
   "planner-agent",
@@ -94,23 +99,22 @@ describe("OAS skill-free invariant", () => {
     });
   }
 
-  // SCOPED length check — applies only to the 4 creation agents migrated to
-  // per-agent catalog skills. Future extensions of the pattern
-  // MUST add agents to CREATION_AGENTS_WITH_THIN_OAS.
+  // SCOPED inline-methodology check (cinatra#2090) — applies only to the 4
+  // creation agents whose bundled methodology skill was folded into their OAS.
   const creationOasFiles = broadOasFiles.filter((e) =>
-    CREATION_AGENTS_WITH_THIN_OAS.has(e.dir),
+    CREATION_AGENTS_WITH_INLINE_METHODOLOGY.has(e.dir),
   );
 
-  it("SCOPED thin-OAS scan: all 4 creation agents are present", () => {
-    expect(creationOasFiles.length).toBe(CREATION_AGENTS_WITH_THIN_OAS.size);
+  it("SCOPED inline-methodology scan: all 4 creation agents are present", () => {
+    expect(creationOasFiles.length).toBe(CREATION_AGENTS_WITH_INLINE_METHODOLOGY.size);
   });
 
-  it("SCOPED thin-OAS scan: whitelist anti-creep — at most 8 creation agents", () => {
-    expect(CREATION_AGENTS_WITH_THIN_OAS.size).toBeLessThanOrEqual(8);
+  it("SCOPED inline-methodology scan: whitelist anti-creep — at most 8 creation agents", () => {
+    expect(CREATION_AGENTS_WITH_INLINE_METHODOLOGY.size).toBeLessThanOrEqual(8);
   });
 
   for (const { dir, oas } of creationOasFiles) {
-    it(`${dir}: no methodology-shaped string field anywhere in OAS exceeds ${SYSTEM_USER_THRESHOLD} chars (thin dispatchers only; methodology in catalog skill)`, () => {
+    it(`${dir}: carries its methodology INLINE in OAS (> ${SYSTEM_USER_THRESHOLD} chars) — not in a bundled skill`, () => {
       // Walk the entire OAS tree
       // (depth-limited) and flag any string-valued field whose KEY signals
       // methodology embedding (`system` / `user` / `prompt_template` /
@@ -166,16 +170,15 @@ describe("OAS skill-free invariant", () => {
         }
       }
       walk(oas, "", 0);
-      // Diagnose offenders inline for fast debugging on regression.
-      if (offenders.length > 0) {
-        const summary = offenders
-          .map((o) => `  ${o.path} (${o.len} chars): "${o.head}…"`)
-          .join("\n");
+      if (offenders.length === 0) {
         throw new Error(
-          `OAS skill-free invariant: ${dir} has methodology-shaped string > ${SYSTEM_USER_THRESHOLD} chars:\n${summary}`,
+          `OAS inline-methodology invariant: ${dir} has NO methodology-shaped string > ` +
+            `${SYSTEM_USER_THRESHOLD} chars. Since cinatra#2090 an agent's own ` +
+            `self-instruction lives in its OAS prompt, not in a bundled SKILL.md — a thin ` +
+            `OAS here means the methodology moved back into a skill bundle.`,
         );
       }
-      expect(offenders).toHaveLength(0);
+      expect(offenders.length).toBeGreaterThan(0);
     });
   }
 });
