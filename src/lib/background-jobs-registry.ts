@@ -36,6 +36,14 @@ import type { ExtensionAutoUpdateRunSummary } from "@/lib/extension-auto-update"
 // derivation VALUE is boot-registered through its slot below, never imported
 // here (see the slot block for the route-graph-ratchet rationale).
 import type { UnboundDerivationSweepSummary } from "@/lib/artifacts/unbound-output-derivation";
+// TYPE-ONLY (erased at compile; NOT a route-graph edge — same rationale as the
+// TYPE-ONLY imports above; the static gate marks erased type clauses
+// isValueEdge:false). The job-authority metadata (cinatra#1941) speaks the raw
+// kernel capability vocabulary plus a type-only reference to the existing
+// system-write purposes; it coins NO capabilities and NO purposes. R1 permits
+// the bare package-root specifier.
+import type { OrgWriteCapability } from "@cinatra-ai/org-write-kernel";
+import type { SystemWritePurpose } from "@/lib/org-write/authority";
 
 // ---------------------------------------------------------------------------
 // Extension-store GC reaper slot (cinatra#796).
@@ -273,10 +281,143 @@ function resolveLifecycleReviewRunner(): LifecycleReviewRunner | null {
 // "<name>"` error the switch's `default` arm produced.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// System authority — typed job-authority metadata (cinatra#1941, Stage S1).
+//
+// `JobHandler` gains ONE required field `authority: JobAuthorityMetadata` — a
+// discriminated union on `authorityKind` with per-kind `?: never` fences so
+// illegal field combinations do NOT typecheck. Because the registry below is a
+// TOTAL `Record<BackgroundJobName, JobHandler>`, this turns "classify every
+// background job" into a compile error to omit: adding a job name without a
+// classified entry, or an entry without `authority`, fails tsc. A runtime guard
+// in `dispatchRegisteredJob` re-checks the record before `handle` (fail-closed
+// against `as JobHandler` casts, test doubles, and JS-level drift).
+//
+// The metadata is FULLY DECLARATIVE — no embedded functions: the
+// S2 dispatcher/mint-seam interpret the bindings via one tested helper
+// (`readPayloadField(payload, field): string | null`), so the record stays
+// serializable, snapshot-pinnable, and side-effect-free. S1 lands only the type
+// + the 32 classifications + the runtime refusal; the dispatcher frame, the mint
+// seam, and the denial-audit emission arrive in S2 (this file gains ZERO new
+// value/dynamic import edges — the two new imports above are TYPE-ONLY/erased).
+// ---------------------------------------------------------------------------
+
 /**
- * A registered background-job handler: a dispatch-time payload schema plus the
- * handler body. The dispatcher validates `job.data` with `payloadSchema`
- * before invoking `handle`.
+ * Where the org axis of this job's writes is bound. The six source variants are
+ * the full binding vocabulary; each `JobAuthorityMetadata` arm inlines only the
+ * subset legal for its kind (the type fences). Consumed declaratively by the S2
+ * dispatcher/seam — never executed as code.
+ */
+export type JobOrgBinding =
+  /** Org id is a top-level validated payload field (all current payload-bound
+   *  jobs are flat: "orgId"). A runtime null/non-string means the payload
+   *  cannot bind an org (e.g. TWENTY_POINTER_REPAIR's nullable orgId) — day-1
+   *  advisory (the write path already fails closed downstream); the mint seam
+   *  treats it as "no org" and refuses. */
+  | { readonly source: "payload"; readonly field: string }
+  /** Org id = the dispatch-time `__actorContext.organizationId` (the blog
+   *  family: writeStore tags rows from getActorContext(), store.ts:785). */
+  | { readonly source: "actor-context" }
+  /** Org id comes from the run row named by `runExtractor` — never the payload. */
+  | { readonly source: "run-row" }
+  /** Multi-org sweep: orgs discovered per row/enumeration inside the cycle
+   *  (e.g. listOrgProvidersWithExpiredCache, outbox rows' org_id). `note`
+   *  names the enumeration for auditability. */
+  | { readonly source: "row-sweep"; readonly note: string }
+  /** Org via an FK parent, no org column of its own (agent_run_pm_links →
+   *  agent_runs.org_id). `via` names the join path. */
+  | { readonly source: "parent-ref"; readonly via: string }
+  /** A platform-policy operation over org-ATTRIBUTED rows with NO per-org
+   *  scoping (global-cutoff deletes; zero-ref cache reaps whose predicate
+   *  spans all orgs). Legal ONLY on the non-mintable maintenance arm below —
+   *  a job shaped like this can never hold org authority. */
+  | { readonly source: "global-org-attributed"; readonly note: string };
+
+/**
+ * The per-job classification. Five arms (four `authorityKind` values;
+ * `system-maintenance` splits into a mintable and a non-mintable arm). The
+ * `?: never` fences make illegal field combinations unrepresentable.
+ */
+export type JobAuthorityMetadata =
+  | {
+      /** The job performs NO org-scoped DB writes (platform/instance tables,
+       *  user-scoped tables, filesystem, or external HTTP only). */
+      readonly authorityKind: "no-org-write";
+      readonly actorSource: "none" | "enqueuer-attribution-only";
+      readonly orgExtractor?: never;
+      readonly runExtractor?: never;
+      readonly capabilities?: never;
+      readonly allowedPurposes?: never;
+    }
+  | {
+      /** The job writes org data AS the actor that caused it (enqueuer's
+       *  __actorContext, or principal ids carried in the validated payload). */
+      readonly authorityKind: "originating-actor";
+      readonly actorSource: "enqueuer-actor-context" | "payload-principal";
+      readonly orgExtractor:
+        | { readonly source: "payload"; readonly field: string }
+        | { readonly source: "actor-context" };
+      readonly runExtractor?: never;
+      /** Non-empty by construction. */
+      readonly capabilities: readonly [OrgWriteCapability, ...OrgWriteCapability[]];
+      readonly allowedPurposes?: never; // actor jobs never mint SYSTEM authority
+    }
+  | {
+      /** Pre-#1941 run-lifecycle jobs: authority anchors on the agent_runs row
+       *  (the #1939-wave-2 "agent-run-dispatch" purpose mints, R5-fenced).
+       *  Classified here; dispatch logic stays #1940's (semantic-coupling rule:
+       *  metadata only, zero dispatch-semantics change). */
+      readonly authorityKind: "grandfathered-run";
+      readonly actorSource: "run-row";
+      readonly orgExtractor: { readonly source: "run-row" };
+      /** Top-level payload field carrying the run id ("runId" for both jobs). */
+      readonly runExtractor: { readonly source: "payload"; readonly field: string };
+      readonly capabilities: readonly [OrgWriteCapability, ...OrgWriteCapability[]];
+      /** Purposes this job's context may mint (documents today's wave-2
+       *  wrapper use: ["agent-run-dispatch"]). */
+      readonly allowedPurposes: readonly SystemWritePurpose[];
+    }
+  | {
+      /** MINTABLE maintenance: writes org-keyed data under the dispatcher-
+       *  minted system identity; may mint kernel authority through the S2 seam,
+       *  bounded by capabilities AND allowedPurposes. */
+      readonly authorityKind: "system-maintenance";
+      readonly actorSource: "dispatcher-system-identity";
+      readonly orgExtractor:
+        | { readonly source: "payload"; readonly field: string }
+        | { readonly source: "row-sweep"; readonly note: string }
+        | { readonly source: "parent-ref"; readonly via: string };
+      readonly runExtractor?: { readonly source: "payload"; readonly field: string };
+      readonly capabilities: readonly [OrgWriteCapability, ...OrgWriteCapability[]];
+      /** Purpose allowlist for the S2 seam; ABSENT ⇒ the seam refuses EVERY
+       *  purpose (fail-closed default — wave-3 opens each job as a reviewed
+       *  design event). PRESENT ⇒ mint allowed iff purpose ∈ list AND its
+       *  grants ⊆ capabilities (both checks). References EXISTING purposes
+       *  only — this design coins none (wave-3 owns vocabulary). */
+      readonly allowedPurposes?: readonly SystemWritePurpose[];
+    }
+  | {
+      /** NON-MINTABLE maintenance (a distinct arm from the mintable one): touches
+       *  org-attributed/org-keyed rows that sit OUTSIDE the kernel write
+       *  universe (caches, run-owned link furniture, the audit sink itself).
+       *  `capabilities` is the LITERAL empty tuple and `allowedPurposes` is
+       *  forbidden — this arm can never mint anything, by type. */
+      readonly authorityKind: "system-maintenance";
+      readonly actorSource: "dispatcher-system-identity";
+      readonly orgExtractor:
+        | { readonly source: "row-sweep"; readonly note: string }
+        | { readonly source: "parent-ref"; readonly via: string }
+        | { readonly source: "global-org-attributed"; readonly note: string };
+      readonly runExtractor?: never;
+      readonly capabilities: readonly [];
+      readonly allowedPurposes?: never;
+    };
+
+/**
+ * A registered background-job handler: a dispatch-time payload schema, its
+ * cinatra#1941 authority classification, plus the handler body. The dispatcher
+ * validates `job.data` with `payloadSchema` and re-checks `authority` before
+ * invoking `handle`.
  */
 export type JobHandler = {
   /**
@@ -289,11 +430,151 @@ export type JobHandler = {
    */
   payloadSchema: z.ZodTypeAny;
   /**
+   * REQUIRED (cinatra#1941). The system-authority classification of this job.
+   * Because `BACKGROUND_JOB_REGISTRY` is a total `Record<BackgroundJobName,
+   * JobHandler>`, omitting this — or the whole entry — is a COMPILE error;
+   * `dispatchRegisteredJob` re-checks it at runtime (fail-closed against casts,
+   * mocks, and JS drift). S1 consumes it only via the runtime validator; the S2
+   * dispatcher (frame decision) and mint seam (capability check) read it next.
+   */
+  authority: JobAuthorityMetadata;
+  /**
    * Handler body. Receives the BullMQ `Job` and the normalised string jobId
    * (`String(job.id ?? "")`) — identical inputs to the old switch arms.
    */
   handle: (job: Job, jobId: string) => Promise<void>;
 };
+
+/**
+ * Thrown by `dispatchRegisteredJob` when a handler's `authority` metadata is
+ * missing or structurally invalid at runtime — the fail-closed backstop behind
+ * the compile-time total-record guarantee (D6). A future job name added without
+ * a classified entry fails to compile; this catches a hole smuggled past tsc by
+ * an `as JobHandler` cast, a test double, or module drift.
+ */
+export class UnclassifiedBackgroundJobError extends Error {
+  constructor(public readonly jobName: string) {
+    super(
+      `Refusing to dispatch unclassified background job "${jobName}": missing or invalid authority metadata (cinatra#1941).`,
+    );
+    this.name = "UnclassifiedBackgroundJobError";
+  }
+}
+
+/** A single org binding is well-formed (source + its required companion field).
+ *  A type predicate so it doubles as the vocabulary's runtime shape check. */
+function isValidJobOrgBinding(value: unknown): value is JobOrgBinding {
+  if (typeof value !== "object" || value === null) return false;
+  const b = value as {
+    source?: unknown;
+    field?: unknown;
+    note?: unknown;
+    via?: unknown;
+  };
+  switch (b.source) {
+    case "payload":
+      return typeof b.field === "string";
+    case "actor-context":
+    case "run-row":
+      return true;
+    case "row-sweep":
+    case "global-org-attributed":
+      return typeof b.note === "string";
+    case "parent-ref":
+      return typeof b.via === "string";
+    default:
+      return false;
+  }
+}
+
+/** True iff `value` is a non-empty tuple of strings (the mintable-arm
+ *  `capabilities` shape; content is validated by the type at compile time). */
+function isNonEmptyCapabilityTuple(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0 && value.every((c) => typeof c === "string");
+}
+
+/**
+ * Pure, dependency-free runtime validator mirroring the `JobAuthorityMetadata`
+ * type fences (kind-discriminated field-presence + shape checks). Used by
+ * `dispatchRegisteredJob` (fail-closed) and by the classification tests
+ * (completeness proof over the real registry). NO imports, NO side effects.
+ */
+export function isValidJobAuthorityMetadata(
+  value: unknown,
+): value is JobAuthorityMetadata {
+  if (typeof value !== "object" || value === null) return false;
+  const m = value as {
+    authorityKind?: unknown;
+    actorSource?: unknown;
+    orgExtractor?: unknown;
+    runExtractor?: unknown;
+    capabilities?: unknown;
+    allowedPurposes?: unknown;
+  };
+  const runExtractorOk = (x: unknown): boolean =>
+    typeof x === "object" &&
+    x !== null &&
+    (x as { source?: unknown }).source === "payload" &&
+    typeof (x as { field?: unknown }).field === "string";
+  const purposesOk = (x: unknown): boolean =>
+    Array.isArray(x) && x.every((p) => typeof p === "string");
+
+  switch (m.authorityKind) {
+    case "no-org-write":
+      return (
+        (m.actorSource === "none" || m.actorSource === "enqueuer-attribution-only") &&
+        m.orgExtractor === undefined &&
+        m.runExtractor === undefined &&
+        m.capabilities === undefined &&
+        m.allowedPurposes === undefined
+      );
+    case "originating-actor":
+      return (
+        (m.actorSource === "enqueuer-actor-context" ||
+          m.actorSource === "payload-principal") &&
+        isValidJobOrgBinding(m.orgExtractor) &&
+        ((m.orgExtractor as JobOrgBinding).source === "payload" ||
+          (m.orgExtractor as JobOrgBinding).source === "actor-context") &&
+        m.runExtractor === undefined &&
+        isNonEmptyCapabilityTuple(m.capabilities) &&
+        m.allowedPurposes === undefined
+      );
+    case "grandfathered-run":
+      return (
+        m.actorSource === "run-row" &&
+        isValidJobOrgBinding(m.orgExtractor) &&
+        (m.orgExtractor as JobOrgBinding).source === "run-row" &&
+        runExtractorOk(m.runExtractor) &&
+        isNonEmptyCapabilityTuple(m.capabilities) &&
+        purposesOk(m.allowedPurposes)
+      );
+    case "system-maintenance": {
+      if (m.actorSource !== "dispatcher-system-identity") return false;
+      if (!isValidJobOrgBinding(m.orgExtractor)) return false;
+      const src = (m.orgExtractor as JobOrgBinding).source;
+      // Non-mintable arm: empty capabilities, no runExtractor, no purposes;
+      // exclusive access to the `global-org-attributed` binding.
+      if (Array.isArray(m.capabilities) && m.capabilities.length === 0) {
+        return (
+          (src === "row-sweep" || src === "parent-ref" || src === "global-org-attributed") &&
+          m.runExtractor === undefined &&
+          m.allowedPurposes === undefined
+        );
+      }
+      // Mintable arm: non-empty capabilities; org via payload/row-sweep/
+      // parent-ref (never global-org-attributed); optional payload runExtractor
+      // and optional purpose allowlist.
+      return (
+        isNonEmptyCapabilityTuple(m.capabilities) &&
+        (src === "payload" || src === "row-sweep" || src === "parent-ref") &&
+        (m.runExtractor === undefined || runExtractorOk(m.runExtractor)) &&
+        (m.allowedPurposes === undefined || purposesOk(m.allowedPurposes))
+      );
+    }
+    default:
+      return false;
+  }
+}
 
 /**
  * Shared recurring-loop helper (cinatra#304; error policy hardened cinatra#849).
@@ -485,6 +766,15 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
   // `BLOG_POST_IDEA_GENERATION` and `BLOG_POST_DRAFT_GENERATION` handlers are
   // retired; replacements live in `blog-pipeline-agent`.
   [BACKGROUND_JOB_NAMES.BLOG_POST_IMAGE_REGENERATION]: {
+    // Writes org-tagged `objects` rows via writeStore → upsertObjectAndEnqueue;
+    // org = the re-established enqueuer `__actorContext.organizationId`
+    // (blog/store.ts:785). External: Gemini image HTTP.
+    authority: {
+      authorityKind: "originating-actor",
+      actorSource: "enqueuer-actor-context",
+      orgExtractor: { source: "actor-context" },
+      capabilities: ["content.write"],
+    },
     payloadSchema: z
       .object({
         projectId: z.string(),
@@ -501,6 +791,14 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.BLOG_POST_WORDPRESS_DRAFT_CREATION]: {
+    // Same writeStore path (store.ts:903,:1291) + notification; external
+    // WordPress REST. Org from the enqueuer actor context (store.ts:785).
+    authority: {
+      authorityKind: "originating-actor",
+      actorSource: "enqueuer-actor-context",
+      orgExtractor: { source: "actor-context" },
+      capabilities: ["content.write"],
+    },
     payloadSchema: z
       .object({
         projectId: z.string(),
@@ -519,6 +817,14 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
   // `BLOG_POST_LINKEDIN_DRAFT_CREATION` handler is retired; the replacement is
   // `blog-linkedin-writer-agent` `linkedin_flow`.
   [BACKGROUND_JOB_NAMES.BLOG_POST_LINKEDIN_DRAFT_PUBLISH]: {
+    // Same writeStore path (store.ts:968,:1540); external LinkedIn publish.
+    // Org from the enqueuer actor context (store.ts:785).
+    authority: {
+      authorityKind: "originating-actor",
+      actorSource: "enqueuer-actor-context",
+      orgExtractor: { source: "actor-context" },
+      capabilities: ["content.write"],
+    },
     payloadSchema: z
       .object({
         projectId: z.string(),
@@ -535,6 +841,8 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.LITELLM_PRICING_SYNC]: {
+    // Upserts platform `model_pricing` only (no org column). External GitHub fetch.
+    authority: { authorityKind: "no-org-write", actorSource: "none" },
     payloadSchema: looseObject(),
     async handle(job) {
       const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -554,6 +862,21 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.AUDIT_RETENTION_ENFORCE]: {
+    // `enforceAuditRetention` deletes `audit_events` older than the retention
+    // window — table HAS organization_id (nullable) but the delete is a GLOBAL
+    // cutoff with no org predicate (audit.ts:385 `.delete(auditEvents).where(lt(
+    // createdAt, cutoff))`): a platform retention policy over org-attributed rows.
+    // NOT no-org-write (deletes org-attributed data); NOT content.write (the audit
+    // sink is deliberately OUTSIDE the kernel write universe) → non-mintable/[].
+    authority: {
+      authorityKind: "system-maintenance",
+      actorSource: "dispatcher-system-identity",
+      orgExtractor: {
+        source: "global-org-attributed",
+        note: "global-cutoff delete, no per-org predicate",
+      },
+      capabilities: [],
+    },
     payloadSchema: looseObject(),
     async handle(job) {
       // Delete authz audit events older than the configured retention window,
@@ -577,6 +900,19 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.GRAPHITI_PROJECTION_REPAIR]: {
+    // Binding drain + projection cycle write org-scoped `semantic_assertion` /
+    // reconcile-queue / `graphiti_*` + `objects` projection columns
+    // (asserted_by='system'); `objects` is a kernel org-axis table → content.write.
+    // No actor today; org per swept row. External: Graphiti add/delete.
+    authority: {
+      authorityKind: "system-maintenance",
+      actorSource: "dispatcher-system-identity",
+      orgExtractor: {
+        source: "row-sweep",
+        note: "binding queue rows' org_id + outbox/object rows' org_id",
+      },
+      capabilities: ["content.write"],
+    },
     payloadSchema: looseObject(),
     async handle(job) {
       // Outbox repair worker. Re-delays the SINGLE canonical loop job each
@@ -661,6 +997,16 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.TWENTY_POINTER_REPAIR]: {
+    // Payload {orgId,userId} IS the actor material: the connector synthesizes
+    // the actor from payload ids and `objects_save` refuses orgId=null on entry
+    // (already fail-closed downstream). Writes org-scoped `objects` pointer rows.
+    // Nullable payload orgId is day-1 advisory (see JobOrgBinding "payload").
+    authority: {
+      authorityKind: "originating-actor",
+      actorSource: "payload-principal",
+      orgExtractor: { source: "payload", field: "orgId" },
+      capabilities: ["content.write"],
+    },
     payloadSchema: z
       .object({
         type: z.enum(["account", "contact"]),
@@ -706,6 +1052,9 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.REGISTRY_POLL]: {
+    // CAS-updates the singleton `metadata` row's registries slot
+    // (instance-identity-store.ts); external registry HTTP + Nango. No org axis.
+    authority: { authorityKind: "no-org-write", actorSource: "none" },
     payloadSchema: z
       .object({
         requestId: z.string(),
@@ -730,6 +1079,18 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION]: {
+    // Run-lifecycle worker; mints `mintAgentRunExecutionAuthority(run.orgId)`
+    // (packages/agents/src/execution.ts) — the #1939-wave-2 "agent-run-dispatch"
+    // purpose (grants run.execute+run.complete), R5-fenced. Metadata only;
+    // dispatch semantics stay #1940's territory (semantic-coupling rule).
+    authority: {
+      authorityKind: "grandfathered-run",
+      actorSource: "run-row",
+      orgExtractor: { source: "run-row" },
+      runExtractor: { source: "payload", field: "runId" },
+      capabilities: ["run.execute", "run.complete"],
+      allowedPurposes: ["agent-run-dispatch"],
+    },
     payloadSchema: z
       .object({
         runId: z.string(),
@@ -777,6 +1138,17 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
   // transitions armed -> queued, and enqueues AGENT_BUILDER_EXECUTION.
   // Recurring triggers create a fresh pending run + arm immediate.
   [BACKGROUND_JOB_NAMES.AGENT_RUN_TRIGGER_RELEASE]: {
+    // Trigger release: gate open + armed→queued + enqueue execution; mints
+    // `mintTriggerReleaseAuthority(sourceRun.orgId)` (trigger-release-job.ts) —
+    // same "agent-run-dispatch" purpose + fence as AGENT_BUILDER_EXECUTION.
+    authority: {
+      authorityKind: "grandfathered-run",
+      actorSource: "run-row",
+      orgExtractor: { source: "run-row" },
+      runExtractor: { source: "payload", field: "runId" },
+      capabilities: ["run.execute", "run.complete"],
+      allowedPurposes: ["agent-run-dispatch"],
+    },
     payloadSchema: z.object({ runId: z.string() }).passthrough(),
     async handle(job, jobId) {
       const { runAgentRunTriggerReleaseJob } = await import("@cinatra-ai/agents");
@@ -784,6 +1156,9 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.SKILL_PREFILL_GENERATION]: {
+    // Upserts the instance-wide `skills` catalog row payload (database.ts:615).
+    // LLM HTTP. No org axis.
+    authority: { authorityKind: "no-org-write", actorSource: "none" },
     payloadSchema: z.object({ skillIds: z.array(z.string()) }).passthrough(),
     async handle(job, jobId) {
       const { runSkillPrefillGenerationJob } = await import("@cinatra-ai/skills");
@@ -795,6 +1170,13 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
   // so re-deliveries / enqueue-site retries are safe. Lazy-imported to keep
   // the LLM + skills graph out of the registry's module load.
   [BACKGROUND_JOB_NAMES.CHAT_CAPTURE_DETECTION]: {
+    // USER-scoped, never org-scoped: `chat_capture_turns` has owner_user_id NOT
+    // NULL and NO org column (chat-capture-schema.ts:49-62); writes the owner's
+    // personal skill. Actor material = payload ownerUserId (attribution only).
+    authority: {
+      authorityKind: "no-org-write",
+      actorSource: "enqueuer-attribution-only",
+    },
     payloadSchema: z
       .object({ threadId: z.string(), turnId: z.string(), ownerUserId: z.string() })
       .passthrough(),
@@ -807,6 +1189,13 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.SKILL_MATCH_INLINE_FOR_SKILL]: {
+    // `skill_matches` is instance-level: PK (agent_id, skill_id), no org column
+    // (drizzle-store.ts:3037-3060); catalog axes are instance-wide. OpenAI per
+    // pair. Enqueue may carry HumanUser attribution for notifications only.
+    authority: {
+      authorityKind: "no-org-write",
+      actorSource: "enqueuer-attribution-only",
+    },
     payloadSchema: z
       .object({ skillId: z.string(), jobStartedAt: z.string() })
       .passthrough(),
@@ -826,6 +1215,11 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.SKILL_MATCH_INLINE_FOR_AGENT]: {
+    // Same store/scoping as inline-for-skill (jobs.ts:235-304); instance-level.
+    authority: {
+      authorityKind: "no-org-write",
+      actorSource: "enqueuer-attribution-only",
+    },
     payloadSchema: z
       .object({ agentId: z.string(), jobStartedAt: z.string() })
       .passthrough(),
@@ -841,6 +1235,12 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.SKILL_MATCH_BATCH_SUBMIT]: {
+    // skill_matches + platform `skill_match_batch_runs` (drizzle-store.ts:3067-
+    // 3080; submitted_by is a principal id, not an org). OpenAI Batch submit.
+    authority: {
+      authorityKind: "no-org-write",
+      actorSource: "enqueuer-attribution-only",
+    },
     payloadSchema: z.object({ submittedBy: z.string() }).passthrough(),
     async handle(job) {
       // Submit a single OpenAI batch covering all current pairs.
@@ -851,6 +1251,9 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.SKILL_MATCH_BATCH_POLL]: {
+    // Batch-run status + result upserts, same platform tables. OpenAI Batch
+    // retrieve/download. No org axis, no enqueuer attribution.
+    authority: { authorityKind: "no-org-write", actorSource: "none" },
     payloadSchema: z
       .object({ batchId: z.string(), jobStartedAt: z.string() })
       .passthrough(),
@@ -866,6 +1269,9 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.SKILL_MATCH_DRIFT_SAMPLE]: {
+    // Re-evals into skill_matches + drift-flag KV in the global `metadata` table
+    // (single instance-wide rows; drift-sampler.ts:797-833). No org axis.
+    authority: { authorityKind: "no-org-write", actorSource: "none" },
     payloadSchema: looseObject(),
     async handle() {
       // Production drift sampler.
@@ -897,6 +1303,9 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.SKILL_MATCH_MAINTENANCE_TICK]: {
+    // Orphan GC deletes skill_matches rows + tombstone/manual-stale KV (metadata
+    // table). Enqueues re-evals. Instance-level; no org axis.
+    authority: { authorityKind: "no-org-write", actorSource: "none" },
     payloadSchema: looseObject(),
     async handle() {
       // Matching-maintenance tick (cinatra #1365): tombstoned orphan GC then the
@@ -930,6 +1339,19 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.ARTIFACT_PROVIDER_CACHE_EVICT]: {
+    // Deletes expired `artifact_provider_cache` rows per (orgId, provider) pair;
+    // org ids from the listOrgProvidersWithExpiredCache sweep. The cache table is
+    // OUTSIDE the kernel write universe → caps [] (non-mintable). External:
+    // provider deleteFile HTTP.
+    authority: {
+      authorityKind: "system-maintenance",
+      actorSource: "dispatcher-system-identity",
+      orgExtractor: {
+        source: "row-sweep",
+        note: "listOrgProvidersWithExpiredCache DISTINCT org_id",
+      },
+      capabilities: [],
+    },
     payloadSchema: looseObject(),
     async handle(job) {
       // Sweep expired rows from the provider-file ref cache.
@@ -1020,6 +1442,9 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.EXTENSION_STORE_GC_REAP]: {
+    // NO DB writes at all — filesystem-only content-addressed store deletes with
+    // lease/active TOCTOU re-checks (extension-store-reaper.ts).
+    authority: { authorityKind: "no-org-write", actorSource: "none" },
     payloadSchema: looseObject(),
     async handle(job) {
       // Explicit content-addressed extension-store GC reaper (cinatra#796).
@@ -1067,6 +1492,13 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.EXTENSION_AUTO_UPDATE]: {
+    // Structurally bounded to NULL-org installed_extensions rows:
+    // selectAutoUpdateCandidates skips organizationId!=null
+    // (extension-auto-update.ts). Self-stamps a `platform_admin` system Actor
+    // (finding F2) — RECORDED here as no-org-write so any future expansion to
+    // org rows becomes a visible reclassification event (pinned by an S1
+    // invariant test). Audit rows via logAuditEventStrict.
+    authority: { authorityKind: "no-org-write", actorSource: "none" },
     payloadSchema: looseObject(),
     async handle(job) {
       // In-app extension auto-update loop (cinatra#1042). The cycle itself
@@ -1115,6 +1547,19 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.ENVIRONMENT_LAYER_GC_REAP]: {
+    // Reaps zero-reference `environment_layers` rows (instance-shared AND
+    // org-partitioned partitions) under advisory lock + fenced NOT EXISTS; the
+    // zero-ref predicate spans ALL orgs' references. Org-keyed cache outside the
+    // kernel universe → caps [] (non-mintable). `docker rmi` after commit.
+    authority: {
+      authorityKind: "system-maintenance",
+      actorSource: "dispatcher-system-identity",
+      orgExtractor: {
+        source: "global-org-attributed",
+        note: "zero-ref predicate spans ALL orgs' references; layer rows carry a partition axis, not per-org scoping",
+      },
+      capabilities: [],
+    },
     payloadSchema: looseObject(),
     async handle(job) {
       // L1 environment-layer retention GC reaper (exec-plane S3 A3,
@@ -1153,6 +1598,17 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.ARTIFACT_MATCH_RUN]: {
+    // One-shot per artifact revision; payload orgId required (handler skips
+    // malformed). Writes org-scoped `semantic_assertion` + `objects` version bump
+    // + `graphiti_projection_outbox` (raw org-scoped SQL, no authority). Builds a
+    // System ActorContext for the LLM call ONLY — the payload org is the write
+    // authority, not the enqueuer. allowedPurposes absent ⇒ seam deny-all til w3.
+    authority: {
+      authorityKind: "system-maintenance",
+      actorSource: "dispatcher-system-identity",
+      orgExtractor: { source: "payload", field: "orgId" },
+      capabilities: ["content.write"],
+    },
     payloadSchema: z
       .object({
         orgId: z.string().optional(),
@@ -1201,6 +1657,17 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.UNBOUND_OUTPUT_DERIVE]: {
+    // Post-terminal derivation for one run: payload {runId, orgId} both required.
+    // Writes org-scoped `agent_run_output_derivations` + artifacts + advisory
+    // notifications. Run is TERMINAL, so verified-run authority cannot exist — a
+    // system write anchored on the payload org. allowedPurposes absent (deny-all).
+    authority: {
+      authorityKind: "system-maintenance",
+      actorSource: "dispatcher-system-identity",
+      orgExtractor: { source: "payload", field: "orgId" },
+      runExtractor: { source: "payload", field: "runId" },
+      capabilities: ["content.write"],
+    },
     payloadSchema: z
       .object({
         runId: z.string().optional(),
@@ -1239,6 +1706,17 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.UNBOUND_OUTPUT_DERIVE_SWEEP]: {
+    // Reconciliation sweep over the same outbox: drains pending / reclaims
+    // expired leases; per-row org from the outbox row (`run_id, org_id`).
+    authority: {
+      authorityKind: "system-maintenance",
+      actorSource: "dispatcher-system-identity",
+      orgExtractor: {
+        source: "row-sweep",
+        note: "agent_run_output_derivations rows' org_id",
+      },
+      capabilities: ["content.write"],
+    },
     payloadSchema: looseObject(),
     async handle(job) {
       // ~5-minute reconciliation sweep over the unbound-output outbox
@@ -1275,6 +1753,20 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.ARTIFACT_REVIEW_RESUME_DELIVERY]: {
+    // Drains `artifact_review_resume_outbox` intents (no org_id column; org from
+    // the run row) and advances `agent_runs` via handleWayflowTaskState + external
+    // A2A. TODAY mints `mintAgentRunExecutionAuthority(run.orgId)` per intent
+    // (artifact-review-resume-delivery.ts:2,:227 — finding F1: an R5 consumer the
+    // gate's prefilter misses; S2 legitimizes it). caps = exactly the
+    // "agent-run-dispatch" grants, so today's mint stays inside the ceiling — the
+    // ONE sweep job whose ceiling includes run caps.
+    authority: {
+      authorityKind: "system-maintenance",
+      actorSource: "dispatcher-system-identity",
+      orgExtractor: { source: "row-sweep", note: "intent rows → run rows' orgId" },
+      capabilities: ["run.execute", "run.complete"],
+      allowedPurposes: ["agent-run-dispatch"],
+    },
     payloadSchema: looseObject(),
     async handle(job) {
       // ~30-second drain of the artifact-review resume outbox (cinatra#1796).
@@ -1313,6 +1805,19 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.LIFECYCLE_REVIEW_ORCHESTRATION]: {
+    // Fence-gated drain of produced-events into policy-matched review gates:
+    // writes org-scoped `artifact_review_gates` (org_id NOT NULL) via
+    // emitArtifactReviewGate, marks `artifact_produced_outbox` processed, parks
+    // checkpoints. No actor, no mint today — direct Drizzle scoped by row orgId.
+    authority: {
+      authorityKind: "system-maintenance",
+      actorSource: "dispatcher-system-identity",
+      orgExtractor: {
+        source: "row-sweep",
+        note: "artifact_produced_outbox rows' orgId",
+      },
+      capabilities: ["content.write"],
+    },
     payloadSchema: looseObject(),
     async handle(job) {
       // ~30-second drain of the ArtifactProduced outbox into policy-matched
@@ -1350,6 +1855,17 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.LIFECYCLE_GATE_MAINTENANCE]: {
+    // Same store's maintain(): reject tombstones SOFT-DELETE org-scoped `objects`
+    // (+ graphiti delete outbox + change_set) via buildSoftDeleteObjectQuery with
+    // actorKind:"system" — the code notes its cross-tenant guard is INERT in a
+    // frameless worker (exactly the hole the dispatcher-minted System frame
+    // closes); CAS-expires due auto-gates; releases parks. Org per disposition row.
+    authority: {
+      authorityKind: "system-maintenance",
+      actorSource: "dispatcher-system-identity",
+      orgExtractor: { source: "row-sweep", note: "disposition/gate rows' orgId" },
+      capabilities: ["content.write"],
+    },
     payloadSchema: looseObject(),
     async handle(job) {
       // ~60-second lifecycle gate-maintenance drain (cinatra#2039, epic #2037 S1):
@@ -1390,6 +1906,14 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.MARKETPLACE_CATALOG_SYNC]: {
+    // Primary effect is external HTTP (marketplace POST + Verdaccio reads); the
+    // ONLY local write is `extension_update_read_model` upsert — package_name-
+    // keyed, NO org_id. Single-package admin-Approve enqueue carries HumanUser
+    // attribution.
+    authority: {
+      authorityKind: "no-org-write",
+      actorSource: "enqueuer-attribution-only",
+    },
     payloadSchema: z
       .object({
         packageName: z.string().optional(),
@@ -1490,6 +2014,12 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.VENDOR_APPLICATION_STATE_RECONCILE]: {
+    // The namespace-reservation applied→approved flip happens REMOTELY
+    // (marketplace-side ability); the only LOCAL write is the `instance_identity`
+    // singleton row in `cinatra.metadata` (repair-stuck flag) — instance-level,
+    // no org axis in this instance's DB. The manifest governs THIS instance's
+    // writers, so the remote flip does not make this org-writing.
+    authority: { authorityKind: "no-org-write", actorSource: "none" },
     payloadSchema: looseObject(),
     async handle(job) {
       // 5-minute sweep that drives `vendor_application_complete_recovery` for
@@ -1533,6 +2063,20 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.PM_SCHEDULE_RECONCILE]: {
+    // Outbound-repair sweep re-projecting local trigger state to the external PM
+    // provider. Local writes = `agent_run_pm_links` bookkeeping (synced_at/
+    // sync_error) — table has NO org_id column (PK run_id) but rows are run-owned
+    // org furniture reachable only through the org-owned agent_runs parent →
+    // parent-ref, caps [] (outside the kernel write universe; may mint nothing).
+    authority: {
+      authorityKind: "system-maintenance",
+      actorSource: "dispatcher-system-identity",
+      orgExtractor: {
+        source: "parent-ref",
+        via: "agent_run_pm_links.run_id → agent_runs.org_id",
+      },
+      capabilities: [],
+    },
     payloadSchema: looseObject(),
     async handle(job) {
       // ~10-minute OUTBOUND-REPAIR sweep over agent_run_pm_links rows that
@@ -1570,6 +2114,10 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
   },
   [BACKGROUND_JOB_NAMES.WEBHOOK_OUTBOUND_DELIVERY]: {
+    // Delivers outbound webhooks (external HTTP); durable failure →
+    // `webhook_outbound_dead_letter` — (event_kind, message_id)-keyed, NO org_id
+    // column; secrets scrubbed, payload stored as digest only.
+    authority: { authorityKind: "no-org-write", actorSource: "none" },
     payloadSchema: z
       .object({
         assistantUserId: z.string().optional(),
@@ -1780,6 +2328,22 @@ export async function dispatchRegisteredJob(job: Job, jobId: string): Promise<vo
   const handler = BACKGROUND_JOB_REGISTRY[name];
   if (!handler) {
     throw new Error(`Unsupported background job "${job.name}".`);
+  }
+  // cinatra#1941 (D6) — fail closed on an unclassified/malformed authority
+  // record BEFORE any handler work. The total `Record<BackgroundJobName,
+  // JobHandler>` makes this a COMPILE error; this runtime re-check guards holes
+  // smuggled past tsc (an `as JobHandler` cast, a test double, or JS drift).
+  //
+  // S1 = console.error + throw ONLY: the registry gains ZERO new import edges of
+  // any kind (route-graph doctrine — the locked dev-perf routes reach this
+  // module). S2's slot runtime additionally emits the denied-audit row
+  // (operation "background-job.unclassified") via the globalThis frame slot, so
+  // audit emission never adds an import edge here — not even a dynamic one.
+  if (!handler.authority || !isValidJobAuthorityMetadata(handler.authority)) {
+    console.error(
+      `[background-jobs] refusing to dispatch "${job.name}": missing or invalid authority metadata (cinatra#1941).`,
+    );
+    throw new UnclassifiedBackgroundJobError(job.name);
   }
   const parsed = handler.payloadSchema.safeParse(job.data ?? {});
   if (!parsed.success) {
