@@ -93,12 +93,64 @@ WHERE rep.id = $1 AND rep.artifact_id = $2 AND rep.org_id = $3
     -- binding) keeps serving ONLY through its content snapshot above
     -- (cinatra#1430 claimant-isolation/redaction preserved), never its
     -- latest representation.
+    --
+    -- ...EXCEPT a representation THIS HOST'S ARTIFACT WRITER authored
+    -- (cinatra#2047 OBS-1). A4's not-claimed guard was written when the A3
+    -- writer minted NO binding, so "pack-typed AND claimed" could only mean a
+    -- TYPED-DATA row — a row with no bytes of its own, whose only legitimate
+    -- content is the policy-keyed object_content_snapshots representation #1430
+    -- mints from objects.data (that IS the claimant-isolation/redaction surface:
+    -- one claimant must not serve another claimant's snapshot of the SAME row
+    -- data). cinatra#1868 then made createSemanticArtifact compose the binding
+    -- reconcile into Tx2, so a genuine FILE artifact written on an org that
+    -- HOLDS the pack's claim now carries an eligible binding too — and this
+    -- guard stranded it: serve -> null, review target "revision-not-member",
+    -- typed changes-request BLOCKED on a tombstoned-base witness (the #2047
+    -- re-acceptance repro).
+    --
+    -- The admission is keyed to WRITER PROVENANCE OF THE EXACT REPRESENTATION,
+    -- never to caller-supplied data. SCOPE, stated exactly: the predicate admits
+    -- representations authored by createSemanticArtifact — the artifact write
+    -- CHOKE POINT the lifecycle contract names and every materializer calls. That
+    -- writer emits the 'create' artifact_audit row carrying this
+    -- representation_revision_id inside its held-lock Tx2, atomically with the
+    -- representation it describes; the table is append-only and NO objects/MCP
+    -- write path, route, extension DB port, migration or trigger can reach it
+    -- (verified in the codex round on this lane). It is a TRUST-BOUNDARY witness,
+    -- not a DB-enforced one: trusted server code or direct SQL could mint it, the
+    -- same trust boundary every server-only store already sits behind.
+    --
+    -- (An objects.data marker such as data.artifactType would NOT do:
+    -- objects_save/objects_update merge caller-supplied fields into objects.data,
+    -- so a claimed typed-DATA row could forge it and serve unredacted row content
+    -- — the codex round caught exactly that; the forgery control in
+    -- claimed-production-write-serve-review-2047.integration.test.ts pins it.)
+    --
+    -- Such a representation has NO snapshot policy to bypass: its bytes ARE its
+    -- authored content, not a rendering of the mutable object row, so admitting it
+    -- neither reads objects.data as content nor crosses a claimant boundary. A
+    -- typed-DATA row keeps the strict snapshot-only path unchanged.
+    --
+    -- KNOWN GAP (unchanged behaviour, not a regression of this change): the two
+    -- CMS capture writers (captureCmsContentSnapshot,
+    -- writePinnedPreviewCapture) mint form='file' representations WITHOUT this
+    -- audit row. Their types carry no dedicated claim today, so they take the
+    -- NOT-claimed arm exactly as before; a future claim over either type would
+    -- strand them here just as it strands them now. Closing that needs those
+    -- writers to emit the same provenance row — a separate change.
     OR (
       o.type = ANY($5::text[])
-      AND NOT EXISTS (
-        SELECT 1 FROM "${schema}"."semantic_assertion" bnd
-        WHERE bnd.org_id = rep.org_id AND bnd.artifact_id = rep.artifact_id
-          AND bnd.assertion_basis = 'binding' AND bnd.eligibility = 'eligible'
+      AND (
+        NOT EXISTS (
+          SELECT 1 FROM "${schema}"."semantic_assertion" bnd
+          WHERE bnd.org_id = rep.org_id AND bnd.artifact_id = rep.artifact_id
+            AND bnd.assertion_basis = 'binding' AND bnd.eligibility = 'eligible'
+        )
+        OR EXISTS (
+          SELECT 1 FROM "${schema}"."artifact_audit" aud
+          WHERE aud.org_id = rep.org_id AND aud.artifact_id = rep.artifact_id
+            AND aud.representation_revision_id = rep.id AND aud.action = 'create'
+        )
       )
     )
   )

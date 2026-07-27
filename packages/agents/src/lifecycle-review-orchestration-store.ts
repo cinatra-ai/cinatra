@@ -89,6 +89,7 @@ import {
   resolveOpenBatchEpoch,
   listOpenBatchEpochs,
   readRepair,
+  type RepairRow,
 } from "./lifecycle-repair-store";
 import { dispatchPendingProducerRepairs, repairIdFromRunId } from "./lifecycle-repair-dispatch-store";
 import type {
@@ -391,10 +392,22 @@ type RepairRunProductionClaim =
   /** The repair landed and pinned THIS production in its successor gate. */
   | "successor-gated";
 
-async function classifyRepairRunProduction(row: ProducedEventRow): Promise<RepairRunProductionClaim> {
-  const repairId = repairIdFromRunId(row.producerRunId);
-  if (!repairId) return "not-claimed";
-  const repair = await readRepair(repairId);
+/** The repair (if any) whose DELIVERY minted this run. Read once per production by
+ * the sweep — `claimForMember` is then pure over it, so a 1000-member production
+ * costs one repair read instead of one per member (the exported single-event path
+ * re-reads it for its own defensive classification, so a lone surviving member
+ * costs two). Null for an ordinary producing run. */
+async function repairForRun(producerRunId: string | null): Promise<RepairRow | null> {
+  const repairId = repairIdFromRunId(producerRunId);
+  if (!repairId) return null;
+  return readRepair(repairId);
+}
+
+/** PURE claim of one production against its run's repair row. */
+function claimForMember(
+  repair: RepairRow | null,
+  row: { artifactId: string; representationRevisionId: string },
+): RepairRunProductionClaim {
   if (!repair) return "not-claimed";
   if (repair.status === "requested" || repair.status === "dispatched") return "awaiting-response";
   if (
@@ -405,6 +418,74 @@ async function classifyRepairRunProduction(row: ProducedEventRow): Promise<Repai
     return "successor-gated";
   }
   return "not-claimed";
+}
+
+async function classifyRepairRunProduction(row: ProducedEventRow): Promise<RepairRunProductionClaim> {
+  return claimForMember(await repairForRun(row.producerRunId), row);
+}
+
+/**
+ * Apply the repair-run claim to the pending members of ONE production and return
+ * the members that still need ORDINARY orchestration (cinatra#2047 OBS-2).
+ *
+ * The classification above lived only inside `orchestrateProducedEvent`, i.e. only
+ * on the SINGLE-artifact path. A production with a second pending event routes to
+ * `orchestrateProducedBatch` instead, which never consulted the repair row — so a
+ * landed repair's SUCCESSOR revision was swept into the coalesced batch membership
+ * and pinned into a batch partition gate ALONGSIDE its own successor gate. That
+ * double-gates the successor (#2114: "a repair successor is never double-gated";
+ * #2040: "fresh gates for repaired targets"), and it re-points the successor
+ * event's effect linkage onto the BATCH gate — so `isArtifactEffectHeld` /
+ * `resolveArtifactEffectDisposition` answer through a gate that does NOT own the
+ * revision (held after the successor gate approved; or released by a batch
+ * approval the successor review never made).
+ *
+ * Hoisting the claim ahead of the batch/single routing decision makes it uniform:
+ *   - `awaiting-response` → the member is EXCLUDED and left PENDING, so an open
+ *     repair's productions never enter a sealed membership (the seal is frozen —
+ *     a member sealed early could not be withdrawn once the repair lands).
+ *   - `successor-gated`   → returned in `settle` to be marked processed (never
+ *     gated here; its gate is the successor gate).
+ *   - `not-claimed`       → returned in `eligible` for NORMAL auto-gating, which is
+ *     exactly what #2114 rules for a second artifact on a repair run ("gated like
+ *     any other").
+ * Because the decision runs BEFORE the routing, a lone surviving member takes the
+ * per-event path (a `lifecycle-review:<eventId>` gate) rather than a batch-of-one —
+ * unless an OPEN epoch already exists, whose frozen membership still wins.
+ *
+ * An ALREADY-LINKED member is passed through untouched: it belongs to the
+ * park-safe settle path (`settleAlreadyLinkedEvent`), which both orchestrators run
+ * before any classification — this filter never re-decides a live linkage.
+ *
+ * PERSISTENCE-PURE (it writes nothing; it only tallies onto `summary` and returns
+ * the two lists, the caller performing the `settle` marks), so the sweep can apply
+ * the pre-fix epoch quarantine below before anything is mutated.
+ */
+function partitionRepairClaimedMembers(
+  repair: RepairRow | null,
+  members: ProducedEventRow[],
+  summary: ReviewOrchestrationSweepSummary,
+): { eligible: ProducedEventRow[]; settle: ProducedEventRow[] } {
+  const eligible: ProducedEventRow[] = [];
+  const settle: ProducedEventRow[] = [];
+  for (const row of members) {
+    if (row.continuationAddress) {
+      eligible.push(row);
+      continue;
+    }
+    const claim = claimForMember(repair, row);
+    if (claim === "awaiting-response") {
+      summary.noGate += 1;
+      continue; // left PENDING on purpose — re-evaluated next sweep.
+    }
+    if (claim === "successor-gated") {
+      settle.push(row);
+      summary.noGate += 1;
+      continue;
+    }
+    eligible.push(row);
+  }
+  return { eligible, settle };
 }
 
 export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<OrchestrateOutcome> {
@@ -616,19 +697,45 @@ export async function sweepReviewOrchestration(opts?: {
       // per-production lock, so a concurrent pass can never seal a divergent
       // membership of a still-growing production into overlapping gates.
       await withProductionLock(key.orgId, runId, async () => {
-        const members = await fetchPendingByRun(key.orgId, runId, MAX_BATCH_MEMBERSHIP);
-        if (members.length === 0) return; // raced to processed by a concurrent pass.
-        summary.scanned += members.length;
+        const pending = await fetchPendingByRun(key.orgId, runId, MAX_BATCH_MEMBERSHIP);
+        if (pending.length === 0) return; // raced to processed by a concurrent pass.
+        summary.scanned += pending.length;
+        // REPAIR-RUN claim first (cinatra#2047 OBS-2): a landed repair's successor
+        // is settled and an open repair's productions stay pending, so neither can
+        // reach the coalescing path and be double-gated by a batch partition gate.
+        const repair = await repairForRun(runId);
+        const open = await resolveOpenBatchEpoch(key.orgId, runId);
+        // PRE-FIX EPOCH QUARANTINE (Codex rounds 1–2). FAIL CLOSED on an open epoch
+        // only a pre-fix seal can have produced: touch nothing, leave every member
+        // pending (so an external effect stays HELD), and report it for ops. Same
+        // posture as the partition emit-conflict path below. Unreachable on
+        // `origin/main` — the slice is fenced OFF, so no epoch has ever been sealed
+        // outside a fence-on stack.
+        const quarantine = open ? repairEpochQuarantineReason(open, repair) : null;
+        if (quarantine) {
+          summary.failed += 1;
+          console.error(
+            `[lifecycle-review-orchestration] open batch epoch ${open!.id} for run=${runId} quarantined — ${quarantine} (a pre-fix seal). Production left pending for ops reconciliation.`,
+          );
+          return;
+        }
+        const { eligible, settle } = partitionRepairClaimedMembers(repair, pending, summary);
+        for (const row of settle) await markProducedEventProcessed(row.eventId);
+        if (eligible.length === 0) {
+          // Every pending member was claimed by a repair. A prior epoch may still be
+          // open and fully drained (a crash between the last mark and the close).
+          await closeOpenEpochIfDrained(key.orgId, runId);
+          return;
+        }
         // Route through the DURABLE-epoch batch path when the production is a
         // multi-artifact one OR an OPEN epoch already exists — a SOLE remaining
         // frozen member (a crash left one unlinked) MUST resume via the frozen
         // membership, never via the single-event path (which would emit an
         // overlapping per-event gate instead of the frozen partition gate).
-        const open = await resolveOpenBatchEpoch(key.orgId, runId);
-        if (members.length > 1 || open) {
-          await orchestrateProducedBatch(members, summary);
+        if (eligible.length > 1 || open) {
+          await orchestrateProducedBatch(eligible, summary);
         } else {
-          tallyOutcome(await orchestrateProducedEvent(members[0]), summary);
+          tallyOutcome(await orchestrateProducedEvent(eligible[0]), summary);
         }
       });
     } catch (err) {
@@ -677,7 +784,22 @@ export async function sweepReviewOrchestration(opts?: {
       await withProductionLock(epoch.orgId, epoch.producerRunId, async () => {
         // Re-read under the lock — a concurrent recovery may have just closed it.
         const stillOpen = await resolveOpenBatchEpoch(epoch.orgId, epoch.producerRunId);
-        if (stillOpen && stillOpen.id === epoch.id && (await epochFullyProcessed(epoch.membership))) {
+        if (!stillOpen || stillOpen.id !== epoch.id) return;
+        // A QUARANTINED pre-fix epoch is not closed either (cinatra#2047 OBS-2): a
+        // fully-marked corrupt epoch has NO pending rows, so the pending-keyed drain
+        // above never reaches it — closing it here would silently retire the state
+        // ops has to reconcile.
+        const reason = repairEpochQuarantineReason(
+          stillOpen,
+          await repairForRun(stillOpen.producerRunId),
+        );
+        if (reason) {
+          console.error(
+            `[lifecycle-review-orchestration] open batch epoch ${stillOpen.id} for run=${stillOpen.producerRunId} quarantined — ${reason} (a pre-fix seal). Left open for ops reconciliation.`,
+          );
+          return;
+        }
+        if (await epochFullyProcessed(epoch.membership)) {
           await closeBatchEpoch(epoch.id);
         }
       });
@@ -708,7 +830,15 @@ type FiredCreateGate = { row: ProducedEventRow; plan: Extract<ReviewOrchestratio
 
 /**
  * Coalesce ONE multi-artifact production (a run's several pending revisions) into
- * sealed, partitioned aggregate review gates, per the S0 batch contract:
+ * sealed, partitioned aggregate review gates, per the S0 batch contract.
+ *
+ * PRECONDITION (cinatra#2047 OBS-2): `group` is the REPAIR-CLAIM-FILTERED member
+ * set — `sweepReviewOrchestration` runs `partitionRepairClaimedMembers` first, so a
+ * landed repair's successor (whose gate is the repair successor gate) and an open
+ * repair's productions can never enter a sealed membership. This function must
+ * never be fed a raw pending set.
+ *
+ * The contract, step by step:
  *
  *   1. Per event: resolve context + plan the REVIEW checkpoint. A `no-gate` /
  *      not-classifiable / already-linked event is SETTLED inline (marked processed);
@@ -894,6 +1024,48 @@ async function epochFullyProcessed(membership: Array<{ artifactId: string; repre
       ),
     );
   return (row?.pending ?? 0) === 0;
+}
+
+/**
+ * Why an OPEN batch epoch on a REPAIR RUN must be QUARANTINED rather than driven
+ * (cinatra#2047 OBS-2, Codex rounds 1–2) — or null when the epoch is legitimate.
+ *
+ * `sealBatchEpoch` REUSES an open epoch's FROZEN membership regardless of the
+ * current candidate set, so keeping the successor out of new candidates does not
+ * protect an epoch sealed BEFORE this fix. The frozen set cannot be edited (the
+ * partition gate ids hash it) and it cannot be closed + resealed (an
+ * already-emitted partition gate for a co-member would then be duplicated by the
+ * reseal). So the only handling that can neither emit a gate pinning a successor
+ * nor overlap an existing one is to refuse the production and report it.
+ *
+ * Both quarantined shapes are UNREACHABLE going forward, which is why refusing
+ * them over-quarantines nothing:
+ *   - repair still OPEN → post-fix every member of an open repair run is
+ *     `awaiting-response`, so nothing is ever sealed while a repair is open; a
+ *     frozen membership here is pre-fix, and ANY of its members may yet be named
+ *     the successor.
+ *   - repair LANDED with its successor frozen → post-fix the successor is settled
+ *     before the candidate set is built, so it can never enter a membership.
+ * A landed repair whose successor is NOT frozen is the legitimate sibling batch
+ * (the `STILL BATCHES` case) and is driven normally.
+ */
+function repairEpochQuarantineReason(
+  epoch: { membership: Array<{ artifactId: string; representationRevisionId: string }> },
+  repair: RepairRow | null,
+): string | null {
+  if (!repair) return null;
+  if (repair.status === "requested" || repair.status === "dispatched") {
+    return `the repair is still ${repair.status} — any frozen member may yet be named its successor`;
+  }
+  const pinsSuccessor = epoch.membership.some(
+    (t) =>
+      t.artifactId === repair.successorArtifactId &&
+      t.representationRevisionId === repair.successorRepresentationRevisionId,
+  );
+  if (repair.status === "repaired" && pinsSuccessor) {
+    return "its frozen membership pins the repair's successor revision";
+  }
+  return null;
 }
 
 /** Close a still-open epoch whose members are all processed (a crash between the
