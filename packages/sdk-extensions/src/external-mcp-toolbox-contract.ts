@@ -8,8 +8,8 @@
 // records a slug-keyed loader entry (literal dynamic import of the package's
 // `mcp-toolbox` subpath plus the factory export name); the host resolves the
 // factory WITHOUT importing any extension package by name and calls
-// `buildTools(provider)` when assembling the external MCP server tools for an
-// LLM call.
+// `buildTools(provider, context?)` when assembling the external MCP server
+// tools for an LLM call.
 //
 // The tool shape is a structural mirror of the host's `LlmMcpServerTool`
 // (`@cinatra-ai/llm`) so extensions carry no host-peer dependency; host-side
@@ -76,6 +76,37 @@ export type ExtensionExternalMcpTool = {
 };
 
 /**
+ * Host-built, identity-free build context (cinatra#2019 S4 / trusted-site
+ * mode). Carries WHERE the injection is being assembled and, on run surfaces,
+ * WHICH connector instance the run is pinned to:
+ *
+ *   - `surface` — the host surface assembling this LLM call's injection:
+ *     `"chat"` (workspace assistant chat), `"agent_run"` (agent/workflow run
+ *     surfaces, including the LLM bridge), `"public_site_widget"` (the
+ *     public-site widget principal, which shares the chat injection plumbing
+ *     host-side), `"session"` (other session-scoped assembly).
+ *   - `connectorInstancePin` — present only when the calling surface is bound
+ *     to ONE connector instance (e.g. an agent run pinned to an instance). A
+ *     pure NARROWING filter: a toolbox consuming it may only ever restrict
+ *     emission to the pinned instance, never widen beyond it.
+ *
+ * The context NEVER carries user/org identity — per-instance authority always
+ * derives host-side from the host's ambient trusted actor stores, so there is
+ * nothing here for a caller to forge. Toolboxes that gate emission on this
+ * context MUST treat an ABSENT context as "emit nothing" (fail-closed on
+ * hosts/call sites that predate the widening).
+ *
+ * Scope note: only the manifest-toolbox path (`ExtensionExternalMcpToolbox`)
+ * carries this context. The host's `llm-toolbox` capability path
+ * (`LlmToolboxProvider.build(provider)`) is deliberately NOT widened — those
+ * providers perform no per-instance site injection.
+ */
+export type ExtensionToolboxBuildContext = {
+  surface: "chat" | "agent_run" | "public_site_widget" | "session";
+  connectorInstancePin?: { connectorKey: string; instanceId: string };
+};
+
+/**
  * The module a `create*ExternalMcpToolbox()` factory returns.
  *
  * `buildTools` receives the LLM provider id (widened to `string` so the SDK
@@ -84,7 +115,17 @@ export type ExtensionExternalMcpTool = {
  * configuration/credential state via its host-bound deps. It MUST never throw
  * for ordinary "not configured / not reachable" conditions; returning `[]`
  * is the no-op signal (the host additionally isolates per-extension failures).
+ *
+ * `context` (optional, cinatra#2019 S4) is the host-built
+ * `ExtensionToolboxBuildContext` above. The parameter is OPTIONAL end to end:
+ * a toolbox implemented against the previous one-parameter shape stays
+ * structurally assignable, and a host call site that does not yet pass a
+ * context stays type-valid — a toolbox whose emission policy depends on the
+ * context MUST then fail closed (return `[]`) when it is absent.
  */
 export type ExtensionExternalMcpToolbox = {
-  buildTools: (provider: string) => Promise<ExtensionExternalMcpTool[]>;
+  buildTools: (
+    provider: string,
+    context?: ExtensionToolboxBuildContext,
+  ) => Promise<ExtensionExternalMcpTool[]>;
 };
