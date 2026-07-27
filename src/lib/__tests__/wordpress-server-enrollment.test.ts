@@ -162,13 +162,17 @@ function makeStore(seed: ConnectorInstanceServerRecord[] = []) {
   return { store, rows, calls };
 }
 
+/** The audit-event shape the deps slot carries — spelled on the spy so
+ * `mock.calls` rows are indexable tuples (the audit assertions read c[0]). */
+type EnrollmentAuditEvent = Parameters<NonNullable<WordPressServerEnrollmentDeps["audit"]>>[0];
+
 function makeDeps(
   seed: ConnectorInstanceServerRecord[] = [],
   over: Partial<WordPressServerEnrollmentDeps> = {},
 ) {
   const { store, rows, calls } = makeStore(seed);
   const onServerInvalidated = vi.fn();
-  const audit = vi.fn(async () => {});
+  const audit = vi.fn<(event: EnrollmentAuditEvent) => Promise<void>>(async () => {});
   const deps: WordPressServerEnrollmentDeps = {
     store,
     onServerInvalidated,

@@ -60,10 +60,17 @@ function makeDeps(overrides: Partial<ConnectorInstanceInvokerDeps> = {}) {
   const listEnrolledServers = vi.fn(async () => enrolled);
   const ensureDefaultServerEnrollment = vi.fn(async () => {});
   const recordServerCatalogStatus = vi.fn(async () => {});
-  const resolveInstanceEndpoint = vi.fn(async (_ck: string, _iid: string, serverId?: string) =>
-    serverId && serverId !== CATALOG_DEFAULT_SERVER_ID
-      ? { endpoint: DEDICATED_ENDPOINT, authHeader: "Basic ded" }
-      : { endpoint: DEFAULT_ENDPOINT, authHeader: "Basic def" },
+  // Explicit `| null` return so the retire-race tests can mockImplementation a
+  // null-resolving endpoint (the inferred type would otherwise exclude null).
+  const resolveInstanceEndpoint = vi.fn(
+    async (
+      _ck: string,
+      _iid: string,
+      serverId?: string,
+    ): Promise<{ endpoint: string; authHeader: string } | null> =>
+      serverId && serverId !== CATALOG_DEFAULT_SERVER_ID
+        ? { endpoint: DEDICATED_ENDPOINT, authHeader: "Basic ded" }
+        : { endpoint: DEFAULT_ENDPOINT, authHeader: "Basic def" },
   );
   const loadServerSnapshot = vi.fn(
     async (input: { serverId: string }): Promise<CatalogServerSnapshot> =>
@@ -71,7 +78,16 @@ function makeDeps(overrides: Partial<ConnectorInstanceInvokerDeps> = {}) {
         ? snapshot(CATALOG_DEFAULT_SERVER_ID, ["core/get-site-info", "ewpa/create-post"], NOW, "triad-only")
         : snapshot(DEDICATED_ID, ["vendor_tool"], NOW),
   );
-  const callWireTool = vi.fn(async () => ({ ok: 1 }));
+  // Param-typed so `mock.calls` rows are indexable tuples (the wire-target
+  // assertions read calls[0][0]).
+  const callWireTool = vi.fn<
+    (input: {
+      endpoint: string;
+      authHeader: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    }) => Promise<{ ok: number }>
+  >(async () => ({ ok: 1 }));
   const audit = vi.fn(async () => {});
   const deps: ConnectorInstanceInvokerDeps = {
     requireUse: vi.fn(async () => {}),

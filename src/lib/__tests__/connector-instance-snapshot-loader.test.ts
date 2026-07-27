@@ -37,7 +37,11 @@ function makeDeps(overrides: Partial<ConnectorInstanceSnapshotLoaderDeps> = {}) 
   const readExposureMode = vi.fn(async () => null as "triad-only" | "first-class" | null);
   const recordExposureMode = vi.fn(async () => {});
   const invalidateSnapshot = vi.fn();
-  const audit = vi.fn(async () => {});
+  // Param-typed so `mock.calls` rows are indexable (the flip-audit assertion
+  // reads calls[0][0]).
+  const audit = vi.fn<
+    (event: Parameters<NonNullable<ConnectorInstanceSnapshotLoaderDeps["audit"]>>[0]) => Promise<void>
+  >(async () => {});
   const deps: ConnectorInstanceSnapshotLoaderDeps = {
     callWireTool: callWireTool as unknown as ConnectorInstanceSnapshotLoaderDeps["callWireTool"],
     listTools,
