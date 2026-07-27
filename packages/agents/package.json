@@ -40,6 +40,7 @@
     "./artifact-review-resume-delivery": "./src/artifact-review-resume-delivery.ts",
     "./lifecycle-review-orchestration": "./src/lifecycle-review-orchestration-store.ts",
     "./lifecycle-continuation-park-store": "./src/lifecycle-continuation-park-store.ts",
+    "./lifecycle-policy-store": "./src/lifecycle-policy-store.ts",
     "./lifecycle-review-changes-requested": "./src/lifecycle-review-changes-requested-store.ts",
     "./auditor-snapshot-errors": "./src/auditor-snapshot-errors.ts",
     "./db": "./src/db.ts",
