@@ -17,6 +17,12 @@
 //         — the persisted per-step output array on the run record.
 //   (+) GATES (from C0's listReviewGatesForRun) — woven in as rail steps,
 //       INCLUDING resolved ones as read-only history.
+//   (+) LIFECYCLE POLICY DECISIONS (cinatra#2047 D-5, from
+//       `readLifecycleDecisionsForRun`) — S0's "every fired/skipped decision
+//       recorded on the run timeline". A FIRED decision renders AS its gate (no
+//       second entry); a SKIPPED one gets its own entry carrying the lattice
+//       reason, so a deliberately-skipped review is distinguishable from no
+//       lifecycle machinery running.
 //
 // This module is PURE (no DB, no React) so the merge is fixture-pinned. The
 // contract — ordering, deduplication, precedence — is defined here in code and
@@ -37,6 +43,8 @@
 //   submission at display index i enriches the template step at i — never a new
 //   entry. Transcript milestones (only when they form the spine) key
 //   `message:<id>`. Gate keys `gate:<reviewTaskId>` never collide with steps.
+//   Lifecycle-decision keys `lifecycle:<eventId>` collide with nothing (the
+//   produced-event id is globally unique).
 //
 // ── ORDERING ────────────────────────────────────────────────────────────────
 //   Final sort is (ordinal ASC, key ASC) — a total order, so the rail is
@@ -45,13 +53,25 @@
 //   order; gates ALWAYS trail the derived-step spine, ordered among themselves by
 //   `createdAt` (they are run-keyed, not bound to a policy step number — trailing
 //   placement matches the review surface's synthetic trailing "Review" step).
+//   Lifecycle-decision entries trail the gates, ordered among themselves by
+//   decision time (then event id).
 // ---------------------------------------------------------------------------
 
 /** Which of the merge sources contributed to a rail entry. */
-export type RailSource = "template" | "submission" | "message" | "stepResult" | "gate" | "verification";
+export type RailSource =
+  | "template"
+  | "submission"
+  | "message"
+  | "stepResult"
+  | "gate"
+  | "verification"
+  | "lifecycleDecision";
 
-/** A rail entry's lifecycle state, derived purely from the merged evidence. */
-export type RailStatus = "completed" | "pending" | "resolved" | "upcoming";
+/** A rail entry's lifecycle state, derived purely from the merged evidence.
+ * `skipped` is a TERMINAL, non-blocking state: the lifecycle policy deliberately
+ * did not fire this checkpoint (cinatra#2047 D-5). It is not "upcoming" (nothing
+ * more will happen) and not "completed" (no work was done). */
+export type RailStatus = "completed" | "pending" | "resolved" | "upcoming" | "skipped";
 
 /** One merged rail entry. */
 export interface RunStepRailEntry {
@@ -59,7 +79,7 @@ export interface RunStepRailEntry {
   key: string;
   /** Sort position (see ORDERING). */
   ordinal: number;
-  kind: "step" | "gate" | "verification";
+  kind: "step" | "gate" | "verification" | "lifecycleDecision";
   label: string;
   status: RailStatus;
   /** The union of contributing sources (sorted, stable). */
@@ -81,6 +101,23 @@ export interface RunStepRailEntry {
     reviewTaskId: string;
     /** verified | drifted | unmet — drives the rail badge. */
     outcome: string;
+  };
+  /** Present iff kind==="lifecycleDecision" (cinatra#2047 D-5): a lifecycle POLICY
+   * decision that did NOT open a gate. A fired decision needs no entry of its own —
+   * it IS the gate entry above. */
+  lifecycleDecision?: {
+    eventId: string;
+    artifactId: string;
+    /** fired | skipped | pending — a `fired` decision only reaches the rail as its
+     * own entry when its gate is missing from this run's gate set. */
+    outcome: "fired" | "skipped" | "pending";
+    /** Which lattice layer decided: org-bound | core-default | manifest |
+     * elevation | fail-closed. Drives the rail badge. */
+    decidedBy: string | null;
+    /** The lattice verdict (skip | forbidden | …). */
+    latticeOutcome: string | null;
+    /** The human-readable "why" the timeline shows. */
+    reason: string;
   };
 }
 
@@ -130,6 +167,22 @@ export interface RailVerification {
   outcome: string;
 }
 
+/** A lifecycle POLICY decision for one produced artifact, narrowed to what the
+ * rail reads (cinatra#2047 D-5; from `readLifecycleDecisionsForRun`). */
+export interface RailLifecycleDecision {
+  eventId: string;
+  artifactId: string;
+  outcome: "fired" | "skipped" | "pending";
+  /** The gate a FIRED decision opened (used to suppress a duplicate entry when
+   * that gate is already on the rail). */
+  gateId: string | null;
+  decidedBy: string | null;
+  latticeOutcome: string | null;
+  reason: string;
+  /** Decision time — the ordering key among decisions. ISO string or epoch ms. */
+  createdAt: string | number | Date;
+}
+
 export interface BuildRunStepRailInput {
   templateSteps?: readonly RailTemplateStep[];
   submissions?: readonly RailSubmissionMarker[];
@@ -138,6 +191,12 @@ export interface BuildRunStepRailInput {
   gates?: readonly RailGate[];
   /** Verification records (S4) — woven in RIGHT AFTER the gate each annotates. */
   verifications?: readonly RailVerification[];
+  /** Lifecycle policy decisions (cinatra#2047 D-5) — every fired/skipped decision
+   * the run's produced-event outbox recorded. A FIRED decision whose gate is
+   * already on the rail contributes NO entry (the gate IS its rendering); a
+   * SKIPPED / PENDING one — and a fired one whose gate is missing — becomes its
+   * own entry carrying the lattice reason. */
+  lifecycleDecisions?: readonly RailLifecycleDecision[];
 }
 
 export interface RunStepRail {
@@ -358,6 +417,63 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
     );
   }
 
+  // (+) LIFECYCLE POLICY DECISIONS (cinatra#2047 D-5) — the run timeline's record
+  //     of EVERY fired/skipped lifecycle decision. A FIRED decision whose gate is
+  //     already an entry contributes nothing (that gate IS its rendering, complete
+  //     with its disposition); everything else — a SKIPPED decision (org-forbidden
+  //     / default-skip / manifest-skip), a decision still awaiting orchestration,
+  //     and a fired decision whose gate is absent from this run's gate set — gets
+  //     its own trailing entry carrying the lattice reason. Keys
+  //     `lifecycle:<eventId>` (the event id is globally unique and disjoint from
+  //     every step/gate/verification key), ordered by decision time.
+  const decisions = input.lifecycleDecisions ?? [];
+  if (decisions.length > 0) {
+    const gateIdsOnRail = new Set<string>();
+    for (const { entry } of byKey.values()) {
+      if (entry.gate) gateIdsOnRail.add(entry.gate.gateId);
+    }
+    const projected = decisions
+      .filter((d) => !(d.outcome === "fired" && d.gateId != null && gateIdsOnRail.has(d.gateId)))
+      .sort((a, b) => {
+        const t = gateTime(a.createdAt) - gateTime(b.createdAt);
+        return t !== 0 ? t : a.eventId.localeCompare(b.eventId);
+      });
+    let maxOrd = 0;
+    for (const { entry } of byKey.values()) maxOrd = Math.max(maxOrd, entry.ordinal);
+    projected.forEach((d, i) => {
+      const key = `lifecycle:${d.eventId}`;
+      const seed = () => ({
+        key,
+        ordinal: maxOrd + 1 + i,
+        kind: "lifecycleDecision" as const,
+        label:
+          d.outcome === "skipped"
+            ? "Review skipped"
+            : d.outcome === "pending"
+              ? "Review pending policy"
+              : "Review gate (missing)",
+        // A skipped decision is TERMINAL — it must never become the "you are here"
+        // anchor; a pending one legitimately is.
+        status: (d.outcome === "pending" ? "pending" : "skipped") as RailStatus,
+        lifecycleDecision: {
+          eventId: d.eventId,
+          artifactId: d.artifactId,
+          outcome: d.outcome,
+          decidedBy: d.decidedBy,
+          latticeOutcome: d.latticeOutcome,
+          reason: d.reason,
+        },
+      });
+      upsert(key, seed, "lifecycleDecision", (e) => {
+        // Idempotent re-appearance keeps the latest truth.
+        const s = seed();
+        e.label = s.label;
+        e.status = s.status;
+        e.lifecycleDecision = s.lifecycleDecision;
+      });
+    });
+  }
+
   // Finalize: attach sorted source unions, then total-order sort.
   const entries: RunStepRailEntry[] = [];
   for (const { entry, sources } of byKey.values()) {
@@ -366,6 +482,10 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
   }
   entries.sort((a, b) => (a.ordinal !== b.ordinal ? a.ordinal - b.ordinal : a.key.localeCompare(b.key)));
 
-  const active = entries.find((e) => e.status !== "completed" && e.status !== "resolved");
+  // `skipped` is TERMINAL (the policy decided not to fire) — like completed and
+  // resolved it can never be the "you are here" anchor.
+  const active = entries.find(
+    (e) => e.status !== "completed" && e.status !== "resolved" && e.status !== "skipped",
+  );
   return { entries, activeOrdinal: active ? active.ordinal : null };
 }

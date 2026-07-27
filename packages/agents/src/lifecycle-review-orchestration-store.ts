@@ -44,7 +44,7 @@ import "server-only";
 // on `origin/main` the whole slice is INERT.
 // ---------------------------------------------------------------------------
 
-import { and, asc, eq, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
 import { pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 
 import { db, agentBuilderPool } from "./db";
@@ -895,6 +895,8 @@ export async function isArtifactEffectHeld(input: {
 
   if (!event) return evaluateEffectHold({ event: null, gateStatus: null });
 
+  const policyUnresolvedPark = await hasPolicyUnresolvedPark(eventId);
+
   let gateStatus: "pending" | "resolved" | null = null;
   let gateDisposition: "approve" | "reject" | "changes_requested" | null = null;
   if (event.continuationAddress) {
@@ -918,7 +920,33 @@ export async function isArtifactEffectHeld(input: {
     },
     gateStatus,
     gateDisposition,
+    policyUnresolvedPark,
   });
+}
+
+/**
+ * D-7 (cinatra#2047): does a CHECKPOINTED continuation park protecting this
+ * produced event sit in the terminal `policy_unresolved` state? The park is keyed
+ * on `(run_id, event_id, checkpoint)`; the effect layer cares only about the EVENT
+ * (any run's park over this event blocks this revision's effect), so this is a
+ * single indexed read on `event_id` + `status`. Excludes a park whose protected
+ * effect is `none` — such a park guards no external effect, so it can never block
+ * one (the park's `protected_effect` is the event's own destination class, but the
+ * defensive filter keeps the join honest for hand-built rows).
+ */
+async function hasPolicyUnresolvedPark(eventId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: lifecycleContinuationPark.id })
+    .from(lifecycleContinuationPark)
+    .where(
+      and(
+        eq(lifecycleContinuationPark.eventId, eventId),
+        eq(lifecycleContinuationPark.status, "policy_unresolved"),
+        ne(lifecycleContinuationPark.protectedEffect, "none"),
+      ),
+    )
+    .limit(1);
+  return row != null;
 }
 
 /** The disposition-aware verdict of a captured external effect (cinatra#2043 S5
@@ -930,8 +958,18 @@ export async function isArtifactEffectHeld(input: {
  *   - `approved` — the gate resolved `approve`; the effect is released → APPLY.
  *   - `rejected` — the gate resolved `reject`; the effect is tombstoned → REFUSE.
  *   - `ungated`  — the org lattice permitted the effect without a gate → APPLY.
+ *   - `policy_unresolved` — a checkpointed park TTL-expired with the policy
+ *                 unresolved; the effect is TERMINALLY blocked (cinatra#2047 D-7)
+ *                 until an explicit later policy decision → HOLD/REFUSE, and it is
+ *                 listed on the lifecycle-operations ops surface.
  *   - `unknown`  — no capture / an incoherent resolved state → fail-closed REFUSE. */
-export type ArtifactEffectDisposition = "held" | "approved" | "rejected" | "ungated" | "unknown";
+export type ArtifactEffectDisposition =
+  | "held"
+  | "approved"
+  | "rejected"
+  | "ungated"
+  | "policy_unresolved"
+  | "unknown";
 
 /**
  * Resolve the disposition of an artifact revision's downstream EXTERNAL effect —
@@ -967,6 +1005,12 @@ export async function resolveArtifactEffectDisposition(input: {
   // the connector treats `unknown` as REFUSE (never a silent apply on a phantom).
   if (!event) return { disposition: "unknown", gate: null };
 
+  // D-7 (cinatra#2047): join the continuation-park set. A TTL-expired park's
+  // terminal `policy_unresolved` block is the effect's disposition, ahead of every
+  // gate state — the always-resume path must never apply an effect whose policy
+  // was never resolved.
+  const policyUnresolvedPark = await hasPolicyUnresolvedPark(eventId);
+
   let gateStatus: "pending" | "resolved" | null = null;
   let gateDisposition: "approve" | "reject" | "changes_requested" | null = null;
   let gateRef: { gateId: string; runId: string } | null = null;
@@ -996,7 +1040,15 @@ export async function resolveArtifactEffectDisposition(input: {
     },
     gateStatus,
     gateDisposition,
+    policyUnresolvedPark,
   });
+
+  // TERMINAL policy block (D-7) — reported as its own disposition so a caller can
+  // tell an ops-actionable dead end from an ordinary pending-gate hold. Both refuse
+  // the apply; only this one is listed on the lifecycle-operations surface.
+  if (verdict.policyUnresolved === true) {
+    return { disposition: "policy_unresolved", gate: gateRef };
+  }
 
   // HELD: the gate is pending (or a repair is in flight, `changes_requested`), or
   // an external effect awaits orchestration (fail-closed) — the connector holds.

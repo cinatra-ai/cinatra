@@ -24,6 +24,7 @@ const mockVerification = vi.fn();
 const mockSuggestions = vi.fn();
 const mockParks = vi.fn();
 const mockSkillRevs = vi.fn();
+const mockLifecycleDecisions = vi.fn();
 
 vi.mock("../artifact-review-gate-store", () => ({
   enforceReviewRunAccess: (...a: unknown[]) => mockEnforce(...a),
@@ -39,6 +40,9 @@ vi.mock("../store", () => ({
 vi.mock("../lifecycle-continuation-park-store", () => ({
   readContinuationParksForRun: (...a: unknown[]) => mockParks(...a),
 }));
+vi.mock("../lifecycle-policy-store", () => ({
+  readLifecycleDecisionsForRun: (...a: unknown[]) => mockLifecycleDecisions(...a),
+}));
 vi.mock("@/lib/run-selected-skill-revisions", () => ({
   readRunSelectedSkillRevisions: (...a: unknown[]) => mockSkillRevs(...a),
 }));
@@ -49,6 +53,7 @@ const actor = { actorType: "human", source: "ui", userId: "u1" } as const;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockLifecycleDecisions.mockResolvedValue([]);
 });
 
 describe("readRunDetailAggregate access enforcement (AC-1)", () => {
@@ -62,6 +67,7 @@ describe("readRunDetailAggregate access enforcement (AC-1)", () => {
     expect(mockReadRun).not.toHaveBeenCalled();
     expect(mockListGates).not.toHaveBeenCalled();
     expect(mockParks).not.toHaveBeenCalled();
+    expect(mockLifecycleDecisions).not.toHaveBeenCalled();
     expect(mockSkillRevs).not.toHaveBeenCalled();
   });
 
@@ -77,6 +83,13 @@ describe("readRunDetailAggregate access enforcement (AC-1)", () => {
     mockVerification.mockResolvedValue([{ id: "v1", gateId: "g2", outcome: "verified" }]);
     mockSuggestions.mockResolvedValue([]);
     mockParks.mockResolvedValue([{ id: "p1", runId: "r1", status: "parked" }]);
+    // cinatra#2047 D-5: the aggregate also carries EVERY lifecycle policy decision
+    // the run recorded — including the SKIPPED one, which owns no gate and no park
+    // and so appeared in no other run-scoped read.
+    mockLifecycleDecisions.mockResolvedValue([
+      { eventId: "ev1", artifactId: "a1", outcome: "skipped", gateId: null, decidedBy: "org-bound" },
+      { eventId: "ev2", artifactId: "a2", outcome: "fired", gateId: "g2", decidedBy: "core-default" },
+    ]);
     mockSkillRevs.mockReturnValue([{ id: "s1", runId: "r1", skillId: "sk1", skillRevisionId: "rev1" }]);
 
     const out = await readRunDetailAggregate({ runId: "r1", actor });
@@ -87,6 +100,7 @@ describe("readRunDetailAggregate access enforcement (AC-1)", () => {
     expect(agg.gates.map((g) => g.reviewTaskId)).toEqual(["t1", "t2"]);
     expect(agg.selectedSkillRevisions).toHaveLength(1);
     expect(agg.parkedContinuations).toHaveLength(1);
+    expect(agg.lifecycleDecisions.map((d) => d.outcome)).toEqual(["skipped", "fired"]);
     // per-gate grouping
     expect(agg.advisoryCommentsByGate.g1).toHaveLength(1);
     expect(agg.verificationRecordsByGate.g2).toHaveLength(1);

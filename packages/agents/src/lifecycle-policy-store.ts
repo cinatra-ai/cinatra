@@ -16,15 +16,25 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
+import { pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 
 import { db } from "./db";
-import { lifecyclePolicyRules } from "./schema";
+import {
+  agentRuns,
+  agentTemplates,
+  artifactProducedOutbox,
+  lifecyclePolicyRules,
+} from "./schema";
+import { evaluatePolicy } from "@/lib/lifecycle/lifecycle-policy";
 import type {
+  CompiledManifestLifecycle,
   DestinationClass,
   LifecycleCheckpoint,
   LifecycleOriginKind,
   OrgPolicyRule,
+  PolicyDecision,
+  PolicyOutcome,
   PolicyRuleKey,
 } from "@/lib/lifecycle/lifecycle-policy";
 
@@ -138,4 +148,231 @@ export async function resolveOrgPolicyRule(
     bound: chosen.bound === "required" ? "required" : "forbidden",
     selfApprovalOptIn: chosen.selfApprovalOptIn,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Run-timeline projection of the lifecycle POLICY DECISIONS (cinatra#2047 D-5).
+//
+// S0 (#2038) deliverable: "Every fired/skipped decision recorded on the run
+// timeline." A FIRED decision has always been visible — it opens a gate, and the
+// run rail weaves gates in (#2066 C1). A SKIPPED decision left NOTHING a user can
+// see: the outbox row simply reaches `status='processed'` with a NULL
+// `continuation_address`, so a deliberately-skipped review is indistinguishable
+// from no lifecycle machinery running at all.
+//
+// This reader is the missing run-scoped projection. Its source is the RUN'S OWN
+// OUTBOX ROWS — the durable record of the production:
+//
+//   pending                          → the decision has not been made yet
+//   processed + continuation_address → FIRED (that gate id)
+//   processed + NULL address         → SKIPPED
+//
+// That fired/skipped split is DURABLE and is never second-guessed. The lattice
+// REASON, however, is not persisted anywhere (the outbox has no reason column and
+// this lane ships no migration), so it is RE-DERIVED at read time by re-running
+// the SAME pure evaluator over the SAME axes the orchestration consumer used. A
+// re-derivation can disagree with the durable row when the org bound / manifest
+// changed in the meantime — that disagreement is REPORTED (`reasonStale`), never
+// papered over with a reason that would misattribute the decision.
+//
+// WHY IT LIVES IN THE POLICY STORE. It is a policy read ("what did policy decide
+// for this run?"), and it is deliberately kept OFF the review-orchestration store:
+// the run screen consumes it, and a static edge from the run screen into the
+// orchestration store drags that store's whole drive-side subtree (repair,
+// verification, advisory, batch — 12 modules) into five ratcheted route graphs.
+// The context resolution below therefore mirrors the orchestration store's own
+// `resolveReviewContext` rather than importing it; the D-5 integration cases pin
+// the two against each other by driving REAL orchestration and asserting this
+// projection reproduces its verdict.
+// ---------------------------------------------------------------------------
+
+/** How a produced event's REVIEW checkpoint resolved for the run timeline. */
+export type LifecycleRunDecisionOutcome = "fired" | "skipped" | "pending";
+
+export interface LifecycleRunDecision {
+  eventId: string;
+  artifactId: string;
+  representationRevisionId: string;
+  emitter: string;
+  /** Point V. The other two checkpoints project through their own surfaces (the
+   * run-start recommendation chip row; the rail's "Core analysis" verification
+   * entry), so the outbox projection is review-only by construction. */
+  checkpoint: "review";
+  outcome: LifecycleRunDecisionOutcome;
+  /** The gate a FIRED decision opened (the rail already renders it) — null for a
+   * skipped/pending decision. */
+  gateId: string | null;
+  /** The lattice verdict re-derived at read time (`skip` / `forbidden` / `fire` /
+   * `required`), or null when the context is no longer resolvable. */
+  latticeOutcome: PolicyOutcome | null;
+  /** Which lattice layer produced that verdict — the run timeline's answer to
+   * "WHY was this skipped": `org-bound` (org-forbidden), `core-default`
+   * (default-skip), `manifest` (manifest-skip), `elevation`, `fail-closed`. */
+  decidedBy: PolicyDecision["decidedBy"] | null;
+  /** Human-readable reason for the timeline entry. */
+  reason: string;
+  /** TRUE when the re-derived verdict no longer matches the durable outcome (the
+   * policy changed after the decision was made) — the timeline then shows the
+   * durable outcome and says the recorded reason is no longer re-derivable. */
+  reasonStale: boolean;
+  createdAt: Date;
+}
+
+/** A minimal read-only projection of `objects` — the artifact TYPE + liveness the
+ * lattice needs. A local pgSchema instance over the SAME app schema (the same
+ * device the orchestration store uses) so this agents-package store reads
+ * `objects.type` without depending on the host objects-store table. */
+const policyObjectsSchema = pgSchema(process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra");
+const policyObjectsRef = policyObjectsSchema.table("objects", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id"),
+  type: text("type").notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+});
+
+/** Parse the JSON-as-text `agent_templates.lifecycle_config`. Fail-soft: a
+ * malformed/absent value yields `undefined` (the lattice then uses core
+ * defaults), never a throw. */
+function parseManifestLifecycle(raw: string | null): CompiledManifestLifecycle | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object") return undefined;
+    const skips = Array.isArray(parsed.requestedSkips)
+      ? (parsed.requestedSkips.filter((v) => typeof v === "string") as LifecycleCheckpoint[])
+      : undefined;
+    return skips ? { requestedSkips: skips } : {};
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Every lifecycle REVIEW decision taken for `runId`, oldest-first — fired,
+ * skipped, and not-yet-decided. Plain run-scoped read (`producer_run_id`); the
+ * caller owns access enforcement (the run-detail aggregate's door, or the run
+ * screen's own run-access check).
+ */
+export async function readLifecycleDecisionsForRun(
+  runId: string,
+  opts?: { limit?: number },
+): Promise<LifecycleRunDecision[]> {
+  const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
+  const rows = await db
+    .select({
+      eventId: artifactProducedOutbox.eventId,
+      orgId: artifactProducedOutbox.orgId,
+      artifactId: artifactProducedOutbox.artifactId,
+      representationRevisionId: artifactProducedOutbox.representationRevisionId,
+      emitter: artifactProducedOutbox.emitter,
+      originKind: artifactProducedOutbox.originKind,
+      destinationClass: artifactProducedOutbox.destinationClass,
+      continuationAddress: artifactProducedOutbox.continuationAddress,
+      status: artifactProducedOutbox.status,
+      createdAt: artifactProducedOutbox.createdAt,
+    })
+    .from(artifactProducedOutbox)
+    .where(eq(artifactProducedOutbox.producerRunId, runId))
+    .orderBy(asc(artifactProducedOutbox.createdAt))
+    .limit(limit);
+  if (rows.length === 0) return [];
+
+  // The producing run's compiled manifest is per-RUN, so it is resolved ONCE.
+  const manifest = await resolveRunManifestLifecycle(runId);
+
+  const out: LifecycleRunDecision[] = [];
+  for (const row of rows) {
+    const outcome: LifecycleRunDecisionOutcome =
+      row.status === "pending" ? "pending" : row.continuationAddress ? "fired" : "skipped";
+
+    let latticeOutcome: PolicyOutcome | null = null;
+    let decidedBy: PolicyDecision["decidedBy"] | null = null;
+    let reason =
+      outcome === "pending"
+        ? "awaiting review orchestration"
+        : "policy decision recorded; its reason is no longer re-derivable";
+    let reasonStale = false;
+
+    const [obj] = await db
+      .select({ type: policyObjectsRef.type, deletedAt: policyObjectsRef.deletedAt })
+      .from(policyObjectsRef)
+      .where(and(eq(policyObjectsRef.id, row.artifactId), eq(policyObjectsRef.orgId, row.orgId)))
+      .limit(1);
+
+    if (obj && !obj.deletedAt) {
+      const originKind = row.originKind as LifecycleOriginKind;
+      const destinationClass = row.destinationClass as DestinationClass;
+      const orgRule = await resolveOrgPolicyRule(row.orgId, {
+        checkpoint: "review",
+        artifactType: obj.type,
+        destinationClass,
+        originKind,
+      });
+      const decision = evaluatePolicy({
+        checkpoint: "review",
+        artifactType: obj.type,
+        destinationClass,
+        originKind,
+        // Review's core default does NOT branch on humanPresent (only
+        // recommendation does) — passed to keep the pure input total, exactly as
+        // the orchestration consumer passes it.
+        humanPresent: false,
+        orgRule,
+        manifest,
+      });
+      latticeOutcome = decision.outcome;
+      decidedBy = decision.decidedBy;
+      if (outcome !== "pending") {
+        reasonStale = decision.fired !== (outcome === "fired");
+        reason = reasonStale
+          ? `policy has changed since this decision (now: ${decision.reason})`
+          : decision.reason;
+      }
+    } else if (outcome !== "pending") {
+      reason = obj
+        ? "policy decision recorded; the artifact was deleted after it"
+        : "policy decision recorded; the artifact is no longer resolvable";
+    }
+
+    out.push({
+      eventId: row.eventId,
+      artifactId: row.artifactId,
+      representationRevisionId: row.representationRevisionId,
+      emitter: row.emitter,
+      checkpoint: "review",
+      outcome,
+      gateId: row.continuationAddress,
+      latticeOutcome,
+      decidedBy,
+      reason,
+      reasonStale,
+      createdAt: row.createdAt,
+    });
+  }
+  return out;
+}
+
+/** The producing run's compiled manifest lifecycle block (`agent_templates.
+ * lifecycle_config`), or undefined when the run/template no longer resolves.
+ * Fail-soft — an unresolvable manifest means the lattice reasons on core
+ * defaults, which is exactly what the orchestration consumer does. */
+async function resolveRunManifestLifecycle(
+  runId: string,
+): Promise<CompiledManifestLifecycle | undefined> {
+  try {
+    const [run] = await db
+      .select({ templateId: agentRuns.templateId })
+      .from(agentRuns)
+      .where(eq(agentRuns.id, runId))
+      .limit(1);
+    if (!run?.templateId) return undefined;
+    const [tmpl] = await db
+      .select({ lifecycleConfig: agentTemplates.lifecycleConfig })
+      .from(agentTemplates)
+      .where(eq(agentTemplates.id, run.templateId))
+      .limit(1);
+    return parseManifestLifecycle(tmpl?.lifecycleConfig ?? null);
+  } catch {
+    return undefined;
+  }
 }

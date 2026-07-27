@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Check, ClipboardCheck, ScanSearch } from "lucide-react";
+import { Check, ClipboardCheck, ScanSearch, SkipForward } from "lucide-react";
 
 import {
   Stepper,
@@ -66,10 +66,13 @@ export function RunStepRailPanel({
             const displayStep = i + 1;
             const isGate = entry.kind === "gate";
             const isVerification = entry.kind === "verification";
+            // cinatra#2047 D-5: a lifecycle POLICY decision that opened no gate.
+            const isLifecycle = entry.kind === "lifecycleDecision";
             const isResolved = entry.status === "resolved";
+            const isSkipped = entry.status === "skipped";
             const isPending = entry.status === "pending";
             const isCompleted = entry.status === "completed" || isResolved;
-            const isActive = displayStep === activeIndex || isPending;
+            const isActive = displayStep === activeIndex || (isPending && !isLifecycle);
             const isLast = i === entries.length - 1;
 
             const titleNode = (
@@ -84,6 +87,11 @@ export function RunStepRailPanel({
                 data-rail-gate-pending={isGate && isPending ? "true" : undefined}
                 data-rail-verification={isVerification ? "true" : undefined}
                 data-rail-verification-outcome={isVerification ? entry.verification?.outcome : undefined}
+                // D-5 anchors for the live proof: a skipped lifecycle decision is
+                // addressable, and carries WHICH lattice layer skipped it.
+                data-rail-lifecycle-decision={isLifecycle ? entry.lifecycleDecision?.outcome : undefined}
+                data-rail-lifecycle-decided-by={isLifecycle ? entry.lifecycleDecision?.decidedBy ?? undefined : undefined}
+                title={isLifecycle ? entry.lifecycleDecision?.reason : undefined}
               >
                 {entry.label}
                 {isGate && isResolved ? (
@@ -96,12 +104,35 @@ export function RunStepRailPanel({
                     {entry.verification?.outcome ?? "verified"}
                   </span>
                 ) : null}
+                {isLifecycle ? (
+                  <>
+                    <span className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground">
+                      {entry.lifecycleDecision?.decidedBy ?? entry.lifecycleDecision?.outcome ?? "policy"}
+                    </span>
+                    {/* The REASON is the point of the entry: a user must be able to
+                        tell a deliberately-skipped review from no machinery running. */}
+                    <span
+                      className="mt-0.5 block text-badge-2xs leading-4 text-muted-foreground"
+                      data-rail-lifecycle-reason=""
+                    >
+                      {entry.lifecycleDecision?.reason}
+                    </span>
+                  </>
+                ) : null}
               </StepperTitle>
             );
 
             const indicatorNode = (
               <StepperIndicator className="data-[state=inactive]:bg-muted-foreground/40 data-[state=inactive]:text-background">
-                {isVerification ? <ScanSearch className="h-3 w-3" /> : isGate ? <ClipboardCheck className="h-3 w-3" /> : displayStep}
+                {isVerification ? (
+                  <ScanSearch className="h-3 w-3" />
+                ) : isGate ? (
+                  <ClipboardCheck className="h-3 w-3" />
+                ) : isLifecycle ? (
+                  <SkipForward className="h-3 w-3" />
+                ) : (
+                  displayStep
+                )}
               </StepperIndicator>
             );
 
@@ -110,7 +141,10 @@ export function RunStepRailPanel({
                 key={entry.key}
                 step={displayStep}
                 completed={isCompleted}
-                disabled={!isGate && !isVerification && entry.status === "upcoming" && !isActive}
+                disabled={
+                  !isGate && !isVerification && !isLifecycle && entry.status === "upcoming" && !isActive
+                }
+                data-rail-skipped={isSkipped ? "true" : undefined}
                 className="items-start !flex-none"
               >
                 <div className="flex items-center gap-1">

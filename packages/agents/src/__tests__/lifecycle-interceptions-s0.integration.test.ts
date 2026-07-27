@@ -371,6 +371,47 @@ describe.skipIf(!HAS_DB)("cinatra#2038 — lifecycle-interceptions S0 (real stor
     expect(dead.some((d) => d.gateId === gate.gateId)).toBe(true);
   });
 
+  // cinatra#2047 D-4: the dead-letter set is now READ by a production ops surface
+  // (/configuration/lifecycle-operations). That surface is multi-tenant, so the
+  // reader must scope by the OWNING org — which the resume outbox does not carry
+  // (it is joined from the gate). A leak here would show one tenant another
+  // tenant's stuck review releases.
+  it("DEAD-LETTER: the ops read is ORG-SCOPED through the gate join (no cross-tenant leak)", async () => {
+    const mk = async (orgId: string) => {
+      const runId = `run-${randomUUID()}`;
+      const reviewTaskId = `wayflow-${randomUUID()}`;
+      const gate = await gateStore.emitArtifactReviewGate({
+        runId, orgId, reviewTaskId,
+        targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" }],
+      });
+      await dbMod.db.insert(schemaMod.artifactReviewResumeOutbox).values({
+        gateId: gate.gateId, runId, reviewTaskId,
+        kind: "approve", responseText: "approved",
+        status: "delivering", leaseToken: null, leaseExpiresAt: null,
+        attempts: 1, maxAttempts: 1,
+      });
+      return gate.gateId;
+    };
+    const mineGateId = await mk(ORG);
+    const theirsGateId = await mk(`${ORG}-tenant-b`);
+    await gateStore.deadLetterExhaustedResumeIntents({ lastError: "org scoping" });
+
+    const mine = await gateStore.readDeadLetteredResumeIntents({ orgId: ORG });
+    expect(mine.some((d) => d.gateId === mineGateId)).toBe(true);
+    expect(mine.some((d) => d.gateId === theirsGateId)).toBe(false);
+    // Every returned row carries the owning org (the surface renders per-tenant).
+    expect(mine.every((d) => d.orgId === ORG)).toBe(true);
+
+    const theirs = await gateStore.readDeadLetteredResumeIntents({ orgId: `${ORG}-tenant-b` });
+    expect(theirs.some((d) => d.gateId === theirsGateId)).toBe(true);
+    expect(theirs.some((d) => d.gateId === mineGateId)).toBe(false);
+
+    // Unscoped (script/test posture) still sees both.
+    const all = await gateStore.readDeadLetteredResumeIntents();
+    expect(all.some((d) => d.gateId === mineGateId)).toBe(true);
+    expect(all.some((d) => d.gateId === theirsGateId)).toBe(true);
+  });
+
   // -------------------------------------------------------------------------
   // ADVISORY — the decision-free seam.
   // -------------------------------------------------------------------------

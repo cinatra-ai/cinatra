@@ -45,7 +45,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import { and, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
 import { db } from "./db";
@@ -868,17 +868,44 @@ export interface DeadLetteredResumeRow {
   maxAttempts: number;
   lastError: string | null;
   deadLetteredAt: Date | null;
+  /** The org that owns the gate this resume intent belongs to (the resume outbox
+   * itself carries no org column — it is joined from the gate, which is also what
+   * makes the ops surface org-scopable). Null only for a gate that no longer
+   * exists (the FK cascades, so in practice never). */
+  orgId: string | null;
 }
 
-/** Ops visibility: the dead-lettered resume intents (delivery attempts
- * exhausted). The surface the AC's "surfaced in ops visibility" requires. */
-export async function readDeadLetteredResumeIntents(limit = 100): Promise<DeadLetteredResumeRow[]> {
+/**
+ * Ops visibility: the dead-lettered resume intents (delivery attempts exhausted).
+ * The surface the S0 AC's "dead-letter transition … surfaced in ops visibility"
+ * requires — consumed by `/configuration/lifecycle-operations` (cinatra#2047 D-4);
+ * before that lane nothing in production read this set, so a stuck review release
+ * was silent.
+ *
+ * `orgId` SCOPES the read through the joined gate (a multi-tenant ops surface must
+ * never show another org's stuck releases); omitting it returns the unscoped set
+ * (tests / a single-org instance script).
+ */
+export async function readDeadLetteredResumeIntents(opts?: {
+  orgId?: string;
+  limit?: number;
+}): Promise<DeadLetteredResumeRow[]> {
+  const limit = Math.max(1, Math.min(opts?.limit ?? 100, 500));
   const rows = await db
-    .select()
+    .select({ row: artifactReviewResumeOutbox, orgId: artifactReviewGates.orgId })
     .from(artifactReviewResumeOutbox)
-    .where(isNotNull(artifactReviewResumeOutbox.deadLetteredAt))
-    .limit(Math.max(1, Math.min(limit, 500)));
-  return rows.map((r) => ({
+    .leftJoin(artifactReviewGates, eq(artifactReviewGates.id, artifactReviewResumeOutbox.gateId))
+    .where(
+      opts?.orgId
+        ? and(
+            isNotNull(artifactReviewResumeOutbox.deadLetteredAt),
+            eq(artifactReviewGates.orgId, opts.orgId),
+          )
+        : isNotNull(artifactReviewResumeOutbox.deadLetteredAt),
+    )
+    .orderBy(desc(artifactReviewResumeOutbox.deadLetteredAt))
+    .limit(limit);
+  return rows.map(({ row: r, orgId }) => ({
     gateId: r.gateId,
     runId: r.runId,
     reviewTaskId: r.reviewTaskId,
@@ -887,6 +914,7 @@ export async function readDeadLetteredResumeIntents(limit = 100): Promise<DeadLe
     maxAttempts: r.maxAttempts,
     lastError: r.lastError,
     deadLetteredAt: r.deadLetteredAt,
+    orgId: orgId ?? null,
   }));
 }
 
