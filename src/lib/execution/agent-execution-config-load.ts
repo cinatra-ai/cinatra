@@ -89,9 +89,13 @@ export async function readManifestEnvironmentClaim(
     // fail-open this discipline forbids.
     if (records.length === 0) {
       if (opts.installedExtension) {
+        // The package name is route-derived (untrusted): pass it as an
+        // ARGUMENT, never interpolated into the format string, so a crafted
+        // name cannot forge log lines (CodeQL js/tainted-format-string).
         console.warn(
-          `[agent-execution-config] ${packageName} is an installed extension but has no ` +
-            `readable store record — the surface degrades to read-only`,
+          "[agent-execution-config] installed extension has no readable store record " +
+            "— the surface degrades to read-only:",
+          packageName,
         );
         return { environment: null, readFailed: true, packaged: true };
       }
@@ -114,16 +118,19 @@ export async function readManifestEnvironmentClaim(
     );
     if (fingerprints.size > 1) {
       console.warn(
-        `[agent-execution-config] ${packageName} has ${records.length} materialized store ` +
-          `records declaring DIFFERENT execution environments — the surface degrades to read-only`,
+        "[agent-execution-config] materialized store records declare DIFFERENT execution " +
+          "environments — the surface degrades to read-only:",
+        packageName,
+        records.length,
       );
       return { environment: null, readFailed: true, packaged: true };
     }
     return { environment: declarations[0], readFailed: false, packaged: true };
   } catch (err) {
     console.warn(
-      `[agent-execution-config] could not read the extension store for ${packageName} ` +
-        `(surface degrades to read-only):`,
+      "[agent-execution-config] could not read the extension store " +
+        "(surface degrades to read-only):",
+      packageName,
       err instanceof Error ? err.message : err,
     );
     return { environment: null, readFailed: true, packaged: true };
