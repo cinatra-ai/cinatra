@@ -139,10 +139,8 @@ function PinnedCaptureBlock({
                     .join(", ")}) · `
                 : "no owned regions marked by the site · "}
               static capture · no live page is loaded
-              {capture.composition && capture.composition.unmatchedFields.length > 0
-                ? ` · ${formatList(capture.composition.unmatchedFields)} ${
-                    capture.composition.unmatchedFields.length === 1 ? "has" : "have"
-                  } no marked region on this page`
+              {capture.composition && capture.composition.unplacedFields.length > 0
+                ? ` · ${formatList(capture.composition.unplacedFields)} could not be placed in this page's own regions`
                 : ""}
               {driftedCount > 0
                 ? ` · ${driftedCount} region${driftedCount === 1 ? "" : "s"} changed outside the reviewed scope`

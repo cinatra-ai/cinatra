@@ -16,7 +16,7 @@ connector's capability resolves) inside a real MCP request frame, the real
 | # | What it proves | Evidence |
 |---|---|---|
 | V1 | Gate creation captures **both** roles from ONE signed fetch: `before` (the live page as fetched) and `current` (the proposal composed into that page's own adapter-marked regions). | `screenshots/V1-a-before-live-page.png`, `screenshots/V1-b-current-composed-proposal.png` — the **stored bytes**, decoded back out of the blob store |
-| V2 | The review surface shows the pair side by side with the adapter's region outlines, honest captions, and **no request to the captured site**. | `screenshots/V2-review-surface-visual-pair.png` (whole surface), `screenshots/V2-b-pair-detail.png` (the pair) |
+| V2 | The review surface shows the pair side by side with the adapter's region outlines, honest captions, and **no request to the captured site**. | `screenshots/V2-review-surface-visual-pair.png` (whole surface), `screenshots/V2-b-pair-detail.png` (the pair), `screenshots/V2-c-pair-after-convergence-fixes.png` (re-driven end to end after the convergence round rewrote the composition scanner and the sanitizer) |
 | V3 | Approve → apply → the post-apply verification records `verified` **with the visual pair linked**: reviewed vs applied. | `screenshots/V3-a-run-rail-core-analysis-verified.png` (rail), `screenshots/V3-b-verification-view-reviewed-vs-applied.png` |
 | V4 | The drift case: a site-plugin rewrite outside the reviewed scope → `drifted`, and the drifted region is outlined **on the applied picture**. | `screenshots/V4-a-run-rail-core-analysis-drifted.png` (rail), `screenshots/V4-b-drift-verification-visual-evidence.png` |
 | V5 | Degraded: the site unreachable at gate creation → the gate is still created and decidable, and **both** halves state the named reason in place. | `screenshots/V5-degraded-pair-named-reason.png` |
@@ -30,7 +30,7 @@ region geometry; only the composed one carries composition provenance:
 ```
 before  | captured |            null                              | 98 183 B  | 4 regions
 current | captured | {"substitutedRegions":["title","content","excerpt"],
-                      "unmatchedFields":["status"]}                | 130 977 B | 4 regions
+                      "unplacedFields":["status"]}                 | 130 977 B | 4 regions
 ```
 
 V2 — measured on the real page load:

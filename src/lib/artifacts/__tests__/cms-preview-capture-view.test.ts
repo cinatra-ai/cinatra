@@ -214,7 +214,7 @@ describe("cinatra#2044 L-B — the review view path performs NO network fetch", 
         data: {
           ...capturedData,
           role: "current",
-          composition: { substitutedRegions: ["content"], unmatchedFields: ["status"] },
+          composition: { substitutedRegions: ["content"], unplacedFields: ["status"] },
         },
         representation_revision_id: "png-c",
       },
@@ -235,7 +235,7 @@ describe("cinatra#2044 L-B — the review view path performs NO network fetch", 
     expect(pair!.left!.composition).toBeNull();
     expect(pair!.right!.composition).toEqual({
       substitutedRegions: ["content"],
-      unmatchedFields: ["status"],
+      unplacedFields: ["status"],
     });
     expect(findRemoteDocumentUrls(views)).toEqual([]);
     expectNoNetwork();

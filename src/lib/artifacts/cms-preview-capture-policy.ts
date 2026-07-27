@@ -127,6 +127,18 @@ export function normalizeOrigin(value: string): string | null {
  * ANYTHING else is refused (`null`) — including an empty instance segment, a
  * trailing colon, or a non-decimal tail. There is no lenient extraction: the
  * whole string must match one of the two grammars.
+ *
+ * THE INSTANCE SEGMENT IS NOT AN ADDRESSING INPUT, and is deliberately NOT
+ * cross-checked against the selected origin: this leaf is handed registered
+ * ORIGINS, not the org's connector-instance→site mapping, so it has nothing
+ * truthful to compare it with, and inventing a comparison would be a guess. The
+ * addressing authority is unchanged and complete without it — the ORIGIN comes
+ * from `sourceUrl` matching a connect-registered origin exactly, and the URL is
+ * built from the REGISTERED origin. A pointer whose instance segment named a
+ * different site than its url therefore resolves by its url, exactly as a bare
+ * id would; the connector builds both halves of the pointer from one instance,
+ * so the two cannot disagree at the source. (Raised by a codex convergence round;
+ * recorded as an accepted, non-SSRF residual rather than papered over.)
  */
 export function parsePostId(externalId: string | null | undefined): number | null {
   if (typeof externalId !== "string") return null;

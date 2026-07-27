@@ -317,7 +317,7 @@ describe("cinatra#2044 L-D — the pinned before/after pair", () => {
     expect(before.data.composition).toBeNull();
     expect(current.data.composition).toEqual({
       substitutedRegions: ["content"],
-      unmatchedFields: [],
+      unplacedFields: [],
     });
     // The two digests differ: the composed document is provably not the base.
     expect(before.data.captureDigest).not.toBe(current.data.captureDigest);
@@ -331,7 +331,7 @@ describe("cinatra#2044 L-D — the pinned before/after pair", () => {
     );
     expect(written[1].data.composition).toEqual({
       substitutedRegions: ["content"],
-      unmatchedFields: ["status"],
+      unplacedFields: ["status"],
     });
   });
 
@@ -357,6 +357,40 @@ describe("cinatra#2044 L-D — the pinned before/after pair", () => {
     expect(out.before.status).toBe("captured");
     expect(out.current).toMatchObject({ status: "degraded", reason: "no-owned-regions" });
     expect(written[1].data.degradedReason).toBe("no-owned-regions");
+  });
+
+  it("distinguishes 'the site marks nothing that changed' from 'its regions could not be placed'", async () => {
+    // Marked, but the element cannot be delimited — a DIFFERENT named reason
+    // from "the site marks none of the changed fields" (a codex finding: the
+    // reviewer was previously told the wrong thing).
+    const { deps, written } = stubDeps({
+      fetchPreview: async () => ({
+        ok: true as const,
+        html: '<html><body><div data-cinatra-region="content">base',
+        pinnedAddresses: ["203.0.113.10"],
+      }),
+    });
+    const out = await capturePinnedPreviewPair(
+      { ...pairInput, proposedFields: { content: "PROPOSED BODY" } },
+      deps,
+    );
+    expect(out.before.status).toBe("captured");
+    expect(out.current).toMatchObject({ status: "degraded", reason: "regions-unplaceable" });
+    expect(written[1].data.degradedReason).toBe("regions-unplaceable");
+  });
+
+  it("reports what the sanitizer removed from the PROPOSED VALUES, not only from the base page", async () => {
+    const { deps, written } = stubDeps();
+    await capturePinnedPreviewPair(
+      {
+        ...pairInput,
+        proposedFields: { content: '<p>ok</p><script>alert(1)</script>' },
+      },
+      deps,
+    );
+    const base = written[0].data.sanitization ?? {};
+    const composed = written[1].data.sanitization ?? {};
+    expect((composed.scripts ?? 0)).toBeGreaterThan(base.scripts ?? 0);
   });
 
   it("a fetch failure degrades BOTH halves with the SAME named reason, and never throws", async () => {

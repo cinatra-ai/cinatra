@@ -86,12 +86,65 @@ function countAndReplace(
   return { html: out, count };
 }
 
+/** The named references that can spell a construct name or an unsafe scheme.
+ * Deliberately tiny: this is a NORMALIZER for the matchers below, not an HTML
+ * entity decoder for display. */
+const NAMED_REFERENCES: Readonly<Record<string, string>> = {
+  amp: "&",
+  colon: ":",
+  Tab: "\t",
+  NewLine: "\n",
+  sol: "/",
+  quot: '"',
+  apos: "'",
+  lpar: "(",
+  rpar: ")",
+};
+
+/**
+ * Decode numeric (`&#114;` / `&#x72;`) and the few named character references a
+ * browser resolves before interpreting an attribute name, value or URL scheme.
+ * Applied repeatedly (bounded) so a doubly-encoded reference cannot hide a
+ * construct behind one pass.
+ */
+export function decodeCharacterReferences(input: string): string {
+  let out = input;
+  for (let pass = 0; pass < 3; pass++) {
+    const next = out
+      .replace(/&#x([0-9a-f]{1,6});?/gi, (m, hex) => {
+        const code = Number.parseInt(String(hex), 16);
+        return Number.isFinite(code) && code > 0 && code < 0x110000
+          ? String.fromCodePoint(code)
+          : m;
+      })
+      .replace(/&#([0-9]{1,7});?/g, (m, dec) => {
+        const code = Number.parseInt(String(dec), 10);
+        return Number.isFinite(code) && code > 0 && code < 0x110000
+          ? String.fromCodePoint(code)
+          : m;
+      })
+      .replace(/&([a-zA-Z]{2,8});/g, (m, name) => NAMED_REFERENCES[String(name)] ?? m);
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
 /**
  * Strip every executable / live-document construct from a fetched page.
  * Idempotent: sanitizing an already-sanitized document changes nothing.
  */
 export function sanitizeCapturedHtml(rawHtml: string): SanitizedCapture {
-  let html = String(rawHtml ?? "");
+  // NORMALIZE FIRST. A browser DECODES character references inside attribute
+  // names/values before acting on them, so `http-equiv="&#x72;efresh"` is a real
+  // refresh and `&#111;nload=` is a real handler — while a raw-text matcher sees
+  // neither (a codex convergence finding, reachable from PROPOSED content once
+  // L-D composes agent-authored values into the page). Decoding the numeric and
+  // the handful of named references that can spell a construct means the
+  // sanitizer and the browser read the SAME document. Decoding never introduces
+  // markup that was not already meant as markup, and the re-verify pass runs on
+  // this normalized text too.
+  let html = decodeCharacterReferences(String(rawHtml ?? ""));
   let scripts = 0;
   let frames = 0;
   let eventHandlers = 0;
@@ -120,12 +173,10 @@ export function sanitizeCapturedHtml(rawHtml: string): SanitizedCapture {
     navigations += dropped.count;
   }
 
-  // `<meta http-equiv="refresh" ...>` — a navigation instruction.
-  const metaRefresh = countAndReplace(
-    html,
-    /<meta\b[^>]*http-equiv\s*=\s*["']?\s*refresh\b[^>]*>/gi,
-    "",
-  );
+  // `<meta http-equiv=...>` — the only http-equiv values that matter here are
+  // navigation instructions, and a page capture needs NONE of them, so the whole
+  // family is dropped rather than pattern-matched on `refresh` alone.
+  const metaRefresh = countAndReplace(html, /<meta\b[^>]*\bhttp-equiv\b[^>]*>/gi, "");
   html = metaRefresh.html;
   navigations += metaRefresh.count;
 
@@ -138,8 +189,14 @@ export function sanitizeCapturedHtml(rawHtml: string): SanitizedCapture {
   html = linkImports.html;
   navigations += linkImports.count;
 
-  // Inline event handlers, in all three attribute-quoting forms.
-  const handlers = countAndReplace(html, /\son[a-z0-9_-]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  // Inline event handlers, in all three attribute-quoting forms. The separator
+  // is whitespace OR `/`: HTML lets `<svg/onload=…>` start an attribute after a
+  // solidus, so a whitespace-only matcher missed it (a codex finding).
+  const handlers = countAndReplace(
+    html,
+    /[\s/]on[a-z0-9_-]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi,
+    " ",
+  );
   html = handlers.html;
   eventHandlers += handlers.count;
 
@@ -171,16 +228,18 @@ export function sanitizeCapturedHtml(rawHtml: string): SanitizedCapture {
  * than assumed from the sanitizer.
  */
 export function findInertnessViolations(html: string): InertnessViolation[] {
-  const source = String(html ?? "");
+  // Same normalization the sanitizer applies, so the check reads the document
+  // the BROWSER will read, not the raw bytes.
+  const source = decodeCharacterReferences(String(html ?? ""));
   const violations: InertnessViolation[] = [];
   const push = (kind: InertnessViolation["kind"], match: RegExpMatchArray | null) => {
     if (match) violations.push({ kind, sample: match[0].slice(0, 80) });
   };
   push("script", source.match(/<\/?(?:script|noscript)\b/i));
   push("frame", source.match(/<\/?(?:iframe|frame|frameset|object|embed|applet|portal)\b/i));
-  push("event-handler", source.match(/\son[a-z0-9_-]+\s*=/i));
+  push("event-handler", source.match(/[\s/]on[a-z0-9_-]+\s*=/i));
   push("srcdoc", source.match(/\ssrcdoc\s*=/i));
-  push("meta-refresh", source.match(/<meta\b[^>]*http-equiv\s*=\s*["']?\s*refresh\b/i));
+  push("meta-refresh", source.match(/<meta\b[^>]*\bhttp-equiv\b/i));
   push("unsafe-url", source.match(/=\s*["']?\s*(?:javascript|vbscript|data:text\/html)/i));
   return violations;
 }

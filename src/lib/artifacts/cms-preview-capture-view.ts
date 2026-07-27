@@ -57,13 +57,13 @@ export interface PinnedCaptureView {
   blockedSubresources: number;
   /**
    * L-D — set ONLY on a COMPOSED picture (the proposal): the adapter-marked
-   * regions the proposed values were placed into, and the proposed fields the
-   * adapter marked no region for. `null` on a straight fetched render. The
+   * regions the proposed values were placed into, and every proposed field whose
+   * value did NOT reach the picture. `null` on a straight fetched render. The
    * surface uses this to tell the reviewer, without hedging, which picture is a
    * photograph of the site and which is the proposal inside that photograph's
    * chrome.
    */
-  composition: { substitutedRegions: string[]; unmatchedFields: string[] } | null;
+  composition: { substitutedRegions: string[]; unplacedFields: string[] } | null;
 }
 
 /** The host byte route for a pinned capture. Same-origin, version-pinned, and

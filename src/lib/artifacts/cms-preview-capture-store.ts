@@ -125,7 +125,11 @@ export interface CmsPreviewCaptureRecordData {
    */
   composition?: {
     substitutedRegions: string[];
-    unmatchedFields: string[];
+    /** EVERY proposed field whose value did not reach the picture, whatever the
+     * cause (no marked region, an undelimitable element, or a region nested
+     * inside another substituted region) — one closed list, so the surface can
+     * never imply a field was shown when it was not. */
+    unplacedFields: string[];
   } | null;
 }
 

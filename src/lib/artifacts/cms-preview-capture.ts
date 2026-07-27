@@ -105,6 +105,7 @@ export type CaptureDegradeReason =
   // L-D — the COMPOSED (proposal) render's own failure classes.
   | "no-proposed-fields"
   | "no-owned-regions"
+  | "regions-unplaceable"
   | "composition-not-inert";
 
 export function captureDegradeCopy(reason: CaptureDegradeReason): string {
@@ -133,6 +134,8 @@ export function captureDegradeCopy(reason: CaptureDegradeReason): string {
       return "the reviewed proposal could not be read back, so the proposed page could not be composed";
     case "no-owned-regions":
       return "the connected site marked none of the changed fields as an owned region on its page";
+    case "regions-unplaceable":
+      return "the connected site's marked regions could not be delimited on its page, so the proposal could not be placed";
     case "composition-not-inert":
       return "the composed proposal page could not be made inert and was refused";
     default:
@@ -325,6 +328,16 @@ async function fetchSanitizedBasePage(
   };
 }
 
+/** Sum two removal-count maps (base page + composed values). */
+function mergeCounts(
+  a: Readonly<Record<string, number>>,
+  b: Readonly<Record<string, number>> | undefined,
+): Record<string, number> {
+  const out: Record<string, number> = { ...a };
+  for (const [k, v] of Object.entries(b ?? {})) out[k] = (out[k] ?? 0) + (Number(v) || 0);
+  return out;
+}
+
 /** Write ONE degraded capture record for a role. Never throws. */
 async function writeDegraded(
   role: CmsPreviewCaptureRole,
@@ -380,7 +393,10 @@ async function renderAndPin(
     input: CapturePinnedPreviewInput | CapturePinnedPreviewPairInput;
     capturedAt: string;
     title: string;
-    composition: { substitutedRegions: string[]; unmatchedFields: string[] } | null;
+    composition: { substitutedRegions: string[]; unplacedFields: string[] } | null;
+    /** Sanitizer removals introduced by composition, merged into the record's
+     * own `sanitization` counts. */
+    extraSanitization?: Record<string, number>;
   },
   deps: PreviewCaptureDeps,
 ): Promise<CapturePinnedPreviewOutcome> {
@@ -422,7 +438,7 @@ async function renderAndPin(
       postId: page.target.postId,
       capturedAt: ctx.capturedAt,
       geometry: rendered.geometry,
-      sanitization: { ...page.removed },
+      sanitization: mergeCounts(page.removed, ctx.extraSanitization),
       network: rendered.network,
       // The digest is of the document THIS capture rendered — so a composed
       // proposal and the base page it was composed from are distinguishable by
@@ -576,10 +592,17 @@ export async function capturePinnedPreviewPair(
     }
     const composed = composeProposedRegions(page.html, input.proposedFields);
     if (composed.substitutedRegions.length === 0) {
-      // The adapter marked no region for anything that changed. Showing the base
-      // page a second time would imply the proposal looks identical, which is not
-      // known — so the proposal half states the gap instead.
-      return { before, current: await degradeCurrent("no-owned-regions") };
+      // Nothing of the proposal reached the picture. Showing the base page a
+      // second time would imply the proposal looks identical, which is not known
+      // — so the proposal half states the gap, with the reason DISTINGUISHED:
+      // the site marked none of the changed fields, or it marked them and their
+      // elements could not be delimited.
+      return {
+        before,
+        current: await degradeCurrent(
+          composed.noMatchingAnchors ? "no-owned-regions" : "regions-unplaceable",
+        ),
+      };
     }
     // The proposed values are remote-authored content too: re-verify the WHOLE
     // composed document before it is rendered or stored (the base page was
@@ -604,8 +627,12 @@ export async function capturePinnedPreviewPair(
         title,
         composition: {
           substitutedRegions: composed.substitutedRegions,
-          unmatchedFields: composed.unmatchedFields,
+          unplacedFields: composed.unplacedFields,
         },
+        // The sanitizer's removals from the SUBSTITUTED VALUES are added to the
+        // base page's own, so the picture's caption reports everything that was
+        // stripped — not only what the site's markup carried (a codex finding).
+        extraSanitization: composed.removedFromValues,
       },
       deps,
     );

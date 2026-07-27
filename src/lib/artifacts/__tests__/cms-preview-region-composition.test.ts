@@ -36,8 +36,8 @@ describe("cinatra#2044 L-D — proposal composition over adapter region anchors"
     });
 
     expect(out.substitutedRegions).toEqual(["title", "content", "excerpt"]);
-    expect(out.unmatchedFields).toEqual([]);
-    expect(out.undelimitedRegions).toEqual([]);
+    expect(out.unplacedFields).toEqual([]);
+    expect(out.noMatchingAnchors).toBe(false);
     // The proposed values are in.
     expect(out.html).toContain("New title");
     expect(out.html).toContain("<p>New body</p>");
@@ -60,7 +60,7 @@ describe("cinatra#2044 L-D — proposal composition over adapter region anchors"
     const out = composeProposedRegions(PAGE, { title: "New title", status: "publish" });
     expect(out.substitutedRegions).toEqual(["title"]);
     // `status` has no owned region on the page — it is stated, not placed.
-    expect(out.unmatchedFields).toEqual(["status"]);
+    expect(out.unplacedFields).toEqual(["status"]);
     expect(out.html).not.toContain("publish");
   });
 
@@ -69,7 +69,10 @@ describe("cinatra#2044 L-D — proposal composition over adapter region anchors"
       '<html><body><div data-cinatra-region="content" data-cinatra-post="7"><p>Old body</p></body></html>';
     const out = composeProposedRegions(truncated, { content: "New body" });
     expect(out.substitutedRegions).toEqual([]);
-    expect(out.undelimitedRegions).toEqual(["content"]);
+    expect(out.unplacedFields).toEqual(["content"]);
+    // The page DID mark the region — it just could not be delimited. The caller
+    // needs that distinction to name the right degrade reason.
+    expect(out.noMatchingAnchors).toBe(false);
     expect(out.html).toBe(truncated);
   });
 
@@ -77,7 +80,8 @@ describe("cinatra#2044 L-D — proposal composition over adapter region anchors"
     const bare = "<html><body><h1>Old title</h1></body></html>";
     const out = composeProposedRegions(bare, { title: "New title" });
     expect(out.substitutedRegions).toEqual([]);
-    expect(out.unmatchedFields).toEqual(["title"]);
+    expect(out.unplacedFields).toEqual(["title"]);
+    expect(out.noMatchingAnchors).toBe(true);
     expect(out.html).toBe(bare);
   });
 
@@ -91,6 +95,11 @@ describe("cinatra#2044 L-D — proposal composition over adapter region anchors"
     expect(out.html).not.toContain("onclick");
     // And the composed document passes the pipeline's own inertness contract.
     expect(findInertnessViolations(out.html)).toEqual([]);
+    // What the sanitizer took out of the VALUE is reported, so the picture's
+    // caption can say it (a codex convergence finding).
+    expect(out.removedFromValues.scripts).toBeGreaterThan(0);
+    expect(out.removedFromValues.frames).toBeGreaterThan(0);
+    expect(out.removedFromValues.eventHandlers).toBeGreaterThan(0);
   });
 
   it("a nested marked region never produces overlapping edits (the outer value wins)", () => {
@@ -100,6 +109,9 @@ describe("cinatra#2044 L-D — proposal composition over adapter region anchors"
     const out = composeProposedRegions(nested, { content: "NEW BODY", title: "NEW TITLE" });
     expect(out.html).toBe('<div data-cinatra-region="content">NEW BODY</div>');
     expect(out.substitutedRegions).toEqual(["content"]);
+    // The nested field's own value never reached the picture — REPORTED, never
+    // silently dropped (a codex convergence finding).
+    expect(out.unplacedFields).toEqual(["title"]);
   });
 
   it("an empty proposed value clears the region rather than leaving the base content behind", () => {
@@ -107,5 +119,44 @@ describe("cinatra#2044 L-D — proposal composition over adapter region anchors"
     expect(out.substitutedRegions).toEqual(["excerpt"]);
     expect(out.html).not.toContain("Old excerpt");
     expect(out.html).toContain("Old title");
+  });
+
+  // -------------------------------------------------------------------------
+  // Structural traps a raw-substring scanner falls into (all codex convergence
+  // findings). Each one previously produced a WRONG picture that still reported
+  // a successful substitution.
+  // -------------------------------------------------------------------------
+
+  it("never matches the marker as a SUFFIX of a longer attribute name", () => {
+    const decoy = '<div x-data-cinatra-region="content">BASE</div>';
+    const out = composeProposedRegions(decoy, { content: "PROPOSED" });
+    expect(out.substitutedRegions).toEqual([]);
+    expect(out.unplacedFields).toEqual(["content"]);
+    expect(out.html).toBe(decoy);
+  });
+
+  it("never treats close-tag text inside a COMMENT as structure", () => {
+    const tricky =
+      '<div data-cinatra-region="content">OLD<!-- </div> -->TAIL</div><p>AFTER</p>';
+    const out = composeProposedRegions(tricky, { content: "NEW" });
+    expect(out.substitutedRegions).toEqual(["content"]);
+    expect(out.html).toBe('<div data-cinatra-region="content">NEW</div><p>AFTER</p>');
+  });
+
+  it("never treats a '>' inside a QUOTED attribute as the end of the opening tag", () => {
+    const tricky = '<div data-cinatra-region="content" title=">">OLD</div><p>AFTER</p>';
+    const out = composeProposedRegions(tricky, { content: "NEW" });
+    expect(out.substitutedRegions).toEqual(["content"]);
+    expect(out.html).toBe(
+      '<div data-cinatra-region="content" title=">">NEW</div><p>AFTER</p>',
+    );
+  });
+
+  it("never treats markup inside a <style> body as structure", () => {
+    const tricky =
+      '<div data-cinatra-region="content"><style>i::after{content:"</div>"}</style>OLD</div><p>AFTER</p>';
+    const out = composeProposedRegions(tricky, { content: "NEW" });
+    expect(out.substitutedRegions).toEqual(["content"]);
+    expect(out.html).toBe('<div data-cinatra-region="content">NEW</div><p>AFTER</p>');
   });
 });
