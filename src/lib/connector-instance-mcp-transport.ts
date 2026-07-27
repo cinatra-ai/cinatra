@@ -82,13 +82,29 @@ export type ConnectorInstanceMcpClient = {
   close(): Promise<void>;
 };
 
+/** The list-capable client surface (`tools/list`) consumed by
+ * `listConnectorInstanceMcpTools` (cinatra#2018 S3 §2). A SEPARATE extension of
+ * the call surface so `ConnectorInstanceMcpClient` stays additive for existing
+ * call-only implementors (codex round-1 Medium); the real SDK `Client`
+ * implements both. */
+export type ConnectorInstanceMcpListClient = ConnectorInstanceMcpClient & {
+  listTools(): Promise<unknown>;
+};
+
 export type ConnectorInstanceMcpClientFactory = (input: {
   endpoint: string;
   authHeader: string;
 }) => ConnectorInstanceMcpClient;
 
-/** The real SDK-backed client factory (default). */
-export const defaultConnectorInstanceMcpClientFactory: ConnectorInstanceMcpClientFactory = ({
+export type ConnectorInstanceMcpListClientFactory = (input: {
+  endpoint: string;
+  authHeader: string;
+}) => ConnectorInstanceMcpListClient;
+
+/** The real SDK-backed client factory (default). Typed as the LIST-capable
+ * factory (a subtype of `ConnectorInstanceMcpClientFactory` by return-type
+ * covariance), so it serves both the call path and the list path. */
+export const defaultConnectorInstanceMcpClientFactory: ConnectorInstanceMcpListClientFactory = ({
   endpoint,
   authHeader,
 }) => {
@@ -102,6 +118,7 @@ export const defaultConnectorInstanceMcpClientFactory: ConnectorInstanceMcpClien
   return {
     connect: () => client.connect(transport),
     callTool: (input) => client.callTool(input) as Promise<unknown>,
+    listTools: () => client.listTools() as Promise<unknown>,
     close: () => client.close(),
   };
 };
@@ -212,6 +229,61 @@ export async function callConnectorInstanceMcpTool(input: {
       }
     }
     throw new InvokerError("empty_response", "connector instance tool returned an empty response");
+  } finally {
+    if (connected) await client.close().catch(() => {});
+  }
+}
+
+/**
+ * Connect, call the wire `tools/list` ONCE, unwrap the `tools[]` rows, close.
+ * The additive per-server catalog primitive (§2): the snapshot loader calls this
+ * once per (instance, server) to BOTH (a) classify exposure mode by inspecting
+ * the returned wire tool names for the triad trio and (b) build the first-class
+ * snapshot from the same rows — one wire round-trip serves both.
+ *
+ * Returns the raw `tools[]` records (may be EMPTY — a server can legitimately
+ * expose zero tools; that is not an error, it classifies as a first-class server
+ * with no tools). A well-formed response missing its `tools` array is
+ * `invalid_response`. A connect / list failure maps through the SAME typed
+ * absent-stack split as `callConnectorInstanceMcpTool`
+ * (`session_required` / `timeout` / `network_error`). NEVER carries the auth
+ * header in an error (the classifier composes its own message).
+ */
+export async function listConnectorInstanceMcpTools(input: {
+  endpoint: string;
+  authHeader: string;
+  clientFactory?: ConnectorInstanceMcpListClientFactory;
+}): Promise<Array<Record<string, unknown>>> {
+  const factory = input.clientFactory ?? defaultConnectorInstanceMcpClientFactory;
+  const client = factory({ endpoint: input.endpoint, authHeader: input.authHeader });
+  let connected = false;
+  try {
+    try {
+      await client.connect();
+      connected = true;
+    } catch (err) {
+      throw classifyTransportError(err);
+    }
+
+    let result: unknown;
+    try {
+      result = await client.listTools();
+    } catch (err) {
+      // A list failure after a successful connect is still an absent-stack /
+      // session-class signal (the SDK surfaces the same shapes here).
+      throw classifyTransportError(err);
+    }
+
+    // Guard before property access: a null/undefined result must map to the
+    // typed `invalid_response`, never a raw TypeError (codex round-0 Low).
+    const tools =
+      result && typeof result === "object" ? (result as { tools?: unknown }).tools : undefined;
+    if (!Array.isArray(tools)) {
+      throw new InvokerError("invalid_response", "connector instance tools/list returned no tools array");
+    }
+    // Keep only object rows so the return type is honest; non-object wire
+    // entries are not valid MCP tool descriptors and are dropped defensively.
+    return tools.filter((t): t is Record<string, unknown> => typeof t === "object" && t !== null);
   } finally {
     if (connected) await client.close().catch(() => {});
   }
