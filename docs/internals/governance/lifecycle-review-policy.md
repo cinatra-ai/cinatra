@@ -19,8 +19,14 @@ Core intercepts the artifact lifecycle at three checkpoints:
 | `review` | Post-production — a produced artifact gets a review gate, and its downstream effects are held until the decision. |
 | `verification` | Post-change — a landed change is verified against what the review authorised. |
 
-Policy decides **whether each checkpoint fires** for a given produced artifact.
-It does not decide who reviews, or what the reviewer concludes.
+The lattice defines, per checkpoint, **whether that checkpoint fires**. Two of
+the three are evaluated against it at runtime: the recommendation checkpoint at
+run start, and the review checkpoint per produced event. The verification
+checkpoint's verdict is defined the same way; the verification record itself is
+written by the paths that hold both sides of a comparison — a landed repair, and
+a remote-apply read-back.
+
+Policy does not decide who reviews, or what the reviewer concludes.
 
 ## 2. The rule key
 
@@ -51,10 +57,11 @@ Three matching rules matter:
 - **One row per key.** A unique index over the five-value key makes a re-upsert
   of the same key an in-place update.
 
-Writes go through `upsertLifecyclePolicyRule` / `deleteLifecyclePolicyRule` and
-reads through `resolveOrgPolicyRule`
-(`packages/agents/src/lifecycle-policy-store.ts`); the resolver returns `silent`
-when nothing matches and never throws.
+The policy store (`packages/agents/src/lifecycle-policy-store.ts`) owns those
+operations: `upsertLifecyclePolicyRule` (idempotent on the key),
+`deleteLifecyclePolicyRule` (the only way to return a key to silence) and
+`resolveOrgPolicyRule`, which returns `silent` when no row matches. Any
+configuration surface goes through them.
 
 **Recommendation is keyed on the wildcard type.** It runs *before* production, so
 the produced type is not yet known: an organization expresses "recommendation is
@@ -94,8 +101,10 @@ Four layers, outer beating inner (`evaluatePolicy`,
    effect only where the org is silent, the default would otherwise fire, **and**
    the destination class is not an external-effect class. A manifest can never
    fire a forbidden gate nor skip a required one.
-4. **Per-run elevation.** A present human may force a checkpoint **on**. There is
-   deliberately no field that forces one off — a run choice can only strengthen.
+4. **Per-run elevation.** The evaluator's fourth layer accepts a per-run
+   `forceOn` set, which turns a checkpoint on that the defaults or a manifest
+   left off. There is deliberately no field that forces one off — a run choice
+   can only strengthen, and it cannot resolve a fail-closed block.
 
 Every verdict records which layer decided it (`org-bound`, `core-default`,
 `manifest`, `elevation`, `fail-closed`) plus a stable reason, so a fired or
@@ -124,7 +133,8 @@ Two rules protect the external-effect classes:
 
 ## 4. Separation of duties
 
-The rule (`src/lib/lifecycle/lifecycle-separation-of-duties.ts`):
+The rule, stated by `evaluateSeparationOfDuties`
+(`src/lib/lifecycle/lifecycle-separation-of-duties.ts`):
 
 > On an **org-required** gate, the producing actor cannot be the **sole**
 > approver.
@@ -143,13 +153,16 @@ The opt-in is the `self_approval_opt_in` flag carried on the org rule; it is
 meaningful only on a `required` bound and defaults to `false`. The lattice
 surfaces the requirement as `separationOfDutiesRequired` on its verdict, set
 exactly when the outcome is `required` and the organization did not opt in. The
-rule is evaluated against the **live** acting actor.
+rule takes the **live** acting actor as its reviewer input — never a captured or
+replayed identity — and the set of prior distinct approvers as its second input.
 
-**Live re-authorization points.** Two later actions are defined as
-re-authorization points rather than replays of a stored context: repair dispatch
-and a remote CMS apply. Captured request context is provenance — it is never
-reusable authority, and authority revoked between the decision and the action
-must be re-checked at the action.
+**Re-authorization points.** Two later actions are defined as re-authorization
+points rather than replays of a stored context: repair dispatch and a remote CMS
+apply. Captured request context is provenance, never reusable authority, so an
+authority revoked between the decision and the action must not carry the action
+through. The repair submission expresses this contractually: it carries an
+explicit re-authorization verdict, and the store refuses a response whose verdict
+is false.
 
 ## 5. Gate lifetime
 
@@ -161,8 +174,8 @@ On expiry:
 
 | Gate | Behaviour |
 |---|---|
-| Optional | Auto-resolves, releasing its held effect — a forgotten optional gate cannot pin an effect forever. |
-| Required | Stays pending, its effect stays blocked, and it is re-notified: a required review that expired unactioned is a genuine operational alert. |
+| Optional | Lapses into a release: the gate auto-resolves and its held effect flows — a forgotten optional gate cannot pin an effect forever. The resolution carries a synthetic `expiry:<gateId>` fingerprint, so an auto-lapse is always distinguishable from a human decision (whose fingerprint is a content hash). |
+| Required | Stays pending and its effect stays blocked, and each maintenance pass logs a warning naming the gate: a required review that expired unactioned is an operational condition, never an automatic release. |
 
 A checkpointed run parked behind a gate is released when that gate resolves —
 by a human decision or by the optional-expiry auto-resolve. A park whose policy
@@ -173,10 +186,12 @@ live may never be torn down without a resolution.
 ## 6. Activation
 
 The machinery ships behind two environment switches. Both default **off**, and
-both are activated only by the exact value `on` (case-insensitive, surrounding
+both are activated only by the value `on` (case-insensitive, surrounding
 whitespace trimmed); anything else — including unset — leaves the switch off.
-This is the deliberate rollout posture: the code is present and the policy model
-is complete, and a deployment turns the behaviour on when it chooses to.
+Each is read on every call rather than memoised, so a boot-time change takes
+effect without a module reload. Default-off is the deliberate posture: these
+switches change behaviour on hot write paths, so a deployment turns them on when
+it chooses to.
 
 | Variable | What it activates |
 |---|---|
@@ -203,16 +218,18 @@ only decides whether the machinery runs at all.
 
 ## 7. Worked examples
 
+How common intentions are expressed as keys.
+
 **Require review of every external publish, org-wide.**
-One rule per origin kind you care about, with `artifactType` `*`,
+One rule per origin kind that matters, with `artifactType` `*`,
 `destinationClass` `external_publish`, `bound` `required`. Nothing can weaken it:
 a manifest skip is ignored, and elevation only strengthens. Separation of duties
-applies unless you also set the self-approval opt-in.
+applies unless the self-approval opt-in is also set.
 
 **Let an agent skip review of its own intermediate scratch output.**
 Leave the org silent for that key and let the agent declare the skip. It is
 honoured because the class is non-external and the org expressed no bound — and
-it stops being honoured the moment you add a `required` bound.
+it stops being honoured the moment a `required` bound is added to that key.
 
 **Turn review off for one noisy artifact type.**
 A `forbidden` bound on the exact type. Because exact beats `*`, this coexists

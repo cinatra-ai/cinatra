@@ -11,10 +11,12 @@ what a producer must never build for itself.
   write choke points that emit the produced event.
 
 Core intercepts the artifact lifecycle at three checkpoints — **recommendation**
-(pre-production), **review** (post-production), and **post-change verification**
-— and decides whether each one fires. A producer never composes its own
-recommender, reviewer or verifier: it produces artifacts, declares a few facts
-about itself, and implements the typed repair round-trip if it can.
+(pre-production), **review** (post-production), and **post-change verification**.
+The policy lattice, not agent wiring, defines whether a checkpoint fires: the
+recommendation checkpoint is evaluated at run start, and the review checkpoint is
+evaluated per produced event. A producer never composes its own recommender,
+reviewer or verifier: it produces artifacts, declares a few facts about itself,
+and implements the typed repair round-trip if it can.
 
 ## 1. What makes something a producer
 
@@ -55,17 +57,19 @@ Three axes on the row decide everything downstream:
   `createSemanticArtifact` emits `none` (a plain durable local write has no
   external effect at creation time); a captured CMS snapshot emits
   `external_publish`, because it is a proposed remote apply.
-- **`continuation_mode`** — `async_effects_gated` (the standard: the run never
-  pauses retroactively, the artifact's downstream effect is held until the
-  decision) or `checkpointed` (per-flow opt-in: the run evaluates policy, then
-  parks). `createSemanticArtifact` emits the standard mode.
+- **`continuation_mode`** — `async_effects_gated` (the run never pauses
+  retroactively; the artifact's downstream effect is held until the decision) or
+  `checkpointed` (the run evaluates policy, then parks; the park is released by
+  the decision or by its deadline). All three emitters emit
+  `async_effects_gated`, which is the standard mode; `checkpointed` is the
+  alternative the event and orchestration contracts carry.
 
 ## 2. The declaration block
 
-A producer's lifecycle declarations are compiled onto
-`agent_templates.lifecycle_config` as JSON-as-text — the same shape
-`trigger_mode` / `gated_steps` use. The compiled shape is
-`CompiledManifestLifecycle` (`src/lib/lifecycle/lifecycle-policy.ts`):
+A producer's lifecycle declarations live on `agent_templates.lifecycle_config` as
+JSON-as-text — the same compiled-config column shape `trigger_mode` /
+`gated_steps` use. The shape the readers expect is `CompiledManifestLifecycle`
+(`src/lib/lifecycle/lifecycle-policy.ts`):
 
 ```json
 {
@@ -81,22 +85,23 @@ A producer's lifecycle declarations are compiled onto
 | `producedTypes` | array of strings | The artifact types the producer declares it creates. The lattice does not branch on it. |
 | `repairCapable` | boolean | Whether this producer implements the typed repair round-trip (§4). |
 
-**Reading is tolerant and fail-soft.** The parse (`parseCompiledManifest` in
-`packages/agents/src/lifecycle-review-orchestration-store.ts`,
-`parseLifecycleConfig` in `packages/agents/src/recommendation-interception.ts`)
-never throws: an absent, empty or malformed value yields no declarations, unknown
-checkpoint names are filtered out, non-string entries in `producedTypes` are
-dropped, and `repairCapable` is honoured only when it is a real boolean. A
-producer with no declarations gets pure core defaults.
+**Reading is tolerant.** Neither reader throws on a malformed value: an absent,
+empty or non-object value yields no declarations, and the producer gets pure core
+defaults. They differ in how far they sanitize, so **declare only the documented
+fields with the documented types**:
+
+| Reader | Behaviour |
+|---|---|
+| `parseCompiledManifest` (`packages/agents/src/lifecycle-review-orchestration-store.ts`) | Field-level filtering: unknown checkpoint names are dropped, non-string entries in `producedTypes` are dropped, and `repairCapable` is read only when it is a real boolean. |
+| `parseLifecycleConfig` (`packages/agents/src/recommendation-interception.ts`) | Structural only: a parsed object is passed through as-is. A field of the wrong shape is not corrected here. |
 
 **Resolution path.** The review orchestration resolves declarations from the
 produced event's `producer_run_id` → the run's template → `lifecycle_config`.
 Any missing link in that chain yields no declarations — which is a **stricter**
 outcome, not a looser one, because the core defaults then apply unchanged.
 
-A declaration block is data on the template row, so a producer that wants a skip
-honoured must have that block compiled onto the template it actually runs as.
-A block that never reaches `agent_templates.lifecycle_config` has no effect.
+A declaration block is data on the template row: a producer's declarations take
+effect only for runs whose template row carries the block.
 
 ## 3. How the policy lattice consumes the declarations
 
@@ -107,8 +112,9 @@ Whether a checkpoint fires is decided by the four-layer lattice
    destination class, origin kind) key. Absolute.
 2. **Core defaults** — apply only where the org expressed no bound.
 3. **Manifest declarations** — refine *within* bounds.
-4. **Per-run elevation** — a present human may force a checkpoint **on**; there
-   is no field that forces one off.
+4. **Per-run elevation** — a per-run `forceOn` set can force a checkpoint **on**.
+   The input shape carries no way to force one off: elevation can only
+   strengthen.
 
 A `requestedSkips` entry takes effect only when **all** of the following hold:
 
@@ -140,19 +146,25 @@ human-readable `reason`, so a skipped checkpoint is always explainable.
 | `review` | Fires for any external-effect class; fires for a durable `agent_produced` artifact; skips for `intermediate`; skips for a plain non-external `user_provided` artifact. |
 | `verification` | Fires when `changes_requested` occurred, and on `external_publish`; otherwise indeterminate (resolved by the fail-closed rule above). |
 
+The verification verdict is the lattice's definition for that checkpoint. The
+verification **record** itself is written by the paths that hold both sides of a
+comparison — the landed repair, and the remote-apply read-back — each supplying
+the reviewed/repaired pair and the scope manifest the verdict is computed over.
+
 ## 4. Declaring repair capability
 
 `repairCapable: true` says this producer can implement a reviewer's
-`changes_requested` itself. Core routes the decision accordingly
-(`routeChangesRequested`):
+`changes_requested` itself. The routing function `routeChangesRequested` is a
+total mapping over the capability flag and an optional organization repair route:
 
-| Declaration | Route |
+| Inputs | Route |
 |---|---|
 | `repairCapable: true` | `producer_repair` — the producer implements the repair, per its continuation mode. |
-| `repairCapable` absent/false, org repair route configured | `org_repair_route`. |
-| `repairCapable` absent/false, no org route | `human_escalation`. |
+| Not repair-capable, a non-empty organization repair route supplied | `org_repair_route`. |
+| Not repair-capable, no route supplied | `human_escalation`. |
 
-Nothing silently drops: every `changes_requested` lands on one of the three.
+Nothing silently drops: every `changes_requested` lands on one of the three, and
+the capability flag is the only one of the two inputs a producer controls.
 
 ### The round-trip a repair-capable producer must satisfy
 
@@ -177,16 +189,22 @@ Three further properties an author should design for:
 - **The successor is pinned into a NEW gate.** A repaired revision is never
   re-pinned under the reviewer's original gate; the held effect re-points onto
   the successor gate.
-- **Repair dispatch is a live re-authorization point.** The captured request
-  context is provenance, never reusable authority — the repair call carries a
-  live `reauthorized` verdict resolved at dispatch time.
+- **Repair dispatch is a re-authorization point, not a replay.** The repair
+  submission carries an explicit `reauthorized` verdict and the store refuses a
+  response whose verdict is false. The captured request context is provenance,
+  never reusable authority, so that verdict must be resolved live at dispatch —
+  passing a stale or assumed `true` defeats the contract.
+- **A stale or dead base is terminal for that attempt.** A `stale-base` or
+  `tombstoned-base` outcome marks the repair stale; a producer-shape error
+  leaves the repair open to retry.
 - **Cycles are bounded.** A single review lineage takes at most
   `MAX_REPAIR_CYCLES` (5) repair round-trips; beyond the bound core escalates to
   a human instead of reopening again.
 
-`packages/agents/src/blog-post-repair-producer.ts` is the worked example: it
-declares `producedTypes` + `repairCapable`, materialises the repaired body into a
-successor artifact, and submits the typed response through the repair store.
+`packages/agents/src/blog-post-repair-producer.ts` shows the shape: a declaration
+block naming `producedTypes` and `repairCapable`, materialisation of the repaired
+body into a successor artifact, and submission of the typed response through the
+repair store.
 
 ### Verification does not trust the producer's report
 
@@ -194,10 +212,14 @@ Post-change verification re-derives what changed from the actual field maps
 (`computeVerificationVerdict`); the producer's per-finding `applied` flag is
 provenance only. The outcomes are `verified`, `drifted` (a change outside the
 review's scope manifest — this takes precedence, because an unexpected change is
-the safety concern) and `unmet` (an accepted, field-scoped finding whose field
-did not change, a failed validator, or a representation that does not correspond
-to the repaired revision). Claiming a finding applied while changing nothing
-produces `unmet`.
+the safety concern) and `unmet` (an accepted, field-scoped finding whose
+projected field is present and did **not** change, a validator failure the caller
+reported, or a representation that does not correspond to the repaired revision).
+Claiming a finding applied while changing nothing produces `unmet`.
+
+The verdict judges only what it can see: a finding whose path is absent from both
+projections is not asserted unapplied. Exposing the finding's field through the
+projector is what makes such a finding verifiable.
 
 ## 5. What a producer must not do
 
@@ -208,13 +230,14 @@ produces `unmet`.
   event axes in §1.
 - **No parallel decision store.** Review decisions live in the gate store. A
   producer never records an approval, rejection or disposition of its own.
-- **The one agent-facing seam is advisory.** Any agent may attach an advisory
-  comment to a gate through the advisory seam
-  (`src/lib/lifecycle/lifecycle-advisory-seam.ts`): gate-bound,
+- **Commentary rides the advisory seam, and it carries no authority.** The
+  advisory contract (`src/lib/lifecycle/lifecycle-advisory-seam.ts`) is the one
+  channel by which a non-deciding party annotates a gate: gate-bound,
   provenance-stamped, idempotent per `(gate, idempotencyKey)`, and
   **structurally decision-free** — the request type admits no verdict field, and
   an object smuggling `disposition`, `decision`, `verdict`, `approve` or
-  `reject` through an untyped boundary is rejected.
+  `reject` through an untyped boundary is rejected. Commentary is never a
+  substitute for, or a second path to, a decision.
 - **Do not treat a requested skip as a guarantee.** It is honoured only under
   §3's conditions; an org bound or an external-effect class overrides it.
 - **Do not repurpose `reject`.** `reject` is a tombstone with unchanged
@@ -227,15 +250,15 @@ produces `unmet`.
    path that skips the produced event.
 2. Emit the right axes: the physical origin kind, and a destination class that
    names the real external effect (`none` when there is none).
-3. Choose the continuation mode deliberately: `async_effects_gated` unless the
-   flow genuinely needs to park.
-4. Compile a declaration block onto the template only for facts that are true:
+3. Emit `async_effects_gated` unless the flow genuinely parks; the mode is a
+   property of the write, not of the agent.
+4. Put a declaration block on the template only for facts that are true:
    `producedTypes` for what you create, `repairCapable` only if you implement
    §4, `requestedSkips` only for checkpoints you can justify skipping on
    non-external output.
-5. If `repairCapable`, satisfy every lineage rule in §4 and expect verification
-   to re-derive your work.
-6. Attach commentary through the advisory seam; leave decisions to core.
+5. If `repairCapable`, satisfy every lineage rule in §4, resolve the
+   re-authorization verdict live, and expect verification to re-derive your work.
+6. Keep commentary on the advisory seam; leave decisions to core.
 
 ## See also
 

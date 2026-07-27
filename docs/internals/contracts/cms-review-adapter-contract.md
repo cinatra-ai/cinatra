@@ -31,10 +31,13 @@ by withholding the capability. The three write-driving members delegate to a sea
 bound during boot; if that binding is absent they **fail closed** with an
 explicit error rather than silently dropping a capture.
 
-**Identity is never adapter input.** Organization, run and acting subject are
-derived from the trusted request frame inside the host binding
-(`src/lib/cms-review-host-seam.ts`). A capture with no resolvable organization is
-refused; a verification with no resolvable organization returns `no-org`.
+**Tenancy is never adapter input.** The organization, the run and the acting
+subject stamped on a capture are derived from the trusted request frame inside
+the host binding (`src/lib/cms-review-host-seam.ts`), never from the capture
+input. A capture with no resolvable organization is refused; a verification with
+no resolvable organization returns `no-org`. The gate and run **coordinates** on
+a read-back do come from the adapter — and are validated against the stored
+binding before anything is recorded (§6).
 
 ## 2. Snapshot capture
 
@@ -56,12 +59,13 @@ binding, nor a produced event without its snapshot.
 
 Facts the adapter should design around:
 
-- **The representation's declared mime is the adapter's resolved mime.** It is
-  the representation's identity, and every mime-keyed consumer downstream reads
-  it. The shipped CMS adapters resolve to the canonical CMS-fields serialization
-  `application/vnd.cinatra.cms-fields+json`, which is the one representation form
-  the snapshot object type accepts. The blob store's sniffed mime is recorded
-  separately as provenance only.
+- **The representation's declared mime is the adapter's resolved mime**, written
+  through unchanged. It is the representation's identity, and every mime-keyed
+  consumer downstream reads it. The snapshot object type declares exactly one
+  accepted representation form — the canonical CMS-fields serialization
+  `application/vnd.cinatra.cms-fields+json` — so that is the mime an adapter
+  resolves to for the snapshot to serve and render. The blob store's sniffed
+  mime is recorded separately as provenance only.
 - **Produced-event axes.** A captured snapshot's physical origin is
   `external_link` (mapping to the `user_provided` lattice axis) and its
   destination class is `external_publish` — the external-effect class that makes
@@ -167,7 +171,7 @@ in-scope deletion or an in-scope rewrite by the site cannot read as faithful.
 |---|---|
 | `verified` | Every authorised path carries the approved value; nothing changed outside the manifest. |
 | `drifted` | A changed field outside the scope manifest — for example a site plugin rewriting content on save. Takes precedence over `unmet`. |
-| `unmet` | An authorised change did not land, a validator failed, or the representation does not correspond to the read-back. |
+| `unmet` | An authorised path does not carry the approved value — an in-scope rewrite or deletion — with nothing changed outside the manifest. |
 
 `outOfScope` returns the offending paths.
 
@@ -197,11 +201,14 @@ inside another substituted region.
 
 ## 8. Pinned renders
 
-At gate creation the host fetches the adapter's authenticated preview, renders it
-in isolation, and pins the result alongside the snapshot
-(`src/lib/artifacts/cms-preview-capture.ts`). A capture is written once and never
-again, so re-viewing an old gate shows the original picture even after the site's
-theme changes. The capture's artifact id is derived from
+Inside the same `captureStagedWrite` call that persists the snapshot, the host
+fetches the adapter's authenticated preview, renders it in isolation, and pins
+the result against the snapshot's `(artifact, revision)` pair
+(`src/lib/artifacts/cms-preview-capture.ts`) — the same pair a gate pins, which
+is how a capture is later found for the gate. Taking the pictures then, rather
+than at view time, is what makes them replay-stable: a capture is written once
+and never again, so re-viewing an old gate shows the original picture even after
+the site's theme changes. The capture's artifact id is derived from
 `sha256(boundArtifactId ␀ boundSnapshotRevisionId ␀ role)` (formatted
 uuid-shaped, so it is indistinguishable from any other artifact id downstream),
 so exactly one capture exists per (pinned target, role) and a re-drive collides
@@ -209,7 +216,7 @@ on the primary key instead of writing a second record.
 
 | Role | What it shows |
 |---|---|
-| `before` | The live page as it stood at gate creation. The effect is held, so this is the real "now". |
+| `before` | The live page as it stood at capture time. The effect is held, so this is the real "now". |
 | `current` | The proposal, composed into that same captured page's owned regions. The proposal is deliberately not on the site, so it cannot be fetched — it is composed, and the surface says so. |
 | `applied` | The page as it stood after an approved apply, fetched fresh at read-back time. |
 
@@ -226,17 +233,24 @@ on the primary key instead of writing a second record.
   segment, the resource id, validated as a positive decimal integer within the
   platform's bound: `/wp-json/cinatra/v1/preview/<id>` (id ≤ 2147483647) and
   `/cinatra/preview/<id>` (id ≤ 4294967295, because that id space is unsigned).
+  The adapter's external id may be bare (`<id>`) or site-scoped
+  (`<instanceId>:<id>`); only the segment after the last colon is read, and the
+  instance segment contributes nothing to the fetched URL.
 - A site whose client kind has no preview adapter is refused by name, not probed.
 
 **Credential and transport.** The request is signed with the site's
 connect-provisioned shared secret over the canonical content `preview.<id>`,
-using the host's existing outbound signer, with a fresh single-use id per
-attempt; the site recomputes the signature and compares in constant time. The
-secret never enters the renderer subprocess, the stored capture, or a log. The
-URL passes the shared egress guard before a byte is sent and redirects are not
-followed, so an open redirect on the site cannot walk the signed request
-elsewhere. Only an authentication refusal is retried under a second candidate
-secret (a rotation window).
+using the host's existing outbound signer, with a freshly minted request id per
+attempt — the adapter's receiver is expected to recompute the signature, compare
+it in constant time, and consume the request id single-use, so a legitimate retry
+is never a replay. The secret never enters the renderer subprocess, the stored
+capture, or a log. The URL passes the shared egress guard (scheme, credentials,
+internal aliases, IP ranges, rebind pinning) before a byte is sent, and redirects
+are not followed, so an open redirect on the site cannot walk the signed request
+elsewhere; the one carve-out is a loopback HTTP origin on a non-production
+instance, which is pinned directly to the loopback address — the same origin
+class the connect handshake accepts there. Only an authentication refusal is
+retried under a second candidate secret (a rotation window).
 
 **Inertness and isolation.** The fetched page is sanitized and re-checked before
 anything is stored or rendered; a page still carrying an executable construct is
@@ -247,10 +261,10 @@ run.
 
 ## 9. The degradation contract
 
-Nothing in the render path may fail the gate. Every failure becomes a **stored
-degraded capture** carrying a **named** reason, so the data-plane review still
-works and the reviewer is told what is missing. The reason set is closed — a new
-failure mode has to be named to ship:
+Nothing in the render path may fail the staged write or the gate. Every failure
+resolves to a **named** reason rather than an exception, so the content review
+still works and the reviewer can be told what is missing. The reason set is
+closed — a new failure mode has to be named to ship:
 
 | Class | Reasons |
 |---|---|
@@ -259,9 +273,13 @@ failure mode has to be named to ship:
 | Render | `sanitization-failed`, `renderer-unavailable`, `render-failed`, `capture-timeout` |
 | Composition | `no-proposed-fields`, `no-owned-regions`, `regions-unplaceable`, `composition-not-inert` |
 
-Each reason carries reviewer-facing copy (`captureDegradeCopy`). A degraded
-capture is stored with `status: "degraded"` and no representation — the record
-exists precisely so the gap can be stated rather than silently vanishing.
+Each reason carries reviewer-facing copy (`captureDegradeCopy`). Where the
+degraded outcome is persisted it is stored with `status: "degraded"` and no
+representation — the record exists precisely so the gap can be stated rather than
+silently vanishing. Persistence is itself best-effort: a capture that exceeds its
+overall time budget, or whose degraded record cannot be written, yields the named
+outcome without a stored record. In every case the reason is named and the write
+path is unaffected.
 
 **Decidability is preserved in every degraded case.** The decision binds to the
 snapshot revision, not to the picture: captures are context. An adapter with no
