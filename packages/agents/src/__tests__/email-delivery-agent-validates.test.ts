@@ -199,7 +199,7 @@ describe("email-delivery-agent OAS — send-confirmation gated shape", () => {
   });
 
   it("package.json declares the pinned milestone version, drops trigger-agent dependency, and declares hasApprovalGates:true", () => {
-    expect(pkg.version).toBe("0.1.1");
+    expect(pkg.version).toBe("0.1.2"); // cinatra#2090 fold bumped the patch
     expect(pkg.cinatra?.agentDependencies).toBeUndefined();
     // The agent now carries a real approval gate — the manifest classifies it truthfully.
     expect(pkg.cinatra?.hasApprovalGates).toBe(true);

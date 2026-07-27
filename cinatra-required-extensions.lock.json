@@ -19,9 +19,9 @@
     {
       "packageName": "@cinatra-ai/author-agent",
       "repo": "cinatra-ai/author-agent",
-      "resolvedSha": "73dd34b3e8030422e8436a33554b227edd2ddd47",
-      "packageVersion": "0.1.0",
-      "treeSha256": "72184d3cffdbf65ecc0a93e0ba7e5d285a27c0986d7b5a73704ff40e53a44e1f"
+      "resolvedSha": "e33ec3e4f1b8b6e80e56ad6c782a0f91feb951d1",
+      "packageVersion": "0.1.1",
+      "treeSha256": "55849e8177c3f3a5c1d77e39fe582a21c3b2a83077afd72de1b69d59a12ad629"
     },
     {
       "packageName": "@cinatra-ai/chart-artifact",
@@ -33,9 +33,9 @@
     {
       "packageName": "@cinatra-ai/code-reviewer-agent",
       "repo": "cinatra-ai/code-reviewer-agent",
-      "resolvedSha": "53effcf232591b039947ea9aa3bc9a9fd952f20b",
-      "packageVersion": "0.1.0",
-      "treeSha256": "1459be627e5c7e9b1ff1c3d5beecebb19456dc5fdb59567c16584e2999884401"
+      "resolvedSha": "d15637fbe1ecaf675513187f272093aae0b27126",
+      "packageVersion": "0.1.1",
+      "treeSha256": "bb2db2f51aeda3db6435a679aa6be8416de06cb445a96fb88d63826a8e537f0e"
     },
     {
       "packageName": "@cinatra-ai/dashboard-artifact",
@@ -96,16 +96,16 @@
     {
       "packageName": "@cinatra-ai/planner-agent",
       "repo": "cinatra-ai/planner-agent",
-      "resolvedSha": "fb98b08ac03117c6fb6285dc47adfb45f9a1c45b",
-      "packageVersion": "0.1.0",
-      "treeSha256": "e46c64b5dfeb8c6270afb22332cb6ed13ed957dde93824abfca4b037625f9d1c"
+      "resolvedSha": "9d43001544205362afa9c9c737bb4643b7bfda4e",
+      "packageVersion": "0.1.1",
+      "treeSha256": "4e53771b200bd2f14f3caf4121b8d5021639fc393f50849388e8eb85dbc115aa"
     },
     {
       "packageName": "@cinatra-ai/security-reviewer-agent",
       "repo": "cinatra-ai/security-reviewer-agent",
-      "resolvedSha": "4eaee35a7eeac71e1625e0eba89046196bcfac29",
-      "packageVersion": "0.1.0",
-      "treeSha256": "c1174b488fbfc260dec80bbe8a1a33774920f042e03e830abc7b496815f16ada"
+      "resolvedSha": "aa44488c38b4b3295b37591d9045d25b88974475",
+      "packageVersion": "0.1.1",
+      "treeSha256": "db8f5e17ea87afc7a2bcdb1c0ff7defc0bf18c44a3e9437bb0b5a1008c473a9c"
     },
     {
       "packageName": "@cinatra-ai/text-artifact",
