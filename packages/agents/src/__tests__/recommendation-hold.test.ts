@@ -79,8 +79,9 @@ beforeEach(() => {
   readContinuationParksForRun.mockResolvedValue([]);
   recommendSkillsForAgentTask.mockResolvedValue([ranked()]);
   maybeParkCheckpoint.mockResolvedValue({ parked: true, parkId: "park-1", reevaluationIntent: false });
-  // The chip-row hold is fenced default-OFF; activate it for the hold tests.
-  process.env.CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW = "on";
+  // The chip-row hold is DEFAULT-ON (#2047 ruling): leave the switch UNSET so
+  // every test below exercises the shipped default posture.
+  delete process.env.CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW;
 });
 
 afterEach(() => {
@@ -88,12 +89,29 @@ afterEach(() => {
 });
 
 describe("maybeHoldRunForRecommendation", () => {
-  it("fence OFF (default) → never parks (origin/main behaviour unchanged)", async () => {
-    delete process.env.CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW;
+  it("switch UNSET (the shipped default) → the hold is ACTIVE and a human-present run parks", async () => {
+    const out = await maybeHoldRunForRecommendation({ run: run(), template: template() });
+    expect(out.held).toBe(true);
+    expect(maybeParkCheckpoint).toHaveBeenCalledTimes(1);
+  });
+
+  it("explicit opt-out `off` → never parks (the pre-flip behaviour, on demand)", async () => {
+    process.env.CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW = "off";
     const out = await maybeHoldRunForRecommendation({ run: run(), template: template() });
     expect(out.held).toBe(false);
     expect(maybeParkCheckpoint).not.toHaveBeenCalled();
     expect(readContinuationParksForRun).not.toHaveBeenCalled();
+  });
+
+  it("the opt-out is trimmed + case-insensitive; a legacy explicit `on` still activates", async () => {
+    process.env.CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW = "  OFF ";
+    expect(
+      (await maybeHoldRunForRecommendation({ run: run(), template: template() })).held,
+    ).toBe(false);
+    process.env.CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW = "on";
+    expect(
+      (await maybeHoldRunForRecommendation({ run: run(), template: template() })).held,
+    ).toBe(true);
   });
 
   it("a HEADLESS run never parks (never evaluates)", async () => {

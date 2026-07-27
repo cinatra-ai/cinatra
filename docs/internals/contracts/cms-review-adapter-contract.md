@@ -21,13 +21,13 @@ An adapter resolves it **optionally and lazily**, and is inert when it is absent
 
 | Member | Contract |
 |---|---|
-| `isReviewActive()` | Reports the review-orchestration activation state truthfully. An adapter calls this first; when it is false the adapter passes the staged write through unchanged. |
+| `isReviewActive()` | Reports the review-orchestration activation state truthfully — **active by default**, false only where the host deployment sets `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`. An adapter calls this first; when it is false the adapter passes the staged write through unchanged. |
 | `captureStagedWrite(input)` | Captures the staged content as an immutable local snapshot + its apply binding, in one transaction. Returns the snapshot identity. |
 | `resolveDisposition({artifactId, snapshotRevisionId})` | The five-state disposition of the captured write's external effect: `held`, `approved`, `rejected`, `ungated`, `unknown`, plus the gate reference when there is one. |
 | `recordApplyVerification(input)` | Records the post-apply read-back verification against the stored scope manifest. |
 
-Publication is unconditional; the fence is reported through `isReviewActive`, not
-by withholding the capability. The three write-driving members delegate to a seam
+Publication is unconditional; the activation state is reported through
+`isReviewActive`, not by withholding the capability. The three write-driving members delegate to a seam
 bound during boot; if that binding is absent they **fail closed** with an
 explicit error rather than silently dropping a capture.
 

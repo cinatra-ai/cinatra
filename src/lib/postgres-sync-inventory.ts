@@ -104,6 +104,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Durable Postgres store behind the EnvironmentLayerCache (exec-plane S3 A2/A3, cinatra#1708). Its reads/writes run on the build / retention-GC / lifecycle-reference cold paths (a later process reusing an earlier layer build; the GC reap), never a per-request hot store. Migrates with the exec-plane store async conversion.",
   },
+  "src/lib/execution/execution-audit-read.ts": {
+    class: "migratable-background-setup",
+    justification:
+      "Org-admin READ of execution-plane audit rows for the Execution health screen (exec-plane S1b, cinatra#2138). One bounded, indexed SELECT over audit_events on an admin configuration page — never a per-request hot path — and it degrades to an empty list rather than throwing. Migrates with the surrounding execution stores.",
+  },
   "src/lib/postgres-schema-init.ts": {
     class: "migratable-background-setup",
     justification:

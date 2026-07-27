@@ -182,6 +182,20 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
   // agentAuthPolicy: template-level AgentAuthPolicy (JSON-as-text). Nullable;
   // null = use DEFAULT_AGENT_AUTH_POLICY. See packages/agent-builder/src/auth-policy.ts.
   agentAuthPolicy:   text("agent_auth_policy"),
+  // Per-agent EXECUTION config (exec-plane S3 slice B, cinatra#1708; epic #1705).
+  // executionEnvironment: the PROJECT-agent authoring surface for the L1 declared
+  // environment — the raw ExecutionEnvironmentSpec as JSON-as-text (the
+  // compiled_plan / gated_steps / lifecycle_config convention on this table),
+  // read through the SAME fail-closed parser packaged-agent manifests go through
+  // so both authoring surfaces resolve to one internal type. Nullable; null = no
+  // declared environment (L0).
+  executionEnvironment: text("execution_environment"),
+  // executionEnabled: the per-agent execution opt-out (epic D4). THREE-valued on
+  // purpose — null = inherit the instance/org posture, true = explicitly on,
+  // false = explicitly opted out. A DEFAULT would silently re-decide the posture
+  // for every pre-slice-B row. Physical columns added additively by core__0085 +
+  // the bootstrap DDL mirror in src/lib/drizzle-store.ts.
+  executionEnabled:  boolean("execution_enabled"),
   createdAt:         timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt:         timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({

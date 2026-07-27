@@ -623,8 +623,9 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
     expect(after.find((r) => r.skillId === "skill-a")?.skillRevisionId).toBe("rev-a"); // unchanged
   });
 
-  it("FENCE: with the S1 fence OFF, the orchestration drain is inert", async () => {
-    delete process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV];
+  it("OPT-OUT: with the S1 switch explicitly `off`, the orchestration drain is inert", async () => {
+    // #2047 activation flip: DEFAULT-ON; the inert posture needs `off` out loud.
+    process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "off";
     const ev = await produce("document", { destinationClass: "external_publish" });
     const summary = await orch.sweepReviewOrchestration();
     expect(summary.gatesCreated).toBe(0);

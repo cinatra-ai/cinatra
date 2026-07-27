@@ -67,7 +67,12 @@ import {
   saveTwentyConnectionAction,
   disconnectTwentyConnectionAction,
 } from "@/app/campaigns/connector-setup-actions";
-import { requireAuthSession, isPlatformAdmin, resolveOrgRoleForSession } from "@/lib/auth-session";
+import {
+  requireAuthSession,
+  isPlatformAdmin,
+  resolveOrgRoleForSession,
+  resolveOrgRoleForUser,
+} from "@/lib/auth-session";
 import { getNangoStatus } from "@/lib/nango-system";
 import { encryptSecret, decryptSecret } from "@/lib/instance-secrets";
 import { buildAppMcpSelfClientHeaders } from "@/lib/mcp-self-client";
@@ -208,6 +213,16 @@ import {
   type AddManualServerRouteResult,
   type RemoveManualServerRouteResult,
 } from "@/lib/wordpress-server-enrollment";
+// cinatra#2019 S4 — the trusted-site native-injection OPT-IN store + the
+// org-admin consent members bound onto the `wordpress-mcp` publication below.
+import {
+  readNativeInjectionPolicy,
+  setNativeInjectionMode,
+} from "@/lib/connector-instance-native-injection-store";
+import {
+  createWordPressNativeInjectionConsentMembers,
+  type WordPressNativeInjectionConsentSurface,
+} from "@/lib/connector-instance-native-injection-consent";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import { logAuditEvent } from "@/lib/authz/audit";
 import { Buffer } from "node:buffer";
@@ -1077,7 +1092,33 @@ export function registerHostConnectorServices(): void {
       await requireWordPressInstanceOrgAdmin(instanceId);
       invalidateWordPressServerArtifacts(instanceId);
     },
-  } satisfies HostWordPressMcpServerEnrollmentSurface);
+    // --- trusted-site native-injection OPT-IN surface (cinatra#2019 S4) ------
+    // ADDITIVE host-local members (the S3 manual-route / #982 structural
+    // precedent — the frozen SDK `HostWordPressMcpService` is untouched; the
+    // connector resolves these structurally and an older host simply lacks
+    // them, which reads as "cannot enable" fail-closed). Authorization lives
+    // INSIDE the members: cookie session + `connector.update` (org_admin+) in
+    // the org that OWNS the instance, resolved from the persisted row — never
+    // caller input, no platform-admin synthesis. On enable/re-acknowledge the
+    // member stamps the persisted consent with the HOST-shipped descriptor-set
+    // version/hash + disclosure version (the caller can only choose the mode).
+    // DORMANT: nothing consumes the persisted mode until the connector's
+    // toolbox guard replacement lands; enabling changes no injection behavior.
+    ...createWordPressNativeInjectionConsentMembers({
+      requireSession: () => requireAuthSession(),
+      resolveInstanceOrgId: (instanceId) => {
+        // Mirrors the instance-write-authority org-binding read: the persisted
+        // row's org (cinatra#274), trimmed; unknown/unbound → null (refused).
+        const row = resolveWordPressInstanceAdmin()?.readInstanceById(instanceId) ?? null;
+        if (!row) return null;
+        return typeof row.orgId === "string" && row.orgId.trim() ? row.orgId.trim() : null;
+      },
+      resolveOrgRole: (orgId, userId) => resolveOrgRoleForUser(orgId, userId),
+      readPolicy: (connectorKey, instanceId, ownerOrgId) =>
+        readNativeInjectionPolicy(connectorKey, instanceId, ownerOrgId),
+      writeMode: (input) => setNativeInjectionMode(input),
+    }),
+  } satisfies HostWordPressMcpServerEnrollmentSurface & WordPressNativeInjectionConsentSurface);
 
   // The WordPress post/media CONTENT surface (`@cinatra-ai/host:
   // wordpress-content`, cinatra#172 Stage H3) is NO LONGER host-published:

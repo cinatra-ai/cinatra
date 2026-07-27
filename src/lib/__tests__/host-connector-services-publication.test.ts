@@ -93,6 +93,11 @@ vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: async () => ({ user: { id: "viewer-1", role: "user,admin" } }),
   isPlatformAdmin: (s: { user?: { role?: string | null } } | null | undefined) =>
     String(s?.user?.role ?? "").split(",").map((v) => v.trim()).includes("admin"),
+  // The S4 native-injection consent members resolve the owning-org membership
+  // role through this. undefined = non-member ⇒ the gate denies fail-closed
+  // (this suite only asserts member PRESENCE; behavior is pinned in
+  // connector-instance-native-injection-consent.test.ts).
+  resolveOrgRoleForUser: async () => undefined,
 }));
 vi.mock("@/lib/nango-system", () => ({ getNangoStatus: () => ({ status: "connected" }) }));
 vi.mock("@/lib/instance-secrets", () => ({ encryptSecret: (v: string) => v, decryptSecret: (v: string) => v }));
@@ -504,6 +509,16 @@ describe("transport-DI inversion services (cinatra#151 Stage 3)", () => {
     expect(wordpress.listInstances()).toEqual([]);
     expect(typeof wordpress.probeAdapter).toBe("function");
     expect(typeof wordpress.deleteInstance).toBe("function");
+    // cinatra#2019 S4 — the trusted-site native-injection OPT-IN members ride
+    // this same publication as ADDITIVE host-local (structurally-typed)
+    // members; the org-admin gate + host consent stamping live INSIDE them
+    // (behavior pinned in connector-instance-native-injection-consent.test.ts).
+    const nativeInjectionOptIn = wordpress as unknown as {
+      readNativeInjectionPolicy?: unknown;
+      setNativeInjectionMode?: unknown;
+    };
+    expect(typeof nativeInjectionOptIn.readNativeInjectionPolicy).toBe("function");
+    expect(typeof nativeInjectionOptIn.setNativeInjectionMode).toBe("function");
 
     const runtimeMode = resolveSingle<HostRuntimeModeService>(svc.runtimeMode);
     expect(runtimeMode.isDevelopment()).toBe(false);

@@ -1079,9 +1079,11 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
         // ArtifactProduced event, written in THIS same held-lock tx as the
         // artifact/representation so review is driven by a durable, same-tx
         // idempotent event (deterministic event_id → ON CONFLICT DO NOTHING).
-        // FENCED default-OFF: `maybeBuildProducedEventInsertOp` returns null when
-        // the S1 activation fence is off, so this splices NOTHING and the tx is
-        // byte-identical to origin/main. Appended LAST so every fixed result
+        // SWITCHED default-ON (cinatra#2047, ruling 2026-07-27): the op is
+        // spliced unless a deployment sets
+        // `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`, in which case
+        // `maybeBuildProducedEventInsertOp` returns null, this splices NOTHING and
+        // the tx is byte-identical to the pre-flip one. Appended LAST so every fixed result
         // offset above (PRODUCER_OPS_OFFSET + the producer splice) is untouched;
         // its result is never parsed. `originKind` is the physical
         // ArtifactOriginKind — the emitter maps it onto the lattice axis.

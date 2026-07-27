@@ -17,7 +17,7 @@ import {
 import { assistantThreadSchemaQueries, assistantHandleSchemaQueries } from "@/lib/assistant-thread-schema";
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
-import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema";
+import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema";
 import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries } from "@/lib/skill-lifecycle-schema";
 import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import {
@@ -26,7 +26,7 @@ import {
   runContextSelectionsSchemaQueries,
 } from "@/lib/artifact-claim-schema";
 import { publicationOperationLedgerSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
-import { environmentLayerStoreSchemaQueries } from "@/lib/execution/environment-layer-schema";
+import { environmentLayerStoreSchemaQueries, agentExecutionConfigSchemaQueries } from "@/lib/execution/environment-layer-schema";
 import { auditorSnapshotSchemaQueries } from "@/lib/auditor-snapshot-schema";
 import { artifactReviewGateSchemaQueries, lifecycleInterceptionsSchemaQueries, lifecycleRepairSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
 import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
@@ -2127,7 +2127,7 @@ $body$` },
     // (reuse an earlier build; one shared GC/teardown source of truth). DDL in
     // the pure-strings leaf src/lib/execution/environment-layer-schema.ts;
     // existing deployments also converge via migration core__0057.
-    ...environmentLayerStoreSchemaQueries(schemaName),
+    ...environmentLayerStoreSchemaQueries(schemaName), ...agentExecutionConfigSchemaQueries(schemaName),
     // ---- authoring_invocation_ledger ----
 
     // Operational recursion-control table for authoring-skill chains.
@@ -4018,7 +4018,7 @@ END $$` },
       created_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS widget_stream_tokens_expires_at_idx ON "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (expires_at)` },
-    ...extensionUpdateReadModelSchemaQueries(schemaName), ...skillEfficacySchemaQueries(schemaName), ...connectorInstanceToolPolicySchemaQueries(schemaName), ...connectorInstanceServerSchemaQueries(schemaName), ...connectorInstancePendingCallSchemaQueries(schemaName), ...connectorInstanceConfirmationPolicySchemaQueries(schemaName), // DDL in pure-strings leaves for file-size-ratchet headroom (#1041 outcome-3 / #1317 / #1405 pattern): extension update read-model + cinatra#1368 skill-efficacy exposure telemetry + cinatra#2017 S2 connector_instance_tool_policy + cinatra#2018 S3 connector_instance_server & site_inventory + cinatra#2020 S5 connector_instance_pending_call & confirmation_policy (additive bootstrap DDL, no numbered migration; all run late)
+    ...extensionUpdateReadModelSchemaQueries(schemaName), ...skillEfficacySchemaQueries(schemaName), ...connectorInstanceToolPolicySchemaQueries(schemaName), ...connectorInstanceServerSchemaQueries(schemaName), ...connectorInstancePendingCallSchemaQueries(schemaName), ...connectorInstanceConfirmationPolicySchemaQueries(schemaName), ...connectorInstanceNativeInjectionSchemaQueries(schemaName), // DDL in pure-strings leaves for file-size-ratchet headroom (#1041 outcome-3 / #1317 / #1405 pattern): extension update read-model + cinatra#1368 skill-efficacy exposure telemetry + cinatra#2017 S2 connector_instance_tool_policy + cinatra#2018 S3 connector_instance_server & site_inventory + cinatra#2020 S5 connector_instance_pending_call & confirmation_policy + cinatra#2019 S4 connector_instance_native_injection_policy opt-in (additive bootstrap DDL, no numbered migration; all run late)
     // -----------------------------------------------------------------------
     // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
     //

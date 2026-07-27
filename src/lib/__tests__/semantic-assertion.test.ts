@@ -105,6 +105,54 @@ describe("buildAssertSemanticTypeQueries — tx-composable builder", () => {
   });
 });
 
+// cinatra#2047 D-8. The archive op has ALWAYS excluded binding rows ("a classic
+// never displaces a binding" — epic #1424); the INSERT did not treat one as a
+// precedence block, so an active same-extension binding left the
+// `sa_active_unique_idx (org_id, artifact_id, extension)` slot occupied while the
+// INSERT still fired → duplicate key, rolling back the caller's whole write. That
+// is the D-8 throw on every org holding an artifact pack's claim (the writer mints
+// the binding in Tx2 since cinatra#1868). These pin the SQL-level symmetry; the
+// real-Postgres behaviour is proven in
+// `src/lib/artifacts/__tests__/claimed-production-write-serve-review-2047.integration.test.ts`.
+describe("buildAssertSemanticTypeQueries — an active BINDING blocks the classic INSERT (cinatra#2047 D-8)", () => {
+  it("the archive EXCLUDES bindings and the insert guard BLOCKS on one — symmetric, so a same-ext binding is a precedence no-op, never a duplicate key", async () => {
+    const { buildAssertSemanticTypeQueries } = await import(
+      "@/lib/artifacts/semantic-assertion-store"
+    );
+    const { queries } = buildAssertSemanticTypeQueries({
+      orgId: "o",
+      artifactId: "a",
+      extension: ICP,
+      assertedBy: "agent",
+    });
+    // Archive half (unchanged): binding rows are never superseded by a classic.
+    expect(queries[0].text).toMatch(/assertion_basis <> 'binding'/);
+    // Insert half: an active same-ext binding is an UNCONDITIONAL block, ORed
+    // ahead of the rank comparison (a binding carries asserted_by='system',
+    // which the rank CASE floors to 0 — no rank comparison can ever block on it).
+    expect(queries[1].text).toMatch(/s3\.assertion_basis = 'binding'/);
+    const insertGuard = queries[1].text.slice(queries[1].text.indexOf("WHERE NOT EXISTS"));
+    expect(insertGuard.indexOf("s3.assertion_basis = 'binding'")).toBeLessThan(
+      insertGuard.indexOf("CASE s3.asserted_by"),
+    );
+  });
+
+  it("EVERY source (incl. matcher and user) is blocked by an active same-ext binding", async () => {
+    const { buildAssertSemanticTypeQueries } = await import(
+      "@/lib/artifacts/semantic-assertion-store"
+    );
+    for (const assertedBy of ["user", "authoring_skill", "agent", "matcher"] as const) {
+      const { queries } = buildAssertSemanticTypeQueries({
+        orgId: "o",
+        artifactId: "a",
+        extension: ICP,
+        assertedBy,
+      });
+      expect(queries[1].text).toMatch(/s3\.assertion_basis = 'binding'/);
+    }
+  });
+});
+
 describe("parseResult invariant — missing/malformed slot THROWS", () => {
   it("a wrong offset (slot absent) throws rather than silently reporting blockedByPrecedence", async () => {
     const { buildAssertSemanticTypeQueries } = await import(

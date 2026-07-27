@@ -83,3 +83,42 @@ export function invalidateLeasesBeforeEpochQuery(input: {
     values: [input.orgId, input.newEpoch],
   };
 }
+
+/**
+ * Per-run lease SETTLEMENT — cinatra#1940 P1 (Decision 4). Deletes EVERY lease
+ * row a run holds, keyed by (org_id, run_id) and deliberately EPOCH-AGNOSTIC: a
+ * run landing terminally settles all its windows across epochs in one shot, so
+ * a stale-epoch leftover dies with the run. (The epoch-invalidation sweep,
+ * `invalidateLeasesBeforeEpochQuery`, stays the bulk cleaner; this is the
+ * precise per-run one, folded into the terminal transaction so status + lease
+ * settlement commit atomically.) The DELETE rides the PK-prefixed
+ * `(org_id, …, run_id)` index of a table that is EMPTY except under archive —
+ * measurable-zero on the hot path for active orgs.
+ *
+ * As a drizzle statement for the callback adapter (the terminal-tx fold), kept
+ * beside its `{text, values}` twin so both write worlds share one settle shape.
+ */
+export function settleLeaseForRunStatement(input: {
+  schema: string;
+  orgId: string;
+  runId: string;
+}): SQL {
+  assertSafeSchemaName(input.schema);
+  return sql`DELETE FROM ${sql.raw(`"${input.schema}"."${ORG_ARCHIVE_LEASE_TABLE}"`)} WHERE org_id = ${input.orgId} AND run_id = ${input.runId}`;
+}
+
+/** The SAME per-run settle as a `{text, values}` pair for the fixed-batch world
+ *  (positional params), twin of `settleLeaseForRunStatement`. */
+export function settleLeaseForRunQuery(input: {
+  schema: string;
+  orgId: string;
+  runId: string;
+}): { text: string; values: unknown[] } {
+  assertSafeSchemaName(input.schema);
+  return {
+    text:
+      `DELETE FROM "${input.schema}"."${ORG_ARCHIVE_LEASE_TABLE}"` +
+      ` WHERE org_id = $1 AND run_id = $2`,
+    values: [input.orgId, input.runId],
+  };
+}

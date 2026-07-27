@@ -36,7 +36,10 @@ export type RunExecutionBinding =
   | {
       kind: "refuse";
       /** Structured audit reason mirroring the mount contract's refusals. */
-      auditReason: "environment_invalid" | "environment_unavailable";
+      auditReason:
+        | "environment_invalid"
+        | "environment_unavailable"
+        | "environment_agent_disabled";
       detail: string;
     };
 
@@ -45,6 +48,18 @@ export async function resolveRunExecutionBinding(input: {
   pinnedSnapshot?: { executionEnvironment?: unknown } | null;
   /** Draft/unpinned run: the live template's declared environment. */
   liveTemplateEnvironment?: unknown;
+  /**
+   * The agent's per-agent execution posture (cinatra#1708 slice B), three-valued:
+   * `null`/absent inherits the instance/org posture, `true` is an explicit opt-in,
+   * `false` an explicit opt-out. An agent that is explicitly opted OUT while a
+   * declared environment is in force is a contradiction the config surface
+   * refuses to author — this is the defence-in-depth arm for a declaration that
+   * arrived some other way (a packaged manifest, a pinned snapshot). It REFUSES
+   * rather than dropping the declared recipe, because silently running a
+   * declared-env agent on L0 is the exact failure the fail-closed matrix exists
+   * to prevent.
+   */
+  executionEnabled?: boolean | null;
   orgId: string;
   visibility?: "shared" | "org-private";
   holder: EnvironmentReferenceHolder;
@@ -54,7 +69,20 @@ export async function resolveRunExecutionBinding(input: {
     liveTemplateEnvironment: input.liveTemplateEnvironment,
   });
 
+  // An agent with NO declared environment is unaffected by the per-agent
+  // posture here: it runs L0 exactly as before (the posture governs the
+  // sandbox TOOL's availability, which is the activation slice's seam).
   if (resolved.kind === "none") return { kind: "l0" };
+
+  if (input.executionEnabled === false) {
+    return {
+      kind: "refuse",
+      auditReason: "environment_agent_disabled",
+      detail:
+        "this agent is explicitly opted out of execution, but a declared environment " +
+        "is in force — refusing rather than running it without its declared packages",
+    };
+  }
   if (resolved.kind === "invalid") {
     return {
       kind: "refuse",
