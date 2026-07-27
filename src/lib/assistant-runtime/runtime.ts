@@ -61,6 +61,7 @@ import {
   isScriptedTestProviderEnabled,
   runScriptedWidgetAssistantTurn,
 } from "@cinatra-ai/llm/scripted-test-provider";
+import { resolveSurfaceExecutionBinding } from "@/lib/execution/surface-execution-session";
 import { issueChatMcpActorToken } from "@/lib/chat-mcp-actor-token";
 import { issueWidgetMcpActorToken } from "@/lib/widget-mcp-actor-token";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
@@ -713,10 +714,22 @@ export async function runAssistantTurn(
       ? buildAttachmentResolverPorts({ orgId: sessionOrgId })
       : undefined;
 
+  // exec-plane S1b (cinatra#2138 deliverable 2): the chat surface is a TRUSTED
+  // execution-session issuer. `sessionOrgId` is auth-derived
+  // (session.activeOrganizationId) and `userId` is the authenticated human — a
+  // chat turn carries NO run binding, so the session is minted without a runId.
+  // Rollout flag off ⇒ an empty spread ⇒ this call stays byte-identical.
+  const chatExecutionBinding = resolveSurfaceExecutionBinding({
+    surface: "chat",
+    orgId: sessionOrgId,
+    userId,
+  });
+
   try {
     await stream({
       provider: adapter.provider,
       actorContext,
+      ...chatExecutionBinding,
       // An explicit `model` pref overrides the connection default; absent, the
       // field is omitted so the call is byte-identical to the legacy chat.
       ...(modelPrefs.model ? { model: modelPrefs.model } : {}),

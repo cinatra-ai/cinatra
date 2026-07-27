@@ -335,24 +335,36 @@ describe("cinatra#1429 — binding write path (real DB)", () => {
 
     // Attempt a classic (agent) assertion for the SAME extension as the binding.
     // The archive statement excludes assertion_basis='binding', so the binding
-    // is not archived; the insert then collides on sa_active_unique_idx and the
-    // whole tx aborts — the binding SURVIVES either way (never displaced).
+    // is not archived — and (cinatra#2047 D-8) the INSERT now treats that active
+    // binding as an unconditional PRECEDENCE BLOCK, so the statement is a clean
+    // no-op instead of a duplicate-key abort. The invariant is unchanged and now
+    // holds by construction rather than by rollback: the binding SURVIVES and no
+    // classic row is created. (The old duplicate-key abort was the D-8 defect: it
+    // rolled back the CALLER's whole write — the shipped materializers' post-Tx
+    // assertion threw on every claim-holding org, after the artifact had already
+    // committed.)
     const reQualify = (t: string) =>
       t.replace(/"[a-z_0-9]+"\.("semantic_assertion")/g, (_m, tbl) => `"${S()}".${tbl}`);
-    const { queries } = buildAssertSemanticTypeQueries({ orgId, artifactId, extension: pkg, assertedBy: "agent" });
-    expect(() =>
-      runPostgresQueriesSync({
-        connectionString: getPostgresConnectionString(),
-        transaction: true,
-        queries: [
-          { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [artifactId] },
-          ...queries.map((qy) => ({ text: reQualify(qy.text), values: qy.values })),
-        ],
-      }),
-    ).toThrow(/sa_active_unique_idx|duplicate key/);
-    // Binding survived.
+    const { queries, parseResult } = buildAssertSemanticTypeQueries({ orgId, artifactId, extension: pkg, assertedBy: "agent" });
+    const results = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      transaction: true,
+      queries: [
+        { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [artifactId] },
+        ...queries.map((qy) => ({ text: reQualify(qy.text), values: qy.values })),
+      ],
+    });
+    // Spliced at offset 1 (after the advisory lock).
+    expect(parseResult(results, 1)).toEqual({ inserted: false, blockedByPrecedence: true });
+    // Binding survived; NO competing classic row was written.
     expect(readActiveBinding(orgId, artifactId)?.extension).toBe(pkg);
     expect(activeBindingCount(orgId, artifactId)).toBe(1);
+    const classics = sql(
+      `SELECT count(*)::int AS n FROM "${S()}"."semantic_assertion"
+       WHERE org_id=$1 AND artifact_id=$2 AND extension=$3 AND assertion_basis='classic' AND eligibility<>'archived'`,
+      [orgId, artifactId, pkg],
+    );
+    expect(Number(classics.rows[0].n)).toBe(0);
   });
 
   it("same-extension classic supersede (cinatra#1493): a PRE-EXISTING live classic row from the winner extension is archived and the binding inserts in one tx — no sa_active_unique_idx throw", () => {

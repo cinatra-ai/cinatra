@@ -1,0 +1,60 @@
+  1048	      void groupId;
+  1049	
+  1050	      // Per-claim activation gate (cinatra#1429): reject a NEW write of an
+  1051	      // invalid payload for an activated (dedicated-claimed + registered-schema)
+  1052	      // type BEFORE it is persisted. No-op for the generic fallback type (its
+  1053	      // schema accepts any object) and for unclaimed types.
+  1054	      await enforceActivatedTypePayload(persistedType, orgId, persistedData);
+  1055	      // Memory-envelope gate (cinatra#1376): validates the SAME shape that gets
+  1056	      // stored; a no-op for any non-memory type (including the generic
+  1057	      // fallback), which passes through untouched.
+  1058	      const dataForWrite = enforceMemoryConceptEnvelope(
+  1059	        persistedType,
+  1060	        persistedData,
+  1061	      );
+  1062	
+  1438	      // Per-claim activation gate (cinatra#1429): an update is also a NEW write
+  1439	      // of a payload for the row's (possibly activated) type. Compute the merged
+  1440	      // payload and reject an invalid one for a dedicated-claimed +
+  1441	      // registered-schema type BEFORE ANY commit — so the project-move below
+  1442	      // cannot commit ahead of a data rejection (codex Q3). Skipped for a
+  1443	      // move-only update (input.data undefined). The type is fixed to the
+  1444	      // existing row's type.
+  1445	      const incomingData =
+  1446	        (input.data as Record<string, unknown> | undefined) ?? {};
+  1447	      let mergedData: Record<string, unknown> = {
+  1448	        ...((existing.data as Record<string, unknown> | null) ?? {}),
+  1449	        ...incomingData,
+  1450	      };
+  1451	      if (input.data !== undefined) {
+  1452	        await enforceActivatedTypePayload(existing.type, orgId, mergedData);
+  1453	        // Draftable lock (cinatra#1449/#1457): a content edit is the primary way
+  1454	        // to mutate a locked draft, so reject it here BEFORE any commit (ahead of
+  1455	        // the project-move branch, mirroring the activation gate's ordering
+
+The assertion change is internally consistent, but the reader exception relies on a mutable payload key and the context pipeline still applies snapshot-only semantics to the same claimed file rows.
+  ✓ Inspect the exact diff, schema constraints, and semantic-assertion store behavior
+  ✓ Trace named assertion callers and transaction/concurrency semantics
+  ✓ Trace file discriminator writers and all serve/context reader gates
+  ✓ Assess tests and deliver five merge-safety verdicts
+codex
+1. **MERGE-SAFE.** The same-extension binding occupies the unique slot while being intentionally immune to classic archival, so treating it as an unconditional precedence block is the correct symmetric behavior. No production caller recognizes `sa_active_unique_idx` as a signal; only the changed test did. Matcher already treats `blockedByPrecedence` as expected, materializers/authoring/templates already have the requested identity through the binding, upload typing reports the block, and uninstall replay independently skips binding lineage and guards on any active same-extension row. The READ-COMMITTED winner-skew rollback remains intact because producer classics still run before binding reconciliation; a winner-B collision still aborts Tx2. `confirmAssertion` has no callers, though its new binding no-op deserves a real-Postgres regression test and its “INSERT a NEW assertion” documentation should be updated.
+
+2. **NOT MERGE-SAFE as written.** The reader is the right conceptual layer; manufacturing an `object_content_snapshots` row is wrong because that subsystem serializes mutable `objects.data` as `application/json`, applies redaction, and keys it by claimant policy—it does not snapshot authored file bytes ([object-content-snapshot.ts](<lane-worktree>/src/lib/artifacts/object-content-snapshot.ts:17)). However, the proposed direct-read exception is based on a mutable, forgeable JSON field. A claimed pack-typed typed-DATA row with an existing direct blob representation can be changed through `objects_update` to add `artifactType:"file"`; the same representation that the ratified test currently rejects will then serve without a snapshot, fingerprint, or redaction check. Use an immutable, writer-owned provenance discriminator—ideally DB-enforced, or at minimum correlated with the creation audit/representation—not this field alone.
+
+3. **NOT MERGE-SAFE.** Repository literals are only stamped explicitly by `artifact-creation.ts`, but that does not make the value non-forgeable. `objects_save` persists classifier-normalized caller data, while `objects_update` merges caller fields into existing data ([handlers.ts](<lane-worktree>/packages/objects/src/mcp/handlers.ts:1438)). Self-owned artifact types without inline schemas explicitly receive permissive `z.record(...)` validation ([register-artifact-extensions.ts](<lane-worktree>/packages/objects/src/integration/register-artifact-extensions.ts:296)); JSON Schemas may also allow additional properties. A non-`isArtifact` DATA_TYPE row cannot pass the new type predicate, but a claimed pack-typed typed-DATA row—the exact class protected by the unchanged #1785 test—can carry this field. Source-code uniqueness is not a security boundary.
+
+4. **MERGE-SAFE.** Changing the ratified test is legitimate. The real invariant is “a classic never displaces a binding,” not “the attempt must abort on a unique-index violation.” The revised test proves the stronger intended contract: clean precedence no-op, binding survives, and zero competing classics exist. Raw uniqueness remains independently covered by `sa_active_unique_idx` tests for competing classics and active bindings.
+
+5. **NOT MERGE-SAFE; material context paths are missing.** `context-resolver.ts` still labels every binding-bearing row `is_claimed` and therefore selects only a capture-time snapshot plus its binding assertion ([context-resolver.ts](<lane-worktree>/src/lib/artifacts/context-resolver.ts:319)). Worse, capture will snapshot the file envelope’s metadata JSON rather than use the authored blob; if snapshot policy/redaction refuses it, the file disappears entirely. Both the primary and diagnostic SQL in `context-selection-finalize.ts` still block the direct pack arm when a binding exists and require an exact `object_content_snapshots` row/fingerprint for the claimed arm ([context-selection-finalize.ts](<lane-worktree>/src/lib/artifacts/context-selection-finalize.ts:199), [probe](<lane-worktree>/src/lib/artifacts/context-selection-finalize.ts:497)). The fix needs one trusted file-provenance rule across serve, snapshot-candidate capture, context resolution, and both finalizer queries. Add an end-to-end produce→context-resolve→finalize test proving the original authored revision is selected with the binding assertion, plus a claimed pack-typed typed-DATA forgery control. The current DATA_TYPE isolation control is not `isArtifact`, so it does not exercise the vulnerable new OR arm.
+tokens used
+239.178
+1. **MERGE-SAFE.** The same-extension binding occupies the unique slot while being intentionally immune to classic archival, so treating it as an unconditional precedence block is the correct symmetric behavior. No production caller recognizes `sa_active_unique_idx` as a signal; only the changed test did. Matcher already treats `blockedByPrecedence` as expected, materializers/authoring/templates already have the requested identity through the binding, upload typing reports the block, and uninstall replay independently skips binding lineage and guards on any active same-extension row. The READ-COMMITTED winner-skew rollback remains intact because producer classics still run before binding reconciliation; a winner-B collision still aborts Tx2. `confirmAssertion` has no callers, though its new binding no-op deserves a real-Postgres regression test and its “INSERT a NEW assertion” documentation should be updated.
+
+2. **NOT MERGE-SAFE as written.** The reader is the right conceptual layer; manufacturing an `object_content_snapshots` row is wrong because that subsystem serializes mutable `objects.data` as `application/json`, applies redaction, and keys it by claimant policy—it does not snapshot authored file bytes ([object-content-snapshot.ts](<lane-worktree>/src/lib/artifacts/object-content-snapshot.ts:17)). However, the proposed direct-read exception is based on a mutable, forgeable JSON field. A claimed pack-typed typed-DATA row with an existing direct blob representation can be changed through `objects_update` to add `artifactType:"file"`; the same representation that the ratified test currently rejects will then serve without a snapshot, fingerprint, or redaction check. Use an immutable, writer-owned provenance discriminator—ideally DB-enforced, or at minimum correlated with the creation audit/representation—not this field alone.
+
+3. **NOT MERGE-SAFE.** Repository literals are only stamped explicitly by `artifact-creation.ts`, but that does not make the value non-forgeable. `objects_save` persists classifier-normalized caller data, while `objects_update` merges caller fields into existing data ([handlers.ts](<lane-worktree>/packages/objects/src/mcp/handlers.ts:1438)). Self-owned artifact types without inline schemas explicitly receive permissive `z.record(...)` validation ([register-artifact-extensions.ts](<lane-worktree>/packages/objects/src/integration/register-artifact-extensions.ts:296)); JSON Schemas may also allow additional properties. A non-`isArtifact` DATA_TYPE row cannot pass the new type predicate, but a claimed pack-typed typed-DATA row—the exact class protected by the unchanged #1785 test—can carry this field. Source-code uniqueness is not a security boundary.
+
+4. **MERGE-SAFE.** Changing the ratified test is legitimate. The real invariant is “a classic never displaces a binding,” not “the attempt must abort on a unique-index violation.” The revised test proves the stronger intended contract: clean precedence no-op, binding survives, and zero competing classics exist. Raw uniqueness remains independently covered by `sa_active_unique_idx` tests for competing classics and active bindings.
+
+5. **NOT MERGE-SAFE; material context paths are missing.** `context-resolver.ts` still labels every binding-bearing row `is_claimed` and therefore selects only a capture-time snapshot plus its binding assertion ([context-resolver.ts](<lane-worktree>/src/lib/artifacts/context-resolver.ts:319)). Worse, capture will snapshot the file envelope’s metadata JSON rather than use the authored blob; if snapshot policy/redaction refuses it, the file disappears entirely. Both the primary and diagnostic SQL in `context-selection-finalize.ts` still block the direct pack arm when a binding exists and require an exact `object_content_snapshots` row/fingerprint for the claimed arm ([context-selection-finalize.ts](<lane-worktree>/src/lib/artifacts/context-selection-finalize.ts:199), [probe](<lane-worktree>/src/lib/artifacts/context-selection-finalize.ts:497)). The fix needs one trusted file-provenance rule across serve, snapshot-candidate capture, context resolution, and both finalizer queries. Add an end-to-end produce→context-resolve→finalize test proving the original authored revision is selected with the binding assertion, plus a claimed pack-typed typed-DATA forgery control. The current DATA_TYPE isolation control is not `isArtifact`, so it does not exercise the vulnerable new OR arm.

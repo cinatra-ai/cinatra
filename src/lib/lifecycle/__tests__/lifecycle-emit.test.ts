@@ -1,6 +1,6 @@
 /**
  * cinatra#2039 (epic #2037 S1) — the local-write PRODUCED-EVENT emit builder: the
- * fenced default-off behaviour, the op shape (columns/params), the deterministic
+ * default-ON-with-explicit-opt-out behaviour (#2047 ruling), the op shape (columns/params), the deterministic
  * event id, the physical→lattice origin mapping, and the closed emitter set. Pure.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -32,20 +32,25 @@ const base = {
   originKind: "agent_generated" as const,
 };
 
-describe("maybeBuildProducedEventInsertOp — the fence", () => {
-  it("returns null when the fence is UNSET (default OFF)", () => {
-    expect(maybeBuildProducedEventInsertOp("cinatra", base)).toBeNull();
+describe("maybeBuildProducedEventInsertOp — the activation switch (#2047: DEFAULT ON)", () => {
+  it("returns an op when the switch is UNSET (default ON)", () => {
+    expect(maybeBuildProducedEventInsertOp("cinatra", base)).not.toBeNull();
   });
-  it("returns null when the fence is any non-'on' value", () => {
+  it("returns an op for any non-'off' value (including the legacy 'on')", () => {
+    process.env[ENV] = "on";
+    expect(maybeBuildProducedEventInsertOp("cinatra", base)).not.toBeNull();
     process.env[ENV] = "true";
-    expect(maybeBuildProducedEventInsertOp("cinatra", base)).toBeNull();
+    expect(maybeBuildProducedEventInsertOp("cinatra", base)).not.toBeNull();
     process.env[ENV] = "0";
-    expect(maybeBuildProducedEventInsertOp("cinatra", base)).toBeNull();
+    expect(maybeBuildProducedEventInsertOp("cinatra", base)).not.toBeNull();
+    process.env[ENV] = "";
+    expect(maybeBuildProducedEventInsertOp("cinatra", base)).not.toBeNull();
   });
-  it("returns an op when the fence is 'on' (case-insensitive, trimmed)", () => {
-    process.env[ENV] = "  ON ";
-    const op = maybeBuildProducedEventInsertOp("cinatra", base);
-    expect(op).not.toBeNull();
+  it("returns null ONLY on the explicit opt-out 'off' (case-insensitive, trimmed)", () => {
+    process.env[ENV] = "off";
+    expect(maybeBuildProducedEventInsertOp("cinatra", base)).toBeNull();
+    process.env[ENV] = "  OFF ";
+    expect(maybeBuildProducedEventInsertOp("cinatra", base)).toBeNull();
   });
 });
 

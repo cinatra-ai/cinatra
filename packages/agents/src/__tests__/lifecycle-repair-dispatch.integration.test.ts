@@ -539,8 +539,10 @@ describe.skipIf(!HAS_DB)("cinatra#2047 D-1 — the repair round-trip is reachabl
     expect(dispatchStore.dispatchEscalationReason({ status: "escalated", changeSummary: null })).toBeNull();
   });
 
-  it("FENCE: with the activation fence OFF the maintenance drain dispatches nothing", async () => {
-    delete process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV];
+  it("OPT-OUT: with the activation switch explicitly `off` the maintenance drain dispatches nothing", async () => {
+    // #2047 activation flip: the switch is DEFAULT-ON, so proving the inert
+    // posture requires the EXPLICIT opt-out — deleting the var now means ACTIVE.
+    process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "off";
     const summary = await orch.sweepLifecycleGateMaintenance();
     expect(summary.repairsDispatched).toBe(0);
     expect(summary.repairsEscalated).toBe(0);

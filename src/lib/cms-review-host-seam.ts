@@ -20,12 +20,13 @@ import "server-only";
 // posture) and threading them into the capture. `register-host-connector-services`
 // registers the built seam under the capability id.
 //
-// FENCE SEMANTICS: publication is UNCONDITIONAL (the connector already no-ops on
-// the fence-off path — its `evaluateStagedContentWrite` returns `{action:"pass"}`
+// SWITCH SEMANTICS: publication is UNCONDITIONAL (the connector already no-ops on
+// the opted-out path — its `evaluateStagedContentWrite` returns `{action:"pass"}`
 // before any capture when `isReviewActive()` is false). The capability itself
-// reports the fence truthfully via `isLifecycleReviewOrchestrationActive()`, and
-// gates the produced-event emission on it, so a host with the fence off keeps
-// byte-identical write behaviour even though the capability is present.
+// reports the switch truthfully via `isLifecycleReviewOrchestrationActive()` —
+// DEFAULT-ON per the #2047 ruling — and gates the produced-event emission on it,
+// so a host that sets `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off` keeps
+// pre-flip write behaviour even though the capability is present.
 //
 // READ-BACK BASE: the connector hands the read-back seam ONLY the post-apply
 // re-read (`postApplyFields`) — it never re-sends the approved proposal. The
