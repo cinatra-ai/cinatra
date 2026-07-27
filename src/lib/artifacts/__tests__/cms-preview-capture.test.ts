@@ -501,3 +501,90 @@ describe("cinatra#2044 L-D — the post-apply read-back render", () => {
     expect(written[0].data.role).toBe("applied");
   });
 });
+
+describe("cinatra#2046 S7b — the DRUPAL adapter on the same capture pipeline", () => {
+  const drupalSite = [{ siteId: "site-d", client: "drupal", origin: "https://news.example.org" }];
+  const drupalInput = {
+    ...input,
+    sourceUrl: "https://news.example.org/node/7",
+    // A REAL staged Drupal write carries the connector's site-scoped pointer id.
+    externalId: "inst-abc:7",
+  };
+
+  it("fetches the drupal module's route and signs the SAME canonical content", async () => {
+    const secrets: Array<{ siteId: string; client: string }> = [];
+    const { deps, fetches, rendered } = stubDeps({
+      listRegisteredSites: async () => drupalSite,
+      resolvePreviewSecrets: async (i) => {
+        secrets.push(i);
+        return [SECRET];
+      },
+    });
+    const out = await capturePinnedPreview(drupalInput, deps);
+
+    expect(out.status).toBe("captured");
+    const [call] = fetches;
+    expect(call.url).toBe("https://news.example.org/cinatra/preview/7");
+    // The credential is looked up under the DRUPAL connector's binding — under
+    // the WordPress one there is no row, and every Drupal gate would degrade
+    // as `no-preview-credential`.
+    expect(secrets).toEqual([{ siteId: "site-d", client: "drupal" }]);
+    // Wire-compatible with what the Drupal module recomputes: the same
+    // Standard-Webhooks signature over `preview.<nid>`.
+    expect(call.headers["webhook-signature"]).toBe(
+      pluginSideSignature(
+        SECRET,
+        call.headers["webhook-id"],
+        call.headers["webhook-timestamp"],
+        "preview.7",
+      ),
+    );
+    // And the secret still never reaches the renderer subprocess.
+    expect(JSON.stringify(rendered)).not.toContain(SECRET);
+  });
+
+  it("composes the proposal into the DRUPAL module's own region names", async () => {
+    const page =
+      '<html><body><h1><span data-cinatra-region="title">Old headline</span></h1>' +
+      '<div data-cinatra-region="body">Old body copy.</div>' +
+      '<div data-cinatra-region="field_tags">tag-a</div></body></html>';
+    const { deps, written, rendered } = stubDeps({
+      listRegisteredSites: async () => drupalSite,
+      fetchPreview: async () => ({ ok: true, html: page, pinnedAddresses: ["203.0.113.10"] }),
+    });
+    const out = await capturePinnedPreviewPair(
+      {
+        ...drupalInput,
+        proposedFields: { title: "New headline", body: "New body copy.", status: "published" },
+      },
+      deps,
+    );
+
+    expect(out.before.status).toBe("captured");
+    expect(out.current.status).toBe("captured");
+    const composed = written.find((w) => w.data.role === "current");
+    // Region names join to the connector's reviewable Drupal paths by NAME.
+    expect(composed?.data.composition?.substitutedRegions).toEqual(["title", "body"]);
+    // `status` is a publish effect the page marks no region for: STATED, never
+    // guessed into some other part of the theme.
+    expect(composed?.data.composition?.unplacedFields).toEqual(["status"]);
+    const composedHtml = rendered.at(-1)?.html ?? "";
+    expect(composedHtml).toContain("New headline");
+    expect(composedHtml).toContain("New body copy.");
+    // An unproposed adapter region is left exactly as the site rendered it.
+    expect(composedHtml).toContain("tag-a");
+  });
+
+  it("a drupal site with no provisioned binding degrades — never borrows another platform's secret", async () => {
+    const { deps, written, fetches } = stubDeps({
+      listRegisteredSites: async () => drupalSite,
+      resolvePreviewSecrets: async () => [],
+    });
+    const out = await capturePinnedPreview(drupalInput, deps);
+    expect(out).toMatchObject({ status: "degraded", reason: "no-preview-credential" });
+    expect(fetches).toHaveLength(0);
+    // The degraded record is still WRITTEN, so the surface can state the reason.
+    expect(written[0].data.status).toBe("degraded");
+    expect(written[0].screenshot).toBeUndefined();
+  });
+});
