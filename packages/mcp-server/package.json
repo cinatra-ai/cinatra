@@ -15,7 +15,8 @@
     "./dev-admin-bypass": "./src/dev-admin-bypass.ts",
     "./obo-ceiling": "./src/obo-ceiling.ts",
     "./annotation-classifier": "./src/annotation-classifier.ts",
-    "./instance-tool-policy": "./src/instance-tool-policy.ts"
+    "./instance-tool-policy": "./src/instance-tool-policy.ts",
+    "./known-destructive-floor": "./src/known-destructive-floor.ts"
   },
   "scripts": {
     "test": "vitest run"
