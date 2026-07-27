@@ -34,9 +34,9 @@ import "server-only";
 // submit commits the emit and the finalize together — its gate is never visible
 // while its repair is unfinalized).
 //
-// FENCED with the rest of the repair loop: nothing here runs until an operator
-// flips `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION`; no production caller reaches it on
-// `origin/main`.
+// SWITCHED with the rest of the repair loop: it runs by DEFAULT (the #2047
+// ruling) and goes inert only when a deployment sets
+// `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`.
 // ---------------------------------------------------------------------------
 
 import { and, asc, eq, inArray, sql } from "drizzle-orm";

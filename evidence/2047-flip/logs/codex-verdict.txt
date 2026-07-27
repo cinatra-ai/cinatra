@@ -1,0 +1,72 @@
+OpenAI Codex v<redacted-for-source-leak-gate>
+--------
+workdir: /Users/ordnas/Code/cinatra-ai/.claude/scratch/worktrees/flip-both
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019fa521-9998-7662-908d-8d077951f0ca
+--------
+user
+You are reviewing a cinatra-ai/cinatra change, READ-ONLY. Do not edit anything.
+
+
+... [codex reasoning trace elided — the FINAL verdict follows verbatim] ...
+
+### Q1. Did any consumer miss the flip?
+
+No production code still reads either lifecycle environment variable directly or repeats the old `=== "on"` comparison. Both predicates use the shared default-on reader (`src/lib/lifecycle/lifecycle-activation.ts:45-48`).
+
+Production consumers:
+
+- Produced-event gateway: `src/lib/lifecycle/lifecycle-emit.ts:111-116`; used by semantic-artifact writes (`src/lib/artifacts/artifact-creation.ts:1088-1099`) and dashboard twins (`src/lib/dashboards/dashboard-artifact-twin-writer.ts:299-317`). Complete.
+- Boot seeding: `src/lib/boot/phases/system-loops.ts:474-527`. Complete: unset now registers and seeds both loops.
+- Orchestration and maintenance drains: `packages/agents/src/lifecycle-review-orchestration-store.ts:660-671` and `:1347-1360`. Complete.
+- CMS review seams: `src/lib/register-cms-review-host-seam-runtime.ts:54-56` and `src/lib/register-host-connector-services.ts:932-937`; event emission inherits the same result at `src/lib/cms-review-host-seam.ts:244-268`. Complete.
+- Review-surface comment→repair behavior: `src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/actions.ts:90-98`. Complete.
+- Recommendation hold: `packages/agents/src/recommendation-hold.ts:80-88`, called by the two canonical dispatch paths at `packages/agents/src/run-actions.ts:98-113` and `:252-265`. Complete.
+
+However, two human-present dispatch paths bypass the recommendation hold entirely:
+
+- `startDevChildPreviewRun` marks the run `humanPresent:true`, then transitions and enqueues directly (`packages/agents/src/run-actions.ts:577-599`).
+- The UI/MCP immediate-trigger path transitions directly to queued (`packages/agents/src/trigger-service.ts:227-240`, `:404-407`); UI-created runs are marked human-present at `packages/agents/src/run-actions.ts:217-226`.
+
+Those paths were harmless while the hold was default-off but now violate the ruled “human-present run pauses when recommendations exist” behavior.
+
+No repository env/example/docker/deployment file sets either variable. The one configuration that needs old behavior is the local full agents-run harness: its server command has no opt-out (`tests/e2e/config/agents-run.config.ts:62-75`) although one executable fixture requires it.
+
+Non-functional misses remain: stale “FENCED default-OFF” comments at `src/lib/artifacts/artifact-creation.ts:1082-1085` and `src/lib/dashboards/dashboard-artifact-twin-writer.ts:289-291`.
+
+### Q2. Is a test inversion hiding a defect?
+
+The actual inverted assertions are correct:
+
+- Dashboard writer 7→8 is correct. The eighth operation is precisely the same-transaction produced-event insert controlled by the now-default-on lifecycle switch (`src/lib/dashboards/__tests__/dashboard-artifact-twin-writer.test.ts:125-146`). The separate opt-out assertion correctly retains seven operations. The extension cases preserve the independent +2 assertion delta (`:187-203`).
+- The real-DB dashboard test correctly expects one pending produced event with the switch unset (`src/lib/__tests__/integration/dashboard-twin-produced-event-same-tx.integration.test.ts:127-160`).
+- Lifecycle-emitter tests correctly assert unset/non-`off` active and explicit `off` inactive (`src/lib/lifecycle/__tests__/lifecycle-emit.test.ts:35-54`).
+- Recommendation-hold tests correctly assert unset parks, `off` bypasses, and headless runs remain unheld (`packages/agents/src/__tests__/recommendation-hold.test.ts:91-135`).
+- The three former FENCE tests correctly use explicit `off`: dispatch maintenance (`packages/agents/src/__tests__/lifecycle-repair-dispatch.integration.test.ts:542-550`), orchestration/repair (`packages/agents/src/__tests__/lifecycle-repair.integration.test.ts:626-634`), and both drains (`packages/agents/src/__tests__/lifecycle-review-orchestration.integration.test.ts:1008-1025`). They test the opt-out path, not the shipped default, so they do not paper over a defect.
+
+The email-follow-up fixture is a latent red. Its executable contract still declares no screens and terminal `completed` (`tests/e2e/agents-run/fixtures.ts:319-340`), while the runner waits directly for that terminal state (`tests/e2e/agents-run/agents-run.spec.ts:157-160`). The local batch includes this fixture (`tests/e2e/agents-run/run-batched.sh:34-36`). A comment is not enough: either the harness must set `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`, or it must drive the core review surface.
+
+It is not currently a CI red because CI runs only the static tunnel-wiring project (`.github/workflows/e2e-app-suites.yml:565-568`).
+
+Coverage caveat: `src/lib/lifecycle/__tests__/lifecycle-activation.test.ts:63-102` directly pins both predicates, but the file is currently untracked and therefore absent from the supplied diff unless explicitly added.
+
+### Q3. Is a CI opt-out hiding a defect?
+
+No. The diff changes no `.github/workflows/*` file and no CI job sets either opt-out.
+
+App-boot jobs will nevertheless behave differently: unset now causes two delayed jobs to be seeded at 30/60 seconds (`src/lib/boot/phases/system-loops.ts:459-529`). This affects the dev-HMR, design, render-smoke, notifications, RBAC, dashboard, and WP/Drupal app boots. Representative Redis/app-boot evidence:
+
+- Dev HMR: `.github/workflows/dev-hmr-smoke.yml:58-85`, `:149-153`
+- Notifications: `.github/workflows/e2e-app-suites.yml:355-381`, `:473-501`
+- RBAC: `.github/workflows/build-image.yml:1511-1537`, `:1713-1756`
+- Dashboard: `.github/workflows/dashboard-live-verify.yml:142-173`, `:331-372`
+- WP/Drupal: `.github/workflows/wp-drupal-uat.yml:215-248`, with its dev-server command at `tests/e2e/config/wp-drupal-uat.config.ts:87-108`
+
+All have Redis available. I found no CI assertion that conflicts with the two empty/default-active drains, so this is intended changed coverage rather than an opt-out hiding a defect. The executable email fixture defect remains outside CI.
+
+The grammar is operationally risky even though it matches the ruling: `false`, `0`, `disabled`, and misspellings such as `0ff` silently activate because the implementation merely compares against `off` (`src/lib/lifecycle/lifecycle-activation.ts:45-48`). Thus any existing deployment that used a non-`on` value to mean “off” will flip on. No repository deployment does so, but there is also no validation or warning; the documentation explicitly records the fail-active behavior (`docs/internals/governance/lifecycle-review-policy.md:187-193`).

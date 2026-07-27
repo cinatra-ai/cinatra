@@ -1840,7 +1840,7 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           const runner = resolveLifecycleReviewRunner();
           if (!runner) {
             console.warn(
-              "[lifecycle-review-orchestration] runner slot empty (S1 fence off, or boot system-loops phase did not run) — skipping cycle",
+              "[lifecycle-review-orchestration] runner slot empty (S1 switch opted out, or boot system-loops phase did not run) — skipping cycle",
             );
             return;
           }
@@ -1885,7 +1885,7 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           const runner = resolveLifecycleReviewRunner();
           if (!runner) {
             console.warn(
-              "[lifecycle-gate-maintenance] runner slot empty (S1 fence off, or boot system-loops phase did not run) — skipping cycle",
+              "[lifecycle-gate-maintenance] runner slot empty (S1 switch opted out, or boot system-loops phase did not run) — skipping cycle",
             );
             return;
           }

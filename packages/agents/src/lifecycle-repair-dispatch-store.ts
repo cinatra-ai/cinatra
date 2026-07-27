@@ -53,9 +53,9 @@ import "server-only";
 // escalation reason rides `change_summary` behind an explicit sentinel, mirroring
 // `ORPHAN_RECOVERY_CHANGE_SUMMARY` in the recovery store.
 //
-// FENCED with the rest of the loop: the only production caller is the S1
-// gate-maintenance drain, which is seeded only when
-// `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION` is on.
+// SWITCHED with the rest of the loop: the only production caller is the S1
+// gate-maintenance drain, which is seeded by DEFAULT (the #2047 ruling) and
+// skipped only when `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`.
 // ---------------------------------------------------------------------------
 
 import { and, asc, eq, sql } from "drizzle-orm";

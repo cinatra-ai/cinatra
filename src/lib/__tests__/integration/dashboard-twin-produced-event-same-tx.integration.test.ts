@@ -11,12 +11,13 @@
  * transaction**. This suite DRIVES it, on a real schema built from the canonical
  * DDL:
  *
- *   1. FENCE OFF (the merged default) — the twin's query list splices NOTHING, so
- *      the writer's transaction is byte-identical to `origin/main`.
- *   2. FENCE ON + COMMIT — executing the twin's query list writes the dashboard
- *      substrate AND exactly one `artifact_produced_outbox` row, keyed by the
- *      deterministic event id, with `emitter='dashboard_twin_writer'`.
- *   3. FENCE ON + ROLLBACK — the SAME execution rolled back leaves ZERO outbox
+ *   1. EXPLICIT OPT-OUT (`=off`) — the twin's query list splices NOTHING, so the
+ *      writer's transaction is byte-identical to the pre-flip one.
+ *   2. DEFAULT (switch UNSET — the #2047 activation ruling) + COMMIT — executing
+ *      the twin's query list writes the dashboard substrate AND exactly one
+ *      `artifact_produced_outbox` row, keyed by the deterministic event id, with
+ *      `emitter='dashboard_twin_writer'`.
+ *   3. ACTIVE + ROLLBACK — the SAME execution rolled back leaves ZERO outbox
  *      rows AND zero substrate rows. This is the same-Tx property: the event can
  *      never outlive the dashboard write that produced it (nor vice versa).
  *   4. ORIGIN mapping — an extension-materialized dashboard is `agent_generated`
@@ -124,14 +125,15 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("cinatra#2047 — dashboard-twin produced event is SAME-TX", () => {
-  it("FENCE OFF (merged default): the twin writes NO produced event at all", async () => {
+  it("EXPLICIT OPT-OUT (`off`): the twin writes NO produced event at all", async () => {
+    process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "off";
     const ctx = ctxFor({ extensionId: "@cinatra-ai/web-analytics-dashboard-artifact" });
     await runTwinTx(ctx, "COMMIT");
     expect(await outboxCount(ctx.dashboardId)).toBe(0);
   });
 
-  it("FENCE ON + COMMIT: exactly ONE produced event, emitter=dashboard_twin_writer, deterministic id", async () => {
-    process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "on";
+  it("DEFAULT (switch UNSET, #2047 ruling) + COMMIT: exactly ONE produced event, emitter=dashboard_twin_writer, deterministic id", async () => {
+    // No env set at all — this is the shipped posture the flip ruled in.
     const ctx = ctxFor({ extensionId: "@cinatra-ai/web-analytics-dashboard-artifact" });
     await runTwinTx(ctx, "COMMIT");
 
@@ -157,7 +159,7 @@ describe.skipIf(!HAS_DB)("cinatra#2047 — dashboard-twin produced event is SAME
     );
   });
 
-  it("FENCE ON + ROLLBACK: the produced event rolls back WITH the twin's transaction (zero partial write)", async () => {
+  it("ACTIVE + ROLLBACK: the produced event rolls back WITH the twin's transaction (zero partial write)", async () => {
     process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "on";
     const ctx = ctxFor({ extensionId: "@cinatra-ai/web-analytics-dashboard-artifact" });
 
@@ -184,7 +186,7 @@ describe.skipIf(!HAS_DB)("cinatra#2047 — dashboard-twin produced event is SAME
     expect(await representationRevisionIdFor(ctx.dashboardId)).toBeNull();
   });
 
-  it("FENCE ON: an OPERATOR-built dashboard (no extension) emits origin_kind=user_provided", async () => {
+  it("ACTIVE: an OPERATOR-built dashboard (no extension) emits origin_kind=user_provided", async () => {
     process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "on";
     const ctx = ctxFor();
     await runTwinTx(ctx, "COMMIT");
@@ -197,7 +199,7 @@ describe.skipIf(!HAS_DB)("cinatra#2047 — dashboard-twin produced event is SAME
     expect(r.rows[0].origin_kind).toBe("user_provided");
   });
 
-  it("FENCE ON: REPLAYING the twin's own emitted op is idempotent (no duplicate event)", async () => {
+  it("ACTIVE: REPLAYING the twin's own emitted op is idempotent (no duplicate event)", async () => {
     process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "on";
     const ctx = ctxFor({ extensionId: "@cinatra-ai/web-analytics-dashboard-artifact" });
     await runTwinTx(ctx, "COMMIT");

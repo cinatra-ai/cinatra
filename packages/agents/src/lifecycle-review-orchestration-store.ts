@@ -38,10 +38,12 @@ import "server-only";
 //
 // Boot-loaded (route-graph ratchet): the background-job registry never imports
 // this module; the boot system-loops phase registers `sweep*` into a globalThis
-// runner slot behind the S1 activation fence. FENCED default-OFF at three seams
-// (see lifecycle-activation.ts): the emitters write no event row, the boot phase
-// seeds no loop, and every drain here short-circuits when the fence is off — so
-// on `origin/main` the whole slice is INERT.
+// runner slot behind the S1 activation switch. That switch is DEFAULT-ON (the
+// #2047 ruling) and is honoured at three seams (see lifecycle-activation.ts):
+// the emitters write the event row, the boot phase seeds the loops, and every
+// drain here runs — unless a deployment sets
+// `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`, which makes the whole slice
+// INERT at all three seams.
 // ---------------------------------------------------------------------------
 
 import { and, asc, eq, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";

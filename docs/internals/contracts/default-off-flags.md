@@ -57,6 +57,19 @@ the surface disabled. Set them in the deployment environment (not in the app UI)
 - **Why gated:** the broker capability is preview/not-yet-complete; the default
   keeps deployments on the proven direct-stream path.
 
+## Not on this page: the lifecycle activation switches
+
+`CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION` and
+`CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW` are **not** default-off flags and
+have never been listed here. They are the inverse posture — **default ON with an
+explicit opt-out**, deactivated only by the exact value `off` (cinatra#2047,
+owner ruling 2026-07-27). They gate product behaviour that ships enabled, not an
+opt-in preview ingress, so the doctrine on this page does not apply to them.
+They are specified in
+[the lifecycle review policy, §6 Activation](../governance/lifecycle-review-policy.md),
+and implemented in `src/lib/lifecycle/lifecycle-activation.ts`. Do not add a
+default-ON switch to the table above.
+
 ## Adding a new default-off flag
 
 If you introduce another `CINATRA_*_ENABLED`-style opt-in gate, add a row here so

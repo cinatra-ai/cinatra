@@ -10,9 +10,11 @@
  * NOTHING` op keyed by the DETERMINISTIC produced-event id, so the event row
  * commits/rolls-back atomically with the artifact and a replay is a no-op.
  *
- * FENCED: `maybeBuildProducedEventInsertOp` returns `null` when the S1 activation
- * fence is OFF (the default) — the caller then splices nothing, so `origin/main`
- * writers are byte-for-byte unchanged. Flipping the fence on adds exactly one
+ * SWITCHED: `maybeBuildProducedEventInsertOp` returns `null` only when the
+ * review-orchestration switch is explicitly OFF
+ * (`CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`) — the caller then splices
+ * nothing and the writer's transaction is byte-for-byte the pre-flip one. In the
+ * DEFAULT (unset ⇒ active, the #2047 ruling) posture it adds exactly one
  * idempotent INSERT per enumerated write.
  *
  * PURE (no DB / server-only): a `{text, values}` op is all it returns; the caller
@@ -101,9 +103,10 @@ ON CONFLICT (event_id) DO NOTHING`,
 }
 
 /**
- * FENCED variant: the produced-event INSERT op when S1 review orchestration is
- * active, else `null`. The write choke points splice `...(op ? [op] : [])`, so an
- * inactive fence leaves the writer's transaction byte-identical to `origin/main`.
+ * SWITCHED variant: the produced-event INSERT op when S1 review orchestration is
+ * active (the DEFAULT), else `null`. The write choke points splice
+ * `...(op ? [op] : [])`, so an explicit opt-out leaves the writer's transaction
+ * byte-identical to the pre-flip one.
  */
 export function maybeBuildProducedEventInsertOp(
   schema: string,
