@@ -26,7 +26,7 @@ import {
   runContextSelectionsSchemaQueries,
 } from "@/lib/artifact-claim-schema";
 import { publicationOperationLedgerSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
-import { environmentLayerStoreSchemaQueries } from "@/lib/execution/environment-layer-schema";
+import { environmentLayerStoreSchemaQueries, agentExecutionConfigSchemaQueries } from "@/lib/execution/environment-layer-schema";
 import { auditorSnapshotSchemaQueries } from "@/lib/auditor-snapshot-schema";
 import { artifactReviewGateSchemaQueries, lifecycleInterceptionsSchemaQueries, lifecycleRepairSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
 import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
@@ -2127,7 +2127,7 @@ $body$` },
     // (reuse an earlier build; one shared GC/teardown source of truth). DDL in
     // the pure-strings leaf src/lib/execution/environment-layer-schema.ts;
     // existing deployments also converge via migration core__0057.
-    ...environmentLayerStoreSchemaQueries(schemaName),
+    ...environmentLayerStoreSchemaQueries(schemaName), ...agentExecutionConfigSchemaQueries(schemaName),
     // ---- authoring_invocation_ledger ----
 
     // Operational recursion-control table for authoring-skill chains.

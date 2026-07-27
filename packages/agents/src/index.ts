@@ -383,6 +383,25 @@ export {
   resolveRunExecutionEnvironment,
   type ResolvedRunEnvironment,
 } from "./execution-environment";
+// Per-agent execution CONFIGURATION model (exec-plane S3 slice B,
+// cinatra#1708): authority resolution (manifest vs config), the fail-closed
+// editor-submission parser, and the starter templates.
+export {
+  EXECUTION_ENVIRONMENT_STARTER_TEMPLATES,
+  assertStarterTemplatesValid,
+  countDeclaredEntries,
+  environmentToEditorText,
+  parseAgentExecutionConfigSubmission,
+  resolveAgentEnvironmentAuthority,
+  serializeExecutionEnvironmentForStorage,
+  splitEnvironmentEntries,
+  type AgentExecutionConfig,
+  type AgentExecutionConfigSubmission,
+  type ExecutionEnvironmentAuthority,
+  type ExecutionEnvironmentStarterTemplate,
+  type ResolvedAgentEnvironment,
+} from "./execution-config";
+export { writeAgentExecutionConfig } from "./execution-config-store";
 export {
   createAgentRunPendingInput,
   updateAgentRunInputParams,
