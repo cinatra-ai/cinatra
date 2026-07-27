@@ -3,6 +3,8 @@
 // (projectId + effectiveRole) the dashboards read-visibility resolver needs — not just projectIds.
 import "server-only";
 
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
+
 import { requireAuthSession, resolveOrgRoleForSession } from "@/lib/auth-session";
 import {
   readTeamsForUser,
@@ -10,6 +12,7 @@ import {
   type TeamMembershipRow,
 } from "@/lib/better-auth-db";
 import type { DashboardAuthzActor } from "@/lib/dashboards/authz";
+import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 
 /**
  * Presence-aware team-role map from the SAME `readTeamsForUser` rows the actor's
@@ -43,6 +46,11 @@ export async function buildDashboardActorFromSession(): Promise<{
   actor: DashboardAuthzActor;
   orgId: string | null;
   userId: string;
+  /** Membership-grounded org-write authority (cinatra#1939 S3) — minted from
+   *  the SAME resolved org role the actor carries, for the SAME (userId,
+   *  orgId) pair. Undefined when no active org or no membership role
+   *  resolved; dashboards writers on the org-write seam then refuse. */
+  authority?: OrgWriteAuthority;
 }> {
   const session = await requireAuthSession();
   const userId = session.user.id;
@@ -66,5 +74,9 @@ export async function buildDashboardActorFromSession(): Promise<{
     orgRole: orgRole ?? undefined,
     projectGrants: grants.map((g) => ({ projectId: g.projectId, effectiveRole: g.effectiveRole })),
   };
-  return { actor, orgId, userId };
+  // cinatra#1939 S3: mint from the role just resolved — its existence IS the
+  // membership proof for exactly this (userId, orgId) pair; no extra read.
+  const authority =
+    orgId && orgRole ? sessionAuthorityFromResolvedRole(orgId, orgRole) : undefined;
+  return { actor, orgId, userId, ...(authority ? { authority } : {}) };
 }

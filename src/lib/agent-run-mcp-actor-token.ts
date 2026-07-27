@@ -89,6 +89,16 @@ export type AgentRunMcpActor = {
    * `cl` treatment) — never an un-pinned reconstruction of a pinned token.
    */
   connectorInstancePin?: { connectorKey: string; instanceId: string };
+  /**
+   * The run's CURRENT execution attempt id at mint time (the `att` claim,
+   * cinatra#1939 S3) — the stale-worker witness for the org-write run
+   * authority: the mint refuses when this no longer matches the row's
+   * current attempt. OPTIONAL for token validity (tokens minted before this
+   * claim existed stay verifiable through their TTL), but the run authority
+   * NEVER mints without it — absence just means an unstamped frame, and
+   * org-write-seam writers refuse. Never widens anything.
+   */
+  executionAttemptId?: string;
 };
 
 type AgentRunMcpActorTokenClaims = {
@@ -102,6 +112,9 @@ type AgentRunMcpActorTokenClaims = {
   /** Compact signed connector-instance pin (cinatra#2017 S2). OPTIONAL (absent ⇒
    * org scope); present-but-malformed fails the whole token closed at verify. */
   pin?: { ck: string; iid: string };
+  /** Current execution attempt id (cinatra#1939 S3) — optional; see
+   *  `AgentRunMcpActor.executionAttemptId` for the tolerance contract. */
+  att?: string;
   scope: "mcp:connect";
   aud: string;
   iss: string;
@@ -187,6 +200,7 @@ export function issueAgentRunMcpActorToken(input: AgentRunMcpActor): string {
           },
         }
       : {}),
+    ...(input.executionAttemptId ? { att: input.executionAttemptId } : {}),
     scope: TOKEN_SCOPE,
     aud: issueAudience(),
     iss: issueIssuer(),
@@ -311,6 +325,13 @@ export function verifyAgentRunMcpActorToken(input: {
               instanceId: pinClaim.iid,
             },
           }
+        : {}),
+      // `att` is tolerated-absent (pre-claim tokens stay valid through their
+      // TTL); a non-string/empty value reads as absent — the org-write run
+      // mint then simply never fires for this frame. Fail-closed downstream,
+      // never here.
+      ...(typeof payload.att === "string" && payload.att.length > 0
+        ? { executionAttemptId: payload.att }
         : {}),
     };
   } catch {

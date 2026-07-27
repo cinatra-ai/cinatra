@@ -32,6 +32,7 @@ import {
   type McpRuntimeToolServer,
 } from "./runtime-server";
 import { mcpRequestContextStorage, resolveRequestRunContext, selectDelegatedToolPolicy, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy } from "./request-context";
+import { resolveFrameOrgWriteAuthority, type OrgWriteAuthorityForwardOptions } from "./org-write-authority-forward";
 import { buildMcpHandshakeUrls } from "./handshake-urls";
 import { replaceOriginInValue } from "./origin-rewrite";
 import { McpAuthFlowBridge } from "./components/mcp-auth-flow-bridge";
@@ -159,7 +160,7 @@ export type CreateMcpServerMountOptions = {
     expectedAudience: string;
     expectedIssuer: string;
   }) => DelegatedMcpActor | null | Promise<DelegatedMcpActor | null>;
-};
+} & OrgWriteAuthorityForwardOptions;
 
 export type McpServerSettings = {
   publicBaseUrl: string | null;
@@ -1233,6 +1234,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       headerAgentSpecVersion: request.headers.get("x-cinatra-agent-spec-version") ?? undefined,
     });
     options.onRunContextServedBy?.(runContext.servedBy, { runId: runContext.runId, suppressed: runContext.suppressed });
+    const orgWriteAuthority = await resolveFrameOrgWriteAuthority({ delegatedActor, options, resolvedUserId, resolvedOrgId, resolvedOrgRole });
     const requestStore: McpRequestContext = {
       clientId: requestClientId,
       orgId: resolvedOrgId,
@@ -1256,6 +1258,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
         delegatedActor?.delegation === "agent_run"
           ? delegatedActor.oboCeiling
           : undefined,
+      orgWriteAuthority,
     };
     const response = await mcpRequestContextStorage.run(
       requestStore,

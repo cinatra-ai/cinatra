@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import type { PreparedReviewTarget } from "@/lib/artifacts/artifact-review-preparation";
 import { ReviewTargetMount } from "@/app/artifacts/[id]/review-target-mount";
-import type { PinnedCaptureView } from "@/lib/artifacts/cms-preview-capture-view";
+import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
 
 import { ReviewPinnedCapture } from "./review-pinned-capture";
 import {
@@ -31,13 +31,15 @@ import {
  */
 export function ReviewTargetPanel({
   prepared,
-  pinnedCaptures = [],
+  capturePair = null,
 }: {
   prepared: PreparedReviewTarget;
-  /** S6 (#2044 L-B): the page captures PINNED at gate creation for this target.
-   * Empty for every target that has none, which renders nothing — the capture is
-   * additive context beneath the decided representation, never a substitute. */
-  pinnedCaptures?: PinnedCaptureView[];
+  /** S6 (#2044 L-B + L-D): the visual before/after PAIR pinned at gate creation
+   * for this target — the live page beside the proposal composed into its chrome.
+   * `null` for every target that has no captures, which renders nothing: the
+   * pictures are additive context beneath the decided representation, never a
+   * substitute. */
+  capturePair?: PinnedCapturePairView | null;
 }): ReactNode {
   const { target, props, mount } = prepared;
   const title = props?.artifact.title ?? target.artifactId;
@@ -110,10 +112,10 @@ export function ReviewTargetPanel({
       </div>
 
       {/* The representation slot — the type renderer mounts here, or the floor.
-          S6: the PINNED page capture follows as non-decisional visual context. */}
+          S6: the PINNED before/after pair follows as non-decisional visual context. */}
       <div className="p-4" data-review-representation-slot="">
         <ReviewTargetMount mount={mount} props={props} fallback={genericFloor} />
-        <ReviewPinnedCapture captures={pinnedCaptures} />
+        <ReviewPinnedCapture pair={capturePair} />
       </div>
     </div>
   );

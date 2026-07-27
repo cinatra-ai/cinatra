@@ -171,19 +171,40 @@ export interface CmsReviewHostSeamDeps {
     producedEventId: string | null;
   }>;
   /**
-   * S6 (#2044 L-B) — the PINNED fetched-render capture, taken at gate creation.
-   * OPTIONAL and best-effort by contract: the binding awaits it (the capture
+   * S6 (#2044, L-B + L-D) — the PINNED before/after capture PAIR, taken at gate
+   * creation: the live page as it stands, and the proposal composed into that
+   * page's own adapter-marked regions.
+   *
+   * OPTIONAL and best-effort by contract: the binding awaits it (both pictures
    * must be pinned WITH the gate, never fetched later), but a rejection or a
    * degraded outcome can never fail the staged write. Absent ⇒ no capture step
    * runs and the write path is byte-identical to S5.
    */
-  capturePinnedPreview?: (input: {
+  capturePinnedPreviewPair?: (input: {
     orgId: string;
     boundArtifactId: string;
     boundSnapshotRevisionId: string;
-    role: "current";
     sourceUrl: string | null;
     externalId: string | null;
+    /** The reviewed proposal's canonical field map — the composition source. */
+    proposedFields: Record<string, string> | null;
+    title?: string;
+    createdBy?: string | null;
+    producerRunId?: string | null;
+  }) => Promise<{
+    before: { status: "captured" | "degraded"; reason?: string };
+    current: { status: "captured" | "degraded"; reason?: string };
+  }>;
+  /**
+   * S6 (#2044 L-D) — the POST-APPLY read-back render, taken after an approved
+   * apply lands, so the S4 verification's field diff gains its visual
+   * counterpart. Same best-effort contract: it can never fail the apply or the
+   * verification record.
+   */
+  capturePostApplyPreview?: (input: {
+    orgId: string;
+    boundArtifactId: string;
+    boundSnapshotRevisionId: string;
     title?: string;
     createdBy?: string | null;
     producerRunId?: string | null;
@@ -246,20 +267,30 @@ export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHo
         emitProducedEvent: deps.isReviewActive(),
         ...(input.title !== undefined ? { title: input.title } : {}),
       });
-      // S6 (#2044 L-B): PIN the fetched render alongside the snapshot, at gate
-      // creation. Awaited so an old gate can always show its ORIGINAL capture
-      // (a later fetch would show a later page), but wrapped so NOTHING about
-      // the capture can fail the staged write — a capture is additive context,
-      // and its absence is recorded as a degraded capture the surface states.
-      if (deps.capturePinnedPreview) {
+      // S6 (#2044 L-B + L-D): PIN the visual before/after PAIR alongside the
+      // snapshot, at gate creation. Awaited so an old gate can always show its
+      // ORIGINAL pictures (a later fetch would show a later page), but wrapped so
+      // NOTHING about the captures can fail the staged write — a capture is
+      // additive context, and its absence is recorded as a degraded capture the
+      // surface states.
+      //
+      // The proposal half is composed from the SNAPSHOT's own stored fields, read
+      // back through the same reader the S4 verification uses as its reviewed
+      // base. So the picture the reviewer decides against and the base the
+      // read-back verifies against are byte-identical by construction — the
+      // visual can never drift from the decided content.
+      if (deps.capturePinnedPreviewPair) {
         try {
-          await deps.capturePinnedPreview({
+          const proposedFields = await deps
+            .readCmsSnapshotProposedFields(orgId, res.snapshotRevisionId)
+            .catch(() => null);
+          await deps.capturePinnedPreviewPair({
             orgId,
             boundArtifactId: res.artifactId,
             boundSnapshotRevisionId: res.snapshotRevisionId,
-            role: "current",
             sourceUrl: input.pointer.url ?? null,
             externalId: input.pointer.externalId ?? null,
+            proposedFields,
             ...(input.title !== undefined ? { title: input.title } : {}),
             createdBy,
             producerRunId: runId,
@@ -364,6 +395,28 @@ export function buildCmsReviewHostSeam(deps: CmsReviewHostSeamDeps): CmsReviewHo
         representationMatches: inScopeFaithful,
       });
       if (!res.ok) return { ok: false, code: res.code, error: res.error };
+      // S6 (#2044 L-D): the verification's field diff gains its VISUAL
+      // counterpart. The apply has landed, so the site now really carries the
+      // applied content — this is a straight fetched render of the page the
+      // read-back just verified, pinned against the same gate target. Awaited so
+      // it is pinned WITH the verification, and swallowed so it can never fail
+      // the verification it annotates.
+      if (deps.capturePostApplyPreview) {
+        try {
+          await deps.capturePostApplyPreview({
+            orgId,
+            boundArtifactId: target.artifactId,
+            boundSnapshotRevisionId: target.snapshotRevisionId,
+            createdBy: null,
+            producerRunId: input.runId,
+          });
+        } catch (err) {
+          console.warn(
+            "[cms-review] post-apply preview capture failed (the verification is unaffected):",
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
       return { ok: true, outcome: res.verdict.outcome, outOfScope: res.verdict.outOfScopePaths };
     },
   };

@@ -55,15 +55,39 @@ export async function verifySessionAuthority(
   if (role === undefined) {
     throw new OrgWriteAuthorityError(`user ${userId} is not a member of ${orgId}`);
   }
+  return sessionAuthorityFromResolvedRole(orgId, role);
+}
+
+/**
+ * Sync session-mint for call sites that ALREADY resolved the membership role
+ * for the SAME (userId, orgId) pair they stamp on the surrounding frame — the
+ * MCP transport resolves it once at context-build (cinatra#1939 S3) and must
+ * not pay a second membership read per request. The resolved role's existence
+ * IS the membership proof; capability rules are byte-identical to
+ * `verifySessionAuthority` (this is its extracted body).
+ */
+export function sessionAuthorityFromResolvedRole(
+  orgId: string,
+  role: Role,
+): OrgWriteAuthority {
   return {
     orgId,
     can: (capability) => {
       const rule = SESSION_PERMISSION_FOR[capability];
       if (rule === "member") return true;
-      return roleHasPermission(role as Role, rule);
+      return roleHasPermission(role, rule);
     },
   };
 }
+
+// cinatra#1939 wave 2 (§2d′) DROPPED — owner ruling 2026-07-26 (groganz,
+// ruling 2): cross-org run management is UNSUPPORTED. The
+// authorized-non-member mint `runManagementAuthority` was removed end-to-end;
+// authorized-non-member run-management flows (a cross-org co-owner / platform
+// admin who is NOT a member of the run's org) now fail closed — the seam
+// refuses a missing authority, and each run-management call site maps that to
+// its own denied/forbidden idiom. Org-member paths are unaffected (they mint a
+// session authority via sessionAuthorityFromResolvedRole).
 
 // ---------------------------------------------------------------------------
 // Verified run authority
@@ -170,6 +194,36 @@ const SYSTEM_PURPOSE_CAPABILITIES: Record<string, readonly OrgWriteCapability[]>
   "org-lifecycle-transition": ["org.lifecycle"],
   /** The S3/S4 lease-expiry finalizer landing terminal transitions. */
   "lease-expiry-finalizer": ["run.execute", "run.complete"],
+  /** The agent-run job contexts driving a run's FULL lifecycle with no session
+   *  (cinatra#1939 wave 2): dispatch (`run.execute`) + terminal finalize
+   *  (`run.complete`). Kept SEPARATE from `lease-expiry-finalizer` (same grant
+   *  shape) so the finalizer's archive/lease audit domain is not conflated with
+   *  normal execution. Sole minting site:
+   *  src/lib/org-write/agent-run-authority-mint.ts (R2-allowlisted in the
+   *  boundary gate); §5.2 further restricts its consumers to the three jobs. */
+  "agent-run-dispatch": ["run.execute", "run.complete"],
+  /** The committed extension archive/restore transition's dashboard hook
+   *  (cinatra#1939 wave 1): archives/restores that org's extension-shipped
+   *  dashboards AFTER install/uninstall authz gated the transition upstream.
+   *  Content-only — the hook can never touch membership/settings/lifecycle.
+   *  Sole minting site: src/lib/dashboards/extension-dashboard-lifecycle.ts
+   *  (R2-allowlisted in the boundary gate). */
+  "extension-dashboard-lifecycle": ["content.write"],
+  /** The dashboardContribution adopt-in-place reconciler (cinatra#1939 wave 1):
+   *  re-keys orphaned/legacy extension dashboard rows onto their live
+   *  successor package for one org — a lifecycle-triggered system write like
+   *  the hook above, install authz gated upstream. Content-only. Sole minting
+   *  site: src/lib/dashboards/reconcile-contribution-adoptions.ts
+   *  (R2-allowlisted in the boundary gate). */
+  "dashboard-contribution-reconciler": ["content.write"],
+  /** The boot-phase dashboard artifact-twin backfill (cinatra#1939 wave 1):
+   *  pairs the substrate twin for pre-existing dashboards that lack one —
+   *  minted PER ORG inside the multi-org sweep, so each per-id transaction is
+   *  ruled against ITS row's org lifecycle (an archived org's rows stay
+   *  untwinned until restore; the reader gate covers them meanwhile).
+   *  Content-only. Sole minting site: src/lib/boot/phases/core-boot.ts
+   *  (R2-allowlisted in the boundary gate). */
+  "dashboard-twin-backfill": ["content.write"],
 };
 
 export type SystemWritePurpose = keyof typeof SYSTEM_PURPOSE_CAPABILITIES;

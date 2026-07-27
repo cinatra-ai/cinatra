@@ -67,6 +67,7 @@
     "@cinatra-ai/mcp-client": "workspace:*",
     "@cinatra-ai/mcp-server": "workspace:*",
     "@cinatra-ai/objects": "workspace:*",
+    "@cinatra-ai/org-write-kernel": "workspace:*",
     "@cinatra-ai/registries": "workspace:*",
     "@cinatra-ai/sdk-extensions": "workspace:*",
     "@cinatra-ai/sdk-ui": "workspace:*",

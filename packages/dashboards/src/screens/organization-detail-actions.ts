@@ -26,6 +26,10 @@
  */
 import { requireAuthSession } from "@/lib/auth-session";
 import { readUserIsOrgMember } from "@/lib/better-auth-db";
+import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
+import { OrgWriteRefusedError } from "@cinatra-ai/org-write-kernel";
+
+import { DashboardOrgWriteAuthorityError } from "../org-write-seam";
 
 import {
   DashboardConfigInvalidError,
@@ -90,7 +94,16 @@ async function requireOrgMemberActor(orgId: string): Promise<DashboardActor> {
   if (!isMember) {
     throw new DashboardForbiddenError("dashboards.read", orgId);
   }
-  return { userId, organizationId: orgId, teamIds: [] };
+  return {
+    userId,
+    organizationId: orgId,
+    teamIds: [],
+    // cinatra#1939 S3: the membership check above IS the session grounding —
+    // mint the MEMBER-floor authority (content.write only; never widens even
+    // when the caller's real role is higher — no dashboards writer needs a
+    // management capability).
+    authority: sessionAuthorityFromResolvedRole(orgId, "member"),
+  };
 }
 
 /** Confinement: the row's immutable owner axis must equal the bound ref. */
@@ -130,6 +143,10 @@ function classifyMutationError(e: unknown): EntityDashboardMutationReason | null
   if (e instanceof DashboardNameConflictError) return "name-conflict";
   if (e instanceof DashboardOverviewProtectedError) return "protected";
   if (e instanceof DashboardForbiddenError) return "denied";
+  // Org-write seam refusals (cinatra#1939 S3): missing/mismatched authority
+  // and kernel lifecycle rulings are authorization outcomes, same as denied.
+  if (e instanceof DashboardOrgWriteAuthorityError) return "denied";
+  if (e instanceof OrgWriteRefusedError) return "denied";
   if (e instanceof DashboardNotFoundError) return "not-found";
   if (e instanceof DashboardConfigInvalidError) return "invalid-config";
   if (e instanceof DashboardInvalidEntityError) {

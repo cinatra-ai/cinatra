@@ -228,16 +228,21 @@ export function lintBundleRouterReferences(
   manifestPaths: string[],
 ): RouterReferenceLint {
   const present = new Set<string>();
+  /** The bundle's own top-level directory names — see `fromInlineCode` below. */
+  const bundleDirs = new Set<string>();
   for (const p of manifestPaths) {
     try {
-      present.add(normalizeBundledRelPath(p));
+      const norm = normalizeBundledRelPath(p);
+      present.add(norm);
+      const slash = norm.indexOf("/");
+      if (slash > 0) bundleDirs.add(norm.slice(0, slash));
     } catch {
       // A malformed manifest path is a caller bug caught elsewhere; ignore here.
     }
   }
   const missing: string[] = [];
   const seen = new Set<string>();
-  const consider = (raw: string) => {
+  const consider = (raw: string, fromInlineCode: boolean) => {
     let target = raw.trim();
     if (!target) return;
     // Strip an optional markdown link title: `path "Title"`.
@@ -248,9 +253,32 @@ export function lintBundleRouterReferences(
     if (target.startsWith("/")) return;
     if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return; // scheme:  (http:, mailto:, data:)
     if (target.startsWith("//")) return;
+    // A `{placeholder}` / `<placeholder>` TEMPLATE is not a file.
+    if (/[{}<>]/.test(target)) return;
     // Drop an in-target anchor/query.
     target = target.split("#")[0].split("?")[0];
     if (!target || !target.includes("/")) return; // no `/` ⇒ not a bundled path
+    if (fromInlineCode) {
+      // An inline-code span is the WEAKEST signal. A SKILL.md legitimately
+      // shows JSON-RPC method names (`message/send`), IANA timezones
+      // (`"Europe/Vienna"`), URL paths, and — for the authoring skills — paths
+      // in the OTHER repo it teaches you to write (`cinatra/oas.json`,
+      // `packages/agents/src/a2a-actions.ts`). None of those are bundled files.
+      // S1 reported this lint as a diagnostic; S2 (cinatra#2089) makes it FAIL
+      // CLOSED, so it must not reject a correct skill: an inline-code reference
+      // counts as a BUNDLED path only when it is unquoted, its last segment
+      // carries a dotted extension, AND its FIRST segment is a directory THIS
+      // BUNDLE actually ships. A markdown link target keeps the stricter
+      // treatment (an explicit `[text](path)` link is a reference by
+      // construction). Pinned as a faithful twin of
+      // `lintRouterOneHopReferences` in
+      // scripts/audit/_lib/skill-packaging-verdict.mjs by the agreement test in
+      // scripts/audit/__tests__/skill-packaging-gate.test.mjs.
+      if (/["'`]/.test(target)) return;
+      const last = target.slice(target.lastIndexOf("/") + 1);
+      if (!/^[^.].*\.[A-Za-z0-9]+$/.test(last)) return;
+      if (!bundleDirs.has(target.slice(0, target.indexOf("/")))) return;
+    }
     let norm: string;
     try {
       norm = normalizeBundledRelPath(target);
@@ -275,8 +303,16 @@ export function lintBundleRouterReferences(
   // is attacker-influenced in the sense that it arrives from an installed
   // extension. Here every `indexOf` result advances the SAME cursor it searched
   // from, so no character is ever re-scanned and the whole pass is linear.
+  // An UNTERMINATED span must not abort the pass (cinatra#2089): a stray "[x("
+  // earlier in the body used to `break`, hiding every later reference and
+  // failing the lint OPEN — harmless while it was a diagnostic, wrong now that
+  // it is enforcement. When a terminator is not found, none exists in the rest
+  // of the document either — record that once and skip the branch from then on,
+  // so the scan continues without ever re-searching (still exactly one pass).
   let i = 0;
   let openBracket = -1;
+  let noMoreCloseParen = false;
+  let noMoreBacktick = false;
   while (i < md.length) {
     const ch = md[i];
     if (ch === "[") {
@@ -284,19 +320,27 @@ export function lintBundleRouterReferences(
       i += 1;
       continue;
     }
-    if (ch === "]" && openBracket >= 0 && md[i + 1] === "(") {
+    if (ch === "]" && openBracket >= 0 && md[i + 1] === "(" && !noMoreCloseParen) {
       const close = md.indexOf(")", i + 2);
-      if (close === -1) break; // unterminated target — nothing further to find
-      consider(md.slice(i + 2, close));
+      if (close === -1) {
+        noMoreCloseParen = true;
+        i += 1;
+        continue;
+      }
+      consider(md.slice(i + 2, close), false);
       i = close + 1;
       openBracket = -1;
       continue;
     }
-    if (ch === "`") {
+    if (ch === "`" && !noMoreBacktick) {
       const close = md.indexOf("`", i + 1);
-      if (close === -1) break; // unterminated code span
+      if (close === -1) {
+        noMoreBacktick = true;
+        i += 1;
+        continue;
+      }
       const inner = md.slice(i + 1, close).trim();
-      if (inner.includes("/")) consider(inner);
+      if (inner.includes("/")) consider(inner, true);
       i = close + 1;
       continue;
     }

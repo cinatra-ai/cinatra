@@ -57,6 +57,14 @@ export type DelegatedMcpActor =
        * transport boundary is the only writer.
        */
       connectorInstancePin?: { connectorKey: string; instanceId: string };
+      /**
+       * The run's execution attempt id at token-mint time (the `att` claim,
+       * cinatra#1939 S3). OPTIONAL: pre-claim tokens verify without it through
+       * their TTL — but the org-write run authority NEVER mints without it
+       * (the mint matches it against the run row's CURRENT attempt; stale →
+       * refused). Absence only ever means an unstamped frame.
+       */
+      executionAttemptId?: string;
     }
   | {
       delegation: "public_site_widget";
@@ -123,6 +131,30 @@ export function selectDelegatedToolPolicy(
     return { toolPolicyMode: "delegated-widget", widgetDelegationKind: delegatedActor.kind };
   }
   return { toolPolicyMode: "unrestricted", widgetDelegationKind: undefined };
+}
+
+/**
+ * Session-mint eligibility for the org-write authority (cinatra#1939 S3).
+ * The transport mints a MEMBERSHIP-grounded authority ONLY for callers whose
+ * identity IS the human's session: a cookie session (no delegation) or a
+ * chat-OBO token (the chat relay acting as that human). An `agent_run`
+ * delegation is grounded in the RUN's live attempt — its authority comes from
+ * the host run verifier, never this mint (minting here would skip the
+ * live-attempt check) — and a `public_site_widget` delegation never receives
+ * one. All three identity fields must be present: `orgRole` proves the
+ * membership row existed at context-build time for the exact (userId, orgId)
+ * pair stamped on this same frame. Anything else → false, frame unstamped,
+ * org-write-seam writers refuse — fail-closed.
+ */
+export function shouldMintSessionOrgWriteAuthority(input: {
+  delegatedActor: DelegatedMcpActor | null | undefined;
+  userId: string | null | undefined;
+  orgId: string | null | undefined;
+  orgRole: "org_owner" | "org_admin" | "member" | undefined;
+}): boolean {
+  const { delegatedActor, userId, orgId, orgRole } = input;
+  if (delegatedActor && delegatedActor.delegation !== "chat") return false;
+  return Boolean(userId && orgId && orgRole);
 }
 
 /**
@@ -229,6 +261,18 @@ export type McpRequestContext = {
    * Carried so the boundary can read it; no surface enforces it yet.
    */
   oboCeiling?: OboCeilingChain;
+  /**
+   * Host-minted org-write authority for this frame (cinatra#1939 S3): the
+   * capability witness `guardOrgMutation` checks INDEPENDENTLY of the org
+   * lifecycle table before any org-scoped write. Trust boundary: ONLY
+   * authenticated context-build sites write this — session callers minted by
+   * the host org-write resolvers (src/lib/org-write/authority.ts), agent-run
+   * OBO callers by `verifyRunAuthority`; never from request input. Typed
+   * OPAQUELY so this transport package takes no kernel dependency —
+   * structurally the kernel's `OrgWriteAuthority`; consumers narrow
+   * fail-closed at their seam (a malformed value reads as "no authority").
+   */
+  orgWriteAuthority?: unknown;
   /**
    * A run id VERIFIED by a trusted server-side run-bound seam (e.g.
    * `/api/agents/passthrough` after `bindBridgeRunId` proves the executing run

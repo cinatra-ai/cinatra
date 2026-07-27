@@ -96,6 +96,10 @@ vi.mock("@cinatra-ai/a2a", async (orig) => {
 });
 
 import { handleWayflowTaskState } from "../execution";
+// cinatra#1939 wave 2: handleWayflowTaskState now requires an org-write authority
+// (§2d). transitionRunStatus is mocked here (no-op), so an inert member-shaped
+// authority satisfies the type without affecting behavior.
+const TEST_AUTHORITY = { orgId: "org-1", can: () => true };
 import type { AgentRunRecord } from "../store";
 
 const SOLE_RENDERER_ID = "@cinatra-ai/email-test-delivery-agent:input";
@@ -133,6 +137,7 @@ function makeRun(): AgentRunRecord {
     oboCeiling: null,
     dependentInstallId: null,
     humanPresent: null, // cinatra#2067 presence discriminator (headless fixture)
+    executionAttemptId: null,
   };
 }
 
@@ -202,7 +207,7 @@ describe("execution.ts — single re-entrant gate resolution (#1625 contract (1)
 
   it("interrupt #1 (first send) resolves the real renderer, NOT the fallback", async () => {
     const run = makeRun();
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -218,11 +223,11 @@ describe("execution.ts — single re-entrant gate resolution (#1625 contract (1)
     // Two-send sequence: distinct taskIds, same sole gate. Before the fix, the
     // 2nd interrupt's positional index (1) exhausted the single-step walk and
     // fell to the fallback.
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id, run, fromStatus: "pending_approval",
       task: sendInterruptTask("task-send-1"),
     });
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id, run, fromStatus: "pending_approval",
       task: sendInterruptTask("task-send-2"),
     });
@@ -233,11 +238,11 @@ describe("execution.ts — single re-entrant gate resolution (#1625 contract (1)
 
   it("BYPASSES the positional renderer-gate index for a sole gate (TTL-reset immune)", async () => {
     const run = makeRun();
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id, run, fromStatus: "pending_approval",
       task: sendInterruptTask("task-send-1"),
     });
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id, run, fromStatus: "pending_approval",
       task: sendInterruptTask("task-send-2"),
     });
@@ -254,7 +259,7 @@ describe("execution.ts — single re-entrant gate resolution (#1625 contract (1)
     // Simulate Redis unavailable on the reverse-map write. The short-circuit must
     // still resolve the one possible renderer.
     a2aMock.rememberWayflowGateTask.mockRejectedValue(new Error("redis unavailable"));
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id, run, fromStatus: "running",
       task: sendInterruptTask("task-send-1"),
     });
@@ -268,7 +273,7 @@ describe("execution.ts — single re-entrant gate resolution (#1625 contract (1)
     // The terminal 'continue' visit is the same gate node re-entered a final time
     // before the workflow branches to end; it must resolve the same renderer.
     for (const taskId of ["task-send-1", "task-send-2", "task-continue"]) {
-      await handleWayflowTaskState({
+      await handleWayflowTaskState({ authority: TEST_AUTHORITY,
         runId: run.id, run, fromStatus: "pending_approval",
         task: sendInterruptTask(taskId),
       });

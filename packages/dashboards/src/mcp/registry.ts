@@ -108,6 +108,12 @@ export function registerDashboardPrimitives(server: McpRuntimeToolServer): void 
         // resolveDashboardAccess can confine the read/write. Undefined for
         // non-agent-run callers.
         if (requestCtx?.oboCeiling) actorBase.oboCeiling = requestCtx.oboCeiling;
+        // Host-minted org-write authority (cinatra#1939 S3) forwarded OPAQUELY
+        // from the same frame; getActor narrows it fail-closed. Writers on the
+        // org-write seam refuse without it.
+        if (requestCtx?.orgWriteAuthority) {
+          actorBase.orgWriteAuthority = requestCtx.orgWriteAuthority;
+        }
 
         const result = await handler({
           primitiveName: name,

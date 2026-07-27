@@ -83,6 +83,10 @@ beforeEach(() => {
   // Re-establish the fail-open default after clearAllMocks resets impls.
   pmBridge.readRunTriggerPmState.mockResolvedValue({ kind: "no-provider" });
   schedule.scheduleTrigger.mockResolvedValue({ jobSchedulerId: "sched_new" });
+  // cinatra#1939 wave 2: the fire + teardown paths read the run row to scope
+  // the per-fire system authority mint to its org — a present row is the
+  // default; tests exercising a vanished row override with a Once(undefined).
+  store.readAgentRunById.mockResolvedValue(makeSourceRun());
 });
 
 function makeRecurringTrigger() {
@@ -251,6 +255,8 @@ describe("runAgentRunTriggerReleaseJob — pre-execution PM check (#319)", () =>
       "run-source",
       "armed",
       "stopped",
+      undefined,
+      expect.objectContaining({ orgId: TEST_ORG_ID }),
     );
     // Skip the fire — no clone, no enqueue.
     expect(store.createAgentRunPendingInput).not.toHaveBeenCalled();

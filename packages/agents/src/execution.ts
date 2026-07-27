@@ -26,6 +26,12 @@ import { isTriggerReleased } from "./trigger-gate";
 import { resolveTemplateInputSchema } from "./input-schema-resolver";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import { snapshotSkillsAtRunStart } from "@/lib/agent-run-skills-used";
+// cinatra#1939 wave 2 (§2b): the worker + WayFlow state handler drive a run's
+// FULL lifecycle with NO session, so they mint the SYSTEM `agent-run-dispatch`
+// authority (run.execute + run.complete) once per job entry, scoped to the run's
+// org, and thread it into every transitionRunStatus.
+import { mintAgentRunExecutionAuthority } from "@/lib/org-write/agent-run-authority-mint";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { readRunSelectedSkillRevisions } from "@/lib/run-selected-skill-revisions";
 import { resolveRunSkillDelivery } from "@cinatra-ai/skills/recommendation";
 import {
@@ -666,6 +672,17 @@ export type HandleWayflowTaskStateArgs = {
   runId: string;
   run: AgentRunRecord;
   fromStatus: AgentRunStatus;
+  /**
+   * cinatra#1939 wave 2 (§2d) — the org-write authority grounding this handler's
+   * internal transitions (→pending_approval / →failed / →completed). Each of the
+   * 3 callers supplies its own: the worker (execution.ts) supplies the SYSTEM
+   * dispatch authority; the two RESUME callers (review-task-actions.ts,
+   * mcp/handlers.ts) supply the RESUMING PRINCIPAL's authority (D-OBO-RESUME),
+   * NEVER the frame's own RUN authority — a lifecycle-driving resume can move a
+   * run forward (→pending_approval = run.execute), which a run's own OBO
+   * authority must never hold.
+   */
+  authority: OrgWriteAuthority;
   // The `task` shape intentionally accepts WayFlow's @a2a-js/sdk `Task` type
   // (status.message.parts is a discriminated union of TextPart | DataPart | FilePart;
   // history.parts is the same union). We narrow at access time inside the helper
@@ -695,7 +712,7 @@ function buildReviewRunBasePath(agentPackageName: string, instanceId: string): s
 }
 
 export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): Promise<void> {
-  const { runId, run, fromStatus, task } = args;
+  const { runId, run, fromStatus, task, authority } = args;
   const taskState = task.status?.state;
 
   // Defensive resync (idempotent if unchanged): persist task.id / contextId
@@ -1010,7 +1027,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         if (fromStatus === "pending_approval") {
           return;
         }
-        await transitionRunStatus(runId, fromStatus, "pending_approval").catch((e) => {
+        await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
         });
@@ -1125,7 +1142,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     }
     // Otherwise (initial-dispatch path: fromStatus === "running"), perform the
     // legal running -> pending_approval transition.
-    await transitionRunStatus(runId, fromStatus, "pending_approval").catch((e) => {
+    await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority).catch((e) => {
       if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
       throw e;
     });
@@ -1149,7 +1166,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     if (fromStatus === "failed") {
       return;
     }
-    await transitionRunStatus(runId, fromStatus, "failed", { error: errMsg }).catch((e) => {
+    await transitionRunStatus(runId, fromStatus, "failed", { error: errMsg }, authority).catch((e) => {
       if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
       throw e;
     });
@@ -1302,7 +1319,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         history: scrubbedHistory,
       },
     ],
-  }).catch((err) => {
+  }, authority).catch((err) => {
     // stale_from_status: a concurrent stop/cancel already moved the row;
     // skip RUN_FINISHED so the UI reflects the DB winner, not us.
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
@@ -1530,6 +1547,11 @@ async function runAgentBuilderExecutionJobInner(
     console.log(`[agent-builder] run ${runId} not found, skipping`);
     return;
   }
+  // cinatra#1939 wave 2 (§2b): mint the SYSTEM dispatch authority ONCE at job
+  // entry (scoped to this run's org) and thread it into every status transition
+  // this worker drives — dispatch (run.execute) and terminal finalize
+  // (run.complete) — including handleWayflowTaskState below.
+  const executionAuthority = mintAgentRunExecutionAuthority(run.orgId);
   if (run.status !== "queued") {
     // Federated children parked by WaitingForHumanError may retry
     // after resume transitions them to a terminal state. If the child reached
@@ -1554,7 +1576,7 @@ async function runAgentBuilderExecutionJobInner(
   if (!template) {
     await transitionRunStatus(runId, "queued", "failed", {
       error: `Template ${run.templateId} not found`,
-    });
+    }, executionAuthority);
     return;
   }
 
@@ -1687,7 +1709,7 @@ async function runAgentBuilderExecutionJobInner(
       // FAIL CLOSED (cinatra#1040 S7): a REQUIRED explicit version pin whose
       // immutable snapshot cannot be served must NEVER silently fall back to the
       // live template. Refuse the run with the full evidence set.
-      await transitionRunStatus(runId, "queued", "failed", { error: err.message });
+      await transitionRunStatus(runId, "queued", "failed", { error: err.message }, executionAuthority);
       return;
     }
     throw err;
@@ -1723,12 +1745,12 @@ async function runAgentBuilderExecutionJobInner(
       await transitionRunStatus(runId, "queued", "pending_input", {
         error: err.message,
         humanWaitGate: true,
-      });
+      }, executionAuthority);
       return;
     }
     await transitionRunStatus(runId, "queued", "failed", {
       error: err instanceof Error ? err.message : String(err),
-    });
+    }, executionAuthority);
     return;
   }
 
@@ -1806,7 +1828,7 @@ async function runAgentBuilderExecutionJobInner(
       (fieldSchema as { "x-renderer"?: string })["x-renderer"]
         ?? SCHEMA_FIELD_FALLBACK_RENDERER_ID;
 
-    await transitionRunStatus(runId, "queued", "pending_approval");
+    await transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority);
 
     // No DB writes — use synthetic ID so approveReviewTaskInternal
     // routes to the "setup-" branch, which re-enqueues AGENT_BUILDER_EXECUTION.
@@ -1876,7 +1898,7 @@ async function runAgentBuilderExecutionJobInner(
 
     const xRenderer = GROUPED_SETUP_FORM_RENDERER_ID;
 
-    await transitionRunStatus(runId, "queued", "pending_approval");
+    await transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority);
 
     // No DB writes — use synthetic ID so approveReviewTaskInternal
     // routes to the "setup-" branch, which re-enqueues AGENT_BUILDER_EXECUTION.
@@ -1929,14 +1951,14 @@ async function runAgentBuilderExecutionJobInner(
     if (!template.agentUrl) {
       await transitionRunStatus(runId, "queued", "failed", {
         error: "external template missing agentUrl",
-      });
+      }, executionAuthority);
       return;
     }
     const saved = findSavedConnectionForAgentUrl(template.agentUrl);
     if (!saved) {
       await transitionRunStatus(runId, "queued", "failed", {
         error: `no saved connection for external A2A server: ${template.agentUrl}`,
-      });
+      }, executionAuthority);
       return;
     }
 
@@ -1966,7 +1988,7 @@ async function runAgentBuilderExecutionJobInner(
     try {
       await transitionRunStatus(runId, "queued", "running", {
         dispatch: { attemptId: randomUUID() },
-      });
+      }, executionAuthority);
     } catch (err) {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
         console.log(`[external-a2a] run ${runId} status no longer "queued" — skipping stale transition`);
@@ -1985,7 +2007,7 @@ async function runAgentBuilderExecutionJobInner(
       stream = client.streamTask(JSON.stringify((run.inputParams ?? {}) as Record<string, unknown>));
       const first = await stream.next();
       if (first.done) {
-        await transitionRunStatus(runId, "running", "failed", { error: "external streamTask returned empty stream" });
+        await transitionRunStatus(runId, "running", "failed", { error: "external streamTask returned empty stream" }, executionAuthority);
         return;
       }
       firstEvent = first.value;
@@ -1995,7 +2017,7 @@ async function runAgentBuilderExecutionJobInner(
     } catch (err) {
       await transitionRunStatus(runId, "running", "failed", {
         error: err instanceof Error ? err.message : "external streamTask failed",
-      });
+      }, executionAuthority);
       return;
     }
 
@@ -2018,7 +2040,7 @@ async function runAgentBuilderExecutionJobInner(
       // cancel has already moved the run off "running"). illegal_transition or
       // any other error must surface so future refactor bugs (typos, wrong
       // "from" argument) are caught at test/CI time, not silently masked.
-      await transitionRunStatus(runId, "running", "completed").catch((err) => {
+      await transitionRunStatus(runId, "running", "completed", undefined, executionAuthority).catch((err) => {
         if (err instanceof RunTransitionError && err.code === "stale_from_status") {
           console.log(
             `[external-a2a] run ${runId} no longer running — skipping running→completed transition`,
@@ -2032,7 +2054,7 @@ async function runAgentBuilderExecutionJobInner(
       // Apply the same discrimination on the failed-branch transition.
       await transitionRunStatus(runId, "running", "failed", {
         error: err instanceof Error ? err.message : String(err),
-      }).catch((e) => {
+      }, executionAuthority).catch((e) => {
         if (e instanceof RunTransitionError && e.code === "stale_from_status") {
           console.log(
             `[external-a2a] run ${runId} no longer running — skipping running→failed transition`,
@@ -2105,7 +2127,7 @@ async function runAgentBuilderExecutionJobInner(
     try {
       await transitionRunStatus(runId, "queued", "running", {
         dispatch: { attemptId: randomUUID() },
-      });
+      }, executionAuthority);
     } catch (err) {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
         console.log(`[wayflow] run ${runId} no longer queued — skipping stale transition`);
@@ -2236,7 +2258,7 @@ async function runAgentBuilderExecutionJobInner(
       // fromStatus is the literal "running" — NOT run.status — because the
       // in-memory run object loaded at line 137 still has the stale "queued"
       // status (the DB row was just moved to "running" by the CAS at line 760).
-      await handleWayflowTaskState({ runId, run, fromStatus: "running", task });
+      await handleWayflowTaskState({ runId, run, fromStatus: "running", task, authority: executionAuthority });
     } catch (err) {
       // #562: a bare `TypeError: fetch failed` from the sendTask transport
       // (WayFlow runtime unreachable) was being recorded verbatim — no target
@@ -2269,7 +2291,7 @@ async function runAgentBuilderExecutionJobInner(
       ).catch(() => undefined);
       await transitionRunStatus(runId, "running", "failed", {
         error: runError,
-      }).catch((e) => {
+      }, executionAuthority).catch((e) => {
         if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
         throw e;
       });

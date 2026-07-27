@@ -24,7 +24,7 @@ import type {
   ReviewDisposition,
   SubmitDecisionResult,
 } from "@/lib/artifacts/artifact-review-decision";
-import type { PinnedCaptureView } from "@/lib/artifacts/cms-preview-capture-view";
+import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
 import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
 
 // ---------------------------------------------------------------------------
@@ -191,14 +191,16 @@ export type ReviewSurfaceModel =
        * present; absent for a gate whose producer supplied none. */
       agentSummary: string | null;
       /**
-       * S6 (#2044 L-B) — the PINNED page captures per target, keyed
-       * `<artifactId>:<representationRevisionId>` (the pinned pair). Captured at
-       * gate creation and read from the store; the surface NEVER fetches the
-       * remote site at view time, so an old gate keeps showing its original
-       * capture. Empty for a target that has none (every other artifact type),
-       * which renders nothing at all — the capture is additive context.
+       * S6 (#2044 L-B + L-D) — the PINNED visual before/after PAIR per target,
+       * keyed `<artifactId>:<representationRevisionId>` (the pinned pair):
+       * the live page beside the proposal composed into that page's own
+       * adapter-marked regions. Captured at gate creation and read from the
+       * store; the surface NEVER fetches the remote site at view time, so an old
+       * gate keeps showing its original pictures. Absent for a target that has
+       * none (every other artifact type), which renders nothing at all — the
+       * pictures are additive context.
        */
-      pinnedCaptures: Record<string, PinnedCaptureView[]>;
+      pinnedCapturePairs: Record<string, PinnedCapturePairView>;
       permissions: ReviewDecisionPermissions;
     };
 

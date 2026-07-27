@@ -19,7 +19,13 @@
 
 import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
-import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
+import { getAuthSession, isPlatformAdmin, resolveOrgRoleForUser } from "@/lib/auth-session";
+// cinatra#1939 wave 2: run-management transitions are grounded on the acting
+// principal's member SESSION authority. Owner ruling 2026-07-26 (ruling 2) DROPPED
+// cross-org run management: an actor cleared by canActOnRun who is NOT a member
+// of the run's org (a cross-org co-owner or a platform admin) now fails closed
+// with the action's Forbidden idiom — never a non-member run-management mint.
+import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import {
   readAgentRunById,
   readAgentRunsByParent,
@@ -79,9 +85,20 @@ export async function cancelOrchestratorAction(
     return { ok: false, error: "Forbidden" };
   }
 
+  // Ground the terminal armed/…→stopped transition on the actor's member
+  // SESSION authority (canActOnRun just cleared this actor). Owner ruling
+  // 2026-07-26 (ruling 2): cross-org run management is unsupported, so an
+  // authorized NON-member (cross-org co-owner / platform admin) fails closed
+  // here — before any child fan-out — rather than driving the cancel.
+  const role = await resolveOrgRoleForUser(run.orgId, actorUserId);
+  if (role === undefined) {
+    return { ok: false, error: "Forbidden" };
+  }
+  const authority = sessionAuthorityFromResolvedRole(run.orgId, role);
+
   // Pass an actor descriptor including the user id as `source` so the inner
   // function logs and audits the cancelling actor.
-  await cancelOrchestratorRun(runId, { actorType: "user", source: actorUserId });
+  await cancelOrchestratorRun(runId, authority, { actorType: "user", source: actorUserId });
   revalidatePath(`/agents/[agentId]/[instanceId]/run`, "page");
   return { ok: true };
 }
@@ -174,6 +191,18 @@ export async function resumeStoppedOrchestratorAction(
   if (!(await canActOnRun(run, actorUserId, isPlatformAdmin(session)))) {
     return { ok: false, error: "Forbidden" };
   }
+
+  // Ground every transition in this resume on the actor's member SESSION
+  // authority (canActOnRun just cleared this actor). Owner ruling 2026-07-26
+  // (ruling 2): cross-org run management is unsupported, so an authorized
+  // NON-member (cross-org co-owner / platform admin) fails closed here — before
+  // any state change or WayFlow send — rather than driving the resume.
+  const role = await resolveOrgRoleForUser(run.orgId, actorUserId);
+  if (role === undefined) {
+    return { ok: false, error: "Forbidden" };
+  }
+  const authority = sessionAuthorityFromResolvedRole(run.orgId, role);
+
   if (run.status !== "stopped") return { ok: false, error: "run is not in stopped state" };
 
   // WayFlow runs do not use lgThreadId. The fasta2a contextId is
@@ -199,7 +228,7 @@ export async function resumeStoppedOrchestratorAction(
 
   // Race-safe state transition.
   try {
-    await transitionRunStatus(runId, "stopped", "queued");
+    await transitionRunStatus(runId, "stopped", "queued", undefined, authority);
   } catch (err) {
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
       return { ok: false, error: "race condition — run status changed" };
@@ -223,7 +252,7 @@ export async function resumeStoppedOrchestratorAction(
       fetchImpl: createWayflowFetch(),
     });
   } catch (err) {
-    await transitionRunStatus(runId, "queued", "stopped").catch(() => undefined);
+    await transitionRunStatus(runId, "queued", "stopped", undefined, authority).catch(() => undefined);
     console.error("[resumeStoppedOrchestratorAction] client creation failed for run", runId, err);
     return { ok: false, error: "resume failed" };
   }
@@ -243,7 +272,7 @@ export async function resumeStoppedOrchestratorAction(
       configuration: { acceptedOutputModes: ["text"] },
     });
   } catch (err) {
-    await transitionRunStatus(runId, "queued", "stopped").catch((revertErr) => {
+    await transitionRunStatus(runId, "queued", "stopped", undefined, authority).catch((revertErr) => {
       if (revertErr instanceof RunTransitionError && revertErr.code === "stale_from_status") {
         console.warn(`[resumeStoppedOrchestratorAction] compensation no-op for ${runId}: status already advanced`);
         return;
@@ -257,7 +286,7 @@ export async function resumeStoppedOrchestratorAction(
   // sendTask succeeded — best-effort transition only, never revert.
   await transitionRunStatus(runId, "queued", "running", {
     dispatch: { attemptId: randomUUID() },
-  }).catch((e) => {
+  }, authority).catch((e) => {
     if (!(e instanceof RunTransitionError && e.code === "stale_from_status")) {
       console.error("[resumeStoppedOrchestratorAction] post-send transition failed", runId, e);
     }

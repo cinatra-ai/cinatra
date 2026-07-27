@@ -56,7 +56,9 @@ import {
 import { readPinnedPreviewCaptures } from "@/lib/artifacts/cms-preview-capture-store";
 import {
   buildPinnedCaptureViews,
-  type PinnedCaptureView,
+  buildPinnedCapturePair,
+  type PinnedCapturePairKind,
+  type PinnedCapturePairView,
 } from "@/lib/artifacts/cms-preview-capture-view";
 import {
   submitReviewDecisionCore,
@@ -351,12 +353,13 @@ export async function loadReviewGateSurface(args: {
     runId,
     reviewTaskId,
     targets,
-    // S6 (#2044 L-B) — the PINNED captures for each pinned target. A STORE read
+    // S6 (#2044 L-B + L-D) — the PINNED before/after PAIR for each pinned
+    // target. A STORE read
     // only: the surface shows the picture taken at gate creation and performs no
     // network fetch at view time (the inert-by-contract rule, asserted by
     // `cms-preview-capture-view.test.ts`). A target with no capture yields an
     // empty list and renders nothing.
-    pinnedCaptures: loadPinnedCapturesForTargets(actorCtx.orgId, targets),
+    pinnedCapturePairs: loadPinnedCapturePairsForTargets(actorCtx.orgId, targets),
     // The producing agent's one-line summary (§I/II) is rendered "when present";
     // no gate/run column carries it in this slice, so it is absent (the chrome
     // renders nothing rather than an empty summary).
@@ -381,26 +384,43 @@ export async function loadReviewGateSurface(args: {
 // is unavailable (#2044's honest-fallback rule).
 // ---------------------------------------------------------------------------
 
-function loadPinnedCapturesForTargets(
+/**
+ * Read one pinned target's captures and project ONE comparison out of them.
+ * Shared by the gate surface (`review` — live page vs proposal) and the S4
+ * verification view (`verification` — reviewed vs applied), so both pairs are
+ * built by exactly the same store read + pure projection.
+ */
+export function loadPinnedCapturePair(
+  orgId: string,
+  target: { artifactId: string; representationRevisionId: string },
+  kind: PinnedCapturePairKind,
+  driftedRegions: readonly string[] = [],
+): PinnedCapturePairView | null {
+  try {
+    const stored = readPinnedPreviewCaptures({
+      orgId,
+      boundArtifactId: target.artifactId,
+      boundSnapshotRevisionId: target.representationRevisionId,
+    });
+    if (stored.length === 0) return null;
+    return buildPinnedCapturePair(buildPinnedCaptureViews(stored), kind, driftedRegions);
+  } catch (err) {
+    console.warn(
+      "[review-gate-ports] pinned capture lookup failed (the review is unaffected):",
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+function loadPinnedCapturePairsForTargets(
   orgId: string,
   targets: readonly PreparedReviewTarget[],
-): Record<string, PinnedCaptureView[]> {
-  const out: Record<string, PinnedCaptureView[]> = {};
+): Record<string, PinnedCapturePairView> {
+  const out: Record<string, PinnedCapturePairView> = {};
   for (const prepared of targets) {
-    const key = pinnedCaptureKey(prepared.target);
-    try {
-      const stored = readPinnedPreviewCaptures({
-        orgId,
-        boundArtifactId: prepared.target.artifactId,
-        boundSnapshotRevisionId: prepared.target.representationRevisionId,
-      });
-      if (stored.length > 0) out[key] = buildPinnedCaptureViews(stored);
-    } catch (err) {
-      console.warn(
-        "[review-gate-ports] pinned capture lookup failed (the review is unaffected):",
-        err instanceof Error ? err.message : err,
-      );
-    }
+    const pair = loadPinnedCapturePair(orgId, prepared.target, "review");
+    if (pair) out[pinnedCaptureKey(prepared.target)] = pair;
   }
   return out;
 }

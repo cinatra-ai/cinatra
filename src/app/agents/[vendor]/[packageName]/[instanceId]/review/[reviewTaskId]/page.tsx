@@ -45,7 +45,10 @@ import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { getAuthSession } from "@/lib/auth-session";
 
-import { loadReviewGateSurface } from "@/app/artifacts/[id]/review-gate-ports";
+import {
+  loadPinnedCapturePair,
+  loadReviewGateSurface,
+} from "@/app/artifacts/[id]/review-gate-ports";
 import type { ReviewDisposition } from "@/lib/artifacts/artifact-review-decision";
 import {
   pinnedCaptureKey,
@@ -138,6 +141,21 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
       readAdvisoryCommentsForGates([gate.id]),
     ]);
     const backHref = `/agents/${vendor}/${packageName}/${encodeURIComponent(runId)}/review/${encodeURIComponent(reviewTaskId)}`;
+    // S6 (#2044 L-D): the field diff's VISUAL counterpart — the reviewed proposal
+    // beside the page as it actually landed, with the read-back's own
+    // out-of-scope paths outlined on the applied side. A pure store read of the
+    // captures pinned against the record's REVIEWED target; nothing is fetched
+    // from the site here either. Absent for a non-CMS target (renders nothing).
+    const visualPair = record
+      ? loadPinnedCapturePair(
+          actorCtx.orgId,
+          record.reviewedTarget,
+          "verification",
+          record.fieldDiff
+            .filter((f) => !record.scopeManifest.paths.includes(f.field))
+            .map((f) => f.field),
+        )
+      : null;
     return (
       <ReviewShell>
         {record ? (
@@ -149,6 +167,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
             scopePaths={record.scopeManifest.paths}
             advisoryComments={advisory.map((c) => ({ id: c.id, authorKind: c.authorKind, body: c.body }))}
             gateHref={backHref}
+            visualPair={visualPair}
           />
         ) : (
           <ReviewGateBlocked reason="no-longer-pending" />
@@ -224,7 +243,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
               >
                 <ReviewTargetPanel
                   prepared={prepared}
-                  pinnedCaptures={surface.pinnedCaptures[pinnedCaptureKey(prepared.target)] ?? []}
+                  capturePair={surface.pinnedCapturePairs[pinnedCaptureKey(prepared.target)] ?? null}
                 />
               </Suspense>
             ))}

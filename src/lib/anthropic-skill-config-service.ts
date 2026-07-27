@@ -42,6 +42,28 @@ export async function orchestrateAnthropicSkillSync(): Promise<void> {
         kind: "error",
       });
     }
+    // A REFUSED skill (cinatra#2089, S2): its stored bundle's router points at a
+    // file the bundle does not ship, so the fail-closed one-hop lint kept it out
+    // of the upload set. The run itself SUCCEEDS (`ok: true`) — every other skill
+    // syncs — but the refused skill stops being published and its already
+    // uploaded copy is marked stale for GC reclamation. Without this the refusal
+    // would be invisible: the operator would see a green save and a skill that
+    // quietly disappeared from the provider. Notify by NAME.
+    const refused = result.captureDiagnostics?.refusedForDanglingReferences ?? [];
+    if (refused.length > 0) {
+      await createNotification({
+        title: `Anthropic skill sync skipped ${refused.length} skill(s) with a broken reference`,
+        body:
+          "These skills were NOT uploaded because their SKILL.md points at files the " +
+          "bundle does not ship (a router may only point one hop, at files it ships). " +
+          "Any copy already uploaded is marked stale and will be reclaimed. Fix the " +
+          "reference or ship the file, then save again: " +
+          refused
+            .map((r) => `${r.catalogSkillId} → ${r.missing.join(", ")}`)
+            .join("; "),
+        kind: "error",
+      });
+    }
   } catch (err) {
     await createNotification({
       title: "Anthropic skill sync failed",

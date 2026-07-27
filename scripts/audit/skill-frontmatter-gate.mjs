@@ -35,6 +35,16 @@
 // they still get valid frontmatter so they cannot be mistaken for one, but the
 // gate does not police fixture content.
 //
+// ── #2089 (S2): ONE validator ──────────────────────────────────────────────
+// The frontmatter rules this gate used to carry inline now live in the SHARED
+// verdict module (`scripts/audit/_lib/skill-packaging-verdict.mjs`) that store
+// install and the extension repos' publish gate consume too, so a SKILL.md can
+// never be accepted at one enforcement point and refused at another. This gate
+// keeps its own scope (git-tracked host SKILL.md + the committed-mirror ban);
+// the schema itself is imported. The fixture exclusion now reads the SHARED
+// policy artifact (config/skill-fixture-allowlist.json) instead of a private
+// regex.
+//
 // Usage:
 //   node scripts/audit/skill-frontmatter-gate.mjs   # exit 1 on any finding
 
@@ -43,18 +53,21 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import {
+  ALLOWED_FRONTMATTER_KEYS,
+  matchesAllowlist,
+  resolveFixtureAllowlist,
+  validateSkillFrontmatter,
+} from "./_lib/skill-packaging-verdict.mjs";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
 
-// Upstream allowed top-level frontmatter keys (mirrors quick_validate.py).
-const ALLOWED_PROPERTIES = new Set([
-  "name",
-  "description",
-  "license",
-  "allowed-tools",
-  "metadata",
-  "compatibility",
-]);
+// Upstream allowed top-level frontmatter keys (mirrors quick_validate.py) —
+// owned by the shared verdict module, re-exported here for the gate's messages
+// and for the tests that pin the two gates together.
+const ALLOWED_PROPERTIES = new Set(ALLOWED_FRONTMATTER_KEYS);
+export { validateSkillFrontmatter };
 
 // SKILL.md under these prefixes are host-canonical and MUST validate.
 const VALIDATE_PREFIXES = ["packages/", "src/"];
@@ -62,8 +75,19 @@ const VALIDATE_PREFIXES = ["packages/", "src/"];
 // SKILL.md committed under these prefixes are a forbidden drift-prone mirror.
 const MIRROR_BAN_PREFIXES = ["data/skill-store/", "extensions/"];
 
-// A loadable-skill validation is skipped for fixture trees (not loadable skills).
-const FIXTURE_PATH_RE = /\/__tests__\/fixtures\//;
+// A loadable-skill validation is skipped for fixture trees (not loadable
+// skills). The pattern set is the SHARED policy artifact — the same list the
+// packaging gate and the store-install seam apply.
+function hostFixtureAllowlist() {
+  try {
+    const policy = JSON.parse(readFileSync(join(REPO_ROOT, "config", "skill-fixture-allowlist.json"), "utf8"));
+    return resolveFixtureAllowlist(policy, "cinatra");
+  } catch {
+    // Fail CLOSED: an unreadable policy means NOTHING is exempt, so a missing
+    // artifact surfaces as loud findings rather than a silently-wider gate.
+    return [];
+  }
+}
 
 function gitTrackedSkillMds() {
   let out;
@@ -82,131 +106,13 @@ function gitTrackedSkillMds() {
     .filter((l) => l.endsWith("SKILL.md"));
 }
 
-// Dependency-free SKILL.md frontmatter validator.
-//
-// This gate runs in the lean pure-node audit lane (NO `pnpm install`; the `yaml`
-// package is a packages/skills dep and is NOT hoisted under pnpm's strict
-// node_modules), so it cannot import a YAML library. Instead it parses the small,
-// constrained frontmatter grammar SKILL.md uses (top-level `key: value` lines,
-// nested mappings/lists under `metadata:`) directly and reproduces the exact
-// failure modes of the upstream quick_validate.py:
-//   - missing/malformed frontmatter fences,
-//   - the "mapping values are not allowed here" YAML error (an unquoted scalar
-//     value containing `: ` — the real failure on bundled extension skills),
-//   - disallowed top-level keys, required name/description, kebab name,
-//     angle-bracket + length limits.
-//
-// Returns null when valid, else a human-readable reason string.
-
-// Strip one layer of matching surrounding quotes from a scalar (single/double).
-function unquoteScalar(raw) {
-  const v = raw.trim();
-  if (v.length >= 2 && ((v[0] === '"' && v.endsWith('"')) || (v[0] === "'" && v.endsWith("'")))) {
-    return v.slice(1, -1);
-  }
-  return v;
-}
-
-// A bare (unquoted) scalar value that contains `: ` or ends with `:` is the YAML
-// "mapping values are not allowed here" error the upstream validator reports on
-// the bundled extension skills. Quoted scalars are exempt.
-function unquotedScalarHasMappingColon(raw) {
-  const v = raw.trim();
-  if (!v) return false;
-  if ((v[0] === '"' && v.endsWith('"')) || (v[0] === "'" && v.endsWith("'"))) return false;
-  return /:\s/.test(v) || /:$/.test(v);
-}
-
-export function validateSkillFrontmatter(content) {
-  if (!content.startsWith("---")) return "No YAML frontmatter found";
-  const match = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!match) return "Invalid frontmatter format";
-
-  const body = match[1];
-  const lines = body.split(/\r?\n/);
-
-  // Collect TOP-LEVEL keys (indentation 0). A line whose first non-blank char is
-  // deeper-indented belongs to the previous top-level key's nested structure and
-  // is not policed here (e.g. metadata.match_when entries).
-  const topLevel = new Map(); // key -> { rawValue (string|null for nested/empty), line }
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (!line.trim()) continue;
-    if (line.trimStart().startsWith("#")) continue; // comment
-    if (/^\s/.test(line)) continue; // indented → nested under a top-level key
-    const m = line.match(/^([^:\s][^:]*?):(.*)$/);
-    if (!m) {
-      // A non-indented, non-empty line that is not `key:` shape (e.g. a bare list
-      // item `- x` at column 0, or stray text) is malformed frontmatter.
-      return `Invalid YAML in frontmatter: unexpected line "${line.trim()}"`;
-    }
-    const key = m[1].trim();
-    const rest = m[2];
-    // Empty value (`key:` or `key:` + trailing spaces) → nested mapping/list.
-    const rawValue = rest.trim() === "" ? null : rest;
-    if (rawValue !== null && unquotedScalarHasMappingColon(rawValue)) {
-      return "Invalid YAML in frontmatter: mapping values are not allowed here";
-    }
-    topLevel.set(key, { rawValue, line: i });
-  }
-
-  const keys = [...topLevel.keys()];
-  if (keys.length === 0) return "Frontmatter must be a YAML dictionary";
-
-  const unexpected = keys.filter((k) => !ALLOWED_PROPERTIES.has(k));
-  if (unexpected.length > 0) {
-    return (
-      `Unexpected key(s) in SKILL.md frontmatter: ${unexpected.sort().join(", ")}. ` +
-      `Allowed properties are: ${[...ALLOWED_PROPERTIES].sort().join(", ")} ` +
-      `(move Cinatra-specific keys such as match_when under metadata.*).`
-    );
-  }
-
-  if (!topLevel.has("name")) return "Missing 'name' in frontmatter";
-  if (!topLevel.has("description")) return "Missing 'description' in frontmatter";
-
-  const nameRaw = topLevel.get("name").rawValue;
-  if (nameRaw === null) return "Name must be a string, got object";
-  const name = unquoteScalar(nameRaw);
-  if (name) {
-    if (!/^[a-z0-9-]+$/.test(name)) {
-      return `Name '${name}' should be kebab-case (lowercase letters, digits, and hyphens only)`;
-    }
-    if (name.startsWith("-") || name.endsWith("-") || name.includes("--")) {
-      return `Name '${name}' cannot start/end with hyphen or contain consecutive hyphens`;
-    }
-    if (name.length > 64) {
-      return `Name is too long (${name.length} characters). Maximum is 64 characters.`;
-    }
-  }
-
-  const descRaw = topLevel.get("description").rawValue;
-  if (descRaw === null) return "Description must be a string, got object";
-  const description = unquoteScalar(descRaw);
-  if (description) {
-    if (description.includes("<") || description.includes(">")) {
-      return "Description cannot contain angle brackets (< or >)";
-    }
-    if (description.length > 1024) {
-      return `Description is too long (${description.length} characters). Maximum is 1024 characters.`;
-    }
-  }
-
-  if (topLevel.has("compatibility")) {
-    const compatRaw = topLevel.get("compatibility").rawValue;
-    if (compatRaw !== null) {
-      const compatibility = unquoteScalar(compatRaw);
-      if (compatibility.length > 500) {
-        return `Compatibility is too long (${compatibility.length} characters). Maximum is 500 characters.`;
-      }
-    }
-  }
-
-  return null;
-}
+// The SKILL.md frontmatter schema itself is the SHARED verdict's
+// `validateSkillFrontmatter` (imported + re-exported above): one
+// dependency-free implementation for CI, store install and publish.
 
 export function scan() {
   const findings = [];
+  const fixtureAllowlist = hostFixtureAllowlist();
   for (const rel of gitTrackedSkillMds()) {
     // #495: forbidden committed mirror.
     if (MIRROR_BAN_PREFIXES.some((p) => rel.startsWith(p))) {
@@ -222,7 +128,7 @@ export function scan() {
     }
     // #494: host-canonical skills must validate.
     if (!VALIDATE_PREFIXES.some((p) => rel.startsWith(p))) continue;
-    if (FIXTURE_PATH_RE.test(rel)) continue;
+    if (matchesAllowlist(rel, fixtureAllowlist)) continue;
     let content;
     try {
       content = readFileSync(join(REPO_ROOT, rel), "utf8");

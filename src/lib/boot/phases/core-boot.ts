@@ -148,7 +148,16 @@ export function coreBootPhases(): BootPhase[] {
         const { backfillDashboardArtifactTwins } = await import(
           "@cinatra-ai/dashboards/twin-backfill"
         );
-        await backfillDashboardArtifactTwins({ log: (msg) => console.log(`[boot] ${msg}`) });
+        // R2-allowlisted minting site (org-write-boundary-gate): the backfill
+        // grounds each per-id transaction on the content-only
+        // "dashboard-twin-backfill" purpose, minted PER ORG inside its sweep
+        // (cinatra#1939 wave 1).
+        const { mintSystemWriteAuthority } = await import("@/lib/org-write/authority");
+        await backfillDashboardArtifactTwins({
+          log: (msg) => console.log(`[boot] ${msg}`),
+          mintOrgAuthority: (orgId) =>
+            mintSystemWriteAuthority("dashboard-twin-backfill", orgId),
+        });
       },
     },
     {

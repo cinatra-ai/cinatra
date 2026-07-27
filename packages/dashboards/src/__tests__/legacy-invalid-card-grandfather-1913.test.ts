@@ -13,37 +13,46 @@ const state = vi.hoisted(() => ({
   audits: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("../store/db", () => {
-  const tx = {
-    select: () => ({
-      from: () => ({
-        where: () => ({
-          for: () => ({
-            limit: async () => (state.row ? [state.row] : []),
+vi.mock("../store/db", async () => {
+  // Kernel test fakes (cinatra#1939 S3 — updateDashboard runs under the
+  // org-write kernel guard): answer the guard's own queries (org locks,
+  // lifecycle read → active org), pass the writer's statements through.
+  const { wrapTxWithOrgWriteKernel } = await import(
+    "@cinatra-ai/org-write-kernel/testing"
+  );
+  const tx = wrapTxWithOrgWriteKernel(
+    {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            for: () => ({
+              limit: async () => (state.row ? [state.row] : []),
+            }),
           }),
         }),
       }),
-    }),
-    update: () => ({
-      set: (v: Record<string, unknown>) => ({
-        where: () => ({
-          returning: async () => {
-            state.updates.push(v);
-            return [{ ...state.row, ...v }];
-          },
+      update: () => ({
+        set: (v: Record<string, unknown>) => ({
+          where: () => ({
+            returning: async () => {
+              state.updates.push(v);
+              return [{ ...state.row, ...v }];
+            },
+          }),
         }),
       }),
-    }),
-    insert: () => ({
-      values: async (v: Record<string, unknown>) => {
-        state.audits.push(v);
-        return [v];
-      },
-    }),
-    // Backs the writer's advisory-lock statement (cinatra#1894 B1b): a
-    // DB-concurrency no-op with no observable effect in this mock.
-    execute: async () => ({ rows: [] }),
-  };
+      insert: () => ({
+        values: async (v: Record<string, unknown>) => {
+          state.audits.push(v);
+          return [v];
+        },
+      }),
+      // Backs the writer's advisory-lock statement (cinatra#1894 B1b): a
+      // DB-concurrency no-op with no observable effect in this mock.
+      execute: async () => ({ rows: [] }),
+    },
+    { organization: { archivedAt: null } },
+  );
   return {
     auditEvents: {},
     dashboardRevisions: {},
@@ -59,7 +68,13 @@ import type { DashboardActor } from "../permissions";
 
 const USER = "user-1";
 const ORG = "org-1";
-const ACTOR: DashboardActor = { userId: USER, organizationId: ORG, teamIds: [] };
+const ACTOR: DashboardActor = {
+  userId: USER,
+  organizationId: ORG,
+  teamIds: [],
+  // cinatra#1939 S3 — updateDashboard runs under the org-write kernel guard.
+  authority: { orgId: ORG, can: (c) => c === "content.write" },
+};
 
 /** A portlet whose kind is unknown to the real registry — its deterministic
  *  validator error string stands in for the legacy cross-cube "Demo" card. */

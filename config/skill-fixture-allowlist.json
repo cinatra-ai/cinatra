@@ -1,0 +1,16 @@
+{
+  "note": "SHARED skill-fixture allowlist policy (cinatra#2089, epic #2086 S2). The ONE artifact that decides which SKILL.md paths are NOT loadable skills and are therefore exempt from the packaging gate's non-skill SKILL.md ban. Consumed IDENTICALLY by the three enforcement points: CI (scripts/audit/skill-packaging-gate.mjs), store install (src/lib/skill-packaging-install-gate.ts) and publish (each extension repo's extension-kind-gate.mjs, which vendors the same verdict module). Glob grammar is exactly `**` (any path segments) and `*` (any characters within one segment); patterns are anchored and matched against the package-relative POSIX path. EXTENSION repos default to an EMPTY allowlist — no exceptions.",
+  "schemaVersion": 1,
+  "extensionRepoDefault": [],
+  "repoAllowlists": {
+    "cinatra": [
+      "**/__tests__/fixtures/**",
+      "**/tests/fixtures/**"
+    ],
+    "create-cinatra-extension": [
+      "**/__tests__/fixtures/**",
+      "**/tests/fixtures/**",
+      "templates/**"
+    ]
+  }
+}

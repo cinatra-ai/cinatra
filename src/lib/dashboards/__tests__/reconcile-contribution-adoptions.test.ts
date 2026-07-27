@@ -7,6 +7,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
+// The reconciler mints its purpose-scoped system authority (cinatra#1939 S3);
+// the real mint module pulls the better-auth chain — stub it to a pure grant.
+vi.mock("@/lib/org-write/authority", () => ({
+  mintSystemWriteAuthority: (_purpose: string, orgId: string) => ({
+    orgId,
+    can: (capability: string) => capability === "content.write",
+  }),
+}));
+
 // Stub the heavy single-writer so the orchestrator can load without a DB. The
 // planner keeps its real behavior (its own pure subpath is NOT mocked).
 const adoptSpy = vi.fn(async () => 0);

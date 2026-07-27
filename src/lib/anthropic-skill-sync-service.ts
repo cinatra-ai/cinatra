@@ -28,6 +28,7 @@ import {
 import { readAnthropicConnectionFromDatabase, readSkillLifecycleStates } from "@/lib/database";
 import {
   captureSkillBundleFromDisk,
+  lintBundleRouterReferences,
   readCurrentSkillBundleFromDatabase,
 } from "@/lib/skill-bundle-store";
 import { isAnthropicSkillUploadAllowedFromConfig } from "@/lib/anthropic-skill-upload-governance";
@@ -323,10 +324,30 @@ export async function captureSkillBundlesFromDisk(): Promise<SkillBundleCaptureR
  * A syncable skill that has never been captured has no bundle in the authority
  * and is skipped (it cannot be byte-bound); the capture phase is what makes it
  * a candidate.
+ *
+ * FAIL-CLOSED ONE-HOP LINT (cinatra#2089, epic #2086 S2). S1 computed the
+ * router-reference lint as a DIAGNOSTIC and explicitly assigned its fail-closed
+ * enforcement to S2. Here it runs over the STORED bytes — the exact bytes the
+ * canonical zip is built from, not a disk copy — and a bundle whose router
+ * points at a file it does not ship is REFUSED as a candidate: uploading it
+ * would publish a skill whose router dead-ends for the model. The refusal is
+ * per-skill and NAMED (returned in `refusedForDanglingReferences`), never a
+ * whole-sync abort: one broken bundle must not stop every other skill from
+ * reaching the provider, and dropping out of the candidate set is exactly what
+ * makes the engine mark an already-uploaded copy stale for GC reclamation.
  */
 export async function buildSyncCandidates(): Promise<SyncCandidateSkill[]> {
+  return (await buildSyncCandidatesWithRefusals()).candidates;
+}
+
+/** The candidate set plus the skills the fail-closed lint refused. */
+export async function buildSyncCandidatesWithRefusals(): Promise<{
+  candidates: SyncCandidateSkill[];
+  refusedForDanglingReferences: { catalogSkillId: string; missing: string[] }[];
+}> {
   const syncable = await resolveSyncableCatalogSkills();
   const candidates: SyncCandidateSkill[] = [];
+  const refusedForDanglingReferences: { catalogSkillId: string; missing: string[] }[] = [];
   for (const skill of syncable) {
     const bundle = readCurrentSkillBundleFromDatabase(skill.id);
     if (!bundle) continue; // never captured ⇒ nothing byte-bound to upload
@@ -337,6 +358,14 @@ export async function buildSyncCandidates(): Promise<SyncCandidateSkill[]> {
       throw new Error(
         `Anthropic skill sync: stored bundle for skill "${skill.id}" (revision ${bundle.revisionId}) has no SKILL.md router`,
       );
+    }
+    const lint = lintBundleRouterReferences(
+      router.bytes.toString("utf8"),
+      bundle.files.map((f) => f.path),
+    );
+    if (!lint.ok) {
+      refusedForDanglingReferences.push({ catalogSkillId: skill.id, missing: lint.missing });
+      continue;
     }
     candidates.push({
       catalogSkillId: skill.id,
@@ -350,7 +379,7 @@ export async function buildSyncCandidates(): Promise<SyncCandidateSkill[]> {
       allowAnthropicUpload: getSkillAnthropicUploadFlag(skill.id),
     });
   }
-  return candidates;
+  return { candidates, refusedForDanglingReferences };
 }
 
 // ---------------------------------------------------------------------------
@@ -384,6 +413,13 @@ export type AppSyncResult = SyncResult & {
   captureDiagnostics?: {
     authorityOwnedDivergences: string[];
     danglingReferences: { catalogSkillId: string; missing: string[] }[];
+    /**
+     * S2 (cinatra#2089) FAIL-CLOSED enforcement of the S1 lint: skills whose
+     * STORED bundle router dead-ends were REFUSED as upload candidates. Named
+     * here so an operator sees exactly which skill stopped being published and
+     * why — the refusal is never silent.
+     */
+    refusedForDanglingReferences?: { catalogSkillId: string; missing: string[] }[];
   };
 };
 
@@ -454,15 +490,24 @@ export async function syncCatalogSkillsToAnthropic(): Promise<AppSyncResult> {
     // bytes, and the mirror row records the revision + bundle identity it was
     // derived from.
     const capture = await captureSkillBundlesFromDisk();
-    const candidates = await buildSyncCandidates();
+    const { candidates, refusedForDanglingReferences } = await buildSyncCandidatesWithRefusals();
 
     // FAIL-CLOSED completeness check: the engine treats the candidate id set as
     // the CURRENT catalog and marks every absent mirror row stale (→ GC
     // reclaims it). A syncable skill that was captured but produced no
     // candidate would therefore have its remote copy reclaimed. That must never
     // happen silently.
+    //
+    // A skill REFUSED by the S2 fail-closed one-hop lint (cinatra#2089) is the
+    // one deliberate, NAMED exclusion: its bundle's router points at a file it
+    // does not ship, so it must not be uploaded, and reclaiming an already
+    // published broken copy is the intended consequence — not a silent drop.
+    // Every OTHER captured-but-candidate-less skill still aborts the sync.
+    const refusedIds = new Set(refusedForDanglingReferences.map((r) => r.catalogSkillId));
     const candidateIds = new Set(candidates.map((c) => c.catalogSkillId));
-    const dropped = [...capture.captured, ...capture.unchanged].filter((id) => !candidateIds.has(id));
+    const dropped = [...capture.captured, ...capture.unchanged].filter(
+      (id) => !candidateIds.has(id) && !refusedIds.has(id),
+    );
     if (dropped.length > 0) {
       throw new Error(
         `Anthropic skill sync aborted: ${dropped.length} captured skill(s) resolved to no byte-bound candidate ` +
@@ -472,13 +517,16 @@ export async function syncCatalogSkillsToAnthropic(): Promise<AppSyncResult> {
 
     const result = await engine.sync(candidates, readGlobalEnabled);
     const hasDiagnostics =
-      capture.authorityOwnedDivergences.length > 0 || capture.danglingReferences.length > 0;
+      capture.authorityOwnedDivergences.length > 0 ||
+      capture.danglingReferences.length > 0 ||
+      refusedForDanglingReferences.length > 0;
     return hasDiagnostics
       ? {
           ...result,
           captureDiagnostics: {
             authorityOwnedDivergences: capture.authorityOwnedDivergences,
             danglingReferences: capture.danglingReferences,
+            ...(refusedForDanglingReferences.length > 0 ? { refusedForDanglingReferences } : {}),
           },
         }
       : result;

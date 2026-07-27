@@ -10,13 +10,27 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Captures every .values() payload; `failNextInsert` simulates a Postgres
 // unique violation (shaped like the drizzle-wrapped driver error: code +
-// constraint on the cause chain).
+// constraint on the cause chain). `kernelAnswers` feeds the org-write kernel
+// fakes (cinatra#1939 S3 — createDashboard now runs under the kernel guard);
+// mutated by reference per test, active-org default restored in beforeEach.
 const state = vi.hoisted(() => ({
   inserted: [] as Array<Record<string, unknown>>,
   failNextInsert: null as null | { code: string; constraint?: string },
+  kernelAnswers: {
+    organization: { archivedAt: null } as {
+      archivedAt: string | null;
+      archiveEpoch?: number;
+    } | null,
+  },
 }));
 
-vi.mock("../store/db", () => {
+vi.mock("../store/db", async () => {
+  // The sanctioned kernel test fakes: answer the guard's own queries (org
+  // locks, lifecycle read) from `state.kernelAnswers`, pass everything else
+  // (the writer's own statements) through to the base fake below.
+  const { wrapTxWithOrgWriteKernel } = await import(
+    "@cinatra-ai/org-write-kernel/testing"
+  );
   // Positional table arg deliberately ignored (extra args are fine in JS).
   const insert = () => ({
     values: (v: Record<string, unknown>) => {
@@ -38,7 +52,10 @@ vi.mock("../store/db", () => {
   });
   // `execute` backs the writer's advisory-lock statement (cinatra#1894 B1b): the
   // twin lock is a DB-concurrency no-op with no observable effect in this mock.
-  const tx = { insert, execute: async () => ({ rows: [] }) };
+  const tx = wrapTxWithOrgWriteKernel(
+    { insert, execute: async () => ({ rows: [] }) },
+    state.kernelAnswers,
+  );
   return {
     auditEvents: {},
     dashboardRevisions: {},
@@ -49,12 +66,15 @@ vi.mock("../store/db", () => {
   };
 });
 
+import { OrgWriteRefusedError } from "@cinatra-ai/org-write-kernel";
+
 import {
   createDashboard,
   DashboardForbiddenError,
   DashboardInvalidEntityError,
   DashboardNameConflictError,
 } from "../mutation-service";
+import { DashboardOrgWriteAuthorityError } from "../org-write-seam";
 import type { DashboardActor } from "../permissions";
 
 const ORG = "org-1";
@@ -66,6 +86,10 @@ const actor: DashboardActor = {
   teamIds: [TEAM],
   orgRole: "admin",
   teamRoles: { [TEAM]: "admin" },
+  // cinatra#1939 S3 — createDashboard runs under the org-write kernel guard;
+  // the host-minted authority arrives on the actor (via the MCP frame in
+  // production, directly here).
+  authority: { orgId: ORG, can: (c) => c === "content.write" },
 };
 
 // Minimal bare drizzle-cube config — normalizeConfigForWrite wraps it into the
@@ -97,6 +121,28 @@ function dashboardRow(): Record<string, unknown> {
 beforeEach(() => {
   state.inserted = [];
   state.failNextInsert = null;
+  state.kernelAnswers.organization = { archivedAt: null };
+});
+
+describe("createDashboard under the org-write kernel guard (#1939 S3)", () => {
+  it("refuses an actor with NO host-minted authority — before any insert", async () => {
+    const bare: DashboardActor = { ...actor, authority: undefined };
+    await expect(createDashboard(input({}), bare)).rejects.toBeInstanceOf(
+      DashboardOrgWriteAuthorityError,
+    );
+    expect(state.inserted).toHaveLength(0);
+  });
+
+  it("refuses content.write on an ARCHIVED organization — before any insert", async () => {
+    state.kernelAnswers.organization = {
+      archivedAt: "2026-07-01T00:00:00Z",
+      archiveEpoch: 1,
+    };
+    await expect(createDashboard(input({}), actor)).rejects.toBeInstanceOf(
+      OrgWriteRefusedError,
+    );
+    expect(state.inserted).toHaveLength(0);
+  });
 });
 
 describe("createDashboard anchor derivation (#1738)", () => {

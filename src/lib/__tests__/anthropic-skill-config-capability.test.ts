@@ -40,7 +40,44 @@ vi.mock("@/lib/notifications", () => ({
   createNotification: (...a: unknown[]) => h.createNotification(...a),
 }));
 
-import { createAnthropicSkillConfigCapability } from "@/lib/anthropic-skill-config-service";
+import {
+  createAnthropicSkillConfigCapability,
+  orchestrateAnthropicSkillSync,
+} from "@/lib/anthropic-skill-config-service";
+
+describe("orchestrateAnthropicSkillSync — S2 fail-closed refusals are operator-visible (cinatra#2089)", () => {
+  beforeEach(() => {
+    h.syncCatalogSkillsToAnthropic.mockReset();
+    h.reclaimStaleAnthropicSkills.mockReset().mockResolvedValue({ ok: true, errors: [] });
+    h.createNotification.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("NOTIFIES by name when a skill was refused for a dangling router reference on an OTHERWISE SUCCESSFUL run", async () => {
+    // The run succeeds (`ok: true`) — every other skill syncs — but the refused
+    // skill stops being published and its uploaded copy is marked stale for GC.
+    // Without this notification the operator sees a green save and a skill that
+    // quietly vanished from the provider.
+    h.syncCatalogSkillsToAnthropic.mockResolvedValue({
+      ok: true,
+      captureDiagnostics: {
+        authorityOwnedDivergences: [],
+        danglingReferences: [],
+        refusedForDanglingReferences: [
+          { catalogSkillId: "broken-skill", missing: ["references/missing.md"] },
+        ],
+      },
+    });
+    await orchestrateAnthropicSkillSync();
+    const bodies = h.createNotification.mock.calls.map((c) => JSON.stringify(c[0]));
+    expect(bodies.some((b) => b.includes("broken-skill") && b.includes("references/missing.md"))).toBe(true);
+  });
+
+  it("stays quiet on a clean run", async () => {
+    h.syncCatalogSkillsToAnthropic.mockResolvedValue({ ok: true });
+    await orchestrateAnthropicSkillSync();
+    expect(h.createNotification).not.toHaveBeenCalled();
+  });
+});
 
 describe("@cinatra-ai/host:anthropic-skill-config capability", () => {
   beforeEach(() => {

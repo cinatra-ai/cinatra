@@ -387,42 +387,65 @@ describe("cinatra#2043 — host cms-review capability binding", () => {
     expect(res).toEqual({ ok: false, code: "gate-target-mismatch", error: "gate does not pin the snapshot" });
   });
   // -------------------------------------------------------------------------
-  // S6 (#2044 L-B) — the PINNED preview capture step.
+  // S6 (#2044 L-B + L-D) — the PINNED before/after capture pair, and the
+  // post-apply read-back render.
   // -------------------------------------------------------------------------
 
-  it("pins the preview capture at gate creation, with the gate's pinned target and frame identity", async () => {
-    const capturePreview = vi.fn<NonNullable<CmsReviewHostSeamDeps["capturePinnedPreview"]>>(
-      async () => ({ status: "captured" as const }),
+  it("pins the capture PAIR at gate creation, with the gate's pinned target, the frame identity, and the SNAPSHOT's own proposed fields", async () => {
+    const capturePair = vi.fn<NonNullable<CmsReviewHostSeamDeps["capturePinnedPreviewPair"]>>(
+      async () => ({ before: { status: "captured" as const }, current: { status: "captured" as const } }),
     );
     const seam = buildCmsReviewHostSeam(
       makeDeps({
         resolveIdentity: async () => ({ orgId: "org-42", runId: "run-42", createdBy: "user-42" }),
-        capturePinnedPreview: capturePreview,
+        capturePinnedPreviewPair: capturePair,
       }),
     );
     await seam.captureStagedWrite(captureInput());
-    expect(capturePreview).toHaveBeenCalledTimes(1);
-    expect(capturePreview.mock.calls[0][0]).toEqual({
+    expect(capturePair).toHaveBeenCalledTimes(1);
+    expect(capturePair.mock.calls[0][0]).toEqual({
       orgId: "org-42",
-      // The pair the gate PINS — so the capture is retrievable from the gate.
+      // The pair the gate PINS — so both pictures are retrievable from the gate.
       boundArtifactId: "art-1",
       boundSnapshotRevisionId: "rev-1",
-      role: "current",
       // The pointer's url is a SELECTOR handed to the capture policy, which
       // resolves the actual address from the connect-registered origins.
       sourceUrl: POINTER.url,
       externalId: POINTER.externalId,
+      // The proposal half is composed from the SNAPSHOT's stored fields — the
+      // same base the S4 read-back verifies against, so the picture the reviewer
+      // decides on can never diverge from the decided content.
+      proposedFields: { title: "New Title", content: "body", excerpt: "", status: "publish" },
       title: "New Title",
       createdBy: "user-42",
       producerRunId: "run-42",
     });
   });
 
+  it("an UNREADABLE proposal still pins the pair — the composition half degrades, the write does not", async () => {
+    const capturePair = vi.fn<NonNullable<CmsReviewHostSeamDeps["capturePinnedPreviewPair"]>>(
+      async () => ({
+        before: { status: "captured" as const },
+        current: { status: "degraded" as const, reason: "no-proposed-fields" },
+      }),
+    );
+    const seam = buildCmsReviewHostSeam(
+      makeDeps({
+        readCmsSnapshotProposedFields: async () => null,
+        capturePinnedPreviewPair: capturePair,
+      }),
+    );
+    await expect(seam.captureStagedWrite(captureInput())).resolves.toMatchObject({
+      artifactId: "art-1",
+    });
+    expect(capturePair.mock.calls[0][0].proposedFields).toBeNull();
+  });
+
   it("a FAILING capture never fails the staged write (the gate is unaffected)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const seam = buildCmsReviewHostSeam(
       makeDeps({
-        capturePinnedPreview: async () => {
+        capturePinnedPreviewPair: async () => {
           throw new Error("the site is down");
         },
       }),
@@ -437,9 +460,9 @@ describe("cinatra#2043 — host cms-review capability binding", () => {
   it("a DEGRADED capture is not an error either — the write returns unchanged", async () => {
     const seam = buildCmsReviewHostSeam(
       makeDeps({
-        capturePinnedPreview: async () => ({
-          status: "degraded" as const,
-          reason: "preview-unreachable",
+        capturePinnedPreviewPair: async () => ({
+          before: { status: "degraded" as const, reason: "preview-unreachable" },
+          current: { status: "degraded" as const, reason: "preview-unreachable" },
         }),
       }),
     );
@@ -457,10 +480,80 @@ describe("cinatra#2043 — host cms-review capability binding", () => {
       producedEventId: "ev-1",
     }));
     const deps = makeDeps({ captureCmsContentSnapshot: capture });
-    expect(deps.capturePinnedPreview).toBeUndefined();
+    expect(deps.capturePinnedPreviewPair).toBeUndefined();
+    expect(deps.capturePostApplyPreview).toBeUndefined();
     await expect(buildCmsReviewHostSeam(deps).captureStagedWrite(captureInput())).resolves.toMatchObject({
       artifactId: "art-1",
     });
     expect(capture).toHaveBeenCalledTimes(1);
+  });
+
+  it("pins the POST-APPLY read-back render against the same gate target once the verification lands", async () => {
+    const capturePostApply = vi.fn<NonNullable<CmsReviewHostSeamDeps["capturePostApplyPreview"]>>(
+      async () => ({ status: "captured" as const }),
+    );
+    const seam = buildCmsReviewHostSeam(
+      makeDeps({
+        resolveIdentity: async () => ({ orgId: "org-42", runId: "run-42", createdBy: "user-42" }),
+        capturePostApplyPreview: capturePostApply,
+      }),
+    );
+    const res = await seam.recordApplyVerification({
+      operationId: "op-1",
+      gateId: "gate-1",
+      runId: "run-42",
+      postApplyFields: { title: "New Title", content: "body", excerpt: "", status: "publish" },
+    });
+    expect(res.ok).toBe(true);
+    expect(capturePostApply).toHaveBeenCalledTimes(1);
+    expect(capturePostApply.mock.calls[0][0]).toMatchObject({
+      orgId: "org-42",
+      boundArtifactId: "art-1",
+      boundSnapshotRevisionId: "rev-1",
+      producerRunId: "run-42",
+    });
+  });
+
+  it("a FAILING post-apply capture never fails the verification it annotates", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const seam = buildCmsReviewHostSeam(
+      makeDeps({
+        capturePostApplyPreview: async () => {
+          throw new Error("the site is down");
+        },
+      }),
+    );
+    await expect(
+      seam.recordApplyVerification({
+        operationId: "op-1",
+        gateId: "gate-1",
+        runId: "run-1",
+        postApplyFields: {},
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    warn.mockRestore();
+  });
+
+  it("a FAILED verification never triggers a post-apply capture (nothing landed to photograph)", async () => {
+    const capturePostApply = vi.fn<NonNullable<CmsReviewHostSeamDeps["capturePostApplyPreview"]>>(
+      async () => ({ status: "captured" as const }),
+    );
+    const seam = buildCmsReviewHostSeam(
+      makeDeps({
+        recordCmsApplyVerification: async () => ({
+          ok: false as const,
+          code: "gate-target-mismatch",
+          error: "gate does not pin the snapshot",
+        }),
+        capturePostApplyPreview: capturePostApply,
+      }),
+    );
+    await seam.recordApplyVerification({
+      operationId: "op-1",
+      gateId: "gate-1",
+      runId: "run-1",
+      postApplyFields: {},
+    });
+    expect(capturePostApply).not.toHaveBeenCalled();
   });
 });

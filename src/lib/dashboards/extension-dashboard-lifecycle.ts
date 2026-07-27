@@ -22,6 +22,10 @@ import {
   archiveExtensionDashboards,
   restoreExtensionDashboards,
 } from "@cinatra-ai/dashboards/extension-materialization";
+// R2-allowlisted minting site (scripts/audit/org-write-boundary-gate.mjs):
+// the content-only "extension-dashboard-lifecycle" purpose grounds these
+// system writes on the org-write kernel (cinatra#1939 wave 1).
+import { mintSystemWriteAuthority } from "@/lib/org-write/authority";
 
 /** The `archive_reason` stamped when the committed-uninstall/archive hook archives
  *  a (package, org)'s dashboards — distinct from the migration orphan sweep's
@@ -41,6 +45,13 @@ export const extensionDashboardLifecycleHook: ExtensionDashboardLifecycleHook = 
     teamIds: [] as string[],
     orgRole: "owner" as const,
     teamRoles: {} as Record<string, "admin" | "member">,
+    // Purpose-scoped system authority (content.write only): the kernel rules
+    // it against the ORG lifecycle — an archived org refuses even this hook
+    // (extension restore inside an archived org must not write).
+    authority: mintSystemWriteAuthority(
+      "extension-dashboard-lifecycle",
+      input.organizationId,
+    ),
   };
   if (input.transition === "archive") {
     return archiveExtensionDashboards(undefined, {

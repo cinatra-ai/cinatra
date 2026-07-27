@@ -1,5 +1,9 @@
 "use server";
 import { requireAuthSession } from "@/lib/auth-session";
+// cinatra#1939 wave 2 (§2a): every run-status transition here is grounded by the
+// acting MEMBER's session (owner / org-admin, already checked above). A member
+// mint fail-closes if membership was revoked — acceptable per the design.
+import { verifySessionAuthority } from "@/lib/org-write/authority";
 import { resolveTemplateVisibilityActor } from "./auth-policy";
 import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import type { AgentTemplateRecord } from "./store";
@@ -120,11 +124,13 @@ export async function triggerAgentRun(
       err instanceof Error ? err.message : String(err),
     );
   }
+  // Owner's member session grounds both the dispatch and its compensation.
+  const authority = await verifySessionAuthority(userId, run.orgId);
 
   // 6. Atomic compare-and-swap: pending_input → queued. Returns false if
   //    a concurrent request already won the race.
   try {
-    await transitionRunStatus(args.runId, "pending_input", "queued");
+    await transitionRunStatus(args.runId, "pending_input", "queued", undefined, authority);
   } catch (err) {
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
       return { ok: false, error: "run is not in pending_input state" };
@@ -150,6 +156,8 @@ export async function triggerAgentRun(
       args.runId,
       "queued",
       "pending_input",
+      undefined,
+      authority,
     ).catch(() => {
       // Best-effort: log but do not mask the original error.
       console.error(
@@ -262,10 +270,13 @@ async function createAndTriggerRunCore(
       err instanceof Error ? err.message : String(err),
     );
   }
+  // The caller-resolved member session (same userId/orgId the run is created
+  // under) grounds both the dispatch and its compensation revert.
+  const authority = await verifySessionAuthority(userId, orgId);
 
   // Atomically transition pending_input → queued then enqueue.
   try {
-    await transitionRunStatus(created.id, "pending_input", "queued");
+    await transitionRunStatus(created.id, "pending_input", "queued", undefined, authority);
   } catch (err) {
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
       return { ok: true, runId: created.id }; // best-effort; run exists
@@ -288,6 +299,8 @@ async function createAndTriggerRunCore(
       created.id,
       "queued",
       "pending_input",
+      undefined,
+      authority,
     ).catch((err) => {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
         console.warn(
@@ -385,8 +398,9 @@ export async function resetAgentRun(
     return { ok: false, error: "run is not in failed state" };
   }
 
+  const authority = await verifySessionAuthority(userId, run.orgId);
   try {
-    await transitionRunStatus(args.runId, "failed", "pending_input");
+    await transitionRunStatus(args.runId, "failed", "pending_input", undefined, authority);
   } catch (err) {
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
       return { ok: false, error: "run is not in failed state" };
@@ -489,11 +503,14 @@ export async function releaseTriggerNow(
 
   await markTriggerReleased(args.runId);
 
+  // Admin (org-role admin, checked above) acts as a member of the run's org.
+  const authority = await verifySessionAuthority(userId, run.orgId);
+
   // Transition armed → queued so the dispatcher can pick up the run.
   // Swallow stale_from_status: the run may already be queued (race with the
   // scheduled release job) or in a terminal state.
   try {
-    await transitionRunStatus(args.runId, "armed", "queued");
+    await transitionRunStatus(args.runId, "armed", "queued", undefined, authority);
   } catch (err) {
     if (
       !(err instanceof RunTransitionError && err.code === "stale_from_status")
@@ -566,8 +583,9 @@ export async function startDevChildPreviewRun(
     humanPresent: true,
   });
 
+  const authority = await verifySessionAuthority(userId, orgId);
   try {
-    await transitionRunStatus(created.id, "pending_input", "queued");
+    await transitionRunStatus(created.id, "pending_input", "queued", undefined, authority);
   } catch (err) {
     if (!(err instanceof RunTransitionError && err.code === "stale_from_status")) {
       throw err;
