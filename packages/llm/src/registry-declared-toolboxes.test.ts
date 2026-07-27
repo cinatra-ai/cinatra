@@ -167,6 +167,73 @@ describe("resolveMcpToolsForDeclaredIds — declared ids", () => {
   });
 });
 
+describe("toolbox build-context threading (cinatra#2019 S4)", () => {
+  const context = {
+    surface: "agent_run" as const,
+    connectorInstancePin: { connectorKey: "wordpress", instanceId: "inst-1" },
+  };
+
+  it("declared-id manifest branch passes the context verbatim into the extension builder", async () => {
+    const wpTool = tool("wordpress-1");
+    const buildTools = vi.fn(async () => [wpTool]);
+    vi.mocked(loadExternalMcpToolboxBySlug).mockResolvedValueOnce({ buildTools });
+
+    const tools = await resolveMcpToolsForDeclaredIds({
+      provider: "openai",
+      declaredToolboxIds: ["wordpress-mcp-connector"],
+      context,
+    });
+
+    expect(buildTools).toHaveBeenCalledWith("openai", context);
+    expect(tools).toEqual([wpTool]);
+  });
+
+  it("declared-id branch passes undefined for the context when the caller supplies none (fail-closed for surface-gating toolboxes)", async () => {
+    const buildTools = vi.fn(async () => []);
+    vi.mocked(loadExternalMcpToolboxBySlug).mockResolvedValueOnce({ buildTools });
+
+    await resolveMcpToolsForDeclaredIds({
+      provider: "openai",
+      declaredToolboxIds: ["wordpress-mcp-connector"],
+    });
+
+    expect(buildTools).toHaveBeenCalledWith("openai", undefined);
+  });
+
+  it("the llm-toolbox capability-provider branch is NOT widened — the provider still receives exactly (id, provider)", async () => {
+    vi.mocked(buildToolboxProviderTools).mockResolvedValueOnce([tool("apify-connector")]);
+
+    await resolveMcpToolsForDeclaredIds({
+      provider: "openai",
+      declaredToolboxIds: ["apify-connector"],
+      context,
+    });
+
+    expect(vi.mocked(buildToolboxProviderTools)).toHaveBeenCalledWith("apify-connector", "openai");
+  });
+
+  it("always-inject path forwards the context inside the buildExternalMcpServerTools options", async () => {
+    await resolveMcpToolsForDeclaredIds({
+      provider: "openai",
+      declaredToolboxIds: undefined,
+      context,
+    });
+
+    expect(vi.mocked(buildExternalMcpServerTools)).toHaveBeenCalledWith("openai", {
+      skipRegistryFallback: false,
+      context,
+    });
+  });
+
+  it("resolveChatExternalMcpTools forwards its context into buildExternalMcpServerTools", async () => {
+    await resolveChatExternalMcpTools("openai", { surface: "public_site_widget" });
+
+    expect(vi.mocked(buildExternalMcpServerTools)).toHaveBeenCalledWith("openai", {
+      context: { surface: "public_site_widget" },
+    });
+  });
+});
+
 describe("duplicate server-label collapse (manifest path ∪ registry-wide injection)", () => {
   it("legacy always-inject path keeps one tool per server label", async () => {
     const viaMarker = tool("external-row-9");

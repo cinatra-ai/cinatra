@@ -228,3 +228,20 @@ describe("toolbox_ids partition", () => {
     expect(wsTools.length).toBe(0);
   });
 });
+
+describe("toolbox build context (cinatra#2019 S4)", () => {
+  it("every dispatch declares the agent_run surface — and no connectorInstancePin while the resolved run carries no instance binding", async () => {
+    const res = await POST(
+      makeReq({ user: "hello", toolbox_ids: ["cinatra-mcp"] }),
+    );
+    expect(res.status).toBe(200);
+    const call = dispatchCallArg();
+    // Host-derived, never request-payload: the bridge is an agent-plane
+    // surface, so surface-gating toolboxes (trusted-site native
+    // read-injection) refuse these builds fail-closed. The pin rides this
+    // context only when the resolved agent_run row itself carries an
+    // instance binding — this harness resolves no run, so the context is
+    // surface-only.
+    expect(call.toolboxBuildContext).toEqual({ surface: "agent_run" });
+  });
+});

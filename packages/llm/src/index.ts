@@ -335,6 +335,7 @@ export type {
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
+import type { ExtensionToolboxBuildContext } from "@cinatra-ai/sdk-extensions";
 import type { LlmProvider, LlmCapabilityRequirement, LlmProviderAdapter, LlmFileReference, GenerateInput, LlmTool, LlmUsageData, LlmResponse, LlmMcpServerTool, OrchestrateGenerateInput, OrchestrateStreamInput, OrchestrateUploadFileInput, OrchestrateFileInputGenerateInput, LlmAttachmentRef, SandboxExecutor, SandboxEnvironmentMount } from "./types";
 // `OpenAIConnectionConfig` is defined+exported above (host-local structural type;
 // the openai provider that once owned it relocated into its connector, #1715).
@@ -543,6 +544,20 @@ export type DeterministicLlmExecutionInput = {
    * (byte-identical S1/S2 dispatch).
    */
   executionEnvironment?: SandboxEnvironmentMount;
+  /**
+   * Host-built, identity-free toolbox build context (cinatra#2019 S4),
+   * threaded to `injectMcpTools` → first-party toolbox
+   * `buildTools(provider, context)`. Carries WHERE the injection is being
+   * assembled (`surface`) and, on run surfaces, WHICH connector instance the
+   * run is pinned to (`connectorInstancePin` — host-derived run data only,
+   * never request payload). Identity NEVER rides here — per-instance
+   * authority derives host-side from the ambient trusted actor stores.
+   * Absent ⇒ `injectMcpTools` supplies `{ surface: "agent_run" }` (every
+   * entry point of this package is agent-plane orchestration; chat/widget
+   * turns resolve their external tools via `resolveChatExternalMcpTools` in
+   * the host runtime instead).
+   */
+  toolboxBuildContext?: ExtensionToolboxBuildContext;
 };
 
 export type SkillAwareDeterministicLlmExecutionInput = DeterministicLlmExecutionInput & {
@@ -728,6 +743,17 @@ export async function injectMcpTools(params: {
    * path either way.
    */
   cinatraMcpToolOverride?: () => Promise<LlmMcpServerTool | null>;
+  /**
+   * Host-built toolbox build context (cinatra#2019 S4) — see
+   * `DeterministicLlmExecutionInput.toolboxBuildContext`. Absent ⇒
+   * `{ surface: "agent_run" }`: every orchestration entry point of this
+   * package (`runDeterministicLlmTask`, `runSkillAwareDeterministicLlmTask`,
+   * `generate`, `stream`) is an agent-plane surface — the chat/widget
+   * runtime assembles its external MCP tools via
+   * `resolveChatExternalMcpTools` and reaches this site only with MCP tools
+   * already present (dedup passthrough above).
+   */
+  toolboxBuildContext?: ExtensionToolboxBuildContext;
 }): Promise<LlmTool[] | undefined> {
   // Gemini has no native MCP — pass through.
   if (params.provider === "gemini") return params.tools;
@@ -746,6 +772,7 @@ export async function injectMcpTools(params: {
     declaredToolboxIds: params.declaredToolboxIds,
     skipExternalMcpRegistry: params.skipExternalMcpRegistry,
     cinatraMcpToolOverride: params.cinatraMcpToolOverride,
+    context: params.toolboxBuildContext ?? { surface: "agent_run" },
   });
   if (mcpTools.length === 0) return params.tools;
   // Stream-only function-tool stripping.
@@ -867,6 +894,7 @@ async function runDeterministicLlmTaskImpl(input: DeterministicLlmExecutionInput
     provider: input.provider,
     tools: undefined,
     declaredToolboxIds: input.declaredToolboxIds,
+    toolboxBuildContext: input.toolboxBuildContext,
   });
   // Execution-capability injection — exactly once, alongside (independent of)
   // MCP injection. Passthrough + byte-identical while the rollout flag is off.
@@ -998,6 +1026,7 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
     declaredToolboxIds: input.declaredToolboxIds,
     skipExternalMcpRegistry: input.skipExternalMcpRegistry,
     cinatraMcpToolOverride: input.cinatraMcpToolOverride,
+    toolboxBuildContext: input.toolboxBuildContext,
   })) ?? baseTools;
 
   // If personal skill content is provided, include it in context

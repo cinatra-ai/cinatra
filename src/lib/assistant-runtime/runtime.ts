@@ -594,7 +594,15 @@ export async function runAssistantTurn(
     return;
   }
 
-  const externalMcpTools = await resolveChatExternalMcpTools(adapter.provider);
+  // cinatra#2019 S4: cookie-chat and widget-principal turns share this
+  // external-tool assembly, so the build context carries the REAL surface —
+  // surface-gating toolboxes (trusted-site native read-injection) emit only
+  // for "chat" and refuse widget builds fail-closed instead of leaking
+  // chat-scoped injections onto public-site widget turns.
+  const externalMcpTools = await resolveChatExternalMcpTools(
+    adapter.provider,
+    widgetPrincipal ? { surface: "public_site_widget" } : { surface: "chat" },
+  );
   const assembledTools: LlmTool[] = [
     chatCinatraMcpTool,
     ...externalMcpTools,
