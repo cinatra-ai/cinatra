@@ -88,6 +88,27 @@ export const WORDPRESS_PREVIEW_BINDING = {
   hook: "post-published",
 } as const;
 
+/** The same tuple for Drupal (`connect-provisioning.ts` DRUPAL_WEBHOOK_BINDING).
+ * A Drupal site's shared secret is provisioned under the DRUPAL connector's
+ * binding, so looking a preview credential up under the WordPress tuple would
+ * find nothing and degrade every Drupal gate as `no-preview-credential`. */
+export const DRUPAL_PREVIEW_BINDING = {
+  vendor: "cinatra-ai",
+  slug: "drupal-mcp-connector",
+  hook: "node-published",
+} as const;
+
+/** The preview-credential binding for a connect client kind. A client with no
+ * entry has no preview adapter either (the addressing policy refuses it first),
+ * so this map never has to guess. */
+const PREVIEW_BINDINGS: ReadonlyMap<
+  string,
+  { readonly vendor: string; readonly slug: string; readonly hook: string }
+> = new Map<string, { readonly vendor: string; readonly slug: string; readonly hook: string }>([
+  ["wordpress", WORDPRESS_PREVIEW_BINDING],
+  ["drupal", DRUPAL_PREVIEW_BINDING],
+]);
+
 /** Every named way a capture can degrade. A closed set: the reviewer is always
  * told which one, and a new failure mode has to be named to ship. */
 export type CaptureDegradeReason =
@@ -150,8 +171,13 @@ export interface PreviewCaptureDeps {
   /** The org's ACTIVE connect-registered sites (host-read, never adapter input). */
   listRegisteredSites: (orgId: string) => Promise<readonly RegisteredCaptureSite[]>;
   /** Candidate shared secrets for a site's preview credential, in priority
-   * order (current, then a non-expired previous during a rotation window). */
-  resolvePreviewSecrets: (siteId: string) => Promise<readonly string[]>;
+   * order (current, then a non-expired previous during a rotation window). The
+   * CLIENT kind is required, not optional: each CMS's secret lives under its own
+   * connector's webhook binding, so the lookup is per-platform. */
+  resolvePreviewSecrets: (input: {
+    siteId: string;
+    client: string;
+  }) => Promise<readonly string[]>;
   /** Guarded HTTP GET of the signed preview request. */
   fetchPreview: (input: {
     url: string;
@@ -260,7 +286,10 @@ async function fetchSanitizedBasePage(
   // 2. CREDENTIAL — the connect-provisioned shared secret, via the existing host
   // signer. A fresh `webhook-id` per attempt (the plugin consumes it single-use),
   // so a legitimate retry is never a replay.
-  const secrets = await deps.resolvePreviewSecrets(target.siteId);
+  const secrets = await deps.resolvePreviewSecrets({
+    siteId: target.siteId,
+    client: target.client,
+  });
   if (secrets.length === 0) {
     return {
       ok: false,
@@ -841,9 +870,15 @@ export function createPreviewCaptureDeps(): PreviewCaptureDeps {
         origin: row.widgetOrigin,
       }));
     },
-    resolvePreviewSecrets: async (siteId) => {
+    resolvePreviewSecrets: async ({ siteId, client }) => {
+      const binding = PREVIEW_BINDINGS.get(client);
+      // Unreachable through the capture path (the addressing policy refuses an
+      // unknown client first), but a missing binding must never fall back to
+      // ANOTHER platform's credential — that would send one site's secret to a
+      // different site. No binding => no candidate secrets => a named degrade.
+      if (!binding) return [];
       const { resolvePreviewSharedSecrets } = await import("@/lib/webhook-secret-service");
-      return resolvePreviewSharedSecrets({ ...WORDPRESS_PREVIEW_BINDING, siteId });
+      return resolvePreviewSharedSecrets({ ...binding, siteId });
     },
     fetchPreview: fetchPreviewGuarded,
     renderIsolated: renderIsolatedSubprocess,

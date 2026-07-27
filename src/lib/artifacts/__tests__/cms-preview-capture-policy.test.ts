@@ -9,12 +9,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   CMS_PREVIEW_PATH_PREFIX,
+  CMS_PREVIEW_PATH_PREFIX_DRUPAL,
   normalizeOrigin,
   parsePostId,
   resolveCaptureTarget,
 } from "@/lib/artifacts/cms-preview-capture-policy";
 
 const wp = (origin: string, siteId = "site-1") => ({ siteId, client: "wordpress", origin });
+const drupal = (origin: string, siteId = "site-d") => ({ siteId, client: "drupal", origin });
 
 describe("cinatra#2044 L-B — capture target policy (SSRF boundary)", () => {
   it("builds the preview URL from the REGISTERED origin, never from the adapter's url", () => {
@@ -155,11 +157,138 @@ describe("cinatra#2044 L-B — capture target policy (SSRF boundary)", () => {
   it("refuses a registered site whose platform has no preview adapter", () => {
     expect(
       resolveCaptureTarget({
-        registeredSites: [{ siteId: "s", client: "drupal", origin: "https://d.example.com" }],
-        sourceUrl: "https://d.example.com/node/1",
+        registeredSites: [{ siteId: "s", client: "shopify", origin: "https://s.example.com" }],
+        sourceUrl: "https://s.example.com/products/1",
         externalId: "1",
       }),
     ).toEqual({ ok: false, reason: "client-has-no-preview-adapter" });
+  });
+
+  // ---- cinatra#2046 (S7b) — the Drupal adapter is a peer, not a special case.
+
+  it("addresses a DRUPAL site through the drupal module's own preview route", () => {
+    const res = resolveCaptureTarget({
+      registeredSites: [drupal("https://news.example.org")],
+      sourceUrl: "https://news.example.org/node/7?foo=bar#frag",
+      externalId: "7",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.url).toBe(`https://news.example.org${CMS_PREVIEW_PATH_PREFIX_DRUPAL}7`);
+    expect(res.client).toBe("drupal");
+    // ONE signing convention across CMSes: both adapters recompute the same
+    // canonical content from the id in the requested path.
+    expect(res.signedContent).toBe("preview.7");
+  });
+
+  it("uses the MATCHED site's route, so a wordpress path is never requested from a drupal origin", () => {
+    const both = [wp("https://blog.example.com"), drupal("https://news.example.org")];
+    const wpRes = resolveCaptureTarget({
+      registeredSites: both,
+      sourceUrl: "https://blog.example.com/x",
+      externalId: "1",
+    });
+    const drRes = resolveCaptureTarget({
+      registeredSites: both,
+      sourceUrl: "https://news.example.org/x",
+      externalId: "1",
+    });
+    expect(wpRes.ok && wpRes.url).toBe(`https://blog.example.com${CMS_PREVIEW_PATH_PREFIX}1`);
+    expect(drRes.ok && drRes.url).toBe(`https://news.example.org${CMS_PREVIEW_PATH_PREFIX_DRUPAL}1`);
+    expect(CMS_PREVIEW_PATH_PREFIX_DRUPAL).not.toBe(CMS_PREVIEW_PATH_PREFIX);
+  });
+
+  it("accepts the DRUPAL connector's site-scoped external id (`<instanceId>:<nid>`)", () => {
+    // drupalNodeExternalId(instanceId, nodeId) — what a real staged Drupal write
+    // carries on its pointer. Only the segment after the last colon addresses.
+    const res = resolveCaptureTarget({
+      registeredSites: [drupal("https://news.example.org")],
+      sourceUrl: "https://news.example.org/node/7",
+      externalId: "inst-abc:7",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.postId).toBe(7);
+    expect(res.url).toBe(`https://news.example.org${CMS_PREVIEW_PATH_PREFIX_DRUPAL}7`);
+  });
+
+  it("refuses a drupal origin the org never registered, exactly like a wordpress one", () => {
+    expect(
+      resolveCaptureTarget({
+        registeredSites: [drupal("https://news.example.org")],
+        sourceUrl: "https://attacker.example.net/node/7",
+        externalId: "7",
+      }),
+    ).toEqual({ ok: false, reason: "origin-not-registered" });
+  });
+
+  it("refuses a non-numeric drupal node id (no traversal into the module route)", () => {
+    expect(
+      resolveCaptureTarget({
+        registeredSites: [drupal("https://news.example.org")],
+        sourceUrl: "https://news.example.org/node/7",
+        externalId: "7/../../admin",
+      }),
+    ).toEqual({ ok: false, reason: "invalid-post-id" });
+  });
+
+
+  // ---- convergence-round hardening (cinatra#2046).
+
+  it("refuses an origin registered under MORE THAN ONE platform rather than guessing", () => {
+    // The connect-site uniqueness index is (org, client, origin), so the same
+    // address CAN carry both a wordpress and a drupal row. Picking the first
+    // would fetch a WordPress route with a WordPress credential for a Drupal
+    // pointer.
+    expect(
+      resolveCaptureTarget({
+        registeredSites: [
+          wp("https://cms.example.com", "site-w"),
+          drupal("https://cms.example.com", "site-d"),
+        ],
+        sourceUrl: "https://cms.example.com/node/7",
+        externalId: "7",
+      }),
+    ).toEqual({ ok: false, reason: "ambiguous-origin-registration" });
+  });
+
+  it("still resolves when the SAME platform is registered twice at one origin", () => {
+    const res = resolveCaptureTarget({
+      registeredSites: [drupal("https://news.example.org", "d1"), drupal("https://news.example.org", "d2")],
+      sourceUrl: "https://news.example.org/node/7",
+      externalId: "7",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.client).toBe("drupal");
+  });
+
+  it("bounds the resource id PER ADAPTER — drupal nids are unsigned, wordpress keeps its bound", () => {
+    const aboveSigned32 = "3000000000";
+    const dr = resolveCaptureTarget({
+      registeredSites: [drupal("https://news.example.org")],
+      sourceUrl: "https://news.example.org/node/x",
+      externalId: aboveSigned32,
+    });
+    expect(dr.ok).toBe(true);
+    if (dr.ok) expect(dr.postId).toBe(3000000000);
+
+    expect(
+      resolveCaptureTarget({
+        registeredSites: [wp("https://blog.example.com")],
+        sourceUrl: "https://blog.example.com/x",
+        externalId: aboveSigned32,
+      }),
+    ).toEqual({ ok: false, reason: "invalid-post-id" });
+
+    // Neither adapter accepts anything past the widest bound.
+    expect(
+      resolveCaptureTarget({
+        registeredSites: [drupal("https://news.example.org")],
+        sourceUrl: "https://news.example.org/x",
+        externalId: "4294967296",
+      }),
+    ).toEqual({ ok: false, reason: "invalid-post-id" });
   });
 
   it("names every denial (an unnamed degrade would be a silent gap)", () => {
