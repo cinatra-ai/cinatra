@@ -412,3 +412,111 @@ export function evaluatePolicy(input: EvaluatePolicyInput): PolicyDecision {
     decidedBy,
   };
 }
+
+// ---------------------------------------------------------------------------
+// ADMIN INPUT PARSING (cinatra#2047 defect D-3).
+//
+// The lattice's top layer finally has a write path, so untrusted operator input
+// has to become a well-formed policy key. Parsing lives HERE, with the vocabulary
+// it validates against, so the admitted values can never drift from the axes the
+// evaluator branches on — and so the whole parse is unit-testable without a DB,
+// a session or a form runtime.
+//
+// FAIL-CLOSED BY OMISSION: `silent` is not a storable bound (it is the ABSENCE of
+// a row), so it is rejected here rather than silently coerced — retracting a
+// bound is a DELETE, a distinct operator intent.
+// ---------------------------------------------------------------------------
+
+/** The wildcard artifact-type token. Mirrors `POLICY_ARTIFACT_TYPE_WILDCARD` in
+ * the store; duplicated (not imported) so this pure module stays DB-free. */
+export const POLICY_ARTIFACT_TYPE_WILDCARD_TOKEN = "*";
+
+/** A parsed, validated org bound ready for `upsertLifecyclePolicyRule`. */
+export interface ParsedPolicyBoundInput {
+  checkpoint: LifecycleCheckpoint;
+  artifactType: string;
+  destinationClass: DestinationClass;
+  originKind: LifecycleOriginKind;
+  bound: "required" | "forbidden";
+  selfApprovalOptIn: boolean;
+}
+
+/** A parsed policy KEY (no bound) — what a delete needs. */
+export type ParsedPolicyKeyInput = Pick<
+  ParsedPolicyBoundInput,
+  "checkpoint" | "artifactType" | "destinationClass" | "originKind"
+>;
+
+export type PolicyInputParse<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/** The raw, untrusted shape a form / route hands in. */
+export type RawPolicyInput = Record<string, unknown>;
+
+function readString(raw: RawPolicyInput, key: string): string {
+  const v = raw[key];
+  return typeof v === "string" ? v.trim() : "";
+}
+
+function parseKey(raw: RawPolicyInput): PolicyInputParse<ParsedPolicyKeyInput> {
+  const checkpoint = readString(raw, "checkpoint");
+  if (!(LIFECYCLE_CHECKPOINTS as readonly string[]).includes(checkpoint)) {
+    return { ok: false, error: `Unknown checkpoint "${checkpoint || "(empty)"}".` };
+  }
+  const destinationClass = readString(raw, "destinationClass");
+  if (!(DESTINATION_CLASSES as readonly string[]).includes(destinationClass)) {
+    return { ok: false, error: `Unknown destination class "${destinationClass || "(empty)"}".` };
+  }
+  const originKind = readString(raw, "originKind");
+  if (!(LIFECYCLE_ORIGIN_KINDS as readonly string[]).includes(originKind)) {
+    return { ok: false, error: `Unknown origin kind "${originKind || "(empty)"}".` };
+  }
+  // `artifact_type` is free text (any installed extension may define a type), so
+  // it is validated for SHAPE only: non-empty, bounded, no whitespace-only value.
+  // `*` is legal and means "every type for this (checkpoint, destination, origin)"
+  // — an exact type always beats it at resolve time.
+  const artifactType = readString(raw, "artifactType");
+  if (!artifactType) return { ok: false, error: "Artifact type is required (use * for all types)." };
+  if (artifactType.length > 200) return { ok: false, error: "Artifact type is too long." };
+  if (/\s/.test(artifactType)) return { ok: false, error: "Artifact type cannot contain spaces." };
+
+  return {
+    ok: true,
+    value: {
+      checkpoint: checkpoint as LifecycleCheckpoint,
+      artifactType,
+      destinationClass: destinationClass as DestinationClass,
+      originKind: originKind as LifecycleOriginKind,
+    },
+  };
+}
+
+/** Parse + validate an operator's bound. Rejects `silent` (retracting a bound is
+ * a delete) and any out-of-vocabulary axis value. */
+export function parsePolicyBoundInput(
+  raw: RawPolicyInput,
+): PolicyInputParse<ParsedPolicyBoundInput> {
+  const key = parseKey(raw);
+  if (!key.ok) return key;
+
+  const bound = readString(raw, "bound");
+  if (bound !== "required" && bound !== "forbidden") {
+    return {
+      ok: false,
+      error:
+        bound === "silent"
+          ? "Silent is the absence of a bound — remove the rule instead of saving it as silent."
+          : `Bound must be "required" or "forbidden".`,
+    };
+  }
+
+  const rawOptIn = raw.selfApprovalOptIn;
+  const selfApprovalOptIn =
+    rawOptIn === true || rawOptIn === "on" || rawOptIn === "true";
+
+  return { ok: true, value: { ...key.value, bound, selfApprovalOptIn } };
+}
+
+/** Parse + validate the KEY of a bound to retract. */
+export function parsePolicyKeyInput(raw: RawPolicyInput): PolicyInputParse<ParsedPolicyKeyInput> {
+  return parseKey(raw);
+}

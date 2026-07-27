@@ -11,6 +11,10 @@
  *   - Restore objects — the time-keyed change-set restore console (inline-modal
  *     Undo, authorized per object, no admin bypass). A single change set's
  *     restore has its own nested route, /configuration/artifacts/restore/[id].
+ *   - Review policy — the org's artifact-lifecycle policy BOUNDS (the lattice's
+ *     top layer, cinatra#2047 D-3) plus the open-review-gate volume they produce
+ *     (row 9). Its own reads/writes are permission-gated inside the tab
+ *     (settings.read / settings.update), not merely by this page's admin gate.
  *
  * Admin-gated (`requireAdminSession`). The active tab is selected server-side
  * from `?tab=`; an unknown/absent tab falls through to Type definitions (a
@@ -28,6 +32,7 @@ import { ArtifactsConsoleTabs } from "@/components/artifacts/console/console-tab
 import { TypeDefinitionsTab } from "@/components/artifacts/console/type-definitions-tab";
 import { StoredObjectsTab } from "@/components/artifacts/console/stored-objects-tab";
 import { RestoreObjectsTab } from "@/components/artifacts/console/restore-objects-tab";
+import { ReviewPolicyTab } from "@/components/artifacts/console/review-policy-tab";
 
 export const metadata: Metadata = { title: "Artifacts" };
 export const dynamic = "force-dynamic";
@@ -36,6 +41,11 @@ const CONSOLE_TABS = [
   { value: "definitions", label: "Type definitions" },
   { value: "objects", label: "Stored objects" },
   { value: "restore", label: "Restore objects" },
+  // Review policy (cinatra#2047 defect D-3 + row 9): the org's lifecycle policy
+  // BOUNDS + the open-review-gate volume they produce. Folded onto this console
+  // rather than given its own route — it is artifact administration, and every
+  // other artifact-administration surface already lives here (#1786).
+  { value: "review-policy", label: "Review policy" },
 ] as const;
 
 type ConsoleTab = (typeof CONSOLE_TABS)[number]["value"];
@@ -75,6 +85,8 @@ export default async function ArtifactsConsolePage({ searchParams }: PageProps) 
             <TypeDefinitionsTab orgId={orgId} />
           ) : tab === "objects" ? (
             <StoredObjectsTab orgId={orgId} actor={actor ?? undefined} />
+          ) : tab === "review-policy" ? (
+            <ReviewPolicyTab />
           ) : (
             <RestoreObjectsTab orgId={orgId} />
           )}

@@ -69,6 +69,7 @@ const administrationSections = [
       { label: "Type definitions", href: "/configuration/artifacts" },
       { label: "Stored objects", href: "/configuration/artifacts?tab=objects" },
       { label: "Restore objects", href: "/configuration/artifacts?tab=restore" },
+      { label: "Review policy", href: "/configuration/artifacts?tab=review-policy" },
     ],
   },
   {
