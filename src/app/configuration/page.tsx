@@ -188,6 +188,19 @@ const administrationSections = [
     ],
   },
   {
+    // exec-plane S1b (cinatra#2138): where the sandbox models run commands in
+    // lives, what it may reach, and whether it is actually up.
+    title: "Execution",
+    description:
+      "Where sandbox commands run, what they may reach on the network, and whether the sandbox is up.",
+    href: "/configuration/execution",
+    icon: domainIcons.environment,
+    links: [
+      { label: "Mode and network", href: "/configuration/execution" },
+      { label: "Health", href: "/configuration/execution?tab=health" },
+    ],
+  },
+  {
     title: "Telemetry",
     description: "Provider logging and operational visibility settings.",
     href: "/configuration/telemetry",

@@ -125,11 +125,52 @@ export function readSeed(): UatSeed {
 }
 
 export async function loginWordPress(page: Page): Promise<void> {
-  await page.goto(`${WP_BASE}/wp-login.php`);
-  await page.fill("#user_login", WP_ADMIN_USER);
-  await page.fill("#user_pass", WP_ADMIN_PASS);
-  await page.click("#wp-submit");
-  await page.waitForURL(/wp-admin/);
+  // cinatra#2131 — this sign-in was burning a WHOLE-TEST retry. The docker
+  // WordPress is still warming its first requests while the suite starts, so on
+  // a loaded runner either half of the sign-in can miss: `page.goto` lands on a
+  // connection reset or a document without the login markup, or the credential
+  // POST's redirect to wp-admin does not arrive inside the bound.
+  //
+  // Both halves are now retried IN PLACE, bounded, with an explicit wait on the
+  // login form — never by letting the runner replay the entire test. A
+  // whole-test retry costs minutes on a runner that is already
+  // memory-constrained, hides the real signal behind a green-on-retry, and
+  // re-runs everything the test had already proven. This mirrors the shape
+  // `loginDrupal` below already uses for the same reason.
+  //
+  // TIMING BUDGET — keep the worst case under the 120s per-test timeout in
+  // tests/e2e/config/wp-drupal-uat.config.ts: 3 attempts x (15s form wait + 30s
+  // redirect wait) leaves headroom, and a successful attempt returns as soon as
+  // the redirect lands. Do not raise these bounds without re-checking that sum;
+  // a per-attempt bound that is generous enough to blow the per-test ceiling
+  // converts a retryable miss back into the whole-test retry this removes.
+  const loginForm = page.locator("#loginform");
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await page.goto(`${WP_BASE}/wp-login.php`, { waitUntil: "domcontentloaded" });
+      // A live session is redirected straight into wp-admin; nothing to do.
+      if (/\/wp-admin/.test(page.url())) return;
+      // Explicit wait on the form itself — reaching `domcontentloaded` does not
+      // mean the login markup is there (a PHP fatal or an in-flight bootstrap
+      // both render a document without it).
+      await loginForm.waitFor({ state: "visible", timeout: 15_000 });
+      await page.locator("#user_login").waitFor({ state: "visible", timeout: 5_000 });
+      await page.fill("#user_login", WP_ADMIN_USER);
+      await page.fill("#user_pass", WP_ADMIN_PASS);
+      await page.click("#wp-submit");
+      await page.waitForURL(/wp-admin/, { timeout: 30_000 });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await page.waitForTimeout(1_000);
+    }
+  }
+  throw new Error(
+    `[wp-drupal-uat] wp-admin sign-in did not reach an authenticated /wp-admin URL after 3 ` +
+      `attempts against ${WP_BASE}/wp-login.php (last page: ${page.url()}). ` +
+      `Cause: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+  );
 }
 
 export async function loginDrupal(page: Page): Promise<void> {

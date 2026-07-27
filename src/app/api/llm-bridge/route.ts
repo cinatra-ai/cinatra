@@ -34,6 +34,7 @@ import {
   type SkillKind,
 } from "@/lib/agent-run-skills-used";
 import { readRunSelectedSkillRevisions } from "@/lib/run-selected-skill-revisions";
+import { resolveSurfaceExecutionBinding } from "@/lib/execution/surface-execution-session";
 import { resolveRunSkillDelivery } from "@cinatra-ai/skills/recommendation";
 import {
   readAgentRunByContextId,
@@ -1596,6 +1597,20 @@ export async function POST(req: Request): Promise<Response> {
           );
         }
       }
+      // exec-plane S1b (cinatra#2138 deliverable 2): the agent-run surface is a
+      // TRUSTED execution-session issuer. `runForPorts` is the run this request
+      // already proved it owns — resolved from the verified #1192 run token (or
+      // the dispatcher-signed binding / auth-injected context id), never from a
+      // caller-supplied body id. Binding the session to THAT run id reuses the
+      // existing per-run binding rather than inventing a second one: the merged
+      // broker's per-command liveness probe re-reads the SAME run row, so a
+      // hard-removed run fails the next sandbox command closed.
+      const runExecutionBinding = resolveSurfaceExecutionBinding({
+        surface: "agent_run",
+        orgId: runForPorts?.orgId,
+        userId: runForPorts?.runBy,
+        runId: runForPorts?.id,
+      });
       result = await runResolvedSkillAwareDeterministicLlmTask({
         runtime: resolvedRuntime,
         model: body.model_id,
@@ -1635,10 +1650,15 @@ export async function POST(req: Request): Promise<Response> {
           ? { attachments: envelope.attachments }
           : {}),
         ...(attachmentResolverPorts ? { attachmentResolverPorts } : {}),
+        // exec-plane S1b (cinatra#2138): the run-bound execution session + the
+        // boot-wired broker executor. Rollout flag off ⇒ an empty spread ⇒
+        // byte-identical dispatch.
+        ...runExecutionBinding,
         // exec-plane S3 A2 (cinatra#1708): supply the broker executor + opaque
         // mount ONLY when a declared environment resolved to a signed layer; the
         // broker re-verifies the signed provenance fail-closed before every
-        // mount (AC4). Absent ⇒ byte-identical L0 dispatch.
+        // mount (AC4). Absent ⇒ byte-identical L0 dispatch. Spread AFTER the S1b
+        // binding so a resolved L1 mount's executor wins for that run.
         ...(runEnvBinding?.kind === "mount"
           ? {
               executionExecutor: runEnvBinding.executor,
