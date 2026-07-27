@@ -5,9 +5,9 @@ to report its MCP Adapter server inventory**, driving per-instance multi-server
 enrollment (add / update / retire). It couples two producers/consumers:
 
 - **Core (consumer):** the zod schema in
-  `src/lib/wordpress-site-inventory-contract.ts` is the single validation
+  `src/lib/connector-instance-site-inventory-contract.ts` is the single validation
   authority; the enrollment reconciler
-  (`src/lib/wordpress-server-enrollment.ts`) diff-applies a parsed payload onto
+  (`src/lib/connector-instance-server-enrollment.ts`) diff-applies a parsed payload onto
   the host-owned `connector_instance_server` rows.
 - **Site plugin (producer, cinatra#2021):** the cinatra WordPress plugin
   collects the inventory (MCP Adapter `get_servers()` enumeration) and sends it

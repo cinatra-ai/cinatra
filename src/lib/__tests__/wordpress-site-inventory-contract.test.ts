@@ -4,7 +4,7 @@ import {
   SUPPORTED_SITE_INVENTORY_VERSIONS,
   wpSiteInventoryV1Schema,
   type WpSiteInventoryV1,
-} from "@/lib/wordpress-site-inventory-contract";
+} from "@/lib/connector-instance-site-inventory-contract";
 import goldenFixture from "./__fixtures__/wp-site-inventory-v1.json";
 
 // cinatra#2018 S3 — the wp-site-inventory contract v1. The golden fixture is

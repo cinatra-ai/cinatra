@@ -30,7 +30,7 @@ import { Buffer } from "node:buffer";
 import type {
   WpSiteInventoryServerEntryV1,
   WpSiteInventoryV1,
-} from "@/lib/wordpress-site-inventory-contract";
+} from "@/lib/connector-instance-site-inventory-contract";
 import {
   CATALOG_DEFAULT_SERVER_ID,
   DEFAULT_SERVER_REST_PATH,
@@ -50,12 +50,6 @@ import {
   type UpsertServerInput,
 } from "@/lib/connector-instance-server-store";
 import { classifyExposureModeFromWireTools } from "@/lib/connector-instance-snapshot-loader";
-import {
-  probeWordPressInstanceMcpServer,
-  resolveWordPressMcpFallbackEndpoint,
-  type WordPressMcpAdapterStatus,
-  type WordPressMcpProbeTarget,
-} from "@/lib/wordpress-mcp-connection";
 import {
   InvokerError,
   listConnectorInstanceMcpTools,
@@ -126,13 +120,31 @@ export type WordPressServerEnrollmentStore = {
   }): Promise<void>;
 };
 
+/** Probe verdict vocabulary — structurally mirrors the host probe helpers.
+ * Declared locally (with the credential-target shape below) so this module
+ * carries NO vendor-named import edge: the binder injects the concrete probe
+ * and endpoint helpers (epic cinatra#978 — core names mechanism, not vendor
+ * modules; the vendor-token gate pins it). */
+export type ManualRouteProbeStatus =
+  | "registered"
+  | "not_installed"
+  | "auth_error"
+  | "unreachable";
+
+/** The instance credential target the probe/verification needs. */
+export type EnrollmentProbeTarget = {
+  siteUrl: string;
+  username: string;
+  applicationPassword: string;
+};
+
 /** Manual-route verification wire surface (injected; tests fake the wire). */
 export type WordPressManualRouteVerifier = {
   /** HEAD probe (pretty → query-string fallback) at the candidate route. */
   probeServer(
-    target: WordPressMcpProbeTarget,
+    target: EnrollmentProbeTarget,
     restPath: string,
-  ): Promise<WordPressMcpAdapterStatus>;
+  ): Promise<ManualRouteProbeStatus>;
   /** REAL MCP handshake + wire `tools/list` through the S2 transport with the
    * instance credential — proves the route speaks Streamable-HTTP MCP AND
    * accepts the connection App-Password; the rows classify exposure mode. */
@@ -148,7 +160,10 @@ export type WordPressServerEnrollmentDeps = {
   onServerInvalidated?: (instanceId: string, serverId: string) => void;
   /** Resolve the instance's probe/credential target (manual verification +
    * health refresh). Null when the instance/credential is unresolvable. */
-  resolveInstance?: (instanceId: string) => WordPressMcpProbeTarget | null;
+  resolveInstance?: (instanceId: string) => EnrollmentProbeTarget | null;
+  /** Build the per-route wire endpoint for a site (the binder injects its
+   * endpoint helper; kept injected so this module names no vendor module). */
+  resolveEndpoint?: (siteUrl: string, restPath: string) => string;
   verifier?: WordPressManualRouteVerifier;
   audit?: (event: Parameters<typeof logAuditEvent>[0]) => Promise<void> | void;
   now?: () => number;
@@ -162,8 +177,12 @@ export type WordPressServerEnrollmentDeps = {
  * invalidation callback and the instance resolver (both live host-side).
  */
 export function createWordPressServerEnrollmentDeps(input: {
+  /** The host probe helper (per-route HEAD + classify). */
+  probeServer: (target: EnrollmentProbeTarget, restPath: string) => Promise<ManualRouteProbeStatus>;
+  /** The host per-route endpoint builder (query-string REST form). */
+  resolveEndpoint: (siteUrl: string, restPath: string) => string;
   onServerInvalidated?: (instanceId: string, serverId: string) => void;
-  resolveInstance?: (instanceId: string) => WordPressMcpProbeTarget | null;
+  resolveInstance?: (instanceId: string) => EnrollmentProbeTarget | null;
 }): WordPressServerEnrollmentDeps {
   return {
     store: {
@@ -180,9 +199,10 @@ export function createWordPressServerEnrollmentDeps(input: {
       recordServerStatus: (i) => recordServerStatus(i),
     },
     verifier: {
-      probeServer: (target, restPath) => probeWordPressInstanceMcpServer(target, restPath),
+      probeServer: (target, restPath) => input.probeServer(target, restPath),
       listTools: (i) => listConnectorInstanceMcpTools(i),
     },
+    resolveEndpoint: input.resolveEndpoint,
     ...(input.onServerInvalidated ? { onServerInvalidated: input.onServerInvalidated } : {}),
     ...(input.resolveInstance ? { resolveInstance: input.resolveInstance } : {}),
   };
@@ -506,11 +526,11 @@ export type AddManualServerRouteResult =
         | "probe_failed"
         | "verification_failed"
         | "conflict";
-      probeStatus?: WordPressMcpAdapterStatus;
+      probeStatus?: ManualRouteProbeStatus;
       errorCode?: string;
     };
 
-function buildBasicAuthHeader(target: WordPressMcpProbeTarget): string {
+function buildBasicAuthHeader(target: EnrollmentProbeTarget): string {
   const credentials = `${target.username}:${target.applicationPassword}`;
   return `Basic ${Buffer.from(credentials, "utf8").toString("base64")}`;
 }
@@ -580,14 +600,16 @@ export async function addManualServerRoute(
     // would shadow the grandfathered identity.
     return { ok: false, reason: "reserved_route" };
   }
-  if (!deps.verifier) return { ok: false, reason: "verification_failed" };
+  if (!deps.verifier || !deps.resolveEndpoint) {
+    return { ok: false, reason: "verification_failed" };
+  }
 
   const probeStatus = await deps.verifier.probeServer(target, restPath);
   if (probeStatus !== "registered") {
     return { ok: false, reason: "probe_failed", probeStatus };
   }
 
-  const endpoint = resolveWordPressMcpFallbackEndpoint(target.siteUrl, restPath);
+  const endpoint = deps.resolveEndpoint(target.siteUrl, restPath);
   const authHeader = buildBasicAuthHeader(target);
   let rows: Array<Record<string, unknown>>;
   try {
@@ -752,7 +774,7 @@ export async function listInstanceServersWithHealthRefresh(
     healthRefreshLastRunAt.set(key, now);
     void refreshEnrolledServerHealth(input, rows, deps).catch((err) => {
       console.error(
-        `[wordpress-server-enrollment] health refresh failed for ${input.instanceId}`,
+        `[connector-instance-server-enrollment] health refresh failed for ${input.instanceId}`,
         err,
       );
     });

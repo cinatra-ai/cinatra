@@ -1,7 +1,7 @@
 // The `wp-site-inventory` contract v1 (cinatra#2018 S3): the zod-validated
 // payload a connected WordPress site pushes to core to report its MCP Adapter
 // server inventory. This module is the SHARED coupling artifact between core's
-// enrollment reconciler (`@/lib/wordpress-server-enrollment`) and the site-side
+// enrollment reconciler (`@/lib/connector-instance-server-enrollment`) and the site-side
 // producer (the cinatra plugin's S6 enrichment sender, cinatra#2021): the S3
 // synthetic fixture (`src/lib/__tests__/__fixtures__/wp-site-inventory-v1.json`)
 // and the live S6 payload validate against the SAME schema.

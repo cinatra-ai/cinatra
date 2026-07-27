@@ -212,7 +212,7 @@ import {
   removeManualServerRoute,
   type AddManualServerRouteResult,
   type RemoveManualServerRouteResult,
-} from "@/lib/wordpress-server-enrollment";
+} from "@/lib/connector-instance-server-enrollment";
 // cinatra#2019 S4 — the trusted-site native-injection OPT-IN store + the
 // org-admin consent members bound onto the `wordpress-mcp` publication below.
 import {
@@ -251,6 +251,7 @@ import {
 // the connectors' `mcp-toolbox` modules carry no `@/` edge.
 import {
   probeWordPressInstanceMcpAdapter,
+  probeWordPressInstanceMcpServer,
   resolveWordPressMcpEndpoint,
   resolveWordPressMcpFallbackEndpoint,
   invalidateWordPressMcpProbeCache,
@@ -501,6 +502,10 @@ function resolveWordPressProbeTarget(
  * inside the sibling module; only the host-owned invalidation + instance
  * resolution close over this binder). */
 const wordpressServerEnrollmentDeps = createWordPressServerEnrollmentDeps({
+  // The vendor-named probe/endpoint helpers are injected HERE (the enrollment
+  // module deliberately names no vendor module — epic cinatra#978 gate).
+  probeServer: (target, restPath) => probeWordPressInstanceMcpServer(target, restPath),
+  resolveEndpoint: (siteUrl, restPath) => resolveWordPressMcpFallbackEndpoint(siteUrl, restPath),
   onServerInvalidated: (instanceId, serverId) =>
     invalidateWordPressServerArtifacts(instanceId, serverId),
   resolveInstance: resolveWordPressProbeTarget,

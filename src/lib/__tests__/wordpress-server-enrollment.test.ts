@@ -9,7 +9,7 @@ import {
   MANUAL_SERVER_REST_PATH_PATTERN,
   type WordPressServerEnrollmentDeps,
   type WordPressServerEnrollmentStore,
-} from "@/lib/wordpress-server-enrollment";
+} from "@/lib/connector-instance-server-enrollment";
 import {
   CATALOG_DEFAULT_SERVER_ID,
   DEFAULT_SERVER_REST_PATH,
@@ -18,7 +18,7 @@ import {
   type ConnectorInstanceServerRecord,
   type UpsertServerInput,
 } from "@/lib/connector-instance-server-store";
-import { wpSiteInventoryV1Schema, type WpSiteInventoryV1 } from "@/lib/wordpress-site-inventory-contract";
+import { wpSiteInventoryV1Schema, type WpSiteInventoryV1 } from "@/lib/connector-instance-site-inventory-contract";
 import { InvokerError } from "@/lib/connector-instance-mcp-transport";
 import goldenFixture from "./__fixtures__/wp-site-inventory-v1.json";
 
@@ -444,6 +444,7 @@ function manualDeps(over: Partial<WordPressServerEnrollmentDeps> = {}) {
   const made = makeDeps([], {
     resolveInstance: () => INSTANCE,
     verifier: { probeServer, listTools },
+    resolveEndpoint: (siteUrl, restPath) => `${siteUrl}/index.php?rest_route=${restPath}`,
     ...over,
   });
   return { ...made, probeServer, listTools };
