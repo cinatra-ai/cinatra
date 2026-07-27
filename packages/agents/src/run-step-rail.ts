@@ -20,9 +20,10 @@
 //   (+) LIFECYCLE POLICY DECISIONS (cinatra#2047 D-5, from
 //       `readLifecycleDecisionsForRun`) — S0's "every fired/skipped decision
 //       recorded on the run timeline". A FIRED decision renders AS its gate (no
-//       second entry); a SKIPPED one gets its own entry carrying the lattice
-//       reason, so a deliberately-skipped review is distinguishable from no
-//       lifecycle machinery running.
+//       second entry — the gate carries the richer rendering, including its
+//       disposition and its deep link); a SKIPPED one gets its own entry carrying
+//       the lattice reason, so a deliberately-skipped review is distinguishable
+//       from no lifecycle machinery running.
 //
 // This module is PURE (no DB, no React) so the merge is fixture-pinned. The
 // contract — ordering, deduplication, precedence — is defined here in code and
@@ -108,9 +109,10 @@ export interface RunStepRailEntry {
   lifecycleDecision?: {
     eventId: string;
     artifactId: string;
-    /** fired | skipped | pending — a `fired` decision only reaches the rail as its
-     * own entry when its gate is missing from this run's gate set. */
-    outcome: "fired" | "skipped" | "pending";
+    /** fired | skipped | pending | not_classifiable — a `fired` decision only
+     * reaches the rail as its own entry when its gate is missing from this run's
+     * gate set. */
+    outcome: "fired" | "skipped" | "pending" | "not_classifiable";
     /** Which lattice layer decided: org-bound | core-default | manifest |
      * elevation | fail-closed. Drives the rail badge. */
     decidedBy: string | null;
@@ -172,7 +174,7 @@ export interface RailVerification {
 export interface RailLifecycleDecision {
   eventId: string;
   artifactId: string;
-  outcome: "fired" | "skipped" | "pending";
+  outcome: "fired" | "skipped" | "pending" | "not_classifiable";
   /** The gate a FIRED decision opened (used to suppress a duplicate entry when
    * that gate is already on the rail). */
   gateId: string | null;
@@ -451,10 +453,16 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
             ? "Review skipped"
             : d.outcome === "pending"
               ? "Review pending policy"
-              : "Review gate (missing)",
-        // A skipped decision is TERMINAL — it must never become the "you are here"
-        // anchor; a pending one legitimately is.
-        status: (d.outcome === "pending" ? "pending" : "skipped") as RailStatus,
+              : d.outcome === "not_classifiable"
+                ? "Review not classifiable"
+                : "Review gate (missing)",
+        // A skipped / not-classifiable decision is TERMINAL — neither may become
+        // the "you are here" anchor. A PENDING decision legitimately is, and so is
+        // a FIRED decision whose gate is missing: that is an incoherent state an
+        // operator has to look at, never a quiet terminal one (Codex convergence).
+        status: (d.outcome === "pending" || d.outcome === "fired"
+          ? "pending"
+          : "skipped") as RailStatus,
         lifecycleDecision: {
           eventId: d.eventId,
           artifactId: d.artifactId,

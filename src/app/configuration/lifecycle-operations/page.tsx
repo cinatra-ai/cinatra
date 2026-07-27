@@ -75,7 +75,35 @@ function shortId(value: string | null): string {
 
 export default async function LifecycleOperationsPage() {
   const session = await requireAdminSession();
-  const orgId = session.session?.activeOrganizationId ?? undefined;
+  const orgId = session.session?.activeOrganizationId ?? null;
+
+  // FAIL CLOSED on a missing active organization. Both readers treat an ABSENT
+  // orgId as "every organization" (the unscoped script/test posture), and
+  // `requireAdminSession` checks only the platform role — so passing an
+  // unresolved org through would turn this page into a cross-tenant read for any
+  // admin whose session has no active org (Codex convergence). No org ⇒ no data.
+  if (!orgId) {
+    return (
+      <Main className="min-h-screen">
+        <PageHeader
+          title="Lifecycle operations"
+          description="Stuck review releases and effects the lifecycle policy never resolved."
+          divider={false}
+        />
+        <PageContent className="pb-8">
+          <Empty data-ops-empty="no-active-organization">
+            <EmptyHeader>
+              <EmptyTitle>No active organization</EmptyTitle>
+              <EmptyDescription>
+                These queues are per-organization. Select an organization to see its stuck review
+                releases and blocked effects.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        </PageContent>
+      </Main>
+    );
+  }
 
   // Both stores are `server-only` packages/agents modules; imported lazily so the
   // page's module graph stays a leaf (the same posture the other configuration
@@ -85,6 +113,8 @@ export default async function LifecycleOperationsPage() {
     import("@cinatra-ai/agents/lifecycle-continuation-park-store"),
   ]);
 
+  // Bounded reads: the most recent 100 of each. A deeper queue is a paging
+  // concern, not a correctness one — the headline is that these rows exist at all.
   const [deadLettered, blockedEffects] = await Promise.all([
     readDeadLetteredResumeIntents({ orgId, limit: 100 }),
     readPolicyUnresolvedParks({ orgId, limit: 100 }),
@@ -162,8 +192,9 @@ export default async function LifecycleOperationsPage() {
             <CardTitle>Blocked effects (policy unresolved)</CardTitle>
             <CardDescription>
               A checkpointed continuation passed its deadline with the review policy still
-              unevaluable. The run always resumes, but the protected effect stays blocked until an
-              explicit policy decision releases it.
+              unevaluable. The run always resumes, but the protected effect stays terminally
+              blocked: nothing retries it, and no automated path clears it — it needs an explicit
+              policy decision.
             </CardDescription>
           </CardHeader>
           <CardContent>

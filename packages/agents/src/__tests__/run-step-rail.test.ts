@@ -291,13 +291,33 @@ describe("buildRunStepRail — lifecycle policy decisions (cinatra#2047 D-5)", (
     expect(rail.entries.map((e) => e.key)).toEqual(["gate:t1"]);
   });
 
-  it("a FIRED decision whose gate is MISSING is still surfaced (never silently dropped)", () => {
+  it("a FIRED decision whose gate is MISSING is surfaced as PENDING (an incoherent state needs attention)", () => {
     const rail = buildRunStepRail({
       gates: [gate("t1", "pending", "2026-07-26T09:00:00Z")],
       lifecycleDecisions: [decision("ev-orphan", "fired", { gateId: "g_absent" })],
     });
     expect(rail.entries.map((e) => e.key)).toEqual(["gate:t1", "lifecycle:ev-orphan"]);
     expect(rail.entries[1].label).toBe("Review gate (missing)");
+    // NOT `skipped`: a fired decision whose gate vanished is a fail-closed
+    // anomaly, never a quiet terminal state (Codex convergence).
+    expect(rail.entries[1].status).toBe("pending");
+  });
+
+  it("a NOT-CLASSIFIABLE decision reads as its own outcome, never as a policy skip", () => {
+    const rail = buildRunStepRail({
+      lifecycleDecisions: [
+        decision("ev-gone", "not_classifiable", {
+          decidedBy: null,
+          latticeOutcome: null,
+          reason: "the artifact was deleted before the review checkpoint could classify it",
+        }),
+      ],
+    });
+    expect(rail.entries[0].label).toBe("Review not classifiable");
+    expect(rail.entries[0].status).toBe("skipped");
+    expect(rail.entries[0].lifecycleDecision?.outcome).toBe("not_classifiable");
+    // Terminal — it never becomes the active anchor.
+    expect(rail.activeOrdinal).toBeNull();
   });
 
   it("a SKIPPED entry is TERMINAL — it never becomes the 'you are here' anchor", () => {

@@ -68,6 +68,7 @@ export function RunStepRailPanel({
             const isVerification = entry.kind === "verification";
             // cinatra#2047 D-5: a lifecycle POLICY decision that opened no gate.
             const isLifecycle = entry.kind === "lifecycleDecision";
+            const lifecycleOutcome = entry.lifecycleDecision?.outcome;
             const isResolved = entry.status === "resolved";
             const isSkipped = entry.status === "skipped";
             const isPending = entry.status === "pending";
@@ -76,23 +77,7 @@ export function RunStepRailPanel({
             const isLast = i === entries.length - 1;
 
             const titleNode = (
-              <StepperTitle
-                className="data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground"
-                data-rail-kind={entry.kind}
-                data-rail-status={entry.status}
-                // Anchors for the live proof: the active gated step + resolved
-                // read-only history + the S4 verification entry are each addressable.
-                data-rail-gated-step={isGate ? "true" : undefined}
-                data-rail-gate-history={isGate && isResolved ? "true" : undefined}
-                data-rail-gate-pending={isGate && isPending ? "true" : undefined}
-                data-rail-verification={isVerification ? "true" : undefined}
-                data-rail-verification-outcome={isVerification ? entry.verification?.outcome : undefined}
-                // D-5 anchors for the live proof: a skipped lifecycle decision is
-                // addressable, and carries WHICH lattice layer skipped it.
-                data-rail-lifecycle-decision={isLifecycle ? entry.lifecycleDecision?.outcome : undefined}
-                data-rail-lifecycle-decided-by={isLifecycle ? entry.lifecycleDecision?.decidedBy ?? undefined : undefined}
-                title={isLifecycle ? entry.lifecycleDecision?.reason : undefined}
-              >
+              <StepperTitle className="data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground">
                 {entry.label}
                 {isGate && isResolved ? (
                   <span className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground">
@@ -107,12 +92,14 @@ export function RunStepRailPanel({
                 {isLifecycle ? (
                   <>
                     <span className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground">
-                      {entry.lifecycleDecision?.decidedBy ?? entry.lifecycleDecision?.outcome ?? "policy"}
+                      {entry.lifecycleDecision?.decidedBy ?? lifecycleOutcome ?? "policy"}
                     </span>
                     {/* The REASON is the point of the entry: a user must be able to
-                        tell a deliberately-skipped review from no machinery running. */}
+                        tell a deliberately-skipped review from no machinery running.
+                        It WRAPS inside the narrow rail (never truncates) — a clipped
+                        reason answers nothing. */}
                     <span
-                      className="mt-0.5 block text-badge-2xs leading-4 text-muted-foreground"
+                      className="mt-0.5 block max-w-36 text-start text-badge-2xs leading-4 break-words whitespace-normal text-muted-foreground"
                       data-rail-lifecycle-reason=""
                     >
                       {entry.lifecycleDecision?.reason}
@@ -147,7 +134,27 @@ export function RunStepRailPanel({
                 data-rail-skipped={isSkipped ? "true" : undefined}
                 className="items-start !flex-none"
               >
-                <div className="flex items-center gap-1">
+                {/* The rail ANCHORS live on this wrapper, not on StepperTitle:
+                    the reui StepperTitle accepts only {children, className} and
+                    drops every other prop, so a data-* attribute placed there
+                    never reaches the DOM. */}
+                <div
+                  // A lifecycle entry's reason wraps to several lines, so its
+                  // indicator aligns to the FIRST line rather than the block centre.
+                  className={isLifecycle ? "flex items-start gap-1" : "flex items-center gap-1"}
+                  data-rail-kind={entry.kind}
+                  data-rail-status={entry.status}
+                  data-rail-gated-step={isGate ? "true" : undefined}
+                  data-rail-gate-history={isGate && isResolved ? "true" : undefined}
+                  data-rail-gate-pending={isGate && isPending ? "true" : undefined}
+                  data-rail-verification={isVerification ? "true" : undefined}
+                  data-rail-verification-outcome={isVerification ? entry.verification?.outcome : undefined}
+                  data-rail-lifecycle-decision={isLifecycle ? lifecycleOutcome : undefined}
+                  data-rail-lifecycle-decided-by={
+                    isLifecycle ? entry.lifecycleDecision?.decidedBy ?? undefined : undefined
+                  }
+                  title={isLifecycle ? entry.lifecycleDecision?.reason : undefined}
+                >
                   {isGate && entry.gate ? (
                     // A gate row links into the run-embedded review surface. A
                     // resolved gate still links — the review page replays the

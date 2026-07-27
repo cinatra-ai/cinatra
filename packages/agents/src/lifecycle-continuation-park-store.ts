@@ -301,10 +301,12 @@ export async function readPolicyUnresolvedParks(opts?: {
       representationRevisionId: artifactProducedOutbox.representationRevisionId,
     })
     .from(lifecycleContinuationPark)
-    // LEFT join: a park whose produced event was purged still MUST be visible to
-    // ops (it is exactly the kind of orphan an operator needs to see), it simply
-    // carries no artifact coordinates. An org-scoped read excludes it by the
-    // predicate below, which is correct — an unattributable park has no org.
+    // LEFT join so an ORPHANED park (its produced event purged) still resolves in
+    // the UNSCOPED read, carrying null artifact coordinates. Note the org-scoped
+    // read necessarily drops those orphans — a park with no event has no org, and
+    // a multi-tenant surface cannot show a row it cannot attribute. That is the
+    // deliberate trade: the product surface is org-scoped; the unscoped read is
+    // the operator/script path that can still see an orphan.
     .leftJoin(
       artifactProducedOutbox,
       eq(artifactProducedOutbox.eventId, lifecycleContinuationPark.eventId),

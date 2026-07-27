@@ -368,7 +368,7 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
   // a terminal policy_unresolved blocked state"). Before this lane
   // `resolveArtifactEffectDisposition` never joined the park, so the always-resume
   // path reported an APPROVED (appliable) effect whose policy was never resolved.
-  it("D-7: a TTL-expired park blocks the protected EFFECT (policy_unresolved), even after the gate resolves", async () => {
+  it("D-7: a TTL-expired park blocks the protected EFFECT, and a LATER gate resolution does not unblock it", async () => {
     const ev = await produce("document", {
       destinationClass: "external_publish",
       originKind: "agent_produced",
@@ -378,32 +378,34 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
     const gate = await readGate(ev.producerRunId!, autoReviewTaskId(ev.eventId));
     expect(gate).not.toBeNull();
 
-    // Baseline: an approved gate releases the effect while no park has expired.
-    await resolveGate(gate!.id);
-    const released = await orch.resolveArtifactEffectDisposition({
+    // Baseline: while the gate is pending the effect is HELD in the ordinary way
+    // (a pending review), not terminally blocked.
+    const pendingDisp = await orch.resolveArtifactEffectDisposition({
       artifactId: ev.artifactId,
       representationRevisionId: ev.representationRevisionId,
     });
-    expect(released.disposition).toBe("approved");
+    expect(pendingDisp.disposition).toBe("held");
 
-    // Now drive the park to its terminal TTL fail-close (the sweeper's own
-    // transition; no hand-written status).
+    // The park passes its TTL with the gate still undecided → the PRODUCTION
+    // maintenance drain fail-closes it. (Driven through the drain, not
+    // `sweepParks` directly: before the #2047 Codex round the drain returned early
+    // whenever no park had a resolved gate to release, so this transition had no
+    // production driver at all.)
     await pool(
       `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_continuation_park"
-         SET status='parked', resolved_at=NULL, ttl_expires_at = now() - interval '1 minute'
-       WHERE run_id=$1 AND event_id=$2 AND checkpoint='review'`,
+          SET ttl_expires_at = now() - interval '1 minute'
+        WHERE run_id=$1 AND event_id=$2 AND checkpoint='review'`,
       [ev.producerRunId, ev.eventId],
     );
-    const swept = await parkStore.sweepParks({ limit: 50 });
-    expect(swept.blocked).toBeGreaterThanOrEqual(1);
+    const drain = await orch.sweepLifecycleGateMaintenance({ limit: 50 });
+    expect(drain.parksPolicyUnresolved).toBeGreaterThanOrEqual(1);
     const parkRow = await pool(
       `SELECT status FROM "${q(TEST_SCHEMA)}"."lifecycle_continuation_park" WHERE run_id=$1 AND event_id=$2`,
       [ev.producerRunId, ev.eventId],
     );
     expect((parkRow.rows[0] as { status: string }).status).toBe("policy_unresolved");
 
-    // THE DEFECT: the effect layer now reports the terminal block, and the
-    // effects-gating predicate HOLDS despite the resolved+approved gate.
+    // THE DEFECT: the effect layer now reports the terminal block.
     const blocked = await orch.resolveArtifactEffectDisposition({
       artifactId: ev.artifactId,
       representationRevisionId: ev.representationRevisionId,
@@ -415,6 +417,17 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
     });
     expect(held.held).toBe(true);
     expect(held.policyUnresolved).toBe(true);
+
+    // A LATER approval does not unblock it: the park is already terminal (the
+    // release branch is CAS-guarded on status='parked'), and the block outranks
+    // every gate state. Only an explicit policy decision may clear it.
+    await resolveGate(gate!.id);
+    await orch.sweepLifecycleGateMaintenance({ limit: 50 });
+    const stillBlocked = await orch.resolveArtifactEffectDisposition({
+      artifactId: ev.artifactId,
+      representationRevisionId: ev.representationRevisionId,
+    });
+    expect(stillBlocked.disposition).toBe("policy_unresolved");
 
     // …and the ops read that lists the blocked set (the "(ops-surfaced)" half,
     // consumed by /configuration/lifecycle-operations) sees it, org-scoped.
@@ -543,6 +556,84 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
 
     // A run with no productions projects nothing (no phantom timeline entries).
     expect(await policyStore.readLifecycleDecisionsForRun(`run-${randomUUID()}`)).toEqual([]);
+  });
+
+  it("D-7: a due park with NO releasable sibling is STILL TTL-swept by the production drain", async () => {
+    // The regression the Codex round caught: the drain used to return early when
+    // no park had a resolved gate, so a lone due park sat un-swept forever and
+    // `policy_unresolved` was unreachable in production. This case has exactly
+    // ONE park, still linked to a PENDING gate, past its TTL.
+    const ev = await produce("document", {
+      destinationClass: "visibility_promotion",
+      originKind: "agent_produced",
+      continuationMode: "checkpointed",
+    });
+    await orch.sweepReviewOrchestration();
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_continuation_park"
+          SET ttl_expires_at = now() - interval '1 minute'
+        WHERE run_id=$1 AND event_id=$2`,
+      [ev.producerRunId, ev.eventId],
+    );
+    const drain = await orch.sweepLifecycleGateMaintenance({ limit: 50 });
+    expect(drain.parksPolicyUnresolved).toBeGreaterThanOrEqual(1);
+
+    const row = await pool(
+      `SELECT status FROM "${q(TEST_SCHEMA)}"."lifecycle_continuation_park" WHERE run_id=$1 AND event_id=$2`,
+      [ev.producerRunId, ev.eventId],
+    );
+    expect((row.rows[0] as { status: string }).status).toBe("policy_unresolved");
+    const disp = await orch.resolveArtifactEffectDisposition({
+      artifactId: ev.artifactId,
+      representationRevisionId: ev.representationRevisionId,
+    });
+    expect(disp.disposition).toBe("policy_unresolved");
+  });
+
+  it("D-7: a terminal park guarding a DIFFERENT effect class never blocks this revision", async () => {
+    // The park join matches the event's OWN destination class, so a malformed or
+    // unrelated park cannot fail-close a revision it does not protect.
+    const ev = await produce("document", {
+      destinationClass: "external_publish",
+      originKind: "agent_produced",
+    });
+    await orch.sweepReviewOrchestration();
+    const gate = await readGate(ev.producerRunId!, autoReviewTaskId(ev.eventId));
+    await resolveGate(gate!.id);
+
+    await pool(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."lifecycle_continuation_park"
+         (id, run_id, event_id, checkpoint, policy_decision_id, protected_effect,
+          reevaluation_intent, status, ttl_expires_at, resolved_at)
+       VALUES ($1,$2,$3,'review',NULL,'pipeline_handoff',false,'policy_unresolved',
+               now() - interval '1 minute', now())`,
+      [randomUUID(), `run-${randomUUID()}`, ev.eventId],
+    );
+
+    const disp = await orch.resolveArtifactEffectDisposition({
+      artifactId: ev.artifactId,
+      representationRevisionId: ev.representationRevisionId,
+    });
+    // The mismatched park is ignored — the approved gate still releases.
+    expect(disp.disposition).toBe("approved");
+  });
+
+  it("D-5: a production whose artifact vanished reads as NOT CLASSIFIABLE, never as a policy skip", async () => {
+    // The orchestration consumer marks an event processed with NO gate on its
+    // `not-classifiable` path too (the objects row is gone / tombstoned). Reading
+    // that as "Review skipped" would claim a policy decision that never happened.
+    const runId = `run-${randomUUID()}`;
+    const ev = await produce("document", { producerRunId: runId });
+    await pool(`DELETE FROM "${q(TEST_SCHEMA)}"."objects" WHERE id = $1`, [ev.artifactId]);
+    await orch.sweepReviewOrchestration();
+
+    const [decision] = await policyStore.readLifecycleDecisionsForRun(runId);
+    expect(decision.outcome).toBe("not_classifiable");
+    expect(decision.gateId).toBeNull();
+    expect(decision.latticeOutcome).toBeNull();
+    expect(decision.decidedBy).toBeNull();
+    expect(decision.reasonStale).toBe(false);
+    expect(decision.reason).toContain("classify");
   });
 
   it("D-5: a policy change AFTER the decision is reported as stale, never misattributed", async () => {
@@ -828,6 +919,7 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       optionalExpired: 0,
       requiredExpiredBlocked: 0,
       parksReleased: 0,
+      parksPolicyUnresolved: 0,
     });
     // The event stays pending (unprocessed) while the fence is off.
     const row = await readEventRow(ev.eventId);

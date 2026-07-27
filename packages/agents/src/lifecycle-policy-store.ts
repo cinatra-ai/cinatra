@@ -165,15 +165,26 @@ export async function resolveOrgPolicyRule(
 //
 //   pending                          → the decision has not been made yet
 //   processed + continuation_address → FIRED (that gate id)
-//   processed + NULL address         → SKIPPED
+//   processed + NULL address         → the checkpoint did NOT fire
 //
-// That fired/skipped split is DURABLE and is never second-guessed. The lattice
-// REASON, however, is not persisted anywhere (the outbox has no reason column and
-// this lane ships no migration), so it is RE-DERIVED at read time by re-running
-// the SAME pure evaluator over the SAME axes the orchestration consumer used. A
-// re-derivation can disagree with the durable row when the org bound / manifest
-// changed in the meantime — that disagreement is REPORTED (`reasonStale`), never
-// papered over with a reason that would misattribute the decision.
+// The last case is NOT unconditionally "the policy skipped it": the orchestration
+// consumer ALSO marks an event processed with no address when it cannot classify
+// the artifact at all (the `objects` row is gone or tombstoned — see
+// `resolveReviewContext`'s `not-classifiable` path). Those two are distinguished
+// here by whether the artifact is resolvable at read time, and reported as
+// distinct outcomes (`skipped` vs `not_classifiable`), because rendering "Review
+// skipped" for an event where no policy decision was ever taken would be a lie
+// (Codex convergence).
+//
+// The lattice REASON is not persisted anywhere (the outbox has no reason column
+// and this lane ships no migration), so what this reader reports is the CURRENT
+// lattice verdict re-derived from the SAME axes the consumer used — a live
+// re-derivation, NOT a historical record of the reason. Where that re-derivation
+// contradicts the durable fired/skipped outcome the disagreement is reported
+// (`reasonStale`) instead of attributing a reason that plainly did not produce it.
+// A policy change that preserves the outcome is NOT detectable this way, which is
+// exactly why the field is documented as the current verdict rather than the
+// recorded one.
 //
 // WHY IT LIVES IN THE POLICY STORE. It is a policy read ("what did policy decide
 // for this run?"), and it is deliberately kept OFF the review-orchestration store:
@@ -186,8 +197,11 @@ export async function resolveOrgPolicyRule(
 // projection reproduces its verdict.
 // ---------------------------------------------------------------------------
 
-/** How a produced event's REVIEW checkpoint resolved for the run timeline. */
-export type LifecycleRunDecisionOutcome = "fired" | "skipped" | "pending";
+/** How a produced event's REVIEW checkpoint resolved for the run timeline.
+ * `not_classifiable` is the orchestration consumer's own third outcome: the
+ * artifact was gone/tombstoned by the time the event drained, so no policy
+ * decision was taken at all. */
+export type LifecycleRunDecisionOutcome = "fired" | "skipped" | "pending" | "not_classifiable";
 
 export interface LifecycleRunDecision {
   eventId: string;
@@ -202,19 +216,24 @@ export interface LifecycleRunDecision {
   /** The gate a FIRED decision opened (the rail already renders it) — null for a
    * skipped/pending decision. */
   gateId: string | null;
-  /** The lattice verdict re-derived at read time (`skip` / `forbidden` / `fire` /
-   * `required`), or null when the context is no longer resolvable. */
+  /** The CURRENT lattice verdict, re-derived at read time (`skip` / `forbidden` /
+   * `fire` / `required`) — not a historical record. Null when the artifact is no
+   * longer resolvable. */
   latticeOutcome: PolicyOutcome | null;
   /** Which lattice layer produced that verdict — the run timeline's answer to
    * "WHY was this skipped": `org-bound` (org-forbidden), `core-default`
    * (default-skip), `manifest` (manifest-skip), `elevation`, `fail-closed`. */
   decidedBy: PolicyDecision["decidedBy"] | null;
-  /** Human-readable reason for the timeline entry. */
+  /** Human-readable reason for the timeline entry — the CURRENT verdict's reason.
+   * */
   reason: string;
-  /** TRUE when the re-derived verdict no longer matches the durable outcome (the
-   * policy changed after the decision was made) — the timeline then shows the
-   * durable outcome and says the recorded reason is no longer re-derivable. */
+  /** TRUE when the re-derived verdict CONTRADICTS the durable outcome (the policy
+   * changed after the decision was made in a way that flips fired/skipped). The
+   * timeline then shows the durable outcome and says so. A policy change that
+   * preserves the outcome is not detectable without a persisted reason. */
   reasonStale: boolean;
+  /** When the artifact was PRODUCED (the outbox row's `created_at`) — the
+   * timeline's ordering key. Not the time the decision was applied. */
   createdAt: Date;
 }
 
@@ -248,16 +267,21 @@ function parseManifestLifecycle(raw: string | null): CompiledManifestLifecycle |
 }
 
 /**
- * Every lifecycle REVIEW decision taken for `runId`, oldest-first — fired,
- * skipped, and not-yet-decided. Plain run-scoped read (`producer_run_id`); the
- * caller owns access enforcement (the run-detail aggregate's door, or the run
- * screen's own run-access check).
+ * The lifecycle REVIEW decisions recorded for `runId`, oldest-first — fired,
+ * skipped, not-classifiable, and not-yet-decided. Plain run-scoped read
+ * (`producer_run_id`); the caller owns access enforcement (the run-detail
+ * aggregate's door, or the run screen's own run-access check).
+ *
+ * BOUNDED: `limit` (default 200, hard cap 500). A run that produces more
+ * artifacts than that renders its first `limit` decisions — the projection makes
+ * no pretence of unbounded history, and the bound is the ordinary run-surface
+ * read budget, not a claim about the data.
  */
 export async function readLifecycleDecisionsForRun(
   runId: string,
   opts?: { limit?: number },
 ): Promise<LifecycleRunDecision[]> {
-  const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
+  const limit = Math.max(1, Math.min(opts?.limit ?? 200, 500));
   const rows = await db
     .select({
       eventId: artifactProducedOutbox.eventId,
@@ -273,7 +297,9 @@ export async function readLifecycleDecisionsForRun(
     })
     .from(artifactProducedOutbox)
     .where(eq(artifactProducedOutbox.producerRunId, runId))
-    .orderBy(asc(artifactProducedOutbox.createdAt))
+    // The event-id tie-break makes the order TOTAL: two artifacts produced in the
+    // same transaction share a `created_at` to the microsecond.
+    .orderBy(asc(artifactProducedOutbox.createdAt), asc(artifactProducedOutbox.eventId))
     .limit(limit);
   if (rows.length === 0) return [];
 
@@ -282,24 +308,34 @@ export async function readLifecycleDecisionsForRun(
 
   const out: LifecycleRunDecision[] = [];
   for (const row of rows) {
+    const [obj] = await db
+      .select({ type: policyObjectsRef.type, deletedAt: policyObjectsRef.deletedAt })
+      .from(policyObjectsRef)
+      .where(and(eq(policyObjectsRef.id, row.artifactId), eq(policyObjectsRef.orgId, row.orgId)))
+      .limit(1);
+    const classifiable = obj != null && !obj.deletedAt;
+
+    // A processed event with no gate is a policy SKIP only when the artifact is
+    // classifiable; an unclassifiable one took the consumer's `not-classifiable`
+    // path and no policy decision was ever taken (Codex convergence).
     const outcome: LifecycleRunDecisionOutcome =
-      row.status === "pending" ? "pending" : row.continuationAddress ? "fired" : "skipped";
+      row.status === "pending"
+        ? "pending"
+        : row.continuationAddress
+          ? "fired"
+          : classifiable
+            ? "skipped"
+            : "not_classifiable";
 
     let latticeOutcome: PolicyOutcome | null = null;
     let decidedBy: PolicyDecision["decidedBy"] | null = null;
     let reason =
       outcome === "pending"
         ? "awaiting review orchestration"
-        : "policy decision recorded; its reason is no longer re-derivable";
+        : "the artifact was deleted before the review checkpoint could classify it";
     let reasonStale = false;
 
-    const [obj] = await db
-      .select({ type: policyObjectsRef.type, deletedAt: policyObjectsRef.deletedAt })
-      .from(policyObjectsRef)
-      .where(and(eq(policyObjectsRef.id, row.artifactId), eq(policyObjectsRef.orgId, row.orgId)))
-      .limit(1);
-
-    if (obj && !obj.deletedAt) {
+    if (classifiable) {
       const originKind = row.originKind as LifecycleOriginKind;
       const destinationClass = row.destinationClass as DestinationClass;
       const orgRule = await resolveOrgPolicyRule(row.orgId, {
@@ -328,10 +364,6 @@ export async function readLifecycleDecisionsForRun(
           ? `policy has changed since this decision (now: ${decision.reason})`
           : decision.reason;
       }
-    } else if (outcome !== "pending") {
-      reason = obj
-        ? "policy decision recorded; the artifact was deleted after it"
-        : "policy decision recorded; the artifact is no longer resolvable";
     }
 
     out.push({

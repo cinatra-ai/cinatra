@@ -34,6 +34,7 @@ import type { Client } from "pg";
 import { connect, createTestSchema, dropSchema } from "./_fixture";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import { producedEventId } from "@/lib/lifecycle/lifecycle-produced-event";
+import { buildProducedEventInsertOp } from "@/lib/lifecycle/lifecycle-emit";
 
 const HAS_DB =
   process.env.CINATRA_DB_INTEGRATION_TESTS === "1" &&
@@ -196,25 +197,29 @@ describe.skipIf(!HAS_DB)("cinatra#2047 — dashboard-twin produced event is SAME
     expect(r.rows[0].origin_kind).toBe("user_provided");
   });
 
-  it("FENCE ON: a re-run of the SAME twin write is idempotent on the deterministic event id", async () => {
+  it("FENCE ON: REPLAYING the twin's own emitted op is idempotent (no duplicate event)", async () => {
     process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "on";
     const ctx = ctxFor({ extensionId: "@cinatra-ai/web-analytics-dashboard-artifact" });
     await runTwinTx(ctx, "COMMIT");
-    const first = await representationRevisionIdFor(ctx.dashboardId);
-    expect(first).not.toBeNull();
+    expect(await outboxCount(ctx.dashboardId)).toBe(1);
 
-    // A second write of the same dashboard advances the representation revision,
-    // so it is a NEW production (a new deterministic id) — while a replay of the
-    // SAME (artifact, revision) can never duplicate (ON CONFLICT DO NOTHING).
-    await client.query(
-      `INSERT INTO "${schema}"."artifact_produced_outbox"
-         (event_id, org_id, artifact_id, representation_revision_id, event_kind, emitter,
-          origin_kind, destination_class, continuation_mode, status)
-       VALUES ($1,$2,$3,$4,'artifact_produced','dashboard_twin_writer',
-               'agent_produced','none','async_effects_gated','pending')
-       ON CONFLICT (event_id) DO NOTHING`,
-      [producedEventId(ctx.dashboardId, first as string), ctx.orgId, ctx.dashboardId, first],
-    );
+    // Re-execute the WRITER'S OWN produced-event op for the SAME (artifact,
+    // revision) — the at-least-once replay the outbox contract must absorb. Built
+    // by the shipped `buildProducedEventInsertOp` (the exact builder the twin
+    // splices), not a hand-written INSERT, so the deterministic-id +
+    // ON CONFLICT (event_id) DO NOTHING guarantee is proven on the real statement.
+    // NOTE a fresh `buildDashboardTwinQueries` call would allocate a NEW
+    // representation revision — a new PRODUCTION, not a replay.
+    const revisionId = await representationRevisionIdFor(ctx.dashboardId);
+    expect(revisionId).not.toBeNull();
+    const emitOp = buildProducedEventInsertOp(schema.replaceAll('"', '""'), {
+      orgId: ctx.orgId,
+      artifactId: ctx.dashboardId,
+      representationRevisionId: revisionId as string,
+      emitter: "dashboard_twin_writer",
+      originKind: "agent_generated",
+    });
+    await client.query(emitOp.text, emitOp.values as unknown[]);
     expect(await outboxCount(ctx.dashboardId)).toBe(1);
   });
 });
