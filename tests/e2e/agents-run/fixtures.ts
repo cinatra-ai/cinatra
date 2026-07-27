@@ -320,11 +320,18 @@ export const AGENT_FIXTURES: ReadonlyArray<AgentFixture> = [
     // this flow's embedded `approval_gate` was REMOVED. It raises NO
     // pending_approval interrupt anywhere in the run, so the fixture declares no
     // HITL screen. The user's approve/reject opportunity moved onto the review
-    // gate CORE opens for the produced `@cinatra-ai/email:body` artifact —
-    // which is behind the CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION fence
-    // (DEFAULT OFF). With the fence off this run completes unattended; the
-    // core-gate hold is exercised by the lifecycle suites and by the fenced walk
-    // recorded on the retirement PR, not by this fence-off fixture.
+    // gate CORE opens for the produced `@cinatra-ai/email:body` artifact.
+    //
+    // #2047 ACTIVATION FLIP (2026-07-27): CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION
+    // is now DEFAULT-ON, so a default-configured run of this flow DOES get a core
+    // review gate on the produced email body — an unattended run would park behind
+    // it instead of completing. The `hitlScreens: []` / `completed` contract below
+    // is a FLOW-level contract and stays correct, because this suite's own local
+    // webServer pins the pre-flip lifecycle posture
+    // (`CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off` in
+    // tests/e2e/config/agents-run.config.ts, with the reasoning there). The
+    // core-gate hold itself is exercised by the lifecycle suites and by the live
+    // walk recorded on the activation PR.
     hitlScreens: [],
     expectedTerminalStatus: "completed",
     tunnelDependent: true,

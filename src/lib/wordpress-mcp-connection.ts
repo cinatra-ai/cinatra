@@ -58,24 +58,39 @@ function trimTrailingSlashes(input: string): string {
 }
 
 /**
- * Resolve the pretty-permalink MCP endpoint URL for a given WP instance.
- * This is the canonical form shown in the UI and used for the MCP server URL
- * when pretty permalinks are enabled.
+ * Resolve the pretty-permalink MCP endpoint URL for a given WP instance's
+ * server route. This is the canonical form shown in the UI and used for the MCP
+ * server URL when pretty permalinks are enabled.
+ *
+ * `restPath` defaults to the grandfathered default-server route
+ * (`WP_MCP_ADAPTER_ROUTE`) so every existing caller is behavior-identical
+ * (cinatra#2018 S3 — additive per-server generalization). A dedicated server
+ * passes its enrolled canonical `/{namespace}/{route}` REST path (leading slash,
+ * validated at enrollment time — never caller-influenced at call time).
  */
-export function resolveWordPressMcpEndpoint(siteUrl: string): string {
+export function resolveWordPressMcpEndpoint(
+  siteUrl: string,
+  restPath: string = WP_MCP_ADAPTER_ROUTE,
+): string {
   const trimmed = trimTrailingSlashes(siteUrl);
-  return `${trimmed}/wp-json${WP_MCP_ADAPTER_ROUTE}`;
+  return `${trimmed}/wp-json${restPath}`;
 }
 
 /**
- * Resolve the query-string REST API endpoint for a given WP instance.
- * Used as a fallback probe when pretty permalinks are not enabled, and as the
- * INJECTED server URL (it works in all WP configurations) — the
+ * Resolve the query-string REST API endpoint for a given WP instance's server
+ * route. Used as a fallback probe when pretty permalinks are not enabled, and
+ * as the INJECTED server URL (it works in all WP configurations) — the
  * wordpress-mcp-connector toolbox consumes it via its host-bound deps.
+ *
+ * `restPath` defaults to `WP_MCP_ADAPTER_ROUTE` (existing callers untouched,
+ * cinatra#2018 S3); a dedicated server passes its enrolled canonical REST path.
  */
-export function resolveWordPressMcpFallbackEndpoint(siteUrl: string): string {
+export function resolveWordPressMcpFallbackEndpoint(
+  siteUrl: string,
+  restPath: string = WP_MCP_ADAPTER_ROUTE,
+): string {
   const trimmed = trimTrailingSlashes(siteUrl);
-  return `${trimmed}/index.php?rest_route=${WP_MCP_ADAPTER_ROUTE}`;
+  return `${trimmed}/index.php?rest_route=${restPath}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,27 +161,41 @@ function classifyStatus(code: number): WordPressMcpAdapterStatus {
   return "unreachable";
 }
 
-/** In-process probe cache: siteUrl → { status, expiresAt } */
+/**
+ * In-process probe cache, keyed by the canonical PER-SERVER probe URL
+ * (`resolveWordPressMcpFallbackEndpoint(siteUrl, restPath)`), NOT the bare
+ * siteUrl (cinatra#2018 S3 §7). Per-server keying tracks a dedicated server's
+ * reachability independently of the default route's; the key is siteUrl-
+ * prefixed so `invalidateWordPressMcpProbeCache` can evict every per-server
+ * entry for a site by prefix after a credential rotation.
+ */
 const probeCache = new Map<string, { status: WordPressMcpAdapterStatus; expiresAt: number }>();
 const PROBE_TTL_MS = 2 * 60 * 1000; // 2 minutes
 
+/** The canonical, siteUrl-prefixed probe-cache key for a (site, restPath). */
+function probeCacheKey(siteUrl: string, restPath: string): string {
+  return resolveWordPressMcpFallbackEndpoint(siteUrl, restPath);
+}
+
 /**
- * Probe a WP site for mcp-adapter reachability, returning a typed status.
- * Tries the pretty-permalink URL first; if that returns 404 (no pretty permalinks),
- * falls back to the index.php?rest_route= query-string form.
- * Results are cached by siteUrl for 2 minutes. Never throws.
+ * Probe a WP site for mcp-adapter reachability at `restPath`, returning a typed
+ * status. Tries the pretty-permalink URL first; if that returns 404 (no pretty
+ * permalinks), falls back to the index.php?rest_route= query-string form.
+ * Results are cached by the canonical per-server probe URL for 2 minutes. Never
+ * throws.
  */
-async function probeWordPressMcpAdapter(
+async function probeWordPressMcpServer(
   siteUrl: string,
+  restPath: string,
   authHeader: string,
 ): Promise<WordPressMcpAdapterStatus> {
-  const cacheKey = siteUrl;
+  const cacheKey = probeCacheKey(siteUrl, restPath);
   const cached = probeCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.status;
 
   // Try pretty-permalink form first, then query-string fallback.
-  const prettyUrl = resolveWordPressMcpEndpoint(siteUrl);
-  const fallbackUrl = resolveWordPressMcpFallbackEndpoint(siteUrl);
+  const prettyUrl = resolveWordPressMcpEndpoint(siteUrl, restPath);
+  const fallbackUrl = resolveWordPressMcpFallbackEndpoint(siteUrl, restPath);
 
   let code = await headProbe(prettyUrl, authHeader);
   // If the pretty URL returned 404, the site likely has no pretty permalinks — try fallback.
@@ -178,27 +207,57 @@ async function probeWordPressMcpAdapter(
 }
 
 /**
- * Probe a single WP instance for mcp-adapter status.
+ * Probe a single WP instance for the DEFAULT mcp-adapter server's status.
  * Exported for the administration UI — returns a typed status rather than a boolean
- * so the UI can show specific guidance per failure mode.
+ * so the UI can show specific guidance per failure mode. Signature/behavior
+ * unchanged (cinatra#2018 S3): targets `WP_MCP_ADAPTER_ROUTE`.
  */
 export async function probeWordPressInstanceMcpAdapter(
   instance: WordPressMcpProbeTarget,
 ): Promise<WordPressMcpAdapterStatus> {
   const authHeader = buildBasicAuthHeader(instance);
-  return probeWordPressMcpAdapter(instance.siteUrl, authHeader);
+  return probeWordPressMcpServer(instance.siteUrl, WP_MCP_ADAPTER_ROUTE, authHeader);
 }
 
 /**
- * Evict the URL-keyed mcp-adapter probe-cache entry for a site. The cache is
- * keyed by site URL, NOT by credential, so after an application-password
- * rotation a stale `auth_error` verdict would otherwise be served for up to
- * PROBE_TTL_MS. The dev-auto-setup reconcile calls this on every WordPress
- * credential rotate so the next probe re-evaluates against the fresh
- * application password. Idempotent; safe when the entry is absent.
+ * Probe a single WP instance's DEDICATED MCP server route (cinatra#2018 S3 §7).
+ * Same HEAD + classify + pretty→fallback sequence as the default-route probe,
+ * but keyed by the per-server endpoint so a dedicated server's health is tracked
+ * independently. `restPath` MUST be a canonical leading-slash REST path
+ * (`/{namespace}/{route}` — validated upstream at enrollment; never caller-
+ * influenced at call time). Consumed by the catalog loader / manual-route
+ * verification. Returns a typed status; never throws.
+ */
+export async function probeWordPressInstanceMcpServer(
+  instance: WordPressMcpProbeTarget,
+  restPath: string,
+): Promise<WordPressMcpAdapterStatus> {
+  const authHeader = buildBasicAuthHeader(instance);
+  return probeWordPressMcpServer(instance.siteUrl, restPath, authHeader);
+}
+
+/**
+ * Evict the mcp-adapter probe-cache entries for a site. The cache is keyed by
+ * the per-server probe URL (siteUrl-prefixed), NOT by credential, so after an
+ * application-password rotation a stale `auth_error` verdict would otherwise be
+ * served for up to PROBE_TTL_MS. Evicts EVERY per-server entry for the site by
+ * prefix (cinatra#2018 S3 §7) so the rotate path clears the default AND all
+ * dedicated-server verdicts in one call. The dev-auto-setup reconcile calls this
+ * on every WordPress credential rotate so the next probe re-evaluates against
+ * the fresh application password. Idempotent; safe when no entry matches.
  */
 export function invalidateWordPressMcpProbeCache(siteUrl: string): void {
-  probeCache.delete(siteUrl);
+  // Every cache key is `probeCacheKey(siteUrl, restPath)` =
+  // `resolveWordPressMcpFallbackEndpoint(siteUrl, restPath)`, so the empty-path
+  // fallback form is — by construction — a prefix of exactly THIS site's keys
+  // and of no other site's: a subdirectory install on the same origin keys as
+  // `https://site.test/blog/index.php?rest_route=…`, which the
+  // `https://site.test/index.php?rest_route=` prefix does not match (codex
+  // round-0 High: a bare `${siteUrl}/` prefix over-evicted such siblings).
+  const prefix = resolveWordPressMcpFallbackEndpoint(siteUrl, "");
+  for (const key of [...probeCache.keys()]) {
+    if (key.startsWith(prefix)) probeCache.delete(key);
+  }
 }
 
 // NOTE: the LLM toolbox builder that used to live here moved into the

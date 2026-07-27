@@ -49,6 +49,8 @@ export {
   leaseHeldStatement,
   snapshotLeasesQuery,
   invalidateLeasesBeforeEpochQuery,
+  settleLeaseForRunStatement,
+  settleLeaseForRunQuery,
 } from "./leases";
 export {
   type OrgWriteAuthority,

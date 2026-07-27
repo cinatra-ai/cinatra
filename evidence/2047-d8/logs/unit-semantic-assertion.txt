@@ -1,0 +1,19 @@
+
+ RUN  vitest <lane-worktree>
+
+ ✓ src/lib/__tests__/semantic-assertion.test.ts > initialEligibility — write policy > matcher ⇒ draft; everyone else ⇒ eligible (never archived as an initial state) 1ms
+ ✓ src/lib/__tests__/semantic-assertion.test.ts > sourceOutranks — precedence user>authoring_skill>agent>matcher > orders the four sources correctly 0ms
+ ✓ src/lib/__tests__/semantic-assertion.test.ts > sourceOutranks — precedence user>authoring_skill>agent>matcher > a matcher never outranks anyone (incl. another matcher — equal, not greater) 0ms
+ ✓ src/lib/__tests__/semantic-assertion.test.ts > buildAssertSemanticTypeQueries — tx-composable builder > produces exactly the archive + insert-RETURNING op pair (no advisory lock / no refresh tail) 1ms
+ ✓ src/lib/__tests__/semantic-assertion.test.ts > buildAssertSemanticTypeQueries — tx-composable builder > parseResult: a RETURNING row at the spliced offset ⇒ {inserted:true, blockedByPrecedence:false} 0ms
+ ✓ src/lib/__tests__/semantic-assertion.test.ts > buildAssertSemanticTypeQueries — tx-composable builder > parseResult: zero RETURNING rows ⇒ {inserted:false, blockedByPrecedence:true} (the matcher's EXPECTED no-op) 0ms
+ ✓ src/lib/__tests__/semantic-assertion.test.ts > buildAssertSemanticTypeQueries — an active BINDING blocks the classic INSERT (cinatra#2047 D-8) > the archive EXCLUDES bindings and the insert guard BLOCKS on one — symmetric, so a same-ext binding is a precedence no-op, never a duplicate key 0ms
+ ✓ src/lib/__tests__/semantic-assertion.test.ts > buildAssertSemanticTypeQueries — an active BINDING blocks the classic INSERT (cinatra#2047 D-8) > EVERY source (incl. matcher and user) is blocked by an active same-ext binding 0ms
+ ✓ src/lib/__tests__/semantic-assertion.test.ts > parseResult invariant — missing/malformed slot THROWS > a wrong offset (slot absent) throws rather than silently reporting blockedByPrecedence 1ms
+ ✓ src/lib/__tests__/semantic-assertion.test.ts > parseResult invariant — missing/malformed slot THROWS > a malformed slot (rows not an array) throws 0ms
+
+ Test Files  1 passed (1)
+      Tests  10 passed (10)
+   Start at  19:38:27
+   Duration  135ms (transform 38ms, setup 0ms, import 52ms, tests 4ms, environment 0ms)
+

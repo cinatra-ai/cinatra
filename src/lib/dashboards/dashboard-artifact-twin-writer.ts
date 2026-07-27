@@ -286,9 +286,11 @@ export function buildDashboardTwinQueries(ctx: DashboardTwinContext): SubstrateQ
   // ── LIFECYCLE-INTERCEPTIONS S1 PRODUCED EVENT (cinatra#2039, epic #2037) ──
   // The transactional ArtifactProduced event for the dashboard twin, written in
   // THIS same dashboards tx so review is driven by a durable, same-tx idempotent
-  // event. FENCED default-OFF: `maybeBuildProducedEventInsertOp` returns null when
-  // the S1 activation fence is off, so this splices NOTHING (the twin query list
-  // is byte-identical to origin/main). ORIGIN: an extension-MATERIALIZED dashboard
+  // event. SWITCHED default-ON (cinatra#2047, ruling 2026-07-27): the op is
+  // spliced unless a deployment sets `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`,
+  // in which case `maybeBuildProducedEventInsertOp` returns null and this splices
+  // NOTHING (the twin query list is byte-identical to the pre-flip one).
+  // ORIGIN: an extension-MATERIALIZED dashboard
   // (`extensionId` set) is `agent_generated` (review-eligible per policy); a
   // user/operator-built dashboard is `upload` (→ user_provided → the review core
   // default SKIPS, unless an org bound requires it). The dashboard produces no

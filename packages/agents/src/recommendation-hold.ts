@@ -77,9 +77,10 @@ export async function maybeHoldRunForRecommendation(input: {
 }): Promise<MaybeHoldResult> {
   const { run, template } = input;
 
-  // Global activation fence (DEFAULT OFF). On origin/main the chip-row hold is
-  // inert — every run dispatches exactly as today (the S3 headless auto-apply
-  // stays byte-identical) — until an operator flips the fence on.
+  // Global activation switch (DEFAULT ON per the #2047 ruling). A deployment
+  // that sets CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW=off gets the pre-flip
+  // posture: the chip-row hold is inert and every run dispatches unheld (the S3
+  // headless auto-apply stays byte-identical either way).
   if (!isRecommendationChipRowHoldActive()) return { held: false, reason: "fence off" };
 
   // Only an interactively-started, present-human run may park. A headless origin

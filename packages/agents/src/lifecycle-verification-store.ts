@@ -23,9 +23,10 @@ import "server-only";
 //      re-drive reopens the same gate — never a fresh one). Past the bound it
 //      escalates (records the verdict, reopens nothing).
 //
-// FENCED: like the whole repair loop, nothing here runs until an operator flips
-// `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION` — the trigger is a best-effort call from
-// `submitRepairResponse`, which no production caller reaches on `origin/main`.
+// SWITCHED with the whole repair loop: this runs by DEFAULT (the #2047 ruling)
+// and goes inert only when a deployment sets
+// `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off` — the trigger is a best-effort
+// call from `submitRepairResponse`.
 // ---------------------------------------------------------------------------
 
 import { eq } from "drizzle-orm";

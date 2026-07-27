@@ -30,7 +30,10 @@ import { resolveOrgRoleForUser } from "@/lib/auth-session";
 
 /** Session capability rules: membership-only capabilities need any org role;
  *  management capabilities need the mapped authz permission. */
-const SESSION_PERMISSION_FOR: Record<OrgWriteCapability, Permission | "member"> = {
+const SESSION_PERMISSION_FOR: Record<
+  OrgWriteCapability,
+  Permission | "member" | "never"
+> = {
   "content.write": "member",
   "run.execute": "member",
   "run.complete": "member",
@@ -42,6 +45,13 @@ const SESSION_PERMISSION_FOR: Record<OrgWriteCapability, Permission | "member"> 
   // delete may proceed, the ACTOR's organization.delete decides whether THIS
   // actor may delete. An "archive" permission can never stand in for "delete".
   "org.delete": "organization.delete",
+  // cinatra#1940: run.lease-expire is SYSTEM-ONLY (the lease-expiry finalizer,
+  // under the exclusive fence). NO session, at ANY role, may ever mint it —
+  // "never" short-circuits in can() below BEFORE any permission lookup. Mapping
+  // it to a real permission (e.g. organization.archive) would silently hand
+  // org-owners a forced-settle capability through the session path; "never" is
+  // the honest total-record cell.
+  "run.lease-expire": "never",
 };
 
 export class OrgWriteAuthorityError extends Error {
@@ -79,6 +89,7 @@ export function sessionAuthorityFromResolvedRole(
     orgId,
     can: (capability) => {
       const rule = SESSION_PERMISSION_FOR[capability];
+      if (rule === "never") return false; // system-only (#1940 run.lease-expire)
       if (rule === "member") return true;
       return roleHasPermission(role, rule);
     },
@@ -197,13 +208,20 @@ export async function verifyRunAuthority(
 const SYSTEM_PURPOSE_CAPABILITIES: Record<string, readonly OrgWriteCapability[]> = {
   /** The S6 archive/unarchive transaction itself. */
   "org-lifecycle-transition": ["org.lifecycle"],
-  /** The S3/S4 lease-expiry finalizer landing terminal transitions. */
-  "lease-expiry-finalizer": ["run.execute", "run.complete"],
+  /** The lease-expiry finalizer settling an EXPIRED archive lease to terminal
+   *  state under the exclusive fence (cinatra#1940). LEAST PRIVILEGE: it holds
+   *  ONLY `run.lease-expire` — its sole DB write is the fence settle tx (runtime
+   *  cancellation is not a DB write; the sweep's reads need no authority).
+   *  Narrowed from the S2 placeholder ["run.execute","run.complete"] (never
+   *  exercisable — zero minting sites ever existed). Kept SEPARATE from
+   *  `agent-run-dispatch` so the finalizer's archive/lease audit domain is not
+   *  conflated with normal execution. */
+  "lease-expiry-finalizer": ["run.lease-expire"],
   /** The agent-run job contexts driving a run's FULL lifecycle with no session
    *  (cinatra#1939 wave 2): dispatch (`run.execute`) + terminal finalize
-   *  (`run.complete`). Kept SEPARATE from `lease-expiry-finalizer` (same grant
-   *  shape) so the finalizer's archive/lease audit domain is not conflated with
-   *  normal execution. Sole minting site:
+   *  (`run.complete`). Kept SEPARATE from `lease-expiry-finalizer` (narrowed to
+   *  `run.lease-expire` in cinatra#1940) so the finalizer's archive/lease audit
+   *  domain is not conflated with normal execution. Sole minting site:
    *  src/lib/org-write/agent-run-authority-mint.ts (R2-allowlisted in the
    *  boundary gate); §5.2 further restricts its consumers to the three jobs. */
   "agent-run-dispatch": ["run.execute", "run.complete"],
