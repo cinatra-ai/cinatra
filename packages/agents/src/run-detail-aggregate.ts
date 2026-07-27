@@ -4,6 +4,7 @@
 // EXISTING run-access enforcement (`enforceReviewRunAccess`, op "read"):
 //
 //   run + messages + gates + run_selected_skill_revisions + parked continuations
+//   + lifecycle policy decisions (the produced-event outbox rows, #2047 D-5)
 //   (+ advisory comments / verification records / suggestion snapshots per gate,
 //    when present)
 //
@@ -40,6 +41,10 @@ import {
 } from "./artifact-review-gate-store";
 import { readContinuationParksForRun } from "./lifecycle-continuation-park-store";
 import type { ParkRow } from "./lifecycle-continuation-park-store";
+import {
+  readLifecycleDecisionsForRun,
+  type LifecycleRunDecision,
+} from "./lifecycle-policy-store";
 
 /** The assembled run-detail read (returned only to an authorized actor). */
 export interface RunDetailAggregate {
@@ -48,6 +53,10 @@ export interface RunDetailAggregate {
   gates: ReviewGateRow[];
   selectedSkillRevisions: RunSelectedSkillRevision[];
   parkedContinuations: ParkRow[];
+  /** Every lifecycle POLICY decision the run's produced-event outbox recorded —
+   * fired, skipped, or still pending (cinatra#2047 D-5). A SKIPPED decision has no
+   * gate and no park, so before this it left NO trace on any run-scoped read. */
+  lifecycleDecisions: LifecycleRunDecision[];
   /** advisory comments grouped by gate id (present entries only). */
   advisoryCommentsByGate: Record<string, GateAdvisoryCommentRow[]>;
   /** verification records grouped by gate id (present entries only). */
@@ -85,10 +94,11 @@ export async function readRunDetailAggregate(input: {
   const run = await readAgentRunById(input.runId);
   if (!run) return { ok: false, status: 404 };
 
-  const [messages, gates, parkedContinuations] = await Promise.all([
+  const [messages, gates, parkedContinuations, lifecycleDecisions] = await Promise.all([
     readAgentRunMessages(input.runId),
     listReviewGatesForRun(input.runId),
     readContinuationParksForRun(input.runId),
+    readLifecycleDecisionsForRun(input.runId),
   ]);
 
   const gateIds = gates.map((g) => g.id);
@@ -109,6 +119,7 @@ export async function readRunDetailAggregate(input: {
       gates,
       selectedSkillRevisions,
       parkedContinuations,
+      lifecycleDecisions,
       advisoryCommentsByGate: groupByGate(advisoryComments),
       verificationRecordsByGate: groupByGate(verificationRecords),
       suggestionSnapshotsByGate: groupByGate(suggestionSnapshots),

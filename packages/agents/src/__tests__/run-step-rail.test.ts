@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildRunStepRail,
   type RailGate,
+  type RailLifecycleDecision,
   type RailMessage,
   type RailTemplateStep,
 } from "../run-step-rail";
@@ -196,5 +197,162 @@ describe("buildRunStepRail merge contract", () => {
     });
     expect(rail.entries.map((e) => e.kind)).toContain("verification");
     expect(rail.entries[rail.entries.length - 1].key).toBe("verification:x");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2047 D-5 — EVERY fired/skipped lifecycle policy decision on the run
+// timeline (S0 #2038's "Every fired/skipped decision recorded on the run
+// timeline"). A fired decision renders AS its gate; a skipped one, which has no
+// gate and no park, previously left NO trace anywhere.
+// ---------------------------------------------------------------------------
+
+const decision = (
+  eventId: string,
+  outcome: RailLifecycleDecision["outcome"],
+  over: Partial<RailLifecycleDecision> = {},
+): RailLifecycleDecision => ({
+  eventId,
+  artifactId: `art_${eventId}`,
+  outcome,
+  gateId: null,
+  decidedBy: "core-default",
+  latticeOutcome: outcome === "fired" ? "fire" : "skip",
+  reason: "core default skips review",
+  createdAt: "2026-07-26T10:00:00Z",
+  ...over,
+});
+
+describe("buildRunStepRail — lifecycle policy decisions (cinatra#2047 D-5)", () => {
+  it("a SKIPPED decision becomes its own trailing entry carrying the lattice reason", () => {
+    const rail = buildRunStepRail({
+      templateSteps: [tstep(1, 10, "Draft")],
+      lifecycleDecisions: [
+        decision("ev1", "skipped", {
+          decidedBy: "org-bound",
+          latticeOutcome: "forbidden",
+          reason: "org policy forbids review for this class",
+        }),
+      ],
+    });
+    expect(rail.entries.map((e) => e.key)).toEqual(["step:10", "lifecycle:ev1"]);
+    const entry = rail.entries[1];
+    expect(entry.kind).toBe("lifecycleDecision");
+    expect(entry.label).toBe("Review skipped");
+    expect(entry.status).toBe("skipped");
+    expect(entry.sources).toEqual(["lifecycleDecision"]);
+    expect(entry.lifecycleDecision).toEqual({
+      eventId: "ev1",
+      artifactId: "art_ev1",
+      outcome: "skipped",
+      decidedBy: "org-bound",
+      latticeOutcome: "forbidden",
+      reason: "org policy forbids review for this class",
+    });
+  });
+
+  it("each skip REASON family is carried verbatim (org-forbidden / default-skip / manifest-skip)", () => {
+    const rail = buildRunStepRail({
+      lifecycleDecisions: [
+        decision("ev-org", "skipped", {
+          decidedBy: "org-bound",
+          reason: "org policy forbids review for this class",
+          createdAt: "2026-07-26T10:00:00Z",
+        }),
+        decision("ev-default", "skipped", {
+          decidedBy: "core-default",
+          reason: "core default skips review",
+          createdAt: "2026-07-26T10:00:01Z",
+        }),
+        decision("ev-manifest", "skipped", {
+          decidedBy: "manifest",
+          reason: "agent manifest requested review skipped (org silent, non-external)",
+          createdAt: "2026-07-26T10:00:02Z",
+        }),
+      ],
+    });
+    expect(rail.entries.map((e) => e.lifecycleDecision?.decidedBy)).toEqual([
+      "org-bound",
+      "core-default",
+      "manifest",
+    ]);
+    expect(rail.entries.map((e) => e.lifecycleDecision?.reason)).toEqual([
+      "org policy forbids review for this class",
+      "core default skips review",
+      "agent manifest requested review skipped (org silent, non-external)",
+    ]);
+  });
+
+  it("a FIRED decision whose gate is already on the rail contributes NO second entry", () => {
+    const rail = buildRunStepRail({
+      gates: [gate("t1", "pending", "2026-07-26T09:00:00Z")],
+      lifecycleDecisions: [decision("ev1", "fired", { gateId: "g_t1" })],
+    });
+    expect(rail.entries.map((e) => e.key)).toEqual(["gate:t1"]);
+  });
+
+  it("a FIRED decision whose gate is MISSING is surfaced as PENDING (an incoherent state needs attention)", () => {
+    const rail = buildRunStepRail({
+      gates: [gate("t1", "pending", "2026-07-26T09:00:00Z")],
+      lifecycleDecisions: [decision("ev-orphan", "fired", { gateId: "g_absent" })],
+    });
+    expect(rail.entries.map((e) => e.key)).toEqual(["gate:t1", "lifecycle:ev-orphan"]);
+    expect(rail.entries[1].label).toBe("Review gate (missing)");
+    // NOT `skipped`: a fired decision whose gate vanished is a fail-closed
+    // anomaly, never a quiet terminal state (Codex convergence).
+    expect(rail.entries[1].status).toBe("pending");
+  });
+
+  it("a NOT-CLASSIFIABLE decision reads as its own outcome, never as a policy skip", () => {
+    const rail = buildRunStepRail({
+      lifecycleDecisions: [
+        decision("ev-gone", "not_classifiable", {
+          decidedBy: null,
+          latticeOutcome: null,
+          reason: "the artifact was deleted before the review checkpoint could classify it",
+        }),
+      ],
+    });
+    expect(rail.entries[0].label).toBe("Review not classifiable");
+    expect(rail.entries[0].status).toBe("skipped");
+    expect(rail.entries[0].lifecycleDecision?.outcome).toBe("not_classifiable");
+    // Terminal — it never becomes the active anchor.
+    expect(rail.activeOrdinal).toBeNull();
+  });
+
+  it("a SKIPPED entry is TERMINAL — it never becomes the 'you are here' anchor", () => {
+    const rail = buildRunStepRail({
+      templateSteps: [tstep(1, 10, "Draft")],
+      submissions: [{ stepIndex: 1, answered: true }],
+      lifecycleDecisions: [decision("ev1", "skipped")],
+    });
+    // Every entry is completed or skipped ⇒ nothing is active.
+    expect(rail.activeOrdinal).toBeNull();
+  });
+
+  it("a PENDING decision (not yet orchestrated) IS active and reads as pending", () => {
+    const rail = buildRunStepRail({
+      lifecycleDecisions: [decision("ev1", "pending", { reason: "awaiting review orchestration" })],
+    });
+    expect(rail.entries[0].status).toBe("pending");
+    expect(rail.entries[0].label).toBe("Review pending policy");
+    expect(rail.activeOrdinal).toBe(rail.entries[0].ordinal);
+  });
+
+  it("decisions trail the gates and order by decision time, then event id (input-order independent)", () => {
+    const decisions = [
+      decision("ev-b", "skipped", { createdAt: "2026-07-26T12:00:00Z" }),
+      decision("ev-a", "skipped", { createdAt: "2026-07-26T11:00:00Z" }),
+    ];
+    const forward = buildRunStepRail({
+      gates: [gate("t1", "resolved", "2026-07-26T09:00:00Z", "approve")],
+      lifecycleDecisions: decisions,
+    });
+    const reversed = buildRunStepRail({
+      gates: [gate("t1", "resolved", "2026-07-26T09:00:00Z", "approve")],
+      lifecycleDecisions: [...decisions].reverse(),
+    });
+    expect(forward.entries.map((e) => e.key)).toEqual(["gate:t1", "lifecycle:ev-a", "lifecycle:ev-b"]);
+    expect(reversed.entries.map((e) => e.key)).toEqual(forward.entries.map((e) => e.key));
   });
 });

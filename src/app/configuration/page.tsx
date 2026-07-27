@@ -198,6 +198,20 @@ const administrationSections = [
     ],
   },
   {
+    // The artifact-lifecycle interception ops queues (cinatra#2047 D-4/D-7): the
+    // two states S0 declared "ops-surfaced" but nothing read — a dead-lettered
+    // resume (a review decision that never released its run) and a TTL-expired
+    // continuation park (an effect the policy never resolved).
+    title: "Lifecycle operations",
+    description: "Stuck review releases and effects the lifecycle policy never resolved.",
+    href: "/configuration/lifecycle-operations",
+    icon: domainIcons.telemetry,
+    links: [
+      { label: "Stuck review releases", href: "/configuration/lifecycle-operations" },
+      { label: "Blocked effects", href: "/configuration/lifecycle-operations" },
+    ],
+  },
+  {
     title: "Development",
     description: "Development-only tools, public base URL, logging, and troubleshooting controls.",
     href: "/configuration/development",

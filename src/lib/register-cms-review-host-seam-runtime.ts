@@ -96,8 +96,21 @@ function createCmsReviewHostSeamDeps(): CmsReviewHostSeamDeps {
         ? { status: "captured" }
         : { status: "degraded", reason: outcome.reason };
     },
-    resolveArtifactEffectDisposition: async (i) =>
-      (await import("@cinatra-ai/agents/lifecycle-review-orchestration")).resolveArtifactEffectDisposition(i),
+    // D-7 (cinatra#2047): the CORE disposition gained a sixth state,
+    // `policy_unresolved` (a checkpointed park TTL-expired with the policy never
+    // resolved → the protected effect is TERMINALLY blocked). The connector-side
+    // `CmsReviewDisposition` mirror is a FIVE-state contract owned by the connector
+    // repos, so the new state is NARROWED here to `held` — the existing value whose
+    // connector behaviour is exactly right (never apply; keep holding). The block is
+    // terminal rather than pending, so the operator-facing truth is carried by the
+    // lifecycle-operations ops surface (which reads the park set directly), not by
+    // widening a cross-repo union.
+    resolveArtifactEffectDisposition: async (i) => {
+      const { disposition, gate } = await (
+        await import("@cinatra-ai/agents/lifecycle-review-orchestration")
+      ).resolveArtifactEffectDisposition(i);
+      return { disposition: disposition === "policy_unresolved" ? "held" : disposition, gate };
+    },
     readCmsSnapshotTargetByOperation: async (operationId) => {
       const row = await (
         await import("@cinatra-ai/agents/cms-snapshot-readback-store")

@@ -223,4 +223,53 @@ describe("evaluateEffectHold", () => {
     });
     expect(v.held).toBe(false);
   });
+
+  // ── D-7 (cinatra#2047): the TTL-expired park's terminal block lands ON THE
+  // EFFECT. S0's continuation contract: "TTL always-resumes with the protected
+  // effect in a terminal `policy_unresolved` blocked state." Before this the
+  // block existed only as a park-row status and the effect layer never consulted
+  // it, so the always-resume path released an effect whose policy was never
+  // resolved.
+  it("D-7: external + a TTL-expired policy_unresolved PARK → HELD terminally, even with a RESOLVED gate", () => {
+    const v = evaluateEffectHold({
+      event: { destinationClass: "external_publish", status: "processed", continuationAddress: "gate-1" },
+      gateStatus: "resolved",
+      gateDisposition: "approve",
+      policyUnresolvedPark: true,
+    });
+    expect(v.held).toBe(true);
+    expect(v.policyUnresolved).toBe(true);
+    expect(v.reason).toContain("policy_unresolved");
+  });
+
+  it("D-7: the park block OUTRANKS a pending gate (same terminal reason, not the ordinary hold)", () => {
+    const v = evaluateEffectHold({
+      event: { destinationClass: "pipeline_handoff", status: "processed", continuationAddress: "gate-1" },
+      gateStatus: "pending",
+      policyUnresolvedPark: true,
+    });
+    expect(v.held).toBe(true);
+    expect(v.policyUnresolved).toBe(true);
+  });
+
+  it("D-7: a park block on a NON-external (none) destination holds nothing", () => {
+    const v = evaluateEffectHold({
+      event: { destinationClass: "none", status: "processed", continuationAddress: null },
+      gateStatus: null,
+      policyUnresolvedPark: true,
+    });
+    expect(v.held).toBe(false);
+    expect(v.policyUnresolved).toBeUndefined();
+  });
+
+  it("D-7: no park ⇒ the verdict is unchanged (no policyUnresolved flag)", () => {
+    const v = evaluateEffectHold({
+      event: { destinationClass: "external_publish", status: "processed", continuationAddress: "gate-1" },
+      gateStatus: "resolved",
+      gateDisposition: "approve",
+      policyUnresolvedPark: false,
+    });
+    expect(v.held).toBe(false);
+    expect(v.policyUnresolved).toBeUndefined();
+  });
 });

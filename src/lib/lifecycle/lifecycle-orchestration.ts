@@ -314,11 +314,23 @@ export interface EffectHoldFacts {
    * releases; `reject` terminates the effect (still not held — a tombstoned
    * artifact publishes nothing). Null/absent for a pending gate or a pre-S2 gate. */
   gateDisposition?: "approve" | "reject" | "changes_requested" | null;
+  /** TRUE when a CHECKPOINTED continuation park protecting THIS revision's effect
+   * was TTL-fail-closed into the terminal `policy_unresolved` state (cinatra#2047
+   * defect D-7). S0's continuation contract: "TTL always-resumes with the protected
+   * effect in a terminal `policy_unresolved` blocked state" — the block lands on
+   * the EFFECT, not merely on the park row. Resolved by the store from
+   * `lifecycle_continuation_park` (joined on the produced-event id). */
+  policyUnresolvedPark?: boolean;
 }
 
 export interface EffectHoldVerdict {
   held: boolean;
   reason: string;
+  /** TRUE only for the TERMINAL `policy_unresolved` block (a TTL-expired park):
+   * the effect is not merely waiting on a decision — the policy was never resolved
+   * and only an explicit later policy decision releases it. Distinguishes an
+   * ops-actionable dead end from an ordinary pending-gate hold. */
+  policyUnresolved?: boolean;
 }
 
 /**
@@ -327,6 +339,12 @@ export interface EffectHoldVerdict {
  *
  *   - No event, or a NON-external (`none`) destination → nothing to hold; the
  *     effect flows immediately (the "ungated artifact's effects flow" invariant).
+ *   - An external-effect revision whose CHECKPOINTED park was TTL-fail-closed into
+ *     `policy_unresolved` → HELD *terminally* (cinatra#2047 D-7). This outranks
+ *     every gate state: the always-resume path released the RUN, but the protected
+ *     EFFECT stays blocked until an explicit later policy decision (S0's
+ *     continuation contract). Without this the always-resume path would publish an
+ *     artifact whose policy was never resolved.
  *   - An external-effect event still `pending` (not yet orchestrated) → HELD,
  *     fail-closed: the effect must not race ahead of the review decision that the
  *     consumer has not yet made.
@@ -341,6 +359,18 @@ export function evaluateEffectHold(facts: EffectHoldFacts): EffectHoldVerdict {
   if (!event) return { held: false, reason: "no produced event for this revision — ungated" };
   if (!isExternalEffectClass(event.destinationClass)) {
     return { held: false, reason: "no external effect to hold (destination 'none')" };
+  }
+  // D-7 (cinatra#2047): a TTL-fail-closed park's terminal `policy_unresolved`
+  // block lands HERE, on the effect — checked BEFORE any gate state, because the
+  // block survives a resolved gate (the park expired precisely because no decision
+  // ever resolved the policy). Released only by an explicit later policy decision.
+  if (facts.policyUnresolvedPark === true) {
+    return {
+      held: true,
+      policyUnresolved: true,
+      reason:
+        "external effect terminally blocked — a checkpointed park TTL-expired with the policy unresolved (policy_unresolved)",
+    };
   }
   if (event.status === "pending") {
     return { held: true, reason: "external effect awaiting review orchestration — fail-closed" };

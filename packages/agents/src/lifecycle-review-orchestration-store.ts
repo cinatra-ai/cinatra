@@ -895,6 +895,11 @@ export async function isArtifactEffectHeld(input: {
 
   if (!event) return evaluateEffectHold({ event: null, gateStatus: null });
 
+  const policyUnresolvedPark = await hasPolicyUnresolvedPark(
+    eventId,
+    event.destinationClass as DestinationClass,
+  );
+
   let gateStatus: "pending" | "resolved" | null = null;
   let gateDisposition: "approve" | "reject" | "changes_requested" | null = null;
   if (event.continuationAddress) {
@@ -918,7 +923,40 @@ export async function isArtifactEffectHeld(input: {
     },
     gateStatus,
     gateDisposition,
+    policyUnresolvedPark,
   });
+}
+
+/**
+ * D-7 (cinatra#2047): does a CHECKPOINTED continuation park protecting THIS
+ * event's effect sit in the terminal `policy_unresolved` state?
+ *
+ * The park is keyed on `(run_id, event_id, checkpoint)`, so several runs may hold
+ * a park over the same event. The effect layer is revision-scoped, not run-scoped
+ * — ANY run's terminal park over this revision blocks it — so the run is
+ * deliberately not part of the predicate. The PROTECTED EFFECT, however, is:
+ * matching `protected_effect = <the event's own destination class>` (Codex
+ * convergence) means an unrelated or malformed park guarding a DIFFERENT effect
+ * class can never fail-close this revision, and a `none`-class park (which guards
+ * no external effect at all) is excluded by construction.
+ */
+async function hasPolicyUnresolvedPark(
+  eventId: string,
+  destinationClass: DestinationClass,
+): Promise<boolean> {
+  if (destinationClass === "none") return false;
+  const [row] = await db
+    .select({ id: lifecycleContinuationPark.id })
+    .from(lifecycleContinuationPark)
+    .where(
+      and(
+        eq(lifecycleContinuationPark.eventId, eventId),
+        eq(lifecycleContinuationPark.status, "policy_unresolved"),
+        eq(lifecycleContinuationPark.protectedEffect, destinationClass),
+      ),
+    )
+    .limit(1);
+  return row != null;
 }
 
 /** The disposition-aware verdict of a captured external effect (cinatra#2043 S5
@@ -930,8 +968,18 @@ export async function isArtifactEffectHeld(input: {
  *   - `approved` — the gate resolved `approve`; the effect is released → APPLY.
  *   - `rejected` — the gate resolved `reject`; the effect is tombstoned → REFUSE.
  *   - `ungated`  — the org lattice permitted the effect without a gate → APPLY.
+ *   - `policy_unresolved` — a checkpointed park TTL-expired with the policy
+ *                 unresolved; the effect is TERMINALLY blocked (cinatra#2047 D-7)
+ *                 until an explicit later policy decision → HOLD/REFUSE, and it is
+ *                 listed on the lifecycle-operations ops surface.
  *   - `unknown`  — no capture / an incoherent resolved state → fail-closed REFUSE. */
-export type ArtifactEffectDisposition = "held" | "approved" | "rejected" | "ungated" | "unknown";
+export type ArtifactEffectDisposition =
+  | "held"
+  | "approved"
+  | "rejected"
+  | "ungated"
+  | "policy_unresolved"
+  | "unknown";
 
 /**
  * Resolve the disposition of an artifact revision's downstream EXTERNAL effect —
@@ -967,6 +1015,15 @@ export async function resolveArtifactEffectDisposition(input: {
   // the connector treats `unknown` as REFUSE (never a silent apply on a phantom).
   if (!event) return { disposition: "unknown", gate: null };
 
+  // D-7 (cinatra#2047): join the continuation-park set. A TTL-expired park's
+  // terminal `policy_unresolved` block is the effect's disposition, ahead of every
+  // gate state — the always-resume path must never apply an effect whose policy
+  // was never resolved.
+  const policyUnresolvedPark = await hasPolicyUnresolvedPark(
+    eventId,
+    event.destinationClass as DestinationClass,
+  );
+
   let gateStatus: "pending" | "resolved" | null = null;
   let gateDisposition: "approve" | "reject" | "changes_requested" | null = null;
   let gateRef: { gateId: string; runId: string } | null = null;
@@ -996,7 +1053,15 @@ export async function resolveArtifactEffectDisposition(input: {
     },
     gateStatus,
     gateDisposition,
+    policyUnresolvedPark,
   });
+
+  // TERMINAL policy block (D-7) — reported as its own disposition so a caller can
+  // tell an ops-actionable dead end from an ordinary pending-gate hold. Both refuse
+  // the apply; only this one is listed on the lifecycle-operations surface.
+  if (verdict.policyUnresolved === true) {
+    return { disposition: "policy_unresolved", gate: gateRef };
+  }
 
   // HELD: the gate is pending (or a repair is in flight, `changes_requested`), or
   // an external effect awaits orchestration (fail-closed) — the connector holds.
@@ -1029,6 +1094,9 @@ export interface GateMaintenanceSummary {
   optionalExpired: number;
   requiredExpiredBlocked: number;
   parksReleased: number;
+  /** Parks the TTL sweep fail-closed into a terminal `policy_unresolved` block
+   * this pass (cinatra#2047 D-7) — the ops-surfaced blocked-effect count. */
+  parksPolicyUnresolved: number;
 }
 
 /**
@@ -1055,6 +1123,7 @@ export async function sweepLifecycleGateMaintenance(opts?: {
     optionalExpired: 0,
     requiredExpiredBlocked: 0,
     parksReleased: 0,
+    parksPolicyUnresolved: 0,
   };
   if (!isLifecycleReviewOrchestrationActive()) return summary;
   const limit = Math.max(1, Math.min(opts?.limit ?? 100, 500));
@@ -1064,7 +1133,8 @@ export async function sweepLifecycleGateMaintenance(opts?: {
   // 2. Expiry resolution (may auto-resolve optional gates → releases their parks
   //    in step 3 this same pass).
   await resolveExpiredAutoGates(limit, summary);
-  // 3. Park release for resolved auto-gates.
+  // 3. Park release for resolved auto-gates + the TTL fail-close of DUE parks
+  //    (one sweep, both effects — see releaseResolvedAutoGateParks).
   await releaseResolvedAutoGateParks(limit, summary);
 
   return summary;
@@ -1280,7 +1350,6 @@ async function releaseResolvedAutoGateParks(limit: number, summary: GateMaintena
       ),
     )
     .limit(limit);
-  if (parks.length === 0) return;
 
   // Join each park to its gate by the EXPLICIT stored linkage `policyDecisionId =
   // gate.id` (stamped at orchestration time), a single-hop lookup on the gate PK —
@@ -1297,7 +1366,17 @@ async function releaseResolvedAutoGateParks(limit: number, summary: GateMaintena
       .limit(1);
     if (gate && gate.status === "resolved") releaseIds.push(park.id);
   }
-  if (releaseIds.length === 0) return;
+
+  // ALWAYS sweep — never short-circuit on an empty release set (cinatra#2047,
+  // Codex convergence). `sweepParks` carries TWO effects: the decision-resolved
+  // RELEASE (the ids collected above) and the TTL FAIL-CLOSE of every DUE park.
+  // Returning early when nothing is releasable — which the pre-#2047 code did,
+  // twice — meant the ONLY production caller of the TTL branch never ran unless a
+  // resolved-gate park happened to exist in the same pass, so S0's "TTL
+  // always-resumes with the protected effect in a terminal `policy_unresolved`
+  // blocked state" had no production driver at all: a due park simply sat there.
+  // The sweep is CAS-guarded and bounded, so an empty pass is cheap and safe.
   const result = await sweepParks({ releasedParkIds: releaseIds, limit });
   summary.parksReleased += result.released;
+  summary.parksPolicyUnresolved += result.blocked;
 }
