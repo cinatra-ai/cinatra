@@ -241,14 +241,16 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const v = values as Record<string, unknown>;
     // Owner ruling 2026-07-25 (3): the review surface lives UNDER the agent run.
     // The template packageName (@cinatra-ai/web-research-agent) → the run base
-    // /agents/cinatra-ai/reviewer-agent/run-rev-1, then the review sub-path.
+    // /agents/cinatra-ai/web-research-agent/run-rev-1, then the review sub-path.
     expect(v.reviewSurfaceUrl).toBe(
-      "/agents/cinatra-ai/reviewer-agent/run-rev-1/review/wayflow-task-rev-1",
+      "/agents/cinatra-ai/web-research-agent/run-rev-1/review/wayflow-task-rev-1",
     );
     expect(v.reviewTaskId).toBe("wayflow-task-rev-1");
     expect(v.targetCount).toBe(2);
     expect(v.agentSummary).toBe("Two items ready for your review.");
-    // The legacy reviewer-output envelope must NOT have been synthesized.
+    // cinatra#1796: the host synthesizes no review envelope at all any more —
+    // the synthesis was deleted with the reviewer rendering teardown. These stay
+    // asserted so a re-introduction is caught here too.
     expect(v.contentType).toBeUndefined();
     expect(v.contentBundle).toBeUndefined();
 
@@ -261,7 +263,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     );
   });
 
-  it("an UNMARKED reviewer gate is byte-identical: never pins, uses the reviewer-output renderer", async () => {
+  it("an UNMARKED gate is byte-identical: never pins, keeps its own declared renderer", async () => {
     storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(UNMARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
 
@@ -270,7 +272,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       runId: run.id,
       run,
       fromStatus: "running",
-      task: inputRequiredTask("Legacy reviewer summary."),
+      task: inputRequiredTask("Legacy gate summary."),
     });
 
     expect(emitSpy).not.toHaveBeenCalled();

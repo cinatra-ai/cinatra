@@ -24,8 +24,6 @@ import {
   seedCampaignContext,
   seedConfirmedRecipients,
   seedContactList,
-  seedDraftBundle,
-  seedFollowupBundle,
   SEED_IDS,
 } from "./seed";
 
@@ -43,13 +41,10 @@ async function seedContactListFromFixture(): Promise<void> {
   await seedContactList(SEED_IDS.contactListA);
 }
 
-async function seedDraftBundleFromFixture(): Promise<void> {
-  await seedDraftBundle(SEED_IDS.draftBundleA);
-}
-
-async function seedFollowupBundleFromFixture(): Promise<void> {
-  await seedFollowupBundle(SEED_IDS.followupBundleA);
-}
+// cinatra#1796 / #2047 row 8: seedDraftBundleFromFixture /
+// seedFollowupBundleFromFixture — and the two seed-module imports behind them —
+// were REMOVED with the reviewer-agent standalone fixture, whose seedFn was
+// their only caller. The seed helpers themselves stay in the seed module.
 
 async function seedApprovedDraftBundleFromFixture(): Promise<void> {
   await seedApprovedDraftBundle(SEED_IDS.approvedDraftBundleA);

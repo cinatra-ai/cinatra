@@ -252,7 +252,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
     expect(values.output).toBe("Ideas are ready for review.");
   });
 
-  it("#839: strips host-reserved envelope keys from surfaced gate inputs", async () => {
+  it("#839/#1796: strips host TRANSPORT keys from surfaced gate inputs, and only those", async () => {
     const run = makeRun();
     const task = {
       id: "task-idea-2",
@@ -261,9 +261,9 @@ describe("execution.ts — generic interrupt-output spread", () => {
       metadata: {
         pendingApproval: {
           ideas: [{ title: "Alpha" }],
-          contentType: "evil",
-          summary: "evil",
-          contentBundle: { text: "evil" },
+          output: "evil",
+          stepNumber: 999,
+          contentType: "extension-owned",
         },
       },
       history: [
@@ -273,17 +273,23 @@ describe("execution.ts — generic interrupt-output spread", () => {
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task });
     const values = onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>;
     expect(values.ideas).toBeDefined();
-    // Reserved envelope keys from pendingApproval must NOT leak in (they would
-    // disable reviewer-output envelope synthesis / shadow a real bundle).
-    expect(values.contentType).not.toBe("evil");
-    expect(values.summary).not.toBe("evil");
-    expect(values.contentBundle).toBeUndefined();
+    // `output` and `stepNumber` are HOST transport: the host sets them from the
+    // history-derived output and the WayFlow step number, so a gate input of the
+    // same name must never shadow them.
+    expect(values.output).not.toBe("evil");
+    expect(values.stepNumber).not.toBe(999);
+    // cinatra#1796: `contentType`/`contentBundle`/`summary` are NO LONGER
+    // reserved. The host synthesized the reviewer envelope those names protected;
+    // that synthesis is deleted, so there is nothing left for a gate input to
+    // disable or shadow, and a gate that genuinely declares one of those names as
+    // a render input now reaches its renderer.
+    expect(values.contentType).toBe("extension-owned");
   });
 
   // #839: the strip must ALSO cover the history-EMPTY fallback, where
   // interruptOutput = JSON.stringify(pendingApproval) and spreadFromOutput
   // re-parses the whole (unfiltered) pendingApproval.
-  it("#839: strips reserved keys even when history is empty (pendingApproval fallback)", async () => {
+  it("#839/#1796: strips transport keys even when history is empty (pendingApproval fallback)", async () => {
     const run = makeRun();
     const task = {
       id: "task-idea-3",
@@ -292,9 +298,8 @@ describe("execution.ts — generic interrupt-output spread", () => {
       metadata: {
         pendingApproval: {
           ideas: [{ title: "Alpha" }],
-          contentType: "evil",
-          summary: "evil",
-          contentBundle: { text: "evil" },
+          stepNumber: 999,
+          contentType: "extension-owned",
         },
       },
       history: [], // EMPTY → spreadFromOutput = parsed pendingApproval (unfiltered)
@@ -302,9 +307,9 @@ describe("execution.ts — generic interrupt-output spread", () => {
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task });
     const values = onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>;
     expect(values.ideas).toEqual([{ title: "Alpha" }]);
-    expect(values.contentType).not.toBe("evil");
-    expect(values.summary).not.toBe("evil");
-    expect(values.contentBundle).toBeUndefined();
+    expect(values.stepNumber).not.toBe(999);
+    // Envelope names pass through on this path too (see the note above).
+    expect(values.contentType).toBe("extension-owned");
   });
 
   // #1625 (D2): on the pinned runtime the a2a worker never writes

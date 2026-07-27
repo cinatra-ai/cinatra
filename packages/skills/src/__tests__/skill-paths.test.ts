@@ -49,7 +49,7 @@ const slugs: SlugMap = {
   ]),
   agentTemplates: new Map([
     [
-      "tmpl-auditor",
+      "tmpl-author",
       { ownerLevel: "team", ownerId: "t-growth", packageName: "@cinatra-ai/author-agent" },
     ],
     [
@@ -146,11 +146,11 @@ describe("resolveSkillDir — representative ownership examples", () => {
       binding_scope: "agent",
       vendor: null,
       package: null,
-      agent_template_id: "tmpl-auditor",
+      agent_template_id: "tmpl-author",
       skill_slug: "hot-fix-subject",
     };
     expect(resolveSkillDir(id, slugs, ROOT)).toBe(
-      "/test/data/skills/personal/user-one/~agents/cinatra-ai/auditor-agent/hot-fix-subject",
+      "/test/data/skills/personal/user-one/~agents/cinatra-ai/author-agent/hot-fix-subject",
     );
   });
 
@@ -176,11 +176,11 @@ describe("resolveSkillDir — representative ownership examples", () => {
       binding_scope: "agent",
       vendor: null,
       package: null,
-      agent_template_id: "tmpl-auditor",
+      agent_template_id: "tmpl-author",
       skill_slug: "pii-check",
     };
     expect(resolveSkillDir(id, slugs, ROOT)).toBe(
-      "/test/data/skills/organization/acme/~agents/cinatra-ai/auditor-agent/pii-check",
+      "/test/data/skills/organization/acme/~agents/cinatra-ai/author-agent/pii-check",
     );
   });
 
@@ -322,7 +322,7 @@ describe("resolveSkillDirsBatch / Keyed", () => {
       binding_scope: "agent",
       vendor: null,
       package: null,
-      agent_template_id: "tmpl-auditor",
+      agent_template_id: "tmpl-author",
       skill_slug: "s2",
     },
   ];
