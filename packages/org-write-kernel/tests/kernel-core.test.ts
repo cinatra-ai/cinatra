@@ -59,10 +59,11 @@ describe("capability table (#1938)", () => {
     expect(ruleFor("archived", "org.delete")).toBe("allow");
   });
 
-  it("active allows every capability except org.delete (delete is archived-only, #1939)", () => {
+  it("active allows every capability except org.delete and run.lease-expire (both archived-only, #1939/#1940)", () => {
+    const activeDenies = new Set<string>(["org.delete", "run.lease-expire"]);
     for (const capability of ORG_WRITE_CAPABILITIES) {
       expect(ruleFor("active", capability)).toBe(
-        capability === "org.delete" ? "deny" : "allow",
+        activeDenies.has(capability) ? "deny" : "allow",
       );
     }
   });
@@ -76,6 +77,22 @@ describe("capability table (#1938)", () => {
     expect(ruleFor("active", "org.lifecycle")).toBe("allow");
     expect(ruleFor("active", "org.delete")).not.toBe(
       ruleFor("active", "org.lifecycle"),
+    );
+  });
+
+  it("run.lease-expire is a system-only, fence-only settle capability: active deny / archived allow (#1940)", () => {
+    // Leases exist ONLY for archived orgs (minted by the archive snapshot,
+    // killed on the unarchive epoch bump), so an active-org lease-expiry write
+    // is a bug/forgery ⇒ deny (fail-closed). Archived ⇒ allow — NOT lease-gated:
+    // the settled lease is EXPIRED, so the lease-gated machinery cannot admit
+    // it; the finalizer re-verifies the expired row FOR UPDATE in-fence.
+    expect(ruleFor("active", "run.lease-expire")).toBe("deny");
+    expect(ruleFor("archived", "run.lease-expire")).toBe("allow");
+    // Distinct from run.complete's archived cell (lease-gated) BY DESIGN — the
+    // whole reason a new capability exists rather than reusing run.complete.
+    expect(ruleFor("archived", "run.complete")).toBe("lease-gated");
+    expect(ruleFor("archived", "run.lease-expire")).not.toBe(
+      ruleFor("archived", "run.complete"),
     );
   });
 

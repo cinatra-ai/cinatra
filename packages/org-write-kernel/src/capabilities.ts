@@ -26,7 +26,16 @@ export type OrgWriteCapability =
   // (Decision 1): until the org_archive_activation gate flips (S6), the delete
   // writer instead demands org.lifecycle (registry conditionalCapabilities) so
   // active-org delete keeps working; the S6 closeout removes that fallback.
-  | "org.delete";
+  | "org.delete"
+  // Finalizer settling an EXPIRED archive lease to terminal state —
+  // system-only, fence-only (cinatra#1940). active → deny (leases are minted
+  // ONLY by the archive snapshot and die on the unarchive epoch bump, so an
+  // active-org lease-expiry write is by construction a bug or a forged call);
+  // archived → allow — NOT lease-gated: the lease being settled is EXPIRED, so
+  // the lease-gated machinery cannot admit it; the finalizer re-verifies the
+  // matching expired lease row FOR UPDATE in-tx before writing, and the fence
+  // (guardOrgLifecycleMutation) enforces the exclusive epoch+write lock.
+  | "run.lease-expire";
 
 export type OrgLifecycleState = "active" | "archived";
 
@@ -40,6 +49,7 @@ export const ORG_WRITE_CAPABILITIES: readonly OrgWriteCapability[] = [
   "org.settings",
   "org.lifecycle",
   "org.delete",
+  "run.lease-expire",
 ];
 
 export const ORG_LIFECYCLE_STATES: readonly OrgLifecycleState[] = [
@@ -71,6 +81,7 @@ export const ORG_WRITE_CAPABILITY_TABLE: Record<
     "org.settings": "allow",
     "org.lifecycle": "allow",
     "org.delete": "deny", // delete is archived-only — never an active org
+    "run.lease-expire": "deny", // leases exist only for archived orgs (#1940)
   },
   archived: {
     "content.write": "deny",
@@ -80,6 +91,7 @@ export const ORG_WRITE_CAPABILITY_TABLE: Record<
     "org.settings": "deny",
     "org.lifecycle": "allow",
     "org.delete": "allow", // delete of an archived org is its final exit
+    "run.lease-expire": "allow", // settle an EXPIRED lease, re-verified FOR UPDATE in-tx (#1940)
   },
 };
 
