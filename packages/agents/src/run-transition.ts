@@ -19,6 +19,13 @@
 import { and, eq, sql } from "drizzle-orm";
 import { expireRunStream } from "@cinatra-ai/a2a";
 import type { OrgWriteAuthority, OrgWriteCapability } from "@cinatra-ai/org-write-kernel";
+// cinatra#1940 P1 (Decision 4): the per-run, epoch-agnostic lease-settle shape,
+// folded into the terminal transaction so status + lease settlement commit as
+// one guarded tx. `orgWriteLeaseSchemaName` is the same lease-schema resolver
+// the run-write seam already consults (already in this module's transitive
+// graph via ./org-write-run-seam — a direct import here adds no new graph edge).
+import { settleLeaseForRunStatement } from "@cinatra-ai/org-write-kernel";
+import { orgWriteLeaseSchemaName } from "@/lib/org-write/schema-name";
 import { db } from "./db";
 import { agentRuns } from "./schema";
 import { dispatchRunWaitTransition } from "./run-wait-notifier"; // #1559/E9: zero-dep leaf seam
@@ -143,6 +150,35 @@ export type AgentRunDispatchFields = {
   attemptId: string;
 };
 
+/**
+ * Settle (revoke) EVERY archive lease a run holds, on the caller's ALREADY-OPEN
+ * guarded transaction — cinatra#1940 P1 (Decision 4, the terminal-tx fold).
+ *
+ * Runs on `tx` right after the status CAS + delegated meta write, so status +
+ * meta + (derivation-outbox) + LEASE SETTLEMENT commit as ONE guarded
+ * transaction: a CAS/meta failure rolls the settle back with them (the lease
+ * row survives → the lease-expiry finalizer settles it later), and an in-window
+ * completion under an archived org leaves zero lingering lease residue.
+ * Epoch-agnostic per-run DELETE (see settleLeaseForRunStatement); on the
+ * `org_archive_lease` table which is EMPTY except under archive, so this is a
+ * measurable-zero indexed DELETE on the hot path for active orgs.
+ *
+ * Shared by BOTH transitionRunStatus branches: the plain terminal path calls it
+ * directly; the derivationOutbox delegate receives it THREADED (avoiding a
+ * run-transition ⇄ run-terminal-derivation-outbox import cycle) and calls it on
+ * the same guarded tx. The tx exposes the kernel's minimal `.execute()` surface
+ * (the same one guardOrgMutation runs the lease probe through).
+ */
+async function settleLeaseInTx(
+  tx: GuardedRunTx,
+  orgId: string,
+  runId: string,
+): Promise<void> {
+  await tx.execute(
+    settleLeaseForRunStatement({ schema: orgWriteLeaseSchemaName(), orgId, runId }),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // canonical run-status transition primitive
 // ---------------------------------------------------------------------------
@@ -234,6 +270,10 @@ export async function transitionRunStatus(
         derivationOutbox,
         orgId,
         guardedTx,
+        // cinatra#1940 P1 fold: settle the lease INSIDE the delegate's terminal
+        // tx (→completed is terminal), threaded to avoid an import cycle. The
+        // CAS + outbox INSERT + lease DELETE commit atomically.
+        settleLeaseInTx,
       );
     });
     // POST-COMMIT (codex #2/#13): the guarded tx committed ⇒ the transition
@@ -264,6 +304,12 @@ export async function transitionRunStatus(
       dbMeta.stepResults !== undefined;
     if (hasDelegatedMeta || isTerminal) {
       await updateAgentRunStatus(runId, to, dbMeta as Partial<AgentRunRecord>, guardedTx);
+    }
+    // cinatra#1940 P1 fold (Decision 4): a terminal landing settles the run's
+    // lease in the SAME guarded tx as the CAS + meta — status and lease
+    // settlement commit atomically (order: CAS → meta → lease DELETE).
+    if (isTerminal) {
+      await settleLeaseInTx(guardedTx, orgId, runId);
     }
   });
 
