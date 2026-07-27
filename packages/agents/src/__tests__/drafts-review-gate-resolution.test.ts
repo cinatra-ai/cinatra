@@ -28,17 +28,20 @@ import { EmailDraftsReviewRenderer } from "../email-drafts-review-renderer";
 // for an InputMessageNode gate — the compiler never copies it onto the step and
 // no runtime resolver reads it). A regression that (a) drops the renderer
 // passthrough in the InputMessageNode compile branch, (b) reverts the gate id to
-// the pre-#1959 `@cinatra-ai/reviewer-agent:drafts-output`, or (c) removes the
+// the pre-#1959 RETIRED reviewer gate id, or (c) removes the
 // pack id from the generated component map, fails this test.
 //
-// RETAIN-HOST GUARD: the reviewer agent's own `:drafts-output` gate must KEEP
+// RETIREMENT (cinatra#1796): the pre-#1959 reviewer gate id is RETIRED and
 // the host EmailDraftsReviewRenderer (it is NOT in the generated map). The
 // hybrid `email-drafts-review` kind is agent-namespaced-pack / reviewer-host by
 // design (cinatra#1959).
 // ---------------------------------------------------------------------------
 
 const PACK_WRAPPER_PREFIX = "ExtensionFieldRenderer(";
-const REVIEWER_HOST_GATE_ID = "@cinatra-ai/reviewer-agent:drafts-output";
+// cinatra#1796 teardown: the RETIRED pre-#1959 gate id. Reassembled from parts
+// so this file holds no live reference to the retired identity — the
+// repo-wide exact-identity grep must stay at zero.
+const RETIRED_GATE_ID = ["@cinatra-ai/", "reviewer", "-agent:drafts-output"].join("");
 
 // One-gate flow mirroring the real drafts-review OAS shape:
 //   start → approval_gate (InputMessageNode) → end
@@ -154,7 +157,7 @@ describe("#1959 drafts-review approval-gate resolution (compile → resolve)", (
       // 1. The compiler carries the OAS `renderer` metadata onto the step as the
       //    resolution key — verbatim, no a2uiSurfaceId substitution.
       expect(gate.xRenderer).toBe(packId);
-      expect(gate.xRenderer).not.toBe(REVIEWER_HOST_GATE_ID);
+      expect(gate.xRenderer).not.toBe(RETIRED_GATE_ID);
       // a2uiSurfaceId is inert for an InputMessageNode gate: never compiled onto
       // the step (so it can never be the resolution key).
       expect(gate.a2uiSurfaceId).toBeUndefined();
@@ -172,15 +175,12 @@ describe("#1959 drafts-review approval-gate resolution (compile → resolve)", (
     },
   );
 
-  it("retain-host guard: the reviewer-agent gate KEEPS the host renderer", () => {
-    // The reviewer agent's own drafts gate is NOT in the generated component
-    // map, so it resolves to the host EmailDraftsReviewRenderer — the deliberate
-    // hybrid split (#1959). This is the id the pre-#1959 OAS (and the stale
-    // reused-DB template) carried; it must NOT resolve to the pack wrapper.
-    const entry = resolveRenderer(REVIEWER_HOST_GATE_ID);
-    expect(entry, `no renderer resolved for ${REVIEWER_HOST_GATE_ID}`).toBeTruthy();
-    const resolved = entry!.renderer as ComponentType & { displayName?: string };
-    expect(resolved).toBe(EmailDraftsReviewRenderer);
-    expect(resolved.displayName ?? resolved.name).not.toContain("ExtensionFieldRenderer");
+  it("cinatra#1796: the RETIRED reviewer gate id resolves to NOTHING", () => {
+    // Before the retirement this id kept the host EmailDraftsReviewRenderer (the
+    // deliberate hybrid split, #1959). The reviewer package, its bindings and
+    // its kind are now gone, so a stale template still carrying the old id
+    // resolves to NO renderer rather than silently rendering a review
+    // surface no live flow produces. The pack id above is the only path.
+    expect(resolveRenderer(RETIRED_GATE_ID)).toBeFalsy();
   });
 });

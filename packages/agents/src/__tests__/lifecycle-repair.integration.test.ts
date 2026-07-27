@@ -1093,4 +1093,56 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
     expect((await repairStore.readRepair(repairId))?.status).toBe("repaired");
   });
 
+  // -------------------------------------------------------------------------
+  // THE DECIDING ACTOR on the changes_requested path (cinatra#2047 D-2).
+  //
+  // `changes_requested` RESOLVES the base gate, so it is a terminal decision and
+  // must leave the same decider of record an approve/reject leaves.
+  // -------------------------------------------------------------------------
+  it("RECORD: changes_requested stamps the deciding actor on the resolved base gate", async () => {
+    const ev = await produce("document", { destinationClass: "external_publish" });
+    await orch.sweepReviewOrchestration();
+    const baseTaskId = autoReviewTaskId(ev.eventId);
+    const baseGate = await gateStore.readReviewGate(ev.producerRunId!, baseTaskId);
+    expect(baseGate).not.toBeNull();
+
+    const cr = await repairStore.recordChangesRequested({
+      runId: ev.producerRunId!,
+      reviewTaskId: baseTaskId,
+      orgId: ORG,
+      request: mkChangesRequested(ev, baseGate!.id),
+      repairCapable: true,
+      producerRunId: ev.producerRunId,
+      currentBaseRevisionId: ev.representationRevisionId,
+      decidedBy: "user-V-reviewer",
+    });
+    expect(cr.ok).toBe(true);
+
+    const closed = await gateStore.readReviewGate(ev.producerRunId!, baseTaskId);
+    expect(closed!.status).toBe("resolved");
+    expect(closed!.disposition).toBe("changes_requested");
+    expect(closed!.resolvedBy).toBe("user-V-reviewer");
+  });
+
+  it("RECORD: a worker-driven changes_requested with no nameable actor resolves with a NULL decider", async () => {
+    const ev = await produce("document", { destinationClass: "external_publish" });
+    await orch.sweepReviewOrchestration();
+    const baseTaskId = autoReviewTaskId(ev.eventId);
+    const baseGate = await gateStore.readReviewGate(ev.producerRunId!, baseTaskId);
+
+    const cr = await repairStore.recordChangesRequested({
+      runId: ev.producerRunId!,
+      reviewTaskId: baseTaskId,
+      orgId: ORG,
+      request: mkChangesRequested(ev, baseGate!.id),
+      repairCapable: true,
+      producerRunId: ev.producerRunId,
+      currentBaseRevisionId: ev.representationRevisionId,
+    });
+    expect(cr.ok).toBe(true);
+
+    const closed = await gateStore.readReviewGate(ev.producerRunId!, baseTaskId);
+    expect(closed!.status).toBe("resolved");
+    expect(closed!.resolvedBy).toBeNull();
+  });
 });

@@ -221,7 +221,13 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
   {
     module: "src/lib/organization-delete.ts",
     exportName: "deleteOrganizationReferenceGuarded",
-    capability: "org.lifecycle",
+    capability: "org.delete",
+    // Pre-activation transitional demand (Decision 1, cinatra#1939 wave 3):
+    // until the org_archive_activation gate flips (S6), the rebuilt delete
+    // writer (stage C) demands org.lifecycle so active-org delete keeps working;
+    // once archiving activates it demands org.delete (active→deny, archived→
+    // allow). The S6 closeout removes this fallback.
+    conditionalCapabilities: ["org.lifecycle"],
     orgIdExtractor: "explicit orgId argument (owner re-verified in-tx)",
     storageReferences: [
       "organization",

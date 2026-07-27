@@ -157,10 +157,12 @@ vi.mock("@/lib/authz/build-actor-context-from-run", () => buildActorCtxMock);
 const bindingsMock = vi.hoisted(() => ({
   getMergedFieldRendererBindings: vi.fn(() => [
     { id: "@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review", kind: "campaign-recipients-review", priority: 80, midRunHitl: true, declaredBy: "@cinatra-ai/email-artifacts" },
-    // agent :output + reviewer :contacts-output gates carry NO midRunHitl → their
-    // scope must NOT enter the set (the retain-host bindings).
+    // The agent's own :output gate and an UNRELATED-scope gate of the same kind
+    // carry NO midRunHitl → neither scope may enter the set. (Pre-cinatra#1796
+    // the unrelated-scope row was the retired reviewer binding; a live retained
+    // package now plays the same role.)
     { id: "@cinatra-ai/email-recipient-selection-agent:output", kind: "campaign-recipients-review", priority: 80, a2uiTranslator: "recipients-output", declaredBy: "@cinatra-ai/email-recipient-selection-agent" },
-    { id: "@cinatra-ai/reviewer-agent:contacts-output", kind: "campaign-recipients-review", priority: 80, declaredBy: "@cinatra-ai/reviewer-agent" },
+    { id: "@cinatra-ai/web-research-agent:contacts-output", kind: "campaign-recipients-review", priority: 80, declaredBy: "@cinatra-ai/web-research-agent" },
   ]),
 }));
 vi.mock("../field-renderer-bindings.server", () => bindingsMock);

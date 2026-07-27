@@ -41,6 +41,25 @@ export default defineConfig({
   testDir: suitePath("wp-drupal-uat"),
   outputDir: repoPath("test-results"),
   timeout: 120_000,
+  // OUTER RUN BOUND. The per-test `timeout` above bounds one test; nothing
+  // bounded the RUN, so a suite that stopped progressing was ended only by the
+  // job timeout — with no reporter summary, no HTML report and no failing test
+  // name. `globalTimeout` gives the run its own ceiling so it ends itself and
+  // reports.
+  //
+  // HONEST LIMIT: this is an in-process timer in the Playwright runner. It
+  // recovers a run that is merely STUCK (a wedged webServer, a test that hangs
+  // past its own timeout, a controller that stops advancing) — it CANNOT fire
+  // when the host has stopped scheduling the runner process itself, which is
+  // what the VM-wide stalls reached. Preventing that state is the job of the
+  // dev-server cache opt-out below and the runner headroom the workflow
+  // provisions; this ceiling is the reporting backstop, not the cure.
+  //
+  // Sized against the gate's own budget: the uat-gate job allows 40 minutes and
+  // spends ~11 of them on install + `setup dev` + docker bring-up before the
+  // suite starts, so 22 minutes leaves headroom for the run to report and for
+  // the job to upload artifacts. A healthy full suite takes ~8.5 minutes.
+  globalTimeout: 22 * 60_000,
   expect: { timeout: 20_000 },
   retries: process.env.CI ? 1 : 0,
   fullyParallel: false,
@@ -79,7 +98,14 @@ export default defineConfig({
     // for headless dev-mode hydration (see https://docs.cinatra.ai/references/platform/e2e-headless-hydration/).
     // reuseExistingServer:false — ALWAYS boot a fresh server carrying the scripted
     // provider env, so the run can never silently use a non-scripted dev server.
-    command: `CINATRA_TEST_LLM_PROVIDER=scripted CINATRA_REQUIRE_ACTOR_CONTEXT=false CINATRA_E2E_SETUP_BYPASS=true POSTGRES_SYNC_TIMEOUT_MS=90000 PORT=${PORT} pnpm dev`,
+    // CINATRA_TURBOPACK_DEV_FS_CACHE=0 — turn OFF Turbopack's persistent dev
+    // filesystem cache for this server (next.config.ts reads the flag). The
+    // cache is worthless here (every CI run starts cold, and the server is
+    // discarded when the suite ends) while its write + compaction cycle is the
+    // marginal load that tipped constrained runners into an unrecoverable stall
+    // — output stops mid-suite, no per-test timeout can fire, and the job is
+    // killed with no diagnosis. See the rationale block in next.config.ts.
+    command: `CINATRA_TEST_LLM_PROVIDER=scripted CINATRA_REQUIRE_ACTOR_CONTEXT=false CINATRA_E2E_SETUP_BYPASS=true CINATRA_TURBOPACK_DEV_FS_CACHE=0 POSTGRES_SYNC_TIMEOUT_MS=90000 PORT=${PORT} pnpm dev`,
     cwd: REPO_ROOT,
     url: BASE_URL,
     timeout: 240_000,

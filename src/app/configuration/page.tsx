@@ -69,6 +69,7 @@ const administrationSections = [
       { label: "Type definitions", href: "/configuration/artifacts" },
       { label: "Stored objects", href: "/configuration/artifacts?tab=objects" },
       { label: "Restore objects", href: "/configuration/artifacts?tab=restore" },
+      { label: "Review policy", href: "/configuration/artifacts?tab=review-policy" },
     ],
   },
   {
@@ -195,6 +196,20 @@ const administrationSections = [
       // The "Telemetry" inner link was removed (cinatra#697) — it duplicated
       // the card title + "Manage" CTA. Logs remains as the one distinct target.
       { label: "Logs", href: "/configuration/telemetry?tab=logs" },
+    ],
+  },
+  {
+    // The artifact-lifecycle interception ops queues (cinatra#2047 D-4/D-7): the
+    // two states S0 declared "ops-surfaced" but nothing read — a dead-lettered
+    // resume (a review decision that never released its run) and a TTL-expired
+    // continuation park (an effect the policy never resolved).
+    title: "Lifecycle operations",
+    description: "Stuck review releases and effects the lifecycle policy never resolved.",
+    href: "/configuration/lifecycle-operations",
+    icon: domainIcons.telemetry,
+    links: [
+      { label: "Stuck review releases", href: "/configuration/lifecycle-operations" },
+      { label: "Blocked effects", href: "/configuration/lifecycle-operations" },
     ],
   },
   {

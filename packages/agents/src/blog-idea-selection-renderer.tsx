@@ -10,10 +10,10 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 // kind "blog-idea-selection" and activated by the DEDICATED binding id
 // `@cinatra-ai/blog-pipeline-agent:idea-selection` (strict-id condition — see
 // register-default-renderers.ts). The idea-chooser relocated OFF the shared
-// `@cinatra-ai/reviewer-agent:output` reviewer binding onto this dedicated one
-// (blog-pipeline-agent#40); the former inline chooser in
-// reviewer-agent-output-renderer.tsx has since been removed (Stage-3 teardown),
-// so this is the sole idea-selection renderer.
+// (now RETIRED) reviewer binding onto this dedicated one
+// (blog-pipeline-agent#40); that shared binding, its package and the
+// reviewer-output dispatcher the inline chooser lived in were all deleted by the
+// cinatra#1796 retirement teardown, so this is the sole idea-selection renderer.
 //
 // PAYLOAD CONTRACT (ground truth: this renderer's tests + the blog OAS
 // idea_selection_gate

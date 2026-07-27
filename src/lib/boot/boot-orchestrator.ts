@@ -150,6 +150,7 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // continues (the pass is idempotent and retries next boot).
   await run(agentRuntimeDepBackfillPhases());
 
+
   // ── skills-catalog explicit rebuild (cinatra#1364) ────────────────────────────
   // AFTER extension activation + the materialize/projection phases above, so the
   // scanner merges the on-disk skill trees those phases produced. `degraded`: a

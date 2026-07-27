@@ -17,7 +17,7 @@ import {
 import { assistantThreadSchemaQueries, assistantHandleSchemaQueries } from "@/lib/assistant-thread-schema";
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
-import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema";
+import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema";
 import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries } from "@/lib/skill-lifecycle-schema";
 import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import {
@@ -3671,7 +3671,7 @@ END $$` },
     },
 
     // 2.5 agent_templates.(owner_level, owner_id) → <owner-prefix>/~agents/<vendor>/<package>.
-    // Path derived at enqueue from package_name (npm, e.g. "@cinatra-ai/auditor-agent"); on-disk
+    // Path derived at enqueue from package_name (npm, e.g. "@cinatra-ai/author-agent"); on-disk
     // store is UNSCOPED so "@<scope>/" is stripped (agentPackageNameToPath; cinatra#550). Quoted
     // $fn$ (not $body$) so agent-owner-move-scope-strip.test.ts slices the body to the "$body$" end.
     {
@@ -4018,7 +4018,7 @@ END $$` },
       created_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS widget_stream_tokens_expires_at_idx ON "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (expires_at)` },
-    ...extensionUpdateReadModelSchemaQueries(schemaName), ...skillEfficacySchemaQueries(schemaName), ...connectorInstanceToolPolicySchemaQueries(schemaName), // DDL in pure-strings leaves for file-size-ratchet headroom (#1041 outcome-3 / #1317 / #1405 pattern): extension update read-model + cinatra#1368 skill-efficacy exposure telemetry + cinatra#2017 S2 connector_instance_tool_policy (additive bootstrap DDL, no numbered migration; all run late)
+    ...extensionUpdateReadModelSchemaQueries(schemaName), ...skillEfficacySchemaQueries(schemaName), ...connectorInstanceToolPolicySchemaQueries(schemaName), ...connectorInstanceServerSchemaQueries(schemaName), // DDL in pure-strings leaves for file-size-ratchet headroom (#1041 outcome-3 / #1317 / #1405 pattern): extension update read-model + cinatra#1368 skill-efficacy exposure telemetry + cinatra#2017 S2 connector_instance_tool_policy + cinatra#2018 S3 connector_instance_server & site_inventory (additive bootstrap DDL, no numbered migration; all run late)
     // -----------------------------------------------------------------------
     // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
     //

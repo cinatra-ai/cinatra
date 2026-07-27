@@ -1,12 +1,15 @@
 # Org-write kernel boundary + registry gates — cinatra#1938 (archive epic S2).
 #
-# Three checks on every PR + push to main:
+# Four checks on every PR + push to main:
 #   1. org-write-boundary-gate.mjs — kernel internals reachable only via the
 #      package root (realpath-canonicalized), mintSystemWriteAuthority is
 #      dispatcher-only, guardedBatchQueries has one consumer.
 #   2. org-write-table-sweep.mjs — no NEW raw org-axis DML outside registered
 #      modules (shrink-only baseline).
-#   3. The kernel + org-write vitest suites (capability table, permits,
+#   3. system-writer-manifest-gate.mjs — the non-registry system writers (boot
+#      phases, backfills, CLI reconcilers) match the committed manifest exactly,
+#      two-directional (cinatra#1941). Migrations are excluded by doctrine.
+#   4. The kernel + org-write vitest suites (capability table, permits,
 #      leases, tickets, resolvers, registry lockstep, gate self-tests) — run
 #      here because packages/org-write-kernel/tests are not in the root
 #      vitest include set.
@@ -50,6 +53,8 @@ jobs:
         run: node scripts/audit/org-write-boundary-gate.mjs
       - name: Org-axis raw-SQL sweep
         run: node scripts/audit/org-write-table-sweep.mjs
+      - name: Non-registry system writer manifest gate
+        run: node scripts/audit/system-writer-manifest-gate.mjs
       - name: Kernel test suite
         run: pnpm --filter @cinatra-ai/org-write-kernel test
       - name: Org-write resolver, registry and gate self-tests

@@ -20,11 +20,17 @@ const agentDir = path.resolve(
   "../../../../extensions/cinatra-ai/blog-wordpress-publish-agent",
 );
 const oasPath = path.join(agentDir, "cinatra/oas.json");
-const skillPath = path.join(agentDir, "skills/blog-wordpress-publish-agent/SKILL.md");
 const packageJsonPath = path.join(agentDir, "package.json");
 
 const oas = JSON.parse(fs.readFileSync(oasPath, "utf8")) as Record<string, unknown>;
-const skill = fs.readFileSync(skillPath, "utf8");
+// cinatra#2090 (epic #2086 S3): this agent ships no skill bundle. Its
+// instructions are the `publish` node's system prompt, so the contract
+// assertions below read THAT — same bytes, new home.
+const skill = [
+  (oas as { description?: string }).description ?? "",
+  (oas as { $referenced_components: Record<string, { data?: { system?: string } }> })
+    .$referenced_components["publish"].data?.system ?? "",
+].join("\n\n");
 const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as Record<string, unknown>;
 
 describe("blog-wordpress-publish-agent OAS validates", () => {
@@ -103,10 +109,12 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
   });
 });
 
-describe("blog-wordpress-publish-agent — SKILL.md contract", () => {
+describe("blog-wordpress-publish-agent — inline instruction contract", () => {
   it("uses status string 'succeeded' (NOT 'completed')", () => {
-    expect(skill).toContain('status === "succeeded"');
-    const wrongMatches = skill.match(/status === "completed"/g);
+    // Quote style differs between the OAS description and the inline prompt
+    // (cinatra#2090 folded the bundle in), so pin the STATEMENT, not the quoting.
+    expect(skill).toMatch(/status\b[^\n]*["']succeeded["']/);
+    const wrongMatches = skill.match(/status === ["']completed["']/g);
     expect(wrongMatches ?? []).toEqual([]);
   });
 

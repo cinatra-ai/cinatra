@@ -63,18 +63,18 @@ describe("agent handler listActive (IoC reader facet)", () => {
     // The visibility-correct reader returns 3 visible templates; only 2 are in
     // the lifecycle-live manifest set -> the third is excluded.
     vi.mocked(readActiveExtensionTemplates).mockResolvedValue([
-      { id: "1", packageName: "@cinatra-ai/auditor-agent" } as never,
+      { id: "1", packageName: "@cinatra-ai/author-agent" } as never,
       { id: "2", packageName: "@cinatra-ai/author-agent" } as never,
       { id: "3", packageName: "@cinatra-ai/not-live-agent" } as never,
     ]);
     const result = (await handler.listActive!({
       actor,
       scope: scopeWith(null),
-      manifests: [m("@cinatra-ai/auditor-agent"), m("@cinatra-ai/author-agent")],
+      manifests: [m("@cinatra-ai/author-agent"), m("@cinatra-ai/author-agent")],
     })) as Array<{ packageName: string }>;
     expect(result.map((t) => t.packageName).sort()).toEqual([
       "@cinatra-ai/author-agent",
-      "@cinatra-ai/auditor-agent",
+      "@cinatra-ai/author-agent",
     ].sort());
   });
 
@@ -93,13 +93,13 @@ describe("agent handler listActive (IoC reader facet)", () => {
 
   it("does NOT surface a visible template that is not lifecycle-live (no manifest entry)", async () => {
     vi.mocked(readActiveExtensionTemplates).mockResolvedValue([
-      { id: "1", packageName: "@cinatra-ai/auditor-agent" } as never,
+      { id: "1", packageName: "@cinatra-ai/author-agent" } as never,
       { id: "2", packageName: "@cinatra-ai/archived-agent" } as never,
     ]);
     const result = await handler.listActive!({
       actor,
       scope: scopeWith(null),
-      manifests: [m("@cinatra-ai/auditor-agent")], // archived-agent absent from live set
+      manifests: [m("@cinatra-ai/author-agent")], // archived-agent absent from live set
     });
     expect(result).toHaveLength(1);
   });
@@ -107,12 +107,12 @@ describe("agent handler listActive (IoC reader facet)", () => {
   it("drops templates with no packageName", async () => {
     vi.mocked(readActiveExtensionTemplates).mockResolvedValue([
       { id: "1", packageName: null } as never,
-      { id: "2", packageName: "@cinatra-ai/auditor-agent" } as never,
+      { id: "2", packageName: "@cinatra-ai/author-agent" } as never,
     ]);
     const result = await handler.listActive!({
       actor,
       scope: scopeWith(null),
-      manifests: [m("@cinatra-ai/auditor-agent")],
+      manifests: [m("@cinatra-ai/author-agent")],
     });
     expect(result).toHaveLength(1);
   });

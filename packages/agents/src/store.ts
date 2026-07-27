@@ -183,6 +183,13 @@ export type AgentTemplateRecord = {
   // JSON-as-text persisted (matches compiledPlan/hitlScreens convention);
   // deserialized to GatedStep[] here so callers can read it as a typed array.
   gatedSteps: GatedStep[] | null;
+  // The compiled agent-manifest LIFECYCLE declaration (cinatra#2047 D-1),
+  // JSON-as-text exactly like gatedSteps. Read by the lifecycle policy lattice
+  // and by the `changes_requested` repair route. Null for templates whose
+  // manifest declares no lifecycle block. OPTIONAL in the type (like `origin`)
+  // so legacy fixture objects in tests remain valid; `deserializeTemplate`
+  // always populates it.
+  lifecycleConfig?: string | null;
   // template-level default AgentAuthPolicy. null = use
   // DEFAULT_AGENT_AUTH_POLICY from auth-policy.ts. Persisted as JSON-as-text
   // in agent_templates.agent_auth_policy.
@@ -306,6 +313,9 @@ export type CreateAgentTemplateInput = {
   // agent_source_compile on every recompile.
   triggerMode?: "full" | "start-only" | null;
   gatedSteps?: GatedStep[] | null;
+  // The compiled manifest LIFECYCLE declaration as JSON-as-text (cinatra#2047
+  // D-1). null clears it; omit to leave the column unchanged.
+  lifecycleConfig?: string | null;
   // template-level default policy; pass null or omit to leave unset
   // (resolves to DEFAULT_AGENT_AUTH_POLICY at read time).
   agentAuthPolicy?: AgentAuthPolicy | null;
@@ -471,6 +481,9 @@ function serializeTemplate(input: CreateAgentTemplateInput) {
     // agent_source_compile on the first recompile.
     triggerMode: input.triggerMode ?? null,
     gatedSteps: input.gatedSteps ? JSON.stringify(input.gatedSteps) : null,
+    // The compiled manifest lifecycle declaration (already JSON-as-text from the
+    // install seed / builder). null on create when the manifest declares none.
+    lifecycleConfig: input.lifecycleConfig ?? null,
     // template-level AgentAuthPolicy as JSON-as-text. null = use
     // DEFAULT_AGENT_AUTH_POLICY at read time.
     agentAuthPolicy: input.agentAuthPolicy ? JSON.stringify(input.agentAuthPolicy) : null,
@@ -540,6 +553,9 @@ export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): Ag
                 : row.triggerMode === "start-only" ? "start-only"
                 : null) as "full" | "start-only" | null,
     gatedSteps: row.gatedSteps ? (JSON.parse(row.gatedSteps) as GatedStep[]) : null,
+    // Compiled manifest lifecycle stays JSON-as-text on the record; the lifecycle
+    // readers parse it fail-soft at their own call sites.
+    lifecycleConfig: row.lifecycleConfig ?? null,
     // JSON-as-text deserialization. Returns null when column is null.
     // fix: defensive parse — see parseAuthPolicySafe definition above.
     agentAuthPolicy: parseAuthPolicySafe(row.agentAuthPolicy ?? null),
@@ -885,6 +901,10 @@ async function _updateAgentTemplateImpl(
   // legacy template can be cleared back to null (e.g. on schema downgrade).
   // gatedSteps is JSON-stringified so the text column stays canonical.
   if (patch.triggerMode !== undefined) updates.triggerMode = patch.triggerMode ?? null;
+  // Compiled manifest lifecycle patch guard (cinatra#2047 D-1): a re-install must
+  // re-project the declaration (including CLEARING it when the new version drops
+  // the block), exactly as triggerMode does. Omit to leave the column unchanged.
+  if (patch.lifecycleConfig !== undefined) updates.lifecycleConfig = patch.lifecycleConfig ?? null;
   if (patch.gatedSteps !== undefined)
     updates.gatedSteps = patch.gatedSteps ? JSON.stringify(patch.gatedSteps) : null;
   // template-level AgentAuthPolicy patch handler. null clears the

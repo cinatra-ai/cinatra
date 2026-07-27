@@ -155,8 +155,10 @@ const bindingsMock = vi.hoisted(() => ({
   getMergedFieldRendererBindings: vi.fn(() => [
     { id: "@cinatra-ai/email-drafting-agent:email-drafts-review", kind: "email-drafts-review", priority: 80, midRunHitl: true, declaredBy: "@cinatra-ai/email-artifacts" },
     { id: "@cinatra-ai/email-follow-up-agent:email-drafts-review", kind: "email-drafts-review", priority: 80, midRunHitl: true, declaredBy: "@cinatra-ai/email-artifacts" },
-    // reviewer :output gate carries NO midRunHitl → its scope must NOT enter the set.
-    { id: "@cinatra-ai/reviewer-agent:drafts-output", kind: "email-drafts-review", priority: 80, declaredBy: "@cinatra-ai/reviewer-agent" },
+    // An UNRELATED-scope gate of the same kind carries NO midRunHitl → its scope
+    // must NOT enter the set. (Pre-cinatra#1796 this row was the retired reviewer
+    // binding; a live retained package now plays the same role.)
+    { id: "@cinatra-ai/web-research-agent:drafts-output", kind: "email-drafts-review", priority: 80, declaredBy: "@cinatra-ai/web-research-agent" },
   ]),
 }));
 vi.mock("../field-renderer-bindings.server", () => bindingsMock);

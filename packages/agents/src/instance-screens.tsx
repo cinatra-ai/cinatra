@@ -14,6 +14,7 @@ import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActo
 import type { ActorRoleHints } from "./auth-policy";
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "./run-stepper-steps";
 import { listReviewGatesForRun, readVerificationRecordsForGates } from "./artifact-review-gate-store";
+import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
 import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { readRecommendationParkForRun } from "./recommendation-hold";
@@ -297,6 +298,12 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // history. Access is already enforced above (readAgentRunById with the actor);
   // `listReviewGatesForRun` is a plain run-scoped read behind that door.
   const railGates = run ? await listReviewGatesForRun(run.id) : [];
+  // cinatra#2047 D-5: the run's LIFECYCLE POLICY DECISIONS, read from the run's own
+  // produced-event outbox rows. A fired decision already renders as its gate above;
+  // a SKIPPED one had no rendering at all before this — so an org-forbidden /
+  // default-skip / manifest-skip review was indistinguishable from no lifecycle
+  // machinery running. Plain run-scoped read behind the access door already cleared.
+  const railLifecycleDecisions = run ? await readLifecycleDecisionsForRun(run.id) : [];
   // S4 (cinatra#2042): the run's post-change verification records, keyed to their
   // gate — woven into the rail as "Core analysis" entries beneath each gate.
   const railVerifications = railGates.length
@@ -348,6 +355,16 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
             reviewTaskId: gateTaskById.get(v.gateId)!,
             outcome: v.outcome,
           })),
+        lifecycleDecisions: railLifecycleDecisions.map((d) => ({
+          eventId: d.eventId,
+          artifactId: d.artifactId,
+          outcome: d.outcome,
+          gateId: d.gateId,
+          decidedBy: d.decidedBy,
+          latticeOutcome: d.latticeOutcome,
+          reason: d.reason,
+          createdAt: d.createdAt,
+        })),
       })
     : { entries: [], activeOrdinal: null };
   const reviewHrefBase = run ? `/agents/${agentId}/${encodeURIComponent(run.id)}/review` : "";

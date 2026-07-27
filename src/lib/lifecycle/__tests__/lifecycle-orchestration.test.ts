@@ -111,7 +111,6 @@ describe("planReviewForEvent", () => {
     expect(plan.continuationMode).toBe("async_effects_gated");
     expect(plan.park).toBeNull();
     expect(plan.heldEffect).toBeNull(); // destination 'none' → nothing to hold
-    expect(plan.separationOfDutiesRequired).toBe(false);
   });
 
   it("user-provided durable local artifact → no-gate (skip)", () => {
@@ -134,19 +133,16 @@ describe("planReviewForEvent", () => {
     expect(plan.heldEffect).toBe("external_publish");
   });
 
-  it("org-REQUIRED bound → create-gate required + SoD (no self-approval opt-in)", () => {
+  it("org-REQUIRED bound → create-gate required, and the plan says nothing about WHO may decide", () => {
     const plan = planReviewForEvent(axes(), ctx({ bound: "required" }));
     expect(plan.action).toBe("create-gate");
     if (plan.action !== "create-gate") return;
     expect(plan.outcome).toBe("required");
-    expect(plan.separationOfDutiesRequired).toBe(true);
-  });
-
-  it("org-REQUIRED with self-approval opt-in → required WITHOUT SoD", () => {
-    const plan = planReviewForEvent(axes(), ctx({ bound: "required", selfApprovalOptIn: true }));
-    expect(plan.action).toBe("create-gate");
-    if (plan.action !== "create-gate") return;
-    expect(plan.separationOfDutiesRequired).toBe(false);
+    // cinatra#2047 row-3 re-scope: a bound decides whether a review is required,
+    // never who is eligible to decide it.
+    for (const key of Object.keys(plan)) {
+      expect(key).not.toMatch(/separation|selfApproval|eligib|reviewer/i);
+    }
   });
 
   it("org-FORBIDDEN bound → no-gate (a hard non-fire, even for agent_produced)", () => {
@@ -222,5 +218,54 @@ describe("evaluateEffectHold", () => {
       gateStatus: "resolved",
     });
     expect(v.held).toBe(false);
+  });
+
+  // ── D-7 (cinatra#2047): the TTL-expired park's terminal block lands ON THE
+  // EFFECT. S0's continuation contract: "TTL always-resumes with the protected
+  // effect in a terminal `policy_unresolved` blocked state." Before this the
+  // block existed only as a park-row status and the effect layer never consulted
+  // it, so the always-resume path released an effect whose policy was never
+  // resolved.
+  it("D-7: external + a TTL-expired policy_unresolved PARK → HELD terminally, even with a RESOLVED gate", () => {
+    const v = evaluateEffectHold({
+      event: { destinationClass: "external_publish", status: "processed", continuationAddress: "gate-1" },
+      gateStatus: "resolved",
+      gateDisposition: "approve",
+      policyUnresolvedPark: true,
+    });
+    expect(v.held).toBe(true);
+    expect(v.policyUnresolved).toBe(true);
+    expect(v.reason).toContain("policy_unresolved");
+  });
+
+  it("D-7: the park block OUTRANKS a pending gate (same terminal reason, not the ordinary hold)", () => {
+    const v = evaluateEffectHold({
+      event: { destinationClass: "pipeline_handoff", status: "processed", continuationAddress: "gate-1" },
+      gateStatus: "pending",
+      policyUnresolvedPark: true,
+    });
+    expect(v.held).toBe(true);
+    expect(v.policyUnresolved).toBe(true);
+  });
+
+  it("D-7: a park block on a NON-external (none) destination holds nothing", () => {
+    const v = evaluateEffectHold({
+      event: { destinationClass: "none", status: "processed", continuationAddress: null },
+      gateStatus: null,
+      policyUnresolvedPark: true,
+    });
+    expect(v.held).toBe(false);
+    expect(v.policyUnresolved).toBeUndefined();
+  });
+
+  it("D-7: no park ⇒ the verdict is unchanged (no policyUnresolved flag)", () => {
+    const v = evaluateEffectHold({
+      event: { destinationClass: "external_publish", status: "processed", continuationAddress: "gate-1" },
+      gateStatus: "resolved",
+      gateDisposition: "approve",
+      policyUnresolvedPark: false,
+    });
+    expect(v.held).toBe(false);
+    expect(v.policyUnresolved).toBeUndefined();
   });
 });
