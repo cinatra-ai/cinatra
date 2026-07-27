@@ -16,8 +16,8 @@ import "server-only";
 //
 // This drain is that delivery:
 //
-//   • a `producer_repair` repair gets a DETERMINISTIC repair run
-//     (`lifecycle-repair-run:<repairId>`) on the PRODUCING template, whose
+//   • an ASYNC-EFFECTS-GATED `producer_repair` repair gets a DETERMINISTIC repair
+//     run (`lifecycle-repair-run:<repairId>`) on the PRODUCING template, whose
 //     `input_params` carry the typed `ChangesRequestedRequest` — that row IS the
 //     delivered request; the producer reads it and answers through its own typed
 //     entry point (for the blog pipeline: `repairBlogPostDraft`), which pins the
@@ -25,7 +25,21 @@ import "server-only";
 //   • the repair is then CAS'd `requested` → `dispatched` (idempotent);
 //   • a repair whose producing run/template cannot be resolved — i.e. there is no
 //     producer to deliver to — is ESCALATED rather than left silently pending
-//     ("nothing silently drops", S2 AC).
+//     ("nothing silently drops", S2 AC);
+//   • a CHECKPOINTED repair is likewise ESCALATED, with its reason recorded. The
+//     plan's checkpointed half is a RESUME of the parked producing run at its
+//     continuation address, not a new run (S2: "resume for checkpointed flows, a
+//     new dispatched repair run for completed ones"); that resume is not shipped
+//     here, and delivering a checkpointed repair through the new-run mechanism
+//     would be the WRONG mechanism silently applied. Fail-closed to a human
+//     instead (Codex round, finding E).
+//
+// SCOPE, stated plainly: this drain DELIVERS the request and makes the hand-off
+// durable + idempotent; EXECUTING the repair run is the producing agent runtime's
+// job, exactly as executing any other agent run is. The `requested → dispatched`
+// move is therefore "the producer has been told", not "the repair has run"; a
+// producer that never answers leaves a `dispatched` repair and a PENDING base
+// produced-event — both ops-visible, neither silently dropped.
 //
 // No schema change: the run id is derived from the repair id (the same technique
 // `orphanRepairRunId` already uses for the successor gate's run slot), and the
@@ -63,8 +77,26 @@ export function repairIdFromRunId(runId: string | null | undefined): string | nu
 
 /** The sentinel a repair escalated by the DISPATCH pass carries on
  * `change_summary` (there is no dedicated reason column, and inventing one would
- * need a migration; the recovery store sets the same precedent). */
+ * need a migration; the recovery store sets the same precedent).
+ *
+ * The sentinel is NOT self-describing — read it only through
+ * `dispatchEscalationReason`, which requires `status === 'escalated'` first, so a
+ * genuine change summary that happens to start with the same characters can never
+ * be misread as an escalation reason (Codex round, finding C). */
 export const DISPATCH_ESCALATION_PREFIX = "[escalated] ";
+
+/** The recorded escalation reason for a repair, or null. Discriminates on STATUS
+ * first — never on the prefix alone. */
+export function dispatchEscalationReason(repair: {
+  status: string;
+  changeSummary: string | null;
+}): string | null {
+  if (repair.status !== "escalated") return null;
+  const summary = repair.changeSummary ?? "";
+  return summary.startsWith(DISPATCH_ESCALATION_PREFIX)
+    ? summary.slice(DISPATCH_ESCALATION_PREFIX.length)
+    : null;
+}
 
 /** The typed repair request delivered on the repair run's `input_params`. */
 export interface DeliveredRepairRequest {
@@ -80,6 +112,11 @@ export interface DeliveredRepairRequest {
   continuationAddress: string | null;
 }
 
+/** Known bound: the pass takes the OLDEST `limit` pending repairs. A row whose
+ * delivery keeps throwing stays `requested` and re-occupies one of those slots on
+ * every pass, so `limit` simultaneously-failing rows would starve newer ones.
+ * Bounding retries durably needs an attempt column (a migration), so the bound is
+ * recorded here rather than silently assumed away. */
 export interface RepairDispatchSummary {
   scanned: number;
   dispatched: number;
@@ -119,6 +156,18 @@ export async function dispatchPendingProducerRepairs(opts?: {
   for (const row of pending) {
     summary.scanned += 1;
     try {
+      if (row.continuationMode === "checkpointed") {
+        // The checkpointed half of the delivery contract is a RESUME, not a new
+        // run. Escalate rather than apply the wrong mechanism.
+        const escalated = await escalateRepair(
+          row.id,
+          "checkpointed repair delivery is a resume of the parked producing run, which this drain does not implement",
+        );
+        if (escalated) summary.escalated += 1;
+        else summary.raced += 1;
+        continue;
+      }
+
       const producer = await resolveProducingTemplate(row.producerRunId);
       if (!producer) {
         // No producing run/template to deliver to. Escalate rather than leaving the
@@ -154,7 +203,11 @@ export async function dispatchPendingProducerRepairs(opts?: {
           id: repairRunId(row.id),
           templateId: producer.templateId,
           orgId: row.orgId,
-          status: "queued",
+          // NOT "queued": a queued run implies an enqueued execution job, and this
+          // drain enqueues none (it delivers a durable request). `pending_input`
+          // is the shipped status for "this run is waiting on an input it has not
+          // received yet", which is exactly the state of an undelivered repair.
+          status: "pending_input",
           inputParams: JSON.stringify({ lifecycleRepairRequest: request }),
           sourceType: "lifecycle_repair",
           parentRunId: row.producerRunId ?? null,

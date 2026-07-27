@@ -88,6 +88,7 @@ import {
   closeBatchEpoch,
   resolveOpenBatchEpoch,
   listOpenBatchEpochs,
+  readRepair,
 } from "./lifecycle-repair-store";
 import { dispatchPendingProducerRepairs, repairIdFromRunId } from "./lifecycle-repair-dispatch-store";
 import type {
@@ -381,6 +382,31 @@ export type OrchestrateOutcome =
  * the event processed. Total + idempotent — a replay re-derives the same gate key
  * and parks the same (run,event,checkpoint), so re-running never duplicates.
  */
+/** How a production on a REPAIR RUN relates to its repair (cinatra#2047 D-1). */
+type RepairRunProductionClaim =
+  /** Not a repair-run production (or no repair claims it) — gate it normally. */
+  | "not-claimed"
+  /** A repair is open and has not answered yet — leave the event PENDING. */
+  | "awaiting-response"
+  /** The repair landed and pinned THIS production in its successor gate. */
+  | "successor-gated";
+
+async function classifyRepairRunProduction(row: ProducedEventRow): Promise<RepairRunProductionClaim> {
+  const repairId = repairIdFromRunId(row.producerRunId);
+  if (!repairId) return "not-claimed";
+  const repair = await readRepair(repairId);
+  if (!repair) return "not-claimed";
+  if (repair.status === "requested" || repair.status === "dispatched") return "awaiting-response";
+  if (
+    repair.status === "repaired" &&
+    repair.successorArtifactId === row.artifactId &&
+    repair.successorRepresentationRevisionId === row.representationRevisionId
+  ) {
+    return "successor-gated";
+  }
+  return "not-claimed";
+}
+
 export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<OrchestrateOutcome> {
   if (row.status !== "pending") return "already-processed";
   // A still-pending event that ALREADY carries a gate linkage was orchestrated by
@@ -395,11 +421,25 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
 
   // A production ON A DISPATCHED REPAIR RUN (cinatra#2047 D-1) is a repair
   // SUCCESSOR, not a fresh production: its review gate is the repair's successor
-  // gate, pinned by `submitRepairResponse` (never repinned under the reviewer).
-  // Opening an auto-gate here would double-gate the same revision. Settle the
-  // event instead — the base event's re-pointed continuation is what holds the
-  // artifact's effect until the successor gate resolves.
-  if (repairIdFromRunId(row.producerRunId)) {
+  // gate, pinned by `submitRepairResponse` (never repinned under the reviewer),
+  // so opening an auto-gate here would double-gate the same revision.
+  //
+  // FAIL-SAFE, not prefix-trusting (Codex round, finding B): a run id that merely
+  // LOOKS like a repair run is not enough. The branch only suppresses the gate
+  // when a repair actually claims this production, and it NEVER leaves a produced
+  // revision permanently ungated:
+  //   - repair still OPEN (`requested`/`dispatched`) → leave the event PENDING
+  //     (do NOT mark processed) and re-evaluate on a later sweep. A crash between
+  //     the successor production and `submitRepairResponse` therefore converges:
+  //     either the response lands (and the successor gate governs) or the event is
+  //     still pending and ops-visible — never silently dropped.
+  //   - repair `repaired` and its successor IS this production → the successor
+  //     gate exists; settle the event.
+  //   - anything else (no repair row, escalated, a DIFFERENT successor) → fall
+  //     through to NORMAL auto-gating, so the revision is gated like any other.
+  const repairClaim = await classifyRepairRunProduction(row);
+  if (repairClaim === "awaiting-response") return "no-gate";
+  if (repairClaim === "successor-gated") {
     await markProducedEventProcessed(row.eventId);
     return "no-gate";
   }

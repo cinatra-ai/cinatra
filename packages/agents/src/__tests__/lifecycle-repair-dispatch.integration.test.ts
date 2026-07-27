@@ -348,14 +348,18 @@ describe.skipIf(!HAS_DB)("cinatra#2047 D-1 — the repair round-trip is reachabl
       representationRevisionId: successorRev,
       producerRunId: repairRunId,
     });
+    const successorEventId = producedEventId(ev.artifactId, successorRev);
     const sweep = await orch.sweepReviewOrchestration({ limit: 50 });
     expect(sweep.gatesCreated).toBe(0);
-    expect(
-      await gateStore.readReviewGate(
-        repairRunId,
-        autoReviewTaskId(producedEventId(ev.artifactId, successorRev)),
-      ),
-    ).toBeNull();
+    expect(await gateStore.readReviewGate(repairRunId, autoReviewTaskId(successorEventId))).toBeNull();
+    // FAIL-SAFE: while the repair has not answered, the successor's event stays
+    // PENDING (never silently marked done) so a crash between the production and
+    // the response converges instead of leaving the revision ungated.
+    const beforeResponse = await pool(
+      `SELECT status FROM "${q(TEST_SCHEMA)}"."artifact_produced_outbox" WHERE event_id=$1`,
+      [successorEventId],
+    );
+    expect((beforeResponse.rows[0] as { status: string }).status).toBe("pending");
 
     const rr = await repairStore.submitRepairResponse({
       repairId: cr.repairId,
@@ -392,6 +396,16 @@ describe.skipIf(!HAS_DB)("cinatra#2047 D-1 — the repair round-trip is reachabl
     const verification = await verifStore.readVerificationRecordForGate(rr.successorGateId);
     expect(verification).not.toBeNull();
     expect(verification!.gateId).toBe(rr.successorGateId);
+
+    // Once the repair landed, the successor's own event settles (its gate is the
+    // repair successor gate) instead of opening a second one.
+    await orch.sweepReviewOrchestration({ limit: 50 });
+    const afterResponse = await pool(
+      `SELECT status FROM "${q(TEST_SCHEMA)}"."artifact_produced_outbox" WHERE event_id=$1`,
+      [successorEventId],
+    );
+    expect((afterResponse.rows[0] as { status: string }).status).toBe("processed");
+    expect(await gateStore.readReviewGate(repairRunId, autoReviewTaskId(successorEventId))).toBeNull();
 
     // 7. Approving the successor releases the held effect.
     await resolveGateApprove(rr.successorGateId);
@@ -443,6 +457,68 @@ describe.skipIf(!HAS_DB)("cinatra#2047 D-1 — the repair round-trip is reachabl
     const row = await repairRow(cr.repairId);
     expect(row!.status).toBe("escalated");
     expect(row!.change_summary).toContain(dispatchStore.DISPATCH_ESCALATION_PREFIX.trim());
+  });
+
+  it("CHECKPOINTED: the delivery is a resume, which this drain does not implement — escalated, never mis-delivered", async () => {
+    await projection.projectCoreLifecycleConfig();
+    const producerRunId = await seedRun(blogTemplateId);
+    const ev = await produce({ producerRunId, continuationMode: "checkpointed" });
+    await orch.sweepReviewOrchestration({ limit: 50 });
+    const baseTaskId = autoReviewTaskId(ev.eventId);
+    const baseGate = await gateStore.readReviewGate(producerRunId, baseTaskId);
+
+    const cr = await repairStore.recordChangesRequested({
+      runId: producerRunId,
+      reviewTaskId: baseTaskId,
+      orgId: ORG,
+      request: {
+        gateId: baseGate!.id,
+        decisionId: `dec-${randomUUID()}`,
+        idempotencyKey: `idem-${randomUUID()}`,
+        baseTarget: {
+          artifactId: ev.artifactId,
+          representationRevisionId: ev.representationRevisionId,
+        },
+        expectedBaseRevisionId: ev.representationRevisionId,
+        findings: [{ id: "f1", message: "fix it" }],
+        continuationMode: "checkpointed",
+        continuationAddress: baseGate!.id,
+      },
+      repairCapable: true,
+      producerRunId,
+      currentBaseRevisionId: ev.representationRevisionId,
+    });
+    expect(cr.ok).toBe(true);
+    if (!cr.ok) return;
+    expect(cr.route.kind).toBe("producer_repair");
+
+    const summary = await dispatchStore.dispatchPendingProducerRepairs();
+    expect(summary.escalated).toBeGreaterThanOrEqual(1);
+    const row = await repairRow(cr.repairId);
+    expect(row!.status).toBe("escalated");
+    expect(
+      dispatchStore.dispatchEscalationReason({
+        status: row!.status,
+        changeSummary: row!.change_summary,
+      }),
+    ).toContain("resume");
+    // No repair run was created for a checkpointed repair.
+    const runs = await pool(`SELECT id FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`, [
+      dispatchStore.repairRunId(cr.repairId),
+    ]);
+    expect(runs.rows.length).toBe(0);
+  });
+
+  it("SENTINEL: the escalation reason is read through the STATUS, never the prefix alone", async () => {
+    // A legitimate change summary that happens to start with the sentinel text is
+    // NOT an escalation reason on a repaired row.
+    expect(
+      dispatchStore.dispatchEscalationReason({
+        status: "repaired",
+        changeSummary: `${dispatchStore.DISPATCH_ESCALATION_PREFIX}not an escalation`,
+      }),
+    ).toBeNull();
+    expect(dispatchStore.dispatchEscalationReason({ status: "escalated", changeSummary: null })).toBeNull();
   });
 
   it("FENCE: with the activation fence OFF the maintenance drain dispatches nothing", async () => {
