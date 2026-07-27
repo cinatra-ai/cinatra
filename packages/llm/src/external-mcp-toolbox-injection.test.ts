@@ -135,8 +135,11 @@ describe("buildExternalMcpServerTools — manifest capability-marker selection",
 
     const tools = await buildExternalMcpServerTools("openai");
 
-    // No caller-supplied build context ⇒ the builder receives undefined for
-    // it (cinatra#2019 S4) — surface-gating toolboxes fail closed on that.
+    // DIRECT helper call with no build context ⇒ the builder receives
+    // undefined for it (cinatra#2019 S4) — surface-gating toolboxes fail
+    // closed on that. (Orchestration entry points supply their own
+    // agent_run default at a higher layer; that is pinned in
+    // toolbox-build-context-threading.test.ts.)
     expect(buildTools).toHaveBeenCalledWith("openai", undefined);
     expect(tools).toEqual([builderTool]);
     expect(vi.mocked(buildSingleExternalMcpTool)).not.toHaveBeenCalled();

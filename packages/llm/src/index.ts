@@ -552,10 +552,11 @@ export type DeterministicLlmExecutionInput = {
    * run is pinned to (`connectorInstancePin` — host-derived run data only,
    * never request payload). Identity NEVER rides here — per-instance
    * authority derives host-side from the ambient trusted actor stores.
-   * Absent ⇒ `injectMcpTools` supplies `{ surface: "agent_run" }` (every
-   * entry point of this package is agent-plane orchestration; chat/widget
-   * turns resolve their external tools via `resolveChatExternalMcpTools` in
-   * the host runtime instead).
+   * Absent ⇒ the deterministic entry points supply
+   * `{ surface: "agent_run" }` at their own `injectMcpTools` call sites
+   * (every entry point of this package is agent-plane orchestration;
+   * chat/widget turns resolve their external tools via
+   * `resolveChatExternalMcpTools` in the host runtime instead).
    */
   toolboxBuildContext?: ExtensionToolboxBuildContext;
 };
@@ -745,11 +746,14 @@ export async function injectMcpTools(params: {
   cinatraMcpToolOverride?: () => Promise<LlmMcpServerTool | null>;
   /**
    * Host-built toolbox build context (cinatra#2019 S4) — see
-   * `DeterministicLlmExecutionInput.toolboxBuildContext`. Absent ⇒
-   * `{ surface: "agent_run" }`: every orchestration entry point of this
-   * package (`runDeterministicLlmTask`, `runSkillAwareDeterministicLlmTask`,
-   * `generate`, `stream`) is an agent-plane surface — the chat/widget
-   * runtime assembles its external MCP tools via
+   * `DeterministicLlmExecutionInput.toolboxBuildContext`. PASS-THROUGH:
+   * this exported helper never invents a context — an absent value stays
+   * absent all the way to the toolbox boundary, where surface-gating
+   * toolboxes emit nothing (the fail-closed rule for unwidened callers).
+   * The four orchestration entry points (`runDeterministicLlmTask`,
+   * `runSkillAwareDeterministicLlmTask`, `generate`, `stream`) each supply
+   * `{ surface: "agent_run" }` themselves — they are agent-plane surfaces;
+   * the chat/widget runtime assembles its external MCP tools via
    * `resolveChatExternalMcpTools` and reaches this site only with MCP tools
    * already present (dedup passthrough above).
    */
@@ -772,7 +776,7 @@ export async function injectMcpTools(params: {
     declaredToolboxIds: params.declaredToolboxIds,
     skipExternalMcpRegistry: params.skipExternalMcpRegistry,
     cinatraMcpToolOverride: params.cinatraMcpToolOverride,
-    context: params.toolboxBuildContext ?? { surface: "agent_run" },
+    context: params.toolboxBuildContext,
   });
   if (mcpTools.length === 0) return params.tools;
   // Stream-only function-tool stripping.
@@ -894,7 +898,10 @@ async function runDeterministicLlmTaskImpl(input: DeterministicLlmExecutionInput
     provider: input.provider,
     tools: undefined,
     declaredToolboxIds: input.declaredToolboxIds,
-    toolboxBuildContext: input.toolboxBuildContext,
+    // Agent-plane entry point: default the build context HERE (not inside
+    // the exported injectMcpTools) so direct helper callers keep the
+    // absent-context fail-closed semantics (cinatra#2019 S4).
+    toolboxBuildContext: input.toolboxBuildContext ?? { surface: "agent_run" },
   });
   // Execution-capability injection — exactly once, alongside (independent of)
   // MCP injection. Passthrough + byte-identical while the rollout flag is off.
@@ -1026,7 +1033,9 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
     declaredToolboxIds: input.declaredToolboxIds,
     skipExternalMcpRegistry: input.skipExternalMcpRegistry,
     cinatraMcpToolOverride: input.cinatraMcpToolOverride,
-    toolboxBuildContext: input.toolboxBuildContext,
+    // Agent-plane entry point: default the build context HERE (not inside
+    // the exported injectMcpTools) — see runDeterministicLlmTaskImpl.
+    toolboxBuildContext: input.toolboxBuildContext ?? { surface: "agent_run" },
   })) ?? baseTools;
 
   // If personal skill content is provided, include it in context
@@ -1228,6 +1237,12 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
     provider: adapter.provider,
     tools: adapterInput.tools,
     declaredToolboxIds: adapterInput.declaredToolboxIds,
+    // Agent-plane entry point (cinatra#2019 S4). OrchestrateGenerateInput is
+    // deliberately NOT widened with a context field — its remaining fields
+    // spread into the provider adapter call below, and a context there would
+    // cross the provider boundary. The fixed agent_run surface is supplied
+    // here instead.
+    toolboxBuildContext: { surface: "agent_run" },
   });
   // Execution-capability injection — exactly once, independent of MCP.
   const exec = applyExecutionInjection({
@@ -1314,6 +1329,10 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<voi
     declaredToolboxIds: input.declaredToolboxIds,
     skipMcpInjection: input.skipMcpInjection,
     preserveFunctionTools: input.preserveFunctionTools,
+    // Agent-plane entry point (cinatra#2019 S4) — OrchestrateStreamInput is
+    // not widened (chat streams pass pre-assembled MCP tools and hit the
+    // dedup/skip passthroughs above); the fixed surface is supplied here.
+    toolboxBuildContext: { surface: "agent_run" },
   });
   // Execution-capability injection — exactly once, independent of MCP. Stream is
   // a multi-step tool loop already, so no step-budget widening (streaming:true).

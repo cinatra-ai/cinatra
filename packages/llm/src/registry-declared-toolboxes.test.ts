@@ -188,7 +188,7 @@ describe("toolbox build-context threading (cinatra#2019 S4)", () => {
     expect(tools).toEqual([wpTool]);
   });
 
-  it("declared-id branch passes undefined for the context when the caller supplies none (fail-closed for surface-gating toolboxes)", async () => {
+  it("declared-id branch passes undefined for the context when the DIRECT registry caller supplies none (fail-closed for surface-gating toolboxes; orchestration entry points add their own agent_run default upstream)", async () => {
     const buildTools = vi.fn(async () => []);
     vi.mocked(loadExternalMcpToolboxBySlug).mockResolvedValueOnce({ buildTools });
 

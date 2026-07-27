@@ -10,15 +10,17 @@
  *         → manifest toolbox `buildTools(provider, context)`
  *
  * Contract under test:
- *   1. DEFAULT — a caller that supplies no context still yields
- *      `{ surface: "agent_run" }` at the toolbox boundary: every entry point
- *      of this package is agent-plane orchestration, so a surface-gating
- *      toolbox (trusted-site native read-injection) can rely on the surface
- *      being declared and refuses non-"chat" builds fail-closed.
+ *   1. ENTRY-POINT DEFAULT — an entry-point caller that supplies no context
+ *      still yields `{ surface: "agent_run" }` at the toolbox boundary: the
+ *      four orchestration entry points are agent-plane surfaces and each
+ *      supplies the default at its own injectMcpTools call site.
  *   2. PASSTHROUGH — a caller-supplied context (the llm-bridge's
  *      `{ surface: "agent_run", connectorInstancePin }` once a resolved run
  *      carries an instance binding) reaches the builder VERBATIM — the pin
  *      is a pure narrowing filter and must never be rewritten in transit.
+ *   3. FAIL-CLOSED PASS-THROUGH — the exported `injectMcpTools` itself never
+ *      invents a context: a direct caller's absent context stays absent all
+ *      the way to the toolbox, which then emits nothing if it surface-gates.
  *
  * The heavy import graph is mocked exactly like personal-skill-injection's
  * harness; the REAL registry (resolveMcpToolsForDeclaredIds) and the REAL
@@ -113,7 +115,9 @@ const _generateMock = vi.fn(
 );
 
 import { loadExternalMcpToolboxBySlug } from "@/lib/external-mcp-toolbox-loader.server";
+import { buildExternalMcpServerTools } from "./mcp-access";
 import {
+  injectMcpTools,
   runDeterministicLlmTask,
   runSkillAwareDeterministicLlmTask,
 } from "./index";
@@ -215,5 +219,37 @@ describe("toolbox build-context threading — orchestration entry points (cinatr
       }),
     );
     expect(forwarded).toHaveBeenCalledWith("openai", context);
+  });
+
+  it("the ALWAYS-INJECT path (no declaredToolboxIds) carries the agent_run default into the buildExternalMcpServerTools options", async () => {
+    await runWithActor(() =>
+      runSkillAwareDeterministicLlmTask({
+        provider: "openai",
+        system: "s",
+        user: "u",
+        // declaredToolboxIds deliberately absent — the legacy always-inject
+        // enumeration runs, and the entry-point default must ride its options.
+      }),
+    );
+
+    expect(vi.mocked(buildExternalMcpServerTools)).toHaveBeenCalledWith("openai", {
+      skipRegistryFallback: false,
+      context: { surface: "agent_run" },
+    });
+  });
+
+  it("the exported injectMcpTools is PASS-THROUGH: an absent context stays absent (fail-closed for direct callers)", async () => {
+    const buildTools = mockToolboxOnce();
+
+    await injectMcpTools({
+      provider: "openai",
+      tools: undefined,
+      declaredToolboxIds: ["fixture-toolbox"],
+      // no toolboxBuildContext — a direct (non-entry-point) caller must NOT
+      // have a surface invented for it; the toolbox sees undefined and a
+      // surface-gating toolbox emits nothing.
+    });
+
+    expect(buildTools).toHaveBeenCalledWith("openai", undefined);
   });
 });
