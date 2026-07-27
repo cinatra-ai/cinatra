@@ -29,9 +29,10 @@ afterEach(() => cleanup());
 const NO_BLOCKERS = {
   teams: 0,
   activeProjects: 0,
-  connectors: 0,
+  installedExtensions: 0,
   dashboards: 0,
   agents: 0,
+  liveAgentRuns: 0,
 } as const;
 
 const BASE = {

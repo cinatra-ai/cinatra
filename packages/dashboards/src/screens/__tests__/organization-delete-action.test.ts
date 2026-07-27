@@ -116,8 +116,15 @@ describe("deleteOrganizationAction — fail-closed write gate", () => {
     expect(deleteOrganizationReferenceGuarded).not.toHaveBeenCalled();
   });
 
-  it("blocked delete: per-kind counts pass through for the danger card", async () => {
-    const blockers = { teams: 1, activeProjects: 0, connectors: 2, dashboards: 0, agents: 0 };
+  it("blocked delete: per-kind counts pass through for the danger card (incl. #1939 kinds)", async () => {
+    const blockers = {
+      teams: 1,
+      activeProjects: 0,
+      installedExtensions: 2,
+      dashboards: 0,
+      agents: 0,
+      liveAgentRuns: 3,
+    };
     deleteOrganizationReferenceGuarded.mockResolvedValue({
       ok: false,
       reason: "blocked",
@@ -129,8 +136,22 @@ describe("deleteOrganizationAction — fail-closed write gate", () => {
     expect(result).toMatchObject({ ok: false, blockers });
     if (!result.ok) {
       expect(result.error).toContain("1 team(s)");
-      expect(result.error).toContain("2 connector(s)");
+      expect(result.error).toContain("2 installed extension(s)");
+      expect(result.error).toContain("3 running agent(s)");
     }
+    expect(logAuditEvent).not.toHaveBeenCalled();
+  });
+
+  it("not-archived refusal (archived-only gate on) surfaces the archive-first guidance", async () => {
+    deleteOrganizationReferenceGuarded.mockResolvedValue({
+      ok: false,
+      reason: "not-archived",
+    });
+    const result = await deleteOrganizationAction(
+      form({ organizationId: ORG, confirmName: "Acme" }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("Archive this organization first");
     expect(logAuditEvent).not.toHaveBeenCalled();
   });
 

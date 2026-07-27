@@ -38,8 +38,8 @@ const BLOCKER_LABELS: ReadonlyArray<{
     hint: "archive them from their project pages",
   },
   {
-    key: "connectors",
-    label: "Connectors",
+    key: "installedExtensions",
+    label: "Installed extensions",
     hint: "uninstall them from the extensions surface",
   },
   {
@@ -48,6 +48,11 @@ const BLOCKER_LABELS: ReadonlyArray<{
     hint: "delete them from their dashboards pages",
   },
   { key: "agents", label: "Agents", hint: "delete or re-home them first" },
+  {
+    key: "liveAgentRuns",
+    label: "Running agents",
+    hint: "wait for them to finish or stop them first",
+  },
 ];
 
 export function OrganizationDeleteDangerForm({
