@@ -67,13 +67,12 @@ export interface UpsertPolicyRuleInput {
   destinationClass: DestinationClass;
   originKind: LifecycleOriginKind;
   bound: "required" | "forbidden";
-  selfApprovalOptIn?: boolean;
 }
 
 /**
  * Upsert an org bound. Keyed by the full (org, checkpoint, artifactType,
  * destinationClass, originKind) tuple — a re-upsert of the same key updates the
- * bound + opt-in in place (idempotent). `silent` is NOT storable: to remove a
+ * bound in place (idempotent). `silent` is NOT storable: to remove a
  * bound, call `deleteLifecyclePolicyRule`.
  */
 export async function upsertLifecyclePolicyRule(
@@ -89,7 +88,6 @@ export async function upsertLifecyclePolicyRule(
       destinationClass: input.destinationClass,
       originKind: input.originKind,
       bound: input.bound,
-      selfApprovalOptIn: input.selfApprovalOptIn ?? false,
     })
     .onConflictDoUpdate({
       target: [
@@ -101,7 +99,6 @@ export async function upsertLifecyclePolicyRule(
       ],
       set: {
         bound: input.bound,
-        selfApprovalOptIn: input.selfApprovalOptIn ?? false,
         updatedAt: new Date(),
       },
     })
@@ -143,7 +140,6 @@ export async function resolveOrgPolicyRule(
     .select({
       artifactType: lifecyclePolicyRules.artifactType,
       bound: lifecyclePolicyRules.bound,
-      selfApprovalOptIn: lifecyclePolicyRules.selfApprovalOptIn,
     })
     .from(lifecyclePolicyRules)
     .where(
@@ -160,10 +156,7 @@ export async function resolveOrgPolicyRule(
   const wildcard = rows.find((r) => r.artifactType === POLICY_ARTIFACT_TYPE_WILDCARD);
   const chosen = exact ?? wildcard;
   if (!chosen) return { bound: "silent" };
-  return {
-    bound: chosen.bound === "required" ? "required" : "forbidden",
-    selfApprovalOptIn: chosen.selfApprovalOptIn,
-  };
+  return { bound: chosen.bound === "required" ? "required" : "forbidden" };
 }
 
 // ---------------------------------------------------------------------------
@@ -439,7 +432,6 @@ export interface LifecyclePolicyRuleRow {
   destinationClass: DestinationClass;
   originKind: LifecycleOriginKind;
   bound: "required" | "forbidden";
-  selfApprovalOptIn: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -452,7 +444,20 @@ export interface LifecyclePolicyRuleRow {
  */
 export async function listLifecyclePolicyRules(orgId: string): Promise<LifecyclePolicyRuleRow[]> {
   const rows = await db
-    .select()
+    // EXPLICIT projection, not a bare `select()`: the retired `self_approval_opt_in`
+    // column is still physically present (dropping it would need a migration) and
+    // must stay genuinely UNREAD — a star-select would keep reading it.
+    .select({
+      id: lifecyclePolicyRules.id,
+      orgId: lifecyclePolicyRules.orgId,
+      checkpoint: lifecyclePolicyRules.checkpoint,
+      artifactType: lifecyclePolicyRules.artifactType,
+      destinationClass: lifecyclePolicyRules.destinationClass,
+      originKind: lifecyclePolicyRules.originKind,
+      bound: lifecyclePolicyRules.bound,
+      createdAt: lifecyclePolicyRules.createdAt,
+      updatedAt: lifecyclePolicyRules.updatedAt,
+    })
     .from(lifecyclePolicyRules)
     .where(eq(lifecyclePolicyRules.orgId, orgId))
     .orderBy(
@@ -469,7 +474,6 @@ export async function listLifecyclePolicyRules(orgId: string): Promise<Lifecycle
     destinationClass: r.destinationClass as DestinationClass,
     originKind: r.originKind as LifecycleOriginKind,
     bound: r.bound === "required" ? "required" : "forbidden",
-    selfApprovalOptIn: r.selfApprovalOptIn,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
   }));

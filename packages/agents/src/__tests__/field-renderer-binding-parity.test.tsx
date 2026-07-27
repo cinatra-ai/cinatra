@@ -30,7 +30,6 @@ import { ListPickerRenderer } from "../list-picker-renderer";
 import { ContextSelectorRenderer } from "../context-selector-renderer";
 import { CampaignRecipientsReviewRenderer } from "../campaign-recipients-review-renderer";
 import { EmailDraftsReviewRenderer } from "../email-drafts-review-renderer";
-import { ReviewerAgentOutputRenderer } from "../reviewer-agent-output-renderer";
 import { CtaRenderer } from "../cta-renderer";
 import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 import { GroupedSetupFormRenderer } from "../grouped-setup-form-renderer";
@@ -93,20 +92,21 @@ const PARITY_TABLE: ReadonlyArray<
   // table. The reviewer `:contacts-output` gate + this agent's own `:output` id
   // carry NO component and KEEP the host renderer (the retain-host guardrail).
   ["@cinatra-ai/email-recipient-selection-agent:output", CampaignRecipientsReviewRenderer as never, 80],
-  // The non-reviewer drafts/follow-up gate renderer COMPONENTS relocated into
+  // The drafts/follow-up gate renderer COMPONENTS relocated into
   // @cinatra-ai/email-artifacts (cinatra#1959): both agent-namespaced
   // `:email-drafts-review` ids + the bare `email-drafts-review` alias now resolve
   // to the ExtensionFieldRenderer wrapper (asserted in the migrated-binding block
-  // + the bare-alias test below), NOT this frozen host table. The reviewer
-  // `:output` gates (drafts-output/followups-output) + these agents' own `:output`
-  // ids carry NO component and KEEP the host renderer (the retain-host guardrail).
+  // + the bare-alias test below), NOT this frozen host table. These agents' own
+  // `:output` ids carry NO component and KEEP the host renderer.
   ["@cinatra-ai/email-drafting-agent:output", EmailDraftsReviewRenderer as never, 80],
   ["@cinatra-ai/email-follow-up-agent:output", EmailDraftsReviewRenderer as never, 80],
-  ["@cinatra-ai/reviewer-agent:contacts-output", CampaignRecipientsReviewRenderer as never, 80],
-  ["@cinatra-ai/reviewer-agent:drafts-output", EmailDraftsReviewRenderer as never, 80],
-  ["@cinatra-ai/reviewer-agent:followups-output", EmailDraftsReviewRenderer as never, 80],
-  ["@cinatra-ai/reviewer-agent:output", ReviewerAgentOutputRenderer as never, 80],
-  ["@cinatra/email-reviewer-agent:output", ReviewerAgentOutputRenderer as never, 80],
+  // NOTE (cinatra#1796 retirement teardown): the four retiring reviewer bindings
+  // (:contacts-output / :drafts-output / :followups-output / :output) and the
+  // `@cinatra/email-reviewer-agent:output` legacy-scope alias were DELETED with
+  // the reviewer-output dispatcher they pointed at. Every flow that used them now
+  // holds on its own gate or on the core-opened review gate. They resolve to NO
+  // custom entry (asserted below), the same accepted unresumable dead-end as the
+  // ai-review-panel alias retired before them.
   // NOTE: the `@cinatra/email-reviewer-agent:ai-review-panel` legacy-scope alias
   // was DELETED (cinatra#1625 S8/M3, owner action-boundary ruling 2026-07-18) —
   // a retired-scope binding whose review-check mutations were already inert stubs
@@ -135,9 +135,10 @@ const PARITY_TABLE: ReadonlyArray<
   // registry (a floor that re-resolved its own fallback xRenderer would recurse).
   ["@cinatra-ai/agent-builder:schema-field-fallback", SchemaOnlyFloorRenderer as never, 1],
   ["@cinatra-ai/agent-builder:grouped-setup-form", GroupedSetupFormRenderer as never, 50],
-  // NOTE: @cinatra-ai/auditor-agent:review MIGRATED into its extension
-  // (cinatra#1625) — it now resolves to the ExtensionFieldRenderer wrapper at
-  // priority 80, asserted in the migrated-binding it.each below, not here.
+  // NOTE: the auditor-review binding was RETIRED with its extension
+  // (cinatra#1796 / #2047 row 8) — the package is gone from devExtensions, its
+  // kind left the vocabulary, and the id now resolves to null (asserted by "an
+  // unknown namespaced id resolves to NO custom entry" below).
   // NOTE: the @cinatra-ai/trigger-agent renderers (:configure / the never-bound
   // :confirm) were RETIRED with the trigger-agent extension (cinatra#1034).
   // Scheduling is now a platform default rendered by the host TriggerScreen
@@ -173,17 +174,13 @@ describe("resolution parity with the retired hand map", () => {
     ["@cinatra-ai/list-curator-agent:final-list-review", 90],
     ["@cinatra-ai/blog-linkedin-publish-agent:draft-review", 90],
     ["@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", 90],
-    // The auditor-review component relocated into @cinatra-ai/auditor-agent
-    // (cinatra#1625) at its pre-cutover priority 80.
-    ["@cinatra-ai/auditor-agent:review", 80],
     // follow-up-cadence relocated into @cinatra-ai/email-artifacts
     // (cinatra#1625): BOTH scoped ids load the same pack component, priority 90.
     ["@cinatra-ai/email-follow-up-agent:follow-up-cadence", 90],
     ["@cinatra-ai/email-drafting-agent:follow-up-cadence", 90],
-    // email-drafts-review non-reviewer gate renderer relocated into
+    // email-drafts-review gate renderer relocated into
     // @cinatra-ai/email-artifacts (cinatra#1959): BOTH agent-namespaced ids load
-    // the same pack component at the pre-cutover priority 80. The reviewer
-    // `:output` gates keep the host renderer (retain-host guardrail).
+    // the same pack component at the pre-cutover priority 80.
     ["@cinatra-ai/email-drafting-agent:email-drafts-review", 80],
     ["@cinatra-ai/email-follow-up-agent:email-drafts-review", 80],
     // campaign-recipients-review non-reviewer gate renderer relocated into
@@ -325,6 +322,30 @@ describe("resolution parity with the retired hand map", () => {
     expect(resolveWith("@cinatra-ai/unknown-agent:whatever")).toBeNull();
   });
 
+  it("cinatra#1796: every RETIRED reviewer/auditor binding resolves to NO custom entry", () => {
+    // The retirement teardown deleted the reviewer-output dispatcher, the four
+    // reviewer bindings that pointed at it, its legacy-scope alias, and the
+    // auditor-review binding + kind. Ids are reassembled from parts so this
+    // frozen parity table holds no live reference to a retired identity (the
+    // same technique the retirement-identity gate uses on itself) — the
+    // repo-wide exact-identity grep must stay at zero.
+    const SCOPE = "@cinatra-ai/";
+    const RETIRED_IDS = [
+      `${SCOPE}${"reviewer"}-agent:output`,
+      `${SCOPE}${"reviewer"}-agent:drafts-output`,
+      `${SCOPE}${"reviewer"}-agent:followups-output`,
+      `${SCOPE}${"reviewer"}-agent:contacts-output`,
+      `${SCOPE}${"auditor"}-agent:review`,
+      "@cinatra/email-reviewer-agent:output",
+    ];
+    for (const id of RETIRED_IDS) {
+      expect(resolveWith(id), id).toBeNull();
+    }
+    // And the two kinds left the neutral vocabulary entirely.
+    expect(KNOWN_FIELD_RENDERER_KINDS).not.toContain("reviewer-output");
+    expect(KNOWN_FIELD_RENDERER_KINDS).not.toContain("auditor-review");
+  });
+
   it("the DELETED ai-review-panel legacy alias resolves to NO custom entry (unresumable dead-end, not a schema floor)", () => {
     // cinatra#1625 S8/M3: the retired-scope `ai-review-panel` alias was
     // deleted (owner action-boundary ruling 2026-07-18). Neither the qualified
@@ -341,7 +362,6 @@ describe("mid-run HITL classification parity", () => {
   it.each([
     "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
     "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
-    "@cinatra-ai/auditor-agent:review",
     "@cinatra-ai/context-selection-agent:context-selector",
     // cinatra#1959: the pack-served re-entrant drafts / follow-ups gates carry
     // midRunHitl:true in the merged bindings (email-artifacts declares it), so the

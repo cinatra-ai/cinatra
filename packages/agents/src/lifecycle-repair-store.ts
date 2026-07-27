@@ -129,6 +129,11 @@ export interface RecordChangesRequestedInput {
   lineageId?: string;
   /** The cycle bound (test override); defaults to `MAX_REPAIR_CYCLES`. */
   maxCycles?: number;
+  /** The DECIDING actor (cinatra#2047 D-2). `changes_requested` RESOLVES the base
+   * gate, so it is a terminal decision and must leave the same decider of record
+   * the approve/reject commit now leaves: `resolved_by` on the gate. Null where
+   * the host cannot name an actor (a worker-driven record). */
+  decidedBy?: string | null;
 }
 
 export type RecordChangesRequestedResult =
@@ -216,6 +221,9 @@ export async function recordChangesRequested(
         status: "resolved",
         disposition: "changes_requested",
         fingerprint,
+        // The DECIDING actor (cinatra#2047 D-2) — `changes_requested` resolves the
+        // gate, so it records its decider exactly like approve/reject.
+        resolvedBy: input.decidedBy ?? null,
         resolvedAt: sql`now()`,
       })
       .where(

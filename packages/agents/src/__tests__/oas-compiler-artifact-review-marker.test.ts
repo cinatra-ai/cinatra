@@ -76,7 +76,7 @@ async function compileSteps(gate: Record<string, unknown>): Promise<CompiledAgen
   const p = path.join(tempDir, "agent.json");
   writeFileSync(p, JSON.stringify(buildAgentJson(gate), null, 2));
   const res = await compileOasAgentJson({
-    packageName: "@cinatra-ai/reviewer-agent",
+    packageName: "@cinatra-ai/web-research-agent",
     oasSourcePath: p,
     registryPath: path.join(tempDir, "components.json"),
   });
@@ -89,7 +89,7 @@ describe("cinatra#1796 — OAS compiler artifact-review marker propagation", () 
   it("propagates artifactReview.targetsInput onto the compiled InputMessageNode step", async () => {
     const steps = await compileSteps(
       inputMessageNode("approval_gate", {
-        renderer: "@cinatra-ai/reviewer-agent:output",
+        renderer: "@cinatra-ai/web-research-agent:output",
         riskClass: "approval",
         artifactReview: { targetsInput: "reviewTargets" },
       }),
@@ -102,7 +102,7 @@ describe("cinatra#1796 — OAS compiler artifact-review marker propagation", () 
   it("leaves artifactReviewTargetsInput UNSET for a gate without the marker", async () => {
     const steps = await compileSteps(
       inputMessageNode("approval_gate", {
-        renderer: "@cinatra-ai/reviewer-agent:output",
+        renderer: "@cinatra-ai/web-research-agent:output",
       }),
     );
     const gateStep = steps.find((s) => s.nodeType === "input_message")!;

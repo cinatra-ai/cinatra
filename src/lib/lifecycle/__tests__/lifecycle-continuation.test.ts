@@ -15,7 +15,6 @@ function decision(over: Partial<PolicyDecision>): PolicyDecision {
   return {
     outcome: "fire",
     fired: true,
-    separationOfDutiesRequired: false,
     reason: "test",
     decidedBy: "core-default",
     ...over,
