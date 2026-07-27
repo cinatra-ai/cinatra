@@ -55,14 +55,31 @@
  *      line as the table name") is what keeps `REFERENCES artifact_review_gates
  *      (id) ON DELETE CASCADE` and `DROP TABLE artifact_review_gates` clean.
  *
- * KNOWN RESIDUALS (documented, not silent — same posture as the sibling guards):
+ * KNOWN RESIDUALS (documented, not silent — same posture as the sibling guards).
+ * They were enumerated by an independent review round and each is recorded here
+ * with its disposition rather than quietly accepted:
+ *
+ *   MISSES (accepted):
  *   - A table object passed THROUGH a generic helper (`writeRow(artifactReview
  *     Gates, ...)`) is not statically attributable to a write verb. A reviewer,
  *     not this script, catches that shape.
+ *   - An alias minted in ANOTHER module and imported under the new name
+ *     (`export { artifactReviewGates as gates }` there, `import { gates }`
+ *     here). Needs cross-module symbol resolution; see resolveLocalSymbols().
  *   - SQL assembled from fragments held in separate variables, such that no
  *     single verb->target span exists in one file.
  *   - Writes issued from a tree this guard does not scan by construction
  *     (migrations and `scripts/`, both root-allowlisted on purpose).
+ *
+ *   OVER-DETECTION (accepted, and deliberately preferred):
+ *   - A STRING LITERAL that reads like SQL is indistinguishable from SQL —
+ *     a diagnostic such as `"Never UPDATE artifact_review_gates directly"` is
+ *     flagged. So is `EXPLAIN UPDATE ...`, and a non-database method that
+ *     happens to be called `.delete(artifactReviewGates)`. This guard fails
+ *     toward over-detection ON PURPOSE: a spurious red is one review
+ *     conversation, whereas a miss is a silent second approval path — the exact
+ *     failure this exists to prevent. The pinned tests record this behaviour so
+ *     it stays a decision rather than a surprise.
  *
  * Exit 0 -> clean; exit 1 -> at least one violation (printed to stderr);
  * exit 2 -> scanner error.
@@ -188,27 +205,64 @@ export const REVIEW_DECISION_SYMBOLS = [
 //
 // `DELETE` is only a verb when followed by `FROM`, which is what keeps the
 // ubiquitous `REFERENCES artifact_review_gates(id) ON DELETE CASCADE` clean.
-const RAW_VERB = String.raw`INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|COPY`;
+// `COPY` is handled separately below because only `COPY <target> FROM` writes —
+// `COPY <target> TO` is an export, i.e. a read.
+const RAW_VERB = String.raw`INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?`;
 
 // An optional schema qualifier in front of the table: a bare identifier, a
 // quoted identifier, or the repo's `"${schema}"` template interpolation, then a
 // dot. e.g. `"${schema}".` / `cinatra.` / `"cinatra".`
 const SCHEMA_QUALIFIER = String.raw`(?:["\`]?(?:\$\{[^}]*\}|[A-Za-z_][\w$]*)["\`]?\s*\.\s*)?`;
 
-function rawSqlPattern(tables) {
+// A leading run of OTHER comma-separated targets, so the protected table is
+// still found when it is not the FIRST target — e.g.
+// `TRUNCATE TABLE scratch_rows, artifact_review_gates`.
+const OTHER_TARGETS = String.raw`(?:["\`]?[\w$]+["\`]?(?:\s*\.\s*["\`]?[\w$]+["\`]?)?\s*,\s*)*`;
+
+/**
+ * The write TARGET, in either shape this repo actually uses:
+ *   - the snake_case table identifier, bare / quoted / schema-qualified
+ *     (including the `"${schema}"."artifact_review_gates"` interpolation), or
+ *   - a Drizzle table OBJECT interpolated into a tagged template, i.e.
+ *     ``sql`INSERT INTO ${artifactReviewAudit} ...` ``. That idiom is live in
+ *     this package (see project-lease-store.ts), so omitting it would leave the
+ *     most natural hand-rolled parallel writer undetected.
+ *
+ * Capture groups: 1 = interpolated symbol, 2 = snake_case table.
+ */
+function targetAlternation(tables, symbols) {
+  const interpolated = String.raw`\$\{\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)*(${symbols.join("|")})\s*\}`;
+  const identifier = SCHEMA_QUALIFIER + String.raw`["\`]?(${tables.join("|")})\b`;
+  return `(?:${interpolated}|${identifier})`;
+}
+
+function rawSqlPattern(tables, symbols) {
+  // Groups: 1 = verb, 2 = interpolated symbol, 3 = snake_case table.
   return new RegExp(
     String.raw`\b(${RAW_VERB})\s+(?:ONLY\s+)?` +
-      SCHEMA_QUALIFIER +
-      String.raw`["\`]?(${tables.join("|")})\b`,
+      OTHER_TARGETS +
+      targetAlternation(tables, symbols),
+    "gi",
+  );
+}
+
+function copyPattern(tables, symbols) {
+  // `COPY <target> [(cols)] FROM` only — the writing direction.
+  // Groups: 1 = verb, 2 = interpolated symbol, 3 = snake_case table.
+  return new RegExp(
+    String.raw`\b(COPY)\s+` +
+      targetAlternation(tables, symbols) +
+      String.raw`\s*(?:\([^)]*\)\s*)?FROM\b`,
     "gi",
   );
 }
 
 function drizzlePattern(symbols) {
   return new RegExp(
-    // `.insert(` / `.update(` / `.delete(`, then optional namespace qualifiers
+    // `.insert(` / `.update(` / `.delete(`, an optional explicit type argument
+    // (`insert<typeof t>(...)`), then optional namespace qualifiers
     // (`schema.`, `schemaMod.`), then one of the table symbols.
-    String.raw`\.\s*(insert|update|delete)\s*\(\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)*(${symbols.join("|")})\b`,
+    String.raw`\.\s*(insert|update|delete)\s*(?:<[^<>]*>)?\s*\(\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)*(${symbols.join("|")})\b`,
     "g",
   );
 }
@@ -216,20 +270,36 @@ function drizzlePattern(symbols) {
 /**
  * Resolve the LOCAL names of the four table symbols inside one module.
  *
- * `import { artifactReviewGates } from "./schema"` yields the symbol itself;
- * `import { artifactReviewGates as gates }` yields `gates` too, so a rename at
- * the import site cannot evade the builder-DML pattern. Namespace imports
- * (`import * as schema`) are already handled by the qualifier group in
- * drizzlePattern().
+ * Covers the two rebindings that stay visible in a single file:
+ *   - an import rename — `import { artifactReviewGates as gates }`
+ *   - a local assignment — `const gates = artifactReviewGates`
+ * so neither is an escape hatch from the builder or interpolation patterns.
+ * Namespace imports (`import * as schema`) are handled by the qualifier group
+ * in drizzlePattern() / targetAlternation().
+ *
+ * KNOWN RESIDUAL: an alias introduced in a DIFFERENT module and imported under
+ * the new name (`export { artifactReviewGates as gates }` in one file, then
+ * `import { gates }` in another) is not resolved — that needs cross-module
+ * symbol resolution, which a lexical guard does not do. It is the same residual
+ * class the sibling objects guard carries, and it is a deliberate evasion
+ * rather than an accident, which is the shape code review catches.
  */
 export function resolveLocalSymbols(code, symbols = REVIEW_DECISION_SYMBOLS) {
   const local = new Set(symbols);
-  const aliasRe = new RegExp(
-    String.raw`\b(${symbols.join("|")})\s+as\s+([A-Za-z_$][\w$]*)`,
-    "g",
-  );
-  let m;
-  while ((m = aliasRe.exec(code)) !== null) local.add(m[2]);
+  const group = `(?:${symbols.join("|")})`;
+  const patterns = [
+    // `artifactReviewGates as gates`
+    new RegExp(String.raw`\b${group}\s+as\s+([A-Za-z_$][\w$]*)`, "g"),
+    // `const gates = artifactReviewGates`
+    new RegExp(
+      String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?=\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)*${group}\b`,
+      "g",
+    ),
+  ];
+  for (const re of patterns) {
+    let m;
+    while ((m = re.exec(code)) !== null) local.add(m[1]);
+  }
   return [...local];
 }
 
@@ -260,8 +330,9 @@ function excerpt(code, index) {
 export function scanSourceForDecisionWrites(source) {
   const code = stripComments(source);
   const findings = [];
+  const symbols = resolveLocalSymbols(code);
 
-  const drizzleRe = drizzlePattern(resolveLocalSymbols(code));
+  const drizzleRe = drizzlePattern(symbols);
   let m;
   while ((m = drizzleRe.exec(code)) !== null) {
     findings.push({
@@ -273,15 +344,21 @@ export function scanSourceForDecisionWrites(source) {
     });
   }
 
-  const rawRe = rawSqlPattern(REVIEW_DECISION_TABLES);
-  while ((m = rawRe.exec(code)) !== null) {
-    findings.push({
-      kind: "raw-sql",
-      verb: m[1].toUpperCase().replace(/\s+/g, " "),
-      token: m[2],
-      line: lineOf(code, m.index),
-      text: excerpt(code, m.index),
-    });
+  // Raw SQL: the general write verbs, plus the writing direction of COPY.
+  // Both share the target alternation, so groups are (verb, symbol, table).
+  for (const rawRe of [
+    rawSqlPattern(REVIEW_DECISION_TABLES, symbols),
+    copyPattern(REVIEW_DECISION_TABLES, symbols),
+  ]) {
+    while ((m = rawRe.exec(code)) !== null) {
+      findings.push({
+        kind: "raw-sql",
+        verb: m[1].toUpperCase().replace(/\s+/g, " "),
+        token: m[2] ?? m[3],
+        line: lineOf(code, m.index),
+        text: excerpt(code, m.index),
+      });
+    }
   }
 
   findings.sort((a, b) => a.line - b.line);

@@ -132,10 +132,45 @@ describe("a new parallel decision writer is caught", () => {
     ['schema-qualified bare', 'UPDATE cinatra.artifact_review_dispositions SET applied_at = now()'],
     ['TRUNCATE', 'TRUNCATE TABLE artifact_review_resume_outbox'],
     ['CTE-wrapped INSERT', 'WITH d AS (INSERT INTO "artifact_review_audit" (id) VALUES ($1) RETURNING id)'],
+    ['ON CONFLICT upsert', 'INSERT INTO artifact_review_gates (id) VALUES ($1) ON CONFLICT (id) DO UPDATE SET status = $2'],
+    ['not the FIRST truncate target', 'TRUNCATE TABLE scratch_rows, artifact_review_gates RESTART IDENTITY'],
+    ['COPY ... FROM (the writing direction)', 'COPY artifact_review_audit (id) FROM STDIN'],
   ])("catches raw SQL: %s", (_label, sql) => {
     const hits = scanSourceForDecisionWrites("await pool.query(`" + sql + "`);");
     expect(hits.length).toBeGreaterThanOrEqual(1);
     expect(hits[0].kind).toBe("raw-sql");
+  });
+
+  // The most natural hand-rolled parallel writer: a tagged template that
+  // interpolates the Drizzle table OBJECT instead of naming the table. This
+  // idiom is live in packages/agents (project-lease-store.ts), so a guard that
+  // only matched the snake_case identifier would miss the realistic case.
+  it.each([
+    ['INSERT', 'await db.execute(sql`INSERT INTO ${artifactReviewAudit} (id) VALUES (${id}) ON CONFLICT DO NOTHING`);'],
+    ['UPDATE', 'await db.execute(sql`UPDATE ${artifactReviewGates} SET status = ${s} WHERE id = ${id}`);'],
+    ['DELETE', 'await db.execute(sql`DELETE FROM ${artifactReviewDispositions} WHERE id = ${id}`);'],
+  ])("catches a Drizzle table object interpolated into raw SQL: %s", (_label, code) => {
+    const hits = scanSourceForDecisionWrites(code);
+    expect(hits.length).toBeGreaterThanOrEqual(1);
+    expect(hits[0].kind).toBe("raw-sql");
+  });
+
+  it("catches a table rebound to a local const", () => {
+    const hits = scanSourceForDecisionWrites(`
+      import { artifactReviewGates } from "./schema";
+      const gates = artifactReviewGates;
+      await db.update(gates).set({ status: "resolved" });
+    `);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].token).toBe("gates");
+  });
+
+  it("catches a write carrying an explicit type argument", () => {
+    const hits = scanSourceForDecisionWrites(
+      "await db.insert<typeof artifactReviewGates>(artifactReviewGates).values(row);",
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0].verb).toBe("INSERT");
   });
 
   it("reports the offending file, line and form", () => {
@@ -229,6 +264,33 @@ describe("legitimate non-write traffic is not flagged", () => {
     expect(
       scanSourceForDecisionWrites("sql`INSERT INTO artifact_review_gates_archive (id) VALUES ($1)`"),
     ).toEqual([]);
+  });
+
+  it("does not flag COPY ... TO (an export, i.e. a read)", () => {
+    expect(
+      scanSourceForDecisionWrites("await pool.query(`COPY artifact_review_audit TO STDOUT`);"),
+    ).toEqual([]);
+  });
+
+  it("does not flag a SELECT over an interpolated table object", () => {
+    expect(
+      scanSourceForDecisionWrites("await db.execute(sql`SELECT id FROM ${artifactReviewGates}`);"),
+    ).toEqual([]);
+  });
+
+  // --- accepted over-detection, pinned deliberately ---------------------
+  //
+  // These SHAPES are flagged even though they do not write. That is the
+  // guard's chosen failure direction: a spurious red is one review
+  // conversation, a miss is a silent second approval path. Pinned so the
+  // behaviour is a recorded decision — if a future change makes one of these
+  // pass, that is a real loosening of the matcher and this test says so.
+  it.each([
+    ["a diagnostic string that reads like SQL", `const msg = "Never UPDATE artifact_review_gates directly — use the store.";`],
+    ["EXPLAIN of a write (plans, does not execute)", "sql`EXPLAIN UPDATE artifact_review_gates SET status = $1`"],
+    ["a non-database method that happens to be .delete()", "tableRegistry.delete(artifactReviewGates);"],
+  ])("deliberately still flags %s", (_label, code) => {
+    expect(scanSourceForDecisionWrites(code).length).toBeGreaterThan(0);
   });
 
   it("treats tests and fixtures as exempt", () => {
