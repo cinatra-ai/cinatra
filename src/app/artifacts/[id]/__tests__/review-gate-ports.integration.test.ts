@@ -283,6 +283,8 @@ function resolvePlan(
     terminal: true,
     fingerprint,
     comment: null,
+    // cinatra#2047 D-2 — the decider of record this commit now stamps.
+    decidedBy: "user-setup-decider",
     auditRows: targets.map((t) => ({
       artifactId: t.artifactId,
       representationRevisionId: t.representationRevisionId,

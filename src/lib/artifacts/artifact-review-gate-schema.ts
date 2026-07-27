@@ -195,7 +195,8 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
   origin_kind       text NOT NULL CHECK (origin_kind IN ('agent_produced','user_provided','intermediate')),
   -- Only bounds are STORED; the absence of a row IS 'silent' (unconstrained).
   bound             text NOT NULL CHECK (bound IN ('required','forbidden')),
-  -- Org opt-in relaxing SoD self-approval on a 'required' gate (default off).
+  -- INERT (cinatra#2047, row-3 re-scope): never read, never written; kept physically because
+  -- dropping it would need a migration. A bound says whether a review is required, not who decides.
   self_approval_opt_in boolean NOT NULL DEFAULT false,
   created_at        timestamptz NOT NULL DEFAULT now(),
   updated_at        timestamptz NOT NULL DEFAULT now()

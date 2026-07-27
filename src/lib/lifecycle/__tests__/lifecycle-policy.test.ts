@@ -19,7 +19,6 @@ import {
   type EvaluatePolicyInput,
   type OrgPolicyRule,
 } from "../lifecycle-policy";
-import { evaluateSeparationOfDuties } from "../lifecycle-separation-of-duties";
 
 const SILENT: OrgPolicyRule = { bound: "silent" };
 
@@ -150,51 +149,29 @@ describe("AC-1: unevaluable policy fails closed on external effects", () => {
   });
 });
 
-describe("separation of duties", () => {
-  const requiredDecision = { outcome: "required" as const, separationOfDutiesRequired: true };
-  it("optional gate (SoD not required) → self-approval allowed", () => {
-    const r = evaluateSeparationOfDuties({
-      decision: { outcome: "fire", separationOfDutiesRequired: false },
-      producingActorId: "actor-1",
-      reviewingActorId: "actor-1",
-    });
-    expect(r.eligible).toBe(true);
+describe("a policy bound controls WHETHER a review is required — never WHO may decide it", () => {
+  // cinatra#2047, row-3 re-scope. A lifecycle review exists so a human can
+  // control what the AGENT produced; any member of the scope the run belongs to
+  // may decide it, explicitly including the person who started the run. The
+  // lattice therefore carries no reviewer-eligibility dimension at all, and no
+  // policy input can reintroduce one.
+  it("an org-required bound produces an outcome and NOTHING about who may decide", () => {
+    const d = evaluatePolicy(base({ orgRule: { bound: "required" } }));
+    expect(d.outcome).toBe("required");
+    expect(d.fired).toBe(true);
+    // No eligibility/self-approval/reviewer key survives anywhere on the decision.
+    for (const key of Object.keys(d)) {
+      expect(key).not.toMatch(/separation|selfApproval|eligib|reviewer/i);
+    }
   });
-  it("org-required gate: producer cannot be the SOLE approver", () => {
-    const r = evaluateSeparationOfDuties({
-      decision: requiredDecision,
-      producingActorId: "actor-1",
-      reviewingActorId: "actor-1",
-    });
-    expect(r.eligible).toBe(false);
-  });
-  it("org-required gate: a DISTINCT reviewer is eligible", () => {
-    const r = evaluateSeparationOfDuties({
-      decision: requiredDecision,
-      producingActorId: "actor-1",
-      reviewingActorId: "actor-2",
-    });
-    expect(r.eligible).toBe(true);
-  });
-  it("org-required gate: producer eligible once a distinct co-approver exists", () => {
-    const r = evaluateSeparationOfDuties({
-      decision: requiredDecision,
-      producingActorId: "actor-1",
-      reviewingActorId: "actor-1",
-      priorApproverIds: ["actor-2"],
-    });
-    expect(r.eligible).toBe(true);
-  });
-  it("org opt-in relaxes SoD (separationOfDutiesRequired false) → producer may self-approve", () => {
-    // With opt-in, evaluatePolicy sets separationOfDutiesRequired=false.
-    const d = evaluatePolicy(base({ orgRule: { bound: "required", selfApprovalOptIn: true } }));
-    expect(d.separationOfDutiesRequired).toBe(false);
-    const r = evaluateSeparationOfDuties({
-      decision: d,
-      producingActorId: "actor-1",
-      reviewingActorId: "actor-1",
-    });
-    expect(r.eligible).toBe(true);
+
+  it("a self-approval opt-in is no longer an input — passing one changes no outcome", () => {
+    const plain = evaluatePolicy(base({ orgRule: { bound: "required" } }));
+    const withStray = evaluatePolicy(
+      // A stale caller still sending the retired field must be inert, not honoured.
+      base({ orgRule: { bound: "required", selfApprovalOptIn: true } as never }),
+    );
+    expect(withStray).toEqual(plain);
   });
 });
 
@@ -224,7 +201,6 @@ describe("D-3: parsePolicyBoundInput (admin write path)", () => {
         destinationClass: "none",
         originKind: "agent_produced",
         bound: "required",
-        selfApprovalOptIn: false,
       });
     }
   });
@@ -235,14 +211,10 @@ describe("D-3: parsePolicyBoundInput (admin write path)", () => {
     if (r.ok) expect(r.value.artifactType).toBe("*");
   });
 
-  it("carries the self-approval opt-in from a checkbox value", () => {
-    for (const on of [true, "on", "true"]) {
-      const r = parsePolicyBoundInput({ ...OK, selfApprovalOptIn: on });
-      expect(r.ok).toBe(true);
-      if (r.ok) expect(r.value.selfApprovalOptIn).toBe(true);
-    }
-    const off = parsePolicyBoundInput({ ...OK });
-    expect(off.ok && off.value.selfApprovalOptIn).toBe(false);
+  it("IGNORES a stray self-approval field — a bound never carries reviewer eligibility", () => {
+    const r = parsePolicyBoundInput({ ...OK, selfApprovalOptIn: "on" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value).not.toHaveProperty("selfApprovalOptIn");
   });
 
   it("REFUSES `silent` — retracting a bound is a delete, never a stored row", () => {

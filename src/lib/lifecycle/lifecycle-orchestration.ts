@@ -220,9 +220,6 @@ export type ReviewOrchestrationPlan =
       reviewTaskId: string;
       /** The lattice outcome (`required` | `fire`). */
       outcome: PolicyOutcome;
-      /** True only for an org-`required` gate without a self-approval opt-in —
-       * the producing actor may not be the sole approver (SoD). */
-      separationOfDutiesRequired: boolean;
       /** How the producing run continues:
        *   - `checkpointed` → the run PARKS (the store calls `maybeParkCheckpoint`
        *     with `park`); the park is released by the decision / TTL sweeper.
@@ -287,7 +284,6 @@ export function planReviewForEvent(
     action: "create-gate",
     reviewTaskId: autoReviewTaskId(event.eventId),
     outcome: decision.outcome,
-    separationOfDutiesRequired: decision.separationOfDutiesRequired,
     continuationMode: event.continuationMode,
     park,
     heldEffect,

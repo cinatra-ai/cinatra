@@ -156,7 +156,7 @@ async function getHandlers(): Promise<HandlerMap> {
 const RUN_ID = "run-ctx-1";
 const ORG_ID = "org-1";
 const OWNER_ID = "owner-1";
-const PKG = "@cinatra-ai/auditor-agent";
+const PKG = "@cinatra-ai/author-agent";
 
 const RUN = {
   id: RUN_ID,

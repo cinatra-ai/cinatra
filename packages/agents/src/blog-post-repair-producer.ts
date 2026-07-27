@@ -21,19 +21,23 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { materializeBlogPostBodyArtifact } from "@/lib/blog-post-artifact-materializer";
-import type { CompiledManifestLifecycle } from "@/lib/lifecycle/lifecycle-policy";
 import type { RepairFindingOutcome } from "@/lib/lifecycle/lifecycle-repair";
 
+import { BLOG_POST_LIFECYCLE } from "./lifecycle-repair-producer-registry";
 import { submitRepairResponse, readRepair, type SubmitRepairResponseResult } from "./lifecycle-repair-store";
 
 /** The compiled lifecycle declaration for the blog pipeline — it PRODUCES blog
  * post body artifacts and CAN REPAIR them (the repair loop routes
  * `changes_requested` to this producer). Seeded onto the blog agent template's
- * `lifecycle_config` (JSON-as-text), trigger-style. */
-export const BLOG_POST_LIFECYCLE: CompiledManifestLifecycle = {
-  producedTypes: ["artifact-blog-post-body"],
-  repairCapable: true,
-};
+ * `lifecycle_config` (JSON-as-text), trigger-style.
+ *
+ * cinatra#2047 defect D-1: the declaration now LIVES in the core producer
+ * registry (a pure module the boot-time projection can load without this
+ * module's materializer graph) and is re-exported here so the declaration and
+ * the implementation remain one source of truth. The projection is what actually
+ * lands it on `agent_templates.lifecycle_config`; before D-1 nothing did, so the
+ * route always fell through to `human_escalation`. */
+export { BLOG_POST_LIFECYCLE } from "./lifecycle-repair-producer-registry";
 
 /** The JSON-as-text form persisted on `agent_templates.lifecycle_config`. */
 export const BLOG_POST_LIFECYCLE_CONFIG = JSON.stringify(BLOG_POST_LIFECYCLE);

@@ -1,0 +1,21 @@
+{
+  "note": "Non-registry system writers (cinatra#1941). Every row is a concrete writer site OUTSIDE BACKGROUND_JOB_REGISTRY and OUTSIDE the write-registry modules' own bodies: boot phases, backfills, CLI reconcilers. Rows are {file, ref, count}; ref = raw-sql:<table> | drizzle:<symbol> | write-registry:<export>. The gate fails on any scanner hit absent here (no ratchet — zero unlisted tolerated), on any row the scanner no longer finds (stale), and on any count drift. Migrations are excluded by doctrine — see docs/internals/contracts/schema-migrations-and-org-write-policy.md. Regenerate with: node scripts/audit/system-writer-manifest-gate.mjs --write-manifest",
+  "version": 1,
+  "writers": [
+    {
+      "file": "scripts/seed.mjs",
+      "ref": "raw-sql:agent_runs",
+      "count": 1
+    },
+    {
+      "file": "scripts/seed.mjs",
+      "ref": "raw-sql:objects",
+      "count": 6
+    },
+    {
+      "file": "src/lib/boot/phases/core-boot.ts",
+      "ref": "write-registry:backfillDashboardArtifactTwins",
+      "count": 1
+    }
+  ]
+}

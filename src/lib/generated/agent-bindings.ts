@@ -27,7 +27,6 @@ export type GeneratedFieldRendererBinding = {
 };
 
 export const GENERATED_FIELD_RENDERER_BINDINGS: ReadonlyArray<GeneratedFieldRendererBinding> = [
-  { id: "@cinatra-ai/auditor-agent:review", kind: "auditor-review", priority: 80, midRunHitl: true, declaredBy: "@cinatra-ai/auditor-agent" },
   { id: "@cinatra-ai/blog-linkedin-publish-agent:draft-review", kind: "linkedin-draft-review", priority: 90, midRunHitl: true, declaredBy: "@cinatra-ai/blog-linkedin-publish-agent" },
   { id: "@cinatra-ai/blog-pipeline-agent:idea-selection", kind: "blog-idea-selection", priority: 80, midRunHitl: true, declaredBy: "@cinatra-ai/blog-pipeline-agent" },
   { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm", priority: 90, midRunHitl: true, declaredBy: "@cinatra-ai/blog-wordpress-publish-agent" },
@@ -49,10 +48,6 @@ export const GENERATED_FIELD_RENDERER_BINDINGS: ReadonlyArray<GeneratedFieldRend
   { id: "@cinatra-ai/email-test-delivery-agent:input", kind: "test-delivery-input", priority: 80, declaredBy: "@cinatra-ai/email-artifacts" },
   { id: "@cinatra-ai/list-curator-agent:final-list-review", kind: "final-list-review", priority: 90, declaredBy: "@cinatra-ai/list-curator-agent" },
   { id: "@cinatra-ai/list-curator-agent:scrape-schema-review", kind: "scrape-schema-review", priority: 90, declaredBy: "@cinatra-ai/list-curator-agent" },
-  { id: "@cinatra-ai/reviewer-agent:contacts-output", kind: "campaign-recipients-review", priority: 80, declaredBy: "@cinatra-ai/reviewer-agent" },
-  { id: "@cinatra-ai/reviewer-agent:drafts-output", kind: "email-drafts-review", priority: 80, declaredBy: "@cinatra-ai/reviewer-agent" },
-  { id: "@cinatra-ai/reviewer-agent:followups-output", kind: "email-drafts-review", priority: 80, declaredBy: "@cinatra-ai/reviewer-agent" },
-  { id: "@cinatra-ai/reviewer-agent:output", kind: "reviewer-output", priority: 80, declaredBy: "@cinatra-ai/reviewer-agent" },
 ];
 
 // Extension ROLE bindings: role name -> the single claimant package

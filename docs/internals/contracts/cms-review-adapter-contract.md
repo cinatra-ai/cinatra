@@ -315,5 +315,5 @@ capture is context and explicitly non-decisional.
 
 - [Authoring guide — lifecycle producers](../workflows/authoring-lifecycle-producers.md)
   — the produced event, the declaration block, and the repair round-trip.
-- [Lifecycle review policy and separation of duties](../governance/lifecycle-review-policy.md)
+- [Lifecycle review policy](../governance/lifecycle-review-policy.md)
   — why a captured snapshot's checkpoint fires, and what holds its effect.

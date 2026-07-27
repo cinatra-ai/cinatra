@@ -28,14 +28,14 @@ describe("normalizeLegacyDependencies", () => {
     const out = normalizeLegacyDependencies({
       agentDependencies: {
         "@cinatra-ai/email-drafting-agent": "^0.1.0",
-        "@cinatra-ai/reviewer-agent": "^0.1.0",
+        "@cinatra-ai/web-research-agent": "^0.1.0",
       },
     });
     expect(out).toHaveLength(2);
     // sorted by packageName
     expect(out.map((d) => d.packageName)).toEqual([
       "@cinatra-ai/email-drafting-agent",
-      "@cinatra-ai/reviewer-agent",
+      "@cinatra-ai/web-research-agent",
     ]);
     expect(out[0]).toMatchObject({
       edgeType: "runtime",
@@ -46,7 +46,7 @@ describe("normalizeLegacyDependencies", () => {
 
   it("resolves kind via the resolver", () => {
     const out = normalizeLegacyDependencies(
-      { agentDependencies: { "@cinatra-ai/reviewer-agent": "^0.1.0" } },
+      { agentDependencies: { "@cinatra-ai/web-research-agent": "^0.1.0" } },
       (pkg) => (pkg.endsWith("-agent") ? "agent" : undefined),
     );
     expect(out[0].kind).toBe("agent");

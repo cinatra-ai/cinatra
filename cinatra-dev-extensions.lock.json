@@ -1,5 +1,5 @@
 {
-  "note": "Committed clone-back pins for the NON-required cinatra.devExtensions universe (cinatra#141). CI checks each companion repo out detached at resolvedSha (scripts/ci/sync-dev-extensions.mjs --pinned); the prod bootable set is pinned separately in cinatra-required-extensions.lock.json (never duplicated here). Regenerate with scripts/extensions/update-dev-extension-lock.mjs and move pnpm-lock.yaml + the generated maps in the SAME PR \u2014 see docs/internals/contracts/extension-clone-pinning.md.",
+  "note": "Committed clone-back pins for the NON-required cinatra.devExtensions universe (cinatra#141). CI checks each companion repo out detached at resolvedSha (scripts/ci/sync-dev-extensions.mjs --pinned); the prod bootable set is pinned separately in cinatra-required-extensions.lock.json (never duplicated here). Regenerate with scripts/extensions/update-dev-extension-lock.mjs and move pnpm-lock.yaml + the generated maps in the SAME PR — see docs/internals/contracts/extension-clone-pinning.md.",
   "schemaVersion": 1,
   "packages": [
     {
@@ -26,11 +26,6 @@
       "packageName": "@cinatra-ai/apollo-prospecting-agent",
       "repo": "cinatra-ai/apollo-prospecting-agent",
       "resolvedSha": "05d978532259dc8d396dde8e1e80a7eac031a6a1"
-    },
-    {
-      "packageName": "@cinatra-ai/auditor-agent",
-      "repo": "cinatra-ai/auditor-agent",
-      "resolvedSha": "e9866959ddd8f0d9062ce708e52d2cd40f43bce0"
     },
     {
       "packageName": "@cinatra-ai/blog-connector",
@@ -75,7 +70,7 @@
     {
       "packageName": "@cinatra-ai/blog-pipeline-agent",
       "repo": "cinatra-ai/blog-pipeline-agent",
-      "resolvedSha": "f923d9a1488b95271730572498aa3ad12ec9b8d6"
+      "resolvedSha": "275843e684d7054cfde21472420c6a14529641eb"
     },
     {
       "packageName": "@cinatra-ai/blog-post-artifact",
@@ -175,22 +170,22 @@
     {
       "packageName": "@cinatra-ai/email-drafting-agent",
       "repo": "cinatra-ai/email-drafting-agent",
-      "resolvedSha": "a78f17cb97ebb63c094eab353030c8340465b048"
+      "resolvedSha": "14898f4a66f8d302fcea904fd5245f9920019701"
     },
     {
       "packageName": "@cinatra-ai/email-follow-up-agent",
       "repo": "cinatra-ai/email-follow-up-agent",
-      "resolvedSha": "0cb90157826accee110b642f5bcbc6939b96b608"
+      "resolvedSha": "ec4cc305688a432d76e400238210867ec296e244"
     },
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
       "repo": "cinatra-ai/email-outreach-agent",
-      "resolvedSha": "8fa97b0c3caeaa1e923777ce250622088e952d84"
+      "resolvedSha": "2e34c135da16fc1e2ae13aa59004f81b1c8da86c"
     },
     {
       "packageName": "@cinatra-ai/email-recipient-selection-agent",
       "repo": "cinatra-ai/email-recipient-selection-agent",
-      "resolvedSha": "402908097f5cd72a0ebf9c07a9de9881e8e77178"
+      "resolvedSha": "a04c9417661d5612c9ed0cdcca9dd7c1c1608641"
     },
     {
       "packageName": "@cinatra-ai/email-test-delivery-agent",
@@ -291,11 +286,6 @@
       "packageName": "@cinatra-ai/resend-connector",
       "repo": "cinatra-ai/resend-connector",
       "resolvedSha": "c87ebcbc5479c6046f1a9b7c686fd6ad812997bd"
-    },
-    {
-      "packageName": "@cinatra-ai/reviewer-agent",
-      "repo": "cinatra-ai/reviewer-agent",
-      "resolvedSha": "4f6d1672647bbb0c64e7ef898ce0ea7e3f4f8b16"
     },
     {
       "packageName": "@cinatra-ai/sales-playbook-artifact",

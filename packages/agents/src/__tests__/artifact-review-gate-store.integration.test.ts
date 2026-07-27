@@ -82,9 +82,13 @@ function freshGateIds(): { runId: string; reviewTaskId: string } {
 function makeDecidePorts(opts?: {
   members?: Set<string>; // target keys that are live members (default: all)
   provenance?: Record<string,  ReviewRendererProvenance>;
+  actingActorId?: string | null;
 }):  SubmitDecisionPorts {
   return {
     verifyRunAccess: async () => ({ ok: true }),
+    // cinatra#2047 D-2: the DECIDING actor the store now stamps on `resolved_by`.
+    // Overridable so a suite can decide as a named actor.
+    actingActorId: () => (opts && "actingActorId" in opts ? opts.actingActorId ?? null : "user-decider"),
     readGateState: (runId, reviewTaskId) => gateStore.readReviewGateState(runId, reviewTaskId),
     revisionMember: async (artifactId, revId) => {
       if (opts?.members && !opts.members.has(`${artifactId}::${revId}`)) return null;
@@ -389,6 +393,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       terminal: true,
       fingerprint: "fp-rollback",
       comment: null,
+      decidedBy: "user-decider",
       auditRows: [
         {
           artifactId: art,
@@ -464,5 +469,170 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     const denied = await gateStore.enforceReviewRunAccess(runId, foreign, "approveHitl");
     expect(denied.ok).toBe(false);
     if (!denied.ok) expect([403, 404]).toContain(denied.status);
+  });
+  // -------------------------------------------------------------------------
+  // THE DECIDING ACTOR (cinatra#2047 D-2).
+  //
+  // A lifecycle review exists so a HUMAN can control what the AGENT produced.
+  // What the gate has to carry is therefore the RECORD of who decided —
+  // `artifact_review_gates.resolved_by`, a column declared and read since #1796
+  // and, until now, never written. Recording is the whole point; the store
+  // imposes NO restriction on which member of the run's scope may decide.
+  // -------------------------------------------------------------------------
+
+  it("RECORD: a terminal APPROVE stamps the deciding actor on resolved_by", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    const art = `art-${randomUUID()}`;
+    const targets = [{ artifactId: art, representationRevisionId: "rev-1" }];
+    await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+
+    const res = await submitReviewDecisionCore(
+      mkDecision({ runId, reviewTaskId, disposition: "approve", targets }),
+      makeDecidePorts({ actingActorId: "user-V-reviewer" }),
+    );
+    expect(res.ok).toBe(true);
+
+    const gate = await gateStore.readReviewGate(runId, reviewTaskId);
+    expect(gate?.status).toBe("resolved");
+    expect(gate?.disposition).toBe("approve");
+    expect(gate?.resolvedBy).toBe("user-V-reviewer");
+  });
+
+  it("RECORD: a terminal REJECT stamps the deciding actor too", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    const art = `art-${randomUUID()}`;
+    const targets = [{ artifactId: art, representationRevisionId: "rev-1" }];
+    await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+
+    const res = await submitReviewDecisionCore(
+      mkDecision({ runId, reviewTaskId, disposition: "reject", targets, comment: "not yet" }),
+      makeDecidePorts({ actingActorId: "user-V-reviewer" }),
+    );
+    expect(res.ok).toBe(true);
+    const gate = await gateStore.readReviewGate(runId, reviewTaskId);
+    expect(gate?.disposition).toBe("reject");
+    expect(gate?.resolvedBy).toBe("user-V-reviewer");
+  });
+
+  it("RECORD: an unidentifiable decider (a non-human carrier) resolves the gate with a NULL decider, never a fabricated one", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    const art = `art-${randomUUID()}`;
+    const targets = [{ artifactId: art, representationRevisionId: "rev-1" }];
+    await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+
+    const res = await submitReviewDecisionCore(
+      mkDecision({ runId, reviewTaskId, disposition: "approve", targets }),
+      makeDecidePorts({ actingActorId: null }),
+    );
+    expect(res.ok).toBe(true);
+    const gate = await gateStore.readReviewGate(runId, reviewTaskId);
+    expect(gate?.status).toBe("resolved");
+    expect(gate?.resolvedBy).toBeNull();
+  });
+
+  it("RECORD: a non-terminal COMMENT leaves the gate pending and unresolved-by (only a decision has a decider)", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    const art = `art-${randomUUID()}`;
+    const targets = [{ artifactId: art, representationRevisionId: "rev-1" }];
+    await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+
+    const res = await submitReviewDecisionCore(
+      mkDecision({ runId, reviewTaskId, disposition: "comment", targets, comment: "a note" }),
+      makeDecidePorts({ actingActorId: "user-V-reviewer" }),
+    );
+    expect(res.ok).toBe(true);
+    const gate = await gateStore.readReviewGate(runId, reviewTaskId);
+    expect(gate?.status).toBe("pending");
+    expect(gate?.resolvedBy).toBeNull();
+  });
+
+  it("NO RESTRICTION: a DISTINCT reviewer and the RUN INITIATOR can both approve their gate — only the recorded decider differs", async () => {
+    // The product decision for lifecycle review: any member of the scope the run
+    // belongs to may decide, WITHOUT limitation, explicitly including the person
+    // who started the run. This drives BOTH actors through the real store.
+    const INITIATOR = "user-U-who-started-the-run";
+    const OTHER = "user-V-someone-else";
+
+    async function approveAs(actor: string) {
+      const { runId, reviewTaskId } = freshGateIds();
+      const targets = [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" }];
+      await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+      const res = await submitReviewDecisionCore(
+        mkDecision({ runId, reviewTaskId, disposition: "approve", targets }),
+        makeDecidePorts({ actingActorId: actor }),
+      );
+      return { res, gate: await gateStore.readReviewGate(runId, reviewTaskId) };
+    }
+
+    const byOther = await approveAs(OTHER);
+    const byInitiator = await approveAs(INITIATOR);
+
+    // PINNED CONTRACT — the exact inverse of the old separation-of-duties repro:
+    // the run's own initiator approving their own run's gate SUCCEEDS.
+    expect(byInitiator.res.ok).toBe(true);
+    expect(byInitiator.gate?.status).toBe("resolved");
+    expect(byInitiator.gate?.disposition).toBe("approve");
+    expect(byInitiator.gate?.resolvedBy).toBe(INITIATOR);
+
+    // ...and it is indistinguishable from a distinct reviewer's approval except
+    // for WHO is recorded. No refusal path exists for either.
+    expect(byOther.res.ok).toBe(true);
+    expect(byOther.gate?.status).toBe(byInitiator.gate?.status);
+    expect(byOther.gate?.disposition).toBe(byInitiator.gate?.disposition);
+    expect(byOther.gate?.resolvedBy).toBe(OTHER);
+  });
+
+  it("GUARD: a self-INCONSISTENT plan is refused — terminal is derived from the disposition, and audit rows must match it", async () => {
+    // Enforcement-independent correctness (cinatra#2047 convergence round): a
+    // direct store caller could otherwise land an APPROVE audit row on a gate
+    // that stays PENDING, leaving the decision trail disagreeing with the gate.
+    const { runId, reviewTaskId } = freshGateIds();
+    const art = `art-${randomUUID()}`;
+    const targets = [{ artifactId: art, representationRevisionId: "rev-1" }];
+    await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+
+    const auditRow = {
+      artifactId: art,
+      representationRevisionId: "rev-1",
+      disposition: "approve" as const,
+      rendererProvenance: { kind: "floor" as const, packageName: null, digest: null },
+    };
+
+    // (a) approve claiming to be NON-terminal — would skip the gate CAS entirely.
+    await expect(
+      gateStore.commitReviewDecision({
+        runId,
+        reviewTaskId,
+        disposition: "approve",
+        terminal: false,
+        fingerprint: `fp-${randomUUID()}`,
+        comment: null,
+        decidedBy: "user-V-reviewer",
+        auditRows: [auditRow],
+        dispositionOps: [],
+        resumeIntent: null,
+      }),
+    ).rejects.toThrow(/terminal is derived/);
+
+    // (b) a comment plan smuggling an APPROVE audit row alongside it.
+    await expect(
+      gateStore.commitReviewDecision({
+        runId,
+        reviewTaskId,
+        disposition: "comment",
+        terminal: false,
+        fingerprint: `fp-${randomUUID()}`,
+        comment: "a note",
+        decidedBy: "user-V-reviewer",
+        auditRows: [auditRow],
+        dispositionOps: [],
+        resumeIntent: null,
+      }),
+    ).rejects.toThrow(/disagrees with the plan disposition/);
+
+    // Neither attempt touched the gate.
+    const gate = await gateStore.readReviewGate(runId, reviewTaskId);
+    expect(gate?.status).toBe("pending");
+    expect(gate?.resolvedBy).toBeNull();
   });
 });
