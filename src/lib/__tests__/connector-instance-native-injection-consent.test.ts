@@ -3,13 +3,13 @@ import {
   createWordPressNativeInjectionConsentMembers,
   WordPressNativeInjectionConsentError,
   type WordPressNativeInjectionConsentDeps,
-} from "@/lib/wordpress-native-injection-consent";
+} from "@/lib/connector-instance-native-injection-consent";
 import {
   resolveShippedTrustedSiteConsent,
   TRUSTED_READ_DESCRIPTOR_SET,
   TRUSTED_SITE_DISCLOSURE_VERSION,
   computeTrustedReadDescriptorSetHash,
-} from "@/lib/wordpress-trusted-read-descriptors";
+} from "@/lib/connector-instance-trusted-read-descriptors";
 import type { AuthzOrgRole } from "@/lib/auth-session";
 import type { NativeInjectionPolicyView } from "@/lib/connector-instance-native-injection-store";
 

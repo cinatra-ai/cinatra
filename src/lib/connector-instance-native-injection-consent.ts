@@ -21,7 +21,7 @@ import "server-only";
 // CONSENT IS HOST-STAMPED AND CONTENT-EXACT: on `trusted_site` the member
 // stamps the row with the CURRENTLY SHIPPED
 // `{descriptor-set version, descriptor-set hash, disclosure version}` from
-// wordpress-trusted-read-descriptors.ts. The caller chooses ONLY the mode —
+// connector-instance-trusted-read-descriptors.ts. The caller chooses ONLY the mode —
 // any stamp-shaped fields on the input are ignored, so a skewed or buggy
 // connector/UI cannot forge an acknowledgement of content that is not the
 // content actually shipped. The injection builder refuses stamps that are not
@@ -48,7 +48,7 @@ import type {
 import {
   resolveShippedTrustedSiteConsent,
   type ShippedTrustedSiteConsent,
-} from "@/lib/wordpress-trusted-read-descriptors";
+} from "@/lib/connector-instance-trusted-read-descriptors";
 
 /** The host-bound connector key these members are hard-pinned to. */
 const WORDPRESS_CONNECTOR_KEY = "wordpress";

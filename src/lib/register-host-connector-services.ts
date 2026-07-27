@@ -191,7 +191,7 @@ import {
 import {
   createWordPressNativeInjectionConsentMembers,
   type WordPressNativeInjectionConsentSurface,
-} from "@/lib/wordpress-native-injection-consent";
+} from "@/lib/connector-instance-native-injection-consent";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import { logAuditEvent } from "@/lib/authz/audit";
 import { Buffer } from "node:buffer";

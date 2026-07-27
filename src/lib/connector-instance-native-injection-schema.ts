@@ -4,7 +4,7 @@
 // caller-chosen field; the consent stamps (`disclosure_version`,
 // `descriptor_set_version`, `descriptor_set_hash`) are HOST-STAMPED at
 // enable/re-acknowledge time from the shipped constants (see
-// wordpress-trusted-read-descriptors.ts) — a `trusted_site` row without all
+// connector-instance-trusted-read-descriptors.ts) — a `trusted_site` row without all
 // three stamps is unrepresentable (the `trusted_site_stamps` CHECK), so a
 // consent acknowledgement can never be partially recorded.
 //

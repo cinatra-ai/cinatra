@@ -1,7 +1,7 @@
 // The cinatra-shipped trusted-read descriptor set for WordPress trusted-site
 // mode (cinatra#2019 S4) + the shipped consent constants the opt-in setter
 // stamps (connector-instance-native-injection-store.ts /
-// wordpress-native-injection-consent.ts).
+// connector-instance-native-injection-consent.ts).
 //
 // WHAT THIS IS: the enumerated, capture-derived allowlist of site tools that
 // MAY be natively injected (handed to the model provider to call directly)

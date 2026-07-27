@@ -7,12 +7,12 @@ import "server-only";
 // explicit, audited org-admin ceremony), and a `trusted_site` row is only
 // honored while (a) its HOST-STAMPED consent stamps exactly match the
 // currently shipped descriptor-set/disclosure constants
-// (wordpress-trusted-read-descriptors.ts) and (b) its `consented_org_id`
+// (connector-instance-trusted-read-descriptors.ts) and (b) its `consented_org_id`
 // equals the instance's CURRENT owning org — consent never survives an
 // ownership change of the instance id.
 //
 // This module owns PERSISTENCE only. The org-admin authorization gate and the
-// host-side consent stamping live in wordpress-native-injection-consent.ts
+// host-side consent stamping live in connector-instance-native-injection-consent.ts
 // (the published members); the injection eligibility computation is a separate
 // consumer. Nothing here evaluates trust — it records and reports it.
 //

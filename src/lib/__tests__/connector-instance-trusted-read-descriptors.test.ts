@@ -6,7 +6,7 @@ import {
   computeTrustedReadDescriptorSetHash,
   resolveShippedTrustedSiteConsent,
   type TrustedReadDescriptorEntry,
-} from "@/lib/wordpress-trusted-read-descriptors";
+} from "@/lib/connector-instance-trusted-read-descriptors";
 
 // cinatra#2019 S4 — the shipped trusted-read descriptor set + the
 // consent-stamp derivation. v1 ships EMPTY (the pinned community stack
