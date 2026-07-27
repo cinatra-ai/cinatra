@@ -18,7 +18,7 @@ describe("reserved-workspace-slugs", () => {
     expect(isReservedWorkspaceSlug("@cinatra-ai/web-scrape-agent")).toBe(false);
     expect(isReservedWorkspaceSlug("@cinatra-ai/trigger-agent")).toBe(false);
     expect(isReservedWorkspaceSlug("@cinatra-ai/email-test-delivery-agent")).toBe(false);
-    expect(isReservedWorkspaceSlug("@cinatra-ai/auditor-agent")).toBe(
+    expect(isReservedWorkspaceSlug("@cinatra-ai/author-agent")).toBe(
       false,
     );
   });

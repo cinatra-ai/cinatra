@@ -156,7 +156,7 @@ function makeTemplate(step: Record<string, unknown>) {
     outputSchema: null,
     taskSpec: null,
     status: "published",
-    packageName: "@cinatra-ai/reviewer-agent",
+    packageName: "@cinatra-ai/web-research-agent",
     packageVersion: null,
     gatedSteps: [],
     triggerMode: "none",
@@ -172,7 +172,7 @@ const MARKED_STEP = {
   nodeType: "input_message",
   requiresApproval: true,
   hitlOwnedBy: "self",
-  xRenderer: "@cinatra-ai/reviewer-agent:output",
+  xRenderer: "@cinatra-ai/web-research-agent:output",
   artifactReviewTargetsInput: "reviewTargets",
 };
 const UNMARKED_STEP = {
@@ -180,7 +180,7 @@ const UNMARKED_STEP = {
   nodeType: "input_message",
   requiresApproval: true,
   hitlOwnedBy: "self",
-  xRenderer: "@cinatra-ai/reviewer-agent:output",
+  xRenderer: "@cinatra-ai/web-research-agent:output",
 };
 
 const TARGETS = [
@@ -240,7 +240,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     expect(invocationId).toBe("wayflow-task-rev-1");
     const v = values as Record<string, unknown>;
     // Owner ruling 2026-07-25 (3): the review surface lives UNDER the agent run.
-    // The template packageName (@cinatra-ai/reviewer-agent) → the run base
+    // The template packageName (@cinatra-ai/web-research-agent) → the run base
     // /agents/cinatra-ai/reviewer-agent/run-rev-1, then the review sub-path.
     expect(v.reviewSurfaceUrl).toBe(
       "/agents/cinatra-ai/reviewer-agent/run-rev-1/review/wayflow-task-rev-1",
@@ -276,7 +276,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     expect(emitSpy).not.toHaveBeenCalled();
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
     const [, xRenderer] = onInterruptSpy.mock.calls[0]!;
-    expect(xRenderer).toBe("@cinatra-ai/reviewer-agent:output");
+    expect(xRenderer).toBe("@cinatra-ai/web-research-agent:output");
     expect(xRenderer).not.toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
   });
 

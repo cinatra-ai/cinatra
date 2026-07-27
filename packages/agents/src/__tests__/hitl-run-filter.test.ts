@@ -111,11 +111,11 @@ describe("selectHitlRunVisibleTemplates", () => {
       id: "gp",
       packageName: "@cinatra-ai/email-outreach-agent",
       gatedSteps: [{ stepName: "final" } as never],
-      agentDependencies: { "@cinatra-ai/reviewer-agent": "^0.1.0" },
+      agentDependencies: { "@cinatra-ai/web-research-agent": "^0.1.0" },
     });
     const child = template({
       id: "child",
-      packageName: "@cinatra-ai/reviewer-agent",
+      packageName: "@cinatra-ai/web-research-agent",
       agentDependencies: { "@cinatra-ai/email-test-delivery-agent": "^0.1.0" },
     });
     const grandchild = template({

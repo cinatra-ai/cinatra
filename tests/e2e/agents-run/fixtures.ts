@@ -69,8 +69,8 @@ export const CANONICAL_VISIBLE_PACKAGES: ReadonlyArray<{
   packageName: string;
   classification: AgentClassification;
 }> = [
-  // Direct HITL (13)
-  { packageName: "@cinatra-ai/auditor-agent", classification: "LIVE-RUNNABLE" },
+  // Direct HITL (10). cinatra#1796 / #2047 row 8: auditor-agent left the set
+  // with the retirement teardown.
   { packageName: "@cinatra-ai/blog-linkedin-publish-agent", classification: "DEFER-EXTERNAL" },
   { packageName: "@cinatra-ai/blog-wordpress-publish-agent", classification: "DEFER-EXTERNAL" },
   { packageName: "@cinatra-ai/email-delivery-agent", classification: "LIVE-WITH-OVERRIDE" },
@@ -81,8 +81,9 @@ export const CANONICAL_VISIBLE_PACKAGES: ReadonlyArray<{
   { packageName: "@cinatra-ai/email-test-delivery-agent", classification: "LIVE-WITH-OVERRIDE" },
   { packageName: "@cinatra-ai/list-curator-agent", classification: "DEFER-EXTERNAL" },
   { packageName: "@cinatra-ai/trigger-agent", classification: "LIVE-RUNNABLE" },
-  // Sub-agent descendants (1)
-  { packageName: "@cinatra-ai/reviewer-agent", classification: "LIVE-RUNNABLE" },
+  // Sub-agent descendants (0). cinatra#1796: reviewer-agent was the only one
+  // and it left the set with the retirement teardown — every flow that invoked
+  // it now holds on its own gate or on the core-opened review gate.
 ];
 
 /** Discriminated HITL screen specification. */
@@ -233,9 +234,13 @@ export const AGENT_FIXTURES: ReadonlyArray<AgentFixture> = [
         action: { listName: "UAT Recipients — Example" },
       },
       {
-        // Gate 2: reviewer-output gate over the LLM-selected recipients.
+        // Gate 2: the inlined recipient subflow's OWN review gate over the
+        // LLM-selected recipients. cinatra#1796: the reviewer only ever RENDERED
+        // this pause — removing it removed a renderer binding, not the pause
+        // (email-outreach-agent#43, hold decision (a): the flow keeps its own
+        // holds, no manifest checkpoint declared).
         kind: "custom-renderer",
-        xRenderer: "@cinatra-ai/reviewer-agent:output",
+        xRenderer: "@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review",
         action: { userResponse: "Approved." },
       },
     ],
@@ -246,7 +251,7 @@ export const AGENT_FIXTURES: ReadonlyArray<AgentFixture> = [
   },
   // ---------------------------------------------------------------------
   // email-drafting-agent: chained-after-recipient fixture. Single HITL gate:
-  // `@cinatra-ai/reviewer-agent:drafts-output` over the LLM-generated drafts.
+  // the pack's own `:email-drafts-review` over the LLM-generated drafts.
   // The agent's StartNode declares two hidden+required inputs:
   //   - campaignId      → reuses SEED_IDS.campaignContextA seeded above
   //   - confirmedRecipients → static array; the agent's skill iterates
@@ -281,7 +286,7 @@ export const AGENT_FIXTURES: ReadonlyArray<AgentFixture> = [
         // clicking outer-panel Continue when no #field-hitl-field input
         // is present (display-only path).
         kind: "custom-renderer",
-        xRenderer: "@cinatra-ai/reviewer-agent:drafts-output",
+        xRenderer: "@cinatra-ai/email-drafting-agent:email-drafts-review",
         action: { userResponse: "Approved." },
       },
     ],
@@ -316,14 +321,16 @@ export const AGENT_FIXTURES: ReadonlyArray<AgentFixture> = [
         followUpDays: [3, 7, 14],
       };
     },
-    hitlScreens: [
-      {
-        // Mid-run gate: review LLM-generated follow-up sequence.
-        kind: "custom-renderer",
-        xRenderer: "@cinatra-ai/reviewer-agent:followups-output",
-        action: { userResponse: "Approved." },
-      },
-    ],
+    // cinatra#1796 / #2047 row 8 — email-follow-up-agent#41, hold decision (a):
+    // this flow's embedded `approval_gate` was REMOVED. It raises NO
+    // pending_approval interrupt anywhere in the run, so the fixture declares no
+    // HITL screen. The user's approve/reject opportunity moved onto the review
+    // gate CORE opens for the produced `@cinatra-ai/email:body` artifact —
+    // which is behind the CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION fence
+    // (DEFAULT OFF). With the fence off this run completes unattended; the
+    // core-gate hold is exercised by the lifecycle suites and by the fenced walk
+    // recorded on the retirement PR, not by this fence-off fixture.
+    hitlScreens: [],
     expectedTerminalStatus: "completed",
     tunnelDependent: true,
     runTimeoutMs: 360_000,
@@ -447,91 +454,12 @@ export const AGENT_FIXTURES: ReadonlyArray<AgentFixture> = [
   // (project + post + draft generation) and intersects with the
   // separate blog-* agent chain. Filed for a focused follow-up phase.
   //
-  // NOTE — auditor-agent (standalone): the earlier
-  // DEFER-STANDALONE-INVESTIGATION ("run_skills needs real skill IDs;
-  // empty skillIds invalid") was misdiagnosed. Empty skillIds:[] is fine
-  // (it falls back to parent-package skill resolution and builds no skill
-  // tools when empty). The real cause was missing start→node DFE wiring +
-  // a dispatcher name mismatch (start declared `agent_run_id`, dispatcher
-  // injects `cinatra_run_id`). Standalone is now a LIVE-RUNNABLE fixture
-  // (see the @cinatra-ai/auditor-agent AGENT_FIXTURES entry below).
-  //
-  // reviewer-agent (standalone). Earlier DEFER hypothesized an EndNode
-  // UUID-validation bounce, but the actual issue was that the OAS approval_gate
-  // declared its renderer as `@cinatra-ai/email-reviewer-agent:output`, while
-  // the text-envelope synthesis path (packages/agents/src/execution.ts:441)
-  // only handles `@cinatra-ai/reviewer-agent:output`. The alternate renderer
-  // path missed the synthesis hook so the gate never received a usable
-  // userResponse and bounced. Fixed by normalizing the OAS renderer to the
-  // canonical id and bumping package metadata so the install pipeline picks
-  // up the new version.
-  {
-    packageName: "@cinatra-ai/reviewer-agent",
-    vendor: "cinatra-ai",
-    slug: "reviewer-agent",
-    classification: "LIVE-RUNNABLE",
-    startInputs: {},
-    seedFn: async () => {
-      await seedDraftBundleFromFixture();
-      await seedFollowupBundleFromFixture();
-      return {
-        draftBundleRef: SEED_IDS.draftBundleA,
-        followupBundleRef: SEED_IDS.followupBundleA,
-      };
-    },
-    hitlScreens: [
-      {
-        // Approval gate now correctly hits the @cinatra-ai/reviewer-agent:output
-        // renderer, which has the text-envelope synthesis behind it.
-        kind: "custom-renderer",
-        xRenderer: "@cinatra-ai/reviewer-agent:output",
-        action: { userResponse: "Approved." },
-      },
-    ],
-    expectedTerminalStatus: "completed",
-    tunnelDependent: true,
-    // 6-10 min: LLM review step fetches both bundles, critiques, saves
-    // approved variants.
-    runTimeoutMs: 600_000,
-  },
-  // auditor-agent (standalone). The OAS DFE wiring maps
-  // start.agent_run_id → cinatra_run_id and includes start→{resolve_skills,
-  // run_skills,apply_patches} edges. The standalone contract: seed {data,
-  // parentPackageName, skillIds:[]}; runtime injects cinatra_run_id (= the
-  // run's own id, run_by=test user so the /api/auditor/* run-ownership guard
-  // passes). resolve_skills falls back to parent-package skill resolution;
-  // with a skill-less parent it resolves [], run_skills builds no skill tools,
-  // the LLM emits zero suggestions ("Do NOT invent suggestions when skills
-  // produce none"), review_gate renders "No captured guidance", outer
-  // Continue → apply_patches (acceptedIds=[] no-op) → end. parentPackageName
-  // must be non-empty (route Zod `.min(1)`); the auditor's own package is
-  // skill-less and self-referential-safe here.
-  {
-    packageName: "@cinatra-ai/auditor-agent",
-    vendor: "cinatra-ai",
-    slug: "auditor-agent",
-    classification: "LIVE-RUNNABLE",
-    startInputs: {},
-    seedFn: async () => ({
-      data: {
-        note: "Standalone auditor smoke — no skills, expect zero suggestions.",
-      },
-      parentPackageName: "@cinatra-ai/auditor-agent",
-      skillIds: [],
-    }),
-    hitlScreens: [
-      {
-        kind: "custom-renderer",
-        xRenderer: "@cinatra-ai/auditor-agent:review",
-        action: { userResponse: "Approved." },
-      },
-    ],
-    expectedTerminalStatus: "completed",
-    tunnelDependent: true,
-    // 4-8 min: resolve_skills + run_skills LLM pass (zero skills) + the
-    // single review_gate HITL + apply_patches no-op.
-    runTimeoutMs: 600_000,
-  },
+  // cinatra#1796 / #2047 row 8 — the reviewer-agent and auditor-agent standalone
+  // fixtures were DELETED with the retirement teardown. Both packages are gone
+  // from cinatra.devExtensions and from both extension locks, so neither is
+  // installable, dispatchable or renderable. The review they used to provide is
+  // now core interception on the run-embedded gate; the flows that invoked them
+  // keep their own holds (see the email/blog fixtures above).
 ];
 
 /**
@@ -578,11 +506,6 @@ export const DEFER_PREREQ_AGENTS: ReadonlyArray<{
     packageName: "@cinatra-ai/email-test-delivery-agent",
     prerequisites:
       "campaignId — needs a campaign already created.",
-  },
-  {
-    packageName: "@cinatra-ai/auditor-agent",
-    prerequisites:
-      "data (object) + parentPackageName — typically called as a sub-agent during email-drafting.",
   },
   {
     packageName: "@cinatra-ai/list-curator-agent",

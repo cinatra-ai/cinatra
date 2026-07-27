@@ -42,14 +42,14 @@ describe("detectExplicitDispatchPackage — chat-mcp fixture prompts", () => {
     ).toBe("@cinatra-ai/trigger-agent");
   });
 
-  it("Use the @cinatra-ai/auditor-agent", () => {
+  it("Use the @cinatra-ai/author-agent", () => {
     expect(
       detectExplicitDispatchPackage(
         u(
-          "Use the @cinatra-ai/auditor-agent agent to audit the agent definition at https://example.com — I'll approve the findings once you produce them.",
+          "Use the @cinatra-ai/author-agent agent to audit the agent definition at https://example.com — I'll approve the findings once you produce them.",
         ),
       ),
-    ).toBe("@cinatra-ai/auditor-agent");
+    ).toBe("@cinatra-ai/author-agent");
   });
 
   it("Use the @cinatra-ai/list-curator-agent", () => {

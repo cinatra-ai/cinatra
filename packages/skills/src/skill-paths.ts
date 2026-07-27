@@ -134,9 +134,9 @@ const SCOPED_PACKAGE_NAME_RE = /^@([^/]+)\/(.+)$/;
 /**
  * Map an agent template's `package_name` to its on-disk `<vendor>/<package>`
  * segment. `agent_templates.package_name` stores the npm package name
- * (e.g. `@cinatra-ai/auditor-agent`), but the skill-store disk layout uses
+ * (e.g. `@cinatra-ai/author-agent`), but the skill-store disk layout uses
  * `<vendor>/<package>` WITHOUT npm's leading `@` scope marker
- * (e.g. `~agents/cinatra-ai/auditor-agent/...`). Strip the `@` so the resolver
+ * (e.g. `~agents/cinatra-ai/author-agent/...`). Strip the `@` so the resolver
  * matches what the materializer/skill-store actually wrote. Non-scoped names
  * (legacy `vendor/package`) pass through unchanged.
  */
@@ -271,7 +271,7 @@ export function resolveSkillDir(id: SkillIdentity, slugs: SlugMap, root: string)
           `for skill ${id.skill_slug}`,
       );
     }
-    // packageName is the npm package name (e.g. "@cinatra-ai/auditor-agent").
+    // packageName is the npm package name (e.g. "@cinatra-ai/author-agent").
     // The disk layout uses <vendor>/<package> without the leading "@" scope
     // marker, so normalize before composing the path. (The SQL relocation
     // trigger still composes the raw value — see cinatra#550; fixing it

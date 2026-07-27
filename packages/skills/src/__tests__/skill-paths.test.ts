@@ -4,7 +4,7 @@
 // directory the skill-store writes/reads.
 //
 // NOTE: for agent-bound skills the resolver normalizes the npm-scoped
-// `agent_templates.package_name` (e.g. "@cinatra-ai/auditor-agent") to the
+// `agent_templates.package_name` (e.g. "@cinatra-ai/author-agent") to the
 // unscoped on-disk segment ("cinatra-ai/auditor-agent"). The SQL relocation
 // trigger still composes the raw scoped value and so currently diverges for
 // scoped names — fixing it requires a migration (tracked in cinatra#550).
@@ -50,7 +50,7 @@ const slugs: SlugMap = {
   agentTemplates: new Map([
     [
       "tmpl-auditor",
-      { ownerLevel: "team", ownerId: "t-growth", packageName: "@cinatra-ai/auditor-agent" },
+      { ownerLevel: "team", ownerId: "t-growth", packageName: "@cinatra-ai/author-agent" },
     ],
     [
       "tmpl-blog",

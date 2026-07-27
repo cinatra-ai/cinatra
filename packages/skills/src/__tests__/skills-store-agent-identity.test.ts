@@ -83,7 +83,7 @@ describe("deriveContextFromLegacy — agent vendor/name (cinatra#537)", () => {
   });
 
   it("keeps first-party agents resolving to vendor=cinatra-ai", () => {
-    const ctx = deriveContextFromLegacy("agent", "@cinatra-ai/auditor-agent", undefined, "pii-check");
+    const ctx = deriveContextFromLegacy("agent", "@cinatra-ai/author-agent", undefined, "pii-check");
     expect(ctx.vendor).toBe("cinatra-ai");
     expect(ctx.package).toBe("auditor-agent");
   });

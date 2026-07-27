@@ -1045,21 +1045,22 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // explicit stepNumber/output so history-derived output still WINS: data-review
     // gates that parse `output` are unaffected.
     //
-    // Reserved host-synthesized envelope keys (set by the reviewer-output
-    // envelope synthesis below) must never be SOURCED from a gate's
-    // pendingApproval — else a gate input could disable synthesis or shadow a
-    // real content bundle. Strip them from ALL pendingApproval-derived values:
-    // the explicit gate-input merge AND the `spreadFromOutput` fallback that
-    // re-parses pendingApproval when history is empty. A `spreadFromOutput`
-    // derived from HISTORY (a subflow that really emits {contentType,...}) is
-    // preserved (`historyText !== undefined`).
-    const RESERVED_ENRICHED_KEYS = new Set([
-      "contentType",
-      "contentBundle",
-      "summary",
-      "output",
-      "stepNumber",
-    ]);
+    // Reserved HOST TRANSPORT keys must never be SOURCED from a gate's
+    // pendingApproval — the host sets them explicitly below from the WayFlow
+    // step number and the history-derived output, and a gate input of the same
+    // name would shadow the real value. Strip them from ALL
+    // pendingApproval-derived values: the explicit gate-input merge AND the
+    // `spreadFromOutput` fallback that re-parses pendingApproval when history is
+    // empty. A `spreadFromOutput` derived from HISTORY is preserved
+    // (`historyText !== undefined`).
+    //
+    // cinatra#1796 teardown: the reviewer-output envelope keys
+    // (`contentType`/`contentBundle`/`summary`) are NO LONGER reserved — the
+    // host synthesizes no envelope, so there is nothing for a gate input to
+    // disable or shadow. A gate that genuinely declares one of those names as a
+    // render input now reaches its renderer, which is the correct behaviour for
+    // an extension-owned key the host has no opinion about.
+    const RESERVED_ENRICHED_KEYS = new Set(["output", "stepNumber"]);
     const stripReserved = (o: Record<string, unknown>): Record<string, unknown> =>
       Object.fromEntries(
         Object.entries(o).filter(([k]) => !RESERVED_ENRICHED_KEYS.has(k)),
@@ -1074,57 +1075,6 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       ...(wayflowStepNumber !== null ? { stepNumber: wayflowStepNumber } : {}),
       ...(interruptOutput !== undefined ? { output: interruptOutput } : {}),
     };
-    // Synthesize the {contentType, contentBundle, summary}
-    // envelope for `@cinatra-ai/reviewer-agent:output` gates when the upstream
-    // subflow didn't emit one. Without it the renderer falls back to
-    // SchemaFieldRenderer fallback path and the LLM-produced
-    // review text never reaches the user-facing SummaryLine component.
-    //
-    // The reviewer-agent's purpose is "human reviews the LLM's output text"
-    // — that text lives in `output` (history-derived). For orchestrators
-    // whose reviewer subflow doesn't construct a typed envelope yet, we
-    // inject a minimal "text" envelope here so the renderer's SummaryLine
-    // displays the LLM output and the fallback SchemaFieldRenderer renders
-    // an empty approve/edit input. Subflows that DO emit the envelope (any
-    // value with `contentType` already present) are passed through
-    // unchanged.
-    // The reviewer output-gate ID is resolved by KIND from the manifest
-    // bindings (the reviewer agent's `cinatra.fieldRenderers` declaration) —
-    // undefined when no present/installed package binds "reviewer-output",
-    // in which case the gate class is absent and synthesis correctly no-ops
-    // (the renderer falls back to the schema-field path, as before).
-    if (
-      wayflowXRenderer === resolveRendererIdForKind("reviewer-output") &&
-      typeof enrichedValues["contentType"] !== "string"
-    ) {
-      // Do not gate envelope synthesis on `typeof output === "string"`:
-      // some reviewer gates fire BEFORE any LLM produced a history.last_assistant text
-      // (e.g. an orchestrator's reviewer subflow gets the title
-      // via DFE, not from a preceding LLM step). In that case `output` is
-      // undefined and the synthesis no-ops, leaving the renderer to fall
-      // back to the schema-field-fallback path — un-advanceable on
-      // last-HITL steps. Always set a minimal envelope so the renderer's
-      // text-case branch (with its own Continue button) always fires.
-      const inputParams = (run.inputParams as Record<string, unknown> | null) ?? {};
-      const out =
-        typeof enrichedValues["output"] === "string"
-          ? (enrichedValues["output"] as string)
-          : "";
-      // Best-effort body: prefer the LLM output, then any title/summaryLine
-      // in inputParams or the interruptPayload — anything to give the user
-      // SOMETHING to read while approving.
-      const fallbackTitle =
-        (typeof inputParams["title"] === "string" && (inputParams["title"] as string)) ||
-        (typeof inputParams["summaryLine"] === "string" && (inputParams["summaryLine"] as string)) ||
-        "";
-      const text = out || fallbackTitle || "(reviewer agent — approve to continue)";
-      enrichedValues["contentType"] = "text";
-      enrichedValues["summary"] = text.length > 200 ? `${text.slice(0, 197)}...` : text;
-      enrichedValues["contentBundle"] = {
-        text,
-        url: (inputParams["url"] as string | undefined) ?? "",
-      };
-    }
     const wayflowSchemaToSend = await enrichSchemaWithResolvedData(
       (wayflowSchema ?? interruptPayload) as Record<string, unknown>,
       enrichmentContextFor(run.runBy),
