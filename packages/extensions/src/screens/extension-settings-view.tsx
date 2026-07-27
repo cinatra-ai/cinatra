@@ -74,6 +74,13 @@ export type ExtensionSettingsViewProps = {
   canPublish: boolean;
   /** The Permissions control (access picker) or a deferred note. */
   permissions: ReactNode;
+  /**
+   * The per-agent EXECUTION config section (exec-plane S3 slice B,
+   * cinatra#1708) — execution on/off, the declared L1 environment, and the
+   * promotion affordance. Injected as a node so this presentational view takes
+   * no execution-plane dependency; absent for every non-agent kind.
+   */
+  execution?: ReactNode;
   actions: ExtensionSettingsActions;
 };
 
@@ -92,6 +99,7 @@ export function ExtensionSettingsView({
   isRegisteredVendor,
   canPublish,
   permissions,
+  execution,
   actions,
 }: ExtensionSettingsViewProps) {
   const { bg } = ACCENT_PALETTE[deriveExtensionAccent(packageName)];
@@ -141,6 +149,17 @@ export function ExtensionSettingsView({
           <h2 className="mb-3.5 text-lg font-bold text-foreground">Permissions</h2>
           {permissions}
         </section>
+
+        {/* Execution — the per-agent execution config (agent kind only).
+            Sits directly under Permissions: both answer "what is this agent
+            allowed to do here", and both are per-agent grants on the same
+            config surface. */}
+        {execution ? (
+          <section data-slot="settings-execution" className="border-b border-line py-5.5">
+            <h2 className="mb-3.5 text-lg font-bold text-foreground">Execution</h2>
+            {execution}
+          </section>
+        ) : null}
 
         {/* Marketplace */}
         <section data-slot="settings-marketplace" className="border-b border-line py-5.5">

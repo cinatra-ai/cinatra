@@ -232,6 +232,31 @@ export async function ExtensionSettingsScreen({
     );
   }
 
+  // §V Execution (exec-plane S3 slice B, cinatra#1708) — the per-agent
+  // execution config: on/off, the declared L1 environment, and the promotion
+  // affordance. AGENT kind only (the sole allowlisted carrier of
+  // `cinatra.execution.environment`). Imported LAZILY so no non-agent settings
+  // page pulls the execution slice, and best-effort: a failure here omits the
+  // section rather than blanking the whole settings page.
+  let ExecutionSection:
+    | ((props: { packageName: string; displayName: string }) => Promise<ReactNode>)
+    | null = null;
+  if (extKind === "agent") {
+    try {
+      ({ AgentExecutionConfigSection: ExecutionSection } = await import(
+        "@/components/execution/agent-execution-config-section"
+      ));
+    } catch (err) {
+      console.warn(
+        "[extension-settings] could not load the execution config section:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  const execution: ReactNode = ExecutionSection ? (
+    <ExecutionSection packageName={packageName} displayName={row.displayName} />
+  ) : null;
+
   return (
     <ExtensionSettingsView
       kind={extKind}
@@ -248,6 +273,7 @@ export async function ExtensionSettingsScreen({
       isRegisteredVendor={isRegisteredVendor}
       canPublish={canPublish}
       permissions={permissions}
+      execution={execution}
       actions={{
         archive: archiveAction,
         activate: activateAction,
