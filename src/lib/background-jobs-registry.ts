@@ -293,7 +293,7 @@ function resolveLifecycleReviewRunner(): LifecycleReviewRunner | null {
 // in `dispatchRegisteredJob` re-checks the record before `handle` (fail-closed
 // against `as JobHandler` casts, test doubles, and JS-level drift).
 //
-// The metadata is FULLY DECLARATIVE — no embedded functions (codex r0 F6): the
+// The metadata is FULLY DECLARATIVE — no embedded functions: the
 // S2 dispatcher/mint-seam interpret the bindings via one tested helper
 // (`readPayloadField(payload, field): string | null`), so the record stays
 // serializable, snapshot-pinnable, and side-effect-free. S1 lands only the type
@@ -325,12 +325,12 @@ export type JobOrgBinding =
    *  names the enumeration for auditability. */
   | { readonly source: "row-sweep"; readonly note: string }
   /** Org via an FK parent, no org column of its own (agent_run_pm_links →
-   *  agent_runs.org_id). `via` names the join path. (codex r0 F5) */
+   *  agent_runs.org_id). `via` names the join path. */
   | { readonly source: "parent-ref"; readonly via: string }
   /** A platform-policy operation over org-ATTRIBUTED rows with NO per-org
    *  scoping (global-cutoff deletes; zero-ref cache reaps whose predicate
    *  spans all orgs). Legal ONLY on the non-mintable maintenance arm below —
-   *  a job shaped like this can never hold org authority. (codex r0 F5) */
+   *  a job shaped like this can never hold org authority. */
   | { readonly source: "global-org-attributed"; readonly note: string };
 
 /**
@@ -374,7 +374,7 @@ export type JobAuthorityMetadata =
       readonly runExtractor: { readonly source: "payload"; readonly field: string };
       readonly capabilities: readonly [OrgWriteCapability, ...OrgWriteCapability[]];
       /** Purposes this job's context may mint (documents today's wave-2
-       *  wrapper use: ["agent-run-dispatch"]). (codex r0 F4) */
+       *  wrapper use: ["agent-run-dispatch"]). */
       readonly allowedPurposes: readonly SystemWritePurpose[];
     }
   | {
@@ -393,11 +393,11 @@ export type JobAuthorityMetadata =
        *  purpose (fail-closed default — wave-3 opens each job as a reviewed
        *  design event). PRESENT ⇒ mint allowed iff purpose ∈ list AND its
        *  grants ⊆ capabilities (both checks). References EXISTING purposes
-       *  only — this design coins none (wave-3 owns vocabulary). (codex r0 F4) */
+       *  only — this design coins none (wave-3 owns vocabulary). */
       readonly allowedPurposes?: readonly SystemWritePurpose[];
     }
   | {
-      /** NON-MINTABLE maintenance (the split codex r0 F5 asked for): touches
+      /** NON-MINTABLE maintenance (a distinct arm from the mintable one): touches
        *  org-attributed/org-keyed rows that sit OUTSIDE the kernel write
        *  universe (caches, run-owned link furniture, the audit sink itself).
        *  `capabilities` is the LITERAL empty tuple and `allowedPurposes` is

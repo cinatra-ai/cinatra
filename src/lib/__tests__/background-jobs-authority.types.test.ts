@@ -5,9 +5,9 @@
 // executes the trivial runtime assertion at the bottom (esbuild strips types, so
 // `@ts-expect-error` is a no-op at runtime).
 //
-// Each negative case MUST produce a genuine type error; an "unused
-// @ts-expect-error" would itself fail tsc. Each positive control MUST compile;
-// a real fence regression makes one stop compiling and fails CI.
+// Each negative case MUST produce a genuine type error (an unused suppression
+// directive would itself fail tsc). Each positive control MUST compile; a real
+// fence regression makes one stop compiling and fails CI.
 
 import { describe, it, expect } from "vitest";
 import { z } from "zod";

@@ -6,7 +6,7 @@
 //   - a literal per-row snapshot so any reclassification is a visible diff;
 //   - the runtime fail-closed guard in dispatchRegisteredJob (D6);
 //   - isValidJobAuthorityMetadata unit coverage;
-//   - two classification invariants (codex r0 F8): EXTENSION_AUTO_UPDATE is
+//   - two classification invariants: EXTENSION_AUTO_UPDATE is
 //     NULL-org-bounded, and the auto-update + vendor local modules do no
 //     org-axis raw-SQL writes.
 
