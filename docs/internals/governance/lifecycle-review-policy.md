@@ -1,9 +1,9 @@
-# Lifecycle review policy and separation of duties
+# Lifecycle review policy
 
 Administrator's view of the artifact-lifecycle policy lattice: what an
 organization can require or forbid, how a rule is keyed and matched, what wins
-when several layers disagree, the separation-of-duties rule on required gates,
-and the activation switches that decide whether any of it runs.
+when several layers disagree, who may decide a review, and the activation
+switches that decide whether any of it runs.
 
 - Status: normative policy reference for the three lifecycle checkpoints.
 - Audience: administrators configuring lifecycle policy, and engineers
@@ -131,30 +131,22 @@ Two rules protect the external-effect classes:
   later policy decision, and a per-run elevation cannot resolve it. On a
   non-external class the same unevaluable default proceeds ungated.
 
-## 4. Separation of duties
+## 4. Who may decide a review
 
-The rule, stated by `evaluateSeparationOfDuties`
-(`src/lib/lifecycle/lifecycle-separation-of-duties.ts`):
+A lifecycle review exists so a **human can control what the agent produced**. It
+is not a human-workflow review system.
 
-> On an **org-required** gate, the producing actor cannot be the **sole**
-> approver.
+Any member of the scope the run belongs to — personal, project, team or
+organization — may decide a review, **without limitation**, explicitly including
+the person who started the run. There is no reviewer assignment, no
+self-approval ban and no quorum.
 
-Concretely:
+A policy bound therefore controls exactly ONE thing: **whether a review is
+required (or forbidden) for a class of work** — never who may decide it. The
+lattice carries no reviewer-eligibility dimension, and no policy input can
+introduce one.
 
-| Situation | Eligible to approve? |
-|---|---|
-| The gate is not org-required (it fired by default, manifest or elevation) | Yes — optional gates allow self-approval. |
-| Org-required, and the organization opted into self-approval | Yes. |
-| Org-required, reviewer is not the producer | Yes. |
-| Org-required, reviewer **is** the producer, and another distinct actor has already approved | Yes — the producer is then not the sole approver. |
-| Org-required, reviewer **is** the producer, no other approver | No. |
-
-The opt-in is the `self_approval_opt_in` flag carried on the org rule; it is
-meaningful only on a `required` bound and defaults to `false`. The lattice
-surfaces the requirement as `separationOfDutiesRequired` on its verdict, set
-exactly when the outcome is `required` and the organization did not opt in. The
-rule takes the **live** acting actor as its reviewer input — never a captured or
-replayed identity — and the set of prior distinct approvers as its second input.
+Recording who decided is welcome bookkeeping; restricting who may decide is not.
 
 **Re-authorization points.** Two later actions are defined as re-authorization
 points rather than replays of a stored context: repair dispatch and a remote CMS
@@ -223,8 +215,7 @@ How common intentions are expressed as keys.
 **Require review of every external publish, org-wide.**
 One rule per origin kind that matters, with `artifactType` `*`,
 `destinationClass` `external_publish`, `bound` `required`. Nothing can weaken it:
-a manifest skip is ignored, and elevation only strengthens. Separation of duties
-applies unless the self-approval opt-in is also set.
+a manifest skip is ignored, and elevation only strengthens.
 
 **Let an agent skip review of its own intermediate scratch output.**
 Leave the org silent for that key and let the agent declare the skip. It is
@@ -236,10 +227,9 @@ A `forbidden` bound on the exact type. Because exact beats `*`, this coexists
 with a broader wildcard `required` rule for the same checkpoint and class, which
 continues to govern every other type.
 
-**Let a reviewer approve their own work on an optional gate.**
-Nothing to configure: self-approval is allowed wherever the gate is not
-org-required. To allow it on a required gate as well, set the self-approval
-opt-in on that rule — deliberately, and per key.
+**Let a reviewer decide a review of their own work.**
+Nothing to configure, on any gate. A bound decides whether a review is required,
+never who may decide it — see §4.
 
 ## See also
 

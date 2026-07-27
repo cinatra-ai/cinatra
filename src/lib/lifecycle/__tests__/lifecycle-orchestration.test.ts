@@ -111,7 +111,6 @@ describe("planReviewForEvent", () => {
     expect(plan.continuationMode).toBe("async_effects_gated");
     expect(plan.park).toBeNull();
     expect(plan.heldEffect).toBeNull(); // destination 'none' → nothing to hold
-    expect(plan.separationOfDutiesRequired).toBe(false);
   });
 
   it("user-provided durable local artifact → no-gate (skip)", () => {
@@ -134,19 +133,16 @@ describe("planReviewForEvent", () => {
     expect(plan.heldEffect).toBe("external_publish");
   });
 
-  it("org-REQUIRED bound → create-gate required + SoD (no self-approval opt-in)", () => {
+  it("org-REQUIRED bound → create-gate required, and the plan says nothing about WHO may decide", () => {
     const plan = planReviewForEvent(axes(), ctx({ bound: "required" }));
     expect(plan.action).toBe("create-gate");
     if (plan.action !== "create-gate") return;
     expect(plan.outcome).toBe("required");
-    expect(plan.separationOfDutiesRequired).toBe(true);
-  });
-
-  it("org-REQUIRED with self-approval opt-in → required WITHOUT SoD", () => {
-    const plan = planReviewForEvent(axes(), ctx({ bound: "required", selfApprovalOptIn: true }));
-    expect(plan.action).toBe("create-gate");
-    if (plan.action !== "create-gate") return;
-    expect(plan.separationOfDutiesRequired).toBe(false);
+    // cinatra#2047 row-3 re-scope: a bound decides whether a review is required,
+    // never who is eligible to decide it.
+    for (const key of Object.keys(plan)) {
+      expect(key).not.toMatch(/separation|selfApproval|eligib|reviewer/i);
+    }
   });
 
   it("org-FORBIDDEN bound → no-gate (a hard non-fire, even for agent_produced)", () => {

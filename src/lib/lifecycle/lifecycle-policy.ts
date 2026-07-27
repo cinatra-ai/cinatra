@@ -142,13 +142,18 @@ export interface PolicyRuleKey {
   originKind: LifecycleOriginKind;
 }
 
-/** The org bound for a key + whether the org opted INTO self-approval on its
- * `required` gates (SoD default is that the producing actor may NOT be the sole
- * approver; an explicit opt-in relaxes it). */
+/**
+ * The org bound for a key.
+ *
+ * A policy bound controls exactly ONE thing: whether a review is REQUIRED (or
+ * forbidden) for a class of work — never WHO may decide it. A lifecycle review
+ * exists so a human can control what the agent produced; any member of the
+ * scope the run belongs to may decide it, including the person who started the
+ * run (cinatra#2047, row-3 re-scope). There is deliberately no reviewer-
+ * eligibility dimension here.
+ */
 export interface OrgPolicyRule {
   bound: PolicyBound;
-  /** Only meaningful for `required`; ignored otherwise. Default false. */
-  selfApprovalOptIn?: boolean;
 }
 
 /** The injected org-rule lookup — the store resolves the most-specific matching
@@ -208,12 +213,12 @@ export interface EvaluatePolicyInput {
 }
 
 /** The lattice verdict. `fired` is the single boolean every emitter branches on;
- * the rest is provenance for the run-timeline record + the SoD downstream. */
+ * the rest is provenance for the run-timeline record. */
 export type PolicyOutcome =
-  /** Org-`required`: the gate fires and SoD applies (producer not sole approver
-   * unless org opt-in). */
+  /** Org-`required`: the org's own bound fires the gate, and nothing below can
+   * weaken it. Says nothing about WHO may decide it. */
   | "required"
-  /** The gate fires by default/manifest/elevation (self-approval allowed). */
+  /** The gate fires by default/manifest/elevation. */
   | "fire"
   /** The gate does not fire (default/manifest skip, or a non-external
    * indeterminate default). */
@@ -228,10 +233,6 @@ export interface PolicyDecision {
   outcome: PolicyOutcome;
   /** Convenience: the checkpoint's gate actually fires. */
   fired: boolean;
-  /** True only when the outcome is `required` (org floor) and the org did NOT
-   * opt into self-approval — the SoD constraint the decision-submit re-check
-   * enforces (producer never the sole approver). */
-  separationOfDutiesRequired: boolean;
   /** A stable, human-readable reason for the run-timeline record. */
   reason: string;
   /** Which lattice layer produced the outcome (for observability). */
@@ -314,11 +315,10 @@ export function evaluatePolicy(input: EvaluatePolicyInput): PolicyDecision {
   // Layer 1 — ORG BOUNDS beat everything.
   if (orgRule.bound === "required") {
     // Nothing below can weaken a required gate (elevation only strengthens; a
-    // manifest skip is ignored). SoD applies unless the org opted in.
+    // manifest skip is ignored).
     return {
       outcome: "required",
       fired: true,
-      separationOfDutiesRequired: orgRule.selfApprovalOptIn !== true,
       reason: `org policy requires ${checkpoint} for this class`,
       decidedBy: "org-bound",
     };
@@ -328,7 +328,6 @@ export function evaluatePolicy(input: EvaluatePolicyInput): PolicyDecision {
     return {
       outcome: "forbidden",
       fired: false,
-      separationOfDutiesRequired: false,
       reason: `org policy forbids ${checkpoint} for this class`,
       decidedBy: "org-bound",
     };
@@ -354,7 +353,6 @@ export function evaluatePolicy(input: EvaluatePolicyInput): PolicyDecision {
       return {
         outcome: "policy_unresolved",
         fired: false,
-        separationOfDutiesRequired: false,
         reason: `${checkpoint} policy is unevaluable for an external-effect class — blocked pending an explicit decision`,
         decidedBy: "fail-closed",
       };
@@ -364,7 +362,6 @@ export function evaluatePolicy(input: EvaluatePolicyInput): PolicyDecision {
       return {
         outcome: "fire",
         fired: true,
-        separationOfDutiesRequired: false,
         reason: `per-run elevation forced ${checkpoint} on`,
         decidedBy: "elevation",
       };
@@ -372,7 +369,6 @@ export function evaluatePolicy(input: EvaluatePolicyInput): PolicyDecision {
     return {
       outcome: "skip",
       fired: false,
-      separationOfDutiesRequired: false,
       reason: `${checkpoint} default is indeterminate for a non-external class — proceed ungated`,
       decidedBy: "core-default",
     };
@@ -407,7 +403,6 @@ export function evaluatePolicy(input: EvaluatePolicyInput): PolicyDecision {
   return {
     outcome,
     fired: outcome === "fire",
-    separationOfDutiesRequired: false,
     reason,
     decidedBy,
   };
@@ -438,7 +433,6 @@ export interface ParsedPolicyBoundInput {
   destinationClass: DestinationClass;
   originKind: LifecycleOriginKind;
   bound: "required" | "forbidden";
-  selfApprovalOptIn: boolean;
 }
 
 /** A parsed policy KEY (no bound) — what a delete needs. */
@@ -509,11 +503,7 @@ export function parsePolicyBoundInput(
     };
   }
 
-  const rawOptIn = raw.selfApprovalOptIn;
-  const selfApprovalOptIn =
-    rawOptIn === true || rawOptIn === "on" || rawOptIn === "true";
-
-  return { ok: true, value: { ...key.value, bound, selfApprovalOptIn } };
+  return { ok: true, value: { ...key.value, bound } };
 }
 
 /** Parse + validate the KEY of a bound to retract. */
