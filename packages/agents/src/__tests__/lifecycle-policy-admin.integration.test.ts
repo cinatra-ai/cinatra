@@ -200,7 +200,7 @@ describe.skipIf(!HAS_DB)("cinatra#2047 D-3 — org policy bounds are writable AN
     await policyStore.upsertLifecyclePolicyRule({
       orgId: ORG, checkpoint: "recommendation", artifactType: "blog-post",
       destinationClass: "external_publish", originKind: "user_provided",
-      bound: "required", selfApprovalOptIn: true,
+      bound: "required",
     });
 
     const rules = await policyStore.listLifecyclePolicyRules(ORG);
@@ -209,10 +209,11 @@ describe.skipIf(!HAS_DB)("cinatra#2047 D-3 — org policy bounds are writable AN
     expect(rules[0].checkpoint).toBe("recommendation");
     expect(rules.slice(1).map((r) => r.artifactType)).toEqual(["*", "document"]);
 
-    const optIn = rules.find((r) => r.checkpoint === "recommendation")!;
-    expect(optIn.selfApprovalOptIn).toBe(true);
-    expect(optIn.destinationClass).toBe("external_publish");
-    expect(optIn.originKind).toBe("user_provided");
+    const rec = rules.find((r) => r.checkpoint === "recommendation")!;
+    // cinatra#2047 row-3 re-scope: a listed bound carries no reviewer-eligibility field.
+    expect(rec).not.toHaveProperty("selfApprovalOptIn");
+    expect(rec.destinationClass).toBe("external_publish");
+    expect(rec.originKind).toBe("user_provided");
   });
 
   it("BOUNDS: a re-save of the SAME tuple UPDATES in place (idempotent, no duplicate row)", async () => {
@@ -221,12 +222,12 @@ describe.skipIf(!HAS_DB)("cinatra#2047 D-3 — org policy bounds are writable AN
       destinationClass: "none" as const, originKind: "agent_produced" as const,
     };
     await policyStore.upsertLifecyclePolicyRule({ ...key, bound: "required" });
-    await policyStore.upsertLifecyclePolicyRule({ ...key, bound: "forbidden", selfApprovalOptIn: true });
+    await policyStore.upsertLifecyclePolicyRule({ ...key, bound: "forbidden" });
 
     const rules = await policyStore.listLifecyclePolicyRules(ORG);
     expect(rules).toHaveLength(1);
     expect(rules[0].bound).toBe("forbidden");
-    expect(rules[0].selfApprovalOptIn).toBe(true);
+    expect(rules[0]).not.toHaveProperty("selfApprovalOptIn");
   });
 
   it("BOUNDS: exact beats `*`, and a retract returns the key to silent", async () => {

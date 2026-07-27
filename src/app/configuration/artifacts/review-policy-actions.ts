@@ -58,12 +58,11 @@ function toRaw(formData: FormData): RawPolicyInput {
     destinationClass: formData.get("destinationClass"),
     originKind: formData.get("originKind"),
     bound: formData.get("bound"),
-    selfApprovalOptIn: formData.get("selfApprovalOptIn"),
   };
 }
 
 /** Set (or replace) one org bound. Idempotent on the full tuple — re-saving the
- * same key updates the bound + opt-in in place. */
+ * same key updates the bound in place. */
 export async function upsertReviewPolicyRuleAction(
   _prev: ReviewPolicyActionState,
   formData: FormData,
