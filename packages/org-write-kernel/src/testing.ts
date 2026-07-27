@@ -22,6 +22,19 @@
  * TEST-ONLY: never import from production code.
  */
 
+import { sql, type SQL } from "drizzle-orm";
+import {
+  acquireOrgLocks,
+  orgLockQueries,
+  type OrgWriteDb,
+  type OrgWriteTx,
+} from "./locks";
+import { readOrgWriteState } from "./org-state";
+import {
+  snapshotLeasesQuery,
+  invalidateLeasesBeforeEpochQuery,
+} from "./leases";
+
 export type FakeOrgWriteOrganizationState = {
   readonly archivedAt?: Date | string | null;
   readonly archiveEpoch?: number;
@@ -159,5 +172,123 @@ export function fakeOrgWriteDb(answers: KernelQueryAnswers): {
     },
     tx,
     executed,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// R-acc archive-transition harness (cinatra#1939 wave 3, S3) — INTEGRATION
+// tier (two real connections, advisory-lock choreography, no timing sleeps).
+//
+// Built ONLY from kernel-exported shapes (locks.ts / org-state.ts / leases.ts)
+// so it cannot drift from what the S6 archive transaction will do AT THE
+// KERNEL LAYER: the archive epoch bumped and the lifecycle state flipped under
+// BOTH org locks. It is the kernel-truthful ORACLE the R-acc races assert
+// against — NOT the S6 archive transaction's business logic (session
+// deactivation and the rest are S6's and are deliberately untested here). When
+// S6 lands the real archive transaction, the integration races re-point at it
+// with the same assertions; this stays the fast kernel-level tier. TEST-ONLY.
+// ---------------------------------------------------------------------------
+
+/** The minimal raw node-postgres `Client`/`PoolClient` surface the lock-hold
+ *  choreography needs — a structural type so the kernel keeps its pure-leaf
+ *  dependency set (no `pg` import). */
+export interface RawPgClientLike {
+  query(queryText: string, values?: unknown[]): Promise<unknown>;
+}
+
+/** Re-express a kernel `{ text, values }` fixed-batch query (positional
+ *  `$n` placeholders, possibly out of order — e.g. `snapshotLeasesQuery`
+ *  emits `$2::int` before `$1`) as a bound drizzle `SQL` so the VERBATIM
+ *  kernel lease shapes run on the callback-world transaction. `$n` maps to
+ *  `values[n-1]`; the static text between placeholders is spliced with
+ *  `sql.raw` (the schema names it contains were already fenced by
+ *  `assertSafeSchemaName` when the kernel built the query). */
+function rawPgQueryToSql(query: { text: string; values: unknown[] }): SQL {
+  let out: SQL = sql.raw("");
+  let last = 0;
+  for (const match of query.text.matchAll(/\$(\d+)/g)) {
+    const at = match.index ?? 0;
+    const value = query.values[Number(match[1]) - 1];
+    out = sql`${out}${sql.raw(query.text.slice(last, at))}${value}`;
+    last = at + match[0].length;
+  }
+  return sql`${out}${sql.raw(query.text.slice(last))}`;
+}
+
+export interface SimulateArchiveTransitionOptions {
+  readonly schema: string;
+  readonly orgId: string;
+  /** Target lifecycle state: `"archived"` snapshots leases at the new epoch;
+   *  `"active"` (unarchive) invalidates every lease of a superseded epoch. */
+  readonly to: "archived" | "active";
+}
+
+/**
+ * Run one archive/unarchive transition the way S6 will at the kernel layer:
+ * ONE transaction taking BOTH org locks in epoch→write order, a locked
+ * lifecycle-state read, the archive-marker + epoch bump, then the epoch's
+ * lease bookkeeping (`snapshotLeasesQuery` on archive, verbatim;
+ * `invalidateLeasesBeforeEpochQuery` on unarchive). Returns the new archive
+ * epoch. Throws if the organization row does not exist (fail-closed, like the
+ * kernel's own state read).
+ */
+export async function simulateArchiveTransition<TTx extends OrgWriteTx>(
+  db: OrgWriteDb<TTx>,
+  options: SimulateArchiveTransitionOptions,
+): Promise<{ archiveEpoch: number }> {
+  const { schema, orgId, to } = options;
+  return db.transaction(async (tx) => {
+    await acquireOrgLocks(tx, { orgId, epoch: true });
+    const state = await readOrgWriteState(tx, orgId);
+    if (state === null) {
+      throw new Error(
+        `simulateArchiveTransition: no such organization ${JSON.stringify(orgId)}`,
+      );
+    }
+    const newEpoch = state.archiveEpoch + 1;
+    await tx.execute(
+      to === "archived"
+        ? sql`UPDATE public."organization" SET "archivedAt" = now(), "archiveEpoch" = COALESCE("archiveEpoch", 0) + 1 WHERE id = ${orgId}`
+        : sql`UPDATE public."organization" SET "archivedAt" = NULL, "archiveEpoch" = COALESCE("archiveEpoch", 0) + 1 WHERE id = ${orgId}`,
+    );
+    await tx.execute(
+      rawPgQueryToSql(
+        to === "archived"
+          ? snapshotLeasesQuery({ schema, orgId, archiveEpoch: newEpoch })
+          : invalidateLeasesBeforeEpochQuery({ schema, orgId, newEpoch }),
+      ),
+    );
+    return { archiveEpoch: newEpoch };
+  });
+}
+
+export interface HoldOrgLocksOptions {
+  readonly orgId: string;
+  /** Also take the archive-epoch lock (epoch→write order); `false` holds only
+   *  the write lock. */
+  readonly epoch: boolean;
+}
+
+/**
+ * Open a transaction on a raw pg client and hold the org advisory lock(s) until
+ * `release()` commits — the deterministic interleaving primitive for the
+ * two-connection races. A second connection issuing a guarded write (write
+ * lock) or lifecycle mutation (epoch→write) provably BLOCKS on
+ * `pg_advisory_xact_lock` until `release()` runs — no timing sleeps. The
+ * caller owns the client's lifecycle (connect/end); `release()` only ends the
+ * held transaction.
+ */
+export async function holdOrgLocks(
+  client: RawPgClientLike,
+  options: HoldOrgLocksOptions,
+): Promise<{ release: () => Promise<void> }> {
+  await client.query("BEGIN");
+  for (const q of orgLockQueries({ orgId: options.orgId, epoch: options.epoch })) {
+    await client.query(q.text, q.values);
+  }
+  return {
+    release: async () => {
+      await client.query("COMMIT");
+    },
   };
 }

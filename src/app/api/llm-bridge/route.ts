@@ -1578,6 +1578,10 @@ export async function POST(req: Request): Promise<Response> {
         const envTemplate = await readAgentTemplateById(runForPorts.templateId);
         runEnvBinding = await resolveRunExecutionBinding({
           liveTemplateEnvironment: envTemplate?.executionEnvironment,
+          // cinatra#1708 slice B: the per-agent execution posture authored on
+          // the agent-config surface. `null`/absent inherits (today's rows) →
+          // byte-identical behaviour.
+          executionEnabled: envTemplate?.executionEnabled ?? null,
           orgId: runForPorts.orgId!,
           holder: {
             templateId: runForPorts.templateId,
