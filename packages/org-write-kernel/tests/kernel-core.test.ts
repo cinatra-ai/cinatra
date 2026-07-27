@@ -59,10 +59,11 @@ describe("capability table (#1938)", () => {
     expect(ruleFor("archived", "org.delete")).toBe("allow");
   });
 
-  it("active allows every capability except org.delete (delete is archived-only, #1939)", () => {
+  it("active allows every capability except org.delete and run.lease-expire (both archived-only, #1939/#1940)", () => {
+    const activeDenies = new Set<string>(["org.delete", "run.lease-expire"]);
     for (const capability of ORG_WRITE_CAPABILITIES) {
       expect(ruleFor("active", capability)).toBe(
-        capability === "org.delete" ? "deny" : "allow",
+        activeDenies.has(capability) ? "deny" : "allow",
       );
     }
   });
@@ -76,6 +77,22 @@ describe("capability table (#1938)", () => {
     expect(ruleFor("active", "org.lifecycle")).toBe("allow");
     expect(ruleFor("active", "org.delete")).not.toBe(
       ruleFor("active", "org.lifecycle"),
+    );
+  });
+
+  it("run.lease-expire is a system-only, fence-only settle capability: active deny / archived allow (#1940)", () => {
+    // Leases exist ONLY for archived orgs (minted by the archive snapshot,
+    // killed on the unarchive epoch bump), so an active-org lease-expiry write
+    // is a bug/forgery ⇒ deny (fail-closed). Archived ⇒ allow — NOT lease-gated:
+    // the settled lease is EXPIRED, so the lease-gated machinery cannot admit
+    // it; the finalizer re-verifies the expired row FOR UPDATE in-fence.
+    expect(ruleFor("active", "run.lease-expire")).toBe("deny");
+    expect(ruleFor("archived", "run.lease-expire")).toBe("allow");
+    // Distinct from run.complete's archived cell (lease-gated) BY DESIGN — the
+    // whole reason a new capability exists rather than reusing run.complete.
+    expect(ruleFor("archived", "run.complete")).toBe("lease-gated");
+    expect(ruleFor("archived", "run.lease-expire")).not.toBe(
+      ruleFor("archived", "run.complete"),
     );
   });
 
@@ -185,6 +202,54 @@ describe("live-attempt predicate (#1938, shared by leases AND authority)", () =>
     expect(cond).toContain("'running','waiting_trigger'");
     expect(cond).toContain("r.status = 'pending_approval'");
     expect(cond).toContain("r.human_wait_attempt_id = r.execution_attempt_id");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#1940 P1 (Decision 5) — the live-attempt predicate stays byte-identical
+// while `pending_trigger` GAINS terminal outbound edges (->stopped, ->failed) in
+// the agents run-status table. Adding OUTBOUND edges must NOT change which states
+// are mid-attempt: a future edit that (accidentally or otherwise) smuggled
+// `pending_trigger` into lease eligibility would fail here.
+// ---------------------------------------------------------------------------
+describe("live-attempt: pending_trigger never live + SQL byte-identical (#1940 P1 Decision 5)", () => {
+  it("liveAttemptSqlCondition('r') is EXACTLY the pinned text (no drift)", () => {
+    expect(liveAttemptSqlCondition("r")).toBe(
+      "(r.execution_attempt_id IS NOT NULL" +
+        " AND r.execution_deadline_at IS NOT NULL AND r.execution_deadline_at > now()" +
+        " AND (r.status IN ('running','waiting_trigger')" +
+        " OR (r.status = 'pending_approval'" +
+        " AND r.human_wait_attempt_id IS NOT NULL" +
+        " AND r.human_wait_attempt_id = r.execution_attempt_id)))",
+    );
+    // pending_trigger must not even be MENTIONED by the eligibility SQL.
+    expect(liveAttemptSqlCondition("r")).not.toContain("pending_trigger");
+  });
+
+  it("isLiveAttempt(pending_trigger) is false for EVERY attempt/deadline/marker combination", () => {
+    const attemptIds = [null, "attempt-1"] as const;
+    const deadlines = [null, PAST, FUTURE] as const;
+    const markers = [null, "attempt-1", "attempt-0"] as const;
+    for (const executionAttemptId of attemptIds) {
+      for (const executionDeadlineAt of deadlines) {
+        for (const humanWaitAttemptId of markers) {
+          expect(
+            isLiveAttempt(
+              {
+                status: "pending_trigger",
+                executionAttemptId,
+                executionDeadlineAt,
+                humanWaitAttemptId,
+              },
+              NOW,
+            ),
+            `pending_trigger must be parked for attempt=${executionAttemptId} deadline=${String(
+              executionDeadlineAt,
+            )} marker=${humanWaitAttemptId}`,
+          ).toBe(false);
+        }
+      }
+    }
   });
 });
 

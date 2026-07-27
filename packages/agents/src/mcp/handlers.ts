@@ -2312,6 +2312,12 @@ async function handleAgentBuilderRunsStop(
     }
     const actor = request.actor as PrimitiveActorContext;
     const roles = await resolveRoleHintsFromSession();
+    // cinatra#1940 P1 (Decision 4): thread the MCP frame authority into the
+    // canonical transitionRunStatus primitive the bulk stop now loops through
+    // (the run_stop §2e pattern). chat/session frames carry a SESSION authority
+    // (no runId → may drive every allowed run); a frame lacking one fail-closes
+    // per-run at the seam. Per-run/template authz was already enforced above.
+    const frameAuthority = (request.actor as { orgWriteAuthority?: OrgWriteAuthority }).orgWriteAuthority;
 
     let result: { stopped: number; alreadyTerminal: number; total: number };
     if (hasRunIds) {
@@ -2347,7 +2353,7 @@ async function handleAgentBuilderRunsStop(
         }
       }
       if (allowedIds.length === 0) return { stopped: 0, alreadyTerminal: 0, total: 0 };
-      result = await bulkStopAgentRuns(allowedIds);
+      result = await bulkStopAgentRuns(allowedIds, frameAuthority);
     } else {
       // Template path: verify the template is owned by the actor's org (or
       // isAdmin) before issuing the bulk stop.
@@ -2356,7 +2362,7 @@ async function handleAgentBuilderRunsStop(
       if (!isAdmin && tpl.orgId !== organizationId) {
         return { error: `Template not found: ${templateId}` }; // hide-existence
       }
-      result = await bulkStopAgentRunsByTemplate(templateId!);
+      result = await bulkStopAgentRunsByTemplate(templateId!, frameAuthority);
     }
 
     void logAuditEvent({
