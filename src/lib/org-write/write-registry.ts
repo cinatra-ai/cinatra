@@ -514,7 +514,15 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     storageReferences: ["org_archive_lease", "agent_runs"],
     cascadeOwnership: "app-furniture",
     importBanned: true,
-    allowedImporters: ["packages/org-write-kernel/src/index.ts"],
+    // testing.ts = the kernel's archive-transition harness (#1939 Decision 3):
+    // simulateArchiveTransition issues snapshotLeasesQuery verbatim so the
+    // harness cannot drift from the real archive tx's lease bookkeeping. The
+    // /testing subpath itself is R1-fenced to test files, so this widens the
+    // ban to one kernel-internal, test-only consumer — not to production code.
+    allowedImporters: [
+      "packages/org-write-kernel/src/index.ts",
+      "packages/org-write-kernel/src/testing.ts",
+    ],
   },
   {
     // cinatra#1940 P1 (Decision 4): the per-run, epoch-agnostic lease SETTLE
