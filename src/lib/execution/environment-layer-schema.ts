@@ -93,3 +93,36 @@ export function environmentLayerStoreSchemaQueries(
     },
   ];
 }
+
+/**
+ * Bootstrap DDL for the PER-AGENT execution config (exec-plane S3 slice B,
+ * cinatra#1708) — the two additive `agent_templates` columns the per-agent
+ * configuration surface writes:
+ *
+ *   - `execution_environment` (text, JSON-as-text — the compiled_plan /
+ *     gated_steps / lifecycle_config convention already used on that table):
+ *     the PROJECT-agent authoring surface for the L1 declared environment. It
+ *     is read through the SAME fail-closed `parseExecutionEnvironment` that
+ *     packaged-agent manifests go through, so both authoring surfaces resolve
+ *     to one internal type and two same-recipe agents share one cache entry.
+ *   - `execution_enabled` (boolean, NULLABLE — three-valued ON PURPOSE): NULL
+ *     inherits the instance/org posture (epic D4's default-on availability),
+ *     true/false are explicit per-agent decisions. A DEFAULT would silently
+ *     re-decide the posture for every pre-slice-B row.
+ *
+ * Lives in this execution-slice leaf (rather than inline in drizzle-store.ts,
+ * a tracked file-size bottleneck) alongside the layer-store DDL: one place for
+ * the execution slice's bootstrap schema. On an EXISTING deployment the columns
+ * arrive via migration core__0085; on a fresh bootstrap they ship here — the
+ * two paths converge (idempotent `ADD COLUMN IF NOT EXISTS`).
+ */
+export function agentExecutionConfigSchemaQueries(
+  schemaName: string,
+): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    {
+      text: `ALTER TABLE "${q}"."agent_templates" ADD COLUMN IF NOT EXISTS execution_environment text, ADD COLUMN IF NOT EXISTS execution_enabled boolean`,
+    },
+  ];
+}
