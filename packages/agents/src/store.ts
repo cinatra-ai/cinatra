@@ -1,6 +1,5 @@
 import { eq, ne, desc, max, asc, and, or, ilike, sql, inArray, isNull, isNotNull, lt, type SQL } from "drizzle-orm";
 import type { AgentIOSpec } from "@cinatra-ai/objects";
-import { expireRunStream } from "@cinatra-ai/a2a";
 import { listSavedNangoConnections } from "@/lib/nango-system";
 import { randomUUID } from "node:crypto";
 import semver from "semver";
@@ -21,6 +20,9 @@ import {
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
 import { TERMINAL_RUN_STATUSES, CannotReassignAfterFirstRun, RunTransitionError, __LEGAL_TRANSITIONS__ } from "./run-status";
 import type { AgentRunStatus } from "./run-status";
+// cinatra#1940 P1 (Decision 4): bulkStop* thread a host-minted authority through
+// the canonical transitionRunStatus primitive (killing the direct-UPDATE bypass).
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 // cinatra#1893 (epic #1883 A5): terminal-success-with-derivation-outbox seam
 // (file-size ratchet #1893). Its producer transitionRunStatus now lives in
 // ./run-transition; only the option TYPE is re-exported for `./store` importers.
@@ -1969,57 +1971,106 @@ export type BulkStopResult = {
   total: number;
 };
 
-/** Stop all active runs matching the given IDs. Returns stopped/alreadyTerminal counts. */
-export async function bulkStopAgentRuns(runIds: string[]): Promise<BulkStopResult> {
-  if (runIds.length === 0) return { stopped: 0, alreadyTerminal: 0, total: 0 };
+// cinatra#1940 P1 (Decision 4/5): the FULL non-terminal status set bulk-stop
+// terminalizes — EXTENDED to also cover armed / pending_trigger / waiting_trigger
+// (every non-terminal status now has a legal ->stopped edge; Decision 5 added
+// pending_trigger->stopped), so bulk-stop no longer silently skips them (disclosed).
+const BULK_STOPPABLE_STATUSES: AgentRunStatus[] = [
+  "queued", "running", "pending_approval", "pending_input",
+  "armed", "pending_trigger", "waiting_trigger",
+];
 
-  const activeStatuses = ["queued", "running", "pending_approval", "pending_input"];
-  const rows = await db.select({ id: agentRuns.id, status: agentRuns.status })
-    .from(agentRuns)
-    .where(inArray(agentRuns.id, runIds));
-
-  const toStop = rows.filter((r) => activeStatuses.includes(r.status)).map((r) => r.id);
-  const alreadyTerminal = rows.length - toStop.length;
-
-  if (toStop.length > 0) {
-    await db.update(agentRuns)
-      .set({ status: "stopped", completedAt: new Date() })
-      .where(inArray(agentRuns.id, toStop));
-    // compatibility — fire expireRunStream for each stopped run so
-    // Redis Streams TTL cleanup applies to bulk-stopped runs the same as
-    // single-stop runs routed through updateAgentRunStatus.
-    for (const id of toStop) {
-      void expireRunStream(id).catch(() => { /* best-effort */ });
+/** Terminalize one run to "stopped" through the canonical, kernel-guarded
+ *  transition (cinatra#1940 P1 Decision 4 — no direct-UPDATE bypass). Returns
+ *  true iff a guarded drive terminalized the run.
+ *
+ *  A `stale_from_status` CAS means the row moved between our bulk read and the
+ *  CAS. It does NOT necessarily mean the run terminalized — it may have raced to
+ *  ANOTHER live status (e.g. queued→running, pending_trigger→armed). Counting
+ *  that as `alreadyTerminal` would let a "stop all" silently leave a running run
+ *  going (a regression vs the old blanket UPDATE). So on stale we
+ *  re-read the LIVE status and retry the guarded CAS from it while the row is
+ *  still ours and stoppable; we return false (→ alreadyTerminal) ONLY once the
+ *  row is genuinely terminal, gone, or another org's. Non-stale errors (illegal
+ *  edge, authority refusal) propagate. Retries are bounded — bulk stop is a rare
+ *  admin path and pathological churn gives up (reported alreadyTerminal). */
+async function stopRunOrSwallowStale(
+  row: { id: string; status: string },
+  authority: OrgWriteAuthority | undefined,
+): Promise<boolean> {
+  let from = row.status;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      await transitionRunStatus(row.id, from as AgentRunStatus, "stopped", undefined, authority);
+      return true;
+    } catch (err) {
+      if (!(err instanceof RunTransitionError && err.code === "stale_from_status")) throw err;
+      const [cur] = await db
+        .select({ status: agentRuns.status, orgId: agentRuns.orgId })
+        .from(agentRuns)
+        .where(eq(agentRuns.id, row.id));
+      // Gone, another org's, or genuinely terminal (terminal ∉ the stoppable
+      // set) ⇒ a real alreadyTerminal. Otherwise retry the guarded CAS from the
+      // fresh live status so a race to another live state is still stopped.
+      if (
+        !cur ||
+        cur.orgId !== authority?.orgId ||
+        !BULK_STOPPABLE_STATUSES.includes(cur.status as AgentRunStatus)
+      ) {
+        return false;
+      }
+      from = cur.status;
     }
   }
-
-  return { stopped: toStop.length, alreadyTerminal, total: rows.length };
+  return false;
 }
 
-/** Stop all active runs for a given template. Returns stopped/alreadyTerminal counts. */
-export async function bulkStopAgentRunsByTemplate(templateId: string): Promise<BulkStopResult> {
-  const activeStatuses = ["queued", "running", "pending_approval", "pending_input"];
-  const rows = await db.select({ id: agentRuns.id, status: agentRuns.status })
+/**
+ * Stop all active runs matching the given IDs (stopped/alreadyTerminal counts).
+ * cinatra#1940 P1 (Decision 4): per-run canonical transitions under the kernel
+ * guard with the threaded frame `authority` — no direct `db.update(agentRuns)`
+ * bypass; the terminal Redis-TTL hook fires POST-COMMIT inside the primitive
+ * (the old hand-rolled expireRunStream loop is gone).
+ */
+export async function bulkStopAgentRuns(
+  runIds: string[],
+  authority: OrgWriteAuthority | undefined,
+): Promise<BulkStopResult> {
+  if (runIds.length === 0) return { stopped: 0, alreadyTerminal: 0, total: 0 };
+  const rows = await db
+    .select({ id: agentRuns.id, status: agentRuns.status, orgId: agentRuns.orgId })
     .from(agentRuns)
-    .where(
-      and(
-        eq(agentRuns.templateId, templateId),
-        inArray(agentRuns.status, activeStatuses),
-      ),
-    );
-
-  if (rows.length === 0) return { stopped: 0, alreadyTerminal: 0, total: 0 };
-
-  const ids = rows.map((r) => r.id);
-  await db.update(agentRuns)
-    .set({ status: "stopped", completedAt: new Date() })
-    .where(inArray(agentRuns.id, ids));
-  // compatibility — fire expireRunStream for each stopped run.
-  for (const id of ids) {
-    void expireRunStream(id).catch(() => { /* best-effort */ });
+    .where(inArray(agentRuns.id, runIds));
+  const toStop = rows.filter((r) => BULK_STOPPABLE_STATUSES.includes(r.status as AgentRunStatus));
+  let stopped = 0;
+  let alreadyTerminal = rows.length - toStop.length;
+  for (const row of toStop) {
+    if (await stopRunOrSwallowStale(row, authority)) stopped += 1;
+    else alreadyTerminal += 1;
   }
+  return { stopped, alreadyTerminal, total: rows.length };
+}
 
-  return { stopped: rows.length, alreadyTerminal: 0, total: rows.length };
+/**
+ * Stop all active runs for a template (same canonical-transition rewrite as
+ * bulkStopAgentRuns; the SQL pre-filters to the stoppable set). cinatra#1940 P1.
+ */
+export async function bulkStopAgentRunsByTemplate(
+  templateId: string,
+  authority: OrgWriteAuthority | undefined,
+): Promise<BulkStopResult> {
+  const rows = await db
+    .select({ id: agentRuns.id, status: agentRuns.status, orgId: agentRuns.orgId })
+    .from(agentRuns)
+    .where(and(eq(agentRuns.templateId, templateId), inArray(agentRuns.status, BULK_STOPPABLE_STATUSES)));
+  if (rows.length === 0) return { stopped: 0, alreadyTerminal: 0, total: 0 };
+  let stopped = 0;
+  let alreadyTerminal = 0;
+  for (const row of rows) {
+    if (await stopRunOrSwallowStale(row, authority)) stopped += 1;
+    else alreadyTerminal += 1;
+  }
+  return { stopped, alreadyTerminal, total: rows.length };
 }
 
 /**

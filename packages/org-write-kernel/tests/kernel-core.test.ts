@@ -205,6 +205,54 @@ describe("live-attempt predicate (#1938, shared by leases AND authority)", () =>
   });
 });
 
+// ---------------------------------------------------------------------------
+// cinatra#1940 P1 (Decision 5) — the live-attempt predicate stays byte-identical
+// while `pending_trigger` GAINS terminal outbound edges (->stopped, ->failed) in
+// the agents run-status table. Adding OUTBOUND edges must NOT change which states
+// are mid-attempt: a future edit that (accidentally or otherwise) smuggled
+// `pending_trigger` into lease eligibility would fail here.
+// ---------------------------------------------------------------------------
+describe("live-attempt: pending_trigger never live + SQL byte-identical (#1940 P1 Decision 5)", () => {
+  it("liveAttemptSqlCondition('r') is EXACTLY the pinned text (no drift)", () => {
+    expect(liveAttemptSqlCondition("r")).toBe(
+      "(r.execution_attempt_id IS NOT NULL" +
+        " AND r.execution_deadline_at IS NOT NULL AND r.execution_deadline_at > now()" +
+        " AND (r.status IN ('running','waiting_trigger')" +
+        " OR (r.status = 'pending_approval'" +
+        " AND r.human_wait_attempt_id IS NOT NULL" +
+        " AND r.human_wait_attempt_id = r.execution_attempt_id)))",
+    );
+    // pending_trigger must not even be MENTIONED by the eligibility SQL.
+    expect(liveAttemptSqlCondition("r")).not.toContain("pending_trigger");
+  });
+
+  it("isLiveAttempt(pending_trigger) is false for EVERY attempt/deadline/marker combination", () => {
+    const attemptIds = [null, "attempt-1"] as const;
+    const deadlines = [null, PAST, FUTURE] as const;
+    const markers = [null, "attempt-1", "attempt-0"] as const;
+    for (const executionAttemptId of attemptIds) {
+      for (const executionDeadlineAt of deadlines) {
+        for (const humanWaitAttemptId of markers) {
+          expect(
+            isLiveAttempt(
+              {
+                status: "pending_trigger",
+                executionAttemptId,
+                executionDeadlineAt,
+                humanWaitAttemptId,
+              },
+              NOW,
+            ),
+            `pending_trigger must be parked for attempt=${executionAttemptId} deadline=${String(
+              executionDeadlineAt,
+            )} marker=${humanWaitAttemptId}`,
+          ).toBe(false);
+        }
+      }
+    }
+  });
+});
+
 describe("permit unforgeability (#1938, runtime WeakSet)", () => {
   const tx = {};
   const fields = {

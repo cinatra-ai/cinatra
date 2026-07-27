@@ -81,4 +81,25 @@ describe("transition-coverage", () => {
       `Edges used in code but missing from LEGAL_TRANSITIONS: ${JSON.stringify(missing)}`,
     ).toEqual([]);
   });
+
+  // cinatra#1940 P1 (Decision 5): pending_trigger gains terminal outbound edges
+  // (the bulk-stop conversion's extended status set is the concrete ->stopped
+  // caller; ->failed is defensive parity with armed->failed).
+  it("pending_trigger has both new terminal edges (->stopped, ->failed)", () => {
+    expect(__LEGAL_TRANSITIONS__.has("pending_trigger->stopped")).toBe(true);
+    expect(__LEGAL_TRANSITIONS__.has("pending_trigger->failed")).toBe(true);
+  });
+
+  it("pending_trigger's pre-existing lifecycle edges are unchanged (no inbound/semantics drift)", () => {
+    for (const edge of [
+      "pending_input->pending_trigger",
+      "pending_trigger->pending_input",
+      "pending_trigger->armed",
+    ]) {
+      expect(__LEGAL_TRANSITIONS__.has(edge)).toBe(true);
+    }
+    // pending_trigger is still NOT directly dispatchable (no ->queued/->running).
+    expect(__LEGAL_TRANSITIONS__.has("pending_trigger->queued")).toBe(false);
+    expect(__LEGAL_TRANSITIONS__.has("pending_trigger->running")).toBe(false);
+  });
 });
