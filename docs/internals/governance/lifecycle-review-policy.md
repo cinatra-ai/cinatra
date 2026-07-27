@@ -177,36 +177,49 @@ live may never be torn down without a resolution.
 
 ## 6. Activation
 
-The machinery ships behind two environment switches. Both default **off**, and
-both are activated only by the value `on` (case-insensitive, surrounding
-whitespace trimmed); anything else — including unset — leaves the switch off.
-Each is read on every call rather than memoised, so a boot-time change takes
-effect without a module reload. Default-off is the deliberate posture: these
-switches change behaviour on hot write paths, so a deployment turns them on when
-it chooses to.
+The machinery is governed by two environment switches. Both default **on**: an
+installation that sets neither variable runs the full lifecycle — review gates
+open on produced artifacts, the maintenance drains are seeded, and a
+human-present run pauses at its recommendation chip row. This is the deliberate
+posture: lifecycle interception is the product, not an add-on, so it is on
+everywhere unless a deployment says otherwise.
 
-| Variable | What it activates |
-|---|---|
-| `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION` | The review-orchestration slice: the produced-event emitters on the local write paths, the boot seeding of the two maintenance loops, and the orchestration consumer. |
-| `CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW` | The run-start recommendation hold — the pre-execution pause that lets a present human confirm or adjust the recommended skills. |
+Each switch is **deactivated only by the exact value `off`** (case-insensitive,
+surrounding whitespace trimmed). Every other value — unset, empty, `on`, `true`,
+`0` — leaves the switch active. Two consequences worth stating out loud: a
+deployment that already set `on` while the switches were opt-in keeps working
+unchanged, and a *mistyped* opt-out (`0ff`, `false`, `disabled`) fails **active**
+rather than silently producing an inert installation. Each switch is read on
+every call rather than memoised, so a boot-time change takes effect without a
+module reload.
 
-With `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION` off, the write paths splice no
-produced-event insert (the transactions are unchanged), the boot phase seeds no
-loop, and a manually enqueued tick short-circuits — three independent
-short-circuits, so the slice is inert rather than merely quiet. Turning it on
-adds one idempotent insert per enumerated write, and schedules two recurring
-drains: the review-orchestration drain (~30s) that turns pending produced events
-into policy-matched gates, and the gate-maintenance drain (~60s) that applies
-reject tombstones, resolves expiries and releases parks.
+| Variable | What it governs | Default | Turn off with |
+|---|---|---|---|
+| `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION` | The review-orchestration slice: the produced-event emitters on the local write paths, the boot seeding of the two maintenance loops, and the orchestration consumer. | **on** | `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off` |
+| `CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW` | The run-start recommendation hold — the pre-execution pause that lets a present human confirm or adjust the recommended skills. | **on** | `CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW=off` |
 
-With `CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW` off, no run is held at start.
-The headless recommendation path is unaffected by this switch: it is inert for a
-silent organization anyway, because the core default for a run with no present
-human is to skip the checkpoint — a headless run never pauses.
+By default `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION` adds one idempotent insert
+per enumerated write, and schedules two recurring drains: the
+review-orchestration drain (~30s) that turns pending produced events into
+policy-matched gates, and the gate-maintenance drain (~60s) that applies reject
+tombstones, resolves expiries and releases parks. Set to `off`, the write paths
+splice no produced-event insert (the transactions are unchanged), the boot phase
+seeds no loop, and a manually enqueued tick short-circuits — three independent
+short-circuits, so the slice is inert rather than merely quiet.
+
+By default `CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW` holds a human-present run
+at start whenever the recommendation checkpoint fires and the scorer returns at
+least one candidate; the human's confirm/adjust/skip releases it. Set to `off`,
+no run is held at start. The headless recommendation path is unaffected by this
+switch either way: it is inert for a silent organization anyway, because the core
+default for a run with no present human is to skip the checkpoint — a headless
+run never pauses.
 
 Note that both switches are global, not per-organization. Per-organization scope
 is expressed through the bounds in §2, which the consumer honours; the switch
-only decides whether the machinery runs at all.
+only decides whether the machinery runs at all. An organization that wants
+review off for itself expresses that with a `forbidden` bound (§2), never by
+turning the global switch off.
 
 ## 7. Worked examples
 

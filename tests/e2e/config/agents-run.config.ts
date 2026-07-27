@@ -68,7 +68,19 @@ export default defineConfig({
         // executing Postgres query" → 500 → no redirect → waitForURL fails).
         // 90s absorbs the dev-load pathology. Only the test webServer gets
         // this; production stays at the 30s default.
-        command: `POSTGRES_SYNC_TIMEOUT_MS=90000 PORT=${PORT} pnpm dev`,
+        //
+        // CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off — the ONE opt-out site in
+        // the repo, and it is deliberate (cinatra#2047, ruling 2026-07-27). The
+        // fixtures in this suite declare their HITL screens and terminal status
+        // as a flow-level contract; with review orchestration active a produced
+        // artifact also opens a CORE review gate, which is decided on the review
+        // SURFACE, not through a flow HITL renderer. Until this harness can drive
+        // a core gate, the live projects assert the FLOW contract and therefore
+        // run in the pre-flip (inert) lifecycle posture. NOTE the scope: this is
+        // the LOCAL webServer branch only — CI runs the static `tunnel-wiring`
+        // project with `E2E_REUSE_SERVER=1`, which never reaches this command, so
+        // no CI job opts out of the flip.
+        command: `POSTGRES_SYNC_TIMEOUT_MS=90000 PORT=${PORT} CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off pnpm dev`,
         cwd: REPO_ROOT,
         url: BASE_URL,
         timeout: 240_000,

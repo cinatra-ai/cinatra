@@ -1005,9 +1005,11 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
     expect(total).toBe(N);
   });
 
-  it("FENCE: every drain is a NO-OP when the S1 activation fence is off", async () => {
+  it("OPT-OUT: every drain is a NO-OP when the S1 activation switch is explicitly `off`", async () => {
     const ev = await produce("document");
-    delete process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV];
+    // #2047 activation flip: DEFAULT-ON, so the inert posture needs the EXPLICIT
+    // opt-out value — an unset var now means ACTIVE.
+    process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "off";
     const orchSummary = await orch.sweepReviewOrchestration();
     expect(orchSummary.scanned).toBe(0);
     const maintSummary = await orch.sweepLifecycleGateMaintenance();

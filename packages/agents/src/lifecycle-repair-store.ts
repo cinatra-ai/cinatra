@@ -33,10 +33,10 @@ import "server-only";
 //                              (approved / changes_requested / rejected / partially_approved).
 //   writeRunRejectedRecommendations — the routed AC-6 rejected-recommendation row.
 //
-// FENCED: nothing here runs until an operator flips the S1 activation fence
-// (`CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION`) — the repair drains short-circuit
-// exactly as the S1 drains do, and no production caller reaches this store on
-// `origin/main` (the emitters write no event row).
+// SWITCHED: this store runs by DEFAULT (the #2047 ruling) and goes inert only
+// when a deployment sets `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off` — the
+// repair drains short-circuit exactly as the S1 drains do, and with the opt-out
+// set no production caller reaches this store (the emitters write no event row).
 // ---------------------------------------------------------------------------
 
 import { createHash, randomUUID } from "node:crypto";

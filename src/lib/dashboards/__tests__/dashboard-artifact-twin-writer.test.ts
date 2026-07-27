@@ -23,9 +23,25 @@ import {
   buildDashboardTwinQueries,
 } from "@/lib/dashboards/dashboard-artifact-twin-writer";
 import { deriveDashboardScopeTuple } from "@/lib/dashboards/dashboard-scope-tuple";
+import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import type { DashboardTwinContext } from "@cinatra-ai/dashboards/twin-writer-seam";
 
 const dialect = new PgDialect();
+
+/** Build the twin's query list with the review-orchestration switch EXPLICITLY
+ *  OPTED OUT (`=off`). The switch is DEFAULT-ON since the cinatra#2047 activation
+ *  ruling, so the pre-flip "substrate only" list is now the opt-out list; the
+ *  builder reads the env synchronously, so set/restore around the call. */
+function buildWithoutLifecycle(ctx: DashboardTwinContext) {
+  const saved = process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV];
+  process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "off";
+  try {
+    return buildDashboardTwinQueries(ctx);
+  } finally {
+    if (saved === undefined) delete process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV];
+    else process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = saved;
+  }
+}
 
 /** Round-trip a builder's {text,values} through the bridge; returns the rendered
  *  SQL and the final positional params (proves the splice re-numbers correctly). */
@@ -115,7 +131,18 @@ describe("twin writer — upsert query list (shape + gating)", () => {
     expect(joined).toContain(`"cinatra"."artifact_audit"`);
     expect(joined).toContain(`"cinatra"."semantic_assertion"`);
     // lock + resource + objects/outbox + representation + audit + 2 binding = 7
-    expect(queries).toHaveLength(7);
+    // SUBSTRATE ops, PLUS the same-tx lifecycle produced-event insert, which the
+    // cinatra#2047 activation ruling made DEFAULT-ON = 8.
+    expect(joined).toContain(`"cinatra"."artifact_produced_outbox"`);
+    expect(queries).toHaveLength(8);
+  });
+
+  it("OPT-OUT (`CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`): the produced-event op is dropped, leaving the 7 substrate ops", () => {
+    const optedOut = buildWithoutLifecycle(upsertCtx);
+    expect(optedOut).toHaveLength(7);
+    expect(optedOut.map((q) => q.text).join("\n---\n")).not.toContain(
+      `"cinatra"."artifact_produced_outbox"`,
+    );
   });
 
   it("stamps the dashboard object type + form/kind='dashboard'", () => {
@@ -161,14 +188,19 @@ describe("twin writer — extension-materialized upsert mints the pack meaning a
   const base = buildDashboardTwinQueries(upsertCtx);
   const queries = buildDashboardTwinQueries(extensionUpsertCtx);
 
-  it("appends exactly 2 classic authoring_skill assertion ops to the base 7 (archive + insert)", () => {
-    // Base (no extension_id) = 7; the meaning assertion adds the archive-UPDATE +
-    // precedence-guarded INSERT-RETURNING pair = 9.
-    expect(base).toHaveLength(7);
-    expect(queries).toHaveLength(9);
-    // A lifecycle upsert (extension_id set, no mint intent) stays at the base 7 —
+  it("appends exactly 2 classic authoring_skill assertion ops to the base list (archive + insert)", () => {
+    // Base (no extension_id) = 7 substrate ops + 1 default-ON lifecycle
+    // produced-event op (cinatra#2047) = 8; the meaning assertion adds the
+    // archive-UPDATE + precedence-guarded INSERT-RETURNING pair = 10.
+    expect(base).toHaveLength(8);
+    expect(queries).toHaveLength(10);
+    // A lifecycle upsert (extension_id set, no mint intent) stays at the base —
     // the narrow gate means only a materialize mints.
-    expect(buildDashboardTwinQueries(lifecycleExtensionCtx)).toHaveLength(7);
+    expect(buildDashboardTwinQueries(lifecycleExtensionCtx)).toHaveLength(8);
+    // The +2 delta is the meaning assertion alone, independent of the activation
+    // switch: with the produced-event op opted out the same pair is appended.
+    expect(buildWithoutLifecycle(extensionUpsertCtx)).toHaveLength(9);
+    expect(buildWithoutLifecycle(upsertCtx)).toHaveLength(7);
   });
 
   it("the INSERT is an eligible authoring_skill assertion for the materializing pack", () => {

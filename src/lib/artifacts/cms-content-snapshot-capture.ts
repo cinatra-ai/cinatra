@@ -37,8 +37,8 @@ import { createLocalDiskBlobStore } from "./local-disk-blob-store";
 //       ref, the SCOPE MANIFEST the read-back verifier reads back, and the
 //       idempotency `operation_id`).
 //
-// FENCE (the S5 grounding finding): `maybeBuildProducedEventInsertOp` returns
-// null unless the GLOBAL env fence is on - which would drop the event even when
+// SWITCH (the S5 grounding finding): `maybeBuildProducedEventInsertOp` returns
+// null when the GLOBAL env switch is opted out - which would drop the event even when
 // the CALLER (the connector staged-write adapter, a follow-up lane) explicitly
 // drives a lifecycle-active capture. So this writer takes an EXPLICIT
 // `emitProducedEvent` flag and calls `buildProducedEventInsertOp` DIRECTLY,
