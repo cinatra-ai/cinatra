@@ -133,12 +133,19 @@ test.describe("chat-prompt-hitl", () => {
 
     await page.goto("/chat", { waitUntil: "domcontentloaded" });
 
-    // Dispatch the read-only auditor agent WITHOUT supplying its required
-    // `url` StartNode input, so the chat hard pre-router cannot pre-fill it and
-    // the setup-interrupt loop surfaces the step-0 input gate
+    // Dispatch a read-only agent WITHOUT supplying its required `url` StartNode
+    // input, so the chat hard pre-router cannot pre-fill it and the
+    // setup-interrupt loop surfaces the step-0 input gate
     // (schema-field-fallback renderer). With the url supplied inline the gate
     // would not fire at all (pendingFields === 0).
-    await typeAndSend(page, "Invoke the cinatra_auditor-agent tool.");
+    //
+    // cinatra#1796 / #2047 row 8: this used to dispatch the auditor agent, which
+    // is RETIRED — `cinatra_auditor-agent` is no longer a registered tool, so the
+    // dispatch would never produce a run and the test would time out. Repointed
+    // to media-feed-lister-agent, the retained read-only agent whose StartNode
+    // declares the same single required `url` input, so the gate shape under
+    // test is unchanged.
+    await typeAndSend(page, "Invoke the cinatra_media-feed-lister-agent tool.");
 
     await expect(
       page.getByText(/pending approval/i).first(),

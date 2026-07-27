@@ -16,18 +16,12 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const COMMITTED = join(REPO_ROOT, "src/lib/generated/field-renderer-components.ts");
 
 // The migrated S8/M3 claimant entries (cinatra#1625) — blog-linkedin-publish-agent
-// + blog-wordpress-publish-agent + list-curator-agent —
+// + blog-wordpress-publish-agent + list-curator-agent (the retiring auditor
+// claimant left this set with the cinatra#1796 teardown) —
 // in the generator's bindingId-sorted order. This mirrors what
 // generate-extension-manifest derives from the extensions'
 // cinatra.fieldRenderers[].component declarations. Append the next claimant here.
 const MIGRATED_ENTRIES = [
-  {
-    bindingId: "@cinatra-ai/auditor-agent:review",
-    packageName: "@cinatra-ai/auditor-agent",
-    specifier: "@cinatra-ai/auditor-agent/src/auditor-review-renderer",
-    resolution: "guardedOptional",
-    propsApiVersion: 1,
-  },
   {
     bindingId: "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
     packageName: "@cinatra-ai/blog-linkedin-publish-agent",

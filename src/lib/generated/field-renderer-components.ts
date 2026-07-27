@@ -28,7 +28,6 @@ export type GeneratedFieldRendererComponentEntry = {
 };
 
 export const GENERATED_FIELD_RENDERER_COMPONENTS: Record<string, GeneratedFieldRendererComponentEntry> = {
-  "@cinatra-ai/auditor-agent:review": { resolution: "guardedOptional", packageName: "@cinatra-ai/auditor-agent", propsApiVersion: 1, load: () => import("@cinatra-ai/auditor-agent/src/auditor-review-renderer") },
   "@cinatra-ai/blog-linkedin-publish-agent:draft-review": { resolution: "guardedOptional", packageName: "@cinatra-ai/blog-linkedin-publish-agent", propsApiVersion: 1, load: () => import("@cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review") },
   "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm": { resolution: "guardedOptional", packageName: "@cinatra-ai/blog-wordpress-publish-agent", propsApiVersion: 1, load: () => import("@cinatra-ai/blog-wordpress-publish-agent/src/renderers/draft-confirm") },
   "@cinatra-ai/email-delivery-agent:output": { resolution: "guardedOptional", packageName: "@cinatra-ai/email-artifacts", propsApiVersion: 1, load: () => import("@cinatra-ai/email-artifacts/src/renderers/send-confirmation") },

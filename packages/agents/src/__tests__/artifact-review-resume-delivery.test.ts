@@ -66,7 +66,7 @@ function pausedRun(overrides: Record<string, unknown> = {}) {
   };
 }
 function internalTemplate() {
-  return { id: "tmpl-1", packageName: "@cinatra-ai/reviewer-agent", sourceType: "internal" };
+  return { id: "tmpl-1", packageName: "@cinatra-ai/web-research-agent", sourceType: "internal" };
 }
 
 function intent(overrides: Partial<ResumeIntentRow> = {}): ResumeIntentRow {
@@ -209,7 +209,7 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     gateStoreMock.claimPendingResumeIntents.mockResolvedValue([intent()]);
     storeMock.readAgentTemplateById.mockResolvedValue({
       id: "tmpl-1",
-      packageName: "@cinatra-ai/reviewer-agent",
+      packageName: "@cinatra-ai/web-research-agent",
       sourceType: "external", // violates the internal-template invariant → throws
     });
     const summary = await sweepArtifactReviewResumeIntents();

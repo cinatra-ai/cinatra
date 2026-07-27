@@ -155,12 +155,21 @@ describe("getMergedFieldRendererBindings — generated precedence", () => {
 });
 
 describe("resolveRendererIdForKind", () => {
-  it("resolves the reviewer-output gate id from the generated bindings", () => {
-    expect(resolveRendererIdForKind("reviewer-output")).toBe("@cinatra-ai/reviewer-agent:output");
+  it("resolves a kind's gate id from the generated bindings", () => {
+    expect(resolveRendererIdForKind("blog-idea-selection")).toBe(
+      "@cinatra-ai/blog-pipeline-agent:idea-selection",
+    );
   });
 
   it("returns undefined for a kind no present/installed package binds", () => {
     expect(resolveRendererIdForKind("kind-nobody-binds")).toBeUndefined();
+  });
+
+  it("cinatra#1796: the RETIRED reviewer-output kind resolves to nothing", () => {
+    // The kind left KNOWN_FIELD_RENDERER_KINDS with the retirement teardown and
+    // no package binds it any more, so the lookup must be empty rather than
+    // silently resolving a stale id.
+    expect(resolveRendererIdForKind("reviewer-output")).toBeUndefined();
   });
 });
 
@@ -183,7 +192,7 @@ describe("buildA2UiMidRunTranslatorResolver", () => {
 
   it("returns undefined for ids without an a2uiTranslator binding", () => {
     const resolve = buildA2UiMidRunTranslatorResolver();
-    expect(resolve("@cinatra-ai/reviewer-agent:output")).toBeUndefined();
     expect(resolve("@cinatra-ai/agent-builder:grouped-setup-form")).toBeUndefined();
+    expect(resolve("@cinatra-ai/blog-pipeline-agent:idea-selection")).toBeUndefined();
   });
 });
