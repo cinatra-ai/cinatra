@@ -35,6 +35,7 @@ function ext(pkgName: string): SkillExtensionDescriptor {
     pkgName,
     pkgDirName: pkgName.split("/").pop() ?? pkgName,
     kind: "skill",
+    dependencies: [],
     capabilities: {},
     slugs: ["s1"],
   };

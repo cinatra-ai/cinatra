@@ -130,6 +130,10 @@ vi.mock("@cinatra-ai/llm", () => ({
 }));
 
 vi.mock("@cinatra-ai/skills", () => ({
+  // cinatra#2090 S3: the declared-edge projection the route consults when a
+  // co-located bundle probe misses. Null here = "no declared skill edge",
+  // which keeps every case in this file on the co-located path.
+  resolveDeclaredSkillEdgeForExtensionDir: vi.fn(async () => null),
   getCustomSkillForCurrentUserAndAgent: getCustomSkillForCurrentUserAndAgentMock,
   // A3 (cinatra#1363): faithful copy of the real runtime-delivery predicate
   // (the real one is drift-guarded by the skills-package matrix test).
