@@ -1157,3 +1157,261 @@ function baseFlow(spec: BaseFlowSpec): Record<string, unknown> {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Invariant 13 — HITL gate mountability on the pinned runtime (cinatra#2140).
+//
+// Each case below mirrors an OBSERVED pyagentspec==26.1.2 outcome; the same
+// cases are asserted against the real runtime in
+// docker/wayflow/tests/test_gate_mount_both_paths.py, so the host rule and the
+// container rule cannot drift apart silently.
+// ---------------------------------------------------------------------------
+
+describe("OAS-RUNTIME-013 — InputMessageNode gate must be mountable on the pinned runtime", () => {
+  function gateFlow(gate: Record<string, unknown>): Record<string, unknown> {
+    return {
+      agentspec_version: "26.1.0",
+      component_type: "Flow",
+      id: "gate_flow",
+      name: "Gate flow",
+      metadata: { cinatra: { packageName: "@cinatra-ai/probe-agent" } },
+      inputs: [{ title: "seed", type: "string" }],
+      outputs: [{ title: "userResponse", type: "string" }],
+      start_node: { $component_ref: "start" },
+      nodes: [
+        { $component_ref: "start" },
+        { $component_ref: "gate" },
+        { $component_ref: "end" },
+      ],
+      control_flow_connections: [
+        {
+          component_type: "ControlFlowEdge",
+          name: "s2g",
+          from_node: { $component_ref: "start" },
+          to_node: { $component_ref: "gate" },
+        },
+        {
+          component_type: "ControlFlowEdge",
+          name: "g2e",
+          from_node: { $component_ref: "gate" },
+          to_node: { $component_ref: "end" },
+        },
+      ],
+      data_flow_connections: [
+        {
+          component_type: "DataFlowEdge",
+          name: "g2e_userResponse",
+          source_node: { $component_ref: "gate" },
+          source_output: "userResponse",
+          destination_node: { $component_ref: "end" },
+          destination_input: "userResponse",
+        },
+      ],
+      $referenced_components: {
+        start: {
+          component_type: "StartNode",
+          id: "start",
+          name: "Start",
+          inputs: [{ title: "seed", type: "string" }],
+        },
+        end: {
+          component_type: "EndNode",
+          id: "end",
+          name: "End",
+          outputs: [{ title: "userResponse", type: "string" }],
+        },
+        gate,
+      },
+    };
+  }
+
+  const code013 = (oas: Record<string, unknown>) =>
+    scanOasForRuntimeInvariantFindings(oas).filter((f) => f.code === "OAS-RUNTIME-013");
+
+  it("PASSES the canonical authored form (declared inputs, plain unique identifier titles)", () => {
+    // The shape both email agents ship — the shim reconciles it and it mounts.
+    const oas = gateFlow({
+      component_type: "InputMessageNode",
+      id: "approval_gate",
+      name: "Review and approve",
+      inputs: [{ title: "draftBundle", type: "object" }],
+      outputs: [{ title: "userResponse", type: "string" }],
+    });
+    expect(code013(oas)).toEqual([]);
+  });
+
+  it("PASSES a native gate that declares no inputs (the inlined-subflow encoding)", () => {
+    const oas = gateFlow({
+      component_type: "InputMessageNode",
+      id: "drafts-approval_gate",
+      name: "Approval gate",
+      outputs: [{ title: "userResponse", type: "string" }],
+    });
+    expect(code013(oas)).toEqual([]);
+  });
+
+  it("PASSES a declared-inputs gate that also carries a `message` (the shim still repairs it)", () => {
+    const oas = gateFlow({
+      component_type: "InputMessageNode",
+      id: "approval_gate",
+      inputs: [{ title: "payload", type: "string" }],
+      outputs: [{ title: "userResponse", type: "string" }],
+      message: "Please review {{ payload }}",
+    });
+    expect(code013(oas)).toEqual([]);
+  });
+
+  it("BLOCKS a declared input title that is not a plain Jinja identifier", () => {
+    const oas = gateFlow({
+      component_type: "InputMessageNode",
+      id: "approval_gate",
+      inputs: [{ title: "pay-load", type: "string" }],
+      outputs: [{ title: "userResponse", type: "string" }],
+    });
+    const found = code013(oas);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.severity).toBe("blocker");
+    expect(found[0]!.message).toContain("pay-load");
+    expect(found[0]!.message).toContain("did not expect any properties");
+  });
+
+  it("BLOCKS duplicate declared input titles", () => {
+    const oas = gateFlow({
+      component_type: "InputMessageNode",
+      id: "approval_gate",
+      inputs: [
+        { title: "payload", type: "string" },
+        { title: "payload", type: "string" },
+      ],
+      outputs: [{ title: "userResponse", type: "string" }],
+    });
+    const found = code013(oas);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.message).toContain("duplicate input");
+    expect(found[0]!.message).toContain("payload");
+  });
+
+  it("BLOCKS declared inputs alongside an author-supplied message_template (the shim skips it)", () => {
+    const oas = gateFlow({
+      component_type: "InputMessageNode",
+      id: "approval_gate",
+      inputs: [{ title: "payload", type: "string" }],
+      outputs: [{ title: "userResponse", type: "string" }],
+      message_template: "hello",
+    });
+    const found = code013(oas);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.message).toContain("message_template");
+  });
+
+  it.each([null, false, 0, "", [] as unknown[], {} as Record<string, unknown>])(
+    "PASSES a FALSY message_template (%p) — the shim overwrites it and the gate mounts",
+    (falsy) => {
+      // Python truthiness, not JS: `bool(obj.get("message_template"))` is False
+      // for each of these, so the shim rewrites the node and the gate mounts.
+      // Flagging them would red a currently-mountable agent.
+      const oas = gateFlow({
+        component_type: "InputMessageNode",
+        id: "approval_gate",
+        inputs: [{ title: "payload", type: "string" }],
+        outputs: [{ title: "userResponse", type: "string" }],
+        message_template: falsy,
+      });
+      expect(code013(oas)).toEqual([]);
+    },
+  );
+
+  it("BLOCKS an empty outputs[] (the runtime demands the single resume payload)", () => {
+    const oas = gateFlow({
+      component_type: "InputMessageNode",
+      id: "approval_gate",
+      inputs: [{ title: "payload", type: "string" }],
+      outputs: [],
+    });
+    const found = code013(oas);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.message).toContain("user_provided_input");
+  });
+
+  it("BLOCKS a single output declared as a non-string type", () => {
+    const oas = gateFlow({
+      component_type: "InputMessageNode",
+      id: "approval_gate",
+      outputs: [{ title: "userResponse", type: "object" }],
+    });
+    const found = code013(oas);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.message).toContain("Expected an output of type string");
+  });
+
+  it("PASSES a gate with NO outputs field (the runtime defaults it; the compiler owns that rule)", () => {
+    const oas = gateFlow({
+      component_type: "InputMessageNode",
+      id: "approval_gate",
+      inputs: [{ title: "payload", type: "string" }],
+    });
+    expect(code013(oas)).toEqual([]);
+  });
+
+  it("BLOCKS a multi-output gate (the one-string-output rule) with or without declared inputs", () => {
+    const withInputs = gateFlow({
+      component_type: "InputMessageNode",
+      id: "approval_gate",
+      inputs: [{ title: "payload", type: "string" }],
+      outputs: [
+        { title: "userResponse", type: "string" },
+        { title: "excludedIds", type: "array" },
+      ],
+    });
+    const foundWith = code013(withInputs);
+    expect(foundWith).toHaveLength(1);
+    expect(foundWith[0]!.message).toContain("EXACTLY ONE string output");
+
+    const nativeMulti = gateFlow({
+      component_type: "InputMessageNode",
+      id: "approval_gate",
+      outputs: [
+        { title: "userResponse", type: "string" },
+        { title: "excludedIds", type: "array" },
+      ],
+    });
+    expect(code013(nativeMulti)).toHaveLength(1);
+  });
+
+  it("BLOCKS a directly-authored PluginInputMessageNode (mounts, but the host cannot see the gate)", () => {
+    const oas = gateFlow({
+      component_type: "PluginInputMessageNode",
+      id: "approval_gate",
+      outputs: [{ title: "userResponse", type: "string" }],
+      message_template: "{% if payload %}{% endif %}",
+    });
+    const found = code013(oas);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.message).toContain("PluginInputMessageNode");
+    expect(found[0]!.message).toContain("oas-compiler.ts");
+  });
+
+  it("reaches a gate nested inside an inlined subflow (the orchestrated encoding)", () => {
+    // email-outreach-agent inlines each child flow under
+    // `$referenced_components.<child>-subflow.$referenced_components.<gate>`.
+    // The scan must reach that depth or the orchestrated path stays unchecked.
+    const inner = gateFlow({
+      component_type: "InputMessageNode",
+      id: "drafts-approval_gate",
+      inputs: [{ title: "draft-bundle", type: "object" }],
+      outputs: [{ title: "userResponse", type: "string" }],
+    });
+    const orchestrator = {
+      agentspec_version: "26.1.0",
+      component_type: "Flow",
+      id: "orchestrator",
+      name: "Orchestrator",
+      $referenced_components: {
+        "email-drafting-subflow": inner,
+      },
+    } as Record<string, unknown>;
+    const found = code013(orchestrator);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.message).toContain("draft-bundle");
+  });
+});
