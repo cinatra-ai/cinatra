@@ -58,9 +58,10 @@ the pinned `@cinatra-ai/assistant-skills` snapshot `e9d5a7eae98b`:
 
 **One genuine staleness, in another repo (cannot be fixed here):**
 `chat-agent-authoring/SKILL.md:107` and
-`references/speed-and-lifecycle.md:23,25,61` still tell agents to compose
-`@cinatra-ai/reviewer-agent` / `@cinatra-ai/auditor-agent`. `assistant-skills` is
-a REQUIRED, prod-shipped extension, so that guidance ships and will now name two
-uninstallable agents. Needs its own assistant-skills PR + a required-lock pin
+`references/speed-and-lifecycle.md:23,25,61` still tell agents to compose the two
+retired packages by name (not written out here — this repo greps to exact zero
+for those identities, and this file must not be the one match).
+`assistant-skills` is a REQUIRED, prod-shipped extension, so that guidance ships
+and will now name two uninstallable agents. Needs its own assistant-skills PR + a required-lock pin
 bump. Already stale for `skill-recommender-agent` (retired earlier) — a
 pre-existing doc-drift class this retirement widens rather than creates.
