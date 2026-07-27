@@ -162,3 +162,11 @@ same harness in gate mode with candidate pins derived from the checked-out ref.
 - `prod-boot-e2e.sh` — production image cold-boot smoke.
 - `prune-extensions-to-required.mjs`, `extension-pin-divergence-report.mjs`,
   `assert-generated-maps-omit.mjs` — extension-universe maintenance helpers.
+- `uat-diagnostics.sh` — WP/Drupal UAT runtime diagnostics (cinatra#2131): the
+  periodic memory/swap/top-RSS sampler, the per-service
+  `docker compose logs --tail=500` capture on the failure path, and the
+  fail-closed scan that keeps a per-run minted value out of the uploaded
+  artifacts. Shared by both jobs in `.github/workflows/wp-drupal-uat.yml`.
+- `uat-mask-verify.mjs` — asserts that every rendering of the UAT lane's per-run
+  minted values in the finished PUBLIC job log is masked (cinatra#2131). Runs as
+  its own job because a job cannot read its own log until it completes.
