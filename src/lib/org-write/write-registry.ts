@@ -27,6 +27,17 @@ export type CascadeOwnership =
   | "block"
   | "inert-history";
 
+/** R4 exceptions ledger (cinatra#1939 wave 3, Decision 4): a registry row may
+ *  stay `importBanned:false` ONLY if it carries an issue-linked exemption. The
+ *  wave-6 default-on coverage proof asserts every row is `importBanned:true` OR
+ *  carries one of these — "zero unguarded write exports OUTSIDE the approved,
+ *  issue-linked exception ledger". */
+export interface ImportBanExemption {
+  /** The tracking issue that will flip this row (never a bare "TODO"). */
+  readonly issue: number;
+  readonly reason: string;
+}
+
 export interface OrgWriteRegistryEntry {
   readonly module: string;
   readonly exportName: string;
@@ -46,12 +57,29 @@ export interface OrgWriteRegistryEntry {
    *  lockstep test — a new site inside a registered writer fails until the
    *  row is deliberately updated). Only tracked where the source is scanned. */
   readonly writeSites?: number;
-  /** R4 seed: when true, the boundary gate bans importing this entry point
-   *  outside its guarded wrapper. ALL FALSE in S2 — the writers are today's
-   *  legitimate product path; S3 flips each row as it wires through
-   *  guardOrgMutation (banning now would break the app, not protect it). */
+  /** R4 (cinatra#1939 wave 3, Decision 4): when true, the boundary gate
+   *  (scripts/audit/org-write-boundary-gate.mjs) bans importing this writer
+   *  entry point outside `allowedImporters`. Flipped per-writer as each converts
+   *  through the guard (wave-1/2 pattern); a row may only remain false with an
+   *  `importBanExemption`. */
   readonly importBanned: boolean;
+  /** R4: when `importBanned`, the ONLY files (repo-relative) allowed to import
+   *  this writer — the enumerated legitimate callers + any sanctioned re-export
+   *  barrel at flip time (mechanically derived from the gate's `--r4-report`,
+   *  reviewed once). Empty = total ban (an internal delegate with no import
+   *  edges). A NEW importer becomes a deliberate, reviewed registry edit rather
+   *  than silent drift. Omitted when `importBanned:false`. */
+  readonly allowedImporters?: readonly string[];
+  /** R4 exceptions ledger — present ONLY on `importBanned:false` rows that are a
+   *  known, tracked hole (Decision 4). */
+  readonly importBanExemption?: ImportBanExemption;
 }
+
+/** The R4 flip payload for a registry row: banned-with-allowlist, or
+ *  unbanned-with-optional-exemption. Keeps the two invariants structural. */
+type ImportBanSpec =
+  | { readonly importBanned: true; readonly allowedImporters: readonly string[] }
+  | { readonly importBanned: false; readonly importBanExemption?: ImportBanExemption };
 
 const DASHBOARDS_MODULE = "packages/dashboards/src/mutation-service.ts";
 
@@ -76,11 +104,15 @@ const TWIN_DELETE_TABLES = [
   "artifact_audit",
 ] as const;
 
+// The `ban` argument is a LITERAL object at every call site — the boundary gate
+// statically reads it as `dashboardsWriter`'s 5th argument (Decision 4). Keep it
+// literal or the gate fails closed.
 function dashboardsWriter(
   exportName: string,
   direct: readonly string[],
   twin: "upsert" | "delete",
   writeSites: number,
+  ban: ImportBanSpec,
 ): OrgWriteRegistryEntry {
   return {
     module: DASHBOARDS_MODULE,
@@ -94,27 +126,111 @@ function dashboardsWriter(
     ],
     cascadeOwnership: "block",
     writeSites,
-    importBanned: false,
+    ...ban,
   };
 }
 
 export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
-  // — dashboards mutation service (17 writers; all pair with the artifact twin) —
-  dashboardsWriter("createDashboard", ["dashboards"], "upsert", 1),
-  dashboardsWriter("updateDashboard", ["dashboards"], "upsert", 1),
-  dashboardsWriter("publishDashboard", ["dashboards", "dashboardRevisions"], "upsert", 2),
-  dashboardsWriter("archiveDashboard", ["dashboards"], "upsert", 1),
-  dashboardsWriter("upsertDashboardConfig", ["dashboards"], "upsert", 1),
-  dashboardsWriter("ensureOverview", ["dashboards"], "upsert", 1),
-  dashboardsWriter("createEntityDashboard", ["dashboards"], "upsert", 1),
-  dashboardsWriter("renameDashboard", ["dashboards"], "upsert", 1),
-  dashboardsWriter("deleteEntityDashboard", ["dashboards"], "delete", 1),
-  dashboardsWriter("materializeExtensionTemplate", ["dashboards"], "upsert", 2),
-  dashboardsWriter("materializeExtensionInstanceForProject", ["dashboards"], "upsert", 1),
-  dashboardsWriter("archiveExtensionDashboards", ["dashboards"], "upsert", 1),
-  dashboardsWriter("restoreExtensionDashboards", ["dashboards"], "upsert", 1),
-  dashboardsWriter("adoptExtensionDashboards", ["dashboards"], "upsert", 1),
-  dashboardsWriter("upgradeExtensionDashboards", ["dashboards"], "upsert", 3),
+  // — dashboards mutation service (17 writers; all pair with the artifact twin).
+  //   R4 (wave 3, Stage A): the 12 writers whose callers are all in-repo are
+  //   import-banned to their enumerated callers; the 3 extension-materializer
+  //   writers stay unbanned under the #1939 exception ledger because their
+  //   callers live in the workflows-extension repo and thread authority when the
+  //   extension wave converts (all 15 already demand a DashboardActor). —
+  dashboardsWriter("createDashboard", ["dashboards"], "upsert", 1, {
+    importBanned: true,
+    allowedImporters: ["packages/dashboards/src/mcp/handlers.ts"],
+  }),
+  dashboardsWriter("updateDashboard", ["dashboards"], "upsert", 1, {
+    importBanned: true,
+    allowedImporters: [
+      "packages/dashboards/src/actions.ts",
+      "packages/dashboards/src/mcp/handlers.ts",
+      "packages/dashboards/src/screens/organization-detail-actions.ts",
+    ],
+  }),
+  dashboardsWriter("publishDashboard", ["dashboards", "dashboardRevisions"], "upsert", 2, {
+    importBanned: true,
+    allowedImporters: ["packages/dashboards/src/mcp/handlers.ts"],
+  }),
+  dashboardsWriter("archiveDashboard", ["dashboards"], "upsert", 1, {
+    importBanned: true,
+    allowedImporters: ["packages/dashboards/src/mcp/handlers.ts"],
+  }),
+  dashboardsWriter("upsertDashboardConfig", ["dashboards"], "upsert", 1, {
+    importBanned: true,
+    allowedImporters: ["packages/dashboards/src/actions.ts"],
+  }),
+  dashboardsWriter("ensureOverview", ["dashboards"], "upsert", 1, {
+    importBanned: true,
+    allowedImporters: [
+      "packages/dashboards/src/actions.ts",
+      "packages/dashboards/src/screens/organization-detail-actions.ts",
+    ],
+  }),
+  dashboardsWriter("createEntityDashboard", ["dashboards"], "upsert", 1, {
+    importBanned: true,
+    allowedImporters: [
+      "packages/dashboards/src/actions.ts",
+      "packages/dashboards/src/screens/organization-detail-actions.ts",
+    ],
+  }),
+  dashboardsWriter("renameDashboard", ["dashboards"], "upsert", 1, {
+    importBanned: true,
+    allowedImporters: [
+      "packages/dashboards/src/actions.ts",
+      "packages/dashboards/src/screens/organization-detail-actions.ts",
+    ],
+  }),
+  dashboardsWriter("deleteEntityDashboard", ["dashboards"], "delete", 1, {
+    importBanned: true,
+    allowedImporters: [
+      "packages/dashboards/src/actions.ts",
+      "packages/dashboards/src/screens/organization-detail-actions.ts",
+    ],
+  }),
+  dashboardsWriter("materializeExtensionTemplate", ["dashboards"], "upsert", 2, {
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason: "callers live in the workflows-extension repo; converts with the extension wave",
+    },
+  }),
+  dashboardsWriter("materializeExtensionInstanceForProject", ["dashboards"], "upsert", 1, {
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason: "callers live in the workflows-extension repo; converts with the extension wave",
+    },
+  }),
+  dashboardsWriter("archiveExtensionDashboards", ["dashboards"], "upsert", 1, {
+    importBanned: true,
+    allowedImporters: [
+      "packages/dashboards/src/extension-materialization.ts",
+      "src/lib/dashboards/extension-dashboard-lifecycle.ts",
+    ],
+  }),
+  dashboardsWriter("restoreExtensionDashboards", ["dashboards"], "upsert", 1, {
+    importBanned: true,
+    allowedImporters: [
+      "packages/dashboards/src/extension-materialization.ts",
+      "src/lib/dashboards/extension-dashboard-lifecycle.ts",
+    ],
+  }),
+  dashboardsWriter("adoptExtensionDashboards", ["dashboards"], "upsert", 1, {
+    importBanned: true,
+    allowedImporters: [
+      "packages/dashboards/src/extension-materialization.ts",
+      "src/lib/dashboards/reconcile-contribution-adoptions.ts",
+    ],
+  }),
+  dashboardsWriter("upgradeExtensionDashboards", ["dashboards"], "upsert", 3, {
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason: "callers live in the workflows-extension repo; converts with the extension wave",
+    },
+  }),
 
   // — the #2006 B1c twin backfill (landed 8215d7c2): pairs pre-twin dashboards
   //   with their artifact twins. Both writers land rows ONLY through the
@@ -131,7 +247,10 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     storageReferences: [...TWIN_UPSERT_TABLES],
     cascadeOwnership: "inert-history",
     writeSites: 0,
-    importBanned: false,
+    // Reached ONLY internally via backfillDashboardArtifactTwins' sweep (module-
+    // internal use is not an import edge) — no file imports it. Total ban.
+    importBanned: true,
+    allowedImporters: [],
   },
   {
     module: DASHBOARDS_MODULE,
@@ -142,7 +261,11 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     storageReferences: [...TWIN_UPSERT_TABLES],
     cascadeOwnership: "inert-history",
     writeSites: 0,
-    importBanned: false,
+    importBanned: true,
+    allowedImporters: [
+      "packages/dashboards/src/twin-backfill.ts",
+      "src/lib/boot/phases/core-boot.ts",
+    ],
   },
 
   // — the host-side twin itself (reached only through pairTwin; registered so
@@ -154,7 +277,10 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     orgIdExtractor: "ctx.orgId (copied verbatim from the dashboards row)",
     storageReferences: [...TWIN_UPSERT_TABLES, ...TWIN_DELETE_TABLES],
     cascadeOwnership: "inert-history",
-    importBanned: false,
+    // Reached through the pairTwin forward path; core-boot registers the writer
+    // (the ONLY sanctioned import). Any other importer is a violation.
+    importBanned: true,
+    allowedImporters: ["src/lib/boot/phases/core-boot.ts"],
   },
 
   // — agent-run lifecycle (canonical CAS entry point + delegated meta writer) —
@@ -172,7 +298,31 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     // under the SAME guarded transaction (§1e).
     storageReferences: ["agent_runs", "agent_run_output_derivations"],
     cascadeOwnership: "inert-history",
-    importBanned: false,
+    // module = store.ts (the registered path: ./store and @cinatra-ai/agents both
+    // re-export from run-transition.ts). Allowlist = the named callers PLUS the
+    // files that OPAQUELY reach store.ts / the agents barrel via a
+    // non-destructured `await import(...)` — those grant the whole module, so the
+    // gate requires them on BOTH run-writer rows (intersection). The last five
+    // entries are those opaque accessors; the rest name transitionRunStatus.
+    importBanned: true,
+    allowedImporters: [
+      "packages/agents/src/actions.ts",
+      "packages/agents/src/execution.ts",
+      "packages/agents/src/index.ts",
+      "packages/agents/src/mcp/handlers.ts",
+      "packages/agents/src/orchestrator-actions.ts",
+      "packages/agents/src/orchestrator-execution.ts",
+      "packages/agents/src/run-actions.ts",
+      "packages/agents/src/trigger-release-job.ts",
+      "packages/agents/src/trigger-service.ts",
+      "src/lib/host-content-editor-dispatch.ts",
+      // opaque store.ts / agents-barrel accessors (also on updateAgentRunStatus):
+      "src/app/plugins-registry.tsx",
+      "src/lib/agent-run-enqueue.ts",
+      "src/lib/agent-runtime-dep-projection-backfill.ts",
+      "src/lib/extension-edge-bound-agent.ts",
+      "src/lib/extension-edge-bound-serving.ts",
+    ],
   },
   {
     module: "packages/agents/src/store.ts",
@@ -184,7 +334,20 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     orgIdExtractor: "agent_runs.org_id (row-derived)",
     storageReferences: ["agent_runs"],
     cascadeOwnership: "inert-history",
-    importBanned: false,
+    // Internal delegate — the only NAMED import edge is the agents barrel
+    // re-export (index.ts); no functional caller names it. The remaining entries
+    // are the opaque store.ts / agents-barrel accessors: an opaque import grants
+    // this delegate too, so the gate requires those files on BOTH run-writer
+    // rows (intersection) — they are identical to transitionRunStatus's tail.
+    importBanned: true,
+    allowedImporters: [
+      "packages/agents/src/index.ts",
+      "src/app/plugins-registry.tsx",
+      "src/lib/agent-run-enqueue.ts",
+      "src/lib/agent-runtime-dep-projection-backfill.ts",
+      "src/lib/extension-edge-bound-agent.ts",
+      "src/lib/extension-edge-bound-serving.ts",
+    ],
   },
   {
     // The HITL setup-resume CAS (cinatra#1939 wave 2 §7.1): the setup-{runId}
@@ -198,7 +361,42 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     orgIdExtractor: "agent_runs.org_id (authority.orgId; row CAS is org-scoped, NOT NULL)",
     storageReferences: ["agent_runs"],
     cascadeOwnership: "inert-history",
+    importBanned: true,
+    allowedImporters: ["packages/agents/src/review-task-actions.ts"],
+  },
+  // — new-run creation (Decision 7): both are plain drizzle inserts into
+  //   agent_runs (in store.ts), still OUTSIDE the guard. Comment wording avoids
+  //   the literal DML call shape — the OBO-ceiling structural scanner greps for
+  //   it and must keep seeing store.ts as the sole inserter. Registered NOW so
+  //   the coverage ledger KNOWS the hole;
+  //   #1940's dispatch freeze converts new-run creation and flips these rows.
+  //   The wave-6 proof reads "zero unguarded write exports OUTSIDE the approved,
+  //   issue-linked exception ledger" — these two are that linked remainder. —
+  {
+    module: "packages/agents/src/store.ts",
+    exportName: "createAgentRun",
+    capability: "run.execute",
+    orgIdExtractor: "input.orgId (CreateAgentRunInput; NOT NULL column)",
+    storageReferences: ["agent_runs"],
+    cascadeOwnership: "inert-history",
     importBanned: false,
+    importBanExemption: {
+      issue: 1940,
+      reason: "dispatch freeze converts new-run creation",
+    },
+  },
+  {
+    module: "packages/agents/src/store.ts",
+    exportName: "createAgentRunPendingInput",
+    capability: "run.execute",
+    orgIdExtractor: "input.orgId (NOT NULL column)",
+    storageReferences: ["agent_runs"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1940,
+      reason: "dispatch freeze converts new-run creation",
+    },
   },
 
   // — artifact substrate (postgres-sync world entry point) —
@@ -297,7 +495,11 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     orgIdExtractor: "explicit request.orgId (authority-bound)",
     storageReferences: ["org_write_completion_ticket"],
     cascadeOwnership: "app-furniture",
-    importBanned: false,
+    // Kernel entry point; importable only via the package root (R1 bans deep
+    // subpaths). The index barrel re-export is its sole current import edge; any
+    // consumer would resolve through it and be caught.
+    importBanned: true,
+    allowedImporters: ["packages/org-write-kernel/src/index.ts"],
   },
   {
     module: "packages/org-write-kernel/src/leases.ts",
@@ -306,7 +508,8 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     orgIdExtractor: "explicit input.orgId (archive transaction only)",
     storageReferences: ["org_archive_lease", "agent_runs"],
     cascadeOwnership: "app-furniture",
-    importBanned: false,
+    importBanned: true,
+    allowedImporters: ["packages/org-write-kernel/src/index.ts"],
   },
 ];
 

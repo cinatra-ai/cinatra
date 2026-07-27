@@ -7,6 +7,7 @@
  * strings (the live pg_constraint check is the CI-tier integration test).
  */
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { describe, it, expect } from "vitest";
 import {
   ORG_WRITE_REGISTRY,
@@ -114,10 +115,86 @@ describe("per-function write-site ratchet + R4 seed", () => {
     }
   });
 
-  it("no entry is import-banned in S2 (the ban flips per-writer in S3 wiring)", () => {
-    for (const row of ORG_WRITE_REGISTRY) {
-      expect(row.importBanned).toBe(false);
+});
+
+describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
+  // The boundary gate STATICALLY parses write-registry.ts to derive its R4
+  // rules. If that parser ever drifts from the EXECUTED registry, a banned
+  // writer could be silently un-banned and the coverage proof would lie. This
+  // runs the real registry against the gate's `--emit-r4-rules` extraction —
+  // they must be byte-identical. (`--emit-r4-rules` returns before any module
+  // resolution or tree walk, so this stays fast.)
+  it("gate static extraction == executed registry (no parser drift)", () => {
+    const raw = execFileSync(
+      "node",
+      ["scripts/audit/org-write-boundary-gate.mjs", "--emit-r4-rules"],
+      { encoding: "utf-8", cwd: process.cwd() },
+    );
+    const emitted = JSON.parse(raw);
+    const norm = (r: (typeof ORG_WRITE_REGISTRY)[number]) => ({
+      module: r.module,
+      exportName: r.exportName,
+      importBanned: r.importBanned,
+      allowedImporters: r.allowedImporters ? [...r.allowedImporters].sort() : null,
+      importBanExemption: r.importBanExemption ?? null,
+    });
+    const byKey = (a: { module: string; exportName: string }, b: typeof a) =>
+      `${a.module}#${a.exportName}`.localeCompare(`${b.module}#${b.exportName}`);
+    expect(emitted).toEqual(ORG_WRITE_REGISTRY.map(norm).sort(byKey));
+  });
+
+  it("banned rows carry allowedImporters; unbanned rows never do; exemptions only on unbanned rows", () => {
+    for (const r of ORG_WRITE_REGISTRY) {
+      if (r.importBanned) {
+        expect(Array.isArray(r.allowedImporters), `${r.exportName}: banned without allowedImporters`).toBe(true);
+        expect(r.importBanExemption, `${r.exportName}: banned yet exempted`).toBeUndefined();
+      } else {
+        expect(r.allowedImporters, `${r.exportName}: unbanned yet has allowedImporters`).toBeUndefined();
+      }
     }
+  });
+
+  it("every allowlisted importer path exists on disk (no stale/typo'd entries)", () => {
+    for (const r of ORG_WRITE_REGISTRY) {
+      for (const f of r.allowedImporters ?? []) {
+        expect(() => readFileSync(f, "utf-8"), `${r.exportName} allowlists a missing file: ${f}`).not.toThrow();
+      }
+    }
+  });
+
+  it("the Stage-A exception ledger is EXACTLY the workflows-extension (#1939) + new-run (#1940) rows", () => {
+    const ledger = ORG_WRITE_REGISTRY.filter((r) => r.importBanExemption)
+      .map((r) => `${r.exportName}#${r.importBanExemption!.issue}`)
+      .sort();
+    expect(ledger).toEqual([
+      "createAgentRun#1940",
+      "createAgentRunPendingInput#1940",
+      "materializeExtensionInstanceForProject#1939",
+      "materializeExtensionTemplate#1939",
+      "upgradeExtensionDashboards#1939",
+    ]);
+  });
+
+  it("the Stage-A flip set (already-converted writers + kernel rows) is import-banned", () => {
+    const banned = new Set(
+      ORG_WRITE_REGISTRY.filter((r) => r.importBanned).map((r) => r.exportName),
+    );
+    for (const w of [
+      // 12 converted dashboards writers (callers all in-repo)
+      "createDashboard", "updateDashboard", "publishDashboard", "archiveDashboard",
+      "upsertDashboardConfig", "ensureOverview", "createEntityDashboard", "renameDashboard",
+      "deleteEntityDashboard", "archiveExtensionDashboards", "restoreExtensionDashboards",
+      "adoptExtensionDashboards",
+      // twin backfill + host twin writer
+      "pairOneUntwinnedDashboardTwin", "backfillDashboardArtifactTwins", "dashboardArtifactTwinWriter",
+      // agent-run lifecycle
+      "transitionRunStatus", "updateAgentRunStatus", "resumeRunFromSetupApproval",
+      // kernel entry points
+      "redeemCompletionTicket", "snapshotLeasesQuery",
+    ]) {
+      expect(banned.has(w), `${w} must be import-banned in Stage A`).toBe(true);
+    }
+    expect(banned.size).toBe(20);
   });
 });
 
