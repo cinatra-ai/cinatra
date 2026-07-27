@@ -13,6 +13,9 @@ import {
   evaluatePolicy,
   isExternalEffectClass,
   lifecycleOriginKind,
+  parsePolicyBoundInput,
+  parsePolicyKeyInput,
+  POLICY_ARTIFACT_TYPE_WILDCARD_TOKEN,
   type EvaluatePolicyInput,
   type OrgPolicyRule,
 } from "../lifecycle-policy";
@@ -192,5 +195,97 @@ describe("separation of duties", () => {
       reviewingActorId: "actor-1",
     });
     expect(r.eligible).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2047 defect D-3 — the ADMIN INPUT PARSER. The lattice's top layer now
+// has a product write path, so untrusted operator input becomes a policy key
+// here. These cases pin the vocabulary the evaluator branches on: nothing
+// out-of-lattice may reach the table, and `silent` is never storable.
+// ---------------------------------------------------------------------------
+
+describe("D-3: parsePolicyBoundInput (admin write path)", () => {
+  const OK = {
+    checkpoint: "review",
+    artifactType: "document",
+    destinationClass: "none",
+    originKind: "agent_produced",
+    bound: "required",
+  };
+
+  it("accepts a well-formed bound over the FULL lattice key", () => {
+    const r = parsePolicyBoundInput(OK);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value).toEqual({
+        checkpoint: "review",
+        artifactType: "document",
+        destinationClass: "none",
+        originKind: "agent_produced",
+        bound: "required",
+        selfApprovalOptIn: false,
+      });
+    }
+  });
+
+  it("accepts the `*` artifact-type wildcard (an exact type beats it at resolve time)", () => {
+    const r = parsePolicyBoundInput({ ...OK, artifactType: POLICY_ARTIFACT_TYPE_WILDCARD_TOKEN });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.artifactType).toBe("*");
+  });
+
+  it("carries the self-approval opt-in from a checkbox value", () => {
+    for (const on of [true, "on", "true"]) {
+      const r = parsePolicyBoundInput({ ...OK, selfApprovalOptIn: on });
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.value.selfApprovalOptIn).toBe(true);
+    }
+    const off = parsePolicyBoundInput({ ...OK });
+    expect(off.ok && off.value.selfApprovalOptIn).toBe(false);
+  });
+
+  it("REFUSES `silent` — retracting a bound is a delete, never a stored row", () => {
+    const r = parsePolicyBoundInput({ ...OK, bound: "silent" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/remove the rule/i);
+  });
+
+  it("refuses every out-of-lattice axis value", () => {
+    expect(parsePolicyBoundInput({ ...OK, checkpoint: "audit" }).ok).toBe(false);
+    expect(parsePolicyBoundInput({ ...OK, destinationClass: "webhook" }).ok).toBe(false);
+    expect(parsePolicyBoundInput({ ...OK, originKind: "imported" }).ok).toBe(false);
+    expect(parsePolicyBoundInput({ ...OK, bound: "maybe" }).ok).toBe(false);
+  });
+
+  it("refuses a missing / whitespace-only / oversized artifact type", () => {
+    expect(parsePolicyBoundInput({ ...OK, artifactType: "" }).ok).toBe(false);
+    expect(parsePolicyBoundInput({ ...OK, artifactType: "   " }).ok).toBe(false);
+    expect(parsePolicyBoundInput({ ...OK, artifactType: "a b" }).ok).toBe(false);
+    expect(parsePolicyBoundInput({ ...OK, artifactType: "x".repeat(201) }).ok).toBe(false);
+  });
+
+  it("refuses a non-string axis (a form array / injected object)", () => {
+    expect(parsePolicyBoundInput({ ...OK, checkpoint: ["review"] }).ok).toBe(false);
+    expect(parsePolicyBoundInput({ ...OK, artifactType: { $ne: null } }).ok).toBe(false);
+  });
+
+  it("carries NO org field — the org is never a client input", () => {
+    const r = parsePolicyBoundInput({ ...OK, orgId: "someone-elses-org" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(Object.keys(r.value)).not.toContain("orgId");
+  });
+
+  it("parsePolicyKeyInput parses the retract key and ignores the bound", () => {
+    const r = parsePolicyKeyInput({ ...OK, bound: "not-a-bound" });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value).toEqual({
+        checkpoint: "review",
+        artifactType: "document",
+        destinationClass: "none",
+        originKind: "agent_produced",
+      });
+    }
   });
 });

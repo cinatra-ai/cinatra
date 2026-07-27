@@ -706,6 +706,104 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
     expect(reqAfter!.status).toBe("pending"); // required stays blocking
   });
 
+  // -------------------------------------------------------------------------
+  // MANIFEST (cinatra#2047 row 2 — the test gap the acceptance named).
+  //
+  // The acceptance found the lattice clause "a manifest skip works where the org
+  // is silent" proven only at the RECOMMENDATION checkpoint, and the
+  // external-effect half ("never on external effects") proven only in the pure
+  // core. These two cases close it at the REVIEW checkpoint, on the REAL store,
+  // through the shipped orchestration path: the manifest is read from the
+  // producing run's template `lifecycle_config` exactly as production reads it.
+  // -------------------------------------------------------------------------
+
+  /** Seed a template carrying a compiled manifest lifecycle block + a run on it,
+   * so `resolveManifest` (run → template → lifecycle_config) resolves for real. */
+  async function produceWithManifest(
+    lifecycleConfig: Record<string, unknown>,
+    over: Partial<ArtifactProducedEvent> = {},
+  ) {
+    const templateId = `tpl-${randomUUID()}`;
+    const runId = `run-${randomUUID()}`;
+    await pool(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."agent_templates"
+         (id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name, lifecycle_config)
+       VALUES ($1, 'manifest-fixture', '', '[]', '{}', '{}', $2, $3)`,
+      [templateId, `@cinatra-ai/manifest-fixture-${randomUUID()}`, JSON.stringify(lifecycleConfig)],
+    );
+    await pool(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs" (id, template_id, input_params, org_id)
+       VALUES ($1, $2, '{}', $3)`,
+      [runId, templateId, ORG],
+    );
+    return produce("manifest-doc", { producerRunId: runId, ...over });
+  }
+
+  it("MANIFEST: a manifest skip IS honoured at the REVIEW checkpoint where the org is SILENT and the class is non-external", async () => {
+    // Org silent for this key (nothing seeded), destination `none`,
+    // agent_produced — the core default FIRES review, so a gate would open.
+    // The producing agent's manifest requests review skipped; that refinement is
+    // legal here, so NO gate opens and the event still settles as processed.
+    const ev = await produceWithManifest({ requestedSkips: ["review"] });
+    await orch.sweepReviewOrchestration();
+
+    const gate = await readGate(ev.producerRunId!, autoReviewTaskId(ev.eventId));
+    expect(gate).toBeNull();
+    const row = await readEventRow(ev.eventId);
+    expect(row?.status).toBe("processed");
+    // A skipped decision leaves no continuation address (no gate to link).
+    expect(row?.continuation_address).toBeNull();
+
+    // CONTROL: the SAME production without the manifest skip DOES open a gate,
+    // so the absence above is the manifest's doing, not an inert pipeline.
+    const control = await produceWithManifest({});
+    await orch.sweepReviewOrchestration();
+    expect(await readGate(control.producerRunId!, autoReviewTaskId(control.eventId))).not.toBeNull();
+  });
+
+  it("MANIFEST: the SAME manifest skip is IGNORED on an EXTERNAL-effect class (fail-closed)", async () => {
+    // Identical manifest, identical org silence — only the destination class
+    // changes. External-effect gates fail closed, so the gate opens anyway.
+    const ev = await produceWithManifest(
+      { requestedSkips: ["review"] },
+      { destinationClass: "external_publish" },
+    );
+    await orch.sweepReviewOrchestration();
+
+    const gate = await readGate(ev.producerRunId!, autoReviewTaskId(ev.eventId));
+    expect(gate).not.toBeNull();
+    expect(gate!.status).toBe("pending");
+    // ...and the protected external effect is HELD by that pending gate.
+    const held = await orch.isArtifactEffectHeld({
+      artifactId: ev.artifactId,
+      representationRevisionId: ev.representationRevisionId,
+    });
+    expect(held.held).toBe(true);
+  });
+
+  it("MANIFEST: a manifest skip can never beat an org `required` bound at the review checkpoint", async () => {
+    await policyStore.upsertLifecyclePolicyRule({
+      orgId: ORG,
+      checkpoint: "review",
+      artifactType: "manifest-doc",
+      destinationClass: "none",
+      originKind: "agent_produced",
+      bound: "required",
+    });
+    const ev = await produceWithManifest({ requestedSkips: ["review"] });
+    await orch.sweepReviewOrchestration();
+    expect(await readGate(ev.producerRunId!, autoReviewTaskId(ev.eventId))).not.toBeNull();
+
+    // Leave the fixture org clean for the sibling cases in this file.
+    await policyStore.deleteLifecyclePolicyRule({
+      orgId: ORG,
+      checkpoint: "review",
+      artifactType: "manifest-doc",
+      destinationClass: "none",
+      originKind: "agent_produced",
+    });
+  });
+
   it("TOMBSTONE: the disposition drain soft-deletes the rejected artifact and stamps applied_at", async () => {
     const artifactId = `tomb-art-${randomUUID()}`;
     const revId = `tomb-rev-${randomUUID()}`;
