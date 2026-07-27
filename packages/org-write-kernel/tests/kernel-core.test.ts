@@ -5,6 +5,8 @@
  * unforgeability (the WeakSet claim, not the type brand).
  */
 import { describe, it, expect } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
+import type { SQL } from "drizzle-orm";
 import {
   ORG_WRITE_CAPABILITIES,
   ORG_LIFECYCLE_STATES,
@@ -18,8 +20,15 @@ import {
   isLiveAttempt,
   liveAttemptSqlCondition,
   assertPermitUsable,
+  guardOrgMutation,
+  guardOrgLifecycleMutation,
+  OrgWriteRefusedError,
   OrgWritePermitError,
   type OrgWritePermit,
+  type OrgWriteAuthority,
+  type OrgWriteCapability,
+  type OrgWriteDb,
+  type OrgWriteTx,
   type LiveAttemptRow,
 } from "../src/index";
 import { mintPermit, revokePermit } from "../src/permit";
@@ -249,5 +258,131 @@ describe("null execution deadline is fail-closed", () => {
     const cond = liveAttemptSqlCondition("r");
     expect(cond).toContain("r.execution_deadline_at IS NOT NULL");
     expect(cond).not.toContain("execution_deadline_at IS NULL OR");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// guardOrgLifecycleMutation — the epoch→write (BOTH-locks) entry point
+// (#1939 wave 3). Pins the exclusive lock order and refusal parity with the
+// write-only guardOrgMutation. A recording fake renders every kernel query to
+// real SQL so the lock ORDER (what makes a second write deterministically
+// block behind a lifecycle mutation) is asserted on the wire, not on intent.
+// ---------------------------------------------------------------------------
+describe("guardOrgLifecycleMutation (#1939 wave 3)", () => {
+  const dialect = new PgDialect();
+
+  type Recorded = { text: string; params: unknown[] };
+  function recordingDb(
+    org: { archivedAt: Date | string | null; archiveEpoch?: number } | null,
+  ): { db: OrgWriteDb<OrgWriteTx>; executed: Recorded[] } {
+    const executed: Recorded[] = [];
+    const tx: OrgWriteTx = {
+      execute: async (query: SQL | string) => {
+        const rendered =
+          typeof query === "string"
+            ? { sql: query, params: [] as unknown[] }
+            : dialect.sqlToQuery(query);
+        executed.push({ text: rendered.sql, params: rendered.params });
+        if (rendered.sql.includes('COALESCE("archiveEpoch"')) {
+          return org === null
+            ? { rows: [] }
+            : { rows: [{ archivedAt: org.archivedAt, archiveEpoch: org.archiveEpoch ?? 0 }] };
+        }
+        return { rows: [] };
+      },
+    };
+    return {
+      db: { transaction: async <R>(fn: (t: OrgWriteTx) => Promise<R>) => fn(tx) },
+      executed,
+    };
+  }
+
+  const authorityFor = (
+    orgId: string,
+    caps: readonly OrgWriteCapability[],
+  ): OrgWriteAuthority => ({ orgId, can: (c) => caps.includes(c) });
+
+  const ORG = "org-life";
+
+  it("acquires epoch→write (both locks, global order) BEFORE the locked state read", async () => {
+    const { db, executed } = recordingDb({ archivedAt: new Date() });
+    const out = await guardOrgLifecycleMutation(
+      db,
+      { orgId: ORG, capability: "org.delete", authority: authorityFor(ORG, ["org.delete"]) },
+      async () => "done",
+    );
+    expect(out).toBe("done");
+    // Epoch lock first, write lock second (the redeemCompletionTicket order).
+    expect(executed[0].params[0]).toBe(ORG_ARCHIVE_EPOCH_LOCK_NAMESPACE);
+    expect(executed[1].params[0]).toBe(ORG_WRITE_LOCK_NAMESPACE);
+    // The locked lifecycle-state read comes AFTER both locks.
+    expect(executed[2].text).toContain('COALESCE("archiveEpoch"');
+  });
+
+  it("the write-only guardOrgMutation never takes the epoch lock (the two entry points differ only in lock set)", async () => {
+    const { db, executed } = recordingDb({ archivedAt: null });
+    await guardOrgMutation(
+      db,
+      { orgId: ORG, capability: "content.write", authority: authorityFor(ORG, ["content.write"]) },
+      async () => undefined,
+    );
+    expect(executed[0].params[0]).toBe(ORG_WRITE_LOCK_NAMESPACE);
+    for (const q of executed) {
+      expect(q.params).not.toContain(ORG_ARCHIVE_EPOCH_LOCK_NAMESPACE);
+    }
+  });
+
+  it("refusal parity with guardOrgMutation: org-not-found, org-mismatch, lacks-capability all refuse identically", async () => {
+    for (const guard of [guardOrgMutation, guardOrgLifecycleMutation]) {
+      // organization-not-found (locked state read returns no row)
+      await expect(
+        guard(
+          recordingDb(null).db,
+          { orgId: ORG, capability: "org.lifecycle", authority: authorityFor(ORG, ["org.lifecycle"]) },
+          async () => undefined,
+        ),
+      ).rejects.toMatchObject({ reason: "organization-not-found" });
+      // authority minted for a different org
+      await expect(
+        guard(
+          recordingDb({ archivedAt: null }).db,
+          { orgId: ORG, capability: "org.lifecycle", authority: authorityFor("other-org", ["org.lifecycle"]) },
+          async () => undefined,
+        ),
+      ).rejects.toMatchObject({ reason: "authority-org-mismatch" });
+      // authority lacks the demanded capability
+      await expect(
+        guard(
+          recordingDb({ archivedAt: null }).db,
+          { orgId: ORG, capability: "org.lifecycle", authority: authorityFor(ORG, []) },
+          async () => undefined,
+        ),
+      ).rejects.toBeInstanceOf(OrgWriteRefusedError);
+    }
+  });
+
+  it("org.delete ruling under the lifecycle fence: active org DENIES (capability-denied), archived org RUNS the callback", async () => {
+    // active → deny
+    let ran = false;
+    await expect(
+      guardOrgLifecycleMutation(
+        recordingDb({ archivedAt: null }).db,
+        { orgId: ORG, capability: "org.delete", authority: authorityFor(ORG, ["org.delete"]) },
+        async () => {
+          ran = true;
+        },
+      ),
+    ).rejects.toMatchObject({ reason: "capability-denied" });
+    expect(ran).toBe(false);
+    // archived → allow, callback runs under the permit
+    const result = await guardOrgLifecycleMutation(
+      recordingDb({ archivedAt: new Date() }).db,
+      { orgId: ORG, capability: "org.delete", authority: authorityFor(ORG, ["org.delete"]) },
+      async (_tx, permit) => {
+        expect(permit).toBeDefined();
+        return "deleted";
+      },
+    );
+    expect(result).toBe("deleted");
   });
 });

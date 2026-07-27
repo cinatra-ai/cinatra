@@ -72,6 +72,7 @@
       "@cinatra-ai/agents/wayflow-url": ["./packages/agents/src/wayflow-url.ts"],
       "@cinatra-ai/agents/readme-render": ["./packages/agents/src/readme-render.ts"],
       "@cinatra-ai/agents/schema": ["./packages/agents/src/schema.ts"],
+      "@cinatra-ai/agents/run-status": ["./packages/agents/src/run-status.ts"],
       "@cinatra-ai/agents/owner-containment-port": ["./packages/agents/src/owner-containment-port.ts"],
       "@cinatra-ai/agents/mcp-client": ["./packages/agents/src/mcp/client/deterministic-client.ts"],
       "@cinatra-ai/agents/db": ["./packages/agents/src/db.ts"],

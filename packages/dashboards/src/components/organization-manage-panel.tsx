@@ -14,8 +14,9 @@
  *   - Danger zone (delete) — `organization.delete`, org_owner ONLY, and only
  *     when structurally deletable (never the default org, never in single-org
  *     mode — the gate folds those in, so the card is entirely absent then).
- *     Referenced records (teams, active projects, connectors, dashboards,
- *     agents) block inside the card with per-kind counts.
+ *     Referenced records (teams, active projects, installed extensions,
+ *     dashboards, agents, running agents) block inside the card with per-kind
+ *     counts.
  *
  * Presentational only — the screen resolves the VIEWED-org capabilities + reads
  * and hands them in, so this stays a pure render (unit-testable without a DB).

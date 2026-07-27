@@ -265,7 +265,12 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     capability: "membership.write",
     orgIdExtractor: "session-resolved organization id",
     storageReferences: ["team", "teamMember"],
-    cascadeOwnership: "db-cascade",
+    // cinatra#1939 wave 3 correction (Decision 5): was "db-cascade", but
+    // `team.organizationId` has NO org FK (team is not in DECLARED_ORG_FK_CASCADES)
+    // and the org-delete transaction BLOCKS on teams — its rows do not vanish by
+    // cascade. Pinned by the cascadeOwnership↔ORG_DELETE_TIME_RULING consistency
+    // test (a writer touching a "block" table can never be db-cascade).
+    cascadeOwnership: "block",
     importBanned: false,
   },
   {
@@ -312,8 +317,10 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
 
 /** Declared org-axis columns WITHOUT database FKs (block-if-referenced or
  *  history semantics — reconciled by the lockstep test against the DDL, and
- *  by the CI-tier integration test against live pg_constraint). */
-export const DECLARED_FKLESS_ORG_REFERENCES: readonly string[] = [
+ *  by the CI-tier integration test against live pg_constraint). `as const`
+ *  (cinatra#1939 wave 3) so `ORG_DELETE_TIME_RULING` can be COMPILE-total over
+ *  the exact reference set — values byte-identical to the prior array. */
+export const DECLARED_FKLESS_ORG_REFERENCES = [
   "dashboards.organization_id",
   "installed_extension.organization_id",
   "agent_templates.org_id",
@@ -326,11 +333,189 @@ export const DECLARED_FKLESS_ORG_REFERENCES: readonly string[] = [
   "object_change_event.org_id",
   "org_archive_lease.org_id",
   "org_write_completion_ticket.org_id",
-];
+] as const;
 
 /** The three REAL org FKs (all ON DELETE CASCADE), verbatim from the DDL. */
-export const DECLARED_ORG_FK_CASCADES: readonly string[] = [
+export const DECLARED_ORG_FK_CASCADES = [
   "connector_access_policy.org_id",
   "role_grant.org_id",
   "project_access.principal_org_id",
-];
+] as const;
+
+// ---------------------------------------------------------------------------
+// Delete-time rulings — cinatra#1939 wave 3 (Decision 5).
+//
+// The org-delete transaction's blocker inventory is REBASELINED from this
+// registry instead of a hand-coded list: EVERY declared org-axis reference
+// carries an explicit delete-time ruling, so adding a 13th FK-less reference
+// without a ruling is a COMPILE error (the total Record below), and
+// `organization-delete.ts` DERIVES its blocker COUNT queries + kernel-table
+// furniture DELETEs from this single source (plus the explicit BA public-table
+// section for organization/member/invitation/session/team, which live outside
+// the app-schema declared lists).
+// ---------------------------------------------------------------------------
+
+/** The union of every declared org-axis reference (FK-less + real-FK). */
+export type DeclaredOrgReference =
+  | (typeof DECLARED_FKLESS_ORG_REFERENCES)[number]
+  | (typeof DECLARED_ORG_FK_CASCADES)[number];
+
+/** The `OrganizationDeleteBlockers` field a "block" ruling feeds. `teams` is a
+ *  Better-Auth public table (not a declared app-schema reference; ruled in the
+ *  BA section) so it is deliberately NOT a value here. Kept in lockstep with
+ *  `OrganizationDeleteBlockers` by organization-delete.ts's own tests. */
+export type OrgDeleteBlockerKey =
+  | "activeProjects"
+  | "installedExtensions"
+  | "dashboards"
+  | "agents"
+  | "liveAgentRuns";
+
+export type DeleteRulingKind = "block" | "furniture" | "inert-history" | "db-cascade";
+
+/** What happens to a declared reference's rows when its organization is deleted. */
+export type DeleteRuling =
+  | {
+      readonly kind: "block";
+      /** app-schema table (unquoted; the delete module quotes it). */
+      readonly table: string;
+      /** primary org-axis column on `table`. */
+      readonly orgColumn: string;
+      /** static predicate narrowing WHICH rows block (e.g. `is_default = false`,
+       *  `archived_at IS NULL`); omitted = every org row blocks. */
+      readonly blockWhere?: string;
+      /** also match rows scoped via `origin->>'scope' = 'org:'||<orgId>` — the
+       *  one compound org axis (agent_templates). */
+      readonly alsoOriginScope?: boolean;
+      /** block only NON-TERMINAL agent runs; the delete module builds the
+       *  `status NOT IN (...)` set from the agents run-status single source
+       *  (TERMINAL_RUN_STATUSES), pinned by a lockstep test. */
+      readonly nonTerminalRunsOnly?: boolean;
+      readonly blockerKey: OrgDeleteBlockerKey;
+      readonly note: string;
+    }
+  | {
+      readonly kind: "furniture";
+      readonly table: string;
+      readonly orgColumn: string;
+      readonly note: string;
+    }
+  | { readonly kind: "inert-history"; readonly note: string }
+  | { readonly kind: "db-cascade"; readonly note: string };
+
+/** The compile-total delete-time ruling for EVERY declared reference. */
+export const ORG_DELETE_TIME_RULING: Record<DeclaredOrgReference, DeleteRuling> = {
+  "dashboards.organization_id": {
+    kind: "block",
+    table: "dashboards",
+    orgColumn: "organization_id",
+    blockWhere: "is_default = false",
+    blockerKey: "dashboards",
+    note: "non-default dashboards block; the entity-anchored default Overview rows are furniture (deleted in-tx)",
+  },
+  "installed_extension.organization_id": {
+    kind: "block",
+    table: "installed_extension",
+    orgColumn: "organization_id",
+    blockerKey: "installedExtensions",
+    note: "ALL installed extension kinds block (#1939 tightening — was connectors-only; every kind has its own uninstall surface)",
+  },
+  "agent_templates.org_id": {
+    kind: "block",
+    table: "agent_templates",
+    orgColumn: "org_id",
+    alsoOriginScope: true,
+    blockerKey: "agents",
+    note: "org-owned (org_id) or org-scoped (origin.scope) agent templates block",
+  },
+  "projects.organization_id": {
+    kind: "block",
+    table: "projects",
+    orgColumn: "organization_id",
+    blockWhere: "archived_at IS NULL",
+    blockerKey: "activeProjects",
+    note: "active projects block; archived project rows are inert history (retained)",
+  },
+  "agent_runs.org_id": {
+    kind: "block",
+    table: "agent_runs",
+    orgColumn: "org_id",
+    nonTerminalRunsOnly: true,
+    blockerKey: "liveAgentRuns",
+    note: "NON-TERMINAL runs block (#1939 new blocker — status NOT IN the canonical terminal set); terminal runs are inert history",
+  },
+  "objects.org_id": {
+    kind: "inert-history",
+    note: "#1928 canonical object history — retained, unreachable once the org is gone",
+  },
+  "resource.org_id": {
+    kind: "inert-history",
+    note: "artifact substrate history — retained",
+  },
+  "artifact_blobs.org_id": {
+    kind: "inert-history",
+    note: "artifact blob history — retained",
+  },
+  "change_set.org_id": {
+    kind: "inert-history",
+    note: "object change-set history — retained",
+  },
+  "object_change_event.org_id": {
+    kind: "inert-history",
+    note: "object change-event history — retained",
+  },
+  "org_archive_lease.org_id": {
+    kind: "furniture",
+    table: "org_archive_lease",
+    orgColumn: "org_id",
+    note: "kernel lease rows die with the org (new furniture #1939)",
+  },
+  "org_write_completion_ticket.org_id": {
+    kind: "furniture",
+    table: "org_write_completion_ticket",
+    orgColumn: "org_id",
+    note: "kernel completion tickets die with the org (new furniture #1939)",
+  },
+  "connector_access_policy.org_id": {
+    kind: "db-cascade",
+    note: "real FK ON DELETE CASCADE — the row dies with the org automatically",
+  },
+  "role_grant.org_id": {
+    kind: "db-cascade",
+    note: "real FK ON DELETE CASCADE — the row dies with the org automatically",
+  },
+  "project_access.principal_org_id": {
+    kind: "db-cascade",
+    note: "real FK ON DELETE CASCADE — the row dies with the org automatically",
+  },
+};
+
+/** Delete-time ruling of the Better-Auth public-schema tables the delete
+ *  transaction handles DIRECTLY (outside the app-schema declared references).
+ *  `team` BLOCKS (each team has its own delete surface — unchanged #1510
+ *  doctrine); membership rows are furniture (deleted / NULL-repointed in-tx);
+ *  `teamMember` rides its team's FK. Feeds the cascadeOwnership consistency
+ *  pin (a writer touching a "block" table can never be `db-cascade`). */
+export const BA_PUBLIC_TABLE_DELETE_RULING: Record<string, DeleteRulingKind> = {
+  organization: "furniture",
+  member: "furniture",
+  invitation: "furniture",
+  session: "furniture",
+  team: "block",
+  teamMember: "db-cascade",
+};
+
+/** Every table (app-schema declared + BA public) whose org-delete ruling is
+ *  "block": its rows do NOT vanish by FK on org delete — they block. A writer
+ *  touching one of these can therefore never be classified `db-cascade` (the
+ *  createTeamAction misclassification this pins against). */
+export function orgDeleteBlockTables(): ReadonlySet<string> {
+  const tables = new Set<string>();
+  for (const ruling of Object.values(ORG_DELETE_TIME_RULING)) {
+    if (ruling.kind === "block") tables.add(ruling.table);
+  }
+  for (const [table, kind] of Object.entries(BA_PUBLIC_TABLE_DELETE_RULING)) {
+    if (kind === "block") tables.add(table);
+  }
+  return tables;
+}
