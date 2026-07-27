@@ -3,6 +3,10 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { compileOasAgentJson } from "./oas-compiler";
+import {
+  readManifestLifecycle,
+  serializeLifecycleConfig,
+} from "@/lib/lifecycle/lifecycle-policy";
 import type { AgentPackageManifest } from "./verdaccio/package-contract";
 import { agentPackageLgGraphIdSchema } from "./verdaccio/package-contract";
 
@@ -83,6 +87,17 @@ export type AgentTemplateInstallSeed = {
     | "wayflow"
     | "default"
     | null;
+  /**
+   * The compiled `cinatra.lifecycle` declaration as JSON-as-text (cinatra#2047
+   * defect D-1), persisted on `agent_templates.lifecycle_config` exactly as
+   * `trigger_mode`/`gated_steps` are. null when the manifest declares none.
+   *
+   * Deliberately NOT part of the version `snapshot`: the snapshot feeds the
+   * content hash the install path re-derives byte-for-byte across its three
+   * branches, and lifecycle_config is a compiled ROW column (like triggerMode),
+   * not part of the agent's source identity.
+   */
+  lifecycleConfig: string | null;
   /** Deterministic snapshot persisted to the agent_versions row. */
   snapshot: Record<string, unknown>;
   /** sha256(JSON.stringify(snapshot)) — full hex, matches the prior install flow. */
@@ -244,6 +259,11 @@ export async function buildAgentTemplateInstallSeed(input: {
     .update(JSON.stringify(snapshot))
     .digest("hex");
 
+  // The manifest LIFECYCLE declaration (cinatra#2047 D-1), compiled to the
+  // persisted JSON-as-text form. Absent block => null => the column stays NULL
+  // (back-compat with every already-published package).
+  const lifecycleConfig = serializeLifecycleConfig(readManifestLifecycle(input.manifest));
+
   return {
     name,
     description,
@@ -258,6 +278,7 @@ export async function buildAgentTemplateInstallSeed(input: {
     lgGraphCode,
     lgGraphId,
     executionProvider: manifestProvider,
+    lifecycleConfig,
     snapshot,
     contentHash,
   };

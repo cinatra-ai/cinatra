@@ -484,6 +484,11 @@ async function _installAgentFromPackageImpl(
         lgGraphCode,
         lgGraphId,
         executionProvider: (executionProvider as "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default" | null) ?? undefined,
+        // cinatra#2047 D-1: re-project the compiled manifest LIFECYCLE
+        // declaration on every (re)install. Passed EXPLICITLY (never omitted) so
+        // a version that DROPS the block clears the column instead of leaving a
+        // stale repairCapable behind.
+        lifecycleConfig: seed.lifecycleConfig,
         agentDependencies:
           Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
         connectorDependencies:
@@ -586,6 +591,9 @@ async function _installAgentFromPackageImpl(
       lgGraphCode,
       lgGraphId,
       executionProvider: (executionProvider as "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default" | null) ?? undefined,
+      // cinatra#2047 D-1 — the compiled manifest LIFECYCLE declaration rides the
+      // fresh-install seed so all three install branches persist it identically.
+      lifecycleConfig: seed.lifecycleConfig,
       status: input.status ?? "draft",
     };
     let templateId: string;
@@ -617,6 +625,11 @@ async function _installAgentFromPackageImpl(
         lgGraphCode,
         lgGraphId,
         executionProvider: (executionProvider as "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default" | null) ?? undefined,
+        // cinatra#2047 D-1: re-project the compiled manifest LIFECYCLE
+        // declaration on every (re)install. Passed EXPLICITLY (never omitted) so
+        // a version that DROPS the block clears the column instead of leaving a
+        // stale repairCapable behind.
+        lifecycleConfig: seed.lifecycleConfig,
         agentDependencies:
           Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
         connectorDependencies:

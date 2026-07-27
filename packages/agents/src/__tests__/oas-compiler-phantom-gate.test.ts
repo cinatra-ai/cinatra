@@ -52,7 +52,7 @@ function flowNode(id: string, name: string, subflowRef: string, pkg: string) {
       cinatra: {
         packageName: pkg,
         gateSteps: [
-          { name, description: name, renderer: "@cinatra-ai/reviewer-agent:output", hitlOwnedBy: "self", gateCount: 1 },
+          { name, description: name, renderer: "@cinatra-ai/web-research-agent:output", hitlOwnedBy: "self", gateCount: 1 },
         ],
       },
     },
@@ -102,10 +102,10 @@ function buildAgentJson(): Record<string, unknown> {
         metadata: {
           cinatra: {
             requiresApproval: true,
-            renderer: "@cinatra-ai/reviewer-agent:output",
+            renderer: "@cinatra-ai/web-research-agent:output",
             inputMessageSchema: {
               type: "object",
-              "x-renderer": "@cinatra-ai/reviewer-agent:output",
+              "x-renderer": "@cinatra-ai/web-research-agent:output",
               properties: { selectedIdeaJson: { type: "string" } },
               required: ["selectedIdeaJson"],
             },

@@ -4,9 +4,7 @@ Runs `discover_agents` against the real `agents/` tree and asserts every
 required Cinatra-vendored agent is found. The on-disk vendor must be
 `cinatra` (the only vendor shipped in this repo today), and the canonical
 slug returned by `discover_agents` is the one in
-`metadata.cinatra.packageName` — not the disk directory name (so e.g.
-`reviewer-agent/` on disk surfaces as `email-reviewer-agent` because that
-is what the OAS metadata declares).
+`metadata.cinatra.packageName` — not the disk directory name.
 """
 
 from __future__ import annotations
@@ -43,7 +41,9 @@ def test_discovers_all_repo_agents() -> None:
         "email-drafting-agent",
         "email-outreach-agent",
         "email-follow-up-agent",
-        "email-reviewer-agent",
+        # cinatra#1796 / #2047 row 8: "email-reviewer-agent" (the reviewer
+        # agent's declared packageName slug) was REMOVED — the package is
+        # retired and no longer mounted, so requiring it here would fail.
         "email-delivery-agent",
     ]
     for slug in required:

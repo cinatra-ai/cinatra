@@ -25,7 +25,6 @@ import {
   LIFECYCLE_ORIGIN_KINDS,
 } from "@/lib/lifecycle/lifecycle-policy";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -98,7 +97,6 @@ export function ReviewPolicyEditor({
                   "Destination",
                   "Origin",
                   "Bound",
-                  "Self-approval",
                   "",
                 ].map((h, i) => (
                   <th
@@ -115,7 +113,7 @@ export function ReviewPolicyEditor({
                 <tr>
                   <td
                     className="px-3.5 py-6 text-center text-muted-foreground"
-                    colSpan={7}
+                    colSpan={6}
                     data-testid="review-policy-empty"
                   >
                     This organization expresses no bounds — every checkpoint runs on
@@ -133,9 +131,6 @@ export function ReviewPolicyEditor({
                       <td className={`${cell} text-muted-foreground`}>{r.destinationClass}</td>
                       <td className={`${cell} text-muted-foreground`}>{r.originKind}</td>
                       <td className={`${cell} font-semibold text-foreground`}>{r.bound}</td>
-                      <td className={`${cell} text-muted-foreground`}>
-                        {r.bound === "required" ? (r.selfApprovalOptIn ? "allowed" : "blocked") : "—"}
-                      </td>
                       <td className={cell}>
                         {canWrite ? (
                           <form action={runDelete}>
@@ -241,12 +236,6 @@ export function ReviewPolicyEditor({
               </NativeSelect>
             </div>
           </div>
-
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Checkbox name="selfApprovalOptIn" value="on" className="mt-0.5" />
-            Allow the producing actor to approve their own required gate
-            (separation of duties is the default).
-          </label>
 
           <div className="flex items-center gap-3">
             <SubmitButton>Save bound</SubmitButton>

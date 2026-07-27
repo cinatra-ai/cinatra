@@ -3671,7 +3671,7 @@ END $$` },
     },
 
     // 2.5 agent_templates.(owner_level, owner_id) → <owner-prefix>/~agents/<vendor>/<package>.
-    // Path derived at enqueue from package_name (npm, e.g. "@cinatra-ai/auditor-agent"); on-disk
+    // Path derived at enqueue from package_name (npm, e.g. "@cinatra-ai/author-agent"); on-disk
     // store is UNSCOPED so "@<scope>/" is stripped (agentPackageNameToPath; cinatra#550). Quoted
     // $fn$ (not $body$) so agent-owner-move-scope-strip.test.ts slices the body to the "$body$" end.
     {

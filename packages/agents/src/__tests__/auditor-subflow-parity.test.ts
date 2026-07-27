@@ -1,11 +1,12 @@
 /**
- * Structural guard between the auditor-agent source-of-truth flow and the
- * email-drafting-agent flow.
+ * Structural guard on the email-drafting-agent flow: it must not carry an
+ * inlined `auditor-subflow` copy or any auditor-prefixed control-flow wiring.
  *
- * The auditor flow lives in its own package. The email-drafting-agent OAS must
- * not carry an inlined `auditor-subflow` copy or any auditor-prefixed control
- * flow wiring. This test fails if auditor nodes or edges are reintroduced into
- * the email-drafting-agent flow.
+ * ORIGINALLY this guarded a boundary against the auditor agent's own package.
+ * After the cinatra#1796 / #2047-row-8 retirement that package does not exist,
+ * so the guard is absolute: auditor nodes or edges may never reappear in this
+ * flow. (The unused source-of-truth path const was dropped with the package —
+ * this test only ever read the email-drafting OAS.)
  *
  * Run: cd packages/agent-builder && pnpm exec vitest run src/__tests__/auditor-subflow-parity.test.ts
  */
@@ -14,10 +15,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 const REPO_ROOT = path.resolve(__dirname, "../../../..");
-const SOT_PATH = path.join(
-  REPO_ROOT,
-  "extensions/cinatra-ai/auditor-agent/cinatra/oas.json",
-);
 const INLINED_PATH = path.join(
   REPO_ROOT,
   "extensions/cinatra-ai/email-drafting-agent/cinatra/oas.json",
@@ -53,11 +50,9 @@ function strip(id: string | undefined): string | undefined {
 
 // The email-drafting-agent flow intentionally has no inlined auditor subflow.
 // These assertions surface regressions that reintroduce auditor nodes or edge
-// wiring. The auditor source-of-truth flow itself remains in its own package.
+// wiring. cinatra#1796 / #2047 row 8: there is no auditor package to hold a
+// source-of-truth flow any more, so "absent here" is now "absent everywhere".
 describe("auditor-subflow is absent from the email-drafting-agent flow", () => {
-  // Reference SOT_PATH so static-analysis sees the import as used; the SOT file
-  // exists and is intentionally not re-asserted here (auditor lives elsewhere).
-  void SOT_PATH;
   void strip;
   const inlined = JSON.parse(fs.readFileSync(INLINED_PATH, "utf8")) as OasShape;
   const subflow = inlined.$referenced_components?.["auditor-subflow"];

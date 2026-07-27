@@ -249,27 +249,20 @@ async function driveCustomRenderer(
     case "@cinatra-ai/agent-builder:schema-field-fallback":
       await advanceSchemaFieldFallback(page, screen.action);
       break;
-    case "@cinatra-ai/reviewer-agent:output":
-      await advanceReviewerAgentOutput(page, screen.action);
-      break;
-    case "@cinatra-ai/reviewer-agent:drafts-output":
-    case "@cinatra-ai/reviewer-agent:followups-output":
-    case "@cinatra-ai/reviewer-agent:contacts-output":
-      // Drafts / followups / contacts review renderers all auto-seed
-      // `userResponse` on mount (renderer reads the upstream
-      // envelope and synthesizes the approval payload before the user
-      // clicks anything). Drive them via the same fallback path as
-      // `:output` — the helper tries #field-hitl-field first and falls
-      // back to clicking outer-panel Continue. No bespoke logic needed
-      // yet; if a future fixture wants to test field-level edits before
-      // approval, branch a dedicated advancer.
-      await advanceReviewerAgentOutput(page, screen.action);
+    // cinatra#1796 / #2047 row 8: the four retiring reviewer cases and the
+    // auditor `:review` case were REMOVED with the retirement teardown — the
+    // packages, their bindings and the reviewer-output dispatcher are gone, so
+    // no fixture can produce those ids. The pack-owned gates the dependent flows
+    // kept are handled here instead.
+    case "@cinatra-ai/email-drafting-agent:email-drafts-review":
+    case "@cinatra-ai/email-follow-up-agent:email-drafts-review":
+      // The drafts / follow-ups review renderer auto-seeds `userResponse` on
+      // mount, so the helper tries #field-hitl-field first and falls back to
+      // clicking outer-panel Continue.
+      await advanceDraftsReview(page, screen.action);
       break;
     case "@cinatra-ai/email-outreach-agent:list-picker":
       await advanceEmailOutreachListPicker(page, screen.action);
-      break;
-    case "@cinatra-ai/auditor-agent:review":
-      await advanceAuditorReview(page, screen.action);
       break;
     case "@cinatra-ai/email-test-delivery-agent:input":
       await advanceEmailTestDeliveryInput(page, screen.action);
@@ -277,8 +270,8 @@ async function driveCustomRenderer(
     case "@cinatra-ai/email-outreach-agent:setup-form":
       await advanceEmailOutreachSetupForm(page, screen.action);
       break;
-    case "@cinatra-ai/reviewer-agent:contacts-output":
-      await advanceReviewerContactsOutput(page, screen.action);
+    case "@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review":
+      await advanceCampaignRecipientsReview(page, screen.action);
       break;
     case "@cinatra-ai/list-curator-agent:scrape-schema-review":
     case "@cinatra-ai/list-curator-agent:final-list-review":
@@ -344,27 +337,23 @@ async function advanceEmailOutreachListPicker(
 }
 
 /**
- * Advancement for `@cinatra-ai/reviewer-agent:output`.
+ * Advancement for the pack-owned drafts / follow-ups review gates
+ * (`@cinatra-ai/email-{drafting,follow-up}-agent:email-drafts-review`).
  *
- * Subflows that don't yet emit the {contentType, contentBundle, summary}
- * envelope hit the
- * ReviewerAgentOutputRenderer fallback renders a SchemaFieldRenderer with
- * the value's non-envelope fields. Visible
- * UI: a single `#field-hitl-field` input + Continue button (same shape
- * as the schema-field-fallback path). `action.userResponse` provides
- * the approval text.
+ * Renderer source: the @cinatra-ai/email-artifacts pack component (relocated in
+ * cinatra#1959). Visible UI is either a read-only summary with an outer
+ * Continue, or a `#field-hitl-field` input + Continue. `action.userResponse`
+ * provides the approval text when the input path is taken.
  */
-async function advanceReviewerAgentOutput(
+async function advanceDraftsReview(
   page: Page,
   action: Record<string, unknown>,
 ): Promise<void> {
   const userResponse =
     typeof action.userResponse === "string" ? action.userResponse : "Approved.";
-  // The renderer has two render modes depending on upstream envelope shape:
-  //   (a) Read-only summary display (text envelope from execution.ts
-  //       synthesis) — no input, just an outer Continue button.
-  //   (b) Schema-field-fallback (subflow emitted no envelope at all) —
-  //       a #field-hitl-field input + outer Continue button.
+  // The renderer has two render modes:
+  //   (a) Read-only summary display — no input, just an outer Continue button.
+  //   (b) Schema-field-fallback — a #field-hitl-field input + outer Continue.
   // Try the input path first; if no input is present within 5s, treat
   // it as the display-only case and click Continue directly.
   // When the renderer emits the text envelope (contentType: "text"), the
@@ -475,7 +464,8 @@ async function advanceEmailOutreachSetupForm(
 }
 
 /**
- * Advancement for `@cinatra-ai/reviewer-agent:contacts-output`.
+ * Advancement for
+ * `@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review`.
  *
  * Renderer source: packages/agents/src/campaign-recipients-review-renderer.tsx
  * Auto-seeds userResponse on mount + on edits. The user reviews the list
@@ -483,7 +473,7 @@ async function advanceEmailOutreachSetupForm(
  * For the fixture, we just wait for the table to render (any recipient
  * row) then click outer Continue.
  */
-async function advanceReviewerContactsOutput(
+async function advanceCampaignRecipientsReview(
   page: Page,
   _action: Record<string, unknown>,
 ): Promise<void> {
@@ -537,41 +527,6 @@ async function advanceEmailTestDeliveryInput(
     .first();
   await expect(continueBtn).toBeEnabled({ timeout: 45_000 });
   await continueBtn.click();
-}
-
-/**
- * Advancement for `@cinatra-ai/auditor-agent:review`.
- *
- * AuditorReviewRenderer source: packages/agents/src/auditor-review-renderer.tsx
- * It renders either:
- *   - a list of captured-guidance prompts with per-prompt Accept/Dismiss
- *     buttons (each click emits reviewResult)
- *   - "No captured guidance." when prompts.length === 0; in this case the
- *     renderer never auto-emits reviewResult, so the outer panel
- *     Continue may still be enabled (renderer doesn't gate the field).
- *
- * For the minimal fixture, we just click Continue at the outer panel level.
- * If the run requires reviewResult to be populated, the test will surface
- * that and we'll extend this helper.
- */
-async function advanceAuditorReview(
-  page: Page,
-  _action: Record<string, unknown>,
-): Promise<void> {
-  // Auditor's resolve_skills + run_skills LLM pass can be slow under
-  // sustained Playwright load (Postgres-sync
-  // starvation + LLM-bridge latency), so the renderer-mount signal may
-  // lag well past the original 30s budget. Companion to the other
-  // dev-server-degradation timeout bumps in this file.
-  await page
-    .getByText(/Captured guidance|No captured guidance/i)
-    .first()
-    .waitFor({ state: "visible", timeout: 90_000 });
-  // Outer Continue on the run panel — the canonical hitl advance.
-  // Use a 45s button-enabled wait for the same reason.
-  const submitBtn = page.getByRole("button", { name: /^(Continue|Submit)$/ }).first();
-  await expect(submitBtn).toBeEnabled({ timeout: 45_000 });
-  await submitBtn.click();
 }
 
 /**

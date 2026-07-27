@@ -15,9 +15,9 @@ documentation and lives under [`config/`](../../config/).
 |-----------|-----------------|
 | [`architecture/`](./architecture/) | System shape and subsystem boundaries (e.g. the skills lifecycle, the stateful-service inventory). |
 | [`decisions/`](./decisions/) | ADRs / decision records — point-in-time rulings with status and rationale. |
-| [`contracts/`](./contracts/) | Invariants the code enforces (extension server-entry contract, clone pinning, library closure, widget source of truth, LLM-provider dependency vocabulary, moderation credentials, default-off flags, the artifact-renderer RSC contract, the CMS review adapter contract). |
+| [`contracts/`](./contracts/) | Invariants the code enforces (extension server-entry contract, clone pinning, library closure, widget source of truth, LLM-provider dependency vocabulary, moderation credentials, default-off flags, the artifact-renderer RSC contract, the CMS review adapter contract, schema migrations vs per-org write policy). |
 | [`workflows/`](./workflows/) | Authoring / process guidance (webhook authoring and delivery, the upgrade track, the run-scoped HITL prompt prep-node + resume-mutation pattern, lifecycle producer authoring). |
-| [`governance/`](./governance/) | Living policy: ownership, decision process, gate policy (including the lifecycle review policy lattice and separation of duties). |
+| [`governance/`](./governance/) | Living policy: ownership, decision process, gate policy (including the lifecycle review policy lattice). |
 | [`records/attribution/`](./records/attribution/) | Attribution / gate correction records (append-only; `Correction-for:` trailers reference commit SHAs, not paths). |
 | [`records/audits/`](./records/audits/) | Release and audit records. |
 

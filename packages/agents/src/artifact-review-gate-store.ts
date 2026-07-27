@@ -492,14 +492,41 @@ export async function commitReviewDecision(
     let gateId: string;
     let orgId: string;
 
+    // PLAN SELF-CONSISTENCY (cinatra#2047 D-2, convergence round). `terminal` is
+    // DERIVED from the disposition, never independent: only a `comment` is
+    // non-terminal. Without this check a direct store caller could hand in
+    // {disposition:"approve", terminal:false} — a plan that skips the gate CAS
+    // entirely and lands an APPROVE audit row on a still-PENDING gate, leaving
+    // the gate's decision trail disagreeing with the gate's own state. The pure
+    // decision core never builds such a plan; these two checks make it
+    // structurally impossible for every other caller too.
+    const expectedTerminal = plan.disposition !== "comment";
+    if (plan.terminal !== expectedTerminal) {
+      throw new Error(
+        `artifact-review commit: plan.terminal=${plan.terminal} disagrees with disposition "${plan.disposition}" (terminal is derived: only a comment is non-terminal)`,
+      );
+    }
+    // ...and every audit row must carry the plan's OWN disposition, so no row of a
+    // different disposition can ride along inside an otherwise-consistent plan.
+    for (const row of plan.auditRows) {
+      if (row.disposition !== plan.disposition) {
+        throw new Error(
+          `artifact-review commit: audit row disposition "${row.disposition}" disagrees with the plan disposition "${plan.disposition}"`,
+        );
+      }
+    }
+
     if (plan.terminal) {
-      // Terminal CAS: pending → resolved, stamping fingerprint + disposition.
+      // Terminal CAS: pending → resolved, stamping fingerprint + disposition + the
+      // DECIDING ACTOR. `resolved_by` has existed (and been read) since #1796 and
+      // was never written: a resolved gate carried no decider of record at all.
       const casRows = await tx
         .update(artifactReviewGates)
         .set({
           status: "resolved",
           disposition: plan.disposition,
           fingerprint: plan.fingerprint,
+          resolvedBy: plan.decidedBy ?? null,
           resolvedAt: sql`now()`,
         })
         .where(

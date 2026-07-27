@@ -623,6 +623,9 @@ export const lifecyclePolicyRules = cinatraSchema.table("lifecycle_policy_rules"
   destinationClass:  text("destination_class").notNull(), // none | external_publish | visibility_promotion | pipeline_handoff
   originKind:        text("origin_kind").notNull(),       // agent_produced | user_provided | intermediate
   bound:             text("bound").notNull(),             // required | forbidden
+  // INERT (cinatra#2047, row-3 re-scope): nothing reads or writes this — a policy bound controls
+  // whether a review is required, never who may decide it. Declared only so the table definition
+  // still mirrors the shipped DDL; dropping the physical column would need a migration.
   selfApprovalOptIn: boolean("self_approval_opt_in").notNull().default(false),
   createdAt:         timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt:         timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

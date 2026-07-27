@@ -45,17 +45,11 @@ const CREATION_AGENTS_WITH_INLINE_METHODOLOGY = new Set([
 /**
  * Deterministic exclusions from the broad no-skillIds scan:
  *   - `lint-policy-agent` — deterministic scanner; no LLM dispatch.
- *   - `auditor-agent` — meta-agent that AUDITS skills; `skillIds` is its
- *     legitimate data payload (input/output field name, DataFlowEdge thread),
- *     NOT methodology-prose embedding. The catalog ownership rule is
- *     preserved: this agent
- *     receives skill ids AS DATA from the catalog; it does not embed
- *     methodology into OAS.
+ *   (The `auditor-agent` exclusion was REMOVED with the cinatra#1796 /
+ *   #2047-row-8 retirement — the package no longer ships, so the scan has
+ *   nothing to skip.)
  */
-const SKIP_NO_SKILL_IDS_SCAN = new Set([
-  "lint-policy-agent",
-  "auditor-agent",
-]);
+const SKIP_NO_SKILL_IDS_SCAN = new Set(["lint-policy-agent"]);
 
 type OasEntry = { dir: string; oasPath: string; oas: Record<string, unknown> };
 

@@ -301,6 +301,43 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
           df -h /
+      - name: Enlarge swap + record the memory baseline (real-run only)
+        if: needs.changed-paths.outputs.run_uat == 'true'
+        # DISK was never the constraint on the silent-stall runs (>100 GB free
+        # after the reclaim above) — MEMORY was. This job co-hosts the docker
+        # WordPress + Drupal + nango + wayflow stack, the Postgres/Redis service
+        # containers, a Next dev server and a Playwright Chromium on one
+        # 4-vCPU / 16-GB runner. When it runs out of headroom the box stops
+        # making progress ENTIRELY: the suite emits nothing further, no
+        # Playwright per-test timeout can fire (its own process is wedged), and
+        # the job is torn down with no diagnosis.
+        #
+        # The hosted image ships a 4 GB swapfile. Growing it to 16 GB on the
+        # (plentiful) reclaimed disk turns that cliff into a slowdown the suite
+        # can still finish and report through. `swapon --show` + `free -m` are
+        # recorded so the next investigation starts with the baseline instead of
+        # inferring it from silence.
+        run: |
+          set -euo pipefail
+          # ADDITIVE: a dedicated swapfile ALONGSIDE whatever the image already
+          # has. Deliberately no `swapoff -a` — disabling every existing swap
+          # device first would leave the box with LESS headroom during the
+          # window it takes to build the new file, and would mask a real failure
+          # to detach an in-use device.
+          if swapon --show=NAME --noheadings | grep -qx /mnt/cinatra-uat-swap; then
+            sudo swapoff /mnt/cinatra-uat-swap
+          fi
+          sudo rm -f /mnt/cinatra-uat-swap
+          sudo fallocate -l 16G /mnt/cinatra-uat-swap
+          sudo chmod 600 /mnt/cinatra-uat-swap
+          sudo mkswap /mnt/cinatra-uat-swap
+          sudo swapon /mnt/cinatra-uat-swap
+          # Prefer reclaiming page cache over swapping; swap here is the cliff
+          # guard of last resort, not a routine tier.
+          sudo sysctl -w vm.swappiness=10
+          swapon --show
+          free -m
+          nproc
       - name: Checkout
         if: needs.changed-paths.outputs.run_uat == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -442,6 +479,31 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
           df -h /
+      - name: Enlarge swap + record the memory baseline
+        # Identical to the uat-gate job's step — see the rationale there: the
+        # silent mid-suite stalls were a MEMORY cliff, not a disk one, and the
+        # nightly runs the same full stack on the same runner class.
+        run: |
+          set -euo pipefail
+          # ADDITIVE: a dedicated swapfile ALONGSIDE whatever the image already
+          # has. Deliberately no `swapoff -a` — disabling every existing swap
+          # device first would leave the box with LESS headroom during the
+          # window it takes to build the new file, and would mask a real failure
+          # to detach an in-use device.
+          if swapon --show=NAME --noheadings | grep -qx /mnt/cinatra-uat-swap; then
+            sudo swapoff /mnt/cinatra-uat-swap
+          fi
+          sudo rm -f /mnt/cinatra-uat-swap
+          sudo fallocate -l 16G /mnt/cinatra-uat-swap
+          sudo chmod 600 /mnt/cinatra-uat-swap
+          sudo mkswap /mnt/cinatra-uat-swap
+          sudo swapon /mnt/cinatra-uat-swap
+          # Prefer reclaiming page cache over swapping; swap here is the cliff
+          # guard of last resort, not a routine tier.
+          sudo sysctl -w vm.swappiness=10
+          swapon --show
+          free -m
+          nproc
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Derive BETTER_AUTH_SECRET (throwaway, per-run)
         run: echo "BETTER_AUTH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"

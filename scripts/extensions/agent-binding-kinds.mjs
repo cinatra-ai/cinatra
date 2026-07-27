@@ -22,7 +22,6 @@
 // `allowJs`, and tests).
 
 export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze([
-  "auditor-review",
   "blog-idea-selection",
   "campaign-recipients-review",
   "context-selector",
@@ -33,7 +32,6 @@ export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze([
   "gmail-sender",
   "linkedin-draft-review",
   "list-picker",
-  "reviewer-output",
   "scrape-schema-review",
   "send-confirmation",
   "test-delivery-input",
