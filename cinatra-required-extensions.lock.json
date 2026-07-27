@@ -5,9 +5,9 @@
     {
       "packageName": "@cinatra-ai/assistant-skills",
       "repo": "cinatra-ai/assistant-skills",
-      "resolvedSha": "92fb85a67733d419632c2dc160413b54ffedc434",
+      "resolvedSha": "fef2b294d5b12a674a1df6f9dedb2dd007fcc3fa",
       "packageVersion": "0.1.2",
-      "treeSha256": "b758d70f954718d39097490bd10107a32ebcdcdb1f8a921e5c0471120412e732"
+      "treeSha256": "07bb52ced69eb81d97a094692df0860e19d2e265b7845b7593f2c9a58ef0e186"
     },
     {
       "packageName": "@cinatra-ai/audio-artifact",
