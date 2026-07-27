@@ -90,6 +90,18 @@ export async function materializeBlogPostBodyArtifact(
     skipFallbackClassification: true,
   });
 
+  // Post-Tx CLASSIC assertion. On an org that does NOT hold the pack's claim
+  // this is what stamps the blog-post identity onto the fresh row.
+  //
+  // On an org that DOES hold it (cinatra#2047 D-8), `createSemanticArtifact`
+  // has already composed the binding reconcile into its Tx2 and committed a
+  // BINDING-basis assertion for the very same extension — the claim winner for
+  // the declared type. This call then correctly returns
+  // `blockedByPrecedence` and writes nothing: a classic never displaces a
+  // binding (epic #1424), and the identity the caller wants is already on the
+  // row with strictly higher authority. Before the store-level fix the INSERT
+  // fired anyway and collided with `sa_active_unique_idx`, throwing AFTER the
+  // artifact had committed — an orphaned row on every claim-holding org.
   assertSemanticType({
     orgId,
     artifactId: result.artifactId,
