@@ -184,9 +184,12 @@ function describeBlockers(blockers: OrganizationDeleteBlockers): string {
   if (blockers.teams > 0) parts.push(`${blockers.teams} team(s)`);
   if (blockers.activeProjects > 0)
     parts.push(`${blockers.activeProjects} active project(s)`);
-  if (blockers.connectors > 0) parts.push(`${blockers.connectors} connector(s)`);
+  if (blockers.installedExtensions > 0)
+    parts.push(`${blockers.installedExtensions} installed extension(s)`);
   if (blockers.dashboards > 0) parts.push(`${blockers.dashboards} dashboard(s)`);
   if (blockers.agents > 0) parts.push(`${blockers.agents} agent(s)`);
+  if (blockers.liveAgentRuns > 0)
+    parts.push(`${blockers.liveAgentRuns} running agent(s)`);
   return parts.join(", ");
 }
 
@@ -265,6 +268,16 @@ export async function deleteOrganizationAction(
         return {
           ok: false,
           error: "Organizations cannot be deleted in single-organization mode.",
+        };
+      }
+      if (result.reason === "not-archived") {
+        // cinatra#1939 (Decision 1): reachable only once the archive activation
+        // gate is on (S6). The archive-first control lands on /settings with
+        // the same activation.
+        return {
+          ok: false,
+          error:
+            "Archive this organization first — deletion is only available for archived organizations.",
         };
       }
       if (result.reason === "denied") {

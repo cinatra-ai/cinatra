@@ -58,6 +58,7 @@ export {
   type GuardOrgMutationRequest,
   OrgWriteRefusedError,
   guardOrgMutation,
+  guardOrgLifecycleMutation,
 } from "./guard";
 export {
   type QueryInput,
