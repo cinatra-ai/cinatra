@@ -20,18 +20,35 @@ import "server-only";
 // that genuinely declares nothing (an UNKNOWN declaration refuses; an absent
 // one is L0).
 //
-// COST: the O(1) bundled-manifest lookup covers every first-party / dev agent.
-// The materialized-store scan only runs for a template whose packageName is
-// NOT in the bundled manifest (a marketplace-installed agent), and is loaded
-// through a dynamic import so the bundled path never pulls the store IO module
-// onto the hot bridge path.
+// ONE definition of "pinned". The pin is resolved through the MERGED
+// `resolvePinnedRunSnapshot` (cinatra#1040 S5/S7, packages/agents/src/execution.ts)
+// — the same classifier the execution worker uses — never a second rule:
+//   - REQUIRED pin (`versionId` AND `packageVersion`): the exact
+//     `agent_template_versions` snapshot, binding-verified; unreachable ⇒ the
+//     classifier THROWS and this run refuses (the worker fails such a run
+//     closed for the same reason, so the seam adds no new blast radius);
+//   - `packageVersion` only: best-effort semver load, live fallback on a miss;
+//   - `versionId` ONLY: the INERT pin every non-A2A run producer writes (it
+//     points at the legacy `agent_versions` table, not at an immutable
+//     `agent_template_versions` snapshot). It is NOT a pin — treating it as one
+//     would make every ordinary run resolve against a row that does not exist.
+//
+// COST. The O(1) bundled-manifest lookup covers every first-party / dev agent.
+// The materialized-store scan runs only for a template whose packageName is NOT
+// bundled (a marketplace-installed agent), behind a dynamic import. The pin read
+// happens only for a run that actually carries a `packageVersion` (A2A version
+// pinning) — an ordinary run adds ZERO database work to the hot bridge path —
+// and is skipped entirely when a packaged manifest already declares the recipe.
 
 import {
+  PinnedRunSnapshotUnreachableError,
   readAgentTemplateVersionById,
-  type AgentTemplateVersionSnapshot,
+  readAgentTemplateVersionBySemver,
+  resolvePinnedRunSnapshot,
 } from "@cinatra-ai/agents";
 import {
   canonicalExecutionEnvironmentJson,
+  isEmptyExecutionEnvironment,
   parseExecutionEnvironment,
 } from "@cinatra-ai/sdk-extensions";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
@@ -40,9 +57,9 @@ export type RunEnvironmentSources = {
   /** RAW packaged-manifest claim, or null when the agent is not packaged / the
    *  package declares none. */
   packagedManifestEnvironment: unknown;
-  /** The immutable snapshot for a PINNED run, or null when the run is
-   *  unpinned (the resolver treats a present snapshot as pin-exclusive). */
-  pinnedSnapshot: Pick<AgentTemplateVersionSnapshot, "executionEnvironment"> | null;
+  /** The resolved PIN's recipe, or null when the run carries no resolved pin
+   *  (the resolver treats a present value as pin-exclusive). */
+  pinnedSnapshot: { executionEnvironment?: unknown } | null;
   /** Set ONLY when a source could not be read at all — the seam refuses. */
   declarationUnreadable: { detail: string } | null;
 };
@@ -50,20 +67,51 @@ export type RunEnvironmentSources = {
 type ManifestClaim = { environment: unknown; readFailed: false } | { readFailed: true };
 
 /**
+ * Identity of a declaration for AGREEMENT purposes. An ABSENT claim and a claim
+ * that parses to the EMPTY spec both mean "declares nothing" and must compare
+ * EQUAL — fingerprinting them apart would turn a package whose retained digests
+ * merely differ between `null` and `{}` into a refused run.
+ */
+function declarationFingerprint(raw: unknown): string {
+  if (raw == null) return "{}";
+  const parsed = parseExecutionEnvironment(raw);
+  if (!parsed.ok) return "invalid";
+  return canonicalExecutionEnvironmentJson(parsed.spec);
+}
+
+/** True when a raw claim carries an ACTUAL recipe (not absent, not empty). */
+function declaresSomething(raw: unknown): boolean {
+  if (raw == null) return false;
+  const parsed = parseExecutionEnvironment(raw);
+  // An INVALID declaration is a declaration — it must reach the resolver so the
+  // matrix can refuse it, never be treated as "nothing declared".
+  if (!parsed.ok) return true;
+  return !isEmptyExecutionEnvironment(parsed.spec);
+}
+
+/**
  * The RAW `cinatra.execution.environment` claim for a package.
  *
- * Fail-closed on a genuine READ failure (the store scan threw, or several
- * materialized digests of the same package DISAGREE about the recipe — picking
- * an arbitrary one would mount a recipe that may not be the reviewed one).
+ * Bundled manifest first (the build-time bundle is what a first-party/dev agent
+ * actually loads from), then the materialized runtime store — the same order,
+ * and the same fail-closed rules, as cinatra#1708 slice B's config-surface twin
+ * `readManifestEnvironmentClaim` (src/lib/execution/agent-execution-config-load.ts),
+ * so the surface that SHOWS a recipe and the seam that MOUNTS it can never
+ * disagree about the same agent.
  *
- * DELIBERATELY NOT fail-closed on "the scan found no record for this package".
- * cinatra#1708 slice B's config-surface twin (`readManifestEnvironmentClaim`)
- * does treat that as unreadable, because it holds the installed-extension
- * registry and is deciding EDIT RIGHTS on one screen. The run seam holds no
- * such registry and decides whether EVERY run of that agent proceeds, so
- * refusing on a merely-absent store record would take a blast radius the seam
- * must not take. A package that is genuinely installed but unreadable is
- * covered by the throw arm.
+ * Deliberately not a call into that twin: it statically imports
+ * `@cinatra-ai/execution-plane/environment/promotion` for the config surface's
+ * promotion feed, and the bridge route must not pull the execution-plane graph
+ * onto its hot path (the whole reason `register-execution-environment-service`
+ * is a DI slot). The two differ in exactly one policy, called out below: what a
+ * MISSING store record means.
+ *
+ * Fail-closed: the store scan threw, several materialized digests DISAGREE about
+ * the recipe (picking an arbitrary one would mount a recipe that may not be the
+ * reviewed one), or a PACKAGED agent has no readable record anywhere. That last
+ * arm matters — `discoverStoreRecordsV2` SKIPS unreadable/corrupt manifests
+ * rather than throwing, so "no record for a package this template says it ships
+ * as" means the declaration is UNKNOWN, not absent.
  */
 async function readPackagedManifestClaim(packageName: string): Promise<ManifestClaim> {
   const bundled = STATIC_EXTENSION_MANIFEST[packageName];
@@ -78,26 +126,55 @@ async function readPackagedManifestClaim(packageName: string): Promise<ManifestC
     const records = (
       await discoverStoreRecordsV2(resolveExtensionDataRoot(), realStoreFs)
     ).filter((r) => r.packageName === packageName);
-    if (records.length === 0) return { environment: null, readFailed: false };
-
-    // Several materialized digests for one package name: accept a declaration
-    // only when they AGREE. Fingerprint through the SAME fail-closed parser the
-    // builder uses, so two byte-different-but-equivalent declarations agree and
-    // an unparseable one is not silently equated with "none".
+    if (records.length === 0) {
+      // No record for this package. That is UNKNOWN only if the package is
+      // genuinely INSTALLED here — `discoverStoreRecordsV2` also legitimately
+      // yields nothing for a deployment with no data volume at all, and
+      // refusing every run of every non-bundled template on such a host would
+      // be a blast radius the run seam must not take (it decides whether EVERY
+      // run of an agent proceeds). So ask the canonical install registry, which
+      // is the authority on "is this package installed on this instance":
+      //   - an install row exists ⇒ the manifest should have been materialized
+      //     and readable; it is not ⇒ UNKNOWN ⇒ refuse (fail-closed);
+      //   - no install row ⇒ this template's packageName does not name an
+      //     installed extension here ⇒ no packaged declaration exists to miss.
+      // One indexed read, and ONLY in this already-degraded branch (a full
+      // store scan just came back empty) — never on the healthy hot path.
+      let installed = false;
+      try {
+        const { readInstalledExtensionsByPackageName } = await import(
+          "@cinatra-ai/extensions/canonical-store"
+        );
+        installed = (await readInstalledExtensionsByPackageName(packageName)).length > 0;
+      } catch {
+        // The registry itself is unreadable — that IS an unknown state.
+        installed = true;
+      }
+      if (!installed) return { environment: null, readFailed: false };
+      // The package name is derived from stored template rows: pass it as an
+      // ARGUMENT, never interpolated into the format string (CodeQL
+      // js/tainted-format-string).
+      console.warn(
+        "[run-environment-sources] INSTALLED packaged agent has no readable manifest " +
+          "(neither bundled nor materialized) — its declared environment is UNKNOWN and " +
+          "the run refuses (fail-closed):",
+        packageName,
+      );
+      return { readFailed: true };
+    }
     const fingerprints = new Set(
-      records.map((r) => {
-        const raw = r.executionEnvironment ?? null;
-        if (raw == null) return "null";
-        const parsed = parseExecutionEnvironment(raw);
-        return parsed.ok ? canonicalExecutionEnvironmentJson(parsed.spec) : "invalid";
-      }),
+      records.map((r) => declarationFingerprint(r.executionEnvironment ?? null)),
     );
-    if (fingerprints.size > 1) return { readFailed: true };
+    if (fingerprints.size > 1) {
+      console.warn(
+        "[run-environment-sources] materialized digests DISAGREE about the declared " +
+          "environment — refusing rather than mounting an arbitrary one:",
+        packageName,
+      );
+      return { readFailed: true };
+    }
     return { environment: records[0].executionEnvironment ?? null, readFailed: false };
   } catch (err) {
-    // The package name is derived from stored template rows: pass it as an
-    // ARGUMENT, never interpolated into the format string (CodeQL
-    // js/tainted-format-string).
     console.warn(
       "[run-environment-sources] extension store read failed — the declared " +
         "environment is UNKNOWN and the run refuses (fail-closed):",
@@ -117,76 +194,85 @@ async function readPackagedManifestClaim(packageName: string): Promise<ManifestC
  * the whole point of the `undeclared → L0 unchanged` arm).
  */
 export async function resolveRunEnvironmentSources(input: {
-  /** The run's `versionId` — non-null means the run is PINNED to that snapshot. */
+  /** The run's template id — the pin's binding check verifies against it. */
+  templateId: string;
+  /** The run's `versionId` (the exact snapshot id of a REQUIRED pin). */
   versionId: string | null | undefined;
+  /** The run's `packageVersion` (the resolved semver of an A2A version pin). */
+  packageVersion: string | null | undefined;
   /** The template's `packageName` — non-null means the agent ships as a package. */
   packageName: string | null | undefined;
   /** The live template row's declared environment (the config source). */
   liveTemplateEnvironment: unknown;
 }): Promise<RunEnvironmentSources> {
   let packagedManifestEnvironment: unknown = null;
-  let manifestUnreadable = false;
   if (typeof input.packageName === "string" && input.packageName.length > 0) {
     const claim = await readPackagedManifestClaim(input.packageName);
-    if (claim.readFailed) manifestUnreadable = true;
-    else packagedManifestEnvironment = claim.environment;
-  }
-  if (manifestUnreadable) {
-    return {
-      packagedManifestEnvironment: null,
-      pinnedSnapshot: null,
-      declarationUnreadable: {
-        detail:
-          "the agent's package manifest could not be read, so whether it declares an " +
-          "execution environment is UNKNOWN — refusing rather than running the agent " +
-          "without a recipe it may have declared (fail-closed)",
-      },
-    };
-  }
-
-  let pinnedSnapshot: Pick<AgentTemplateVersionSnapshot, "executionEnvironment"> | null =
-    null;
-  let pinUnreadable = false;
-  if (typeof input.versionId === "string" && input.versionId.length > 0) {
-    try {
-      const version = await readAgentTemplateVersionById(input.versionId);
-      if (version) pinnedSnapshot = { executionEnvironment: version.snapshot.executionEnvironment };
-      else pinUnreadable = true;
-    } catch (err) {
-      console.warn(
-        "[run-environment-sources] pinned version snapshot read failed:",
-        err instanceof Error ? err.message : String(err),
-      );
-      pinUnreadable = true;
+    if (claim.readFailed) {
+      return {
+        packagedManifestEnvironment: null,
+        pinnedSnapshot: null,
+        declarationUnreadable: {
+          detail:
+            "the agent's package manifest could not be read, so whether it declares an " +
+            "execution environment is UNKNOWN — refusing rather than running the agent " +
+            "without a recipe it may have declared (fail-closed)",
+        },
+      };
     }
+    packagedManifestEnvironment = claim.environment;
   }
 
-  if (pinUnreadable) {
-    // The pin cannot be honored. That only CHANGES the outcome when some other
-    // source shows this agent's lineage declares an environment at all:
-    //  - a packaged manifest claim is authoritative over the pin anyway (the
-    //    manifest is versioned by the installed package, which the agent-
-    //    template pin does not name) — the resolution is unaffected;
-    //  - a live template declaration means the pinned version PROBABLY declared
-    //    one too, and falling back to the live row would be exactly the pin
-    //    bypass this fix closes → refuse;
-    //  - nothing declared anywhere ⇒ no downgrade is possible ⇒ L0, byte-
-    //    identical to today (a purged snapshot must not start 409-ing every
-    //    env-less run).
-    const manifestDeclares = packagedManifestEnvironment != null;
-    const liveDeclares = input.liveTemplateEnvironment != null;
-    if (!manifestDeclares && liveDeclares) {
+  // A non-empty packaged declaration is authoritative (epic D8 — it is reviewed
+  // and locked through the extension review path and versioned by the INSTALLED
+  // PACKAGE, which the agent-template pin does not name), so the pin read is
+  // pure cost at that point. Skip it.
+  if (declaresSomething(packagedManifestEnvironment)) {
+    return { packagedManifestEnvironment, pinnedSnapshot: null, declarationUnreadable: null };
+  }
+
+  let pinnedSnapshot: { executionEnvironment?: unknown } | null = null;
+  try {
+    const pinned = await resolvePinnedRunSnapshot(
+      {
+        templateId: input.templateId,
+        packageVersion: input.packageVersion ?? null,
+        versionId: input.versionId ?? null,
+      },
+      { readAgentTemplateVersionById, readAgentTemplateVersionBySemver },
+    );
+    // `null` = no resolved pin (no pin, an inert versionId-only pin, or a
+    // best-effort semver miss) → the live template config applies, unchanged.
+    if (pinned) pinnedSnapshot = { executionEnvironment: pinned.executionEnvironment ?? null };
+  } catch (err) {
+    if (err instanceof PinnedRunSnapshotUnreachableError) {
+      // A REQUIRED pin whose immutable snapshot cannot be served. The execution
+      // worker already fails such a run closed for exactly this reason
+      // (cinatra#1040 S7) — the seam refuses instead of resolving the
+      // environment against the live row, which would be the pin bypass this
+      // fix exists to close.
       return {
         packagedManifestEnvironment,
         pinnedSnapshot: null,
         declarationUnreadable: {
-          detail:
-            "this run is pinned to an agent version whose immutable snapshot could not " +
-            "be read, while the live agent declares an execution environment — refusing " +
-            "rather than swapping the live recipe under the pin (fail-closed)",
+          detail: `${err.message} (the run's declared execution environment is therefore UNKNOWN)`,
         },
       };
     }
+    console.warn(
+      "[run-environment-sources] pinned version snapshot read failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return {
+      packagedManifestEnvironment,
+      pinnedSnapshot: null,
+      declarationUnreadable: {
+        detail:
+          "this run's pinned agent version could not be read, so its declared execution " +
+          "environment is UNKNOWN — refusing rather than resolving the recipe against the " +
+          "live agent (fail-closed)",
+      },
+    };
   }
 
   return { packagedManifestEnvironment, pinnedSnapshot, declarationUnreadable: null };

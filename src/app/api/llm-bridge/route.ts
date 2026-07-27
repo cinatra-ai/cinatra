@@ -1601,7 +1601,9 @@ export async function POST(req: Request): Promise<Response> {
           // and version pinning was bypassed on this seam. The reader resolves
           // all three (and reports a source it could not READ, which refuses).
           ...(await resolveRunEnvironmentSources({
+            templateId: runForPorts.templateId,
             versionId: runForPorts.versionId,
+            packageVersion: runForPorts.packageVersion,
             packageName: envTemplate?.packageName,
             liveTemplateEnvironment: envTemplate?.executionEnvironment,
           })),

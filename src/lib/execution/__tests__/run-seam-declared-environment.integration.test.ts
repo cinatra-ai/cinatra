@@ -115,7 +115,9 @@ describe.skipIf(!hasDb)("run seam — packaged-manifest declaration (REAL extens
   it("declared + resolvable → BOUND to the manifest's recipe (was: silent L0)", async () => {
     registerReady();
     const sources = await resolveRunEnvironmentSources({
+      templateId: "tpl-unpinned",
       versionId: null,
+      packageVersion: null,
       packageName: PACKAGE_NAME,
       // The live template row declares nothing — exactly the state the bridge
       // was in, where this run fell through to L0.
@@ -135,7 +137,9 @@ describe.skipIf(!hasDb)("run seam — packaged-manifest declaration (REAL extens
   it("declared + ABSENT (the layer cannot be resolved) → REFUSED, never L0", async () => {
     registerReady(null);
     const sources = await resolveRunEnvironmentSources({
+      templateId: "tpl-unpinned",
       versionId: null,
+      packageVersion: null,
       packageName: PACKAGE_NAME,
       liveTemplateEnvironment: undefined,
     });
@@ -152,7 +156,9 @@ describe.skipIf(!hasDb)("run seam — packaged-manifest declaration (REAL extens
   it("declared + the plane not ready → REFUSED (today's instances)", async () => {
     register("disabled");
     const sources = await resolveRunEnvironmentSources({
+      templateId: "tpl-unpinned",
       versionId: null,
+      packageVersion: null,
       packageName: PACKAGE_NAME,
       liveTemplateEnvironment: undefined,
     });
@@ -169,7 +175,9 @@ describe.skipIf(!hasDb)("run seam — packaged-manifest declaration (REAL extens
   it("UNDECLARED packaged agent → L0, unchanged", async () => {
     registerReady();
     const sources = await resolveRunEnvironmentSources({
+      templateId: "tpl-unpinned",
       versionId: null,
+      packageVersion: null,
       packageName: BARE_PACKAGE_NAME,
       liveTemplateEnvironment: undefined,
     });
@@ -185,8 +193,19 @@ describe.skipIf(!hasDb)("run seam — packaged-manifest declaration (REAL extens
   });
 });
 
+
 describe.skipIf(!hasDb)("run seam — pinned version snapshot (REAL Postgres)", () => {
-  async function seedPinnedTemplate(): Promise<{ templateId: string; v1: string; v2: string }> {
+  /**
+   * Seed a real template plus two real immutable `agent_template_versions`
+   * snapshots. A REQUIRED pin is `(versionId, packageVersion)` — the exact
+   * snapshot id AND its semver — per the merged classifier
+   * (`resolvePinnedRunSnapshot`, cinatra#1040 S5/S7).
+   */
+  async function seedPinnedTemplate(): Promise<{
+    templateId: string;
+    v1: { id: string; semver: string };
+    v2: { id: string; semver: string };
+  }> {
     const { createAgentTemplate, createAgentTemplateVersion } = await import(
       "@cinatra-ai/agents/store"
     );
@@ -231,15 +250,21 @@ describe.skipIf(!hasDb)("run seam — pinned version snapshot (REAL Postgres)", 
       snapshot: { ...base, executionEnvironment: { pip: ["numpy"] } },
       createdBy: null,
     });
-    return { templateId, v1: v1.id, v2: v2.id };
+    return {
+      templateId,
+      v1: { id: v1.id, semver: v1.semver },
+      v2: { id: v2.id, semver: v2.semver },
+    };
   }
 
-  it("a PINNED run mounts its OWN snapshot's recipe, not the live drift", async () => {
+  it("a REQUIRED-pin run mounts its OWN snapshot's recipe, not the live drift", async () => {
     registerReady();
-    const { v1 } = await seedPinnedTemplate();
-    // The live agent has since moved on to `numpy` (v2 is latest).
+    const { templateId, v1 } = await seedPinnedTemplate();
+    // The live agent has since moved on to `numpy` (v2 is the latest version).
     const sources = await resolveRunEnvironmentSources({
-      versionId: v1,
+      templateId,
+      versionId: v1.id,
+      packageVersion: v1.semver,
       packageName: null,
       liveTemplateEnvironment: { pip: ["numpy"] },
     });
@@ -250,20 +275,22 @@ describe.skipIf(!hasDb)("run seam — pinned version snapshot (REAL Postgres)", 
       ...sources,
       liveTemplateEnvironment: { pip: ["numpy"] },
       orgId: "org-lane1705",
-      holder: { templateId: "t" },
+      holder: { templateId },
     });
     expect(binding.kind).toBe("mount");
     expect(mountCalls).toHaveLength(1);
-    // Version pinning honored on the seam — the whole point of the second half
-    // of this fix (epic #1705 AC9).
+    // Version pinning honored on the seam — the second half of this fix
+    // (epic #1705's lifecycle "Versions" clause / AC9).
     expect(mountCalls[0].spec).toEqual({ pip: ["pandas==2.0.0"] });
   });
 
-  it("the LATEST version's recipe is what an unpinned-to-latest run mounts", async () => {
+  it("a run pinned to the LATEST version mounts that version's recipe", async () => {
     registerReady();
-    const { v2 } = await seedPinnedTemplate();
+    const { templateId, v2 } = await seedPinnedTemplate();
     const sources = await resolveRunEnvironmentSources({
-      versionId: v2,
+      templateId,
+      versionId: v2.id,
+      packageVersion: v2.semver,
       packageName: null,
       liveTemplateEnvironment: { pip: ["pandas==2.0.0"] },
     });
@@ -271,13 +298,127 @@ describe.skipIf(!hasDb)("run seam — pinned version snapshot (REAL Postgres)", 
       ...sources,
       liveTemplateEnvironment: { pip: ["pandas==2.0.0"] },
       orgId: "org-lane1705",
-      holder: { templateId: "t" },
+      holder: { templateId },
     });
     expect(binding.kind).toBe("mount");
     expect(mountCalls[0].spec).toEqual({ pip: ["numpy"] });
   });
 
-  it("a pinned run whose snapshot declares NOTHING stays L0 (no live fallback)", async () => {
+  it("a BEST-EFFORT semver pin (packageVersion only) resolves through the real store", async () => {
+    registerReady();
+    const { templateId, v1 } = await seedPinnedTemplate();
+    const sources = await resolveRunEnvironmentSources({
+      templateId,
+      versionId: null,
+      packageVersion: v1.semver,
+      packageName: null,
+      liveTemplateEnvironment: { pip: ["numpy"] },
+    });
+    const binding = await resolveRunExecutionBinding({
+      ...sources,
+      liveTemplateEnvironment: { pip: ["numpy"] },
+      orgId: "org-lane1705",
+      holder: { templateId },
+    });
+    expect(binding.kind).toBe("mount");
+    expect(mountCalls[0].spec).toEqual({ pip: ["pandas==2.0.0"] });
+  });
+
+  it("the INERT versionId-only pin every ordinary run carries is NOT a pin", async () => {
+    // This is the state EVERY non-A2A run is in (createAgentRunPendingInput,
+    // runFromRegistry, the workflow/project dispatch paths). Its versionId points
+    // at the legacy `agent_versions` table, so treating it as an
+    // `agent_template_versions` pin would make every ordinary run resolve against
+    // a row that does not exist.
+    registerReady();
+    const { templateId } = await seedPinnedTemplate();
+    const sources = await resolveRunEnvironmentSources({
+      templateId,
+      versionId: `agent-versions-row_${randomUUID()}`,
+      packageVersion: null,
+      packageName: null,
+      liveTemplateEnvironment: { pip: ["numpy"] },
+    });
+    expect(sources.pinnedSnapshot).toBeNull();
+    expect(sources.declarationUnreadable).toBeNull();
+    const binding = await resolveRunExecutionBinding({
+      ...sources,
+      liveTemplateEnvironment: { pip: ["numpy"] },
+      orgId: "org-lane1705",
+      holder: { templateId },
+    });
+    // The LIVE declaration governs, exactly as the merged classifier says.
+    expect(binding.kind).toBe("mount");
+    expect(mountCalls[0].spec).toEqual({ pip: ["numpy"] });
+  });
+
+  it("a run with no pin and nothing declared stays L0 (byte-identical to today)", async () => {
+    registerReady();
+    const { templateId } = await seedPinnedTemplate();
+    const sources = await resolveRunEnvironmentSources({
+      templateId,
+      versionId: null,
+      packageVersion: null,
+      packageName: null,
+      liveTemplateEnvironment: undefined,
+    });
+    const binding = await resolveRunExecutionBinding({
+      ...sources,
+      liveTemplateEnvironment: undefined,
+      orgId: "org-lane1705",
+      holder: { templateId },
+    });
+    expect(binding).toEqual({ kind: "l0" });
+    expect(mountCalls).toHaveLength(0);
+  });
+
+  it("a REQUIRED pin whose snapshot is PURGED REFUSES rather than swapping the recipe", async () => {
+    registerReady();
+    const { templateId } = await seedPinnedTemplate();
+    const sources = await resolveRunEnvironmentSources({
+      templateId,
+      versionId: `v_${randomUUID()}`, // never inserted
+      packageVersion: "1.0.0",
+      packageName: null,
+      liveTemplateEnvironment: { pip: ["numpy"] },
+    });
+    const binding = await resolveRunExecutionBinding({
+      ...sources,
+      liveTemplateEnvironment: { pip: ["numpy"] },
+      orgId: "org-lane1705",
+      holder: { templateId },
+    });
+    expect(binding.kind).toBe("refuse");
+    expect(binding.kind === "refuse" && binding.auditReason).toBe(
+      "environment_declaration_unreadable",
+    );
+    expect(mountCalls).toHaveLength(0);
+  });
+
+  it("a REQUIRED pin bound to ANOTHER template's snapshot REFUSES", async () => {
+    registerReady();
+    const a = await seedPinnedTemplate();
+    const b = await seedPinnedTemplate();
+    const sources = await resolveRunEnvironmentSources({
+      templateId: a.templateId,
+      versionId: b.v1.id, // a real row — but template B's
+      packageVersion: b.v1.semver,
+      packageName: null,
+      liveTemplateEnvironment: { pip: ["numpy"] },
+    });
+    const binding = await resolveRunExecutionBinding({
+      ...sources,
+      liveTemplateEnvironment: { pip: ["numpy"] },
+      orgId: "org-lane1705",
+      holder: { templateId: a.templateId },
+    });
+    expect(binding.kind).toBe("refuse");
+    expect(binding.kind === "refuse" && binding.auditReason).toBe(
+      "environment_declaration_unreadable",
+    );
+  });
+
+  it("a REQUIRED pin whose snapshot declares NOTHING stays L0 (no live fallback)", async () => {
     registerReady();
     const { createAgentTemplate, createAgentTemplateVersion } = await import(
       "@cinatra-ai/agents/store"
@@ -314,7 +455,9 @@ describe.skipIf(!hasDb)("run seam — pinned version snapshot (REAL Postgres)", 
       createdBy: null,
     });
     const sources = await resolveRunEnvironmentSources({
+      templateId,
       versionId: v.id,
+      packageVersion: v.semver,
       packageName: null,
       liveTemplateEnvironment: { pip: ["numpy"] },
     });
@@ -322,53 +465,19 @@ describe.skipIf(!hasDb)("run seam — pinned version snapshot (REAL Postgres)", 
       ...sources,
       liveTemplateEnvironment: { pip: ["numpy"] },
       orgId: "org-lane1705",
-      holder: { templateId: "t" },
+      holder: { templateId },
     });
     expect(binding).toEqual({ kind: "l0" });
     expect(mountCalls).toHaveLength(0);
-  });
-
-  it("a PURGED pin + a live declaration REFUSES rather than swapping the recipe", async () => {
-    registerReady();
-    const sources = await resolveRunEnvironmentSources({
-      versionId: `v_${randomUUID()}`, // never inserted
-      packageName: null,
-      liveTemplateEnvironment: { pip: ["numpy"] },
-    });
-    const binding = await resolveRunExecutionBinding({
-      ...sources,
-      liveTemplateEnvironment: { pip: ["numpy"] },
-      orgId: "org-lane1705",
-      holder: { templateId: "t" },
-    });
-    expect(binding.kind).toBe("refuse");
-    expect(binding.kind === "refuse" && binding.auditReason).toBe(
-      "environment_declaration_unreadable",
-    );
-    expect(mountCalls).toHaveLength(0);
-  });
-
-  it("a PURGED pin with nothing declared anywhere stays L0 (bounded blast radius)", async () => {
-    registerReady();
-    const sources = await resolveRunEnvironmentSources({
-      versionId: `v_${randomUUID()}`,
-      packageName: null,
-      liveTemplateEnvironment: undefined,
-    });
-    const binding = await resolveRunExecutionBinding({
-      ...sources,
-      liveTemplateEnvironment: undefined,
-      orgId: "org-lane1705",
-      holder: { templateId: "t" },
-    });
-    expect(binding).toEqual({ kind: "l0" });
   });
 
   it("a packaged manifest OUTRANKS the pinned snapshot (epic D8 review authority)", async () => {
     registerReady();
-    const { v1 } = await seedPinnedTemplate();
+    const { templateId, v1 } = await seedPinnedTemplate();
     const sources = await resolveRunEnvironmentSources({
-      versionId: v1,
+      templateId,
+      versionId: v1.id,
+      packageVersion: v1.semver,
       packageName: PACKAGE_NAME,
       liveTemplateEnvironment: undefined,
     });
