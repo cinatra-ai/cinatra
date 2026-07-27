@@ -175,7 +175,7 @@ On expiry:
 | Gate | Behaviour |
 |---|---|
 | Optional | Lapses into a release: the gate auto-resolves and its held effect flows — a forgotten optional gate cannot pin an effect forever. The resolution carries a synthetic `expiry:<gateId>` fingerprint, so an auto-lapse is always distinguishable from a human decision (whose fingerprint is a content hash). |
-| Required | Stays pending and its effect stays blocked, and each maintenance pass logs a warning naming the gate: a required review that expired unactioned is an operational condition, never an automatic release. |
+| Required | Stays pending and its effect stays blocked. A required review that expired unactioned is an operational condition, never an automatic release: every such gate the pass picks up is logged by name, and because it is never resolved it is picked up again on subsequent passes. |
 
 A checkpointed run parked behind a gate is released when that gate resolves —
 by a human decision or by the optional-expiry auto-resolve. A park whose policy

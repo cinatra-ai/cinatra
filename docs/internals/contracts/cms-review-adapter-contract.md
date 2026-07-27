@@ -261,10 +261,11 @@ run.
 
 ## 9. The degradation contract
 
-Nothing in the render path may fail the staged write or the gate. Every failure
-resolves to a **named** reason rather than an exception, so the content review
-still works and the reviewer can be told what is missing. The reason set is
-closed — a new failure mode has to be named to ship:
+Nothing in the render path may fail the staged write or the gate — the capture
+step is awaited so its results are pinned with the snapshot, but its outcome
+never propagates as an error. The failure modes the pipeline models each resolve
+to a **named** reason instead of an exception, and the reason set is closed: a
+new modelled failure has to be named to ship.
 
 | Class | Reasons |
 |---|---|
@@ -273,13 +274,18 @@ closed — a new failure mode has to be named to ship:
 | Render | `sanitization-failed`, `renderer-unavailable`, `render-failed`, `capture-timeout` |
 | Composition | `no-proposed-fields`, `no-owned-regions`, `regions-unplaceable`, `composition-not-inert` |
 
-Each reason carries reviewer-facing copy (`captureDegradeCopy`). Where the
-degraded outcome is persisted it is stored with `status: "degraded"` and no
-representation — the record exists precisely so the gap can be stated rather than
-silently vanishing. Persistence is itself best-effort: a capture that exceeds its
-overall time budget, or whose degraded record cannot be written, yields the named
-outcome without a stored record. In every case the reason is named and the write
-path is unaffected.
+Each reason carries reviewer-facing copy (`captureDegradeCopy`). What the review
+surface reads is the **stored** degraded record: `status: "degraded"`, the named
+reason, and no representation — the record exists precisely so the gap can be
+stated rather than silently vanishing.
+
+Two honest limits on that record. A capture is bounded by a hard wall-clock
+ceiling, and the ceiling resolves the *result* (`capture-timeout`) without
+cancelling the work behind it, so a timed-out capture may still have written, or
+may still write, its own record. And an outcome whose record could not be
+written, or a failure raised outside the modelled classes, is logged rather than
+surfaced. An adapter should treat a present degraded record as authoritative and
+its absence as "no picture", not as "no attempt".
 
 **Decidability is preserved in every degraded case.** The decision binds to the
 snapshot revision, not to the picture: captures are context. An adapter with no
