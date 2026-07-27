@@ -42,3 +42,25 @@ Proven pre-existing by mounting the **previous** pins
 PR) in an identical container: **identical failure**. Both flows are exercised in
 production as inlined subflows of `email-outreach-agent`, which mounts cleanly.
 Recorded for the coordinator; out of scope for this teardown.
+
+## Skills-drift: the four declared-watch findings, reviewed
+
+The gate's watch surfaces include `@cinatra-ai/*` **packages**, which this PR's
+`package.json` / lock changes move — so it flagged four findings. Read against
+the pinned `@cinatra-ai/assistant-skills` snapshot `e9d5a7eae98b`:
+
+| Finding | Verdict |
+|---|---|
+| `chat-agent-authoring` ← `code-reviewer-agent`, `security-reviewer-agent` | not stale — both packages are RETAINED; the prose is accurate |
+| `blog-content` ← `blog-pipeline-agent` | not stale — zero retired-agent references; the flow's park is the same node at the same position |
+| `chat-campaign-creation` ← `email-outreach-agent` | not stale — zero retired-agent references; the flow keeps its own holds |
+| six skills ← `agent_run` (primitive) | not stale — `packages/agents/src/mcp/handlers.ts` is byte-unchanged; the only `agent_run`-matching file in the diff is a test whose illustrative package name was swapped |
+
+**One genuine staleness, in another repo (cannot be fixed here):**
+`chat-agent-authoring/SKILL.md:107` and
+`references/speed-and-lifecycle.md:23,25,61` still tell agents to compose
+`@cinatra-ai/reviewer-agent` / `@cinatra-ai/auditor-agent`. `assistant-skills` is
+a REQUIRED, prod-shipped extension, so that guidance ships and will now name two
+uninstallable agents. Needs its own assistant-skills PR + a required-lock pin
+bump. Already stale for `skill-recommender-agent` (retired earlier) — a
+pre-existing doc-drift class this retirement widens rather than creates.
