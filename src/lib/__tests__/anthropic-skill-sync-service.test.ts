@@ -72,6 +72,9 @@ type FakeBundle = {
   files: { path: string; digest: string; byteLength: number; mode: number; isRouter: boolean; bytes: Buffer }[];
 };
 const bundleHeads = new Map<string, FakeBundle>();
+const { lintRouterOneHopReferences } = await import(
+  "../../../scripts/audit/_lib/skill-packaging-verdict.mjs"
+);
 vi.mock("@/lib/skill-bundle-store", () => ({
   captureSkillBundleFromDisk: async (skillId: string, skillMdPath: string) => {
     const { readFileSync } = await import("node:fs");
@@ -103,6 +106,12 @@ vi.mock("@/lib/skill-bundle-store", () => ({
     if (!head) return null;
     return { revisionId: head.revisionId, skillId, bundleDigest: head.bundleDigest, files: head.files };
   },
+  // The REAL one-hop lint (cinatra#2089): the shared verdict's
+  // `lintRouterOneHopReferences` is pinned byte-for-behaviour to the store's
+  // `lintBundleRouterReferences` by the agreement test in
+  // scripts/audit/__tests__/skill-packaging-gate.test.mjs, so the fail-closed
+  // candidate refusal below is exercised against the actual rules — not a stub.
+  lintBundleRouterReferences: lintRouterOneHopReferences,
 }));
 
 vi.mock("@/lib/anthropic-skill-sync-dao", () => ({
@@ -117,6 +126,7 @@ const {
   deriveApiKeyFingerprint,
   deriveEnvironmentNamespace,
   buildSyncCandidates,
+  buildSyncCandidatesWithRefusals,
   captureSkillBundlesFromDisk,
   syncCatalogSkillsToAnthropic,
 } = await import("../anthropic-skill-sync-service");
@@ -304,6 +314,39 @@ describe("broad recommendable-pool sync", () => {
       expect(typeof c.bundleDigest).toBe("string");
       expect(c.bundleDigest.length).toBeGreaterThan(0);
     }
+  });
+
+  it("cinatra#2089 (S2): a stored bundle whose router DEAD-ENDS is REFUSED as an upload candidate, by name", async () => {
+    // S1 (#2088) computed the one-hop router lint as a DIAGNOSTIC and assigned
+    // its fail-closed enforcement to S2. The lint runs over the STORED bytes —
+    // the exact bytes the canonical zip is built from — so a router that points
+    // at a file the bundle does not ship never reaches the provider. The
+    // refusal is per-skill and NAMED: every other skill still syncs.
+    tmpRoot = mkdtempSync(nodePath.join(tmpdir(), "dangling-router-"));
+    const mk = (id: string, body: string) => {
+      const dir = nodePath.join(tmpRoot, id);
+      mkdirSync(dir, { recursive: true });
+      const p = nodePath.join(dir, "SKILL.md");
+      writeFileSync(p, body);
+      return p;
+    };
+    vi.mocked(skillsPkg.readSkillsCatalogSnapshot)
+      .mockReset()
+      .mockResolvedValue({
+        skills: [
+          { id: "broken", name: "Broken", sourcePath: mk("broken", "# broken\nRead [more](references/missing.md).") },
+          { id: "sound", name: "Sound", sourcePath: mk("sound", "# sound\nNo references at all.") },
+        ],
+      } as never);
+    vi.mocked(skillsPkg.getSkillAnthropicUploadFlag).mockReset().mockReturnValue(true as never);
+
+    await captureSkillBundlesFromDisk();
+    const { candidates, refusedForDanglingReferences } = await buildSyncCandidatesWithRefusals();
+
+    expect(candidates.map((c) => c.catalogSkillId)).toEqual(["sound"]);
+    expect(refusedForDanglingReferences).toEqual([
+      { catalogSkillId: "broken", missing: ["references/missing.md"] },
+    ]);
   });
 
   it("cinatra#2088: a DERIVED (extension) skill — which never gets a lifecycle revision — is still a byte-bound candidate", async () => {

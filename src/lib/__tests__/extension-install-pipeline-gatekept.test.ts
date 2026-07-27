@@ -99,6 +99,21 @@ vi.mock("@cinatra-ai/extensions/manifest-dependencies", () => ({
   // dual-read seam reports a declared-empty edge set.
   readManifestDependencyEdgesFromStore: vi.fn(async () => ({ edges: [], source: "canonical" })),
 }));
+// cinatra#2089 (S2): the pre-finalize skill-packaging gate reads the
+// materialized package.json off the store dir. These fixtures are fs-free with a
+// SYNTHETIC storeDir, so — exactly like the dependency-edge dual-read above —
+// only the READER is stubbed (to the conforming verdict); the real gate logic
+// still runs, so a regression that started refusing conforming packages would
+// still fail here.
+vi.mock("@/lib/skill-packaging-install-gate", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/skill-packaging-install-gate")>()),
+  readSkillPackagingSignalsFromStore: vi.fn(async () => ({
+    packageName: "@acme/fixture",
+    kind: "connector",
+    violations: [],
+    waived: [],
+  })),
+}));
 vi.mock("@/lib/extension-install-anchor", () => ({
   pickSingleActiveRow: h.pickSingleActiveRow,
 }));
