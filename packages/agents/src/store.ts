@@ -1,5 +1,6 @@
 import { eq, ne, desc, max, asc, and, or, ilike, sql, inArray, isNull, isNotNull, lt, type SQL } from "drizzle-orm";
 import type { AgentIOSpec } from "@cinatra-ai/objects";
+import { EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY } from "@cinatra-ai/sdk-extensions";
 import { listSavedNangoConnections } from "@/lib/nango-system";
 import { randomUUID } from "node:crypto";
 import semver from "semver";
@@ -214,6 +215,11 @@ export type AgentTemplateRecord = {
   // save time (see ./template-snapshot buildSnapshotFromTemplate) so pin runs
   // their environment from the pinned snapshot, never the live row.
   executionEnvironment?: unknown;
+  // Per-agent execution opt-out (epic #1705 D4), THREE-valued: null = inherit
+  // the instance/org posture, true = explicitly on, false = explicitly off.
+  // Optional in the type so legacy fixture objects stay valid;
+  // deserializeTemplate always populates it.
+  executionEnabled?: boolean | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -571,9 +577,35 @@ export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): Ag
     // origin JSONB deserialized as-is; null for legacy rows.
     // Callers that need visibility should read origin?.visibility ?? 'public' (grandfather clause).
     origin: (row.origin as ExtensionOrigin | null | undefined) ?? null,
+    // Per-agent execution config (cinatra#1708 slice B). The declared
+    // environment stays RAW on the record — every consumer runs it through the
+    // fail-closed `parseExecutionEnvironment` (a JSON.parse here would have to
+    // choose a failure mode for malformed stored text, and "silently no
+    // environment" is exactly the outcome the fail-closed doctrine forbids).
+    // Unparseable text therefore surfaces as an INVALID declaration downstream,
+    // never as "no environment".
+    executionEnvironment: parseStoredExecutionEnvironment(row.executionEnvironment),
+    executionEnabled: row.executionEnabled ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+/**
+ * JSON-as-text → the RAW declared value handed to `parseExecutionEnvironment`.
+ * `null`/empty column ⇒ `null` ("no declared environment"). Text that is not
+ * JSON at all cannot be "no environment" (that would silently drop a
+ * declaration the author made), so it resolves to the sdk leaf's
+ * present-but-malformed POISON marker, which the parser rejects with a precise
+ * error at consumption — the same doctrine the manifest claim resolver uses.
+ */
+function parseStoredExecutionEnvironment(stored: string | null | undefined): unknown {
+  if (stored == null || stored.trim() === "") return null;
+  try {
+    return JSON.parse(stored) as unknown;
+  } catch {
+    return { [EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY]: true };
+  }
 }
 
 // ---------------------------------------------------------------------------
