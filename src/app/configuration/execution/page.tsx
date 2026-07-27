@@ -118,7 +118,7 @@ export default async function ConfigurationExecutionPage({ searchParams }: Props
     <Main className="min-h-screen">
       <PageHeader
         title="Execution"
-        description="Where the sandbox that models run commands in lives, what it may reach on the network, and whether it is actually up."
+        description="Where the sandbox models run commands in lives, what it may reach on the network, and whether it is actually up."
         divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
@@ -289,7 +289,7 @@ async function HealthTab({ orgId }: { orgId: string | null }) {
             </span>
           </HealthRow>
           <HealthRow label="Last handshake">
-            <span className="text-sm text-muted-foreground">
+            <span className="block text-sm break-all text-muted-foreground">
               {liveness
                 ? liveness.detail
                 : status.handshake
@@ -390,7 +390,7 @@ async function HealthTab({ orgId }: { orgId: string | null }) {
 
 function HealthRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-baseline gap-4">
+    <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-4">
       <span className="w-40 shrink-0 text-sm font-medium">{label}</span>
       <div className="min-w-0 flex-1">{children}</div>
     </div>
