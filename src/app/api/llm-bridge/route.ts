@@ -87,6 +87,11 @@ import { verifyRunToken, RUN_TOKEN_HEADER } from "@/lib/agent-run-token";
 // executor (or refuses a declared env that cannot be honored — never a silent L0
 // downgrade). Reaches the execution service through a lightweight DI slot.
 import { resolveRunExecutionBinding } from "@/lib/execution/resolve-run-execution-binding";
+// …fed from ALL THREE declared-environment sources the epic names (packaged
+// manifest / pinned version snapshot / live template config). Supplying fewer
+// is a fail-open: an unsupplied source reads as "declared nothing" and the run
+// executes on L0.
+import { resolveRunEnvironmentSources } from "@/lib/execution/resolve-run-environment-sources";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import { emitUsageEvent } from "@cinatra-ai/metric-usage-api";
 import {
@@ -1588,6 +1593,18 @@ export async function POST(req: Request): Promise<Response> {
             ...(envTemplate?.packageName ? { packageName: envTemplate.packageName } : {}),
             ...(body.agent_spec_version ? { versionId: body.agent_spec_version } : {}),
           },
+          // epic #1705: the live template row is only ONE of the three sources a
+          // run's environment can be declared in. Supplying it alone let a
+          // PACKAGED agent's manifest declaration — and a pinned run's snapshot
+          // recipe — resolve ABSENT, so the run silently executed on L0 against
+          // the "a declared environment resolves or the run refuses" contract,
+          // and version pinning was bypassed on this seam. The reader resolves
+          // all three (and reports a source it could not READ, which refuses).
+          ...(await resolveRunEnvironmentSources({
+            versionId: runForPorts.versionId,
+            packageName: envTemplate?.packageName,
+            liveTemplateEnvironment: envTemplate?.executionEnvironment,
+          })),
         });
         if (runEnvBinding.kind === "refuse") {
           return NextResponse.json(

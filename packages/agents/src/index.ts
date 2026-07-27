@@ -382,6 +382,7 @@ export {
   normalizeProjectAgentEnvironment,
   resolveRunExecutionEnvironment,
   type ResolvedRunEnvironment,
+  type ResolvedRunEnvironmentSource,
 } from "./execution-environment";
 // Per-agent execution CONFIGURATION model (exec-plane S3 slice B,
 // cinatra#1708): authority resolution (manifest vs config), the fail-closed
