@@ -1,0 +1,50 @@
+   367	        reconcileTypeBindings({ scope, objectTypeId, generation, restart: true });
+   368	      }
+   369	      runPostgresQueriesSync({
+   370	        connectionString: conn(),
+
+codex
+A. **NOT MERGE-SAFE on the stated general claim.** The predicate is sound for the specific `createSemanticArtifact` path: artifact and representation IDs are host-generated, and the representation plus matching `create` audit row commit atomically in Tx2 ([ID allocation](<lane-worktree>/src/lib/artifacts/artifact-creation.ts:345), [atomic inserts](<lane-worktree>/src/lib/artifacts/artifact-creation.ts:999)). I found no caller-reachable MCP tool, route, extension DB port, migration, or trigger that can manufacture that row. The extension DB port is explicitly unwired ([extension-host-context.ts](<lane-worktree>/src/lib/extension-host-context.ts:926)).
+
+It is not intrinsically non-forgeable at the database boundary. `artifact_audit` has no FK, action constraint, exact-representation uniqueness, or append-only trigger ([drizzle-store.ts](<lane-worktree>/src/lib/drizzle-store.ts:1938)). The exported `writeArtifactAudit` accepts `action: "create"` without proving provenance, although it has no production `create` caller today ([artifact-retention.ts](<lane-worktree>/src/lib/artifacts/artifact-retention.ts:49)). Thus trusted server code, a migration, or direct DB SQL can mint the witness; ordinary objects/MCP callers cannot.
+
+More importantly, there are legitimate FILE writers this predicate misses:
+
+- `captureCmsContentSnapshot` writes an `objects` row and a `form='file'` representation atomically, but no `artifact_audit/create` row ([cms-content-snapshot-capture.ts](<lane-worktree>/src/lib/artifacts/cms-content-snapshot-capture.ts:165)).
+- `writePinnedPreviewCapture` does the same for PNG captures ([cms-preview-capture-store.ts](<lane-worktree>/src/lib/artifacts/cms-preview-capture-store.ts:195)).
+- Both types are registered `isArtifact` FILE types ([register-all-object-types.ts](<lane-worktree>/src/lib/register-all-object-types.ts:133)).
+- A legitimate later dedicated-claim activation enqueues a type-wide reconcile, and that sweep binds every matching existing row ([artifact-claim-store.ts](<lane-worktree>/src/lib/objects/artifact-claim-store.ts:271), [binding-reconcile-sweep.ts](<lane-worktree>/src/lib/objects/binding-reconcile-sweep.ts:303)). Those claimed FILE rows then fail this predicate despite host-authored bytes.
+
+Therefore this is merge-safe only if explicitly narrowed to “representations authored by `createSemanticArtifact`,” not “host-authored FILE representations” generally. As currently described, it has reachable legitimate false negatives.
+
+B. **MERGE-SAFE to scope out, with a tracked follow-up.** Leaving the context path unchanged introduces an observable cross-surface asymmetry, but not a new security or integrity hazard:
+
+- Serve/review now recognizes the audited direct representation.
+- `context-resolver` still classifies any bound row as claimed and selects only a supplied snapshot pin—never the audited direct representation ([context-resolver.ts](<lane-worktree>/src/lib/artifacts/context-resolver.ts:319)).
+- Snapshot capture only considers claims with `pinnable=true` and `snapshotPolicy='content'`, and serializes `objects.data`; for these FILE rows that is the metadata envelope, not the authored file bytes ([object-content-snapshot.ts](<lane-worktree>/src/lib/artifacts/object-content-snapshot.ts:790)).
+- Claims with another policy yield no candidate. Direct submission remains incoherent in both the main finalizer and its diagnostic probe ([context-selection-finalize.ts](<lane-worktree>/src/lib/artifacts/context-selection-finalize.ts:219), [probe](<lane-worktree>/src/lib/artifacts/context-selection-finalize.ts:518)).
+
+That behavior is fail-closed and unchanged: it neither exposes new bytes nor weakens claimant isolation. The newly visible inconsistency is capability-level—“servable/reviewable but not directly context-pinnable”—not a regression in the reported produce → serve → review → changes-request chain. A follow-up is appropriately separate because it must coordinate the snapshot-candidate rule, resolver selection, and both finalizer SQL predicates; changing only one would create mixed or rejected triples.
+tokens used
+244.271
+A. **NOT MERGE-SAFE on the stated general claim.** The predicate is sound for the specific `createSemanticArtifact` path: artifact and representation IDs are host-generated, and the representation plus matching `create` audit row commit atomically in Tx2 ([ID allocation](<lane-worktree>/src/lib/artifacts/artifact-creation.ts:345), [atomic inserts](<lane-worktree>/src/lib/artifacts/artifact-creation.ts:999)). I found no caller-reachable MCP tool, route, extension DB port, migration, or trigger that can manufacture that row. The extension DB port is explicitly unwired ([extension-host-context.ts](<lane-worktree>/src/lib/extension-host-context.ts:926)).
+
+It is not intrinsically non-forgeable at the database boundary. `artifact_audit` has no FK, action constraint, exact-representation uniqueness, or append-only trigger ([drizzle-store.ts](<lane-worktree>/src/lib/drizzle-store.ts:1938)). The exported `writeArtifactAudit` accepts `action: "create"` without proving provenance, although it has no production `create` caller today ([artifact-retention.ts](<lane-worktree>/src/lib/artifacts/artifact-retention.ts:49)). Thus trusted server code, a migration, or direct DB SQL can mint the witness; ordinary objects/MCP callers cannot.
+
+More importantly, there are legitimate FILE writers this predicate misses:
+
+- `captureCmsContentSnapshot` writes an `objects` row and a `form='file'` representation atomically, but no `artifact_audit/create` row ([cms-content-snapshot-capture.ts](<lane-worktree>/src/lib/artifacts/cms-content-snapshot-capture.ts:165)).
+- `writePinnedPreviewCapture` does the same for PNG captures ([cms-preview-capture-store.ts](<lane-worktree>/src/lib/artifacts/cms-preview-capture-store.ts:195)).
+- Both types are registered `isArtifact` FILE types ([register-all-object-types.ts](<lane-worktree>/src/lib/register-all-object-types.ts:133)).
+- A legitimate later dedicated-claim activation enqueues a type-wide reconcile, and that sweep binds every matching existing row ([artifact-claim-store.ts](<lane-worktree>/src/lib/objects/artifact-claim-store.ts:271), [binding-reconcile-sweep.ts](<lane-worktree>/src/lib/objects/binding-reconcile-sweep.ts:303)). Those claimed FILE rows then fail this predicate despite host-authored bytes.
+
+Therefore this is merge-safe only if explicitly narrowed to “representations authored by `createSemanticArtifact`,” not “host-authored FILE representations” generally. As currently described, it has reachable legitimate false negatives.
+
+B. **MERGE-SAFE to scope out, with a tracked follow-up.** Leaving the context path unchanged introduces an observable cross-surface asymmetry, but not a new security or integrity hazard:
+
+- Serve/review now recognizes the audited direct representation.
+- `context-resolver` still classifies any bound row as claimed and selects only a supplied snapshot pin—never the audited direct representation ([context-resolver.ts](<lane-worktree>/src/lib/artifacts/context-resolver.ts:319)).
+- Snapshot capture only considers claims with `pinnable=true` and `snapshotPolicy='content'`, and serializes `objects.data`; for these FILE rows that is the metadata envelope, not the authored file bytes ([object-content-snapshot.ts](<lane-worktree>/src/lib/artifacts/object-content-snapshot.ts:790)).
+- Claims with another policy yield no candidate. Direct submission remains incoherent in both the main finalizer and its diagnostic probe ([context-selection-finalize.ts](<lane-worktree>/src/lib/artifacts/context-selection-finalize.ts:219), [probe](<lane-worktree>/src/lib/artifacts/context-selection-finalize.ts:518)).
+
+That behavior is fail-closed and unchanged: it neither exposes new bytes nor weakens claimant isolation. The newly visible inconsistency is capability-level—“servable/reviewable but not directly context-pinnable”—not a regression in the reported produce → serve → review → changes-request chain. A follow-up is appropriately separate because it must coordinate the snapshot-candidate rule, resolver selection, and both finalizer SQL predicates; changing only one would create mixed or rejected triples.

@@ -1,0 +1,71 @@
+cinatra#2047 D-8 + OBS-1 — LIVE WALK TRANSCRIPT (lane stack, fences ON)
+=======================================================================
+Stack: Postgres 127.0.0.1:5634/d8walk (lane's OWN database on the shared verify
+stack), Redis 127.0.0.1:6579, app on :3149, real first-admin signup, isolated
+headless Chromium driven from this worktree. Both lifecycle fences flipped ON
+(CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=on,
+CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW=on) — main defaults them OFF.
+
+STEP CLAIM — the org HOLDS the blog-post pack's dedicated claim
+--------------------------------------------------------------
+WALKD8 CLAIM {"activated":"already-active","claims":[{"id":"9c3ccf2e-19ed-4f13-b9cf-b728713c559c","object_type_id":"@cinatra-ai/blog-post-artifact:post","extension_package":"@cinatra-ai/blog-post-artifact","status":"active","generation":1}]}
+
+STEP PRODUCE — the SHIPPED wrapper materializeBlogPostBodyArtifact (D-8 + OBS-1)
+--------------------------------------------------------------------------------
+This is the exact call the re-acceptance had to SUBSTITUTE ("the shipped
+materializeBlogPostBodyArtifact wrapper could not be used — it throws on any org
+holding the blog-post claim"). It now returns, and its output SERVES:
+
+WALKD8 PRODUCE {"runId":"run-d8-cef608e0","artifactId":"35a7db85-3377-41e5-9fd8-9faf838e1d0a","representationRevisionId":"bb7fcfd6-29c7-49aa-851b-093e76f05347","assertions":[{"extension":"@cinatra-ai/blog-post-artifact","assertion_basis":"binding","eligibility":"eligible","asserted_by":"system"}],"serve":{"storageKey":"orgs/1ddc08de-2343-42ad-ad0a-0faaf1d01c99/blobs/sha256/39/39aba93cf505c33f65c6eb6b2d5bcce861865c5f46a707fe3aebd257de032f37.bin","mime":"text/markdown","sizeBytes":70,"originKind":"upload"}}
+
+  - no throw (pre-fix: duplicate key value violates unique constraint "sa_active_unique_idx")
+  - exactly ONE active assertion: the winner BINDING (the trailing classic is a
+    precedence no-op)
+  - resolveArtifactVersionForServe(liveOnly:true) resolves real bytes
+    (pre-fix: null)
+
+STEP GATE — the shipped sweeper opens exactly one gate on the produced event
+---------------------------------------------------------------------------
+WALKD8 GATE {"summary":{"scanned":1,"gatesCreated":1,"noGate":0,"notClassifiable":0,"failed":0,"batchesCoalesced":0},"gates":[{"id":"ab7b55de-52f6-40b4-b28b-3ca6e83782fc","run_id":"run-d8-cef608e0","review_task_id":"lifecycle-review:384d06b6fd61ea5c74db58722003caaaf9ea399b017817bc43418a5a33fd4147","status":"pending","disposition":null}],"events":[{"event_id":"384d06b6fd61ea5c74db58722003caaaf9ea399b017817bc43418a5a33fd4147","emitter":"createSemanticArtifact","origin_kind":"agent_produced","destination_class":"none","status":"processed"}]}
+
+UI — the run-embedded review surface (screenshot D8-01)
+------------------------------------------------------
+/agents/cinatra-ai/blog-draft-writer-agent/run-d8-cef608e0/review/lifecycle-review%3A384d06b6...
+Rendered body (verbatim excerpt):
+
+    Lane 2047 D-8 blog body
+    Blog Post Artifact
+    @cinatra-ai/blog-post-artifact:post · revision bb7fcfd6-29c… · pinned ·
+      organization · organization · text/markdown · updated 2026-07-27T17:31:15.367Z
+    Floor
+    review target unavailable — slot "detail", reason "no-semantic-renderer"
+    ...
+    type   @cinatra-ai/blog-post-artifact:post
+    mime   text/markdown
+    revision  bb7fcfd6-29c7-49aa-851b-093e76f05347
+    Preview   Download
+    Comment  Reject  Approve
+
+  READ THIS EXACTLY: the floor reason is "no-semantic-renderer" — the pack's own
+  renderer is not org-installed on this dev stack (the SAME caveat the
+  re-acceptance recorded, unrelated to these defects). It is NOT
+  "revision-not-member", which is what OBS-1 produced. The target resolved, its
+  revision/mime/props are real, and Preview/Download are live.
+
+UI — the typed changes-request through the prompt window (screenshots D8-02)
+---------------------------------------------------------------------------
+Typed: "Tighten the headline and add a CTA."
+Surface response (verbatim):
+
+    Changes requested. The reviewed work has been turned back for repair —
+    a repair is now in flight.
+
+  Pre-fix this came back BLOCKED: the revisionMember port resolved the base CAS
+  witness to null, so recordChangesRequested answered `tombstoned-base`.
+
+STEP READBACK — the store
+-------------------------
+WALKD8 READBACK {"gates":[{"id":"ab7b55de-52f6-40b4-b28b-3ca6e83782fc","review_task_id":"lifecycle-review:384d06b6fd61ea5c74db58722003caaaf9ea399b017817bc43418a5a33fd4147","status":"resolved","disposition":"changes_requested","resolved_by":"f9a4f129-d519-40f1-ba03-5ccb710e618e"}],"repairs":[{"id":"0b7a5e0d-9f87-4b5a-b7fb-5397ca3601b8","gate_id":"ab7b55de-52f6-40b4-b28b-3ca6e83782fc","route":"producer_repair","status":"dispatched","attempt":1}]}
+
+  Base gate RESOLVED changes_requested, stamped with the real session actor; a
+  repair opened, routed producer_repair, dispatched, attempt 1.

@@ -256,6 +256,26 @@ AND NOT EXISTS (
     // a strictly-higher active same-ext blocks; an equal/lower was archived above).
     // `RETURNING id` lets callers detect insertion vs precedence-block at
     // the row-count level.
+    //
+    // BINDING ROWS ARE AN UNCONDITIONAL BLOCK (cinatra#2047 D-8). The archive
+    // above already refuses to touch a binding-basis row ("a classic never
+    // displaces a binding" — epic #1424); until now the INSERT did not treat one
+    // as a precedence block either, so a same-extension active binding left the
+    // (org, artifact, extension) `sa_active_unique_idx` slot occupied while the
+    // INSERT still fired → duplicate-key, rolling back the caller's whole write.
+    // `artifact-creation.ts` documents this exact asymmetry for the in-Tx
+    // composition ordering; every POST-Tx caller of `assertSemanticType`
+    // (the blog-post/blog-idea/blog-image materializers, artifact templates,
+    // authoring emit, the upload typing action) re-created it the moment
+    // cinatra#1868 made the writer mint a binding in Tx2 for a claim-backed
+    // declared type — i.e. on any org that actually holds the pack's claim.
+    // Blocking is the CORRECT outcome, not a degradation: the binding already
+    // asserts that exact extension on that exact artifact with strictly higher
+    // authority, so the classic row would be redundant. The caller sees the
+    // ordinary `{inserted:false, blockedByPrecedence:true}` verdict.
+    // NOTE the rank CASE cannot express this: a binding carries
+    // `asserted_by='system'` (binding-write-path), which the rank CASE floors to
+    // 0 — the lowest rank — so a rank comparison can never block on it.
     {
       text: `INSERT INTO "${S}"."semantic_assertion"
   (id, org_id, artifact_id, extension, asserted_by, eligibility, confidence, asserted_by_principal)
@@ -263,8 +283,10 @@ SELECT $8::text,$1::text,$2::text,$3::text,$4::text,$5::text,$6::real,$7::text
 WHERE NOT EXISTS (
   SELECT 1 FROM "${S}"."semantic_assertion" s3
    WHERE s3.org_id=$1::text AND s3.artifact_id=$2::text AND s3.extension=$3::text AND s3.eligibility <> 'archived'
-     AND (CASE s3.asserted_by WHEN 'user' THEN 3 WHEN 'authoring_skill' THEN 2 WHEN 'agent' THEN 1 ELSE 0 END)
-         >= CASE WHEN $4::text = 'matcher' THEN 0 ELSE $9::int + 1 END)
+     AND (
+       s3.assertion_basis = 'binding'
+       OR (CASE s3.asserted_by WHEN 'user' THEN 3 WHEN 'authoring_skill' THEN 2 WHEN 'agent' THEN 1 ELSE 0 END)
+          >= CASE WHEN $4::text = 'matcher' THEN 0 ELSE $9::int + 1 END))
 RETURNING id`,
       values: [
         input.orgId,              // $1
@@ -369,7 +391,9 @@ export function buildAssertSemanticTypeQueries(input: {
 /**
  * Confirm an extension as a NON-matcher eligible assertion: archive any
  * matcher drafts of that ext, INSERT a NEW eligible assertion. The draft is
- * NEVER mutated to eligible.
+ * NEVER mutated to eligible. When an ACTIVE same-extension BINDING already
+ * holds the identity, the insert is a NO-OP (cinatra#2047 D-8) — the binding
+ * outranks any classic and owns the unique slot.
  */
 export function confirmAssertion(input: {
   orgId: string;
@@ -410,6 +434,11 @@ AND NOT EXISTS (
      AND (CASE s2.asserted_by WHEN 'user' THEN 3 WHEN 'authoring_skill' THEN 2 WHEN 'agent' THEN 1 ELSE 0 END) > $4::int)`,
       values: [input.orgId, input.artifactId, input.extension, cRank],
     },
+    // Same binding block as `buildAssertionOps` (cinatra#2047 D-8): the archive
+    // above excludes binding rows, so a same-extension active binding keeps the
+    // `sa_active_unique_idx` slot — inserting on top of it is a duplicate-key,
+    // not a confirmation. A binding already asserts this extension with higher
+    // authority, so the confirm is a no-op rather than a throw.
     {
       text: `INSERT INTO "${S}"."semantic_assertion"
   (id, org_id, artifact_id, extension, asserted_by, eligibility, asserted_by_principal)
@@ -417,7 +446,9 @@ SELECT $6::text,$1::text,$2::text,$3::text,$4::text,'eligible',$5::text
 WHERE NOT EXISTS (
   SELECT 1 FROM "${S}"."semantic_assertion" s
    WHERE s.org_id=$1::text AND s.artifact_id=$2::text AND s.extension=$3::text AND s.eligibility <> 'archived'
-     AND (CASE s.asserted_by WHEN 'user' THEN 3 WHEN 'authoring_skill' THEN 2 WHEN 'agent' THEN 1 ELSE 0 END) > $7::int)`,
+     AND (
+       s.assertion_basis = 'binding'
+       OR (CASE s.asserted_by WHEN 'user' THEN 3 WHEN 'authoring_skill' THEN 2 WHEN 'agent' THEN 1 ELSE 0 END) > $7::int))`,
       values: [
         input.orgId,              // $1
         input.artifactId,         // $2
