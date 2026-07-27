@@ -12,31 +12,31 @@
       "from": 1623,
       "to": 1626,
       "reason": "cinatra#2018 S3 PR-C multi-server invoker lifecycle: the boot binder (register-host-connector-services.ts, statically reachable from every locked route) now wires the enrollment-driven acquire path, adding exactly +3 first-party modules per route \u2014 the connector-instance-server-store (the PR-2118 DDL leaf's store, now bound into the invoker deps + endpoint resolver), the connector-instance-snapshot-loader (per-server exposure dispatch), and the wordpress-server-enrollment reconciler (manual routes + health refresh bound as host-local wordpress-mcp members). The wp-site-inventory contract module stays type-only from the reconciler and adds no route edge. Ships dark (no live perimeter reaches the invoker until S7); the edge is the design-mandated boot-time capability publish and cannot be narrowed without deferring capability registration off the boot path. Replaces the PR-2126 record for this route (its raise is baked into base).",
-      "pr": 2139
+      "pr": 2146
     },
     "/api/mcp": {
       "from": 1619,
       "to": 1622,
       "reason": "cinatra#2018 S3 PR-C multi-server invoker lifecycle: the boot binder (register-host-connector-services.ts, statically reachable from every locked route) now wires the enrollment-driven acquire path, adding exactly +3 first-party modules per route \u2014 the connector-instance-server-store (the PR-2118 DDL leaf's store, now bound into the invoker deps + endpoint resolver), the connector-instance-snapshot-loader (per-server exposure dispatch), and the wordpress-server-enrollment reconciler (manual routes + health refresh bound as host-local wordpress-mcp members). The wp-site-inventory contract module stays type-only from the reconciler and adds no route edge. Ships dark (no live perimeter reaches the invoker until S7); the edge is the design-mandated boot-time capability publish and cannot be narrowed without deferring capability registration off the boot path. Replaces the PR-2126 record for this route (its raise is baked into base).",
-      "pr": 2139
+      "pr": 2146
     },
     "/chat": {
       "from": 1693,
       "to": 1696,
       "reason": "cinatra#2018 S3 PR-C multi-server invoker lifecycle: the boot binder (register-host-connector-services.ts, statically reachable from every locked route) now wires the enrollment-driven acquire path, adding exactly +3 first-party modules per route \u2014 the connector-instance-server-store (the PR-2118 DDL leaf's store, now bound into the invoker deps + endpoint resolver), the connector-instance-snapshot-loader (per-server exposure dispatch), and the wordpress-server-enrollment reconciler (manual routes + health refresh bound as host-local wordpress-mcp members). The wp-site-inventory contract module stays type-only from the reconciler and adds no route edge. Ships dark (no live perimeter reaches the invoker until S7); the edge is the design-mandated boot-time capability publish and cannot be narrowed without deferring capability registration off the boot path. Replaces the PR-2126 record for this route (its raise is baked into base).",
-      "pr": 2139
+      "pr": 2146
     },
     "/api/a2a": {
       "from": 1624,
       "to": 1627,
       "reason": "cinatra#2018 S3 PR-C multi-server invoker lifecycle: the boot binder (register-host-connector-services.ts, statically reachable from every locked route) now wires the enrollment-driven acquire path, adding exactly +3 first-party modules per route \u2014 the connector-instance-server-store (the PR-2118 DDL leaf's store, now bound into the invoker deps + endpoint resolver), the connector-instance-snapshot-loader (per-server exposure dispatch), and the wordpress-server-enrollment reconciler (manual routes + health refresh bound as host-local wordpress-mcp members). The wp-site-inventory contract module stays type-only from the reconciler and adds no route edge. Ships dark (no live perimeter reaches the invoker until S7); the edge is the design-mandated boot-time capability publish and cannot be narrowed without deferring capability registration off the boot path. Replaces the PR-2126 record for this route (its raise is baked into base).",
-      "pr": 2139
+      "pr": 2146
     },
     "/api/llm-bridge": {
       "from": 1634,
       "to": 1637,
       "reason": "cinatra#2018 S3 PR-C multi-server invoker lifecycle: the boot binder (register-host-connector-services.ts, statically reachable from every locked route) now wires the enrollment-driven acquire path, adding exactly +3 first-party modules per route \u2014 the connector-instance-server-store (the PR-2118 DDL leaf's store, now bound into the invoker deps + endpoint resolver), the connector-instance-snapshot-loader (per-server exposure dispatch), and the wordpress-server-enrollment reconciler (manual routes + health refresh bound as host-local wordpress-mcp members). The wp-site-inventory contract module stays type-only from the reconciler and adds no route edge. Ships dark (no live perimeter reaches the invoker until S7); the edge is the design-mandated boot-time capability publish and cannot be narrowed without deferring capability registration off the boot path. Replaces the PR-2126 record for this route (its raise is baked into base).",
-      "pr": 2139
+      "pr": 2146
     }
   }
 }
