@@ -317,8 +317,12 @@ async function runSharedGate(
  * ENROLLMENT-DRIVEN path (cinatra#2018 S3 — `listEnrolledServers` bound): the
  * loop iterates the STORE's currently-enrolled servers (store beats cache —
  * layer 1 of removed-server fail-closed: a retired server's still-cached
- * snapshot is unreachable even if eviction raced) and enforces the freshness
- * policy per server: fresh (age ≤ TTL) serves the cache; expired triggers a
+ * snapshot is unreachable even if eviction raced, because iteration is DRIVEN
+ * by this per-call list read — a server absent from it is never looked up in
+ * the cache at all, so the residual exposure is only the read-to-serve
+ * instant of an acquire already in flight when the retire commits, a bound no
+ * additional per-server store re-read could tighten) and enforces the
+ * freshness policy per server: fresh (age ≤ TTL) serves the cache; expired triggers a
  * per-server reload (endpoint resolved per server); a FAILED reload serves the
  * stale snapshot only within the max-stale window (age honestly visible via
  * `cacheAgeMs`) and records the mapped per-server health; past max-stale the
