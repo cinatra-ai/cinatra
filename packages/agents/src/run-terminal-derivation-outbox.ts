@@ -133,6 +133,11 @@ export async function transitionRunToCompletedWithDerivationOutbox(
   derivationOutbox: DerivationOutboxCapture,
   orgId: string,
   tx: GuardedRunTx,
+  // cinatra#1940 P1 (Decision 4): the per-run lease-settle helper, THREADED from
+  // transitionRunStatus (passed by reference to avoid a run-transition ⇄
+  // run-terminal-derivation-outbox import cycle). Runs on THIS same guarded `tx`
+  // so the CAS + outbox INSERT + lease DELETE commit as one atomic unit.
+  settleLeaseInTx: (tx: GuardedRunTx, orgId: string, runId: string) => Promise<void>,
 ): Promise<void> {
   if (to !== "completed") {
     throw new Error(
@@ -144,4 +149,7 @@ export async function transitionRunToCompletedWithDerivationOutbox(
     // Rolls back the guarded tx (fail-closed: mismatched-org or stale `from`).
     throw new RunTransitionError({ code: "stale_from_status", runId, from, to });
   }
+  // cinatra#1940 P1 fold: →completed is terminal, so settle the run's lease in
+  // this same guarded tx (statement order: CAS → outbox INSERT → lease DELETE).
+  await settleLeaseInTx(tx, orgId, runId);
 }

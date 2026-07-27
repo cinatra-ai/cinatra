@@ -308,6 +308,27 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     cascadeOwnership: "app-furniture",
     importBanned: false,
   },
+  {
+    // cinatra#1940 P1 (Decision 4): the per-run, epoch-agnostic lease SETTLE
+    // folded into transitionRunStatus's terminal transaction (status + meta +
+    // derivation + LEASE DELETE in one guarded commit). capability is
+    // `run.complete` — the terminal-edge capability the fold already runs under.
+    // VOCAB-CLEAN by design: `run.lease-expire` (the finalizer's capability) is
+    // P2's vocab addition and the `conditionalCapabilities:["run.lease-expire"]`
+    // annotation + the finalizer-module import allowlist are added by P4 — this
+    // P1 row references ONLY existing vocabulary. importBanned stays `false` in
+    // step with every S2 row and its sibling `snapshotLeasesQuery`: the R4
+    // boundary gate (wave-3 stage A — not yet on main; adds `allowedImporters`)
+    // is what flips it `true` + records the run-transition.ts allowlist, per the
+    // "the ban flips per-writer" convention the lockstep test pins.
+    module: "packages/org-write-kernel/src/leases.ts",
+    exportName: "settleLeaseForRunStatement",
+    capability: "run.complete",
+    orgIdExtractor: "explicit input.orgId (per-run terminal settle; the caller's guarded org)",
+    storageReferences: ["org_archive_lease"],
+    cascadeOwnership: "app-furniture",
+    importBanned: false,
+  },
 ];
 
 /** Declared org-axis columns WITHOUT database FKs (block-if-referenced or
