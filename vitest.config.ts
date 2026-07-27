@@ -202,6 +202,18 @@ export default defineConfig({
           "packages/llm/src/scripted-test-provider.ts",
         ),
       },
+      // Execution-plane session/injection barrel (exec-plane, cinatra#1706 +
+      // #2138). Dependency-light: node:crypto plus type-only imports of
+      // ../types. The app's boot phase + surface issuers import it directly, so
+      // — like /actor-context — it must be aliased BEFORE the bare entry or the
+      // prefix matcher rewrites it into the actor-context leaf.
+      {
+        find: "@cinatra-ai/llm/execution-plane",
+        replacement: path.join(
+          __dirname,
+          "packages/llm/src/execution-plane/index.ts",
+        ),
+      },
       {
         find: "@cinatra-ai/llm",
         replacement: path.join(

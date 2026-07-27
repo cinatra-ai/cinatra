@@ -62,11 +62,31 @@ export type ExecutionExecutorFactory = () => SandboxExecutor;
 
 let executorFactory: ExecutionExecutorFactory | undefined;
 
-/** Register the broker-executor factory (the S1 app-broker wiring, when it
- * lands). Until then no factory is registered and `ready` is unreachable in
- * production — declared-env runs fail closed. */
+/** Register the broker-executor factory. LANDED as the S1b activation slice
+ * (cinatra#2138): the `execution-broker` boot phase calls this — and ONLY past
+ * a completed broker↔worker health handshake — so `ready` is reachable exactly
+ * when the plane has really run a command on a live worker. With the default-off
+ * ROLLOUT flag unset that phase does not exist, nothing registers, and
+ * declared-env runs keep failing closed. */
 export function registerExecutionExecutorFactory(factory: ExecutionExecutorFactory): void {
   executorFactory = factory;
+}
+
+/**
+ * The broker-backed executor for the trusted surface issuers (chat + agent-run),
+ * or `undefined` when the plane is not wired (flag off, mode disabled/remote,
+ * handshake failed). The injection layer treats an absent executor as
+ * `capability_unavailable` and keeps the model usable — it NEVER delivers a tool
+ * schema the model could call into a void (exec-plane S1b, cinatra#2138
+ * deliverable 2).
+ */
+export function getRegisteredExecutionExecutor(): SandboxExecutor | undefined {
+  return executorFactory?.();
+}
+
+/** Test seam — drop the registered factory between hermetic runs. */
+export function _resetExecutionExecutorFactoryForTests(): void {
+  executorFactory = undefined;
 }
 
 export type ExecutionEnvironmentReadiness =
