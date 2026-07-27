@@ -49,6 +49,8 @@ function ports(
     readGateState: async (): Promise<ReviewGateState> => ({ status: "pending", targets: PINNED }),
     revisionMember: () => ({ mime: "application/json" }),
     deriveProvenance: async () => PROV,
+    // cinatra#2047 D-2 — the live acting actor the core stamps onto the plan.
+    actingActorId: () => "user-decider",
     commit,
     ...over,
   } as SubmitDecisionPorts & { commit: ReturnType<typeof vi.fn> };
@@ -254,5 +256,80 @@ describe("rendererProvenanceFromMount", () => {
       packageName: null,
       digest: null,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE DECIDING ACTOR (cinatra#2047 D-2).
+//
+// A lifecycle review exists to let a HUMAN control what the AGENT produced. The
+// record the gate must carry is therefore WHO decided — not a restriction on who
+// is allowed to. These tests pin both halves: the plan always carries the
+// server-resolved acting actor, and the core never consults it to permit or
+// refuse a decision.
+// ---------------------------------------------------------------------------
+
+describe("submitReviewDecisionCore — the deciding actor is recorded", () => {
+  it("stamps the SERVER-resolved acting actor onto the commit plan (approve)", async () => {
+    const p = ports({ actingActorId: () => "user-V" });
+    const r = await submitReviewDecisionCore(decision(), p);
+    expect(r.ok).toBe(true);
+    expect(p.commit.mock.calls[0][0].decidedBy).toBe("user-V");
+  });
+
+  it("stamps the acting actor on a REJECT too (every terminal decision has a decider)", async () => {
+    const p = ports({ actingActorId: () => "user-V" });
+    const r = await submitReviewDecisionCore(decision({ disposition: "reject" }), p);
+    expect(r.ok).toBe(true);
+    expect(p.commit.mock.calls[0][0].decidedBy).toBe("user-V");
+  });
+
+  it("takes the actor from the PORT, never from the client decision payload", async () => {
+    // A client that tries to name a different decider changes nothing: the core
+    // reads the host port, which resolves the verified session actor.
+    const p = ports({ actingActorId: () => "user-server-resolved" });
+    const spoofed = { ...decision(), decidedBy: "user-claimed-by-client" } as ReturnType<typeof decision>;
+    const r = await submitReviewDecisionCore(spoofed, p);
+    expect(r.ok).toBe(true);
+    expect(p.commit.mock.calls[0][0].decidedBy).toBe("user-server-resolved");
+  });
+
+  it("records null when the host cannot name an actor (a non-human carrier) — and still commits", async () => {
+    const p = ports({ actingActorId: () => null });
+    const r = await submitReviewDecisionCore(decision(), p);
+    expect(r.ok).toBe(true);
+    expect(p.commit.mock.calls[0][0].decidedBy).toBeNull();
+  });
+
+  it("PINNED CONTRACT — the actor who STARTED the run may decide their own run's review", async () => {
+    // The product decision for lifecycle review: any member of the scope the run
+    // belongs to may decide the review WITHOUT limitation, explicitly including
+    // the person who started the run. Recording who decided is the point;
+    // restricting who may decide is not. This is the exact INVERSE of the old
+    // separation-of-duties repro, pinned so the decision cannot silently regress.
+    const initiator = "user-who-started-the-run";
+    const p = ports({ actingActorId: () => initiator });
+    const r = await submitReviewDecisionCore(decision(), p);
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    // Approved, committed, and attributed to the initiator — no refusal path.
+    const plan = p.commit.mock.calls[0][0];
+    expect(plan.disposition).toBe("approve");
+    expect(plan.terminal).toBe(true);
+    expect(plan.decidedBy).toBe(initiator);
+  });
+
+  it("the core exposes NO actor-based refusal: identical outcome for any two actors", async () => {
+    const a = ports({ actingActorId: () => "user-producer" });
+    const b = ports({ actingActorId: () => "user-someone-else" });
+    const ra = await submitReviewDecisionCore(decision(), a);
+    const rb = await submitReviewDecisionCore(decision(), b);
+    expect(ra.ok).toBe(true);
+    expect(rb.ok).toBe(true);
+    // Only the recorded decider differs; nothing else about the decision does.
+    const strip = (plan: Record<string, unknown>) => ({ ...plan, decidedBy: undefined });
+    expect(strip(a.commit.mock.calls[0][0])).toEqual(strip(b.commit.mock.calls[0][0]));
+    expect(a.commit.mock.calls[0][0].decidedBy).toBe("user-producer");
+    expect(b.commit.mock.calls[0][0].decidedBy).toBe("user-someone-else");
   });
 });

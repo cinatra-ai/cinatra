@@ -175,6 +175,11 @@ export function bindSubmitDecisionPorts(ctx: ReviewActorContext): SubmitDecision
     revisionMember: (artifactId, representationRevisionId) =>
       artifactPorts.revisionMember(artifactId, representationRevisionId),
     deriveProvenance,
+    // The DECIDING actor (cinatra#2047 D-2) — taken from the SAME verified actor
+    // context run access was just enforced against, never from the request body.
+    // A carrier with no user id (an A2A/system principal) yields null, and the
+    // gate then records no decider rather than a fabricated one.
+    actingActorId: () => ctx.actor.userId ?? null,
     commit: (plan) => commitReviewDecision(plan),
   };
 }
@@ -256,6 +261,9 @@ export async function submitReviewSurfaceChangesRequested(args: {
     },
     currentBaseRevisionId,
     feedback: args.feedback,
+    // The DECIDING actor (cinatra#2047 D-2) — the same verified session actor the
+    // approve/reject commit stamps, from the context run access was enforced against.
+    decidedBy: args.actorCtx.actor.userId ?? null,
   });
 }
 

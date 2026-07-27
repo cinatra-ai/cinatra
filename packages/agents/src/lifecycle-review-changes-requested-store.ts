@@ -86,6 +86,11 @@ export interface RecordReviewSurfaceChangesRequestedInput {
    * message. The caller passes it trimmed + non-empty (empty feedback stays a plain
    * annotation on the base comment path). */
   feedback: string;
+  /** The DECIDING actor (cinatra#2047 D-2) — resolved server-side from the live
+   * session by the binder, never a client claim. Stamped on the resolved gate so
+   * a `changes_requested` decision carries the same decider of record an
+   * approve/reject does. */
+  decidedBy?: string | null;
 }
 
 /**
@@ -234,6 +239,7 @@ export async function recordReviewSurfaceChangesRequested(
       producerAgentId,
       currentBaseRevisionId,
       lineageId,
+      decidedBy: input.decidedBy ?? null,
     });
   } catch (err) {
     // The entry point THROWS a gate CAS conflict (the gate is not pending — a
