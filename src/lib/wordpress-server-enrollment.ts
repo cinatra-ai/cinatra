@@ -253,12 +253,15 @@ export async function applySiteInventory(
   const reportedAdapterIds = new Set<string>();
 
   for (const entry of payload.servers) {
-    reportedAdapterIds.add(entry.adapterServerId);
-
     // --- default server: metadata refresh only (route + exposure pinned) ----
+    // Its adapterServerId deliberately does NOT join the reported set: the
+    // default row is matched by the grandfathered constant, never by registry
+    // id, so a default entry can never shadow a discovered identity out of the
+    // retire pass (the contract additionally pins the default route to
+    // isDefault, so an aliasing entry is rejected before it gets here).
     if (isDefaultServerEntry(entry)) {
       const defaultRow = existing.find((row) => row.serverId === CATALOG_DEFAULT_SERVER_ID);
-      await deps.store.upsertServer({
+      const { written } = await deps.store.upsertServer({
         connectorKey,
         instanceId,
         serverId: CATALOG_DEFAULT_SERVER_ID,
@@ -280,20 +283,38 @@ export async function applySiteInventory(
         lastStatusAt: defaultRow?.lastStatusAt ?? null,
         createdBy: defaultRow?.createdBy ?? SYSTEM_SERVER_ENROLLMENT_ACTOR,
       });
-      enrolled += 1;
+      if (written) enrolled += 1;
       continue;
     }
 
+    reportedAdapterIds.add(entry.adapterServerId);
     const eligible =
       entry.transports.includes("streamable-http") && !entry.requiresDedicatedAuth;
     const match = discoveredByAdapterId.get(entry.adapterServerId);
 
-    // --- ineligible: surfaced present_unenrolled, never silently dropped ----
+    // Identity-metadata drift is computed for ANY matched discovered row —
+    // BEFORE the eligibility split — so a route/name/version change is audited
+    // even while the server is parked present_unenrolled (a later
+    // re-enrollment must never surface an unexplained identity history gap).
+    const restPathChanged = match ? match.restPath !== entry.restPath : false;
+    const changed: string[] = [];
+    if (match) {
+      if (restPathChanged || match.route !== entry.route || match.namespace !== entry.namespace) {
+        changed.push("route");
+      }
+      if ((match.label ?? null) !== entry.name) changed.push("name");
+      if ((match.serverVersion ?? null) !== (entry.version ?? null)) changed.push("version");
+    }
+
+    let serverId: string;
+    let written: boolean;
+    let invalidate: boolean;
     if (!eligible) {
+      // --- ineligible: surfaced present_unenrolled, never silently dropped --
       const reason = !entry.transports.includes("streamable-http")
         ? ("custom_transport" as const)
         : ("custom_auth" as const);
-      const serverId =
+      serverId =
         match?.serverId ??
         resolveServerId(
           { kind: "discovered", instanceId, adapterServerId: entry.adapterServerId },
@@ -301,7 +322,7 @@ export async function applySiteInventory(
         );
       takenIds.add(serverId);
       const wasEnrolled = match?.status === "enrolled";
-      const { written } = await deps.store.upsertServer({
+      ({ written } = await deps.store.upsertServer({
         connectorKey,
         instanceId,
         serverId,
@@ -322,22 +343,20 @@ export async function applySiteInventory(
         lastStatus: match?.lastStatus ?? null,
         lastStatusAt: match?.lastStatusAt ?? null,
         createdBy: match?.createdBy ?? SYSTEM_SERVER_ENROLLMENT_ACTOR,
-      });
+      }));
       if (written) presentUnenrolled += 1;
       // Leaving the enrolled set ⇒ its snapshot must die with it (fail closed
-      // beats the cache either way; eviction is the hygiene layer).
-      if (written && wasEnrolled) deps.onServerInvalidated?.(instanceId, serverId);
-      continue;
-    }
-
-    // --- eligible, no prior identity: enroll fresh (verified-intake) --------
-    if (!match) {
-      const serverId = resolveServerId(
+      // beats the cache either way; eviction is the hygiene layer); a route
+      // move invalidates too (stale probe verdicts under the old route).
+      invalidate = Boolean(wasEnrolled) || restPathChanged;
+    } else if (!match) {
+      // --- eligible, no prior identity: enroll fresh (verified-intake) ------
+      serverId = resolveServerId(
         { kind: "discovered", instanceId, adapterServerId: entry.adapterServerId },
         (candidate) => takenIds.has(candidate),
       );
       takenIds.add(serverId);
-      const { written } = await deps.store.upsertServer({
+      ({ written } = await deps.store.upsertServer({
         connectorKey,
         instanceId,
         serverId,
@@ -358,66 +377,62 @@ export async function applySiteInventory(
         lastStatus: null,
         lastStatusAt: null,
         createdBy: SYSTEM_SERVER_ENROLLMENT_ACTOR,
-      });
+      }));
       if (written) enrolled += 1;
-      continue;
+      invalidate = false;
+    } else {
+      // --- eligible, same identity: update / revive on the SAME row ---------
+      const wasRetired = match.status === "retired";
+      const stayedEnrolled = match.status === "enrolled";
+      serverId = match.serverId;
+      ({ written } = await deps.store.upsertServer({
+        connectorKey,
+        instanceId,
+        serverId: match.serverId,
+        source: "discovered",
+        status: "enrolled",
+        adapterServerId: entry.adapterServerId,
+        namespace: entry.namespace,
+        route: entry.route,
+        restPath: entry.restPath,
+        label: entry.name,
+        serverVersion: entry.version ?? null,
+        transports: entry.transports,
+        exposureMode: match.exposureMode,
+        unenrolledReason: null,
+        enrolledAt: stayedEnrolled ? match.enrolledAt : nowIso,
+        retiredAt: null,
+        verifiedAt: nowIso,
+        lastStatus: match.lastStatus,
+        lastStatusAt: match.lastStatusAt,
+        createdBy: match.createdBy,
+      }));
+      if (written) enrolled += 1;
+      if (written && wasRetired) {
+        await audit({
+          resourceType: "connector_instance",
+          resourceId: instanceId,
+          actorPrincipalType: "system",
+          authSource: "worker",
+          operation: "server_reenrolled",
+          decision: "allowed",
+          policyVersion: "connector-instance-server-enrollment",
+          metadata: {
+            connectorKey,
+            serverId: match.serverId,
+            adapterServerId: entry.adapterServerId,
+            ...(input.siteId ? { siteId: input.siteId } : {}),
+          },
+        });
+      }
+      invalidate = restPathChanged;
     }
 
-    // --- eligible, same identity: update / revive on the SAME row -----------
-    const wasRetired = match.status === "retired";
-    const stayedEnrolled = match.status === "enrolled";
-    const restPathChanged = match.restPath !== entry.restPath;
-    const changed: string[] = [];
-    if (restPathChanged || match.route !== entry.route || match.namespace !== entry.namespace) {
-      changed.push("route");
-    }
-    if ((match.label ?? null) !== entry.name) changed.push("name");
-    if ((match.serverVersion ?? null) !== (entry.version ?? null)) changed.push("version");
-
-    const { written } = await deps.store.upsertServer({
-      connectorKey,
-      instanceId,
-      serverId: match.serverId,
-      source: "discovered",
-      status: "enrolled",
-      adapterServerId: entry.adapterServerId,
-      namespace: entry.namespace,
-      route: entry.route,
-      restPath: entry.restPath,
-      label: entry.name,
-      serverVersion: entry.version ?? null,
-      transports: entry.transports,
-      exposureMode: match.exposureMode,
-      unenrolledReason: null,
-      enrolledAt: stayedEnrolled ? match.enrolledAt : nowIso,
-      retiredAt: null,
-      verifiedAt: nowIso,
-      lastStatus: match.lastStatus,
-      lastStatusAt: match.lastStatusAt,
-      createdBy: match.createdBy,
-    });
-    if (!written) continue;
-    enrolled += 1;
-    if (wasRetired) {
-      await audit({
-        resourceType: "connector_instance",
-        resourceId: instanceId,
-        actorPrincipalType: "system",
-        authSource: "worker",
-        operation: "server_reenrolled",
-        decision: "allowed",
-        policyVersion: "connector-instance-server-enrollment",
-        metadata: {
-          connectorKey,
-          serverId: match.serverId,
-          adapterServerId: entry.adapterServerId,
-          ...(input.siteId ? { siteId: input.siteId } : {}),
-        },
-      });
-    }
-    if (changed.length > 0) {
+    if (!written) continue; // identity-guard refusal (race) — nothing changed
+    if (match && changed.length > 0) {
       // Operator-visible trail for an implementation swapped/moved under a
-      // reused registry id (policy refs persist across the change by design).
+      // reused registry id (policy refs persist across the change by design) —
+      // emitted for EVERY status the row lands in, not only enrolled.
       await audit({
         resourceType: "connector_instance",
         resourceId: instanceId,
@@ -431,11 +446,12 @@ export async function applySiteInventory(
           serverId: match.serverId,
           adapterServerId: entry.adapterServerId,
           changed,
+          status: eligible ? "enrolled" : "present_unenrolled",
           ...(input.siteId ? { siteId: input.siteId } : {}),
         },
       });
     }
-    if (restPathChanged) deps.onServerInvalidated?.(instanceId, match.serverId);
+    if (invalidate) deps.onServerInvalidated?.(instanceId, serverId);
   }
 
   // --- retire pass: discovered rows absent from THIS payload ----------------
@@ -488,7 +504,8 @@ export type AddManualServerRouteResult =
         | "reserved_route"
         | "instance_unresolvable"
         | "probe_failed"
-        | "verification_failed";
+        | "verification_failed"
+        | "conflict";
       probeStatus?: WordPressMcpAdapterStatus;
       errorCode?: string;
     };
@@ -597,7 +614,7 @@ export async function addManualServerRoute(
       ),
     );
 
-  await deps.store.upsertServer({
+  const { written } = await deps.store.upsertServer({
     connectorKey,
     instanceId,
     serverId,
@@ -623,6 +640,12 @@ export async function addManualServerRoute(
     lastStatusAt: nowIso,
     createdBy: existingManual?.createdBy ?? input.actor,
   });
+  if (!written) {
+    // The store's identity guard refused (a concurrent write claimed this id
+    // for a different identity between our read and this write). Nothing was
+    // persisted — no audit, no invalidation; the admin retries.
+    return { ok: false, reason: "conflict" };
+  }
   deps.onServerInvalidated?.(instanceId, serverId);
   await audit({
     resourceType: "connector_instance",

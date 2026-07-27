@@ -61,7 +61,7 @@ export const siteInventoryTransportSchema = z.enum([
 
 export type WpSiteInventoryTransport = z.infer<typeof siteInventoryTransportSchema>;
 
-const siteBlockSchema = z.object({
+const siteBlockSchema = z.strictObject({
   wpVersion: z.string().min(1).max(32),
   phpVersion: z.string().min(1).max(32),
   /** `null` ⇒ the MCP Adapter plugin is absent — `servers` MUST be empty
@@ -74,7 +74,7 @@ const siteBlockSchema = z.object({
   permalinkStructure: z.enum(["pretty", "plain"]),
 });
 
-const serverEntrySchema = z.object({
+const serverEntrySchema = z.strictObject({
   adapterServerId: z.string().regex(ADAPTER_SERVER_ID_PATTERN),
   namespace: z.string().regex(SERVER_NAMESPACE_PATTERN),
   route: z.string().regex(SERVER_ROUTE_PATTERN),
@@ -109,10 +109,11 @@ export type WpSiteInventoryServerEntryV1 = z.infer<typeof serverEntrySchema>;
  * `collectedAt` is advisory (debugging) and NEVER trusted for ordering.
  */
 export const wpSiteInventoryV1Schema = z
-  .object({
+  .strictObject({
     contractVersion: z.literal("v1"),
-    /** Must equal the authenticating connect-site credential row's client. */
-    client: z.string().min(1).max(64),
+    /** v1 is WordPress-only by definition; the intake ADDITIONALLY cross-checks
+     * this against the authenticating connect-site credential row's client. */
+    client: z.literal("wordpress"),
     inventorySeq: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     collectedAt: z.string().datetime({ offset: true }),
     /** Optional instance-claim: DISAMBIGUATION ONLY among origin-matched
@@ -131,6 +132,7 @@ export const wpSiteInventoryV1Schema = z
       });
     }
     const seen = new Set<string>();
+    let defaultEntries = 0;
     for (const [index, server] of payload.servers.entries()) {
       const canonical = `/${server.namespace}/${server.route}`;
       if (server.restPath !== canonical) {
@@ -140,12 +142,34 @@ export const wpSiteInventoryV1Schema = z
           path: ["servers", index, "restPath"],
         });
       }
+      // The default-route ⇄ isDefault pin is BIDIRECTIONAL: an entry may
+      // neither claim isDefault on another route nor sit on the default route
+      // without declaring it. Without the second direction, an entry could
+      // alias an arbitrary adapterServerId onto the default route and shadow
+      // that id's real discovered server out of the reconciler's retire pass.
       if (server.isDefault && server.restPath !== DEFAULT_ADAPTER_SERVER_REST_PATH) {
         ctx.addIssue({
           code: "custom",
           message: `isDefault is reserved for the adapter default server at "${DEFAULT_ADAPTER_SERVER_REST_PATH}"`,
           path: ["servers", index, "isDefault"],
         });
+      }
+      if (!server.isDefault && server.restPath === DEFAULT_ADAPTER_SERVER_REST_PATH) {
+        ctx.addIssue({
+          code: "custom",
+          message: `an entry on "${DEFAULT_ADAPTER_SERVER_REST_PATH}" must declare isDefault`,
+          path: ["servers", index, "isDefault"],
+        });
+      }
+      if (server.isDefault) {
+        defaultEntries += 1;
+        if (defaultEntries > 1) {
+          ctx.addIssue({
+            code: "custom",
+            message: "at most one default-server entry is allowed per payload",
+            path: ["servers", index, "isDefault"],
+          });
+        }
       }
       if (seen.has(server.adapterServerId)) {
         ctx.addIssue({

@@ -367,6 +367,44 @@ describe("applySiteInventory — lifecycle transitions", () => {
     expect(onServerInvalidated).toHaveBeenCalledWith(IID, VENDOR_ID);
   });
 
+  it("a route move while PARKED present_unenrolled still audits the identity-metadata change", async () => {
+    const { deps, rows, audit, onServerInvalidated } = await seededDeps();
+    const stdioId = mintServerId({
+      kind: "discovered",
+      instanceId: IID,
+      adapterServerId: "fixture-stdio-only-server",
+    });
+    const payload = parseFixture();
+    const stdio = payload.servers.find((s) => s.adapterServerId === "fixture-stdio-only-server")!;
+    stdio.route = "fixture-stdio-only-server-v2";
+    stdio.restPath = "/mcp/fixture-stdio-only-server-v2";
+    stdio.name = "Renamed Stdio Server";
+    await applySiteInventory({ connectorKey: CK, instanceId: IID, payload }, deps);
+    // Still parked (ineligible), but the drift is on the row AND on the trail.
+    expect(rows.get(stdioId)).toMatchObject({
+      status: "present_unenrolled",
+      restPath: "/mcp/fixture-stdio-only-server-v2",
+    });
+    const metadataAudit = audit.mock.calls.find(
+      (c) => (c[0] as { operation: string }).operation === "server_identity_metadata_changed",
+    );
+    expect(metadataAudit?.[0]).toMatchObject({
+      metadata: { serverId: stdioId, changed: ["route", "name"], status: "present_unenrolled" },
+    });
+    expect(onServerInvalidated).toHaveBeenCalledWith(IID, stdioId);
+  });
+
+  it("a default entry cannot suppress a discovered identity's retire (registry ids never map onto the default row)", async () => {
+    const { deps, rows } = await seededDeps();
+    // Craft a payload whose ONLY entry is the default server; the vendor
+    // server is absent and must retire even though a default entry exists.
+    const payload = parseFixture();
+    payload.servers = payload.servers.filter((s) => s.isDefault);
+    await applySiteInventory({ connectorKey: CK, instanceId: IID, payload }, deps);
+    expect(rows.get(VENDOR_ID)!.status).toBe("retired");
+    expect(rows.get(CATALOG_DEFAULT_SERVER_ID)!.status).toBe("enrolled");
+  });
+
   it("a present_unenrolled server that turns eligible enrolls on the SAME identity row", async () => {
     const { deps, rows } = await seededDeps();
     const stdioId = mintServerId({
@@ -540,6 +578,22 @@ describe("addManualServerRoute — verify-then-enroll (strict preconditions)", (
       deps,
     );
     expect(result).toEqual({ ok: false, reason: "instance_unresolvable" });
+  });
+
+  it("a store identity-guard refusal (race) → conflict; no audit, no invalidation, nothing claimed persisted", async () => {
+    const made = manualDeps();
+    made.deps.store.upsertServer = async () => ({ written: false });
+    const result = await addManualServerRoute(
+      { connectorKey: CK, instanceId: IID, restPath: "/mcp/raced", actor: "admin-1" },
+      made.deps,
+    );
+    expect(result).toEqual({ ok: false, reason: "conflict" });
+    expect(made.onServerInvalidated).not.toHaveBeenCalled();
+    expect(
+      made.audit.mock.calls.some(
+        (c) => (c[0] as { operation: string }).operation === "server_manual_enrolled",
+      ),
+    ).toBe(false);
   });
 });
 

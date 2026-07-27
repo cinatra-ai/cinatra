@@ -75,7 +75,7 @@ See the schema module for exact bounds/patterns. Summary:
 | Field | Type | Semantics |
 |---|---|---|
 | `contractVersion` | `"v1"` | Unknown version → `unsupported_contract_version` + supported list. |
-| `client` | string | Must equal the authenticating credential row's client (`"wordpress"`). |
+| `client` | `"wordpress"` | Literal in v1; the intake additionally cross-checks it against the authenticating credential row's client. |
 | `inventorySeq` | int | See above. |
 | `collectedAt` | ISO-8601 | Advisory only. |
 | `claimedInstanceId` | string? | Disambiguation only among origin-matched instances. |
@@ -95,7 +95,7 @@ Per server entry:
 | `name`, `description`, `version` | Display metadata (name/version changes on a reused `adapterServerId` are audited core-side). |
 | `transports` | Site-normalized enum `streamable-http \| stdio \| sse \| unknown` (the producer maps the adapter's PHP transport class names; unmappable → `unknown`). |
 | `requiresDedicatedAuth` | Site-declared "demands its own auth" flag. |
-| `isDefault` | True only for the adapter default server (`/mcp/mcp-adapter-default-server`; cross-checked). That entry refreshes metadata on the grandfathered always-enrolled default row. |
+| `isDefault` | Pinned BIDIRECTIONALLY to the default route (`/mcp/mcp-adapter-default-server`): `isDefault` requires that route AND that route requires `isDefault`; at most one default entry per payload. That entry refreshes metadata on the grandfathered always-enrolled default row and never joins the discovered-identity reconciliation (so it can never shadow a real server's registry id out of the retire pass). |
 | `toolCount` | Advisory only. |
 
 ## Enrollment semantics (what core does with an accepted payload)
@@ -133,6 +133,7 @@ alone no longer describes the full site integration.
 
 ## Versioning
 
-`SUPPORTED_SITE_INVENTORY_VERSIONS` lists what a core build accepts. Additive
-producer-side fields require a new contract version; unknown versions are
-rejected loudly with the supported list so a newer plugin degrades visibly.
+`SUPPORTED_SITE_INVENTORY_VERSIONS` lists what a core build accepts. The v1
+objects are STRICT: unknown fields are rejected, so additive producer-side
+fields require a new contract version; unknown versions are rejected loudly
+with the supported list so a newer plugin degrades visibly.

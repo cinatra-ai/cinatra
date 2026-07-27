@@ -78,6 +78,46 @@ describe("wp-site-inventory v1 — version + shape rejection", () => {
     expect(wpSiteInventoryV1Schema.safeParse(raw).success).toBe(false);
   });
 
+  it("rejects a default-route entry that does NOT declare isDefault (no aliasing a registry id onto the default route)", () => {
+    const raw = rawFixture();
+    const servers = raw.servers as Array<Record<string, unknown>>;
+    // An impostor: the default route under a DIFFERENT registry id, undeclared.
+    servers[0] = {
+      ...servers[0]!,
+      adapterServerId: "fixture-vendor-server-alias",
+      isDefault: false,
+    };
+    expect(wpSiteInventoryV1Schema.safeParse(raw).success).toBe(false);
+  });
+
+  it("rejects more than one default entry per payload", () => {
+    const raw = rawFixture();
+    const servers = raw.servers as Array<Record<string, unknown>>;
+    servers.push({
+      ...structuredClone(servers[0]!),
+      adapterServerId: "second-default-claimant",
+    });
+    expect(wpSiteInventoryV1Schema.safeParse(raw).success).toBe(false);
+  });
+
+  it("rejects unknown fields at every level (strict objects) and a non-wordpress client", () => {
+    const withTopLevel = rawFixture();
+    withTopLevel.surprise = true;
+    expect(wpSiteInventoryV1Schema.safeParse(withTopLevel).success).toBe(false);
+
+    const withSiteField = rawFixture();
+    (withSiteField.site as Record<string, unknown>).surprise = true;
+    expect(wpSiteInventoryV1Schema.safeParse(withSiteField).success).toBe(false);
+
+    const withServerField = rawFixture();
+    (withServerField.servers as Array<Record<string, unknown>>)[1]!.surprise = true;
+    expect(wpSiteInventoryV1Schema.safeParse(withServerField).success).toBe(false);
+
+    const wrongClient = rawFixture();
+    wrongClient.client = "drupal";
+    expect(wpSiteInventoryV1Schema.safeParse(wrongClient).success).toBe(false);
+  });
+
   it("rejects an out-of-vocabulary transport and an empty transport list", () => {
     const raw = rawFixture();
     const servers = raw.servers as Array<Record<string, unknown>>;
