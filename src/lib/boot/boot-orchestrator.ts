@@ -34,6 +34,7 @@ import { artifactDataRootGuardPhases } from "@/lib/boot/phases/artifact-data-roo
 import { bootDegradeProbePhases } from "@/lib/boot/phases/boot-degrade-probe";
 import { executionPlaneHealthPhases } from "@/lib/boot/phases/execution-plane-health";
 import { environmentExecutionServicePhases } from "@/lib/boot/phases/environment-execution-service";
+import { executionBrokerPhases } from "@/lib/boot/phases/execution-broker";
 import { systemServicesPhases } from "@/lib/boot/phases/system-services";
 import { systemLoopPhases } from "@/lib/boot/phases/system-loops";
 import {
@@ -221,6 +222,16 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // REQUIRED=1 → degraded policy), non-blocking degraded otherwise. Inert (skipped)
   // on an instance that has not opted into the plane, so today's boots are unchanged.
   await run(executionPlaneHealthPhases());
+
+  // ── execution-broker (exec-plane S1b activation — cinatra#2138) ──────────────
+  // Wires the merged broker + local-dev worker + attributing egress gateway and
+  // registers the executor factory — but ONLY past a completed broker↔worker
+  // health handshake, and ONLY behind the epic's default-off ROLLOUT flag. With
+  // the flag unset `executionBrokerPhases()` returns an EMPTY list, so this line
+  // is a no-op and the boot sequence is byte-identical to today's. MUST run
+  // BEFORE environment-execution-service: that phase resolves its tri-state
+  // readiness from the registered factory.
+  await run(executionBrokerPhases());
 
   // ── environment-execution-service (exec-plane S3 A2 — cinatra#1708) ──────────
   // Instantiates the A2 execution-environment singletons (durable layer store +

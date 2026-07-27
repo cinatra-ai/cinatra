@@ -1,0 +1,22 @@
+Real-daemon Docker E2E battery (packages/execution-plane, pnpm test:e2e) — this lane's machine, 2026-07-27.
+Real containers over cinatra-sandbox-l0:dev, real docker volumes, the real --internal network + gateway container.
+
+ ✓ AC1 — command / script / persistence, all in the plane > runs a command in a real hardened container and captures stdout 649ms
+ ✓ AC1 — command / script / persistence, all in the plane > persists files across commands within a run: write a script, then run it 1354ms
+ ✓ AC1 — command / script / persistence, all in the plane > a fresh run NEVER sees another run's workspace (L2 isolation) 1410ms
+ ✓ security battery — hardened-container contract (epic AC6) > non-root fixed UID, read-only rootfs, zero capabilities, no-new-privileges, scrubbed env 671ms
+ ✓ security battery — hardened-container contract (epic AC6) > mount table: no host bind mounts — only the L2 volume and declared tmpfs are writable 651ms
+ ✓ security battery — hardened-container contract (epic AC6) > no runtime root path: sudo/su absent or refused (D2) 1578ms
+ ✓ disk-quota enforcement (S1 AC4 — the write cap is ENFORCED) > a single file is capped by the in-sandbox ulimit 560ms
+ ✓ disk-quota enforcement (S1 AC4 — the write cap is ENFORCED) > total-workspace exhaustion terminates the job; further commands are refused closed 600ms
+ ✓ resource ceilings — timeout and output caps > a runaway command is killed at the wall-clock ceiling and the container is removed 4422ms
+ ✓ resource ceilings — timeout and output caps > unbounded output is truncated and terminated as output_cap_exceeded 667ms
+ ✓ egress policy — network-LAYER enforcement (S1 AC3, epic D3) > mode none: the sandbox has no network at all 549ms
+ ✓ egress policy — network-LAYER enforcement (S1 AC3, epic D3) > default-internet transits ONLY the gateway, fully attributed (pypi.org reachable; audit carries destinations) 16008ms
+ ✓ egress policy — network-LAYER enforcement (S1 AC3, epic D3) > pip install through the gateway, then USE the package in a later command (AC1) 2604ms
+ ✓ egress policy — network-LAYER enforcement (S1 AC3, epic D3) > allowlist mode: non-listed hosts are denied AND the gateway cannot be bypassed 26686ms
+ ✓ S2 (#1707) — staged skill snapshots: /skills reads, immutability, executor binding > skill reads work via /skills/<slug> staging; the snapshot is READ-ONLY 4063ms
+ ✓ S2 (#1707) — staged skill snapshots: /skills reads, immutability, executor binding > the llm sandbox tool bound via createBrokerSandboxExecutor runs reads + persistence on the plane 3217ms
+ ✓ S2 (#1707) — staged skill snapshots: /skills reads, immutability, executor binding > openJob refuses a tampered snapshot against the real staging path (fail-closed) 21ms
+ ✓ session liveness against real containers (S1 AC6) > purge mid-job fails the next command closed and terminates; archive does not 1456ms
+      Tests  18 passed (18)

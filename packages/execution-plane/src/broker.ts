@@ -104,6 +104,20 @@ type BrokerJob = {
    */
   environment?: ResolvedEnvironmentMount;
   seq: number;
+  /**
+   * Epoch ms of the last activity on this job (open, or a dispatched command).
+   * Drives `closeIdleJobs` — the app wiring's defense against the open-job
+   * ceiling filling up with jobs whose carriers have long expired (exec-plane
+   * S1b, cinatra#2138; Codex convergence finding 3).
+   */
+  lastActivityMs: number;
+  /**
+   * Commands currently dispatched on this job. `closeIdleJobs` NEVER closes a
+   * job with work in flight (Codex convergence round 2): a command that outlives
+   * the idle window — a long queue wait plus a long run — must not have its job
+   * terminated underneath it.
+   */
+  inFlightCommands: number;
   terminated: boolean;
   terminationReason?: string;
 };
@@ -330,6 +344,8 @@ export class ExecutionBroker {
         ...(skillsVolume ? { skillsVolume } : {}),
         ...(openOpts?.environment ? { environment: openOpts.environment } : {}),
         seq: 0,
+        lastActivityMs: this.opts.nowMs?.() ?? Date.now(),
+        inFlightCommands: 0,
         terminated: false,
       };
       this.jobs.set(jobId, job);
@@ -455,17 +471,25 @@ export class ExecutionBroker {
       }
 
       const seq = job.seq++;
+      job.lastActivityMs = this.opts.nowMs?.() ?? Date.now();
+      job.inFlightCommands += 1;
       let result: SandboxCommandResult;
       try {
-        result = await this.opts.worker.runCommand({
-          jobId: job.jobId,
-          command,
-          workspaceVolume: job.workspaceVolume,
-          ...(job.skillsVolume ? { skillsVolume: job.skillsVolume } : {}),
-          ...(job.environment ? { environment: job.environment } : {}),
-          egress,
-          limits: this.limits,
-        });
+        try {
+          result = await this.opts.worker.runCommand({
+            jobId: job.jobId,
+            command,
+            workspaceVolume: job.workspaceVolume,
+            ...(job.skillsVolume ? { skillsVolume: job.skillsVolume } : {}),
+            ...(job.environment ? { environment: job.environment } : {}),
+            egress,
+            limits: this.limits,
+          });
+        } finally {
+          // Always released, on EVERY path out of the dispatch — the idle sweep
+          // must never see a phantom in-flight command (nor miss a real one).
+          job.inFlightCommands = Math.max(0, job.inFlightCommands - 1);
+        }
       } catch (err) {
         // A worker/dispatch failure must NOT throw into the caller (an
         // unaudited error encourages unsafe retries). Audit a structured
@@ -537,6 +561,53 @@ export class ExecutionBroker {
       await removeSkillsVolume(job.skillsVolume, this.opts.docker);
     }
     this.jobs.delete(jobId);
+  }
+
+  /**
+   * Close every open job whose last activity is older than `idleMs`.
+   *
+   * The executor memoizes ONE job per sealed carrier and reuses it across the
+   * steps/turns of a request (the L2 workspace-persistence contract), but a
+   * request has no "turn finished" signal it can hand back — so without this
+   * sweep a long-lived app-wired broker accumulates one open job per carrier
+   * until the per-org open-job ceiling refuses all further execution until the
+   * process restarts (exec-plane S1b, cinatra#2138; Codex convergence finding
+   * 3). The app wiring runs this on a timer with the carrier TTL as `idleMs`:
+   * past that, no valid carrier can reach the job anyway.
+   *
+   * A job with a command IN FLIGHT is never closed, so the sweep can never
+   * terminate a job underneath a running command; `closeJob` is idempotent
+   * (unknown job ⇒ no-op), so overlapping sweeps cannot double-close.
+   *
+   * The WORKSPACE is deliberately left in place — an L2 volume is run-keyed and
+   * possibly shared, and the retention GC owns it; a later command on the same
+   * run re-opens onto the same workspace. Returns the number closed.
+   */
+  async closeIdleJobs(idleMs: number): Promise<number> {
+    const cutoff = (this.opts.nowMs?.() ?? Date.now()) - idleMs;
+    const reapable = (job: BrokerJob): boolean =>
+      // Work in flight ⇒ never a reap candidate, whatever the idle clock says.
+      !job.terminated && job.inFlightCommands === 0 && job.lastActivityMs <= cutoff;
+    const candidates: string[] = [];
+    for (const job of this.jobs.values()) {
+      if (reapable(job)) candidates.push(job.jobId);
+    }
+    let closed = 0;
+    for (const jobId of candidates) {
+      // RE-CHECK AND CLAIM SYNCHRONOUSLY, immediately before the awaited close
+      // (Codex convergence round 3). Between building the candidate list and
+      // reaching this job, an await may have let a new command open on it — or
+      // an overlapping sweep may already have claimed it. `terminate` is a
+      // synchronous flag flip, so the claim cannot interleave: a concurrent
+      // `exec` sees `terminated` and refuses fail-closed, and a second sweep
+      // sees it too and skips.
+      const job = this.jobs.get(jobId);
+      if (!job || !reapable(job)) continue;
+      this.terminate(job, "closed");
+      await this.closeJob(jobId);
+      closed += 1;
+    }
+    return closed;
   }
 
   /** Currently-executing command count (observability / load tests). */
