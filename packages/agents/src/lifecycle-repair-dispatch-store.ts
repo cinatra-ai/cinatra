@@ -41,6 +41,13 @@ import "server-only";
 // producer that never answers leaves a `dispatched` repair and a PENDING base
 // produced-event — both ops-visible, neither silently dropped.
 //
+// The repair run is minted through `createAgentRun` — the single OBO-ceiling
+// primitive (#1035) — as a CHILD DISPATCH under the producing run, threading the
+// producing run's PERSISTED ceiling chain as the compose operand. The child's own
+// ceiling is server-derived inside the primitive; a provably-disjoint composition
+// throws and the delivery fails closed with nothing written. The primitive mints
+// the row `queued`; no execution job is enqueued HERE (see the scope note below).
+//
 // No schema change: the run id is derived from the repair id (the same technique
 // `orphanRepairRunId` already uses for the successor gate's run slot), and the
 // escalation reason rides `change_summary` behind an explicit sentinel, mirroring
@@ -55,7 +62,10 @@ import { and, asc, eq, sql } from "drizzle-orm";
 
 import { db } from "./db";
 import { agentRuns, agentTemplates, lifecycleRepair } from "./schema";
+import { createAgentRun } from "./store";
 import { markRepairDispatched } from "./lifecycle-repair-store";
+
+import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 
 import type { ChangesRequestedRequest, RepairFinding } from "@/lib/lifecycle/lifecycle-repair";
 
@@ -197,22 +207,34 @@ export async function dispatchPendingProducerRepairs(opts?: {
         continuationAddress: row.continuationAddress ?? null,
       };
 
-      await db
-        .insert(agentRuns)
-        .values({
-          id: repairRunId(row.id),
-          templateId: producer.templateId,
-          orgId: row.orgId,
-          // NOT "queued": a queued run implies an enqueued execution job, and this
-          // drain enqueues none (it delivers a durable request). `pending_input`
-          // is the shipped status for "this run is waiting on an input it has not
-          // received yet", which is exactly the state of an undelivered repair.
-          status: "pending_input",
-          inputParams: JSON.stringify({ lifecycleRepairRequest: request }),
-          sourceType: "lifecycle_repair",
-          parentRunId: row.producerRunId ?? null,
-        })
-        .onConflictDoNothing({ target: agentRuns.id });
+      const runId = repairRunId(row.id);
+      const [already] = await db
+        .select({ id: agentRuns.id })
+        .from(agentRuns)
+        .where(eq(agentRuns.id, runId))
+        .limit(1);
+      if (!already) {
+        try {
+          await createAgentRun({
+            id: runId,
+            templateId: producer.templateId,
+            orgId: row.orgId,
+            inputParams: { lifecycleRepairRequest: request },
+            sourceType: "lifecycle_repair",
+            // CHILD DISPATCH (#1035): the repair run runs under the producing
+            // run. Its own ceiling is server-derived inside the primitive; the
+            // parent's PERSISTED chain is the compose operand only, never copied.
+            parentRunId: row.producerRunId ?? null,
+            parentOboCeiling: producer.parentOboCeiling,
+            // A re-drain re-derives the same key, so an at-least-once delivery
+            // converges on the SAME repair run.
+            idempotencyKey: `lifecycle-repair:${row.id}`,
+          });
+        } catch (err) {
+          // A concurrent drain won the insert — the delivery is already durable.
+          if ((err as { code?: string } | null)?.code !== "23505") throw err;
+        }
+      }
 
       const moved = await markRepairDispatched(row.id);
       if (moved) summary.dispatched += 1;
@@ -231,12 +253,16 @@ export async function dispatchPendingProducerRepairs(opts?: {
 }
 
 /** Resolve the producing run's template (the agent that must repair). */
-async function resolveProducingTemplate(
-  producerRunId: string | null,
-): Promise<{ templateId: string; packageName: string | null } | null> {
+async function resolveProducingTemplate(producerRunId: string | null): Promise<{
+  templateId: string;
+  packageName: string | null;
+  /** The producing run's PERSISTED OBO ceiling chain — the compose operand for
+   * the child repair run (server-read, never caller input). */
+  parentOboCeiling: OboCeilingChain | null;
+} | null> {
   if (!producerRunId) return null;
   const [run] = await db
-    .select({ templateId: agentRuns.templateId })
+    .select({ templateId: agentRuns.templateId, oboCeiling: agentRuns.oboCeiling })
     .from(agentRuns)
     .where(eq(agentRuns.id, producerRunId))
     .limit(1);
@@ -247,7 +273,15 @@ async function resolveProducingTemplate(
     .where(eq(agentTemplates.id, run.templateId))
     .limit(1);
   if (!tmpl) return null;
-  return { templateId: tmpl.id, packageName: tmpl.packageName ?? null };
+  let parentOboCeiling: OboCeilingChain | null = null;
+  if (run.oboCeiling) {
+    try {
+      parentOboCeiling = JSON.parse(run.oboCeiling) as OboCeilingChain;
+    } catch {
+      parentOboCeiling = null;
+    }
+  }
+  return { templateId: tmpl.id, packageName: tmpl.packageName ?? null, parentOboCeiling };
 }
 
 /** CAS a `requested` repair to `escalated`, recording WHY on `change_summary`

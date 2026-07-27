@@ -56,6 +56,12 @@ const SCAN_ROOTS = ["src", "packages"];
  * check below). `why` documents the classification for the next reader.
  */
 const DISPATCH_SITES: Record<string, { role: "child-dispatch" | "top-level"; why: string }> = {
+  "packages/agents/src/lifecycle-repair-dispatch-store.ts": {
+    role: "child-dispatch",
+    why:
+      "cinatra#2047 D-1: the lifecycle repair DELIVERY mints a repair run under the " +
+      "PRODUCING run — threads that run's server-read persisted oboCeiling.",
+  },
   "src/lib/project-dispatch.ts": {
     role: "child-dispatch",
     why: "PM-seat tick dispatches a worker agent under the PM run — threads the parent run's server-read oboCeiling.",
