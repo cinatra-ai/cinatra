@@ -60,6 +60,42 @@ export type RequireInstanceUseGate = (
 /** Host-side resolved wire target for an instance (Nango → Basic auth; §1.3). */
 export type ResolvedInstanceEndpoint = { endpoint: string; authHeader: string };
 
+/** Fresh-serve window for a per-(instance, server) catalog snapshot
+ * (cinatra#2018 S3 D7). Expansion costs one discover + N get-info wire calls,
+ * so refreshing at most every 5 min per server is negligible load while
+ * keeping "a new tool appears within the TTL" a 5-minute promise. */
+export const CATALOG_TTL_MS = 5 * 60_000;
+/** Serve-stale ceiling, applied ONLY when a refresh FAILED (D7): bounds the
+ * operator-visible inconsistency window through a transient site outage
+ * without letting a long-dead site serve phantom catalogs. */
+export const CATALOG_MAX_STALE_MS = 60 * 60_000;
+
+/** The minimal enrolled-server projection the acquire loop consumes
+ * (structurally satisfied by the enrollment store's `listEnrolledServers`) —
+ * deliberately never the full health/history row. */
+export type EnrolledServerRef = {
+  serverId: string;
+  exposureMode: "triad-only" | "first-class" | null;
+  restPath: string;
+};
+
+/** Map a catalog-load failure onto the persisted per-server health state
+ * (cinatra#2018 S3 §7): wire 401/403 → `auth_error`; absent-stack
+ * (`network_error`/`timeout`) → `unreachable`; everything else — the endpoint
+ * answered but expansion failed (`session_required`/`tool_error`/
+ * `empty_response`/`invalid_response`) or an unclassified expansion error —
+ * → `catalog_unavailable`. */
+export function mapCatalogLoadErrorToServerHealth(
+  err: unknown,
+): "catalog_unavailable" | "unreachable" | "auth_error" {
+  if (err instanceof InvokerError) {
+    if (err.httpStatus === 401 || err.httpStatus === 403) return "auth_error";
+    if (err.code === "network_error" || err.code === "timeout") return "unreachable";
+    return "catalog_unavailable";
+  }
+  return "catalog_unavailable";
+}
+
 export type ConnectorInstanceInvokerDeps = {
   /** Step 1 — the SINGLE live per-instance USE authority pass (M4). */
   requireUse: RequireInstanceUseGate;
@@ -72,11 +108,47 @@ export type ConnectorInstanceInvokerDeps = {
     reason: string;
   }) => Promise<{ created: boolean }>;
   /** Host-side endpoint + single-source (Nango→Basic) auth resolution (§1.3).
-   * Runs ONLY after the gate (B2). Returns null when the instance is unresolvable. */
+   * Runs ONLY after the gate (B2). Returns null when the instance is
+   * unresolvable. The OPTIONAL third parameter (cinatra#2018 S3) resolves a
+   * dedicated enrolled server's per-route endpoint; omitted / the default id
+   * keeps the exact pre-S3 behavior, and an unknown/retired serverId resolves
+   * null (fail closed). Legacy two-parameter implementations remain assignable. */
   resolveInstanceEndpoint: (
     connectorKey: string,
     instanceId: string,
+    serverId?: string,
   ) => Promise<ResolvedInstanceEndpoint | null>;
+  /** cinatra#2018 S3 — the enrollment-store read driving multi-server acquire.
+   * OPTIONAL for compatibility: when ABSENT the acquire path keeps the exact
+   * S2 single-default-server behavior (legacy deps / connectors without
+   * enrollment). When PRESENT the acquire loop serves ONLY currently-enrolled
+   * serverIds (store beats cache: a retired server's still-cached snapshot is
+   * unreachable even if eviction raced) under the TTL/max-stale policy, and a
+   * FAILED store read fails CLOSED (typed error — never a silent
+   * default-server fallback that could resurrect a retired server). */
+  listEnrolledServers?: (
+    connectorKey: string,
+    instanceId: string,
+  ) => Promise<EnrolledServerRef[]>;
+  /** cinatra#2018 S3 — first-touch default-enrollment backstop, run in the
+   * shared gate tail beside `ensureDefaultOpenPolicy` so a pre-S3 instance
+   * converges to an explicit default-enrolled row on first authorized use. */
+  ensureDefaultServerEnrollment?: (input: {
+    connectorKey: string;
+    instanceId: string;
+  }) => Promise<void>;
+  /** cinatra#2018 S3 — per-server health write-back from acquire-loop load
+   * failures (§7). Failures here are logged, never masking the serve path. */
+  recordServerCatalogStatus?: (input: {
+    connectorKey: string;
+    instanceId: string;
+    serverId: string;
+    status: "catalog_unavailable" | "unreachable" | "auth_error";
+    at: number;
+  }) => Promise<void>;
+  /** TTL/max-stale overrides (tests). Defaults: CATALOG_TTL_MS / CATALOG_MAX_STALE_MS. */
+  catalogTtlMs?: number;
+  catalogMaxStaleMs?: number;
   /** The per-(instance, server) catalog cache (§1.4). */
   cache: ConnectorInstanceCatalogCache;
   /** Populate a server's catalog snapshot from the wire (triad expand /
@@ -228,35 +300,163 @@ async function runSharedGate(
     reason: "invoker_first_touch",
   });
 
+  // First-touch default-ENROLLMENT backstop (cinatra#2018 S3), mirroring the
+  // policy backstop above: a pre-S3 instance converges to an explicit
+  // default-enrolled server row the moment it is used — zero backfill.
+  await deps.ensureDefaultServerEnrollment?.({
+    connectorKey: boundConnectorKey,
+    instanceId: effectiveInstanceId,
+  });
+
   return { effectiveInstanceId };
 }
 
-/** Acquire the instance's catalog snapshots (cache-first; populate the default
- * server on a miss). Runs ONLY after the gate (B2). Conservative freshness — S3
- * owns TTL/invalidation (N6). */
+/**
+ * Acquire the instance's catalog snapshots. Runs ONLY after the gate (B2).
+ *
+ * ENROLLMENT-DRIVEN path (cinatra#2018 S3 — `listEnrolledServers` bound): the
+ * loop iterates the STORE's currently-enrolled servers (store beats cache —
+ * layer 1 of removed-server fail-closed: a retired server's still-cached
+ * snapshot is unreachable even if eviction raced) and enforces the freshness
+ * policy per server: fresh (age ≤ TTL) serves the cache; expired triggers a
+ * per-server reload (endpoint resolved per server); a FAILED reload serves the
+ * stale snapshot only within the max-stale window (age honestly visible via
+ * `cacheAgeMs`) and records the mapped per-server health; past max-stale the
+ * server contributes nothing (fail closed). A store-read failure fails CLOSED
+ * (typed error) — never a silent default-server fallback. When the caller
+ * EXPLICITLY targeted an enrolled server that ended up with no obtainable
+ * snapshot, the typed `catalog_unavailable` error distinguishes "the catalog
+ * is unavailable" from `tool_not_found`.
+ *
+ * LEGACY path (`listEnrolledServers` absent — S2-shaped deps): byte-identical
+ * S2 behavior — cache-first, default-server population on a miss.
+ *
+ * SECURITY (§10-A1 / R3-M3, both paths): snapshots are only ever minted under
+ * STABLE, host-owned server ids — `CATALOG_DEFAULT_SERVER_ID` or ids read from
+ * the enrollment STORE — NEVER a caller-supplied `serverId`. Minting a catalog
+ * under a caller-picked id would let a caller forge a `{serverId,name}` policy
+ * key that no deny entry matches (policy bypass). A caller `serverId` stays a
+ * downstream FILTER (resolveToolAcrossServers / the list `scoped` filter /
+ * the explicit-target check here); an unenrolled id resolves to
+ * `tool_not_found`, never a mis-tagged catalog.
+ */
 async function acquireSnapshots(
-  input: { connectorKey: string; instanceId: string; endpoint: string; authHeader: string },
+  input: {
+    connectorKey: string;
+    instanceId: string;
+    endpoint: string;
+    authHeader: string;
+    requestedServerId?: string;
+  },
   deps: ConnectorInstanceInvokerDeps,
 ): Promise<CatalogServerSnapshot[]> {
-  const cached = deps.cache.listForInstance(input.instanceId);
-  if (cached.length > 0) return cached;
-  // SECURITY (§10-A1 / R3-M3): the snapshot identity is the STABLE, host-owned
-  // `CATALOG_DEFAULT_SERVER_ID` — NEVER a caller-supplied `serverId`. Minting the
-  // default catalog under a caller-picked id would let a caller forge a
-  // `{serverId,name}` policy key that no deny entry matches (policy bypass). A
-  // caller `serverId` is a downstream FILTER only (resolveToolAcrossServers /
-  // the list `scoped` filter); an unenrolled id therefore resolves to
-  // `tool_not_found`, never a mis-tagged catalog. S3 owns real multi-server
-  // enrollment + host-generated ids.
-  const snap = await deps.loadServerSnapshot({
-    connectorKey: input.connectorKey,
-    instanceId: input.instanceId,
-    serverId: CATALOG_DEFAULT_SERVER_ID,
-    endpoint: input.endpoint,
-    authHeader: input.authHeader,
-  });
-  deps.cache.set(input.instanceId, snap);
-  return [snap];
+  if (!deps.listEnrolledServers) {
+    const cached = deps.cache.listForInstance(input.instanceId);
+    if (cached.length > 0) return cached;
+    const snap = await deps.loadServerSnapshot({
+      connectorKey: input.connectorKey,
+      instanceId: input.instanceId,
+      serverId: CATALOG_DEFAULT_SERVER_ID,
+      endpoint: input.endpoint,
+      authHeader: input.authHeader,
+    });
+    deps.cache.set(input.instanceId, snap);
+    return [snap];
+  }
+
+  let enrolled: EnrolledServerRef[];
+  try {
+    enrolled = await deps.listEnrolledServers(input.connectorKey, input.instanceId);
+  } catch {
+    throw new InvokerError(
+      "catalog_unavailable",
+      "the server-enrollment read failed; refusing to serve any catalog",
+    );
+  }
+
+  const now = deps.now?.() ?? Date.now();
+  const ttlMs = deps.catalogTtlMs ?? CATALOG_TTL_MS;
+  const maxStaleMs = deps.catalogMaxStaleMs ?? CATALOG_MAX_STALE_MS;
+  const served: CatalogServerSnapshot[] = [];
+
+  for (const server of enrolled) {
+    const cached = deps.cache.get(input.instanceId, server.serverId);
+    const ageMs = cached ? now - cached.fetchedAtMs : Number.POSITIVE_INFINITY;
+    if (cached && ageMs <= ttlMs) {
+      served.push(cached);
+      continue;
+    }
+
+    // Miss/expired → per-server reload. The default server reuses the already-
+    // resolved instance endpoint (behavior-identical to S2); a dedicated server
+    // resolves its own enrolled route.
+    let loadError: unknown;
+    try {
+      const target =
+        server.serverId === CATALOG_DEFAULT_SERVER_ID
+          ? { endpoint: input.endpoint, authHeader: input.authHeader }
+          : await deps.resolveInstanceEndpoint(
+              input.connectorKey,
+              input.instanceId,
+              server.serverId,
+            );
+      if (!target) {
+        throw new InvokerError(
+          "network_error",
+          "per-server endpoint could not be resolved for an enrolled server",
+        );
+      }
+      const snap = await deps.loadServerSnapshot({
+        connectorKey: input.connectorKey,
+        instanceId: input.instanceId,
+        serverId: server.serverId,
+        endpoint: target.endpoint,
+        authHeader: target.authHeader,
+      });
+      deps.cache.set(input.instanceId, snap);
+      served.push(snap);
+      continue;
+    } catch (err) {
+      loadError = err;
+    }
+
+    // Reload FAILED: record per-server health, then serve-stale-within-window
+    // or omit (fail closed past max-stale).
+    if (deps.recordServerCatalogStatus) {
+      try {
+        await deps.recordServerCatalogStatus({
+          connectorKey: input.connectorKey,
+          instanceId: input.instanceId,
+          serverId: server.serverId,
+          status: mapCatalogLoadErrorToServerHealth(loadError),
+          at: now,
+        });
+      } catch (recordErr) {
+        console.error(
+          "[connector-instance-invoker] per-server health write-back failed",
+          recordErr,
+        );
+      }
+    }
+    if (cached && ageMs <= maxStaleMs) served.push(cached);
+  }
+
+  // Explicitly-targeted enrolled server with no obtainable snapshot → the
+  // typed distinction from tool_not_found (the tool may well exist; the
+  // catalog is unavailable). Without an explicit target the other servers
+  // still resolve and a missing tool stays tool_not_found.
+  if (
+    input.requestedServerId &&
+    enrolled.some((server) => server.serverId === input.requestedServerId) &&
+    !served.some((snapshot) => snapshot.serverId === input.requestedServerId)
+  ) {
+    throw new InvokerError(
+      "catalog_unavailable",
+      `no catalog snapshot is obtainable for enrolled server "${input.requestedServerId}"`,
+    );
+  }
+
+  return served;
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +492,7 @@ export async function invokeConnectorInstanceTool(
       instanceId: effectiveInstanceId,
       endpoint: resolved.endpoint,
       authHeader: resolved.authHeader,
+      ...(input.serverId ? { requestedServerId: input.serverId } : {}),
     },
     deps,
   );
@@ -338,6 +539,25 @@ export async function invokeConnectorInstanceTool(
 
   // Step 4 — execute. Triad-translate on triad-only servers; direct call on
   // first-class servers (§3.1). structuredContent-preferring unwrap in transport.
+  // The wire target is the RESOLVED server's endpoint (cinatra#2018 S3): the
+  // default server keeps the pre-resolved instance endpoint (behavior-identical
+  // to S2); a dedicated enrolled server resolves its own route — null (e.g. a
+  // retire raced the call) fails closed.
+  let wireTarget: ResolvedInstanceEndpoint = resolved;
+  if (serverId !== CATALOG_DEFAULT_SERVER_ID && deps.listEnrolledServers) {
+    const perServer = await deps.resolveInstanceEndpoint(
+      input.connectorKey,
+      effectiveInstanceId,
+      serverId,
+    );
+    if (!perServer) {
+      throw new InvokerError(
+        "network_error",
+        "connector instance endpoint could not be resolved",
+      );
+    }
+    wireTarget = perServer;
+  }
   const wire =
     snapshot.exposureMode === "triad-only"
       ? { name: TRIAD_EXECUTE_ABILITY, arguments: { ability_name: name, parameters: input.args } }
@@ -358,8 +578,8 @@ export async function invokeConnectorInstanceTool(
   let result: unknown;
   try {
     result = await deps.callWireTool({
-      endpoint: resolved.endpoint,
-      authHeader: resolved.authHeader,
+      endpoint: wireTarget.endpoint,
+      authHeader: wireTarget.authHeader,
       name: wire.name,
       arguments: wire.arguments,
     });
@@ -472,6 +692,7 @@ export async function listConnectorInstanceTools(
       instanceId: effectiveInstanceId,
       endpoint: resolved.endpoint,
       authHeader: resolved.authHeader,
+      ...(input.serverId ? { requestedServerId: input.serverId } : {}),
     },
     deps,
   );

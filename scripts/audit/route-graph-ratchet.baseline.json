@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1623,
-    "/api/mcp": 1619,
-    "/chat": 1693,
-    "/api/a2a": 1624,
-    "/api/llm-bridge": 1634
+    "/sign-in": 1626,
+    "/api/mcp": 1622,
+    "/chat": 1696,
+    "/api/a2a": 1627,
+    "/api/llm-bridge": 1637
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1621,
-      "to": 1623,
-      "reason": "cinatra#2020 S5 PR-1 destructive-confirmation stores: two zero-import bootstrap-DDL leaves (connector-instance-pending-call-schema.ts + connector-instance-confirmation-policy-schema.ts) are composed into buildCreateStoreSchemaQueries in drizzle-store.ts, which is statically reachable from every locked route, adding +2 first-party modules per route. Only the schema leaves are wired here (the store + floor modules are not reachable from any route) and the leaves have no imports, so the raise is exactly +2 and cannot be narrowed without deferring the additive bootstrap DDL off the boot schema composition. Replaces the PR-2118 record for this route (its raise is baked into base).",
-      "pr": 2126
+      "from": 1623,
+      "to": 1626,
+      "reason": "cinatra#2018 S3 PR-C multi-server invoker lifecycle: the boot binder (register-host-connector-services.ts, statically reachable from every locked route) now wires the enrollment-driven acquire path, adding exactly +3 first-party modules per route \u2014 the connector-instance-server-store (the PR-2118 DDL leaf's store, now bound into the invoker deps + endpoint resolver), the connector-instance-snapshot-loader (per-server exposure dispatch), and the wordpress-server-enrollment reconciler (manual routes + health refresh bound as host-local wordpress-mcp members). The wp-site-inventory contract module stays type-only from the reconciler and adds no route edge. Ships dark (no live perimeter reaches the invoker until S7); the edge is the design-mandated boot-time capability publish and cannot be narrowed without deferring capability registration off the boot path. Replaces the PR-2126 record for this route (its raise is baked into base).",
+      "pr": 2139
     },
     "/api/mcp": {
-      "from": 1617,
-      "to": 1619,
-      "reason": "cinatra#2020 S5 PR-1 destructive-confirmation stores: two zero-import bootstrap-DDL leaves (connector-instance-pending-call-schema.ts + connector-instance-confirmation-policy-schema.ts) are composed into buildCreateStoreSchemaQueries in drizzle-store.ts, which is statically reachable from every locked route, adding +2 first-party modules per route. Only the schema leaves are wired here (the store + floor modules are not reachable from any route) and the leaves have no imports, so the raise is exactly +2 and cannot be narrowed without deferring the additive bootstrap DDL off the boot schema composition. Replaces the PR-2118 record for this route (its raise is baked into base).",
-      "pr": 2126
+      "from": 1619,
+      "to": 1622,
+      "reason": "cinatra#2018 S3 PR-C multi-server invoker lifecycle: the boot binder (register-host-connector-services.ts, statically reachable from every locked route) now wires the enrollment-driven acquire path, adding exactly +3 first-party modules per route \u2014 the connector-instance-server-store (the PR-2118 DDL leaf's store, now bound into the invoker deps + endpoint resolver), the connector-instance-snapshot-loader (per-server exposure dispatch), and the wordpress-server-enrollment reconciler (manual routes + health refresh bound as host-local wordpress-mcp members). The wp-site-inventory contract module stays type-only from the reconciler and adds no route edge. Ships dark (no live perimeter reaches the invoker until S7); the edge is the design-mandated boot-time capability publish and cannot be narrowed without deferring capability registration off the boot path. Replaces the PR-2126 record for this route (its raise is baked into base).",
+      "pr": 2139
     },
     "/chat": {
-      "from": 1691,
-      "to": 1693,
-      "reason": "cinatra#2020 S5 PR-1 destructive-confirmation stores: two zero-import bootstrap-DDL leaves (connector-instance-pending-call-schema.ts + connector-instance-confirmation-policy-schema.ts) are composed into buildCreateStoreSchemaQueries in drizzle-store.ts, which is statically reachable from every locked route, adding +2 first-party modules per route. Only the schema leaves are wired here (the store + floor modules are not reachable from any route) and the leaves have no imports, so the raise is exactly +2 and cannot be narrowed without deferring the additive bootstrap DDL off the boot schema composition. Replaces the PR-2118 record for this route (its raise is baked into base).",
-      "pr": 2126
+      "from": 1693,
+      "to": 1696,
+      "reason": "cinatra#2018 S3 PR-C multi-server invoker lifecycle: the boot binder (register-host-connector-services.ts, statically reachable from every locked route) now wires the enrollment-driven acquire path, adding exactly +3 first-party modules per route \u2014 the connector-instance-server-store (the PR-2118 DDL leaf's store, now bound into the invoker deps + endpoint resolver), the connector-instance-snapshot-loader (per-server exposure dispatch), and the wordpress-server-enrollment reconciler (manual routes + health refresh bound as host-local wordpress-mcp members). The wp-site-inventory contract module stays type-only from the reconciler and adds no route edge. Ships dark (no live perimeter reaches the invoker until S7); the edge is the design-mandated boot-time capability publish and cannot be narrowed without deferring capability registration off the boot path. Replaces the PR-2126 record for this route (its raise is baked into base).",
+      "pr": 2139
     },
     "/api/a2a": {
-      "from": 1622,
-      "to": 1624,
-      "reason": "cinatra#2020 S5 PR-1 destructive-confirmation stores: two zero-import bootstrap-DDL leaves (connector-instance-pending-call-schema.ts + connector-instance-confirmation-policy-schema.ts) are composed into buildCreateStoreSchemaQueries in drizzle-store.ts, which is statically reachable from every locked route, adding +2 first-party modules per route. Only the schema leaves are wired here (the store + floor modules are not reachable from any route) and the leaves have no imports, so the raise is exactly +2 and cannot be narrowed without deferring the additive bootstrap DDL off the boot schema composition. Replaces the PR-2118 record for this route (its raise is baked into base).",
-      "pr": 2126
+      "from": 1624,
+      "to": 1627,
+      "reason": "cinatra#2018 S3 PR-C multi-server invoker lifecycle: the boot binder (register-host-connector-services.ts, statically reachable from every locked route) now wires the enrollment-driven acquire path, adding exactly +3 first-party modules per route \u2014 the connector-instance-server-store (the PR-2118 DDL leaf's store, now bound into the invoker deps + endpoint resolver), the connector-instance-snapshot-loader (per-server exposure dispatch), and the wordpress-server-enrollment reconciler (manual routes + health refresh bound as host-local wordpress-mcp members). The wp-site-inventory contract module stays type-only from the reconciler and adds no route edge. Ships dark (no live perimeter reaches the invoker until S7); the edge is the design-mandated boot-time capability publish and cannot be narrowed without deferring capability registration off the boot path. Replaces the PR-2126 record for this route (its raise is baked into base).",
+      "pr": 2139
     },
     "/api/llm-bridge": {
-      "from": 1632,
-      "to": 1634,
-      "reason": "cinatra#2020 S5 PR-1 destructive-confirmation stores: two zero-import bootstrap-DDL leaves (connector-instance-pending-call-schema.ts + connector-instance-confirmation-policy-schema.ts) are composed into buildCreateStoreSchemaQueries in drizzle-store.ts, which is statically reachable from every locked route, adding +2 first-party modules per route. Only the schema leaves are wired here (the store + floor modules are not reachable from any route) and the leaves have no imports, so the raise is exactly +2 and cannot be narrowed without deferring the additive bootstrap DDL off the boot schema composition. Replaces the PR-2118 record for this route (its raise is baked into base).",
-      "pr": 2126
+      "from": 1634,
+      "to": 1637,
+      "reason": "cinatra#2018 S3 PR-C multi-server invoker lifecycle: the boot binder (register-host-connector-services.ts, statically reachable from every locked route) now wires the enrollment-driven acquire path, adding exactly +3 first-party modules per route \u2014 the connector-instance-server-store (the PR-2118 DDL leaf's store, now bound into the invoker deps + endpoint resolver), the connector-instance-snapshot-loader (per-server exposure dispatch), and the wordpress-server-enrollment reconciler (manual routes + health refresh bound as host-local wordpress-mcp members). The wp-site-inventory contract module stays type-only from the reconciler and adds no route edge. Ships dark (no live perimeter reaches the invoker until S7); the edge is the design-mandated boot-time capability publish and cannot be narrowed without deferring capability registration off the boot path. Replaces the PR-2126 record for this route (its raise is baked into base).",
+      "pr": 2139
     }
   }
 }
