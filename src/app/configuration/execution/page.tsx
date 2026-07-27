@@ -37,6 +37,7 @@ import { getExecutionBrokerStatus } from "@/lib/execution/execution-broker-slot"
 import {
   EXECUTION_PLANE_MODES,
   OPERABLE_EXECUTION_PLANE_MODES,
+  isExecutionPlaneRolloutOn,
   readExecutionPlaneSettings,
   type ExecutionEgressMode,
   type ExecutionPlaneMode,
@@ -108,6 +109,10 @@ export default async function ConfigurationExecutionPage({ searchParams }: Props
   const tab = TABS.some((item) => item.value === requested) ? requested : "settings";
 
   const settings = readExecutionPlaneSettings();
+  // An instance without the rollout flag is INERT by design: nothing is wired
+  // and nothing would honor a setting change. Render read-only rather than
+  // offering controls that quietly do nothing.
+  const rolloutOn = isExecutionPlaneRolloutOn();
 
   return (
     <Main className="min-h-screen">
@@ -119,7 +124,7 @@ export default async function ConfigurationExecutionPage({ searchParams }: Props
       <PageContent className="flex flex-col gap-6 pb-8">
         <SettingsTabNav tabs={TABS} activeTab={tab} />
 
-        {tab === "settings" && <SettingsTab settings={settings} />}
+        {tab === "settings" && <SettingsTab settings={settings} rolloutOn={rolloutOn} />}
         {tab === "health" && (
           <HealthTab orgId={session.session?.activeOrganizationId ?? null} />
         )}
@@ -130,11 +135,20 @@ export default async function ConfigurationExecutionPage({ searchParams }: Props
 
 function SettingsTab({
   settings,
+  rolloutOn,
 }: {
   settings: ReturnType<typeof readExecutionPlaneSettings>;
+  rolloutOn: boolean;
 }) {
   return (
     <SaveExecutionPlaneForm className="flex flex-col gap-4">
+      {!rolloutOn && (
+        <div className="max-w-3xl rounded-control border border-line bg-surface-muted p-4 text-sm leading-6 text-muted-foreground">
+          The execution plane is not enabled on this instance, so these settings are
+          read-only and nothing runs sandbox commands. Turning it on for users is a
+          separate, deliberate decision made outside this screen.
+        </div>
+      )}
       <Card className="max-w-3xl border-line bg-surface backdrop-blur-none">
         <CardHeader>
           <CardTitle>Execution mode</CardTitle>
@@ -153,7 +167,7 @@ function SettingsTab({
                     <RadioGroupItem
                       id={`mode-${mode}`}
                       value={mode}
-                      disabled={!operable}
+                      disabled={!operable || !rolloutOn}
                     />
                     <FieldContent
                       className={operable ? undefined : "opacity-50"}
@@ -185,7 +199,7 @@ function SettingsTab({
             <FieldGroup>
               {(Object.keys(EGRESS_COPY) as ExecutionEgressMode[]).map((mode) => (
                 <Field key={mode} orientation="horizontal">
-                  <RadioGroupItem id={`egress-${mode}`} value={mode} />
+                  <RadioGroupItem id={`egress-${mode}`} value={mode} disabled={!rolloutOn} />
                   <FieldContent>
                     <FieldLabel htmlFor={`egress-${mode}`}>
                       {EGRESS_COPY[mode].label}
@@ -204,6 +218,7 @@ function SettingsTab({
               rows={3}
               defaultValue={settings.egressAllowlist.join("\n")}
               placeholder={"pypi.org\nregistry.npmjs.org"}
+              disabled={!rolloutOn}
             />
             <FieldDescription>
               One host per line. A host also covers its subdomains. Used only by the
@@ -212,7 +227,13 @@ function SettingsTab({
           </Field>
         </CardContent>
         <CardFooter>
-          <Button type="submit">Save execution settings</Button>
+          <Button
+            type="submit"
+            disabled={!rolloutOn}
+            title={rolloutOn ? undefined : "The execution plane is not enabled on this instance"}
+          >
+            Save execution settings
+          </Button>
         </CardFooter>
       </Card>
     </SaveExecutionPlaneForm>

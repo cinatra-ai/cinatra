@@ -115,10 +115,24 @@ describe("run-liveness probe", () => {
   });
 
   it("answers alive while the run row exists", async () => {
-    readAgentRunById.mockResolvedValueOnce({ id: "run-9" });
+    readAgentRunById.mockResolvedValueOnce({ id: "run-9", orgId: "o", runBy: "u" });
     await expect(
       createRunLivenessProbe()({ orgId: "o", userId: "u", surface: "agent_run", runId: "run-9" }),
     ).resolves.toBe("alive");
+  });
+
+  it("answers gone when the run row's ORG no longer matches the sealed session", async () => {
+    readAgentRunById.mockResolvedValueOnce({ id: "run-9", orgId: "other-org", runBy: "u" });
+    await expect(
+      createRunLivenessProbe()({ orgId: "o", userId: "u", surface: "agent_run", runId: "run-9" }),
+    ).resolves.toBe("gone");
+  });
+
+  it("answers gone when the run row's OWNER no longer matches the sealed session", async () => {
+    readAgentRunById.mockResolvedValueOnce({ id: "run-9", orgId: "o", runBy: "someone-else" });
+    await expect(
+      createRunLivenessProbe()({ orgId: "o", userId: "u", surface: "agent_run", runId: "run-9" }),
+    ).resolves.toBe("gone");
   });
 
   it("does not kill live jobs on a transient store failure", async () => {

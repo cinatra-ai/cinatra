@@ -36,6 +36,7 @@ import {
   type LocalGateway,
 } from "@cinatra-ai/execution-plane";
 import {
+  DEFAULT_CARRIER_TTL_MS,
   mintExecutionSession,
   sealExecutionSession,
   type ExecutionSession,
@@ -62,13 +63,30 @@ export const BOOT_HANDSHAKE_ACTOR_ID = "__boot_handshake";
 const HANDSHAKE_COMMAND = "printf cinatra-exec-handshake";
 const HANDSHAKE_EXPECTED_STDOUT = "cinatra-exec-handshake";
 
+/** How often the idle-job sweep runs (Codex convergence finding 3). */
+export const IDLE_JOB_SWEEP_INTERVAL_MS = 60_000;
+
+/** How long the health surface may reuse a liveness verdict (finding 7). */
+export const LIVENESS_CACHE_MS = 30_000;
+
 /**
  * Host path of the gateway script to bind-mount into the trusted gateway
  * container. Resolved from the repo root rather than `import.meta.url`: the app
  * consumes `@cinatra-ai/execution-plane` through a bundler, so the package's own
  * module URL points into the build output.
+ *
+ * PACKAGING NOTE (Codex convergence finding 5): the standalone runtime image
+ * copies `.next/standalone`, `.next/static`, `public` and the setup CLI — it
+ * does NOT copy `packages/execution-plane/runtime/`. That is consistent with
+ * this slice's scope: `local-dev` is the only operable placement and it runs
+ * from a repo checkout. `EXECUTION_GATEWAY_SCRIPT_PATH` lets a packaged
+ * deployment point at a mounted copy; absent the file, `startLocalGateway`
+ * fails and the boot phase reports the plane `unavailable` with that reason
+ * rather than running sandboxes with unattributed egress.
  */
-function resolveGatewayScriptPath(): string {
+function resolveGatewayScriptPath(env: Record<string, string | undefined>): string {
+  const override = env.EXECUTION_GATEWAY_SCRIPT_PATH?.trim();
+  if (override) return override;
   return path.join(
     process.cwd(),
     "packages",
@@ -115,12 +133,24 @@ export function createExecutionAuditSink(): (record: ExecutionAuditRecord) => Pr
 
 /**
  * Run-liveness probe (the merged broker's per-command revalidation seam).
- * A session bound to a run resolves against the run store: a row that no longer
- * exists is `gone` (hard removal via force_delete / purge) and fails the NEXT
- * command closed. Sessions with no run binding (chat, deterministic tasks) have
- * no run row to consult and rely on carrier expiry — the contract's documented
- * `alive` answer. A store failure answers `alive` rather than killing live jobs
- * on a transient read error; the carrier TTL still bounds the exposure.
+ *
+ * A session bound to a run resolves against the run store and is `gone` when
+ * either:
+ *   - the row no longer exists (hard removal via force_delete / purge), or
+ *   - the row's `orgId` / `runBy` no longer match the identity sealed into the
+ *     carrier (Codex convergence finding 2). The session was minted FROM that
+ *     row, so a divergence means the binding is stale or forged — continuing
+ *     would execute under attribution the run no longer supports.
+ * Either way the NEXT command fails closed and the job terminates.
+ *
+ * Sessions with no run binding (chat, deterministic tasks) have no run row to
+ * consult and rely on carrier expiry — the contract's documented `alive`.
+ *
+ * A store THROW answers `alive`, deliberately: killing every in-flight sandbox
+ * on a transient read blip is a worse failure than the bounded exposure of one
+ * extra command inside an unexpired (≤15 min) carrier window. This is the
+ * merged contract's stated posture for hosts that cannot answer — note it is a
+ * read ERROR, not a missing row: absence is answered `gone`, not `alive`.
  */
 export function createRunLivenessProbe(): (
   session: ExecutionSession,
@@ -128,8 +158,13 @@ export function createRunLivenessProbe(): (
   return async (session) => {
     if (!session.runId) return "alive";
     try {
-      const run = await readAgentRunById(session.runId);
-      return run ? "alive" : "gone";
+      const run = (await readAgentRunById(session.runId)) as
+        | { orgId?: string | null; runBy?: string | null }
+        | null;
+      if (!run) return "gone";
+      if (run.orgId && run.orgId !== session.orgId) return "gone";
+      if (run.runBy && run.runBy !== session.userId) return "gone";
+      return "alive";
     } catch {
       return "alive";
     }
@@ -188,7 +223,7 @@ export async function constructLocalDevExecutionBroker(input: {
     try {
       gateway = await startLocalGateway(policy, {
         internalNetwork: network,
-        scriptPath: resolveGatewayScriptPath(),
+        scriptPath: resolveGatewayScriptPath(env),
         ...(env.CINATRA_SANDBOX_L0_IMAGE ? { imageRef: env.CINATRA_SANDBOX_L0_IMAGE } : {}),
       });
     } catch (err) {
@@ -216,6 +251,24 @@ export async function constructLocalDevExecutionBroker(input: {
 
   const executor = createBrokerSandboxExecutor(broker);
 
+  // Bound the open-job population (Codex convergence finding 3). The executor
+  // memoizes one broker job per sealed carrier and a request has no
+  // "turn finished" signal to hand back, so without this sweep a long-lived
+  // app-wired broker fills the per-org open-job ceiling and refuses all further
+  // execution until the process restarts. The sweep interval is the carrier
+  // TTL: past it no valid carrier can reach the job anyway. `unref` so it never
+  // holds the process open.
+  const idleSweep = setInterval(() => {
+    void broker.closeIdleJobs(DEFAULT_CARRIER_TTL_MS).catch(() => {});
+  }, IDLE_JOB_SWEEP_INTERVAL_MS);
+  idleSweep.unref?.();
+
+  // The health surface must not run a real container on every page GET (Codex
+  // convergence finding 7): memoize the probe for a short window and
+  // single-flight concurrent callers.
+  let cached: { at: number; value: ExecutionBrokerLiveness } | null = null;
+  let inFlight: Promise<ExecutionBrokerLiveness> | null = null;
+
   return {
     ok: true,
     value: {
@@ -232,18 +285,33 @@ export async function constructLocalDevExecutionBroker(input: {
           }
         : {}),
       // The health surface asks "is the worker alive RIGHT NOW", not "did it
-      // come up at boot" — so the live probe re-runs the SAME handshake.
+      // come up at boot" — so the live probe re-runs the SAME handshake, but
+      // memoized for LIVENESS_CACHE_MS and single-flighted so a refresh storm
+      // cannot turn the admin page into a container-spawning load generator.
       probeLiveness: async (): Promise<ExecutionBrokerLiveness> => {
-        const result = await runBrokerHandshake(broker);
-        return result.ok
-          ? {
-              ok: true,
-              detail: `Handshake completed in ${result.value.wallMs} ms over image ${result.value.imageDigest}.`,
-              atMs: result.value.completedAtMs,
-            }
-          : { ok: false, detail: result.reason, atMs: Date.now() };
+        const now = Date.now();
+        if (cached && now - cached.at < LIVENESS_CACHE_MS) return cached.value;
+        if (inFlight) return inFlight;
+        inFlight = (async () => {
+          const result = await runBrokerHandshake(broker);
+          const value: ExecutionBrokerLiveness = result.ok
+            ? {
+                ok: true,
+                detail: `Handshake completed in ${result.value.wallMs} ms over image ${result.value.imageDigest}.`,
+                atMs: result.value.completedAtMs,
+              }
+            : { ok: false, detail: result.reason, atMs: Date.now() };
+          cached = { at: Date.now(), value };
+          return value;
+        })();
+        try {
+          return await inFlight;
+        } finally {
+          inFlight = null;
+        }
       },
       stop: async () => {
+        clearInterval(idleSweep);
         await gateway?.stop().catch(() => {});
       },
     },

@@ -104,6 +104,13 @@ type BrokerJob = {
    */
   environment?: ResolvedEnvironmentMount;
   seq: number;
+  /**
+   * Epoch ms of the last activity on this job (open, or a dispatched command).
+   * Drives `closeIdleJobs` — the app wiring's defense against the open-job
+   * ceiling filling up with jobs whose carriers have long expired (exec-plane
+   * S1b, cinatra#2138; Codex convergence finding 3).
+   */
+  lastActivityMs: number;
   terminated: boolean;
   terminationReason?: string;
 };
@@ -330,6 +337,7 @@ export class ExecutionBroker {
         ...(skillsVolume ? { skillsVolume } : {}),
         ...(openOpts?.environment ? { environment: openOpts.environment } : {}),
         seq: 0,
+        lastActivityMs: this.opts.nowMs?.() ?? Date.now(),
         terminated: false,
       };
       this.jobs.set(jobId, job);
@@ -455,6 +463,7 @@ export class ExecutionBroker {
       }
 
       const seq = job.seq++;
+      job.lastActivityMs = this.opts.nowMs?.() ?? Date.now();
       let result: SandboxCommandResult;
       try {
         result = await this.opts.worker.runCommand({
@@ -537,6 +546,33 @@ export class ExecutionBroker {
       await removeSkillsVolume(job.skillsVolume, this.opts.docker);
     }
     this.jobs.delete(jobId);
+  }
+
+  /**
+   * Close every open job whose last activity is older than `idleMs`.
+   *
+   * The executor memoizes ONE job per sealed carrier and reuses it across the
+   * steps/turns of a request (the L2 workspace-persistence contract), but a
+   * request has no "turn finished" signal it can hand back — so without this
+   * sweep a long-lived app-wired broker accumulates one open job per carrier
+   * until the per-org open-job ceiling refuses all further execution until the
+   * process restarts (exec-plane S1b, cinatra#2138; Codex convergence finding
+   * 3). The app wiring runs this on a timer with the carrier TTL as `idleMs`:
+   * past that, no valid carrier can reach the job anyway.
+   *
+   * The WORKSPACE is deliberately left in place — an L2 volume is run-keyed and
+   * possibly shared, and the retention GC owns it; a later command on the same
+   * run re-opens onto the same workspace. Returns the number closed.
+   */
+  async closeIdleJobs(idleMs: number): Promise<number> {
+    const cutoff = (this.opts.nowMs?.() ?? Date.now()) - idleMs;
+    const stale: string[] = [];
+    for (const job of this.jobs.values()) {
+      if (job.terminated || job.lastActivityMs > cutoff) continue;
+      stale.push(job.jobId);
+    }
+    for (const jobId of stale) await this.closeJob(jobId);
+    return stale.length;
   }
 
   /** Currently-executing command count (observability / load tests). */

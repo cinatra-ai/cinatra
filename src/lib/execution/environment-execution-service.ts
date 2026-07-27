@@ -18,13 +18,12 @@ import "server-only";
 //   - `ready`       — opted in, provenance key present, AND a broker-executor
 //     binding available: declared-env runs build + mount their layer.
 //   - `unavailable` — opted in / required BUT cannot instantiate: no provenance
-//     key, OR no broker-executor wiring yet (the S1 app-broker wiring — worker +
-//     audit sink + liveness probe + egress resolver — is still outside the
-//     execution-plane package). Rather than fabricate a `ready` posture that
-//     cannot mount, the service resolves `unavailable` so declared-env runs FAIL
-//     CLOSED — the design's §1.4 posture, generalized. Full production `ready`
-//     lands with the S1 app-broker wiring seam (`ExecutionExecutorFactory`) + the
-//     slice-D real-daemon E2E.
+//     key, OR no broker-executor wiring (the `execution-broker` boot phase did
+//     not register a factory — flag off, mode disabled/remote, or the handshake
+//     did not complete). Rather than fabricate a `ready` posture that cannot
+//     mount, the service resolves `unavailable` so declared-env runs FAIL CLOSED
+//     — the design's §1.4 posture, generalized. The app-broker wiring itself
+//     landed with the S1b activation slice (cinatra#2138).
 
 import type {
   EnvironmentLayerCache,
@@ -54,13 +53,32 @@ export const DEFAULT_ENVIRONMENT_LAYER_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * The S1 app-broker wiring seam. A `ready` posture needs a broker-backed
- * `SandboxExecutor`. That wiring is NOT landed yet, so no factory is registered
- * by default and an opted-in instance resolves `unavailable`. Tests inject a
- * fake factory to exercise the `ready` path.
+ * `SandboxExecutor`. The wiring LANDED with the S1b activation slice
+ * (cinatra#2138): the `execution-broker` boot phase registers a factory when
+ * (and only when) the default-off ROLLOUT flag is on, the mode is `local-dev`,
+ * and a broker↔worker health handshake completed. With the flag off no phase
+ * exists, no factory is registered, and an opted-in instance resolves
+ * `unavailable`. Tests inject a fake factory to exercise the `ready` path.
  */
 export type ExecutionExecutorFactory = () => SandboxExecutor;
 
-let executorFactory: ExecutionExecutorFactory | undefined;
+declare global {
+  var __cinatraExecutionExecutorFactory: ExecutionExecutorFactory | undefined;
+}
+
+/**
+ * ANCHORED ON `globalThis`, not on a module-local binding (exec-plane S1b,
+ * cinatra#2138 — Codex convergence finding 1). The boot phase runs inside the
+ * Next instrumentation bundle while the chat runtime and the llm-bridge route
+ * run in their own route bundles; a module-local `let` would give each bundle
+ * its OWN copy, so boot could register an executor that no request ever sees
+ * (readiness `ready`, capability silently `capability_unavailable`). The
+ * sibling S3 slot (`register-execution-environment-service.ts`) uses exactly
+ * this pattern for exactly this reason.
+ */
+function executorFactorySlot(): ExecutionExecutorFactory | undefined {
+  return globalThis.__cinatraExecutionExecutorFactory;
+}
 
 /** Register the broker-executor factory. LANDED as the S1b activation slice
  * (cinatra#2138): the `execution-broker` boot phase calls this — and ONLY past
@@ -69,7 +87,18 @@ let executorFactory: ExecutionExecutorFactory | undefined;
  * ROLLOUT flag unset that phase does not exist, nothing registers, and
  * declared-env runs keep failing closed. */
 export function registerExecutionExecutorFactory(factory: ExecutionExecutorFactory): void {
-  executorFactory = factory;
+  globalThis.__cinatraExecutionExecutorFactory = factory;
+}
+
+/**
+ * Explicitly CLEAR the registration (Codex convergence finding 4). A re-boot
+ * whose handshake fails — or that reads a `disabled` / `remote` mode — must not
+ * leave an earlier boot's executor in place, or readiness would keep reporting
+ * `ready` against a broker that is no longer proven. Every non-ready boot branch
+ * calls this.
+ */
+export function clearExecutionExecutorFactory(): void {
+  globalThis.__cinatraExecutionExecutorFactory = undefined;
 }
 
 /**
@@ -81,12 +110,12 @@ export function registerExecutionExecutorFactory(factory: ExecutionExecutorFacto
  * deliverable 2).
  */
 export function getRegisteredExecutionExecutor(): SandboxExecutor | undefined {
-  return executorFactory?.();
+  return executorFactorySlot()?.();
 }
 
 /** Test seam — drop the registered factory between hermetic runs. */
 export function _resetExecutionExecutorFactoryForTests(): void {
-  executorFactory = undefined;
+  clearExecutionExecutorFactory();
 }
 
 export type ExecutionEnvironmentReadiness =
@@ -101,7 +130,7 @@ export type ExecutionEnvironmentReadiness =
  */
 export function resolveExecutionEnvironmentReadiness(
   env: Record<string, string | undefined> = process.env,
-  factory: ExecutionExecutorFactory | undefined = executorFactory,
+  factory: ExecutionExecutorFactory | undefined = executorFactorySlot(),
 ): ExecutionEnvironmentReadiness {
   const optedIn =
     evaluateExecutionPlaneReadiness(env).state !== "not-configured" ||
@@ -114,7 +143,10 @@ export function resolveExecutionEnvironmentReadiness(
   if (!factory) {
     return {
       state: "unavailable",
-      reason: "no broker-executor wiring (S1 app-broker wiring not landed)",
+      reason:
+        "no broker-executor wiring — the execution-broker boot phase has not " +
+        "registered a factory (rollout flag off, mode disabled/remote, or the " +
+        "broker↔worker handshake did not complete)",
     };
   }
   return { state: "ready", provenanceKey, executorFactory: factory };

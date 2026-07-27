@@ -62,9 +62,16 @@ export function executionBrokerPhases(
         const { registerExecutionBrokerStatus } = await import(
           "@/lib/execution/execution-broker-slot"
         );
+        const {
+          clearExecutionExecutorFactory,
+          registerExecutionExecutorFactory,
+        } = await import("@/lib/execution/environment-execution-service");
         const settings = readExecutionPlaneSettings();
 
         if (settings.mode === "disabled") {
+          // An earlier boot in this process may have registered a factory; a
+          // `disabled` re-boot must not leave it reachable (Codex finding 4).
+          clearExecutionExecutorFactory();
           registerExecutionBrokerStatus({
             rolloutEnabled: true,
             mode: settings.mode,
@@ -81,6 +88,7 @@ export function executionBrokerPhases(
             "Remote placement is part of the persisted vocabulary but is not operable on this " +
             "instance yet (the remote broker service boundary ships with the CLI slice). " +
             "Nothing is wired; the plane stays fail-closed.";
+          clearExecutionExecutorFactory();
           registerExecutionBrokerStatus({
             rolloutEnabled: true,
             mode: settings.mode,
@@ -98,15 +106,13 @@ export function executionBrokerPhases(
         const { constructLocalDevExecutionBroker } = await import(
           "@/lib/execution/execution-broker-construct"
         );
-        const { registerExecutionExecutorFactory } = await import(
-          "@/lib/execution/environment-execution-service"
-        );
 
         const constructed = await constructLocalDevExecutionBroker({ settings, env });
         if (!constructed.ok) {
           // NOTHING registers. `resolveExecutionEnvironmentReadiness()` keeps
           // reporting a not-ready state and every declared-environment run keeps
           // refusing — the merged fail-closed posture, untouched.
+          clearExecutionExecutorFactory();
           registerExecutionBrokerStatus({
             rolloutEnabled: true,
             mode: settings.mode,

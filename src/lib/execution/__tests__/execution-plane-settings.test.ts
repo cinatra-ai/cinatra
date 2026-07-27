@@ -3,7 +3,7 @@
 // `remote | local-dev | disabled` set; only `local-dev` and `disabled` are
 // operable in this slice, and the write path refuses the rest fail-closed.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const store = new Map<string, unknown>();
 
@@ -17,6 +17,8 @@ vi.mock("@/lib/database", () => ({
 
 import {
   DEFAULT_EXECUTION_PLANE_SETTINGS,
+  ExecutionPlaneRolloutDisabledError,
+  isExecutionPlaneRolloutOn,
   EXECUTION_PLANE_MODES,
   ExecutionPlaneModeNotOperableError,
   EXECUTION_PLANE_SETTINGS_KEY,
@@ -26,8 +28,19 @@ import {
   writeExecutionPlaneSettings,
 } from "@/lib/execution/execution-plane-settings";
 
+let priorFlag: string | undefined;
+
 beforeEach(() => {
   store.clear();
+  priorFlag = process.env.CINATRA_EXECUTION_PLANE_ROLLOUT;
+  // Every write-path test runs on an instance whose ROLLOUT flag is ON; the
+  // flag-off refusal has its own test below.
+  process.env.CINATRA_EXECUTION_PLANE_ROLLOUT = "on";
+});
+
+afterEach(() => {
+  if (priorFlag === undefined) delete process.env.CINATRA_EXECUTION_PLANE_ROLLOUT;
+  else process.env.CINATRA_EXECUTION_PLANE_ROLLOUT = priorFlag;
 });
 
 describe("execution-plane settings", () => {
@@ -74,6 +87,25 @@ describe("execution-plane settings", () => {
       egressMode: "default_internet",
       egressAllowlist: [],
     });
+  });
+
+  it("REFUSES every write on an instance whose ROLLOUT flag is off", () => {
+    delete process.env.CINATRA_EXECUTION_PLANE_ROLLOUT;
+    expect(isExecutionPlaneRolloutOn()).toBe(false);
+    expect(() =>
+      writeExecutionPlaneSettings({
+        mode: "local-dev",
+        egressMode: "default_internet",
+        egressAllowlist: [],
+      }),
+    ).toThrow(ExecutionPlaneRolloutDisabledError);
+    expect(store.size).toBe(0);
+  });
+
+  it("still READS on a flag-off instance (the surface renders, read-only)", () => {
+    store.set("execution_plane", { mode: "local-dev", egressMode: "none", egressAllowlist: [] });
+    delete process.env.CINATRA_EXECUTION_PLANE_ROLLOUT;
+    expect(readExecutionPlaneSettings().mode).toBe("local-dev");
   });
 
   it("normalizes the allowlist: trim, lowercase, de-duplicate, drop empties", () => {

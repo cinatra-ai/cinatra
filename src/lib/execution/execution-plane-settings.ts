@@ -14,6 +14,8 @@ import "server-only";
 // (`connector_config:execution_plane`, the same schema-config seam
 // `audit_retention` uses). NO migration — the issue's stores already exist.
 
+import { isExecutionPlaneRolloutEnabled } from "@cinatra-ai/llm/execution-plane";
+
 import {
   readConnectorConfigFromDatabase,
   writeConnectorConfigToDatabase,
@@ -121,6 +123,31 @@ export function readExecutionPlaneSettings(): ExecutionPlaneSettings {
 }
 
 /**
+ * Whether the instance has the epic's default-off ROLLOUT flag on. The admin
+ * surface reads this to render honestly (an instance with the flag off can look
+ * at the settings but cannot change them — nothing would honor the change), and
+ * the write path uses it as a hard gate so a hand-crafted POST cannot mutate the
+ * stored posture of an inert instance (Codex convergence finding 6).
+ */
+export function isExecutionPlaneRolloutOn(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return isExecutionPlaneRolloutEnabled(env.CINATRA_EXECUTION_PLANE_ROLLOUT);
+}
+
+/** Raised when the instance's ROLLOUT flag is off — nothing may be persisted. */
+export class ExecutionPlaneRolloutDisabledError extends Error {
+  constructor() {
+    super(
+      "The execution plane is not enabled on this instance, so its settings " +
+        "cannot be changed. Enabling it for users is a separate, explicit " +
+        "decision made outside this screen.",
+    );
+    this.name = "ExecutionPlaneRolloutDisabledError";
+  }
+}
+
+/**
  * Raised when an admin attempts to persist a mode this slice cannot honor.
  * `remote` is the only such value today (S4 makes it operable).
  */
@@ -146,6 +173,9 @@ export function writeExecutionPlaneSettings(input: {
   egressMode: ExecutionEgressMode;
   egressAllowlist: string[] | string;
 }): ExecutionPlaneSettings {
+  if (!isExecutionPlaneRolloutOn()) {
+    throw new ExecutionPlaneRolloutDisabledError();
+  }
   const mode = coerceMode(input.mode);
   if (!OPERABLE_EXECUTION_PLANE_MODES.includes(mode)) {
     throw new ExecutionPlaneModeNotOperableError(mode);
