@@ -65,7 +65,7 @@ export function executionBrokerPhases(
         const {
           clearExecutionExecutorFactory,
           registerExecutionExecutorFactory,
-        } = await import("@/lib/execution/environment-execution-service");
+        } = await import("@/lib/execution/execution-executor-slot");
         const settings = readExecutionPlaneSettings();
 
         if (settings.mode === "disabled") {

@@ -31,7 +31,7 @@ import {
 } from "@cinatra-ai/llm/execution-plane";
 import type { SandboxExecutor } from "@cinatra-ai/llm";
 
-import { getRegisteredExecutionExecutor } from "@/lib/execution/environment-execution-service";
+import { getRegisteredExecutionExecutor } from "@/lib/execution/execution-executor-slot";
 
 /** Exactly the two orchestration-entry fields the surfaces spread. */
 export type SurfaceExecutionBinding = {

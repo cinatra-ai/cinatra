@@ -32,6 +32,10 @@ import type {
 } from "@cinatra-ai/execution-plane";
 import type { SandboxEnvironmentMount, SandboxExecutor } from "@cinatra-ai/llm";
 import {
+  getExecutionExecutorFactory,
+  type ExecutionExecutorFactory,
+} from "@/lib/execution/execution-executor-slot";
+import {
   evaluateExecutionPlaneReadiness,
   executionPlaneRequired,
 } from "@/lib/boot/phases/execution-plane-health";
@@ -60,63 +64,18 @@ export const DEFAULT_ENVIRONMENT_LAYER_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
  * exists, no factory is registered, and an opted-in instance resolves
  * `unavailable`. Tests inject a fake factory to exercise the `ready` path.
  */
-export type ExecutionExecutorFactory = () => SandboxExecutor;
-
-declare global {
-  var __cinatraExecutionExecutorFactory: ExecutionExecutorFactory | undefined;
-}
-
-/**
- * ANCHORED ON `globalThis`, not on a module-local binding (exec-plane S1b,
- * cinatra#2138 — Codex convergence finding 1). The boot phase runs inside the
- * Next instrumentation bundle while the chat runtime and the llm-bridge route
- * run in their own route bundles; a module-local `let` would give each bundle
- * its OWN copy, so boot could register an executor that no request ever sees
- * (readiness `ready`, capability silently `capability_unavailable`). The
- * sibling S3 slot (`register-execution-environment-service.ts`) uses exactly
- * this pattern for exactly this reason.
- */
-function executorFactorySlot(): ExecutionExecutorFactory | undefined {
-  return globalThis.__cinatraExecutionExecutorFactory;
-}
-
-/** Register the broker-executor factory. LANDED as the S1b activation slice
- * (cinatra#2138): the `execution-broker` boot phase calls this — and ONLY past
- * a completed broker↔worker health handshake — so `ready` is reachable exactly
- * when the plane has really run a command on a live worker. With the default-off
- * ROLLOUT flag unset that phase does not exist, nothing registers, and
- * declared-env runs keep failing closed. */
-export function registerExecutionExecutorFactory(factory: ExecutionExecutorFactory): void {
-  globalThis.__cinatraExecutionExecutorFactory = factory;
-}
-
-/**
- * Explicitly CLEAR the registration (Codex convergence finding 4). A re-boot
- * whose handshake fails — or that reads a `disabled` / `remote` mode — must not
- * leave an earlier boot's executor in place, or readiness would keep reporting
- * `ready` against a broker that is no longer proven. Every non-ready boot branch
- * calls this.
- */
-export function clearExecutionExecutorFactory(): void {
-  globalThis.__cinatraExecutionExecutorFactory = undefined;
-}
-
-/**
- * The broker-backed executor for the trusted surface issuers (chat + agent-run),
- * or `undefined` when the plane is not wired (flag off, mode disabled/remote,
- * handshake failed). The injection layer treats an absent executor as
- * `capability_unavailable` and keeps the model usable — it NEVER delivers a tool
- * schema the model could call into a void (exec-plane S1b, cinatra#2138
- * deliverable 2).
- */
-export function getRegisteredExecutionExecutor(): SandboxExecutor | undefined {
-  return executorFactorySlot()?.();
-}
-
-/** Test seam — drop the registered factory between hermetic runs. */
-export function _resetExecutionExecutorFactoryForTests(): void {
-  clearExecutionExecutorFactory();
-}
+// The factory slot itself now lives in the dependency-free leaf
+// `execution-executor-slot.ts` so the hot surfaces can reach the executor
+// without pulling this module (and its boot-phase / execution-plane type graph)
+// into their route bundles — the route-graph ratchet enforces that. Re-exported
+// here so the S3 readiness contract keeps its existing public surface.
+export {
+  clearExecutionExecutorFactory,
+  getRegisteredExecutionExecutor,
+  registerExecutionExecutorFactory,
+  _resetExecutionExecutorFactoryForTests,
+  type ExecutionExecutorFactory,
+} from "@/lib/execution/execution-executor-slot";
 
 export type ExecutionEnvironmentReadiness =
   | { state: "disabled" }
@@ -130,7 +89,7 @@ export type ExecutionEnvironmentReadiness =
  */
 export function resolveExecutionEnvironmentReadiness(
   env: Record<string, string | undefined> = process.env,
-  factory: ExecutionExecutorFactory | undefined = executorFactorySlot(),
+  factory: ExecutionExecutorFactory | undefined = getExecutionExecutorFactory(),
 ): ExecutionEnvironmentReadiness {
   const optedIn =
     evaluateExecutionPlaneReadiness(env).state !== "not-configured" ||
