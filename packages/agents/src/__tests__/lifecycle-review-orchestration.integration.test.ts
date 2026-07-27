@@ -1018,6 +1018,10 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       requiredExpiredBlocked: 0,
       parksReleased: 0,
       parksPolicyUnresolved: 0,
+      // cinatra#2047 D-1 added the repair-DELIVERY sub-drain to this pass; it is
+      // fenced with the rest (the whole sweep short-circuits before it runs).
+      repairsDispatched: 0,
+      repairsEscalated: 0,
     });
     // The event stays pending (unprocessed) while the fence is off.
     const row = await readEventRow(ev.eventId);

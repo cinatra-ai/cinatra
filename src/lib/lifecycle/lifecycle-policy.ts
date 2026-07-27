@@ -510,3 +510,131 @@ export function parsePolicyBoundInput(
 export function parsePolicyKeyInput(raw: RawPolicyInput): PolicyInputParse<ParsedPolicyKeyInput> {
   return parseKey(raw);
 }
+
+// ---------------------------------------------------------------------------
+// Manifest-declaration COMPILE (cinatra#2047 defect D-1)
+// ---------------------------------------------------------------------------
+//
+// S0 decided the contract — "agent-manifest declarations (`metadata.cinatra`
+// block compiled onto `agent_templates`, trigger-style)" — and S2 shipped the
+// repair route that READS it (`resolveRepairCapable`). Nothing ever COMPILED it:
+// no install path wrote the column, so `repairCapable` could not be declared by
+// any package and every `changes_requested` dead-ended in a human escalation
+// (the S8 acceptance defect D-1).
+//
+// These helpers are that missing compile step. They live HERE, beside the
+// `CompiledManifestLifecycle` contract they produce, so the install seed builder
+// and the boot-time core projection share one implementation without either
+// module minting a new node on the locked dev-perf route graphs.
+//
+// Two producers of a compiled declaration exist, in this precedence:
+//   1. the package's own `package.json#cinatra.lifecycle` block (the EXTENSION
+//      contract — an extension that implements its own repair declares it);
+//   2. a CORE-registered producer overlay (the first repairing producer's
+//      declaration lives in core because its repair implementation lives in
+//      core — see `lifecycle-repair-producer-registry`).
+// The overlay wins per KEY; the merge is otherwise additive.
+//
+// Persisted form: JSON-as-text on `agent_templates.lifecycle_config`, exactly
+// the shape the orchestration store and the repair route already read.
+
+
+const LIFECYCLE_CHECKPOINT_SET = new Set(["recommendation", "review", "verification"]);
+
+/**
+ * Read the `cinatra.lifecycle` declaration off an agent package manifest.
+ *
+ * Contract: "quietly empty on bad input, never throws" — the same posture the
+ * `produces` reader carries, so a hostile/legacy manifest can never crash an
+ * install. The STRICT refusal of a malformed block happens earlier, at manifest
+ * PARSE time (`agentLifecycleDeclarationSchema`); this reader is the defensive
+ * second line for callers holding an unvalidated blob.
+ */
+export function readManifestLifecycle(manifest: unknown): CompiledManifestLifecycle | null {
+  try {
+    if (!manifest || typeof manifest !== "object") return null;
+    const cinatra = (manifest as { cinatra?: unknown }).cinatra;
+    if (!cinatra || typeof cinatra !== "object") return null;
+    const raw = (cinatra as { lifecycle?: unknown }).lifecycle;
+    return normalizeLifecycle(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Normalize an arbitrary blob into a `CompiledManifestLifecycle`, dropping every
+ * member that does not satisfy the contract. Returns null when nothing survives
+ * (so an empty/absent declaration writes SQL NULL rather than `"{}"`).
+ */
+export function normalizeLifecycle(raw: unknown): CompiledManifestLifecycle | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const src = raw as Record<string, unknown>;
+  const out: CompiledManifestLifecycle = {};
+
+  const skips = src.requestedSkips;
+  if (Array.isArray(skips)) {
+    const kept = skips.filter(
+      (s): s is "recommendation" | "review" | "verification" =>
+        typeof s === "string" && LIFECYCLE_CHECKPOINT_SET.has(s),
+    );
+    if (kept.length > 0) out.requestedSkips = Array.from(new Set(kept));
+  }
+
+  const produced = src.producedTypes;
+  if (Array.isArray(produced)) {
+    const kept = produced.filter((t): t is string => typeof t === "string" && t.length > 0);
+    if (kept.length > 0) out.producedTypes = Array.from(new Set(kept));
+  }
+
+  if (typeof src.repairCapable === "boolean") out.repairCapable = src.repairCapable;
+
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
+ * Merge a manifest-declared lifecycle with a CORE overlay. The overlay wins per
+ * key (a core-implemented capability is authoritative over a manifest edit);
+ * every other key carries forward. Either side may be null.
+ */
+export function mergeLifecycle(
+  manifestSide: CompiledManifestLifecycle | null | undefined,
+  coreOverlay: CompiledManifestLifecycle | null | undefined,
+): CompiledManifestLifecycle | null {
+  if (!manifestSide && !coreOverlay) return null;
+  const merged: CompiledManifestLifecycle = { ...(manifestSide ?? {}), ...(coreOverlay ?? {}) };
+  return Object.keys(merged).length > 0 ? merged : null;
+}
+
+/**
+ * The JSON-as-text form persisted on `agent_templates.lifecycle_config`. Keys are
+ * emitted in a STABLE order so re-installing the same tarball writes byte-identical
+ * text (the install seed is otherwise deterministic and the version snapshot hash
+ * must not drift). Returns null for an empty declaration → the column stays NULL.
+ */
+export function serializeLifecycleConfig(
+  lifecycle: CompiledManifestLifecycle | null | undefined,
+): string | null {
+  if (!lifecycle) return null;
+  const ordered: Record<string, unknown> = {};
+  if (lifecycle.producedTypes && lifecycle.producedTypes.length > 0) {
+    ordered.producedTypes = [...lifecycle.producedTypes];
+  }
+  if (lifecycle.repairCapable !== undefined) ordered.repairCapable = lifecycle.repairCapable;
+  if (lifecycle.requestedSkips && lifecycle.requestedSkips.length > 0) {
+    ordered.requestedSkips = [...lifecycle.requestedSkips];
+  }
+  if (Object.keys(ordered).length === 0) return null;
+  return JSON.stringify(ordered);
+}
+
+/** Parse the persisted JSON-as-text back into the compiled declaration
+ * (fail-soft: malformed text reads as absent). */
+export function parseLifecycleConfigText(raw: string | null | undefined): CompiledManifestLifecycle | null {
+  if (!raw) return null;
+  try {
+    return normalizeLifecycle(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
