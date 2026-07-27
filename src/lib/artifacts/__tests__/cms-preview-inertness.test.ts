@@ -77,4 +77,41 @@ describe("cinatra#2044 L-B — captured-page inertness", () => {
     );
     expect(isCapturedHtmlInert("<p>plain</p>")).toBe(true);
   });
+
+  // -------------------------------------------------------------------------
+  // ENCODED / SEPARATOR bypasses (codex convergence findings). A browser decodes
+  // character references before acting on an attribute, so a raw-text matcher
+  // read a different document than the renderer would. L-D makes these reachable
+  // from PROPOSED content, so both the sanitizer and the verifier now normalize
+  // first.
+  // -------------------------------------------------------------------------
+
+  it("removes a meta refresh whose http-equiv is written with character references", () => {
+    const encoded = '<meta http-equiv="&#x72;efresh" content="0;url=/wp-admin/">';
+    const out = sanitizeCapturedHtml(encoded);
+    expect(out.html).not.toContain("meta");
+    expect(isCapturedHtmlInert(out.html)).toBe(true);
+    // And the verifier catches it even if the sanitizer ever regressed.
+    expect(findInertnessViolations(encoded).map((v) => v.kind)).toContain("meta-refresh");
+  });
+
+  it("removes an event handler introduced with a decimal reference", () => {
+    const encoded = '<div &#111;nclick="steal()">body</div>';
+    expect(findInertnessViolations(encoded).map((v) => v.kind)).toContain("event-handler");
+    expect(isCapturedHtmlInert(sanitizeCapturedHtml(encoded).html)).toBe(true);
+  });
+
+  it("removes an event handler separated by a solidus rather than whitespace", () => {
+    const svg = "<svg/onload=alert(1)></svg>";
+    expect(findInertnessViolations(svg).map((v) => v.kind)).toContain("event-handler");
+    const out = sanitizeCapturedHtml(svg);
+    expect(out.html).not.toContain("onload");
+    expect(isCapturedHtmlInert(out.html)).toBe(true);
+  });
+
+  it("removes an encoded javascript: URL scheme", () => {
+    const encoded = '<a href="&#106;avascript:alert(1)">x</a>';
+    expect(findInertnessViolations(encoded).map((v) => v.kind)).toContain("unsafe-url");
+    expect(isCapturedHtmlInert(sanitizeCapturedHtml(encoded).html)).toBe(true);
+  });
 });

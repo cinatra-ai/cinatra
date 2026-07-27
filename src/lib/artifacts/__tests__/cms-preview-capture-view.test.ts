@@ -39,6 +39,7 @@ import {
   type CmsPreviewCaptureRecordData,
 } from "@/lib/artifacts/cms-preview-capture-store";
 import {
+  buildPinnedCapturePair,
   buildPinnedCaptureViews,
   findRemoteDocumentUrls,
   pinnedCaptureImageUrl,
@@ -197,5 +198,88 @@ describe("cinatra#2044 L-B — the review view path performs NO network fetch", 
         },
       ]),
     ).toEqual(["https://blog.example.com/wp-json/cinatra/v1/preview/42"]);
+  });
+
+  // -------------------------------------------------------------------------
+  // L-D — the PAIR projection. The comparison's reading order, the missing-side
+  // states, and the drift marking are DATA, so the whole matrix is proven here
+  // (and the no-live-fetch spy still holds across every arm).
+  // -------------------------------------------------------------------------
+
+  it("projects the REVIEW pair in reading order: the live page, then the composed proposal", () => {
+    rows.push(
+      { id: "cap-b", data: { ...capturedData, role: "before" }, representation_revision_id: "png-b" },
+      {
+        id: "cap-c",
+        data: {
+          ...capturedData,
+          role: "current",
+          composition: { substitutedRegions: ["content"], unplacedFields: ["status"] },
+        },
+        representation_revision_id: "png-c",
+      },
+    );
+    const views = buildPinnedCaptureViews(
+      readPinnedPreviewCaptures({
+        orgId: "org-1",
+        boundArtifactId: "art-1",
+        boundSnapshotRevisionId: "rev-a",
+      }),
+    );
+    const pair = buildPinnedCapturePair(views, "review");
+    expect(pair).not.toBeNull();
+    expect(pair!.left!.role).toBe("before");
+    expect(pair!.right!.role).toBe("current");
+    // Only the composed side carries composition provenance — that is what lets
+    // the surface distinguish a photograph from a composition without hedging.
+    expect(pair!.left!.composition).toBeNull();
+    expect(pair!.right!.composition).toEqual({
+      substitutedRegions: ["content"],
+      unplacedFields: ["status"],
+    });
+    expect(findRemoteDocumentUrls(views)).toEqual([]);
+    expectNoNetwork();
+  });
+
+  it("projects the VERIFICATION pair as reviewed vs applied, marking DRIFT from the record's own paths", () => {
+    rows.push(
+      { id: "cap-c", data: { ...capturedData, role: "current" }, representation_revision_id: "png-c" },
+      { id: "cap-a", data: { ...capturedData, role: "applied" }, representation_revision_id: "png-a" },
+    );
+    const views = buildPinnedCaptureViews(
+      readPinnedPreviewCaptures({
+        orgId: "org-1",
+        boundArtifactId: "art-1",
+        boundSnapshotRevisionId: "rev-a",
+      }),
+    );
+    const pair = buildPinnedCapturePair(views, "verification", ["content"]);
+    expect(pair!.left!.role).toBe("current");
+    expect(pair!.right!.role).toBe("applied");
+    // The drift outline is applied to the APPLIED side only, and only for the
+    // regions the read-back itself named — never inferred from the pictures.
+    expect(pair!.right!.regions[0].drifted).toBe(true);
+    expect(pair!.left!.regions[0].drifted).toBeUndefined();
+    expectNoNetwork();
+  });
+
+  it("one missing half still renders the comparison (the other picture is never withheld)", () => {
+    rows.push({ id: "cap-b", data: { ...capturedData, role: "before" }, representation_revision_id: "png-b" });
+    const views = buildPinnedCaptureViews(
+      readPinnedPreviewCaptures({
+        orgId: "org-1",
+        boundArtifactId: "art-1",
+        boundSnapshotRevisionId: "rev-a",
+      }),
+    );
+    const pair = buildPinnedCapturePair(views, "review");
+    expect(pair!.left!.role).toBe("before");
+    expect(pair!.right).toBeNull();
+    expectNoNetwork();
+  });
+
+  it("no captures at all ⇒ no pair (the surface renders nothing, not an empty frame)", () => {
+    expect(buildPinnedCapturePair([], "review")).toBeNull();
+    expectNoNetwork();
   });
 });

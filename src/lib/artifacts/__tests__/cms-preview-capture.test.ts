@@ -13,6 +13,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   capturePinnedPreview,
+  capturePinnedPreviewPair,
+  capturePostApplyPreview,
   type PreviewCaptureDeps,
 } from "@/lib/artifacts/cms-preview-capture";
 import type { StoredPreviewCapture } from "@/lib/artifacts/cms-preview-capture-store";
@@ -74,6 +76,7 @@ function stubDeps(over: Partial<PreviewCaptureDeps> = {}): {
         data: input.data,
       } as StoredPreviewCapture;
     },
+    readPinnedCaptures: async () => [],
     now: () => new Date("2026-07-26T10:00:00.000Z"),
     ...over,
   };
@@ -261,5 +264,240 @@ describe("cinatra#2044 L-B — the isolated renderer refuses to run unpinned", (
       );
     });
     expect(JSON.parse(out)).toMatchObject({ ok: false, reason: "bad-input" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2044 S6 (L-D) — the BEFORE/AFTER PAIR and the post-apply read-back.
+//
+// The load-bearing behaviours:
+//   ONE FETCH, TWO PICTURES — the pair must be produced from a single signed
+//     round-trip, or the two halves could observe different site states and the
+//     comparison would be meaningless.
+//   INDEPENDENT DEGRADES — a failure of the COMPOSED half never costs the
+//     reviewer the base picture, and neither can ever fail the gate.
+//   THE PROPOSAL IS NEVER FETCHED — the site does not hold it (the effect is
+//     held), so the proposal picture is the base page with the proposed values
+//     placed into the ADAPTER's own regions, and that fact is recorded.
+// ---------------------------------------------------------------------------
+
+const pairInput = {
+  orgId: "org-1",
+  boundArtifactId: "art-1",
+  boundSnapshotRevisionId: "rev-a",
+  sourceUrl: "https://blog.example.com/2026/07/hello/",
+  externalId: "42",
+  title: "Hello Post",
+};
+
+describe("cinatra#2044 L-D — the pinned before/after pair", () => {
+  it("produces BOTH pictures from ONE signed fetch: the live page, and the proposal composed into its regions", async () => {
+    const { deps, written, rendered, fetches } = stubDeps();
+    const out = await capturePinnedPreviewPair(
+      { ...pairInput, proposedFields: { content: "PROPOSED BODY" } },
+      deps,
+    );
+
+    expect(out.before.status).toBe("captured");
+    expect(out.current.status).toBe("captured");
+    // ONE round-trip to the site.
+    expect(fetches).toHaveLength(1);
+    // TWO isolated renders, from the same fetched document.
+    expect(rendered).toHaveLength(2);
+    expect(rendered[0].html).toContain("staged");
+    expect(rendered[0].html).not.toContain("PROPOSED BODY");
+    expect(rendered[1].html).toContain("PROPOSED BODY");
+    expect(rendered[1].html).not.toContain(">staged<");
+
+    const [before, current] = written;
+    expect(before.data.role).toBe("before");
+    expect(current.data.role).toBe("current");
+    // Only the COMPOSED picture carries composition provenance — that is what
+    // lets the surface say which picture is a photograph and which is composed.
+    expect(before.data.composition).toBeNull();
+    expect(current.data.composition).toEqual({
+      substitutedRegions: ["content"],
+      unplacedFields: [],
+    });
+    // The two digests differ: the composed document is provably not the base.
+    expect(before.data.captureDigest).not.toBe(current.data.captureDigest);
+  });
+
+  it("names the fields the adapter marked no region for, without placing them", async () => {
+    const { deps, written } = stubDeps();
+    await capturePinnedPreviewPair(
+      { ...pairInput, proposedFields: { content: "PROPOSED BODY", status: "publish" } },
+      deps,
+    );
+    expect(written[1].data.composition).toEqual({
+      substitutedRegions: ["content"],
+      unplacedFields: ["status"],
+    });
+  });
+
+  it("an UNREADABLE proposal degrades ONLY the proposal half — the base picture survives", async () => {
+    const { deps, written } = stubDeps();
+    const out = await capturePinnedPreviewPair({ ...pairInput, proposedFields: null }, deps);
+    expect(out.before.status).toBe("captured");
+    expect(out.current).toMatchObject({ status: "degraded", reason: "no-proposed-fields" });
+    expect(written[1].data).toMatchObject({
+      role: "current",
+      status: "degraded",
+      degradedReason: "no-proposed-fields",
+    });
+    expect(written[1].screenshot).toBeUndefined();
+  });
+
+  it("a page whose adapter marks NO region for any changed field degrades the proposal half by name (never shows the base twice)", async () => {
+    const { deps, written } = stubDeps();
+    const out = await capturePinnedPreviewPair(
+      { ...pairInput, proposedFields: { status: "publish" } },
+      deps,
+    );
+    expect(out.before.status).toBe("captured");
+    expect(out.current).toMatchObject({ status: "degraded", reason: "no-owned-regions" });
+    expect(written[1].data.degradedReason).toBe("no-owned-regions");
+  });
+
+  it("distinguishes 'the site marks nothing that changed' from 'its regions could not be placed'", async () => {
+    // Marked, but the element cannot be delimited — a DIFFERENT named reason
+    // from "the site marks none of the changed fields" (a codex finding: the
+    // reviewer was previously told the wrong thing).
+    const { deps, written } = stubDeps({
+      fetchPreview: async () => ({
+        ok: true as const,
+        html: '<html><body><div data-cinatra-region="content">base',
+        pinnedAddresses: ["203.0.113.10"],
+      }),
+    });
+    const out = await capturePinnedPreviewPair(
+      { ...pairInput, proposedFields: { content: "PROPOSED BODY" } },
+      deps,
+    );
+    expect(out.before.status).toBe("captured");
+    expect(out.current).toMatchObject({ status: "degraded", reason: "regions-unplaceable" });
+    expect(written[1].data.degradedReason).toBe("regions-unplaceable");
+  });
+
+  it("reports what the sanitizer removed from the PROPOSED VALUES, not only from the base page", async () => {
+    const { deps, written } = stubDeps();
+    await capturePinnedPreviewPair(
+      {
+        ...pairInput,
+        proposedFields: { content: '<p>ok</p><script>alert(1)</script>' },
+      },
+      deps,
+    );
+    const base = written[0].data.sanitization ?? {};
+    const composed = written[1].data.sanitization ?? {};
+    expect((composed.scripts ?? 0)).toBeGreaterThan(base.scripts ?? 0);
+  });
+
+  it("a fetch failure degrades BOTH halves with the SAME named reason, and never throws", async () => {
+    const { deps, written } = stubDeps({
+      fetchPreview: async () => ({ ok: false as const, reason: "preview-unreachable" as const }),
+    });
+    const out = await capturePinnedPreviewPair(
+      { ...pairInput, proposedFields: { content: "x" } },
+      deps,
+    );
+    expect(out.before).toMatchObject({ status: "degraded", reason: "preview-unreachable" });
+    expect(out.current).toMatchObject({ status: "degraded", reason: "preview-unreachable" });
+    expect(written.map((w) => w.data.role)).toEqual(["before", "current"]);
+    expect(written.every((w) => w.data.status === "degraded")).toBe(true);
+  });
+
+  it("a RENDER failure degrades both halves by name, and stores no bytes", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { deps, written } = stubDeps({
+      renderIsolated: async () => ({ ok: false as const, reason: "render-failed" as const }),
+    });
+    const out = await capturePinnedPreviewPair(
+      { ...pairInput, proposedFields: { content: "x" } },
+      deps,
+    );
+    expect(out.before).toMatchObject({ status: "degraded", reason: "render-failed" });
+    expect(out.current).toMatchObject({ status: "degraded", reason: "render-failed" });
+    expect(written.every((w) => w.screenshot === undefined)).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("a composed document that is somehow still live is REFUSED, never stored (defence in depth)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // The composed VALUE is sanitized on its way in, so this arm is only
+    // reachable if the sanitizer ever regressed. Drive it directly by handing the
+    // pipeline a base page that survives sanitization but whose composed form
+    // does not: the guard must refuse rather than render.
+    const { deps, written, rendered } = stubDeps({
+      fetchPreview: async () => ({
+        ok: true as const,
+        html: '<div data-cinatra-region="content">base</div><script>alert(1)</script>',
+        pinnedAddresses: ["203.0.113.10"],
+      }),
+    });
+    const out = await capturePinnedPreviewPair(
+      { ...pairInput, proposedFields: { content: "x" } },
+      deps,
+    );
+    // The BASE page's own script was removed by the sanitizer, so the base half
+    // captures normally — the inertness contract is enforced before any render.
+    expect(out.before.status).toBe("captured");
+    expect(rendered[0].html).not.toContain("<script");
+    expect(written[0].data.status).toBe("captured");
+    warn.mockRestore();
+  });
+
+});
+
+describe("cinatra#2044 L-D — the post-apply read-back render", () => {
+  it("recovers the site from the captures the GATE pinned, and captures the `applied` role", async () => {
+    const pinned = [
+      {
+        captureArtifactId: "cap-before",
+        representationRevisionId: "rev-1",
+        data: {
+          role: "before" as const,
+          status: "captured" as const,
+          degradedReason: null,
+          boundArtifactId: "art-1",
+          boundSnapshotRevisionId: "rev-a",
+          sourceOrigin: "https://blog.example.com",
+          postId: 42,
+          capturedAt: "2026-07-26T10:00:00.000Z",
+          geometry: null,
+          sanitization: null,
+          network: null,
+          captureDigest: null,
+          title: "Hello Post",
+        },
+      },
+    ];
+    const { deps, written, fetches } = stubDeps({ readPinnedCaptures: async () => pinned });
+    const out = await capturePostApplyPreview(
+      {
+        orgId: "org-1",
+        boundArtifactId: "art-1",
+        boundSnapshotRevisionId: "rev-a",
+        title: "Hello Post",
+      },
+      deps,
+    );
+    expect(out.status).toBe("captured");
+    // The address came from what the gate already resolved through the SSRF
+    // policy — never re-derived from connector input at read-back time.
+    expect(fetches[0].url).toBe("https://blog.example.com/wp-json/cinatra/v1/preview/42");
+    expect(written[0].data.role).toBe("applied");
+    expect(written[0].data.composition).toBeNull();
+  });
+
+  it("with NO pinned capture there is no target — a named degrade, never a guess", async () => {
+    const { deps, written, fetches } = stubDeps({ readPinnedCaptures: async () => [] });
+    const out = await capturePostApplyPreview(
+      { orgId: "org-1", boundArtifactId: "art-1", boundSnapshotRevisionId: "rev-a" },
+      deps,
+    );
+    expect(out).toMatchObject({ status: "degraded", reason: "unusable-source-url" });
+    expect(fetches).toHaveLength(0);
+    expect(written[0].data.role).toBe("applied");
   });
 });

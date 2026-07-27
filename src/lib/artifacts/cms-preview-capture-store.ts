@@ -51,10 +51,25 @@ import { createLocalDiskBlobStore } from "./local-disk-blob-store";
  * target. */
 export const CMS_PREVIEW_CAPTURE_OBJECT_TYPE = "@cinatra-ai/objects:cms-preview-capture";
 
-/** The before/after pair #2044 asks for. `current` is the staged proposal's
- * render (what the reviewer decides against); `before` is the published page as
- * it stood at gate creation. */
-export type CmsPreviewCaptureRole = "current" | "before";
+/**
+ * The before/after pair #2044 asks for, completed in L-D.
+ *
+ *   `before`  — the LIVE page as it stood at gate creation, fetched from the
+ *               adapter's authenticated preview. The S5 trigger holds the effect,
+ *               so at that instant the site still carries the base content: this
+ *               capture is the real "now".
+ *   `current` — the PROPOSAL, rendered inside that same page's captured theme
+ *               chrome by placing the proposed field values into the regions the
+ *               adapter marked as its own (`cms-preview-region-composition.ts`).
+ *               The proposal is deliberately NOT on the site — that is the whole
+ *               point of holding it — so it cannot be fetched; it is composed,
+ *               and the surface says so.
+ *   `applied`  — the page as it actually stood AFTER an approved apply, fetched
+ *               fresh at read-back time. Paired with `current` on the S4
+ *               verification view, this is #2044's "reviewed vs applied
+ *               read-back render": drift the field diff reports gains a picture.
+ */
+export type CmsPreviewCaptureRole = "current" | "before" | "applied";
 
 /** A capture either produced a picture, or explains why it could not. */
 export type CmsPreviewCaptureStatus = "captured" | "degraded";
@@ -100,6 +115,22 @@ export interface CmsPreviewCaptureRecordData {
    * the gate records as context provenance. */
   captureDigest: string | null;
   title: string;
+  /**
+   * L-D composition provenance. Present ONLY on a COMPOSED capture (the
+   * `current`/proposal role): which adapter-marked regions carried the proposed
+   * value, and which proposed fields the adapter marked no region for. Absent
+   * (`null`) on a straight fetched render (`before` / `applied`), which is what
+   * lets the surface say truthfully which of the two pictures is a photograph of
+   * the site and which is the proposal placed into that photograph's chrome.
+   */
+  composition?: {
+    substitutedRegions: string[];
+    /** EVERY proposed field whose value did not reach the picture, whatever the
+     * cause (no marked region, an undelimitable element, or a region nested
+     * inside another substituted region) — one closed list, so the surface can
+     * never imply a field was shown when it was not. */
+    unplacedFields: string[];
+  } | null;
 }
 
 const CAPTURE_MAX_BYTES = 24 * 1024 * 1024;

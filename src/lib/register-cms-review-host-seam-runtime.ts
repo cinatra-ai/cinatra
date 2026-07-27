@@ -69,15 +69,29 @@ function createCmsReviewHostSeamDeps(): CmsReviewHostSeamDeps {
     },
     captureCmsContentSnapshot: async (i) =>
       (await import("@/lib/artifacts/cms-content-snapshot-capture")).captureCmsContentSnapshot(i),
-    // S6 (#2044 L-B): the pinned fetched-render capture. Lazy exactly like the
-    // stores above — the capture module reaches the connect-site store, the
-    // webhook secret service, and (through a SPAWNED script, never an import) a
-    // headless browser, so it must never appear in a route-reachable graph.
-    capturePinnedPreview: async (i) => {
-      const { capturePinnedPreviewForGate } = await import(
+    // S6 (#2044 L-B + L-D): the pinned before/after capture pair. Lazy exactly
+    // like the stores above — the capture module reaches the connect-site store,
+    // the webhook secret service, and (through a SPAWNED script, never an
+    // import) a headless browser, so it must never appear in a route-reachable
+    // graph.
+    capturePinnedPreviewPair: async (i) => {
+      const { capturePinnedPreviewPairForGate } = await import(
         "@/lib/artifacts/cms-preview-capture"
       );
-      const outcome = await capturePinnedPreviewForGate(i);
+      const pair = await capturePinnedPreviewPairForGate(i);
+      const project = (o: { status: "captured" | "degraded"; reason?: string }) =>
+        o.status === "captured"
+          ? { status: "captured" as const }
+          : { status: "degraded" as const, reason: o.reason };
+      return { before: project(pair.before), current: project(pair.current) };
+    },
+    // S6 (#2044 L-D): the post-apply read-back render, pinned with the S4
+    // verification record it gives a visual counterpart to.
+    capturePostApplyPreview: async (i) => {
+      const { capturePostApplyPreviewForGate } = await import(
+        "@/lib/artifacts/cms-preview-capture"
+      );
+      const outcome = await capturePostApplyPreviewForGate(i);
       return outcome.status === "captured"
         ? { status: "captured" }
         : { status: "degraded", reason: outcome.reason };

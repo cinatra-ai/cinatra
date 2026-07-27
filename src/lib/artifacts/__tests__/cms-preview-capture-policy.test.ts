@@ -113,7 +113,20 @@ describe("cinatra#2044 L-B — capture target policy (SSRF boundary)", () => {
 
   it("accepts only a strict, in-range decimal post id (no traversal, no smuggling)", () => {
     expect(parsePostId("42")).toBe(42);
+    // The connector's SITE-SCOPED composition is what a real staged CMS write
+    // carries (`cmsExternalId(instanceId, cmsResourceId)`) — accepted, with the
+    // instance segment contributing nothing to the fetched URL. (Found by the
+    // L-D live walk: without this every real capture degraded `invalid-post-id`.)
+    expect(parsePostId("inst-1:42")).toBe(42);
+    expect(parsePostId("f47ac10b-58cc-4372-a567-0e02b2c3d479:7")).toBe(7);
     for (const bad of [
+      ":42",
+      "inst-1:",
+      "inst 1:42",
+      "inst-1:42:9",
+      "inst-1:4.2",
+      "inst-1:0",
+      "inst-1:42/../../wp-admin",
       "0",
       "-1",
       "+1",

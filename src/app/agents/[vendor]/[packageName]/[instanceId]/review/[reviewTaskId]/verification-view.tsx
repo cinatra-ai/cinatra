@@ -1,6 +1,10 @@
 import { ScanSearch, ArrowRight } from "lucide-react";
 import Link from "next/link";
 
+import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
+
+import { ReviewPinnedCapture } from "./review-pinned-capture";
+
 /**
  * The S4 post-change VERIFICATION view (cinatra#2042, re-anchored 2026-07-25) —
  * mounted on the run-embedded review surface, reached from the run rail's "Core
@@ -10,7 +14,11 @@ import Link from "next/link";
  * analysis"** so no output implies a broader inspection than occurred (the
  * provenance principle; the diff shows exactly the fields that were inspected).
  *
- * CMS visual before/after arrives with S6's capture pipeline — out of scope here.
+ * S6 (#2044 L-D) adds the field diff's VISUAL counterpart for a target that has
+ * pinned captures: what was REVIEWED beside what was actually APPLIED, with the
+ * read-back's own out-of-scope paths outlined on the applied side — so drift is
+ * not only a row in a table, it is visible on the page. Both pictures were pinned
+ * when they were taken; the site is never fetched at view time.
  */
 export interface VerificationViewFieldDiff {
   field: string;
@@ -33,6 +41,10 @@ export interface VerificationViewProps {
   advisoryComments: VerificationAdvisoryComment[];
   /** Link back to the review gate this analysis annotates. */
   gateHref: string;
+  /** S6 (#2044 L-D) — the reviewed/applied picture pair, when the target has
+   * pinned captures. `null` for every target that has none (the analysis then
+   * reads exactly as it did before). */
+  visualPair?: PinnedCapturePairView | null;
 }
 
 const OUTCOME_COPY: Record<string, { label: string; tone: string }> = {
@@ -49,6 +61,7 @@ export function VerificationView({
   scopePaths,
   advisoryComments,
   gateHref,
+  visualPair = null,
 }: VerificationViewProps) {
   const oc = OUTCOME_COPY[outcome] ?? { label: outcome, tone: "border-line bg-surface-muted text-muted-foreground" };
   const scope = new Set(scopePaths);
@@ -84,7 +97,8 @@ export function VerificationView({
         {fieldDiff.length === 0 ? (
           <p className="px-4 py-6 text-xs text-muted-foreground">
             No field-level changes were projected for this revision (a type-aware content
-            projection surfaces field diffs; a visual before/after for CMS targets arrives with S6).
+            projection surfaces field diffs; a target that carries pinned page captures also
+            shows the visual before/after below).
           </p>
         ) : (
           <table className="w-full border-collapse text-left text-xs">
@@ -117,6 +131,10 @@ export function VerificationView({
           </table>
         )}
       </div>
+
+      {/* S6 (#2044 L-D) — the VISUAL counterpart of the diff above: reviewed vs
+          applied, drift outlined from the record's own out-of-scope paths. */}
+      <ReviewPinnedCapture pair={visualPair} />
 
       {/* Advisory comments (the S0 attach/list seam; core lanes are its first writers). */}
       <div className="flex flex-col gap-2" data-verification-advisory="">

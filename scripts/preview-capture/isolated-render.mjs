@@ -164,12 +164,27 @@ async function main() {
       //    own URL, so relative subresources resolve — while no request for the
       //    document ever leaves this process.
       if (request.url() === documentUrl) {
+        // ONCE. A second request for the document means the page tried to
+        // NAVIGATE (a refresh instruction, a redirect) — serving the piped HTML
+        // again would loop, and serving nothing would capture whatever the
+        // browser fetched. Abort instead: what is captured is always the ONE
+        // document the parent fetched and sanitized.
+        if (documentFulfilled > 0) {
+          blockedRequests += 1;
+          return route.abort();
+        }
         documentFulfilled += 1;
         return route.fulfill({
           status: 200,
           contentType: "text/html; charset=utf-8",
           body: html,
         });
+      }
+      // Any OTHER top-level document request is a navigation away from the
+      // captured page. Never followed.
+      if (request.isNavigationRequest()) {
+        blockedRequests += 1;
+        return route.abort();
       }
       // 2. Subresources: same-origin GET only.
       let sameOrigin = false;
