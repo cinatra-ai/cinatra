@@ -292,6 +292,7 @@
       "@modelcontextprotocol/server": ["./packages/mcp-server/vendor/modelcontextprotocol-server"],
       "@cinatra-ai/mcp-client": ["./packages/mcp-client/src/index.ts"],
       "@cinatra-ai/org-write-kernel": ["./packages/org-write-kernel/src/index.ts"],
+      "@cinatra-ai/org-write-kernel/testing": ["./packages/org-write-kernel/src/testing.ts"],
       "@cinatra-ai/metric-contracts": ["./packages/metric-contracts/src/index.ts"],
       "@cinatra-ai/metric-usage-api": ["./packages/metric-usage-api/src/index.ts"],
       "@cinatra-ai/metric-usage-api/screens": ["./packages/metric-usage-api/src/screens.tsx"],

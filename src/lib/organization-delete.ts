@@ -268,7 +268,7 @@ export async function deleteOrganizationReferenceGuarded(
   const schema = appSchema();
   // Hoisted so the catch can map the kernel's capability-denied refusal to
   // "not-archived" ONLY when the archived-only demand (org.delete) was the one
-  // refused — never a future org.lifecycle deny cell (codex r0 nit, defensive).
+  // refused — a future org.lifecycle deny cell must never masquerade as it.
   let demandedCapability: OrgWriteCapability | undefined;
   try {
     // Structural pre-tx fence (hazard 3) via the shared lifecycle primitive
