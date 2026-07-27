@@ -72,13 +72,21 @@ describe("scanExtensionsForFsImports (fixture tree)", () => {
     expect(violationsOf(hits, new Set())).toEqual(["@acme/seeded-connector::src/index.ts"]);
   });
 
-  it("excludes extension-kind-gate.mjs, top-level scripts/, and test files", async () => {
+  it("excludes the author-facing gate scripts, top-level scripts/, and test files", async () => {
     const extDir = path.join(dir, "acme", "clean-connector");
     await mkdir(path.join(extDir, "src", "__tests__"), { recursive: true });
     await mkdir(path.join(extDir, "scripts"), { recursive: true });
     await writeFile(path.join(extDir, "package.json"), JSON.stringify({ name: "@acme/clean-connector" }), "utf8");
     await writeFile(
       path.join(extDir, "extension-kind-gate.mjs"),
+      'import { readFileSync } from "node:fs";\n',
+      "utf8",
+    );
+    // cinatra#1796: renderer-binding-gate.mjs is the SAME class — a per-repo,
+    // never-published author gate whose job is reading its own package.json +
+    // cinatra/oas.json. Locked here so the exclusion cannot silently narrow.
+    await writeFile(
+      path.join(extDir, "renderer-binding-gate.mjs"),
       'import { readFileSync } from "node:fs";\n',
       "utf8",
     );
