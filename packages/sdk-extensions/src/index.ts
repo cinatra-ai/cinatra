@@ -706,6 +706,24 @@ export type {
   LlmSkillDeliveryAdapterSurface,
 } from "./host-connector-services-contract";
 
+// Governed connector-instance invoker (cinatra#2017 S2). TYPE-ONLY host-capability
+// contract — the shared mirror of the connector's vendored shape (C3 swaps its
+// vendored copy for these). The capability-id CONSTANT stays host-fenced
+// (`HOST_CONNECTOR_SERVICE_CAPABILITIES.connectorInstanceInvoker` via ./internal).
+export type {
+  ConnectorInstancePin,
+  SiteToolRef,
+  InstanceToolPolicyMode,
+  InstanceToolPolicyRecord,
+  SiteToolCallInput,
+  SiteToolsListInput,
+  SiteToolDerivedClass,
+  SiteToolPolicyStatus,
+  SiteToolRow,
+  SiteToolsListPage,
+  HostConnectorInstanceInvokerService,
+} from "./connector-instance-invoker-contract";
+
 // LLM provider ADAPTER surface version (llm-providers S4 — cinatra#1715). The
 // capability-id constant stays host-fenced (./internal); this VERSION literal is
 // author-facing (a connector sets its `abiVersion` against it) — a

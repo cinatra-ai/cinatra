@@ -193,8 +193,10 @@ export class InstanceWriteAuthorityError extends Error {
   }
 }
 
-/** The trusted actor frame this authority resolves from the host context. */
-type ResolvedActor = {
+/** The trusted actor frame this authority resolves from the host context.
+ * EXPORTED (cinatra#2017 S2 slice K2) so the governed invoker can pass a
+ * host-derived trusted actor into the explicit `requireUse` entry (§2.4). */
+export type ResolvedActor = {
   actor: ActorContext;
   userId: string;
   orgId: string;
@@ -208,7 +210,7 @@ type ResolvedActor = {
  *
  * Identity is HOST-DERIVED ONLY — never from connector / tool input.
  */
-async function resolveTrustedWriteActor(): Promise<ResolvedActor | null> {
+export async function resolveTrustedWriteActor(): Promise<ResolvedActor | null> {
   // Summary carries the human SUBJECT userId + org (the `runBy` user on whose
   // behalf the model call runs). The kernel actor carries roles/platformRole.
   // Both come from the SAME trusted resolution (extension-host-actor).
@@ -243,24 +245,38 @@ export type RequireInstanceWriteAuthority = (
   input: InstanceWriteAuthorityInput,
 ) => Promise<void>;
 
+/** Additive gate input — `InstanceWriteAuthorityInput` plus an optional
+ * `causation` stamp (runId | jobId | requestId) threaded into the audit
+ * metadata (cinatra#2017 S2). */
+export type InstanceUseAuthorityGateInput = InstanceWriteAuthorityInput & {
+  causation?: string;
+};
+
+/** The EXPLICIT-ACTOR use-authority guard the governed invoker calls (§2.4). The
+ * actor is HOST-DERIVED (never connector/tool input); throws on deny (fail-closed). */
+export type RequireInstanceUseAuthority = (
+  resolved: ResolvedActor,
+  input: InstanceUseAuthorityGateInput,
+) => Promise<void>;
+
 /**
- * Mint a per-connector-kind write-authority guard. `kind` is the CLOSED enum the
- * connector names for ITSELF; the host maps it to the package id + instance
- * reader (never caller-supplied). The returned guard throws
- * `InstanceWriteAuthorityError` on deny (fail-closed) and resolves `void` on
- * allow.
+ * The actor-parameterized CORE of the per-instance USE/WRITE authority gate
+ * (cinatra#2017 S2 slice K2). Both the ambient `requireWrite` and the explicit
+ * `requireUse` entries below share this ONE gate body → ONE live pass → ONE
+ * authorization-decision audit (M4). `mode:"use"` is unchanged — the gate already
+ * evaluates the connector policy in use-mode. The a→e logic is byte-identical to
+ * the pre-K2 gate; only the actor SOURCE is parameterized (ambient vs explicit).
  */
-export function createInstanceWriteAuthority(
+function createInstanceUseAuthorityGateCore(
   kind: InstanceWriteConnectorKind,
-): RequireInstanceWriteAuthority {
+): (resolved: ResolvedActor | null, input: InstanceUseAuthorityGateInput) => Promise<void> {
   const packageId = resolvePackageIdForKind(kind);
   const resolveInstanceOrg = CONNECTOR_KIND_TO_INSTANCE_ORG_RESOLVER[kind];
 
-  return async function requireInstanceWriteAuthority({
-    instanceId,
-    primitiveName,
-    sourceType,
-  }: InstanceWriteAuthorityInput): Promise<void> {
+  return async function runInstanceUseAuthorityGate(
+    resolved: ResolvedActor | null,
+    { instanceId, primitiveName, sourceType, causation }: InstanceUseAuthorityGateInput,
+  ): Promise<void> {
     const deny = async (
       reason: string,
       ids?: { userId?: string; orgId?: string },
@@ -281,14 +297,15 @@ export function createInstanceWriteAuthority(
           primitiveName,
           reason,
           ...(sourceType ? { sourceType } : {}),
+          ...(causation ? { causation } : {}),
         },
       });
       throw new InstanceWriteAuthorityError(reason);
     };
 
-    // (a)+(b) Resolve the trusted user actor; DENY fail-closed if absent. The
-    // synthetic/anonymous path NEVER reaches the instance read or the policy.
-    const resolved = await resolveTrustedWriteActor();
+    // (a)+(b) DENY fail-closed if no trusted actor. The synthetic/anonymous path
+    // NEVER reaches the instance read or the policy. The actor is resolved by the
+    // CALLER (ambient for `requireWrite`; host-derived explicit for `requireUse`).
     if (!resolved) await deny("no_trusted_actor");
     const { actor, userId, orgId } = resolved as ResolvedActor;
 
@@ -430,6 +447,43 @@ export function createInstanceWriteAuthority(
 }
 
 /**
+ * Mint the per-connector-kind AMBIENT write-authority guard. Resolves the trusted
+ * actor from the active MCP/llm/cookie frame, then runs the shared gate core.
+ * PUBLIC BEHAVIOR IS UNCHANGED — byte-identical to the pre-K2 `requireWrite`
+ * (register-host publish, `filterAuthorizedInstances` consumers unaffected).
+ */
+export function createInstanceWriteAuthority(
+  kind: InstanceWriteConnectorKind,
+): RequireInstanceWriteAuthority {
+  const runGate = createInstanceUseAuthorityGateCore(kind);
+  return async function requireInstanceWriteAuthority(
+    input: InstanceWriteAuthorityInput,
+  ): Promise<void> {
+    const resolved = await resolveTrustedWriteActor();
+    await runGate(resolved, input);
+  };
+}
+
+/**
+ * Mint the per-connector-kind EXPLICIT-ACTOR use-authority guard (cinatra#2017 S2
+ * / D2). The governed invoker passes the HOST-DERIVED trusted actor (§2.4 — MCP
+ * path ambient, job path enqueue-preserved); it is NEVER connector/tool input.
+ * Same gate core → same single live pass → same one authorization-decision audit
+ * (M4). `mode:"use"` is unchanged.
+ */
+export function createInstanceUseAuthority(
+  kind: InstanceWriteConnectorKind,
+): RequireInstanceUseAuthority {
+  const runGate = createInstanceUseAuthorityGateCore(kind);
+  return async function requireInstanceUseAuthority(
+    resolved: ResolvedActor,
+    input: InstanceUseAuthorityGateInput,
+  ): Promise<void> {
+    await runGate(resolved, input);
+  };
+}
+
+/**
  * The minimal instance shape the actor-scoped LIST filter needs: every row
  * carries an `id` (the per-instance authority is keyed on it). Callers thread
  * their own richer row type through the generic so the FULL row is returned
@@ -563,15 +617,22 @@ export function createInstanceListAuthority(
  * always host-controlled, never arbitrary caller input (codex must-fix).
  */
 export function createInstanceWriteAuthorityService(): {
-  selectForConnector(kind: string): { requireWrite: RequireInstanceWriteAuthority };
+  selectForConnector(kind: string): {
+    requireWrite: RequireInstanceWriteAuthority;
+    requireUse: RequireInstanceUseAuthority;
+  };
 } {
   return {
     selectForConnector(kind: string) {
       if (!Object.prototype.hasOwnProperty.call(CONNECTOR_KIND_TO_CATALOG_SLUG, kind)) {
         throw new InstanceWriteAuthorityError(`unsupported_connector_kind:${kind}`);
       }
+      // ADDITIVE (cinatra#2017 S2 slice K2): `requireUse` is the explicit-actor
+      // use-authority guard the governed invoker calls; `requireWrite` is the
+      // unchanged ambient guard the content-editor connectors already use.
       const requireWrite = createInstanceWriteAuthority(kind as InstanceWriteConnectorKind);
-      return { requireWrite };
+      const requireUse = createInstanceUseAuthority(kind as InstanceWriteConnectorKind);
+      return { requireWrite, requireUse };
     },
   };
 }

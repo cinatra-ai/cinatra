@@ -105,6 +105,7 @@ import {
   type HostDrupalMcpService,
   type HostWordPressMcpService,
   type HostInstanceWriteAuthorityService,
+  type HostConnectorInstanceInvokerService,
   type HostExternalMcpRegistryService,
   type HostYouTubeConnectionService,
   type HostInstanceConnectionGateService,
@@ -159,7 +160,31 @@ import { resolveWidgetActorFromFrame } from "./widget-actor-frame";
 import {
   createInstanceListAuthority,
   createInstanceWriteAuthorityService,
+  resolveTrustedWriteActor,
+  InstanceWriteAuthorityError,
 } from "./connector-instance-write-authority";
+// cinatra#2017 S2 — the governed connector-instance invoker (Plane C) + its
+// transport / catalog cache / policy store. Published below beside the
+// instance-write-authority as `@cinatra-ai/host:connector-instance-invoker`.
+import {
+  invokeConnectorInstanceTool,
+  listConnectorInstanceTools,
+  type ConnectorInstanceInvokerDeps,
+  type InvokerTrustedActor,
+  type ResolvedInstanceEndpoint,
+} from "@/lib/connector-instance-invoker";
+import { callConnectorInstanceMcpTool, InvokerError } from "@/lib/connector-instance-mcp-transport";
+import {
+  createInMemoryConnectorInstanceCatalogCache,
+  expandTriadCatalog,
+} from "@/lib/connector-instance-catalog-cache";
+import {
+  readInstanceToolPolicy,
+  ensureDefaultOpenPolicy,
+} from "@/lib/connector-instance-tool-policy-store";
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
+import { logAuditEvent } from "@/lib/authz/audit";
+import { Buffer } from "node:buffer";
 // The vendor connection/instance CLIENTS are GONE from core (cinatra#975
 // Wave 3 CORE EVICTION, epic #978): each owning connector registers its
 // relocated client under the SAME capability id from its `register(ctx)`.
@@ -312,6 +337,139 @@ export function resolveConnectorConfigEnvOverrides(packageName: string): Record<
     record?.envOverrides,
     record?.resolution,
   );
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#2017 S2 — governed connector-instance invoker (Plane C) wiring.
+//
+// The host publishes ONE shared `{ invokeSiteTool, listSiteTools }` guard; the
+// connector resolves it via `hostService(ctx, …)` and calls it with NO
+// connectorKey/kind (M6). `connectorKey` is HOST-DERIVED — never connector-
+// selected. The host-authoritative source available to this shared impl at call
+// time is the SIGNED, host-minted connector-instance pin on the ambient delegated
+// actor (§2.7); an absent pin (the org-scope-via-shared-primitive path §1.6 flags
+// as the danger) FAILS CLOSED (`connector_key_underivable`). The job path (S7
+// seam) supplies `connectorKey` from a host-minted enqueue binding to the
+// low-level core API directly — never a payload field (R3-B1).
+//
+// SHIP-DARK (§1.5): nothing in production reaches these methods yet — delegated
+// chat/widget deny-by-default keeps the connector primitives off every live
+// perimeter until the S7 cutover. This publication only lets the connector's
+// `register(ctx)` RESOLVE the capability fail-loud at boot.
+// ---------------------------------------------------------------------------
+
+/** Per-process catalog cache (S3 owns TTL/invalidation/lifecycle — N6). */
+const connectorInstanceCatalogCache = createInMemoryConnectorInstanceCatalogCache();
+/** The shared authority service — `selectForConnector(kind).requireUse` is the
+ * invoker's single live per-instance USE authority pass (M4). */
+const connectorInstanceUseAuthority = createInstanceWriteAuthorityService();
+/** The connector kinds the invoker guard host-derives a connectorKey for. */
+const CONNECTOR_INSTANCE_INVOKER_KINDS = new Set(["wordpress", "drupal"]);
+
+/** Resolve a connector instance's MCP endpoint + single-source Basic auth
+ * HOST-SIDE (never connector input). S2 targets the always-enrolled WordPress
+ * default server; drupal endpoint resolution is S3. The credential is the
+ * host-resolved instance row's application password (host-authoritative — NOT the
+ * connector toolbox's raw field, §1.3); it never appears in error text. */
+async function resolveConnectorInstanceEndpoint(
+  connectorKey: string,
+  instanceId: string,
+): Promise<ResolvedInstanceEndpoint | null> {
+  if (connectorKey !== "wordpress") return null;
+  const row = resolveWordPressInstanceAdmin()?.readInstanceById(instanceId) ?? null;
+  if (!row || !row.siteUrl || !row.username || !row.applicationPassword) return null;
+  const endpoint = resolveWordPressMcpFallbackEndpoint(row.siteUrl);
+  const authHeader = `Basic ${Buffer.from(`${row.username}:${row.applicationPassword}`, "utf8").toString("base64")}`;
+  return { endpoint, authHeader };
+}
+
+/** Build the invoker deps for a host-bound connectorKey (closes over the shared
+ * authority / transport / cache / policy store, §1.6). */
+function buildConnectorInstanceInvokerDeps(boundConnectorKey: string): ConnectorInstanceInvokerDeps {
+  const authority = connectorInstanceUseAuthority.selectForConnector(boundConnectorKey);
+  return {
+    requireUse: (actor, gateInput) => authority.requireUse(actor, gateInput),
+    ensureDefaultOpenPolicy: (input) => ensureDefaultOpenPolicy(input),
+    resolveInstanceEndpoint: resolveConnectorInstanceEndpoint,
+    cache: connectorInstanceCatalogCache,
+    // S2's always-enrolled default server is triad-only — expand via the wire
+    // (discover → get-info). S3 owns first-class + multi-server enrollment.
+    loadServerSnapshot: ({ serverId, endpoint, authHeader }) =>
+      expandTriadCatalog({
+        serverId,
+        callWireTool: (name, args) =>
+          callConnectorInstanceMcpTool({ endpoint, authHeader, name, arguments: args }),
+      }),
+    callWireTool: (input) => callConnectorInstanceMcpTool(input),
+    readPolicy: (connectorKey, instanceId) => readInstanceToolPolicy(connectorKey, instanceId),
+    audit: (event) =>
+      logAuditEvent({
+        resourceType: event.resourceType,
+        resourceId: event.resourceId,
+        actorPrincipalType: "human",
+        ...(event.actorPrincipalId ? { actorPrincipalId: event.actorPrincipalId } : {}),
+        ...(event.organizationId ? { organizationId: event.organizationId } : {}),
+        authSource: "mcp",
+        operation: event.operation,
+        decision: event.decision,
+        policyVersion: "connector-instance-invoker",
+        metadata: { ...event.metadata, ...(event.causation ? { causation: event.causation } : {}) },
+      }),
+    // destructiveHook is INTENTIONALLY absent in S2 — S2 provides the classifier +
+    // the hook POINT; the subsystem (persistence/UI/resume-token) is S5 (N2).
+    warnAbsentPolicy: (connectorKey, instanceId) => {
+      console.warn(
+        `[connector-instance-invoker] no persisted policy for ${connectorKey}/${instanceId} — ` +
+          `compatibility fallback OPEN (transient; reconcile + first-touch converge it).`,
+      );
+    },
+    // Fail-closed INVALID policy (§10-A3): denies-all AND emits an audit warn —
+    // an invalid/malformed persisted record is a security signal, not the benign
+    // absent-fallback. Loud + audited so an operator sees a corrupt policy row.
+    warnInvalidPolicy: (connectorKey, instanceId) => {
+      console.error(
+        `[connector-instance-invoker] INVALID policy record for ${connectorKey}/${instanceId} — ` +
+          `evaluating as DENY-ALL (fail-closed). A malformed policy row must be repaired.`,
+      );
+      void logAuditEvent({
+        resourceType: "connector_instance",
+        resourceId: instanceId,
+        actorPrincipalType: "system",
+        authSource: "worker",
+        operation: "policy_invalid_deny_all",
+        decision: "denied",
+        policyVersion: "connector-instance-tool-policy",
+        metadata: { connectorKey, reason: "invalid_policy_deny_all" },
+      });
+    },
+  };
+}
+
+/** Resolve the HOST-DERIVED connectorKey + trusted actor for a guard call. */
+async function resolveConnectorInstanceInvokerContext(): Promise<{
+  actor: InvokerTrustedActor;
+  boundConnectorKey: string;
+}> {
+  const frame = mcpRequestContextStorage.getStore();
+  const delegated = frame?.delegatedActor;
+  // The `chat` delegation member carries no pin; narrow via `in` before reading.
+  const pin =
+    delegated && "connectorInstancePin" in delegated ? delegated.connectorInstancePin : undefined;
+  // connectorKey is HOST-DERIVED from the signed pin (host-authoritative) — never
+  // connector-selected (M6/R2-B1). No pin / unknown kind ⇒ fail closed.
+  if (!pin || !CONNECTOR_INSTANCE_INVOKER_KINDS.has(pin.connectorKey)) {
+    throw new InvokerError(
+      "connector_key_underivable",
+      "the governed invoker requires a signed connector-instance pin to host-derive the connector",
+    );
+  }
+  const resolved = await resolveTrustedWriteActor();
+  if (!resolved) {
+    // Fail closed — no anonymous/synthetic invoker calls (the gate would deny
+    // no_trusted_actor; surface it here before touching any endpoint/cache).
+    throw new InstanceWriteAuthorityError("no_trusted_actor");
+  }
+  return { actor: { ...resolved, connectorInstancePin: pin }, boundConnectorKey: pin.connectorKey };
 }
 
 /**
@@ -697,6 +855,44 @@ export function registerHostConnectorServices(): void {
   // audit row). `selectForConnector` maps the connector KIND to BOTH the package
   // id and the instance reader host-side — neither is ever caller-supplied.
   register(svc.instanceWriteAuthority, createInstanceWriteAuthorityService() satisfies HostInstanceWriteAuthorityService);
+
+  // cinatra#2017 S2 — the governed connector-instance invoker (Plane C). ONE
+  // shared guard; `connectorKey` is HOST-DERIVED from the signed instance pin on
+  // the ambient delegated actor (M6/R2-B1), never a connector/kind selector on
+  // the connector-facing shape. `listSiteTools` runs the SAME pin + live USE
+  // authority gate BEFORE any catalog read (B2). Ship-dark: no live perimeter
+  // reaches these until S7 (delegated deny-by-default keeps them off, untouched).
+  register(svc.connectorInstanceInvoker, {
+    invokeSiteTool: async (input) => {
+      const { actor, boundConnectorKey } = await resolveConnectorInstanceInvokerContext();
+      return invokeConnectorInstanceTool(
+        {
+          connectorKey: boundConnectorKey,
+          toolName: input.toolName,
+          args: input.args,
+          ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+          ...(input.serverId ? { serverId: input.serverId } : {}),
+          actor,
+          primitiveName: `${boundConnectorKey}_site_tool_call`,
+        },
+        buildConnectorInstanceInvokerDeps(boundConnectorKey),
+      );
+    },
+    listSiteTools: async (input) => {
+      const { actor, boundConnectorKey } = await resolveConnectorInstanceInvokerContext();
+      return listConnectorInstanceTools(
+        {
+          connectorKey: boundConnectorKey,
+          ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+          ...(input.serverId ? { serverId: input.serverId } : {}),
+          ...(input.cursor ? { cursor: input.cursor } : {}),
+          actor,
+          primitiveName: `${boundConnectorKey}_site_tools_list`,
+        },
+        buildConnectorInstanceInvokerDeps(boundConnectorKey),
+      );
+    },
+  } satisfies HostConnectorInstanceInvokerService);
 
   // cinatra#2043 S5 — the CMS review-before-publish capability. A NEW host-local
   // capability id (the anthropic-skill-config precedent — an arbitrary string,

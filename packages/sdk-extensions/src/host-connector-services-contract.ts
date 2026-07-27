@@ -92,6 +92,14 @@ export const HOST_CONNECTOR_SERVICE_CAPABILITIES = {
   // package id) — never caller-supplied. Distinct from the content/connection
   // service ids so authz and content CRUD never evolve under one id.
   instanceWriteAuthority: "@cinatra-ai/host:instance-write-authority",
+  // --- governed connector-instance invoker (cinatra#2017 S2) ----------------
+  // Plane C: the host-published guard the WordPress/Drupal content connectors
+  // resolve to reach a connector instance's own MCP catalog through the full
+  // authz→policy→classify→hook→execute→audit order. `connectorKey` is derived
+  // HOST-SIDE from the verified calling-connector identity (M6/R2-B1) — the
+  // connector-facing methods carry NO connectorKey/kind selector. Connector-
+  // generic (the core API is keyed by connectorKey), hence not wordpress-prefixed.
+  connectorInstanceInvoker: "@cinatra-ai/host:connector-instance-invoker",
   // Per-concern widget-auth config surface for the wordpress assistant widget
   // (`@/lib/wordpress-widget-auth` stays host-side).
   wordpressWidgetAuth: "@cinatra-ai/host:wordpress-widget-auth",
@@ -642,6 +650,17 @@ export type HostInstanceWriteAuthorityService = {
       primitiveName: string;
       sourceType?: string;
     }): Promise<void>;
+    /**
+     * ADDITIVE (cinatra#2017 S2): the EXPLICIT-ACTOR use-authority guard the
+     * governed connector-instance invoker calls. Same gate core / single live
+     * pass / one authorization-decision audit as `requireWrite`, but the trusted
+     * actor is passed in HOST-DERIVED (the invoker resolves it — MCP path ambient,
+     * job path enqueue-preserved), never connector/tool input. Throws on deny.
+     */
+    requireUse(
+      resolved: { actor: unknown; userId: string; orgId: string },
+      input: { instanceId: string; primitiveName: string; sourceType?: string; causation?: string },
+    ): Promise<void>;
   };
 };
 

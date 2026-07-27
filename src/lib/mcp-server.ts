@@ -511,9 +511,24 @@ export const mcpServerMount = createMcpServerMount({
   verifyDelegatedActorToken: async (input) => {
     const chatActor = await verifyChatMcpActorToken(input);
     if (chatActor) return chatActor;
+    // The agent-run verifier already surfaces the NORMALIZED
+    // `connectorInstancePin` from its signed `pin:{ck,iid}` claim (cinatra#2017
+    // S2 / B1); absent ⇒ org scope. No re-mapping needed here.
     const agentRunActor = await verifyAgentRunMcpActorToken(input);
     if (agentRunActor) return agentRunActor;
-    return verifyWidgetMcpActorToken(input);
+    const widgetActor = await verifyWidgetMcpActorToken(input);
+    if (!widgetActor) return null;
+    // Normalize the widget token's native `inst`/`knd` into the SAME unified
+    // `connectorInstancePin` shape (cinatra#2017 S2 / B1) — a widget turn is
+    // ALWAYS instance-pinned, so the governed invoker reads one field regardless
+    // of token type.
+    return {
+      ...widgetActor,
+      connectorInstancePin: {
+        connectorKey: widgetActor.kind,
+        instanceId: widgetActor.instanceId,
+      },
+    };
   },
   // cinatra#1939 S3: membership-grounded org-write authority for session /
   // chat-OBO callers. The transport already resolved the membership role for

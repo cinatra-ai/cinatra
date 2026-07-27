@@ -109,6 +109,21 @@ export default defineConfig({
         find: "@cinatra-ai/projects",
         replacement: path.join(__dirname, "packages/projects/src/index.ts"),
       },
+      // cinatra#2017 S2: the governed connector-instance invoker
+      // (src/lib/connector-instance-invoker.ts) imports these two mcp-server leaf
+      // subpaths — the pure per-instance tool-policy evaluator and the annotation
+      // classifier. tsconfig has the path aliases; the root vitest run needs the
+      // mirrored entries so every suite transitively reaching the invoker (via the
+      // host connector-service registration) resolves them instead of failing to
+      // collect.
+      {
+        find: "@cinatra-ai/mcp-server/instance-tool-policy",
+        replacement: path.join(__dirname, "packages/mcp-server/src/instance-tool-policy.ts"),
+      },
+      {
+        find: "@cinatra-ai/mcp-server/annotation-classifier",
+        replacement: path.join(__dirname, "packages/mcp-server/src/annotation-classifier.ts"),
+      },
       // `@cinatra-ai/objects/classifier-signals` is a leaf subpath. Listed
       // here so tests under `src/lib/artifacts/` (root vitest scope) can
       // import the leaf without the heavy objects barrel. tsconfig has the
