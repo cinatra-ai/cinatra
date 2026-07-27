@@ -125,11 +125,52 @@ export function readSeed(): UatSeed {
 }
 
 export async function loginWordPress(page: Page): Promise<void> {
-  await page.goto(`${WP_BASE}/wp-login.php`);
+  // cinatra#2131 — the NAVIGATION to wp-login.php is the flaky step, not the
+  // sign-in. The docker WordPress is still warming up its first requests while
+  // this suite starts, so `page.goto` intermittently lands on a connection
+  // reset or a half-rendered document; the bare `fill` that followed then threw
+  // and burned a whole-test retry (the "1 flaky" the incident review saw).
+  //
+  // Retry the SINGLE navigation in place — bounded, and only until the login
+  // form is actually present — rather than letting the runner replay the entire
+  // test. A retry of the whole test costs minutes on a runner that is already
+  // memory-constrained, hides the real signal behind a green-on-retry, and
+  // re-runs everything the test had already proven.
+  //
+  // The submit path below stays a SINGLE attempt on purpose: a repeated
+  // credential POST is a different failure class (bad credentials, a broken
+  // auth cookie) that must fail loud, not be papered over by a retry.
+  const loginForm = page.locator("#loginform");
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await page.goto(`${WP_BASE}/wp-login.php`, { waitUntil: "domcontentloaded" });
+      // A live session is redirected straight into wp-admin; nothing to do.
+      if (/\/wp-admin/.test(page.url())) return;
+      // Explicit wait on the form itself — reaching `domcontentloaded` does not
+      // mean the login markup is there (a PHP fatal or an in-flight bootstrap
+      // both render a document without it).
+      await loginForm.waitFor({ state: "visible", timeout: 15_000 });
+      await page.locator("#user_login").waitFor({ state: "visible", timeout: 5_000 });
+      lastError = undefined;
+      break;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await page.waitForTimeout(1_000);
+    }
+  }
+  if (lastError !== undefined) {
+    throw new Error(
+      `[wp-drupal-uat] the wp-admin login form never became available at ` +
+        `${WP_BASE}/wp-login.php after 3 navigation attempts (last page: ${page.url()}). ` +
+        `Cause: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    );
+  }
+
   await page.fill("#user_login", WP_ADMIN_USER);
   await page.fill("#user_pass", WP_ADMIN_PASS);
   await page.click("#wp-submit");
-  await page.waitForURL(/wp-admin/);
+  await page.waitForURL(/wp-admin/, { timeout: 30_000 });
 }
 
 export async function loginDrupal(page: Page): Promise<void> {
