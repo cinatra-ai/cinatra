@@ -72,6 +72,11 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
           df -h /
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # No later step needs the git token (public-registry install, local
+          # docker build, no pushes) — don't leave it in .git/config while
+          # building and running an image from repository content.
+          persist-credentials: false
       - name: Set up pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - name: Set up Node.js
@@ -106,9 +111,15 @@ jobs:
           wait_ready "/wp-json/scalesmoke/scalesmoke-server"
           docker exec cinatra-wordpress-1 wp core version --allow-root | grep -E '^6\.9\.' || { echo "::error::core version is not 6.9.*"; exit 1; }
       - name: Mint per-run app password (no committed secret)
+        # The credential is minted at runtime, so GitHub cannot auto-redact it
+        # like a stored secret — mask BOTH the raw password and the derived
+        # base64 Basic value before either can reach a log line.
         run: |
           APPPW=$(docker exec cinatra-wordpress-1 wp user application-password create admin scale-smoke --porcelain --allow-root)
-          echo "WP_MCP_BASIC_AUTH=$(printf 'admin:%s' "$APPPW" | base64 -w0)" >> "$GITHUB_ENV"
+          echo "::add-mask::$APPPW"
+          BASIC_B64=$(printf 'admin:%s' "$APPPW" | base64 -w0)
+          echo "::add-mask::$BASIC_B64"
+          echo "WP_MCP_BASIC_AUTH=$BASIC_B64" >> "$GITHUB_ENV"
       - name: Run the live provider-scale proof
         env:
           WP_BASE_URL: http://localhost:8080

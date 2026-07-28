@@ -290,12 +290,16 @@ describe.skipIf(!LIVE)(
         //      The server URL is the fixture route the tools actually live
         //      on. This proves serialization-shape preservation (allowed
         //      tools / auth / label survive intact) — not a live provider
-        //      round-trip (no provider API is called here). --------------------
+        //      round-trip (no provider API is called here). The authorization
+        //      value is therefore a PLACEHOLDER, never the live minted
+        //      credential: a failing assertion serializes these objects into
+        //      the CI log, and the live value must never be printable there.
+        const placeholderAuth = `Basic ${Buffer.from("admin:placeholder-not-a-real-credential").toString("base64")}`;
         const materializerInputs: McpMaterializerInput[] = [
           {
             serverLabel: "wordpress-live-instance",
             serverUrl: `${base}/wp-json/scalesmoke/scalesmoke-server`,
-            authorization: `Basic ${auth}`,
+            authorization: placeholderAuth,
             allowedTools: grant!.allowedTools,
             approval: "auto_execute",
             transport: "streamable-http",
@@ -306,6 +310,7 @@ describe.skipIf(!LIVE)(
         expect(materialized.skipped).toEqual([]); // zero skipped entries — no batch loss
         expect(materialized.servers).toHaveLength(1);
         const materializedServer = materialized.servers[0]!;
+        expect(materializedServer.authorization).toBe(placeholderAuth); // single-auth-source preserved verbatim
         expect(materializedServer.allowedTools).toHaveLength(trustedSnapshot.tools.length);
 
         for (const provider of ["openai", "anthropic"] as const) {
