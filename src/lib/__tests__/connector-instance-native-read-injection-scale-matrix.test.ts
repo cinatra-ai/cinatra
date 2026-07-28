@@ -138,7 +138,7 @@ function buildInstanceFixture(instance: Instance): {
   const defaultSnapshot: CatalogServerSnapshot = {
     serverId: "mcp-adapter-default",
     exposureMode: "first-class",
-    tools: READ_TOOL_NAMES.map(readTool),
+    tools: READ_TOOL_NAMES.map((name) => readTool(name)),
     catalogRevision: `rev-${instance.instanceId}-default`,
     fetchedAtMs: 1_000,
   };
