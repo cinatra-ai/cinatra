@@ -1,7 +1,12 @@
 import { notFound, redirect } from "next/navigation";
 import { inArray } from "drizzle-orm";
 import { Main } from "@/components/layout/main";
-import { getAuthSession, isPlatformAdmin, resolveOrgRoleForSession } from "@/lib/auth-session";
+import {
+  getAuthSession,
+  isPlatformAdmin,
+  requireActorContext,
+  resolveOrgRoleForSession,
+} from "@/lib/auth-session";
 import {
   betterAuthDb,
   betterAuthUsers,
@@ -17,9 +22,11 @@ import { listReviewGatesForRun, readVerificationRecordsForGates } from "./artifa
 import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
 import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
-import { readRecommendationParkForRun } from "./recommendation-hold";
+import {
+  readRecommendationParkForRun,
+  resolveRecommendationCandidateSkillIds,
+} from "./recommendation-hold";
 import { getRunRecommendations } from "./recommendation-interception";
-import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import {
   readRunSelectedSkillRevisions,
   hasRunRecommendationSkip,
@@ -386,7 +393,27 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       const packageName = template.packageName ?? undefined;
       if (packageName) {
         try {
-          const assigned = await getAssignedSkillIdsForAgent(packageName);
+          // Run-actor-scoped candidate seam (cinatra#2148 finding 1): the same
+          // set the hold decision fired on, so an org/workspace-assigned skill
+          // actually appears as a chip instead of being filtered out by an
+          // actor-free resolve — INTERSECTED with THIS viewer's own entitlement
+          // so the actor threading never widens what a run-READ-only reader can
+          // learn about the owner's scoped skills. For the owner (the actor the
+          // chip-row's decision requires) the two sets coincide. FAIL-CLOSED: an
+          // unresolvable viewer scope renders no chips.
+          const viewer = await requireActorContext().catch(() => null);
+          const assigned = viewer
+            ? await resolveRecommendationCandidateSkillIds({
+                run,
+                packageName,
+                viewer: {
+                  principalId: viewer.principalId,
+                  teamIds: viewer.teamIds ?? [],
+                  projectIds: viewer.projectIds ?? [],
+                  organizationId: viewer.organizationId ?? undefined,
+                },
+              })
+            : [];
           let intentPromptText = "";
           try {
             intentPromptText = JSON.stringify(run.inputParams ?? {});

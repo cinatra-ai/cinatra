@@ -24,12 +24,13 @@
 // anywhere (issue #2067 AC-8).
 // ---------------------------------------------------------------------------
 
-import { requireAuthSession } from "@/lib/auth-session";
+import { requireActorContext, requireAuthSession } from "@/lib/auth-session";
+import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
+import type { ActorRoleHints } from "./auth-policy";
 import {
   writeRunRejectedRecommendations,
   SKIP_RECOMMENDATION_SOURCE,
 } from "@/lib/run-selected-skill-revisions";
-import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 
 import {
   readRunSelectedSkillRevisions,
@@ -38,7 +39,11 @@ import {
 
 import { readAgentRunById, readAgentTemplateById } from "./store";
 import { getRunRecommendations } from "./recommendation-interception";
-import { readRecommendationParkForRun, releaseRecommendationParkForRun } from "./recommendation-hold";
+import {
+  readRecommendationParkForRun,
+  releaseRecommendationParkForRun,
+  resolveRecommendationCandidateSkillIds,
+} from "./recommendation-hold";
 import { triggerAgentRun } from "./run-actions";
 import { confirmRunSkillSelectionAction } from "./server-actions";
 import type { RecommendedSkillForChip } from "./server-actions";
@@ -60,37 +65,81 @@ export type RunRecommendationHoldState =
  *   confirmed → the read-only confirmed summary;
  *   skipped   → the read-only skipped summary;
  *   none      → no row (headless / policy-skipped / empty-candidate / no run).
- * Read-only + session-guarded via the run access door (`readAgentRunById`).
+ *
+ * AUTHORIZATION (cinatra#2148): the run is loaded THROUGH the access door —
+ * `readAgentRunById(runId, actor, roleHints)` runs
+ * `enforceRunAccess(..., "read", ...)` and throws for a run this session may not
+ * see. The bare `readAgentRunById(runId)` this used before SKIPPED that gate, so
+ * any authenticated caller holding a run id could read the row; with the
+ * candidate set now actor-scoped that would have leaked the run owner's scoped
+ * skill NAMES. The park read is likewise moved BEHIND the door so an
+ * unauthorized caller cannot even probe a run's hold state. The role HINTS ride
+ * along (mirroring `confirmRunSkillSelectionAction`) so the door neither
+ * over-admits nor falsely denies a platform-admin / org-admin / policy-authorized
+ * same-org reader.
  */
 export async function getRunRecommendationHoldStateAction(input: {
   runId: string;
 }): Promise<RunRecommendationHoldState> {
   const session = await requireAuthSession().catch(() => null);
-  if (!session?.user?.id) return { state: "none" };
+  const userId = session?.user?.id ?? null;
+  if (!userId) return { state: "none" };
   if (!input.runId) return { state: "none" };
+
+  // The viewer's kernel context serves BOTH the access door's role hints and the
+  // presentation intersection below. FAIL-CLOSED: unresolvable ⇒ no row.
+  const viewer = await requireActorContext().catch(() => null);
+  if (!viewer) return { state: "none" };
+  const roleHints: ActorRoleHints = {
+    ...(viewer.platformRole ? { platformRole: viewer.platformRole } : {}),
+    ...(viewer.orgRole ? { orgRole: viewer.orgRole } : {}),
+    ...(viewer.teamRoles ? { teamRoles: viewer.teamRoles } : {}),
+    ...(viewer.teamIds ? { teamIds: viewer.teamIds } : {}),
+    ...(viewer.projectGrants ? { projectGrants: viewer.projectGrants } : {}),
+    actorOrganizationId: viewer.organizationId ?? null,
+  };
+
+  // Access door FIRST — every branch below is behind it.
+  const doorActor: PrimitiveActorContext = { actorType: "human", source: "ui", userId };
+  const run = await readAgentRunById(input.runId, doorActor, roleHints).catch(() => null);
+  if (!run) return { state: "none" };
 
   const park = await readRecommendationParkForRun(input.runId).catch(() => null);
   if (!park) return { state: "none" };
 
   if (park.status !== "parked") {
+    // DECIDED summary. Deliberately NOT viewer-filtered: these are the skills
+    // THIS run resolved, and the run's own Skills tab
+    // (`/agents/.../[instanceId]/skills`) already lists exactly this joined set
+    // to every viewer who clears the same run-read door. Filtering only here
+    // would hide legitimately run-scoped information while changing no
+    // disclosure boundary. The LIVE candidate row below is the surface this
+    // change actually widens, and that one IS intersected.
     const selected = readRunSelectedSkillRevisions(input.runId);
     if (selected.length > 0) return { state: "confirmed", skillNames: selected.map((s) => s.skillId) };
     if (hasRunRecommendationSkip(input.runId)) return { state: "skipped" };
     return { state: "none" };
   }
 
-  const run = await readAgentRunById(input.runId).catch(() => null);
-  if (!run) return { state: "none" };
   const template = await readAgentTemplateById(run.templateId).catch(() => null);
   const packageName = template?.packageName;
   if (!packageName) return { state: "none" };
 
-  let assignedSkillIds: string[] = [];
-  try {
-    assignedSkillIds = await getAssignedSkillIdsForAgent(packageName);
-  } catch {
-    assignedSkillIds = [];
-  }
+  // Same run-actor-scoped candidate seam the hold decision used (cinatra#2148
+  // finding 1) — the row must SHOW exactly the candidate set that made it fire,
+  // org/workspace assignments included — INTERSECTED with this viewer's own
+  // entitlement so a non-owner reader never learns the owner's scoped skill
+  // names and every offered chip is one this caller's confirm can write.
+  const assignedSkillIds = await resolveRecommendationCandidateSkillIds({
+    run,
+    packageName,
+    viewer: {
+      principalId: viewer.principalId,
+      teamIds: viewer.teamIds ?? [],
+      projectIds: viewer.projectIds ?? [],
+      organizationId: viewer.organizationId ?? undefined,
+    },
+  });
   let promptText = "";
   try {
     promptText = JSON.stringify(run.inputParams ?? {});
@@ -182,12 +231,12 @@ export async function skipRunRecommendationAction(input: {
     const template = await readAgentTemplateById(run.templateId).catch(() => null);
     const packageName = template?.packageName;
     if (packageName) {
-      let assignedSkillIds: string[] = [];
-      try {
-        assignedSkillIds = await getAssignedSkillIdsForAgent(packageName);
-      } catch {
-        assignedSkillIds = [];
-      }
+      // The skip evidence must name the SAME candidates the row offered
+      // (cinatra#2148 finding 1) — resolve through the shared run-actor seam.
+      const assignedSkillIds = await resolveRecommendationCandidateSkillIds({
+        run,
+        packageName,
+      });
       let intentPromptText = "";
       try {
         intentPromptText = JSON.stringify(run.inputParams ?? {});
@@ -232,9 +281,28 @@ export async function skipRunRecommendationAction(input: {
  * park is now RELEASED, `triggerAgentRun`'s hold re-check finds no live park and
  * `maybeHoldRunForRecommendation` sees a decided run — so the run dispatches
  * instead of re-holding.
+ *
+ * The release is VERIFIED before dispatching (cinatra#2148): a swallowed release
+ * failure used to leave the park LIVE, which made `triggerAgentRun` return
+ * `ok:true` off its live-park short-circuit — and this helper then reported
+ * `dispatched: true` for a run that never moved. A still-live park is now an
+ * explicit, retryable error instead of a false success. The verification read
+ * FAILS CLOSED: an unreadable park is treated as still-held, because "I could
+ * not confirm the release" must never become "dispatched".
  */
 async function releaseAndDispatch(runId: string): Promise<RunRecommendationDecisionResult> {
+  const HOLD_STILL_LIVE = {
+    ok: false as const,
+    error: "could not release the run-start recommendation hold — please retry",
+  };
   await releaseRecommendationParkForRun(runId).catch(() => false);
+  let parkAfterRelease: Awaited<ReturnType<typeof readRecommendationParkForRun>>;
+  try {
+    parkAfterRelease = await readRecommendationParkForRun(runId);
+  } catch {
+    return HOLD_STILL_LIVE;
+  }
+  if (parkAfterRelease?.status === "parked") return HOLD_STILL_LIVE;
 
   const run = await readAgentRunById(runId).catch(() => null);
   if (!run) return { ok: false, error: "run not found" };

@@ -541,6 +541,11 @@ export type StartDevChildPreviewResult =
       templateName: string;
       packageName: string;
       agUiEnabled: boolean;
+      /** cinatra#2148 finding 2: TRUE when the preview run PARKED at the
+       * run-start recommendation interception. The caller renders the chip-row
+       * (the decision releases the park and dispatches) and treats the run as
+       * `pending_input`, not `queued`. */
+      heldForRecommendation: boolean;
     }
   | { ok: false; error: string };
 
@@ -583,6 +588,50 @@ export async function startDevChildPreviewRun(
     humanPresent: true,
   });
 
+  // For vendor-scoped packages (@vendor/name), agentSlug becomes "vendor/name"
+  // so router.push paths match /agents/[vendor]/[pkg]/... routing.
+  const resolvedPkg = template.packageName ?? packageName;
+  const resolvedMatch = resolvedPkg.match(/^@([^/]+)\/(.+)$/);
+  const agentSlug = resolvedMatch ? `${resolvedMatch[1]}/${resolvedMatch[2]}` : fallbackSlug;
+  const previewResult = (heldForRecommendation: boolean): StartDevChildPreviewResult => ({
+    ok: true,
+    runId: created.id,
+    templateId: template.id,
+    agentSlug,
+    templateName: template.name,
+    packageName: resolvedPkg,
+    agUiEnabled: true,
+    heldForRecommendation,
+  });
+
+  // Run-start recommendation HOLD (cinatra#2148 finding 2). The Dev Stepper
+  // preview marks its run humanPresent and used to transition + enqueue
+  // DIRECTLY, so under the default-on chip-row it was the one interactive
+  // run-start that never paused — contradicting "a human-present run pauses when
+  // recommendations exist". It now consults the SAME hold as every other
+  // interactive run-start: parked ⇒ return the panel metadata WITHOUT
+  // dispatching (the embedded child panel renders the chip-row, whose
+  // confirm/adjust/skip releases the park and dispatches through the canonical
+  // `triggerAgentRun`). Best-effort — a hold failure fails OPEN to the previous
+  // direct dispatch.
+  try {
+    const hold = await maybeHoldRunForRecommendation({
+      run: created,
+      template: {
+        packageName: template.packageName,
+        lifecycleConfig: (template as { lifecycleConfig?: string | null }).lifecycleConfig,
+      },
+    });
+    if (hold.held) return previewResult(true);
+  } catch (err) {
+    console.warn(
+      "[startDevChildPreviewRun] recommendation hold evaluation failed for run",
+      created.id,
+      "— dispatching normally:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
   const authority = await verifySessionAuthority(userId, orgId);
   try {
     await transitionRunStatus(created.id, "pending_input", "queued", undefined, authority);
@@ -601,21 +650,7 @@ export async function startDevChildPreviewRun(
     console.error("[startDevChildPreviewRun] enqueue failed", err);
   }
 
-  // For vendor-scoped packages (@vendor/name), agentSlug becomes "vendor/name"
-  // so router.push paths match /agents/[vendor]/[pkg]/... routing.
-  const resolvedPkg = template.packageName ?? packageName;
-  const resolvedMatch = resolvedPkg.match(/^@([^/]+)\/(.+)$/);
-  const agentSlug = resolvedMatch ? `${resolvedMatch[1]}/${resolvedMatch[2]}` : fallbackSlug;
-
-  return {
-    ok: true,
-    runId: created.id,
-    templateId: template.id,
-    agentSlug,
-    templateName: template.name,
-    packageName: resolvedPkg,
-    agUiEnabled: true,
-  };
+  return previewResult(false);
 }
 
 // ---------------------------------------------------------------------------
