@@ -23,6 +23,10 @@ import {
   type TriggerRecord,
 } from "./trigger-store";
 import { scheduleTrigger, cancelTriggerSchedule } from "./trigger-schedule";
+// Run-start recommendation hold (cinatra#2067 C3 / #2148 finding 3) — the
+// immediate-trigger transition is a run-START dispatch and must consult the same
+// hold every other interactive run-start does.
+import { maybeHoldRunForRecommendation } from "./recommendation-hold";
 import {
   transitionRunStatus,
   RunTransitionError,
@@ -402,21 +406,72 @@ export async function setRunTriggerForActor(
       }
     }
   } else if (args.triggerType === "immediate") {
-    // Gate is already open; transition directly to queued.
+    // Run-start recommendation HOLD (cinatra#2148 finding 3). An immediate
+    // trigger IS a run-start dispatch, so it must consult the same hold every
+    // other interactive run-start does; before this it transitioned
+    // pending_input → queued directly and a human-present run never paused.
+    //
+    // The trigger row + open gate are already durable at this point, so a park
+    // costs nothing: the run simply stays pending_input until the chip-row
+    // decision releases the park and dispatches through the canonical
+    // `triggerAgentRun` (which performs the pending_input → queued CAS + enqueue
+    // with the gate already open). A headless run (`humanPresent` null/false —
+    // e.g. every programmatic MCP-created run) never parks, so the MCP surface
+    // is byte-unchanged. Best-effort: any hold failure fails OPEN to the direct
+    // transition below.
+    //
+    // A RETRIED immediate trigger on an ALREADY-parked run is covered by the
+    // hold itself: it answers `held:true` with the existing park id and writes
+    // no second park, so the retry cannot dispatch past the live park.
+    let heldForRecommendation = false;
     try {
-      await transitionRunStatus(args.runId, "pending_input", "queued", undefined, authority);
-    } catch (err) {
-      if (
-        !(err instanceof RunTransitionError && err.code === "stale_from_status")
-      ) {
-        throw err;
+      const template = await readAgentTemplateById(run.templateId);
+      if (template?.packageName) {
+        const hold = await maybeHoldRunForRecommendation({
+          run,
+          template: {
+            packageName: template.packageName,
+            lifecycleConfig: (template as { lifecycleConfig?: string | null }).lifecycleConfig,
+          },
+        });
+        heldForRecommendation = hold.held;
       }
-      // stale_from_status means the run was already in another status
-      // (e.g. was reset to pending_trigger or already queued). Log and
-      // continue — gate is already open.
-      console.log(
-        `[setRunTriggerForActor] immediate: run ${args.runId} not in pending_input — status left as-is`,
+    } catch (err) {
+      // runId passed as a discrete ARGUMENT (never interpolated into the format
+      // string) so a `%`-bearing id can never be read as a util.format specifier
+      // (CodeQL js/tainted-format-string).
+      console.warn(
+        "[setRunTriggerForActor] immediate: recommendation hold evaluation failed for run",
+        args.runId,
+        "— dispatching normally:",
+        err instanceof Error ? err.message : String(err),
       );
+    }
+    if (heldForRecommendation) {
+      // Parked at the recommendation interception — the chip-row's
+      // confirm/adjust/skip releases the park and dispatches. Do NOT transition
+      // here (the run stays pending_input; the run view renders the chip-row).
+      console.log(
+        "[setRunTriggerForActor] immediate: run held at the run-start recommendation interception; the chip-row decision dispatches it —",
+        args.runId,
+      );
+    } else {
+      // Gate is already open; transition directly to queued.
+      try {
+        await transitionRunStatus(args.runId, "pending_input", "queued", undefined, authority);
+      } catch (err) {
+        if (
+          !(err instanceof RunTransitionError && err.code === "stale_from_status")
+        ) {
+          throw err;
+        }
+        // stale_from_status means the run was already in another status
+        // (e.g. was reset to pending_trigger or already queued). Log and
+        // continue — gate is already open.
+        console.log(
+          `[setRunTriggerForActor] immediate: run ${args.runId} not in pending_input — status left as-is`,
+        );
+      }
     }
   }
 
