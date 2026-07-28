@@ -82,8 +82,8 @@ describe("core-extension-import-ban gate", () => {
 
   it("derives extension names from package.json — incl. *-skills + the un-exempt anthropic-connector", () => {
     const names = discoverExtensionNames();
-    expect(names.has("@cinatra-ai/blog-skills")).toBe(true); // plural-suffixed skill pkg the old regex missed
-    expect(names.has("@cinatra-ai/assistant-skills")).toBe(true);
+    expect(names.has("@cinatra-ai/assistant-skills")).toBe(true); // plural-suffixed skill pkg the old regex missed
+    expect(names.has("@cinatra-ai/blog-writing-skill")).toBe(true); // and the singular `-skill` form
     expect(names.has("@cinatra-ai/anthropic-connector")).toBe(true); // un-exempt
   });
 

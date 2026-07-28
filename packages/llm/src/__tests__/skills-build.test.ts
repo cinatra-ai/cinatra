@@ -194,8 +194,8 @@ describe("buildSkillTools soft-fallback", () => {
   // that this fix closes.
   it("returns a mountable shell tool for a resolvable widget-chat skill (widget stream contract)", async () => {
     for (const widgetSkillId of [
-      "@cinatra-ai/wordpress-mcp-connector:wordpress-widget-chat",
-      "@cinatra-ai/drupal-skills:drupal-widget-chat",
+      "@cinatra-ai/wordpress-widget-chat-skill:wordpress-widget-chat",
+      "@cinatra-ai/drupal-widget-chat-skill:drupal-widget-chat",
     ]) {
       installedGetMock.mockReset();
       installedGetMock.mockResolvedValueOnce({

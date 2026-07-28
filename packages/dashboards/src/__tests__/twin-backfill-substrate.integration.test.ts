@@ -192,14 +192,17 @@ d("dashboards-artifact twin BACKFILL — substrate proof (cinatra#1894 B1c / #20
     // excluded by the NOT EXISTS predicate, never scanned).
     expect(result.scanned).toBe(5);
 
-    // Each paired dashboard now has a COMPLETE twin with verbatim axis, the
-    // conservative visibility, the 'dashboards-twin' source, and the full
-    // resource/representation/audit/outbox set.
+    // Each paired dashboard now has a COMPLETE twin carrying the CANONICAL
+    // scope tuple (`deriveDashboardScopeTuple`, cinatra#1898), the
+    // 'dashboards-twin' source, and the full resource/representation/audit/
+    // outbox set. NOTE the project row: its tuple is ORGANIZATION-owned +
+    // private + project-refined (never its underlying user/team owner), so the
+    // canonical object filter admits it ONLY via the project clause.
     const cases: Array<{ id: string; ownerLevel: string; ownerId: string; projectId: string | null; visibility: string }> = [
       { id: "bf-01-user", ownerLevel: "user", ownerId: USER, projectId: null, visibility: "private" },
       { id: "bf-02-team", ownerLevel: "team", ownerId: TEAM, projectId: null, visibility: "team" },
       { id: "bf-03-org", ownerLevel: "organization", ownerId: ORG, projectId: null, visibility: "organization" },
-      { id: "bf-04-proj", ownerLevel: "user", ownerId: USER, projectId: PROJECT, visibility: "private" },
+      { id: "bf-04-proj", ownerLevel: "organization", ownerId: ORG, projectId: PROJECT, visibility: "private" },
     ];
     for (const c of cases) {
       const objs = await q<{

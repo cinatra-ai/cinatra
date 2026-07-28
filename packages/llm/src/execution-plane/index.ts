@@ -15,6 +15,11 @@
  * hardened container, egress gateway, audit-kernel records, admin
  * settings/health surfaces, and DB migrations are separate slices that
  * consume this contract.
+ *
+ * cinatra#2175 adds the RENDER-SIDE half (in `./policy`): a pure verdict
+ * function a surface applies to a finished turn so prose that claims code ran
+ * without a completed sandbox dispatch is marked unverified in the transcript
+ * instead of reading as captured output.
  */
 
 export {
@@ -37,7 +42,16 @@ export {
   shouldSuppressExecutionForTask,
   ensureToolAwareStepBudget,
   composeExecutionCue,
+  EXECUTION_PROVENANCE_UNVERIFIED_NOTICE,
+  EXECUTION_PROVENANCE_REFUSED_NOTICE,
+  EXECUTION_PROVENANCE_NO_EXECUTION_NOTICE,
+  assertsExecution,
+  detectExecutionClaims,
+  evaluateExecutionProvenance,
   type ExecutionAvailability,
+  type ExecutionProvenanceInput,
+  type ExecutionProvenanceStatus,
+  type ExecutionProvenanceVerdict,
 } from "./policy";
 
 export {

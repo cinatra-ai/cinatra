@@ -267,8 +267,8 @@ describe("requireResourceAccess", () => {
 
   it("allows the internal model actor reading a widget-chat skill (isWidgetChatSkill flag)", () => {
     for (const resourceId of [
-      "@cinatra-ai/wordpress-mcp-connector:wordpress-widget-chat",
-      "@cinatra-ai/drupal-skills:drupal-widget-chat",
+      "@cinatra-ai/wordpress-widget-chat-skill:wordpress-widget-chat",
+      "@cinatra-ai/drupal-widget-chat-skill:drupal-widget-chat",
     ]) {
       expect(() =>
         requireResourceAccess(internalModelActor(), {
@@ -324,7 +324,7 @@ describe("requireResourceAccess", () => {
     expect(() =>
       requireResourceAccess(wrongShape, {
         resourceType: "skill",
-        resourceId: "@cinatra-ai/wordpress-mcp-connector:wordpress-widget-chat",
+        resourceId: "@cinatra-ai/wordpress-widget-chat-skill:wordpress-widget-chat",
         level: "workspace",
         isWidgetChatSkill: true,
       }),
@@ -337,7 +337,7 @@ describe("requireResourceAccess", () => {
         internalModelActor(),
         {
           resourceType: "skill",
-          resourceId: "@cinatra-ai/wordpress-mcp-connector:wordpress-widget-chat",
+          resourceId: "@cinatra-ai/wordpress-widget-chat-skill:wordpress-widget-chat",
           level: "workspace",
           isWidgetChatSkill: true,
         },

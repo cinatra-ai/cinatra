@@ -214,6 +214,18 @@ export default defineConfig({
           "packages/llm/src/execution-plane/index.ts",
         ),
       },
+      // cinatra#2019 (provider-scale proof harness): the pure, dependency-free
+      // MCP-server-tool materializer (no I/O, no `@/` imports — see the
+      // module header). Like the other `@cinatra-ai/llm/*` leaves above, it
+      // must be aliased BEFORE the bare entry so the prefix matcher does not
+      // rewrite it into the actor-context leaf.
+      {
+        find: "@cinatra-ai/llm/mcp-materializer",
+        replacement: path.join(
+          __dirname,
+          "packages/llm/src/mcp-materializer.ts",
+        ),
+      },
       {
         find: "@cinatra-ai/llm",
         replacement: path.join(

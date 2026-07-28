@@ -126,13 +126,12 @@ function toSummary(row: DashboardRow, actor: DashboardActor): EntityDashboardSum
 }
 
 /** Whether the actor may CREATE a dashboard for this ref (mirrors the service's
- *  create authz: a private, non-default pseudo row owned per the ref). */
+ *  create authz: a non-default pseudo row owned per the ref). */
 function canCreateForRef(ref: DashboardEntityRef, actor: DashboardActor): boolean {
   const pseudo = {
     organizationId: actor.organizationId,
     ownerLevel: ref.ownerLevel,
     ownerId: ref.ownerId,
-    visibility: "private",
     projectId: null,
   } as unknown as DashboardRow;
   return resolveDashboardAccess(pseudo, actor).canWrite;

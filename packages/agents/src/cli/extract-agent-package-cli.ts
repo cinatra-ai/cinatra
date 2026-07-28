@@ -5,10 +5,17 @@
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import * as pacote from "pacote";
+import * as pacoteImpl from "pacote";
 // Barrel import is CLI-safe: @cinatra-ai/registries intentionally ships no
 // Next.js server-guard (pinned by its no-server-only-chain test).
-import { registryScopedAuthOptions } from "@cinatra-ai/registries";
+import { createRedactingPacote, registryScopedAuthOptions } from "@cinatra-ai/registries";
+
+/**
+ * Redacting facade over pacote — see @cinatra-ai/registries verdaccio/registry-auth.
+ * Keeps the bearer token out of `Error.message` when the registry response body
+ * is folded into it (pacote 22 / npm-registry-fetch 20 behaviour).
+ */
+const pacote = createRedactingPacote(pacoteImpl);
 import {
   requireVerdaccioConfig,
   type VerdaccioConfig,

@@ -854,9 +854,10 @@ export function createMcpServerAuthPlugins(
   // Include the configured public MCP URL (stable HTTPS endpoint set via
   // /configuration/development?tab=tunnel, or the deployed app origin in
   // production) so OpenAI's MCP client — which sends `resource=<public URL>`
-  // per RFC 8707 — receives a JWT bound to that audience. Without this entry,
-  // the resource doesn't match validAudiences, oauth-provider falls back to an
-  // opaque token, and verifyMcpAccessToken (JWT-only) rejects it with 401.
+  // per RFC 8707 — receives a JWT bound to that audience. Without this entry
+  // the provider's resource check REJECTS the request (`invalid_request`); no
+  // token is issued. Read ONCE per process, so a saved public-base-URL change
+  // needs an app RESTART — see `setMcpPublicBaseUrlAction` (cinatra#2173).
   const publicMcpUrl = getPublicMcpServerUrl();
   const validAudiences = publicMcpUrl ? [localMcpUrl, publicMcpUrl] : [localMcpUrl];
 

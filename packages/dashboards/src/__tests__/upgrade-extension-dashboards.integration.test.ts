@@ -47,9 +47,9 @@ async function seedRow(
 ) {
   await pool.query(
     `INSERT INTO "${SCHEMA}".dashboards
-       (id, name, config_json, config_version, owner_level, owner_id, organization_id, visibility, status,
+       (id, name, config_json, config_version, owner_level, owner_id, organization_id, status,
         created_by, extension_id, is_template, contribution_id, applied_default_json, applied_default_hash, applied_contribution_version)
-     VALUES ($1,$2,$3,'1.2','organization','owner-1',$4,'members',$5,'sys',$6,false,$7,$8,$9,$10)`,
+     VALUES ($1,$2,$3,'1.2','organization','owner-1',$4,$5,'sys',$6,false,$7,$8,$9,$10)`,
     [
       row.id, `${row.id} name`, JSON.stringify(row.config), ORG, row.status ?? "published", PKG, LINEAGE,
       row.appliedDefaultJson === null ? null : JSON.stringify(row.appliedDefaultJson),
@@ -81,7 +81,7 @@ describe.skipIf(!RUN_IT)("upgradeExtensionDashboards (real Postgres)", () => {
       id text PRIMARY KEY, name text NOT NULL, description text, config_json jsonb NOT NULL,
       config_version text NOT NULL DEFAULT '1.2', dashboard_version integer NOT NULL DEFAULT 1,
       published_revision_number integer, owner_level text NOT NULL, owner_id text NOT NULL,
-      organization_id text NOT NULL, visibility text NOT NULL DEFAULT 'private', status text NOT NULL DEFAULT 'draft',
+      organization_id text NOT NULL, status text NOT NULL DEFAULT 'draft',
       created_by text NOT NULL, updated_by text, created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(), published_at timestamptz, archived_at timestamptz,
       project_id text, extension_id text, is_template boolean NOT NULL DEFAULT false, template_scope text,

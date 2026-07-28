@@ -218,7 +218,7 @@ describe("ensure_plugin() — idempotent skip vs re-fetch contract (checksummed 
 });
 
 describe("activate_plugins() — deterministic activation order", () => {
-  it("activates mcp-adapter -> fixture-thirdparty-mcp -> enable-abilities-for-mcp -> cinatra", () => {
+  it("activates mcp-adapter -> fixture-thirdparty-mcp -> scale-smoke-plugin -> enable-abilities-for-mcp -> cinatra", () => {
     const { dir, bin } = makeHarness();
     const callsFile = path.join(dir, "calls.log");
     const demained = path.join(dir, "entrypoint.demained.sh");
@@ -238,6 +238,7 @@ describe("activate_plugins() — deterministic activation order", () => {
     expect(calls).toEqual([
       "plugin activate mcp-adapter",
       "plugin activate fixture-thirdparty-mcp",
+      "plugin activate scale-smoke-plugin",
       "plugin activate enable-abilities-for-mcp",
       "plugin activate cinatra",
     ]);
