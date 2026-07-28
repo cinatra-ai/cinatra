@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1631,
-    "/api/mcp": 1627,
-    "/chat": 1701,
-    "/api/a2a": 1632,
-    "/api/llm-bridge": 1642
+    "/sign-in": 1634,
+    "/api/mcp": 1630,
+    "/chat": 1704,
+    "/api/a2a": 1635,
+    "/api/llm-bridge": 1645
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1630,
-      "to": 1631,
-      "reason": "cinatra#2139 residuals: the artifact-writer PROVENANCE WITNESS moves out of three hand-rolled copies into ONE shared leaf (src/lib/artifacts/artifact-writer-witness.ts), adding exactly +1 first-party module per locked route. The leaf imports nothing but \"server-only\", so the +1 IS the module itself — no transitive edge, no barrel, no cross-package widening. It cannot be narrowed away without re-splitting the invariant back across the four writers and four read gates that must agree on it, which is the exact drift this change exists to make impossible (one writer already shipped without the row). Replaces the PR-2146 record for this route (its raise is baked into base).",
-      "pr": 2167
+      "from": 1631,
+      "to": 1634,
+      "reason": "cinatra#2019 S4 (trusted-site native read-injection, verifier slice): exactly +3 first-party modules per locked route — src/lib/connector-instance-trusted-read-verifier.ts and src/lib/connector-instance-native-read-injection.ts (both new), plus packages/mcp-server/src/known-destructive-floor.ts (pre-existing module gaining its first host-side importer). All three attach through the host connector-service binder (register-host-connector-services.ts), which every locked route reaches, so the growth is uniform and equals the module count itself — no barrel widening and no new cross-package edge beyond the one pure floor subpath. The two new modules are the dormant trust-eligibility computation (pure verifier + builder/explain members on the wordpress-mcp publication) that the connector-side guard replacement consumes next; they cannot be split away from the binder without forking the additive publication-member registration pattern every sibling governance member uses. Replaces the PR-2167 record for this route (its raise is baked into base).",
+      "pr": 2171
     },
     "/api/mcp": {
-      "from": 1626,
-      "to": 1627,
-      "reason": "cinatra#2139 residuals: the artifact-writer PROVENANCE WITNESS moves out of three hand-rolled copies into ONE shared leaf (src/lib/artifacts/artifact-writer-witness.ts), adding exactly +1 first-party module per locked route. The leaf imports nothing but \"server-only\", so the +1 IS the module itself — no transitive edge, no barrel, no cross-package widening. It cannot be narrowed away without re-splitting the invariant back across the four writers and four read gates that must agree on it, which is the exact drift this change exists to make impossible (one writer already shipped without the row). Replaces the PR-2146 record for this route (its raise is baked into base).",
-      "pr": 2167
+      "from": 1627,
+      "to": 1630,
+      "reason": "cinatra#2019 S4 (trusted-site native read-injection, verifier slice): exactly +3 first-party modules per locked route — src/lib/connector-instance-trusted-read-verifier.ts and src/lib/connector-instance-native-read-injection.ts (both new), plus packages/mcp-server/src/known-destructive-floor.ts (pre-existing module gaining its first host-side importer). All three attach through the host connector-service binder (register-host-connector-services.ts), which every locked route reaches, so the growth is uniform and equals the module count itself — no barrel widening and no new cross-package edge beyond the one pure floor subpath. The two new modules are the dormant trust-eligibility computation (pure verifier + builder/explain members on the wordpress-mcp publication) that the connector-side guard replacement consumes next; they cannot be split away from the binder without forking the additive publication-member registration pattern every sibling governance member uses. Replaces the PR-2167 record for this route (its raise is baked into base).",
+      "pr": 2171
     },
     "/chat": {
-      "from": 1700,
-      "to": 1701,
-      "reason": "cinatra#2139 residuals: the artifact-writer PROVENANCE WITNESS moves out of three hand-rolled copies into ONE shared leaf (src/lib/artifacts/artifact-writer-witness.ts), adding exactly +1 first-party module per locked route. The leaf imports nothing but \"server-only\", so the +1 IS the module itself — no transitive edge, no barrel, no cross-package widening. It cannot be narrowed away without re-splitting the invariant back across the four writers and four read gates that must agree on it, which is the exact drift this change exists to make impossible (one writer already shipped without the row). Replaces the PR-2146 record for this route (its raise is baked into base).",
-      "pr": 2167
+      "from": 1701,
+      "to": 1704,
+      "reason": "cinatra#2019 S4 (trusted-site native read-injection, verifier slice): exactly +3 first-party modules per locked route — src/lib/connector-instance-trusted-read-verifier.ts and src/lib/connector-instance-native-read-injection.ts (both new), plus packages/mcp-server/src/known-destructive-floor.ts (pre-existing module gaining its first host-side importer). All three attach through the host connector-service binder (register-host-connector-services.ts), which every locked route reaches, so the growth is uniform and equals the module count itself — no barrel widening and no new cross-package edge beyond the one pure floor subpath. The two new modules are the dormant trust-eligibility computation (pure verifier + builder/explain members on the wordpress-mcp publication) that the connector-side guard replacement consumes next; they cannot be split away from the binder without forking the additive publication-member registration pattern every sibling governance member uses. Replaces the PR-2167 record for this route (its raise is baked into base).",
+      "pr": 2171
     },
     "/api/a2a": {
-      "from": 1631,
-      "to": 1632,
-      "reason": "cinatra#2139 residuals: the artifact-writer PROVENANCE WITNESS moves out of three hand-rolled copies into ONE shared leaf (src/lib/artifacts/artifact-writer-witness.ts), adding exactly +1 first-party module per locked route. The leaf imports nothing but \"server-only\", so the +1 IS the module itself — no transitive edge, no barrel, no cross-package widening. It cannot be narrowed away without re-splitting the invariant back across the four writers and four read gates that must agree on it, which is the exact drift this change exists to make impossible (one writer already shipped without the row). Replaces the PR-2146 record for this route (its raise is baked into base).",
-      "pr": 2167
+      "from": 1632,
+      "to": 1635,
+      "reason": "cinatra#2019 S4 (trusted-site native read-injection, verifier slice): exactly +3 first-party modules per locked route — src/lib/connector-instance-trusted-read-verifier.ts and src/lib/connector-instance-native-read-injection.ts (both new), plus packages/mcp-server/src/known-destructive-floor.ts (pre-existing module gaining its first host-side importer). All three attach through the host connector-service binder (register-host-connector-services.ts), which every locked route reaches, so the growth is uniform and equals the module count itself — no barrel widening and no new cross-package edge beyond the one pure floor subpath. The two new modules are the dormant trust-eligibility computation (pure verifier + builder/explain members on the wordpress-mcp publication) that the connector-side guard replacement consumes next; they cannot be split away from the binder without forking the additive publication-member registration pattern every sibling governance member uses. Replaces the PR-2167 record for this route (its raise is baked into base).",
+      "pr": 2171
     },
     "/api/llm-bridge": {
-      "from": 1641,
-      "to": 1642,
-      "reason": "cinatra#2139 residuals: the artifact-writer PROVENANCE WITNESS moves out of three hand-rolled copies into ONE shared leaf (src/lib/artifacts/artifact-writer-witness.ts), adding exactly +1 first-party module per locked route. The leaf imports nothing but \"server-only\", so the +1 IS the module itself — no transitive edge, no barrel, no cross-package widening. It cannot be narrowed away without re-splitting the invariant back across the four writers and four read gates that must agree on it, which is the exact drift this change exists to make impossible (one writer already shipped without the row). Replaces the PR-2146 record for this route (its raise is baked into base).",
-      "pr": 2167
+      "from": 1642,
+      "to": 1645,
+      "reason": "cinatra#2019 S4 (trusted-site native read-injection, verifier slice): exactly +3 first-party modules per locked route — src/lib/connector-instance-trusted-read-verifier.ts and src/lib/connector-instance-native-read-injection.ts (both new), plus packages/mcp-server/src/known-destructive-floor.ts (pre-existing module gaining its first host-side importer). All three attach through the host connector-service binder (register-host-connector-services.ts), which every locked route reaches, so the growth is uniform and equals the module count itself — no barrel widening and no new cross-package edge beyond the one pure floor subpath. The two new modules are the dormant trust-eligibility computation (pure verifier + builder/explain members on the wordpress-mcp publication) that the connector-side guard replacement consumes next; they cannot be split away from the binder without forking the additive publication-member registration pattern every sibling governance member uses. Replaces the PR-2167 record for this route (its raise is baked into base).",
+      "pr": 2171
     }
   }
 }
