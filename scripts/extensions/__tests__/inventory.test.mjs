@@ -9,6 +9,7 @@ import {
   scanHostImportsInText,
   scanCrossExtImportsInText,
   isValidExtensionDependency,
+  dependencyRoleProblem,
   scanSdkOnlyImportsInText,
   sdkOnlyManifestDeps,
   isSdkOnlyViolation,
@@ -67,6 +68,76 @@ describe("isValidExtensionDependency — full edge shape required (no packageNam
   it("rejects non-objects", () => {
     expect(isValidExtensionDependency(null)).toBe(false);
     expect(isValidExtensionDependency("@cinatra-ai/nango-connector")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The declared skill-edge ROLE (cinatra#2090 S3).
+//
+// An artifact extension declares TWO skill edges — the rules its classifier
+// follows and the methodology the chat follows when authoring one — so the edge
+// carries `role: "matcher" | "authoring"` naming the surface it feeds. This
+// validator is the CI deps-gate's mirror of the install authority
+// `validateExtensionDependencyShape`; it accepted the field and checked nothing,
+// so a typo'd role passed the monorepo gate and failed only at the install read.
+//
+// Pinned here: the two problems the authority reports (in its order), and the
+// rule it deliberately does NOT impose — `edgeType` is unconstrained, so a role
+// on an install-time or peer skill edge is valid exactly as it is at install.
+// ---------------------------------------------------------------------------
+describe("isValidExtensionDependency / dependencyRoleProblem — the skill-edge role", () => {
+  const SKILL_EDGE = {
+    packageName: "@cinatra-ai/blog-idea-matcher-skill",
+    kind: "skill",
+    edgeType: "runtime",
+    versionConstraint: { kind: "semver-range", range: "^1.0.0" },
+    requirement: "required",
+  };
+  const nameToKind = new Map([["@cinatra-ai/blog-idea-matcher-skill", "skill"]]);
+
+  it("accepts both declared roles on a kind:\"skill\" edge", () => {
+    expect(dependencyRoleProblem({ ...SKILL_EDGE, role: "matcher" })).toBeNull();
+    expect(dependencyRoleProblem({ ...SKILL_EDGE, role: "authoring" })).toBeNull();
+    expect(isValidExtensionDependency({ ...SKILL_EDGE, role: "matcher" }, nameToKind)).toBe(true);
+    expect(isValidExtensionDependency({ ...SKILL_EDGE, role: "authoring" }, nameToKind)).toBe(true);
+  });
+
+  it("an ABSENT role stays valid on every edge (additive vocabulary, no regression)", () => {
+    expect(dependencyRoleProblem(SKILL_EDGE)).toBeNull();
+    expect(dependencyRoleProblem({ ...SKILL_EDGE, kind: "connector" })).toBeNull();
+    expect(isValidExtensionDependency(SKILL_EDGE, nameToKind)).toBe(true);
+  });
+
+  it("REFUSES an unknown role value, BEFORE the target-kind check", () => {
+    expect(dependencyRoleProblem({ ...SKILL_EDGE, role: "matchr" })).toBe(
+      'role, when present, must be one of matcher|authoring (got "matchr")',
+    );
+    expect(dependencyRoleProblem({ ...SKILL_EDGE, role: 1 })).toContain(
+      "must be one of matcher|authoring",
+    );
+    expect(dependencyRoleProblem({ ...SKILL_EDGE, kind: "connector", role: "matchr" })).toContain(
+      "must be one of matcher|authoring",
+    );
+    expect(isValidExtensionDependency({ ...SKILL_EDGE, role: "matchr" }, nameToKind)).toBe(false);
+  });
+
+  it("REFUSES a valid role on a non-skill edge, including a kind-LESS edge", () => {
+    expect(dependencyRoleProblem({ ...SKILL_EDGE, kind: "artifact", role: "matcher" })).toBe(
+      'role is only meaningful on a kind:"skill" edge (got kind "artifact")',
+    );
+    const kindless = { ...SKILL_EDGE, role: "matcher" };
+    delete kindless.kind;
+    expect(dependencyRoleProblem(kindless)).toBe(
+      'role is only meaningful on a kind:"skill" edge (got kind null)',
+    );
+    expect(isValidExtensionDependency(kindless, nameToKind)).toBe(false);
+  });
+
+  it("does NOT constrain edgeType — the authority keys the rule on kind alone", () => {
+    for (const edgeType of ["runtime", "install-time", "peer"]) {
+      expect(dependencyRoleProblem({ ...SKILL_EDGE, edgeType, role: "matcher" })).toBeNull();
+      expect(isValidExtensionDependency({ ...SKILL_EDGE, edgeType, role: "matcher" }, nameToKind)).toBe(true);
+    }
   });
 });
 

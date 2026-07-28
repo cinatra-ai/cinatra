@@ -12,9 +12,9 @@ import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import * as pacote from "pacote";
+import * as pacoteImpl from "pacote";
 import * as semver from "semver";
-import { registryScopedAuthOptions } from "./registry-auth";
+import { createRedactingPacote, registryScopedAuthOptions } from "./registry-auth";
 import type {
   AgentPackageDetail,
   AgentPackageOrigin,
@@ -94,6 +94,21 @@ function redactToken(value: string, token: string | null): string {
   if (!token || !value.includes(token)) return value;
   return value.replaceAll(token, "[redacted]");
 }
+
+/**
+ * Every pacote call in this module goes through the redacting facade, never
+ * the raw module. `pacoteOptions` below always carries the credential as a
+ * registry-scoped `_authToken` key, so the facade recovers the exact secret
+ * from the options object and scrubs it out of anything a failure carries.
+ *
+ * Load-bearing since pacote 22 / npm-registry-fetch 20 (cinatra#2163): the
+ * fetch layer now folds a registry response body's `message` (or the whole
+ * serialized body) into `HttpErrorGeneral.message`, where 19 folded only
+ * `body.error` — so a registry or proxy that echoes the inbound request would
+ * otherwise put the bearer token straight into `Error.message`. See
+ * ./registry-auth.ts and tests/registry-error-redaction.test.ts.
+ */
+const pacote = createRedactingPacote(pacoteImpl);
 
 /**
  * Options for every pacote call in this module.

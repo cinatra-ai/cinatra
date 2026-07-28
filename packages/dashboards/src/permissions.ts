@@ -5,16 +5,17 @@
  * All four code paths import THIS module — verified by integration tests
  * across all four surfaces.
  *
- * Phase-2 ACL cutover (cinatra#1898, epic #1883 §D7; owner ruling 2026-07-20
- * "ruling 5"): a dashboard is ALWAYS visible to everyone in its scope. Access
- * derives PURELY from scope (owner tier + project refinement) — the retired
- * dashboard-local `{private, owners, members}` visibility vocabulary no longer
- * participates in the decision (the `visibility` column is demoted/write-only,
- * dropped in Phase-3 after this resolver soaks). Read = "member of the owning
- * scope" (owner OR member); write = "owner of the owning scope". This mapping is
- * the row projection of the SAME canonical `object.read` filter the library uses
- * — the library/dashboard AGREEMENT is pinned by a property-style conformance
- * test (`library-dashboard-agreement.test.ts`).
+ * ACL cutover COMPLETE (cinatra#1898, epic #1883 §D7; product decision
+ * 2026-07-20 "ruling 5"): a dashboard is ALWAYS visible to everyone in its
+ * scope. Access derives PURELY from scope (owner tier + project refinement) —
+ * the dashboard-local `{private, owners, members}` visibility vocabulary is
+ * RETIRED: Phase-2 stopped consulting it, Phase-3 DROPPED its column
+ * (migration core__0087), so the row this resolver reads no longer carries a
+ * visibility field at all. Read = "member of the owning scope" (owner OR
+ * member); write = "owner of the owning scope". This mapping is the row
+ * projection of the SAME canonical `object.read` filter the library uses — the
+ * library/dashboard AGREEMENT is pinned by a property-style conformance test
+ * (`library-dashboard-agreement.test.ts`).
  *
  * 4-level ownership doctrine: user / team / organization / workspace.
  *
@@ -64,7 +65,7 @@ export type DashboardActor = {
    * Set ONLY for agent-run OBO delegated actors (threaded from the MCP request
    * frame by the dashboards registry/handler); undefined for every human /
    * session caller. When present, a dashboard row must fall WITHIN the chain or
-   * access is denied outright — checked before the owner/member/visibility gates.
+   * access is denied outright — checked before the owner/member gates.
    */
   readonly oboCeiling?: OboCeilingChain;
   /**
@@ -140,7 +141,8 @@ function isMember(row: DashboardRow, actor: DashboardActor): boolean {
  * Compute the access verdict for `actor` against `row`. The result is the
  * same regardless of which surface called (list filter, MCP handler, etc.).
  *
- * Phase-2 (cinatra#1898): scope-only, `visibility`-column-free. Read = owner OR
+ * Post-cutover (cinatra#1898): scope-only; the `visibility` column no longer
+ * exists on the row (Phase-3 drop). Read = owner OR
  * member of the owning scope; write = owner. A project-refined row reads as "any
  * in-scope actor" at the owner tier — the project grant the callers apply narrows
  * it to project members (see the module header). This is the exact row projection

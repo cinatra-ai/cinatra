@@ -924,10 +924,151 @@ this lane, each recorded for its own staged lane: `jsdom` 29 → 30 (test
 environment; published 2026-07-27), `pdfjs-dist` 5 → 6 (coupled with
 `react-pdf` — re-check its peer range first), `react-dropzone` 15 → 19 (four
 majors published inside one week upstream; let the line settle),
-`libnpmpublish` 11 → 12 and `pacote` 21 → 22 (the registry/publish path —
-proof is the publish round-trip), and `node-pg-migrate` 9 (blocked, §13.2).
+and `node-pg-migrate` 9 (blocked, §13.2). `libnpmpublish` 11 → 12 and `pacote`
+21 → 22 were the registry/publish-path group and are **APPLIED** — see §13.4.
 Image-side majors remain as recorded in §1: the profile-gated demo images
 (mariadb 12, wordpress 7, rabbitmq 4, valkey 9, and the Twenty/Plane postgres
 and redis pins) are upstream-dictated and tracked, not led; `tailscale` stays
 held on the upstream fix (§1); `php` 8.5 for the Drupal image is the one
 non-demo image major still open.
+
+### 13.4 libnpmpublish 11 → 12 + pacote 21 → 22 — APPLIED (registry/publish path)
+
+Taken as ONE group (cinatra#2163): both packages ride the npm CLI's release
+train and their majors move the shared `npm-registry-fetch` /
+`npm-package-arg` / `ssri` floors together. Splitting them into two PRs would
+leave the tree carrying two parallel fetch stacks for a whole window — pnpm
+resolves that fine, but the wire behaviour under proof would then be a mix of
+both, which is precisely what the round-trip below exists to pin down.
+
+| Package | Manifest(s) | Before | After |
+|---|---|---|---|
+| `libnpmpublish` | `packages/agents` | `^11.2.0` | `^12.0.0` |
+| `pacote` | `packages/agents`, `packages/registries` | `^21.5.1` | `^22.0.0` |
+
+Transitives moved with the group: `npm-registry-fetch` 19.1.1 → 20.0.1,
+`make-fetch-happen` 15 → 16, `npm-package-arg` 13 → 14,
+`npm-pick-manifest` 11 → 12, `npm-packlist` 10 → 11, `ssri` 13 → 14,
+`cacache` 20 → 21, `sigstore` 4 → 5, `proc-log` 6 → 7, `node-gyp` 12 → 13,
+plus the `@npmcli/*` line. `proxy-agent-negotiate` (via `@npmcli/agent` 5) is
+the ONLY entirely new package NAME the hop introduces; everything else added
+is a new version of a name the tree already carried. A `pacote@21.5.1` copy
+remains in the lockfile: it is pulled by the PUBLISHED `@cinatra-ai/cinatra`
+CLI package, not by this repo's own manifests, so it clears only once that
+package ships a release on the 22 line AND this repo consumes that release —
+it is not carried along by this hop.
+
+**Node engine.** Both majors declare `^22.22.2 || ^24.15.0 || >=26.0.0` — note
+the 24 arm floors at 24.15.0, so "on node 24" is not by itself sufficient.
+Verified at the exact versions: the app image (`node:24-alpine`) resolves
+24.17.0 and the CI `node-version: "24"` setup resolves the current 24 line
+(24.18.0) — both inside the floor. Nothing in the repo pins a 24 release below
+24.15.0, and there is no `engines` field or engine-strict setting that would
+turn a drop below the floor into an install-time failure, so any environment
+deliberately held on an older 24 patch is the case to watch.
+
+**`allowBuilds` re-confirmed unchanged.** `pnpm-workspace.yaml` is untouched by
+this hop, and none of the packages the group moves — checked across the full
+added/changed name set in the lockfile diff, `pacote` and `libnpmpublish`
+included — appears in the `allowBuilds` map. The install requested no new build
+script.
+
+**What actually changed in the code paths this repo uses.** `pacote` 22's own
+`lib/` diff against 21.5.1 is confined to `lib/dir.js` (pack-time
+`patchedDependencies` stripping via `onWriteEntry`), `lib/fetcher.js`
+(`--global=false` on the inner git-prepare install), `lib/git.js` (hosted
+SSH-vs-HTTPS selection, `ignoreScripts` now honoured during git prepare, and a
+tarball→clone fallback keyed on the status code rather than the error class)
+and `lib/util/add-git-sha.js`. `lib/registry.js`, `lib/remote.js` and
+`lib/index.js` are byte-identical. `npm-registry-fetch` 20's only direct `lib/`
+change is a richer `HttpErrorGeneral` message (see the redaction note below);
+`lib/auth.js` is byte-identical, so the registry-scoped
+`//<host><path>:_authToken` nerf-dart key this repo threads through
+`registryScopedAuthOptions` resolves exactly as before.
+
+Because "unchanged registry fetcher" does not by itself prove "unchanged
+`extract()`" — `extract` dispatches on the SPEC, so a directory or git spec
+reaches the changed fetchers — the two majors were also run side by side
+against the same fixtures: a local DIRECTORY spec whose `package.json` declares
+`patchedDependencies` (exactly the `lib/dir.js` change), a local TARBALL spec, a
+local bare git repo, a HOSTED shortcut (`github:owner/repo#tag`), an explicit
+`git+https://` hosted URL, and a registry spec on a live Verdaccio — each for
+`extract` and `manifest`, plus the registry tarball and its wrong-SRI refusal.
+
+Every case is identical between 21.5.1 and 22.0.0 with ONE exception, which the
+probe is there to catch: for an explicit `git+https://github.com/…` spec,
+21.5.1 resolves to `git+ssh://git@github.com/…` while 22.0.0 keeps
+`git+https://…`. That is the `h.default === 'https'` change in `lib/git.js` /
+`lib/util/add-git-sha.js` — an explicit HTTPS spec is no longer silently
+rewritten to SSH. The bare `github:owner/repo` shortcut still resolves to SSH on
+both.
+
+That one difference is unreachable from this repo. The three pacote call sites
+build their spec as `name` or `name@version` and use only `packument`,
+`tarball` and `extract` — `manifest` (where the difference surfaces) is never
+called. And `extract` on ANY git spec, hosted or bare, refuses identically on
+both majors with `GitFetcher requires an Arborist constructor to pack a
+tarball`, exactly as a directory spec refuses with the `DirFetcher` equivalent,
+because this repo supplies no Arborist — which is also why the publish path
+builds its tarball with `tar` directly rather than through pacote. The changed
+git-prepare code (the `--global=false` inner install and the newly honoured
+`ignoreScripts`) sits behind that refusal, and both of those changes are
+hardening in any case.
+
+Worth recording as a standing (not new) observation: the extract entry points
+accept an arbitrary spec string rather than enforcing a registry package name,
+so the dispatch surface itself is real. It is unchanged in kind by this hop and
+is the pre-existing shape; narrowing it is its own change.
+
+**A credential-exposure widening this hop closes.** From `npm-registry-fetch`
+20, `HttpErrorGeneral.message` folds in the response body's `error` OR
+`message` OR — failing both — the whole body serialized; 19 folded only
+`error`. A registry, reverse proxy, or diagnostic error handler that echoes the
+inbound request back therefore lands the bearer token in `Error.message`, the
+field that reaches logs, telemetry and surfaced error text. Measured against a
+hostile in-process registry stub: pacote 21 / fetch 19 leaves the token out of
+`Error.message`; pacote 22 / fetch 20 includes it verbatim. Closed here by
+routing every pacote call through a token-redacting facade
+(in `packages/registries/src/verdaccio/registry-auth.ts`, beside the
+registry-scoped credential derivation it is the mirror of, re-exported from the
+package barrel and used by `packages/registries` and both `packages/agents`
+call sites) that recovers the credential(s) from the same options object the
+caller passed and scrubs them from the error's `message`, `stack`, attached
+`body` string values and a one-level `cause`. EVERY scoped `_authToken` value
+in the options is scrubbed, not just the first: the fetch layer selects the
+longest matching path prefix, so re-deriving that choice here would be a way to
+redact the wrong one. The facade mutates rather than re-wraps so the
+`statusCode` / `code` fields the 404 branches depend on survive. It is
+deliberately not a general sanitizer — nested body objects, headers, other
+custom properties and transformed copies of the credential stay out of scope.
+Pinned by `packages/registries/tests/registry-error-redaction.test.ts`: each
+protected path asserts the stub actually received `Bearer <token>` and that the
+error is the stub's own 500 carrying the redaction marker, so a request that
+never left could not pass it, and a control case asserts the RAW pacote call —
+built through the same auth derivation — does still leak against that stub.
+
+**`libnpmpublish` has no call site.** The publish path in
+`packages/agents/src/verdaccio/client.ts` performs the npm registry HTTP PUT
+directly (explicit Bearer header via `registryJson`) rather than delegating to
+`libnpmpublish`; the package is carried in the manifest and listed in knip's
+`ignoreDependencies` for exactly that reason. The bump is manifest + lockfile
+currency for the group; the wire behaviour it would govern is already this
+repo's own code. Retiring the dependency outright changes the package's
+declared dependency contract and is a separate decision, not part of this hop.
+
+**Works-after proof.** `WORKS_AFTER_ONLY=verdaccio WORKS_AFTER_GATE_MODE=1 bash
+scripts/ci/works-after-proof.sh` green — publish → install round-trip against a
+Verdaccio that mounts the repo's real `docker/verdaccio/config.yaml`. That arm
+drives the npm CLI, so it was paired with a round-trip through the repo's OWN
+registry code on the candidate pins: `createNpmUser` →
+`publishExtensionPackageFromDir` → `getPublishedExtensionSummary`
+(`pacote.packument`) → `resolveExtensionDistIntegrity` →
+`resolveMaxSatisfyingVersion` → `fetchExtensionTarballBytes` (`pacote.tarball`
+with SRI enforcement, plus the wrong-SRI `EINTEGRITY` negative) →
+`extractExtensionPackage` (`pacote.extract`, sentinel compare) → the
+`publish: $authenticated` refusal negative → the overwrite guard. The
+`packages/registries` suite (including the live-wire
+`registry-auth.integration.test.ts`, which drives the real pacote +
+npm-registry-fetch stack against an auth-required in-process registry stub, and
+the redaction suite above) and `pnpm gate:gatekept-install` are the standing
+regression tiers for this dependency pair.
