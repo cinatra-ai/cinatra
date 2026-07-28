@@ -1280,6 +1280,56 @@ jobs:
           cd packages/registries && pnpm exec vitest run tests/resolve-dist-integrity.test.ts tests/registry-auth-options.test.ts tests/registry-auth.integration.test.ts --no-coverage && cd ../..
           cd packages/sdk-extensions && pnpm exec vitest run src/__tests__/runtime-loader.test.ts --no-coverage && cd ../..
 
+      # Seed-pack manifest parity tier (packages/objects). These four suites are
+      # the ONLY host-side assertion that each seeded artifact extension's typed
+      # manifest export still equals the `cinatra.artifact` block in its own
+      # package.json — the manifest OF RECORD that the object-registry bridge
+      # reads at boot — plus the matcher catalog-id shape, the exact
+      # representation forms, and the LLM capability-registry guard on every
+      # declared MIME. Host CI ran exactly ONE packages/objects file
+      # (registry-package-provenance, pinned in the step above), so this tier had
+      # no runner at all and could sit silently diverged from the extension
+      # fleet; it only surfaced when a fleet-wide pin move made it green again.
+      #
+      # It rides THIS job rather than a job of its own deliberately. The tier is
+      # sub-second of vitest (120 assertions over 4 files, ~0.7s; ~2s wall
+      # including process start). A dedicated job would pay a fresh checkout, a
+      # companion-extension clone and a full `pnpm install` — minutes of setup —
+      # to run it, which is out of all proportion. This job already has the
+      # PINNED extension tree on disk (clone-extensions, above) and node_modules
+      # installed, so the marginal cost is one vitest process.
+      #
+      # NOT vacuous: this job carries no path filter and runs on every
+      # non-docs-only, non-draft PR (the `detect` guard at the top of the job),
+      # so every PR that can move an input runs the tier for real. The GROUNDED
+      # input set is: packages/objects/** (the suites plus the manifest parser
+      # and claim schema they call), packages/llm/**'s attachment capability
+      # registry (what the per-MIME provider guard probes), and the dev/required
+      # extension lock pins, which decide WHICH extension sources
+      # clone-extensions puts on disk. The generated host maps
+      # (src/lib/generated/extensions.server.ts and siblings) are deliberately
+      # NOT in that set: these suites read each extension's package.json and its
+      # typed export straight off the cloned tree, never through a generated
+      # map. So a PR that moves ONLY a lock pin — touching no host source at
+      # all — is enough to turn this step red, which is exactly the case the
+      # tier existed for and never caught.
+      #
+      # Why four PINNED files and not `cd packages/objects && pnpm test`: the
+      # rest of that package carries a pre-existing red baseline (the objects
+      # MCP handler / bridge suites), so a whole-package invocation could not be
+      # made required today. Pinning the parity tier gates what is green and
+      # keeps the named failure surface tight; the pinned-test existence gate
+      # (above) is what stops a pin from silently going stale.
+      - name: Seed-pack manifest parity tier (packages/objects)
+        working-directory: packages/objects
+        run: >-
+          pnpm exec vitest run
+          src/__tests__/seed-pack-gtm-manifest.test.ts
+          src/__tests__/seed-pack-content-manifest.test.ts
+          src/__tests__/seed-pack-email-legal-manifest.test.ts
+          src/__tests__/blog-image-artifact-manifest.test.ts
+          --no-coverage
+
       # Apollo connector suite. Lives in the extension tree (not covered by the
       # root vitest include), so it is run explicitly here from the package dir.
       # Whole-dir (same shape as the nango/twenty steps below) — previously
