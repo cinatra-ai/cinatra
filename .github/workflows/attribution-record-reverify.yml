@@ -1,0 +1,176 @@
+name: attribution-record-reverify
+
+# Re-run the truthful-attribution post-merge verdict FRESH, on the CURRENTLY
+# pinned gate engine, against a historical merge commit.
+#
+# WHY THIS EXISTS. Re-running an old Actions run replays that run's ORIGINAL
+# workflow snapshot and its original engine pin — by design. So a merge record
+# that was red-flagged by an engine defect can never clear by re-running its own
+# post-merge run: the replay re-executes the same defective engine and returns
+# the same verdict forever. The only way to ask "does this record verify on the
+# engine we run TODAY?" is a NEW run, on today's pin, pointed at that commit.
+#
+# WHAT IT IS. The engine's own post-merge arm is a plain CLI:
+#   truthful-attribution-gate.mjs --arm post-merge --commit <sha>
+# and the arm's environment is fully determined by the checkout. This workflow
+# reproduces that environment EXACTLY — the caller repo checked out AT the
+# target commit (so `.github/gate-suite.json`, the changed-file set, the squash
+# message and the first-parent base are all read as of that merge, no TOCTOU),
+# the gate repo checked out at the SAME SHA the required-context caller
+# (.github/workflows/truthful-attribution-gate.yml) is pinned to, and the same
+# read-only permission grant — then invokes the same entry point in enforce
+# mode. It is not a second implementation of the gate; it is the same engine,
+# same arm, same inputs, run fresh.
+#
+# VERIFICATION-ONLY, BY CONSTRUCTION. This workflow creates, amends and
+# removes NO verification record of any kind. The engine reads through `gh api`
+# GETs only; the permission block below grants read scopes exclusively (no
+# `contents: write`, no `checks: write`, no issues/PR write), so the job
+# physically cannot amend a record, push a correction, re-open a PR or post a
+# check-run of its own. (Actions itself of course creates THIS run and its own
+# check-run/log/step-summary — that is the platform reporting this job, under
+# this job's distinct name, and is not an attribution record.) Its entire
+# output is that verdict: the engine's findings for the target commit under
+# today's rules. Acting on the verdict — a `Correction-for:` record, an
+# approval routing — stays a separate, deliberate change; nothing here is
+# self-executing.
+#
+# DISPATCH FROM THE DEFAULT BRANCH. `workflow_dispatch` runs the snapshot of
+# THIS file on the selected ref, so dispatching from a side branch would run
+# that branch's copy — a different pin, a different job, possibly modified.
+# Fire it from the default branch so "the currently pinned engine" is the claim
+# the run actually honours.
+#
+# NOT A REQUIRED CONTEXT, AND DELIBERATELY UNABLE TO BECOME ONE. The job below
+# carries its own display name, so its check-run is named "attribution record
+# re-verification (dispatch, verification-only)" — it can never collide with the
+# `truthful-attribution-gate / truthful-attribution-gate` required context, and
+# `scripts/ci/merge-group-coverage-guard.mjs` therefore still resolves that
+# context to exactly one workflow file. This workflow also does NOT call the
+# reusable engine via `uses:`, so it produces no `referenced_workflows[]` entry
+# and cannot satisfy a workflow-pinned required context by accident.
+#
+# WHY `workflow_dispatch` IS NOT ADDED TO THE SUITE'S allowedEvents. The
+# suite's truthful-attribution entry declares
+# allowedEvents [pull_request, push, merge_group]; that list constrains which
+# caller EVENTS may produce a check-run the gate will accept as the required
+# context on a reviewed head. A run of THIS workflow is attached to the head of
+# the dispatched branch — which in principle could coincide with some PR's
+# reviewed head — but it can never satisfy that context anyway, on four
+# independent binds: its check-run NAME differs from the context name; its
+# run.path differs from the declared callerPath; it references no reusable
+# workflow at all, so referenced_workflows[] cannot match the pinned SHA; and
+# `workflow_dispatch` is not an allowed event. Widening allowedEvents to admit
+# `workflow_dispatch` would be actively HARMFUL: the shortest dispatch path —
+# adding `workflow_dispatch:` to the required-context caller itself — makes the
+# reusable engine run with NEITHER arm firing (its steps are guarded on
+# `pull_request` / `push`), producing a check-run that verified nothing; if
+# `workflow_dispatch` were an allowed event, that empty green could then be
+# accepted as a satisfied required context. So the suite's allowedEvents stays
+# exactly as it is, and the dispatch path lives here, out of band.
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Merge commit SHA to re-verify (full 40-hex, on this repo)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  # The engine lists PR reviews for anti-fabrication, reads check-runs for the
+  # gate arm, and resolves a check-run to its Actions run to verify
+  # referenced_workflows[] at the pinned SHA. All reads; mirrors the reusable
+  # engine's own grant so the fresh verdict is computed under identical scopes.
+  pull-requests: read
+  checks: read
+  actions: read
+
+concurrency:
+  # One re-verification per target commit; a duplicate dispatch queues rather
+  # than racing an identical read.
+  group: attribution-record-reverify-${{ inputs.commit }}
+  cancel-in-progress: false
+
+jobs:
+  reverify:
+    name: attribution record re-verification (dispatch, verification-only)
+    runs-on: ubuntu-latest
+    # Matches the engine job's own budget: the gate-arm verification may wait
+    # (bounded) for a context to settle, and a job timeout shorter than that
+    # window would surface as a cancelled run, i.e. a false verdict.
+    timeout-minutes: 20
+    steps:
+      # Validate BEFORE any use. The dispatch input is operator-supplied text;
+      # it is lowercased and surrounding whitespace is trimmed, then it must be
+      # EXACTLY 40 hex characters — interior whitespace or any other stray
+      # character is REJECTED, not silently stripped, so what runs is what was
+      # typed. Every later step consumes the validated STEP OUTPUT, never the
+      # raw input, and never by interpolating it into a shell line.
+      - name: Validate target commit
+        id: target
+        env:
+          RAW_COMMIT: ${{ inputs.commit }}
+        run: |
+          raw="$RAW_COMMIT"
+          raw="${raw#"${raw%%[![:space:]]*}"}"
+          raw="${raw%"${raw##*[![:space:]]}"}"
+          sha="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+          case "$sha" in
+            *[!0-9a-f]* | "")
+              echo "::error::commit input must be a full 40-character hex SHA (rejected: not pure hex)"
+              exit 1
+              ;;
+          esac
+          if [ "${#sha}" -ne 40 ]; then
+            echo "::error::commit input must be a full 40-character hex SHA (got ${#sha} characters)"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      # fetch-depth 0: the post-merge arm needs the commit's first parent, the
+      # squash message and the file-at-ref reads that the engine performs with
+      # local git.
+      - name: Checkout this repository at the target commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+          fetch-depth: 0
+          # Nothing here pushes, and the historical tree is DATA to be read, not
+          # code to be run — so the job keeps no git credential around.
+          persist-credentials: false
+
+      # Pinned to the SAME cinatra-ai/ci commit as the required-context caller
+      # (.github/workflows/truthful-attribution-gate.yml `uses:@` / `ref:`) and
+      # as gate-suite.json requiredContexts[].pinned. All four move together;
+      # a re-verification on a different engine than the one the repo gates on
+      # would answer a question nobody asked.
+      - name: Checkout gate engine (cinatra-ai/ci)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: cinatra-ai/ci
+          ref: 5c437aa1b65acd135353e92d679c3893bde42bd3
+          path: .truthful-attribution-gate
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+
+      # The engine's own post-merge invocation, unchanged: same script, same
+      # arm, same enforce mode. A non-zero exit is the honest verdict for the
+      # target commit under today's engine — it corrects nothing and records
+      # nothing, it only answers.
+      - name: Re-verify the merge record (post-merge arm, enforce)
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          node .truthful-attribution-gate/scripts/truthful-attribution-gate.mjs \
+            --arm post-merge \
+            --mode enforce \
+            --repo "$GITHUB_REPOSITORY" \
+            --commit "$TARGET_SHA"
