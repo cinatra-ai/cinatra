@@ -25,6 +25,7 @@ import {
   isRuntimeDeliverableLifecycleState,
   readSkillsCatalog,
   registerExtensionSkill,
+  resolveDeclaredSkillEdgeForExtensionDir,
 } from "@cinatra-ai/skills";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import { readSkillLifecycleStates } from "@/lib/database";
@@ -87,6 +88,11 @@ import { verifyRunToken, RUN_TOKEN_HEADER } from "@/lib/agent-run-token";
 // executor (or refuses a declared env that cannot be honored — never a silent L0
 // downgrade). Reaches the execution service through a lightweight DI slot.
 import { resolveRunExecutionBinding } from "@/lib/execution/resolve-run-execution-binding";
+// …fed from ALL THREE declared-environment sources the epic names (packaged
+// manifest / pinned version snapshot / live template config). Supplying fewer
+// is a fail-open: an unsupplied source reads as "declared nothing" and the run
+// executes on L0.
+import { resolveRunEnvironmentSources } from "@/lib/execution/resolve-run-environment-sources";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import { emitUsageEvent } from "@cinatra-ai/metric-usage-api";
 import {
@@ -449,11 +455,24 @@ async function resolveBridgeSkillContent(body: {
     (body.agent_id.includes("..") ||
       body.agent_id.includes("/") ||
       body.agent_id.includes("\\"));
-  const candidateSkillPath = body.skill_source_path
+  let candidateSkillPath = body.skill_source_path
     ? body.skill_source_path
     : body.agent_id && !agentIdLooksLikePath
       ? autoDiscoverSkillPath(body.agent_id)
       : "";
+  // Declared-edge projection (cinatra#2090 S3): an extension that no longer
+  // EMBEDS its bundle names the skill extension it depends on. Consulted only
+  // when the co-located probe missed, so an agent that still ships its own
+  // bundle resolves byte-identically to before.
+  if (
+    !body.skill_source_path &&
+    body.agent_id &&
+    !agentIdLooksLikePath &&
+    !existsSync(candidateSkillPath)
+  ) {
+    const edge = await resolveDeclaredSkillEdgeForExtensionDir(body.agent_id);
+    if (edge) candidateSkillPath = edge.sourcePath;
+  }
   if (!candidateSkillPath) return "";
 
   // Path-traversal guard: must resolve under an allowed skill root (the dev
@@ -844,11 +863,32 @@ export async function POST(req: Request): Promise<Response> {
     (body.agent_id.includes("..") ||
       body.agent_id.includes("/") ||
       body.agent_id.includes("\\"));
-  const candidateSkillPath = body.skill_source_path
+  let candidateSkillPath = body.skill_source_path
     ? body.skill_source_path
     : body.agent_id && !agentIdLooksLikePath
       ? autoDiscoverSkillPath(body.agent_id)
       : "";
+  // Declared-edge projection (cinatra#2090 S3, epic #2086). The separation rule
+  // moves a genuine knowledge bundle OUT of the producing extension into its own
+  // `kind:"skill"` package, reached by a declared `cinatra.dependencies` edge.
+  // The co-located probe above cannot see that bundle (it lives under the
+  // PROVIDER's dir, not the agent's), so the edge is resolved here and its
+  // provider identity is carried to the mount below — the skillId must be the
+  // one the catalog knows the provider's bundle by, never a name derived from
+  // the consumer's path. Consulted ONLY on a co-located miss, so an extension
+  // that still ships its own bundle keeps resolving byte-identically.
+  let declaredSkillEdge: Awaited<
+    ReturnType<typeof resolveDeclaredSkillEdgeForExtensionDir>
+  > = null;
+  if (
+    !body.skill_source_path &&
+    body.agent_id &&
+    !agentIdLooksLikePath &&
+    !existsSync(candidateSkillPath)
+  ) {
+    declaredSkillEdge = await resolveDeclaredSkillEdgeForExtensionDir(body.agent_id);
+    if (declaredSkillEdge) candidateSkillPath = declaredSkillEdge.sourcePath;
+  }
 
   if (candidateSkillPath) {
     // Path traversal containment against the allowed skill roots (dev tree OR
@@ -907,8 +947,17 @@ export async function POST(req: Request): Promise<Response> {
         // substring. First-party canonical paths still yield `@cinatra-ai/<slug>`
         // byte-identically; an operator/third-party `<mount>/<vendor>/<slug>/…`
         // now yields `@<vendor>/<slug>` instead of collapsing to a bare slug.
-        const packageName = deriveSkillPackageName(resolvedPath, skillSlug);
-        const skillId = `${packageName}:${skillSlug}`;
+        // A declared-edge mount already KNOWS its provider package and the
+        // catalog id that package's bundle registers under
+        // (`deriveSkillRegistration`), so it never goes through the
+        // path-shape derivation — that derivation reads the vendor from the
+        // path and the slug from the BUNDLE dir, which for a provider package
+        // (`@cinatra-ai/web-research-skill` shipping `skills/web-research/`)
+        // would invent `@cinatra-ai/web-research` and register a second,
+        // divergent catalog row for the same bytes.
+        const packageName =
+          declaredSkillEdge?.packageName ?? deriveSkillPackageName(resolvedPath, skillSlug);
+        const skillId = declaredSkillEdge?.skillId ?? `${packageName}:${skillSlug}`;
         let mountedSourcePath = resolvedPath;
         let mountedDirectoryPath = skillDirPath;
         try {
@@ -1588,6 +1637,20 @@ export async function POST(req: Request): Promise<Response> {
             ...(envTemplate?.packageName ? { packageName: envTemplate.packageName } : {}),
             ...(body.agent_spec_version ? { versionId: body.agent_spec_version } : {}),
           },
+          // epic #1705: the live template row is only ONE of the three sources a
+          // run's environment can be declared in. Supplying it alone let a
+          // PACKAGED agent's manifest declaration — and a pinned run's snapshot
+          // recipe — resolve ABSENT, so the run silently executed on L0 against
+          // the "a declared environment resolves or the run refuses" contract,
+          // and version pinning was bypassed on this seam. The reader resolves
+          // all three (and reports a source it could not READ, which refuses).
+          ...(await resolveRunEnvironmentSources({
+            templateId: runForPorts.templateId,
+            versionId: runForPorts.versionId,
+            packageVersion: runForPorts.packageVersion,
+            packageName: envTemplate?.packageName,
+            liveTemplateEnvironment: envTemplate?.executionEnvironment,
+          })),
         });
         if (runEnvBinding.kind === "refuse") {
           return NextResponse.json(
