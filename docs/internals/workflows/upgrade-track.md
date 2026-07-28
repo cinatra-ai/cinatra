@@ -50,8 +50,7 @@ targets). `profile` = the service only starts under an opt-in compose profile.
 | twenty-server / twenty-worker | docker-compose.yml | image tag `twentycrm/twenty:${TWENTY_TAG:-v2.7.3}` | Twenty v2 currency | profile `twenty`; already release-pinned by default |
 | node (app image) | Dockerfile | `node:24-alpine` | stay node 24 (LTS) | engines require node 24; no major offered |
 | python (wayflow) | docker/wayflow/Dockerfile | `python:3.14-slim` (was `3.11-slim`, bumped — cinatra#354) | (at target) | wayflowcore runtime; the Wayflow agent-runtime major-upgrade lane (§6) |
-| php (drupal) | docker/drupal/Dockerfile | `php:8.3-apache` | php 8.5-apache | |
-| composer (drupal) | docker/drupal/Dockerfile | `composer:2` | composer 2.x | |
+| drupal (dev/demo companion) | docker/drupal/Dockerfile | `drupal:11-apache@sha256:7a93…d6b` (was a hand-built `php:8.3-apache` + `composer:2` + `composer create-project` stack — **rebased onto the official image, cinatra#2178**) | follows docker-library/drupal | dev/demo-only, deliberately OFF this track: PHP, Apache, the extensions and the Drupal codebase are now upstream's. The only pin we own is this one image reference — bump it by re-resolving the multi-arch index digest of the tag |
 | tailscale (wayflow clone) | docker/wayflow/compose.clone.template.yml | `tailscale/tailscale:v1.78.3` | tailscale v1.98.4 | **held on purpose** — in-file TODO cites the upstream containerboot SIGSEGV (tailscale/tailscale#14354); obsoleted-by = that upstream fix lands |
 
 wayflow Python deps (exact `==` pins in `docker/wayflow/Dockerfile`, not docker
@@ -143,7 +142,7 @@ prerelease-only, so 18.4 is the latest-stable bar). Two coupled facts:
 | Patch | Patches | Why | Obsoleted by version |
 |---|---|---|---|
 | `patches/@a2a-js__sdk@0.3.13.patch` | `@a2a-js/sdk@0.3.13` dist `parseSseStream` | upstream SSE parser overwrote multi-line `data:` instead of accumulating with `\n`; the patch accumulates | an `@a2a-js/sdk` release that ships the multi-line `data:` accumulation fix upstream. The `patchedDependencies` key embeds the exact version, so every `@a2a-js/sdk` bump must re-key + re-verify or the patch silently stops applying |
-| `docker/drupal/patches/mcp_tools-audit-logger-strtolower.patch` | Drupal `mcp_tools_content` AuditLogger `strtolower($key)` | PHP 8 throws a `TypeError` when an `int` array key reaches `strtolower`; the patch casts `(string)` | an upstream `mcp_tools` (Drupal contrib) release that null/int-safes the key. Tied to the contrib module, **not** to the PHP image bump (the php 8.5 bump does not retire it) |
+| `docker/drupal/patches/mcp_tools-audit-logger-strtolower.patch` | Drupal `mcp_tools_content` AuditLogger `strtolower($key)` | PHP 8 throws a `TypeError` when an `int` array key reaches `strtolower`; the patch casts `(string)` | an upstream `mcp_tools` (Drupal contrib) release that null/int-safes the key. Tied to the contrib module, **not** to the PHP image bump — confirmed empirically on the official-image rebase (cinatra#2178), which lands PHP 8.5 and still needs the cast |
 
 ### 4.2 `pnpm-workspace.yaml` — `overrides`
 
