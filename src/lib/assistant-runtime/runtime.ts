@@ -69,6 +69,10 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 import {
   buildExtensionImplementationConfirmationPolicy,
 } from "@/app/api/chat/extension-confirmation";
+// cinatra#2020 S5 (PR-4) — the bounded pending-confirmation outcome section
+// (§6.3): one term in the system-context assembly below; empty string when
+// the viewer has no recent confirmation transitions.
+import { buildPendingConfirmationContext } from "./pending-confirmation-context";
 // Chat-side resolver ports are scoped to the session's active org
 // (auth-derived; never caller-controlled).
 import { buildAttachmentResolverPorts } from "@/lib/artifacts/attachment-resolver-ports";
@@ -636,6 +640,14 @@ export async function runAssistantTurn(
 
   const extensionConfirmationPolicy = buildExtensionImplementationConfirmationPolicy();
 
+  // cinatra#2020 S5 (PR-4): the viewer's recent destructive-confirmation
+  // outcomes (max 5 lines, last hour; "" when none — byte-identical system
+  // string for users with no confirmation activity).
+  const pendingConfirmationContext =
+    userId && sessionOrgId
+      ? await buildPendingConfirmationContext({ orgId: sessionOrgId, userId })
+      : "";
+
   // Deterministic explicit-dispatch pre-router.
   //
   // SOFT layer (system-message directive): scans the latest user message
@@ -747,6 +759,7 @@ export async function runAssistantTurn(
         userContext +
         instanceContext +
         extensionConfirmationPolicy +
+        pendingConfirmationContext +
         // AC#5: the conversation-only degrade notice (empty for tool-capable
         // providers, so their system string is byte-identical to before).
         conversationOnlyNotice,

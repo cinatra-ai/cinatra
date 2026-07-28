@@ -224,6 +224,14 @@ import {
   createWordPressNativeInjectionConsentMembers,
   type WordPressNativeInjectionConsentSurface,
 } from "@/lib/connector-instance-native-injection-consent";
+// cinatra#2020 S5 (PR-4) — the per-instance destructive-confirmation override
+// surface (org-disable). Same structural-member pattern as the S4 consent
+// members above: the gate lives INSIDE the members; this binder only WIRES
+// the live host deps.
+import {
+  createConfirmationPolicySurfaceMembers,
+  type WordPressConfirmationPolicySurface,
+} from "@/lib/connector-instance-confirmation-policy-surface";
 // cinatra#2020 S5 (PR-3) — the destructive-confirmation hook impl. The surface
 // matrix + park + §7.3 audits live in the sibling module; this binder only
 // BINDS it into the invoker deps literal, derives the host-side
@@ -1179,6 +1187,22 @@ export function registerHostConnectorServices(): void {
         readNativeInjectionPolicy(connectorKey, instanceId, ownerOrgId),
       writeMode: (input) => setNativeInjectionMode(input),
     }),
+    // --- destructive-confirmation org-disable surface (cinatra#2020 S5) -----
+    // ADDITIVE host-local members (same precedent as the consent members
+    // above; frozen SDK contract untouched). `disabled` turns the D7 require
+    // rows OFF for ONE instance; the store audits every change
+    // (`confirmation_policy_changed`). S5 ships the machinery + tests; S7
+    // ships the settings toggle that calls these.
+    ...createConfirmationPolicySurfaceMembers({
+      connectorKey: "wordpress",
+      requireSession: () => requireAuthSession(),
+      resolveInstanceOrgId: (instanceId) => {
+        const row = resolveWordPressInstanceAdmin()?.readInstanceById(instanceId) ?? null;
+        if (!row) return null;
+        return typeof row.orgId === "string" && row.orgId.trim() ? row.orgId.trim() : null;
+      },
+      resolveOrgRole: (orgId, userId) => resolveOrgRoleForUser(orgId, userId),
+    }),
     // --- trusted-site native READ-INJECTION builder + preview (cinatra#2019
     // S4 verifier slice). ADDITIVE host-local members (same structural
     // precedent as the consent members above): `buildNativeReadInjection` is
@@ -1235,6 +1259,7 @@ export function registerHostConnectorServices(): void {
     }),
   } satisfies HostWordPressMcpServerEnrollmentSurface &
     WordPressNativeInjectionConsentSurface &
+    WordPressConfirmationPolicySurface &
     WordPressNativeReadInjectionSurface);
 
   // The WordPress post/media CONTENT surface (`@cinatra-ai/host:
