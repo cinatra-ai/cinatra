@@ -1,0 +1,44 @@
+COUNTERFACTUALS — the same suite, run with parts of the change reverted to
+the default branch. Residual (a) needs all three sites: each one reverted
+ALONE already leaves the suite red, and no single site carries it.
+
+===== all three residual-(a) sites reverted =====
+     × CANDIDATE: the produced FILE artifact is pinned at its AUTHORED representation, and no data snapshot is minted for it 599ms
+     × RESOLVE: the pinned candidate resolves with the triple intact; without pins the claimed row stays fail-closed EXCLUDED 513ms
+     × FINALIZE: the resolved triple finalizes — audit row + REAL retention pin, both keyed to the authored representation 621ms
+     × COHERENCE: a pinned candidate is never a DOOMED candidate — the same representation serves its real bytes 465ms
+     × ISOLATION: a claimed TYPED-DATA row keeps the SNAPSHOT arm — never a direct pin (cinatra#1430 preserved) 406ms
+     × FORGERY: a claimed PACK-typed row with a representation NO host writer authored is refused at all three sites — and the real witness flips every one of them 601ms
+     × WINNER IDENTITY: a RETIRING claim is still the winner and still pins; a claim SUPERSEDED by a narrower-scope one stops pinning before the queue drains 197ms
+     × TYPE CHANGE: a row that stops being a registered artifact type stops resolving through the witness arm 554ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 8 ⎯⎯⎯⎯⎯⎯⎯
+      Tests  8 failed | 4 passed (12)
+===== ONLY src/lib/artifacts/object-content-snapshot.ts reverted =====
+     × CANDIDATE: the produced FILE artifact is pinned at its AUTHORED representation, and no data snapshot is minted for it 558ms
+     × RESOLVE: the pinned candidate resolves with the triple intact; without pins the claimed row stays fail-closed EXCLUDED 545ms
+     × FINALIZE: the resolved triple finalizes — audit row + REAL retention pin, both keyed to the authored representation 677ms
+     × COHERENCE: a pinned candidate is never a DOOMED candidate — the same representation serves its real bytes 486ms
+     × ISOLATION: a claimed TYPED-DATA row keeps the SNAPSHOT arm — never a direct pin (cinatra#1430 preserved) 422ms
+     × FORGERY: a claimed PACK-typed row with a representation NO host writer authored is refused at all three sites — and the real witness flips every one of them 1050ms
+     × WINNER IDENTITY: a RETIRING claim is still the winner and still pins; a claim SUPERSEDED by a narrower-scope one stops pinning before the queue drains 206ms
+     × TYPE CHANGE: a row that stops being a registered artifact type stops resolving through the witness arm 553ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 8 ⎯⎯⎯⎯⎯⎯⎯
+      Tests  8 failed | 4 passed (12)
+===== ONLY src/lib/artifacts/context-resolver.ts reverted =====
+     × ISOLATION: a claimed TYPED-DATA row keeps the SNAPSHOT arm — never a direct pin (cinatra#1430 preserved) 596ms
+     × FORGERY: a claimed PACK-typed row with a representation NO host writer authored is refused at all three sites — and the real witness flips every one of them 608ms
+     × WINNER IDENTITY: a RETIRING claim is still the winner and still pins; a claim SUPERSEDED by a narrower-scope one stops pinning before the queue drains 620ms
+     × TYPE CHANGE: a row that stops being a registered artifact type stops resolving through the witness arm 412ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+      Tests  4 failed | 8 passed (12)
+===== ONLY src/lib/artifacts/context-selection-finalize.ts reverted =====
+     × FINALIZE: the resolved triple finalizes — audit row + REAL retention pin, both keyed to the authored representation 380ms
+     × FORGERY: a claimed PACK-typed row with a representation NO host writer authored is refused at all three sites — and the real witness flips every one of them 1130ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+      Tests  2 failed | 10 passed (12)
+===== the two CMS witness writers reverted =====
+     × captureCmsContentSnapshot emits the witness for its snapshot representation, in the SAME transaction 141ms
+     × a CLAIMED captured CMS snapshot still SERVES — the consequence the missing witness would have cost 270ms
+     × writePinnedPreviewCapture emits the witness for its PNG — and a DEGRADED capture emits none (no representation to vouch for) 137ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+      Tests  3 failed | 9 passed (12)
