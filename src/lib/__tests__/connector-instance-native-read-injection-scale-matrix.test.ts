@@ -101,10 +101,10 @@ const SHIPPED_CONSENT: ShippedTrustedSiteConsent = {
   disclosureVersion: "v1",
 };
 
-function readTool(name: string): CatalogToolEntry {
+function readTool(name: string, serverId = "mcp-adapter-default"): CatalogToolEntry {
   return {
     name,
-    serverId: "mcp-adapter-default",
+    serverId,
     inputSchema: READ_INPUT_SCHEMA,
     outputSchema: READ_OUTPUT_SCHEMA,
     rawAnnotations: { readOnlyHint: true, destructiveHint: false },
@@ -152,7 +152,7 @@ function buildInstanceFixture(instance: Instance): {
   const other2: CatalogServerSnapshot = {
     serverId: instance.otherServerIds[1],
     exposureMode: "first-class",
-    tools: instance.duplicatedName ? [readTool(instance.duplicatedName)] : [],
+    tools: instance.duplicatedName ? [readTool(instance.duplicatedName, instance.otherServerIds[1])] : [],
     catalogRevision: `rev-${instance.instanceId}-other2`,
     fetchedAtMs: 1_000,
   };

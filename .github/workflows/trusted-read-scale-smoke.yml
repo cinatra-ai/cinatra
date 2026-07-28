@@ -42,6 +42,7 @@ on:
     paths:
       - ".github/workflows/trusted-read-scale-smoke.yml"
       - "docker/wordpress/scale-smoke-plugin/**"
+      - "docker/wordpress/Dockerfile"
       - "docker-compose.yml"
       - "scripts/wordpress-entrypoint.sh"
       - "src/lib/connector-instance-native-read-injection.ts"

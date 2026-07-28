@@ -43,11 +43,17 @@ import {
 //   1. the pinned DEFAULT adapter server is still triad-only live — the
 //      ship-dark precondition this whole feature rests on;
 //   2. the dedicated scale-smoke fixture server (docker/wordpress/
-//      scale-smoke-plugin) really is first-class and really carries >= 64
-//      read-only tools;
-//   3. a descriptor set DERIVED from that live capture (by construction —
-//      the fingerprints are computed from the exact bytes the server
-//      returned) survives builder -> materializer -> the shared per-provider
+//      scale-smoke-plugin) really is first-class (its per-ability tools
+//      appear as individual wire entries — the exposure-mode decision rule)
+//      and really carries >= 64 read-only tools;
+//   3. under a test-deps override that TRUSTS the fixture server — the
+//      injected acquire presents the fixture server's live-captured tool
+//      list AS the instance's default adapter server (only the default
+//      server is ever injectable, by design, so "trusting" a fixture surface
+//      means standing it in for the default server at the acquire seam) — a
+//      descriptor set DERIVED from that live capture (fingerprints computed
+//      from the exact bytes the server returned) survives the REAL verifier
+//      conjunction -> builder -> materializer -> the shared per-provider
 //      approval-vocabulary boundary for openai + anthropic with NO
 //      truncation and ZERO skipped entries;
 //   4. with the REAL SHIPPED (still-empty, cinatra#2019 D1) descriptor set,
@@ -155,9 +161,12 @@ describe.skipIf(!LIVE)(
         const base = WP_BASE_URL!;
 
         // ---- 1. The pinned default server is still triad-only, live -------
+        // Per-ability entries present => first-class; absent => triad-only
+        // (the committed exposure-mode decision rule). Asserting the wire
+        // list IS exactly the triad is the live triad-only proof.
         const defaultTools = await rawToolsList(`${base}/wp-json/mcp/mcp-adapter-default-server`, auth);
         expect(defaultTools.map((t) => t.name).sort()).toEqual([...DEFAULT_SERVER_TRIAD_TOOL_NAMES].sort());
-        const defaultSnapshot: CatalogServerSnapshot = {
+        const liveDefaultSnapshot: CatalogServerSnapshot = {
           serverId: CATALOG_DEFAULT_SERVER_ID,
           exposureMode: "triad-only",
           tools: [],
@@ -165,22 +174,43 @@ describe.skipIf(!LIVE)(
           fetchedAtMs: Date.now(),
         };
 
-        // ---- 2. The dedicated scale-smoke server really is first-class and
-        //         really carries >= 64 read tools -----------------------------
+        // ---- 2. The dedicated scale-smoke server really carries >= 64
+        //         individually-listed (first-class) read tools ---------------
         const scaleTools = await rawToolsList(`${base}/wp-json/scalesmoke/scalesmoke-server`, auth);
         expect(scaleTools.length).toBeGreaterThanOrEqual(SCALE_SMOKE_MIN_TOOL_COUNT);
-        const scaleSnapshot = buildFirstClassSnapshot({
-          serverId: "scalesmoke-server",
+
+        // The test-deps override that "trusts the fixture server": stand the
+        // fixture server's LIVE-captured tool list in as the instance's
+        // default adapter server (the only injectable server, by design) at
+        // the injected acquire seam. The remap changes ONLY the server id the
+        // snapshot is filed under — every schema/annotation byte is the real
+        // wire capture.
+        const trustedSnapshot = buildFirstClassSnapshot({
+          serverId: CATALOG_DEFAULT_SERVER_ID,
           tools: scaleTools as Array<Record<string, unknown>>,
-          revision: "live-scalesmoke",
+          revision: "live-scalesmoke-as-default",
         });
-        expect(scaleSnapshot.exposureMode).toBe("first-class");
+        // The real triad server rides along as a second enrolled server so
+        // the duplicate-anywhere rule is exercised over live data too (its
+        // triad tool names never collide with the scalesmoke/* names).
+        const liveTriadAsOtherSnapshot: CatalogServerSnapshot = {
+          serverId: "wps-livetriad0000",
+          exposureMode: "triad-only",
+          tools: defaultTools.map((t) => ({
+            name: t.name,
+            serverId: "wps-livetriad0000",
+            inputSchema: t.inputSchema ?? {},
+            rawAnnotations: {},
+          })),
+          catalogRevision: "live-triad-as-other",
+          fetchedAtMs: Date.now(),
+        };
 
         // ---- 3. Derive a descriptor set from the LIVE capture (by
         //         construction: fingerprints computed from the exact bytes
         //         the server returned, not a hand-typed guess) ---------------
         const descriptorEntries: TrustedReadDescriptorEntry[] = [];
-        for (const tool of scaleSnapshot.tools) {
+        for (const tool of trustedSnapshot.tools) {
           const computed = computeTrustedReadFingerprint({
             inputSchema: tool.inputSchema,
             ...(tool.outputSchema !== undefined ? { outputSchema: tool.outputSchema } : {}),
@@ -193,7 +223,7 @@ describe.skipIf(!LIVE)(
             hasOutputSchema: computed.hasOutputSchema,
           });
         }
-        expect(descriptorEntries).toHaveLength(scaleSnapshot.tools.length);
+        expect(descriptorEntries).toHaveLength(trustedSnapshot.tools.length);
 
         const liveDescriptorSet: TrustedReadDescriptorSet = {
           version: 1,
@@ -208,8 +238,8 @@ describe.skipIf(!LIVE)(
         };
 
         const enrolled: EnrolledServerRef[] = [
-          { serverId: defaultSnapshot.serverId, exposureMode: defaultSnapshot.exposureMode, restPath: "mcp/mcp-adapter-default-server" },
-          { serverId: scaleSnapshot.serverId, exposureMode: scaleSnapshot.exposureMode, restPath: "scalesmoke/scalesmoke-server" },
+          { serverId: trustedSnapshot.serverId, exposureMode: trustedSnapshot.exposureMode, restPath: "scalesmoke/scalesmoke-server" },
+          { serverId: liveTriadAsOtherSnapshot.serverId, exposureMode: liveTriadAsOtherSnapshot.exposureMode, restPath: "mcp/mcp-adapter-default-server" },
         ];
         const actor: ResolvedActor = {
           actor: { organizationId: "live-org" } as ResolvedActor["actor"],
@@ -235,25 +265,36 @@ describe.skipIf(!LIVE)(
           isKnownDestructiveToolName: () => false,
           requireSession: async () => ({ user: { id: "live-admin" } }),
           resolveOrgRole: async () => "org_admin",
+          // Silence the real audit sink — this harness has no database, and
+          // the builder's audits are documented best-effort telemetry.
+          audit: () => {},
         };
 
         const scaleMembers = createWordPressNativeReadInjectionMembers({
           ...baseDeps,
           readPolicy: async () => trustedSitePolicy,
-          acquireEnrolledSnapshots: async () => ({ enrolled, snapshots: [defaultSnapshot, scaleSnapshot] }),
+          acquireEnrolledSnapshots: async () => ({
+            enrolled,
+            snapshots: [trustedSnapshot, liveTriadAsOtherSnapshot],
+          }),
           shippedConsent: liveShipped,
           descriptorSet: liveDescriptorSet,
         });
         const grant = await scaleMembers.buildNativeReadInjection({ instanceId: "live-instance", surface: "chat" });
         expect(grant).not.toBeNull();
-        expect(grant?.allowedTools).toHaveLength(scaleSnapshot.tools.length);
+        expect(grant?.serverId).toBe(CATALOG_DEFAULT_SERVER_ID);
+        expect(grant?.allowedTools).toHaveLength(trustedSnapshot.tools.length);
 
         // ---- Materializer + the shared per-provider approval-vocabulary
-        //      boundary, for every provider the issue's scale smoke names ----
+        //      boundary, for every provider the issue's scale smoke names.
+        //      The server URL is the fixture route the tools actually live
+        //      on. This proves serialization-shape preservation (allowed
+        //      tools / auth / label survive intact) — not a live provider
+        //      round-trip (no provider API is called here). --------------------
         const materializerInputs: McpMaterializerInput[] = [
           {
             serverLabel: "wordpress-live-instance",
-            serverUrl: `${base}/wp-json/mcp/mcp-adapter-default-server`,
+            serverUrl: `${base}/wp-json/scalesmoke/scalesmoke-server`,
             authorization: `Basic ${auth}`,
             allowedTools: grant!.allowedTools,
             approval: "auto_execute",
@@ -265,7 +306,7 @@ describe.skipIf(!LIVE)(
         expect(materialized.skipped).toEqual([]); // zero skipped entries — no batch loss
         expect(materialized.servers).toHaveLength(1);
         const materializedServer = materialized.servers[0]!;
-        expect(materializedServer.allowedTools).toHaveLength(scaleSnapshot.tools.length);
+        expect(materializedServer.allowedTools).toHaveLength(trustedSnapshot.tools.length);
 
         for (const provider of ["openai", "anthropic"] as const) {
           const declaration = BUILD_KNOWN_LLM_PROVIDER_DECLARATIONS[provider];
@@ -275,8 +316,9 @@ describe.skipIf(!LIVE)(
           expect(checked?.allowedTools).toEqual(materializedServer.allowedTools);
         }
 
-        // ---- 4. Ship-dark proof (D1): opt-in ON, REAL pinned default
-        //         server, REAL SHIPPED descriptor set -> EMPTY emission ------
+        // ---- 4. Ship-dark proof (D1): opt-in ON, the REAL pinned default
+        //         server (triad-only, as proven live in step 1), the REAL
+        //         SHIPPED descriptor set -> EMPTY emission -------------------
         const shipDarkMembers = createWordPressNativeReadInjectionMembers({
           ...baseDeps,
           readPolicy: async () => {
@@ -288,7 +330,16 @@ describe.skipIf(!LIVE)(
               disclosureVersion: shipped.disclosureVersion,
             };
           },
-          acquireEnrolledSnapshots: async () => ({ enrolled: [enrolled[0]!], snapshots: [defaultSnapshot] }),
+          acquireEnrolledSnapshots: async () => ({
+            enrolled: [
+              {
+                serverId: liveDefaultSnapshot.serverId,
+                exposureMode: liveDefaultSnapshot.exposureMode,
+                restPath: "mcp/mcp-adapter-default-server",
+              },
+            ],
+            snapshots: [liveDefaultSnapshot],
+          }),
           // shippedConsent / descriptorSet OMITTED — resolves to the real
           // TRUSTED_READ_DESCRIPTOR_SET / resolveShippedTrustedSiteConsent().
         });

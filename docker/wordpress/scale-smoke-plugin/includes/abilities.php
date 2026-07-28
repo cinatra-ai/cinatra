@@ -73,10 +73,11 @@ function scalesmoke_register_abilities(): void {
 				'label'               => "Get Scale-Smoke Note {$suffix}",
 				'description'         => "Return fixture note #{$suffix}, one of the scale-smoke read-only abilities used to prove trusted-read native injection at provider scale (cinatra#2019).",
 				'category'            => 'scalesmoke',
-				'input_schema'        => array(
-					'type'       => 'object',
-					'properties' => array(),
-				),
+				// No input_schema: the read takes no arguments. Deliberately
+				// OMITTED (matching the fixturelabs note-get precedent) rather
+				// than declared as an empty properties map — PHP JSON-encodes
+				// an empty array() as [] (a list, not an object), which would
+				// advertise a malformed schema fragment on the wire.
 				'output_schema'       => array(
 					'type'       => 'object',
 					'properties' => array(
