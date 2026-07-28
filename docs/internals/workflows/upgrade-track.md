@@ -192,6 +192,7 @@ story could change).
 | `eslint.config.mjs` (react `settings.version`) | hard-sets `settings.react.version` to a fixed string because `eslint-plugin-react@7.37.5` (via `eslint-config-next`) calls the removed ESLint-9 `context.getFilename()` under ESLint 10 when version is `"detect"` | an `eslint-plugin-react` release that is ESLint-10-compatible (this is the gating workaround for the ESLint 10 major). Minor drift to align: that fixed string is `19.2.5` while the overrides pin react `19.2.6` — harmless (it only skips detection) but worth aligning on the next touch |
 | `packages/dashboards/src/mcp-cubes/registry.ts` | an `any`-cast to attach drizzle-cube `_meta` past the MCP SDK's narrow `Tool` type | an MCP SDK release that exposes a typed annotations/meta slot (and/or drizzle-cube typing) |
 | `extensions/cinatra-ai/pdf-artifact/src/renderers/pdf-promise-with-resolvers-polyfill.ts` | a `Promise.withResolvers` polyfill for the react-pdf / pdfjs-dist path on older Safari (migrated into the pdf-artifact base by the Slice B G2 cutover — cinatra#1630) | a **browser baseline** move (Safari 17.4+, Mar 2024) — runtime/browser-version-tied, **not** a dependency upgrade; remove when the supported-browser floor moves past Safari 17.4. Listed for completeness; out of scope for the dependency-majors track |
+| `src/components/__tests__/access-picker-jsdom-shims.ts` + `packages/dashboards/src/components/__tests__/jsdom-shims.ts` | no-op shims the DOM-environment suites install before mounting Radix / cmdk / drizzle-cube: `window.matchMedia`, `ResizeObserver`, `Element.prototype.scrollIntoView`, the three pointer-capture methods, plus a desktop `window.innerWidth` override for the responsive tier | a `jsdom` release that implements layout and pointer capture. **Re-confirmed on `jsdom` 30.0.0 (§13.3): all still missing, both shims kill-tested as load-bearing, nothing dropped.** Re-run that check on the next `jsdom` major |
 
 (The `bpmn-moddle` ambient-`.d.ts` workaround that was formerly listed here was
 retired by the workflow-kind engine removal — see §4.6.)
@@ -773,10 +774,10 @@ first Renovate digest PR that lands green without a manual matrix sync.
 
 ---
 
-## 13. Refresh 2026-07-28 — npm-major re-grounding: `cron-parser` 5 applied, `node-pg-migrate` 9 BLOCKED
+## 13. Refresh 2026-07-28 — npm-major re-grounding: `cron-parser` 5 + `jsdom` 30 applied, `node-pg-migrate` 9 BLOCKED
 
 A re-grounding of the §5 / §11 stack-major candidate list against the live npm
-registry and the repo's own manifests. Two items moved; both are recorded here
+registry and the repo's own manifests. Three items moved; each is recorded here
 with the works-after evidence the track requires.
 
 ### 13.1 `cron-parser` `^4.9.0` → `^5.6.2` — MAJOR APPLIED (`packages/agents`)
@@ -909,7 +910,157 @@ alongside the loader strategies the 9 line introduced). The pinned 8.0.4 stays;
 re-drive the hop through `scripts/ci/upgrade-proof.sh` at that point — it is
 the works-after gate for this dependency, and it caught this cleanly.
 
-### 13.3 Net for this repo
+### 13.3 `jsdom` `29.1.1` → `30.0.0` — MAJOR APPLIED (four test manifests)
+
+`jsdom` is the DOM implementation behind vitest's `jsdom` environment. It is a
+`devDependencies` entry in four manifests that had to move together — the root
+`package.json` (`^29.1.1`), `packages/agents` (`^29.1.1`), `packages/chat`
+(`^29.1.1`) and `packages/dashboards` (`29.1.1`, exact by house style). No
+production surface: nothing outside a test imports it, and it is absent from
+every `dependencies` block.
+
+**The breaking surface, read off the 29.1.1…30.0.0 commit range** (a small
+major — ten upstream commits) and then re-checked against this repo:
+
+1. **Node floor raised** to `^22.22.2 || ^24.15.0 || >=26.0.0` (the 29 line
+   accepted `^20.19.0 || ^22.13.0 || >=24.0.0`). This is the actual major
+   trigger. Every place this repo resolves Node clears it: the build and
+   runtime images are `node:24-alpine`, and every workflow that installs the
+   workspace pins `node-version: 24`, which the hosted runner resolves from
+   its tool cache to **24.18.0** — read off a live `main` run log, whose
+   setup step reports the cached `node/24.18.0` toolchain and then prints
+   `24.18.0` as the active Node.
+   The single `node-version: 20` step in the tree
+   (`verdaccio-publish-proof.yml`) neither checks out this repo nor installs
+   the workspace — it publishes a throwaway canary package from a temp dir —
+   so it is unaffected. **Residual, recorded not fixed:** `setup-node` defaults
+   `check-latest` to `false` and accepts any cached `24.x`, and the root
+   `package.json` declares no `engines` block (so pnpm only warns rather than
+   refusing). A runner or developer machine parked on a pre-`24.15.0` /
+   pre-`22.22.2` build would get a warning and a possible runtime fault instead
+   of a clean refusal. Declaring the floor in the workspace is a separate
+   decision, not part of this hop.
+2. **`getComputedStyle` now resolves lengths to pixels.** Measured directly on
+   both lines with the same document: `font-size: 2em` reads back `2em` on 29
+   and `32px` on 30; `width: 10rem` → `10rem` vs `160px`; `margin: 1em` →
+   `1em` vs `32px`. `vw`/`vh` resolve against `window.innerWidth` /
+   `innerHeight`. Any assertion comparing a computed length to an authored
+   string would break — this repo has none (the only `getComputedStyle` call
+   site in first-party source is `packages/chat/src/dancing-robot.tsx`, which
+   reads `transform`, not a length).
+3. **`CSS.escape()` and `CSS.supports()` are now implemented.** `window.CSS`
+   was `undefined` on 29 and is an object with both functions on 30. Nothing
+   first-party feature-detects or shims them, so this only means third-party
+   render-path code takes its native branch instead of its fallback; the suites
+   below cover that empirically.
+4. **`document.evaluate()` validates the result type.** A non-`ANY_TYPE`
+   request against a `null` value now raises a `TypeError` instead of slipping
+   through (`typeof null === "object"`), and the non-node-set case raises a
+   plain `TypeError` rather than an `XPathException`. Zero `document.evaluate`
+   call sites in this repo.
+5. **`background-position` gained `-x` / `-y` longhands**, and CSS function
+   values serialize with a space after commas. Cosmetic for this repo.
+6. Transitively: `undici` `^7` → `^8`, `whatwg-url` `16` → `17`,
+   `@asamuzakjp/dom-selector` `7` → `8`, `@asamuzakjp/css-color` `5` → `6`.
+   The repo's own `undici` was already on the 8 line, so no new MAJOR line
+   appears; jsdom's `^8` does resolve independently to 8.9.0 next to the
+   repo's own lock-held 8.5.0 — a second 8.x resolution in the dev tree,
+   collapsible by a `pnpm dedupe` that is its own (prod-affecting) decision.
+   The selector-engine hop is the one with teeth: `dom-selector` 8 is what
+   backs `querySelector`/`querySelectorAll`/`matches`/`closest`, and it drops
+   `:target-within` and `:closed`. Neither appears anywhere in this tree, and
+   no test passes a `:has()` / `:is()` / `:where()` / `:not()` selector to any
+   of those four DOM methods (the complex pseudo-selectors in `globals.css` are
+   authored CSS, not test queries). The optional `canvas` peer floor also rose
+   to `^3.2.3`; `canvas` is not installed, so it is inert.
+
+**Shim re-confirmation (the §4 obsolete-on-upgrade rule).** Two shim modules
+exist because jsdom implements no layout and no pointer capture:
+`src/components/__tests__/access-picker-jsdom-shims.ts` (matchMedia,
+`scrollIntoView`, the three pointer-capture methods, `ResizeObserver`) and
+`packages/dashboards/src/components/__tests__/jsdom-shims.ts` (a desktop
+`innerWidth`, matchMedia, `ResizeObserver`). Every guarded capability was
+probed inside the real vitest `jsdom` environment on 30.0.0 and is still
+missing — `matchMedia`, `ResizeObserver`, `scrollIntoView`,
+`hasPointerCapture`, `setPointerCapture`, `releasePointerCapture` all report
+`undefined`, and `window.innerWidth` still defaults to 1024, so the dashboards
+desktop override still does real work. Each shim was then kill-tested by
+emptying it and re-running its importers on 30.0.0: the root shim's removal
+fails 15 tests across its 4 importing files (`ReferenceError: ResizeObserver is
+not defined`), the dashboards shim's removal fails 7 of its 8 importing files
+(`TypeError: window.matchMedia is not a function`). **Nothing is dropped —
+both shims stay, both proven load-bearing.** The only capability the 30 line
+newly provides (`CSS.escape` / `CSS.supports`) was never shimmed here, so there
+is no redundant code to retire.
+
+**Works-after proof.** Both sides of the hop paired at ONE named base commit
+(`72368a900`), same worktree, same commands: the root run (`pnpm test:root`),
+`packages/chat`, `packages/dashboards` and `packages/agents`. Test counts are
+identical before and after — no suite stopped executing:
+
+| Tier | on 29.1.1 | on 30.0.0 |
+|---|---|---|
+| root (`pnpm test:root`) | 1157 files passed, 2 skipped; 13842 tests passed, 21 skipped, 3 todo | identical |
+| `packages/chat` | 38 files, 395 tests passed | identical |
+| `packages/dashboards` | 73 files, 675 tests passed | identical |
+| `packages/agents` | 267 files passed, 1 failed, 2 skipped; 2855 tests passed, 2 failed | identical |
+
+Re-verified on the 30 line after rebasing onto a newer `main` (which had added
+3 files / 90 tests of its own): root 1160 files + 13932 tests passed, chat
+38/395, dashboards 73/675, agents unchanged. Re-verified a second time after
+rebasing past the wave-4 extension re-pins, with the lockfile regenerated from
+the merged manifests rather than merged textually: root 1166 files + 14019
+tests passed, chat 40/407, dashboards 74/680, agents 268 files + 2861 tests
+passed with the same two macOS-only temp-path failures. The paired A/B numbers
+above stay anchored to the base commit named at the top of this paragraph —
+that is the comparison; the rebase re-runs only confirm the hop still holds as
+`main` moves.
+
+The two `packages/agents` failures are the same two on both lines and are not
+jsdom-related: `agent-source-write-files-name-rescoping.test.ts` compares a
+`node:os` temp path against the resolved one, which differ by the `/private`
+prefix on a macOS developer machine only. They are a node-environment file, run
+green in the Linux CI tier, and are recorded here so the before/after delta
+reads as exactly zero.
+
+Matching aggregate counts prove cardinality, not identity, so the inventory was
+compared directly as well: `vitest list` (the full `file > suite > test` id
+list, not just file names) was captured for all four tiers on BOTH lines and
+diffed — **17,769 test ids, zero diff lines**. Nothing was renamed, re-homed or
+silently dropped. The environment assignment was pinned the same way: a
+throwaway sentinel asserting `navigator.userAgent` and `typeof CSS.supports`
+was run under each config and reported `jsdom/30.0.0` + `CSS.supports=function`
+for the root, `packages/agents` and `packages/dashboards` DOM suites — i.e.
+the pragma files really are executing on the new line, not quietly falling back
+to the node environment.
+
+**Grounding correction found while pinning that** (pre-existing, NOT caused by
+this hop, and deliberately left alone here): `packages/chat/vitest.config.ts`
+carries an `environmentMatchGlobs` entry mapping
+`src/**/__tests__/**/*.test.tsx` to `jsdom`, annotated with a `@ts-ignore`
+claiming the option is "valid vitest option but missing from InlineConfig
+types". Under `vitest` 4 that option **no longer exists** — it is absent from
+the installed distribution entirely and is silently ignored. The sentinel run
+under the chat config confirms it: a `.test.tsx` file matching that glob with
+no pragma executes on `Node.js/22`, not jsdom. In practice nothing is broken —
+8 of the 9 matching files carry an explicit `@vitest-environment jsdom` pragma
+(9 files as of the post-wave-4 rebase; `main` added one), and the 9th
+(`renderer-surface.test.tsx`) is a pure export-surface guard that needs no
+DOM — so `packages/chat`'s real DOM surface is the 8 pragma files.
+The dead config line is obsoleted by the `vitest` 4 major, not by this one, so
+retiring it belongs to its own lane; it is recorded here so the next reader
+does not trust the glob.
+
+**Rollback.** Revert the lane commit; the four manifests and the lockfile move
+together. Nothing else changes — no source file, no shim, no config.
+
+**Residual.** Two companion connector extension packages
+(`a2a-server-connector`, `linkedin-connector`) declare their own `jsdom`
+`^29.0.0`, and a set of artifact extensions declare `^25.0.1`; those manifests
+live in their own repos and keep their own resolutions in the lockfile. They
+are outside this hop's four manifests and are recorded for their own lanes.
+
+### 13.4 Net for this repo
 
 Re-grounded against the live registry, the platform manifests are otherwise at
 their latest stable major: `next` / `eslint-config-next` 16, `react` /
@@ -918,20 +1069,20 @@ their latest stable major: `next` / `eslint-config-next` 16, `react` /
 `zod` 4, `tailwindcss` 4, `@modelcontextprotocol/sdk` 1, `@opentelemetry/*` 2
 (§10), `undici` 8, `tar` 7, `knip` 6, `node` 24 (image + `@types/node` 24,
 runtime-coupled — do not lead the image), `pnpm` 11. `typescript` stays at the
-standing peer ceiling (§8.1/§11.1). Remaining offered npm majors NOT taken in
-this lane, each recorded for its own staged lane: `jsdom` 29 → 30 (test
-environment; published 2026-07-27), `pdfjs-dist` 5 → 6 (coupled with
+standing peer ceiling (§8.1/§11.1). `jsdom` is now 30 (§13.3). Remaining
+offered npm majors NOT taken in this lane, each recorded for its own staged
+lane: `pdfjs-dist` 5 → 6 (coupled with
 `react-pdf` — re-check its peer range first), `react-dropzone` 15 → 19 (four
 majors published inside one week upstream; let the line settle),
 and `node-pg-migrate` 9 (blocked, §13.2). `libnpmpublish` 11 → 12 and `pacote`
-21 → 22 were the registry/publish-path group and are **APPLIED** — see §13.4.
+21 → 22 were the registry/publish-path group and are **APPLIED** — see §13.5.
 Image-side majors remain as recorded in §1: the profile-gated demo images
 (mariadb 12, wordpress 7, rabbitmq 4, valkey 9, and the Twenty/Plane postgres
 and redis pins) are upstream-dictated and tracked, not led; `tailscale` stays
 held on the upstream fix (§1); `php` 8.5 for the Drupal image is the one
 non-demo image major still open.
 
-### 13.4 libnpmpublish 11 → 12 + pacote 21 → 22 — APPLIED (registry/publish path)
+### 13.5 libnpmpublish 11 → 12 + pacote 21 → 22 — APPLIED (registry/publish path)
 
 Taken as ONE group (cinatra#2163): both packages ride the npm CLI's release
 train and their majors move the shared `npm-registry-fetch` /
