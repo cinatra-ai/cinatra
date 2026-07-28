@@ -41,6 +41,7 @@ import type { ExtensionDependency, VersionConstraint } from "./canonical-types";
 import {
   DEPENDENCY_EDGE_TYPES,
   DEPENDENCY_REQUIREMENTS,
+  DEPENDENCY_SKILL_ROLES,
   EXTENSION_KINDS,
 } from "./canonical-types";
 
@@ -106,6 +107,20 @@ export function validateExtensionDependencyShape(
   }
   if (v.kind !== undefined && !(EXTENSION_KINDS as readonly string[]).includes(v.kind as string)) {
     problems.push(`kind, when present, must be one of ${EXTENSION_KINDS.join("|")}`);
+  }
+  // cinatra#2090 — the edge-ROLE vocabulary. Fail-loud on an unknown value
+  // rather than ignoring it: a typo'd role would silently stop resolving, and
+  // an artifact whose `matcher` edge does not resolve classifies nothing at
+  // all. A role only means something on a skill edge, so declaring one on any
+  // other kind is a declaration error too.
+  if (v.role !== undefined) {
+    if (!(DEPENDENCY_SKILL_ROLES as readonly string[]).includes(v.role as string)) {
+      problems.push(`role, when present, must be one of ${DEPENDENCY_SKILL_ROLES.join("|")}`);
+    } else if (v.kind !== "skill") {
+      problems.push(
+        `role is only meaningful on a kind:"skill" edge (got kind ${JSON.stringify(v.kind)})`,
+      );
+    }
   }
   const vc = v.versionConstraint as Record<string, unknown> | undefined;
   if (!vc || typeof vc !== "object") {
