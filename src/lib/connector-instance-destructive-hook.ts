@@ -33,8 +33,8 @@ import "server-only";
 // parked row surviving such a refusal is harmless: a retry collapses onto it
 // via the store's DB-enforced dedup arbiter and the card stays actionable.)
 //
-// AUDIT HYGIENE (codex r2 pin): audit metadata carries ids/hashes/sizes only —
-// NEVER the raw `args` or the `endpointUrl` verbatim.
+// AUDIT HYGIENE: audit metadata carries ids/hashes/sizes only — NEVER the raw
+// `args` or the `endpointUrl` verbatim.
 
 import { logAuditEvent } from "@/lib/authz/audit";
 import {

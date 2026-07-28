@@ -595,10 +595,10 @@ export async function invokeConnectorInstanceTool(
   const floorHit = isKnownDestructiveToolName(name);
   if ((derivedClass === "destructive" || floorHit) && deps.destructiveHook?.enabled()) {
     // The consent-target endpoint for the park-time `target_fingerprint`
-    // (§4.2 / codex r2 pin): the SAME per-server resolution step 4 will run —
-    // the stored serverId through the S3-widened resolver — so park and
-    // resume fingerprint the same materialized execution target. URL string
-    // only; the auth header NEVER reaches the hook.
+    // (§4.2): the SAME per-server resolution step 4 will run — the stored
+    // serverId through the S3-widened resolver — so park and resume
+    // fingerprint the same materialized execution target. URL string only;
+    // the auth header NEVER reaches the hook.
     let confirmationEndpointUrl = resolved.endpoint;
     if (serverId !== CATALOG_DEFAULT_SERVER_ID && deps.listEnrolledServers) {
       const perServer = await deps.resolveInstanceEndpoint(

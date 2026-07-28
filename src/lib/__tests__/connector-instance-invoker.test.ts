@@ -19,6 +19,10 @@ import type { InstanceToolPolicyRecord } from "@cinatra-ai/mcp-server/instance-t
 // cinatra#2017 S2 slice K6 — the governed invoker core (design §1.2 order, M4
 // single pass, B1 pin, §3 triad/routing). Fully mocked deps — no live stack.
 
+// Real-signature spy type for the step-3 hook so `mock.calls` rows are
+// indexable, typed tuples.
+type DestructiveHookFire = NonNullable<ConnectorInstanceInvokerDeps["destructiveHook"]>["fire"];
+
 const ACTOR: InvokerTrustedActor = {
   actor: { principalType: "HumanUser", principalId: "u1", organizationId: "org1" } as never,
   userId: "u1",
@@ -274,7 +278,7 @@ describe("invokeConnectorInstanceTool — serverId is NOT caller-mintable (cache
 
 describe("invokeConnectorInstanceTool — destructive hook (step 3, cinatra#2020 S5 blocking)", () => {
   it("fires the hook when enabled AND the resolved tool classifies destructive; a VOID verdict (S2-era impls/mocks) executes", async () => {
-    const fire = vi.fn(async () => {});
+    const fire = vi.fn<DestructiveHookFire>(async () => {});
     const { deps, callWireTool } = makeDeps({ destructiveHook: { enabled: () => true, fire } });
     deps.cache.set("inst-1", triadSnapshot([{ name: "danger", rawAnnotations: { destructiveHint: true } }]));
     await invokeConnectorInstanceTool(
@@ -286,7 +290,7 @@ describe("invokeConnectorInstanceTool — destructive hook (step 3, cinatra#2020
   });
 
   it("does NOT fire for a read-classified tool", async () => {
-    const fire = vi.fn(async () => {});
+    const fire = vi.fn<DestructiveHookFire>(async () => {});
     const { deps } = makeDeps({ destructiveHook: { enabled: () => true, fire } });
     deps.cache.set("inst-1", triadSnapshot([{ name: "safe", rawAnnotations: { readOnlyHint: true } }]));
     await invokeConnectorInstanceTool(
@@ -302,7 +306,7 @@ describe("invokeConnectorInstanceTool — destructive hook (step 3, cinatra#2020
       serverId: CATALOG_DEFAULT_SERVER_ID,
       pendingCallId: "cipc_x1",
     });
-    const fire = vi.fn(async () => ({
+    const fire = vi.fn<DestructiveHookFire>(async () => ({
       action: "park" as const,
       pendingCallId: "cipc_x1",
       expiresAt: "2026-07-28T10:15:00.000Z",
@@ -330,7 +334,7 @@ describe("invokeConnectorInstanceTool — destructive hook (step 3, cinatra#2020
   });
 
   it("a continue verdict (surface default off / org-disabled) executes normally", async () => {
-    const fire = vi.fn(async () => ({ action: "continue" as const, reason: "surface_default_off" as const }));
+    const fire = vi.fn<DestructiveHookFire>(async () => ({ action: "continue" as const, reason: "surface_default_off" as const }));
     const { deps, callWireTool, audit } = makeDeps({
       destructiveHook: { enabled: () => true, fire },
     });
@@ -345,7 +349,7 @@ describe("invokeConnectorInstanceTool — destructive hook (step 3, cinatra#2020
   });
 
   it("FLOOR trigger (D9): a known-destructive NAME with EMPTY annotations (write-class) still fires — floorHit true, derivedClass write", async () => {
-    const fire = vi.fn(async () => ({
+    const fire = vi.fn<DestructiveHookFire>(async () => ({
       action: "park" as const,
       pendingCallId: "cipc_f1",
       expiresAt: "2026-07-28T10:15:00.000Z",
@@ -363,7 +367,7 @@ describe("invokeConnectorInstanceTool — destructive hook (step 3, cinatra#2020
   });
 
   it("annotation-destructive NON-floor name fires with floorHit false", async () => {
-    const fire = vi.fn(async () => {});
+    const fire = vi.fn<DestructiveHookFire>(async () => {});
     const { deps } = makeDeps({ destructiveHook: { enabled: () => true, fire } });
     deps.cache.set("inst-1", triadSnapshot([{ name: "danger", rawAnnotations: { destructiveHint: true } }]));
     await invokeConnectorInstanceTool(
@@ -374,7 +378,7 @@ describe("invokeConnectorInstanceTool — destructive hook (step 3, cinatra#2020
   });
 
   it("write-class NON-floor name: no fire, executes (the S2 write path is untouched)", async () => {
-    const fire = vi.fn(async () => {});
+    const fire = vi.fn<DestructiveHookFire>(async () => {});
     const { deps, callWireTool } = makeDeps({ destructiveHook: { enabled: () => true, fire } });
     await invokeConnectorInstanceTool(
       { connectorKey: "wordpress", toolName: "ewpa/create-post", args: {}, actor: ACTOR },
@@ -385,7 +389,7 @@ describe("invokeConnectorInstanceTool — destructive hook (step 3, cinatra#2020
   });
 
   it("enabled() false → never fires, executes (the S2 kill-switch semantics)", async () => {
-    const fire = vi.fn(async () => {});
+    const fire = vi.fn<DestructiveHookFire>(async () => {});
     const { deps, callWireTool } = makeDeps({ destructiveHook: { enabled: () => false, fire } });
     deps.cache.set("inst-1", triadSnapshot([{ name: "core/delete-post", rawAnnotations: { destructiveHint: true } }]));
     await invokeConnectorInstanceTool(
@@ -397,7 +401,7 @@ describe("invokeConnectorInstanceTool — destructive hook (step 3, cinatra#2020
   });
 
   it("fire input carries the full widened park material (§2.3): args, class flags, surface, endpoint, tool-shape, correlation", async () => {
-    const fire = vi.fn(async () => {});
+    const fire = vi.fn<DestructiveHookFire>(async () => {});
     const { deps } = makeDeps({ destructiveHook: { enabled: () => true, fire } });
     deps.cache.set("inst-1", triadSnapshot([{ name: "danger", rawAnnotations: { destructiveHint: true } }]));
     await invokeConnectorInstanceTool(
@@ -434,7 +438,7 @@ describe("invokeConnectorInstanceTool — destructive hook (step 3, cinatra#2020
   });
 
   it("a typed refusal thrown inside fire (confirmation_unavailable) propagates fail-closed — no wire call", async () => {
-    const fire = vi.fn(async () => {
+    const fire = vi.fn<DestructiveHookFire>(async () => {
       throw new InvokerError("confirmation_unavailable", "subsystem unavailable — the call was NOT executed");
     });
     const { deps, callWireTool } = makeDeps({ destructiveHook: { enabled: () => true, fire } });

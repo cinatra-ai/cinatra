@@ -420,8 +420,11 @@ describe("defaults", () => {
 });
 
 describe("destructive hook (cinatra#2020 S5) — per-server consent-target endpoint", () => {
+  // Real-signature spy type so `mock.calls` rows are indexable, typed tuples.
+  type DestructiveHookFire = NonNullable<ConnectorInstanceInvokerDeps["destructiveHook"]>["fire"];
+
   it("a destructive call on a DEDICATED server fires the hook with the PER-SERVER endpoint (stored serverId through the S3-widened resolver)", async () => {
-    const fire = vi.fn(async () => {});
+    const fire = vi.fn<DestructiveHookFire>(async () => {});
     const { deps, cache, resolveInstanceEndpoint, callWireTool } = makeDeps({
       destructiveHook: { enabled: () => true, fire },
     });
@@ -442,9 +445,9 @@ describe("destructive hook (cinatra#2020 S5) — per-server consent-target endpo
       deps,
     );
     expect(fire).toHaveBeenCalledTimes(1);
-    // Codex r2 pin: the park-time target fingerprint must hash the SAME
-    // materialized execution target step 4 resolves — the per-server endpoint,
-    // reached by passing the STORED serverId into the S3-widened resolver.
+    // The park-time target fingerprint must hash the SAME materialized
+    // execution target step 4 resolves — the per-server endpoint, reached by
+    // passing the STORED serverId into the S3-widened resolver.
     expect(fire.mock.calls[0]![0]).toMatchObject({
       serverId: DEDICATED_ID,
       endpointUrl: DEDICATED_ENDPOINT,
@@ -459,7 +462,7 @@ describe("destructive hook (cinatra#2020 S5) — per-server consent-target endpo
   });
 
   it("a park verdict blocks BEFORE the per-server wire call; the default server needs no extra resolve", async () => {
-    const fire = vi.fn(async () => ({
+    const fire = vi.fn<DestructiveHookFire>(async () => ({
       action: "park" as const,
       pendingCallId: "cipc_ms1",
       expiresAt: "2026-07-28T10:15:00.000Z",

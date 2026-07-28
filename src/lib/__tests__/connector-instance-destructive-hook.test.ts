@@ -5,6 +5,7 @@ import {
   buildPendingConfirmationMessage,
   deriveConfirmationSurface,
   normalizeConfirmationSurface,
+  type ConnectorInstanceDestructiveHook,
   type ConnectorInstanceDestructiveHookDeps,
 } from "@/lib/connector-instance-destructive-hook";
 import {
@@ -15,6 +16,10 @@ import type { InvokerTrustedActor } from "@/lib/connector-instance-invoker";
 import {
   ARGS_MAX_BYTES,
   computeArgsDigest,
+  type ConnectorInstanceConfirmationPolicyRecord,
+  type ParkPendingCallInput,
+  type ParkPendingCallResult,
+  type PendingCallStoreDeps,
   type PendingCallStoreQuery,
 } from "@/lib/connector-instance-pending-call-store";
 
@@ -30,7 +35,20 @@ const ACTOR: InvokerTrustedActor = {
   connectorInstancePin: { connectorKey: "wordpress", instanceId: "inst-1" },
 };
 
-function fireInput(overrides: Record<string, unknown> = {}) {
+// Real-signature spy types so `mock.calls` rows are indexable, typed tuples.
+type FireInput = Parameters<ConnectorInstanceDestructiveHook["fire"]>[0];
+type ParkFn = (
+  input: ParkPendingCallInput,
+  deps?: PendingCallStoreDeps,
+) => Promise<ParkPendingCallResult>;
+type ReadPolicyFn = (
+  connectorKey: string,
+  instanceId: string,
+  deps?: PendingCallStoreDeps,
+) => Promise<ConnectorInstanceConfirmationPolicyRecord | null>;
+type AuditFn = NonNullable<ConnectorInstanceDestructiveHookDeps["audit"]>;
+
+function fireInput(overrides: Partial<FireInput> = {}): FireInput {
   return {
     connectorKey: "wordpress",
     instanceId: "inst-1",
@@ -38,7 +56,7 @@ function fireInput(overrides: Record<string, unknown> = {}) {
     toolName: "core/delete-post",
     actor: ACTOR,
     args: { id: 7, force: true },
-    derivedClass: "destructive" as const,
+    derivedClass: "destructive",
     floorHit: true,
     sourceType: "chat",
     endpointUrl: "https://site.example/wp-json/wp/v2/mcp",
@@ -52,17 +70,17 @@ function fireInput(overrides: Record<string, unknown> = {}) {
 }
 
 function makeHook(overrides: Partial<ConnectorInstanceDestructiveHookDeps> = {}) {
-  const park = vi.fn(async () => ({
-    outcome: "parked" as const,
+  const park = vi.fn<ParkFn>(async () => ({
+    outcome: "parked",
     id: "cipc_abc123",
     expiresAt: "2026-07-28T10:15:00.000Z",
     reused: false,
   }));
-  const readPolicy = vi.fn(async () => null);
-  const audit = vi.fn(async () => {});
+  const readPolicy = vi.fn<ReadPolicyFn>(async () => null);
+  const audit = vi.fn<AuditFn>(async () => {});
   const hook = buildConnectorInstanceDestructiveHook({
-    park: park as never,
-    readPolicy: readPolicy as never,
+    park,
+    readPolicy,
     audit,
     ...overrides,
   });
@@ -117,7 +135,7 @@ describe("buildPendingConfirmationMessage — the §2.1 model-facing contract", 
     expect(msg).toContain("Do NOT retry or re-issue this call");
   });
 
-  it("pins the EXACT contract text — deliberate wording drift must break this test (codex r0)", () => {
+  it("pins the EXACT contract text — deliberate wording drift must break this test", () => {
     expect(
       buildPendingConfirmationMessage({
         toolName: "core/delete-post",
@@ -159,9 +177,9 @@ describe("default matrix (D7) × org override — the FULL 4-surface × 3-policy
     ["public_site_widget", "default", "surface_default_off"],
     ["public_site_widget", "disabled", "surface_default_off"],
   ] as const)("surface %s × policy %s → %s", async (surface, mode, expected) => {
-    const readPolicy = vi.fn(async () => (mode ? policyRow(mode) : null));
-    const { hook, park, audit } = makeHook({ readPolicy: readPolicy as never });
-    const verdict = await hook.fire(fireInput({ sourceType: surface }) as never);
+    const readPolicy = vi.fn<ReadPolicyFn>(async () => (mode ? policyRow(mode) : null));
+    const { hook, park, audit } = makeHook({ readPolicy });
+    const verdict = await hook.fire(fireInput({ sourceType: surface }));
     if (expected === "park") {
       expect(verdict).toMatchObject({ action: "park", pendingCallId: "cipc_abc123" });
       expect(readPolicy).toHaveBeenCalledTimes(1);
@@ -182,21 +200,21 @@ describe("default matrix (D7) × org override — the FULL 4-surface × 3-policy
 
   it("absent sourceType → session → parks (fail-safe)", async () => {
     const { hook, park } = makeHook();
-    const verdict = await hook.fire(fireInput({ sourceType: undefined }) as never);
+    const verdict = await hook.fire(fireInput({ sourceType: undefined }));
     expect(verdict).toMatchObject({ action: "park" });
     expect(park.mock.calls[0][0]).toMatchObject({ surface: "session" });
   });
 
   it("mode 'disabled' → continue(org_disabled) + the ONE bypass audit row (§7.3), no park", async () => {
-    const readPolicy = vi.fn(async () => ({
+    const readPolicy = vi.fn<ReadPolicyFn>(async () => ({
       connectorKey: "wordpress",
       instanceId: "inst-1",
-      mode: "disabled" as const,
+      mode: "disabled",
       updatedBy: "admin",
       updatedAt: "2026-07-27T00:00:00.000Z",
     }));
-    const { hook, park, audit } = makeHook({ readPolicy: readPolicy as never });
-    const verdict = await hook.fire(fireInput() as never);
+    const { hook, park, audit } = makeHook({ readPolicy });
+    const verdict = await hook.fire(fireInput());
     expect(verdict).toEqual({ action: "continue", reason: "org_disabled" });
     expect(park).not.toHaveBeenCalled();
     expect(audit).toHaveBeenCalledTimes(1);
@@ -215,7 +233,7 @@ describe("park verdict + pending_call_parked audit (§7.3)", () => {
   it("returns park with id/expiresAt/§2.1-message and audits ids/hashes — never raw args or endpointUrl", async () => {
     const { hook, park, audit } = makeHook();
     const input = fireInput();
-    const verdict = await hook.fire(input as never);
+    const verdict = await hook.fire(input);
     const { hash, bytes } = computeArgsDigest(input.args as Record<string, unknown>);
 
     expect(verdict).toMatchObject({
@@ -223,9 +241,9 @@ describe("park verdict + pending_call_parked audit (§7.3)", () => {
       pendingCallId: "cipc_abc123",
       expiresAt: "2026-07-28T10:15:00.000Z",
     });
-    const message = (verdict as { message: string }).message;
-    expect(message.startsWith(PENDING_CONFIRMATION_MESSAGE_PREFIX)).toBe(true);
-    expect(message).toContain("cipc_abc123");
+    if (!verdict || verdict.action !== "park") throw new Error("expected a park verdict");
+    expect(verdict.message.startsWith(PENDING_CONFIRMATION_MESSAGE_PREFIX)).toBe(true);
+    expect(verdict.message).toContain("cipc_abc123");
 
     // Park input: full material for row + fingerprints (store computes them).
     expect(park.mock.calls[0][0]).toMatchObject({
@@ -246,7 +264,7 @@ describe("park verdict + pending_call_parked audit (§7.3)", () => {
     });
 
     expect(audit).toHaveBeenCalledTimes(1);
-    const event = audit.mock.calls[0][0] as { operation: string; decision: string; metadata: Record<string, unknown> };
+    const event = audit.mock.calls[0][0];
     expect(event).toMatchObject({
       operation: "pending_call_parked",
       decision: "denied",
@@ -262,7 +280,8 @@ describe("park verdict + pending_call_parked audit (§7.3)", () => {
       expiresAt: "2026-07-28T10:15:00.000Z",
       reused: false,
     });
-    // Codex r2 pin: raw hook input never serialized into audit metadata.
+    // Raw hook input must never be serialized into audit metadata — the rows
+    // carry ids/hashes/sizes only.
     const serialized = JSON.stringify(event.metadata);
     expect(serialized).not.toContain("https://site.example");
     expect(serialized).not.toContain('"force"');
@@ -270,22 +289,22 @@ describe("park verdict + pending_call_parked audit (§7.3)", () => {
 
   it("floor-only trigger (write-class annotations) parks with row derived_class 'floor'", async () => {
     const { hook, park } = makeHook();
-    await hook.fire(fireInput({ derivedClass: "write", floorHit: true }) as never);
+    await hook.fire(fireInput({ derivedClass: "write", floorHit: true }));
     expect(park.mock.calls[0][0]).toMatchObject({ derivedClass: "floor" });
   });
 
   it("dedup collapse (reused) surfaces the SAME pending call id and audits reused:true", async () => {
     const { hook, audit } = makeHook({
-      park: vi.fn(async () => ({
-        outcome: "parked" as const,
+      park: vi.fn<ParkFn>(async () => ({
+        outcome: "parked",
         id: "cipc_existing",
         expiresAt: "2026-07-28T10:09:00.000Z",
         reused: true,
-      })) as never,
+      })),
     });
-    const verdict = await hook.fire(fireInput() as never);
+    const verdict = await hook.fire(fireInput());
     expect(verdict).toMatchObject({ action: "park", pendingCallId: "cipc_existing" });
-    expect((audit.mock.calls[0][0] as { metadata: Record<string, unknown> }).metadata).toMatchObject({
+    expect(audit.mock.calls[0][0].metadata).toMatchObject({
       reused: true,
     });
   });
@@ -294,7 +313,7 @@ describe("park verdict + pending_call_parked audit (§7.3)", () => {
     const { hook, park } = makeHook({
       getForensicsContext: () => ({ runId: "run-42", clientId: "client-7" }),
     });
-    await hook.fire(fireInput() as never);
+    await hook.fire(fireInput());
     expect(park.mock.calls[0][0]).toMatchObject({
       context: { runId: "run-42", clientId: "client-7", catalogRevision: "rev-9" },
     });
@@ -302,7 +321,7 @@ describe("park verdict + pending_call_parked audit (§7.3)", () => {
 
   it("no forensics and no catalogRevision → context null", async () => {
     const { hook, park } = makeHook();
-    await hook.fire(fireInput({ catalogRevision: undefined }) as never);
+    await hook.fire(fireInput({ catalogRevision: undefined }));
     expect(park.mock.calls[0][0]).toMatchObject({ context: null });
   });
 });
@@ -310,9 +329,9 @@ describe("park verdict + pending_call_parked audit (§7.3)", () => {
 describe("typed refusals + fail-closed doctrine (§2.3)", () => {
   it("args_too_large → InvokerError confirmation_args_too_large (reduce-payload guidance)", async () => {
     const { hook } = makeHook({
-      park: vi.fn(async () => ({ outcome: "args_too_large" as const, argsBytes: 300_000 })) as never,
+      park: vi.fn<ParkFn>(async () => ({ outcome: "args_too_large", argsBytes: 300_000 })),
     });
-    const err = await hook.fire(fireInput() as never).catch((e: unknown) => e);
+    const err = await hook.fire(fireInput()).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(InvokerError);
     expect((err as InvokerError).code).toBe("confirmation_args_too_large");
     expect((err as InvokerError).message).toContain(String(ARGS_MAX_BYTES));
@@ -321,43 +340,43 @@ describe("typed refusals + fail-closed doctrine (§2.3)", () => {
 
   it("cap_exceeded → InvokerError confirmation_unavailable naming the pending-card recourse", async () => {
     const { hook } = makeHook({
-      park: vi.fn(async () => ({ outcome: "cap_exceeded" as const, pendingCount: 3 })) as never,
+      park: vi.fn<ParkFn>(async () => ({ outcome: "cap_exceeded", pendingCount: 3 })),
     });
-    const err = await hook.fire(fireInput() as never).catch((e: unknown) => e);
+    const err = await hook.fire(fireInput()).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(InvokerError);
     expect((err as InvokerError).code).toBe("confirmation_unavailable");
     expect((err as InvokerError).message).toContain("too many pending confirmations");
   });
 
-  it.each([
-    ["policy read fails", { readPolicy: vi.fn(async () => Promise.reject(new Error("db down"))) }],
-    ["park transaction fails", { park: vi.fn(async () => Promise.reject(new Error("db down"))) }],
-  ] as const)("%s → confirmation_unavailable (refuses, never executes unconfirmed)", async (_label, o) => {
-    const { hook } = makeHook(o as never);
-    const err = await hook.fire(fireInput() as never).catch((e: unknown) => e);
+  it.each<[string, Partial<ConnectorInstanceDestructiveHookDeps>]>([
+    ["policy read fails", { readPolicy: vi.fn<ReadPolicyFn>(async () => Promise.reject(new Error("db down"))) }],
+    ["park transaction fails", { park: vi.fn<ParkFn>(async () => Promise.reject(new Error("db down"))) }],
+  ])("%s → confirmation_unavailable (refuses, never executes unconfirmed)", async (_label, o) => {
+    const { hook } = makeHook(o);
+    const err = await hook.fire(fireInput()).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(InvokerError);
     expect((err as InvokerError).code).toBe("confirmation_unavailable");
   });
 
   it("a failed park-audit write refuses fail-closed too (blocking is never weakened)", async () => {
     const { hook } = makeHook({ audit: vi.fn(async () => Promise.reject(new Error("sink down"))) });
-    const err = await hook.fire(fireInput() as never).catch((e: unknown) => e);
+    const err = await hook.fire(fireInput()).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(InvokerError);
     expect((err as InvokerError).code).toBe("confirmation_unavailable");
   });
 
   it("a failed org-disabled bypass audit refuses — the bypass may not proceed unaudited", async () => {
     const { hook, park } = makeHook({
-      readPolicy: vi.fn(async () => ({
+      readPolicy: vi.fn<ReadPolicyFn>(async () => ({
         connectorKey: "wordpress",
         instanceId: "inst-1",
-        mode: "disabled" as const,
+        mode: "disabled",
         updatedBy: "admin",
         updatedAt: "2026-07-27T00:00:00.000Z",
-      })) as never,
+      })),
       audit: vi.fn(async () => Promise.reject(new Error("sink down"))),
     });
-    const err = await hook.fire(fireInput() as never).catch((e: unknown) => e);
+    const err = await hook.fire(fireInput()).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(InvokerError);
     expect((err as InvokerError).code).toBe("confirmation_unavailable");
     expect(park).not.toHaveBeenCalled();
@@ -399,9 +418,10 @@ describe("park verdict + ROW via the REAL store (injected query fn — §10 acce
     const audit = vi.fn(async () => {});
     const hook = buildConnectorInstanceDestructiveHook({ storeDeps: { query }, audit });
 
-    const verdict = await hook.fire(fireInput() as never);
+    const verdict = await hook.fire(fireInput());
+    if (!verdict || verdict.action !== "park") throw new Error("expected a park verdict");
     expect(verdict).toMatchObject({ action: "park", expiresAt: "2026-07-28T10:15:00.000Z" });
-    expect((verdict as { pendingCallId: string }).pendingCallId).toMatch(/^cipc_[0-9a-f]{32}$/);
+    expect(verdict.pendingCallId).toMatch(/^cipc_[0-9a-f]{32}$/);
 
     const insert = statements.find((s) => s.text.startsWith("INSERT INTO"));
     expect(insert).toBeDefined();
