@@ -48,7 +48,6 @@
     "@cinatra-ai/contract-artifact :: skills/contract-matcher/SKILL.md",
     "@cinatra-ai/drupal-mcp-connector :: skills/drupal-widget-chat/SKILL.md",
     "@cinatra-ai/email-artifacts :: skills/email-body-matcher/SKILL.md",
-    "@cinatra-ai/list-curator-agent :: skills/list-curator-agent/SKILL.md",
     "@cinatra-ai/marketing-icp-artifact :: skills/marketing-icp-author/SKILL.md",
     "@cinatra-ai/marketing-icp-artifact :: skills/marketing-icp-matcher/SKILL.md",
     "@cinatra-ai/marketing-strategy-artifact :: skills/marketing-strategy-matcher/SKILL.md",
@@ -57,7 +56,6 @@
     "@cinatra-ai/sales-playbook-artifact :: skills/sales-playbook-matcher/SKILL.md",
     "@cinatra-ai/screenshot-artifact :: skills/screenshot-matcher/SKILL.md",
     "@cinatra-ai/slide-deck-artifact :: skills/slide-deck-matcher/SKILL.md",
-    "@cinatra-ai/web-research-agent :: skills/web-research-agent/SKILL.md",
     "@cinatra-ai/wordpress-mcp-connector :: skills/wordpress-widget-chat/SKILL.md"
   ]
 }
