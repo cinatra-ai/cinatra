@@ -26,6 +26,10 @@ on:
       - 'packages/agents/src/validate-agent-json.ts'
       - 'packages/agents/src/validate-oas-runtime-invariants.ts'
       - 'packages/agents/src/__tests__/oas-runtime-invariants.test.ts'
+      # cinatra#2140 — the WayFlow standalone-mount guard job below builds this
+      # image and runs these suites against the pinned tree, so the loader, its
+      # HITL gate reconcile shim and the guards themselves gate their own changes.
+      - 'docker/wayflow/**'
       # The test imports KNOWN_BROKEN_AGENTS from this fixture; its allowlist can
       # mask/unmask blocker findings (flip the job result), so changes must re-run.
       - 'packages/agents/src/__tests__/__fixtures__/**'
@@ -66,6 +70,10 @@ on:
       - 'packages/agents/src/validate-agent-json.ts'
       - 'packages/agents/src/validate-oas-runtime-invariants.ts'
       - 'packages/agents/src/__tests__/oas-runtime-invariants.test.ts'
+      # cinatra#2140 — the WayFlow standalone-mount guard job below builds this
+      # image and runs these suites against the pinned tree, so the loader, its
+      # HITL gate reconcile shim and the guards themselves gate their own changes.
+      - 'docker/wayflow/**'
       # The test imports KNOWN_BROKEN_AGENTS from this fixture; its allowlist can
       # mask/unmask blocker findings (flip the job result), so changes must re-run.
       - 'packages/agents/src/__tests__/__fixtures__/**'
@@ -133,3 +141,91 @@ jobs:
 
       - name: Run hermetic runtime-invariants vitest
         run: pnpm --filter @cinatra-ai/agents exec vitest run __tests__/oas-runtime-invariants.test.ts
+
+  validate-wayflow-mount:
+    name: WayFlow mount guard (standalone + orchestrated, pinned tree)
+    runs-on: ubuntu-latest
+    # cinatra#2140. Until now NOTHING in CI mounted the pinned extension tree:
+    # the only place `docker/wayflow/tests/test_repo_agents_load.py` ran was the
+    # `works-after proof` workflow, which (a) fires only on upgrade paths — the
+    # extension lock files are not among them — and (b) points
+    # CINATRA_AGENTS_DIR at the single-agent `works-after` FIXTURE tree, so the
+    # real agents were never in scope. A pin bump could therefore ship an agent
+    # the runtime refuses to mount, and the standalone encoding of a HITL gate
+    # could drift away from the orchestrated (inlined-subflow) one unnoticed.
+    #
+    # This job closes that: it boots the repo's OWN WayFlow container over the
+    # PINNED tree and runs the mount guards inside it. It is gated on the same
+    # paths as the sibling jobs, so it re-runs on every extension-lock bump.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      - name: Clone companion extension repos (pinned)
+        uses: ./.github/actions/clone-extensions
+
+      - name: Build the WayFlow runtime image
+        run: docker build -t cinatra-wayflow:mount-guard docker/wayflow
+
+      - name: Boot the runtime over the pinned extension tree
+        run: |
+          set -euo pipefail
+          # The tree is mounted READ-WRITE on purpose: a freshly cloned repo has
+          # no `.cinatra-published.json`, and the loader's startup marker
+          # backfill is what makes `discover_agents` (hence the mount guard's
+          # parametrization) see the agents at all. A `:ro` mount would leave
+          # discovery empty and the guard would pass VACUOUSLY.
+          docker run -d --name wayflow-mount-guard -p 127.0.0.1:3010:3010 \
+            -e PORT=3010 \
+            -e CINATRA_AGENTS_DIR=/agents \
+            -e CINATRA_BASE_URL=http://host.docker.internal:3000 \
+            -e CINATRA_BRIDGE_TOKEN="mount-guard-$(openssl rand -hex 16)" \
+            -e CINATRA_CONTEXT_ATTEST_KEY="mount-guard-$(openssl rand -hex 16)" \
+            -v "$PWD/extensions:/agents" \
+            cinatra-wayflow:mount-guard
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:3010/.health >/dev/null 2>&1; then break; fi
+            if [ "$(docker inspect -f '{{.State.Running}}' wayflow-mount-guard)" != "true" ]; then
+              echo "::error::wayflow runtime exited before becoming healthy."; exit 1
+            fi
+            if [ "$i" -eq 40 ]; then echo "::error::/.health did not answer within 120s."; exit 1; fi
+            sleep 3
+          done
+          echo "health: $(curl -fsS http://127.0.0.1:3010/.health)"
+
+      - name: Assert the boot is complete and non-vacuous
+        run: |
+          set -euo pipefail
+          # Three ways this job could pass while proving nothing — discovery
+          # silently dropping agents, a post-`load_json` mount failure the pytest
+          # guard structurally cannot see, or a clone-back without the #2140
+          # agents — are all closed by this script, which reads the ONE
+          # known-failing allowlist from the guard module itself.
+          docker exec -e CINATRA_AGENTS_DIR=/agents -w /app wayflow-mount-guard \
+            python tests/assert_mount_health.py
+
+      - name: Mount guards inside the runtime (standalone + orchestrated)
+        run: |
+          set -euo pipefail
+          # `test_repo_agents_load` owns the per-agent verdict (a known-failing
+          # agent is a BOUNDED xfail there — the single source of truth), and
+          # `test_gate_mount_both_paths` pins the standalone vs orchestrated
+          # gate encodings against the same ruled contract (cinatra#2140).
+          docker exec -e CINATRA_AGENTS_DIR=/agents wayflow-mount-guard \
+            python -m pytest -q \
+            tests/test_input_message_gate_reconcile.py \
+            tests/test_repo_agents_load.py \
+            tests/test_gate_mount_both_paths.py
+
+      - name: Runtime logs
+        if: always()
+        run: docker logs wayflow-mount-guard 2>&1 | tail -100 || true
+
+      - name: Tear down
+        if: always()
+        run: docker rm -f wayflow-mount-guard >/dev/null 2>&1 || true
