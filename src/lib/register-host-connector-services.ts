@@ -177,6 +177,7 @@ import {
   type ConnectorInstanceInvokerDeps,
   type InvokerTrustedActor,
   type ResolvedInstanceEndpoint,
+  acquireSnapshots as acquireConnectorInstanceCatalogSnapshots,
 } from "@/lib/connector-instance-invoker";
 import {
   callConnectorInstanceMcpTool,
@@ -223,6 +224,17 @@ import {
   createWordPressNativeInjectionConsentMembers,
   type WordPressNativeInjectionConsentSurface,
 } from "@/lib/connector-instance-native-injection-consent";
+// cinatra#2019 S4 (verifier slice) — the trusted-site native READ-INJECTION
+// builder + org-admin dry-run preview, bound beside the consent members. The
+// binder only WIRES host closures: the acquire closure rides the governed
+// invoker's own snapshot path (same deps shape, same shared cache — one
+// freshness policy), pinned to a single enrollment read so the completeness
+// check and the acquire loop see the SAME server list.
+import {
+  createWordPressNativeReadInjectionMembers,
+  type WordPressNativeReadInjectionSurface,
+} from "@/lib/wordpress-native-read-injection";
+import { isKnownDestructiveToolName } from "@cinatra-ai/mcp-server/known-destructive-floor";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import { logAuditEvent } from "@/lib/authz/audit";
 import { Buffer } from "node:buffer";
@@ -1123,7 +1135,63 @@ export function registerHostConnectorServices(): void {
         readNativeInjectionPolicy(connectorKey, instanceId, ownerOrgId),
       writeMode: (input) => setNativeInjectionMode(input),
     }),
-  } satisfies HostWordPressMcpServerEnrollmentSurface & WordPressNativeInjectionConsentSurface);
+    // --- trusted-site native READ-INJECTION builder + preview (cinatra#2019
+    // S4 verifier slice). ADDITIVE host-local members (same structural
+    // precedent as the consent members above): `buildNativeReadInjection` is
+    // the toolbox-facing eligibility computation (ambient trusted actor + the
+    // SAME explicit-actor per-instance USE gate core the governed invoker
+    // runs; only `surface:"chat"` can ever emit), and
+    // `explainNativeReadInjection` is the org-admin-gated dry-run for the
+    // settings card (no audits, no credential material, works while off).
+    // Descriptor/fingerprint logic lives host-side in the sibling modules —
+    // the connector only renders what the member returns. On the pinned
+    // community stack the verified set is EMPTY by construction (the shipped
+    // v1 descriptor set is empty), so these members emit nothing anywhere
+    // until a future capture-backed descriptor-population change lands.
+    ...createWordPressNativeReadInjectionMembers({
+      requireSession: () => requireAuthSession(),
+      resolveInstanceOrgId: (instanceId) => {
+        const row = resolveWordPressInstanceAdmin()?.readInstanceById(instanceId) ?? null;
+        if (!row) return null;
+        return typeof row.orgId === "string" && row.orgId.trim() ? row.orgId.trim() : null;
+      },
+      resolveOrgRole: (orgId, userId) => resolveOrgRoleForUser(orgId, userId),
+      readPolicy: (connectorKey, instanceId, ownerOrgId) =>
+        readNativeInjectionPolicy(connectorKey, instanceId, ownerOrgId),
+      resolveTrustedActor: () => resolveTrustedWriteActor(),
+      requireUse: (actor, gateInput) =>
+        connectorInstanceUseAuthority.selectForConnector("wordpress").requireUse(actor, gateInput),
+      // The governed invoker's OWN acquire path (exported surface, same deps
+      // shape, same shared per-process cache ⇒ one freshness policy). The
+      // enrollment list is read ONCE and pinned into the acquire deps so the
+      // builder's completeness check and the acquire loop can never see two
+      // different server sets. Endpoint + credential resolution stays inside
+      // this closure — the builder module never sees an auth header.
+      acquireEnrolledSnapshots: async (connectorKey, instanceId) => {
+        const resolved = await resolveConnectorInstanceEndpoint(connectorKey, instanceId);
+        if (!resolved) {
+          throw new Error("wordpress native-read-injection: instance endpoint unresolvable");
+        }
+        const enrolled = await listEnrolledServers(connectorKey, instanceId);
+        const snapshots = await acquireConnectorInstanceCatalogSnapshots(
+          {
+            connectorKey,
+            instanceId,
+            endpoint: resolved.endpoint,
+            authHeader: resolved.authHeader,
+          },
+          {
+            ...buildConnectorInstanceInvokerDeps("wordpress"),
+            listEnrolledServers: async () => enrolled,
+          },
+        );
+        return { enrolled, snapshots };
+      },
+      isKnownDestructiveToolName: (name) => isKnownDestructiveToolName(name),
+    }),
+  } satisfies HostWordPressMcpServerEnrollmentSurface &
+    WordPressNativeInjectionConsentSurface &
+    WordPressNativeReadInjectionSurface);
 
   // The WordPress post/media CONTENT surface (`@cinatra-ai/host:
   // wordpress-content`, cinatra#172 Stage H3) is NO LONGER host-published:

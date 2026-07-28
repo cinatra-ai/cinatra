@@ -343,8 +343,16 @@ async function runSharedGate(
  * downstream FILTER (resolveToolAcrossServers / the list `scoped` filter /
  * the explicit-target check here); an unenrolled id resolves to
  * `tool_not_found`, never a mis-tagged catalog.
+ *
+ * EXPORTED (cinatra#2019 S4, surface-only — zero behavior change): the
+ * trusted-site native-read-injection builder must recompute its eligibility
+ * verdict against snapshots served under EXACTLY this freshness policy
+ * (TTL / bounded serve-stale / fail-closed store read), never a forked second
+ * one. The binder composes it with the same deps object the invoker runs on;
+ * callers own their gate — like the in-module callers, this runs only AFTER
+ * an authorization pass.
  */
-async function acquireSnapshots(
+export async function acquireSnapshots(
   input: {
     connectorKey: string;
     instanceId: string;
