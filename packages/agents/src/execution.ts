@@ -139,6 +139,17 @@ export type PinnedVersionRow = {
 export type PinnedRunSnapshotFields = {
   compiledPlan?: unknown;
   taskSpec?: string | null;
+  /**
+   * The L1 declared execution environment captured in THIS snapshot (exec-plane
+   * S3, cinatra#1708; epic #1705). `null` means the pinned version was saved
+   * without one — which, for a resolved pin, means the run declares NO
+   * environment; it is NEVER a fallback to the live template row (that would
+   * swap the recipe under the pin, the exact thing the version-snapshot
+   * doctrine forbids). Consumed by the `/api/llm-bridge` run seam via
+   * `resolveRunEnvironmentSources`; the worker's own overlay ignores it (the
+   * environment is bound at the seam, not on the template object).
+   */
+  executionEnvironment?: unknown;
 };
 
 export type ResolvePinnedRunSnapshotDeps = {
@@ -241,7 +252,11 @@ export async function resolvePinnedRunSnapshot(
     if (typeof snap !== "object" || snap === null || Array.isArray(snap)) {
       return fail("pinned snapshot payload is structurally unusable (not a structured object)");
     }
-    const s = snap as { compiledPlan?: unknown; taskSpec?: string | null };
+    const s = snap as {
+      compiledPlan?: unknown;
+      taskSpec?: string | null;
+      executionEnvironment?: unknown;
+    };
     // (5) EXECUTION-FIELD COMPLETENESS — a required pin FULLY replaces the
     //     execution plan, so an ABSENT or `undefined` compiledPlan cannot pin
     //     the run: the worker overlays a field only when it is `!== undefined`,
@@ -254,7 +269,11 @@ export async function resolvePinnedRunSnapshot(
     // Both execution fields are now DEFINED (compiledPlan verified above;
     // taskSpec normalized to null), so the worker's `!== undefined` overlay is a
     // FULL replacement for a required pin — never a partial overlay onto live.
-    return { compiledPlan: s.compiledPlan, taskSpec: s.taskSpec ?? null };
+    return {
+      compiledPlan: s.compiledPlan,
+      taskSpec: s.taskSpec ?? null,
+      executionEnvironment: s.executionEnvironment ?? null,
+    };
   }
 
   // NON-REQUIRED with a resolved semver — best-effort load, live-template
@@ -264,8 +283,20 @@ export async function resolvePinnedRunSnapshot(
     if (!row) return null; // live-template fallback (unchanged)
     const snap = row.snapshot;
     if (typeof snap !== "object" || snap === null) return null;
-    const s = snap as { compiledPlan?: unknown; taskSpec?: string | null };
-    return { compiledPlan: s.compiledPlan, taskSpec: s.taskSpec };
+    const s = snap as {
+      compiledPlan?: unknown;
+      taskSpec?: string | null;
+      executionEnvironment?: unknown;
+    };
+    // A RESOLVED best-effort snapshot is authoritative for this run exactly as
+    // it is for compiledPlan/taskSpec above — the environment does not fall back
+    // to the live row once the snapshot was found (only a MISSING row falls
+    // back, which is the `return null` a line up).
+    return {
+      compiledPlan: s.compiledPlan,
+      taskSpec: s.taskSpec,
+      executionEnvironment: s.executionEnvironment ?? null,
+    };
   }
 
   // `versionId`-only (inert pin) or neither → live template.

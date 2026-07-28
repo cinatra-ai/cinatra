@@ -116,4 +116,64 @@ describe("resolveRunExecutionBinding matrix", () => {
     });
     expect(r).toEqual({ kind: "l0" });
   });
+
+  it("a PACKAGED MANIFEST declaration binds a mount (the #1705 fail-open, inverted)", async () => {
+    register("ready", {
+      resolveRunExecutionMount: async () => fakeMount,
+      getRunExecutionExecutor: () => fakeExecutor,
+    });
+    // The template row declares nothing (on `main` it cannot — the column is a
+    // later slice); the PACKAGE's manifest is where a packaged agent declares.
+    const r = await resolveRunExecutionBinding({
+      packagedManifestEnvironment: { pip: ["pandas==2.2.1"] },
+      liveTemplateEnvironment: undefined,
+      orgId: "o",
+      holder: { packageName: "@acme/agent" },
+    });
+    expect(r).toEqual({ kind: "mount", executor: fakeExecutor, environment: fakeMount });
+  });
+
+  it("a PACKAGED MANIFEST declaration that cannot be honored REFUSES (never L0)", async () => {
+    register("disabled");
+    const r = await resolveRunExecutionBinding({
+      packagedManifestEnvironment: { pip: ["pandas==2.2.1"] },
+      liveTemplateEnvironment: undefined,
+      orgId: "o",
+      holder: { packageName: "@acme/agent" },
+    });
+    expect(r.kind).toBe("refuse");
+    expect(r.kind === "refuse" && r.auditReason).toBe("environment_unavailable");
+  });
+
+  it("an UNREADABLE declaration source refuses — UNKNOWN is not 'declared nothing'", async () => {
+    register("ready", {
+      resolveRunExecutionMount: async () => fakeMount,
+      getRunExecutionExecutor: () => fakeExecutor,
+    });
+    const r = await resolveRunExecutionBinding({
+      declarationUnreadable: { detail: "store read failed" },
+      orgId: "o",
+      holder: {},
+    });
+    expect(r.kind).toBe("refuse");
+    expect(r.kind === "refuse" && r.auditReason).toBe("environment_declaration_unreadable");
+    expect(r.kind === "refuse" && r.detail).toBe("store read failed");
+  });
+
+  it("an UNDECLARED run stays L0 with every source supplied (byte-identical)", async () => {
+    register("ready", {
+      resolveRunExecutionMount: async () => fakeMount,
+      getRunExecutionExecutor: () => fakeExecutor,
+    });
+    expect(
+      await resolveRunExecutionBinding({
+        packagedManifestEnvironment: null,
+        pinnedSnapshot: null,
+        declarationUnreadable: null,
+        liveTemplateEnvironment: undefined,
+        orgId: "o",
+        holder: {},
+      }),
+    ).toEqual({ kind: "l0" });
+  });
 });

@@ -116,7 +116,16 @@ export {
   // job.moveToDelayed when the trigger gate is closed.
   TriggerGateClosedError,
   gateBackoffMs,
+  // The ONE run→immutable-snapshot pin classifier (cinatra#1040 S5/S7). The
+  // `/api/llm-bridge` execution-environment seam resolves a run's pinned
+  // recipe through THIS function so there is exactly one definition of "this
+  // run is pinned" — a `versionId`-ONLY row is the INERT pin the worker has
+  // never honored, and a REQUIRED pin whose snapshot cannot be served throws
+  // rather than falling back to live.
+  resolvePinnedRunSnapshot,
+  PinnedRunSnapshotUnreachableError,
 } from "./execution";
+export type { PinnedRunSnapshotFields, PinnedVersionRow } from "./execution";
 // Compile-time side-effects inference for the trigger gate and UI.
 export {
   collectGatedSteps,
@@ -382,6 +391,7 @@ export {
   normalizeProjectAgentEnvironment,
   resolveRunExecutionEnvironment,
   type ResolvedRunEnvironment,
+  type ResolvedRunEnvironmentSource,
 } from "./execution-environment";
 // Per-agent execution CONFIGURATION model (exec-plane S3 slice B,
 // cinatra#1708): authority resolution (manifest vs config), the fail-closed
