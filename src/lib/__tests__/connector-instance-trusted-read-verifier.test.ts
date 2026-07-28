@@ -191,6 +191,37 @@ describe("canonicalizeSchemaForFingerprint", () => {
       reason: "depth_exceeded",
     });
   });
+
+  it("rejects a sibling-$ref expansion bomb via the total node budget (never hangs)", () => {
+    // Two refs per level to the NEXT def: ~2^48 resolutions live inside the
+    // depth cap (each level costs one depth), so only a TOTAL work budget can
+    // bound it. Without the budget this test would not return in this epoch.
+    const defs: Record<string, unknown> = { d48: { type: "null" } };
+    for (let i = 47; i >= 0; i--) {
+      defs[`d${i}`] = {
+        a: { $ref: `#/$defs/d${i + 1}` },
+        b: { $ref: `#/$defs/d${i + 1}` },
+      };
+    }
+    const started = Date.now();
+    expect(
+      canonicalizeSchemaForFingerprint({
+        properties: { x: { $ref: "#/$defs/d0" } },
+        $defs: defs,
+      }),
+    ).toEqual({ ok: false, reason: "work_budget_exceeded" });
+    // Typed and FAST — the budget trips after a bounded number of node
+    // visits, orders of magnitude before any meaningful CPU burn.
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("keeps ordinary large schemas well inside the node budget", () => {
+    const properties: Record<string, unknown> = {};
+    for (let i = 0; i < 200; i++) {
+      properties[`field${i}`] = { type: "string", description: `field ${i}` };
+    }
+    expect(canonicalizeSchemaForFingerprint({ type: "object", properties }).ok).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -588,6 +619,26 @@ describe("verifyTrustedReadSet", () => {
         reason: "snapshot_set_inconsistent",
         detail: "wps-cccccccccccccccc",
       },
+    ]);
+  });
+
+  it("duplicate names WITHIN the descriptor set eject (the pin is ambiguous), unique names unaffected", () => {
+    const other = entryFor("core-get-site-info");
+    const result = verify({
+      descriptor: DESCRIPTOR(ENTRY, { ...ENTRY, fingerprint: "0".repeat(64) }, other),
+      defaultServerSnapshot: snapshot({
+        serverId: "mcp-adapter-default",
+        tools: [tool({ name: "ewpa-get-post" }), tool({ name: "core-get-site-info" })],
+      }),
+      otherServerSnapshots: [],
+      enrollmentComplete: true,
+    });
+    // Neither duplicate claimant verifies — and the name can never appear
+    // (once or twice) in the allowlist while its pin is ambiguous.
+    expect(result.allowedTools).toEqual(["core-get-site-info"]);
+    expect(result.ejected).toEqual([
+      { name: "ewpa-get-post", reason: "descriptor_set_inconsistent" },
+      { name: "ewpa-get-post", reason: "descriptor_set_inconsistent" },
     ]);
   });
 

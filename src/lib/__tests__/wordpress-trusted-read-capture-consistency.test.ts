@@ -109,6 +109,11 @@ describe("descriptor set ⇄ committed capture consistency (cinatra#2019 S4)", (
         1,
       );
       const row = rows[0]!;
+      // `?? {}` mirrors the runtime snapshot builder byte-for-byte: a
+      // first-class wire row without inputSchema becomes `inputSchema: {}` in
+      // the catalog snapshot (buildFirstClassSnapshot,
+      // connector-instance-catalog-cache.ts) BEFORE the verifier ever sees
+      // it, so the gate fingerprints exactly what the runtime would verify.
       const computed = computeTrustedReadFingerprint({
         inputSchema: row.inputSchema ?? {},
         ...(row.outputSchema !== undefined ? { outputSchema: row.outputSchema } : {}),
@@ -191,6 +196,17 @@ describe("capture parser sanity + real-capture fingerprint vectors", () => {
 
   it("classifies the captured fixture rows with the REAL classifier + floor (the S1-proven hints)", () => {
     const byName = new Map(fixtureServerTools.map((tool) => [tool.name, tool]));
+    // Existence FIRST: with the `?? {}` fallback below, a silently-vanished
+    // row would classify as write-class — correct for note-get/note-delete
+    // (their assertions would fail loudly) but a VACUOUS pass for the
+    // unannotated row, whose expectation is write-class either way.
+    for (const name of [
+      "fixturelabs-note-get",
+      "fixturelabs-note-delete",
+      "fixturelabs-note-get-unannotated",
+    ]) {
+      expect(byName.has(name), `capture must still carry ${name}`).toBe(true);
+    }
     expect(classifyAnnotations(byName.get("fixturelabs-note-get")?.annotations ?? {})).toBe("read");
     // The delete fixture is destructive BOTH ways: hints and the name floor.
     expect(classifyAnnotations(byName.get("fixturelabs-note-delete")?.annotations ?? {})).toBe(

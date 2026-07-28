@@ -43,7 +43,10 @@
 // anywhere, a `$ref` that is not a same-document `#/…` JSON pointer, a `$ref`
 // carrying sibling keys (draft-ambiguous), an unresolvable pointer (which
 // includes any percent-escaped or invalidly-`~`-escaped segment — only plain
-// unencoded pointers are accepted), a reference cycle, or nesting depth > 64. Internal `#/` refs are resolved by
+// unencoded pointers are accepted), a reference cycle, nesting depth > 64, or
+// total canonicalization work beyond a fixed node budget (a sibling-`$ref`
+// expansion bomb multiplies work without adding depth; it ejects typed long
+// before it can stall the host). Internal `#/` refs are resolved by
 // inlining before canonicalization. Canonical form = recursive object-key sort
 // (arrays order-preserved), compact JSON.stringify serialization. NO unicode
 // normalization: both comparands come from the same JSON parse, so
@@ -74,6 +77,16 @@ export const TRUSTED_READ_FINGERPRINT_ALGORITHM = "tsr1";
 /** Maximum nesting depth of the RESOLVED (ref-inlined) schema tree. */
 export const SCHEMA_CANONICALIZATION_MAX_DEPTH = 64;
 
+/** Total node-visit budget for one canonicalization, counted over the
+ * RESOLVED (ref-inlined) walk. The depth cap alone does not bound WORK: a
+ * small schema whose defs each hold two refs to the next def expands as
+ * ~2^depth resolutions while staying inside the depth cap — an
+ * algorithmic-complexity bomb aimed at the exact component whose job is to
+ * verify untrusted input. Any legitimate tool-argument schema is orders of
+ * magnitude below this budget; exceeding it ejects typed and fast, never
+ * stalls the host. */
+export const SCHEMA_CANONICALIZATION_MAX_NODES = 10_000;
+
 /** Why a schema cannot be canonicalized (⇒ the tool is M1-only). */
 export type SchemaCanonicalizationFailureReason =
   | "not_an_object"
@@ -82,7 +95,8 @@ export type SchemaCanonicalizationFailureReason =
   | "ref_sibling_keys"
   | "unresolvable_ref"
   | "ref_cycle"
-  | "depth_exceeded";
+  | "depth_exceeded"
+  | "work_budget_exceeded";
 
 export type CanonicalizeSchemaForFingerprintResult =
   | { ok: true; canonical: string }
@@ -152,27 +166,41 @@ function resolveInternalPointer(root: Record<string, unknown>, ref: string): unk
   return current;
 }
 
+/** Mutable per-canonicalization work meter (node visits over the RESOLVED
+ * walk — re-visiting an inlined `$ref` target counts every time, which is
+ * exactly what makes an expansion bomb spend its budget instead of our CPU). */
+type CanonicalizationBudget = { remainingNodes: number };
+
 /**
  * Canonicalize one node of the (being-resolved) schema tree.
  *
  * `activeRefs` carries the `$ref` pointers currently being inlined on this
  * path — re-entering one is a cycle. An inlined target continues at the SAME
  * depth as the `$ref` node it replaces (the pointer node is substituted, not
- * nested), so the depth cap measures the RESOLVED tree.
+ * nested), so the depth cap measures the RESOLVED tree. The node budget
+ * bounds TOTAL work across the whole walk (the depth cap cannot: sibling
+ * refs multiply work without adding depth).
  */
 function canonicalizeNode(
   node: unknown,
   root: Record<string, unknown>,
   depth: number,
   activeRefs: ReadonlySet<string>,
+  budget: CanonicalizationBudget,
 ): string {
+  budget.remainingNodes -= 1;
+  if (budget.remainingNodes < 0) {
+    throw new SchemaCanonicalizationFailure("work_budget_exceeded");
+  }
   if (depth > SCHEMA_CANONICALIZATION_MAX_DEPTH) {
     throw new SchemaCanonicalizationFailure("depth_exceeded");
   }
   if (Array.isArray(node)) {
     // Arrays are order-preserved; JSON.stringify semantics for gaps/undefined.
     return `[${node
-      .map((item) => (item === undefined ? "null" : canonicalizeNode(item, root, depth + 1, activeRefs)))
+      .map((item) =>
+        item === undefined ? "null" : canonicalizeNode(item, root, depth + 1, activeRefs, budget),
+      )
       .join(",")}]`;
   }
   if (isPlainObject(node)) {
@@ -193,12 +221,13 @@ function canonicalizeNode(
       const nextActive = new Set(activeRefs);
       nextActive.add(ref);
       // Substitution: the target replaces the `$ref` node at the same depth.
-      return canonicalizeNode(target, root, depth, nextActive);
+      return canonicalizeNode(target, root, depth, nextActive, budget);
     }
     return `{${keys
       .sort()
       .map(
-        (key) => `${JSON.stringify(key)}:${canonicalizeNode(node[key], root, depth + 1, activeRefs)}`,
+        (key) =>
+          `${JSON.stringify(key)}:${canonicalizeNode(node[key], root, depth + 1, activeRefs, budget)}`,
       )
       .join(",")}}`;
   }
@@ -221,7 +250,12 @@ export function canonicalizeSchemaForFingerprint(
 ): CanonicalizeSchemaForFingerprintResult {
   if (!isPlainObject(schema)) return { ok: false, reason: "not_an_object" };
   try {
-    return { ok: true, canonical: canonicalizeNode(schema, schema, 1, new Set()) };
+    return {
+      ok: true,
+      canonical: canonicalizeNode(schema, schema, 1, new Set(), {
+        remainingNodes: SCHEMA_CANONICALIZATION_MAX_NODES,
+      }),
+    };
   } catch (err) {
     if (err instanceof SchemaCanonicalizationFailure) return { ok: false, reason: err.reason };
     throw err;
@@ -270,6 +304,7 @@ export function computeTrustedReadFingerprint(input: {
  * `native_injection_empty` audit's reason counts and the explain preview. */
 export type TrustedReadEjectionReason =
   | "fingerprint_algorithm_unsupported"
+  | "descriptor_set_inconsistent"
   | "snapshot_set_inconsistent"
   | "exposure_not_first_class"
   | "not_advertised"
@@ -367,7 +402,23 @@ export function verifyTrustedReadSet(input: VerifyTrustedReadSetInput): VerifyTr
     return { allowedTools, ejected };
   }
 
+  // The DESCRIPTOR side must be an unambiguous enumeration too: two entries
+  // claiming the same name make that name's pin undefined (which fingerprint
+  // is the trusted one?) — and verifying both would emit the name twice.
+  // Every entry bearing a duplicated name ejects; unique names are unaffected.
+  // (The shipped set cannot carry duplicates — the consent-hash canonicalizer
+  // throws on them at stamp time — but this conjunction stays locally sound
+  // for ANY input, same doctrine as the snapshot-set check above.)
+  const nameCounts = new Map<string, number>();
   for (const entry of input.descriptor.entries) {
+    nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
+  }
+
+  for (const entry of input.descriptor.entries) {
+    if ((nameCounts.get(entry.name) ?? 0) > 1) {
+      ejected.push({ name: entry.name, reason: "descriptor_set_inconsistent" });
+      continue;
+    }
     const verdict = verifyEntry(entry, defaultSnapshot, input.otherServerSnapshots, input);
     if (verdict === null) allowedTools.push(entry.name);
     else ejected.push(verdict);
