@@ -52,7 +52,8 @@ export type InvokerErrorCode =
   | "connector_key_underivable" // no host-authoritative connectorKey source (guard fail-closed, §1.6)
   | "tool_policy_denied" // per-instance policy denied the resolved tool (§2.6 step 2)
   | "ambiguous_tool" // toolName non-unique across servers; serverId required (§3.6)
-  | "catalog_revision_changed"; // a stale cursor was paged against a bumped snapshot (§3.5)
+  | "catalog_revision_changed" // a stale cursor was paged against a bumped snapshot (§3.5)
+  | "catalog_unavailable"; // an explicitly-targeted enrolled server has no obtainable snapshot (cinatra#2018 S3)
 
 /** A typed transport / invocation error. NEVER carries the auth header or any
  * credential; `message` is safe to surface. `wpErrorCode` carries a WP_Error /
