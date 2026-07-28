@@ -11,36 +11,9 @@
       ],
       "reason": "18 bundles in one pack; consolidated to 5 injectable + 1 internal and renamed by the S3 migration wave. `invalid-frontmatter` is waived for ONE named, pre-existing break this gate discovered on the pinned revision: skills/chat-extension-discovery/SKILL.md carries angle brackets in its description (`is there a <X> agent`, `@cinatra-ai/<slug>`), which the upstream Anthropic validator rejects. It ships today, so refusing it here would break installs before S3 can rewrite it.",
       "migratedBy": "cinatra#2090"
-    },
-    {
-      "packageName": "@cinatra-ai/blog-skills",
-      "codes": [
-        "package-suffix",
-        "not-exactly-one-bundle"
-      ],
-      "reason": "3 bundles in one pack; split into one extension per skill by the S3 migration wave.",
-      "migratedBy": "cinatra#2090"
-    },
-    {
-      "packageName": "@cinatra-ai/drupal-skills",
-      "codes": [
-        "package-suffix"
-      ],
-      "reason": "single bundle, retired plural name; renamed to @cinatra-ai/drupal-widget-chat-skill by the S3 migration wave.",
-      "migratedBy": "cinatra#2090"
-    },
-    {
-      "packageName": "@cinatra-ai/skill-creator-skills",
-      "codes": [
-        "package-suffix"
-      ],
-      "reason": "single bundle, retired plural name; renamed to @cinatra-ai/skill-prefill-generation-skill by the S3 migration wave.",
-      "migratedBy": "cinatra#2090"
     }
   ],
   "embeddedSkills": [
-    "@cinatra-ai/drupal-mcp-connector :: skills/drupal-widget-chat/SKILL.md",
-    "@cinatra-ai/media-transcript-agent :: skills/transcribe-media/SKILL.md",
-    "@cinatra-ai/wordpress-mcp-connector :: skills/wordpress-widget-chat/SKILL.md"
+    "@cinatra-ai/media-transcript-agent :: skills/transcribe-media/SKILL.md"
   ]
 }
