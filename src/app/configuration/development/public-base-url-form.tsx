@@ -56,7 +56,12 @@ export function PublicBaseUrlForm({ initialUrl, tailscaleConnected, tailscaleUrl
         return;
       }
       setSavedUrl(trimmed);
-      toast.success("Public base URL saved.");
+      // The OAuth audience allowlist is derived once at startup (see
+      // ./actions.ts), so "saved" is NOT "in effect" for external MCP clients —
+      // in either direction. Say so at the moment of the save: a silent success
+      // invites reading the resulting token rejection as a broken tunnel, and a
+      // clear as a revocation.
+      toast.success("Public base URL saved. Restart the app — until then the OAuth audience allowlist still reflects the previous URL.");
     });
   }
 
