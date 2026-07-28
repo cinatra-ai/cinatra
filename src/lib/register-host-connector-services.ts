@@ -233,7 +233,7 @@ import {
 import {
   createWordPressNativeReadInjectionMembers,
   type WordPressNativeReadInjectionSurface,
-} from "@/lib/wordpress-native-read-injection";
+} from "@/lib/connector-instance-native-read-injection";
 import { isKnownDestructiveToolName } from "@cinatra-ai/mcp-server/known-destructive-floor";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import { logAuditEvent } from "@/lib/authz/audit";

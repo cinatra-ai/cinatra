@@ -523,7 +523,7 @@ describe("transport-DI inversion services (cinatra#151 Stage 3)", () => {
     expect(typeof nativeInjectionOptIn.setNativeInjectionMode).toBe("function");
     // cinatra#2019 S4 (verifier slice) — the read-injection builder + the
     // org-admin dry-run preview ride the same publication (behavior pinned in
-    // wordpress-native-read-injection.test.ts; the verifier conjunction in
+    // connector-instance-native-read-injection.test.ts; the verifier conjunction in
     // connector-instance-trusted-read-verifier.test.ts).
     expect(typeof nativeInjectionOptIn.buildNativeReadInjection).toBe("function");
     expect(typeof nativeInjectionOptIn.explainNativeReadInjection).toBe("function");

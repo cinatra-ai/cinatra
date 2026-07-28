@@ -51,7 +51,7 @@
 // the pin (`hasOutputSchema:false`) and fingerprints as the literal `ABSENT`.
 //
 // This module is PURE (no I/O, no ambient state): the impure builder
-// (wordpress-native-read-injection.ts) feeds it acquired snapshots and owns
+// (connector-instance-native-read-injection.ts) feeds it acquired snapshots and owns
 // policy/authority/audit. It performs ZERO M1 changes — the governed invoker
 // path is untouched by construction, and an ejection here never denies or
 // hides a tool anywhere else.

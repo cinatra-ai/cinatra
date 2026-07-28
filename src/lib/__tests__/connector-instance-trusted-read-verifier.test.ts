@@ -20,7 +20,7 @@ import {
 // eligibility CONJUNCTION: every unproven conjunct ejects with its typed
 // reason, uncertainty never adds a name, and the empty set is the degenerate
 // safe outcome. The impure builder around this core is pinned in
-// wordpress-native-read-injection.test.ts.
+// connector-instance-native-read-injection.test.ts.
 
 // ---------------------------------------------------------------------------
 // canonicalizeSchemaForFingerprint — the strict canonicalization spec.

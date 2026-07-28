@@ -21,7 +21,7 @@ import {
   NATIVE_READ_INJECTION_PRIMITIVE,
   createWordPressNativeReadInjectionMembers,
   type WordPressNativeReadInjectionDeps,
-} from "@/lib/wordpress-native-read-injection";
+} from "@/lib/connector-instance-native-read-injection";
 
 // cinatra#2019 S4 — the impure builder around the pure verifier: opt-in +
 // content-exact consent, dual-layer surface enforcement, ambient-actor USE
