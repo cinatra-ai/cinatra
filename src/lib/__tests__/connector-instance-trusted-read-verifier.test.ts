@@ -142,6 +142,21 @@ describe("canonicalizeSchemaForFingerprint", () => {
     },
   );
 
+  it("rejects percent-escapes in a ref instead of resolving them as literal key text", () => {
+    // `$ref` is a URI reference: a spec-conforming consumer percent-decodes
+    // the fragment BEFORE pointer evaluation, so `a%2Fb` means the two
+    // segments `a`/`b` to it. Fingerprinting the literal `"a%2Fb"` property
+    // here would bind a different document view than that consumer executes —
+    // any `%` in an accepted `#/` ref is ineligible, even when a literal
+    // property of that exact name exists.
+    expect(
+      canonicalizeSchemaForFingerprint({
+        properties: { x: { $ref: "#/definitions/a%2Fb" } },
+        definitions: { "a%2Fb": { type: "null" }, a: { b: { type: "null" } } },
+      }),
+    ).toEqual({ ok: false, reason: "unresolvable_ref" });
+  });
+
   it("decodes ~01 to the literal ~1 (escape order pinned)", () => {
     const result = canonicalizeSchemaForFingerprint({
       properties: { x: { $ref: "#/definitions/~01" } },

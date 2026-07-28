@@ -41,8 +41,9 @@
 // failure, never a fingerprint) on ANY of: a non-object schema (boolean
 // schemas included), presence of `$id`/`$anchor`/`$dynamicRef`/`$dynamicAnchor`
 // anywhere, a `$ref` that is not a same-document `#/…` JSON pointer, a `$ref`
-// carrying sibling keys (draft-ambiguous), an unresolvable pointer, a
-// reference cycle, or nesting depth > 64. Internal `#/` refs are resolved by
+// carrying sibling keys (draft-ambiguous), an unresolvable pointer (which
+// includes any percent-escaped or invalidly-`~`-escaped segment — only plain
+// unencoded pointers are accepted), a reference cycle, or nesting depth > 64. Internal `#/` refs are resolved by
 // inlining before canonicalization. Canonical form = recursive object-key sort
 // (arrays order-preserved), compact JSON.stringify serialization. NO unicode
 // normalization: both comparands come from the same JSON parse, so
@@ -104,15 +105,18 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** A pointer segment may only use the two RFC 6901 escapes (`~0`, `~1`). Any
- * other `~` use (`~2`, a trailing `~`) is an INVALID pointer — resolving it as
- * literal characters would diverge from spec-conforming resolvers, so it is
- * typed-ineligible instead of guessed. */
-const VALID_POINTER_SEGMENT = /^(?:[^~]|~[01])*$/;
+/** A pointer segment may only use the two RFC 6901 escapes (`~0`, `~1`), and
+ * may not contain `%` at all. Any other `~` use (`~2`, a trailing `~`) is an
+ * invalid pointer, and a `%` is a URI-fragment percent-escape that a
+ * spec-conforming `$ref` consumer would DECODE before pointer evaluation
+ * (`a%2Fb` becomes the two segments `a`/`b` there) — resolving either as
+ * literal key text would make this verifier fingerprint a different document
+ * view than other consumers execute. Both are typed-ineligible instead of
+ * guessed: the accepted subset is plain, unencoded `#/` pointers only. */
+const VALID_POINTER_SEGMENT = /^(?:[^~%]|~[01])*$/;
 
 /** RFC 6901 pointer segment unescape (`~1` → `/`, `~0` → `~`; validated by
- * `VALID_POINTER_SEGMENT` first). Deliberately no percent-decoding: an
- * URI-encoded pointer simply fails to resolve — closed. */
+ * `VALID_POINTER_SEGMENT` first, which also refuses percent-escapes). */
 function unescapePointerSegment(segment: string): string {
   return segment.replaceAll("~1", "/").replaceAll("~0", "~");
 }
