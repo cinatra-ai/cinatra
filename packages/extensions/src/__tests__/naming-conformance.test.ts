@@ -248,11 +248,12 @@ function isAllowedDirShapeForKind(dirBasename: string, kind: Kind, packageName: 
   // packaging contract (cinatra#2089, epic #2086 S2) gives one `kind:"skill"`
   // extension exactly one Anthropic-schema bundle, so a plural name reads as a
   // pack. The retired plural `-skills` stays accepted while the cinatra#2090
-  // migration renames the four packages that still carry it (assistant-skills,
-  // blog-skills, drupal-skills, skill-creator-skills); the skill-packaging
-  // verdict is the authority that refuses a plural package NAME, and it waives
-  // exactly those four by name in its expiring ledger. Same shape as the
-  // artifact branch above: `-skills` does not end with the singular `-skill`.
+  // migration renames the packages that still carry it — down to ONE
+  // (assistant-skills, the 18-bundle pack whose consolidation is the last item
+  // of that wave); the skill-packaging verdict is the authority that refuses a
+  // plural package NAME, and it waives exactly that one by name in its expiring
+  // ledger. Same shape as the artifact branch above: `-skills` does not end
+  // with the singular `-skill`.
   if (kind === "skill") {
     return dirBasename.endsWith("-skill") || dirBasename.endsWith("-skills");
   }
