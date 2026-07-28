@@ -260,13 +260,17 @@ async function main() {
       ["headless", st.headlessRunId],
     ] as const) {
       const [runRow] = await sql(
-        `select id, org_id, human_present, input_params from "${schema}".agent_runs where id=$1`,
+        `select id, org_id, run_by, source_type, human_present, input_params from "${schema}".agent_runs where id=$1`,
         [runId],
       );
       const hold = await maybeHoldRunForRecommendation({
         run: {
           id: String(runRow.id),
           orgId: String(runRow.org_id),
+          // cinatra#2148: the hold resolves its candidate set through the RUN's
+          // own actor, so the projection carries the run's owner + source.
+          runBy: (runRow.run_by as string | null) ?? null,
+          sourceType: (runRow.source_type as string | null) ?? null,
           humanPresent: runRow.human_present as boolean | null,
           inputParams: runRow.input_params as never,
         },

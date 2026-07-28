@@ -1,8 +1,8 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// OrganizationDeleteDangerForm — the delete control of the `/organizations/[id]`
-// Manage tab's Danger zone card (cinatra#1510 remainder). Renders ONLY for a
+// OrganizationDeleteDangerForm — the delete control of the
+// `/organizations/[id]/settings` Danger zone card (cinatra#1510). Renders ONLY for a
 // viewer whose capabilities carry `canDelete` (org_owner, non-default org,
 // multi-org mode) — the panel hides the card entirely on structural blocks.
 //

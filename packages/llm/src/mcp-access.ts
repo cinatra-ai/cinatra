@@ -6,6 +6,7 @@
 
 import "server-only";
 
+import type { ExtensionToolboxBuildContext } from "@cinatra-ai/sdk-extensions";
 import type { LlmProvider, LlmMcpServerTool } from "./types";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import {
@@ -470,11 +471,12 @@ async function buildToolboxToolsForSlug(
   slug: string,
   provider: LlmProvider,
   skipRegistryFallback: boolean,
+  context?: ExtensionToolboxBuildContext,
 ): Promise<TaggedMcpServerTool[]> {
   try {
     const toolbox = await loadExternalMcpToolboxBySlug(slug);
     if (toolbox) {
-      return sanitizeExternalMcpToolboxTools(slug, await toolbox.buildTools(provider)).map(
+      return sanitizeExternalMcpToolboxTools(slug, await toolbox.buildTools(provider, context)).map(
         (tool) => ({ tool, origin: "managed" as const }),
       );
     }
@@ -543,6 +545,18 @@ export type BuildExternalMcpServerToolsOptions = {
    * through the manifest fallback either.
    */
   skipRegistryFallback?: boolean;
+  /**
+   * Host-built, identity-free toolbox build context (cinatra#2019 S4) —
+   * WHERE this injection is being assembled (surface) and, on run surfaces,
+   * WHICH connector instance the run is pinned to. Threaded verbatim into
+   * every first-party toolbox's `buildTools(provider, context)`; surface-
+   * gating toolboxes treat an ABSENT context as "emit nothing" (fail-closed
+   * on unwidened callers). Existing one-arg toolboxes ignore it — passing a
+   * context never changes their output. DELIBERATELY NOT threaded into the
+   * `llm-toolbox` capability-provider path (`buildAllToolboxProviderTools`):
+   * those providers do no per-instance site injection.
+   */
+  context?: ExtensionToolboxBuildContext;
 };
 
 /**
@@ -579,7 +593,7 @@ export async function buildExternalMcpServerTools(
     const [manifestToolLists, capabilityTools] = await Promise.all([
       Promise.all(
         slugs.map((slug) =>
-          buildToolboxToolsForSlug(slug, provider, options.skipRegistryFallback === true),
+          buildToolboxToolsForSlug(slug, provider, options.skipRegistryFallback === true, options.context),
         ),
       ),
       // Registration-driven: every `llm-toolbox` capability provider (apify

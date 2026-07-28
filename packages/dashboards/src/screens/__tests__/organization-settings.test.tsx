@@ -144,6 +144,12 @@ describe("organization settings screen (#1734)", () => {
     expect(html).not.toContain("data-cinatra-org-manage");
     expect(html).not.toContain("settings-form");
     expect(html).not.toContain("delete-danger-form");
+    // viewerCanManageMembers=false threading (cinatra#1510): the access-model
+    // copy names the owning role — no pointer to a card this viewer can't see,
+    // and no dead-end /configuration/workspace link.
+    expect(html).toContain("managed by this organization");
+    expect(html).not.toContain("card below");
+    expect(html).not.toContain("/configuration/workspace");
     // Negative data-loading pins: no invitations read, no blocker count.
     expect(h.execute).not.toHaveBeenCalled();
     expect(h.countBlockers).not.toHaveBeenCalled();
@@ -164,6 +170,11 @@ describe("organization settings screen (#1734)", () => {
     expect(html).toContain("settings-form");
     expect(html).toContain("members-manager");
     expect(html).toContain("delete-danger-form");
+    // viewerCanManageMembers=true threading (cinatra#1510): the access-model
+    // copy points at the Members & invitations card rendered below.
+    expect(html).toContain("card below");
+    expect(html).not.toContain("managed by this organization");
+    expect(html).not.toContain("/configuration/workspace");
     expect(h.execute).toHaveBeenCalledTimes(1);
     expect(h.countBlockers).toHaveBeenCalledTimes(1);
   });
