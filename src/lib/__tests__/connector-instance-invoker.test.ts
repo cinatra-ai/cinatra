@@ -4,7 +4,11 @@ import {
   type ConnectorInstanceInvokerDeps,
   type InvokerTrustedActor,
 } from "@/lib/connector-instance-invoker";
-import { InvokerError } from "@/lib/connector-instance-mcp-transport";
+import {
+  InvokerError,
+  PENDING_CONFIRMATION_MESSAGE_PREFIX,
+} from "@/lib/connector-instance-mcp-transport";
+import { buildPendingConfirmationMessage } from "@/lib/connector-instance-destructive-hook";
 import {
   CATALOG_DEFAULT_SERVER_ID,
   createInMemoryConnectorInstanceCatalogCache,
@@ -14,6 +18,10 @@ import type { InstanceToolPolicyRecord } from "@cinatra-ai/mcp-server/instance-t
 
 // cinatra#2017 S2 slice K6 — the governed invoker core (design §1.2 order, M4
 // single pass, B1 pin, §3 triad/routing). Fully mocked deps — no live stack.
+
+// Real-signature spy type for the step-3 hook so `mock.calls` rows are
+// indexable, typed tuples.
+type DestructiveHookFire = NonNullable<ConnectorInstanceInvokerDeps["destructiveHook"]>["fire"];
 
 const ACTOR: InvokerTrustedActor = {
   actor: { principalType: "HumanUser", principalId: "u1", organizationId: "org1" } as never,
@@ -268,20 +276,21 @@ describe("invokeConnectorInstanceTool — serverId is NOT caller-mintable (cache
   });
 });
 
-describe("invokeConnectorInstanceTool — destructive hook (step 3, S5 seam)", () => {
-  it("fires the hook only when enabled AND the resolved tool classifies destructive", async () => {
-    const fire = vi.fn(async () => {});
-    const { deps } = makeDeps({ destructiveHook: { enabled: () => true, fire } });
+describe("invokeConnectorInstanceTool — destructive hook (step 3, cinatra#2020 S5 blocking)", () => {
+  it("fires the hook when enabled AND the resolved tool classifies destructive; a VOID verdict (S2-era impls/mocks) executes", async () => {
+    const fire = vi.fn<DestructiveHookFire>(async () => {});
+    const { deps, callWireTool } = makeDeps({ destructiveHook: { enabled: () => true, fire } });
     deps.cache.set("inst-1", triadSnapshot([{ name: "danger", rawAnnotations: { destructiveHint: true } }]));
     await invokeConnectorInstanceTool(
       { connectorKey: "wordpress", toolName: "danger", args: {}, actor: ACTOR },
       deps,
     );
     expect(fire).toHaveBeenCalledTimes(1);
+    expect(callWireTool).toHaveBeenCalledTimes(1); // void = continue (back-compat)
   });
 
   it("does NOT fire for a read-classified tool", async () => {
-    const fire = vi.fn(async () => {});
+    const fire = vi.fn<DestructiveHookFire>(async () => {});
     const { deps } = makeDeps({ destructiveHook: { enabled: () => true, fire } });
     deps.cache.set("inst-1", triadSnapshot([{ name: "safe", rawAnnotations: { readOnlyHint: true } }]));
     await invokeConnectorInstanceTool(
@@ -289,6 +298,157 @@ describe("invokeConnectorInstanceTool — destructive hook (step 3, S5 seam)", (
       deps,
     );
     expect(fire).not.toHaveBeenCalled();
+  });
+
+  it("BLOCKS on a park verdict: typed pending_confirmation, verdict-message passthrough (§2.1 contract), NO wire call, NO step-5 audit", async () => {
+    const message = buildPendingConfirmationMessage({
+      toolName: "danger",
+      serverId: CATALOG_DEFAULT_SERVER_ID,
+      pendingCallId: "cipc_x1",
+    });
+    const fire = vi.fn<DestructiveHookFire>(async () => ({
+      action: "park" as const,
+      pendingCallId: "cipc_x1",
+      expiresAt: "2026-07-28T10:15:00.000Z",
+      message,
+    }));
+    const { deps, callWireTool, audit } = makeDeps({
+      destructiveHook: { enabled: () => true, fire },
+    });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "danger", rawAnnotations: { destructiveHint: true } }]));
+    const err = await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "danger", args: { id: 1 }, actor: ACTOR },
+      deps,
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InvokerError);
+    expect((err as InvokerError).code).toBe("pending_confirmation");
+    // The M1 path renders error.message as the model-facing tool result: the
+    // STABLE prefix + the no-retry directive must survive the passthrough.
+    expect((err as InvokerError).message).toBe(message);
+    expect((err as InvokerError).message.startsWith(PENDING_CONFIRMATION_MESSAGE_PREFIX)).toBe(true);
+    expect((err as InvokerError).message).toContain("Do NOT retry or re-issue this call");
+    expect(callWireTool).not.toHaveBeenCalled();
+    // The park path writes its own audit row inside the hook impl — the
+    // invoker's step-5 execution audit must NOT record a parked call.
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("a continue verdict (surface default off / org-disabled) executes normally", async () => {
+    const fire = vi.fn<DestructiveHookFire>(async () => ({ action: "continue" as const, reason: "surface_default_off" as const }));
+    const { deps, callWireTool, audit } = makeDeps({
+      destructiveHook: { enabled: () => true, fire },
+    });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "danger", rawAnnotations: { destructiveHint: true } }]));
+    const result = await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "danger", args: {}, actor: ACTOR },
+      deps,
+    );
+    expect(result).toEqual({ success: true, data: { ok: 1 } });
+    expect(callWireTool).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledTimes(1); // ordinary step-5 success audit
+  });
+
+  it("FLOOR trigger (D9): a known-destructive NAME with EMPTY annotations (write-class) still fires — floorHit true, derivedClass write", async () => {
+    const fire = vi.fn<DestructiveHookFire>(async () => ({
+      action: "park" as const,
+      pendingCallId: "cipc_f1",
+      expiresAt: "2026-07-28T10:15:00.000Z",
+      message: `${PENDING_CONFIRMATION_MESSAGE_PREFIX} parked`,
+    }));
+    const { deps, callWireTool } = makeDeps({ destructiveHook: { enabled: () => true, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "ewpa/delete-user", rawAnnotations: {} }]));
+    const err = await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "ewpa/delete-user", args: {}, actor: ACTOR },
+      deps,
+    ).catch((e: unknown) => e);
+    expect((err as InvokerError).code).toBe("pending_confirmation");
+    expect(fire.mock.calls[0][0]).toMatchObject({ derivedClass: "write", floorHit: true });
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+
+  it("annotation-destructive NON-floor name fires with floorHit false", async () => {
+    const fire = vi.fn<DestructiveHookFire>(async () => {});
+    const { deps } = makeDeps({ destructiveHook: { enabled: () => true, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "danger", rawAnnotations: { destructiveHint: true } }]));
+    await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "danger", args: {}, actor: ACTOR },
+      deps,
+    );
+    expect(fire.mock.calls[0][0]).toMatchObject({ derivedClass: "destructive", floorHit: false });
+  });
+
+  it("write-class NON-floor name: no fire, executes (the S2 write path is untouched)", async () => {
+    const fire = vi.fn<DestructiveHookFire>(async () => {});
+    const { deps, callWireTool } = makeDeps({ destructiveHook: { enabled: () => true, fire } });
+    await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "ewpa/create-post", args: {}, actor: ACTOR },
+      deps,
+    );
+    expect(fire).not.toHaveBeenCalled();
+    expect(callWireTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("enabled() false → never fires, executes (the S2 kill-switch semantics)", async () => {
+    const fire = vi.fn<DestructiveHookFire>(async () => {});
+    const { deps, callWireTool } = makeDeps({ destructiveHook: { enabled: () => false, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "core/delete-post", rawAnnotations: { destructiveHint: true } }]));
+    await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "core/delete-post", args: {}, actor: ACTOR },
+      deps,
+    );
+    expect(fire).not.toHaveBeenCalled();
+    expect(callWireTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("fire input carries the full widened park material (§2.3): args, class flags, surface, endpoint, tool-shape, correlation", async () => {
+    const fire = vi.fn<DestructiveHookFire>(async () => {});
+    const { deps } = makeDeps({ destructiveHook: { enabled: () => true, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "danger", rawAnnotations: { destructiveHint: true } }]));
+    await invokeConnectorInstanceTool(
+      {
+        connectorKey: "wordpress",
+        toolName: "danger",
+        args: { id: 3 },
+        actor: ACTOR,
+        sourceType: "chat",
+        causation: "run-1",
+        intent: "cleanup",
+      },
+      deps,
+    );
+    expect(fire.mock.calls[0][0]).toMatchObject({
+      connectorKey: "wordpress",
+      instanceId: "inst-1",
+      serverId: CATALOG_DEFAULT_SERVER_ID,
+      toolName: "danger",
+      args: { id: 3 },
+      derivedClass: "destructive",
+      floorHit: false,
+      sourceType: "chat",
+      endpointUrl: "https://site/x", // URL string only — never the auth header
+      inputSchema: {},
+      rawAnnotations: { destructiveHint: true },
+      intent: "cleanup",
+      primitiveName: "connector_instance_tool_call",
+      catalogRevision: "rev-1",
+      causation: "run-1",
+    });
+    const serialized = JSON.stringify(fire.mock.calls[0][0]);
+    expect(serialized).not.toContain("Basic zzz"); // the resolved auth header must not leak into the hook input
+  });
+
+  it("a typed refusal thrown inside fire (confirmation_unavailable) propagates fail-closed — no wire call", async () => {
+    const fire = vi.fn<DestructiveHookFire>(async () => {
+      throw new InvokerError("confirmation_unavailable", "subsystem unavailable — the call was NOT executed");
+    });
+    const { deps, callWireTool } = makeDeps({ destructiveHook: { enabled: () => true, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "danger", rawAnnotations: { destructiveHint: true } }]));
+    const err = await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "danger", args: {}, actor: ACTOR },
+      deps,
+    ).catch((e: unknown) => e);
+    expect((err as InvokerError).code).toBe("confirmation_unavailable");
+    expect(callWireTool).not.toHaveBeenCalled();
   });
 });
 

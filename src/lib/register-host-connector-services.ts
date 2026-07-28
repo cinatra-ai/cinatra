@@ -223,6 +223,16 @@ import {
   createWordPressNativeInjectionConsentMembers,
   type WordPressNativeInjectionConsentSurface,
 } from "@/lib/connector-instance-native-injection-consent";
+// cinatra#2020 S5 (PR-3) — the destructive-confirmation hook impl. The surface
+// matrix + park + §7.3 audits live in the sibling module; this binder only
+// BINDS it into the invoker deps literal, derives the host-side
+// ConfirmationSurface from the VERIFIED delegation (D6), and stashes the
+// frame's {runId, clientId} forensics into the park-row context.
+import {
+  buildConnectorInstanceDestructiveHook,
+  deriveConfirmationSurface,
+  type ConfirmationSurface,
+} from "@/lib/connector-instance-destructive-hook";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import { logAuditEvent } from "@/lib/authz/audit";
 import { Buffer } from "node:buffer";
@@ -623,8 +633,24 @@ function buildConnectorInstanceInvokerDeps(boundConnectorKey: string): Connector
         policyVersion: "connector-instance-invoker",
         metadata: { ...event.metadata, ...(event.causation ? { causation: event.causation } : {}) },
       }),
-    // destructiveHook is INTENTIONALLY absent in S2 — S2 provides the classifier +
-    // the hook POINT; the subsystem (persistence/UI/resume-token) is S5 (N2).
+    // cinatra#2020 S5 (PR-3) — the destructive-confirmation hook, ARMED by
+    // binding (the S7 entry criterion is "S5 stages merged AND the hook bound +
+    // enabled", design §7.2). Dark today by construction: only pin-carrying
+    // delegations (agent_run / public_site_widget) can reach the invoker and
+    // both default confirmation OFF in the D7 matrix — chat exposure is S7's
+    // switch. The impl owns matrix + park + audits; the binder stashes the
+    // ambient frame's {runId, clientId} as park-row forensics (correlation
+    // only, never a decision input).
+    destructiveHook: buildConnectorInstanceDestructiveHook({
+      getForensicsContext: () => {
+        const frame = mcpRequestContextStorage.getStore();
+        if (!frame) return undefined;
+        return {
+          ...(frame.runId ? { runId: frame.runId } : {}),
+          ...(frame.clientId ? { clientId: frame.clientId } : {}),
+        };
+      },
+    }),
     warnAbsentPolicy: (connectorKey, instanceId) => {
       console.warn(
         `[connector-instance-invoker] no persisted policy for ${connectorKey}/${instanceId} — ` +
@@ -653,10 +679,18 @@ function buildConnectorInstanceInvokerDeps(boundConnectorKey: string): Connector
   };
 }
 
-/** Resolve the HOST-DERIVED connectorKey + trusted actor for a guard call. */
+/** Resolve the HOST-DERIVED connectorKey + trusted actor for a guard call.
+ * cinatra#2020 S5 (D6): additionally derives the ConfirmationSurface from the
+ * VERIFIED `delegatedActor.delegation` discriminant (null → `session`) — the
+ * members pass it as the invoker input's existing `sourceType` (guard-set;
+ * the connector-facing shape has no such field, so it is unforgeable by
+ * construction — the M6 pattern) — plus the ambient frame `runId` the members
+ * forward as advisory `causation`. */
 async function resolveConnectorInstanceInvokerContext(): Promise<{
   actor: InvokerTrustedActor;
   boundConnectorKey: string;
+  surface: ConfirmationSurface;
+  frameRunId?: string;
 }> {
   const frame = mcpRequestContextStorage.getStore();
   const delegated = frame?.delegatedActor;
@@ -677,8 +711,18 @@ async function resolveConnectorInstanceInvokerContext(): Promise<{
     // no_trusted_actor; surface it here before touching any endpoint/cache).
     throw new InstanceWriteAuthorityError("no_trusted_actor");
   }
-  return { actor: { ...resolved, connectorInstancePin: pin }, boundConnectorKey: pin.connectorKey };
+  return {
+    actor: { ...resolved, connectorInstancePin: pin },
+    boundConnectorKey: pin.connectorKey,
+    surface: deriveConfirmationSurface(delegated?.delegation),
+    ...(frame?.runId ? { frameRunId: frame.runId } : {}),
+  };
 }
+
+// cinatra#2020 S5 §8 — the ONE additive builder export (no structural
+// extraction): the PR-4 resume executor imports THIS builder so park-time and
+// resume-time invoker deps are the same object graph by construction.
+export { buildConnectorInstanceInvokerDeps };
 
 /**
  * Publish the per-concern host connector services into the capability
@@ -1158,7 +1202,8 @@ export function registerHostConnectorServices(): void {
   // reaches these until S7 (delegated deny-by-default keeps them off, untouched).
   register(svc.connectorInstanceInvoker, {
     invokeSiteTool: async (input) => {
-      const { actor, boundConnectorKey } = await resolveConnectorInstanceInvokerContext();
+      const { actor, boundConnectorKey, surface, frameRunId } =
+        await resolveConnectorInstanceInvokerContext();
       return invokeConnectorInstanceTool(
         {
           connectorKey: boundConnectorKey,
@@ -1168,12 +1213,19 @@ export function registerHostConnectorServices(): void {
           ...(input.serverId ? { serverId: input.serverId } : {}),
           actor,
           primitiveName: `${boundConnectorKey}_site_tool_call`,
+          // cinatra#2020 D6 — host-derived surface as `sourceType` (also makes
+          // the existing widget platform-admin suppression at the USE gate
+          // apply to widget-surface invoker calls) + frame runId as advisory
+          // causation for the audit/park correlation trail.
+          sourceType: surface,
+          ...(frameRunId ? { causation: frameRunId } : {}),
         },
         buildConnectorInstanceInvokerDeps(boundConnectorKey),
       );
     },
     listSiteTools: async (input) => {
-      const { actor, boundConnectorKey } = await resolveConnectorInstanceInvokerContext();
+      const { actor, boundConnectorKey, surface, frameRunId } =
+        await resolveConnectorInstanceInvokerContext();
       return listConnectorInstanceTools(
         {
           connectorKey: boundConnectorKey,
@@ -1182,6 +1234,8 @@ export function registerHostConnectorServices(): void {
           ...(input.cursor ? { cursor: input.cursor } : {}),
           actor,
           primitiveName: `${boundConnectorKey}_site_tools_list`,
+          sourceType: surface,
+          ...(frameRunId ? { causation: frameRunId } : {}),
         },
         buildConnectorInstanceInvokerDeps(boundConnectorKey),
       );
