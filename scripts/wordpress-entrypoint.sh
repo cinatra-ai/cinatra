@@ -250,7 +250,7 @@ ensure_enable_abilities_for_mcp() {
 }
 
 activate_plugins() {
-  log "Activating mcp-adapter + fixture-thirdparty-mcp + enable-abilities-for-mcp + cinatra..."
+  log "Activating mcp-adapter + fixture-thirdparty-mcp + scale-smoke-plugin + enable-abilities-for-mcp + cinatra..."
   # Deterministic order (WP 6.9 core Abilities API is always loaded before
   # plugins, so there is no abilities-api-before-adapter constraint):
   #   1. mcp-adapter                — MCP server infrastructure / route factory
@@ -258,12 +258,18 @@ activate_plugins() {
   #                                    dedicated MCP server (activated BEFORE eafm
   #                                    so its abilities pre-exist regardless of
   #                                    eafm's discovery lifecycle — #2016 S1)
-  #   3. enable-abilities-for-mcp   — exposes WP-core + registered abilities as MCP tools
-  #   4. cinatra                    — companion glue (bind-mounted)
+  #   3. scale-smoke-plugin         — registers scalesmoke/* read abilities + its
+  #                                    own dedicated first-class MCP server
+  #                                    (activated BEFORE eafm for the same reason;
+  #                                    cinatra#2019 provider-scale proof)
+  #   4. enable-abilities-for-mcp   — exposes WP-core + registered abilities as MCP tools
+  #   5. cinatra                    — companion glue (bind-mounted)
   # Activate individually so one failure doesn't block the rest; log result.
   wp --path="$WP_PATH" --allow-root plugin activate mcp-adapter 2>&1 \
     | grep -v "already active" || true
   wp --path="$WP_PATH" --allow-root plugin activate fixture-thirdparty-mcp 2>&1 \
+    | grep -v "already active" || true
+  wp --path="$WP_PATH" --allow-root plugin activate scale-smoke-plugin 2>&1 \
     | grep -v "already active" || true
   wp --path="$WP_PATH" --allow-root plugin activate enable-abilities-for-mcp 2>&1 \
     | grep -v "already active" || true
