@@ -10,6 +10,7 @@ import {
   upsertServer,
   retireServer,
   deletePresentUnenrolledServer,
+  deleteManualServer,
   retireServersForInstance,
   recordServerStatus,
   recordServerExposureMode,
@@ -235,6 +236,14 @@ function makeStore(): {
       const [ck, iid, sid] = v as [string, string, string];
       const k = key(ck, iid, sid);
       const row = servers.get(k);
+      if (text.includes("source = 'manual'")) {
+        // deleteManualServer — manual-only pin
+        if (row && row.source === "manual") {
+          servers.delete(k);
+          return [{ server_id: sid }];
+        }
+        return [];
+      }
       if (row && row.status === "present_unenrolled") {
         servers.delete(k);
         return [{ server_id: sid }];
@@ -491,6 +500,30 @@ describe("deletePresentUnenrolledServer — informational replace-semantics (§5
     await upsertServer(enrolled, deps);
     expect(await deletePresentUnenrolledServer("wordpress", "i1", enrolled.serverId, deps)).toEqual({ deleted: false });
     expect(await readServer("wordpress", "i1", enrolled.serverId, deps)).not.toBeNull();
+  });
+});
+
+describe("deleteManualServer — manual-only hard delete (§5 manual routes)", () => {
+  it("deletes a manual row; refuses discovered and default rows (source pin)", async () => {
+    const { deps } = makeStore();
+    const manual = {
+      connectorKey: "wordpress", instanceId: "i1",
+      serverId: mintServerId({ kind: "manual", instanceId: "i1", restPath: "/mcp/manual" }),
+      source: "manual" as const, status: "enrolled" as const, restPath: "/mcp/manual",
+      createdBy: "admin-user", enrolledAt: TS, verifiedAt: TS,
+    };
+    await upsertServer(manual, deps);
+    expect(await deleteManualServer("wordpress", "i1", manual.serverId, deps)).toEqual({ deleted: true });
+    expect(await readServer("wordpress", "i1", manual.serverId, deps)).toBeNull();
+
+    const disc = discovered({ adapterServerId: "vendor-a" });
+    await upsertServer(disc, deps);
+    expect(await deleteManualServer("wordpress", "i1", disc.serverId, deps)).toEqual({ deleted: false });
+    expect(await readServer("wordpress", "i1", disc.serverId, deps)).not.toBeNull();
+
+    await ensureDefaultServerEnrollment({ connectorKey: "wordpress", instanceId: "i1" }, deps);
+    expect(await deleteManualServer("wordpress", "i1", CATALOG_DEFAULT_SERVER_ID, deps)).toEqual({ deleted: false });
+    expect(await readServer("wordpress", "i1", CATALOG_DEFAULT_SERVER_ID, deps)).not.toBeNull();
   });
 });
 
