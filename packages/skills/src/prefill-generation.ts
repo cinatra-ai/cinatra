@@ -1,5 +1,6 @@
 import "server-only";
-import { runResolvedSkillAwareDeterministicLlmTask, resolveConfiguredLlmRuntime, buildLlmMcpServerTool } from "@cinatra-ai/llm";
+import { runResolvedDeterministicLlmTask, resolveConfiguredLlmRuntime } from "@cinatra-ai/llm";
+import { readSkillFileContent } from "./skills-store";
 import { updateSkillPrefillTextInDatabase, readSkillCatalogFromDatabase } from "@/lib/database";
 import { ensureSkillForCapability } from "./extension-skill-resolver";
 
@@ -15,9 +16,41 @@ function buildPrefillUserPrompt(skillContent: string): string {
 }
 
 /**
- * Generate prefill text for a single skill via the skill-aware orchestration path.
- * The skill-prefill-generation meta-skill is delivered as a tool via skillIds so
- * it appears in the LLM request log rather than being embedded in the system prompt.
+ * Read the prefill meta-skill's SKILL.md body from the catalog row the
+ * capability resolver just registered. Fails LOUD: an unreadable meta-skill is a
+ * configuration error, and generating prefill text without its instructions
+ * would silently produce garbage.
+ */
+async function readPrefillMetaSkillBody(prefillSkillId: string): Promise<string> {
+  const catalog = readSkillCatalogFromDatabase();
+  const record = catalog.skills.find(
+    (entry) => (entry as Record<string, unknown>).id === prefillSkillId,
+  ) as Record<string, unknown> | undefined;
+  const inlineBody =
+    typeof record?.content === "string" ? record.content.trim() : "";
+  if (inlineBody) return inlineBody;
+  const sourcePath =
+    typeof record?.sourcePath === "string" ? record.sourcePath : "";
+  if (sourcePath) {
+    const fromDisk = (await readSkillFileContent(sourcePath)).trim();
+    if (fromDisk) return fromDisk;
+  }
+  throw new Error(
+    `The skill-prefill-generation meta-skill "${prefillSkillId}" resolved to no readable body.`,
+  );
+}
+
+/**
+ * Generate prefill text for a single skill.
+ *
+ * cinatra#2091 S4 — prefill generation LEAVES THE INJECTION WORLD. Its
+ * meta-skill is an INTERNAL skill (S3): it is never assigned to an agent, never
+ * uploaded, and it instructs the generator rather than the run. Delivering it
+ * through the skill-injection contract would have required an intent for a
+ * caller that has no run, no agent, and no user — so it is now read CORE-SIDE as
+ * plain prompt context and dispatched through the NON-skill-aware API. That is
+ * the same bytes reaching the model, minus a whole injection surface.
+ *
  * Returns the trimmed text or null if the model returned an empty response.
  * Re-throws any LLM error so the caller (the BullMQ job) can decide whether
  * to continue with other skills or abort.
@@ -31,21 +64,21 @@ export async function generateSkillPrefillText(skill: {
   if (!runtime) {
     throw new Error("No LLM provider configured for skill prefill generation.");
   }
-  // Pass the Cinatra MCP tool explicitly so the deduplication guard in
-  // runResolvedSkillAwareDeterministicLlmTask fires and skips injecting
-  // registered external MCPs (e.g. Apify) that have no role here.
-  const cinatraMcpTool = await buildLlmMcpServerTool(runtime.provider);
   // Resolve the meta-skill by capability (lazily registering its SKILL.md body
-  // into the catalog) before resolution.
+  // into the catalog), then read its body as PLAIN PROMPT CONTEXT.
   const prefillSkillId = await ensureSkillForCapability(SKILL_PREFILL_CAPABILITY);
-  const response = await runResolvedSkillAwareDeterministicLlmTask({
+  const prefillInstructions = await readPrefillMetaSkillBody(prefillSkillId);
+  const response = await runResolvedDeterministicLlmTask({
     runtime,
-    system: "",
+    system: prefillInstructions,
     user: buildPrefillUserPrompt(skill.content),
-    skillIds: [prefillSkillId],
     maxOutputTokens: 80,
     logLabel: `skill-prefill-generation:${skill.id}`,
-    extraTools: cinatraMcpTool ? [cinatraMcpTool] : [],
+    // Declare the Cinatra self-MCP toolbox EXPLICITLY so the registered
+    // external MCPs (Apify, ...) that have no role here are never injected —
+    // the same net tool set the pre-contract call assembled through
+    // `extraTools` plus the skill-aware arm's dedup guard.
+    declaredToolboxIds: ["cinatra-mcp"],
   });
   const text = (response.text ?? "").trim();
   if (!text) {

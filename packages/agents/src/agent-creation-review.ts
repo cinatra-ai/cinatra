@@ -48,7 +48,7 @@ import {
 } from "./validate-agent-json";
 import { scanOasForRuntimeInvariantFindings } from "./validate-oas-runtime-invariants";
 import { resolveDevExtensionSourceRoot } from "./agent-runtime-mount";
-import { requireAgentRole, agentRoleDirSlug } from "./agent-roles";
+import { requireAgentRole, agentRoleDirSlug, type KnownAgentRole } from "./agent-roles";
 import {
   mergeReviewLanes,
   restampLaneSource,
@@ -62,7 +62,16 @@ import type { ReviewFinding } from "./validate-agent-json";
 import {
   runDeterministicLlmTask,
   runSkillAwareDeterministicLlmTask,
+  injectedSkillSetCatalogIds,
 } from "@cinatra-ai/llm";
+import { resolveInjectedSkillSet } from "@cinatra-ai/skills/injection";
+import type {
+  ResolvedInjectedSkillSet,
+  ReviewerLane,
+  InjectionAuthorization,
+  InjectionResolverPorts,
+  InjectionSkillRef,
+} from "@cinatra-ai/skills/injection";
 // Native MCP path doesn't establish an actor frame for the LLM
 // orchestration ALS. Without this, `runDeterministicLlmTask` throws
 // `ACTOR_CONTEXT_MISSING`. We derive an ActorContext from `request.actor`
@@ -281,6 +290,19 @@ type ReviewerPromptTemplate = {
  */
 // Lane label == role name (the lane labels are the stable security-semantic
 // identities; the role bindings resolve them to packages).
+/**
+ * The REVIEW lane slug (this module's stable security-semantic identity) mapped
+ * onto the injection contract's closed `ReviewerLane` enum.
+ */
+const LANE_SLUG_TO_REVIEWER_LANE: Record<
+  "agent-security-reviewer" | "agent-code-reviewer" | "agent-planner",
+  ReviewerLane
+> = {
+  "agent-security-reviewer": "security-reviewer",
+  "agent-code-reviewer": "code-reviewer",
+  "agent-planner": "planner",
+};
+
 const REVIEWER_LANE_TO_PACKAGE: Record<string, string> = Object.fromEntries(
   REVIEWER_LANE_ROLES.map((role) => [role, requireAgentRole(role)]),
 );
@@ -452,16 +474,20 @@ async function runLlmTask(input: {
   user: string;
   logLabel: string;
   actorContext: ReturnType<typeof buildActorContextFromPrimitive>;
-  /** Per-agent methodology skills resolved from the
-   *  catalog by `loadReviewerPrompt`. Empty ⇒ classic dispatch on the thin
-   *  OAS `system` alone (BACKWARDS-COMPAT for dev-fresh DB). */
-  skillIds: string[];
+  /**
+   * The AUTHORITATIVE injected set for this lane (cinatra#2091 S4), resolved
+   * from the `agent-creation-review` purpose with the lane bound server-side.
+   * An EMPTY set ⇒ classic dispatch on the thin OAS `system` alone
+   * (BACKWARDS-COMPAT for dev-fresh DB).
+   */
+  injectedSkills: ResolvedInjectedSkillSet;
 }): Promise<{ content: string }> {
+  const injectedCount = injectedSkillSetCatalogIds(input.injectedSkills).length;
   // Resolve provider/model + skill-aware routing via the config-driven
   // dispatch resolver. Pin plumbing is INERT until
   // `isAgentCreationPinActive()` returns true (gated on governance
   const dispatch = await resolveAgentCreationDispatch({
-    hasSkillIds: input.skillIds.length > 0,
+    hasSkillIds: injectedCount > 0,
   });
 
   // Belt-and-suspenders dispatch-site guard: Anthropic + empty skill ids
@@ -470,7 +496,7 @@ async function runLlmTask(input: {
   // native MCP fails). The preflight is the first gate; this throws
   // an `AgentCreationDispatchAbortError` that `handleAgentCreationReview`
   // converts to a deterministic blocker.
-  if (dispatch.provider === "anthropic" && input.skillIds.length === 0) {
+  if (dispatch.provider === "anthropic" && injectedCount === 0) {
     throw new AgentCreationDispatchAbortError(
       "anthropic_empty_skill_ids",
       `Cannot dispatch agent-creation lane to Anthropic with zero skills (function-tool fallback risk at anthropic.ts:466). logLabel="${input.logLabel}".`,
@@ -489,13 +515,11 @@ async function runLlmTask(input: {
   const response = dispatch.useSkillAware
     ? await runSkillAwareDeterministicLlmTask({
         ...common,
-        skillIds: input.skillIds,
+        injectedSkills: input.injectedSkills,
         // Creation path guard: the creation path is a FIXED pre-synced
-        // per-agent allowlist (2-3 skills). Pin "creation" explicitly so an
-        // over-cap is a HARD AnthropicSkillCapError — a fixed allowlist must
-        // NEVER be silently rank-and-truncated. Belt-and-suspenders: unset
-        // already means hard-cap, but stating intent here means a future
-        // default flip cannot silently truncate this allowlist.
+        // per-agent allowlist (2-3 skills). Pin "creation" explicitly so the
+        // delivery adapter's defence-in-depth cap is a HARD error — a fixed
+        // allowlist must NEVER be silently rank-and-truncated.
         skillSelectionMode: "creation",
       })
     : await runDeterministicLlmTask(common);
@@ -566,6 +590,85 @@ function parseReviewerResponse(
   }));
 }
 
+// ---------------------------------------------------------------------------
+// Injection ports for a REVIEW lane (cinatra#2091, epic #2086 S4). Co-located
+// with its only caller. The load-bearing property is `authorizeCreationReview`:
+// the reviewer LANE is bound HERE, server-side, by the orchestration that owns
+// the fan-out, and the derived skills are THAT LANE's own pinned methodology
+// dependencies — never the candidate agent's. A candidate under review can
+// therefore never influence which methodology its reviewer reads.
+// ---------------------------------------------------------------------------
+
+function toRefs(skillIds: readonly string[]): InjectionSkillRef[] {
+  return skillIds.map((skillId) => ({ skillId }));
+}
+
+/**
+ * The reviewer LANE (host-neutral vocabulary) mapped onto the agent ROLE that
+ * owns its methodology skills. Host code never names a concrete package for a
+ * lane — the role registry resolves it fail-loud from the generated bindings
+ * (cinatra#151 Stage 5b), so this module stays free of extension instance
+ * names.
+ */
+const REVIEWER_LANE_ROLE: Readonly<Record<ReviewerLane, KnownAgentRole>> =
+  Object.freeze({
+    "security-reviewer": "agent-security-reviewer",
+    "code-reviewer": "agent-code-reviewer",
+    planner: "agent-planner",
+  });
+
+/** Resolve a lane's methodology-owning package through the role registry. */
+export function reviewerLaneMethodologyPackage(lane: ReviewerLane): string {
+  return requireAgentRole(REVIEWER_LANE_ROLE[lane]);
+}
+
+export function buildCreationReviewInjectionPorts(input: {
+  /** The candidate the orchestration is reviewing. */
+  candidateAgentRef: string;
+  /** The lane THIS dispatch is, bound server-side by the fan-out. */
+  boundReviewerLane: ReviewerLane;
+  /**
+   * The lane's pre-resolved methodology skill ids. The fan-out resolves these
+   * ONCE before dispatching (per-lane catalog re-resolution serializes the
+   * concurrent dispatches), so they are passed in rather than re-read here.
+   */
+  preResolvedLaneSkillIds?: readonly string[];
+}): InjectionResolverPorts {
+  return {
+    async authorizeCreationReview(subject): Promise<InjectionAuthorization> {
+      if (subject.candidateAgentRef !== input.candidateAgentRef) {
+        return {
+          ok: false,
+          reason:
+            "the review intent names a candidate this orchestration did not bind",
+        };
+      }
+      // The lane is server-bound: an intent naming a DIFFERENT lane than the
+      // one this dispatch is would read another lane's methodology.
+      if (subject.reviewerLane !== input.boundReviewerLane) {
+        return {
+          ok: false,
+          reason: `the review intent claims lane "${subject.reviewerLane}" but this dispatch is bound to "${input.boundReviewerLane}"`,
+        };
+      }
+      return { ok: true };
+    },
+    async resolveLaneMethodologySkills({ reviewerLane }) {
+      // THAT LANE's own methodology — deliberately not the candidate's.
+      if (
+        reviewerLane === input.boundReviewerLane &&
+        input.preResolvedLaneSkillIds
+      ) {
+        return toRefs(input.preResolvedLaneSkillIds);
+      }
+      const laneSets = await resolveRequiredCreationSkillIds([
+        reviewerLaneMethodologyPackage(reviewerLane),
+      ]);
+      return toRefs(laneSets[0]?.skillIds ?? []);
+    },
+  };
+}
+
 async function dispatchLlmReviewer(
   slug: "agent-security-reviewer" | "agent-code-reviewer" | "agent-planner",
   fallbackSystem: string,
@@ -579,15 +682,32 @@ async function dispatchLlmReviewer(
 ): Promise<ReviewFinding[]> {
   const prompt = await loadReviewerPrompt(slug, fallbackSystem, actorContext, preResolvedSkillIds);
   const userPrompt = substituteUserTemplate(prompt.user, vars);
+  // cinatra#2091 S4 — the lane declares the `agent-creation-review` PURPOSE
+  // with its OWN lane identity bound here, server-side. The resolver derives
+  // THAT LANE's pinned methodology skills; the candidate under review can never
+  // influence which methodology its reviewer reads.
+  const reviewerLane = LANE_SLUG_TO_REVIEWER_LANE[slug];
+  const injectedSkills = await resolveInjectedSkillSet(
+    {
+      kind: "explicit-purpose",
+      purpose: "agent-creation-review",
+      subject: { candidateAgentRef: vars.packageSlug, reviewerLane },
+    },
+    buildCreationReviewInjectionPorts({
+      candidateAgentRef: vars.packageSlug,
+      boundReviewerLane: reviewerLane,
+      preResolvedLaneSkillIds: prompt.skillIds,
+    }),
+  );
   try {
     const result = await runLlmTask({
       system: prompt.system,
       user: userPrompt,
       logLabel: `agent_creation_review:${slug}`,
       actorContext,
-      // Methodology delivered via catalog-resolved
-      // skills, NOT inline OAS prose.
-      skillIds: prompt.skillIds,
+      // Methodology delivered via the typed injection contract, NOT inline OAS
+      // prose and never a caller-supplied skill-id list.
+      injectedSkills,
     });
     return parseReviewerResponse(result.content, slug);
   } catch (err) {
@@ -753,6 +873,13 @@ export async function handleAgentCreationReview(
       requiredCatalogSkillIds,
       laneSkillSets,
     });
+    // cinatra#2091 S4: the preflight now returns NON-blocking warnings too (a
+    // lane sitting exactly ON the per-request cap has no slot left for a
+    // personal delta). Surfacing them is the point — a discarded warning is the
+    // same as no warning.
+    for (const warning of preflight.warnings ?? []) {
+      console.warn(`[agent_creation_review] preflight ${warning.code}: ${warning.message}`);
+    }
     if (!preflight.ok) {
       // Compose a single deterministic-blocker MergedReviewReport per failure
       // so the merge layer surfaces every config error in one envelope.

@@ -21,6 +21,7 @@
  * does not drag in real provider SDKs / DB / Nango.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { emptyInjectedSkillSet } from "../../../tests/__helpers__/injected-skills";
 import type { GenerateInput, LlmResponse, StreamInput } from "../../types";
 import type { ActorContext } from "@/lib/authz/actor-context";
 
@@ -233,6 +234,7 @@ describe("flag ON + session + EXECUTOR — tool + cue delivered together (S2)", 
   it("runSkillAwareDeterministicLlmTask: sandbox tool AND cue reach the adapter", async () => {
     enablePlane();
     await runSkillAwareDeterministicLlmTask({
+      injectedSkills: await emptyInjectedSkillSet(),
       provider: "openai",
       system: "SYS",
       user: "hi",
@@ -370,6 +372,7 @@ describe("flag ON + session + EXECUTOR + declared ENVIRONMENT — matrix (S3, ci
     enablePlane();
     const rec = recordingExecutor();
     await runSkillAwareDeterministicLlmTask({
+      injectedSkills: await emptyInjectedSkillSet(),
       provider: "openai",
       system: "SYS",
       user: "hi",
@@ -426,6 +429,7 @@ describe("flag ON + session, NO executor binding — fail-closed, model usable (
   it("runSkillAwareDeterministicLlmTask warns capability_unavailable; stays stripped", async () => {
     enablePlane();
     await runSkillAwareDeterministicLlmTask({
+      injectedSkills: await emptyInjectedSkillSet(),
       provider: "openai",
       system: "SYS",
       user: "hi",
@@ -469,7 +473,8 @@ describe("flag ON + NO session — fail-closed per entry point, model still usab
 
   it("runSkillAwareDeterministicLlmTask warns no_session and still calls the adapter", async () => {
     enablePlane();
-    await runSkillAwareDeterministicLlmTask({ provider: "openai", system: "SYS", user: "hi", actorContext: ctx });
+    await runSkillAwareDeterministicLlmTask({
+      injectedSkills: await emptyInjectedSkillSet(), provider: "openai", system: "SYS", user: "hi", actorContext: ctx });
     expect(noSessionWarned("runSkillAwareDeterministicLlmTask")).toBe(true);
     expect(_capturedGenerate).toBeDefined();
   });

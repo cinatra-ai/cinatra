@@ -46,7 +46,19 @@ import {
   type AuditSkillPreview,
 } from "@cinatra-ai/agents/auditor-snapshot-store";
 import { AuditorSnapshotError } from "@cinatra-ai/agents/auditor-snapshot-errors";
-import { runSkillAwareDeterministicLlmTask, withActorContext } from "@cinatra-ai/llm";
+import {
+  runSkillAwareDeterministicLlmTask,
+  withActorContext,
+  injectedSkillSetCatalogIds,
+} from "@cinatra-ai/llm";
+import {
+  resolveInjectedSkillSet,
+  type InjectionAuthorization,
+  type InjectionResolverPorts,
+  type InjectionSkillRef,
+} from "@cinatra-ai/skills/injection";
+import { readRunSelectedSkillRevisions } from "@/lib/run-selected-skill-revisions";
+import { listSkillsUsedForRun } from "@/lib/agent-run-skills-used";
 import { buildActorContextFromRun } from "@/lib/authz/build-actor-context-from-run";
 import {
   createInProcessPrimitiveTransport,
@@ -161,6 +173,76 @@ const RUN_OUTPUT_SCHEMA = {
 
 type GeneratedPreview = { name: string; description: string; content: string };
 
+// ---------------------------------------------------------------------------
+// Injection ports for the audit surface (cinatra#2091, epic #2086 S4).
+// Co-located with its only caller: the factory closes over the run this route
+// already resolved AND ownership-checked.
+// ---------------------------------------------------------------------------
+
+export type AuditorInjectionPortsInput = {
+  /** The audited run, already resolved AND ownership-checked by the route. */
+  run: { id: string };
+};
+
+export function buildAuditorInjectionPorts(
+  input: AuditorInjectionPortsInput,
+): InjectionResolverPorts {
+  return {
+    async authorizeAuditAuthority(subject): Promise<InjectionAuthorization> {
+      if (subject.runId !== input.run.id) {
+        return {
+          ok: false,
+          reason:
+            "the audit intent names a run whose ownership this request did not verify",
+        };
+      }
+      return { ok: true, runOwnerUserId: null };
+    },
+    /**
+     * The RECORDED set of the audited run — never a caller-supplied list. The
+     * authoritative per-run selection wins; with no selection the exposure
+     * ledger's own rows for that run reproduce what the run actually saw.
+     */
+    async resolveRecordedRunSkills({ runId }) {
+      try {
+        const selected = readRunSelectedSkillRevisions(runId);
+        if (selected.length > 0) {
+          const seen = new Set<string>();
+          const refs: InjectionSkillRef[] = [];
+          for (const row of selected) {
+            if (seen.has(row.skillId)) continue;
+            seen.add(row.skillId);
+            refs.push({ skillId: row.skillId, revisionId: row.skillRevisionId });
+          }
+          return refs;
+        }
+      } catch (err) {
+        console.warn(
+          `[skill-injection] audited-run selection read failed for ${runId}:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+      try {
+        const used = listSkillsUsedForRun({ runId });
+        const seen = new Set<string>();
+        const refs: InjectionSkillRef[] = [];
+        for (const row of used) {
+          if (seen.has(row.skillId)) continue;
+          seen.add(row.skillId);
+          refs.push({ skillId: row.skillId });
+        }
+        return refs;
+      } catch (err) {
+        console.warn(
+          `[skill-injection] audited-run ledger read failed for ${runId}:`,
+          err instanceof Error ? err.message : String(err),
+        );
+        return [];
+      }
+    },
+  };
+}
+
 export async function POST(request: Request): Promise<Response> {
   // Dual auth: WayFlow dispatches the auditor as an agent;
   // agent_loader.py:_patch_api_call_step_bridge_token injects
@@ -225,14 +307,24 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   // phase === "run"
-  let skillIds: string[] = parsed.skillIds ?? [];
-  if (skillIds.length === 0) {
-    const resolved = await callSkills<{ skillIds?: string[] }>(
-      "skills_installed_resolve_for_agent",
-      { agentId: parsed.parentPackageName },
-    );
-    skillIds = resolved.skillIds ?? [];
-  }
+  //
+  // cinatra#2091 S4 — the RUN phase no longer injects a caller-supplied list.
+  // It declares the `auditor-run-skills` PURPOSE and the resolver reproduces the
+  // AUDITED RUN'S RECORDED SET (its authoritative per-run selection, else the
+  // exposure ledger's own rows for that run). The body's `skillIds` remain the
+  // HITL-confirmed answer of the "resolve" phase above — a resolution result,
+  // not an injection channel — so an auditor can no longer be pointed at skills
+  // the audited run never saw. Authorization binds to the run this request
+  // already resolved AND ownership-checked above.
+  const injectedSkills = await resolveInjectedSkillSet(
+    {
+      kind: "explicit-purpose",
+      purpose: "auditor-run-skills",
+      subject: { runId: run.id },
+    },
+    buildAuditorInjectionPorts({ run: { id: run.id } }),
+  );
+  const skillIds = injectedSkillSetCatalogIds(injectedSkills);
 
   // Derive `edited` — whether the user applied changes to the artifact the
   // parent agent offered for review. The run's captured HITL amendment prompts
@@ -285,7 +377,7 @@ export async function POST(request: Request): Promise<Response> {
         provider,
         system,
         user,
-        skillIds,
+        injectedSkills,
         outputSchema: RUN_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
         logLabel: "auditor.run-skills",
       }),

@@ -69,7 +69,18 @@ vi.mock("@cinatra-ai/llm", () => ({
     provider: "openai",
     defaultModel: "gpt-4o",
   })),
-  buildSkillTools: vi.fn(async () => []),
+  // cinatra#2091 S4: the runtime routes skill delivery through the provider
+  // seam (and, on an inline-mechanism provider, through core expansion) instead
+  // of calling buildSkillTools directly.
+  selectSkillDeliveryAdapter: vi.fn(() => ({
+    provider: "openai",
+    deliver: vi.fn(async () => ({ tools: [], systemContext: "", exposure: [] })),
+  })),
+  deliverInjectedSkillsInline: vi.fn(async () => ({
+    systemContext: "",
+    exposure: [],
+    dropped: [],
+  })),
   resolveChatExternalMcpTools: vi.fn(async () => []),
   buildLlmMcpServerToolForChat: vi.fn(async () => ({
     type: "mcp",

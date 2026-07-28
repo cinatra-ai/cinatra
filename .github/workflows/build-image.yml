@@ -535,6 +535,16 @@ jobs:
           CINATRA_DB_INTEGRATION_TESTS: '1'
         run: pnpm exec vitest run src/lib/__tests__/integration/demote-optional-extension-anchors.test.ts
 
+      # cinatra#2091 (epic #2086 S4). The injection contract's drop ledger lives
+      # entirely in two upserts' ON CONFLICT clauses (a delivery supersedes a
+      # drop; a drop never erases a delivery; neither resets invocation_count),
+      # so a mock proves nothing — this runs the real SQL against the real store
+      # DDL on the service Postgres already provisioned for this job.
+      - name: Skill-injection drop-ledger DB test (cinatra#2091)
+        env:
+          CINATRA_DB_INTEGRATION_TESTS: '1'
+        run: pnpm exec vitest run src/lib/__tests__/integration/skill-injection-drop-ledger.integration.test.ts
+
       # cinatra#1988 — the shared dashboards session→actor builder must thread
       # `teamRoles` end-to-end. Real-store regression: seeds team memberships in
       # a lane-unique DB and drives buildDashboardActorFromSession → the real

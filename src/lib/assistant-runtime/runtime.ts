@@ -48,7 +48,8 @@ import { shouldDeliverChatShellSkillTools } from "@/app/api/chat/shell-skill-gat
 import {
   hasConfiguredLlmRuntime,
   stream,
-  buildSkillTools,
+  selectSkillDeliveryAdapter,
+  deliverInjectedSkillsInline,
   resolveDefaultAdapter,
   resolveProviderAdapter,
   resolveChatExternalMcpTools,
@@ -57,6 +58,17 @@ import {
   checkPublicMcpReachability,
 } from "@cinatra-ai/llm";
 import type { LlmTool, LlmProvider } from "@cinatra-ai/llm";
+// cinatra#2091 (epic #2086 S4): the assistant runtime routes through the ONE
+// typed injection contract + the provider delivery seam. Its former direct
+// `buildSkillTools` call was the last production bypass of that seam.
+import {
+  resolveInjectedSkillSet,
+  injectedCatalogSkillIds,
+  injectedSkillDrops,
+  isInlineSkillMechanism,
+  type InjectionAuthorization,
+  type InjectionResolverPorts,
+} from "@cinatra-ai/skills/injection";
 import {
   assertScriptedProviderNotProduction,
   isScriptedTestProviderEnabled,
@@ -124,6 +136,20 @@ export type RunChatTurnArgs = {
   /** Aborted when the client disconnects (#503) so the run stops LLM/MCP work
    *  promptly instead of running to completion with nobody listening. */
   signal?: AbortSignal;
+  /**
+   * The assistant PRINCIPAL identity this turn runs as (cinatra#2091 S4) — the
+   * `assistant` injection intent's subject. Absent ⇒ the runtime uses the
+   * config's skill-id namespace, which is the assistant's own stable package
+   * identity (`@cinatra-ai/chat`, `@cinatra-ai/wordpress`, …).
+   */
+  assistantId?: string;
+  /**
+   * The session this turn belongs to (cinatra#2091 S4). Absent ⇒ the runtime
+   * mints a per-turn server-side binding so the intent subject is complete; the
+   * load-bearing authorization checks are the assistant identity and the
+   * AUTHENTICATED user, both of which the runtime holds directly.
+   */
+  sessionId?: string;
   /**
    * S5 public-site (WordPress/Drupal) widget path. When present, the caller is
    * the broker-auth widget branch of `/api/assistants/chat`, which has already
@@ -405,6 +431,53 @@ function buildInstanceContext(): string {
 // constants exactly (see cinatra-assistant-config.ts + cinatra-parity.test.ts).
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Injection ports for the assistant surface (cinatra#2091, epic #2086 S4).
+// Co-located with its only caller: the factory closes over the AUTHENTICATED
+// identity this turn already resolved, and the authorization port compares the
+// intent against it.
+// ---------------------------------------------------------------------------
+
+export type AssistantInjectionPortsInput = {
+  /** The assistant agent identity the surface resolved. */
+  agentId: string;
+  /** The AUTHENTICATED user this turn runs for. */
+  userId: string;
+  /** The session id the surface bound. */
+  sessionId: string;
+  /** The assistant's own required injectable set (its runtime config bundle). */
+  requiredSkillIds: readonly string[];
+};
+
+export function buildAssistantInjectionPorts(
+  input: AssistantInjectionPortsInput,
+): InjectionResolverPorts {
+  return {
+    async authorizeAssistantSession(intent): Promise<InjectionAuthorization> {
+      if (intent.agentId !== input.agentId) {
+        return {
+          ok: false,
+          reason: `intent names assistant "${intent.agentId}" but the surface vetted "${input.agentId}"`,
+        };
+      }
+      if (intent.userId !== input.userId) {
+        return {
+          ok: false,
+          reason: "the intent names a user this session is not authenticated as",
+        };
+      }
+      if (!intent.sessionId || intent.sessionId !== input.sessionId) {
+        return { ok: false, reason: "the intent names a different session" };
+      }
+      return { ok: true, runOwnerUserId: input.userId };
+    },
+    async resolveAssistantRequiredSkills() {
+      return input.requiredSkillIds.map((skillId) => ({ skillId }));
+    },
+  };
+}
+
+
 export async function runAssistantTurn(
   runtimeConfig: AssistantRuntimeConfig,
   args: RunChatTurnArgs,
@@ -526,7 +599,66 @@ export async function runAssistantTurn(
   // MCP/skill assembly + the dead-ingress reachability probe is skipped for them.
   // Tool-capable providers (OpenAI/Anthropic) assemble the full array below,
   // byte-identical to before.
+  // cinatra#2091 S4 — the assistant declares its INTENT; the resolver derives
+  // the members (its own required injectable set) and applies the hard cap of
+  // 8 TOTAL. Resolved BEFORE the provider branch so the cap is enforced
+  // IDENTICALLY on every provider, including the conversation-only (no-native-
+  // MCP) branch that assembles no tools at all.
+  const assistantAgentId = args.assistantId ?? runtimeConfig.skillIdNamespace;
+  const assistantSessionId = args.sessionId ?? `assistant-turn:${randomUUID()}`;
+  const injectedSkills = await resolveInjectedSkillSet(
+    {
+      kind: "assistant",
+      agentId: assistantAgentId,
+      userId,
+      sessionId: assistantSessionId,
+    },
+    buildAssistantInjectionPorts({
+      agentId: assistantAgentId,
+      userId,
+      sessionId: assistantSessionId,
+      requiredSkillIds: runtimeConfig.skillIds,
+    }),
+  );
+  // The CINATRA assistant never truncates BY DESIGN: its bundle's SIZE
+  // CONTRACT (cinatra-assistant-config.ts, pinned by its test) keeps the
+  // required set at 5 slugs — at most 7 — so 5 + the personal delta = 6 ≤ the
+  // hard cap of 8. This guard therefore exists for the OTHER configs that
+  // reach this runtime: an extension-declared assistant's `skillBundle` is
+  // schema-unbounded, and a drop the resolver recorded must reach an operator
+  // rather than vanish here.
+  const injectionDrops = injectedSkillDrops(injectedSkills);
+  if (injectionDrops.length > 0) {
+    console.error(
+      `[assistant-runtime] the injection contract dropped ${injectionDrops.length} ` +
+        `skill(s) for assistant "${assistantAgentId}" — its required bundle of ` +
+        `${runtimeConfig.skillIds.length} exceeds the hard cap of 8 per request: ` +
+        injectionDrops.map((d) => `${d.skillId} (${d.reason})`).join(", "),
+    );
+  }
+
   let tools: LlmTool[] = [];
+  // The provider's skill contribution to the system prompt: an availability cue
+  // on a tool-mount/container provider, the EXPANDED skill bodies on an inline
+  // provider. Declared out here because both branches below feed it.
+  let skillSystemContext = "";
+  if (isInlineSkillMechanism(adapter.provider)) {
+    // Inline mechanism (Gemini): core SHORT-CIRCUITS — no delivery adapter, no
+    // connector surface. It reads each member's router body plus its ONE-HOP
+    // references and merges them under the per-request byte budget, so a
+    // conversation-only turn still receives the assistant's skills instead of
+    // silently losing every one of them.
+    await ensureAssistantSkillsRegistered(runtimeConfig.skillIds);
+    const inline = await deliverInjectedSkillsInline({ set: injectedSkills });
+    skillSystemContext = inline.systemContext;
+    if (inline.dropped.length > 0) {
+      console.warn(
+        `[assistant-runtime] inline expansion dropped ${inline.dropped.length} ` +
+          `whole skill(s) for assistant "${assistantAgentId}": ` +
+          inline.dropped.map((d) => `${d.skillId} (${d.reason})`).join(", "),
+      );
+    }
+  }
   if (isNativeMcpProvider(adapter.provider)) {
   // adapter.provider is narrowed to "openai" | "anthropic" in this block
   // (equivalent to `!conversationOnly`), so the tool-assembly calls type-check.
@@ -548,9 +680,20 @@ export async function runAssistantTurn(
         "turn continues with MCP + web_search tools only)",
     );
   }
-  const skillTools = deliverShellSkillTools
-    ? await buildSkillTools({ skillIds: runtimeConfig.skillIds })
-    : [];
+  let skillTools: LlmTool[] = [];
+  if (deliverShellSkillTools) {
+    const catalogSkillIds = injectedCatalogSkillIds(injectedSkills);
+    if (catalogSkillIds.length > 0) {
+      const delivery = await selectSkillDeliveryAdapter(adapter.provider).deliver({
+        skillIds: catalogSkillIds,
+        // The authoritative cap already ran in the contract; the adapter's own
+        // cap is a defence-in-depth invariant.
+        selectionMode: "general",
+      });
+      skillTools = delivery.tools;
+      skillSystemContext = delivery.systemContext;
+    }
+  }
   // Dead-ingress guard (#1699): a configured-but-unreachable public MCP URL
   // is WORSE than a missing one — OpenAI silently omits the hosted MCP server
   // (200 completed, no mcp_list_tools, no 424), chat loses every Cinatra tool
@@ -814,6 +957,13 @@ export async function runAssistantTurn(
       system:
         explicitDispatchDirective +
         systemPrompt +
+        // The provider's skill contribution: an availability cue (Anthropic
+        // container listing; empty for OpenAI shell delivery, which must not be
+        // told about a read_skill tool) or, on an inline provider, the expanded
+        // skill bodies. Separated explicitly — the fragment carries no leading
+        // blank line of its own, and a trimmed/fallback persona would otherwise
+        // run straight into its first heading.
+        (skillSystemContext ? `\n\n${skillSystemContext}` : "") +
         userContext +
         instanceContext +
         extensionConfirmationPolicy +

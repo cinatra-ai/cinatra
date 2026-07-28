@@ -424,6 +424,7 @@
       "@cinatra-ai/chat/ag-ui-chat-client": ["./packages/chat/src/ag-ui-chat-client.ts"],
       "@cinatra-ai/skills/mcp-client": ["./packages/skills/src/mcp/client/deterministic-client.ts"],
       "@cinatra-ai/skills/extension-handler": ["./packages/skills/src/extension-handler.ts"],
+      "@cinatra-ai/skills/injection": ["./packages/skills/src/injection/index.ts"],
       "@cinatra-ai/skills/llm-matching/constants": ["./packages/skills/src/llm-matching/constants.ts"],
       "@cinatra-ai/skills/llm-matching/types": ["./packages/skills/src/llm-matching/types.ts"],
       "@cinatra-ai/a2a": ["./packages/a2a/src/index.ts"],
