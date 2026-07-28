@@ -175,9 +175,9 @@ beforeAll(async () => {
   await client.query(`DELETE FROM public."teamMember"`);
   await client.query(`DELETE FROM public."team"`);
   await client.query(
-    `INSERT INTO public."team" (id, name, slug, "organizationId") VALUES
-       ('team-growth-1437', 'Growth', 'growth-1437', $1),
-       ('team-foreign-1437', 'Foreign', 'foreign-1437', 'org-OTHER')`,
+    `INSERT INTO public."team" (id, name, slug, "organizationId", "createdAt") VALUES
+       ('team-growth-1437', 'Growth', 'growth-1437', $1, now()),
+       ('team-foreign-1437', 'Foreign', 'foreign-1437', 'org-OTHER', now())`,
     [ORG],
   );
   await client.query(
