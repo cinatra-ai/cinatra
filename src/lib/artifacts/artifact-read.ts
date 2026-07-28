@@ -8,6 +8,7 @@ import {
 import { SEMANTIC_ARTIFACT_OBJECT_TYPE } from "@cinatra-ai/artifacts";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
+import { artifactWriterWitnessExistsSql } from "./artifact-writer-witness";
 
 // Serve-side resolver. Tenant isolation is enforced HERE: a representation is
 // only resolvable when org_id + artifact_id + representation.id all match. Blob
@@ -110,15 +111,15 @@ WHERE rep.id = $1 AND rep.artifact_id = $2 AND rep.org_id = $3
     --
     -- The admission is keyed to WRITER PROVENANCE OF THE EXACT REPRESENTATION,
     -- never to caller-supplied data. SCOPE, stated exactly: the predicate admits
-    -- representations authored by createSemanticArtifact — the artifact write
-    -- CHOKE POINT the lifecycle contract names and every materializer calls. That
-    -- writer emits the 'create' artifact_audit row carrying this
-    -- representation_revision_id inside its held-lock Tx2, atomically with the
-    -- representation it describes; the table is append-only and NO objects/MCP
-    -- write path, route, extension DB port, migration or trigger can reach it
-    -- (verified in the codex round on this lane). It is a TRUST-BOUNDARY witness,
-    -- not a DB-enforced one: trusted server code or direct SQL could mint it, the
-    -- same trust boundary every server-only store already sits behind.
+    -- representations authored by a HOST ARTIFACT WRITER — createSemanticArtifact
+    -- (the artifact write CHOKE POINT the lifecycle contract names and every
+    -- materializer calls) and the two CMS capture writers, each emitting the
+    -- 'create' artifact_audit row carrying this representation_revision_id inside
+    -- the SAME transaction as the representation it describes. The table is
+    -- append-only and NO objects/MCP write path, route, extension DB port,
+    -- migration or trigger can reach it. It is a TRUST-BOUNDARY witness, not a
+    -- DB-enforced one: trusted server code or direct SQL could mint it, the same
+    -- trust boundary every server-only store already sits behind.
     --
     -- (An objects.data marker such as data.artifactType would NOT do:
     -- objects_save/objects_update merge caller-supplied fields into objects.data,
@@ -131,13 +132,14 @@ WHERE rep.id = $1 AND rep.artifact_id = $2 AND rep.org_id = $3
     -- neither reads objects.data as content nor crosses a claimant boundary. A
     -- typed-DATA row keeps the strict snapshot-only path unchanged.
     --
-    -- KNOWN GAP (unchanged behaviour, not a regression of this change): the two
-    -- CMS capture writers (captureCmsContentSnapshot,
-    -- writePinnedPreviewCapture) mint form='file' representations WITHOUT this
-    -- audit row. Their types carry no dedicated claim today, so they take the
-    -- NOT-claimed arm exactly as before; a future claim over either type would
-    -- strand them here just as it strands them now. Closing that needs those
-    -- writers to emit the same provenance row — a separate change.
+    -- The witness predicate is the SHARED one (artifact-writer-witness.ts), the
+    -- same fragment the context-candidate rule, the resolver and both
+    -- selection-finalizer statements test — a writer and a reader cannot drift
+    -- into "authored bytes no read path admits". The former gap here (the two CMS
+    -- capture writers minted form='file' representations WITHOUT the audit row,
+    -- so a future claim over either type would have stranded them) is CLOSED:
+    -- both now emit the witness from that same builder, inside their own capture
+    -- transaction.
     OR (
       o.type = ANY($5::text[])
       AND (
@@ -146,11 +148,11 @@ WHERE rep.id = $1 AND rep.artifact_id = $2 AND rep.org_id = $3
           WHERE bnd.org_id = rep.org_id AND bnd.artifact_id = rep.artifact_id
             AND bnd.assertion_basis = 'binding' AND bnd.eligibility = 'eligible'
         )
-        OR EXISTS (
-          SELECT 1 FROM "${schema}"."artifact_audit" aud
-          WHERE aud.org_id = rep.org_id AND aud.artifact_id = rep.artifact_id
-            AND aud.representation_revision_id = rep.id AND aud.action = 'create'
-        )
+        OR ${artifactWriterWitnessExistsSql(schema, {
+          orgId: "rep.org_id",
+          artifactId: "rep.artifact_id",
+          representationRevisionId: "rep.id",
+        })}
       )
     )
   )

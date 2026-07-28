@@ -19,6 +19,7 @@ import {
 
 import { deriveSubstanceKey } from "./resource-store";
 import { createLocalDiskBlobStore } from "./local-disk-blob-store";
+import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 
 // ---------------------------------------------------------------------------
 // CMS content-snapshot CAPTURE writer (cinatra#2043, epic #2037 S5 - the CORE
@@ -147,8 +148,10 @@ export interface CmsSnapshotCaptureFacts {
  * PURE composition of the capture transaction's query list (no DB, no blob I/O).
  * `schema` is the already-escaped postgres schema identifier. The returned array
  * is ONE atomic transaction's op list, in order:
- *   [0] resource + artifact_blobs + representation write (the CMS content).
- *   [1..] the produced-event INSERT (ONLY when `emitProducedEvent`), then the
+ *   [0] the snapshot's `objects` identity row.
+ *   [1] resource + artifact_blobs + representation write (the CMS content).
+ *   [2] the artifact-writer PROVENANCE WITNESS for that representation (always).
+ *   [3..] the produced-event INSERT (ONLY when `emitProducedEvent`), then the
  *         `cms_snapshot_targets` INSERT - spliced into the SAME list so the event
  *         + the apply binding commit/roll-back atomically with the content write.
  */
@@ -227,6 +230,29 @@ SELECT (SELECT id FROM rep_insert) AS representation_revision_id,
     ],
   };
 
+  // The WRITER PROVENANCE WITNESS for the representation the content write just
+  // minted. Rides THIS transaction, so the witness and the representation it
+  // vouches for commit (or roll back) together. Unconditional — it is not a
+  // lifecycle-fenced signal like the produced event, it is the artifact-writer
+  // invariant every claimed-row read gate tests for
+  // (`artifactWriterWitnessExistsSql`). Before this, a captured CMS snapshot was
+  // a host-authored FILE representation with NO witness: the moment a claim were
+  // reserved over `@cinatra-ai/objects:cms-content-snapshot` (an `isArtifact`
+  // registered type, so the pack-typed serve arm governs it), its own capture
+  // would have stopped serving and stopped being context-pinnable.
+  const witnessOp: ProducedEventInsertOp = buildArtifactWriterWitnessOp(schema, {
+    orgId: f.orgId,
+    artifactId: f.artifactId,
+    representationRevisionId: f.representationRevisionId,
+    actor: f.createdBy,
+    detail: {
+      mime: f.declaredMime,
+      size: f.sizeBytes,
+      originKind: CMS_SNAPSHOT_ORIGIN_KIND,
+      writer: CMS_SNAPSHOT_EMITTER,
+    },
+  });
+
   const producedEventOp = f.emitProducedEvent
     ? buildProducedEventInsertOp(schema, {
         orgId: f.orgId,
@@ -268,7 +294,15 @@ VALUES ($1::text, $2::text, $3::text, $4::jsonb, $5::text,
     ],
   };
 
-  return [objectInsert, contentWrite, ...(producedEventOp ? [producedEventOp] : []), targetInsert];
+  // ORDER IS LOAD-BEARING: `captureCmsContentSnapshot` reads `results[1]` for the
+  // content write's RETURNING row, so the witness is spliced AFTER it.
+  return [
+    objectInsert,
+    contentWrite,
+    witnessOp,
+    ...(producedEventOp ? [producedEventOp] : []),
+    targetInsert,
+  ];
 }
 
 /** The stored apply-binding facts needed to return an idempotent capture result

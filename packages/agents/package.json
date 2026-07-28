@@ -77,7 +77,7 @@
     "@cinatra-ai/sdk-extensions": "workspace:*",
     "@cinatra-ai/sdk-ui": "workspace:*",
     "@cinatra-ai/skills": "workspace:*",
-    "cron-parser": "^4.9.0",
+    "cron-parser": "^5.6.2",
     "cronstrue": "^3.14.0",
     "diff": "9.0.0",
     "libnpmpublish": "^11.2.0",

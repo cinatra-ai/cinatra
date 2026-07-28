@@ -771,3 +771,163 @@ simulation over the real matrix shows every matrix pin pairing to its compose
 image with the sibling digest kept in sync and the gate green on a paired bump
 (and red on an unpaired one, the old status quo). The definitive proof is the
 first Renovate digest PR that lands green without a manual matrix sync.
+
+---
+
+## 13. Refresh 2026-07-28 — npm-major re-grounding: `cron-parser` 5 applied, `node-pg-migrate` 9 BLOCKED
+
+A re-grounding of the §5 / §11 stack-major candidate list against the live npm
+registry and the repo's own manifests. Two items moved; both are recorded here
+with the works-after evidence the track requires.
+
+### 13.1 `cron-parser` `^4.9.0` → `^5.6.2` — MAJOR APPLIED (`packages/agents`)
+
+`packages/agents` pinned `cron-parser: "^4.9.0"`; the latest stable is `5.6.2`
+(the 5 line has been the stable line for some time — this repo was a full major
+behind on a PRODUCTION dependency). The sole consumer is the recurring-trigger
+arm-time validator in `trigger-service.ts`. `luxon` is already in the tree (the
+4 line depends on it too), so the bump adds no new transitive dependency.
+
+**Two breaking changes, both real for this repo:**
+
+1. **The top-level `parseExpression` helper is gone.** The 5 line exposes the
+   parser as the `CronExpressionParser` class (also the module default);
+   `parse` is a static method. The pre-change validator probed
+   `mod.default?.parseExpression ?? mod.parseExpression` and had a fail-closed
+   branch returning `{ ok: false, error: "cron-parser unavailable" }` when
+   neither resolved. On the 5 line that probe yields `undefined`, so a bare
+   dependency bump would have silently refused **every** recurring trigger
+   while staying green. Verified directly against the installed package:
+
+   ```
+   pre-change resolution on cron-parser 5 -> typeof parseExpression = undefined
+   pre-change validator verdict for "0 9 * * MON":
+     { ok: false, error: "cron-parser unavailable" }  <-- EVERY recurring trigger refused
+   post-change resolution -> typeof CronExpressionParser.parse = function
+   ```
+
+2. **Timezone validation moved from `parse()` to the first iteration step.**
+   On the 4 line, `parseExpression("0 9 * * MON", { tz: "Not/AZone" })` THREW
+   at parse time, so an unknown IANA zone was refused at arm time. On the 5
+   line the same call returns a parsed expression and only the first `next()`
+   throws (`CronDate: unhandled timestamp: Invalid Date`) — i.e. the bad zone
+   would be accepted at arm time and blow up when the schedule first came due.
+   The validator therefore takes **one iteration step** as part of validation,
+   which restores the arm-time contract.
+
+   The step is deliberately NOT described as a satisfiability check. Iteration
+   behaviour was compared expression-by-expression across the two lines, and
+   they agree everywhere except that the 5 line's own loop-limit check is
+   unreliable: `0 0 31 2,4,6,9,11 *` (day 31 in months that have none — never
+   matches) THROWS `Invalid expression, loop limit exceeded` on the 4 line but
+   returns a NON-MATCHING date (`2053-12-12`) on the 5 line. So an
+   unsatisfiable expression can still pass validation; that is an upstream
+   defect on the 5 line, recorded here rather than papered over. Everything a
+   caller could legitimately want is unaffected — sparse-but-real expressions
+   iterate identically on both lines (`0 0 * 2 1#5` → `2044-02-29`,
+   `0 0 29 2 *` → `2028-02-29`), and `0 0 * * L` fails iteration on BOTH lines
+   (so nothing schedulable is newly refused; it is merely refused earlier).
+
+**What changed.** The validation stays INSIDE `trigger-service.ts` (the parser
+resolution and the iteration step are local to it) — deliberately not extracted
+into a helper module, because the route-graph ratchet
+(`scripts/audit/route-graph-ratchet.mjs`) is a no-new-rot ceiling and a new
+first-party module adds +1 reachable module to five locked routes. Extracting
+it was tried first and the ratchet correctly refused it; the sanctioned
+`absorbs` raise was NOT used, because growing five route ceilings for a
+convenience helper is exactly the pressure that gate exists to resist. Error
+strings and their ordering are unchanged.
+
+**Works-after proof.** The branch that covers this path in the existing suites
+lives in `trigger-handlers.integration.test.ts`, a DB-backed
+`*.integration.test.ts` file: the default unit run excludes it and CI skips the
+integration step when no test database is provisioned — so the unit tier could
+not have caught either breaking change. This lane closes that hole with
+`packages/agents/src/__tests__/trigger-service-cron-validation.test.ts`, which
+drives the REAL `setRunTriggerForActor` against the REAL `cron-parser`
+(deliberately unmocked — only the run read, the store/schedule writes and the
+PM bridge are stubbed, so it needs no database) and pins: a 5-field expression,
+a macro expression, an explicit IANA zone, an **unknown zone**, an unparseable
+expression, an out-of-range field, the missing/over-long guards, an explicit
+assertion that the fail-closed `cron-parser unavailable` verdict does not
+occur, and that a failed validation writes neither a trigger row nor a
+schedule. It runs in the DEFAULT unit run — i.e. inside the existing required
+`Unit tests (packages/agents)` CI step — so the next `cron-parser` major cannot
+repeat either failure silently. Locally: 9/9 on the new file, `packages/agents`
+unit tier green, route-graph ratchet OK, root `tsgo --noEmit` clean, eslint
+clean on the touched files.
+
+**Rollback.** Revert the lane commit (manifest + lockfile + the two source
+files move together). No persisted state: the validator is a pure arm-time
+check; already-armed schedules are untouched.
+
+**Obsolete-on-upgrade check (§4).** Nothing is retired by this bump — no patch,
+override, `allowBuilds` entry or code workaround was tied to the 4 line. The
+`cronstrue` humanizer (a separate package) is unaffected.
+
+### 13.2 `node-pg-migrate` `8.0.4` → `9.0.0` — offered, GROUNDED, and BLOCKED
+
+`node-pg-migrate` 9 is published and is a genuine offered major (the Renovate
+dashboard lists it). It was taken through a real candidate build in this lane
+and **it cannot land**: the 9 line's migration-file loader is incompatible with
+this repo's namespaced migration filenames, and there is no configuration
+escape hatch.
+
+**The incompatibility.** Migration modules here are namespaced by design (the
+shared-ledger scheme): `migrations/core/core__NNNN_short-description.mjs`, and
+extension migrations record as `ext_<scope>_<pkg>__NNNN`. The 8 line derived a
+file's sort key with `filename.split("_")[0]`, and when that was not numeric it
+logged a benign error and **returned 0** — every file compared equal, so the
+loader fell through to its locale-numeric comparator and sorted correctly.
+(That fall-through is load-bearing today: `buildRunnerLogger` in
+`packages/migrations/src/core-migrations.mjs` explicitly suppresses the 8
+line's `Can't determine timestamp for ` message.) The 9 line replaced that with
+a fail-closed `/^(\d+)/` match on the filename that **throws** when the name
+does not START with digits — and both loader branches (directory scan AND the
+glob branch) route through the same comparator, so `useGlob` does not avoid it.
+A candidate run reproduced it exactly:
+
+```
+Error loading migration files: Cannot determine numeric prefix for "core__0002_drop-agent-templates-durable.mjs"
+ERROR: candidate core migration chain failed against the upgraded database.
+```
+
+(from `scripts/ci/upgrade-proof.sh` against the last published release image on
+`postgres:18-alpine`: the previous-release schema provisioned, the candidate
+bootstrap DDL applied 825/825, then the candidate chain failed at LOAD before
+executing a single migration.)
+
+**Why renaming is not the answer.** The `core__` / `ext_<scope>_<pkg>__`
+prefixes are the ledger namespace: the name is what `pgmigrations.name` stores
+for every already-applied migration on every existing deployment, and it is
+enforced by `CORE_MIGRATION_FILE_RE` plus the schema-migration audit gate.
+Renaming would orphan every ledger row and break the per-namespace down-fence.
+
+**PARKED** on the same shape as the TypeScript 7 entry (§8.1/§11.1): record the
+target, and lift when upstream restores a non-throwing sort key for files
+without a numeric prefix (or exposes a pluggable comparator / sort-key option
+alongside the loader strategies the 9 line introduced). The pinned 8.0.4 stays;
+re-drive the hop through `scripts/ci/upgrade-proof.sh` at that point — it is
+the works-after gate for this dependency, and it caught this cleanly.
+
+### 13.3 Net for this repo
+
+Re-grounded against the live registry, the platform manifests are otherwise at
+their latest stable major: `next` / `eslint-config-next` 16, `react` /
+`react-dom` 19, `eslint` 10, `vitest` 4, `vite` 8 (held — §4.2), `drizzle-orm`
+0.45.2 and `pg` 8.22.0 at the top of their lines, `bullmq` 5, `ioredis` 5,
+`zod` 4, `tailwindcss` 4, `@modelcontextprotocol/sdk` 1, `@opentelemetry/*` 2
+(§10), `undici` 8, `tar` 7, `knip` 6, `node` 24 (image + `@types/node` 24,
+runtime-coupled — do not lead the image), `pnpm` 11. `typescript` stays at the
+standing peer ceiling (§8.1/§11.1). Remaining offered npm majors NOT taken in
+this lane, each recorded for its own staged lane: `jsdom` 29 → 30 (test
+environment; published 2026-07-27), `pdfjs-dist` 5 → 6 (coupled with
+`react-pdf` — re-check its peer range first), `react-dropzone` 15 → 19 (four
+majors published inside one week upstream; let the line settle),
+`libnpmpublish` 11 → 12 and `pacote` 21 → 22 (the registry/publish path —
+proof is the publish round-trip), and `node-pg-migrate` 9 (blocked, §13.2).
+Image-side majors remain as recorded in §1: the profile-gated demo images
+(mariadb 12, wordpress 7, rabbitmq 4, valkey 9, and the Twenty/Plane postgres
+and redis pins) are upstream-dictated and tracked, not led; `tailscale` stays
+held on the upstream fix (§1); `php` 8.5 for the Drupal image is the one
+non-demo image major still open.

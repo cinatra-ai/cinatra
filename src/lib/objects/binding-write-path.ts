@@ -95,6 +95,59 @@ function winnerCte(schema: string): string {
 }
 
 /**
+ * The WINNER-IDENTITY predicate, for READ gates: does the binding row named by
+ * `cols.binding` carry the exact `(claim id, generation, extension)` tuple of the
+ * CANONICAL dedicated winner for the object's CURRENT type? Returns a
+ * parenthesised SQL boolean expression; `schemaName` is the raw (unescaped)
+ * schema name, escaped here exactly as the reconcile builder escapes it, and the
+ * four `cols` entries are SQL expressions from the calling statement.
+ *
+ * WHY A READ GATE NEEDS THIS AT ALL (cinatra#2139, codex round-2 finding). A
+ * binding's `eligibility = 'eligible'` does NOT mean it is the live winner:
+ * activating a claim, retiring one, or changing the object's type all move the
+ * winner IMMEDIATELY, while the binding is replaced only when the reconcile queue
+ * drains. In that gap the superseded claimant is still the artifact's sole
+ * eligible binding — and per-SCOPE claim uniqueness means an org claim can win
+ * over a platform claim with BOTH rows still 'active', so a status check cannot
+ * see the difference either. A gate that must not hand a new claimant's identity
+ * to an old claimant's row therefore has to re-derive the winner.
+ *
+ * The derivation is the SAME one `winnerCte` performs for the WRITE path — same
+ * dedicated-only rule, same `('active','retiring')` admission (a retiring claim
+ * is still the winner until it is retired), same org-beats-platform precedence,
+ * same generation DESC / id ASC tie-break, same quarantine exclusion — so a read
+ * gate and the reconcile can never disagree about who the winner is.
+ */
+export function bindingIsCurrentWinnerSql(
+  schemaName: string,
+  cols: { orgId: string; objectId: string; objectType: string; binding: string },
+): string {
+  const s = schemaName.replaceAll('"', '""');
+  return `(
+    EXISTS (
+      SELECT 1 FROM (
+        SELECT c.id AS claim_id, c.extension_package AS ext, c.generation AS gen
+        FROM "${s}"."artifact_type_claims" c
+        WHERE c.object_type_id = ${cols.objectType}
+          AND c.claim_kind = 'dedicated'
+          AND c.status IN ('active','retiring')
+          AND (c.scope = 'platform' OR c.scope = 'org:' || ${cols.orgId})
+        ORDER BY (CASE WHEN c.scope = 'org:' || ${cols.orgId} THEN 0 ELSE 1 END) ASC,
+                 c.generation DESC, c.id ASC
+        LIMIT 1
+      ) w
+      WHERE w.claim_id = ${cols.binding}.binding_claim_id
+        AND w.gen = ${cols.binding}.binding_generation
+        AND w.ext = ${cols.binding}.extension
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM "${s}"."object_binding_quarantine" qz
+      WHERE qz.org_id = ${cols.orgId} AND qz.object_id = ${cols.objectId}
+    )
+  )`;
+}
+
+/**
  * Build the two binding-reconcile statements (archive-stale, insert-winner) for
  * one artifact. PURE — does not execute. Compose into an outer transaction that
  * ALREADY holds `pg_advisory_xact_lock(hashtext(artifactId))` (the write-path's

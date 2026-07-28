@@ -8,6 +8,11 @@ import {
 import { buildOwnershipFilter } from "@/lib/derived-store-ownership";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
+import { artifactWriterWitnessExistsSql } from "./artifact-writer-witness";
+// NOTE the RAW `postgresSchema` at the call site: this builder escapes its own
+// identifier (the binding-write-path convention), and the local `schema` const is
+// ALREADY escaped — passing it would double-escape an embedded quote.
+import { bindingIsCurrentWinnerSql } from "@/lib/objects/binding-write-path";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { AgentContextSlot } from "@cinatra-ai/extensions/agent-context-slots-reader";
 
@@ -73,14 +78,19 @@ export type ResolveContextSlotInput = {
    *  present + NOT in actor.projectIds → `[]` fail-closed. */
   projectId?: string;
   installedExtensions: ReadonlyArray<InstalledExtensionDescriptor>;
-  /** cinatra#1430: the snapshot pins minted/reused by
-   *  `captureSnapshotsForContextSlot` at THIS resolution. A CLAIMED row
-   *  (eligible binding) is emitted ONLY through its pinned snapshot
-   *  representation — never "latest revision" (an A→B→A content cycle must
-   *  resolve to the reused snapshot, and a redaction-blocked row must not be
-   *  selectable through an older representation). Claimed rows without a pin
-   *  are EXCLUDED (fail-closed). Generic artifacts ignore this and keep the
-   *  latest-representation join. */
+  /** cinatra#1430: the pins minted/reused by `captureSnapshotsForContextSlot` at
+   *  THIS resolution. A CLAIMED row (eligible binding) is emitted ONLY through
+   *  its pinned representation — never "latest revision" (an A→B→A content cycle
+   *  must resolve to the reused snapshot, and a redaction-blocked row must not be
+   *  selectable through an older representation). Claimed rows without a pin are
+   *  EXCLUDED (fail-closed). Generic artifacts ignore this and keep the
+   *  latest-representation join.
+   *
+   *  cinatra#2139: a pin is either a policy-keyed content snapshot (the #1430
+   *  arm) or a HOST-AUTHORED representation carrying the writer-provenance
+   *  witness (the arm that makes a run's own produced artifact pinnable on the
+   *  orgs that hold its pack's claim). The name is historical; the SQL below
+   *  admits exactly those two and nothing else. */
   snapshotPins?: ReadonlyArray<{
     objectId: string;
     representationRevisionId: string;
@@ -318,7 +328,7 @@ export function resolveContextSlot(
 
   const sql = `
     WITH visible_objects AS (
-      SELECT id, org_id, owner_level, owner_id, visibility, project_id,
+      SELECT id, org_id, type, owner_level, owner_id, visibility, project_id,
         EXISTS (
           SELECT 1 FROM "${schema}"."semantic_assertion" b
           WHERE b.org_id = o.org_id AND b.artifact_id = o.id
@@ -357,8 +367,20 @@ export function resolveContextSlot(
       ON sa.org_id = o.org_id AND sa.artifact_id = o.id
     JOIN LATERAL (
       -- Generic artifacts: the latest representation revision (unchanged).
-      -- CLAIMED rows: ONLY the snapshot representation pinned at THIS
-      -- resolution (cinatra#1430) — no pin, no candidate.
+      -- CLAIMED rows: ONLY the representation pinned at THIS resolution
+      -- (cinatra#1430) — no pin, no candidate — AND that pin must be one of the
+      -- two things a claimed row is ever allowed to expose (cinatra#2139):
+      --   * its policy-keyed object_content_snapshots representation, or
+      --   * a representation THIS HOST'S ARTIFACT WRITER authored, attested by
+      --     the shared append-only writer-provenance witness.
+      -- The pins are host-derived (captureSnapshotsForContextSlot computes them
+      -- immediately before this call and no caller supplies them), so this is
+      -- DEFENCE IN DEPTH, not the primary gate: it makes the pin's admissibility
+      -- a property of the SQL rather than of the caller, so the candidate rule,
+      -- this resolver and both selection-finalizer statements state the same
+      -- invariant and cannot drift into a pin that resolves here but is refused
+      -- at finalization (or, worse, one that resolves an arbitrary revision of a
+      -- claimed row).
       SELECT rep.id, rep.revision
       FROM "${schema}"."representation" rep
       WHERE rep.org_id = o.org_id AND rep.artifact_id = o.id
@@ -369,6 +391,36 @@ export function resolveContextSlot(
           ))
           OR (o.is_claimed AND rep.id = (
             SELECT p.rep_id FROM pins p WHERE p.object_id = o.id LIMIT 1
+          ) AND (
+            EXISTS (
+              SELECT 1 FROM "${schema}"."object_content_snapshots" snap
+              WHERE snap.org_id = rep.org_id AND snap.object_id = rep.artifact_id
+                AND snap.representation_revision_id = rep.id
+            )
+            OR (
+              -- The witness arm carries the SAME two predicates the candidate
+              -- rule and both finalizer statements carry (codex rounds 1 and 2),
+              -- so a pin that resolves here is a pin that finalizes and serves:
+              --   * the registered-isArtifact PACK-type gate the serve arm also
+              --     applies — without it a row whose type changed after its pin
+              --     was computed would still resolve and then be refused
+              --     everywhere downstream;
+              --   * WINNER IDENTITY on the binding this row is resolved AS,
+              --     because an eligible binding is not necessarily the live
+              --     winner while the reconcile queue is draining.
+              o.type = ANY(${artifactTypeIdsPh}::text[])
+              AND ${bindingIsCurrentWinnerSql(postgresSchema, {
+                orgId: "o.org_id",
+                objectId: "o.id",
+                objectType: "o.type",
+                binding: "sa",
+              })}
+              AND ${artifactWriterWitnessExistsSql(schema, {
+                orgId: "rep.org_id",
+                artifactId: "rep.artifact_id",
+                representationRevisionId: "rep.id",
+              })}
+            )
           ))
         )
       LIMIT 1

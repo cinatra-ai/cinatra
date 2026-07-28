@@ -12,6 +12,7 @@ import { parseClaimDispositions } from "@cinatra-ai/objects/claims";
 
 import { canonicalJSONStringify, deriveSubstanceKey } from "./resource-store";
 import { createLocalDiskBlobStore } from "./local-disk-blob-store";
+import { artifactWriterWitnessExistsSql } from "./artifact-writer-witness";
 
 // ---------------------------------------------------------------------------
 // Policy-aware content snapshots for CLAIMED typed object rows
@@ -698,6 +699,12 @@ SELECT
 // ---------------------------------------------------------------------------
 
 import { buildOwnershipFilter } from "@/lib/derived-store-ownership";
+import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
+// NOTE the RAW `postgresSchema` at every call site: this builder escapes its own
+// identifier (the binding-write-path convention), and the local `schema` const is
+// ALREADY escaped — passing it would double-escape an embedded quote.
+import { bindingIsCurrentWinnerSql } from "@/lib/objects/binding-write-path";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { AgentContextSlot } from "@cinatra-ai/extensions/agent-context-slots-reader";
 import {
@@ -727,17 +734,52 @@ export interface CaptureSnapshotsForContextSlotResult {
   captured: number;
   reused: number;
   skipped: number;
-  /** objectId → snapshot representation for the resolver's claimed-row join. */
+  /** Claimed rows pinned at an ALREADY-AUTHORED representation (the
+   * writer-provenance-witnessed arm) rather than at a minted data snapshot.
+   * Nothing is captured for these — the bytes already exist. */
+  directPinned: number;
+  /** objectId → pinned representation for the resolver's claimed-row join.
+   * Either a policy-keyed content snapshot or a witnessed authored
+   * representation — see the module header's CANDIDATE RULE. */
   pins: SnapshotPin[];
 }
 
 /**
- * Capture (or keyed-reuse) content snapshots for every actor-visible CLAIMED
- * typed row matching the slot's accepted extensions whose claim dispositions
- * permit pinning. Mirrors the resolver's visibility CTE (ownership filter +
- * project narrowing + tombstone exclusion) restricted to rows carrying an
- * eligible BINDING whose extension is in the accepted set. Idempotent:
- * unchanged rows keyed-reuse their snapshot via ONE batched query.
+ * Pin every actor-visible CLAIMED row matching the slot's accepted extensions
+ * whose claim dispositions permit pinning. Mirrors the resolver's visibility CTE
+ * (ownership filter + project narrowing + tombstone exclusion) restricted to rows
+ * carrying an eligible BINDING whose extension is in the accepted set.
+ *
+ * THE CANDIDATE RULE — two disjoint arms, decided by what the row actually IS:
+ *
+ *   DIRECT  a claimed row of a registered isArtifact PACK type holding a
+ *           representation this host's artifact writer AUTHORED (the
+ *           append-only writer-provenance witness — artifact-writer-witness.ts)
+ *           is pinned AT THAT REPRESENTATION. Its bytes ARE its content, not a
+ *           rendering of the mutable object row, so there is nothing to
+ *           snapshot: minting one would pin the metadata envelope instead of the
+ *           authored work. Nothing is written for this arm at all.
+ *   SNAPSHOT every other claimed row keeps the cinatra#1430 path unchanged — the
+ *           policy-keyed, redaction-gated snapshot of `objects.data`, minted or
+ *           keyed-reused at THIS resolution. That IS the claimant-isolation
+ *           surface and it is untouched.
+ *
+ * WHY THE DIRECT ARM EXISTS (cinatra#2139 residual). cinatra#1868 made
+ * `createSemanticArtifact` compose the binding reconcile into its creation
+ * transaction, so a GENUINE FILE artifact produced on an org that HOLDS the
+ * pack's claim now carries an eligible binding. Every claimed-row gate then
+ * routed it through the snapshot branch, where it had no snapshot and could get
+ * none worth having — so a run's own produced artifact was not context-pinnable
+ * on exactly the orgs that installed the pack. The serve arm resolved this the
+ * same way for the same reason (cinatra#2047 OBS-1); the three sites of the
+ * context/pin path — this candidate rule, `resolveContextSlot`'s claimed-row
+ * join, and both `context-selection-finalize` statements — now agree with it and
+ * with each other, testing the ONE shared witness predicate.
+ *
+ * The two arms are EXCLUSIVE: a row taking the direct arm is removed from the
+ * snapshot candidate set, so a claimed row is never pinned twice or pinned at a
+ * representation the resolver did not choose. Idempotent: the direct arm writes
+ * nothing, unchanged snapshot rows keyed-reuse via ONE batched query.
  */
 export async function captureSnapshotsForContextSlot(input: {
   actor: ActorContext;
@@ -750,6 +792,7 @@ export async function captureSnapshotsForContextSlot(input: {
     captured: 0,
     reused: 0,
     skipped: 0,
+    directPinned: 0,
     pins: [],
   };
   const orgId = input.actor.organizationId;
@@ -779,43 +822,140 @@ export async function captureSnapshotsForContextSlot(input: {
   const projectExcludeWhenUnset =
     input.projectId === undefined ? " AND o.project_id IS NULL" : "";
 
-  // 1. Candidate rows: visible + claimed by an accepted extension + the
-  // winning claim's dispositions permit content snapshots/pinning (SQL-side
-  // string checks align with the zod defaults: an absent key IS the
-  // fail-closed default). Ordered narrowest-scope-first, then id.
+  // ONE STATEMENT, ONE SNAPSHOT (codex round-1 finding). The two arms were first
+  // written as two queries in one round trip; without an enclosing transaction
+  // those are two MVCC snapshots, so a witness landing (or a resource being
+  // reclaimed) BETWEEN them could put a row in neither arm or in both — and two
+  // independent LIMITs meant two independent caps rather than the one global
+  // narrowest-first cap this composition documents. Both arms are now decided
+  // inside a single statement over a single `claimed` CTE, with ONE ordering and
+  // ONE cap, so their disjointness is a property of the row, not of timing.
+  //
+  //   DIRECT   pack-typed + pinnable + the binding IS the CURRENT WINNER + a
+  //            witnessed representation over a live blob resource ⇒ pinned AT
+  //            that representation; nothing is written.
+  //   SNAPSHOT everything else the cinatra#1430 rule admitted, unchanged:
+  //            pinnable + snapshotPolicy 'content' ⇒ mint-or-keyed-reuse.
+  //
+  // WHY `snapshotPolicy` IS NOT CONSULTED ON THE DIRECT ARM: it governs whether
+  // the MUTABLE `objects.data` may be serialized into a snapshot, and this arm
+  // serializes nothing — its bytes are already authored. Requiring it would
+  // exclude exactly the immutable file artifacts whose registered policy is
+  // deliberately 'none'.
+  //
+  // WHY WINNER IDENTITY, NOT ELIGIBILITY, ON THE DIRECT ARM (codex round-2
+  // finding). An eligible binding is not necessarily the LIVE winner: activating
+  // a claim, retiring one, or changing the object's type moves the winner at
+  // once, while the binding follows only when the reconcile queue drains — and
+  // because claim uniqueness is PER SCOPE, an org claim can win over a platform
+  // claim with both rows still 'active', which no status check can distinguish.
+  // So the direct arm re-derives the canonical winner through the same builder
+  // the reconcile write path uses and requires the binding's exact (claim id,
+  // generation, extension) tuple to match it. That also keeps a RETIRING claim —
+  // still the winner until it is retired — correctly pinnable. The gate is NOT
+  // added to the snapshot arm, whose predicate is the shipped, ratified one: the
+  // same queue-lag window is part of that arm's contract and narrowing it is a
+  // change to claimed-row pinning as a whole, not a detail of this one.
+  ensureArtifactTypesRegistered();
+  const packTypesPh = ph(objectTypeRegistry.listArtifacts().map((d) => d.type));
+  const scopeOrder = (a: string) => `(CASE
+     WHEN ${a}.project_id IS NOT NULL THEN 0
+     WHEN ${a}.owner_level = 'user' THEN 1
+     WHEN ${a}.owner_level = 'team' THEN 2
+     WHEN ${a}.owner_level = 'organization' THEN 3
+     ELSE 4
+   END) ASC,
+  ${a}.id ASC`;
   const [candRes] = runPostgresQueriesSync({
     connectionString: conn(),
     queries: [
       {
-        text: `SELECT o.id
-FROM "${schema}"."objects" o
-WHERE o.org_id = ${orgIdPh}
-  AND o.deleted_at IS NULL
-  AND EXISTS (
-    SELECT 1 FROM "${schema}"."semantic_assertion" b
-    JOIN "${schema}"."artifact_type_claims" c ON c.id = b.binding_claim_id
-    WHERE b.org_id = o.org_id AND b.artifact_id = o.id
-      AND b.assertion_basis = 'binding' AND b.eligibility = 'eligible'
-      AND b.extension = ANY(${acceptedPh}::text[])
-      AND c.dispositions->>'pinnable' = 'true'
-      AND c.dispositions->>'snapshotPolicy' = 'content'
-  )
-  AND (${ownership.sql})${projectNarrow}${projectExcludeWhenUnset}
-ORDER BY
-  (CASE
-     WHEN o.project_id IS NOT NULL THEN 0
-     WHEN o.owner_level = 'user' THEN 1
-     WHEN o.owner_level = 'team' THEN 2
-     WHEN o.owner_level = 'organization' THEN 3
-     ELSE 4
-   END) ASC,
-  o.id ASC
+        // `buildOwnershipFilter` emits an UNQUALIFIED `org_id` predicate written
+        // for single-table reads, so (exactly as `resolveContextSlot` does) the
+        // visible-object set is resolved in a CTE over `objects` ALONE first —
+        // splicing it into the joined query below would crash on an ambiguous
+        // column reference.
+        text: `WITH visible AS (
+  SELECT o.id, o.org_id, o.type, o.owner_level, o.project_id
+  FROM "${schema}"."objects" o
+  WHERE o.org_id = ${orgIdPh}
+    AND o.deleted_at IS NULL
+    AND (${ownership.sql})${projectNarrow}${projectExcludeWhenUnset}
+),
+claimed AS (
+  SELECT v.id, v.org_id, v.type, v.owner_level, v.project_id,
+         b.id AS binding_id,
+         (v.type = ANY(${packTypesPh}::text[])) AS pack_typed,
+         (c.dispositions->>'pinnable' = 'true') AS pinnable,
+         (c.dispositions->>'snapshotPolicy' = 'content') AS content_policy,
+         ${bindingIsCurrentWinnerSql(postgresSchema, {
+           orgId: "v.org_id",
+           objectId: "v.id",
+           objectType: "v.type",
+           binding: "b",
+         })} AS binding_is_winner
+  FROM visible v
+  JOIN "${schema}"."semantic_assertion" b
+    ON b.org_id = v.org_id AND b.artifact_id = v.id
+   AND b.assertion_basis = 'binding' AND b.eligibility = 'eligible'
+   AND b.extension = ANY(${acceptedPh}::text[])
+  JOIN "${schema}"."artifact_type_claims" c ON c.id = b.binding_claim_id
+),
+direct AS (
+  SELECT k.id, rep.id AS rep_id
+  FROM claimed k
+  JOIN LATERAL (
+    SELECT r.id, r.revision
+    FROM "${schema}"."representation" r
+    JOIN "${schema}"."resource" res
+      ON res.id = r.resource_id AND res.org_id = r.org_id AND res.kind = 'blob'
+    WHERE r.org_id = k.org_id AND r.artifact_id = k.id
+      AND ${artifactWriterWitnessExistsSql(schema, {
+        orgId: "r.org_id",
+        artifactId: "r.artifact_id",
+        representationRevisionId: "r.id",
+      })}
+    ORDER BY r.revision DESC, r.id DESC
+    LIMIT 1
+  ) rep ON true
+  WHERE k.pack_typed AND k.pinnable AND k.binding_is_winner
+)
+SELECT k.id AS object_id, k.binding_id, d.rep_id AS direct_rep_id
+FROM claimed k
+LEFT JOIN direct d ON d.id = k.id
+WHERE d.rep_id IS NOT NULL
+   OR (k.pinnable AND k.content_policy)
+ORDER BY ${scopeOrder("k")}
 LIMIT ${CAPTURE_CANDIDATES_MAX}`,
         values: params,
       },
     ],
   });
-  const ids = ((candRes?.rows ?? []) as Array<{ id: string }>).map((r) => String(r.id));
+
+  const candidateRows = (candRes?.rows ?? []) as Array<{
+    object_id: string;
+    binding_id: string;
+    direct_rep_id: string | null;
+  }>;
+  if (candidateRows.length === CAPTURE_CANDIDATES_MAX) {
+    console.warn(
+      `[object-content-snapshot] capture candidate set truncated at ${CAPTURE_CANDIDATES_MAX} rows for org ${orgId} — broadest-scope rows dropped first`,
+    );
+  }
+
+  const ids: string[] = [];
+  for (const row of candidateRows) {
+    if (row.direct_rep_id) {
+      out.directPinned += 1;
+      out.pins.push({
+        objectId: String(row.object_id),
+        representationRevisionId: String(row.direct_rep_id),
+        semanticAssertionId: String(row.binding_id),
+      });
+    } else {
+      ids.push(String(row.object_id));
+    }
+  }
   if (ids.length === CAPTURE_CANDIDATES_MAX) {
     console.warn(
       `[object-content-snapshot] capture candidate set truncated at ${CAPTURE_CANDIDATES_MAX} rows for org ${orgId} — broadest-scope rows dropped first`,
