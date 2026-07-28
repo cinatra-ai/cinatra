@@ -1,12 +1,11 @@
 import { z } from "zod";
 
-import { DASHBOARD_STATUSES, OWNER_LEVELS, VISIBILITIES } from "../store/schema";
+import { DASHBOARD_STATUSES, OWNER_LEVELS } from "../store/schema";
 import { DashboardConfigV1_1Schema } from "../store/dashboard-config";
 import { DASHBOARD_CONFIG_V12_VERSION } from "../extension/dashboard-config-v12";
 import { ANALYTICS_PORTLET_KIND, ANALYTICS_PORTLET_KIND_ALIAS, isAnalyticsPortletKind } from "../portlets/kinds";
 
 const ownerLevelSchema = z.enum(OWNER_LEVELS);
-const visibilitySchema = z.enum(VISIBILITIES);
 const statusSchema = z.enum(DASHBOARD_STATUSES);
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -63,7 +62,10 @@ const dashboardConfigInputSchema = z
 export const dashboardsListSchema = z.object({
   ownerLevel: ownerLevelSchema.optional(),
   ownerId: z.string().min(1).optional(),
-  visibility: visibilitySchema.optional(),
+  // NO `visibility` filter (cinatra#1898 Phase-3): the dashboard-local
+  // visibility vocabulary retired with its column — a dashboard is always
+  // visible to everyone in its scope, so `ownerLevel`/`ownerId` ARE the
+  // share axis. An incoming `visibility` key is ignored (non-strict object).
   /** If absent, inactive dashboards (archived/generation_failed) are EXCLUDED. */
   status: z.union([statusSchema, z.array(statusSchema)]).optional(),
   search: z.string().optional(),
@@ -117,7 +119,6 @@ export const dashboardsCreateSchema = z.object({
       "The scope entity's id — the team or organization the dashboard is " +
         "about (or the user id for a personal dashboard).",
     ),
-  visibility: visibilitySchema.optional(),
 });
 
 export const dashboardsUpdateSchema = z.object({
@@ -126,7 +127,6 @@ export const dashboardsUpdateSchema = z.object({
   description: z.string().optional(),
   config: dashboardConfigInputSchema.optional(),
   configVersion: z.string().min(1).optional(),
-  visibility: visibilitySchema.optional(),
 });
 
 export const dashboardsPublishSchema = z.object({

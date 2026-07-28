@@ -22,7 +22,7 @@ const TOOL_META: Record<string, { description: string; inputSchema: ZodTypeAny }
   // Read tools.
   dashboards_list: {
     description:
-      "List dashboards accessible to the caller. Filters by owner level / owner id / visibility / status / search. Inactive (archived, generation_failed) dashboards are excluded unless `status` is explicitly set.",
+      "List dashboards accessible to the caller. Filters by owner level / owner id / status / search. Inactive (archived, generation_failed) dashboards are excluded unless `status` is explicitly set.",
     inputSchema: dashboardsListSchema,
   },
   dashboards_get: {
@@ -44,7 +44,7 @@ const TOOL_META: Record<string, { description: string; inputSchema: ZodTypeAny }
   },
   dashboards_update: {
     description:
-      "Update a dashboard (name / description / config / configVersion / visibility). Bumps `dashboard_version` for cache invalidation. " +
+      "Update a dashboard (name / description / config / configVersion). Bumps `dashboard_version` for cache invalidation. " +
       "Portlet queries follow the same executable-surface contract as dashboards_create (equals/in/inDateRange filters, one " +
       "granularity-bearing timeDimensions entry, no grouped and/or). " +
       "Returns { dashboard } on success; { error } with code forbidden / not_found / invalid_config / internal_error.",

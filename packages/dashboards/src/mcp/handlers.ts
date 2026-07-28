@@ -124,7 +124,6 @@ export type DashboardDto = {
   readonly ownerLevel: string;
   readonly ownerId: string;
   readonly organizationId: string;
-  readonly visibility: string;
   readonly status: string;
   readonly configVersion: string;
   readonly dashboardVersion: number;
@@ -151,7 +150,6 @@ function toDto(row: DashboardRow): DashboardDto {
     ownerLevel: row.ownerLevel,
     ownerId: row.ownerId,
     organizationId: row.organizationId,
-    visibility: row.visibility,
     status: row.status,
     configVersion: row.configVersion,
     dashboardVersion: row.dashboardVersion,
@@ -214,7 +212,6 @@ export function createDashboardPrimitiveHandlers() {
       conditions.push(or(isNull(dashboards.templateScope), ne(dashboards.templateScope, "project"))!);
       if (input.ownerLevel) conditions.push(eq(dashboards.ownerLevel, input.ownerLevel));
       if (input.ownerId) conditions.push(eq(dashboards.ownerId, input.ownerId));
-      if (input.visibility) conditions.push(eq(dashboards.visibility, input.visibility));
       if (input.search) {
         // ILIKE on name; description is nullable so we omit it from the
         // search to keep the WHERE simple.
@@ -223,7 +220,8 @@ export function createDashboardPrimitiveHandlers() {
 
       // Fetch a slice + permission-filter in JS. The org-scope condition
       // already eliminates the vast majority of irrelevant rows. The
-      // remaining permission check is per-row (visibility × ownership).
+      // remaining permission check is per-row (scope membership; cinatra#1898
+      // Phase-3 retired the dashboard-local visibility axis with its column).
       const slice = await db
         .select()
         .from(dashboards)
@@ -346,7 +344,6 @@ export function createDashboardPrimitiveHandlers() {
             configVersion: input.configVersion,
             ownerLevel: input.ownerLevel,
             ownerId: resolvedOwnerId,
-            visibility: input.visibility,
           },
           actor,
         );
@@ -368,7 +365,6 @@ export function createDashboardPrimitiveHandlers() {
             description: input.description,
             config: input.config,
             configVersion: input.configVersion,
-            visibility: input.visibility,
           },
           actor,
         );

@@ -11,7 +11,7 @@
  * Invariants:
  *   - Dashboard id is per-org-per-user (cross-org isolation; users in
  *     different orgs see different rows).
- *   - ownerLevel "user" + ownerId=userId + visibility "private" means
+ *   - ownerLevel "user" + ownerId=userId means
  *     `canWrite` is satisfied by `row.ownerId === actor.userId` —
  *     no org role required. Every user can edit + save THEIR /agents
  *     layout, regardless of their Better Auth org role.
@@ -107,7 +107,6 @@ export async function saveAgentsDashboardAction(
         name: "Agents",
         ownerLevel: "user",
         ownerId: ctx.userId,
-        visibility: "private",
       },
       actor,
     );
@@ -125,7 +124,7 @@ export async function saveAgentsDashboardAction(
 /**
  * Save actions for the four additional dashboards. Same shape as the
  * agents action — per-org-per-user dashboard id, ownerLevel "user",
- * ownerId = caller's userId, visibility "private" — so each user
+ * ownerId = caller's userId — so each user
  * customises their own dashboard layout independently.
  */
 
@@ -157,7 +156,6 @@ async function saveCinatraDashboardAction(
         name,
         ownerLevel: "user",
         ownerId: ctx.userId,
-        visibility: "private",
       },
       actor,
     );
@@ -284,15 +282,15 @@ function toSummary(row: DashboardRow, actor: DashboardActor): EntityDashboardSum
 }
 
 /** Whether the actor may CREATE a dashboard for this ref. Mirrors the service's
- *  create authz (a private, non-default pseudo row owned per the ref, run
- *  through the shared resolver); for a human/session actor the resolver reads
- *  only organizationId, ownerLevel, ownerId, visibility. */
+ *  create authz (a non-default pseudo row owned per the ref, run through the
+ *  shared resolver); for a human/session actor the resolver reads only
+ *  organizationId, ownerLevel, ownerId, projectId (cinatra#1898 Phase-3 retired
+ *  the dashboard-local visibility axis with its column). */
 function canCreateForRef(ref: DashboardEntityRef, actor: DashboardActor): boolean {
   const pseudo = {
     organizationId: actor.organizationId,
     ownerLevel: ref.ownerLevel,
     ownerId: ref.ownerId,
-    visibility: "private",
     projectId: null,
   } as unknown as DashboardRow;
   return resolveDashboardAccess(pseudo, actor).canWrite;

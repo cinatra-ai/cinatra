@@ -85,7 +85,6 @@ async function provision(pool: Pool): Promise<void> {
     owner_level text NOT NULL,
     owner_id text NOT NULL,
     organization_id text NOT NULL,
-    visibility text NOT NULL DEFAULT 'private',
     status text NOT NULL DEFAULT 'draft',
     created_by text NOT NULL,
     updated_by text,
@@ -99,7 +98,16 @@ async function provision(pool: Pool): Promise<void> {
     template_scope text,
     entity_type text,
     entity_id text,
-    is_default boolean NOT NULL DEFAULT false
+    is_default boolean NOT NULL DEFAULT false,
+    -- dashboardContribution lineage columns (cinatra#1628 S11a). The fixture
+    -- predated them, so every drizzle SELECT (which lists the full row) errored
+    -- with a missing contribution_id column and this suite could not run at
+    -- all. Mirrors store/schema.ts.
+    contribution_id text,
+    applied_contribution_version integer,
+    applied_default_json jsonb,
+    applied_default_hash text,
+    archive_reason text
   )`);
   await pool.query(`CREATE TABLE "${SCHEMA}".dashboard_revisions (
     dashboard_id text NOT NULL REFERENCES "${SCHEMA}".dashboards(id) ON DELETE CASCADE,
@@ -299,7 +307,7 @@ describe.skipIf(!RUN_IT)("cinatra#700 per-entity dashboards (real Postgres)", ()
     const bareDc = { portlets: [], layoutMode: "grid", grid: { cols: 12, rowHeight: 50, minW: 3, minH: 4 } };
     await upsertDashboardConfig(
       legacyId,
-      { config: bareDc, name: "Agents", ownerLevel: "user", ownerId: actor.userId, visibility: "private" },
+      { config: bareDc, name: "Agents", ownerLevel: "user", ownerId: actor.userId },
       actor,
     );
     // The row is born mapped: entity_type/entity_id/is_default set, name forced to Overview.
