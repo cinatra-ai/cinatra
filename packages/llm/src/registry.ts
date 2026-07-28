@@ -4,6 +4,7 @@
 
 import "server-only";
 
+import type { ExtensionToolboxBuildContext } from "@cinatra-ai/sdk-extensions";
 import { buildLlmMcpServerTool, buildExternalMcpServerTools } from "./mcp-access";
 import { isScriptedTestProviderEnabled } from "./scripted-test-provider";
 import type { LlmProvider, LlmProviderAdapter, LlmMcpServerTool } from "./types";
@@ -93,12 +94,24 @@ export async function resolveMcpToolsForDeclaredIds(params: {
    * one.
    */
   cinatraMcpToolOverride?: () => Promise<LlmMcpServerTool | null>;
+  /**
+   * Host-built, identity-free toolbox build context (cinatra#2019 S4):
+   * `{ surface, connectorInstancePin? }`. Threaded into first-party
+   * manifest-toolbox `buildTools(provider, context)` calls on BOTH the
+   * always-inject and the declared-id path so surface-gating toolboxes can
+   * discriminate chat / agent_run / widget builds (absent ⇒ they emit
+   * nothing, fail-closed). NOT passed to the `llm-toolbox` capability
+   * providers or the `external_mcp_servers` registry resolver — neither
+   * performs per-instance site injection.
+   */
+  context?: ExtensionToolboxBuildContext;
 }): Promise<LlmMcpServerTool[]> {
   const {
     provider,
     declaredToolboxIds,
     skipExternalMcpRegistry,
     cinatraMcpToolOverride,
+    context,
   } = params;
   const resolveCinatraMcpTool = async (): Promise<LlmMcpServerTool | null> => {
     if (cinatraMcpToolOverride) {
@@ -117,6 +130,7 @@ export async function resolveMcpToolsForDeclaredIds(params: {
     // opt-out would be reachable through the back door.
     const externalMcpTools = await buildExternalMcpServerTools(provider, {
       skipRegistryFallback: skipExternalMcpRegistry === true,
+      context,
     });
     const registeredMcpTools = skipExternalMcpRegistry
       ? []
@@ -159,7 +173,7 @@ export async function resolveMcpToolsForDeclaredIds(params: {
       if (toolbox) {
         const toolboxTools = sanitizeExternalMcpToolboxTools(
           declaredId,
-          await toolbox.buildTools(provider),
+          await toolbox.buildTools(provider, context),
         );
         tools.push(...toolboxTools);
         if (toolboxTools.length === 0) {
@@ -201,9 +215,18 @@ export async function resolveMcpToolsForDeclaredIds(params: {
  */
 export async function resolveChatExternalMcpTools(
   provider: "openai" | "anthropic",
+  /**
+   * Host-derived build context for the chat surface (cinatra#2019 S4). The
+   * assistant runtime passes `{ surface: "chat" }` for cookie-session turns
+   * and `{ surface: "public_site_widget" }` for widget-principal turns — the
+   * two share this plumbing, so the explicit surface is what lets a
+   * surface-gating toolbox refuse widget builds fail-closed. Absent ⇒
+   * toolboxes that gate on it emit nothing (unwidened-caller fail-closed).
+   */
+  context?: ExtensionToolboxBuildContext,
 ): Promise<LlmMcpServerTool[]> {
   const [externalMcpTools, registeredMcpTools] = await Promise.all([
-    buildExternalMcpServerTools(provider),
+    buildExternalMcpServerTools(provider, { context }),
     buildRegisteredExternalMcpServerTools(),
   ]);
   return dedupeMcpToolsByServerLabel([...externalMcpTools, ...registeredMcpTools]);
