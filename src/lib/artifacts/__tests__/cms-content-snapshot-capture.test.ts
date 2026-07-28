@@ -45,36 +45,71 @@ function facts(over: Partial<CmsSnapshotCaptureFacts> = {}): CmsSnapshotCaptureF
 }
 
 describe("cinatra#2043 - buildCmsSnapshotCaptureQueries", () => {
-  it("composes FOUR ops when the produced event is active: objects, content write, produced event, apply-binding row - in that order", () => {
+  it("composes FIVE ops when the produced event is active: objects, content write, writer witness, produced event, apply-binding row - in that order", () => {
     const ops = buildCmsSnapshotCaptureQueries(SCHEMA, facts({ emitProducedEvent: true }));
-    expect(ops).toHaveLength(4);
+    expect(ops).toHaveLength(5);
 
     // [0] the objects row (the artifact identity the gate pins + orchestration classifies).
     expect(ops[0].text).toContain(`"${SCHEMA}"."objects"`);
     expect(ops[0].values).toContain("@cinatra-ai/objects:cms-content-snapshot");
 
     // [1] the content write touches resource + artifact_blobs + representation.
+    // Its position is LOAD-BEARING: the writer reads results[1] for the
+    // RETURNING row, so nothing may be spliced ahead of it.
     expect(ops[1].text).toContain(`"${SCHEMA}"."resource"`);
     expect(ops[1].text).toContain(`"${SCHEMA}"."artifact_blobs"`);
     expect(ops[1].text).toContain(`"${SCHEMA}"."representation"`);
 
-    // [2] the transactional ArtifactProduced event, enumerated emitter.
-    expect(ops[2].text).toContain(`"${SCHEMA}"."artifact_produced_outbox"`);
-    expect(ops[2].values).toContain("object_cms_snapshot_capture");
+    // [2] the artifact-writer PROVENANCE WITNESS for the representation [1]
+    // just minted (cinatra#2139).
+    expect(ops[2].text).toContain(`"${SCHEMA}"."artifact_audit"`);
+    expect(ops[2].text).toContain("'create'");
 
-    // [3] the cms_snapshot_targets apply binding.
-    expect(ops[3].text).toContain(`"${SCHEMA}"."cms_snapshot_targets"`);
+    // [3] the transactional ArtifactProduced event, enumerated emitter.
+    expect(ops[3].text).toContain(`"${SCHEMA}"."artifact_produced_outbox"`);
+    expect(ops[3].values).toContain("object_cms_snapshot_capture");
+
+    // [4] the cms_snapshot_targets apply binding.
+    expect(ops[4].text).toContain(`"${SCHEMA}"."cms_snapshot_targets"`);
   });
 
-  it("omits the produced-event op when the caller-level fence is off (3 ops, no outbox write)", () => {
+  it("omits the produced-event op when the caller-level fence is off (4 ops, no outbox write)", () => {
     const ops = buildCmsSnapshotCaptureQueries(SCHEMA, facts({ emitProducedEvent: false }));
-    expect(ops).toHaveLength(3);
+    expect(ops).toHaveLength(4);
     expect(ops.some((o) => o.text.includes("artifact_produced_outbox"))).toBe(false);
     // The apply-binding row is ALWAYS present (the capture is real even fenced-off).
     expect(ops[ops.length - 1].text).toContain(`"${SCHEMA}"."cms_snapshot_targets"`);
     // The objects row + content write are still present and first.
     expect(ops[0].text).toContain(`"${SCHEMA}"."objects"`);
     expect(ops[1].text).toContain(`"${SCHEMA}"."representation"`);
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#2139 residual (b) — the WITNESS is unconditional.
+  //
+  // A captured CMS snapshot is a host-authored FILE representation on an
+  // `isArtifact`-registered type, so the pack-typed serve arm governs it exactly
+  // as it governs a materializer's output. It shipped WITHOUT the witness, so a
+  // claim reserved over the snapshot type would have stranded the capture on its
+  // own review surface. The witness is not lifecycle-fenced: it rides every
+  // capture, fenced or not.
+  // -------------------------------------------------------------------------
+  it("emits the writer-provenance witness for the snapshot representation, fence ON or OFF", () => {
+    for (const emitProducedEvent of [true, false]) {
+      const f = facts({ emitProducedEvent, artifactId: "art-W", representationRevisionId: "rev-W" });
+      const ops = buildCmsSnapshotCaptureQueries(SCHEMA, f);
+      const witness = ops.filter((o) => o.text.includes(`"${SCHEMA}"."artifact_audit"`));
+      expect(witness).toHaveLength(1);
+      // Keyed to the EXACT representation the content write minted, in the SAME
+      // transaction (one op list = one tx) — a witness that could commit without
+      // its representation would not be a witness.
+      expect(witness[0].values).toContain("art-W");
+      expect(witness[0].values).toContain("rev-W");
+      expect(witness[0].values).toContain("org-1");
+      expect(witness[0].text).toContain("'create'");
+      // It rides AFTER the content write, never before it.
+      expect(ops.indexOf(witness[0])).toBeGreaterThan(1);
+    }
   });
 
   it("the produced-event op carries external_publish + the deterministic event id for the snapshot revision", () => {

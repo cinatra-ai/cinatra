@@ -1,0 +1,15 @@
+Round 3 closes F2. I found no implementation blocker; this is merge-safe subject to the normal DB-backed CI proof.
+
+1. **S1 — Faithful.** [`bindingIsCurrentWinnerSql`](<<lane-worktree>/src/lib/objects/binding-write-path.ts:121>) matches [`winnerCte`](<<lane-worktree>/src/lib/objects/binding-write-path.ts:78>) on dedicated-only selection, `active|retiring`, org-over-platform precedence, generation DESC/id ASC, exact tuple, and quarantine exclusion. Moving quarantine outside the winner subquery is logically equivalent. The write CTE obtains type/org/id from `objects`; the read builder receives those expressions from an already-joined object row. Schema escaping is correct: every call passes raw `postgresSchema`, escaped exactly once.
+
+2. **S2 — All call sites are correct.**
+
+   - Candidate: `v` is the current object and `b` the eligible accepted binding; winner identity only controls `direct`, leaving the snapshot fallback untouched.
+   - Resolver: `o` carries current type/org/id and `sa` is ultimately constrained to the pinned eligible binding.
+   - Finalizer: inner `b` is pinned to `b.id = sa.id`; both finalize and probe emit the same helper as a separate top-level OR branch. The snapshot branch is unchanged.
+
+3. **S3 — Yes.** In [`context-resolver.ts`](<<lane-worktree>/src/lib/artifacts/context-resolver.ts:365>), both `o` and `sa` precede `JOIN LATERAL`, so PostgreSQL permits the lateral subquery to correlate against both. The later outer `WHERE` affects filtering, not alias visibility.
+
+4. **S4 — No remaining code blocker.** One non-blocking test hardening opportunity: the winner-transition test verifies candidacy and both finalizers, but does not feed the pre-transition pin directly to the resolver after supersession. Adding that assertion would explicitly lock the resolver’s winner gate against regression.
+
+Validation: scoped ESLint had zero errors; `git diff --check` passed. Full typecheck was blocked by unrelated missing extension packages, and the real-Postgres suite could not run here because no DB URL is configured and the read-only sandbox prevents Vitest’s temp directory creation.

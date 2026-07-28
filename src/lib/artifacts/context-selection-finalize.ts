@@ -13,6 +13,11 @@ import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import type { RunContextSelectionRow } from "./run-context-selections-store";
 import type { ReferrerKind } from "./artifact-refs-store";
 import { computeClaimDispositionFingerprint } from "./object-content-snapshot";
+import { artifactWriterWitnessExistsSql } from "./artifact-writer-witness";
+// NOTE the RAW `postgresSchema` at every call site: this builder escapes its own
+// identifier (the binding-write-path convention), and the local `schema` const is
+// ALREADY escaped — passing it would double-escape an embedded quote.
+import { bindingIsCurrentWinnerSql } from "@/lib/objects/binding-write-path";
 
 // ---------------------------------------------------------------------------
 // Context-selection FINALIZATION (cinatra#1430, epic #1424).
@@ -23,7 +28,10 @@ import { computeClaimDispositionFingerprint } from "./object-content-snapshot";
 //      semanticAssertionId) triple's coherence IN SQL under the lock (the row
 //      is live, the representation belongs to the artifact, the assertion
 //      belongs to the artifact and its extension matches, and the object is a
-//      generic artifact OR a claimed typed row carrying an eligible binding);
+//      generic artifact, an UNCLAIMED pack-typed row, or a CLAIMED row pinned at
+//      one of the exactly two things a claimed row may expose — its policy-keyed
+//      content snapshot, or a host-authored representation carrying the
+//      writer-provenance witness);
 //   2. appends the `run_context_selections` audit row (append-only);
 //   3. writes a REAL `artifact_refs` retention pin.
 //
@@ -126,13 +134,77 @@ WHERE rep.org_id = $1 AND rep.artifact_id = $2 AND rep.id = $3 LIMIT 1`,
 
 const GENERIC_ARTIFACT_OBJECT_TYPE = "@cinatra-ai/artifact:object";
 
-/** The registered isArtifact PACK type ids (NOT the generic base). The
- * coherence gate admits a NON-CLAIMED pack row of one of these types; a
- * CLAIMED pack row (like any claimed row) must still route through the
- * binding-snapshot branch (cinatra#1430). Read at CALL time (never a frozen
- * module-load snapshot). */
+/** The registered isArtifact PACK type ids (NOT the generic base). The coherence
+ * gate admits a NON-CLAIMED pack row of one of these types; a CLAIMED pack row
+ * routes through either the binding-SNAPSHOT branch (cinatra#1430) or the
+ * binding-plus-WITNESS branch (cinatra#2139) — never through the bare type. Read
+ * at CALL time (never a frozen module-load snapshot). */
 function registeredPackArtifactTypes(): string[] {
   return objectTypeRegistry.listArtifacts().map((d) => d.type);
+}
+
+/**
+ * The CLAIMED + HOST-AUTHORED admission branch (cinatra#2139), emitted into BOTH
+ * coherence statements — `buildFinalizeQuery`'s `coherent` CTE and
+ * `buildProbeQuery`'s read-only probe — from this ONE definition, so the two can
+ * never disagree about what finalizes. Assumes the surrounding statement's
+ * aliases: `o` (the objects row), `rep` (the pinned representation) and `sa` (the
+ * selection's assertion, already constrained to the selection's extension and to
+ * `eligibility = 'eligible'`). `packTypesPh` is that statement's own positional
+ * placeholder for the registered isArtifact PACK type ids — the two statements
+ * number their parameters differently, which is exactly why it is an argument.
+ *
+ * WHAT IT ADMITS. A claimed row of a registered isArtifact PACK type, selected AS
+ * its BINDING, whose winning claim's dispositions permit pinning, pinned at a
+ * representation carrying the shared writer-provenance witness. Those bytes are
+ * AUTHORED CONTENT, not a rendering of the mutable object row, so there is no
+ * snapshot policy to bypass and no claimant boundary to cross — the same argument
+ * the serve arm makes for the same rows (cinatra#2047 OBS-1). `snapshotPolicy` is
+ * deliberately NOT consulted: it governs serializing `objects.data`, and this arm
+ * serializes nothing.
+ *
+ * THE CLAIMANT GUARD, without a fingerprint. The snapshot branch pins its
+ * representation to the capture-time claim/disposition fingerprint because a
+ * snapshot is a rendering OF a claimant's view. An authored representation is
+ * not, so the guard here is IDENTITY, not content: the selection must name the
+ * binding ITSELF (`b.id = sa.id`), that binding must still be eligible, and it
+ * must be the CANONICAL WINNER for the object's current type — re-derived through
+ * the same builder the reconcile write path uses.
+ *
+ * Eligibility alone is not enough (codex round-2 finding): activating a claim,
+ * retiring one, or changing the object's type moves the winner IMMEDIATELY while
+ * the binding follows only when the reconcile queue drains, and because claim
+ * uniqueness is PER SCOPE an org claim can win over a platform claim with both
+ * rows still 'active'. A plain `status` check therefore neither sees that case
+ * nor admits a RETIRING claim that is still legitimately the winner. Winner
+ * identity answers both. The gate is deliberately NOT added to the snapshot
+ * branch below, whose predicate is the shipped, ratified one — the same queue-lag
+ * window is part of that branch's contract, and narrowing it is a change to
+ * claimed-row pinning as a whole, not a detail of this branch.
+ */
+function claimedWitnessedBranchSql(schema: string, packTypesPh: string): string {
+  return `OR (
+        o.type = ANY(${packTypesPh}::text[])
+        AND sa.assertion_basis = 'binding'
+        AND EXISTS (
+          SELECT 1 FROM "${schema}"."semantic_assertion" b
+          JOIN "${schema}"."artifact_type_claims" c ON c.id = b.binding_claim_id
+          WHERE b.org_id = o.org_id AND b.artifact_id = o.id AND b.id = sa.id
+            AND b.assertion_basis = 'binding' AND b.eligibility = 'eligible'
+            AND c.dispositions->>'pinnable' = 'true'
+            AND ${bindingIsCurrentWinnerSql(postgresSchema, {
+              orgId: "o.org_id",
+              objectId: "o.id",
+              objectType: "o.type",
+              binding: "b",
+            })}
+        )
+        AND ${artifactWriterWitnessExistsSql(schema, {
+          orgId: "rep.org_id",
+          artifactId: "rep.artifact_id",
+          representationRevisionId: "rep.id",
+        })}
+      )`;
 }
 
 type FinalizeArgs = {
@@ -248,6 +320,7 @@ coherent AS (
             AND snap.claim_disposition_fingerprint = $21
         )
       )
+      ${claimedWitnessedBranchSql(schema, "$22")}
     )
 ),
 sel AS (
@@ -538,6 +611,7 @@ function buildProbeQuery(schema: string, a: FinalizeArgs) {
               AND snap.claim_disposition_fingerprint = $7
           )
         )
+        ${claimedWitnessedBranchSql(schema, "$8")}
       )
   ) AS coherent,
   EXISTS (
