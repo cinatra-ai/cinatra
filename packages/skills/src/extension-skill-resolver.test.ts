@@ -47,6 +47,7 @@ import {
   deriveSkillRegistration,
   resolveSkillIdForCapability,
   resolveInstalledSkillSourcePath,
+  resolveDeclaredSkillEdgeForExtensionDir,
   ensureInstalledSkillRegistered,
   ensureInstalledSkillsRegistered,
   scanSkillExtensions,
@@ -62,6 +63,7 @@ async function writeExtension(input: {
   name: string;
   kind: string;
   capabilities?: Record<string, string>;
+  dependencies?: unknown[];
   slugs: string[];
 }) {
   const dir = path.join(tmpDir, "extensions", input.vendor, input.pkgDir);
@@ -70,7 +72,12 @@ async function writeExtension(input: {
     path.join(dir, "package.json"),
     JSON.stringify({
       name: input.name,
-      cinatra: { apiVersion: "cinatra.ai/v1", kind: input.kind, capabilities: input.capabilities },
+      cinatra: {
+        apiVersion: "cinatra.ai/v1",
+        kind: input.kind,
+        capabilities: input.capabilities,
+        dependencies: input.dependencies,
+      },
     }),
   );
   for (const slug of input.slugs) {
@@ -418,6 +425,7 @@ describe("installed_extension lifecycle gate (explicit-tombstone semantics)", ()
       pkgName,
       pkgDirName: pkgName.split("/")[1] ?? pkgName,
       kind: "skill",
+      dependencies: [],
       capabilities: {},
       slugs: [],
     });
@@ -490,5 +498,202 @@ describe("resolveInstalledSkillSourcePath", () => {
     expect(
       await resolveInstalledSkillSourcePath("@acme/art-pkg2:do-art", { allowKinds: ["artifact"] }),
     ).toBe(path.join(process.cwd(), "extensions", "acme", "art-pkg2", "skills", "do-art", "SKILL.md"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dependency → injection projection (cinatra#2090 S3).
+// ---------------------------------------------------------------------------
+
+describe("resolveDeclaredSkillEdgeForExtensionDir", () => {
+  const skillEdge = (packageName: string, over: Record<string, unknown> = {}) => ({
+    packageName,
+    edgeType: "runtime",
+    versionConstraint: { kind: "semver-range", range: "*" },
+    requirement: "required",
+    kind: "skill",
+    ...over,
+  });
+
+  async function writeConsumerAndProvider(over?: {
+    consumerDeps?: unknown[];
+    providerSlugs?: string[];
+    providerKind?: string;
+  }) {
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "web-research-agent",
+      name: "@cinatra-ai/web-research-agent",
+      kind: "agent",
+      dependencies: over?.consumerDeps ?? [skillEdge("@cinatra-ai/web-research-skill")],
+      slugs: [],
+    });
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "web-research-skill",
+      name: "@cinatra-ai/web-research-skill",
+      kind: over?.providerKind ?? "skill",
+      slugs: over?.providerSlugs ?? ["web-research"],
+    });
+  }
+
+  it("resolves a consumer's declared skill edge to the provider's bundle + catalog id", async () => {
+    await writeConsumerAndProvider();
+    const edge = await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent");
+    expect(edge).toEqual({
+      packageName: "@cinatra-ai/web-research-skill",
+      slug: "web-research",
+      skillId: "@cinatra-ai/web-research-skill:web-research",
+      // process.cwd() (not tmpDir): macOS resolves /var -> /private/var on
+      // chdir, and the scan reports the resolved root.
+      sourcePath: path.join(
+        process.cwd(),
+        "extensions",
+        "cinatra-ai",
+        "web-research-skill",
+        "skills",
+        "web-research",
+        "SKILL.md",
+      ),
+    });
+  });
+
+  it("returns null for an extension that declares no skill edge", async () => {
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "plain-agent",
+      name: "@cinatra-ai/plain-agent",
+      kind: "agent",
+      dependencies: [skillEdge("@cinatra-ai/other-agent", { kind: "agent" })],
+      slugs: [],
+    });
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("plain-agent")).toBeNull();
+  });
+
+  it("returns null for an unknown consumer dir", async () => {
+    await writeConsumerAndProvider();
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("nope-agent")).toBeNull();
+  });
+
+  it("FAILS CLOSED when the consumer declares TWO install-blocking skill edges", async () => {
+    await writeConsumerAndProvider({
+      consumerDeps: [
+        skillEdge("@cinatra-ai/web-research-skill"),
+        skillEdge("@cinatra-ai/other-skill"),
+      ],
+    });
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent")).toBeNull();
+  });
+
+  it("ignores an OPTIONAL skill edge (only a required one delivers)", async () => {
+    await writeConsumerAndProvider({
+      consumerDeps: [skillEdge("@cinatra-ai/web-research-skill", { requirement: "optional" })],
+    });
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent")).toBeNull();
+  });
+
+  it("delivers on a RUNTIME edge only — peer and install-time never inject", async () => {
+    for (const edgeType of ["peer", "install-time"]) {
+      await writeConsumerAndProvider({
+        consumerDeps: [skillEdge("@cinatra-ai/web-research-skill", { edgeType })],
+      });
+      expect(await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent")).toBeNull();
+    }
+    // …and the runtime edge still does.
+    await writeConsumerAndProvider();
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent")).not.toBeNull();
+  });
+
+  it("refuses a kind:\"skill\" CONSUMER — a provider never chains a skill of its own", async () => {
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "chained-skill",
+      name: "@cinatra-ai/chained-skill",
+      kind: "skill",
+      dependencies: [skillEdge("@cinatra-ai/web-research-skill")],
+      slugs: ["chained"],
+    });
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "web-research-skill",
+      name: "@cinatra-ai/web-research-skill",
+      kind: "skill",
+      slugs: ["web-research"],
+    });
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("chained-skill")).toBeNull();
+  });
+
+  it("resolves for the artifact and connector consumer kinds too", async () => {
+    for (const kind of ["artifact", "connector"]) {
+      await writeConsumerAndProvider();
+      await writeExtension({
+        vendor: "cinatra-ai",
+        pkgDir: "some-consumer",
+        name: `@cinatra-ai/some-${kind}`,
+        kind,
+        dependencies: [skillEdge("@cinatra-ai/web-research-skill")],
+        slugs: [],
+      });
+      expect(await resolveDeclaredSkillEdgeForExtensionDir("some-consumer")).toEqual(
+        expect.objectContaining({ packageName: "@cinatra-ai/web-research-skill" }),
+      );
+    }
+  });
+
+  it("returns null when the declared provider is absent (uninstalled)", async () => {
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "web-research-agent",
+      name: "@cinatra-ai/web-research-agent",
+      kind: "agent",
+      dependencies: [skillEdge("@cinatra-ai/web-research-skill")],
+      slugs: [],
+    });
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent")).toBeNull();
+  });
+
+  it("returns null when the provider is not a kind:\"skill\" package", async () => {
+    await writeConsumerAndProvider({ providerKind: "artifact" });
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent")).toBeNull();
+  });
+
+  it("returns null when the provider does not ship EXACTLY ONE bundle", async () => {
+    await writeConsumerAndProvider({ providerSlugs: [] });
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent")).toBeNull();
+    await writeConsumerAndProvider({ providerSlugs: ["a", "b"] });
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent")).toBeNull();
+  });
+
+  it("returns null when the provider extension is TOMBSTONED (all rows archived)", async () => {
+    await writeConsumerAndProvider();
+    readEffectiveStatusMock.mockResolvedValue(
+      new Map([["@cinatra-ai/web-research-skill", "archived"]]),
+    );
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent")).toBeNull();
+  });
+
+  it("still resolves when the lifecycle-status READ FAILS (documented fail-open)", async () => {
+    // Deliberate, and different from the widget-chat auth carve-out: this
+    // surface mounts an extension's own declared instructions, and the
+    // behaviour it replaces (an embedded bundle) had no lifecycle check at all,
+    // so a degraded status store must not newly strip a skill. Pinned so the
+    // posture is a decision, not an accident.
+    await writeConsumerAndProvider();
+    readEffectiveStatusMock.mockRejectedValue(new Error("status store down"));
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent")).toEqual(
+      expect.objectContaining({ skillId: "@cinatra-ai/web-research-skill:web-research" }),
+    );
+  });
+
+  it("ignores MALFORMED dependency entries instead of resolving through them", async () => {
+    await writeConsumerAndProvider({
+      consumerDeps: [
+        null,
+        "not-an-object",
+        { packageName: "@cinatra-ai/web-research-skill", kind: "skill" }, // no edgeType/requirement
+        { edgeType: "runtime", requirement: "required", kind: "skill" }, // no packageName
+      ],
+    });
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent")).toBeNull();
   });
 });

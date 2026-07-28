@@ -233,9 +233,14 @@
       "resolvedSha": "da01eed8dc9f1d661d72e2f042aeda6ea6843fbc"
     },
     {
+      "packageName": "@cinatra-ai/list-curation-skill",
+      "repo": "cinatra-ai/list-curation-skill",
+      "resolvedSha": "91ef6f1f51595b55fe3bb5ad488366912c36f4bf"
+    },
+    {
       "packageName": "@cinatra-ai/list-curator-agent",
       "repo": "cinatra-ai/list-curator-agent",
-      "resolvedSha": "e97fe332657fb2f126893bf4d39f8e91aad3e82a"
+      "resolvedSha": "8b6f8f3b3d04d959e440bc9b0891b08f59ee8c6b"
     },
     {
       "packageName": "@cinatra-ai/marketing-icp-artifact",
@@ -325,7 +330,12 @@
     {
       "packageName": "@cinatra-ai/web-research-agent",
       "repo": "cinatra-ai/web-research-agent",
-      "resolvedSha": "85860da95988427f38b75ff1050b6b2701393374"
+      "resolvedSha": "e8bd3c7d0c9393415111986eb444fe542835a54c"
+    },
+    {
+      "packageName": "@cinatra-ai/web-research-skill",
+      "repo": "cinatra-ai/web-research-skill",
+      "resolvedSha": "6e58dcbcd5e7764e0573624f37e90d902b1279a2"
     },
     {
       "packageName": "@cinatra-ai/web-scrape-agent",

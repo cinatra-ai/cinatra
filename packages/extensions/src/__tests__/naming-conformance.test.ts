@@ -225,8 +225,9 @@ function scopeAllowedForKind(scope: string, kind: Kind, packageName: string): bo
 }
 
 function dirSuffixForKind(kind: Kind): string {
-  // Singular kind → directory suffix
-  return kind === "skill" ? "-skills" : `-${kind}`;
+  // Singular kind → directory suffix. `skill` and `artifact` accept a second
+  // form and are branched explicitly in `isAllowedDirShapeForKind`.
+  return kind === "skill" ? "-skill" : `-${kind}`;
 }
 
 function isAllowedDirShapeForKind(dirBasename: string, kind: Kind, packageName: string): boolean {
@@ -242,6 +243,18 @@ function isAllowedDirShapeForKind(dirBasename: string, kind: Kind, packageName: 
   // singular `-artifact`, so the plural form needs an explicit branch.
   if (kind === "artifact") {
     return dirBasename.endsWith("-artifact") || dirBasename.endsWith("-artifacts");
+  }
+  // Skill kind: the CANONICAL suffix is the SINGULAR `-skill` — the ratified
+  // packaging contract (cinatra#2089, epic #2086 S2) gives one `kind:"skill"`
+  // extension exactly one Anthropic-schema bundle, so a plural name reads as a
+  // pack. The retired plural `-skills` stays accepted while the cinatra#2090
+  // migration renames the four packages that still carry it (assistant-skills,
+  // blog-skills, drupal-skills, skill-creator-skills); the skill-packaging
+  // verdict is the authority that refuses a plural package NAME, and it waives
+  // exactly those four by name in its expiring ledger. Same shape as the
+  // artifact branch above: `-skills` does not end with the singular `-skill`.
+  if (kind === "skill") {
+    return dirBasename.endsWith("-skill") || dirBasename.endsWith("-skills");
   }
   const suffix = dirSuffixForKind(kind);
   return dirBasename.endsWith(suffix);
