@@ -27,6 +27,21 @@ export type DependencyEdgeType = (typeof DEPENDENCY_EDGE_TYPES)[number];
 export const DEPENDENCY_REQUIREMENTS = ["required", "optional"] as const;
 export type DependencyRequirement = (typeof DEPENDENCY_REQUIREMENTS)[number];
 
+/**
+ * The EDGE-ROLE vocabulary (cinatra#2090). Structural mirror of the host's
+ * `canonical-types.ts` `DEPENDENCY_SKILL_ROLES` — the two shapes stay
+ * assignable across the ABI boundary. Additive and OPTIONAL, so every edge
+ * authored before this vocabulary existed stays valid.
+ *
+ *   - `matcher`   — the artifact classifier may honour the resolved skill;
+ *   - `authoring` — the chat-driven authoring path follows it.
+ *
+ * No role = the plain injectable delivery (the whole bundle is mounted into
+ * the declaring extension's own run).
+ */
+export const DEPENDENCY_SKILL_ROLES = ["matcher", "authoring"] as const;
+export type DependencySkillRole = (typeof DEPENDENCY_SKILL_ROLES)[number];
+
 export type VersionConstraint =
   | { kind: "semver-range"; range: string }
   | { kind: "exact"; version: string }
@@ -54,6 +69,11 @@ export type ExtensionDependency = {
   packageName: string;
   /** The depended-on extension's kind. Optional for older rows. */
   kind?: ExtensionKind;
+  /**
+   * Which host surface a `kind:"skill"` edge feeds. Absent = plain injectable
+   * delivery. See {@link DEPENDENCY_SKILL_ROLES}.
+   */
+  role?: DependencySkillRole;
   edgeType: DependencyEdgeType;
   versionConstraint: VersionConstraint;
   requirement: DependencyRequirement;

@@ -77,6 +77,12 @@ export const extensionDependencyEdgeTable = canonicalSchema.table("extension_dep
   dependentInstallId: text("dependent_install_id").notNull(),
   declaredPackageName: text("declared_package_name").notNull(),
   declaredKind: text("declared_kind"),
+  // The declared edge ROLE (cinatra#2090 S3) — which host surface a
+  // `kind:"skill"` edge feeds. NULL = no role (the plain injectable delivery,
+  // and every edge persisted before the vocabulary existed). Schema DDL lives
+  // in src/lib/extension-grant-schema.ts (dependencyEdgeSchemaQueries) +
+  // migrations/core/core__0086.
+  declaredRole: text("declared_role"),
   edgeType: text("edge_type").notNull(),
   requirement: text("requirement").notNull(),
   versionConstraint: jsonb("version_constraint").notNull(),
@@ -90,10 +96,39 @@ export const extensionDependencyEdgeTable = canonicalSchema.table("extension_dep
 export type InstalledExtensionRow = typeof installedExtensionTable.$inferSelect;
 export type ExtensionDependencyEdgeRow = typeof extensionDependencyEdgeTable.$inferSelect;
 
+/**
+ * The WRITE half of the edge round-trip: one persisted row payload per declared
+ * edge. Kept adjacent to (and unit-tested against) `edgeRowToResolved`, its
+ * READ half — a field added to the canonical edge type and to only ONE of these
+ * two is a silent data loss on every write/read cycle, which is exactly how the
+ * declared ROLE nearly shipped unpersisted (cinatra#2090 S3, codex round 1).
+ */
+function resolvedEdgeToRowValues(
+  id: string,
+  dependentInstallId: string,
+  edge: ResolvedDependencyEdge,
+  declaredIndex: number,
+) {
+  return {
+    id,
+    dependentInstallId,
+    declaredPackageName: edge.packageName,
+    declaredKind: edge.kind ?? null,
+    declaredRole: edge.role ?? null,
+    edgeType: edge.edgeType,
+    requirement: edge.requirement,
+    versionConstraint: edge.versionConstraint as unknown,
+    declaredIndex,
+    resolvedInstallId: edge.resolvedInstallId,
+    resolutionReason: edge.resolutionReason,
+  };
+}
+
 function edgeRowToResolved(row: ExtensionDependencyEdgeRow): ResolvedDependencyEdge {
   return {
     packageName: row.declaredPackageName,
     ...(row.declaredKind ? { kind: row.declaredKind as ResolvedDependencyEdge["kind"] } : {}),
+    ...(row.declaredRole ? { role: row.declaredRole as ResolvedDependencyEdge["role"] } : {}),
     edgeType: row.edgeType as DependencyEdgeType,
     versionConstraint: row.versionConstraint as VersionConstraint,
     requirement: row.requirement as DependencyRequirement,
@@ -348,18 +383,7 @@ async function replaceDependencyEdgesInTx(
     .where(eq(extensionDependencyEdgeTable.dependentInstallId, dependentId));
   if (resolved.length > 0) {
     await tx.insert(extensionDependencyEdgeTable).values(
-      resolved.map((edge, index) => ({
-        id: newEdgeId(),
-        dependentInstallId: dependentId,
-        declaredPackageName: edge.packageName,
-        declaredKind: edge.kind ?? null,
-        edgeType: edge.edgeType,
-        requirement: edge.requirement,
-        versionConstraint: edge.versionConstraint as unknown,
-        declaredIndex: index,
-        resolvedInstallId: edge.resolvedInstallId,
-        resolutionReason: edge.resolutionReason,
-      })),
+      resolved.map((edge, index) => resolvedEdgeToRowValues(newEdgeId(), dependentId, edge, index)),
     );
   }
 }
@@ -692,3 +716,11 @@ export async function _internalDeleteInstalledExtension(id: string): Promise<voi
   const db = await getDb();
   await db.delete(installedExtensionTable).where(eq(installedExtensionTable.id, id));
 }
+
+// Test-only exports of the two PURE halves of the dependency-edge round-trip.
+// Not part of the production surface: every production caller goes through
+// `replaceDependencyEdgesInTx` / `hydrateSingleRow`.
+export const __test = {
+  resolvedEdgeToRowValues,
+  edgeRowToResolved,
+};

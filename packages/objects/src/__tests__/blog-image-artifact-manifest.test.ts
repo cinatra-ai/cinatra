@@ -7,11 +7,12 @@
  *     src/__tests__/blog-image-artifact-manifest.test.ts
  */
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { parseSemanticArtifactManifest } from "../semantic-manifest";
 import type { SemanticArtifactManifest } from "../types";
 import { blogImageArtifactManifest } from "../../../../extensions/cinatra-ai/blog-image-artifact/src/index";
+import { expectedMatcherSkillIds } from "./seed-pack-skill-ids";
 import { resolveAttachmentCapability } from "../../../llm/src/attachments/capability-registry";
 
 const REPO_ROOT = path.resolve(__dirname, "../../../..");
@@ -43,21 +44,28 @@ describe("blog-image-artifact — registration + visibility", () => {
     expect(r.ok).toBe(true);
   });
 
-  it("matcher catalog-id is `<pkg>:blog-image-matcher`", () => {
+  it("matcher catalog-id names the co-located OR the extracted matcher bundle", () => {
     const id = blogImageArtifactManifest.skills?.matchers?.[0];
-    expect(id).toBe(`${PKG}:blog-image-matcher`);
+    expect(expectedMatcherSkillIds(SLUG, PKG)).toContain(id);
   });
 
-  it("matcher SKILL.md exists with the agent-only strict policy", () => {
-    const skill = readFileSync(
-      path.join(
-        REPO_ROOT,
-        "extensions/cinatra-ai",
-        SLUG,
-        "skills/blog-image-matcher/SKILL.md",
-      ),
-      "utf-8",
-    );
+  it("the matcher SKILL.md ships with the agent-only strict policy, wherever it lives", () => {
+    // cinatra#2090 S3: the bundle moves out of this artifact extension into
+    // `@cinatra-ai/blog-image-matcher-skill`. The migration is rolling and the
+    // host pins each extension independently, so read the bundle from
+    // WHICHEVER of the two packages the pinned clone-back actually carries —
+    // and fail loudly if NEITHER does, which is the real regression (the rules
+    // vanished) as opposed to the expected relocation.
+    const id = blogImageArtifactManifest.skills?.matchers?.[0] ?? "";
+    const [providerPkg] = id.split(":");
+    const providerDir = providerPkg.replace(/^@cinatra-ai\//, "");
+    const candidates = [
+      path.join(REPO_ROOT, "extensions/cinatra-ai", providerDir, "skills/blog-image-matcher/SKILL.md"),
+      path.join(REPO_ROOT, "extensions/cinatra-ai", SLUG, "skills/blog-image-matcher/SKILL.md"),
+    ];
+    const found = candidates.find((p) => existsSync(p));
+    expect(found, `blog-image-matcher SKILL.md not found in ${candidates.join(" or ")}`).toBeDefined();
+    const skill = readFileSync(found as string, "utf-8");
     expect(skill).toContain("name: blog-image-matcher");
     expect(skill).toMatch(/agent-only/i);
     expect(skill).toMatch(/matches:false|matches.*false/i);

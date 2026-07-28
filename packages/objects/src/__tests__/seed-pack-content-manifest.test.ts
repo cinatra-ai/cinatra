@@ -22,6 +22,11 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { parseSemanticArtifactManifest } from "../semantic-manifest";
+import {
+  expectedAuthoringSkillIds,
+  expectedMatcherSkillIds,
+} from "./seed-pack-skill-ids";
+
 import type { SemanticArtifactManifest } from "../types";
 
 import { blogPostArtifactManifest } from "../../../../extensions/cinatra-ai/blog-post-artifact/src/index";
@@ -107,14 +112,11 @@ describe("Content seed pack — manifest parity + schema", () => {
 
 describe("Content seed pack — matcher catalog-id format", () => {
   it.each(PACK)(
-    "$slug — `skills.matchers[0]` is `<packageName>:<slug>-matcher`",
+    "$slug — `skills.matchers[0]` names the co-located OR the extracted matcher bundle",
     ({ slug, pkgName, manifest }) => {
       const id = manifest.skills?.matchers?.[0];
       expect(id, `${slug} matcher id`).toBeDefined();
-      const [pkg, ...rest] = (id as string).split(":");
-      const skillDir = rest.join(":");
-      expect(pkg).toBe(pkgName);
-      expect(skillDir).toBe(`${slug.replace(/-artifact$/, "")}-matcher`);
+      expect(expectedMatcherSkillIds(slug, pkgName)).toContain(id);
     },
   );
 });
@@ -152,25 +154,28 @@ describe("Content seed pack — exact-shape contract", () => {
   );
 
   it.each(PACK)(
-    "$slug — skills.matchers is EXACTLY [<packageName>:<slug>-matcher]",
+    "$slug — skills.matchers is EXACTLY ONE legal matcher id",
     ({ slug, pkgName, manifest }) => {
-      const expectedMatcherId = `${pkgName}:${slug.replace(/-artifact$/, "")}-matcher`;
-      expect(manifest.skills?.matchers).toEqual([expectedMatcherId]);
+      expect(manifest.skills?.matchers).toHaveLength(1);
+      expect(expectedMatcherSkillIds(slug, pkgName)).toContain(
+        manifest.skills?.matchers?.[0],
+      );
     },
   );
 
   // Content artifacts MAY also declare an authoring skill (chat-create-artifact
   // surface). The pack-level invariant is that EVERY content artifact has an
-  // authoring skill named `<slug-without-artifact>-author` OR no authoring
-  // skill at all — never a mismatched name. The matcher must always be present
+  // authoring skill named for its own base OR no authoring skill at all —
+  // never a mismatched name. Post-cinatra#2090 the id may name the extracted
+  // `-authoring-skill` provider instead of the artifact's own package. The matcher must always be present
   // (asserted above) but the authoring skill is optional per-artifact.
   it.each(PACK)(
-    "$slug — skills.authoring (when present) is EXACTLY [<packageName>:<slug>-author]",
+    "$slug — skills.authoring (when present) is EXACTLY ONE legal authoring id",
     ({ slug, pkgName, manifest }) => {
       const authoring = manifest.skills?.authoring;
       if (!authoring) return;
-      const expectedAuthorId = `${pkgName}:${slug.replace(/-artifact$/, "")}-author`;
-      expect(authoring).toEqual([expectedAuthorId]);
+      expect(authoring).toHaveLength(1);
+      expect(expectedAuthoringSkillIds(slug, pkgName)).toContain(authoring[0]);
     },
   );
 
