@@ -123,6 +123,42 @@ export async function registerColocatedWorkspaceSkills(input: {
 
 const DEFAULT_ALLOW_KINDS = ["skill"] as const;
 
+/**
+ * One `cinatra.dependencies` entry, narrowed to the fields the projection needs.
+ *
+ * Deliberately re-declared here instead of imported from
+ * `@cinatra-ai/extensions`: that package already consumes `@cinatra-ai/skills`,
+ * so importing it back would invert the layering (the same reason the lifecycle
+ * gate above reaches for it only through a fail-soft dynamic import). The shape
+ * is the canonical `ExtensionDependency`; the structural filter below accepts
+ * only entries that carry the fields it reads.
+ */
+export type DeclaredExtensionDependency = {
+  packageName: string;
+  edgeType: string;
+  requirement: string;
+  kind?: string;
+};
+
+/** Keep only structurally well-formed `cinatra.dependencies` entries. */
+function readDeclaredDependencies(raw: unknown): DeclaredExtensionDependency[] {
+  if (!Array.isArray(raw)) return [];
+  const out: DeclaredExtensionDependency[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.packageName !== "string" || e.packageName.length === 0) continue;
+    if (typeof e.edgeType !== "string" || typeof e.requirement !== "string") continue;
+    out.push({
+      packageName: e.packageName,
+      edgeType: e.edgeType,
+      requirement: e.requirement,
+      kind: typeof e.kind === "string" ? e.kind : undefined,
+    });
+  }
+  return out;
+}
+
 export type SkillExtensionDescriptor = {
   /** Absolute path to the extension package dir. */
   pkgDir: string;
@@ -132,6 +168,14 @@ export type SkillExtensionDescriptor = {
   pkgDirName: string;
   /** `cinatra.kind`. */
   kind: string;
+  /**
+   * The package's DECLARED `cinatra.dependencies` edges, structurally filtered
+   * to the well-formed entries (cinatra#2090 S3). Carried on the descriptor so
+   * the dependency→injection projection below can read a consumer's declared
+   * skill edge from the SAME single filesystem scan the rest of this module
+   * uses. `[]` when the manifest declares none / declares them malformed.
+   */
+  dependencies: DeclaredExtensionDependency[];
   /** `cinatra.capabilities` map: stable capability key → co-located skill slug. */
   capabilities: Record<string, string>;
   /** Co-located `skills/<slug>` dirs that contain a `SKILL.md`. */
@@ -213,7 +257,10 @@ export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]>
         if (seenPkgDir.has(realPkgDir)) continue;
         const pkgJsonPath = path.join(pkgDir, "package.json");
         if (!existsSync(pkgJsonPath)) continue;
-        let pkgJson: { name?: string; cinatra?: { kind?: string; capabilities?: unknown } };
+        let pkgJson: {
+          name?: string;
+          cinatra?: { kind?: string; capabilities?: unknown; dependencies?: unknown };
+        };
         try {
           pkgJson = JSON.parse(await readFile(pkgJsonPath, "utf8"));
         } catch {
@@ -247,6 +294,7 @@ export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]>
           pkgName: pkgJson.name ?? pkg.name,
           pkgDirName: pkg.name,
           kind,
+          dependencies: readDeclaredDependencies(pkgJson?.cinatra?.dependencies),
           capabilities,
           slugs,
         });
@@ -665,4 +713,139 @@ export async function ensureSkillForCapability(
   }
   await ensureInstalledSkillRegistered(skillId, opts);
   return skillId;
+}
+
+// ---------------------------------------------------------------------------
+// Dependency → injection projection (cinatra#2090 S3, epic #2086).
+//
+// The separation rule says a non-skill extension must not SHIP a skill: the
+// bundle moves into its own `kind:"skill"` extension and the producing
+// extension DECLARES a dependency edge on it. Nothing consumed that edge at
+// runtime — the declared graph drove install closure only — so an extracted
+// bundle would simply stop reaching the run.
+//
+// This is the projection that closes that gap for the extension-mount surface:
+// consumer dir slug → its declared skill edge → the RESOLVED provider package's
+// single bundle (its on-disk router plus the skillId the catalog knows it by).
+// It is deliberately the same filesystem substrate as the rest of this module,
+// so an uninstalled/tombstoned provider stops resolving, exactly like every
+// other resolver entry point here.
+//
+// FAIL-CLOSED at every RESOLUTION ambiguity, because the alternative is mounting
+// the WRONG instructions into a run:
+//   - the consumer dir must resolve to exactly ONE scanned package;
+//   - the consumer must be a kind the separation rule actually covers (agent /
+//     artifact / connector). A `kind:"skill"` package is a PROVIDER; letting one
+//     resolve its own declared edge would chain skill→skill deliveries that no
+//     plan text describes;
+//   - it must declare exactly ONE `kind:"skill"` edge that is `runtime` AND
+//     `required`. Deliberately NARROWER than the install closure's
+//     install-blocking predicate (which also admits `install-time`): an
+//     install-time edge says "must be present to install", not "deliver these
+//     instructions into every run". Zero or several ⇒ null;
+//   - the provider must be a `kind:"skill"` package shipping exactly ONE bundle
+//     (the S2 packaging contract) ⇒ otherwise null.
+//
+// LIFECYCLE liveness is NOT fail-closed here, and the difference matters enough
+// to name: this uses `filterRetiredSkillExtensions`, which drops an EXPLICITLY
+// tombstoned provider (canonical rows all `archived`) but KEEPS everything when
+// the status read itself fails (fail-OPEN), exactly like the registration path
+// above. That is deliberate — the surface this feeds is an extension mounting
+// its own declared instructions, not an authorization decision, and the
+// behaviour it REPLACES (a bundle embedded in the consumer) had no lifecycle
+// check at all, so a degraded status store must not newly strip an installed
+// extension's own skill. The fail-CLOSED posture belongs to the auth carve-out
+// (`isWidgetChatSkillId`), which denies on a degraded read.
+//
+// The declared VERSION CONSTRAINT is not re-checked here: what is on disk is
+// what the install closure resolved and materialized, and this module never
+// selects among versions. Version-pinned revision selection belongs to the S4
+// injection contract (cinatra#2091), which consumes this projection.
+// ---------------------------------------------------------------------------
+
+/** A consumer's declared skill edge, resolved to a concrete bundle. */
+export type DeclaredSkillEdgeResolution = {
+  /** The PROVIDER package (`@vendor/<slug>-skill`). */
+  packageName: string;
+  /** The provider's single bundle slug (its `skills/<slug>/` dir name). */
+  slug: string;
+  /** The canonical catalog id — `deriveSkillRegistration`, one derivation. */
+  skillId: string;
+  /** Absolute path to the provider's `SKILL.md` router. */
+  sourcePath: string;
+};
+
+/**
+ * Is this edge a RUNTIME skill dependency — the only kind that means "deliver
+ * this skill into the run"? Narrower than the closure's install-blocking
+ * predicate on purpose (see the block comment above).
+ */
+function isRuntimeSkillEdge(dep: DeclaredExtensionDependency): boolean {
+  return dep.kind === "skill" && dep.requirement === "required" && dep.edgeType === "runtime";
+}
+
+/**
+ * The extension kinds the separation rule makes CONSUMERS: the non-skill kinds
+ * that used to embed a bundle. A `kind:"skill"` package is a provider, never a
+ * consumer, on this surface.
+ */
+const DECLARED_EDGE_CONSUMER_KINDS: ReadonlySet<string> = new Set([
+  "agent",
+  "artifact",
+  "connector",
+]);
+
+/**
+ * Resolve the skill bundle a consumer extension DECLARES a dependency on, by
+ * the consumer's package DIRECTORY name (the identity the agent runtime and the
+ * llm-bridge carry — a bare slug like `web-research-agent`, never a scoped npm
+ * name).
+ *
+ * Returns null — never throws — when the consumer is unknown or ambiguous, when
+ * it is not a consumer kind, when it declares no single runtime skill edge, or when the provider is
+ * absent/tombstoned/not a one-bundle skill package. A null means "no
+ * declared-edge skill for this extension", which every caller treats as
+ * "deliver nothing extra", not as an error. A FAILED lifecycle-status read
+ * keeps the provider (fail-open — see the block comment above).
+ */
+export async function resolveDeclaredSkillEdgeForExtensionDir(
+  consumerDirName: string,
+): Promise<DeclaredSkillEdgeResolution | null> {
+  if (typeof consumerDirName !== "string" || consumerDirName.length === 0) return null;
+  let exts: SkillExtensionDescriptor[];
+  try {
+    exts = await filterRetiredSkillExtensions(await scanSkillExtensions());
+  } catch {
+    return null;
+  }
+
+  const consumers = exts.filter((e) => e.pkgDirName === consumerDirName);
+  // A bare dir slug cannot disambiguate two vendors shipping the same slug —
+  // the same fail-closed rule the bridge's own mount probe applies.
+  if (consumers.length !== 1) return null;
+  if (!DECLARED_EDGE_CONSUMER_KINDS.has(consumers[0]!.kind)) return null;
+
+  const edges = consumers[0]!.dependencies.filter(isRuntimeSkillEdge);
+  if (edges.length !== 1) return null;
+  const providerName = edges[0]!.packageName;
+
+  const providers = exts.filter((e) => e.kind === "skill" && e.pkgName === providerName);
+  if (providers.length !== 1) return null;
+  const provider = providers[0]!;
+  // The S2 packaging contract: one `kind:"skill"` extension ships exactly one
+  // bundle. Anything else is not a package this projection can mount from.
+  if (provider.slugs.length !== 1) return null;
+  const slug = provider.slugs[0]!;
+
+  const { packageName, skillId } = deriveSkillRegistration(
+    provider.pkgName,
+    provider.pkgDirName,
+    slug,
+  );
+  return {
+    packageName,
+    slug,
+    skillId,
+    sourcePath: path.join(provider.pkgDir, "skills", slug, "SKILL.md"),
+  };
 }

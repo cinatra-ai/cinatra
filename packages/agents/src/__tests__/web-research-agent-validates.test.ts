@@ -91,9 +91,13 @@ describe("web-research-agent OAS validates against L1, LLM-metadata, and StartNo
     expect(apiNode.http_method).toBe("POST");
     const data = apiNode.data as Record<string, unknown>;
     expect(data.agent_id).toBe("web-research-agent");
-    // skill_source_path MUST be omitted — bridge auto-discovers from agent_id
-    // via autoDiscoverSkillPath() in src/app/api/llm-bridge/route.ts. Convention:
-    //   <installDir>/cinatra/<agent_id>/skills/<agent_id>/SKILL.md
+    // skill_source_path MUST be omitted — the bridge resolves the bundle from
+    // agent_id in src/app/api/llm-bridge/route.ts. Since cinatra#2090 S3 this
+    // agent EMBEDS no bundle: the co-located probe
+    // (<installDir>/<vendor>/<agent_id>/skills/<agent_id>/SKILL.md) misses and
+    // the declared-edge projection resolves its
+    // `@cinatra-ai/web-research-skill` dependency instead. An explicit path
+    // would bypass both.
     expect(data.skill_source_path).toBeUndefined();
   });
 
