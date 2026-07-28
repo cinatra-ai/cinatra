@@ -103,9 +103,9 @@
     {
       "packageName": "@cinatra-ai/security-reviewer-agent",
       "repo": "cinatra-ai/security-reviewer-agent",
-      "resolvedSha": "aa44488c38b4b3295b37591d9045d25b88974475",
+      "resolvedSha": "8e978e464a6992e2ba479f4896edad0c738b5c69",
       "packageVersion": "0.1.1",
-      "treeSha256": "db8f5e17ea87afc7a2bcdb1c0ff7defc0bf18c44a3e9437bb0b5a1008c473a9c"
+      "treeSha256": "51e42f81be73f6788f9e798c8c985fd4ece7d4f66d1a5a455f77fb793521e815"
     },
     {
       "packageName": "@cinatra-ai/text-artifact",

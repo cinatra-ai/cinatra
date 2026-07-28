@@ -101,26 +101,25 @@ except Exception:  # pragma: no cover
 # A conditional xfail would have no failing state to represent and could conceal
 # a future regression, so the entry is removed unconditionally.
 #
-# ``security-reviewer-agent`` (cinatra#2140): the FIRST run of this guard against
-# the real pinned extension tree — see the ``validate-wayflow-mount`` job in
-# .github/workflows/validate-agents.yml, which that issue wires up — surfaced one
-# genuine pre-existing mount failure. It is NOT a HITL-gate defect: at pin
-# ``aa44488c`` the ``review`` node's ``data.system`` prompt contains a LITERAL
-# ``{{ ... }}`` inside prose ("interpolate untrusted input via ``{{ ... }}``"),
-# which wayflowcore parses as a Jinja expression and rejects with
-# ``TemplateSyntaxError: unexpected '.'`` — so the agent never mounts. The fix
-# belongs in the agent repo (wrap the prose in ``{% raw %}…{% endraw %}``) and is
-# out of scope for #2140, whose subject is the two email agents' gate encoding.
-# Listed here so the guard reports that red VISIBLY instead of being blocked by an
-# unrelated defect.
+# ``security-reviewer-agent`` also formerly sat here (cinatra#2140): the FIRST run
+# of this guard against the real pinned extension tree — see the
+# ``validate-wayflow-mount`` job in .github/workflows/validate-agents.yml, which
+# that issue wired up — surfaced one genuine pre-existing mount failure. It was
+# NOT a HITL-gate defect: at pin ``aa44488c`` the ``review`` node's ``data.system``
+# prompt contained a LITERAL ``{{ ... }}`` inside prose ("interpolate untrusted
+# input via ``{{ ... }}``"), which wayflowcore parses as a Jinja expression and
+# rejects with ``TemplateSyntaxError: unexpected '.'`` — so the agent never
+# mounted. The fix belonged in the agent repo and LANDED there
+# (security-reviewer-agent#33, escaping the literal moustache example); the pin
+# moved to ``8e978e46`` in the same core change that removes this entry, so the
+# agent mounts and the strict xfail would XPASS-red. Removed exactly as designed:
+# the allowlist never outlives the failure it records.
 #
 # The allowlist maps slug → a SUBSTRING of the expected failure, and the check is
 # BOUNDED (below): only that exact failure xfails. A different exception on an
 # allowlisted agent is a real FAILURE (a blanket slug xfail would have masked it),
 # and an allowlisted agent that starts mounting fails too, forcing the entry out.
-_KNOWN_FAILING_GATE_AGENTS: dict[str, str] = {
-    "security-reviewer-agent": "unexpected '.'",
-}
+_KNOWN_FAILING_GATE_AGENTS: dict[str, str] = {}
 _KNOWN_FAILING_REASON = (
     "known-failing mount (see _KNOWN_FAILING_GATE_AGENTS) — awaits a "
     "separately-tracked fix; the bounded xfail keeps the red visible without "
