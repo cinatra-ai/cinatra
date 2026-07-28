@@ -1209,9 +1209,10 @@ async function seedCanonicalBlogFixtures() {
 async function seedDashboards(orgMap, adminUserId) {
   console.log("Seeding dashboards…");
 
-  // dashboards.visibility CHECK constraint: ('private' | 'owners' | 'members').
-  // We map user-owned to 'private' and team/org-owned to 'members' so peers
-  // in the team/org can see the dashboard.
+  // No `visibility` on a dashboard row (cinatra#1898 ACL cutover Phase-3 dropped
+  // the demoted column): a dashboard is always visible to everyone in its
+  // scope, so owner_level/owner_id ARE the share axis — a user-owned row is the
+  // owner's alone, a team/org-owned row is visible to that team/org.
   const ownerLevel = (level, id, orgId) => ({ level, id, orgId });
   const dashboards = [
     {
@@ -1219,35 +1220,30 @@ async function seedDashboards(orgMap, adminUserId) {
       name: "My research",
       description: "Personal scratchpad — recent runs, saved queries, top contacts.",
       owner: ownerLevel("user", "usr-alice-cooper", orgMap["acme-group"]),
-      visibility: "private",
     },
     {
       id: "dash-seed-v65-cloud-platform-health",
       name: "Cloud Platform health",
       description: "Platform Engineering team — SLO/error-rate dashboard.",
       owner: ownerLevel("team", "team-cloud-platform", orgMap["acme-cloud"]),
-      visibility: "members",
     },
     {
       id: "dash-seed-v65-hardware-launch",
       name: "Q3 Hardware launch",
       description: "Robotics Hardware team — launch readiness + outstanding tasks.",
       owner: ownerLevel("team", "team-rob-hardware", orgMap["acme-robotics"]),
-      visibility: "members",
     },
     {
       id: "dash-seed-v65-acme-overview",
       name: "ACME Group overview",
       description: "Cross-org KPIs — revenue, run volume, agent activity.",
       owner: ownerLevel("organization", "org-acme-group", orgMap["acme-group"]),
-      visibility: "members",
     },
     {
       id: "dash-seed-v65-cost-summary",
       name: "Cost & usage",
       description: "Token spend by provider, per-agent cost, monthly budget burn.",
       owner: ownerLevel("organization", "org-acme-group", orgMap["acme-group"]),
-      visibility: "members",
     },
   ];
 
@@ -1271,15 +1267,15 @@ async function seedDashboards(orgMap, adminUserId) {
       `INSERT INTO cinatra.dashboards
          (id, name, description, config_json, config_version, dashboard_version,
           published_revision_number, owner_level, owner_id, organization_id,
-          visibility, status, created_by, updated_by, created_at, updated_at, published_at)
-       VALUES ($1, $2, $3, $4::jsonb, '1', 1, 1, $5, $6, $7, $8, 'published', $9, $9, NOW(), NOW(), NOW())
+          status, created_by, updated_by, created_at, updated_at, published_at)
+       VALUES ($1, $2, $3, $4::jsonb, '1', 1, 1, $5, $6, $7, 'published', $8, $8, NOW(), NOW(), NOW())
        ON CONFLICT (id) DO UPDATE SET
          name = EXCLUDED.name,
          description = EXCLUDED.description,
          config_json = EXCLUDED.config_json,
          updated_at = NOW(),
          updated_by = EXCLUDED.updated_by`,
-      [d.id, d.name, d.description, JSON.stringify(config), d.owner.level, d.owner.id, d.owner.orgId, d.visibility, adminUserId],
+      [d.id, d.name, d.description, JSON.stringify(config), d.owner.level, d.owner.id, d.owner.orgId, adminUserId],
     );
     // 1 revision per dashboard so the history surface is non-empty.
     await q(
