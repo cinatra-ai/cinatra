@@ -131,9 +131,49 @@ empty-rendering `{% if <name> %}{% endif %}` guards, so no payload text leaks in
 the conversation), then drops the declared `inputs`. The `DataFlowEdge` keeps
 delivering the same values. **Do not** author `PluginInputMessageNode` /
 `message_template` directly — the host compiler pins the `InputMessageNode`
-literal; author the declared-input form and let the loader reconcile it. The
-mount-time guard (`docker/wayflow/tests/test_repo_agents_load.py`, run against the
-installed extension tree) fails any PR whose gate cannot mount.
+literal; author the declared-input form and let the loader reconcile it.
+
+### The two mount paths, and what enforces the contract (cinatra#2140)
+
+The same gate exists in **two encodings**, and both must satisfy this contract:
+
+- **Standalone** — the agent package's own `cinatra/oas.json`, mounted by the
+  WayFlow container as its own A2A agent. This is the declared-`inputs` form
+  above; it reaches the runtime only through the reconcile shim.
+- **Orchestrated** — the same gate inlined as a subflow of an orchestrator
+  (e.g. `email-outreach-agent`). Those inlined copies declare **no** gate
+  `inputs`, so they mount natively and never touch the shim.
+
+Because the two travel different code, either can move without the other
+noticing. Three things now hold them together:
+
+1. `OAS-RUNTIME-013` in `packages/agents/src/validate-oas-runtime-invariants.ts`
+   — the HOST half of the contract. It mirrors exactly what the shim can and
+   cannot repair, and every rule is backed by an observed
+   `pyagentspec==26.1.2` mount outcome, not by inference:
+   declared input titles must be plain unique Jinja identifiers; the gate must
+   not carry a *truthy* author-supplied `message_template` (a falsy one is
+   overwritten by the shim and mounts, so it is deliberately allowed); it must
+   declare exactly one `string` output; and it must never be an authored
+   `PluginInputMessageNode`. It runs on every extension-lock bump via
+   `.github/workflows/validate-agents.yml`.
+2. `docker/wayflow/tests/test_gate_mount_both_paths.py` — mounts BOTH encodings
+   through the real pre-load pipeline, asserts the shim fired on the standalone
+   form and did **not** need to on the orchestrated one, and pins the
+   repairability case table against the live pinned runtime.
+3. The `WayFlow mount guard` job in `.github/workflows/validate-agents.yml`
+   boots the repo's own WayFlow container over the **pinned** extension tree and
+   runs those suites inside it, so a pin bump to an unmountable revision fails
+   the PR. (Before #2140 the guard ran only inside `works-after proof`, which
+   fires on upgrade paths and points `CINATRA_AGENTS_DIR` at a single-agent
+   fixture tree — the real agents were never mounted in CI.)
+
+A bare `AgentSpecLoader().load_json()` of the authored standalone form **is
+expected to fail** with `received a property titled '<name>', but did not expect
+any properties`. That is the pinned-runtime half of the contract, not a defect in
+the OAS: any consumer that mounts an agent package must go through the loader's
+pre-load pipeline (`_reconcile_input_message_gates`), exactly as
+`_mount_one_sync` does.
 
 **One-string-output rule.** An `InputMessageNode` gate returns **exactly one
 `string` output** — the resume payload (the renderer's JSON-encoded `onChange`
