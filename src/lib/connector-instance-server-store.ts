@@ -551,6 +551,31 @@ export async function deletePresentUnenrolledServer(
 }
 
 /**
+ * Delete a MANUAL server row (the org-admin `removeManualServerRoute` path —
+ * §5). A manual row's identity IS its route, so removal is a hard delete
+ * (delete+add is the manual route-change semantics; no tombstone). Scoped to
+ * `source = 'manual'` so discovered/default rows (whose lifecycle belongs to
+ * reconciliation) can never be dropped here — the clobber-protection twin of
+ * `retireServer`'s discovered-only pin.
+ */
+export async function deleteManualServer(
+  connectorKey: string,
+  instanceId: string,
+  serverId: string,
+  deps?: ServerStoreDeps,
+): Promise<{ deleted: boolean }> {
+  const { query, serverTable } = resolveDeps(deps);
+  const rows = await query<{ server_id: string }>(
+    `DELETE FROM ${serverTable}
+      WHERE connector_key = $1 AND instance_id = $2 AND server_id = $3
+        AND source = 'manual'
+      RETURNING server_id`,
+    [connectorKey, instanceId, serverId],
+  );
+  return { deleted: rows.length > 0 };
+}
+
+/**
  * Retire ALL rows for an instance (instance delete — §6 invalidation event 5).
  * Unlike the reconciler's per-server retire this intentionally covers every
  * source (the instance is gone). Tombstones are kept (identity/health continuity

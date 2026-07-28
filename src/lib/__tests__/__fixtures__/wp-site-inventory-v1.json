@@ -1,0 +1,63 @@
+{
+  "contractVersion": "v1",
+  "client": "wordpress",
+  "inventorySeq": 42,
+  "collectedAt": "2026-07-27T12:00:00Z",
+  "site": {
+    "wpVersion": "6.9.1",
+    "phpVersion": "8.3.2",
+    "adapterVersion": "0.5.0",
+    "abilitiesPluginVersion": "1.0.0",
+    "connectedUserRole": "editor",
+    "permalinkStructure": "pretty"
+  },
+  "servers": [
+    {
+      "adapterServerId": "mcp-adapter-default-server",
+      "namespace": "mcp",
+      "route": "mcp-adapter-default-server",
+      "restPath": "/mcp/mcp-adapter-default-server",
+      "name": "MCP Adapter Default Server",
+      "version": "0.5.0",
+      "transports": ["streamable-http"],
+      "requiresDedicatedAuth": false,
+      "isDefault": true,
+      "toolCount": 20
+    },
+    {
+      "adapterServerId": "fixture-vendor-server",
+      "namespace": "mcp",
+      "route": "fixture-vendor-server",
+      "restPath": "/mcp/fixture-vendor-server",
+      "name": "Fixture Vendor Server",
+      "description": "Synthetic third-party dedicated MCP server used as the multi-server enrollment acceptance fixture.",
+      "version": "1.2.3",
+      "transports": ["streamable-http"],
+      "requiresDedicatedAuth": false,
+      "isDefault": false,
+      "toolCount": 8
+    },
+    {
+      "adapterServerId": "fixture-stdio-only-server",
+      "namespace": "mcp",
+      "route": "fixture-stdio-only-server",
+      "restPath": "/mcp/fixture-stdio-only-server",
+      "name": "Fixture Stdio-Only Server",
+      "description": "Custom-transport server that must surface as present-not-enrolled.",
+      "transports": ["stdio"],
+      "requiresDedicatedAuth": false,
+      "isDefault": false
+    },
+    {
+      "adapterServerId": "fixture-dedicated-auth-server",
+      "namespace": "mcp",
+      "route": "fixture-dedicated-auth-server",
+      "restPath": "/mcp/fixture-dedicated-auth-server",
+      "name": "Fixture Dedicated-Auth Server",
+      "description": "Custom-auth server that must surface as present-not-enrolled.",
+      "transports": ["streamable-http"],
+      "requiresDedicatedAuth": true,
+      "isDefault": false
+    }
+  ]
+}
