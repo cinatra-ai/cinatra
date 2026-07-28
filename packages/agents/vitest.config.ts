@@ -185,10 +185,10 @@ export default defineConfig({
         root,
         "packages/mcp-server/src/annotation-classifier.ts",
       ),
-      // cinatra#2019 S4: the trusted-site native-read-injection members (bound
-      // in the same host connector-service registration) import the pure
-      // known-destructive name floor by subpath. PURE (no React/host deps) —
-      // alias to REAL source, BEFORE the barrel stub, same as its siblings.
+      // cinatra#2020 S5: invoker step 3 additionally imports the pure
+      // known-destructive name floor by subpath (same species as the two
+      // above: no React/host deps) — alias to REAL source, BEFORE the barrel
+      // stub, or the stub swallows it and the invoker import is unresolved.
       "@cinatra-ai/mcp-server/known-destructive-floor": path.join(
         root,
         "packages/mcp-server/src/known-destructive-floor.ts",

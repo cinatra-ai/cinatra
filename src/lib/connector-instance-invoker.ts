@@ -26,6 +26,7 @@ import {
   type ToolRef,
 } from "@cinatra-ai/mcp-server/instance-tool-policy";
 import { classifyAnnotations } from "@cinatra-ai/mcp-server/annotation-classifier";
+import { isKnownDestructiveToolName } from "@cinatra-ai/mcp-server/known-destructive-floor";
 import {
   InvokerError,
   TRIAD_EXECUTE_ABILITY,
@@ -181,9 +182,19 @@ export type ConnectorInstanceInvokerDeps = {
     organizationId?: string;
     causation?: string;
   }) => Promise<void> | void;
-  /** Step 3 — S5 destructive-confirmation hook. S2 only FIRES it when enabled AND
-   * the resolved tool classifies destructive; the subsystem is S5 (absent = no-op). */
+  /** Step 3 — the S5 destructive-confirmation hook (cinatra#2020 §2.3, widened
+   * from the S2 fire-and-continue seam). The invoker FIRES it when enabled AND
+   * the step-3 trigger matches (annotation verdict OR the known-destructive
+   * name floor) and BLOCKS on a `park` verdict by throwing typed
+   * `InvokerError("pending_confirmation")` — fail-closed for every consumer by
+   * construction (an error can never read as tool success). The hook IMPL owns
+   * the surface matrix + persistence + park/bypass audits (sibling module
+   * connector-instance-destructive-hook.ts, bound by the binder); the invoker
+   * owns control flow only and takes no store import. Absent hook / `enabled()`
+   * false / a `continue` or void verdict = the exact S2 behavior (execute).
+   * The `| void` verdict keeps S2-era `Promise<void>` impls/mocks assignable. */
   destructiveHook?: {
+    /** Cheap sync kill-switch (unchanged from S2). */
     enabled: () => boolean;
     fire: (input: {
       connectorKey: string;
@@ -191,8 +202,33 @@ export type ConnectorInstanceInvokerDeps = {
       serverId: string;
       toolName: string;
       actor: InvokerTrustedActor;
+      /** FULL call args — persisted by a park for execution + the card (§3). */
+      args: Record<string, unknown>;
+      /** The annotation verdict for the resolved tool (advisory class). */
+      derivedClass: "read" | "write" | "destructive";
+      /** The known-destructive name floor matched (D9 — trigger-only). */
+      floorHit: boolean;
+      /** Host-derived ConfirmationSurface riding the input's existing
+       * `sourceType` (guard-set, never connector/model-supplied — §7.1). */
+      sourceType?: string;
+      /** The resolved EXECUTION-target endpoint URL string (NEVER the auth
+       * header) — park-time `target_fingerprint` material (§4.2). */
+      endpointUrl: string;
+      /** Tool-shape material for the park-time `tool_fingerprint` (§3). */
+      inputSchema?: unknown;
+      rawAnnotations?: unknown;
+      /** Advisory op intent — audit/forensics only, never a decision. */
+      intent?: string;
+      /** Audit correlation. */
+      primitiveName?: string;
+      /** Forensics only (park-row context; NOT a consent boundary — §4.2). */
+      catalogRevision?: string;
       causation?: string;
-    }) => Promise<void>;
+    }) => Promise<
+      | { action: "park"; pendingCallId: string; expiresAt: string; message: string }
+      | { action: "continue"; reason?: "surface_default_off" | "org_disabled" }
+      | void
+    >;
   };
   /** Warn-once sink for the absent-policy compatibility fallback (§10-A3). */
   warnAbsentPolicy?: (connectorKey: string, instanceId: string) => void;
@@ -551,17 +587,62 @@ export async function invokeConnectorInstanceTool(
     );
   }
 
-  // Step 3 — destructive-confirmation hook (advisory class; fire only, S5 owns it).
+  // Step 3 — destructive-confirmation trigger (cinatra#2020 S5 §2.3): the
+  // annotation verdict OR'd with the pure known-destructive name floor (D9 —
+  // the floor can only ADD confirmation friction; `tools_list` `derivedClass`
+  // stays the pure annotation verdict, S4's untouched input). On a `park`
+  // verdict the invoker throws typed `pending_confirmation` — BLOCKING; the
+  // verdict message is the model-facing rendering (§2.1). A `continue`/void
+  // verdict (surface default off / org-disabled / S2-era hook impls) executes.
+  // The hook impl owns matrix + persistence + its own park/bypass audits
+  // (§7.3); a hook-side infrastructure failure throws
+  // `confirmation_unavailable` from inside `fire` — fail-closed, never an
+  // unconfirmed execution. A step-3 throw precedes the step-4/5 execution +
+  // audit block below (like the step-2 policy throw), which stays untouched.
   const derivedClass = classifyAnnotations(entry.rawAnnotations);
-  if (derivedClass === "destructive" && deps.destructiveHook?.enabled()) {
-    await deps.destructiveHook.fire({
+  const floorHit = isKnownDestructiveToolName(name);
+  if ((derivedClass === "destructive" || floorHit) && deps.destructiveHook?.enabled()) {
+    // The consent-target endpoint for the park-time `target_fingerprint`
+    // (§4.2): the SAME per-server resolution step 4 will run — the stored
+    // serverId through the S3-widened resolver — so park and resume
+    // fingerprint the same materialized execution target. URL string only;
+    // the auth header NEVER reaches the hook.
+    let confirmationEndpointUrl = resolved.endpoint;
+    if (serverId !== CATALOG_DEFAULT_SERVER_ID && deps.listEnrolledServers) {
+      const perServer = await deps.resolveInstanceEndpoint(
+        input.connectorKey,
+        effectiveInstanceId,
+        serverId,
+      );
+      if (!perServer) {
+        throw new InvokerError(
+          "network_error",
+          "connector instance endpoint could not be resolved",
+        );
+      }
+      confirmationEndpointUrl = perServer.endpoint;
+    }
+    const verdict = await deps.destructiveHook.fire({
       connectorKey: input.connectorKey,
       instanceId: effectiveInstanceId,
       serverId,
       toolName: name,
       actor: input.actor,
+      args: input.args,
+      derivedClass,
+      floorHit,
+      ...(input.sourceType ? { sourceType: input.sourceType } : {}),
+      endpointUrl: confirmationEndpointUrl,
+      inputSchema: entry.inputSchema,
+      rawAnnotations: entry.rawAnnotations,
+      ...(input.intent ? { intent: input.intent } : {}),
+      primitiveName,
+      catalogRevision: snapshot.catalogRevision,
       ...(input.causation ? { causation: input.causation } : {}),
     });
+    if (verdict && verdict.action === "park") {
+      throw new InvokerError("pending_confirmation", verdict.message);
+    }
   }
 
   // Step 4 — execute. Triad-translate on triad-only servers; direct call on

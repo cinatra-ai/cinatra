@@ -418,3 +418,80 @@ describe("defaults", () => {
     expect(CATALOG_MAX_STALE_MS).toBe(60 * 60_000);
   });
 });
+
+describe("destructive hook (cinatra#2020 S5) — per-server consent-target endpoint", () => {
+  // Real-signature spy type so `mock.calls` rows are indexable, typed tuples.
+  type DestructiveHookFire = NonNullable<ConnectorInstanceInvokerDeps["destructiveHook"]>["fire"];
+
+  it("a destructive call on a DEDICATED server fires the hook with the PER-SERVER endpoint (stored serverId through the S3-widened resolver)", async () => {
+    const fire = vi.fn<DestructiveHookFire>(async () => {});
+    const { deps, cache, resolveInstanceEndpoint, callWireTool } = makeDeps({
+      destructiveHook: { enabled: () => true, fire },
+    });
+    cache.set("inst-1", snapshot(CATALOG_DEFAULT_SERVER_ID, ["core/get-site-info"], NOW, "triad-only"));
+    cache.set("inst-1", {
+      ...snapshot(DEDICATED_ID, [], NOW),
+      tools: [
+        {
+          name: "vendor_wipe",
+          serverId: DEDICATED_ID,
+          inputSchema: { type: "object" },
+          rawAnnotations: { destructiveHint: true },
+        },
+      ],
+    });
+    await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "vendor_wipe", args: { all: true }, actor: ACTOR },
+      deps,
+    );
+    expect(fire).toHaveBeenCalledTimes(1);
+    // The park-time target fingerprint must hash the SAME materialized
+    // execution target step 4 resolves — the per-server endpoint, reached by
+    // passing the STORED serverId into the S3-widened resolver.
+    expect(fire.mock.calls[0]![0]).toMatchObject({
+      serverId: DEDICATED_ID,
+      endpointUrl: DEDICATED_ENDPOINT,
+      derivedClass: "destructive",
+    });
+    expect(
+      resolveInstanceEndpoint.mock.calls.some((c) => c[2] === DEDICATED_ID),
+    ).toBe(true);
+    // Void verdict (fire-and-continue back-compat): execution proceeds on the
+    // SAME dedicated wire target the hook input named.
+    expect(callWireTool.mock.calls[0]![0]).toMatchObject({ endpoint: DEDICATED_ENDPOINT });
+  });
+
+  it("a park verdict blocks BEFORE the per-server wire call; the default server needs no extra resolve", async () => {
+    const fire = vi.fn<DestructiveHookFire>(async () => ({
+      action: "park" as const,
+      pendingCallId: "cipc_ms1",
+      expiresAt: "2026-07-28T10:15:00.000Z",
+      message: "pending_confirmation: parked",
+    }));
+    const { deps, cache, resolveInstanceEndpoint, callWireTool } = makeDeps({
+      destructiveHook: { enabled: () => true, fire },
+    });
+    cache.set("inst-1", {
+      ...snapshot(CATALOG_DEFAULT_SERVER_ID, [], NOW, "triad-only"),
+      tools: [
+        {
+          name: "core/delete-post",
+          serverId: CATALOG_DEFAULT_SERVER_ID,
+          inputSchema: {},
+          rawAnnotations: { destructiveHint: true },
+        },
+      ],
+    });
+    cache.set("inst-1", snapshot(DEDICATED_ID, ["vendor_tool"], NOW));
+    const err = await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "core/delete-post", args: {}, actor: ACTOR },
+      deps,
+    ).catch((e: unknown) => e);
+    expect((err as InvokerError).code).toBe("pending_confirmation");
+    expect(callWireTool).not.toHaveBeenCalled();
+    // Default-server consent target = the instance-default endpoint: the hook
+    // input resolution never passes a serverId for the default server.
+    expect(fire.mock.calls[0]![0]).toMatchObject({ endpointUrl: DEFAULT_ENDPOINT });
+    expect(resolveInstanceEndpoint.mock.calls.every((c) => c[2] !== CATALOG_DEFAULT_SERVER_ID)).toBe(true);
+  });
+});
