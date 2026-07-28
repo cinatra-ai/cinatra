@@ -126,12 +126,17 @@ for (const t of tables) {
 out.push("");
 
 // 2b. Constraints (PK, unique, FK, check) via pg_get_constraintdef — guarded.
+// contype 'n' is excluded: Postgres 18 catalogs plain column NOT NULLs as named
+// pg_constraint rows (contype = 'n'), but section 2a already emits NOT NULL on
+// every such column line, so dumping them again would add ~85 guarded blocks
+// that can never fire (CREATE TABLE auto-creates the same default names).
 const consRes = await c.query(`
   SELECT con.conname, rel.relname AS table, pg_get_constraintdef(con.oid) AS def
     FROM pg_constraint con
     JOIN pg_class rel ON rel.oid = con.conrelid
     JOIN pg_namespace n ON n.oid = rel.relnamespace
    WHERE n.nspname = 'public' AND rel.relname NOT LIKE 'pg_stat_statements%'
+     AND con.contype <> 'n'
    ORDER BY (con.contype = 'f'), rel.relname, con.conname
 `);
 for (const r of consRes.rows) {
@@ -164,5 +169,7 @@ out.push("");
 
 await c.end();
 mkdirSync(dirname(OUT), { recursive: true });
-writeFileSync(OUT, out.join("\n") + "\n");
+// Exactly one trailing newline (the last section pushes a "" separator, which
+// would otherwise leave a blank line at EOF and trip whitespace linting).
+writeFileSync(OUT, out.join("\n").replace(/\n+$/, "") + "\n");
 console.log(`wrote ${OUT}: ${tables.length} tables, ${consRes.rows.length} constraints, ${idxRes.rows.length} indexes`);
