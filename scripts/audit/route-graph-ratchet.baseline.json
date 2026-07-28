@@ -1,42 +1,42 @@
 {
-  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
+  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1634,
-    "/api/mcp": 1630,
-    "/chat": 1704,
-    "/api/a2a": 1635,
-    "/api/llm-bridge": 1645
+    "/sign-in": 1636,
+    "/api/mcp": 1632,
+    "/chat": 1706,
+    "/api/a2a": 1637,
+    "/api/llm-bridge": 1647
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1631,
-      "to": 1634,
-      "reason": "cinatra#2020 S5 PR-3 destructive-confirmation blocking: binding the hook into the binder's invoker deps literal makes connector-instance-destructive-hook.ts and (through it) the stage-1 connector-instance-pending-call-store.ts reachable, and the invoker's step-3 floor import makes packages/mcp-server/src/known-destructive-floor.ts reachable \u2014 +3 first-party modules per locked route (the binder and the invoker are statically reachable from all five). Each module is the confirmation subsystem landing at its planned seam; the raise cannot be narrowed without deferring the hook bind off the deps literal, which is the arming point the S7 exposure criterion names. Replaces the PR-2167 record for this route (its raise is baked into base).",
-      "pr": 2166
+      "from": 1634,
+      "to": 1636,
+      "reason": "cinatra#2019 S4 (trusted-site native read-injection, verifier slice): exactly +2 first-party modules per locked route — src/lib/connector-instance-trusted-read-verifier.ts and src/lib/connector-instance-native-read-injection.ts, the dormant trust-eligibility computation (pure verifier + builder/explain members on the wordpress-mcp publication) that the connector-side guard replacement consumes next. Both attach through the host connector-service binder (register-host-connector-services.ts), which every locked route reaches, so the growth is uniform and equals the module count itself — no barrel widening and no new cross-package edge: the one floor subpath this slice also imports (packages/mcp-server/src/known-destructive-floor.ts) is already in the base graph via the confirmation-flow invoker binding, so it adds nothing here. The members cannot be split away from the binder without forking the additive publication-member registration pattern every sibling governance member uses. Replaces the PR-2166 record for this route (its raise is baked into base).",
+      "pr": 2171
     },
     "/api/mcp": {
-      "from": 1627,
-      "to": 1630,
-      "reason": "cinatra#2020 S5 PR-3 destructive-confirmation blocking: binding the hook into the binder's invoker deps literal makes connector-instance-destructive-hook.ts and (through it) the stage-1 connector-instance-pending-call-store.ts reachable, and the invoker's step-3 floor import makes packages/mcp-server/src/known-destructive-floor.ts reachable \u2014 +3 first-party modules per locked route (the binder and the invoker are statically reachable from all five). Each module is the confirmation subsystem landing at its planned seam; the raise cannot be narrowed without deferring the hook bind off the deps literal, which is the arming point the S7 exposure criterion names. Replaces the PR-2167 record for this route (its raise is baked into base).",
-      "pr": 2166
+      "from": 1630,
+      "to": 1632,
+      "reason": "cinatra#2019 S4 (trusted-site native read-injection, verifier slice): exactly +2 first-party modules per locked route — src/lib/connector-instance-trusted-read-verifier.ts and src/lib/connector-instance-native-read-injection.ts, the dormant trust-eligibility computation (pure verifier + builder/explain members on the wordpress-mcp publication) that the connector-side guard replacement consumes next. Both attach through the host connector-service binder (register-host-connector-services.ts), which every locked route reaches, so the growth is uniform and equals the module count itself — no barrel widening and no new cross-package edge: the one floor subpath this slice also imports (packages/mcp-server/src/known-destructive-floor.ts) is already in the base graph via the confirmation-flow invoker binding, so it adds nothing here. The members cannot be split away from the binder without forking the additive publication-member registration pattern every sibling governance member uses. Replaces the PR-2166 record for this route (its raise is baked into base).",
+      "pr": 2171
     },
     "/chat": {
-      "from": 1701,
-      "to": 1704,
-      "reason": "cinatra#2020 S5 PR-3 destructive-confirmation blocking: binding the hook into the binder's invoker deps literal makes connector-instance-destructive-hook.ts and (through it) the stage-1 connector-instance-pending-call-store.ts reachable, and the invoker's step-3 floor import makes packages/mcp-server/src/known-destructive-floor.ts reachable \u2014 +3 first-party modules per locked route (the binder and the invoker are statically reachable from all five). Each module is the confirmation subsystem landing at its planned seam; the raise cannot be narrowed without deferring the hook bind off the deps literal, which is the arming point the S7 exposure criterion names. Replaces the PR-2167 record for this route (its raise is baked into base).",
-      "pr": 2166
+      "from": 1704,
+      "to": 1706,
+      "reason": "cinatra#2019 S4 (trusted-site native read-injection, verifier slice): exactly +2 first-party modules per locked route — src/lib/connector-instance-trusted-read-verifier.ts and src/lib/connector-instance-native-read-injection.ts, the dormant trust-eligibility computation (pure verifier + builder/explain members on the wordpress-mcp publication) that the connector-side guard replacement consumes next. Both attach through the host connector-service binder (register-host-connector-services.ts), which every locked route reaches, so the growth is uniform and equals the module count itself — no barrel widening and no new cross-package edge: the one floor subpath this slice also imports (packages/mcp-server/src/known-destructive-floor.ts) is already in the base graph via the confirmation-flow invoker binding, so it adds nothing here. The members cannot be split away from the binder without forking the additive publication-member registration pattern every sibling governance member uses. Replaces the PR-2166 record for this route (its raise is baked into base).",
+      "pr": 2171
     },
     "/api/a2a": {
-      "from": 1632,
-      "to": 1635,
-      "reason": "cinatra#2020 S5 PR-3 destructive-confirmation blocking: binding the hook into the binder's invoker deps literal makes connector-instance-destructive-hook.ts and (through it) the stage-1 connector-instance-pending-call-store.ts reachable, and the invoker's step-3 floor import makes packages/mcp-server/src/known-destructive-floor.ts reachable \u2014 +3 first-party modules per locked route (the binder and the invoker are statically reachable from all five). Each module is the confirmation subsystem landing at its planned seam; the raise cannot be narrowed without deferring the hook bind off the deps literal, which is the arming point the S7 exposure criterion names. Replaces the PR-2167 record for this route (its raise is baked into base).",
-      "pr": 2166
+      "from": 1635,
+      "to": 1637,
+      "reason": "cinatra#2019 S4 (trusted-site native read-injection, verifier slice): exactly +2 first-party modules per locked route — src/lib/connector-instance-trusted-read-verifier.ts and src/lib/connector-instance-native-read-injection.ts, the dormant trust-eligibility computation (pure verifier + builder/explain members on the wordpress-mcp publication) that the connector-side guard replacement consumes next. Both attach through the host connector-service binder (register-host-connector-services.ts), which every locked route reaches, so the growth is uniform and equals the module count itself — no barrel widening and no new cross-package edge: the one floor subpath this slice also imports (packages/mcp-server/src/known-destructive-floor.ts) is already in the base graph via the confirmation-flow invoker binding, so it adds nothing here. The members cannot be split away from the binder without forking the additive publication-member registration pattern every sibling governance member uses. Replaces the PR-2166 record for this route (its raise is baked into base).",
+      "pr": 2171
     },
     "/api/llm-bridge": {
-      "from": 1642,
-      "to": 1645,
-      "reason": "cinatra#2020 S5 PR-3 destructive-confirmation blocking: binding the hook into the binder's invoker deps literal makes connector-instance-destructive-hook.ts and (through it) the stage-1 connector-instance-pending-call-store.ts reachable, and the invoker's step-3 floor import makes packages/mcp-server/src/known-destructive-floor.ts reachable \u2014 +3 first-party modules per locked route (the binder and the invoker are statically reachable from all five). Each module is the confirmation subsystem landing at its planned seam; the raise cannot be narrowed without deferring the hook bind off the deps literal, which is the arming point the S7 exposure criterion names. Replaces the PR-2167 record for this route (its raise is baked into base).",
-      "pr": 2166
+      "from": 1645,
+      "to": 1647,
+      "reason": "cinatra#2019 S4 (trusted-site native read-injection, verifier slice): exactly +2 first-party modules per locked route — src/lib/connector-instance-trusted-read-verifier.ts and src/lib/connector-instance-native-read-injection.ts, the dormant trust-eligibility computation (pure verifier + builder/explain members on the wordpress-mcp publication) that the connector-side guard replacement consumes next. Both attach through the host connector-service binder (register-host-connector-services.ts), which every locked route reaches, so the growth is uniform and equals the module count itself — no barrel widening and no new cross-package edge: the one floor subpath this slice also imports (packages/mcp-server/src/known-destructive-floor.ts) is already in the base graph via the confirmation-flow invoker binding, so it adds nothing here. The members cannot be split away from the binder without forking the additive publication-member registration pattern every sibling governance member uses. Replaces the PR-2166 record for this route (its raise is baked into base).",
+      "pr": 2171
     }
   }
 }
