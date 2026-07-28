@@ -350,7 +350,11 @@ describe("legacy exception ledger", () => {
       { code: "dangling-reference", message: "m" },
     ];
     const listed = applyLegacyExceptions(violations, {
-      packageName: "@cinatra-ai/drupal-skills",
+      // The last package still on the ledger. Every other entry was deleted as
+      // cinatra#2090 migrated its package; when this one goes too the ledger is
+      // empty and this assertion moves to a synthetic entry (or the whole
+      // ledger mechanism retires with it).
+      packageName: "@cinatra-ai/assistant-skills",
       ledger,
     });
     expect(codes(listed.waived)).toEqual(["package-suffix"]);

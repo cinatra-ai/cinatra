@@ -98,14 +98,14 @@
       "resolvedSha": "c91f24e6774105902706a8cfe2689e3cf289cc43"
     },
     {
-      "packageName": "@cinatra-ai/blog-skills",
-      "repo": "cinatra-ai/blog-skills",
-      "resolvedSha": "a1837dd641d6eb9224a3f75e5997c8873216c254"
-    },
-    {
       "packageName": "@cinatra-ai/blog-wordpress-publish-agent",
       "repo": "cinatra-ai/blog-wordpress-publish-agent",
       "resolvedSha": "cf9e6475689070399d9cce60242417cf3f147bd4"
+    },
+    {
+      "packageName": "@cinatra-ai/blog-writing-skill",
+      "repo": "cinatra-ai/blog-writing-skill",
+      "resolvedSha": "0f894cbd6802d43fec688b135b9144c2cdcd6ed8"
     },
     {
       "packageName": "@cinatra-ai/brand-voice-artifact",
@@ -180,12 +180,12 @@
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "2b8c18de5c6a466d09177d0cacfe79503f43bd3b"
+      "resolvedSha": "44dfcbb470dec14d53e06a038a5f86344628f406"
     },
     {
-      "packageName": "@cinatra-ai/drupal-skills",
-      "repo": "cinatra-ai/drupal-skills",
-      "resolvedSha": "e493c0dc1f505446821274cfe7e76092bcafe578"
+      "packageName": "@cinatra-ai/drupal-widget-chat-skill",
+      "repo": "cinatra-ai/drupal-widget-chat-skill",
+      "resolvedSha": "03093d4b85a8a5bdf0f8d621aa2b6ce62df7ec40"
     },
     {
       "packageName": "@cinatra-ai/email-artifacts",
@@ -373,9 +373,9 @@
       "resolvedSha": "ef4dc94ceffe7502f006991044e9e44065ae21eb"
     },
     {
-      "packageName": "@cinatra-ai/skill-creator-skills",
-      "repo": "cinatra-ai/skill-creator-skills",
-      "resolvedSha": "0379b74602ea263210ff03cc5e6a83d9a279f1b6"
+      "packageName": "@cinatra-ai/skill-prefill-generation-skill",
+      "repo": "cinatra-ai/skill-prefill-generation-skill",
+      "resolvedSha": "5a3376e8a90e5b9432369ed30a5040c5c0f5fdaa"
     },
     {
       "packageName": "@cinatra-ai/slide-deck-artifact",
@@ -430,7 +430,12 @@
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",
       "repo": "cinatra-ai/wordpress-mcp-connector",
-      "resolvedSha": "fc4e8923e72463872d6862e0d19c5c55322a3da1"
+      "resolvedSha": "e46781db566c5538ce6ffe42df19c1662c9e2b79"
+    },
+    {
+      "packageName": "@cinatra-ai/wordpress-widget-chat-skill",
+      "repo": "cinatra-ai/wordpress-widget-chat-skill",
+      "resolvedSha": "ade558a9848701252170a0ff3b3b27a0cb7fd2a4"
     },
     {
       "packageName": "@cinatra-ai/youtube-connector",
