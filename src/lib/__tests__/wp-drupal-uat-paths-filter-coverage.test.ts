@@ -81,6 +81,13 @@ const REQUIRED_BOOT_DEPENDENCY_PATHS = [
   "src/app/api/agents/*/token/**",
   // Boot orchestration/phases the mount + assistant seeding depend on:
   "src/lib/boot/**",
+  // cinatra#2165 — the Drupal companion image + its entrypoint. The suite's
+  // Drupal scenarios run against a container compose BUILDS from
+  // docker/drupal/Dockerfile and boots via scripts/drupal-entrypoint.sh, so a
+  // base-image major or a bootstrap rewrite changes the subject under test.
+  // A php base-image bump previously fast-passed this gate.
+  "docker/drupal/**",
+  "scripts/drupal-entrypoint.sh",
 ];
 
 /**

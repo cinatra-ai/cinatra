@@ -50,7 +50,7 @@ targets). `profile` = the service only starts under an opt-in compose profile.
 | twenty-server / twenty-worker | docker-compose.yml | image tag `twentycrm/twenty:${TWENTY_TAG:-v2.7.3}` | Twenty v2 currency | profile `twenty`; already release-pinned by default |
 | node (app image) | Dockerfile | `node:24-alpine` | stay node 24 (LTS) | engines require node 24; no major offered |
 | python (wayflow) | docker/wayflow/Dockerfile | `python:3.14-slim` (was `3.11-slim`, bumped — cinatra#354) | (at target) | wayflowcore runtime; the Wayflow agent-runtime major-upgrade lane (§6) |
-| php (drupal) | docker/drupal/Dockerfile | `php:8.3-apache` | php 8.5-apache | |
+| php (drupal) | docker/drupal/Dockerfile | `php:8.5-apache@sha256:eacc…66dd` (was the floating tag `php:8.3-apache`; **major applied + digest-pinned 2026-07-28** — §14) | at target (8.5.8-apache-trixie is the latest stable line) | Drupal companion image; the bump also removed `opcache` from `docker-php-ext-install` (§14) |
 | composer (drupal) | docker/drupal/Dockerfile | `composer:2` | composer 2.x | |
 | tailscale (wayflow clone) | docker/wayflow/compose.clone.template.yml | `tailscale/tailscale:v1.78.3` | tailscale v1.98.4 | **held on purpose** — in-file TODO cites the upstream containerboot SIGSEGV (tailscale/tailscale#14354); obsoleted-by = that upstream fix lands |
 
@@ -143,7 +143,7 @@ prerelease-only, so 18.4 is the latest-stable bar). Two coupled facts:
 | Patch | Patches | Why | Obsoleted by version |
 |---|---|---|---|
 | `patches/@a2a-js__sdk@0.3.13.patch` | `@a2a-js/sdk@0.3.13` dist `parseSseStream` | upstream SSE parser overwrote multi-line `data:` instead of accumulating with `\n`; the patch accumulates | an `@a2a-js/sdk` release that ships the multi-line `data:` accumulation fix upstream. The `patchedDependencies` key embeds the exact version, so every `@a2a-js/sdk` bump must re-key + re-verify or the patch silently stops applying |
-| `docker/drupal/patches/mcp_tools-audit-logger-strtolower.patch` | Drupal `mcp_tools_content` AuditLogger `strtolower($key)` | PHP 8 throws a `TypeError` when an `int` array key reaches `strtolower`; the patch casts `(string)` | an upstream `mcp_tools` (Drupal contrib) release that null/int-safes the key. Tied to the contrib module, **not** to the PHP image bump (the php 8.5 bump does not retire it) |
+| `docker/drupal/patches/mcp_tools-audit-logger-strtolower.patch` | Drupal `mcp_tools` AuditLogger `strtolower($key)` | PHP 8 throws a `TypeError` when an `int` array key reaches `strtolower`; the patch casts `(string)` | an upstream `mcp_tools` (Drupal contrib) release that null/int-safes the key — **that release has landed**: `drupal/mcp_tools` `1.0.0-beta18` already carries `strtolower((string) $key)` (see §14.2). The php 8.5 bump did **not** retire it, exactly as predicted; the contrib release did. Kept in tree (the entrypoint applier is grep-guarded and no-ops), because the contrib requirement is the unpinned `^1.0` with `minimum-stability: dev` — retiring the applier is a separate contrib-pinning decision, not an image decision |
 
 ### 4.2 `pnpm-workspace.yaml` — `overrides`
 
@@ -929,5 +929,146 @@ proof is the publish round-trip), and `node-pg-migrate` 9 (blocked, §13.2).
 Image-side majors remain as recorded in §1: the profile-gated demo images
 (mariadb 12, wordpress 7, rabbitmq 4, valkey 9, and the Twenty/Plane postgres
 and redis pins) are upstream-dictated and tracked, not led; `tailscale` stays
-held on the upstream fix (§1); `php` 8.5 for the Drupal image is the one
-non-demo image major still open.
+held on the upstream fix (§1); `php` 8.5 for the Drupal image was the one
+non-demo image major still open — **it is now applied (§14)**, so no non-demo
+image major remains open.
+
+---
+
+## 14. `php` `8.3-apache` → `8.5-apache` (Drupal companion image) — MAJOR APPLIED
+
+cinatra#2165. `docker/drupal/Dockerfile` moves from the floating tag
+`php:8.3-apache` to `php:8.5-apache@sha256:eacc0d98992683cb46e4f8f44b2418a0323855dc8b59d32dc54f7a9b90a966dd`
+(8.5.8-apache-trixie). This closes the last non-demo image major on the track
+and simultaneously closes a pin-drift hole: the previous reference was a bare
+tag that moved on every pull. The pin is the top-level multi-arch OCI **index**
+digest (the image is a genuine multi-arch index, unlike the amd64-only
+nango-server of §2), so it stays portable across arm64 dev and amd64 CI. Both
+the 8.3 and 8.5 lines are already `debian:trixie-slim`-based, so this is a PHP
+major only — no distribution hop rides along.
+
+### 14.1 The one real breaking change: OPcache can no longer be built shared
+
+The bump's first failure was not Drupal and not the contrib set — it was the
+image's own extension step:
+
+```
+Installing shared extensions:     /usr/local/lib/php/extensions/no-debug-non-zts-20250925/
+cp: cannot stat 'modules/*': No such file or directory
+make: *** [Makefile:89: install-modules] Error 1
+ERROR: process "/bin/sh -c docker-php-ext-configure gd … && docker-php-ext-install gd pdo pdo_mysql zip opcache" did not complete successfully
+```
+
+Upstream php-src made OPcache **static-only**. `ext/opcache/config.m4` now
+declares `PHP_NEW_EXTENSION([opcache], …, [no], …)` where the 8.3 line passed
+`$ext_shared`, so a `phpize` build emits no `modules/*.so` and
+`docker-php-ext-install opcache` has nothing to copy. Confirmed by reading both
+lines' `config.m4` inside the two base images.
+
+Nothing is lost by dropping the argument. The official image **already compiles
+OPcache in and enables it** — on 8.3 as well as 8.5:
+
+```
+php:8.5-apache → php -v … "with Zend OPcache 8.5.8"
+                 opcache.enable => On ; extension_loaded("Zend OPcache") => true
+php:8.3-apache → php -v … "with Zend OPcache 8.3.32" ; opcache.enable => On
+```
+
+So the old `opcache` argument was building a redundant second copy on 8.3 too.
+The Dockerfile now ends that RUN with an explicit assertion
+(`extension_loaded("Zend OPcache") && ini_get("opcache.enable")`) so a future
+base-image change that silently drops OPcache fails the BUILD instead of
+quietly degrading the entrypoint's `opcache.revalidate_freq=0` /
+`validate_timestamps=1` dev ini. Because OPcache is built in on 8.3 as well,
+**rollback is still just the `FROM` line** — reverting it alone yields a
+working image.
+
+`composer:2` and the contrib set re-confirmed on the new base, as the issue
+required: composer 2.10.0 resolved `drupal/recommended-project:^11` →
+`drupal/core 11.4.4`, `drush/drush 13.7.6`, `drupal/paragraphs 1.21.0`,
+`drupal/tool 1.0.0-beta2`, `drupal/mcp_tools 1.0.0-beta18`, and the image's own
+`test -d …/mcp_tools`/`paragraphs` + `drush --version` assertion passed.
+
+### 14.2 Obsolete-on-upgrade check (§4) — the mcp_tools patch, honestly
+
+The issue's expected verdict was that
+`docker/drupal/patches/mcp_tools-audit-logger-strtolower.patch` **survives** the
+image move because it is tied to the contrib module, not to PHP. That prediction
+is correct about the mechanism, and the recorded obsoleted-by condition has
+**separately come true**: `drupal/mcp_tools` `1.0.0-beta18` already ships
+
+```php
+// AuditLogger.php:136 (upstream, unpatched checkout)
+$lowerKey = strtolower((string) $key);
+```
+
+so the entrypoint's grep-guarded applier finds no `strtolower($key)` and logs
+nothing — on the 8.5 candidate **and on an 8.3 control build of the pre-change
+Dockerfile** (`Applying mcp_tools …` appears 0 times in both boots). The same is
+true of the sibling `ContentAnalysisService` `date()` applier: beta18 already
+casts `(int)` at every call site. Two consequences, both recorded rather than
+acted on here:
+
+- the patch was **not** retired by the image move, so this lane does not drop it
+  (per the issue's instruction);
+- it is inert against the currently-resolved contrib version. The contrib
+  requirement is an unpinned `"drupal/mcp_tools:^1.0"` under
+  `minimum-stability: dev`, so an older beta can still resolve in principle and
+  the applier is a cheap, idempotent guard. Retiring it belongs to a contrib
+  **pinning** decision, not to this image bump. The `.patch` file's header path
+  (`modules/mcp_tools_content/src/Service/AuditLogger.php`) is additionally
+  stale — beta18 keeps the class at `src/Service/AuditLogger.php`, which is the
+  path the entrypoint (correctly) targets.
+
+### 14.3 Works-after proof
+
+**The gate now actually fires.** `.github/workflows/wp-drupal-uat.yml`'s
+`relevant` paths filter did **not** list the Drupal companion image or its
+entrypoint, so a PR rebuilding the container the suite boots against fast-passed
+the hard gate — the same misleading-green shape as cinatra#1919 / cinatra#2036.
+`docker/drupal/**` and `scripts/drupal-entrypoint.sh` are now in the filter and
+pinned by the coverage regression test
+(`src/lib/__tests__/wp-drupal-uat-paths-filter-coverage.test.ts`), so this bump
+gates itself and so does every future one. (The symmetric WordPress-side gap —
+`docker/wordpress/**` — is recorded here for its own lane rather than widened
+silently in an image-bump PR.)
+
+**Local proof, run against the rebuilt image with an 8.3 control alongside.**
+Both stacks were brought up from the repo's own entrypoint, config-sync, seed
+fixtures and bind-mounted `cinatra` module, against `mariadb:11.4`:
+
+| Check | 8.5 candidate | 8.3 control (pre-change Dockerfile) |
+|---|---|---|
+| Image build | green | green |
+| Entrypoint bootstrap to `Bootstrap complete` | yes (17 log stages) | yes (17 log stages) |
+| Drupal install / content types / paragraphs / mcp_tools / German / config import / `cinatra` module enable / config export / seed | all executed; 3 fixture nodes | identical |
+| `drush pm:list` shows `cinatra`, `mcp_tools`, `mcp_tools_remote`, `mcp_tools_content`, `paragraphs` enabled | yes | yes |
+| MCP `initialize` + `tools/list` on `/_mcp_tools` | 200, **29 tools** | 200, **29 tools**, byte-identical tool set |
+| MCP content op — `mcp_create_content` | `success: true`, node created | — |
+| MCP content op — `mcp_update_content` (the AuditLogger path the patch targets) | `success: true`, `fields_updated: [title, body]`, `revision_id 5` | — |
+| DB read-back of the updated node via `drush php:eval` | title + body + published state all persisted | — |
+| `mcp_tools_get_recent_content` (the `date()` applier's path) | correct `created`/`changed` timestamps | — |
+| HTTP surface `/`, `/node/1`, `/node/4`, `/user/login`, widget JS asset | all 200 | 200 |
+| Distinct Drupal `php`-channel watchdog message classes | 1 (`mkdir(): Permission Denied` from the dev container's non-writable `sites/default`) | **the same 1** — pre-existing, not introduced |
+| PHP deprecations with `error_reporting=E_ALL` | 1 class: `assert.active INI setting is deprecated`, emitted by `symfony/error-handler`'s `ini_set('assert.active', 1)` | **the same 1** — already present on 8.3, so the bump adds **zero** new deprecations |
+
+The `config:import had errors` warning (`Site UUID in source storage does not
+match the target storage` + `mcp_tools_servers.settings` depending on an
+uninstalled extension) appears identically in both boots: it is a from-scratch
+install property of the checked-in `config/sync`, which the entrypoint already
+treats as non-fatal, not a bump regression.
+
+**The Drupal module is 8.5-clean, and now says so in its own CI.**
+`cinatra-ai/drupal-module` is the code that runs *inside* this image, and its
+gates only ever exercised 8.3. Under 8.5 it is clean today — `php -l` over every
+`.php`/`.module`/`.install`, the standalone preview-auth harness (53 checks, 0
+failures), `phpcs` (Drupal + DrupalPractice) and `phpstan` with
+`phpstan-deprecation-rules` all pass, and no implicit-nullable parameter
+declaration (the PHP 8.4 deprecation that bites Drupal contrib hardest) exists in
+the tree. A companion PR on that repo adds an additive PHP 8.5 job so the claim
+is CI-enforced rather than asserted once. **Canonical order: the module PR lands
+first, this image PR second.**
+
+**Rollback.** Revert the `FROM` line (see §14.1 — OPcache is built into the 8.3
+base too, so the extension-list change needs no accompanying revert) and rebuild
+the `drupal` service.

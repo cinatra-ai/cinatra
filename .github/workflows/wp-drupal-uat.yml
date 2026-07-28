@@ -160,6 +160,21 @@ jobs:
               - 'tests/e2e/config/base.ts'
               - 'dev/wordpress-plugin/**'
               - 'dev/drupal-module/**'
+              # cinatra#2165 — the Drupal COMPANION IMAGE the suite boots. The
+              # composite action brings the stack up with `docker compose
+              # --profile wordpress --profile drupal up`, and the `drupal`
+              # service has a `build:` (no registry image), so compose BUILDS
+              # docker/drupal/Dockerfile and runs scripts/drupal-entrypoint.sh
+              # as the container entrypoint. A PR that rebases that image (a
+              # base-image major, an extension change) or rewrites the
+              # bootstrap the Drupal scenarios depend on therefore changes what
+              # the suite runs against — yet previously fast-passed this gate,
+              # the same misleading-green shape as cinatra#1919 / cinatra#2036.
+              # The coverage regression test pins these; keep the two lists equal.
+              # (The symmetric WordPress-side image paths are a known remaining
+              # gap, left to their own lane rather than widened here.)
+              - 'docker/drupal/**'
+              - 'scripts/drupal-entrypoint.sh'
 
   # Reciprocal contract lock-step gate (canonical-first ordering): a core PR
   # that edits the ENFORCED auth-init schema copy must match the CANONICAL
