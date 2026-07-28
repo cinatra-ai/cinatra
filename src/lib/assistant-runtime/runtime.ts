@@ -61,7 +61,11 @@ import {
   isScriptedTestProviderEnabled,
   runScriptedWidgetAssistantTurn,
 } from "@cinatra-ai/llm/scripted-test-provider";
-import { resolveSurfaceExecutionBinding } from "@/lib/execution/surface-execution-session";
+import {
+  observeSurfaceExecutionDispatches,
+  resolveSurfaceExecutionBinding,
+} from "@/lib/execution/surface-execution-session";
+import { evaluateExecutionProvenance } from "@cinatra-ai/llm/execution-plane";
 import { issueChatMcpActorToken } from "@/lib/chat-mcp-actor-token";
 import { issueWidgetMcpActorToken } from "@/lib/widget-mcp-actor-token";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
@@ -744,12 +748,57 @@ export async function runAssistantTurn(
     orgId: sessionOrgId,
     userId,
   });
+  // cinatra#2175 — render-side execution provenance. A live turn with the
+  // capability fully injected answered a "run this" request with prose shaped
+  // exactly like captured stdout: no tool call, no `execution_sandbox` audit
+  // row, a wrong digest. The audit trail was right (nothing ran) and the
+  // surface was wrong (it looked like something had). So the turn now carries
+  // its own provenance: the executor is wrapped to COUNT completed dispatches
+  // — each one is the broker round-trip that writes the audit row — and the
+  // assistant's own text is accumulated alongside. At the end of the turn the
+  // two are compared and an unbacked execution claim is MARKED in the
+  // transcript (below), never blocked and never rewritten.
+  //
+  // `executionCapabilityOffered` is the runtime's own view of the offer: a
+  // minted session AND a registered executor, i.e. everything the injection
+  // layer needs. It over-approximates that layer's `injected` verdict on
+  // purpose — a turn refused deeper in (unsealable session, opted-out org)
+  // still ran nothing, so marking a claim there is equally true. Flag off ⇒
+  // empty binding ⇒ `false` ⇒ the guard is inert and this turn is
+  // byte-identical to before.
+  const chatExecutionObserver =
+    observeSurfaceExecutionDispatches(chatExecutionBinding);
+  const executionCapabilityOffered = Boolean(
+    chatExecutionBinding.executionSession &&
+      chatExecutionBinding.executionExecutor,
+  );
+  let assistantTurnText = "";
+  let executionProvenanceEmitted = false;
+  // Emitted on BOTH terminal paths. A turn that streamed fabricated output and
+  // then failed (provider timeout, client abort) still PERSISTS that text, so
+  // marking only the clean path would leave the worst case — a half-finished
+  // turn nobody re-ran — unmarked. Idempotent: at most one marker per turn.
+  const markUnverifiedExecutionClaim = () => {
+    if (executionProvenanceEmitted) return;
+    const verdict = evaluateExecutionProvenance({
+      capabilityOffered: executionCapabilityOffered,
+      dispatches: chatExecutionObserver.readLog(),
+      text: assistantTurnText,
+    });
+    if (verdict.status !== "unverified") return;
+    executionProvenanceEmitted = true;
+    console.warn(
+      "[execution-plane] chat: execution claim with NO sandbox dispatch that " +
+        `reached a sandbox — marking the turn unverified (claims: ${verdict.matchedClaims.join(", ")})`,
+    );
+    send("text", { content: verdict.notice });
+  };
 
   try {
     await stream({
       provider: adapter.provider,
       actorContext,
-      ...chatExecutionBinding,
+      ...chatExecutionObserver.binding,
       // An explicit `model` pref overrides the connection default; absent, the
       // field is omitted so the call is byte-identical to the legacy chat.
       ...(modelPrefs.model ? { model: modelPrefs.model } : {}),
@@ -793,6 +842,9 @@ export async function runAssistantTurn(
         : AbortSignal.timeout(120_000),
       logLabel: "chat",
       onTextDelta: (delta) => {
+        // Accumulated for the end-of-turn execution-provenance verdict
+        // (cinatra#2175); the sink emission itself is unchanged.
+        assistantTurnText += delta;
         send("text", { content: delta });
       },
       onToolCall: (call) => {
@@ -833,12 +885,29 @@ export async function runAssistantTurn(
         send("citations", { citations });
       },
       onError: (error) => {
+        // `error` is a TERMINAL sink frame: the AG-UI adapter ignores every
+        // event after the first terminal. An adapter that reports through this
+        // callback and then RESOLVES would therefore have its marker dropped
+        // if we only evaluated after the stream — so the verdict is taken here,
+        // on the text accumulated so far, before the terminal goes out.
+        markUnverifiedExecutionClaim();
         send("error", { message: error.message });
       },
     });
 
+    // Execution-provenance verdict (cinatra#2175). Rides the EXISTING text
+    // path, so the marker persists with the turn (`assistant_turns.content`),
+    // renders through the same markdown the reply does, and needs no new
+    // stream vocabulary or component. `not_applicable` (the default, and the
+    // only reachable status while the plane is dark) emits nothing.
+    markUnverifiedExecutionClaim();
+
     send("done", {});
   } catch (error) {
+    // Same verdict before the terminal error frame: the partial text is
+    // persisted either way, so an unbacked claim inside it must be marked
+    // either way.
+    markUnverifiedExecutionClaim();
     const message = error instanceof Error ? error.message : "Chat request failed.";
     send("error", { message });
   }
