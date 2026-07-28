@@ -59,3 +59,13 @@ Finding 3 (the `immediate` trigger) is pinned by unit tests that provably fail
 against `origin/main` plus the real-store park/release integration test; the
 immediate-trigger surface was not reachable in this walk without first
 dispatching the run under test.
+
+## Skills-drift acknowledgement
+
+`blog-content/SKILL.md` declares a watch on `@cinatra-ai/blog-pipeline-agent`.
+This lane changes no file under `extensions/cinatra-ai/blog-pipeline-agent/` —
+the package name appears in the diff only in this write-up, naming the agent used
+for the live walk. The declared-watch hit is the `packages/agents/**` surface
+mapping. The skill documents the blog-content dashboard's selection chain and its
+publish-workflow launcher; nothing in that guidance is affected by a change to
+the run-start recommendation candidate set and two run-start dispatch paths.
