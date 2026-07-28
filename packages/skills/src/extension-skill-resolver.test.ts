@@ -48,6 +48,7 @@ import {
   resolveSkillIdForCapability,
   resolveInstalledSkillSourcePath,
   resolveDeclaredSkillEdgeForExtensionDir,
+  resolveDeclaredSkillEdgeForPackage,
   ensureInstalledSkillRegistered,
   ensureInstalledSkillsRegistered,
   scanSkillExtensions,
@@ -695,5 +696,224 @@ describe("resolveDeclaredSkillEdgeForExtensionDir", () => {
       ],
     });
     expect(await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The EDGE-ROLE vocabulary (cinatra#2090 S3).
+//
+// An artifact extension declares more than one skill edge — the classifier's
+// rules and the chat's authoring methodology — so the projection can no longer
+// mean "the single skill edge". Each surface reads the edge declared FOR it,
+// and an edge declared for another surface is NEVER a fallback.
+// ---------------------------------------------------------------------------
+describe("declared skill edge — ROLE selection", () => {
+  const skillEdgeLocal = (packageName: string, over: Record<string, unknown> = {}) => ({
+    packageName,
+    edgeType: "runtime",
+    versionConstraint: { kind: "semver-range", range: "*" },
+    requirement: "required",
+    kind: "skill",
+    ...over,
+  });
+
+  async function writeRolelessConsumerAndProvider() {
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "web-research-agent",
+      name: "@cinatra-ai/web-research-agent",
+      kind: "agent",
+      dependencies: [skillEdgeLocal("@cinatra-ai/web-research-skill")],
+      slugs: [],
+    });
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "web-research-skill",
+      name: "@cinatra-ai/web-research-skill",
+      kind: "skill",
+      slugs: ["web-research"],
+    });
+  }
+
+  const roledEdge = (packageName: string, role?: string) => ({
+    packageName,
+    edgeType: "runtime",
+    versionConstraint: { kind: "semver-range", range: "*" },
+    requirement: "required",
+    kind: "skill",
+    ...(role ? { role } : {}),
+  });
+
+  async function writeArtifactWithBothRoles(over?: { deps?: unknown[] }) {
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "blog-idea-artifact",
+      name: "@cinatra-ai/blog-idea-artifact",
+      kind: "artifact",
+      dependencies:
+        over?.deps ?? [
+          roledEdge("@cinatra-ai/blog-idea-authoring-skill", "authoring"),
+          roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher"),
+        ],
+      slugs: [],
+    });
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "blog-idea-matcher-skill",
+      name: "@cinatra-ai/blog-idea-matcher-skill",
+      kind: "skill",
+      slugs: ["blog-idea-matcher"],
+    });
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "blog-idea-authoring-skill",
+      name: "@cinatra-ai/blog-idea-authoring-skill",
+      kind: "skill",
+      slugs: ["blog-idea-authoring"],
+    });
+  }
+
+  it("resolves each role to ITS OWN provider on a consumer declaring both", async () => {
+    await writeArtifactWithBothRoles();
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "matcher"),
+    ).toEqual(
+      expect.objectContaining({
+        packageName: "@cinatra-ai/blog-idea-matcher-skill",
+        skillId: "@cinatra-ai/blog-idea-matcher-skill:blog-idea-matcher",
+        slug: "blog-idea-matcher",
+      }),
+    );
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "authoring"),
+    ).toEqual(
+      expect.objectContaining({
+        packageName: "@cinatra-ai/blog-idea-authoring-skill",
+        skillId: "@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring",
+        slug: "blog-idea-authoring",
+      }),
+    );
+  });
+
+  it("a role the consumer does not declare resolves to null (no cross-role fallback)", async () => {
+    await writeArtifactWithBothRoles({
+      deps: [roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher")],
+    });
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "authoring"),
+    ).toBeNull();
+  });
+
+  it("the run-MOUNT surface refuses a roled edge — a classifier prompt is never mounted as instructions", async () => {
+    // The regression this closes: before roles existed, an artifact that
+    // declared exactly ONE skill edge (its matcher's rules) satisfied the
+    // "exactly one runtime skill edge" predicate, so the bridge would have
+    // mounted the classifier prompt into the run.
+    await writeArtifactWithBothRoles({
+      deps: [roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher")],
+    });
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("blog-idea-artifact")).toBeNull();
+  });
+
+  it("the run-MOUNT surface still resolves a ROLE-LESS edge (wave-2 behaviour is untouched)", async () => {
+    await writeRolelessConsumerAndProvider();
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent")).toEqual(
+      expect.objectContaining({ skillId: "@cinatra-ai/web-research-skill:web-research" }),
+    );
+  });
+
+  it("a role-less edge is NOT a matcher edge (resolveDeclaredSkillEdgeForPackage is role-exact)", async () => {
+    await writeRolelessConsumerAndProvider();
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/web-research-agent", "matcher"),
+    ).toBeNull();
+  });
+
+  it("an UNKNOWN role string resolves for neither the mount surface nor a named role", async () => {
+    await writeArtifactWithBothRoles({
+      deps: [roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matchr")],
+    });
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("blog-idea-artifact")).toBeNull();
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "matcher"),
+    ).toBeNull();
+  });
+
+  it("TWO edges carrying the SAME role fail closed", async () => {
+    await writeArtifactWithBothRoles({
+      deps: [
+        roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher"),
+        roledEdge("@cinatra-ai/blog-idea-authoring-skill", "matcher"),
+      ],
+    });
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "matcher"),
+    ).toBeNull();
+  });
+
+  it("a peer / install-time edge NEVER resolves, role or not", async () => {
+    for (const edgeType of ["peer", "install-time"]) {
+      await rm(path.join(tmpDir, "extensions"), { recursive: true, force: true });
+      await writeArtifactWithBothRoles({
+        deps: [{ ...roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher"), edgeType }],
+      });
+      expect(
+        await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "matcher"),
+      ).toBeNull();
+    }
+  });
+
+  it("an OPTIONAL roled edge never resolves (required-only, same as wave 2)", async () => {
+    await writeArtifactWithBothRoles({
+      deps: [
+        { ...roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher"), requirement: "optional" },
+      ],
+    });
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "matcher"),
+    ).toBeNull();
+  });
+
+  it("a kind:\"skill\" package cannot chain through a roled edge either", async () => {
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "chaining-skill",
+      name: "@cinatra-ai/chaining-skill",
+      kind: "skill",
+      dependencies: [roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher")],
+      slugs: ["chaining"],
+    });
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "blog-idea-matcher-skill",
+      name: "@cinatra-ai/blog-idea-matcher-skill",
+      kind: "skill",
+      slugs: ["blog-idea-matcher"],
+    });
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/chaining-skill", "matcher"),
+    ).toBeNull();
+  });
+
+  it("a tombstoned provider drops the roled resolution", async () => {
+    await writeArtifactWithBothRoles();
+    readEffectiveStatusMock.mockResolvedValue(
+      new Map([["@cinatra-ai/blog-idea-matcher-skill", "archived"]]),
+    );
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "matcher"),
+    ).toBeNull();
+    // the OTHER role is unaffected
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "authoring"),
+    ).toEqual(expect.objectContaining({ packageName: "@cinatra-ai/blog-idea-authoring-skill" }));
+  });
+
+  it("an unknown consumer package name resolves to null", async () => {
+    await writeArtifactWithBothRoles();
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/nope-artifact", "matcher"),
+    ).toBeNull();
+    expect(await resolveDeclaredSkillEdgeForPackage("", "matcher")).toBeNull();
   });
 });

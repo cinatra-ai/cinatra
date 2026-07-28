@@ -41,39 +41,68 @@ import {
 } from "@cinatra-ai/skills";
 
 /**
- * One-shot lazy registration of a single artifact extension's co-located
- * skill bundle, by package
- * name. The boot/dev extension scan is fire-and-forget, so a first
- * artifact-create right
- * after restart can run the matcher before the owning package's
- * matcher skill is in the catalog. The matcher calls this on a
- * catalog miss for that package, then retries the lookup once.
+ * One-shot lazy registration of a single matcher-skill-OWNING package's
+ * co-located skill bundle, by package name. The boot/dev extension scan is
+ * fire-and-forget, so a first artifact-create right after restart can run the
+ * matcher before the owning package's matcher skill is in the catalog. The
+ * matcher calls this on a catalog miss for that package, then retries the
+ * lookup once.
  *
- * Scans `extensions/<vendor>/<slug>` for the dir whose `package.json`
- * `name` === `packageName` AND `cinatra.kind === "artifact"`, then
- * runs the SAME `registerColocatedWorkspaceSkills` the boot scan
- * uses. Returns the count registered (0 if the package dir cannot be
- * located / has no skills/). Never throws.
+ * Scans `extensions/<vendor>/<slug>` for the dir whose `package.json` `name`
+ * === `packageName` AND whose `cinatra.kind` is a kind that may legitimately
+ * OWN a matcher skill, then runs the SAME `registerColocatedWorkspaceSkills`
+ * the boot scan uses. Returns the count registered (0 if the package dir
+ * cannot be located / is not an owning kind / has no skills/). Never throws.
+ *
+ * The owning kinds are `artifact` and `skill` (cinatra#2090 S3). Before the
+ * extraction the ONLY legitimate owner was the artifact extension itself, and
+ * the matcher's trust anchor said so. Now a matcher bundle lives in its own
+ * one-bundle `kind:"skill"` extension that the artifact declares a
+ * `role:"matcher"` dependency edge on, and the matcher resolves that edge to
+ * the PROVIDER package before calling this — so refusing `kind:"skill"` here
+ * would leave every extracted matcher unable to heal a catalog miss (the
+ * artifact package no longer has a `skills/` dir at all). Every OTHER kind is
+ * still refused: a name match on, say, a connector is not a valid matcher-skill
+ * source. This function does not decide TRUST — the caller's declared-edge /
+ * package-owned anchor does — it only locates a package that may hold one.
  */
+const MATCHER_SKILL_OWNING_KINDS = new Set(["artifact", "skill"]);
+
 export async function registerArtifactExtensionSkillsForPackage(
   packageName: string,
 ): Promise<number> {
-  const extensionsRoot = path.join(
-    process.cwd(),
-    "extensions",
-    "cinatra-ai",
-  );
+  // Scan EVERY vendor directory, not just `cinatra-ai` (cinatra#2090 S3, codex
+  // round 2). The resolver that decides WHICH package to heal walks
+  // `<root>/<vendor>/<pkg>` across every extension root, so pinning this heal
+  // to one vendor left a resolvable third-party provider unable to register on
+  // a cold catalog. The bundled `cwd/extensions` root is the floor every
+  // deployment has; the on-disk layout is otherwise unchanged.
+  const extensionsRoot = path.join(process.cwd(), "extensions");
   if (!existsSync(extensionsRoot)) return 0;
-  let pkgEntries;
+  let vendorEntries;
   try {
-    pkgEntries = await readdir(extensionsRoot, { withFileTypes: true });
+    vendorEntries = await readdir(extensionsRoot, { withFileTypes: true });
   } catch {
     return 0;
   }
-  for (const entry of pkgEntries) {
-    if (!entry.isDirectory()) continue;
-    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
-    const pkgDir = path.join(extensionsRoot, entry.name);
+  const pkgDirs: string[] = [];
+  for (const vendor of vendorEntries) {
+    if (!vendor.isDirectory()) continue;
+    if (vendor.name === "node_modules" || vendor.name.startsWith(".")) continue;
+    const vendorDir = path.join(extensionsRoot, vendor.name);
+    let entries;
+    try {
+      entries = await readdir(vendorDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      pkgDirs.push(path.join(vendorDir, entry.name));
+    }
+  }
+  for (const pkgDir of pkgDirs) {
     const pkgJsonPath = path.join(pkgDir, "package.json");
     if (!existsSync(pkgJsonPath)) continue;
     let pkgJson: { name?: string; cinatra?: { kind?: string } };
@@ -83,16 +112,15 @@ export async function registerArtifactExtensionSkillsForPackage(
       continue;
     }
     if (pkgJson.name !== packageName) continue;
-    if (pkgJson.cinatra?.kind !== "artifact") {
-      // The trust anchor requires the skills be owned by an ARTIFACT
-      // extension. A name match on a non-artifact package is not a
-      // valid matcher-skill source — refuse.
+    if (!MATCHER_SKILL_OWNING_KINDS.has(pkgJson.cinatra?.kind ?? "")) {
+      // A name match on a package of any other kind is not a valid
+      // matcher-skill source — refuse.
       return 0;
     }
     return (await registerColocatedWorkspaceSkills({
       pkgDir,
-      pkgName: pkgJson.name ?? entry.name,
-      pkgDirName: entry.name,
+      pkgName: pkgJson.name ?? path.basename(pkgDir),
+      pkgDirName: path.basename(pkgDir),
     })).length;
   }
   return 0;

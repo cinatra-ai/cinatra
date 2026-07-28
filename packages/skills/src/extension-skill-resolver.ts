@@ -138,6 +138,15 @@ export type DeclaredExtensionDependency = {
   edgeType: string;
   requirement: string;
   kind?: string;
+  /**
+   * The edge ROLE (cinatra#2090) — which host surface this skill edge feeds.
+   * `matcher` / `authoring` per `DEPENDENCY_SKILL_ROLES`; ABSENT means the
+   * plain injectable delivery wave 2 landed. Read as an opaque string here for
+   * the same layering reason the rest of this type is re-declared: the
+   * canonical vocabulary lives in `@cinatra-ai/extensions`, which already
+   * consumes this package.
+   */
+  role?: string;
 };
 
 /** Keep only structurally well-formed `cinatra.dependencies` entries. */
@@ -154,6 +163,7 @@ function readDeclaredDependencies(raw: unknown): DeclaredExtensionDependency[] {
       edgeType: e.edgeType,
       requirement: e.requirement,
       kind: typeof e.kind === "string" ? e.kind : undefined,
+      role: typeof e.role === "string" ? e.role : undefined,
     });
   }
   return out;
@@ -739,10 +749,15 @@ export async function ensureSkillForCapability(
 //     resolve its own declared edge would chain skill→skill deliveries that no
 //     plan text describes;
 //   - it must declare exactly ONE `kind:"skill"` edge that is `runtime` AND
-//     `required`. Deliberately NARROWER than the install closure's
-//     install-blocking predicate (which also admits `install-time`): an
-//     install-time edge says "must be present to install", not "deliver these
-//     instructions into every run". Zero or several ⇒ null;
+//     `required` AND carries the ROLE the calling surface asked for
+//     (cinatra#2090 S3 — see `edgeMatchesRole`). Deliberately NARROWER than the
+//     install closure's install-blocking predicate (which also admits
+//     `install-time`): an install-time edge says "must be present to install",
+//     not "deliver these instructions into every run". Zero or several ⇒ null.
+//     An edge declared for ANOTHER role is never a fallback: mounting a
+//     classifier's rules into a run as instructions to follow, because they
+//     were the only skill edge on the package, is exactly the confusion the
+//     role vocabulary exists to prevent;
 //   - the provider must be a `kind:"skill"` package shipping exactly ONE bundle
 //     (the S2 packaging contract) ⇒ otherwise null.
 //
@@ -785,6 +800,84 @@ function isRuntimeSkillEdge(dep: DeclaredExtensionDependency): boolean {
 }
 
 /**
+ * The EDGE-ROLE selector (cinatra#2090 S3).
+ *
+ * `null` selects the ROLE-LESS edge — the plain injectable delivery wave 2
+ * landed, where the consumer's whole declared bundle is mounted into its own
+ * run. A named role (`"matcher"` / `"authoring"`) selects the edge that feeds
+ * that specific host surface.
+ *
+ * The distinction is load-bearing, not cosmetic. Before roles existed the
+ * projection matched ANY single runtime skill edge, so an artifact extension
+ * that declared exactly one edge — its CLASSIFIER's rules — would have had
+ * that classifier prompt mounted into runs as if it were instructions for the
+ * model to follow. Selecting by role means each surface reads only the edge
+ * that was declared FOR it, and an edge declared for another surface is not a
+ * fallback.
+ */
+function edgeMatchesRole(dep: DeclaredExtensionDependency, role: string | null): boolean {
+  return role === null ? dep.role === undefined : dep.role === role;
+}
+
+/**
+ * The one place a consumer's declared edge is turned into a concrete bundle.
+ * Shared by both entry points below; `matchConsumer` is the only thing that
+ * differs (directory slug vs package name).
+ */
+async function resolveDeclaredSkillEdge(
+  matchConsumer: (ext: SkillExtensionDescriptor) => boolean,
+  role: string | null,
+  onScanFailure: "null" | "throw",
+): Promise<DeclaredSkillEdgeResolution | null> {
+  let exts: SkillExtensionDescriptor[];
+  try {
+    exts = await filterRetiredSkillExtensions(await scanSkillExtensions());
+  } catch (err) {
+    // ABSENT vs UNAVAILABLE (cinatra#2090 S3, codex round 2). A clean `null`
+    // means "this consumer declares no such edge" — a fact about the
+    // declaration. A SCAN FAILURE means the question could not be asked at
+    // all, and collapsing the two lets an fs blip look exactly like a
+    // deliberate non-declaration. The run-MOUNT surface must never throw, so
+    // it asks for `"null"`; the surfaces whose fail-closed policy would be
+    // user-visible ask for `"throw"` and fall back on it.
+    if (onScanFailure === "throw") throw err;
+    return null;
+  }
+
+  const consumers = exts.filter(matchConsumer);
+  // A bare dir slug cannot disambiguate two vendors shipping the same slug —
+  // the same fail-closed rule the bridge's own mount probe applies.
+  if (consumers.length !== 1) return null;
+  if (!DECLARED_EDGE_CONSUMER_KINDS.has(consumers[0]!.kind)) return null;
+
+  const edges = consumers[0]!.dependencies
+    .filter(isRuntimeSkillEdge)
+    .filter((dep) => edgeMatchesRole(dep, role));
+  if (edges.length !== 1) return null;
+  const providerName = edges[0]!.packageName;
+
+  const providers = exts.filter((e) => e.kind === "skill" && e.pkgName === providerName);
+  if (providers.length !== 1) return null;
+  const provider = providers[0]!;
+  // The S2 packaging contract: one `kind:"skill"` extension ships exactly one
+  // bundle. Anything else is not a package this projection can mount from.
+  if (provider.slugs.length !== 1) return null;
+  const slug = provider.slugs[0]!;
+
+  const { packageName, skillId } = deriveSkillRegistration(
+    provider.pkgName,
+    provider.pkgDirName,
+    slug,
+  );
+  return {
+    packageName,
+    slug,
+    skillId,
+    sourcePath: path.join(provider.pkgDir, "skills", slug, "SKILL.md"),
+  };
+}
+
+/**
  * The extension kinds the separation rule makes CONSUMERS: the non-skill kinds
  * that used to embed a bundle. A `kind:"skill"` package is a provider, never a
  * consumer, on this surface.
@@ -812,40 +905,35 @@ export async function resolveDeclaredSkillEdgeForExtensionDir(
   consumerDirName: string,
 ): Promise<DeclaredSkillEdgeResolution | null> {
   if (typeof consumerDirName !== "string" || consumerDirName.length === 0) return null;
-  let exts: SkillExtensionDescriptor[];
-  try {
-    exts = await filterRetiredSkillExtensions(await scanSkillExtensions());
-  } catch {
-    return null;
-  }
+  // ROLE-LESS only: this surface MOUNTS the resolved bundle as instructions the
+  // model follows. An edge declared for the classifier (`matcher`) or for the
+  // chat's authoring path (`authoring`) is delivered by those surfaces, not
+  // here, and must never be mounted into a run as a fallback.
+  return resolveDeclaredSkillEdge((e) => e.pkgDirName === consumerDirName, null, "null");
+}
 
-  const consumers = exts.filter((e) => e.pkgDirName === consumerDirName);
-  // A bare dir slug cannot disambiguate two vendors shipping the same slug —
-  // the same fail-closed rule the bridge's own mount probe applies.
-  if (consumers.length !== 1) return null;
-  if (!DECLARED_EDGE_CONSUMER_KINDS.has(consumers[0]!.kind)) return null;
-
-  const edges = consumers[0]!.dependencies.filter(isRuntimeSkillEdge);
-  if (edges.length !== 1) return null;
-  const providerName = edges[0]!.packageName;
-
-  const providers = exts.filter((e) => e.kind === "skill" && e.pkgName === providerName);
-  if (providers.length !== 1) return null;
-  const provider = providers[0]!;
-  // The S2 packaging contract: one `kind:"skill"` extension ships exactly one
-  // bundle. Anything else is not a package this projection can mount from.
-  if (provider.slugs.length !== 1) return null;
-  const slug = provider.slugs[0]!;
-
-  const { packageName, skillId } = deriveSkillRegistration(
-    provider.pkgName,
-    provider.pkgDirName,
-    slug,
-  );
-  return {
-    packageName,
-    slug,
-    skillId,
-    sourcePath: path.join(provider.pkgDir, "skills", slug, "SKILL.md"),
-  };
+/**
+ * Resolve the skill bundle a consumer extension declares for ONE named ROLE,
+ * by the consumer's npm PACKAGE NAME — the identity the artifact surfaces
+ * carry (`matcherManifestRegistry` entries, the artifact manifest view), as
+ * opposed to the bare directory slug the agent runtime and llm-bridge carry.
+ *
+ * This is the trust anchor the matcher/authoring surfaces re-key onto: a skill
+ * is honoured because it is the RESOLVED TARGET of the consumer's declared
+ * edge for that role, not because it happens to sit in the consumer's own
+ * package. Same fail-closed resolution rules as
+ * {@link resolveDeclaredSkillEdgeForExtensionDir}, with ONE difference that
+ * matters: a `null` return means "this consumer declares no such edge" — a
+ * fact about the DECLARATION — while a filesystem-SCAN FAILURE throws. The
+ * callers of this function apply a fail-closed policy to `null` (refuse the
+ * skill / refuse the emit), and a policy that refuses work must not be
+ * triggered by an fs blip that made the question unanswerable. Callers catch
+ * the throw and fall back to their pre-cutover behaviour.
+ */
+export async function resolveDeclaredSkillEdgeForPackage(
+  consumerPackageName: string,
+  role: "matcher" | "authoring",
+): Promise<DeclaredSkillEdgeResolution | null> {
+  if (typeof consumerPackageName !== "string" || consumerPackageName.length === 0) return null;
+  return resolveDeclaredSkillEdge((e) => e.pkgName === consumerPackageName, role, "throw");
 }

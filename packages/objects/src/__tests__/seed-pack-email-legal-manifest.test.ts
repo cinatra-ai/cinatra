@@ -10,6 +10,11 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { parseSemanticArtifactManifest } from "../semantic-manifest";
+import {
+  expectedAuthoringSkillIds,
+  expectedMatcherSkillIds,
+} from "./seed-pack-skill-ids";
+
 import type { SemanticArtifactManifest } from "../types";
 
 // email-body-artifact was RETIRED from the dev-extension set (cinatra#1454);
@@ -76,14 +81,11 @@ describe("Email+Legal seed pack — manifest parity + schema", () => {
 
 describe("Email+Legal seed pack — matcher catalog-id format", () => {
   it.each(PACK)(
-    "$slug — `skills.matchers[0]` is `<packageName>:<slug>-matcher`",
+    "$slug — `skills.matchers[0]` names the co-located OR the extracted matcher bundle",
     ({ slug, pkgName, manifest }) => {
       const id = manifest.skills?.matchers?.[0];
       expect(id, `${slug} matcher id`).toBeDefined();
-      const [pkg, ...rest] = (id as string).split(":");
-      const skillDir = rest.join(":");
-      expect(pkg).toBe(pkgName);
-      expect(skillDir).toBe(`${slug.replace(/-artifact$/, "")}-matcher`);
+      expect(expectedMatcherSkillIds(slug, pkgName)).toContain(id);
     },
   );
 });
@@ -121,10 +123,13 @@ describe("Email+Legal seed pack — exact-shape contract", () => {
   );
 
   it.each(PACK)(
-    "$slug — skills.matchers is EXACTLY [<packageName>:<slug>-matcher]",
+    "$slug — skills is EXACTLY { matchers: [one legal matcher id] }",
     ({ slug, pkgName, manifest }) => {
-      const expectedId = `${pkgName}:${slug.replace(/-artifact$/, "")}-matcher`;
-      expect(manifest.skills).toEqual({ matchers: [expectedId] });
+      expect(Object.keys(manifest.skills ?? {})).toEqual(["matchers"]);
+      expect(manifest.skills?.matchers).toHaveLength(1);
+      expect(expectedMatcherSkillIds(slug, pkgName)).toContain(
+        manifest.skills?.matchers?.[0],
+      );
     },
   );
 
