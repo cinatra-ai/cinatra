@@ -109,6 +109,42 @@ describe("buildPendingConfirmationContext (§6.3)", () => {
     expect(out).not.toContain("tool-8"); // oldest dropped
   });
 
+  it("orders by decidedAt, not updatedAt, when the two diverge", async () => {
+    // "older" was decided most recently but its updatedAt is stale (touched
+    // earlier by an unrelated event); "newer" was decided earlier but its
+    // updatedAt is fresher. Ordering must follow decidedAt for both the
+    // recency window and the sort, so "older" (the more recent DECISION)
+    // sorts first.
+    const out = await build([
+      record({
+        id: "newer-updated",
+        toolName: "tool-stale-decision",
+        decidedAt: new Date(NOW - 30 * 60_000).toISOString(),
+        updatedAt: new Date(NOW - 1 * 60_000).toISOString(),
+      }),
+      record({
+        id: "older-updated",
+        toolName: "tool-fresh-decision",
+        decidedAt: new Date(NOW - 1 * 60_000).toISOString(),
+        updatedAt: new Date(NOW - 30 * 60_000).toISOString(),
+      }),
+    ]);
+    const lines = out.split("\n").filter((l) => l.startsWith("- "));
+    expect(lines[0]).toContain("tool-fresh-decision");
+    expect(lines[1]).toContain("tool-stale-decision");
+  });
+
+  it("an unparseable updatedAt does not scramble order when decidedAt is null", async () => {
+    const out = await build([
+      record({ id: "a", toolName: "tool-good", decidedAt: null, updatedAt: new Date(NOW - 60_000).toISOString() }),
+      record({ id: "b", toolName: "tool-bad", decidedAt: null, updatedAt: "not-a-date" }),
+    ]);
+    // The unparseable row is excluded by the recency filter (its effective
+    // timestamp is -Infinity, never >= cutoff), so only the valid row remains.
+    expect(out).toContain("tool-good");
+    expect(out).not.toContain("tool-bad");
+  });
+
   it("bounded content: never args/previews (ids + tool/server names only)", async () => {
     const out = await build([record({ argsPreview: '{"secret":"[redacted]"}' })]);
     expect(out).not.toContain("argsPreview");

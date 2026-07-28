@@ -69,6 +69,15 @@ export const RESULT_PREVIEW_MAX_BYTES = 2048;
  * (`execution_interrupted`) and a late real outcome upgrades it exactly once. */
 export const EXECUTE_TIMEOUT_MS = 120_000;
 
+/** Page budget for the drift-check catalog re-list (§4.2 step 5b): a
+ * misbehaving or malicious remote catalog that keeps returning a non-null (or
+ * repeating) cursor must never spin the resume path forever with the row
+ * already pinned in `executing` by the consume CAS above. The governed list
+ * pages at up to 100 tools/page (`DEFAULT_PAGE_SIZE` in
+ * connector-instance-invoker.ts), so this covers a catalog of up to 5,000
+ * tools — far beyond any legitimate MCP server — before ejecting fail-closed. */
+export const CATALOG_LOOKUP_MAX_PAGES = 50;
+
 /** Invoker error codes whose resume-time throw IS the TOCTOU denial (the
  * re-run gate/presence/policy spine refused — execution provably never ran).
  * Everything else on the invoke path is an ordinary execution failure. */
@@ -439,9 +448,18 @@ async function executeConfirmedCall(
     // CURRENT catalog via the governed list (the same acquire path the invoke
     // runs) and recompute the shared fingerprint. Vanished ⇒ tool_not_found;
     // schema/annotation drift ⇒ tool_changed. Both: wire never called.
+    // Page-bounded (CATALOG_LOOKUP_MAX_PAGES): a repeating/non-null cursor
+    // from the remote catalog must eject fail-closed rather than spin this
+    // request forever with the row stuck in `executing`.
     let cursor: string | undefined;
     let entry: { name: string; serverId: string; inputSchema: unknown; rawAnnotations: Record<string, unknown> } | undefined;
+    let pagesFetched = 0;
+    let budgetExceeded = false;
     for (;;) {
+      if (pagesFetched >= CATALOG_LOOKUP_MAX_PAGES) {
+        budgetExceeded = true;
+        break;
+      }
       const page = await d.listTools(
         {
           connectorKey: row.connectorKey,
@@ -455,10 +473,12 @@ async function executeConfirmedCall(
         },
         invokerDeps,
       );
+      pagesFetched += 1;
       entry = page.tools.find((t) => t.serverId === row.serverId && t.name === row.toolName);
       if (entry || !page.nextCursor) break;
       cursor = page.nextCursor;
     }
+    if (budgetExceeded) return failTerminal("catalog_lookup_budget_exceeded", true);
     if (!entry) return failTerminal("tool_not_found", true);
     const currentToolFingerprint = computeToolFingerprint({
       name: entry.name,

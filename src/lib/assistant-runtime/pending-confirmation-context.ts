@@ -71,14 +71,18 @@ export async function buildPendingConfirmationContext(
     return "";
   }
   const cutoff = now() - PENDING_CONFIRMATION_CONTEXT_WINDOW_MS;
+  // One effective timestamp per record, reused for BOTH the recency filter
+  // and the ordering — a mismatched pair would let the cap keep an older
+  // row over a more recently decided one, and an unparseable date must sort
+  // last rather than scramble the comparator with NaN.
+  const effectiveTs = (r: ConnectorInstancePendingCallRecord): number => {
+    const ts = Date.parse(r.decidedAt ?? r.updatedAt);
+    return Number.isFinite(ts) ? ts : Number.NEGATIVE_INFINITY;
+  };
   const recent = records
     .filter((r) => REPORTED_STATUSES.has(r.status))
-    .filter((r) => {
-      const decidedAt = r.decidedAt ?? r.updatedAt;
-      const ts = Date.parse(decidedAt);
-      return Number.isFinite(ts) && ts >= cutoff;
-    })
-    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    .filter((r) => effectiveTs(r) >= cutoff)
+    .sort((a, b) => effectiveTs(b) - effectiveTs(a))
     .slice(0, PENDING_CONFIRMATION_CONTEXT_MAX_LINES);
   if (recent.length === 0) return "";
   return (

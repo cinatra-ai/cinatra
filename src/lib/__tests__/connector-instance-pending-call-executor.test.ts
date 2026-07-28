@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   buildResultSummary,
+  CATALOG_LOOKUP_MAX_PAGES,
   decidePendingCall,
   EXECUTE_TIMEOUT_MS,
   type PendingCallExecutorDeps,
@@ -408,6 +409,31 @@ describe("decidePendingCall — material-identity drift (consent binding)", () =
     expect(result).toMatchObject({ outcome: "decided", status: "executed" });
     expect(h.listTools).toHaveBeenCalledTimes(2);
     expect(h.listTools.mock.calls[1][0]).toMatchObject({ cursor: "c2", serverId: TOOL.serverId });
+  });
+
+  it("a catalog that keeps returning a non-null cursor forever is capped at CATALOG_LOOKUP_MAX_PAGES → failed('catalog_lookup_budget_exceeded'), row never stays pinned in executing", async () => {
+    const h = makeDeps();
+    h.listTools.mockImplementation(async () => ({
+      tools: [] as never,
+      catalogRevision: "rev-1",
+      nextCursor: "same-cursor-forever",
+    }));
+    const result = await DECIDE(h.deps);
+    expect(result).toMatchObject({
+      outcome: "decided",
+      status: "failed",
+      failureCode: "catalog_lookup_budget_exceeded",
+    });
+    expect(h.listTools).toHaveBeenCalledTimes(CATALOG_LOOKUP_MAX_PAGES);
+    expect(h.invoke).not.toHaveBeenCalled();
+    expect(auditOps(h.audit)).toEqual(["pending_call_confirmed", "pending_call_toctou_denied"]);
+    // The recorded terminal status came from d.recordOutcome — the row left
+    // `executing` rather than staying pinned there while this call hung.
+    expect(h.recordOutcome).toHaveBeenCalledWith(
+      h.executingRow.id,
+      expect.objectContaining({ status: "failed", failureCode: "catalog_lookup_budget_exceeded" }),
+      undefined,
+    );
   });
 });
 

@@ -197,7 +197,10 @@ export function PendingToolConfirmationCards({
               <div className="mt-2 flex gap-2">
                 <Button
                   size="sm"
-                  disabled={busy}
+                  // Any row in flight disables every row's buttons — `decide()`
+                  // itself early-returns while `busyId` is set, so a non-busy
+                  // row must not look clickable during another row's decision.
+                  disabled={busyId !== null}
                   onClick={() => void decide(row, "confirm", row.confirmToken)}
                 >
                   {busy ? "Working…" : "Confirm"}
@@ -205,7 +208,7 @@ export function PendingToolConfirmationCards({
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={busy}
+                  disabled={busyId !== null}
                   onClick={() => void decide(row, "deny", row.rejectToken)}
                 >
                   Deny
@@ -213,7 +216,7 @@ export function PendingToolConfirmationCards({
                 <Button
                   size="sm"
                   variant="ghost"
-                  disabled={busy}
+                  disabled={busyId !== null}
                   onClick={() => void decide(row, "cancel", row.rejectToken)}
                 >
                   Cancel

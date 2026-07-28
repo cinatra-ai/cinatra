@@ -124,6 +124,37 @@ describe("PendingToolConfirmationCards", () => {
     expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
   });
 
+  it("disables every row's buttons while ANY row's decision is in flight (no silent no-op)", async () => {
+    let releaseDecide: (value: unknown) => void = () => {};
+    decidePendingToolCall.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseDecide = resolve;
+        }),
+    );
+    listPendingToolConfirmations.mockResolvedValue({
+      rows: [
+        pendingRow({ id: "cipc_1" }),
+        pendingRow({ id: "cipc_2", toolName: "core/delete-page" }),
+      ],
+    });
+    render(<PendingToolConfirmationCards />);
+    const confirmButtons = await screen.findAllByRole("button", { name: /^(Confirm|Working…)$/ });
+    expect(confirmButtons).toHaveLength(2);
+
+    fireEvent.click(confirmButtons[0]);
+    await waitFor(() => expect(decidePendingToolCall).toHaveBeenCalledTimes(1));
+
+    const [, secondRowConfirm] = screen.getAllByRole("button", { name: /^(Confirm|Working…)$/ });
+    expect((secondRowConfirm as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(secondRowConfirm);
+    // The disabled attribute alone would already block the click, but this
+    // also pins decide()'s own busyId early-return: still exactly one call.
+    expect(decidePendingToolCall).toHaveBeenCalledTimes(1);
+
+    releaseDecide({ outcome: "refused" });
+  });
+
   it("a pollSignal bump triggers a refresh", async () => {
     listPendingToolConfirmations.mockResolvedValue({ rows: [] });
     const { rerender } = render(<PendingToolConfirmationCards pollSignal={0} />);
