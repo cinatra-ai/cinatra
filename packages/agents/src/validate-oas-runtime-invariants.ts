@@ -31,6 +31,21 @@
  *                     composition must use `FlowNode` subflow inlining or a
  *                     deterministic MCP primitive. See docs/developing-agents.md
  *                     for the canonical inlining pattern.
+ *   OAS-RUNTIME-013 — HITL `InputMessageNode` gate the pinned WayFlow runtime
+ *                     cannot mount (cinatra#2140). The ruled contract lives in
+ *                     `docs/internals/workflows/agent-run-hitl-prompt-primitives.md`
+ *                     ("Pinned-runtime contract for the gate node", cinatra#1830):
+ *                     the gate is AUTHORED as `component_type:"InputMessageNode"`
+ *                     with declared `inputs` fed by a `DataFlowEdge` (the host
+ *                     compiler pins that literal), and the WayFlow loader shim
+ *                     `_reconcile_input_message_gates` reconciles it to
+ *                     `PluginInputMessageNode` + a synthesized `message_template`
+ *                     at mount. That shim is CONDITIONAL — it declines to repair
+ *                     some shapes, and pyagentspec then rejects the gate. This
+ *                     invariant is the HOST half of that same contract, so the
+ *                     two mount paths (the agent package mounted STANDALONE and
+ *                     the same gate inlined as a subflow of an orchestrator)
+ *                     cannot drift apart unnoticed.
  *
  * See `docs/developing-agents.md` "pyagentspec constraints when authoring
  * oas.json" for the human-readable description of each pattern.
@@ -153,6 +168,7 @@ export function scanOasForRuntimeInvariantFindings(
   findings.push(...scanForCinatraLlmInSource(parsed));
   findings.push(...scanForToolboxIdsInSource(parsed));
   findings.push(...scanForInternalA2aAgentMisuse(parsed));
+  findings.push(...scanInputMessageGateMountability(parsed));
   // Placeholder/inputs parity + agent_run_id propagation + EndNode source
   // all walk the per-Flow graph, so we compose them per-Flow component.
   for (const flow of iterFlowComponents(parsed)) {
@@ -572,6 +588,235 @@ function scanForInternalA2aAgentMisuse(
 
   visit(parsed, "$");
   return findings;
+}
+
+// ---------------------------------------------------------------------------
+// Invariant 13 — HITL gate mountability on the pinned runtime (OAS-RUNTIME-013).
+//
+// This mirrors, on the HOST side, exactly what the WayFlow loader shim
+// `_reconcile_input_message_gates` (docker/wayflow/agent_loader.py, cinatra#1830)
+// can and cannot repair, so an OAS that the container refuses to mount is
+// rejected at authoring/CI time instead of at boot.
+//
+// Every rule below is grounded in an observed pyagentspec==26.1.2 outcome
+// (see docker/wayflow/tests/test_gate_mount_both_paths.py, which asserts the
+// same cases against the real runtime):
+//
+//   declared `inputs`, plain unique identifier titles   → shim repairs, MOUNTS
+//   declared `inputs` + non-identifier title            → shim declines, REJECTED
+//   declared `inputs` + duplicate titles                → shim declines, REJECTED
+//   declared `inputs` + a TRUTHY message_template       → shim skips, REJECTED
+//   declared `inputs` + a FALSY message_template
+//     (null / false / 0 / "" / [] / {})                 → shim OVERWRITES it, MOUNTS
+//   declared `inputs` + a `message` (with or without a
+//     matching placeholder)                             → shim repairs, MOUNTS
+//   more than one declared output                       → REJECTED with or
+//     without declared inputs (the one-string-output rule); the shim cannot help
+//   an EMPTY declared `outputs` array                   → REJECTED ("expected a
+//     property titled `user_provided_input`"). An ABSENT `outputs` field is a
+//     different case: the runtime defaults it and MOUNTS, and the host compiler
+//     already rejects it (MISSING_INPUT_MESSAGE_OUTPUT), so it is not repeated here.
+//   a single output whose declared `type` is not
+//     "string"                                          → REJECTED ("Expected an
+//     output of type string, given `<type>` instead")
+//   `PluginInputMessageNode` authored directly          → the RUNTIME accepts it.
+//     This one rule is a HOST-contract rule rather than a mount rule: the host
+//     compiler pins the `InputMessageNode` literal, so an authored
+//     PluginInputMessageNode gate is invisible to it (no approval step, no
+//     renderer binding) — a silently ungated side effect.
+// ---------------------------------------------------------------------------
+
+/** Jinja identifier the loader shim is willing to fold into a synthesized
+ *  `message_template` — byte-identical to `_GATE_INPUT_TITLE_RE` in
+ *  `docker/wayflow/agent_loader.py`. */
+const GATE_INPUT_TITLE_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Python truthiness for a JSON value, because the loader shim's
+ *  "already templated?" test is `bool(obj.get("message_template"))`. A falsy
+ *  value there is OVERWRITTEN by the synthesized template (so the gate mounts);
+ *  only a truthy one makes the shim skip the node. Mirroring JS truthiness
+ *  instead would red `[]` / `{}`, which Python treats as falsy. */
+function isPythonTruthy(value: unknown): boolean {
+  if (value === undefined || value === null || value === false) return false;
+  if (value === 0 || value === "") return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (isPlainObject(value)) return Object.keys(value).length > 0;
+  return Boolean(value);
+}
+
+const HITL_GATE_DOC =
+  "See docs/internals/workflows/agent-run-hitl-prompt-primitives.md " +
+  '("Pinned-runtime contract for the gate node", cinatra#1830/#2140).';
+
+function scanInputMessageGateMountability(
+  parsed: Record<string, unknown>,
+): ReviewFinding[] {
+  const findings: ReviewFinding[] = [];
+  walkComponentObjects(parsed, (node, path) => {
+    const componentType = node["component_type"];
+
+    if (componentType === "PluginInputMessageNode") {
+      findings.push({
+        code: "OAS-RUNTIME-013",
+        severity: "blocker",
+        message:
+          `Gate "${gateLabel(node)}" is authored as "PluginInputMessageNode". ` +
+          `Do not author the reconciled form directly: the host compiler ` +
+          `(packages/agents/src/oas-compiler.ts) pins ` +
+          `component_type === "InputMessageNode" to detect a HITL gate, so a ` +
+          `PluginInputMessageNode is invisible to it — the run gets no approval ` +
+          `step and no renderer binding even though the WayFlow runtime mounts ` +
+          `it happily (a SILENTLY ungated side effect). Author ` +
+          `"InputMessageNode" with declared inputs[] fed by a DataFlowEdge and ` +
+          `let the loader shim reconcile it at mount. ${HITL_GATE_DOC}`,
+        location: path,
+        source: "deterministic",
+      });
+      return;
+    }
+
+    if (componentType !== "InputMessageNode") return;
+
+    // --- one-string-output rule -------------------------------------------
+    // Only an EXPLICIT `outputs` array is judged here. An absent field is
+    // defaulted by the runtime (it mounts) and is already rejected by the host
+    // compiler, so flagging it again would be a rule this scan cannot back with
+    // an observed mount failure.
+    const outputs = node["outputs"];
+    if (Array.isArray(outputs) && outputs.length > 1) {
+      const titles = outputs.map((o) =>
+        isPlainObject(o) && typeof o["title"] === "string" ? o["title"] : "<unnamed>",
+      );
+      findings.push({
+        code: "OAS-RUNTIME-013",
+        severity: "blocker",
+        message:
+          `InputMessageNode gate "${gateLabel(node)}" declares ${outputs.length} ` +
+          `outputs [${titles.map((t) => `"${t}"`).join(", ")}]. A gate returns ` +
+          `EXACTLY ONE string output — the resume payload. pyagentspec rejects a ` +
+          `multi-output gate at mount ("received a property titled ` +
+          `\`${titles[1]}\`, but expected only properties with the titles: ` +
+          `['${titles[0]}']") and the loader shim cannot repair it. Extract the ` +
+          `extra fields from the single resume payload in a post-resume node. ` +
+          `${HITL_GATE_DOC}`,
+        location: path,
+        source: "deterministic",
+      });
+    } else if (Array.isArray(outputs) && outputs.length === 0) {
+      findings.push({
+        code: "OAS-RUNTIME-013",
+        severity: "blocker",
+        message:
+          `InputMessageNode gate "${gateLabel(node)}" declares an EMPTY outputs[]. ` +
+          `A gate must declare exactly one string output (the resume payload); ` +
+          `pyagentspec rejects an output-less gate at mount ("expected a property ` +
+          `titled \`user_provided_input\`, but none of the passed properties have ` +
+          `this title: []"). ${HITL_GATE_DOC}`,
+        location: path,
+        source: "deterministic",
+      });
+    } else if (Array.isArray(outputs) && outputs.length === 1) {
+      const only = outputs[0];
+      const declaredType = isPlainObject(only) ? only["type"] : undefined;
+      if (typeof declaredType === "string" && declaredType !== "string") {
+        findings.push({
+          code: "OAS-RUNTIME-013",
+          severity: "blocker",
+          message:
+            `InputMessageNode gate "${gateLabel(node)}" declares its single output ` +
+            `as "type":"${declaredType}". A gate output is the JSON-encoded resume ` +
+            `payload and must be a string; pyagentspec rejects any other type at ` +
+            `mount ("Expected an output of type string, given \`${declaredType}\` ` +
+            `instead"). Parse the payload in a post-resume node. ${HITL_GATE_DOC}`,
+          location: path,
+          source: "deterministic",
+        });
+      }
+    }
+
+    // --- declared-inputs reconcilability ----------------------------------
+    const inputs = node["inputs"];
+    if (!Array.isArray(inputs) || inputs.length === 0) return;
+
+    // An author-supplied `message_template` makes the shim treat the node as
+    // already reconciled and skip it — the declared `inputs` then survive into
+    // the runtime and the mount is rejected. Python truthiness, not JS: the shim
+    // OVERWRITES a falsy message_template (null/false/0/""/[]/{}) and the gate
+    // still mounts, so those must NOT be flagged.
+    if (isPythonTruthy(node["message_template"])) {
+      findings.push({
+        code: "OAS-RUNTIME-013",
+        severity: "blocker",
+        message:
+          `InputMessageNode gate "${gateLabel(node)}" declares inputs[] AND an ` +
+          `author-supplied "message_template". The WayFlow loader shim skips a ` +
+          `gate that already carries a message_template, so the declared inputs ` +
+          `reach pyagentspec unreconciled and the mount is rejected ("received a ` +
+          `property titled \`<name>\`, but did not expect any properties"). Drop ` +
+          `the message_template and let the shim synthesize it. ${HITL_GATE_DOC}`,
+        location: path,
+        source: "deterministic",
+      });
+      return;
+    }
+
+    const titles = inputs.map((i) =>
+      isPlainObject(i) && typeof i["title"] === "string" ? i["title"] : null,
+    );
+    const badTitles = titles.filter(
+      (t): t is string | null => t === null || !GATE_INPUT_TITLE_RE.test(t),
+    );
+    if (badTitles.length > 0) {
+      findings.push({
+        code: "OAS-RUNTIME-013",
+        severity: "blocker",
+        message:
+          `InputMessageNode gate "${gateLabel(node)}" declares input title(s) ` +
+          `[${badTitles.map((t) => (t === null ? "<missing>" : `"${t}"`)).join(", ")}] ` +
+          `that are not plain Jinja identifiers (/${GATE_INPUT_TITLE_RE.source}/). ` +
+          `The WayFlow loader shim folds declared gate inputs into a synthesized ` +
+          `message_template and refuses to do so for a title it cannot safely ` +
+          `emit, so the gate stays an unreconciled InputMessageNode and ` +
+          `pyagentspec rejects it at mount ("received a property titled ` +
+          `\`<name>\`, but did not expect any properties"). Rename the input to a ` +
+          `plain identifier. ${HITL_GATE_DOC}`,
+        location: path,
+        source: "deterministic",
+      });
+      return;
+    }
+
+    const seen = new Set<string>();
+    const duplicates = new Set<string>();
+    for (const t of titles as string[]) {
+      if (seen.has(t)) duplicates.add(t);
+      seen.add(t);
+    }
+    if (duplicates.size > 0) {
+      findings.push({
+        code: "OAS-RUNTIME-013",
+        severity: "blocker",
+        message:
+          `InputMessageNode gate "${gateLabel(node)}" declares duplicate input ` +
+          `title(s) [${[...duplicates].map((t) => `"${t}"`).join(", ")}]. The ` +
+          `WayFlow loader shim declines to fold duplicate titles, and pyagentspec ` +
+          `rejects the gate at mount ("Found multiple instances of properties ` +
+          `(inputs or outputs) with the same title in a InputMessageNode"). ` +
+          `${HITL_GATE_DOC}`,
+        location: path,
+        source: "deterministic",
+      });
+    }
+  });
+  return findings;
+}
+
+function gateLabel(node: Record<string, unknown>): string {
+  const id = node["id"];
+  if (typeof id === "string" && id.length > 0) return id;
+  const name = node["name"];
+  if (typeof name === "string" && name.length > 0) return name;
+  return "<unnamed>";
 }
 
 // ---------------------------------------------------------------------------
