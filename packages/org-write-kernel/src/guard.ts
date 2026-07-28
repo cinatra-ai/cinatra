@@ -9,6 +9,17 @@
  * lifecycle table — both must pass) → capability ruling → fail-closed lease
  * check for "lease-gated" → permit minted for exactly this transaction and
  * revoked in `finally` when the callback exits.
+ *
+ * `guardOrgLifecycleMutation` (cinatra#1939 wave 3) is the SECOND callback-
+ * scoped entry point: byte-identical contract, but it acquires BOTH org locks
+ * in the global epoch→write order up front (`redeemCompletionTicket`
+ * precedent). It is the EXCLUSIVE org fence the archive epic demands for
+ * organization delete — no epoch transition, no ticket redemption, and no
+ * write-only guarded write can interleave with a lifecycle mutation running
+ * under it. S6's real archive transaction is the second consumer of this same
+ * entry point (designed once here, reused there). The two entry points stay
+ * distinct public functions; a caller can never upgrade the write-only guard
+ * into the epoch fence, only pick the entry point up front.
  */
 import {
   lifecycleStateOf,
@@ -65,9 +76,40 @@ export async function guardOrgMutation<TTx extends OrgWriteTx, R>(
   request: GuardOrgMutationRequest,
   fn: (tx: TTx, permit: OrgWritePermit) => Promise<R>,
 ): Promise<R> {
+  return guardWithLocks(db, request, false, fn);
+}
+
+/**
+ * The lifecycle (epoch→write, BOTH locks) entry point — cinatra#1939 wave 3.
+ *
+ * Identical contract to `guardOrgMutation`, but `acquireOrgLocks({ epoch:
+ * true })` takes the archive-epoch lock BEFORE the write lock in the global
+ * order (`redeemCompletionTicket` precedent). Use it for organization delete
+ * (and, from S6, the archive/unarchive transition) — the exclusive fence that
+ * excludes every write-only guarded write AND every ticket redemption for the
+ * whole transaction.
+ */
+export async function guardOrgLifecycleMutation<TTx extends OrgWriteTx, R>(
+  db: OrgWriteDb<TTx>,
+  request: GuardOrgMutationRequest,
+  fn: (tx: TTx, permit: OrgWritePermit) => Promise<R>,
+): Promise<R> {
+  return guardWithLocks(db, request, true, fn);
+}
+
+/** Shared guard body for both entry points; `epoch` fixes the lock set (the
+ *  ONLY difference between them) and is passed literally by each public
+ *  wrapper — never threaded from a caller, so neither entry point can be
+ *  upgraded into the other. */
+async function guardWithLocks<TTx extends OrgWriteTx, R>(
+  db: OrgWriteDb<TTx>,
+  request: GuardOrgMutationRequest,
+  epoch: boolean,
+  fn: (tx: TTx, permit: OrgWritePermit) => Promise<R>,
+): Promise<R> {
   const { orgId, capability, authority } = request;
   return db.transaction(async (tx) => {
-    await acquireOrgLocks(tx, { orgId, epoch: false });
+    await acquireOrgLocks(tx, { orgId, epoch });
 
     const state = await readOrgWriteState(tx, orgId);
     if (state === null) {

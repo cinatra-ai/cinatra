@@ -1,7 +1,8 @@
 /**
- * OrganizationManagePanel — the "Manage" tab content for `/organizations/[id]`
- * (cinatra#1510). Composes the cleanly-permitted, hazard-free management subset
- * in the app's settings-card idiom:
+ * OrganizationManagePanel — the management section of
+ * `/organizations/[id]/settings` (cinatra#1734; management surface shipped
+ * for cinatra#1510). Composes the cleanly-permitted, hazard-free management
+ * subset in the app's settings-card idiom:
  *
  *   - Settings (rename name + edit slug) — `organization.update`, org_admin+.
  *   - Members (role change/remove + invite) and Invitations (cancel) —
@@ -14,13 +15,14 @@
  *   - Danger zone (delete) — `organization.delete`, org_owner ONLY, and only
  *     when structurally deletable (never the default org, never in single-org
  *     mode — the gate folds those in, so the card is entirely absent then).
- *     Referenced records (teams, active projects, connectors, dashboards,
- *     agents) block inside the card with per-kind counts.
+ *     Referenced records (teams, active projects, installed extensions,
+ *     dashboards, agents, running agents) block inside the card with per-kind
+ *     counts.
  *
  * Presentational only — the screen resolves the VIEWED-org capabilities + reads
  * and hands them in, so this stays a pure render (unit-testable without a DB).
- * ARCHIVE has no schema/catalog basis yet and stays DEFERRED (owner proposal
- * pending on #1510).
+ * ARCHIVE ships via the #1510 archive program — substrate dark since S1
+ * (cinatra#1937); S6 (cinatra#1942) mounts its controls here.
  */
 import Link from "next/link";
 

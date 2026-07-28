@@ -1645,6 +1645,16 @@ export async function POST(req: Request): Promise<Response> {
         outputSchema: body.output_schema,
         extraTools: extraTools.length > 0 ? extraTools : undefined,
         skipExternalMcpRegistry: true,
+        // cinatra#2019 S4: the bridge is an agent-plane surface — surface-
+        // gating toolboxes (trusted-site native read-injection) refuse
+        // non-"chat" builds fail-closed, so declaring the surface here keeps
+        // agent runs on the governed M1 path. `connectorInstancePin` rides
+        // this context ONLY when the resolved run row itself carries an
+        // instance binding (host-derived, the same pin data the agent-run
+        // MCP actor token would carry — NEVER request-payload input);
+        // today's agent_run rows carry no instance binding, so the context
+        // stays surface-only until one exists.
+        toolboxBuildContext: { surface: "agent_run" },
         logLabel: body.agent_id ?? "wayflow",
         actorContext: bridgeActorContext,
         telemetryRequestedProvider: dispatch.requestedProvider,

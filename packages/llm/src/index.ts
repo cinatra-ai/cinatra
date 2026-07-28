@@ -335,6 +335,7 @@ export type {
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
+import type { ExtensionToolboxBuildContext } from "@cinatra-ai/sdk-extensions";
 import type { LlmProvider, LlmCapabilityRequirement, LlmProviderAdapter, LlmFileReference, GenerateInput, LlmTool, LlmUsageData, LlmResponse, LlmMcpServerTool, OrchestrateGenerateInput, OrchestrateStreamInput, OrchestrateUploadFileInput, OrchestrateFileInputGenerateInput, LlmAttachmentRef, SandboxExecutor, SandboxEnvironmentMount } from "./types";
 // `OpenAIConnectionConfig` is defined+exported above (host-local structural type;
 // the openai provider that once owned it relocated into its connector, #1715).
@@ -543,6 +544,21 @@ export type DeterministicLlmExecutionInput = {
    * (byte-identical S1/S2 dispatch).
    */
   executionEnvironment?: SandboxEnvironmentMount;
+  /**
+   * Host-built, identity-free toolbox build context (cinatra#2019 S4),
+   * threaded to `injectMcpTools` → first-party toolbox
+   * `buildTools(provider, context)`. Carries WHERE the injection is being
+   * assembled (`surface`) and, on run surfaces, WHICH connector instance the
+   * run is pinned to (`connectorInstancePin` — host-derived run data only,
+   * never request payload). Identity NEVER rides here — per-instance
+   * authority derives host-side from the ambient trusted actor stores.
+   * Absent ⇒ the deterministic entry points supply
+   * `{ surface: "agent_run" }` at their own `injectMcpTools` call sites
+   * (every entry point of this package is agent-plane orchestration;
+   * chat/widget turns resolve their external tools via
+   * `resolveChatExternalMcpTools` in the host runtime instead).
+   */
+  toolboxBuildContext?: ExtensionToolboxBuildContext;
 };
 
 export type SkillAwareDeterministicLlmExecutionInput = DeterministicLlmExecutionInput & {
@@ -728,6 +744,20 @@ export async function injectMcpTools(params: {
    * path either way.
    */
   cinatraMcpToolOverride?: () => Promise<LlmMcpServerTool | null>;
+  /**
+   * Host-built toolbox build context (cinatra#2019 S4) — see
+   * `DeterministicLlmExecutionInput.toolboxBuildContext`. PASS-THROUGH:
+   * this exported helper never invents a context — an absent value stays
+   * absent all the way to the toolbox boundary, where surface-gating
+   * toolboxes emit nothing (the fail-closed rule for unwidened callers).
+   * The four orchestration entry points (`runDeterministicLlmTask`,
+   * `runSkillAwareDeterministicLlmTask`, `generate`, `stream`) each supply
+   * `{ surface: "agent_run" }` themselves — they are agent-plane surfaces;
+   * the chat/widget runtime assembles its external MCP tools via
+   * `resolveChatExternalMcpTools` and reaches this site only with MCP tools
+   * already present (dedup passthrough above).
+   */
+  toolboxBuildContext?: ExtensionToolboxBuildContext;
 }): Promise<LlmTool[] | undefined> {
   // Gemini has no native MCP — pass through.
   if (params.provider === "gemini") return params.tools;
@@ -746,6 +776,7 @@ export async function injectMcpTools(params: {
     declaredToolboxIds: params.declaredToolboxIds,
     skipExternalMcpRegistry: params.skipExternalMcpRegistry,
     cinatraMcpToolOverride: params.cinatraMcpToolOverride,
+    context: params.toolboxBuildContext,
   });
   if (mcpTools.length === 0) return params.tools;
   // Stream-only function-tool stripping.
@@ -867,6 +898,10 @@ async function runDeterministicLlmTaskImpl(input: DeterministicLlmExecutionInput
     provider: input.provider,
     tools: undefined,
     declaredToolboxIds: input.declaredToolboxIds,
+    // Agent-plane entry point: default the build context HERE (not inside
+    // the exported injectMcpTools) so direct helper callers keep the
+    // absent-context fail-closed semantics (cinatra#2019 S4).
+    toolboxBuildContext: input.toolboxBuildContext ?? { surface: "agent_run" },
   });
   // Execution-capability injection — exactly once, alongside (independent of)
   // MCP injection. Passthrough + byte-identical while the rollout flag is off.
@@ -998,6 +1033,9 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
     declaredToolboxIds: input.declaredToolboxIds,
     skipExternalMcpRegistry: input.skipExternalMcpRegistry,
     cinatraMcpToolOverride: input.cinatraMcpToolOverride,
+    // Agent-plane entry point: default the build context HERE (not inside
+    // the exported injectMcpTools) — see runDeterministicLlmTaskImpl.
+    toolboxBuildContext: input.toolboxBuildContext ?? { surface: "agent_run" },
   })) ?? baseTools;
 
   // If personal skill content is provided, include it in context
@@ -1199,6 +1237,12 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
     provider: adapter.provider,
     tools: adapterInput.tools,
     declaredToolboxIds: adapterInput.declaredToolboxIds,
+    // Agent-plane entry point (cinatra#2019 S4). OrchestrateGenerateInput is
+    // deliberately NOT widened with a context field — its remaining fields
+    // spread into the provider adapter call below, and a context there would
+    // cross the provider boundary. The fixed agent_run surface is supplied
+    // here instead.
+    toolboxBuildContext: { surface: "agent_run" },
   });
   // Execution-capability injection — exactly once, independent of MCP.
   const exec = applyExecutionInjection({
@@ -1285,6 +1329,10 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<voi
     declaredToolboxIds: input.declaredToolboxIds,
     skipMcpInjection: input.skipMcpInjection,
     preserveFunctionTools: input.preserveFunctionTools,
+    // Agent-plane entry point (cinatra#2019 S4) — OrchestrateStreamInput is
+    // not widened (chat streams pass pre-assembled MCP tools and hit the
+    // dedup/skip passthroughs above); the fixed surface is supplied here.
+    toolboxBuildContext: { surface: "agent_run" },
   });
   // Execution-capability injection — exactly once, independent of MCP. Stream is
   // a multi-step tool loop already, so no step-budget widening (streaming:true).

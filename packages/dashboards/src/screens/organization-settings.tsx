@@ -182,7 +182,11 @@ export async function OrganizationSettingsPage({
           settingsHref={`/organizations/${encodeURIComponent(id)}/settings`}
           active="settings"
         />
-        <OrganizationPermissionsPanel orgName={orgName} accessModel={accessModel} />
+        <OrganizationPermissionsPanel
+          orgName={orgName}
+          accessModel={accessModel}
+          viewerCanManageMembers={manage.canManageMembers}
+        />
         {manage.canManageSettings ? (
           <OrganizationManagePanel
             organizationId={id}
