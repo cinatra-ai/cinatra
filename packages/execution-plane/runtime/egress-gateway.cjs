@@ -144,31 +144,149 @@ function ipv6ToBytes(input) {
   return bytes;
 }
 
-/** Classify the 16 expanded IPv6 bytes as a protected range (numeric CIDRs). */
+/** Hextet i (0..7) of the 16 expanded IPv6 bytes. */
+function hextet(b, i) {
+  return ((b[i * 2] << 8) | b[i * 2 + 1]) >>> 0;
+}
+
+/**
+ * If the 16 expanded bytes are a v4-in-v6 WRAPPER with a FIXED-offset embedded
+ * IPv4, return that IPv4 as a dotted quad (else null). The caller re-classifies
+ * it against the IPv4 ranges, so a wrapper can never be used to smuggle an
+ * address the v4 list would reject — and, symmetrically, a wrapper around a
+ * PUBLIC v4 stays reachable.
+ *
+ * Covered wrappers: `::w.x.y.z` (IPv4-compatible, deprecated), `::ffff:w.x.y.z`
+ * (IPv4-mapped, ::ffff:0:0/96), `::ffff:0:w.x.y.z` (IPv4-translated,
+ * ::ffff:0:0:0/96), `64:ff9b::w.x.y.z` (NAT64 well-known prefix, RFC 6052) and
+ * `2002:wwxx:yyzz::/48` (6to4, RFC 3056 — the v4 sits in bytes 2..5, not the
+ * low 32 bits).
+ *
+ * KNOWN LIMIT, deliberate: wrappers whose prefix is chosen by the OPERATOR
+ * rather than fixed by an RFC cannot be recognised without configuration —
+ * RFC 6052 network-specific NAT64 prefixes, 6rd (RFC 5969) and ISATAP
+ * interface identifiers all embed a v4 under a site-assigned prefix. Detecting
+ * them generically would mean rejecting any global-unicast address whose tail
+ * merely resembles a private v4, which would break ordinary IPv6 egress. The
+ * network topology is the enforcement point for those (the sandbox network is
+ * `--internal`; the gateway is the only route out), not this predicate. The
+ * NAT64 LOCAL-use prefix 64:ff9b:1::/48 is likewise not unwrapped — its
+ * embedded-v4 offset is variable (RFC 8215) — so it falls through to the
+ * global-unicast rule below, which denies it outright.
+ */
+function embeddedIPv4(b) {
+  const quadAt = (i) => `${b[i]}.${b[i + 1]}.${b[i + 2]}.${b[i + 3]}`;
+  const zeroThrough = (n) => b.slice(0, n).every((x) => x === 0);
+  // ::/96 IPv4-compatible and ::ffff:0:0/96 IPv4-mapped.
+  if (zeroThrough(10) && ((b[10] === 0 && b[11] === 0) || (b[10] === 0xff && b[11] === 0xff))) {
+    return quadAt(12);
+  }
+  // ::ffff:0:0:0/96 IPv4-translated.
+  if (zeroThrough(8) && b[8] === 0xff && b[9] === 0xff && b[10] === 0 && b[11] === 0) {
+    return quadAt(12);
+  }
+  // 64:ff9b::/96 NAT64 well-known prefix.
+  if (
+    hextet(b, 0) === 0x0064 &&
+    hextet(b, 1) === 0xff9b &&
+    b.slice(4, 12).every((x) => x === 0)
+  ) {
+    return quadAt(12);
+  }
+  // 2002::/16 6to4: the tunnel endpoint's IPv4 is bytes 2..5. Classifying by
+  // that endpoint keeps a 6to4 wrapper for a PUBLIC v4 reachable while a 6to4
+  // wrapper for loopback/private/metadata is refused like the bare v4 is.
+  if (hextet(b, 0) === 0x2002) {
+    return quadAt(2);
+  }
+  return null;
+}
+
+/**
+ * Classify the 16 expanded IPv6 bytes as a protected range (numeric CIDRs).
+ *
+ * The covered set is kept at PARITY with the IPv4 list in `isProtectedAddress`
+ * below — every IPv4 class that is rejected there has its IPv6 counterpart
+ * rejected here (loopback, unspecified/"this network", private, link-local,
+ * multicast, reserved/discard, documentation), plus the v4-in-v6 wrapper forms,
+ * which are unwrapped and re-checked against the IPv4 list rather than trusted.
+ * `packages/webhooks/src/egress-guard.ts` classifies a comparable set for the
+ * webhook sender and is the closest in-repo reference; this file cannot import
+ * it (the gateway is dependency-free CommonJS by design — see the module
+ * header), so the parity is asserted by the unit suite instead of shared at
+ * runtime. The two are not identical: the rules below are narrower where that
+ * guard denies an enclosing prefix containing globally reachable allocations.
+ *
+ * Over-blocking is a real cost here (a refused range is a job that cannot fetch
+ * its dependencies), so inside global unicast every rule matches an exact IANA
+ * special-purpose block rather than the convenient enclosing prefix.
+ */
 function isProtectedIPv6Bytes(b) {
   const firstFifteenZero = b.slice(0, 15).every((x) => x === 0);
   if (firstFifteenZero && (b[15] === 0 || b[15] === 1)) return true; // :: and ::1
-  if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true; // fe80::/10 link-local
-  if ((b[0] & 0xfe) === 0xfc) return true; // fc00::/7 ULA
-  // IPv4-mapped ::ffff:0:0/96 — re-check the embedded v4 numerically.
-  if (b.slice(0, 10).every((x) => x === 0) && b[10] === 0xff && b[11] === 0xff) {
-    return isProtectedAddress(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
-  }
-  // IPv4-compatible ::/96 (deprecated) embedding a v4 address.
-  if (
-    b.slice(0, 12).every((x) => x === 0) &&
-    !(b[12] === 0 && b[13] === 0 && b[14] === 0 && (b[15] === 0 || b[15] === 1))
-  ) {
-    return isProtectedAddress(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
-  }
+
+  // v4-in-v6 wrappers: classify the embedded IPv4 numerically, never the wrapper.
+  const embedded = embeddedIPv4(b);
+  if (embedded !== null) return isProtectedAddress(embedded);
+
+  const h0 = hextet(b, 0);
+  const h1 = hextet(b, 1);
+  const h2 = hextet(b, 2);
+
+  // Everything outside global unicast. This is the direct counterpart of the
+  // IPv4 branch's `a >= 224` catch-all: globally reachable IPv6 unicast is
+  // allocated exclusively out of 2000::/3 (RFC 4291 §2.4 + the IANA IPv6
+  // Address Space registry), so the complement is, in one rule, every range the
+  // IPv4 list rejects plus the IPv6-only ones —
+  //   fc00::/7    unique-local          (v4: 10/8, 172.16/12, 192.168/16)
+  //   fe80::/10   link-local            (v4: 169.254/16, incl. metadata)
+  //   fec0::/10   site-local, RFC 3879-deprecated but still locally routed
+  //   ff00::/8    multicast             (v4: 224/4)
+  //   100::/64    discard-only          (v4: 240/4, the reserved half of >= 224)
+  //   5f00::/16   SRv6 SIDs (RFC 9602)
+  //   64:ff9b:1::/48 NAT64 local-use — NOT unwrapped (variable v4 offset, RFC 8215)
+  //   0000::/8, 0200::/7, 0400::/6, 0800::/5, 1000::/4, 4000::/3 … e000::/3
+  //               IETF-reserved, never allocated
+  // …and it fails CLOSED on any future special-purpose block carved out of that
+  // reserved space. The v4-in-v6 wrappers are unwrapped ABOVE this line, so the
+  // two wrapper prefixes that live outside 2000::/3 (::ffff:0:0/96 and
+  // 64:ff9b::/96) still reach a public IPv4 destination.
+  if ((h0 & 0xe000) !== 0x2000) return true;
+
+  // Inside 2000::/3: the individually-named blocks that are NOT globally
+  // reachable. Named one at a time rather than by enclosing prefix — 2001::/23,
+  // for one, also holds allocations that ARE globally reachable (2001:1::1/128
+  // PCP anycast, 2001:1::2/128 TURN anycast, 2001:3::/32 AMT, 2001:4:112::/48
+  // AS112, 2001:20::/28 ORCHIDv2, 2001:30::/28), which must stay pinnable.
+  if (h0 === 0x2001 && h1 === 0x0000) return true; // 2001::/32 Teredo (tunnels to an arbitrary v4)
+  if (h0 === 0x2001 && h1 === 0x0002 && h2 === 0x0000) return true; // 2001:2::/48 benchmarking
+  // Documentation space has no counterpart in the IPv4 list above (v4
+  // documentation ranges are globally unrouted and were never worth a line
+  // there). Rejecting it on the v6 side is a strict superset of parity — an
+  // asymmetry only in the safe direction, never a hole.
+  if (h0 === 0x2001 && h1 === 0x0db8) return true; // 2001:db8::/32 documentation (RFC 3849)
+  if (h0 === 0x3fff && (h1 & 0xf000) === 0x0000) return true; // 3fff::/20 documentation (RFC 9637)
+  // 3ffe::/16 — the 6BONE testing block, returned to IANA by RFC 3701 and never
+  // reallocated. It also contains 3ffe:831f::/32, the pre-standard Teredo
+  // prefix shipped by early Windows builds, which embeds an arbitrary IPv4
+  // exactly as the RFC 4380 prefix (2001::/32, denied above) does.
+  if (h0 === 0x3ffe) return true;
+  // NOT enumerated, deliberately: the unallocated remainder of 2000::/3. IANA
+  // hands new /12s to the RIRs continually, so a predicate that only admitted
+  // today's allocated space would start refusing legitimately routable
+  // destinations as the registry moves — a failure mode that breaks working
+  // jobs, unlike the named blocks above, which are stable by RFC.
   return false;
 }
 
 /**
  * Reject an IP literal that lands in a protected range (SSRF pivot / metadata).
- * Covers IPv4 loopback/private/link-local/CGNAT/multicast + the cloud metadata
- * address, and IPv6 loopback/ULA/link-local + IPv4-mapped/compatible forms —
- * numeric classification, not string-prefix matching. Unparseable ⇒ rejected.
+ * Covers IPv4 loopback/private/link-local/CGNAT/multicast/reserved + the cloud
+ * metadata address, and — at parity with that list — IPv6 unspecified/loopback/
+ * ULA/link-local/site-local/multicast/discard/reserved/documentation, plus the
+ * IPv4-mapped, -compatible, -translated, NAT64 and 6to4 wrapper forms, which
+ * are unwrapped and re-checked against the IPv4 list. Numeric classification
+ * throughout, not string-prefix matching. Unparseable ⇒ rejected.
  */
 function isProtectedAddress(ip) {
   const addr = String(ip);
