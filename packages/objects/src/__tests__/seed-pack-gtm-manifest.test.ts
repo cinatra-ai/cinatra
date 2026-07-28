@@ -18,6 +18,11 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { parseSemanticArtifactManifest } from "../semantic-manifest";
+import {
+  expectedAuthoringSkillIds,
+  expectedMatcherSkillIds,
+} from "./seed-pack-skill-ids";
+
 import type { SemanticArtifactManifest } from "../types";
 
 import { marketingIcpArtifactManifest } from "../../../../extensions/cinatra-ai/marketing-icp-artifact/src/index";
@@ -119,20 +124,16 @@ describe("GTM seed pack — manifest parity + schema", () => {
 
 describe("GTM seed pack — matcher catalog-id format", () => {
   it.each(PACK)(
-    "$slug — `skills.matchers[0]` follows `<packageName>:<skillDirName>`",
+    "$slug — `skills.matchers[0]` names the co-located OR the extracted matcher bundle",
     ({ slug, pkgName, manifest }) => {
       const id = manifest.skills?.matchers?.[0];
       expect(id, `${slug} must declare a matcher skill id`).toBeDefined();
-      // Format: <packageName>:<skillDirName>.
-      // (@cinatra-ai/<slug>-artifact:<slug>-matcher).
-      const [pkg, ...rest] = (id as string).split(":");
-      const skillDir = rest.join(":");
-      expect(pkg, `${slug} matcher id pkg-prefix`).toBe(pkgName);
-      // The skill directory name we ship per matcher.
+      // Either `<the artifact's own package>:<base>-matcher` (pre-extraction)
+      // or `@cinatra-ai/<base>-matcher-skill:<base>-matcher` (post-extraction).
       expect(
-        skillDir,
-        `${slug} matcher id skill-dir suffix must equal <slug-without-artifact>-matcher`,
-      ).toBe(`${slug.replace(/-artifact$/, "")}-matcher`);
+        expectedMatcherSkillIds(slug, pkgName),
+        `${slug} matcher id must be the co-located or the extracted bundle`,
+      ).toContain(id);
     },
   );
 });
@@ -183,20 +184,25 @@ describe("GTM seed pack — exact-shape contract", () => {
   );
 
   it.each(PACK)(
-    "$slug — skills is EXACTLY {matchers:[<pkg>:<slug>-matcher]} (+ authoring only for the marketing-icp exemplar)",
+    "$slug — skills is EXACTLY one matcher id (+ authoring only for the marketing-icp exemplar)",
     ({ slug, pkgName, manifest }) => {
-      const base = slug.replace(/-artifact$/, "");
-      const expected: { matchers: string[]; authoring?: string[] } = {
-        matchers: [`${pkgName}:${base}-matcher`],
-      };
       // marketing-icp-artifact is the reference authoring exemplar and is the
       // only pack that additionally declares an authoring skill. Keep this
       // pinned so a new authoring skill on any other pack — or its removal
       // here — forces an explicit test update rather than silently widening.
+      const expectedKeys =
+        slug === "marketing-icp-artifact" ? ["authoring", "matchers"] : ["matchers"];
+      expect(Object.keys(manifest.skills ?? {}).sort()).toEqual(expectedKeys);
+      expect(manifest.skills?.matchers).toHaveLength(1);
+      expect(expectedMatcherSkillIds(slug, pkgName)).toContain(
+        manifest.skills?.matchers?.[0],
+      );
       if (slug === "marketing-icp-artifact") {
-        expected.authoring = [`${pkgName}:${base}-author`];
+        expect(manifest.skills?.authoring).toHaveLength(1);
+        expect(expectedAuthoringSkillIds(slug, pkgName)).toContain(
+          manifest.skills?.authoring?.[0],
+        );
       }
-      expect(manifest.skills).toEqual(expected);
     },
   );
 
