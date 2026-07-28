@@ -204,7 +204,7 @@ describe("buildNativeReadInjection — the verified emission", () => {
     expect(emittedEvents(audits)).toHaveLength(3);
   });
 
-  it("recomputes statelessly: schema drift in a REFRESHED snapshot ejects at that rebuild (D2)", async () => {
+  it("recomputes statelessly: schema drift in a REFRESHED snapshot ejects at that rebuild", async () => {
     let snapshots = [defaultSnapshot()];
     const { deps, audits } = mkDeps({
       acquireEnrolledSnapshots: async () => ({
@@ -246,7 +246,7 @@ describe("buildNativeReadInjection — the verified emission", () => {
     });
   });
 
-  it("D1 pinned-stack proof: the REAL shipped (empty) descriptor set emits NOTHING even when opted in", async () => {
+  it("pinned-stack proof: the REAL shipped (empty) descriptor set emits NOTHING even when opted in", async () => {
     for (const snapshot of [
       defaultSnapshot(), // even against a first-class snapshot…
       defaultSnapshot({ exposureMode: "triad-only", catalogRevision: "rev-t" }), // …and the real triad shape
@@ -281,23 +281,33 @@ describe("buildNativeReadInjection — the verified emission", () => {
   });
 });
 
-describe("buildNativeReadInjection — the surface matrix (D5, host-side layer)", () => {
+describe("buildNativeReadInjection — the surface matrix (host-side layer)", () => {
   it.each(["agent_run", "public_site_widget", "session", "somewhere-new"])(
-    "refuses surface %s before ever reading policy or acquiring",
+    "refuses surface %s on an OPTED-IN instance — audited, and no authority/acquire work runs",
     async (surface) => {
-      const readPolicy = vi.fn(async () => trustedSitePolicy());
-      const acquire = vi.fn();
+      const requireUse = vi.fn<WordPressNativeReadInjectionDeps["requireUse"]>(async () => {});
+      const acquire =
+        vi.fn<WordPressNativeReadInjectionDeps["acquireEnrolledSnapshots"]>();
       const { deps, audits } = mkDeps({
-        readPolicy,
-        acquireEnrolledSnapshots: acquire as never,
+        requireUse,
+        acquireEnrolledSnapshots: acquire,
       });
       const members = createWordPressNativeReadInjectionMembers(deps);
       expect(await members.buildNativeReadInjection({ instanceId: "inst-1", surface })).toBeNull();
-      expect(readPolicy).not.toHaveBeenCalled();
+      expect(requireUse).not.toHaveBeenCalled();
       expect(acquire).not.toHaveBeenCalled();
       expect(emptyReasons(audits)).toEqual(["surface_not_chat"]);
     },
   );
+
+  it("refuses a non-chat surface SILENTLY while the mode is off (no ambient audit noise)", async () => {
+    const { deps, audits } = mkDeps({ readPolicy: async () => ({ ...OFF_POLICY }) });
+    const members = createWordPressNativeReadInjectionMembers(deps);
+    expect(
+      await members.buildNativeReadInjection({ instanceId: "inst-1", surface: "agent_run" }),
+    ).toBeNull();
+    expect(audits).toEqual([]);
+  });
 
   it("refuses an ABSENT surface (unwidened/skewed caller) fail-closed", async () => {
     const { deps, audits } = mkDeps();
@@ -312,7 +322,7 @@ describe("buildNativeReadInjection — the surface matrix (D5, host-side layer)"
   });
 });
 
-describe("buildNativeReadInjection — opt-in + content-exact consent (D3)", () => {
+describe("buildNativeReadInjection — opt-in + content-exact consent", () => {
   it("mode off/absent emits nothing and stays SILENT (off is the normal state)", async () => {
     const { deps, audits } = mkDeps({ readPolicy: async () => ({ ...OFF_POLICY }) });
     const members = createWordPressNativeReadInjectionMembers(deps);
@@ -358,7 +368,9 @@ describe("buildNativeReadInjection — opt-in + content-exact consent (D3)", () 
     ).toEqual({ serverId: "mcp-adapter-default", allowedTools: ["ewpa-get-post"] });
   });
 
-  it("an unresolvable instance or unreadable policy refuses typed (fail closed)", async () => {
+  it("an unresolvable instance or unreadable policy refuses SILENTLY (mode never proven ON)", async () => {
+    // Trusted-site mode was never proven ON for these, so the operator
+    // signal stays quiet — the refusal itself is identical (nothing emits).
     const a = mkDeps({ resolveInstanceOrgId: () => null });
     expect(
       await createWordPressNativeReadInjectionMembers(a.deps).buildNativeReadInjection({
@@ -366,7 +378,7 @@ describe("buildNativeReadInjection — opt-in + content-exact consent (D3)", () 
         surface: "chat",
       }),
     ).toBeNull();
-    expect(emptyReasons(a.audits)).toEqual(["instance_unresolved"]);
+    expect(a.audits).toEqual([]);
 
     const b = mkDeps({
       readPolicy: async () => {
@@ -379,7 +391,7 @@ describe("buildNativeReadInjection — opt-in + content-exact consent (D3)", () 
         surface: "chat",
       }),
     ).toBeNull();
-    expect(emptyReasons(b.audits)).toEqual(["policy_unreadable"]);
+    expect(b.audits).toEqual([]);
   });
 });
 
@@ -394,7 +406,7 @@ describe("buildNativeReadInjection — ambient authority + acquire failures", ()
   });
 
   it("runs the explicit per-instance USE pass with the resolved actor and refuses on deny", async () => {
-    const requireUse = vi.fn(async () => {
+    const requireUse = vi.fn<WordPressNativeReadInjectionDeps["requireUse"]>(async () => {
       throw new Error("denied");
     });
     const { deps, audits } = mkDeps({ requireUse });
@@ -460,6 +472,42 @@ describe("buildNativeReadInjection — ambient authority + acquire failures", ()
     });
   });
 
+  it("an internally inconsistent snapshot set refuses wholesale (duplicate id / unenrolled server)", async () => {
+    // Two snapshots claiming the default server id — never pick a claimant.
+    const a = mkDeps({
+      acquireEnrolledSnapshots: async () => ({
+        enrolled: [...DEFAULT_ENROLLED],
+        snapshots: [defaultSnapshot(), defaultSnapshot({ catalogRevision: "rev-imposter" })],
+      }),
+    });
+    expect(
+      await createWordPressNativeReadInjectionMembers(a.deps).buildNativeReadInjection({
+        instanceId: "inst-1",
+        surface: "chat",
+      }),
+    ).toBeNull();
+    expect(emptyReasons(a.audits)).toEqual(["snapshot_set_inconsistent"]);
+
+    // A served snapshot for a server that is NOT in the enrollment
+    // enumeration — the acquire seam misbehaved; refuse wholesale.
+    const b = mkDeps({
+      acquireEnrolledSnapshots: async () => ({
+        enrolled: [...DEFAULT_ENROLLED],
+        snapshots: [
+          defaultSnapshot(),
+          defaultSnapshot({ serverId: "wps-not-enrolled-0001", catalogRevision: "rev-8" }),
+        ],
+      }),
+    });
+    expect(
+      await createWordPressNativeReadInjectionMembers(b.deps).buildNativeReadInjection({
+        instanceId: "inst-1",
+        surface: "chat",
+      }),
+    ).toBeNull();
+    expect(emptyReasons(b.audits)).toEqual(["snapshot_set_inconsistent"]);
+  });
+
   it("a duplicate name on another enrolled server subtracts (the spoof rule, end to end)", async () => {
     const { deps, audits } = mkDeps({
       acquireEnrolledSnapshots: async () => ({
@@ -517,7 +565,7 @@ describe("credential + schema hygiene of everything this module externalizes", (
   });
 });
 
-describe("explainNativeReadInjection — the org-admin dry-run (codex r0 #7)", () => {
+describe("explainNativeReadInjection — the org-admin dry-run preview", () => {
   it("previews the verified set while the mode is OFF, and NEVER audits", async () => {
     const { deps, audits } = mkDeps({ readPolicy: async () => ({ ...OFF_POLICY }) });
     const members = createWordPressNativeReadInjectionMembers(deps);
@@ -611,10 +659,10 @@ describe("explainNativeReadInjection — the org-admin dry-run (codex r0 #7)", (
   });
 
   it("does NOT require an ambient trusted actor (the org-admin session is the authority)", async () => {
-    const requireUse = vi.fn();
+    const requireUse = vi.fn<WordPressNativeReadInjectionDeps["requireUse"]>(async () => {});
     const { deps } = mkDeps({
       resolveTrustedActor: async () => null,
-      requireUse: requireUse as never,
+      requireUse,
     });
     const members = createWordPressNativeReadInjectionMembers(deps);
     const explained = await members.explainNativeReadInjection({ instanceId: "inst-1" });

@@ -9,8 +9,8 @@ import {
 } from "@/lib/connector-instance-trusted-read-descriptors";
 import { computeTrustedReadFingerprint } from "@/lib/connector-instance-trusted-read-verifier";
 
-// cinatra#2019 S4 — the descriptor⇄capture CONSISTENCY GATE (design §5, threat
-// model #8): every shipped trusted-read descriptor entry must be re-derivable
+// cinatra#2019 S4 — the descriptor⇄capture CONSISTENCY GATE (the descriptor
+// supply-chain invariant): every shipped trusted-read descriptor entry must be re-derivable
 // from the COMMITTED, provenance-hashed community-stack capture at the pinned
 // tuple. A phantom entry (no capture backing), a pin bump without a descriptor
 // review, or a stale exposure-mode assumption reds CI here — populating the
@@ -21,8 +21,8 @@ import { computeTrustedReadFingerprint } from "@/lib/connector-instance-trusted-
 //   1. You are POPULATING the set after a stack-pin bump whose refreshed
 //      capture shows FIRST-CLASS default-server reads: add entries derived
 //      from the new capture, bump `TRUSTED_READ_DESCRIPTOR_SET.version`,
-//      update the version⇄hash pin below, and ship the disclosure/consent
-//      re-acknowledgement ceremony with it (design D3).
+//      update the version⇄hash pair below, and ship the disclosure/consent
+//      re-acknowledgement ceremony with it (the consent-stamp binding).
 //   2. You bumped the stack pin (captures refreshed) WITHOUT populating:
 //      update `pinnedTuple` + the explicit-empty expectations together in the
 //      SAME reviewed change.
@@ -82,7 +82,7 @@ const rawToolsCapture = loadCapture<{
 const defaultServerTools = extractWireToolsList(rawToolsCapture.defaultServer, "defaultServer");
 const fixtureServerTools = extractWireToolsList(rawToolsCapture.fixtureServer, "fixtureServer");
 
-describe("descriptor set ⇄ committed capture consistency (cinatra#2019 S4 §5)", () => {
+describe("descriptor set ⇄ committed capture consistency (cinatra#2019 S4)", () => {
   it("(a) the pinned tuple equals the capture's versions block byte-for-byte", () => {
     // A stack-pin bump refreshes the captures in the same PR (the capture-
     // freshness gate) — this assertion forces the descriptor review with it.

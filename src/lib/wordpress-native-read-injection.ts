@@ -18,7 +18,7 @@ import "server-only";
 //     freshness policy and NO force-refresh.
 //   - Every step refuses toward `null` (nothing injected, M1 unaffected). The
 //     empty outcome is always safe and is the shipped v1 posture on the pinned
-//     community stack (empty descriptor set — design D1).
+//     community stack (the shipped descriptor set is empty).
 //   - CONSENT IS CONTENT-EXACT: a `trusted_site` row is honored only while its
 //     HOST-STAMPED `{descriptor-set version, descriptor-set hash, disclosure
 //     version}` are EXACTLY the currently shipped constants. Older, newer, or
@@ -91,16 +91,19 @@ export const NATIVE_READ_INJECTION_PRIMITIVE = "wordpress_native_read_injection"
 const AUDIT_LATCH_TTL_MS = 10 * 60_000;
 const AUDIT_LATCH_MAX_ENTRIES = 256;
 
-/** Why a build produced nothing (the `native_injection_empty` reason). */
+/** Why an OPTED-IN build produced nothing (the `native_injection_empty`
+ * reason). Refusals that occur BEFORE trusted-site mode is proven — an
+ * unresolvable instance, an unreadable policy row, or any build while the
+ * mode is off — are silent by design: the operator signal is scoped to
+ * instances an admin actually opted in. */
 export type NativeReadInjectionEmptyReason =
   | "surface_not_chat"
-  | "instance_unresolved"
-  | "policy_unreadable"
   | "consent_stale"
   | "no_trusted_actor"
   | "use_authority_denied"
   | "acquire_failed"
   | "default_snapshot_missing"
+  | "snapshot_set_inconsistent"
   | "no_verified_tools";
 
 /** A non-empty verified injection for the default adapter server. An empty
@@ -123,7 +126,10 @@ export type WordPressNativeReadInjectionExplanation = {
   ejected: TrustedReadEjection[];
   /** Present when the snapshot acquire could not complete — the card renders
    * "preview unavailable" instead of a fake empty verdict. */
-  previewUnavailableReason?: "acquire_failed" | "default_snapshot_missing";
+  previewUnavailableReason?:
+    | "acquire_failed"
+    | "default_snapshot_missing"
+    | "snapshot_set_inconsistent";
 };
 
 /** The structural members the `wordpress-mcp` publication is widened with
@@ -261,7 +267,7 @@ export function createWordPressNativeReadInjectionMembers(
     }
   }
 
-  /** Consent stamps must be EXACTLY the shipped constants (D3). */
+  /** Consent stamps must be EXACTLY the shipped constants. */
   function consentIsCurrent(policy: NativeInjectionPolicyView): boolean {
     return (
       policy.descriptorSetVersion === shipped.descriptorSetVersion &&
@@ -287,7 +293,10 @@ export function createWordPressNativeReadInjectionMembers(
         ejected: TrustedReadEjection[];
         revision: string;
       }
-    | { ok: false; reason: "acquire_failed" | "default_snapshot_missing" };
+    | {
+        ok: false;
+        reason: "acquire_failed" | "default_snapshot_missing" | "snapshot_set_inconsistent";
+      };
 
   /** Acquire + verify (shared by build and explain). Pure recomputation —
    * nothing is persisted; every failure collapses to a typed refusal. */
@@ -298,13 +307,31 @@ export function createWordPressNativeReadInjectionMembers(
     } catch {
       return { ok: false, reason: "acquire_failed" };
     }
+    // The served snapshot SET must be internally unambiguous before anything
+    // is proven against it: exactly one snapshot per server id, exactly one
+    // default-server snapshot, and no snapshot for a server that is not in
+    // the enrollment enumeration. Any violation means the acquire seam
+    // misbehaved — refuse wholesale rather than pick a claimant. (The
+    // verifier re-asserts the id-uniqueness half on its own inputs.)
+    const servedIds = new Set<string>();
+    for (const snapshot of acquired.snapshots) {
+      if (servedIds.has(snapshot.serverId)) {
+        return { ok: false, reason: "snapshot_set_inconsistent" };
+      }
+      servedIds.add(snapshot.serverId);
+    }
+    const enrolledIds = new Set(acquired.enrolled.map((server) => server.serverId));
+    for (const servedId of servedIds) {
+      if (!enrolledIds.has(servedId)) {
+        return { ok: false, reason: "snapshot_set_inconsistent" };
+      }
+    }
     const defaultServerSnapshot = acquired.snapshots.find(
       (snapshot) => snapshot.serverId === CATALOG_DEFAULT_SERVER_ID,
     );
     if (!defaultServerSnapshot) return { ok: false, reason: "default_snapshot_missing" };
     // Complete ⟺ every currently-enrolled server yielded a snapshot (a server
     // omitted past its stale window makes the duplicate rule unprovable).
-    const servedIds = new Set(acquired.snapshots.map((snapshot) => snapshot.serverId));
     const enrollmentComplete = acquired.enrolled.every((server) => servedIds.has(server.serverId));
     const verdict = verifyTrustedReadSet({
       descriptor,
@@ -337,8 +364,27 @@ export function createWordPressNativeReadInjectionMembers(
       const instanceId = typeof input?.instanceId === "string" ? input.instanceId : "";
       if (!instanceId.trim()) return null; // unroutable — nothing to audit against
 
-      // Step 0 — surface matrix (D5): only chat may emit; every other or
-      // absent value refuses host-side regardless of what the caller gated.
+      // Step 1 — opt-in FIRST, silently. Every refusal on an instance whose
+      // trusted-site mode is not PROVEN ON stays quiet: an unresolvable
+      // instance, an unreadable policy row, and the ordinary off/absent mode
+      // all return null with no audit — `native_injection_empty` is the
+      // operator signal for instances an admin actually opted in, never
+      // ambient noise for the default state of the world. (The refusal
+      // itself is identical either way: nothing is emitted.)
+      const ownerOrgId = resolveOwnerOrgId(instanceId);
+      if (!ownerOrgId) return null;
+      let policy: NativeInjectionPolicyView;
+      try {
+        policy = await deps.readPolicy(WORDPRESS_CONNECTOR_KEY, instanceId, ownerOrgId);
+      } catch {
+        return null;
+      }
+      if (policy.mode !== "trusted_site") return null;
+
+      // Step 2 — surface matrix, enforced host-side regardless of what the
+      // caller gated: only chat may emit. Audited (mode is proven ON here —
+      // a non-chat build attempt against an opted-in instance is a real
+      // signal), refused before any authority/acquire work.
       if (input?.surface !== "chat") {
         await auditEmpty({
           instanceId,
@@ -348,21 +394,8 @@ export function createWordPressNativeReadInjectionMembers(
         return null;
       }
 
-      // Step 1 — opt-in + content-exact consent. OFF is silent (the default
-      // state of the world); a stale acknowledgement is the operator signal.
-      const ownerOrgId = resolveOwnerOrgId(instanceId);
-      if (!ownerOrgId) {
-        await auditEmpty({ instanceId, reason: "instance_unresolved" });
-        return null;
-      }
-      let policy: NativeInjectionPolicyView;
-      try {
-        policy = await deps.readPolicy(WORDPRESS_CONNECTOR_KEY, instanceId, ownerOrgId);
-      } catch {
-        await auditEmpty({ instanceId, reason: "policy_unreadable" });
-        return null;
-      }
-      if (policy.mode !== "trusted_site") return null;
+      // Step 3 — content-exact consent: a stale acknowledgement is the
+      // re-acknowledge ceremony's signal.
       if (!consentIsCurrent(policy)) {
         await auditEmpty({
           instanceId,
@@ -378,7 +411,7 @@ export function createWordPressNativeReadInjectionMembers(
         return null;
       }
 
-      // Step 2 — ambient trusted actor + the explicit per-instance USE pass.
+      // Step 4 — ambient trusted actor + the explicit per-instance USE pass.
       let actor: ResolvedActor | null = null;
       try {
         actor = await deps.resolveTrustedActor();
@@ -400,14 +433,14 @@ export function createWordPressNativeReadInjectionMembers(
         return null;
       }
 
-      // Step 3 — acquire through the invoker's freshness path (injected).
+      // Step 5 — acquire through the invoker's freshness path (injected).
       const computed = await computeVerifiedSet(instanceId);
       if (!computed.ok) {
         await auditEmpty({ instanceId, reason: computed.reason, actor });
         return null;
       }
 
-      // Step 4 — the verdict. Empty ⇒ null (never an empty-allowlist entry).
+      // Step 6 — the verdict. Empty ⇒ null (never an empty-allowlist entry).
       if (computed.allowedTools.length === 0) {
         await auditEmpty({
           instanceId,

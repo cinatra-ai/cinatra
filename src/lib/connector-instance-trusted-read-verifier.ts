@@ -36,7 +36,7 @@
 // provenance (enforced against the committed capture by the consistency test),
 // never a runtime check.
 //
-// FINGERPRINT SPEC (`tsr1`, STRICT — design D7). Input is the default server's
+// FINGERPRINT SPEC (`tsr1`, strict by construction). Input is the default server's
 // advertised wire row as JSON-parsed data. A schema is INELIGIBLE (typed
 // failure, never a fingerprint) on ANY of: a non-object schema (boolean
 // schemas included), presence of `$id`/`$anchor`/`$dynamicRef`/`$dynamicAnchor`
@@ -104,8 +104,15 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** RFC 6901 pointer segment unescape (`~1` → `/`, `~0` → `~`). Deliberately no
- * percent-decoding: an URI-encoded pointer simply fails to resolve — closed. */
+/** A pointer segment may only use the two RFC 6901 escapes (`~0`, `~1`). Any
+ * other `~` use (`~2`, a trailing `~`) is an INVALID pointer — resolving it as
+ * literal characters would diverge from spec-conforming resolvers, so it is
+ * typed-ineligible instead of guessed. */
+const VALID_POINTER_SEGMENT = /^(?:[^~]|~[01])*$/;
+
+/** RFC 6901 pointer segment unescape (`~1` → `/`, `~0` → `~`; validated by
+ * `VALID_POINTER_SEGMENT` first). Deliberately no percent-decoding: an
+ * URI-encoded pointer simply fails to resolve — closed. */
 function unescapePointerSegment(segment: string): string {
   return segment.replaceAll("~1", "/").replaceAll("~0", "~");
 }
@@ -118,6 +125,9 @@ function resolveInternalPointer(root: Record<string, unknown>, ref: string): unk
   if (!ref.startsWith("#/")) throw new SchemaCanonicalizationFailure("external_ref");
   let current: unknown = root;
   for (const rawSegment of ref.slice(2).split("/")) {
+    if (!VALID_POINTER_SEGMENT.test(rawSegment)) {
+      throw new SchemaCanonicalizationFailure("unresolvable_ref");
+    }
     const segment = unescapePointerSegment(rawSegment);
     if (Array.isArray(current)) {
       // Strict array indexing: canonical non-negative integer only.
@@ -256,6 +266,7 @@ export function computeTrustedReadFingerprint(input: {
  * `native_injection_empty` audit's reason counts and the explain preview. */
 export type TrustedReadEjectionReason =
   | "fingerprint_algorithm_unsupported"
+  | "snapshot_set_inconsistent"
   | "exposure_not_first_class"
   | "not_advertised"
   | "ambiguous_on_default_server"
@@ -287,8 +298,12 @@ export type VerifyTrustedReadSetInput = {
   /** TRUE only when every currently-enrolled server produced a snapshot this
    * acquire. FALSE makes the duplicate rule unprovable ⇒ every name ejects. */
   enrollmentComplete: boolean;
-  /** The cinatra known-destructive name floor (S5), OR'd in when present. */
-  isKnownDestructiveToolName?: (name: string) => boolean;
+  /** The cinatra known-destructive name floor. REQUIRED — the floor module is
+   * merged, and an optional excluder would be a fail-open seam (a caller
+   * forgetting it would silently weaken the conjunction). Injected rather
+   * than imported so the conjunction stays pure and the floor stays a single
+   * sibling module, but the type makes omission impossible. */
+  isKnownDestructiveToolName: (name: string) => boolean;
 };
 
 export type VerifyTrustedReadSetResult = {
@@ -299,7 +314,7 @@ export type VerifyTrustedReadSetResult = {
 };
 
 /**
- * The eligibility conjunction (design §3), evaluated per descriptor entry in
+ * The eligibility conjunction, evaluated per descriptor entry in
  * rule order. Pure over its inputs; any unproven conjunct ejects the name with
  * a typed reason. An empty descriptor set verifies to the empty result — no
  * ejections, nothing eligible.
@@ -321,13 +336,35 @@ export function verifyTrustedReadSet(input: VerifyTrustedReadSetInput): VerifyTr
     return { allowedTools, ejected };
   }
 
+  // The snapshot SET itself must be unambiguous before any name can be
+  // proven: an `otherServerSnapshots` entry carrying the default server's id,
+  // or two snapshots sharing a server id, means the caller's acquire was
+  // inconsistent — the duplicate rule (and the default-server binding) would
+  // be evaluated against an ambiguous world. Uncertainty ejects EVERYTHING;
+  // it is never resolved by silently ignoring one of the claimants.
   const defaultSnapshot = input.defaultServerSnapshot;
-  const otherSnapshots = input.otherServerSnapshots.filter(
-    (snapshot) => snapshot.serverId !== defaultSnapshot.serverId,
-  );
+  const seenServerIds = new Set<string>([defaultSnapshot.serverId]);
+  let inconsistentServerId: string | null = null;
+  for (const snapshot of input.otherServerSnapshots) {
+    if (seenServerIds.has(snapshot.serverId)) {
+      inconsistentServerId = snapshot.serverId;
+      break;
+    }
+    seenServerIds.add(snapshot.serverId);
+  }
+  if (inconsistentServerId !== null) {
+    for (const entry of input.descriptor.entries) {
+      ejected.push({
+        name: entry.name,
+        reason: "snapshot_set_inconsistent",
+        detail: inconsistentServerId,
+      });
+    }
+    return { allowedTools, ejected };
+  }
 
   for (const entry of input.descriptor.entries) {
-    const verdict = verifyEntry(entry, defaultSnapshot, otherSnapshots, input);
+    const verdict = verifyEntry(entry, defaultSnapshot, input.otherServerSnapshots, input);
     if (verdict === null) allowedTools.push(entry.name);
     else ejected.push(verdict);
   }
@@ -388,8 +425,8 @@ function verifyEntry(
     return { name: entry.name, reason: "not_read_classified" };
   }
 
-  // 6. The cinatra known-destructive floor must be silent (OR'd in when bound).
-  if (input.isKnownDestructiveToolName?.(entry.name) === true) {
+  // 6. The cinatra known-destructive floor must be silent.
+  if (input.isKnownDestructiveToolName(entry.name)) {
     return { name: entry.name, reason: "destructive_floor" };
   }
 

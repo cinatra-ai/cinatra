@@ -12,17 +12,18 @@ import {
   canonicalizeSchemaForFingerprint,
   computeTrustedReadFingerprint,
   verifyTrustedReadSet,
+  type VerifyTrustedReadSetInput,
 } from "@/lib/connector-instance-trusted-read-verifier";
 
 // cinatra#2019 S4 — the PURE trust-algorithm core. These tests pin (a) the
-// strict `tsr1` canonicalization/fingerprint spec (design D7) and (b) the
+// strict `tsr1` canonicalization/fingerprint spec and (b) the
 // eligibility CONJUNCTION: every unproven conjunct ejects with its typed
 // reason, uncertainty never adds a name, and the empty set is the degenerate
 // safe outcome. The impure builder around this core is pinned in
 // wordpress-native-read-injection.test.ts.
 
 // ---------------------------------------------------------------------------
-// canonicalizeSchemaForFingerprint — the strict D7 spec.
+// canonicalizeSchemaForFingerprint — the strict canonicalization spec.
 // ---------------------------------------------------------------------------
 
 describe("canonicalizeSchemaForFingerprint", () => {
@@ -120,6 +121,34 @@ describe("canonicalizeSchemaForFingerprint", () => {
     expect(
       canonicalizeSchemaForFingerprint({ properties: { x: { $ref: "#/$defs/missing" } } }),
     ).toEqual({ ok: false, reason: "unresolvable_ref" });
+  });
+
+  it.each([
+    ["invalid escape ~2", "#/definitions/a~2b"],
+    ["trailing bare ~", "#/definitions/x~"],
+  ])(
+    "rejects an invalid RFC 6901 escape instead of resolving it literally: %s",
+    (_label, ref) => {
+      // A property literally named like the raw segment must NOT be reachable
+      // through an invalid pointer — spec-conforming resolvers reject it, so
+      // resolving it literally would fingerprint a different document than
+      // other consumers see.
+      expect(
+        canonicalizeSchemaForFingerprint({
+          properties: { x: { $ref: ref } },
+          definitions: { "a~2b": { type: "null" }, "x~": { type: "null" } },
+        }),
+      ).toEqual({ ok: false, reason: "unresolvable_ref" });
+    },
+  );
+
+  it("decodes ~01 to the literal ~1 (escape order pinned)", () => {
+    const result = canonicalizeSchemaForFingerprint({
+      properties: { x: { $ref: "#/definitions/~01" } },
+      definitions: { "~1": { type: "null" } },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.canonical).toContain('"x":{"type":"null"}');
   });
 
   it("rejects a reference cycle", () => {
@@ -264,6 +293,16 @@ const DESCRIPTOR = (...entries: TrustedReadDescriptorEntry[]) => ({
   entries,
 });
 
+/** The floor is a REQUIRED input (an optional excluder would be a fail-open
+ * seam). Tests that are not about the floor pass a silent one explicitly. */
+const SILENT_FLOOR = (): boolean => false;
+function verify(
+  input: Omit<VerifyTrustedReadSetInput, "isKnownDestructiveToolName"> &
+    Partial<Pick<VerifyTrustedReadSetInput, "isKnownDestructiveToolName">>,
+) {
+  return verifyTrustedReadSet({ isKnownDestructiveToolName: SILENT_FLOOR, ...input });
+}
+
 describe("verifyTrustedReadSet", () => {
   const ENTRY = entryFor("ewpa-get-post");
   const DEFAULT_OK = snapshot({
@@ -273,7 +312,7 @@ describe("verifyTrustedReadSet", () => {
 
   it("verifies the exact descriptor∩advertised intersection (sorted) and nothing else", () => {
     const other = entryFor("core-get-site-info");
-    const result = verifyTrustedReadSet({
+    const result = verify({
       descriptor: DESCRIPTOR(other, ENTRY),
       defaultServerSnapshot: snapshot({
         serverId: "mcp-adapter-default",
@@ -293,7 +332,7 @@ describe("verifyTrustedReadSet", () => {
 
   it("an empty descriptor set verifies to the empty result (the shipped v1 posture)", () => {
     expect(
-      verifyTrustedReadSet({
+      verify({
         descriptor: DESCRIPTOR(),
         defaultServerSnapshot: DEFAULT_OK,
         otherServerSnapshots: [],
@@ -303,7 +342,7 @@ describe("verifyTrustedReadSet", () => {
   });
 
   it("a triad-only default snapshot ejects EVERYTHING (the pinned-stack case)", () => {
-    const result = verifyTrustedReadSet({
+    const result = verify({
       descriptor: DESCRIPTOR(ENTRY),
       defaultServerSnapshot: snapshot({
         serverId: "mcp-adapter-default",
@@ -321,7 +360,7 @@ describe("verifyTrustedReadSet", () => {
   });
 
   it("a name not advertised on the default server is ejected — including one advertised ONLY elsewhere", () => {
-    const result = verifyTrustedReadSet({
+    const result = verify({
       descriptor: DESCRIPTOR(ENTRY),
       defaultServerSnapshot: snapshot({ serverId: "mcp-adapter-default", tools: [] }),
       otherServerSnapshots: [
@@ -333,7 +372,7 @@ describe("verifyTrustedReadSet", () => {
   });
 
   it("an ambiguously-advertised name (two default-server rows) is ejected", () => {
-    const result = verifyTrustedReadSet({
+    const result = verify({
       descriptor: DESCRIPTOR(ENTRY),
       defaultServerSnapshot: snapshot({
         serverId: "mcp-adapter-default",
@@ -348,7 +387,7 @@ describe("verifyTrustedReadSet", () => {
   });
 
   it("a mutated input schema ejects on fingerprint mismatch", () => {
-    const result = verifyTrustedReadSet({
+    const result = verify({
       descriptor: DESCRIPTOR(ENTRY),
       defaultServerSnapshot: snapshot({
         serverId: "mcp-adapter-default",
@@ -366,7 +405,7 @@ describe("verifyTrustedReadSet", () => {
   });
 
   it("an output-schema presence flip reports its own typed reason (both directions)", () => {
-    const gained = verifyTrustedReadSet({
+    const gained = verify({
       descriptor: DESCRIPTOR({ ...ENTRY, hasOutputSchema: false }),
       defaultServerSnapshot: DEFAULT_OK,
       otherServerSnapshots: [],
@@ -375,7 +414,7 @@ describe("verifyTrustedReadSet", () => {
     expect(gained.ejected).toEqual([
       { name: "ewpa-get-post", reason: "output_schema_presence_mismatch" },
     ]);
-    const lost = verifyTrustedReadSet({
+    const lost = verify({
       descriptor: DESCRIPTOR(ENTRY),
       defaultServerSnapshot: snapshot({
         serverId: "mcp-adapter-default",
@@ -390,7 +429,7 @@ describe("verifyTrustedReadSet", () => {
   });
 
   it("an uncanonicalizable advertised schema is ineligible with the failure as detail", () => {
-    const result = verifyTrustedReadSet({
+    const result = verify({
       descriptor: DESCRIPTOR(ENTRY),
       defaultServerSnapshot: snapshot({
         serverId: "mcp-adapter-default",
@@ -416,7 +455,7 @@ describe("verifyTrustedReadSet", () => {
     ["contradictory hints (destructive wins)", { readOnlyHint: true, destructiveHint: true }],
     ["uninterpretable hint values (dropped ⇒ write)", { readOnlyHint: "yes-please" }],
   ])("a row whose annotations do not classify read is ejected: %s", (_label, rawAnnotations) => {
-    const result = verifyTrustedReadSet({
+    const result = verify({
       descriptor: DESCRIPTOR(ENTRY),
       defaultServerSnapshot: snapshot({
         serverId: "mcp-adapter-default",
@@ -429,7 +468,7 @@ describe("verifyTrustedReadSet", () => {
   });
 
   it("annotations can only SUBTRACT: readOnlyHint on a non-descriptor tool places nothing", () => {
-    const result = verifyTrustedReadSet({
+    const result = verify({
       descriptor: DESCRIPTOR(),
       defaultServerSnapshot: snapshot({
         serverId: "mcp-adapter-default",
@@ -443,7 +482,7 @@ describe("verifyTrustedReadSet", () => {
 
   it("the known-destructive floor (the REAL S5 predicate) ejects even a read-annotated match", () => {
     const deleteEntry = entryFor("ewpa-delete-post");
-    const result = verifyTrustedReadSet({
+    const result = verify({
       descriptor: DESCRIPTOR(deleteEntry),
       defaultServerSnapshot: snapshot({
         serverId: "mcp-adapter-default",
@@ -456,18 +495,19 @@ describe("verifyTrustedReadSet", () => {
     expect(result.ejected).toEqual([{ name: "ewpa-delete-post", reason: "destructive_floor" }]);
   });
 
-  it("the floor is optional: absent ⇒ the annotation conjunct alone decides", () => {
-    const result = verifyTrustedReadSet({
+  it("a silent floor leaves the annotation conjunct deciding (the floor can only subtract)", () => {
+    const result = verify({
       descriptor: DESCRIPTOR(ENTRY),
       defaultServerSnapshot: DEFAULT_OK,
       otherServerSnapshots: [],
       enrollmentComplete: true,
+      isKnownDestructiveToolName: SILENT_FLOOR,
     });
     expect(result.allowedTools).toEqual(["ewpa-get-post"]);
   });
 
   it("an incomplete enrollment enumeration ejects everything (duplicate rule unprovable)", () => {
-    const result = verifyTrustedReadSet({
+    const result = verify({
       descriptor: DESCRIPTOR(ENTRY),
       defaultServerSnapshot: DEFAULT_OK,
       otherServerSnapshots: [],
@@ -478,7 +518,7 @@ describe("verifyTrustedReadSet", () => {
   });
 
   it("a trusted name present on ANY other enrolled server is ejected (spoof containment)", () => {
-    const result = verifyTrustedReadSet({
+    const result = verify({
       descriptor: DESCRIPTOR(ENTRY),
       defaultServerSnapshot: DEFAULT_OK,
       otherServerSnapshots: [
@@ -496,19 +536,48 @@ describe("verifyTrustedReadSet", () => {
     ]);
   });
 
-  it("a snapshot sharing the default server's id is never treated as a duplicate source", () => {
-    const result = verifyTrustedReadSet({
+  it("an `other` snapshot claiming the default server's id ejects EVERYTHING (ambiguity is never resolved by ignoring a claimant)", () => {
+    const result = verify({
       descriptor: DESCRIPTOR(ENTRY),
       defaultServerSnapshot: DEFAULT_OK,
-      // defensive: the same snapshot accidentally passed on both sides
+      // a default-id-spoofed / double-passed snapshot set is an inconsistent
+      // acquire — no name can be proven against an ambiguous world
       otherServerSnapshots: [DEFAULT_OK],
       enrollmentComplete: true,
     });
-    expect(result.allowedTools).toEqual(["ewpa-get-post"]);
+    expect(result.allowedTools).toEqual([]);
+    expect(result.ejected).toEqual([
+      {
+        name: "ewpa-get-post",
+        reason: "snapshot_set_inconsistent",
+        detail: "mcp-adapter-default",
+      },
+    ]);
+  });
+
+  it("two `other` snapshots sharing a server id eject EVERYTHING (duplicate claimants)", () => {
+    const dedicated = snapshot({
+      serverId: "wps-cccccccccccccccc",
+      tools: [tool({ name: "ewpa-list-posts" })],
+    });
+    const result = verify({
+      descriptor: DESCRIPTOR(ENTRY),
+      defaultServerSnapshot: DEFAULT_OK,
+      otherServerSnapshots: [dedicated, { ...dedicated, catalogRevision: "rev-x" }],
+      enrollmentComplete: true,
+    });
+    expect(result.allowedTools).toEqual([]);
+    expect(result.ejected).toEqual([
+      {
+        name: "ewpa-get-post",
+        reason: "snapshot_set_inconsistent",
+        detail: "wps-cccccccccccccccc",
+      },
+    ]);
   });
 
   it("an unknown fingerprint algorithm ejects the whole set, typed", () => {
-    const result = verifyTrustedReadSet({
+    const result = verify({
       descriptor: {
         fingerprintAlgorithm: "tsr9" as unknown as "tsr1",
         entries: [ENTRY],
