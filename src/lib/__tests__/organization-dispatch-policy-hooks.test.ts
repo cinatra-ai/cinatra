@@ -465,6 +465,56 @@ describe("dispatch-hook endpoint policy — PROHIBITED endpoints refuse on an ar
   });
 });
 
+describe("dispatch-hook endpoint policy — a bodyless organization-target request falls back to the session's active org", () => {
+  // The `resolveDispatchTarget` "organization" class mirrors Better Auth's
+  // OWN default: when the body names no `organizationId`/`organizationSlug`,
+  // both the policy and the real endpoint (e.g. `/organization/update`)
+  // fall back to the caller's session `activeOrganizationId`. The hook must
+  // read that from a REAL session lookup (`getSessionFromCtx`), not the
+  // `ctx.context.session` cache slot, which is unpopulated this early in the
+  // root `hooks.before` pipeline — reading it directly would silently
+  // resolve `unresolvable` and stand the policy aside on every such request,
+  // even though the real endpoint still acts on the archived org.
+  it("raw HTTP POST /organization/update with no organizationId in the body still refuses when the session's active org is archived", async () => {
+    const db = makeDb();
+    const auth = makeAuth(db);
+    const owner = await seedUserWithSession(auth, "owner");
+    const orgId = await seedOrg(auth, owner.userId);
+    // Make the org the session's active org WHILE it is still active...
+    await auth.api.setActiveOrganization({
+      body: { organizationId: orgId },
+      headers: new Headers({ cookie: owner.cookie }),
+    });
+    // ...then archive it out from under the session.
+    plantArchived(db, orgId);
+    const res = await rawPost(
+      auth,
+      "/organization/update",
+      { data: { name: "Renamed While Archived" } },
+      owner.cookie,
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("in-process auth.api.updateOrganization with no organizationId in the body still refuses when the session's active org is archived", async () => {
+    const db = makeDb();
+    const auth = makeAuth(db);
+    const owner = await seedUserWithSession(auth, "owner");
+    const orgId = await seedOrg(auth, owner.userId);
+    await auth.api.setActiveOrganization({
+      body: { organizationId: orgId },
+      headers: new Headers({ cookie: owner.cookie }),
+    });
+    plantArchived(db, orgId);
+    await expect(
+      auth.api.updateOrganization({
+        body: { data: { name: "Renamed While Archived" } },
+        headers: new Headers({ cookie: owner.cookie }),
+      }),
+    ).rejects.toMatchObject({ status: "FORBIDDEN" });
+  });
+});
+
 describe("dispatch-hook endpoint policy — the set-active(null) UNSET escape hatch is never policed", () => {
   it("a user whose session still points at an archived org can always unset it (organizationId: null)", async () => {
     const db = makeDb();

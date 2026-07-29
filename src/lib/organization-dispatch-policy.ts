@@ -1,5 +1,5 @@
 import "server-only";
-import { createAuthMiddleware, APIError } from "better-auth/api";
+import { createAuthMiddleware, APIError, getSessionFromCtx } from "better-auth/api";
 import { readOrganizationArchivedAt } from "@/lib/organization-archive-guard";
 
 /**
@@ -361,8 +361,22 @@ export function buildOrganizationDispatchPolicyBeforeHook(deps: DispatchPolicyHo
   // so the non-policed 99% of auth traffic pays one Set lookup and returns.
   return createAuthMiddleware(async (ctx) => {
     if (!POLICED_ENDPOINTS.has(ctx.path)) return;
-    const session = (ctx.context as { session?: { session?: { activeOrganizationId?: string | null } } })
-      .session;
+    // `ctx.context.session` is only a CACHE slot — it is not guaranteed
+    // populated here. This is the ROOT-level `hooks.before`, which Better
+    // Auth's dispatch pipeline runs BEFORE the endpoint's own middleware
+    // (including its `sessionMiddleware`) ever executes, so on a fresh
+    // dispatch `ctx.context.session` is `null` regardless of whether the
+    // caller is authenticated. Reading it directly here would silently drop
+    // the `activeOrganizationId` fallback below for every bodyless
+    // organization-target request, making `resolveDispatchTarget` return
+    // `unresolvable` — which stands the policy aside — even though the real
+    // endpoint (e.g. `/organization/update`, `/organization/invite-member`)
+    // independently falls back to that same session's active org and
+    // proceeds. `getSessionFromCtx` is the same accessor Better Auth's own
+    // `sessionMiddleware` uses: it returns the cached value if present, else
+    // resolves and caches it, so this costs at most one extra read on the
+    // ~16 policed paths and is free everywhere else.
+    const session = await getSessionFromCtx(ctx);
     const resolution = await resolveDispatchTarget(
       ctx.path,
       (ctx.body ?? null) as Record<string, unknown> | null,
