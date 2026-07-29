@@ -28,10 +28,16 @@ vi.mock("@/lib/background-jobs-notify", () => ({
   notifyJobStarted: vi.fn(async () => undefined),
 }));
 
-const SYSTEM_MAINTENANCE_JOB = "TEST_SYSTEM_MAINTENANCE_JOB";
-const GRANDFATHERED_JOB = "TEST_GRANDFATHERED_JOB";
-
-const { dispatchRegisteredJobMock, UnclassifiedBackgroundJobErrorStub } = vi.hoisted(() => {
+// Everything the hoisted vi.mock factory below references MUST come from
+// vi.hoisted — a plain top-level const would still be in its temporal dead
+// zone when the hoisted factory executes (the exact ReferenceError this
+// suite once threw in CI).
+const {
+  SYSTEM_MAINTENANCE_JOB,
+  GRANDFATHERED_JOB,
+  dispatchRegisteredJobMock,
+  UnclassifiedBackgroundJobErrorStub,
+} = vi.hoisted(() => {
   class UnclassifiedBackgroundJobErrorStub extends Error {
     constructor(public readonly jobName: string) {
       super(`unclassified: ${jobName}`);
@@ -39,6 +45,8 @@ const { dispatchRegisteredJobMock, UnclassifiedBackgroundJobErrorStub } = vi.hoi
     }
   }
   return {
+    SYSTEM_MAINTENANCE_JOB: "TEST_SYSTEM_MAINTENANCE_JOB",
+    GRANDFATHERED_JOB: "TEST_GRANDFATHERED_JOB",
     dispatchRegisteredJobMock: vi.fn(async () => undefined),
     UnclassifiedBackgroundJobErrorStub,
   };
