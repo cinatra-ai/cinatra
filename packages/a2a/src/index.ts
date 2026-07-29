@@ -34,6 +34,12 @@ export {
   createInProcessA2AClient,
   type CreateInProcessA2AClientInput,
   type InProcessA2AClient,
+  // cinatra#2202 — the fail-closed actor precondition every in-process dispatch
+  // must satisfy. Exported so a host caller can match the refusal structurally
+  // (`err.code === IN_PROCESS_ACTOR_MISSING_CODE`).
+  requireInProcessDispatchActor,
+  InProcessA2AActorMissingError,
+  IN_PROCESS_ACTOR_MISSING_CODE,
 } from "./client";
 export {
   createExternalA2AClient,
