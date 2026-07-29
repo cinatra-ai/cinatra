@@ -45,6 +45,7 @@
 
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { buildProvenance } from "./provenance.mjs";
 
 const REPO_ROOT = process.env.CAPTURE_REPO_ROOT || process.cwd();
@@ -236,6 +237,32 @@ function toolMatchesAbility(tool, abilityId) {
     const cn = norm(c);
     return cn && cn === target;
   });
+}
+
+/**
+ * Is `abilityId` (or its mcp-adapter wire form, `ns/ability` -> `ns-ability`)
+ * present in raw text `haystack` as a WHOLE token — never merely as a prefix of
+ * a longer id? Used ONLY for the advisory (f) discover-abilities fallback,
+ * where there is no structured tool list to run `toolMatchesAbility` against —
+ * just the raw JSON-RPC response text.
+ *
+ * cinatra#2104: the previous fallback did
+ * `norm(haystack).includes(norm(abilityId))`. `norm()` strips `-` and `/`, so
+ * `norm("fixturelabs/note-get")` -> `fixturelabsnoteget`, which IS a substring
+ * of `norm("fixturelabs/note-get-unannotated")` -> `fixturelabsnotegetunannotated`.
+ * A discover payload listing only the edge variant would then falsely report
+ * the plain trio ability as discoverable, letting the HARD sub-claim (f) pass
+ * on evidence that doesn't exist. A trailing negative-lookahead boundary
+ * (`(?![\w-])`) rules that out: the match cannot be immediately followed by a
+ * word character or `-`, so `note-get` no longer matches inside
+ * `note-get-unannotated`, while `note-get` at a genuine word boundary (end of
+ * string, followed by a quote/comma/brace/etc.) still matches.
+ */
+function matchesAsWholeToken(haystack, abilityId) {
+  const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const wire = abilityId.replace("/", "-");
+  const hasBoundaryMatch = (needle) => new RegExp(`${escapeRegExp(needle)}(?![\\w-])`).test(haystack);
+  return hasBoundaryMatch(abilityId) || hasBoundaryMatch(wire);
 }
 
 function writeCapture(name, payload, keys) {
@@ -491,7 +518,7 @@ async function main() {
   let firstClassCount = 0;
   for (const abilityId of FIXTURELABS_ALL) {
     const individual = defaultTools.find((t) => toolMatchesAbility(t, abilityId));
-    const viaDiscover = discoverText.includes(abilityId) || norm(discoverText).includes(norm(abilityId));
+    const viaDiscover = matchesAsWholeToken(discoverText, abilityId);
     if (individual) firstClassCount++;
     surfacing[abilityId] = {
       firstClassOnDefault: Boolean(individual),
@@ -566,7 +593,15 @@ async function main() {
   console.log(`capture-annotations: OK — exposure mode = ${mode}; ${findings.length} finding(s) recorded. Transcripts in ${CAPTURES_DIR}`);
 }
 
-main().catch((err) => {
-  console.error(`capture-annotations: unexpected error: ${err && err.stack ? err.stack : err}`);
-  process.exit(1);
-});
+// CLI entry guard (same convention as scripts/audit/wp-gateway-capture-freshness.mjs):
+// only auto-run the live capture when this file is executed directly, so an
+// offline unit test can `import` the pure matching helpers below without
+// tripping requireEnv()'s process.exit(1) (no WP_BASE_URL in a test process).
+if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+  main().catch((err) => {
+    console.error(`capture-annotations: unexpected error: ${err && err.stack ? err.stack : err}`);
+    process.exit(1);
+  });
+}
+
+export { norm, toolMatchesAbility, matchesAsWholeToken };
