@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "description": "WP MCP gateway VERIFY verdicts (#2016 S1 §5) — ewpa/* abilities driven via the gateway execute triad against the booted pinned fixture; a FAIL names its fallback, never a cinatra ability.",
   "exposureMode": "triad-only",
-  "determinedAt": "2026-07-26T13:13:38.260Z",
-  "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30203573327",
+  "determinedAt": "2026-07-29T10:08:33.964Z",
+  "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30442320352",
   "verdicts": [
     {
       "item": "ewpa/create-post",
@@ -177,11 +177,11 @@
             "isError": false,
             "error": null,
             "count": 5,
-            "contentText": "{\"success\":true,\"data\":[{\"ID\":8,\"post_title\":\"Brightwater Logistics streamlines publishing\",\"post_status\":\"publish\",\"post_date\":\"2026-07-26 13:13:31\",\"post_excerpt\":\"\",\"post_author\":\"\",\"permalink\":\"http:\\/\\/localhost:8080\\/brightwater-logistics-streamlines-publishing\\/\",\"categories\":[\"Uncategorized\"],\"tags\":[]},{\"ID\":7,\"post_title\":\"Welcome to your demo blog\",\"post_status\":\"publish\",\"post_date\":\"2"
+            "contentText": "{\"success\":true,\"data\":[{\"ID\":8,\"post_title\":\"Brightwater Logistics streamlines publishing\",\"post_status\":\"publish\",\"post_date\":\"2026-07-29 10:08:26\",\"post_excerpt\":\"\",\"post_author\":\"\",\"permalink\":\"http:\\/\\/localhost:8080\\/brightwater-logistics-streamlines-publishing\\/\",\"categories\":[\"Uncategorized\"],\"tags\":[]},{\"ID\":7,\"post_title\":\"Welcome to your demo blog\",\"post_status\":\"publish\",\"post_date\":\"2"
           }
         ],
         "diagnosticNoFilterCount": 5,
-        "diagnosticContentText": "{\"success\":true,\"data\":[{\"ID\":8,\"post_title\":\"Brightwater Logistics streamlines publishing\",\"post_status\":\"publish\",\"post_date\":\"2026-07-26 13:13:31\",\"post_excerpt\":\"\",\"post_author\":\"\",\"permalink\":\"http:\\/\\/localhost:8080\\/brightwater-logistics-streamlines-publishing\\/\",\"categories\":[\"Uncategorized\"],\"tags\":[]},{\"ID\":7,\"post_title\":\"Welcome to your demo blog\",\"post_status\":\"publish\",\"post_date\":\"2",
+        "diagnosticContentText": "{\"success\":true,\"data\":[{\"ID\":8,\"post_title\":\"Brightwater Logistics streamlines publishing\",\"post_status\":\"publish\",\"post_date\":\"2026-07-29 10:08:26\",\"post_excerpt\":\"\",\"post_author\":\"\",\"permalink\":\"http:\\/\\/localhost:8080\\/brightwater-logistics-streamlines-publishing\\/\",\"categories\":[\"Uncategorized\"],\"tags\":[]},{\"ID\":7,\"post_title\":\"Welcome to your demo blog\",\"post_status\":\"publish\",\"post_date\":\"2",
         "returnedTitles": [
           "Brightwater Logistics streamlines publishing",
           "Welcome to your demo blog",
@@ -198,12 +198,12 @@
     }
   ],
   "provenance": {
-    "capturedAtCommit": "1346373e4f0f1c316446bd0e5056f5754b8701ea",
-    "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30203573327",
-    "capturedAt": "2026-07-26T13:13:38.260Z",
+    "capturedAtCommit": "b7208b94660e53a23adb1051e2247fe6759b5afb",
+    "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30442320352",
+    "capturedAt": "2026-07-29T10:08:33.964Z",
     "pinsLockSha256": "7bddc5015bbbf794a15229a4753d7973b40dfd364e0050e578e7121bab72ad7a",
     "fixturePluginSha256": "435ff97d89701d402398d589aa5b4570cc77b6ac65e8fa8c74be0e9c07195231",
-    "producerSha256": "9f81bb67bd5eb378ea498c379dca7bd8eacc0dc25bc578d8d6ae8d1973545a81",
+    "producerSha256": "2c8ad16e064f20f534305d12f70f0f6d87e8016239fb30e6491f32e5277cff6c",
     "apiMapSha256": "55749cb32fb96c5443510eb61a353bb63a9277c1600af212e25846b997c2dac8",
     "equivalenceSha256": "db2c5e968cd9d20cc071f5abeb6696c47322b2d92a499e98f2b8838060e114e6"
   }
