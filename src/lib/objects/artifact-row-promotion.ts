@@ -33,7 +33,10 @@ import * as errors from "@/lib/object-history/errors";
 
 import type { ApprovalViewer } from "@/app/configuration/approvals/sources/types";
 import { redactChatCaptureText } from "@/lib/chat-capture/redact";
-import { verifySessionAuthority } from "@/lib/org-write/authority";
+import {
+  verifySessionAuthority,
+  OrgWriteAuthorityError,
+} from "@/lib/org-write/authority";
 import type {
   ArtifactPromotionRequestRow,
   ArtifactPromotionRequestStatus,
@@ -97,7 +100,10 @@ export interface PromotableObject {
 
 export type WidenOutcome =
   | { ok: true }
-  | { ok: false; reason: "version_conflict" | "not_found" | "transient" };
+  | {
+      ok: false;
+      reason: "version_conflict" | "not_found" | "transient" | "not_authorized";
+    };
 
 // ── never-narrow scope ranking ──────────────────────────────────────────────
 
@@ -267,6 +273,16 @@ async function productionDeps(): Promise<ArtifactPromotionDeps> {
           if (error instanceof errors.VersionConflictError) {
             // A concurrent edit / vanished row moved the CAS anchor.
             return { ok: false, reason: "version_conflict" };
+          }
+          if (error instanceof OrgWriteAuthorityError) {
+            // The DECIDER holds no org-write authority for this org (the
+            // platform-admin-who-is-not-a-member case — the authority mint is
+            // membership-grounded). PERMANENT for this decider, never
+            // "transient": mapping it to a retryable outcome would loop the
+            // same refusal forever (adversarial-review finding). The decide
+            // path compensates the claim back to pending so a member admin
+            // can decide the request instead.
+            return { ok: false, reason: "not_authorized" };
           }
           // FAIL-CLOSED: every other failure is a transient VALUE, never a
           // rethrow — the decide path must always be able to compensate the
@@ -689,6 +705,19 @@ export async function decideArtifactPromotion(
     if (widened.reason === "not_found") {
       deps.compensateApproved({ id: request.id, orgId: viewer.orgId, to: "superseded" });
       return { ok: false, code: "not_found", message: `The artifact row '${request.objectId}' no longer exists.` };
+    }
+    if (widened.reason === "not_authorized") {
+      // PERMANENT for this decider (no org-write authority in this org — the
+      // platform-admin-who-is-not-a-member case). The request goes back to
+      // pending for a member admin; the message says so instead of inviting
+      // an endless retry ("transient" would loop the same refusal forever).
+      deps.compensateApproved({ id: request.id, orgId: viewer.orgId, to: "pending" });
+      return {
+        ok: false,
+        code: "not_authorized",
+        message:
+          "You are not a member of this organization, so you cannot apply this promotion — it stays pending for an organization admin to decide.",
+      };
     }
     deps.compensateApproved({ id: request.id, orgId: viewer.orgId, to: "pending" });
     return { ok: false, code: "transient", message: "The promotion apply failed transiently; retry the approval." };

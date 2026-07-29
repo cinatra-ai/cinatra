@@ -65,7 +65,9 @@ function harness(cfg: {
   object?: PromotableObject | null;
   scan?: { clean: boolean };
   scanThrows?: boolean;
-  widen?: { ok: true } | { ok: false; reason: "version_conflict" | "not_found" | "transient" };
+  widen?:
+    | { ok: true }
+    | { ok: false; reason: "version_conflict" | "not_found" | "transient" | "not_authorized" };
   widenThrows?: boolean;
   /** readTeamInOrg returns null (unknown/foreign team or non-member). */
   teamMissing?: boolean;
@@ -384,6 +386,21 @@ describe("decideArtifactPromotion — atomic apply", () => {
     );
     expect(res).toMatchObject({ ok: false, code: "not_found" });
     expect(spies.compensateApproved).toHaveBeenCalledWith({ id: "req-1", orgId: "org-1", to: "superseded" });
+  });
+
+  it("a widen not_authorized (decider holds no org-write authority — #1939 Stage D) COMPENSATES to pending and returns not_authorized, never transient", async () => {
+    // The platform-admin-who-is-not-a-member case: the org-write authority
+    // mint is membership-grounded, so this decider can NEVER apply the widen.
+    // Mapping it to "transient" would invite an endless retry of the same
+    // refusal (adversarial-review finding); the request instead goes back to
+    // pending for a member admin, with a permanent not_authorized outcome.
+    const { deps, spies } = harness({ widen: { ok: false, reason: "not_authorized" } });
+    const res = await decideArtifactPromotion(
+      { requestId: "req-1", action: "approve", expectedVersion: "3", viewer: admin },
+      deps,
+    );
+    expect(res).toMatchObject({ ok: false, code: "not_authorized" });
+    expect(spies.compensateApproved).toHaveBeenCalledWith({ id: "req-1", orgId: "org-1", to: "pending" });
   });
 
   it("a transient widen failure COMPENSATES to pending (retryable) and returns transient", async () => {
