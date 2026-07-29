@@ -1,0 +1,83 @@
+{
+  "results": [
+    {
+      "name": "f1a the key-save failure renders as an IN-PAGE actionable state",
+      "verdict": "PASS",
+      "detail": "Could not save the Anthropic API key Configure the connection service first so Anthropic API requests can authenticate. Finish the Connections step first — the Anthropic key is stored through the connection service, which is not configured yet. Complete Connections, then come back and save the key."
+    },
+    {
+      "name": "f1b the state names the step to complete FIRST",
+      "verdict": "PASS",
+      "detail": "the fix-forward names the Connections step"
+    },
+    {
+      "name": "f1c the wizard step still renders (no unhandled server error)",
+      "verdict": "PASS",
+      "detail": "the provider choice + both sections are still on the page"
+    },
+    {
+      "name": "f1d reported through the wizard's CODES-ONLY flash",
+      "verdict": "PASS",
+      "detail": "redirected to /setup/ai?stay=1&error=setup-provider-save-failed, then consumed by the toast island (settled at /setup/ai?stay=1)"
+    },
+    {
+      "name": "d1 readiness failure renders actionably",
+      "verdict": "PASS",
+      "detail": "AI setup did not complete (native-skills-probe) This Anthropic connection's MCP mode is 'function-tools'. In that mode Cinatra cannot deliver custom skills to Claude — every container.skills request is rejected. Use “Switch to native MCP delivery” below to set the Anthropic connector's MCP mode to 'native', then run this step again. Switch to native MCP delivery"
+    },
+    {
+      "name": "d2 the fix-forward names an EXISTING control, not an unreachable settings page",
+      "verdict": "PASS",
+      "detail": "AI setup did not complete (native-skills-probe) This Anthropic connection's MCP mode is 'function-tools'. In that mode Cinatra cannot deliver custom skills to Claude — every container.skills request is rejected. Use “Switch to native MCP delivery” below to set the Anthropic connector's MCP mode to 'native', then run this step again. Switch to native MCP delivery"
+    },
+    {
+      "name": "d3 the fix-forward's control is RENDERED in the failure state",
+      "verdict": "PASS",
+      "detail": "Switch to native MCP delivery"
+    },
+    {
+      "name": "f2a the control flips the STORED mcpMode",
+      "verdict": "PASS",
+      "detail": "{\"mcpMode\":\"function-tools\"} -> {\"mcpMode\":\"native\"}"
+    },
+    {
+      "name": "f2b the resolved failure is cleared",
+      "verdict": "PASS",
+      "detail": "no setup-readiness-failure node after the switch"
+    },
+    {
+      "name": "f2c the switch does NOT fabricate readiness",
+      "verdict": "PASS",
+      "detail": "no receipt panel — readiness is still a probe the operator has to run"
+    },
+    {
+      "name": "c1 the saga reaches a valid receipt with the mode set FROM THE UI",
+      "verdict": "PASS",
+      "detail": "receipt panel renders; probe reference = {\"skill_id\":\"skill_lane2093_23\",\"version\":\"v1\",\"type\":\"custom\"}"
+    },
+    {
+      "name": "c2 probe carried BOTH halves of the container.skills reference",
+      "verdict": "PASS",
+      "detail": "{\"skill_id\":\"skill_lane2093_23\",\"version\":\"v1\",\"type\":\"custom\"}"
+    }
+  ],
+  "consoleErrors": [],
+  "navigations": [
+    "/sign-in",
+    "/sign-in",
+    "/",
+    "/setup",
+    "/setup/name",
+    "/setup/ai?stay=1",
+    "/setup/ai?stay=1",
+    "/setup/ai?stay=1",
+    "/setup/ai?stay=1&error=setup-provider-save-failed",
+    "/setup/ai?stay=1",
+    "/setup/ai?stay=1",
+    "/setup/ai?stay=1",
+    "/setup/ai?stay=1&error=setup-readiness-failed",
+    "/setup/ai?stay=1",
+    "/setup/ai?stay=1",
+    "/setup/ai?stay=1"
+  ]
+}

@@ -1,9 +1,9 @@
-// cinatra.llmProvider v1 leaf schema + tolerant parse (cinatra#1712, epic #1711
-// S1 AC1).
+// cinatra.llmProvider v2 leaf schema + tolerant parse (cinatra#1712 S1 AC1;
+// ABI v2 per cinatra#2093, epic #2086 S6).
 //
 // The LLM-provider declaration surface — the PUBLIC, host-neutral MIRROR of the
 // host declaration model in `@cinatra-ai/agents`'s `llm-provider-policy.ts`.
-// Pins the canonical v1 shape the conformance gate consumes: valid v1, the
+// Pins the canonical v2 shape the conformance gate consumes: valid v2, the
 // strict object grammar at every level, the provider/status/approval
 // vocabularies, the models.default ∈ models.allowed cross-field rule, and the
 // sanitized tolerant-parse degradation contract. (The leaf ↔ host byte-parity
@@ -34,12 +34,15 @@ const decl = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
     default: "claude-sonnet-4-6",
     allowed: ["claude-sonnet-4-6", "claude-opus-4-7"],
   },
+  // ABI v2 (cinatra#2093 S6) — required on every declaration.
+  defaultCapable: true,
+  wizardEligible: true,
   ...over,
 });
 
-describe("cinatra.llmProvider v1 — constants + vocabulary", () => {
-  it("the ABI version is 1", () => {
-    expect(LLM_PROVIDER_ABI_VERSION).toBe(1);
+describe("cinatra.llmProvider v2 — constants + vocabulary", () => {
+  it("the ABI version is 2", () => {
+    expect(LLM_PROVIDER_ABI_VERSION).toBe(2);
   });
   it("declares the closed provider vocabulary (openai/anthropic/gemini)", () => {
     expect([...LLM_PROVIDERS]).toEqual(["openai", "anthropic", "gemini"]);
@@ -53,12 +56,12 @@ describe("cinatra.llmProvider v1 — constants + vocabulary", () => {
   });
 });
 
-describe("parseLlmProvider — valid v1", () => {
+describe("parseLlmProvider — valid v2", () => {
   it("accepts a minimal native-MCP provider declaration", () => {
     const r = parseLlmProvider(decl());
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.declaration.abiVersion).toBe(1);
+      expect(r.declaration.abiVersion).toBe(2);
       expect(r.declaration.provider).toBe("anthropic");
       expect(r.declaration.capabilities.native_mcp.status).toBe("native");
     }
@@ -77,7 +80,8 @@ describe("parseLlmProvider — valid v1", () => {
 
 describe("parseLlmProvider — rejections (fail-closed verdict; degrades at host)", () => {
   it("rejects a wrong abiVersion", () => {
-    expect(parseLlmProvider(decl({ abiVersion: 2 })).ok).toBe(false);
+    expect(parseLlmProvider(decl({ abiVersion: 3 })).ok).toBe(false);
+    expect(parseLlmProvider(decl({ abiVersion: 0 })).ok).toBe(false);
   });
   it("rejects an unknown provider", () => {
     expect(parseLlmProvider(decl({ provider: "mistral" })).ok).toBe(false);

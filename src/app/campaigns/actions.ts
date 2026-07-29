@@ -23,6 +23,8 @@ import {
 } from "@/lib/llm-provider-surfaces";
 import { requireAuthSession, requireAdminSession, isPlatformAdmin, resolveOrgRoleForSession, getActorContext } from "@/lib/auth-session";
 import { updateDefaultLlmProvider } from "@/lib/admin/default-llm-provider-mutation";
+import { buildKnownDefaultCapableProviders } from "@cinatra-ai/sdk-extensions/llm-provider-contract";
+import type { LlmProvider } from "@cinatra-ai/agents/llm-provider-policy";
 import {
   getExternalMcpServerByIdFresh,
   insertExternalMcpServerStrict,
@@ -188,9 +190,17 @@ export async function setAnthropicMcpModeAction(_formData: FormData) {
 export async function setDefaultLlmProviderAction(formData: FormData) {
   // Global default LLM provider is platform-level. Route through the shared
   // chokepoint: platform-admin authority + strict-before-mutation audit + the
-  // authoritative {openai,gemini} sink. (Previously this action wrote with no
+  // authoritative fail-closed sink. (Previously this action wrote with no
   // authority check and no audit — the operator-mutation chokepoint closes that gap.)
-  const provider = z.enum(["openai", "gemini"]).parse(formData.get("provider"));
+  //
+  // S6 (cinatra#2093): the accepted set is DERIVED from the ABI v2
+  // `defaultCapable` flag instead of the hardcoded ["openai","gemini"] literal
+  // that barred Anthropic. `writeDefaultLlmProviderToDatabase` remains the
+  // authoritative sink; this parse just fails the request early with a clear
+  // message rather than silently preserving the prior value.
+  const provider = z
+    .enum(buildKnownDefaultCapableProviders() as [string, ...string[]])
+    .parse(formData.get("provider")) as LlmProvider;
   const actor = await getActorContext();
   await updateDefaultLlmProvider({ actor, provider });
   redirect("/configuration/llm");
@@ -220,9 +230,9 @@ export async function setDefaultProvidersAction(formData: FormData) {
   await requireAdminSession();
   // The DefaultProvidersCard posts `defaultProvider`, while other callers may
   // still post `llmProvider`. Accept both keys and prefer the card's
-  // `defaultProvider`. Anthropic can never become the global default regardless
-  // of input: `writeDefaultLlmProviderToDatabase` is the authoritative
-  // fail-closed chokepoint.
+  // `defaultProvider`. `writeDefaultLlmProviderToDatabase` remains the
+  // authoritative fail-closed chokepoint for which providers may be the global
+  // default (derived from the ABI v2 `defaultCapable` flag since S6).
   const llmProvider =
     (formData.get("defaultProvider") as string | null)?.trim() ||
     (formData.get("llmProvider") as string | null)?.trim();
@@ -233,13 +243,15 @@ export async function setDefaultProvidersAction(formData: FormData) {
   const agentCreationModel = (formData.get("agentCreationModel") as string | null)?.trim();
 
   if (llmProvider) {
-    // Chokepoint refuses anything outside {openai,gemini}; explicit guard kept
-    // for reader clarity (the sink is still authoritative). The shared
+    // The sink refuses anything that is not `defaultCapable`; this explicit
+    // guard is kept for reader clarity and now DERIVES the same set (S6
+    // cinatra#2093 — it previously hardcoded {openai,gemini}, which silently
+    // dropped an Anthropic selection on the floor). The shared
     // `updateDefaultLlmProvider` adds the strict-before-mutation audit and a
     // defense-in-depth platform-admin re-check on top of `requireAdminSession`.
-    if (llmProvider === "openai" || llmProvider === "gemini") {
+    if ((buildKnownDefaultCapableProviders() as readonly string[]).includes(llmProvider)) {
       const actor = await getActorContext();
-      await updateDefaultLlmProvider({ actor, provider: llmProvider });
+      await updateDefaultLlmProvider({ actor, provider: llmProvider as LlmProvider });
     }
   }
   if (imageProvider) {

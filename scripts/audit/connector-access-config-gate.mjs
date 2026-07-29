@@ -42,6 +42,27 @@ const EXTENSIONS_ROOT = join(REPO_ROOT, "extensions");
 export const ACCESS_SCOPES = ["user", "project", "team", "organization", "workspace", "admin"];
 export const PROTECTED_SLUGS = { openai: "admin", anthropic: "admin", gemini: "admin" };
 
+/**
+ * MIRROR of `packages/sdk-extensions/src/extension-protection.ts` — the generic,
+ * KIND-AGNOSTIC `protected` declaration domain (cinatra#1927). A TOP-LEVEL
+ * boolean sibling of `access` / `assistant`, accepted structurally by BOTH file
+ * validators below and interpreted by neither. Fail-closed: present-but-not-a-
+ * boolean is a finding (never coerced). Kept self-contained here (a .mjs gate
+ * cannot import the package's .ts); the mirror tests pin the two in agreement.
+ */
+export const EXTENSION_PROTECTION_KEY = "protected";
+
+/** Validate the `protected` domain of a parsed config. Returns error strings. */
+export function validateProtectionDeclaration(parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+  if (!(EXTENSION_PROTECTION_KEY in parsed)) return [];
+  const value = parsed[EXTENSION_PROTECTION_KEY];
+  if (value === undefined || typeof value === "boolean") return [];
+  return [
+    `\`${EXTENSION_PROTECTION_KEY}\` must be a boolean (got ${JSON.stringify(value)}) — fail-closed, never coerced`,
+  ];
+}
+
 /** `@scope/x-connector` / `x-connector` / `x` → `x` (mirror of the SDK normalizer). */
 export function accessSlugFromPackageName(packageName) {
   const base = String(packageName).startsWith("@")
@@ -63,10 +84,12 @@ export function validateAccessConfig(parsed, packageName) {
     errors.push(`\`formatVersion\` must be EXACTLY 1 (got ${JSON.stringify(parsed.formatVersion)})`);
   }
   for (const key of Object.keys(parsed)) {
-    if (key !== "formatVersion" && key !== "access") {
+    if (key !== "formatVersion" && key !== "access" && key !== EXTENSION_PROTECTION_KEY) {
       errors.push(`unknown top-level key "${key}" (fail-closed: unknown domains hard-fail)`);
     }
   }
+  // cinatra#1927: the generic protection domain is a known top-level sibling.
+  errors.push(...validateProtectionDeclaration(parsed));
   let declared = null; // { mode, scope }
   if ("access" in parsed && parsed.access !== undefined) {
     if (!isObj(parsed.access)) {
@@ -174,10 +197,17 @@ export function validateAssistantConfig(parsed, packageName) {
     errors.push(`\`formatVersion\` must be EXACTLY ${ASSISTANT_DECLARATION_FORMAT_VERSION} (got ${JSON.stringify(parsed.formatVersion)})`);
   }
   for (const key of Object.keys(parsed)) {
-    if (key !== "formatVersion" && key !== "access" && key !== "assistant") {
+    if (
+      key !== "formatVersion" &&
+      key !== "access" &&
+      key !== "assistant" &&
+      key !== EXTENSION_PROTECTION_KEY
+    ) {
       errors.push(`unknown top-level key "${key}" (fail-closed: unknown domains hard-fail)`);
     }
   }
+  // cinatra#1927: the generic protection domain is a known top-level sibling.
+  errors.push(...validateProtectionDeclaration(parsed));
   if (!("assistant" in parsed) || parsed.assistant === undefined) return errors;
   const block = parsed.assistant;
   if (!isObj(block)) {

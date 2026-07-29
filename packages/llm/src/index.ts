@@ -109,6 +109,11 @@ export {
   resolveProviderAdapter,
   resolveFirstAvailableAdapter,
   resolveDefaultAdapter,
+  // S6 exact binding (cinatra#2093): the throwing variant + the shared
+  // implicit-global order helper + the named unavailability error.
+  resolveBoundDefaultAdapter,
+  resolveImplicitGlobalProviderOrder,
+  BoundDefaultProviderUnavailableError,
   resolveDefaultImageAdapter,
   hasConfiguredLlmRuntime,
   resolveChatExternalMcpTools,
@@ -393,6 +398,7 @@ import {
   resolveProviderAdapter,
   resolveFirstAvailableAdapter,
   resolveDefaultAdapter,
+  resolveImplicitGlobalProviderOrder,
   resolveMcpToolsForDeclaredIds,
 } from "./registry";
 import { deliverInjectedSkillsInline } from "./tools/skills";
@@ -1701,38 +1707,31 @@ export async function orchestrateCancelBatch(
 export async function resolveConfiguredLlmRuntime(input?: {
   preferredProviders?: LlmProvider[];
   openaiConnection?: OpenAIConnectionConfig | null;
-  // Opt-in LAST-RESORT Anthropic eligibility for a per-purpose caller that can
-  // legitimately run on Anthropic (e.g. personal-skill generation). Only takes
-  // effect in the implicit-global branch below, and only AFTER the openai/gemini
-  // precedence — so multi-provider installs keep their existing winner and an
-  // Anthropic-only install resolves instead of returning null. Ignored when an
-  // explicit `preferredProviders` list is supplied (that list is authoritative).
-  allowAnthropicFallback?: boolean;
 }): Promise<ResolvedLlmRuntime | null> {
   let providers: LlmProvider[];
   if (input?.preferredProviders) {
-    // Explicit caller preference (incl. a per-purpose Anthropic selection) is
-    // honored verbatim — Anthropic IS a valid explicit per-purpose target.
+    // Explicit caller preference (the S6 purpose policy's `explicit-pin`) is
+    // honored verbatim and is AUTHORITATIVE.
     providers = input.preferredProviders;
   } else {
     // This is the SECOND implicit-global resolver (alongside registry.ts
-    // `resolveFirstAvailableAdapter`). The IMPLICIT global default must never
-    // resolve Anthropic. `readDefaultLlmProviderFromDatabase()` is already
-    // sanitized to openai/gemini at the read path; the fallthrough list must
-    // ALSO exclude Anthropic so an unavailable OpenAI cannot silently promote a
-    // connected Anthropic to the resolved global runtime.
-    const { readDefaultLlmProviderFromDatabase } = await import("@/lib/database");
-    const dbDefault = readDefaultLlmProviderFromDatabase() as LlmProvider;
-    const globalEligible: LlmProvider[] = ["openai", "gemini"];
-    providers = [dbDefault, ...globalEligible.filter((p) => p !== dbDefault)];
-    // Per-purpose opt-in ONLY: append Anthropic strictly LAST, after the
-    // openai/gemini precedence, so it is reached only when no OpenAI/Gemini
-    // runtime is available. dbDefault is sanitized to openai/gemini, so this
-    // never duplicates. The default (flag absent) leaves `providers` byte-for-
-    // byte identical, preserving the global Anthropic-exclusion invariant.
-    if (input?.allowAnthropicFallback && !providers.includes("anthropic")) {
-      providers = [...providers, "anthropic"];
-    }
+    // `resolveFirstAvailableAdapter`). S6 (cinatra#2093) makes BOTH derive
+    // their order from the one shared helper, so the un-fencing and the exact
+    // binding can never apply to one resolver and not the other:
+    //
+    //  - the eligible set comes from the ABI v2 `defaultCapable` flag, not a
+    //    hardcoded `["openai","gemini"]` — Anthropic is un-fenced here in the
+    //    same coherent change as the other three sites;
+    //  - resolution binds to the STORED provider EXACTLY unless the admin has
+    //    stored the explicit `"ordered"` failover policy.
+    //
+    // The `allowAnthropicFallback` opt-in this function used to carry is
+    // RETIRED (S6 deliverable): it existed only to let a per-purpose caller
+    // reach Anthropic past the global exclusion. With Anthropic
+    // default-capable, an Anthropic-only install resolves Anthropic because it
+    // IS the stored default — no special case, and no path by which a caller
+    // silently lands on a provider the operator did not choose.
+    providers = resolveImplicitGlobalProviderOrder().providers;
   }
 
   for (const provider of providers) {
