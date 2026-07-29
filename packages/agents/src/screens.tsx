@@ -11,7 +11,7 @@ import {
   resolveOrgRoleForSession,
 } from "@/lib/auth-session";
 import {
-  readOrgsWithTeamsForUser,
+  readOrgsWithTeamsForUserActiveOnly,
   readProjectsForUser,
 } from "@/lib/better-auth-db";
 import { canDo } from "@/lib/authz";
@@ -856,7 +856,7 @@ export async function AgentBuilderImportScreen() {
   const session = await requireAuthSession();
   const actorUserId = session.user?.id ?? null;
   const isAdmin = isPlatformAdmin(session);
-  const orgs = actorUserId ? await readOrgsWithTeamsForUser(actorUserId) : [];
+  const orgs = actorUserId ? await readOrgsWithTeamsForUserActiveOnly(actorUserId) : [];
   const activeOrgId = session.session?.activeOrganizationId ?? null;
   const projects =
     actorUserId && activeOrgId

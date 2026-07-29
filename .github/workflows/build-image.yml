@@ -545,6 +545,20 @@ jobs:
           CINATRA_DB_INTEGRATION_TESTS: '1'
         run: pnpm exec vitest run src/lib/__tests__/integration/skill-injection-drop-ledger.integration.test.ts
 
+      # cinatra#2092 (epic #2086 S5). The upload-on-install CRASH WINDOW is a
+      # claim about what survives in Postgres between COMMIT and the worker run,
+      # so a mock cannot prove it: this drives the REAL catalog-transaction tail
+      # (derived `allowAnthropicUpload` projection + the transactional
+      # reconcile-request row), then shows the request is still pending and
+      # claimable after a simulated crash, that a ROLLBACK leaves no phantom
+      # request, and that the uninstall's delayed GC row is due only at
+      # grace-window expiry. Own vitest invocation (own process) so its
+      # SUPABASE_DB_URL/pool lifecycle never touches the steps above.
+      - name: Upload-on-install outbox + consent projection DB test (cinatra#2092)
+        env:
+          CINATRA_DB_INTEGRATION_TESTS: '1'
+        run: pnpm exec vitest run src/lib/__tests__/integration/anthropic-skill-upload-outbox.integration.test.ts
+
       # cinatra#1988 — the shared dashboards session→actor builder must thread
       # `teamRoles` end-to-end. Real-store regression: seeds team memberships in
       # a lane-unique DB and drives buildDashboardActorFromSession → the real

@@ -19,7 +19,7 @@ import {
 import {
   betterAuthDb,
   betterAuthUsers,
-  readOrgsWithTeamsForUser,
+  readOrgsWithTeamsForUserActiveOnly,
   readProjectsForUser,
 } from "@/lib/better-auth-db";
 
@@ -171,7 +171,9 @@ export async function loadSkillPackagePermissionsContext(
   const coOwners = await resolveCoOwnerViews(packageId);
   const accessPolicy = await readSkillPackageAccessPolicy(packageId);
 
-  const orgs = actorUserId ? await readOrgsWithTeamsForUser(actorUserId) : [];
+  // UI picker (cinatra#1942 archive V1, Decision 4): archived orgs are
+  // excluded — never offer one as a grant scope.
+  const orgs = actorUserId ? await readOrgsWithTeamsForUserActiveOnly(actorUserId) : [];
   const activeOrgId = session.session?.activeOrganizationId ?? null;
   const projects =
     actorUserId && activeOrgId
@@ -435,11 +437,14 @@ async function loadPersonalSkillPermissionsContext(
   const coOwners = await resolveUserViews(skillCoOwnerRows.map((r) => r.userId));
   const accessPolicy = await readSkillAccessPolicy(skillId);
 
-  // Offered scopes = the manager's REAL memberships (readOrgsWithTeamsForUser /
-  // readProjectsForUser) — the same assembly the package loader uses. The
-  // server-side grantability re-validation on save is the enforcement
-  // (#1069 predicate, diff-based); this list is the affordance.
-  const orgs = actorUserId ? await readOrgsWithTeamsForUser(actorUserId) : [];
+  // Offered scopes = the manager's REAL memberships
+  // (readOrgsWithTeamsForUserActiveOnly / readProjectsForUser) — the same
+  // assembly the package loader uses. The server-side grantability
+  // re-validation on save is the enforcement (#1069 predicate, diff-based);
+  // this list is the affordance. UI picker (cinatra#1942 archive V1,
+  // Decision 4): archived orgs are excluded — never offer one as a grant
+  // scope.
+  const orgs = actorUserId ? await readOrgsWithTeamsForUserActiveOnly(actorUserId) : [];
   const activeOrgId = session.session?.activeOrganizationId ?? null;
   const projects =
     actorUserId && activeOrgId

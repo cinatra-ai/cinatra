@@ -919,7 +919,12 @@ function catalogSignature(input: { skillPackages: PersistedSkillPackage[]; skill
 }
 
 // options.catalogWriteGuard (cinatra#1364): locked-rebuild-only lease fence for the catalog-write transaction.
-export async function syncInstalledSkillsToDatabase(options?: { catalogWriteGuard?: { guardKey: string; guardToken: string } }) {
+// options.uploadReconcileReason (cinatra#2092, S5): the lifecycle reason label
+// carried onto the reconcile-request row this write commits in its OWN
+// transaction. A reason naming an UNINSTALL additionally schedules the delayed
+// GC row due at grace-window expiry, so remote copies are reclaimed with no
+// manual step.
+export async function syncInstalledSkillsToDatabase(options?: { catalogWriteGuard?: { guardKey: string; guardToken: string }; uploadReconcileReason?: string }) {
   if (!githubAutoSyncAttempted) {
     githubAutoSyncAttempted = true;
     await tryAutoSyncConfiguredRepository();
@@ -964,33 +969,41 @@ export async function syncInstalledSkillsToDatabase(options?: { catalogWriteGuar
   // LLM-generated text forward across syncs. Without this, every sync would
   // silently drop prefillText for every third-party/system skill.
   const existingPrefillTextBySkillId = new Map<string, string>();
-  // The per-skill Anthropic-upload flag is an admin-set
-  // DB-only value (NEVER from SKILL.md / disk). Disk-scanned skills never carry
-  // it, so without this carry-forward every resync would silently clobber the
-  // admin's choice back to "excluded" — exactly the failure mode prefillText
-  // already guards against. Only the literal `true` is carried (fail-closed).
-  const existingAllowAnthropicUploadBySkillId = new Set<string>();
+  // cinatra#2092 (S5): `allowAnthropicUpload` is no longer a PRESERVED admin
+  // boolean — it is a DERIVED projection of the `skill_upload_consent` ledger,
+  // recomputed over the whole catalog INSIDE the same transaction as this write
+  // (`buildSkillUploadProjectionQuery`). Whatever value rides along in this
+  // payload is overwritten there, so the ledger is the only acquisition path
+  // and a newly-installed skill can finally become eligible (the old
+  // carry-forward could only ever preserve a grant, never create one).
+  //
+  // The carry-forward below therefore exists for exactly ONE reason: keeping
+  // the catalog SIGNATURE stable. Disk-scanned rows never carry the key, so
+  // dropping a projected `true` would make every rebuild differ from the
+  // projected DB state and write (plus emit an outbox row) on every otherwise
+  // no-op rebuild. It can never GRANT anything — the projection re-derives the
+  // value at write time. Only the literal `true` is carried, matching
+  // `normalizeStoredSkill` (which maps a projected `false` to `undefined`, and
+  // `JSON.stringify` then drops it from both sides of the signature).
+  const projectedUploadTrueSkillIds = new Set<string>();
   for (const record of current.skills) {
     const normalized = normalizeStoredSkill(record);
     if (normalized?.prefillText) {
       existingPrefillTextBySkillId.set(normalized.id, normalized.prefillText);
     }
     if (normalized?.allowAnthropicUpload === true) {
-      existingAllowAnthropicUploadBySkillId.add(normalized.id);
+      projectedUploadTrueSkillIds.add(normalized.id);
     }
   }
 
   const mergedSkills = [
     ...scanned.skills.map((scannedSkill) => {
       const carriedPrefillText = existingPrefillTextBySkillId.get(scannedSkill.id);
-      const carriedAllowAnthropicUpload = existingAllowAnthropicUploadBySkillId.has(
-        scannedSkill.id,
-      );
       let merged = scannedSkill;
       if (carriedPrefillText) {
         merged = { ...merged, prefillText: carriedPrefillText };
       }
-      if (carriedAllowAnthropicUpload) {
+      if (projectedUploadTrueSkillIds.has(scannedSkill.id)) {
         merged = { ...merged, allowAnthropicUpload: true };
       }
       return merged;
@@ -1007,10 +1020,15 @@ export async function syncInstalledSkillsToDatabase(options?: { catalogWriteGuar
       skills: current.skills.map(normalizeStoredSkill).filter(isPersistedSkill),
     })
   ) {
+    const reconcileReason = options?.uploadReconcileReason ?? "catalog-sync";
     replaceSkillCatalogInDatabase({
       skillPackages: mergedPackages,
       skills: mergedSkills,
       writeGuard: options?.catalogWriteGuard,
+      uploadReconcile: {
+        reason: reconcileReason,
+        scheduleGcAtGraceExpiry: /uninstall|remove|delete/i.test(reconcileReason),
+      },
     });
   }
 

@@ -10,7 +10,7 @@ import {
 import {
   betterAuthDb,
   betterAuthUsers,
-  readOrgsWithTeamsForUser,
+  readOrgsWithTeamsForUserActiveOnly,
   readProjectsForUser,
 } from "@/lib/better-auth-db";
 import { readAgentTemplateBySlug, readAgentRunById, readAgentRunMessages, readAgentTemplates, ensureRunTitle, readRunCoOwners } from "./store";
@@ -669,12 +669,14 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
   // queries Better Auth tables; all directory data is server-resolved and
   // passed as props.
   //
-  // Multi-org: readOrgsWithTeamsForUser returns ALL orgs the actor belongs to
-  // with their teams nested.
+  // Multi-org: readOrgsWithTeamsForUserActiveOnly returns every active
+  // (non-archived) org the actor belongs to, with their teams nested — a UI
+  // scope picker, so archived orgs are excluded (cinatra#1942 archive V1,
+  // Decision 4).
   // -------------------------------------------------------------------------
 
   const orgs = actorUserId
-    ? await readOrgsWithTeamsForUser(actorUserId)
+    ? await readOrgsWithTeamsForUserActiveOnly(actorUserId)
     : [];
 
   const activeOrgIdForScopes =

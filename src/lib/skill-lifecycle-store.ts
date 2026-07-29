@@ -14,6 +14,8 @@ import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-conf
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { buildRevisionBundleQueries, bundleDigestForFiles, type BundleFileInput } from "@/lib/skill-bundle-store";
+import type { SkillPackageIdentity } from "@/lib/drizzle-store";
+import type { SkillLevel } from "@cinatra-ai/skills";
 
 /** An immutable revision to record atomically with a skills catalog write. The
  * `source` value is validated by the pure lifecycle policy before it arrives. */
@@ -502,4 +504,529 @@ export function applySkillLifecycleTransitionInDatabase(input: SkillLifecycleTra
   });
   const audit = results[1];
   return { changed: (audit?.rows?.length ?? 0) > 0 };
+}
+
+// ---------------------------------------------------------------------------
+// Upload-on-install (cinatra#2092, epic #2086 S5) — pure query builders for the
+// consent ledger, the derived `allowAnthropicUpload` projection, and the
+// transactional reconcile outbox. Same posture as the lifecycle builders above:
+// callers append these to the SAME transaction as a catalog write
+// (`replaceSkillCatalogInDatabase`) or run them in their own transactional
+// batch (the consent-ledger writers in database.ts) — a post-commit enqueue is
+// explicitly NOT a supported trigger shape (the lost-trigger window S5 closes).
+// ---------------------------------------------------------------------------
+
+/**
+ * GC stale-age GRACE window (single source of truth — the gc-service asserts
+ * `GRACE > lease TTL` at module load and re-exports this). Lives in this sync
+ * leaf so the uninstall path's delayed-GC outbox row (`not_before = now() +
+ * grace`) can be built inside the catalog transaction without dragging the GC
+ * service's module graph into `database.ts`.
+ */
+export const ANTHROPIC_SKILL_STALE_GRACE_MS = 30 * 60 * 1000;
+
+export type SkillUploadConsentScopeKind = "extension" | "core-system" | "personal";
+export type SkillUploadConsentSourceEvent =
+  | "extension-install"
+  | "setup-bulk"
+  | "admin-grant"
+  | "personal-grant";
+
+/**
+ * The DERIVED `allowAnthropicUpload` projection (cinatra#2092): recompute the
+ * per-skill flag for the WHOLE catalog from the unrevoked consent rows, inside
+ * the same transaction as the catalog write. The flag stops being a preserved
+ * boolean — whatever a caller's payload carried is overwritten here, so the
+ * ledger is the only acquisition path and the gate keeps its fail-closed
+ * `=== true` shape (EXISTS=false writes the literal `false`, which every
+ * normalizer/gate already treats as excluded).
+ *
+ * Scope join (mirrors the grant writers below):
+ *   - a PERSONAL skill is eligible ONLY through a `personal` consent row keyed
+ *     on its own skill id;
+ *   - a NON-personal skill is eligible ONLY through a package-scoped
+ *     (`extension` / `core-system`) row keyed on the version-free package
+ *     identity in its payload's `packageId`. Those two kinds differ in grant
+ *     PROVENANCE only, never in join topology, so a misclassified tier can
+ *     never orphan a grant.
+ *
+ * The level split is load-bearing, not cosmetic. Personal skills all share ONE
+ * synthetic package identity (`DEFAULT_CUSTOM_SKILL_PACKAGE_ID`), so a
+ * package-scoped grant that reached them would silently authorize every
+ * personal skill in the workspace from a single admin act — the exact
+ * over-share the per-skill personal grant exists to prevent. Symmetrically, a
+ * stale `personal` row can never authorize a non-personal skill whose id it
+ * happens to match.
+ */
+/**
+ * SQL mirror of `normalizeStoredSkill`'s personal-skill classification
+ * (`packages/skills/src/skills-store.ts`). `level` is OPTIONAL on a stored row:
+ * the normalizer treats a row with no (or an unrecognized) level as PERSONAL
+ * when it carries the durable `isCustomSkill` flag or the legacy `isPersonal`
+ * one. Keying the projection on `level = 'personal'` alone would therefore
+ * classify every LEGACY personal row as non-personal — and since all personal
+ * rows share one synthetic package identity, a single package grant would
+ * authorize all of them.
+ *
+ * `alias` is the `skills` alias in the enclosing statement. Kept as ONE
+ * exported fragment so the projection and the bulk-consent selector can never
+ * drift apart.
+ */
+export function skillIsPersonalSqlPredicate(alias: string): string {
+  const known = "('personal','team','organization','workspace','project','system','agent')";
+  // EVERY extraction is coalesced to a definite value. Without that, a missing
+  // JSON key yields NULL, three-valued logic turns the whole predicate NULL,
+  // and `NOT <predicate>` is NULL too — so a row would match NEITHER branch of
+  // the projection and could never become eligible. Coalescing keeps the
+  // predicate a strict boolean and the two branches exact complements.
+  const level = `coalesce(${alias}.payload::jsonb ->> 'level', '')`;
+  // JSONB comparison, not `->>`: the TS normalizer requires the PRIMITIVE
+  // boolean (`record.isCustomSkill === true`), and `->>` would render the JSON
+  // string "true" identically to the JSON boolean true — so a row carrying the
+  // string would be classified differently by SQL than by TypeScript.
+  const flag = (key: string) =>
+    `coalesce(${alias}.payload::jsonb -> '${key}', 'false'::jsonb) = 'true'::jsonb`;
+  return `(
+    ${level} = 'personal'
+    OR (
+      ${level} NOT IN ${known}
+      AND (${flag("isCustomSkill")} OR ${flag("isPersonal")})
+    )
+  )`;
+}
+
+export function buildSkillUploadProjectionQuery(schemaName: string): { text: string } {
+  const s = schemaName.replaceAll('"', '""');
+  const isPersonal = skillIsPersonalSqlPredicate("sk");
+  return {
+    text: `UPDATE "${s}"."skills" AS sk
+      SET payload = jsonb_set(sk.payload::jsonb, '{allowAnthropicUpload}', to_jsonb(EXISTS (
+        SELECT 1 FROM "${s}"."skill_upload_consent" c
+        WHERE c.revoked_at IS NULL
+          AND (
+            (
+              c.scope_kind = 'personal'
+              AND ${isPersonal}
+              AND c.scope_key = sk.id
+            )
+            OR (
+              c.scope_kind IN ('extension','core-system')
+              AND NOT ${isPersonal}
+              AND c.scope_key = (sk.payload::jsonb ->> 'packageId')
+            )
+          )
+      )))::text`,
+  };
+}
+
+/**
+ * Transaction-scoped advisory lock serializing every write that TOUCHES the
+ * consent ledger or recomputes its projection. Taken as the first
+ * consent/projection statement of the batch; released automatically at
+ * COMMIT/ROLLBACK.
+ *
+ * Why a lock and not just the unique indexes: under READ COMMITTED an
+ * `INSERT ... WHERE NOT EXISTS` and the projection's `EXISTS` sub-select are
+ * each evaluated against their own statement snapshot. A grant that started
+ * before a concurrent revoke committed can therefore observe the pre-revoke
+ * ledger, insert nothing (a row it thinks is still active), and then project
+ * `true` for a package that ends the race with NO unrevoked consent — a
+ * fail-OPEN outcome. Serializing the ledger writers removes the window
+ * entirely; the partial unique indexes remain the durable backstop.
+ */
+export function buildSkillUploadConsentLockQuery(_schemaName: string): { text: string } {
+  // A fixed 64-bit key derived from a stable label. `pg_advisory_xact_lock`
+  // (not the session variant) so a crashed worker can never strand it.
+  return { text: `SELECT pg_advisory_xact_lock(hashtext('cinatra:skill-upload-consent'))` };
+}
+
+/**
+ * Append ONE `pending` reconcile-request row to the transactional outbox.
+ *
+ * UNCONDITIONAL by design. An earlier draft coalesced onto an existing
+ * unclaimed `pending` row, reasoning that whichever drain claimed it would read
+ * a catalog at least as fresh as this transaction. That is NOT sound: seeing an
+ * unclaimed row in this transaction's snapshot says nothing about WHEN its
+ * worker reads the catalog. A worker can claim that row, read the catalog, and
+ * complete it all BEFORE this transaction commits — leaving the newly committed
+ * catalog with no pending request, which is exactly the lost trigger the outbox
+ * exists to prevent. Correctness beats row count here, and duplicates are
+ * cheap: the drain claims every due row in ONE statement and the
+ * namespace + catalog-digest idempotency key collapses them into a single
+ * engine run.
+ */
+export function buildInsertReconcileOutboxQuery(
+  schemaName: string,
+  reason: string,
+): { text: string; values: unknown[] } {
+  const s = schemaName.replaceAll('"', '""');
+  return {
+    text: `INSERT INTO "${s}"."anthropic_skill_reconcile_outbox" (kind, reason)
+      VALUES ('reconcile', $1)`,
+    values: [reason],
+  };
+}
+
+/**
+ * Schedule the uninstall path's DELAYED GC row: due at grace-window expiry, so
+ * remote copies the reconcile marked stale are reclaimed without manual
+ * intervention even if no later admin-save/periodic run happens to land after
+ * the window. Never coalesced — each uninstall anchors its own reclamation.
+ */
+export function buildInsertUploadGcOutboxQuery(
+  schemaName: string,
+  reason: string,
+  graceMs: number = ANTHROPIC_SKILL_STALE_GRACE_MS,
+): { text: string; values: unknown[] } {
+  const s = schemaName.replaceAll('"', '""');
+  return {
+    text: `INSERT INTO "${s}"."anthropic_skill_reconcile_outbox" (kind, reason, not_before)
+      VALUES ('gc', $1, now() + ($2::bigint * interval '1 millisecond'))`,
+    values: [reason, graceMs],
+  };
+}
+
+/**
+ * INSERT a consent grant iff no active (unrevoked) row exists for the scope
+ * TARGET. The existence check collapses `extension` / `core-system` exactly
+ * like the unique index does — those two address one package identity, so an
+ * `extension` grant must not slip past an active `core-system` one (or the
+ * package would carry two active consents and a single revoke would not
+ * disable it). Race-safety comes from the caller's advisory lock
+ * (`buildSkillUploadConsentLockQuery`); the partial unique index is the durable
+ * backstop — a duplicate that somehow raced through loses with a constraint
+ * error that rolls the whole batch back.
+ */
+export function buildGrantSkillUploadConsentQuery(
+  schemaName: string,
+  input: {
+    scopeKind: SkillUploadConsentScopeKind;
+    scopeKey: string;
+    grantedBy: string | null;
+    sourceEvent: SkillUploadConsentSourceEvent;
+  },
+): { text: string; values: unknown[] } {
+  const s = schemaName.replaceAll('"', '""');
+  return {
+    text: `INSERT INTO "${s}"."skill_upload_consent" (scope_kind, scope_key, granted_by, source_event)
+      SELECT $1, $2, $3, $4
+      WHERE NOT EXISTS (
+        SELECT 1 FROM "${s}"."skill_upload_consent"
+        WHERE scope_key = $2 AND revoked_at IS NULL
+          AND (scope_kind = 'personal') = ($1 = 'personal')
+      )`,
+    values: [input.scopeKind, input.scopeKey, input.grantedBy, input.sourceEvent],
+  };
+}
+
+/**
+ * Stamp `revoked_at`/`revoked_by` on the active consent row (ledger-preserving
+ * revocation — the grant row survives as the audit record). Matches the SAME
+ * collapsed target the grant checks, so revoking a package identity clears
+ * whichever provenance tier granted it in ONE statement.
+ */
+export function buildRevokeSkillUploadConsentQuery(
+  schemaName: string,
+  input: { scopeKind: SkillUploadConsentScopeKind; scopeKey: string; revokedBy: string | null },
+): { text: string; values: unknown[] } {
+  const s = schemaName.replaceAll('"', '""');
+  return {
+    text: `UPDATE "${s}"."skill_upload_consent"
+      SET revoked_at = now(), revoked_by = $3
+      WHERE scope_key = $2 AND revoked_at IS NULL
+        AND (scope_kind = 'personal') = ($1 = 'personal')`,
+    values: [input.scopeKind, input.scopeKey, input.revokedBy],
+  };
+}
+
+/**
+ * Setup-with-Anthropic BULK consent (source `setup-bulk`): one grant per
+ * DISTINCT package identity currently carried by a NON-personal catalog skill —
+ * "already-installed injectable packages + the core system-tier skills" at the
+ * package granularity the ledger keys on. `level='system'` rows record the
+ * `core-system` tier, everything else `extension` (provenance only — the
+ * projection joins both kinds identically). Personal skills are deliberately
+ * excluded: they keep per-skill grants.
+ */
+export function buildBulkSkillUploadConsentQuery(
+  schemaName: string,
+  grantedBy: string | null,
+): { text: string; values: unknown[] } {
+  const s = schemaName.replaceAll('"', '""');
+  return {
+    // DISTINCT ON the package identity, not plain DISTINCT over the projected
+    // tuple: a package holding BOTH a system-level and a non-system skill would
+    // otherwise project two rows ('core-system' and 'extension') for the same
+    // identity. The ORDER BY makes the choice deterministic and explicit —
+    // `core-system` wins whenever the package has any system-tier skill (a
+    // boolean sort key, not a lexical accident of the two label strings).
+    text: `INSERT INTO "${s}"."skill_upload_consent" (scope_kind, scope_key, granted_by, source_event)
+      SELECT DISTINCT ON (pkg) tier, pkg, $1, 'setup-bulk'
+      FROM (
+        SELECT
+          (sk.payload::jsonb ->> 'packageId') AS pkg,
+          CASE WHEN (sk.payload::jsonb ->> 'level') = 'system' THEN 'core-system' ELSE 'extension' END AS tier
+        FROM "${s}"."skills" sk
+        WHERE NOT ${skillIsPersonalSqlPredicate("sk")}
+          AND coalesce(sk.payload::jsonb ->> 'packageId', '') <> ''
+          AND NOT EXISTS (
+            SELECT 1 FROM "${s}"."skill_upload_consent" c
+            WHERE c.scope_key = (sk.payload::jsonb ->> 'packageId')
+              AND c.scope_kind <> 'personal'
+              AND c.revoked_at IS NULL
+          )
+      ) candidates
+      ORDER BY pkg, (tier = 'core-system') DESC`,
+    values: [grantedBy],
+  };
+}
+
+/** SELECT the full consent ledger (active + revoked), newest grant first. */
+export function buildSelectSkillUploadConsentQuery(schemaName: string): { text: string } {
+  const s = schemaName.replaceAll('"', '""');
+  return {
+    text: `SELECT id, scope_kind, scope_key, granted_by, granted_at, source_event, revoked_at, revoked_by
+      FROM "${s}"."skill_upload_consent" ORDER BY granted_at DESC`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Skill-package identity derivation — extracted VERBATIM from database.ts
+// (the file-size ratchet; re-exported there for the stable `@/lib/database`
+// surface, same pattern as the lifecycle primitives above).
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive a SkillPackageIdentity tuple from a PersistedSkillPackage-shaped row.
+ * Mirrors the bridge `deriveContextFromLegacy` in
+ * `packages/skills/src/skills-store.ts` but returns the identity columns
+ * directly, matching the typed-column SQL contract instead of the
+ * SkillWriteContext TypeScript interface.
+ *
+ * Used by `replaceSkillCatalogInDatabase` so every UPSERT to skill_packages
+ * populates the typed identity columns alongside the JSONB payload. Once
+ * every write goes through this path, the identity columns can be enforced as
+ * NOT NULL.
+ *
+ * Mapping rules (must stay in sync with deriveContextFromLegacy):
+ *   - level="personal"  + installedByUserId → (personal, userId, owner, user-authored)
+ *   - level="team"                          → (workspace, null, owner, user-authored)  [TEMP — full owner routing pending]
+ *   - level="organization"                  → (workspace, null, owner, user-authored)  [TEMP]
+ *   - level="workspace" / "system"          → (workspace, null, owner, installed)
+ *   - level="project"                       → (workspace, null, owner, user-authored)  [TEMP]
+ *   - level="agent"                         → (workspace, null, owner, user-authored)  [post-publish update promotes to binding=agent]
+ *   - level=undefined / unrecognized        → (workspace, null, owner, user-authored)
+ *
+ * The catalog row's `slug` field becomes `skill_slug`. The `packageId`
+ * pattern `github:<owner>/<repo>` or `zip:<slug>` yields vendor/package
+ * when present; otherwise both are null.
+ */
+const KNOWN_SKILL_LEVELS = new Set<SkillLevel>([
+  "personal",
+  "team",
+  "organization",
+  "workspace",
+  "project",
+  "system",
+  "agent",
+]);
+function isSkillLevel(value: unknown): value is SkillLevel {
+  return typeof value === "string" && KNOWN_SKILL_LEVELS.has(value as SkillLevel);
+}
+
+// Exported for unit testing. Pure function.
+export function deriveSkillPackageIdentity(
+  row: { id: string } & Record<string, unknown>,
+): SkillPackageIdentity {
+  // Type `level` strictly. Anything outside the SkillLevel union (including
+  // the legacy `"custom"` sentinel) falls into the explicit `undefined` arm of
+  // the switch; no silent default for unknown levels.
+  const level: SkillLevel | undefined = isSkillLevel(row.level) ? row.level : undefined;
+  const slug = typeof row.slug === "string" ? row.slug : row.id;
+  const packageId = typeof row.packageId === "string" ? row.packageId : null;
+  const installedByUserId =
+    typeof row.installedByUserId === "string" ? row.installedByUserId : null;
+
+  // Derive vendor/package from packageId pattern. The four shapes we know:
+  //   github:<owner>/<repo>   — GitHub-installed package
+  //   zip:<slug>              — uploaded ZIP package
+  //   installed:<slug>        — scanner-emitted fallback for plugin-less
+  //                             discovered packages (packages/skills/src/skills-store.ts)
+  //   custom:<slug>           — command-line emitted agent-skill package (packages/skills/src/cli.mjs)
+  //
+  // If the source_kind ends up "installed" or "bundled", the optional
+  // `skill_pkg_vendor_required_chk` CHECK requires non-null (vendor, package).
+  // Falling through to (null, null) would abort the transactional UPSERT batch
+  // from `replaceSkillCatalogInDatabase`. Provide a synthetic vendor for the
+  // two non-github/zip prefixes so the pair is always non-null when the regex
+  // matches.
+  let vendor: string | null = null;
+  let pkg: string | null = null;
+  if (packageId) {
+    const ghMatch = /^github:([^/]+)\/(.+)$/.exec(packageId);
+    const zipMatch = /^zip:(.+)$/.exec(packageId);
+    const installedMatch = /^installed:(.+)$/.exec(packageId);
+    const customMatch = /^custom:(.+)$/.exec(packageId);
+    if (ghMatch) {
+      vendor = ghMatch[1];
+      pkg = ghMatch[2];
+    } else if (zipMatch) {
+      vendor = "uploaded";
+      pkg = zipMatch[1];
+    } else if (installedMatch) {
+      vendor = "installed";
+      pkg = installedMatch[1];
+    } else if (customMatch) {
+      vendor = "custom";
+      pkg = customMatch[1];
+    }
+  }
+  // Defensive guard: `skill_pkg_vendor_required_chk` requires non-null (vendor,
+  // package) whenever source_kind is NOT 'user-authored'. If the packageId
+  // pattern pipeline above produced nulls (unknown prefix, missing packageId),
+  // fall back to a synthetic pair anchored on the slug so the INSERT never
+  // fails the constraint regardless of which level branch below sets
+  // source_kind to 'installed' or 'bundled'. Mirrors the per-prefix
+  // synthetic-vendor pattern (vendor="uploaded"/"installed"/"custom") for
+  // unknown shapes.
+  if ((vendor === null || pkg === null) && slug) {
+    vendor = vendor ?? "unknown";
+    pkg = pkg ?? slug;
+  }
+
+  switch (level) {
+    case "personal":
+      return {
+        owner_scope: "personal",
+        owner_id: installedByUserId ?? "local-user",
+        binding_scope: "owner",
+        source_kind: "user-authored",
+        vendor,
+        package: pkg,
+        agent_template_id: null,
+        skill_slug: slug,
+      };
+    case "system":
+    case "workspace":
+      return {
+        owner_scope: "workspace",
+        owner_id: null,
+        binding_scope: "owner",
+        source_kind: "installed",
+        vendor,
+        package: pkg,
+        agent_template_id: null,
+        skill_slug: slug,
+      };
+    case "team":
+    case "organization":
+    case "project":
+      // [TEMP — full owner routing pending] Identical to the
+      // deriveContextFromLegacy fallback for these levels. The catalog row
+      // currently carries no team_id / organization_id, so owner_id stays
+      // null and we collapse to (workspace, owner). Until replaceSkill
+      // CatalogInDatabase threads `targetScope` through, these levels are
+      // indistinguishable from system/workspace in the identity columns.
+      return {
+        owner_scope: "workspace",
+        owner_id: null,
+        binding_scope: "owner",
+        source_kind: "user-authored",
+        vendor,
+        package: pkg,
+        agent_template_id: null,
+        skill_slug: slug,
+      };
+    case "agent":
+      // agent-level packages: workspace-scoped, owner-bound at INSERT;
+      // post-publish update promotes binding_scope to "agent" once the
+      // agent_template_id is known.
+      return {
+        owner_scope: "workspace",
+        owner_id: null,
+        binding_scope: "owner",
+        source_kind: "user-authored",
+        vendor,
+        package: pkg,
+        agent_template_id: null,
+        skill_slug: slug,
+      };
+    case undefined:
+      // Unknown / missing level — safest workspace-scoped default. Matches
+      // the legacy "custom" fallback in deriveContextFromLegacy.
+      return {
+        owner_scope: "workspace",
+        owner_id: null,
+        binding_scope: "owner",
+        source_kind: "user-authored",
+        vendor,
+        package: pkg,
+        agent_template_id: null,
+        skill_slug: slug,
+      };
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// Upload-on-install reconcile DRAIN KICK seam (cinatra#2092, epic #2086 S5).
+//
+// The reconcile-request row is committed INSIDE the catalog/consent transaction
+// (the builders above) — that row is the durable trigger and the only source of
+// truth. This slot is the best-effort PROMPTNESS seam on top of it: a one-shot
+// queue kick so a fresh install reconciles in seconds instead of waiting up to
+// a sweep interval.
+//
+// It lives in THIS sync leaf, next to the builders whose transactions fire it,
+// rather than in its own module: `@/lib/database` (which fires it) already
+// imports this file, and every locked dev-perf route reaches `database.ts`, so
+// a separate module would add a module to five route graphs for one globalThis
+// slot (the route-graph ratchet). The BOOT phase binds the real enqueue —
+// `@/lib/background-jobs` must never be reachable from `database.ts`.
+//
+// An UNBOUND slot (early boot, unit tests, a bundle whose boot phase has not
+// run) or a failed enqueue is not an error: the committed outbox row is
+// recovered by the periodic safety-net sweep.
+// ---------------------------------------------------------------------------
+
+export type AnthropicSkillReconcileKick = () => Promise<void>;
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __cinatraAnthropicSkillReconcileKick: AnthropicSkillReconcileKick | undefined;
+}
+
+/** Boot-time binding (system-loops phase). Idempotent — last write wins. */
+export function registerAnthropicSkillReconcileKick(
+  kick: AnthropicSkillReconcileKick,
+): void {
+  globalThis.__cinatraAnthropicSkillReconcileKick = kick;
+}
+
+/** Test/boot teardown helper — unbinds the slot. */
+export function clearAnthropicSkillReconcileKick(): void {
+  globalThis.__cinatraAnthropicSkillReconcileKick = undefined;
+}
+
+/**
+ * Fire the drain kick if one is bound. NEVER throws and never blocks: a
+ * rejected enqueue is logged at warn level and swallowed, because the durable
+ * outbox row already committed and the sweep is the safety net.
+ */
+export function kickAnthropicSkillReconcileDrain(): void {
+  const kick = globalThis.__cinatraAnthropicSkillReconcileKick;
+  if (!kick) return;
+  try {
+    void kick().catch((err: unknown) => {
+      console.warn(
+        "[anthropic-skill-reconcile] drain kick enqueue failed (the periodic sweep backstops):",
+        err instanceof Error ? err.message : err,
+      );
+    });
+  } catch (err) {
+    console.warn(
+      "[anthropic-skill-reconcile] drain kick threw synchronously (the periodic sweep backstops):",
+      err instanceof Error ? err.message : err,
+    );
+  }
 }

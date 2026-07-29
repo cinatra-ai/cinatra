@@ -438,6 +438,37 @@ function readGlobalEnabled(): boolean {
  * the global opt-in is OFF.
  */
 export async function syncCatalogSkillsToAnthropic(): Promise<AppSyncResult> {
+  return runCatalogSyncLocked(false);
+}
+
+/**
+ * STRICT whole-catalog reconcile (cinatra#2092, S5) — the S0 strict
+ * orchestrator surfaced at the app layer for the durable reconcile worker.
+ * Same capture → candidates → engine pipeline as the lenient entry, but the
+ * engine runs `syncStrict`, which THROWS (`AnthropicSkillSyncFailedError` /
+ * `AnthropicSkillExpectedSetError`) instead of returning `ok:false` or letting
+ * an all-governance-skipped run masquerade as success — so the outbox drain
+ * retries with backoff rather than swallowing a failed reconcile. The
+ * expected set is exactly the CONSENTED candidates (projected
+ * `allowAnthropicUpload === true`): after a successful run each must hold a
+ * non-stale remote row byte-bound to the offered revision. App-layer config
+ * failures (undeterminable namespace) also THROW here — a durable caller must
+ * never treat them as a clean no-op. Inert (non-throwing) when the global
+ * opt-in is OFF or no API key is configured — the caller records that no-op.
+ */
+export async function syncCatalogSkillsToAnthropicStrict(): Promise<AppSyncResult> {
+  const result = await runCatalogSyncLocked(true);
+  if (!result.ok) {
+    throw new Error(
+      result.namespaceError ??
+        result.diskReadError ??
+        "Anthropic skill sync reported a configuration error (strict mode).",
+    );
+  }
+  return result;
+}
+
+async function runCatalogSyncLocked(strict: boolean): Promise<AppSyncResult> {
   // Global gate first — OFF ⇒ fully inert, zero work.
   let globalEnabled = false;
   try {
@@ -515,7 +546,15 @@ export async function syncCatalogSkillsToAnthropic(): Promise<AppSyncResult> {
       );
     }
 
-    const result = await engine.sync(candidates, readGlobalEnabled);
+    // Strict (cinatra#2092): the S0 strict engine mode — throws on any !ok and
+    // verifies every CONSENTED candidate ended byte-bound + non-stale remote.
+    const result = strict
+      ? await engine.syncStrict(candidates, readGlobalEnabled, {
+          expectedInjectableIds: candidates
+            .filter((c) => c.allowAnthropicUpload === true)
+            .map((c) => c.catalogSkillId),
+        })
+      : await engine.sync(candidates, readGlobalEnabled);
     const hasDiagnostics =
       capture.authorityOwnedDivergences.length > 0 ||
       capture.danglingReferences.length > 0 ||

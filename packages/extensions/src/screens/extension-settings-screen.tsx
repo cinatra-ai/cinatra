@@ -14,7 +14,7 @@ import "server-only";
 import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
 import { requireAdminSession } from "@/lib/auth-session";
-import { readOrgsWithTeamsForUser, readProjectsForUser } from "@/lib/better-auth-db";
+import { readOrgsWithTeamsForUserActiveOnly, readProjectsForUser } from "@/lib/better-auth-db";
 import type { AvailableScopes } from "@/components/access-scope";
 import { readMarketplaceVendorStatus } from "@/app/configuration/environment/marketplace-publish-actions";
 import type { AgentAuthPolicyVisibility } from "@cinatra-ai/agents/auth-policy";
@@ -179,7 +179,7 @@ export async function ExtensionSettingsScreen({
     const resourceId = canonical.id;
     const userId = session.user.id;
     const activeOrgId = session.session?.activeOrganizationId ?? null;
-    const orgs = await readOrgsWithTeamsForUser(userId);
+    const orgs = await readOrgsWithTeamsForUserActiveOnly(userId);
     const projects = activeOrgId ? await readProjectsForUser(userId, activeOrgId) : [];
     const scopes: AvailableScopes = {
       orgs: orgs.map((org) => ({
