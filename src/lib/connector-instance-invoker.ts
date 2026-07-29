@@ -13,6 +13,13 @@ import "server-only";
 // `connectorKey` is HOST-INTERNAL — supplied ONLY by the host-bound guard (MCP
 // path) or the host-minted job binding (job path), NEVER a connector/model/
 // payload field on any path (M6 / R2-B1 / R3-B1).
+//
+// The hook step carries TWO sibling slots, not one: step 3's destructive-
+// confirmation hook (cinatra#2020 S5) and step 3b's content-review hook
+// (cinatra#2022 S7 PR-σ, added by this PR — slot only, no consumer bound
+// here). Both are optional, connector-bound-or-absent, and additive to this
+// same order — see each slot's own deps-literal doc comment for its trigger
+// + ordering contract.
 
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type {
@@ -228,6 +235,107 @@ export type ConnectorInstanceInvokerDeps = {
       | { action: "park"; pendingCallId: string; expiresAt: string; message: string }
       | { action: "continue"; reason?: "surface_default_off" | "org_disabled" }
       | void
+    >;
+  };
+  /** Step 3b — the S7 content-review hook slot (cinatra#2022 design amendment
+   * D4-REVISED, PR-σ): a SIBLING addition to the destructiveHook slot above —
+   * same seam shape, NOT a restructure of the authz→policy→classify→hook→
+   * execute→audit order. This PR ships the SLOT + the invoker's own trigger
+   * only; no consumer is registered here (PR-τ, wordpress-mcp-connector,
+   * registers `evaluateStagedContentWrite` against it, replacing that
+   * composition's current inline per-handler wiring in `wordpress_post_update`).
+   *
+   * TRIGGER (deliberately connector-agnostic, unlike destructiveHook's
+   * annotation+floor pair): fires for any NON-READ (mutating) resolved tool —
+   * `derivedClass !== "read"` — once a connector BINDS a hook here AND
+   * `enabled()` is true. There is, today, no site-advertised "requires content
+   * review" annotation the way `destructiveHint` is a real MCP hint a site can
+   * emit; inventing one would need a THIRD repo (the site's own MCP adapter)
+   * to start emitting it before any connector could use this seam at all. So
+   * the invoker's own trigger stays a cheap, generic classification gate, and
+   * — exactly where step 3's surface-default / org-policy nuance lives inside
+   * the BOUND destructive hook, never the invoker — the bound hook's own
+   * `fire()` decides, per resolved tool name, whether THIS call is one of ITS
+   * content-review-classified writes, returning a `continue` verdict
+   * immediately for everything else. A connector that never binds this slot
+   * (every connector besides the one(s) that register a hook here) pays
+   * nothing: `deps.contentReviewHook` stays `undefined` and step 3b is a
+   * no-op, identical to today.
+   *
+   * ORDERING vs. destructiveHook (the other genuinely-open contract question):
+   * this hook fires STRICTLY AFTER step 3 — a `park` verdict there throws and
+   * step 3b is never reached for that call. Rationale: destructive-
+   * confirmation is the universal, cross-connector, higher-severity HITL
+   * safety net (irreversible data loss); it must clear first and
+   * unconditionally, never be reordered or shadowed by a narrower,
+   * connector-registered business gate. Content-review only ever evaluates a
+   * call that already survived (or never needed) that leg.
+   *
+   * VERDICT SHAPE: `hold` and `reject` both BLOCK (typed, fail-closed
+   * `InvokerError`s — `content_review_hold` / `content_review_rejected`) but
+   * carry distinct model-facing messages/retry semantics, mirroring the
+   * connector's own hold-vs-reject distinction (cinatra#2043
+   * `evaluateStagedContentWrite`'s hold/reject/pass/apply gate) without the
+   * invoker needing to know that vocabulary: `pass`/`apply` both collapse
+   * onto `continue` at this generic seam (the write executes); `hold`/
+   * `reject` collapse onto their respective typed errors. The hook impl owns
+   * ALL of that nuance + its own persistence/audits (mirrors destructiveHook's
+   * `fire` docs above); the invoker owns control flow only and takes no store
+   * import. Absent hook / `enabled()` false / the hook's own tool-name check
+   * saying "not mine" all execute exactly like today.
+   *
+   * NO `| void` verdict (a deliberate divergence from destructiveHook's
+   * `Promise<void> | void`, which exists there only for S2-era back-compat
+   * mocks this brand-new slot has none of): `fire` MUST resolve an explicit
+   * `{ action: "continue" }` to proceed. A review gate should not read an
+   * accidentally-missing return as permission — `| void` is a weaker-than-
+   * necessary contract for a brand-new slot with no legacy callers to
+   * support, so this one requires the explicit verdict.
+   *
+   * Any infrastructure failure INSIDE `fire` must throw a typed
+   * `content_review_unavailable` — fail-closed, never an unreviewed execution
+   * (same doctrine as `confirmation_unavailable` above). An unrecognized
+   * `action` value at runtime (a misbehaving hook impl outside the TS
+   * contract) executes — the SAME posture step 3's destructive hook already
+   * has for an unrecognized verdict shape (only `action === "park"` is
+   * checked there too); TypeScript's contract, not a runtime tag switch, is
+   * the real guard on both hooks. */
+  contentReviewHook?: {
+    /** Cheap sync kill-switch (mirrors destructiveHook.enabled). */
+    enabled: () => boolean;
+    fire: (input: {
+      connectorKey: string;
+      instanceId: string;
+      serverId: string;
+      toolName: string;
+      actor: InvokerTrustedActor;
+      /** FULL call args — a connector's review composition stages/captures
+       * from these, mirroring the destructive hook's park-time args use. */
+      args: Record<string, unknown>;
+      /** The annotation-derived class (§3.4) — advisory input only; the hook
+       * decides per-toolName whether it cares, this is NOT itself the trigger
+       * for WHICH ability needs review, only recorded for audit/forensics. */
+      derivedClass: "read" | "write" | "destructive";
+      /** Host-derived ConfirmationSurface-shaped source, riding the input's
+       * existing `sourceType` (guard-set, never connector/model-supplied). */
+      sourceType?: string;
+      /** The resolved EXECUTION-target endpoint URL string (NEVER the auth
+       * header) — mirrors destructiveHook's park-time target material. */
+      endpointUrl: string;
+      /** Tool-shape material, mirrors destructiveHook's fire input. */
+      inputSchema?: unknown;
+      rawAnnotations?: unknown;
+      /** Advisory op intent — audit/forensics only, never a decision. */
+      intent?: string;
+      /** Audit correlation. */
+      primitiveName?: string;
+      /** Forensics only, NOT a consent boundary. */
+      catalogRevision?: string;
+      causation?: string;
+    }) => Promise<
+      | { action: "hold"; holdId: string; message: string }
+      | { action: "reject"; holdId?: string; message: string }
+      | { action: "continue"; reason?: string }
     >;
   };
   /** Warn-once sink for the absent-policy compatibility fallback (§10-A3). */
@@ -642,6 +750,75 @@ export async function invokeConnectorInstanceTool(
     });
     if (verdict && verdict.action === "park") {
       throw new InvokerError("pending_confirmation", verdict.message);
+    }
+  }
+
+  // Step 3b — content-review trigger (cinatra#2022 S7 PR-σ, design amendment
+  // D4-REVISED): a SIBLING addition to step 3 above — see the
+  // `contentReviewHook` deps-literal doc comment for the full contract
+  // (trigger rationale, ordering rationale, verdict-shape mapping). Runs
+  // STRICTLY AFTER step 3 — a `park` verdict there throws and this line is
+  // never reached for that call. Deliberately connector-agnostic trigger: any
+  // NON-READ resolved tool, once a connector binds + enables a hook here; the
+  // bound hook's own `fire()` decides per-toolName whether THIS call is one
+  // of its content-review-classified writes. A `hold`/`reject` verdict throws
+  // a typed, fail-closed InvokerError; an explicit `continue` verdict (or no
+  // hook bound / disabled / "not mine") executes exactly like today.
+  if (derivedClass !== "read" && deps.contentReviewHook?.enabled()) {
+    // Same per-server endpoint re-resolution step 3 already does above for its
+    // own park-time fingerprint (URL string only; the auth header NEVER
+    // reaches the hook) — recomputed here rather than hoisted, so this block
+    // stays purely additive and step 3's existing code is untouched.
+    let contentReviewEndpointUrl = resolved.endpoint;
+    if (serverId !== CATALOG_DEFAULT_SERVER_ID && deps.listEnrolledServers) {
+      const perServer = await deps.resolveInstanceEndpoint(
+        input.connectorKey,
+        effectiveInstanceId,
+        serverId,
+      );
+      if (!perServer) {
+        throw new InvokerError(
+          "network_error",
+          "connector instance endpoint could not be resolved",
+        );
+      }
+      contentReviewEndpointUrl = perServer.endpoint;
+    }
+    const reviewVerdict = await deps.contentReviewHook.fire({
+      connectorKey: input.connectorKey,
+      instanceId: effectiveInstanceId,
+      serverId,
+      toolName: name,
+      actor: input.actor,
+      args: input.args,
+      derivedClass,
+      ...(input.sourceType ? { sourceType: input.sourceType } : {}),
+      endpointUrl: contentReviewEndpointUrl,
+      inputSchema: entry.inputSchema,
+      rawAnnotations: entry.rawAnnotations,
+      ...(input.intent ? { intent: input.intent } : {}),
+      primitiveName,
+      catalogRevision: snapshot.catalogRevision,
+      ...(input.causation ? { causation: input.causation } : {}),
+    });
+    // Defensive `if (reviewVerdict)`: the TYPE no longer admits `void` (a
+    // misbehaving hook impl outside the TS contract could still resolve
+    // `undefined` at runtime) — an unrecognized/absent shape here executes,
+    // the same posture step 3's destructive hook already has (see the
+    // deps-literal doc comment above).
+    if (reviewVerdict) {
+      if (reviewVerdict.action === "hold") {
+        throw new InvokerError("content_review_hold", reviewVerdict.message, {
+          reviewHoldId: reviewVerdict.holdId,
+        });
+      }
+      if (reviewVerdict.action === "reject") {
+        throw new InvokerError(
+          "content_review_rejected",
+          reviewVerdict.message,
+          reviewVerdict.holdId ? { reviewHoldId: reviewVerdict.holdId } : undefined,
+        );
+      }
     }
   }
 
