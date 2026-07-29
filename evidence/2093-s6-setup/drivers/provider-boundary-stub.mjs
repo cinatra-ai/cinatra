@@ -29,7 +29,11 @@ if (!DIR) {
   console.warn("[boundary-stub] LANE_STUB_DIR unset — stub NOT installed");
 } else {
   mkdirSync(DIR, { recursive: true });
-  const LEDGER = path.join(DIR, "egress.jsonl");
+  // The ledger FILE is selectable so that re-driving a SUBSET of the flows
+  // later (drivers/refresh-f1-f2-walk.mjs) records into its own file instead of
+  // appending onto — and thereby muddying — the first walk's record, which is
+  // what makes the un-re-driven flows' egress claims a measurement.
+  const LEDGER = path.join(DIR, process.env.LANE_LEDGER ?? "egress.jsonl");
   const CONTROL = path.join(DIR, "control.json");
 
   const PROVIDER_HOSTS = new Set(["api.openai.com", "api.anthropic.com"]);
@@ -194,5 +198,5 @@ if (!DIR) {
     return json({});
   };
 
-  console.log(`[boundary-stub] installed — ledger ${path.join(DIR, "egress.jsonl")}`);
+  console.log(`[boundary-stub] installed — ledger ${LEDGER}`);
 }
