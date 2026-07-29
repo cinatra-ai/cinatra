@@ -641,11 +641,17 @@ export function systemLoopPhases(): BootPhase[] {
         registerLeaseExpiryFinalizerRunner({
           sweep: () => runLeaseExpiryFinalizerSweep(),
         });
-        const {
-          enqueueBackgroundJob,
-          BACKGROUND_JOB_NAMES,
-          LEASE_EXPIRY_FINALIZE_LOOP_JOB_ID,
-        } = await import("@/lib/background-jobs");
+        const { enqueueBackgroundJob, BACKGROUND_JOB_NAMES } = await import(
+          "@/lib/background-jobs"
+        );
+        // Imported directly from the leaf constants module (not the
+        // `background-jobs` barrel re-export) — the barrel sits at its
+        // file-size ceiling and this leaf is already reachable from this
+        // same boot phase via `background-jobs-registry`'s static import
+        // above, so this adds no new route-graph edge.
+        const { LEASE_EXPIRY_FINALIZE_LOOP_JOB_ID } = await import(
+          "@/lib/background-jobs-names"
+        );
         await enqueueBackgroundJob(
           BACKGROUND_JOB_NAMES.LEASE_EXPIRY_FINALIZE,
           {},
