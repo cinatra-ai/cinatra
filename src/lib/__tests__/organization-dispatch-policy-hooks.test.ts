@@ -60,9 +60,39 @@ function makeDb(): Record<string, unknown[]> {
   };
 }
 
+/**
+ * Hook deps that read the SAME in-memory store the `memoryAdapter` endpoints
+ * mutate. The hook's DEFAULT deps run raw SQL against the app's Drizzle
+ * `betterAuthDb` — a database that does not exist in this unit-test
+ * environment, so leaving the defaults in place would make every archived
+ * check throw and the prohibited tests would "pass" via the fail-closed
+ * error polarity (green for the wrong reason) while the CONTROL/unarchive
+ * tests failed outright. Injecting store-backed readers keeps the ENTIRE
+ * hook pipeline real (matcher -> class-aware resolution -> split-polarity
+ * decision -> APIError) while the I/O seam — which is exactly the seam
+ * production swaps the other way — reads the harness's own store. The
+ * default readers' SQL text is trivial single-row lookups covered by the CI
+ * typecheck.
+ */
+function storeBackedDeps(
+  db: Record<string, unknown[]>,
+): Parameters<typeof buildOrganizationDispatchPolicyBeforeHook>[0] {
+  return {
+    readArchivedAt: async (organizationId: string) =>
+      ((db.organization as OrgRow[]).find((o) => o.id === organizationId)?.archivedAt ?? null),
+    readTeamOrganizationId: async (teamId: string) =>
+      ((db.team as TeamRow[]).find((t) => t.id === teamId)?.organizationId ?? null),
+    readInvitationOrganizationId: async (invitationId: string) =>
+      ((db.invitation as InvitationRow[]).find((i) => i.id === invitationId)?.organizationId ??
+        null),
+    readOrganizationIdBySlug: async (slug: string) =>
+      ((db.organization as OrgRow[]).find((o) => o.slug === slug)?.id ?? null),
+  };
+}
+
 function makeAuth(
   db: Record<string, unknown[]>,
-  beforeHookDeps?: Parameters<typeof buildOrganizationDispatchPolicyBeforeHook>[0],
+  beforeHookDepOverrides?: Parameters<typeof buildOrganizationDispatchPolicyBeforeHook>[0],
 ) {
   return betterAuth({
     appName: "Cinatra",
@@ -76,7 +106,12 @@ function makeAuth(
       }),
     ],
     hooks: {
-      before: [buildOrganizationDispatchPolicyBeforeHook(beforeHookDeps)],
+      before: [
+        buildOrganizationDispatchPolicyBeforeHook({
+          ...storeBackedDeps(db),
+          ...beforeHookDepOverrides,
+        }),
+      ],
       after: [buildOrganizationListAfterHook()],
     },
   });
