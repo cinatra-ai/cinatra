@@ -80,6 +80,12 @@ describe("InProcessAgentExecutor — cancelTask contextId propagation", () => {
     const executor = new InProcessAgentExecutor({
       templateId: "tpl_1",
       enqueueJob: vi.fn(async () => undefined) as any,
+      // cinatra#1940 P3: the creation perimeter is now guarded — the
+      // executor requires this injected contract or it fails closed with
+      // AUTHORITY_REQUIRED before ever calling createAgentRun (this test
+      // exercises execute() to populate the taskToContext map for cancelTask,
+      // so it must reach past the create step).
+      createRunWithAuthority: (input: unknown) => agentBuilder.createAgentRun(input),
       pollIntervalMs: 5,
       pollTimeoutMs: 1000,
     } as any);

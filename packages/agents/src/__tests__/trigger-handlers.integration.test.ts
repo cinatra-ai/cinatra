@@ -22,7 +22,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 // Mock auth-session ONLY for the server-action wrapper test. Service-layer
 // tests do not need this — they pass actor envelopes directly.
@@ -53,6 +53,15 @@ import { agentRuns } from "../schema";
 // Every test fixture row carries an explicit orgId so the NOT NULL schema
 // constraint does not break this suite.
 const TEST_ORG_ID = "org-test";
+// cinatra#1939 wave 2 / #1940 P3: createAgentRun now runs under guardOrgMutation
+// and REQUIRES a host-minted authority; the guard also reads the org's
+// lifecycle from `public."organization"`. A member-shaped authority grounds the
+// guarded write; the idempotent insert in beforeAll below (shared with the
+// sibling trigger-*/store-*/pm-link-store-reconcile integration suites, which
+// all use the SAME literal orgId and run in parallel forks against the same
+// DB) ensures the row exists without any suite ever deleting a row another
+// might still need.
+const AUTH = { orgId: TEST_ORG_ID, can: () => true };
 
 // ---------------------------------------------------------------------------
 // Helpers — create parent agent_runs row with given runBy so the trigger FK
@@ -61,13 +70,16 @@ const TEST_ORG_ID = "org-test";
 
 async function ensureParentRun(runBy: string | null = null): Promise<string> {
   const id = `test-trigger-handler-${randomUUID()}`;
-  await createAgentRun({
-    id,
-    templateId: `tmpl-${randomUUID()}`,
-    inputParams: {},
-    runBy: runBy ?? undefined,
-    orgId: TEST_ORG_ID,
-  });
+  await createAgentRun(
+    {
+      id,
+      templateId: `tmpl-${randomUUID()}`,
+      inputParams: {},
+      runBy: runBy ?? undefined,
+      orgId: TEST_ORG_ID,
+    },
+    AUTH,
+  );
   return id;
 }
 
@@ -92,12 +104,19 @@ const adminActor = (userId: string) => ({
 describe("trigger service + handlers + server-action wrapper", () => {
   const createdRunIds: string[] = [];
 
-  beforeAll(() => {
+  beforeAll(async () => {
     if (!process.env.SUPABASE_DB_URL) {
       throw new Error(
         "trigger-handlers.test.ts requires SUPABASE_DB_URL — run `cinatra setup branch` first.",
       );
     }
+    // Idempotent — see the TEST_ORG_ID comment above (never deleted: shared
+    // with sibling suites running in parallel forks against the same DB).
+    await db.execute(sql`
+      INSERT INTO public."organization" (id, name, slug, "createdAt")
+      VALUES (${TEST_ORG_ID}, ${"Test Org"}, ${TEST_ORG_ID}, now())
+      ON CONFLICT (id) DO NOTHING
+    `);
   });
 
   afterAll(async () => {

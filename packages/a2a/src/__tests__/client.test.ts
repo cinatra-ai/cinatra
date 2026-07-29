@@ -78,6 +78,7 @@ describe("createInProcessA2AClient", () => {
     const client = await createInProcessA2AClient({
       packageName: "pkg-a",
       enqueueJob: vi.fn().mockResolvedValue(undefined),
+      createRunWithAuthority: (input: unknown) => mockCreateRun(input),
       pollIntervalMs: 5,
       pollTimeoutMs: 2_000,
     });
@@ -96,6 +97,7 @@ describe("createInProcessA2AClient", () => {
     const client = await createInProcessA2AClient({
       packageName: "pkg-a",
       enqueueJob: vi.fn().mockResolvedValue(undefined),
+      createRunWithAuthority: (input: unknown) => mockCreateRun(input),
       pollIntervalMs: 5,
       pollTimeoutMs: 2_000,
     });
@@ -119,6 +121,7 @@ describe("createInProcessA2AClient", () => {
     const client = await createInProcessA2AClient({
       packageName: "pkg-a",
       enqueueJob,
+      createRunWithAuthority: (input: unknown) => mockCreateRun(input),
       pollIntervalMs: 5,
       pollTimeoutMs: 2_000,
     });
@@ -135,6 +138,7 @@ describe("createInProcessA2AClient", () => {
     const client = await createInProcessA2AClient({
       packageName: "pkg-a",
       enqueueJob: vi.fn().mockResolvedValue(undefined),
+      createRunWithAuthority: (input: unknown) => mockCreateRun(input),
       pollIntervalMs: 5,
       pollTimeoutMs: 2_000,
     });
@@ -145,6 +149,7 @@ describe("createInProcessA2AClient", () => {
     const client = await createInProcessA2AClient({
       packageName: "pkg-a",
       enqueueJob: vi.fn().mockResolvedValue(undefined),
+      createRunWithAuthority: (input: unknown) => mockCreateRun(input),
       pollIntervalMs: 5,
       pollTimeoutMs: 2_000,
     });

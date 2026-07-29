@@ -19,7 +19,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   createOrUpdateRunTrigger,
   readRunTriggerByRunId,
@@ -32,6 +32,14 @@ import { agentRuns, agentTemplates } from "../schema";
 
 // Fixture orgId for the required agent template and run relationship.
 const TEST_ORG_ID = "org-test";
+// cinatra#1939 wave 2 / #1940 P3: createAgentRun now runs under guardOrgMutation
+// and REQUIRES a host-minted authority; the guard also reads the org's
+// lifecycle from `public."organization"`. A member-shaped authority grounds the
+// guarded write; the idempotent insert below (shared with the sibling
+// trigger-*/store-*/pm-link-store-reconcile integration suites, which all use
+// the SAME literal orgId and run in parallel forks against the same DB) ensures
+// the row exists without any suite ever deleting a row another might still need.
+const AUTH = { orgId: TEST_ORG_ID, can: () => true };
 
 // Track every fixture template id we create so we can clean up after the suite.
 const createdTemplateIds: string[] = [];
@@ -51,12 +59,15 @@ async function ensureParentRun(): Promise<string> {
   });
   createdTemplateIds.push(templateId);
   const id = `test-trigger-${randomUUID()}`;
-  await createAgentRun({
-    id,
-    templateId,
-    inputParams: {},
-    orgId: TEST_ORG_ID,
-  });
+  await createAgentRun(
+    {
+      id,
+      templateId,
+      inputParams: {},
+      orgId: TEST_ORG_ID,
+    },
+    AUTH,
+  );
   return id;
 }
 
@@ -64,7 +75,7 @@ describe("trigger-store", () => {
   // Track every parent run id we create so we can clean up after the suite.
   const createdRunIds: string[] = [];
 
-  beforeAll(() => {
+  beforeAll(async () => {
     // Make sure the env points at a non-empty DB connection string. If this
     // throws the suite aborts cleanly with a helpful message rather than a
     // confusing "connection refused" deep inside drizzle.
@@ -73,6 +84,13 @@ describe("trigger-store", () => {
         "trigger-store.test.ts requires SUPABASE_DB_URL — run `cinatra setup branch` first.",
       );
     }
+    // Idempotent — see the TEST_ORG_ID comment above (never deleted: shared
+    // with sibling suites running in parallel forks against the same DB).
+    await db.execute(sql`
+      INSERT INTO public."organization" (id, name, slug, "createdAt")
+      VALUES (${TEST_ORG_ID}, ${"Test Org"}, ${TEST_ORG_ID}, now())
+      ON CONFLICT (id) DO NOTHING
+    `);
   });
 
   afterAll(async () => {
