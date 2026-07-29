@@ -103,6 +103,19 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1428 RBAC + deletion unification (real DB
     }
     (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 
+    // cinatra#1939 wave 3 Stage D: restoreChangeSet now runs under the
+    // org-write kernel's guarded batch, whose lifecycle-ruling SELECT reads
+    // the org's row from public."organization" (the shared Better-Auth
+    // schema, not TEST_SCHEMA). Seed an ACTIVE org row for ORG so the
+    // guarded restore rules allow — the org-anchor-backfill /
+    // org-write-archive-race seeding precedent.
+    await client.query(
+      `INSERT INTO public."organization" (id, name, slug, "createdAt")
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (id) DO NOTHING`,
+      [ORG, "RBAC 1428 org", "rbac-1428-org"],
+    );
+
     // Seed the artifact-eligible faceted rows + one non-artifact typed row
     // (never visible through the artifact surface regardless of authz).
     for (const r of [...ROWS, { id: "r-typed-nonartifact", ownerLevel: "organization" as const, ownerId: ORG, visibility: "org", type: "@cinatra-ai/campaigns:email" }]) {
@@ -124,6 +137,9 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1428 RBAC + deletion unification (real DB
   });
 
   afterAll(async () => {
+    await client
+      ?.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG])
+      .catch(() => {});
     await client?.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`).catch(() => {});
     await client?.end().catch(() => {});
     delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized;
@@ -329,6 +345,13 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1428 RBAC + deletion unification (real DB
     const restored = restoreChangeSet({
       changeSetId: res.changeSetId!,
       actor: { actorId: ADMIN, actorKind: "user", orgId: ORG },
+      // cinatra#1939 wave 3 Stage D: the restore engine's batched write now
+      // runs under the org-write kernel's guarded batch. This integration
+      // test provisions its own live schema + ACTIVE org row, so a permissive
+      // in-test authority exercises the REAL guard SQL (lock + lifecycle
+      // ruling) against that live row — the refusal matrix itself is the
+      // kernel suite's concern.
+      authority: { orgId: ORG, can: () => true },
     });
     expect(restored.appliedEventCount).toBeGreaterThan(0);
 

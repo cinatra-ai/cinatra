@@ -1,7 +1,7 @@
 {
   "generatedBy": "scripts/build-postgres-sync-inventory.mjs",
   "note": "DO NOT EDIT BY HAND. Re-run `pnpm sync:inventory`. Per-file classification + justification lives in src/lib/postgres-sync-inventory.ts.",
-  "totalCallSites": 365,
+  "totalCallSites": 359,
   "callers": [
     {
       "file": "packages/extensions/src/permissions-store.ts",
@@ -221,7 +221,7 @@
     },
     {
       "file": "src/lib/object-history/canonical-writer.ts",
-      "calls": 5
+      "calls": 2
     },
     {
       "file": "src/lib/object-history/change-set.ts",
@@ -241,7 +241,7 @@
     },
     {
       "file": "src/lib/object-history/restore-engine.ts",
-      "calls": 2
+      "calls": 1
     },
     {
       "file": "src/lib/object-history/server-views.ts",
@@ -297,7 +297,7 @@
     },
     {
       "file": "src/lib/resource-project-move.ts",
-      "calls": 3
+      "calls": 1
     },
     {
       "file": "src/lib/run-selected-skill-revisions.ts",

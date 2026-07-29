@@ -78,8 +78,17 @@ export type ResourceProjectMoveArgs = {
  * helper. Extracted as a pure builder so unit tests can capture the
  * emitted SQL + values without a live Postgres instance (mirrors the
  * buildChatThreadUpsertQuery pattern).
+ *
+ * cinatra#1939 wave 3 Stage D: the builder deliberately OMITS the guard-only
+ * fields (`orgId`, `authority`) — it emits SQL text and binds values, nothing
+ * more; the kernel guard is `runResourceProjectMove`'s concern (which wraps
+ * these queries in the guarded batch). Keeping the builder authority-free
+ * also keeps its pure-SQL unit tests free of stub authorities.
  */
-export function buildResourceProjectMoveQueries(args: ResourceProjectMoveArgs & {
+export function buildResourceProjectMoveQueries(args: Omit<
+  ResourceProjectMoveArgs,
+  "orgId" | "authority"
+> & {
   schemaName: string;
   auditId: string;
 }): Array<{ text: string; values: unknown[] }> {
