@@ -27,6 +27,13 @@ const mocks = vi.hoisted(() => {
     getObjectById: vi.fn(),
     enforceResourceAccess: vi.fn(),
     restoreObjectToVersion: vi.fn(),
+    // cinatra#1939 wave 3 Stage D: the action mints an org-write authority
+    // for the now-guarded restore engine. The stub carries a marker so the
+    // happy-path assertion can pin the threading.
+    verifySessionAuthority: vi.fn(async (_userId: string, orgId: string) => ({
+      orgId,
+      can: () => true,
+    })),
     FakeAuthzError,
   };
 });
@@ -62,6 +69,10 @@ vi.mock("@/lib/authz/build-actor-context", () => ({
 }));
 
 vi.mock("@/lib/authz/errors", () => ({ AuthzError: mocks.FakeAuthzError }));
+
+vi.mock("@/lib/org-write/authority", () => ({
+  verifySessionAuthority: mocks.verifySessionAuthority,
+}));
 
 import { restoreObjectToVersionAction } from "../restore-object-version-action";
 
@@ -166,7 +177,10 @@ describe("restoreObjectToVersionAction", () => {
       objectId: "obj_1",
       targetVersion: 2,
       actor: { actorId: "user_1", actorKind: "user", orgId: "org_1" },
+      // #1939 Stage D: the freshly minted org-write authority rides along.
+      authority: expect.objectContaining({ orgId: "org_1" }),
     });
+    expect(mocks.verifySessionAuthority).toHaveBeenCalledWith("user_1", "org_1");
   });
 
   it("surfaces a RestoreNotEligibleError message from the engine as an error", async () => {

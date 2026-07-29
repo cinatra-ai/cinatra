@@ -12,7 +12,7 @@
  *
  * DB-gated: skips when SUPABASE_DB_URL is unset (mirrors the idempotency test).
  */
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import {
@@ -31,6 +31,14 @@ const hasDb =
   !dbUrl.includes("unused:unused@localhost:5432/unused");
 const q = (s: string) => s.replaceAll('"', '""');
 
+// cinatra#1939 wave 2 / #1940 P3: createAgentRun now runs under guardOrgMutation
+// and REQUIRES a host-minted authority; the guard also reads the org's
+// lifecycle from `public."organization"`. This orgId is unique to this file
+// (not shared with any sibling integration suite), so it is seeded + cleaned
+// up here rather than left as a permanent shared fixture.
+const ORG_ID = "org-runtoken";
+const AUTH = { orgId: ORG_ID, can: () => true };
+
 beforeAll(async () => {
   if (!hasDb) return;
   // Defensive: ensure the run-token column + partial unique index exist
@@ -41,8 +49,20 @@ beforeAll(async () => {
   await c.query(
     `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_run_token_hash_uniq ON "${q(SCHEMA)}"."agent_runs" (run_token_hash) WHERE run_token_hash IS NOT NULL`,
   );
+  await c.query(
+    `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
+    [ORG_ID, ORG_ID, ORG_ID],
+  );
   await c.end();
 }, 30_000);
+
+afterAll(async () => {
+  if (!hasDb) return;
+  const c = new Client({ connectionString: dbUrl });
+  await c.connect();
+  await c.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG_ID]);
+  await c.end();
+});
 
 async function makeTemplate(): Promise<string> {
   const { createAgentTemplate } = await import("../store");
@@ -68,7 +88,7 @@ describe.skipIf(!hasDb)("run-token spine — dispatch seam persist + verify", ()
       inputParams: { foo: "bar" },
       orgId: "org-runtoken",
       runBy: "user-1",
-    });
+    }, AUTH);
 
     // The exact dispatch seam: mint, persist ONLY the hash (before sendTask),
     // build the initial message carrying the raw token.
@@ -124,7 +144,7 @@ describe.skipIf(!hasDb)("run-token spine — dispatch seam persist + verify", ()
       templateId,
       inputParams: {},
       orgId: "org-runtoken",
-    });
+    }, AUTH);
     const parentToken = mintRunToken();
     await setAgentRunTokenHash(parent.id, parentToken.tokenHash);
 
@@ -134,7 +154,7 @@ describe.skipIf(!hasDb)("run-token spine — dispatch seam persist + verify", ()
       inputParams: {},
       orgId: "org-runtoken",
       parentRunId: parent.id,
-    });
+    }, AUTH);
 
     // The explicit-whitelist insert must NOT have propagated the parent's hash.
     const c = new Client({ connectionString: dbUrl });
@@ -155,8 +175,8 @@ describe.skipIf(!hasDb)("run-token spine — dispatch seam persist + verify", ()
   it("the partial unique index forbids two runs sharing a token hash", async () => {
     const { createAgentRun, setAgentRunTokenHash } = await import("../store");
     const templateId = await makeTemplate();
-    const a = await createAgentRun({ id: `r_${randomUUID()}`, templateId, inputParams: {}, orgId: "org-runtoken" });
-    const b = await createAgentRun({ id: `r_${randomUUID()}`, templateId, inputParams: {}, orgId: "org-runtoken" });
+    const a = await createAgentRun({ id: `r_${randomUUID()}`, templateId, inputParams: {}, orgId: "org-runtoken" }, AUTH);
+    const b = await createAgentRun({ id: `r_${randomUUID()}`, templateId, inputParams: {}, orgId: "org-runtoken" }, AUTH);
     const shared = mintRunToken().tokenHash;
     await setAgentRunTokenHash(a.id, shared);
     let thrown: unknown = null;

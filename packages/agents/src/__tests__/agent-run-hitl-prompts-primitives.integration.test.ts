@@ -14,8 +14,9 @@
  *
  * DB-gated: skips when SUPABASE_DB_URL is unset (mirrors the run-token test).
  */
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
+import { Client } from "pg";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
@@ -25,6 +26,12 @@ const hasDb =
   !dbUrl.includes("unused:unused@localhost:5432/unused");
 
 const ORG = "org-hitl-prims";
+// cinatra#1939 wave 2 / #1940 P3: createAgentRun now runs under guardOrgMutation
+// and REQUIRES a host-minted authority; the guard also reads the org's
+// lifecycle from `public."organization"` — this DB-gated suite needs an
+// ACTIVE org row for ORG for the guarded writes to pass at runtime (seeded in
+// beforeAll / cleaned up in afterAll below).
+const AUTH = { orgId: ORG, can: () => true };
 
 type Store = typeof import("../store");
 let store: Store;
@@ -32,6 +39,21 @@ let store: Store;
 beforeAll(async () => {
   if (!hasDb) return;
   store = await import("../store");
+  const c = new Client({ connectionString: dbUrl });
+  await c.connect();
+  await c.query(
+    `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
+    [ORG, ORG, ORG],
+  );
+  await c.end();
+});
+
+afterAll(async () => {
+  if (!hasDb) return;
+  const c = new Client({ connectionString: dbUrl });
+  await c.connect();
+  await c.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]);
+  await c.end();
 });
 
 async function makeTemplate(packageName: string): Promise<string> {
@@ -55,7 +77,7 @@ async function makeRun(templateId: string, runBy: string): Promise<string> {
     inputParams: {},
     orgId: ORG,
     runBy,
-  });
+  }, AUTH);
   return run.id;
 }
 

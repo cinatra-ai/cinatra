@@ -276,6 +276,8 @@
     "gate:design-packages": "node scripts/audit/design-packages-pack-smoke.mjs",
     "gate:gatekept-install": "node scripts/audit/gatekept-install-no-direct-registry.mjs",
     "gate:file-size": "node scripts/audit/file-size-ratchet.mjs",
+    "gate:archive-acceptance": "node scripts/audit/archive-acceptance-gate.mjs",
+    "gate:archive-acceptance:strict": "node scripts/audit/archive-acceptance-gate.mjs --strict",
     "backup:create": "cinatra backup create",
     "backup:import": "cinatra backup import --yes",
     "auth:migrate": "node --env-file-if-exists=.env.local scripts/better-auth-migrate.mts",

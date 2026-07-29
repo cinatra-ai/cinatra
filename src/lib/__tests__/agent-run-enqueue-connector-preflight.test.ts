@@ -140,9 +140,15 @@ describe("enqueueAgentRun — actor self-heal (cinatra#1056, codex D4)", () => {
     expect(enqOpts).not.toHaveProperty("actorContext");
   });
 
-  it("does not touch the run/actor lookups when there is no connector dependency map (fast path)", async () => {
+  it("does not touch the ACTOR lookups when there is no connector dependency map (fast path)", async () => {
+    // cinatra#1940 P3 (Decision 1, enqueue row): the dispatch-freeze pre-check
+    // performs ONE run-row read on this path to learn the org id (no
+    // actorContext / preflight actor supplied one) — the connector-preflight
+    // machinery itself (#1056's concern) still runs nothing: no actor build,
+    // no connector gate. An unresolvable row (undefined here) fail-opens to
+    // the enqueue; the worker-start park is the backstop.
     await enqueueAgentRun({ runId: "run-4" }, { jobId: "run-4" });
-    expect(readAgentRunById).not.toHaveBeenCalled();
+    expect(readAgentRunById).toHaveBeenCalledTimes(1);
     expect(buildActorContextFromRun).not.toHaveBeenCalled();
     expect(requireConnectorAuthority).not.toHaveBeenCalled();
     expect(enqueueBackgroundJob).toHaveBeenCalledTimes(1);

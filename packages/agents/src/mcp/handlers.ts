@@ -295,6 +295,12 @@ import { getAuthSession, isPlatformAdmin, resolveOrgRoleForUser } from "@/lib/au
 // closed (Run access denied) instead of minting a non-member run-management authority.
 import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
+// cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded — the
+// agent_run primitive already receives request.actor.orgWriteAuthority
+// (forwarded by registry.ts for every primitive) but never consumed it for
+// creation; this resolver picks it up when usable, else falls back to the
+// delegating principal (the D-OBO-RESUME precedent below, applied to create).
+import { resolveRunCreationAuthority } from "@/lib/org-write/run-creation-authority";
 import {
   readTeamsForUser,
   readProjectGrantsForUser,
@@ -1051,17 +1057,30 @@ async function handleAgentBuilderRun(
   }
 
   try {
-    const run = await createAgentRun({
-      id: runId,
-      templateId: resolvedTemplateId,
-      versionId: latestVersionId,
-      inputParams: inputParamsParsed,
-      timeoutSeconds: timeoutSeconds ?? null,
-      runBy: request.actor?.userId,
-      orgId: organizationId,
-      projectId: projectIdForRun,
-      delegatedActorSnapshot: delegatedActorSnapshotJson,
+    // cinatra#1940 P3 (Decision 2): resolve whichever authority this frame
+    // already carries — a session frame's forwarded orgWriteAuthority (fast
+    // path), else the delegating principal (an OBO/agent-as-tool frame's
+    // run-bound authority never satisfies can("run.execute"), so it falls
+    // through here by construction).
+    const frameAuthority = (request.actor as { orgWriteAuthority?: OrgWriteAuthority } | undefined)?.orgWriteAuthority;
+    const creationAuthority = await resolveRunCreationAuthority(organizationId, {
+      orgWriteAuthority: frameAuthority,
+      userId: request.actor?.userId,
     });
+    const run = await createAgentRun(
+      {
+        id: runId,
+        templateId: resolvedTemplateId,
+        versionId: latestVersionId,
+        inputParams: inputParamsParsed,
+        timeoutSeconds: timeoutSeconds ?? null,
+        runBy: request.actor?.userId,
+        orgId: organizationId,
+        projectId: projectIdForRun,
+        delegatedActorSnapshot: delegatedActorSnapshotJson,
+      },
+      creationAuthority,
+    );
 
     // cinatra#1056 connector edges + cinatra#1062 LLM-provider package identity.
     await enqueueAgentRun({ runId }, enqueueDepsForTemplate(template));
@@ -1332,8 +1351,17 @@ async function handleAgentBuilderRunUpdate(
 );
     }
 
-    // Transactional cascade.
+    // Transactional cascade. cinatra#1939 wave 3 Stage D: the move is now a
+    // guarded content.write on the run's own org — the same forwarded MCP-
+    // frame authority run_stop/agent_run_move_with_outputs use (§2e
+    // precedent); a frame lacking one fails closed rather than moving
+    // unguarded.
     const actorId = actor.userId ?? "system";
+    const moveAuthority = (request.actor as { orgWriteAuthority?: OrgWriteAuthority })
+      .orgWriteAuthority;
+    if (!moveAuthority) {
+      return { error: "Run move requires an org-write authority on the request frame." };
+    }
     runResourceProjectMove({
       table: "agent_runs",
       resourceId: run.id,
@@ -1343,6 +1371,8 @@ async function handleAgentBuilderRunUpdate(
       actorId,
       sourceRunId: run.id,
       reason: reason ?? null,
+      orgId: run.orgId,
+      authority: moveAuthority,
     });
     return { ok: true as const };
   } catch (err) {
@@ -1420,12 +1450,22 @@ async function handleAgentBuilderRunMoveWithOutputs(
     }
 
     const actorId = actor.userId ?? "system";
+    // cinatra#1939 wave 3 Stage D: guarded content.write on the run's org —
+    // same forwarded MCP-frame authority precedent as agent_run_update above.
+    const moveWithOutputsAuthority = (
+      request.actor as { orgWriteAuthority?: OrgWriteAuthority }
+    ).orgWriteAuthority;
+    if (!moveWithOutputsAuthority) {
+      return { error: "Run move requires an org-write authority on the request frame." };
+    }
     const result = runAgentRunMoveWithOutputs({
       runId: run.id,
       oldProjectId: run.projectId ?? null,
       newProjectId,
       actorId,
       reason: reason ?? null,
+      orgId: run.orgId,
+      authority: moveWithOutputsAuthority,
     });
     return {
       ok: true as const,

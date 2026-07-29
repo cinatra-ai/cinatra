@@ -17,9 +17,23 @@ import "server-only";
  * closeout is the only place that will ever write it in production.
  */
 
+// cinatra#1940 P3 (Decision 7, design review) — compile-time structural
+// coupling, not merely an S6 checklist item: this module is the ONE gate
+// every activation consumer already flows through (this S1 stub consults it
+// first; S6's real archive transaction will too). Statically importing the
+// dispatch-freeze module HERE means no build can evaluate the activation
+// gate without also containing the dispatch freeze. A module-graph test
+// pins this import edge so a future refactor that drops it fails CI here —
+// independent of the S6 activation runbook. `dispatch-freeze.ts` is a leaf
+// (zero further dependencies), so this adds no real module weight.
+import { DISPATCH_FREEZE_S3 } from "@/lib/org-write/dispatch-freeze";
+
 export const ORG_ARCHIVE_ACTIVATION_CONFIG_KEY = "org_archive_activation";
 
 export async function isArchiveActivationEnabled(): Promise<boolean> {
+  // Keep the sentinel a real (non-elidable) value use — see the import
+  // comment above — so a bundler can never tree-shake the coupling away.
+  void DISPATCH_FREEZE_S3;
   try {
     const { readConnectorConfigFromDatabase } = await import("@/lib/database");
     const cfg = readConnectorConfigFromDatabase<{ enabled?: boolean } | null>(

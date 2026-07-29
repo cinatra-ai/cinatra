@@ -83,7 +83,7 @@ async function seedRunningRun(input?: {
     orgId: ORG,
     runBy: input?.runBy,
     packageVersion: input?.packageVersion,
-  });
+  }, AUTH);
   await client.query(
     `UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status = 'running' WHERE id = $1`,
     [runId],
@@ -153,10 +153,17 @@ beforeAll(async () => {
   dbMod = await import("../db");
   client = new Client({ connectionString: DB_URL });
   await client.connect();
+  // The guard reads the org's lifecycle from public."organization" (see the
+  // AUTH comment above) — seed the ACTIVE row this suite's guarded writes need.
+  await client.query(
+    `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
+    [ORG, ORG, ORG],
+  );
 }, 90_000);
 
 afterAll(async () => {
   if (!HAS_DB) return;
+  await client?.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]).catch(() => {});
   await client?.end().catch(() => {});
   await dbMod?.agentBuilderPool?.end().catch(() => {});
   const admin = new Client({ connectionString: DB_URL });

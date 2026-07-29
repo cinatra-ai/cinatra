@@ -10,6 +10,12 @@ import {
   createAgentRun,
   readAgentRunById,
 } from "../store";
+// cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded — this
+// ALS-frame carrier has no `orgWriteAuthority` concept at all, so the
+// resolver goes straight to the delegating-principal path (a HumanUser
+// principal's id) or refuses (no live path loses: §8.1 says an agent-OBO
+// context always carries the delegating human).
+import { resolveRunCreationAuthority } from "@/lib/org-write/run-creation-authority";
 // ---------------------------------------------------------------------------
 // MCP tool name sanitization
 // ---------------------------------------------------------------------------
@@ -205,13 +211,19 @@ async function invokePublishedAgentTool(
   // createAgentRun folds it onto the freshly-derived child anchor and throws
   // OboCeilingCompositionError (caught below) on a provably-disjoint chain.
   try {
-    await createAgentRun({
-      id: runId,
-      templateId,
-      inputParams,
-      orgId,
-      parentOboCeiling: ctx?.oboCeiling ?? null,
+    const authority = await resolveRunCreationAuthority(orgId, {
+      userId: ctx?.principalType === "HumanUser" ? ctx.principalId : undefined,
     });
+    await createAgentRun(
+      {
+        id: runId,
+        templateId,
+        inputParams,
+        orgId,
+        parentOboCeiling: ctx?.oboCeiling ?? null,
+      },
+      authority,
+    );
   } catch (err) {
     if (err instanceof OboCeilingCompositionError) {
       return { error: err.message, code: err.code, runId };

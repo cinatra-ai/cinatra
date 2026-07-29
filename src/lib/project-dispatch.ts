@@ -65,6 +65,11 @@ import {
   type DispatchAttemptRecord,
 } from "@cinatra-ai/agents/project-dispatch-ledger-store";
 import { readEffectiveStatusByPackageNames } from "@cinatra-ai/extensions/canonical-store";
+// cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded — this
+// PM-tick dynamic dispatch has no session, so it mints the SYSTEM
+// `agent-run-dispatch` authority (a caller the design's caller matrix did not
+// enumerate; found while grounding P3 against live source).
+import { mintProjectDispatchAuthority } from "@/lib/org-write/agent-run-authority-mint";
 
 /** Stable code carried by OboCeilingCompositionError — branch on the CODE, not
  *  instanceof, to avoid cross-bundle class-identity coupling (the documented
@@ -602,29 +607,36 @@ export async function dispatchProjectWorker(
     const latestVersionId = versions[0]?.id;
 
     const runId = `run_${randomUUID()}`;
+    // cinatra#1940 P3 (Decision 2): the guarded creation perimeter needs an
+    // authority — this tick has no session, so mint the system dispatcher
+    // authority scoped to the project's org.
+    const dispatchAuthority = mintProjectDispatchAuthority(input.orgId);
     let run;
     try {
-      run = await createAgentRun({
-        id: runId,
-        templateId: template.id,
-        versionId: latestVersionId,
-        inputParams: input.runInput,
-        runBy: input.runBy ?? undefined,
-        // Tenant is the project's auth-derived org, never a body id.
-        orgId: input.orgId,
-        // The cinatra project refinement is the INSTANCE's persisted binding
-        // (one truth) — never a per-dispatch input.
-        projectId: instance.projectId,
-        // Idempotent dispatch provenance — the ledgered key, VERBATIM.
-        idempotencyKey: attempt.idempotencyKey,
-        // Child linkage + OBO ceiling composition (W5): the child's ceiling is
-        // server-derived over its OWN anchored scope inside createAgentRun;
-        // the parent chain is the seat run's PERSISTED chain (read server-side
-        // in step 0c) as the compose operand only — never copied, never
-        // accepted from input.
-        parentRunId: parentRun.id,
-        parentOboCeiling: parentRun.oboCeiling ?? null,
-      });
+      run = await createAgentRun(
+        {
+          id: runId,
+          templateId: template.id,
+          versionId: latestVersionId,
+          inputParams: input.runInput,
+          runBy: input.runBy ?? undefined,
+          // Tenant is the project's auth-derived org, never a body id.
+          orgId: input.orgId,
+          // The cinatra project refinement is the INSTANCE's persisted binding
+          // (one truth) — never a per-dispatch input.
+          projectId: instance.projectId,
+          // Idempotent dispatch provenance — the ledgered key, VERBATIM.
+          idempotencyKey: attempt.idempotencyKey,
+          // Child linkage + OBO ceiling composition (W5): the child's ceiling is
+          // server-derived over its OWN anchored scope inside createAgentRun;
+          // the parent chain is the seat run's PERSISTED chain (read server-side
+          // in step 0c) as the compose operand only — never copied, never
+          // accepted from input.
+          parentRunId: parentRun.id,
+          parentOboCeiling: parentRun.oboCeiling ?? null,
+        },
+        dispatchAuthority,
+      );
     } catch (err) {
       if ((err as { code?: string } | null)?.code === OBO_CEILING_DISJOINT_CODE) {
         const message = err instanceof Error ? err.message : String(err);

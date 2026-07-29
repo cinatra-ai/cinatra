@@ -364,14 +364,13 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     importBanned: true,
     allowedImporters: ["packages/agents/src/review-task-actions.ts"],
   },
-  // — new-run creation (Decision 7): both are plain drizzle inserts into
-  //   agent_runs (in store.ts), still OUTSIDE the guard. Comment wording avoids
-  //   the literal DML call shape — the OBO-ceiling structural scanner greps for
-  //   it and must keep seeing store.ts as the sole inserter. Registered NOW so
-  //   the coverage ledger KNOWS the hole;
-  //   #1940's dispatch freeze converts new-run creation and flips these rows.
-  //   The wave-6 proof reads "zero unguarded write exports OUTSIDE the approved,
-  //   issue-linked exception ledger" — these two are that linked remainder. —
+  // — new-run creation (#1940 P3, Decision 2): the exemption above is FLIPPED
+  //   — both are now guarded inserts (guardedRunWrite, capability run.execute)
+  //   into agent_runs (store.ts). Allowlist = the named callers (the full
+  //   caller matrix, Decision 2) PLUS the same "opaque store.ts / agents-barrel
+  //   accessor" tail already carried on transitionRunStatus/updateAgentRunStatus
+  //   above (an opaque `await import(...)` grants the whole module, so those
+  //   files sit on every store.ts writer row — intersection, not coincidence).
   {
     module: "packages/agents/src/store.ts",
     exportName: "createAgentRun",
@@ -379,11 +378,25 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     orgIdExtractor: "input.orgId (CreateAgentRunInput; NOT NULL column)",
     storageReferences: ["agent_runs"],
     cascadeOwnership: "inert-history",
-    importBanned: false,
-    importBanExemption: {
-      issue: 1940,
-      reason: "dispatch freeze converts new-run creation",
-    },
+    importBanned: true,
+    allowedImporters: [
+      "packages/agents/src/a2a-actions.ts",
+      "packages/agents/src/actions.ts",
+      "packages/agents/src/index.ts",
+      "packages/agents/src/lifecycle-repair-dispatch-store.ts",
+      "packages/agents/src/mcp/agent-tools-registry.ts",
+      "packages/agents/src/mcp/handlers.ts",
+      "src/lib/a2a-server.ts",
+      "src/lib/host-content-editor-dispatch.ts",
+      "src/lib/project-dispatch.ts",
+      // opaque store.ts / agents-barrel accessors (also on
+      // transitionRunStatus/updateAgentRunStatus):
+      "src/app/plugins-registry.tsx",
+      "src/lib/agent-run-enqueue.ts",
+      "src/lib/agent-runtime-dep-projection-backfill.ts",
+      "src/lib/extension-edge-bound-agent.ts",
+      "src/lib/extension-edge-bound-serving.ts",
+    ],
   },
   {
     module: "packages/agents/src/store.ts",
@@ -392,11 +405,19 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     orgIdExtractor: "input.orgId (NOT NULL column)",
     storageReferences: ["agent_runs"],
     cascadeOwnership: "inert-history",
-    importBanned: false,
-    importBanExemption: {
-      issue: 1940,
-      reason: "dispatch freeze converts new-run creation",
-    },
+    importBanned: true,
+    allowedImporters: [
+      "packages/agents/src/index.ts",
+      "packages/agents/src/run-actions.ts",
+      "packages/agents/src/trigger-release-job.ts",
+      // opaque store.ts / agents-barrel accessors (also on
+      // transitionRunStatus/updateAgentRunStatus):
+      "src/app/plugins-registry.tsx",
+      "src/lib/agent-run-enqueue.ts",
+      "src/lib/agent-runtime-dep-projection-backfill.ts",
+      "src/lib/extension-edge-bound-agent.ts",
+      "src/lib/extension-edge-bound-serving.ts",
+    ],
   },
 
   // — artifact substrate (postgres-sync world entry point) —
@@ -412,7 +433,23 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "graphiti_projection_outbox",
     ],
     cascadeOwnership: "inert-history",
+    // cinatra#1939 wave 3 Stage D grounding finding: Decision 4 ordered this
+    // FIRST in the "blast-radius ascending" conversion sequence, but a live
+    // caller sweep found ~30 files importing createSemanticArtifact (blog
+    // materializers, lifecycle emit, extension agent-produces-reader,
+    // authoring/materialization-ledger, url-import, matcher-enqueue, ...) —
+    // by far the LARGEST blast radius of any Stage-D writer, not the
+    // smallest. Threading a required authority through every caller in one
+    // lane risks correctness regressions across unrelated subsystems.
+    // Deferred to its own dedicated wave (recommended: convert per-caller-
+    // family, same discipline as the wave-1 dashboards rollout) rather than
+    // guessed through in this slice.
     importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "wave-3 Stage D grounding found ~30 real callers across blog/lifecycle/artifacts/extensions/agents — too large a blast radius for this slice; needs its own per-caller-family conversion wave",
+    },
   },
 
   // — organization furniture & lifecycle —
@@ -448,14 +485,67 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     cascadeOwnership: "db-cascade",
     importBanned: false,
   },
+  // cinatra#1939 wave 3 Stage D correction: the prior single row named
+  // exportName "teamMemberActions" — no such export exists in
+  // member-actions.ts. The real writers are the three functions below
+  // (addTeamMemberAction / removeTeamMemberAction / updateTeamMemberRoleAction;
+  // searchTeamMemberCandidates is read-only). storageReferences corrected to
+  // `teamMember` ONLY — the file reads `member`/`user` but never writes them
+  // (the prior row's "invitation" reference was also never touched here).
+  //
+  // NOT converted this stage (registered + exempted, Decision-7 pattern): all
+  // three support an authority TIER the org-write kernel's session-authority
+  // resolver cannot express — `assertTeamMemberAuthority` admits (a)
+  // `platform` (isPlatformAdmin, no org-membership row required) and (b)
+  // `team_admin` (team-role admin, whose ORG role may be plain 'member' — the
+  // kernel's SESSION_PERMISSION_FOR["membership.write"] maps to
+  // organization.manageMembers, which a 'member' role does not hold). Minting
+  // via verifySessionAuthority would either throw for a legitimate
+  // non-member platform admin or wrongly refuse a legitimate team_admin whose
+  // org role is 'member' — a functional regression, not a guard. Needs a
+  // design decision (e.g. a new tiered/elevated authority-minting variant)
+  // before conversion; flagged here rather than forced.
   {
     module: "src/app/teams/[teamId]/settings/member-actions.ts",
-    exportName: "teamMemberActions",
+    exportName: "addTeamMemberAction",
     capability: "membership.write",
     orgIdExtractor: "team.organizationId (advisory-locked per team)",
-    storageReferences: ["member", "invitation", "teamMember"],
+    storageReferences: ["teamMember"],
     cascadeOwnership: "db-cascade",
     importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "platform-admin/team-admin authority tiers have no sanctioned kernel session-authority mapping — needs a design decision, not a mechanical thread",
+    },
+  },
+  {
+    module: "src/app/teams/[teamId]/settings/member-actions.ts",
+    exportName: "removeTeamMemberAction",
+    capability: "membership.write",
+    orgIdExtractor: "team.organizationId (advisory-locked per team)",
+    storageReferences: ["teamMember"],
+    cascadeOwnership: "db-cascade",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "platform-admin/team-admin authority tiers have no sanctioned kernel session-authority mapping — needs a design decision, not a mechanical thread",
+    },
+  },
+  {
+    module: "src/app/teams/[teamId]/settings/member-actions.ts",
+    exportName: "updateTeamMemberRoleAction",
+    capability: "membership.write",
+    orgIdExtractor: "team.organizationId (advisory-locked per team)",
+    storageReferences: ["teamMember"],
+    cascadeOwnership: "db-cascade",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "platform-admin/team-admin authority tiers have no sanctioned kernel session-authority mapping — needs a design decision, not a mechanical thread",
+    },
   },
   {
     module: "src/app/teams/new/actions.ts",
@@ -469,27 +559,174 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     // cascade. Pinned by the cascadeOwnership↔ORG_DELETE_TIME_RULING consistency
     // test (a writer touching a "block" table can never be db-cascade).
     cascadeOwnership: "block",
+    // NOT converted in Stage D — the SAME authority-tier gap as the
+    // member-actions rows above, verified concretely: the action's own gate
+    // (readTeamCreatableOrganizationsForUser) admits org OWNER + ADMIN roles
+    // (and platform admins with any membership), but the kernel's session
+    // mapping for membership.write is organization.manageMembers — an
+    // org_owner-ONLY permission in authz/policies.ts. Converting would turn a
+    // working org-admin team creation into a refusal (a functional
+    // regression, not a guard). Same design decision as above.
     importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "kernel membership.write maps to org_owner-only organization.manageMembers; the action legitimately admits org admins — needs the tiered authority design decision, not a mechanical thread",
+    },
   },
-  {
-    module: "src/lib/assistant-agent-registration.ts",
-    exportName: "ensureBuiltinAssistantRegistration",
-    capability: "membership.write",
-    orgIdExtractor: "target organization id (builtin-assistant seed lock)",
-    storageReferences: ["member"],
-    cascadeOwnership: "db-cascade",
-    importBanned: false,
-  },
+  // cinatra#1939 wave 3 Stage D correction: the prior row (exportName
+  // "ensureBuiltinAssistantRegistration", capability "membership.write",
+  // storageReferences ["member"]) named an export that does not exist, and
+  // described a write that does not happen. assistant-agent-registration.ts's
+  // real single mint primitive is `registerAssistantAgent` — it writes
+  // Better-Auth `public."user"`/`public."oauthClient"` (a GLOBAL platform
+  // principal, e.g. the built-in @cinatra/WordPress/Drupal assistants) and a
+  // GLOBAL (org_id-less) `agent_templates` row via
+  // upsertBuiltInAssistantAgentTemplate — never a `member` row, never scoped
+  // to any one organization's lifecycle. It has no org axis for the org-write
+  // kernel to guard against, so it is REMOVED from this registry rather than
+  // force-fit (a fabricated orgId would be theater, not a real fence). Not an
+  // org-write coverage hole: nothing here is an organization-scoped write.
 
   // — objects canonical history writer (raw-SQL world) —
+  // cinatra#1939 wave 3 Stage D correction: the prior single row named
+  // exportName "canonicalObjectWriter" — no such export exists in
+  // canonical-writer.ts. Per the registry's own "per-function, not
+  // per-module" discipline, the real writer surface is the four functions
+  // below (historyAwareTombstone delegates entirely to historyAwareSoftDelete
+  // with zero DML of its own — a total-ban delegate row, the
+  // updateAgentRunStatus precedent). Converted onto the kernel's fixed-batch
+  // adapter (buildGuardedOrgWriteBatch + runGuardedOrgWriteBatchSync) — this
+  // module runs the postgres-sync raw-SQL world, not a drizzle transaction,
+  // so guardOrgMutation's db.transaction() contract does not apply; the S2
+  // batch adapter (dark since its own landing) is the sanctioned fit.
+  // Allowlist note: src/lib/objects/artifact-row-promotion.ts reaches this
+  // module via a NAMESPACE import (`import * as writer`) — an OPAQUE access
+  // that grants every binding, so the gate requires it on EVERY row of this
+  // module (the transitionRunStatus/updateAgentRunStatus intersection
+  // precedent), even though it only calls historyAwareUpsert.
   {
     module: "src/lib/object-history/canonical-writer.ts",
-    exportName: "canonicalObjectWriter",
+    exportName: "historyAwareUpsert",
     capability: "content.write",
-    orgIdExtractor: "change-set org_id (threaded per emit)",
+    orgIdExtractor: "actor.orgId (HistoryActor, required — requireGuardOrgId)",
     storageReferences: ["objects", "change_set", "object_change_event", "graphiti_projection_outbox"],
     cascadeOwnership: "inert-history",
-    importBanned: false,
+    importBanned: true,
+    allowedImporters: [
+      "src/lib/object-history/restore-engine.ts",
+      "src/lib/object-history/merge-proposals.ts",
+      "src/lib/objects/artifact-row-promotion.ts",
+      "src/lib/object-history/index.ts",
+    ],
+  },
+  {
+    module: "src/lib/object-history/canonical-writer.ts",
+    exportName: "historyAwareSoftDelete",
+    capability: "content.write",
+    orgIdExtractor: "actor.orgId (HistoryActor, required — requireGuardOrgId)",
+    storageReferences: ["objects", "change_set", "object_change_event", "graphiti_projection_outbox"],
+    cascadeOwnership: "inert-history",
+    importBanned: true,
+    allowedImporters: [
+      "src/lib/object-history/restore-engine.ts",
+      "src/lib/object-history/index.ts",
+      // opaque namespace-import accessor (see module allowlist note above):
+      "src/lib/objects/artifact-row-promotion.ts",
+    ],
+  },
+  {
+    module: "src/lib/object-history/canonical-writer.ts",
+    exportName: "historyAwareUndelete",
+    capability: "content.write",
+    orgIdExtractor: "actor.orgId (HistoryActor, required — requireGuardOrgId)",
+    storageReferences: ["objects", "change_set", "object_change_event", "graphiti_projection_outbox"],
+    cascadeOwnership: "inert-history",
+    importBanned: true,
+    allowedImporters: [
+      "src/lib/object-history/restore-engine.ts",
+      "src/lib/object-history/index.ts",
+      // opaque namespace-import accessor (see module allowlist note above):
+      "src/lib/objects/artifact-row-promotion.ts",
+    ],
+  },
+  {
+    // Total-delegate: forwards verbatim to historyAwareSoftDelete, zero
+    // direct DML sites of its own (the transitionRunStatus/
+    // updateAgentRunStatus internal-delegate precedent). No production
+    // importer NAMES it in the wave-3 Stage D caller sweep.
+    module: "src/lib/object-history/canonical-writer.ts",
+    exportName: "historyAwareTombstone",
+    capability: "content.write",
+    orgIdExtractor: "actor.orgId (HistoryActor, required — requireGuardOrgId)",
+    storageReferences: ["objects", "change_set", "object_change_event", "graphiti_projection_outbox"],
+    cascadeOwnership: "inert-history",
+    writeSites: 0,
+    importBanned: true,
+    allowedImporters: [
+      "src/lib/object-history/index.ts",
+      // opaque namespace-import accessor (see module allowlist note above):
+      "src/lib/objects/artifact-row-promotion.ts",
+    ],
+  },
+  // — restore engine's OWN batched multi-event write (cinatra#1939 wave 3
+  //   Stage D): restoreChangeSet composes its own fixed statement list
+  //   (per-event inverse statements) rather than delegating to
+  //   historyAwareUpsert et al, so it is its own registered writer. —
+  {
+    module: "src/lib/object-history/restore-engine.ts",
+    exportName: "restoreChangeSet",
+    capability: "content.write",
+    orgIdExtractor: "input.actor.orgId (required)",
+    storageReferences: ["objects", "change_set", "object_change_event", "graphiti_projection_outbox"],
+    cascadeOwnership: "inert-history",
+    importBanned: true,
+    allowedImporters: [
+      "src/components/data-safety/restore-change-set-action.ts",
+      "src/lib/object-history/index.ts",
+      "packages/objects/src/mcp/object-history-handlers.ts",
+    ],
+  },
+  {
+    module: "src/lib/object-history/restore-engine.ts",
+    exportName: "restoreObjectToVersion",
+    capability: "content.write",
+    orgIdExtractor: "input.actor.orgId (required)",
+    storageReferences: ["objects", "change_set", "object_change_event", "graphiti_projection_outbox"],
+    cascadeOwnership: "inert-history",
+    importBanned: true,
+    allowedImporters: [
+      "src/components/data-safety/restore-object-version-action.ts",
+      "src/lib/object-history/index.ts",
+      "packages/objects/src/mcp/object-history-handlers.ts",
+    ],
+  },
+  // — resource/agent-run project-move cascade (cinatra#1939 wave 3 Stage D,
+  //   Decision 9): confirmed a real unregistered content writer during
+  //   grounding (2 raw DML sites, resource-project-move.ts) — registered +
+  //   converted this stage; the table-sweep baseline shrinks. —
+  {
+    module: "src/lib/resource-project-move.ts",
+    exportName: "runResourceProjectMove",
+    capability: "content.write",
+    orgIdExtractor: "explicit orgId argument (the moved resource's own org)",
+    storageReferences: ["objects", "agent_runs"],
+    cascadeOwnership: "inert-history",
+    importBanned: true,
+    allowedImporters: [
+      "packages/agents/src/mcp/handlers.ts",
+      "packages/objects/src/mcp/handlers.ts",
+    ],
+  },
+  {
+    module: "src/lib/resource-project-move.ts",
+    exportName: "runAgentRunMoveWithOutputs",
+    capability: "content.write",
+    orgIdExtractor: "explicit orgId argument (the run's own org)",
+    storageReferences: ["agent_runs", "objects"],
+    cascadeOwnership: "inert-history",
+    importBanned: true,
+    allowedImporters: ["packages/agents/src/mcp/handlers.ts"],
   },
 
   // — kernel-owned tables (S2's own entry points) —

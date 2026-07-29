@@ -17,6 +17,13 @@ import { resolveOrgRoleForUser } from "@/lib/auth-session";
 // SYSTEM `agent-run-dispatch` authority (one fail-safe path for the whole carrier
 // run lifecycle), scoped to the OBO-carrier run's org.
 import { mintContentEditorDispatchAuthority } from "@/lib/org-write/agent-run-authority-mint";
+// cinatra#1940 P3 (Decision 1, content-editor row): the creation perimeter is
+// now guarded; an archived-org refusal here must fail LOUD to the connector,
+// never degrade to the anonymous fallback (anonymous dispatch would still
+// fire the A2A task against the CMS agent — real external work — with the
+// write only failing later, silently, at the MCP boundary).
+import { OrgWriteRefusedError } from "@cinatra-ai/org-write-kernel";
+import { OrganizationArchivedDispatchError } from "@/lib/org-write/dispatch-freeze";
 
 // Host-side A2A blocking-dispatch helper shared by the Drupal + WordPress
 // content-editor connectors. The non-SDK runtime edges — `@cinatra-ai/llm`
@@ -318,17 +325,33 @@ async function prepareDispatch(
     // run-creation boundary.
     await assertWidgetPreCreateAuthorized(input, widgetFrameActor !== null);
     const overrideRunId = `run_${randomUUID()}`;
-    const overrideRun = await createAgentRun({
-      id: overrideRunId,
-      templateId: template.id,
-      versionId: latestVersionId,
-      inputParams: payloadObject,
-      runBy: input.actorOverride.runBy,
-      orgId: input.actorOverride.orgId,
-      // The discriminator the bridge resolver keys on to suppress the
-      // platform-admin bypass for ONLY this per-user widget path (cinatra#408).
-      sourceType: input.actorOverride.sourceType,
-    });
+    // cinatra#1940 P3: mint BEFORE the guarded create — this is the ONLY
+    // system authority for the whole carrier run lifecycle (D-HOST); the
+    // outer dispatchContentEditorViaA2A re-mints the same purpose for its own
+    // subsequent transitions (the mint is a stateless closure, not a handle).
+    const overrideAuthority = mintContentEditorDispatchAuthority(input.actorOverride.orgId);
+    let overrideRun;
+    try {
+      overrideRun = await createAgentRun(
+        {
+          id: overrideRunId,
+          templateId: template.id,
+          versionId: latestVersionId,
+          inputParams: payloadObject,
+          runBy: input.actorOverride.runBy,
+          orgId: input.actorOverride.orgId,
+          // The discriminator the bridge resolver keys on to suppress the
+          // platform-admin bypass for ONLY this per-user widget path (cinatra#408).
+          sourceType: input.actorOverride.sourceType,
+        },
+        overrideAuthority,
+      );
+    } catch (err) {
+      if (err instanceof OrgWriteRefusedError && err.reason === "capability-denied") {
+        throw new OrganizationArchivedDispatchError(input.actorOverride.orgId, "content-editor");
+      }
+      throw err;
+    }
     const overrideText = JSON.stringify({
       ...payloadObject,
       cinatra_run_id: overrideRun.id,
@@ -383,18 +406,32 @@ async function prepareDispatch(
   // (see the override-path note above for the linearization semantics).
   await assertPreCreateAuthorized(input);
   const runId = `run_${randomUUID()}`;
-  const run = await createAgentRun({
-    id: runId,
-    templateId: template.id,
-    versionId: latestVersionId,
-    inputParams: payloadObject,
-    runBy: identity.runBy,
-    orgId: identity.orgId,
-    // Distinct discriminator: this run carries OBO identity for a host-side
-    // blocking A2A dispatch; it is NOT a worker-executed agent_builder run and
-    // is never enqueued.
-    sourceType: "content_editor_dispatch",
-  });
+  // cinatra#1940 P3: mint BEFORE the guarded create — see the actorOverride
+  // branch above for the same rationale.
+  const identityAuthority = mintContentEditorDispatchAuthority(identity.orgId);
+  let run;
+  try {
+    run = await createAgentRun(
+      {
+        id: runId,
+        templateId: template.id,
+        versionId: latestVersionId,
+        inputParams: payloadObject,
+        runBy: identity.runBy,
+        orgId: identity.orgId,
+        // Distinct discriminator: this run carries OBO identity for a host-side
+        // blocking A2A dispatch; it is NOT a worker-executed agent_builder run and
+        // is never enqueued.
+        sourceType: "content_editor_dispatch",
+      },
+      identityAuthority,
+    );
+  } catch (err) {
+    if (err instanceof OrgWriteRefusedError && err.reason === "capability-denied") {
+      throw new OrganizationArchivedDispatchError(identity.orgId, "content-editor");
+    }
+    throw err;
+  }
 
   // Inject cinatra_run_id into the message text (mirrors execution.ts:1332).
   const text = JSON.stringify({ ...payloadObject, cinatra_run_id: run.id });

@@ -78,6 +78,7 @@ import {
   runResourceProjectMove,
   runAgentRunMoveWithOutputs,
 } from "@/lib/resource-project-move";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { AuthzError } from "@/lib/authz/errors";
 // Direct ESM handle to the mocked module so we can stack one-shot
 // implementations per-test without going through CJS `require()` (the
@@ -101,6 +102,16 @@ afterEach(() => {
 function setMockCteRows(rows: Array<Record<string, unknown>>) {
   mockCteRows = rows;
 }
+
+// cinatra#1939 wave 3 Stage D: both runners now run through the org-write
+// kernel's guarded fixed-batch (buildGuardedOrgWriteBatch prepends the org
+// write-lock + refusal-message + capability-guard queries ahead of the
+// module's own list). A stub authority satisfies the kernel's synchronous
+// authority checks; the guard SQL itself rides the same mocked
+// runPostgresQueriesSync as every other query here. GUARD_PREFIX documents
+// the prepended-statement count the assertions below skip over.
+const stubAuthority: OrgWriteAuthority = { orgId: "org-1", can: () => true };
+const GUARD_PREFIX = 3; // lock + set_config(refusal message) + guard SELECT
 
 // ---------------------------------------------------------------------------
 // assertProjectWritable helper
@@ -356,7 +367,7 @@ describe("buildResourceProjectMoveQueries — atomic shape", () => {
 });
 
 describe("runResourceProjectMove — single transaction (atomicity)", () => {
-  it("executes both queries in ONE transaction:true call", () => {
+  it("executes the guard prefix + both queries in ONE transaction:true call", () => {
     runResourceProjectMove({
       table: "objects",
       resourceId: "obj-1",
@@ -364,10 +375,19 @@ describe("runResourceProjectMove — single transaction (atomicity)", () => {
       oldProjectId: null,
       newProjectId: "p-new",
       actorId: "user-1",
+      orgId: "org-1",
+      authority: stubAuthority,
     });
     expect(capturedTxs).toHaveLength(1);
     expect(capturedTxs[0]!.transaction).toBe(true);
-    expect(capturedTxs[0]!.queries).toHaveLength(2);
+    expect(capturedTxs[0]!.queries).toHaveLength(GUARD_PREFIX + 2);
+    // Guard prefix shape: org write lock first, then the refusal-message
+    // set_config, then the capability guard SELECT against organization.
+    expect(capturedTxs[0]!.queries[0]!.text).toMatch(/pg_advisory_xact_lock/);
+    expect(capturedTxs[0]!.queries[2]!.text).toMatch(/public\."organization"/);
+    // The module's own two queries ride LAST, in order.
+    expect(capturedTxs[0]!.queries.at(-2)!.text).toMatch(/UPDATE "cinatra_test"\."objects"/);
+    expect(capturedTxs[0]!.queries.at(-1)!.text).toMatch(/resource_project_moves/);
   });
 
   it("if the UPDATE matched zero rows, throws (worker rolls the tx back)", () => {
@@ -381,7 +401,7 @@ describe("runResourceProjectMove — single transaction (atomicity)", () => {
             values: q.values ?? [],
           })),
         });
-        // First query (UPDATE) returns rowCount=0 (no match).
+        // Every query (incl. the UPDATE) returns rowCount=0 (no match).
         return opts.queries.map(() => ({ rows: [], rowCount: 0 }));
       },
     );
@@ -393,8 +413,38 @@ describe("runResourceProjectMove — single transaction (atomicity)", () => {
         oldProjectId: "p-OLD",
         newProjectId: "p-new",
         actorId: "user-1",
+        orgId: "org-1",
+        authority: stubAuthority,
       }),
     ).toThrow(/zero rows updated/);
+  });
+
+  it("refuses BEFORE any SQL when the authority is org-mismatched or lacks the capability", () => {
+    expect(() =>
+      runResourceProjectMove({
+        table: "objects",
+        resourceId: "obj-1",
+        resourceKind: "object",
+        oldProjectId: null,
+        newProjectId: "p-new",
+        actorId: "user-1",
+        orgId: "org-OTHER",
+        authority: stubAuthority, // minted for org-1
+      }),
+    ).toThrow(/authority-org-mismatch/);
+    expect(() =>
+      runResourceProjectMove({
+        table: "objects",
+        resourceId: "obj-1",
+        resourceKind: "object",
+        oldProjectId: null,
+        newProjectId: "p-new",
+        actorId: "user-1",
+        orgId: "org-1",
+        authority: { orgId: "org-1", can: () => false },
+      }),
+    ).toThrow(/authority-lacks-capability/);
+    expect(capturedTxs).toHaveLength(0); // fail-closed: no transaction opened
   });
 });
 
@@ -403,7 +453,7 @@ describe("runResourceProjectMove — single transaction (atomicity)", () => {
 // ---------------------------------------------------------------------------
 
 describe("runAgentRunMoveWithOutputs — moves run + provenance outputs", () => {
-  it("emits ONE composite CTE statement (single tx atomicity)", () => {
+  it("emits the guard prefix + ONE composite CTE statement (single tx atomicity)", () => {
     setMockCteRows([
       { run_id: "run-1", obj_ids: ["obj-A", "obj-B"], run_audit_id: "audit-run" },
     ]);
@@ -412,10 +462,12 @@ describe("runAgentRunMoveWithOutputs — moves run + provenance outputs", () => 
       oldProjectId: null,
       newProjectId: "p-new",
       actorId: "user-1",
+      orgId: "org-1",
+      authority: stubAuthority,
     });
     expect(capturedTxs).toHaveLength(1);
     expect(capturedTxs[0]!.transaction).toBe(true);
-    expect(capturedTxs[0]!.queries).toHaveLength(1);
+    expect(capturedTxs[0]!.queries).toHaveLength(GUARD_PREFIX + 1);
   });
 
   it("composite CTE includes BOTH run UPDATE AND objects UPDATE (provenance cascade)", () => {
@@ -427,8 +479,10 @@ describe("runAgentRunMoveWithOutputs — moves run + provenance outputs", () => 
       oldProjectId: null,
       newProjectId: "p-new",
       actorId: "user-1",
+      orgId: "org-1",
+      authority: stubAuthority,
     });
-    const sql = capturedTxs[0]!.queries[0]!.text;
+    const sql = capturedTxs[0]!.queries.at(-1)!.text;
     // Run update CTE.
     expect(sql).toMatch(/UPDATE "cinatra_test"\."agent_runs"\s+SET project_id = \$1/);
     // Objects update CTE — keyed by run_id (the provenance pin).
@@ -450,6 +504,8 @@ describe("runAgentRunMoveWithOutputs — moves run + provenance outputs", () => 
       oldProjectId: null,
       newProjectId: "p-new",
       actorId: "user-1",
+      orgId: "org-1",
+      authority: stubAuthority,
     });
     expect(out.movedOutputIds).toEqual(["obj-A", "obj-B", "obj-C"]);
     expect(out.auditId).toBe("audit-run");
@@ -464,9 +520,12 @@ describe("runAgentRunMoveWithOutputs — moves run + provenance outputs", () => 
       newProjectId: "p-new",
       actorId: "user-1",
       sourceRunId: "run-1",
+      orgId: "org-1",
+      authority: stubAuthority,
     });
-    // Two queries: agent_runs UPDATE + audit INSERT. NO objects UPDATE.
-    const queries = capturedTxs[0]!.queries;
+    // The module's OWN queries (after the guard prefix): agent_runs UPDATE +
+    // audit INSERT. NO objects UPDATE.
+    const queries = capturedTxs[0]!.queries.slice(GUARD_PREFIX);
     expect(queries).toHaveLength(2);
     expect(queries[0]!.text).toMatch(/UPDATE "cinatra_test"\."agent_runs"/);
     expect(queries[0]!.text).not.toMatch(/objects/);
@@ -483,6 +542,8 @@ describe("runAgentRunMoveWithOutputs — moves run + provenance outputs", () => 
         oldProjectId: "p-OLD",
         newProjectId: "p-new",
         actorId: "user-1",
+        orgId: "org-1",
+        authority: stubAuthority,
       }),
     ).toThrow(/zero rows updated/);
   });

@@ -1,0 +1,143 @@
+{
+  "note": "Archive adversarial acceptance coverage-completeness manifest (cinatra#1943 A0). Every row is one literal criterion from #1943's issue body (15 total, verbatim from the issue — see the gate script's CANONICAL_CRITERIA). This is NOT a scanned-surface manifest (contrast scripts/audit/system-writer-manifest.json): rows are hand-authored against the issue text, not discovered by a source scan, so there is no --write-manifest regeneration mode. `owner: \"sibling\"` rows point at a SIBLING slice's own test (w3-1939 / r-1940) via ciDependency rather than re-authoring it — #1943 never duplicates a criterion another slice's acceptance map already proves. `status` is a DECLARED claim: it may read \"green\" only once the gate's `strict` mode structurally confirms the referenced proof(s) exist, pass, AND the coverage-gate's own CI job `needs:` the job named in ciDependency (see the gate script header for the current, honestly-disclosed gap: NO row can pass strict mode yet, because the coverage-gate itself is not wired into any CI job in this PR by design — that wiring is a separate, always-human-gated follow-up per the design's Decision 6). Every row therefore ships `red` at authoring time (Decision 1's zero-baseline), each with a trackingIssue, even where the underlying proof already exists and passes today. Regenerate NOTHING — edit this file by hand, one row per criterion, and update kernelProof/e2eProof/ciDependency/status/trackingIssue as each tier (A0..A7) lands, per DESIGN.md's PR ladder in .claude/scratch/a-1943/DESIGN.md.",
+  "version": 1,
+  "rows": [
+    {
+      "criterion": "Forged/ambient run identity refused",
+      "owner": "self",
+      "kernelProof": {
+        "file": "src/lib/org-write/__tests__/authority-1938.test.ts",
+        "testName": "a cast cannot forge a VerifiedRunRef"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "perpetual-loops-invariants" },
+      "status": "red",
+      "trackingIssue": 1943
+    },
+    {
+      "criterion": "Stale-attempt lease reuse denied",
+      "owner": "self",
+      "kernelProof": {
+        "file": "packages/agents/src/__tests__/run-authority-adversarial.test.ts",
+        "testName": "a forged execution-attempt id (well-typed but not the leased one) is refused"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "test" },
+      "status": "red",
+      "trackingIssue": 1943
+    },
+    {
+      "criterion": "Ticket replay + unarchive/re-archive epoch invalidation",
+      "owner": "self",
+      "kernelProof": {
+        "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
+        "testName": "ticket replay across an unarchive/re-archive cycle: a stale ticket never un-refuses, and a fresh ticket at the new epoch redeems (positive control)"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
+      "status": "red",
+      "trackingIssue": 1943
+    },
+    {
+      "criterion": "Delete-vs-completion race",
+      "owner": "self",
+      "kernelProof": {
+        "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
+        "testName": "delete-vs-completion race: a run.complete write queued behind a guarded delete's exclusive fence sees the committed delete, never landing into a deleted org"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
+      "status": "red",
+      "trackingIssue": 1943
+    },
+    {
+      "criterion": "Platform-admin denial",
+      "owner": "self",
+      "kernelProof": {
+        "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
+        "testName": "platform-admin denial: an unconditionally-permissive authority is still refused for a mismatched org (org-scope beats any elevated capability bit)"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
+      "status": "red",
+      "trackingIssue": 1943
+    },
+    {
+      "criterion": "Unclassified job fails closed",
+      "owner": "self",
+      "kernelProof": {
+        "file": "src/lib/__tests__/background-jobs-authority-adversarial.test.ts",
+        "testName": "a real job's authority stripped post-hoc via Object.assign is refused at dispatch and never runs its handler"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "perpetual-loops-invariants" },
+      "status": "red",
+      "trackingIssue": 1943
+    },
+    {
+      "criterion": "Two-connection post-predicate-check archive race (write loses)",
+      "owner": "sibling",
+      "kernelProof": {
+        "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
+        "testName": "two-connection post-check race: a guarded write blocks behind the lifecycle locks, then LOSES to the committed archive (capability-denied)"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
+      "status": "red",
+      "trackingIssue": 1939
+    },
+    {
+      "criterion": "Cross-job capability misuse",
+      "owner": "self",
+      "ciDependency": { "workflow": "build-image.yml", "job": "perpetual-loops-invariants" },
+      "status": "red",
+      "trackingIssue": 1941
+    },
+    {
+      "criterion": "Pre-archive parent spawning post-archive child denied",
+      "owner": "self",
+      "ciDependency": { "workflow": "build-image.yml", "job": "test" },
+      "status": "red",
+      "trackingIssue": 1940
+    },
+    {
+      "criterion": "Lease expiry mid-completion → cancel-then-settle",
+      "owner": "self",
+      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
+      "status": "red",
+      "trackingIssue": 1940
+    },
+    {
+      "criterion": "Archive-vs-terminal-CAS race",
+      "owner": "sibling",
+      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
+      "status": "red",
+      "trackingIssue": 1940
+    },
+    {
+      "criterion": "Direct BA-DML-vs-archive, both lock interleavings",
+      "owner": "self",
+      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
+      "status": "red",
+      "trackingIssue": 1939
+    },
+    {
+      "criterion": "Dual-transport coverage",
+      "owner": "self",
+      "ciDependency": { "workflow": "build-image.yml", "job": "test" },
+      "status": "red",
+      "trackingIssue": 1942
+    },
+    {
+      "criterion": "BOUNDED, deterministic eventual-successful-archive under contention (a fixed retry ceiling, not an unbounded spin)",
+      "owner": "self",
+      "kernelProof": {
+        "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
+        "testName": "bounded contention: a fixed, finite set of concurrent guarded writers never blocks the exclusive fence past a generous deadline, and the fence succeeds once the writers drain"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
+      "status": "red",
+      "trackingIssue": 1943
+    },
+    {
+      "criterion": "3-role live Playwright proof (owner archives/unarchives; admin/member read-only; non-member 404) on a production-equivalent build",
+      "owner": "self",
+      "ciDependency": { "workflow": "e2e-app-suites.yml", "job": "archive-acceptance" },
+      "status": "red",
+      "trackingIssue": 1942
+    }
+  ]
+}

@@ -18,6 +18,7 @@ import { PrimitiveInvocationError } from "@cinatra-ai/mcp-client";
 // already gates entry to objects_update.
 import { assertProjectWritable } from "@/lib/project-writable";
 import { runResourceProjectMove } from "@/lib/resource-project-move";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { classifyObject } from "../classifier";
 import type { ClassifierOutput } from "../classifier/schema";
 import { resolveIdentity } from "../identity";
@@ -1491,6 +1492,22 @@ export function createObjectsPrimitiveHandlers() {
         // actor has access to the target — and grants are tenant-scoped.
         const userId =
           (request.actor as PrimitiveActorContext).userId ?? actorExt.source ?? "system";
+        // Org-write kernel guard (cinatra#1939 wave 3 Stage D): the move is a
+        // content.write on this object's org — the SAME `orgId` this handler
+        // already scoped the read/authz on above. A frame lacking the
+        // transport-minted authority fails closed rather than moving unguarded.
+        if (!orgId) {
+          throw new Error(
+            "objects_update project move requires an authenticated org context (actor.orgId is null)",
+          );
+        }
+        const moveAuthority = (request.actor as { orgWriteAuthority?: OrgWriteAuthority })
+          .orgWriteAuthority;
+        if (!moveAuthority) {
+          throw new Error(
+            "objects_update project move requires an org-write authority on the request frame",
+          );
+        }
         runResourceProjectMove({
           table: "objects",
           resourceId: existing.id,
@@ -1500,6 +1517,8 @@ export function createObjectsPrimitiveHandlers() {
           actorId: userId,
           sourceRunId: actorExt.runId ?? existing.runId ?? null,
           reason: input.reason ?? null,
+          orgId,
+          authority: moveAuthority,
         });
         // If the caller ONLY requested a project move (no data), return
         // early — no need to run the data upsert path.

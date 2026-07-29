@@ -5,6 +5,8 @@
 // the canonical writer and emits exactly one object_change_event in the
 // same DB transaction as the object mutation + Graphiti outbox enqueue.
 
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
+
 export type HistoryEffect =
   | "reversible-internal"
   | "irreversible-logged"
@@ -160,6 +162,12 @@ export type HistoryWriteOptions = {
   objectSchemaVersion?: string;
   // Actor context. Mandatory. The canonical writer never infers actor.
   actor: HistoryActor;
+  // Org-write kernel authority (cinatra#1939 wave 3 Stage D). Mandatory —
+  // minted host-side (verifySessionAuthority / sessionAuthorityFromResolvedRole
+  // / a forwarded MCP-frame authority) and independently verified against
+  // `actor.orgId` by the writer before any statement runs. The canonical writer
+  // never mints one itself (dark-slice discipline, cinatra#1938).
+  authority: OrgWriteAuthority;
 };
 
 export type VersionConflictReason =

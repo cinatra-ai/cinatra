@@ -17,6 +17,16 @@
  *     Inline `string_agg` subquery over `public."team"`.
  *   - `member_count` — total members of the org. Inline `count(*)`
  *     subquery over `public."member"`.
+ *   - `lifecycle_status` (cinatra#1942 archive program) — a computed
+ *     `CASE WHEN archivedAt IS NULL THEN 'active' ELSE 'archived' END`
+ *     dimension. The two literal string values a query can filter/group by
+ *     are exactly `'active'` and `'archived'` — no other value is ever
+ *     emitted. `archived_at` is the raw-timestamp sibling dimension for
+ *     callers that need the underlying predicate instead of the label.
+ *     Both are read-only projections of the org's `archivedAt` column —
+ *     they do not consult the `org_archive_activation` gate: with the
+ *     gate off no org has `archivedAt` set, so these dimensions are
+ *     inert-but-correct until S6 lands the real archive transaction.
  *
  * This file (inside the sdk-dashboard adapter directory) is
  * the only place the cube wiring is allowed to talk about Better Auth
@@ -35,6 +45,7 @@ export type OrganizationsTable = {
   readonly name: AnyColumn;
   readonly slug: AnyColumn;
   readonly createdAt: AnyColumn;
+  readonly archivedAt: AnyColumn;
 };
 
 export type MembersTable = {
@@ -57,7 +68,9 @@ export const ORGANIZATIONS_CUBE_DESCRIPTOR: CubeDescriptor = {
   description:
     "Organizations the caller is a member of via SecurityContext" +
     ".accessibleOrgIds. The Role / Teams / Members columns are derived per " +
-    "row against public.\"member\" and public.\"team\".",
+    "row against public.\"member\" and public.\"team\". lifecycle_status is " +
+    "'active' or 'archived' (cinatra#1942); the accessible-org predicate is " +
+    "unchanged by archive state — only the DEFAULT list view filters to active.",
   dimensions: [
     { id: "id", displayName: "Organization ID", type: "string" },
     { id: "name", displayName: "Name", type: "string" },
@@ -65,6 +78,9 @@ export const ORGANIZATIONS_CUBE_DESCRIPTOR: CubeDescriptor = {
     { id: "role", displayName: "Role", type: "string" },
     { id: "team_names", displayName: "Teams", type: "string" },
     { id: "created_at", displayName: "Created at", type: "date" },
+    // cinatra#1942 — see the file-level docblock for the exact semantics.
+    { id: "lifecycle_status", displayName: "Lifecycle status", type: "string" },
+    { id: "archived_at", displayName: "Archived at", type: "date" },
   ],
   measures: [
     { id: "count", displayName: "Organization count", type: "count" },
@@ -147,6 +163,11 @@ export function createOrganizationsCube(
         WHERE t."organizationId" = ${columns.id}
       ), '')`,
       created_at: columns.createdAt,
+      // cinatra#1942 — literal 'active'/'archived' strings, never anything
+      // else (matches the seed-config default filter's `values: ["active"]`
+      // and the fixed Archived-section's `values: ["archived"]`).
+      lifecycle_status: sql<string>`CASE WHEN ${columns.archivedAt} IS NULL THEN 'active' ELSE 'archived' END`,
+      archived_at: columns.archivedAt,
     },
     measureSql: {
       count: columns.id,

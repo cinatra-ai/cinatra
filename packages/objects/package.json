@@ -35,6 +35,7 @@
     "@cinatra-ai/llm": "workspace:*",
     "@cinatra-ai/mcp-client": "workspace:*",
     "@cinatra-ai/mcp-server": "workspace:*",
+    "@cinatra-ai/org-write-kernel": "workspace:*",
     "@cinatra-ai/sdk-extensions": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "drizzle-orm": "^0.45.2",
