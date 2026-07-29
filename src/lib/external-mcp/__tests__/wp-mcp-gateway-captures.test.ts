@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { matchesAsWholeToken } from "../../../../tests/e2e/wp-mcp-gateway/capture-annotations.mjs";
 
 // Offline assertion layer for the WP MCP gateway captures (issue #2016, S1 §5).
 //
@@ -50,6 +51,64 @@ describe("WP MCP gateway captures — provenance (drift-proof)", () => {
         expect(p[key], `${n} provenance.${key}`).toMatch(SHA256_RE);
       }
     }
+  });
+});
+
+describe("WP MCP gateway captures — producer discover-fallback matching (cinatra#2104, prefix-collision)", () => {
+  // Regression for the deferred PR #2083 review finding: the (f) advisory
+  // viaDiscoverAbilities fallback used to do
+  // `norm(haystack).includes(norm(abilityId))`, and norm() strips `-`/`/`, so
+  // `norm("fixturelabs/note-get")` is a substring of
+  // `norm("fixturelabs/note-get-unannotated")` — a discover payload listing
+  // ONLY the edge variant would falsely report the plain trio ability as
+  // discoverable. matchesAsWholeToken replaced that with a trailing
+  // token-boundary match. Both directions of the fix are pinned here: the
+  // collision must now be rejected, and a genuine match (verbatim ability id
+  // or its mcp-adapter wire form) must still be found.
+
+  it("collision REJECTED: a shorter ability id no longer matches when only a longer edge-case id is present", () => {
+    const haystack = JSON.stringify({
+      result: { content: [{ type: "text", text: '{"abilities":["fixturelabs/note-get-unannotated"]}' }] },
+    });
+    expect(matchesAsWholeToken(haystack, "fixturelabs/note-get")).toBe(false);
+  });
+
+  it("collision REJECTED on the wire form too: 'fixturelabs-note-get' no longer matches inside 'fixturelabs-note-get-unannotated'", () => {
+    const haystack = JSON.stringify({ tools: [{ name: "fixturelabs-note-get-unannotated" }] });
+    expect(matchesAsWholeToken(haystack, "fixturelabs/note-get")).toBe(false);
+  });
+
+  it("legitimate match STILL WORKS: verbatim ability id present as its own token", () => {
+    const haystack = JSON.stringify({
+      result: { content: [{ type: "text", text: '{"abilities":["fixturelabs/note-get","fixturelabs/note-set"]}' }] },
+    });
+    expect(matchesAsWholeToken(haystack, "fixturelabs/note-get")).toBe(true);
+  });
+
+  it("legitimate match STILL WORKS: mcp-adapter wire form (ns/ability -> ns-ability) present as its own token", () => {
+    const haystack = JSON.stringify({ tools: [{ name: "fixturelabs-note-get" }] });
+    expect(matchesAsWholeToken(haystack, "fixturelabs/note-get")).toBe(true);
+  });
+
+  it("legitimate match STILL WORKS when the ability id is the last token in the text (end-of-string boundary)", () => {
+    const haystack = 'discover-abilities returned: fixturelabs/note-get';
+    expect(matchesAsWholeToken(haystack, "fixturelabs/note-get")).toBe(true);
+  });
+
+  it("both edge-case ids are disambiguated from each other and from the plain trio ability", () => {
+    const haystack = JSON.stringify({
+      abilities: [
+        "fixturelabs/note-get-unannotated",
+        "fixturelabs/note-get-malformed",
+        "fixturelabs/note-get-contradictory",
+      ],
+    });
+    // The three EDGE ids are each present verbatim, so they DO match themselves...
+    expect(matchesAsWholeToken(haystack, "fixturelabs/note-get-unannotated")).toBe(true);
+    expect(matchesAsWholeToken(haystack, "fixturelabs/note-get-malformed")).toBe(true);
+    expect(matchesAsWholeToken(haystack, "fixturelabs/note-get-contradictory")).toBe(true);
+    // ...but none of them makes the PLAIN trio ability falsely discoverable.
+    expect(matchesAsWholeToken(haystack, "fixturelabs/note-get")).toBe(false);
   });
 });
 
