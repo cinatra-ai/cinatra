@@ -19,6 +19,7 @@
     "./manifest": "./src/manifest.ts",
     "./access-config": "./src/access-config.ts",
     "./assistant-declaration": "./src/assistant-declaration.ts",
+    "./extension-protection": "./src/extension-protection.ts",
     "./dependencies": "./src/dependencies.ts",
     "./consumes": "./src/consumes.ts",
     "./flash-href": "./src/flash-href.ts",

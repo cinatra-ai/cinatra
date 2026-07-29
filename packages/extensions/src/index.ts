@@ -177,6 +177,17 @@ export async function assertNoLockedCanonicalRow(
   // user-facing actions gate the same intent up front.
   const { assertCanRemoveExtension } = await import("./system-extension-inventory");
   assertCanRemoveExtension(packageName, op);
+  // DECLARATION-DRIVEN protection (cinatra#1927): an extension whose OWN
+  // `cinatra/config.json` declares `protected: true` refuses every destructive
+  // op here — the GENERIC pipeline's kind-agnostic choke-point, so a forged
+  // request that reaches the dispatcher directly (MCP / CLI / a hand-crafted
+  // server-action POST) is refused exactly like the UI path. Runs alongside the
+  // host-declared system-extension refusal above and BEFORE the canonical-store
+  // read: protection is a property of the shipped package, not of the row, so it
+  // holds even when the manifest row is unreadable. Core names NO package —
+  // the package declares, the host enforces.
+  const { assertExtensionNotProtected } = await import("./protected-extension");
+  await assertExtensionNotProtected(packageName, op);
   const { readInstalledExtensionsByPackageName } = await import("./canonical-store");
   let rows: Awaited<ReturnType<typeof readInstalledExtensionsByPackageName>> | null = null;
   try {

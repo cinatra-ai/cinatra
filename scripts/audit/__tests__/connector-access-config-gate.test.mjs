@@ -54,6 +54,14 @@ const FIXTURES = [
   { raw: { formatVersion: 1 }, pkg: "@cinatra-ai/openai-connector", ok: false }, // scope-less protected
   // gmail is NOT validator-forced in W1
   { raw: wrap({ default: "admin" }), pkg: "@cinatra-ai/gmail-connector", ok: true },
+  // cinatra#1927 — the generic, KIND-AGNOSTIC `protected` top-level domain is a
+  // KNOWN sibling of `access` in BOTH validators, and fail-closed when malformed.
+  { raw: { formatVersion: 1, protected: true, access: { scope: { default: "user" } } }, pkg: PKG, ok: true },
+  { raw: { formatVersion: 1, protected: false, access: { scope: { only: "admin" } } }, pkg: PKG, ok: true },
+  { raw: { formatVersion: 1, protected: true }, pkg: PKG, ok: true },
+  { raw: { formatVersion: 1, protected: "true", access: { scope: { default: "user" } } }, pkg: PKG, ok: false },
+  { raw: { formatVersion: 1, protected: 1, access: { scope: { default: "user" } } }, pkg: PKG, ok: false },
+  { raw: { formatVersion: 1, protectd: true, access: { scope: { default: "user" } } }, pkg: PKG, ok: false },
 ];
 
 describe("connector-access-config-gate — mirror rules", () => {
