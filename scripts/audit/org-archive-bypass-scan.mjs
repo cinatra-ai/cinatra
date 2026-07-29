@@ -36,7 +36,7 @@
  *   2. Session lifecycle-column writes — a dedicated detector for raw SQL
  *      `UPDATE ... session ... SET ... "activeOrganizationId"|"activeTeamId"`
  *      AND `INSERT INTO ... session ...` naming either column (covers
- *      upsert/ON CONFLICT shapes too — codex 1942-v2 r0 #5), plus Drizzle
+ *      upsert/ON CONFLICT shapes too — a V2 review finding), plus Drizzle
  *      `.update(betterAuthSessions).set({...})` and
  *      `.insert(betterAuthSessions)...values({...})` naming either column,
  *      since `scanSource()`'s table-level matcher does not model
@@ -115,7 +115,7 @@ const SESSION_RAW_SQL_RE = new RegExp(
 // Raw SQL INSERT (incl. upsert / ON CONFLICT DO UPDATE): an INSERT whose
 // target is the (possibly schema-qualified, possibly quoted) `session` table
 // and whose statement names either lifecycle column within a bounded window
-// (codex 1942-v2 r0 #5 — the UPDATE-only detector missed insert/upsert
+// (a V2 review finding — the UPDATE-only detector missed insert/upsert
 // writes to these columns).
 const SESSION_RAW_INSERT_RE = new RegExp(
   String.raw`\bINSERT\s+INTO\s+(?:[A-Za-z_$][\w$]*\s*\.\s*)?"?session"?\s*\([\s\S]{0,500}?"(${SESSION_COLUMNS.join(
@@ -138,7 +138,7 @@ const SESSION_DRIZZLE_RE = new RegExp(
 
 // Drizzle: `.insert(betterAuthSessions)` ... `.values({ ... })` (or an
 // `.onConflictDoUpdate` upsert) naming either lifecycle column within the
-// same bounded window (codex 1942-v2 r0 #5).
+// same bounded window (the same V2 review finding).
 const SESSION_DRIZZLE_INSERT_RE = new RegExp(
   String.raw`\.insert\s*\(\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)*betterAuthSessions\b[\s\S]{0,500}?(${SESSION_COLUMN_GROUP})\b`,
   "g",

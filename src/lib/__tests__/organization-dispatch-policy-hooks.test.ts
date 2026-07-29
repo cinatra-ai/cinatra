@@ -1,7 +1,7 @@
 /**
  * Dual-transport hook-CONTRACT test (cinatra#1942 archive V2, Decision 5;
- * codex r0 finding #14: "a mis-shaped matcher/mutation could silently
- * no-op"). Proves the top-level `hooks:` layer (built in
+ * the design review's warning that "a mis-shaped matcher/mutation could
+ * silently no-op"). Proves the top-level `hooks:` layer (built in
  * `@/lib/organization-dispatch-policy`, wired in `src/lib/auth.ts`) actually
  * FIRES against a REAL `betterAuth()` instance on BOTH transports:
  *   - raw HTTP  (`auth.handler(new Request(...))`, mirrors
@@ -353,7 +353,7 @@ describe("dispatch-hook endpoint policy — PROHIBITED endpoints refuse on an ar
     ).resolves.toBeTruthy();
   });
 
-  // --- codex 1942-v2 r0 #1 — the organizationId-spoof exploit is DEAD ------
+  // --- V2 review finding 1 — the organizationId-spoof leg is DEAD ---------
   it("SPOOF PIN: add-team-member with a planted ACTIVE organizationId still refuses (target = the team's org)", async () => {
     // A second, ACTIVE org the attacker points the checker at.
     const activeOrgId = await seedOrg(auth, ownerUserId);
@@ -368,7 +368,7 @@ describe("dispatch-hook endpoint policy — PROHIBITED endpoints refuse on an ar
     expect(res.status).toBe(403);
   });
 
-  // --- codex 1942-v2 r0 #3 — the extended prohibit set fires (raw HTTP; a
+  // --- V2 review finding 3 — the extended prohibit set fires (raw HTTP; a
   // wrong path name would 404 here, so these also pin the endpoint names) ---
   it("raw HTTP POST /organization/invite-member refuses on the archived org", async () => {
     const res = await rawPost(
@@ -547,7 +547,7 @@ describe("dispatch-hook endpoint policy — CLEANUP endpoints stay ALLOWED on an
   });
 });
 
-describe("dispatch-hook endpoint policy — end-to-end SPLIT read-error polarity (codex r0 #6), through a REAL betterAuth() instance", () => {
+describe("dispatch-hook endpoint policy — end-to-end SPLIT read-error polarity through a REAL betterAuth() instance", () => {
   // A forced `readArchivedAt` failure, injected into the SAME hook wiring
   // `src/lib/auth.ts` uses in production (just with a broken reader) — this
   // closes the loop between the exhaustive PURE decideDispatchPolicy

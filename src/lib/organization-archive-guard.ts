@@ -17,7 +17,7 @@ import "server-only";
  * lifecycle-gated / out of scope by migration doctrine.
  *
  * FAIL-CLOSED ON READ ERROR — unlike the dispatch-hook's per-endpoint SPLIT
- * polarity (Decision 5 / codex r0 finding #6), these are raw app-native
+ * polarity (design Decision 5), these are raw app-native
  * writes with NO kernel/DB backstop at all (they bypass org-write-kernel
  * entirely), so "can't verify archived state" must mean REFUSE, not proceed.
  * This mirrors the fail-closed posture the other org-lifecycle guards use

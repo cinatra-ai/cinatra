@@ -18,13 +18,13 @@ import { readOrganizationArchivedAt } from "@/lib/organization-archive-guard";
  *    shape (never hides on uncertainty, only on a confirmed archived row).
  *  - Mechanism 3 — the dispatch-hook BEFORE-hook: a per-endpoint allow/
  *    prohibit policy for organization mutation endpoints when the target org
- *    is archived, with a SPLIT read-error polarity (design codex r0 finding
- *    #6): prohibited (mutation) endpoints fail CLOSED, cleanup/exit
+ *    is archived, with a SPLIT read-error polarity (a design-review
+ *    ruling): prohibited (mutation) endpoints fail CLOSED, cleanup/exit
  *    endpoints fail OPEN. Fires before the endpoint on BOTH transports (raw
  *    HTTP via the catch-all route; in-process `auth.api.*`).
  *
- * TARGET RESOLUTION IS ENDPOINT-CLASS-AWARE (V2 adversarial review, codex
- * 1942-v2 r0 findings #1/#2): the org whose `archivedAt` this policy checks
+ * TARGET RESOLUTION IS ENDPOINT-CLASS-AWARE (V2 adversarial-review
+ * findings 1 and 2): the org whose `archivedAt` this policy checks
  * is derived EXACTLY the way the endpoint itself derives its target —
  *  - team-target endpoints resolve ONLY via `body.teamId` -> the team's
  *    organization (an extra `body.organizationId` is IGNORED: trusting it
@@ -117,12 +117,12 @@ export function buildOrganizationListAfterHook() {
 
 /**
  * Endpoints that must REFUSE while the target org is archived. Fail CLOSED
- * on a read error (design Decision 5 / codex r0 #6) — there is no downstream
+ * on a read error (design Decision 5) — there is no downstream
  * DB fence for these Better-Auth membership/invitation/furniture writes
  * pre-Stage-E, so this hook IS the fence.
  *
  * The first five are the design's Decision 5 table. The rest were added
- * after the V2 adversarial review (codex 1942-v2 r0 finding #3): they are
+ * after the V2 adversarial review (its finding 3): they are
  * the REMAINING Better-Auth organization mutation endpoints — invitation
  * create, member remove / role change, server-only member add, team CRUD,
  * and the org-settings update. Decision 7's per-action inventory already
@@ -138,7 +138,7 @@ export const ARCHIVED_PROHIBITED_ENDPOINTS = new Set<string>([
   "/organization/set-active",
   "/organization/set-active-team",
   "/organization/accept-invitation",
-  // Adversarial-review extension (codex 1942-v2 r0 #3) — same class, same
+  // Adversarial-review extension (V2 review finding 3) — same class, same
   // Decision 7 ruling:
   "/organization/invite-member",
   "/organization/remove-member",
@@ -171,7 +171,7 @@ export type DispatchPolicyDecision = "allow" | "refuse" | "not-policed";
 /**
  * Pure decision function — no I/O, fully unit-testable. `archived` is
  * `"unknown"` when the archivedAt read (or the target resolution it depends
- * on) failed; the SPLIT polarity (codex r0 #6) means the decision differs by
+ * on) failed; the SPLIT polarity means the decision differs by
  * endpoint class in that case.
  */
 export function decideDispatchPolicy(
@@ -191,7 +191,7 @@ export function decideDispatchPolicy(
 /**
  * How each policed endpoint names the organization it acts on. This mirrors
  * Better Auth's OWN target derivation, which is the anti-spoof property
- * (codex 1942-v2 r0 #1): the policy must check exactly the org the endpoint
+ * (V2 review finding 1): the policy must check exactly the org the endpoint
  * will mutate, never an unrelated id a caller plants in the body.
  */
 export const ENDPOINT_TARGET_CLASS: Record<string, "team" | "invitation" | "organization"> = {
@@ -219,7 +219,7 @@ export const ENDPOINT_TARGET_CLASS: Record<string, "team" | "invitation" | "orga
  * no row) — the endpoint's own validation/authorization handles it, and this
  * policy stands aside. `error` = a lookup FAILED — the archived state is
  * unknowable, and the SPLIT polarity governs (prohibited -> refuse, cleanup
- * -> allow). Never a fallback to a different org (codex 1942-v2 r0 #2).
+ * -> allow). Never a fallback to a different org (V2 review finding 2).
  */
 export type DispatchTargetResolution =
   | { kind: "resolved"; organizationId: string }

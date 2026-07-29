@@ -7,19 +7,19 @@
  *
  * Truths locked here:
  *  - the endpoint classification is the design's allow/prohibit map PLUS the
- *    V2 adversarial-review extension (codex 1942-v2 r0 #3): the remaining
+ *    V2 adversarial-review extension (its finding 3): the remaining
  *    Better-Auth org mutation endpoints are prohibited too;
- *  - SPLIT read-error polarity (design codex r0 #6): a PROHIBITED endpoint
+ *  - SPLIT read-error polarity (a design-review ruling): a PROHIBITED endpoint
  *    refuses on an unknown (failed-read) archived state; a CLEANUP endpoint
  *    still allows;
  *  - an endpoint outside both lists is "not-policed" regardless of state;
- *  - target resolution is ENDPOINT-CLASS-AWARE (codex 1942-v2 r0 #1): a
+ *  - target resolution is ENDPOINT-CLASS-AWARE (V2 review finding 1): a
  *    team-target endpoint resolves ONLY via teamId (a caller-planted
  *    organizationId is ignored — the spoof pin), an invitation-target
  *    endpoint ONLY via invitationId, an org-target endpoint via
  *    organizationId / organizationSlug / active-org;
  *  - a resolution lookup ERROR yields {kind:"error"} — never a fallback to
- *    a different org (codex 1942-v2 r0 #2);
+ *    a different org (V2 review finding 2);
  *  - the set-active(null) / set-active-team(null) unset motions are never
  *    policed (the archived-org escape hatch).
  */
@@ -61,7 +61,7 @@ describe("decideDispatchPolicy", () => {
     });
   });
 
-  describe("archived === 'unknown' (a failed archivedAt or target read) — SPLIT polarity (codex r0 #6)", () => {
+  describe("archived === 'unknown' (a failed archivedAt or target read) — SPLIT polarity", () => {
     it("PROHIBITED endpoints fail CLOSED (refuse) — no downstream fence exists pre-Stage-E", () => {
       for (const path of ARCHIVED_PROHIBITED_ENDPOINTS) {
         expect(decideDispatchPolicy(path, "unknown")).toBe("refuse");
@@ -74,7 +74,7 @@ describe("decideDispatchPolicy", () => {
     });
   });
 
-  it("the prohibit list is the design's Decision 5 table plus the codex 1942-v2 r0 #3 extension", () => {
+  it("the prohibit list is the design's Decision 5 table plus the adversarial-review extension", () => {
     expect([...ARCHIVED_PROHIBITED_ENDPOINTS].sort()).toEqual(
       [
         // Design Decision 5:
@@ -117,7 +117,7 @@ describe("resolveDispatchTarget", () => {
   });
 
   describe("team-target endpoints (add/remove-team-member, set-active-team, update/remove-team)", () => {
-    it("resolves ONLY via teamId — a caller-planted organizationId is IGNORED (codex 1942-v2 r0 #1 spoof pin)", async () => {
+    it("resolves ONLY via teamId — a caller-planted organizationId is IGNORED (the wrong-org spoof pin)", async () => {
       const d = deps();
       d.readTeamOrganizationId.mockResolvedValue("org-archived-A");
       const res = await resolveDispatchTarget(
@@ -130,7 +130,7 @@ describe("resolveDispatchTarget", () => {
       expect(d.readTeamOrganizationId).toHaveBeenCalledWith("team-of-A");
     });
 
-    it("a team lookup ERROR is {kind:'error'} — never a fallback to another org (codex 1942-v2 r0 #2)", async () => {
+    it("a team lookup ERROR is {kind:'error'} — never a fallback to another org", async () => {
       const d = deps();
       d.readTeamOrganizationId.mockRejectedValue(new Error("db down"));
       const res = await resolveDispatchTarget(

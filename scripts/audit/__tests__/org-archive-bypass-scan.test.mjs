@@ -82,7 +82,7 @@ describe("a new app-native write site is caught — session lifecycle columns", 
       "activeTeamId",
     ],
     [
-      "raw SQL INSERT INTO session naming activeOrganizationId (codex 1942-v2 r0 #5)",
+      "raw SQL INSERT INTO session naming activeOrganizationId",
       'await q(`INSERT INTO public."session" (id, "userId", "activeOrganizationId") VALUES ($1, $2, $3)`);',
       "activeOrganizationId",
     ],
