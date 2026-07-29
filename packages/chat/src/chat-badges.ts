@@ -23,8 +23,9 @@ export const BUILD_AGENT_BADGE: SkillBadge = {
   pinned: true,
 };
 
-// Pinned beside the agent badge — the chat-workflow-authoring assistant
-// skill drives the rest of the flow once the user types into the prompt.
+// Pinned beside the agent badge — the workflow-authoring guidance (a
+// reference of the `chat-automation-authoring` router bundle) drives the
+// rest of the flow once the user types into the prompt.
 export const BUILD_WORKFLOW_BADGE: SkillBadge = {
   id: "__pinned_build_workflow__",
   name: "Build a workflow",

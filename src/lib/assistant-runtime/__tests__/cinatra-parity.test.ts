@@ -54,6 +54,7 @@ vi.mock("@cinatra-ai/skills/mcp-client", () => ({
 vi.mock("@cinatra-ai/skills", () => ({
   ensureInstalledSkillsRegistered: vi.fn(async () => undefined),
   resolveInstalledSkillSourcePath: vi.fn(async () => null),
+  retireSupersededChatSkillsOnce: vi.fn(async () => undefined),
 }));
 vi.mock("@/lib/wizard-staging-store", () => ({
   getAllStagedByType: () => [],

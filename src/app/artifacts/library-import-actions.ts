@@ -17,7 +17,8 @@
 //     Materializes a starter representation + writes a user-asserted
 //     eligibility for the chosen extension. There is no skill in the
 //     loop for this path, just a button click. Chat-driven authoring
-//     is live through the `chat-create-artifact` chat skill + the
+//     is live through the chat-create-artifact guidance (a reference of
+//     the `chat-assistant-core` router bundle) + the
 //     `artifact_authoring_emit` MCP primitive.
 // ---------------------------------------------------------------------------
 

@@ -37,10 +37,19 @@ import "server-only";
 // rows cannot regress), and a failed status read keeps everything (fail-open).
 
 import { existsSync, realpathSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { revalidatePath } from "next/cache";
+import { replaceSkillCatalogInDatabase } from "@/lib/database";
 import { registerExtensionSkill } from "./register-extension-skill";
 import { resolveSkillOwnerPackageCandidates } from "./manifest-identity";
+import { commitSkillChange } from "./storage/git-commit";
+import {
+  getSkillStoreRootPath,
+  getSkillsDataRootPath,
+  isRealpathContained,
+  readSkillsCatalog,
+} from "./skills-store";
 
 // ---------------------------------------------------------------------------
 // Skill-ID derivation (canonical home — re-exported by the dev watcher).
@@ -49,12 +58,49 @@ import { resolveSkillOwnerPackageCandidates } from "./manifest-identity";
 export type SkillRegistration = { packageName: string; skillId: string };
 
 /**
- * Skill-ID derivation. The chat's `assistant-skills` package is a special
- * case: its skills register under the `@cinatra-ai/chat:` namespace so they
- * stay consistent with the runner's chat skill-ids and the auth-policy
- * carve-out (which matches the `@cinatra-ai/chat:chat-` prefix — a
- * security-sensitive auth boundary + DB row key; do NOT change). Every other
- * skill package uses its own scoped name as the id prefix.
+ * The FIVE injectable successor packages of the retired
+ * `@cinatra-ai/assistant-skills` pack (cinatra#2090 S3 fold). Their bundles
+ * register under the `@cinatra-ai/chat:` namespace so they stay consistent
+ * with the runner's chat skill-ids and the auth-policy carve-out (which
+ * matches the `@cinatra-ai/chat:chat-` prefix — a security-sensitive auth
+ * boundary + DB row key; do NOT change).
+ *
+ * SECURITY: this is an EXACT (manifest-name, dir) allowlist. Matching the
+ * dir basename alone (the pre-fold `assistant-skills` special case) would let
+ * a foreign package mint privileged `@cinatra-ai/chat:chat-*` ids just by
+ * sitting in a directory with the right name; membership therefore requires
+ * BOTH the canonical dir basename AND the manifest `name` equal to that
+ * basename under the first-party vendor scope — i.e. exactly the five
+ * (`@cinatra-ai/<dir>`, `<dir>`) pairs, nothing wider. Expressed as
+ * dir-basename + scope-equality (not literal scoped names) per the
+ * instance-coupling gate: core carries no extension package-name literal;
+ * the semantics are the same exact-pair allowlist. The internal
+ * hitl-prompt-drive package is deliberately NOT here — it registers under
+ * its own scoped namespace and is resolved by capability, never by
+ * chat-namespace id.
+ */
+const CHAT_NAMESPACE_DIR_BASENAMES: ReadonlySet<string> = new Set([
+  "chat-assistant-core-skill",
+  "extension-authoring-skill",
+  "automation-authoring-skill",
+  "company-research-skill",
+  "blog-content-skill",
+]);
+const CHAT_NAMESPACE_VENDOR_SCOPE = "@cinatra-ai/";
+
+/**
+ * Skill-ID derivation. The five injectable chat successor packages (exact
+ * scoped-name allowlist above) register under the `@cinatra-ai/chat:`
+ * namespace; every other skill package uses its own scoped name as the id
+ * prefix.
+ *
+ * RESERVED-NAMESPACE guard: `@cinatra-ai/chat` is a privileged VIRTUAL
+ * namespace (the auth carve-out reads `@cinatra-ai/chat:chat-*`), never a
+ * real installable package. Without this guard a foreign package could mint
+ * carve-out ids by simply NAMING itself `@cinatra-ai/chat` (or the bare
+ * `cinatra-ai/chat`, which the normalization below would @-prefix) — the
+ * generic branch would emit the privileged prefix verbatim. Such a package
+ * is refused outright (throws); the fail-soft registration loop skips it.
  *
  * The storage path (separate from the skillId namespace) mirrors the on-disk
  * source package path; that mapping lives in `register-extension-skill.ts`.
@@ -64,11 +110,38 @@ export function deriveSkillRegistration(
   pkgDirName: string,
   slug: string,
 ): SkillRegistration {
-  if (pkgDirName === "assistant-skills") {
+  if (
+    CHAT_NAMESPACE_DIR_BASENAMES.has(pkgDirName) &&
+    pkgName === `${CHAT_NAMESPACE_VENDOR_SCOPE}${pkgDirName}`
+  ) {
     return { packageName: "@cinatra-ai/chat", skillId: `@cinatra-ai/chat:${slug}` };
   }
   const packageName = pkgName.startsWith("@") ? pkgName : `@${pkgName}`;
+  if (packageName === "@cinatra-ai/chat") {
+    throw new Error(
+      `deriveSkillRegistration: package "${pkgName}" (dir "${pkgDirName}") claims the reserved ` +
+        `@cinatra-ai/chat namespace but is not an allowlisted successor package — refusing to mint a privileged skill id.`,
+    );
+  }
   return { packageName, skillId: `${packageName}:${slug}` };
+}
+
+/**
+ * Scan-loop-safe variant: a package the reserved-namespace guard refuses
+ * yields `null` (skip THIS package) instead of aborting the surrounding
+ * extension scan — an installed impostor must degrade only itself, never all
+ * skill delivery.
+ */
+function safeDeriveSkillRegistration(
+  pkgName: string,
+  pkgDirName: string,
+  slug: string,
+): SkillRegistration | null {
+  try {
+    return deriveSkillRegistration(pkgName, pkgDirName, slug);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -99,12 +172,16 @@ export async function registerColocatedWorkspaceSkills(input: {
     const slug = slugEntry.name;
     const skillMdPath = path.join(skillsRoot, slug, "SKILL.md");
     if (!existsSync(skillMdPath)) continue;
-    const { packageName, skillId } = deriveSkillRegistration(
-      input.pkgName,
-      input.pkgDirName,
-      slug,
-    );
     try {
+      // Inside the fail-soft frame: the reserved-namespace guard in
+      // `deriveSkillRegistration` throws for a package impersonating
+      // `@cinatra-ai/chat`, and that refusal must skip THIS package's slug,
+      // never abort the whole scan.
+      const { packageName, skillId } = deriveSkillRegistration(
+        input.pkgName,
+        input.pkgDirName,
+        slug,
+      );
       await registerExtensionSkill({ skillId, packageName, skillMdPath });
       registered.push(skillId);
     } catch (err) {
@@ -413,9 +490,9 @@ async function isSkillExtensionLiveFailClosed(
 /**
  * The subset of `skillIds` whose OWNER package is explicitly tombstoned.
  * Owner identity is derived from the skillId's package prefix (`@scope/pkg:slug`)
- * through the same candidate union as the scan filter; the assistant-skills
- * carve-out prefix (`@cinatra-ai/chat`) has no lifecycle rows → kept, by the
- * no-row rule. Fail-open: a failed status read tombstones nothing.
+ * through the same candidate union as the scan filter; the chat successor
+ * packages' carve-out prefix (`@cinatra-ai/chat`) has no lifecycle rows →
+ * kept, by the no-row rule. Fail-open: a failed status read tombstones nothing.
  */
 async function tombstonedSkillIds(skillIds: readonly string[]): Promise<Set<string>> {
   const out = new Set<string>();
@@ -480,7 +557,7 @@ export function ensureInstalledSkillRegistered(
     for (const ext of exts) {
       if (!allow.has(ext.kind)) continue;
       const provides = ext.slugs.some(
-        (slug) => deriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug).skillId === skillId,
+        (slug) => safeDeriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug)?.skillId === skillId,
       );
       if (!provides) continue;
       const registered = await registerColocatedWorkspaceSkills({
@@ -557,9 +634,10 @@ export async function ensureInstalledSkillsRegistered(
       for (const ext of exts) {
         if (!allow.has(ext.kind)) continue;
         if (packagesDone.has(ext.pkgDir)) continue;
-        const provided = ext.slugs.map(
-          (slug) => deriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug).skillId,
-        );
+        const provided = ext.slugs.flatMap((slug) => {
+          const reg = safeDeriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug);
+          return reg ? [reg.skillId] : [];
+        });
         // Register a package only if it provides at least one still-pending id,
         // and register each providing package at most once.
         if (!pending.some((id) => provided.includes(id))) continue;
@@ -618,7 +696,7 @@ export async function resolveInstalledSkillSourcePath(
   for (const ext of exts) {
     if (!allow.has(ext.kind)) continue;
     for (const slug of ext.slugs) {
-      if (deriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug).skillId === skillId) {
+      if (safeDeriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug)?.skillId === skillId) {
         return path.join(ext.pkgDir, "skills", slug, "SKILL.md");
       }
     }
@@ -632,20 +710,38 @@ export async function resolveInstalledSkillSourcePath(
  * `cinatra.capabilities`. Returns null when no active extension provides the
  * capability. This is the indirection that lets core name a capability instead
  * of a specific extension/package/skillId.
+ *
+ * `opts.unique` (fail-closed ambiguity): when true, MORE than one active
+ * extension declaring the capability throws instead of returning the first
+ * match. First-match is fine for a delivery the user sees and can correct; a
+ * capability that feeds an INTERNAL system prompt (e.g.
+ * `chat.hitl-prompt-drive`) must never depend on filesystem scan order to
+ * pick between two rival providers.
  */
 export async function resolveSkillIdForCapability(
   capabilityKey: string,
-  opts?: { allowKinds?: readonly string[] },
+  opts?: { allowKinds?: readonly string[]; unique?: boolean },
 ): Promise<string | null> {
   const allow = new Set(opts?.allowKinds ?? DEFAULT_ALLOW_KINDS);
   const exts = await filterRetiredSkillExtensions(await scanSkillExtensions());
+  const matches: { pkgName: string; skillId: string }[] = [];
   for (const ext of exts) {
     if (!allow.has(ext.kind)) continue;
     const slug = ext.capabilities[capabilityKey];
     if (!slug) continue;
-    return deriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug).skillId;
+    const skillId = safeDeriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug)?.skillId;
+    if (!skillId) continue;
+    if (!opts?.unique) return skillId;
+    matches.push({ pkgName: ext.pkgName, skillId });
   }
-  return null;
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    throw new Error(
+      `Capability "${capabilityKey}" is declared by ${matches.length} active extensions ` +
+        `(${matches.map((m) => m.pkgName).join(", ")}) — refusing an order-dependent pick.`,
+    );
+  }
+  return matches[0].skillId;
 }
 
 /**
@@ -689,7 +785,7 @@ export async function isWidgetChatSkillId(skillId: string): Promise<boolean> {
       if (ext.kind !== "skill" && ext.kind !== "connector") continue;
       for (const [capabilityKey, slug] of Object.entries(ext.capabilities)) {
         if (!capabilityKey.startsWith(WIDGET_CHAT_CAPABILITY_PREFIX)) continue;
-        if (deriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug).skillId !== skillId) {
+        if (safeDeriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug)?.skillId !== skillId) {
           continue;
         }
         // The capability must point at a slug that actually ships a bundled
@@ -708,11 +804,13 @@ export async function isWidgetChatSkillId(skillId: string): Promise<boolean> {
 /**
  * Resolve a capability key to its skillId AND ensure that skill's body is in
  * the catalog, returning the skillId. Throws when no active extension provides
- * the capability (a configuration/install error the caller should surface).
+ * the capability (a configuration/install error the caller should surface),
+ * and — with `opts.unique` — when MORE than one does (fail-closed ambiguity;
+ * see `resolveSkillIdForCapability`).
  */
 export async function ensureSkillForCapability(
   capabilityKey: string,
-  opts?: { allowKinds?: readonly string[] },
+  opts?: { allowKinds?: readonly string[]; unique?: boolean },
 ): Promise<string> {
   const skillId = await resolveSkillIdForCapability(capabilityKey, opts);
   if (!skillId) {
@@ -864,11 +962,9 @@ async function resolveDeclaredSkillEdge(
   if (provider.slugs.length !== 1) return null;
   const slug = provider.slugs[0]!;
 
-  const { packageName, skillId } = deriveSkillRegistration(
-    provider.pkgName,
-    provider.pkgDirName,
-    slug,
-  );
+  const reg = safeDeriveSkillRegistration(provider.pkgName, provider.pkgDirName, slug);
+  if (!reg) return null; // reserved-namespace impostor: never mount from it
+  const { packageName, skillId } = reg;
   return {
     packageName,
     slug,
@@ -936,4 +1032,135 @@ export async function resolveDeclaredSkillEdgeForPackage(
 ): Promise<DeclaredSkillEdgeResolution | null> {
   if (typeof consumerPackageName !== "string" || consumerPackageName.length === 0) return null;
   return resolveDeclaredSkillEdge((e) => e.pkgName === consumerPackageName, role, "throw");
+}
+
+// ---------------------------------------------------------------------------
+// Superseded chat-namespace retirement (cinatra#2090 S3 fold).
+// ---------------------------------------------------------------------------
+
+/**
+ * EXACT-ID retirement of superseded extension-registered workspace skills
+ * (cinatra#2090 S3 fold). The store is upsert-only for extension registration
+ * and `isCustom`-preserving, so a catalog row whose slug was absorbed or
+ * renamed by a package consolidation survives forever unless something
+ * removes it — and a stale `@cinatra-ai/chat:<old-slug>` row keeps resolving
+ * for matching/injection long after its package stopped shipping the bundle.
+ *
+ * Deliberately NARROW, never a namespace sweep:
+ *   - only ids in the caller's EXACT list are touched (never "everything in
+ *     the namespace that isn't current" — a user/personal row that happens to
+ *     share the namespace must survive);
+ *   - a row is only removed when it is NOT personally owned and NOT
+ *     agent-bound (`ownerUserId`/`agentId` unset — the shape extension
+ *     registration writes);
+ *   - disk removal reuses the same lexical + realpath confinement as
+ *     `deleteCustomSkill` (nothing outside the store/data roots is deleted).
+ *
+ * Idempotent: ids with no matching row are skipped silently. Returns the ids
+ * actually retired.
+ */
+export async function retireExtensionSkillsByExactId(
+  skillIds: readonly string[],
+): Promise<string[]> {
+  if (skillIds.length === 0) return [];
+  const catalog = await readSkillsCatalog();
+  const wanted = new Set(skillIds);
+  const toRetire = catalog.skills.filter(
+    (skill) =>
+      wanted.has(skill.id) &&
+      !skill.ownerUserId &&
+      !skill.agentId,
+  );
+  if (toRetire.length === 0) return [];
+  const retiredIds = new Set(toRetire.map((s) => s.id));
+
+  replaceSkillCatalogInDatabase({
+    skillPackages: catalog.skillPackages,
+    skills: catalog.skills.filter((skill) => !retiredIds.has(skill.id)),
+  });
+
+  for (const skill of toRetire) {
+    const skillDiskDir = skill.sourcePath ? path.dirname(skill.sourcePath) : null;
+    if (!skillDiskDir) continue;
+    const resolvedSkillDiskDir = path.resolve(skillDiskDir);
+    const storeRoot = path.resolve(getSkillStoreRootPath());
+    const legacyRoot = path.resolve(getSkillsDataRootPath());
+    const insideStore =
+      resolvedSkillDiskDir.startsWith(storeRoot + path.sep) &&
+      isRealpathContained(resolvedSkillDiskDir, storeRoot);
+    const insideLegacy =
+      resolvedSkillDiskDir.startsWith(legacyRoot + path.sep) &&
+      isRealpathContained(resolvedSkillDiskDir, legacyRoot);
+    if (insideStore || insideLegacy) {
+      await rm(resolvedSkillDiskDir, { recursive: true, force: true });
+    }
+  }
+  commitSkillChange(
+    `skill: retire superseded extension skills (${[...retiredIds].join(", ")})`,
+  ).catch(() => undefined);
+
+  try { revalidatePath("/skills"); } catch { /* best-effort: non-RSC contexts (boot/instrumentation) lack the static-generation store */ }
+
+  return [...retiredIds];
+}
+
+
+/**
+ * The `@cinatra-ai/chat:<slug>` catalog rows the retired
+ * `@cinatra-ai/assistant-skills` pack registered whose slug NO LONGER exists
+ * in the successor bundle set. Registration is upsert-only and the store
+ * preserves `isCustom` rows, so without an explicit retirement these rows
+ * survive the fold and keep resolving (matching, injection, shell mounts)
+ * even though no installed package ships their bundle any more.
+ *
+ * EXACT ids, frozen at the fold: the successor routers keep
+ * `chat-assistant-core`, `company-research` and `blog-content` under the same
+ * namespace (those ids are NOT here), and `chat-hitl-prompt-drive` moved to
+ * the internal package's own namespace (its OLD chat-namespace id IS here).
+ * Never widen this to a namespace sweep — see
+ * `retireExtensionSkillsByExactId`.
+ */
+export const RETIRED_CHAT_NAMESPACE_SKILL_IDS = [
+  "@cinatra-ai/chat:chat-extension-authoring-core",
+  "@cinatra-ai/chat:chat-agent-authoring",
+  "@cinatra-ai/chat:chat-workflow-extension-authoring",
+  "@cinatra-ai/chat:chat-artifact-extension-authoring",
+  "@cinatra-ai/chat:chat-skill-extension-authoring",
+  "@cinatra-ai/chat:chat-agent-dispatch",
+  "@cinatra-ai/chat:chat-campaign-creation",
+  "@cinatra-ai/chat:chat-appointment-schedules",
+  "@cinatra-ai/chat:chat-run-polling",
+  "@cinatra-ai/chat:chat-create-artifact",
+  "@cinatra-ai/chat:chat-workflow-authoring",
+  "@cinatra-ai/chat:chat-extension-discovery",
+  "@cinatra-ai/chat:create-campaign",
+  "@cinatra-ai/chat:create-trigger",
+  "@cinatra-ai/chat:chat-hitl-prompt-drive",
+] as const;
+
+let retiredSupersededChatSkills: Promise<void> | null = null;
+
+/**
+ * Idempotent, memoized-per-process retirement of the superseded
+ * chat-namespace rows, run AFTER the successor bundle registers (the caller
+ * sequences it). Failures clear the memo so a later turn retries; they never
+ * propagate — a failed cleanup must not take down a chat turn.
+ */
+export function retireSupersededChatSkillsOnce(): Promise<void> {
+  if (retiredSupersededChatSkills) return retiredSupersededChatSkills;
+  retiredSupersededChatSkills = (async () => {
+    const retired = await retireExtensionSkillsByExactId(RETIRED_CHAT_NAMESPACE_SKILL_IDS);
+    if (retired.length > 0) {
+      console.log(
+        `[cinatra:skills] retired ${retired.length} superseded chat skill row(s): ${retired.join(", ")}`,
+      );
+    }
+  })().catch((err) => {
+    retiredSupersededChatSkills = null;
+    console.warn(
+      "[cinatra:skills] superseded chat-skill retirement failed (will retry):",
+      err instanceof Error ? err.message : err,
+    );
+  });
+  return retiredSupersededChatSkills;
 }

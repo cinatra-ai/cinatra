@@ -80,10 +80,14 @@ describe("core-extension-import-ban gate", () => {
     expect(baselineGrowth(committed, baseBaseline)).toEqual([]);
   });
 
-  it("derives extension names from package.json — incl. *-skills + the un-exempt anthropic-connector", () => {
+  it("derives extension names from package.json — incl. the `-skill` successors + the un-exempt anthropic-connector", () => {
     const names = discoverExtensionNames();
-    expect(names.has("@cinatra-ai/assistant-skills")).toBe(true); // plural-suffixed skill pkg the old regex missed
-    expect(names.has("@cinatra-ai/blog-writing-skill")).toBe(true); // and the singular `-skill` form
+    // The plural-suffixed assistant-skills pack (the case the old regex
+    // missed) was consolidated into singular `-skill` successors by
+    // cinatra#2090 S3; discovery must see them all.
+    expect(names.has("@cinatra-ai/chat-assistant-core-skill")).toBe(true);
+    expect(names.has("@cinatra-ai/hitl-prompt-drive-skill")).toBe(true);
+    expect(names.has("@cinatra-ai/blog-writing-skill")).toBe(true); // the singular `-skill` form
     expect(names.has("@cinatra-ai/anthropic-connector")).toBe(true); // un-exempt
   });
 

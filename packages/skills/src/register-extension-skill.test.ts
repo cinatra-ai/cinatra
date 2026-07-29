@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, rm, mkdir, readFile, symlink } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
@@ -43,7 +44,7 @@ vi.mock("./skills-registry", () => ({
   },
 }));
 
-import { registerExtensionSkill } from "./register-extension-skill";
+import { registerExtensionSkill, mirrorSkillBundleAssets } from "./register-extension-skill";
 
 const SKILL_MD = `---
 name: chat-assistant
@@ -112,5 +113,109 @@ describe("registerExtensionSkill — skills-layer invariant", () => {
     ).rejects.toThrow(/without a sourcePath/);
 
     await rm(dir, { recursive: true, force: true });
+  });
+});
+
+// Delivered-surface completeness (cinatra#2090 S3 fold): registration must
+// mirror the bundle's references/** beside the stored SKILL.md, because the
+// shell tool serves one-hop reference reads from the CANONICAL dir — a router
+// registered without its references promises paths that do not resolve.
+describe("registerExtensionSkill — bundle-asset mirroring (references/**)", () => {
+  let srcDir: string;
+  let storeDir: string;
+
+  beforeEach(async () => {
+    upsertSkillMock.mockReset();
+    srcDir = await mkdtemp(path.join(os.tmpdir(), "pss-src-"));
+    storeDir = await mkdtemp(path.join(os.tmpdir(), "pss-store-"));
+    await writeFile(path.join(srcDir, "SKILL.md"), SKILL_MD, "utf8");
+    await mkdir(path.join(srcDir, "references", "deep"), { recursive: true });
+    await writeFile(path.join(srcDir, "references", "one.md"), "ref one\n", "utf8");
+    await writeFile(path.join(srcDir, "references", "deep", "two.md"), "ref two\n", "utf8");
+  });
+
+  it("copies references/** (recursively) into the canonical dir; SKILL.md stays upsertSkill-owned", async () => {
+    const storedSkillMd = path.join(storeDir, "SKILL.md");
+    await writeFile(storedSkillMd, "CANONICAL BODY (written by upsertSkill)\n", "utf8");
+    upsertSkillMock.mockResolvedValue({
+      id: "@cinatra-ai/chat:chat-assistant",
+      sourcePath: storedSkillMd,
+    });
+
+    await registerExtensionSkill({
+      skillId: "@cinatra-ai/chat:chat-assistant",
+      packageName: "@cinatra-ai/chat",
+      skillMdPath: path.join(srcDir, "SKILL.md"),
+    });
+
+    expect(await readFile(path.join(storeDir, "references", "one.md"), "utf8")).toBe("ref one\n");
+    expect(await readFile(path.join(storeDir, "references", "deep", "two.md"), "utf8")).toBe("ref two\n");
+    // The canonical SKILL.md is upsertSkill's write — the mirror never overwrites it.
+    expect(await readFile(storedSkillMd, "utf8")).toBe("CANONICAL BODY (written by upsertSkill)\n");
+
+    await rm(srcDir, { recursive: true, force: true });
+    await rm(storeDir, { recursive: true, force: true });
+  });
+
+  it("mirrorSkillBundleAssets skips symlinks fail-closed (nothing outside the bundle is pulled in)", async () => {
+    const outside = await mkdtemp(path.join(os.tmpdir(), "pss-outside-"));
+    await writeFile(path.join(outside, "secret.md"), "outside\n", "utf8");
+    await symlink(path.join(outside, "secret.md"), path.join(srcDir, "references", "link.md"));
+    await symlink(outside, path.join(srcDir, "linked-dir"));
+
+    await mirrorSkillBundleAssets(srcDir, storeDir);
+
+    expect(existsSync(path.join(storeDir, "references", "one.md"))).toBe(true);
+    expect(existsSync(path.join(storeDir, "references", "link.md"))).toBe(false);
+    expect(existsSync(path.join(storeDir, "linked-dir"))).toBe(false);
+
+    await rm(srcDir, { recursive: true, force: true });
+    await rm(storeDir, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it("mirrorSkillBundleAssets refuses to write through a pre-existing symlink leaf in the storage dir", async () => {
+    const outside = await mkdtemp(path.join(os.tmpdir(), "pss-outside2-"));
+    await mkdir(path.join(storeDir, "references"), { recursive: true });
+    await symlink(path.join(outside, "target.md"), path.join(storeDir, "references", "one.md"));
+
+    await expect(mirrorSkillBundleAssets(srcDir, storeDir)).rejects.toThrow(/symlink leaf/);
+    expect(existsSync(path.join(outside, "target.md"))).toBe(false);
+
+    await rm(srcDir, { recursive: true, force: true });
+    await rm(storeDir, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it("is a no-op when the source bundle dir has no extra assets (single SKILL.md bundles)", async () => {
+    const bare = await mkdtemp(path.join(os.tmpdir(), "pss-bare-"));
+    await writeFile(path.join(bare, "SKILL.md"), SKILL_MD, "utf8");
+    await mirrorSkillBundleAssets(bare, storeDir);
+    expect(existsSync(path.join(storeDir, "references"))).toBe(false);
+    await rm(bare, { recursive: true, force: true });
+    await rm(srcDir, { recursive: true, force: true });
+    await rm(storeDir, { recursive: true, force: true });
+  });
+});
+
+// Appended alongside the mirroring suite: a pre-existing SYMLINKED DIRECTORY
+// in the storage tree must refuse the descent (a linked references/ would
+// redirect every copied leaf outside the canonical dir).
+describe("mirrorSkillBundleAssets — symlinked destination directory", () => {
+  it("refuses to descend through a symlinked destination directory", async () => {
+    const src = await mkdtemp(path.join(os.tmpdir(), "pss-src2-"));
+    const store = await mkdtemp(path.join(os.tmpdir(), "pss-store2-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "pss-outside3-"));
+    await writeFile(path.join(src, "SKILL.md"), SKILL_MD, "utf8");
+    await mkdir(path.join(src, "references"), { recursive: true });
+    await writeFile(path.join(src, "references", "one.md"), "ref one\n", "utf8");
+    await symlink(outside, path.join(store, "references"));
+
+    await expect(mirrorSkillBundleAssets(src, store)).rejects.toThrow(/symlinked directory/);
+    expect(existsSync(path.join(outside, "one.md"))).toBe(false);
+
+    await rm(src, { recursive: true, force: true });
+    await rm(store, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
   });
 });

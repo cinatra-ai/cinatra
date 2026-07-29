@@ -41,8 +41,11 @@ export const WORDPRESS_ASSISTANT_SKILL_BUNDLE = [
   "wordpress-post-authoring",
   "wordpress-media-library",
   "blog-content",
-  "chat-create-artifact",
-  "chat-run-polling",
+  // The former `chat-create-artifact` / `chat-run-polling` sub-skills were
+  // absorbed into the `chat-assistant-core` router as `references/*.md`
+  // (cinatra#2090 S3 fold): mounting the router delivers that guidance one
+  // shell-tool hop away, same as every other on-demand concern.
+  "chat-assistant-core",
 ] as const;
 
 // The WordPress assistant's persona / conversational identity — distinct from
@@ -93,8 +96,11 @@ export const DRUPAL_ASSISTANT_SKILL_BUNDLE = [
   "drupal-node-authoring",
   "drupal-taxonomy-and-media",
   "blog-content",
-  "chat-create-artifact",
-  "chat-run-polling",
+  // The former `chat-create-artifact` / `chat-run-polling` sub-skills were
+  // absorbed into the `chat-assistant-core` router as `references/*.md`
+  // (cinatra#2090 S3 fold): mounting the router delivers that guidance one
+  // shell-tool hop away, same as every other on-demand concern.
+  "chat-assistant-core",
 ] as const;
 
 // The Drupal assistant's persona / conversational identity — distinct from

@@ -21,15 +21,18 @@ export type ReadLocalPackageSkillInput = {
   packageDir?: string;
   /**
    * Extension directory name under `extensions/cinatra-ai/` — e.g.
-   * "assistant-skills". When set, the skill is resolved from
+   * "chat-assistant-core-skill". When set, the skill is resolved from
    * `extensions/cinatra-ai/{extensionDir}/skills/{skillSlug}/SKILL.md`
-   * instead of the `packages/` tree. Chat assistant skills live here.
+   * instead of the `packages/` tree. Prefer the catalog/capability resolvers
+   * (`ensureSkillForCapability`) for extension-shipped skills — this literal
+   * path escape hatch couples the caller to a concrete extension instance
+   * (its last core consumer, the chat HITL prompt, moved to capability
+   * resolution in the cinatra#2090 S3 fold).
    */
   extensionDir?: string;
   /**
    * Slug of the skill directory under the resolved skills root.
-   * e.g. "skill-prefill-generation", "research-data", "enrich-data",
-   * "chat-hitl-prompt-drive".
+   * e.g. "skill-prefill-generation", "research-data", "enrich-data".
    */
   skillSlug: string;
   /**
