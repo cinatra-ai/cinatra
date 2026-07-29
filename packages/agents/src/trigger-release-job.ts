@@ -25,6 +25,10 @@ import {
 // ground the run's armed/pending→queued/stopped transitions, scoped to the run's
 // own org.
 import { mintTriggerReleaseAuthority } from "@/lib/org-write/agent-run-authority-mint";
+// cinatra#1940 P3 (Decision 1): the archived-org pre-check, consulted BEFORE
+// any fire side-effect (routing/UX only — the kernel's run.execute ruling on
+// the guarded create/transition below is the enforcement point).
+import { readOrgArchivedAtForDispatch } from "@/lib/org-write/dispatch-freeze";
 
 // ---------------------------------------------------------------------------
 // runAgentRunTriggerReleaseJob
@@ -102,6 +106,46 @@ export async function runAgentRunTriggerReleaseJob(
   // immediate run whose row is absent is tolerated by the armed→queued CAS.
   const runForFire = await readAgentRunById(data.runId);
 
+  // ---------- Dispatch-freeze pre-check (cinatra#1940 P3, Decision 1) ----------
+  // Checked BEFORE any side-effect below: markTriggerReleased (either branch),
+  // the recurring clone's createAgentRunPendingInput, and createOrUpdateRunTrigger.
+  // A skip here never throws (a throw would BullMQ-retry a deterministic
+  // refusal) — leaving the run `armed` with the gate closed IS the freeze; on
+  // unarchive a later tick / manual re-release fires it normally. Fail-open on
+  // `null` (unknown) — this is routing/UX, not the enforcement point (the
+  // guarded create/transition below is the kernel backstop for the race
+  // window between this read and that write).
+  if (runForFire?.orgId) {
+    const archived = await readOrgArchivedAtForDispatch(runForFire.orgId);
+    if (archived === true) {
+      console.log(
+        `[trigger-release] run ${data.runId} org ${runForFire.orgId} is archived — skipping fire (audited)`,
+      );
+      try {
+        const { logAuditEvent, POLICY_VERSION } = await import("@/lib/authz");
+        void logAuditEvent({
+          actorPrincipalId: runForFire.runBy ?? undefined,
+          actorPrincipalType: "system",
+          authSource: "scheduler",
+          resourceType: "agent_run",
+          resourceId: runForFire.id,
+          operation: "create",
+          decision: "denied",
+          policyVersion: POLICY_VERSION,
+          runId: runForFire.id,
+          organizationId: runForFire.orgId,
+          metadata: { via: "trigger-fire", reason: "org-archived" },
+        });
+      } catch (auditErr) {
+        console.warn(
+          `[trigger-release] archived-org fire-gate audit write failed for run ${data.runId} (continuing):`,
+          auditErr instanceof Error ? auditErr.message : auditErr,
+        );
+      }
+      return;
+    }
+  }
+
   // ---------- Configuration-needs FIRE gate (cinatra #1057 ruling (b)) ----------
   // A scheduled/recurring trigger must NOT fire an agent whose REQUIRED
   // connectors are not configured for its owner. Re-checked HERE, at FIRE time,
@@ -158,13 +202,22 @@ export async function runAgentRunTriggerReleaseJob(
     // also makes createAgentRunPendingInput re-derive the SAME OBO scope-ceiling
     // chain as the schedule-defining run (the template owner anchor is locked
     // after first run), so the cloned run carries the identical ceiling.
-    const newRun = await createAgentRunPendingInput({
-      templateId: sourceRun.templateId,
-      runBy: sourceRun.runBy,
-      orgId: sourceRun.orgId,
-      inputParams: sourceRun.inputParams ?? {},
-      projectId: sourceRun.projectId,
-    });
+    // cinatra#1940 P3 (Decision 2): mint BEFORE the clone insert — the
+    // creation perimeter is now guarded, so the authority must exist before
+    // createAgentRunPendingInput runs (was previously minted only after, for
+    // the transition below). The clone shares sourceRun.orgId (non-null,
+    // checked above == newRun.orgId).
+    const releaseAuthority = mintTriggerReleaseAuthority(sourceRun.orgId);
+    const newRun = await createAgentRunPendingInput(
+      {
+        templateId: sourceRun.templateId,
+        runBy: sourceRun.runBy,
+        orgId: sourceRun.orgId,
+        inputParams: sourceRun.inputParams ?? {},
+        projectId: sourceRun.projectId,
+      },
+      releaseAuthority,
+    );
     // Arm the new run as immediate so the gate opens at run-start.
     // We call createOrUpdateRunTrigger directly here (we are inside the worker
     // — no actor context). The setRunTriggerForActor service is for
@@ -177,8 +230,6 @@ export async function runAgentRunTriggerReleaseJob(
       jobSchedulerId: null,
     });
     await markTriggerReleased(newRun.id);
-    // The clone shares sourceRun.orgId (non-null, checked above == newRun.orgId).
-    const releaseAuthority = mintTriggerReleaseAuthority(sourceRun.orgId);
     try {
       await transitionRunStatus(newRun.id, "pending_input", "queued", undefined, releaseAuthority);
     } catch (err) {

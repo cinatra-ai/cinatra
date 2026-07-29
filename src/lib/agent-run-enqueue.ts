@@ -26,6 +26,13 @@ import {
   enforceConnectorPolicy,
   type ConnectorPolicyMode,
 } from "@/lib/connector-policy";
+// cinatra#1940 P3 (Decision 1, enqueue row): pre-check only — the kernel
+// cannot guard a Redis enqueue. Fail-open on `null` (unknown); the
+// worker-start pre-check + kernel backstop cover the race window.
+import {
+  readOrgArchivedAtForDispatch,
+  OrganizationArchivedDispatchError,
+} from "@/lib/org-write/dispatch-freeze";
 
 // A `connectorDependencies` map value (cinatra#1056). Structurally identical to
 // `ConnectorDepValue` / `ConnectorDependencyMap` on `@cinatra-ai/agents/store`
@@ -377,6 +384,31 @@ export async function enqueueAgentRun(
           throw err;
         }
       }
+    }
+  }
+
+  // cinatra#1940 P3 (Decision 1, enqueue row): the archived-org pre-check,
+  // BEFORE enqueueBackgroundJob. Reuse an org id already resolved above
+  // (actorContext, or the connector-preflight actor) when available;
+  // otherwise one extra readAgentRunById. Harm analysis for the fail-open
+  // path: an enqueued job for a frozen org parks at worker-start (a no-op
+  // re-delay, not a write) — this pre-check only avoids the wasted round-trip.
+  const enqueueOrgId =
+    actorContext?.organizationId ?? preflightActor?.organizationId;
+  const archivedOrgId =
+    enqueueOrgId ??
+    (await (async () => {
+      try {
+        const { readAgentRunById } = await import("@cinatra-ai/agents/store");
+        const run = await readAgentRunById(record.runId);
+        return run?.orgId ?? undefined;
+      } catch {
+        return undefined;
+      }
+    })());
+  if (archivedOrgId) {
+    if ((await readOrgArchivedAtForDispatch(archivedOrgId)) === true) {
+      throw new OrganizationArchivedDispatchError(archivedOrgId, "enqueue");
     }
   }
 

@@ -17,11 +17,12 @@ import type {
 } from "@a2a-js/sdk/server";
 import { InMemoryTaskStore } from "@a2a-js/sdk/server";
 import {
-  createAgentRun,
   readAgentRunById,
   updateAgentRunA2ATaskId, // A2A taskId ↔ runId bridge
   readAgentTemplateById,   // needed for inputSchema validation
   jsonSchemaToZod,         // JSON Schema → Zod runtime converter
+  type CreateAgentRunInput,
+  type AgentRunRecord,
 } from "@cinatra-ai/agents";
 import { getActorContext } from "@cinatra-ai/llm/actor-context"; // ALS-frame org read
 
@@ -42,7 +43,10 @@ import { publishRunEvent } from "./streaming-bridge";
 // Bridges the @a2a-js/sdk `AgentExecutor` interface to Cinatra's virtual-agent
 // execution model. Cinatra virtual agents execute asynchronously via BullMQ:
 //
-//   1) createAgentRun() inserts an `agent_runs` row (status: "queued")
+//   1) config.createRunWithAuthority() inserts an `agent_runs` row (status:
+//      "queued") — a host-injected contract since cinatra#1940 P3 (the
+//      creation perimeter is guarded; this package cannot resolve an
+//      authority itself, see CreateRunWithAuthorityFn below)
 //   2) enqueueJob("AGENT_BUILDER_EXECUTION", { runId }) queues the worker
 //   3) the worker drives the run through running → completed/failed/stopped
 //      (or pauses on pending_approval / pending_input for HITL gates)
@@ -98,6 +102,19 @@ export type CreateAndEnqueueAgentRunFn = (
     connectorDependencies?: Record<string, string>;
   },
 ) => Promise<unknown>;
+
+// cinatra#1940 P3 (Decision 2, D2 caller matrix): the creation perimeter
+// (`createAgentRun`) is now guarded — this package deliberately imports NO
+// `@/lib` host modules (same injected-contract discipline as
+// `createAndEnqueueAgentRun` above), so authority resolution is host-side.
+// The host construction site (`src/lib/a2a-server.ts`) wires this to: a
+// HumanUser principal ⇒ the delegating member's authority
+// (`resolveRunCreationAuthority`); a Service/Internal/External principal ⇒
+// the system `mintExternalA2ADispatchAuthority` mint — then the guarded
+// `createAgentRun`.
+export type CreateRunWithAuthorityFn = (
+  input: CreateAgentRunInput,
+) => Promise<AgentRunRecord>;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -325,6 +342,17 @@ export type InProcessAgentExecutorOptions = CinatraA2AConfig & {
    */
   createAndEnqueueAgentRun?: CreateAndEnqueueAgentRunFn;
   /**
+   * cinatra#1940 P3 — REQUIRED in production (no default; a legacy direct
+   * `createAgentRun` fallback would either always fail-closed on a missing
+   * authority or silently create runs with no dispatch-freeze authority
+   * resolution, per caller). Absent ⇒ execute() fails the dispatch loud with
+   * a terminal `AUTHORITY_REQUIRED` event — the same fail-closed posture as
+   * `ORG_CONTEXT_REQUIRED` above, never a silent direct-call fallback. Tests
+   * that don't exercise the archived-org path may omit it only if they never
+   * reach the create step.
+   */
+  createRunWithAuthority?: CreateRunWithAuthorityFn;
+  /**
    * Constructor-injected lookup used by MultiAgentExecutor to surface the
    * server-resolved pinned `packageVersion` for a given taskId. Returning a
    * string pins the created `agent_runs` row to that version; undefined leaves
@@ -525,8 +553,25 @@ export class InProcessAgentExecutor implements AgentExecutor {
       // human / external caller has no oboCeiling → no composition. A provably-
       // disjoint composition fails the dispatch CLOSED (no run created) with a
       // terminal failed event, mirroring the ORG_CONTEXT_REQUIRED shape above.
+      // cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded —
+      // this package cannot resolve an authority itself (no `@/lib` imports),
+      // so a host-injected contract is required. Absent ⇒ fail the dispatch
+      // loud (never a silent direct-call fallback, which would either always
+      // refuse with a confusing "missing authority" error or skip the
+      // dispatch-freeze check entirely).
+      if (!this.config.createRunWithAuthority) {
+        eventBus.publish(
+          buildStatusUpdate(requestContext, "failed", {
+            final: true,
+            errorMessage:
+              "External A2A run rejected: no createRunWithAuthority contract wired (host misconfiguration)",
+            errorCode: "AUTHORITY_REQUIRED",
+          }),
+        );
+        return;
+      }
       try {
-        await createAgentRun({
+        await this.config.createRunWithAuthority({
           id: runId,
           templateId: this.config.templateId,
           inputParams,

@@ -32,6 +32,10 @@ import { snapshotSkillsAtRunStart } from "@/lib/agent-run-skills-used";
 // org, and thread it into every transitionRunStatus.
 import { mintAgentRunExecutionAuthority } from "@/lib/org-write/agent-run-authority-mint";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
+import { OrgWriteRefusedError } from "@cinatra-ai/org-write-kernel";
+// cinatra#1940 P3 (Decision 1, worker-start row): the archived-org pre-check
+// at job entry, before any dispatch work.
+import { readOrgArchivedAtForDispatch } from "@/lib/org-write/dispatch-freeze";
 import { readRunSelectedSkillRevisions } from "@/lib/run-selected-skill-revisions";
 import { resolveRunSkillDelivery } from "@cinatra-ai/skills/recommendation";
 import {
@@ -341,6 +345,39 @@ export function gateBackoffMs(attempt: number): number {
   const safeAttempt = Math.max(1, attempt);
   const ms = 30_000 * Math.pow(2, safeAttempt - 1);
   return Math.min(ms, 300_000);
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#1940 P3 (Decision 1, worker-start row) — dispatch freeze at
+// worker-start.
+//
+// Sentinel thrown when the archived-org pre-check (or its kernel backstop —
+// the guarded queued→running CAS refusing with `capability-denied`)
+// determines the run's org is archived. Handled in
+// background-jobs-registry.ts's AGENT_BUILDER_EXECUTION catch chain EXACTLY
+// like TriggerGateClosedError above: `job.moveToDelayed(...)` then
+// `throw new DelayedError()` — no retry consumed, active slot released, zero
+// new machinery. The row stays `queued` AND its BullMQ job survives, so
+// unarchive recovery is automatic (the next fire after unarchive dispatches
+// normally) — no reconcile machinery, no stuck-queued orphan. A flat 15-minute
+// re-delay (not exponential like the gate backoff above): this is an
+// indefinite park, not a bounded retry sequence — a months-long archive costs
+// one no-op tick per 15m per parked run.
+// ---------------------------------------------------------------------------
+export const ORG_ARCHIVED_FREEZE_DELAY_MS = 15 * 60 * 1000;
+
+export class OrgArchivedFreezeError extends Error {
+  readonly runId: string;
+  readonly delayMs: number;
+  constructor(args: { runId: string; delayMs?: number }) {
+    const delayMs = args.delayMs ?? ORG_ARCHIVED_FREEZE_DELAY_MS;
+    super(
+      `Organization archived — parking run ${args.runId} (retry in ${delayMs}ms)`,
+    );
+    this.name = "OrgArchivedFreezeError";
+    this.runId = args.runId;
+    this.delayMs = delayMs;
+  }
 }
 import {
   AgUiAdapter,
@@ -1549,6 +1586,18 @@ async function runAgentBuilderExecutionJobInner(
     return;
   }
 
+  // cinatra#1940 P3 (Decision 1, worker-start row): the archived-org
+  // pre-check, before any dispatch work (template load / status transition).
+  // Fail-open on `null` (unknown) — this is routing/UX; the guarded
+  // queued→running CAS below is the kernel backstop for the race window
+  // between this read and that write (caught around both CAS call sites).
+  if ((await readOrgArchivedAtForDispatch(run.orgId)) === true) {
+    console.log(
+      `[agent-builder] run ${runId} org ${run.orgId} is archived — parking (re-delay ${ORG_ARCHIVED_FREEZE_DELAY_MS}ms)`,
+    );
+    throw new OrgArchivedFreezeError({ runId });
+  }
+
   // 2. Load template to determine execution mode before any status transition.
   // The agentic path owns its own "running" transition inside runAgentBuilderAgenticJob,
   // so we must NOT mark as running here for that branch — otherwise the agentic job
@@ -1975,6 +2024,12 @@ async function runAgentBuilderExecutionJobInner(
         console.log(`[external-a2a] run ${runId} status no longer "queued" — skipping stale transition`);
         return;
       }
+      // cinatra#1940 P3 (Decision 1, worker-start row): the kernel backstop —
+      // archive landed between the pre-check above and this CAS. Map ONLY
+      // this narrow reason to the same re-delay park (never a bare denial).
+      if (err instanceof OrgWriteRefusedError && err.reason === "capability-denied") {
+        throw new OrgArchivedFreezeError({ runId });
+      }
       throw err;
     }
 
@@ -2113,6 +2168,12 @@ async function runAgentBuilderExecutionJobInner(
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
         console.log(`[wayflow] run ${runId} no longer queued — skipping stale transition`);
         return;
+      }
+      // cinatra#1940 P3 (Decision 1, worker-start row): the kernel backstop —
+      // archive landed between the pre-check above and this CAS. Map ONLY
+      // this narrow reason to the same re-delay park (never a bare denial).
+      if (err instanceof OrgWriteRefusedError && err.reason === "capability-denied") {
+        throw new OrgArchivedFreezeError({ runId });
       }
       throw err;
     }

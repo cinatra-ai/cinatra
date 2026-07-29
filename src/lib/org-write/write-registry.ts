@@ -364,14 +364,13 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     importBanned: true,
     allowedImporters: ["packages/agents/src/review-task-actions.ts"],
   },
-  // — new-run creation (Decision 7): both are plain drizzle inserts into
-  //   agent_runs (in store.ts), still OUTSIDE the guard. Comment wording avoids
-  //   the literal DML call shape — the OBO-ceiling structural scanner greps for
-  //   it and must keep seeing store.ts as the sole inserter. Registered NOW so
-  //   the coverage ledger KNOWS the hole;
-  //   #1940's dispatch freeze converts new-run creation and flips these rows.
-  //   The wave-6 proof reads "zero unguarded write exports OUTSIDE the approved,
-  //   issue-linked exception ledger" — these two are that linked remainder. —
+  // — new-run creation (#1940 P3, Decision 2): the exemption above is FLIPPED
+  //   — both are now guarded inserts (guardedRunWrite, capability run.execute)
+  //   into agent_runs (store.ts). Allowlist = the named callers (the full
+  //   caller matrix, Decision 2) PLUS the same "opaque store.ts / agents-barrel
+  //   accessor" tail already carried on transitionRunStatus/updateAgentRunStatus
+  //   above (an opaque `await import(...)` grants the whole module, so those
+  //   files sit on every store.ts writer row — intersection, not coincidence).
   {
     module: "packages/agents/src/store.ts",
     exportName: "createAgentRun",
@@ -379,11 +378,25 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     orgIdExtractor: "input.orgId (CreateAgentRunInput; NOT NULL column)",
     storageReferences: ["agent_runs"],
     cascadeOwnership: "inert-history",
-    importBanned: false,
-    importBanExemption: {
-      issue: 1940,
-      reason: "dispatch freeze converts new-run creation",
-    },
+    importBanned: true,
+    allowedImporters: [
+      "packages/agents/src/a2a-actions.ts",
+      "packages/agents/src/actions.ts",
+      "packages/agents/src/index.ts",
+      "packages/agents/src/lifecycle-repair-dispatch-store.ts",
+      "packages/agents/src/mcp/agent-tools-registry.ts",
+      "packages/agents/src/mcp/handlers.ts",
+      "src/lib/a2a-server.ts",
+      "src/lib/host-content-editor-dispatch.ts",
+      "src/lib/project-dispatch.ts",
+      // opaque store.ts / agents-barrel accessors (also on
+      // transitionRunStatus/updateAgentRunStatus):
+      "src/app/plugins-registry.tsx",
+      "src/lib/agent-run-enqueue.ts",
+      "src/lib/agent-runtime-dep-projection-backfill.ts",
+      "src/lib/extension-edge-bound-agent.ts",
+      "src/lib/extension-edge-bound-serving.ts",
+    ],
   },
   {
     module: "packages/agents/src/store.ts",
@@ -392,11 +405,19 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     orgIdExtractor: "input.orgId (NOT NULL column)",
     storageReferences: ["agent_runs"],
     cascadeOwnership: "inert-history",
-    importBanned: false,
-    importBanExemption: {
-      issue: 1940,
-      reason: "dispatch freeze converts new-run creation",
-    },
+    importBanned: true,
+    allowedImporters: [
+      "packages/agents/src/index.ts",
+      "packages/agents/src/run-actions.ts",
+      "packages/agents/src/trigger-release-job.ts",
+      // opaque store.ts / agents-barrel accessors (also on
+      // transitionRunStatus/updateAgentRunStatus):
+      "src/app/plugins-registry.tsx",
+      "src/lib/agent-run-enqueue.ts",
+      "src/lib/agent-runtime-dep-projection-backfill.ts",
+      "src/lib/extension-edge-bound-agent.ts",
+      "src/lib/extension-edge-bound-serving.ts",
+    ],
   },
 
   // — artifact substrate (postgres-sync world entry point) —

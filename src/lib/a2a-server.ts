@@ -13,6 +13,7 @@ import {
   readPublishedAgentTemplates,
   isAgentPubliclyDiscoverable,
   readAgentTemplateVersions,
+  createAgentRun,
   type AgentTemplateVersionRecord,
 } from "@cinatra-ai/agents";
 import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
@@ -22,6 +23,13 @@ import { getActivationGeneration } from "@/lib/extension-activation-generation";
 // binding (deferred from #1403 behind the route-graph ratchet; this slice
 // carries the annotated absorb records for the growth).
 import { resolveEdgeBoundServingDecision } from "@/lib/a2a-edge-bound-serving";
+// cinatra#1940 P3 (Decision 2, D2 caller matrix): the `createRunWithAuthority`
+// host wiring — a HumanUser principal resolves the delegating member's
+// authority; any other principal (Service/Internal/External A2A peer) mints
+// the system dispatch authority.
+import { getActorContext } from "@cinatra-ai/llm/actor-context";
+import { resolveRunCreationAuthority } from "@/lib/org-write/run-creation-authority";
+import { mintExternalA2ADispatchAuthority } from "@/lib/org-write/agent-run-authority-mint";
 
 // ---------------------------------------------------------------------------
 // A2A server mount singleton builder.
@@ -96,6 +104,21 @@ async function buildA2AMount(): Promise<A2AMount> {
     // Preferred chokepoint. Runs connector preflight before the BullMQ enqueue.
     createAndEnqueueAgentRun: async (record, options) => {
       await enqueueAgentRun(record, options);
+    },
+    // cinatra#1940 P3: the creation perimeter is now guarded (run.execute).
+    // The executor runs inside the same ALS ActorContext frame the route
+    // handler established, so this callback can read it directly — a
+    // HumanUser principal resolves the delegating member's authority; any
+    // other principal (Service/Internal/External A2A peer — the one
+    // genuinely principal-less child-run dispatch surface) mints the system
+    // dispatch authority.
+    createRunWithAuthority: async (input) => {
+      const actorCtx = getActorContext();
+      const authority =
+        actorCtx?.principalType === "HumanUser"
+          ? await resolveRunCreationAuthority(input.orgId, { userId: actorCtx.principalId })
+          : mintExternalA2ADispatchAuthority(input.orgId);
+      return createAgentRun(input, authority);
     },
     // Retained for the rare legacy code path inside the a2a package that
     // still calls `enqueueJob` directly. Production never hits this branch

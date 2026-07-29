@@ -295,6 +295,12 @@ import { getAuthSession, isPlatformAdmin, resolveOrgRoleForUser } from "@/lib/au
 // closed (Run access denied) instead of minting a non-member run-management authority.
 import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
+// cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded — the
+// agent_run primitive already receives request.actor.orgWriteAuthority
+// (forwarded by registry.ts for every primitive) but never consumed it for
+// creation; this resolver picks it up when usable, else falls back to the
+// delegating principal (the D-OBO-RESUME precedent below, applied to create).
+import { resolveRunCreationAuthority } from "@/lib/org-write/run-creation-authority";
 import {
   readTeamsForUser,
   readProjectGrantsForUser,
@@ -1051,17 +1057,30 @@ async function handleAgentBuilderRun(
   }
 
   try {
-    const run = await createAgentRun({
-      id: runId,
-      templateId: resolvedTemplateId,
-      versionId: latestVersionId,
-      inputParams: inputParamsParsed,
-      timeoutSeconds: timeoutSeconds ?? null,
-      runBy: request.actor?.userId,
-      orgId: organizationId,
-      projectId: projectIdForRun,
-      delegatedActorSnapshot: delegatedActorSnapshotJson,
+    // cinatra#1940 P3 (Decision 2): resolve whichever authority this frame
+    // already carries — a session frame's forwarded orgWriteAuthority (fast
+    // path), else the delegating principal (an OBO/agent-as-tool frame's
+    // run-bound authority never satisfies can("run.execute"), so it falls
+    // through here by construction).
+    const frameAuthority = (request.actor as { orgWriteAuthority?: OrgWriteAuthority } | undefined)?.orgWriteAuthority;
+    const creationAuthority = await resolveRunCreationAuthority(organizationId, {
+      orgWriteAuthority: frameAuthority,
+      userId: request.actor?.userId,
     });
+    const run = await createAgentRun(
+      {
+        id: runId,
+        templateId: resolvedTemplateId,
+        versionId: latestVersionId,
+        inputParams: inputParamsParsed,
+        timeoutSeconds: timeoutSeconds ?? null,
+        runBy: request.actor?.userId,
+        orgId: organizationId,
+        projectId: projectIdForRun,
+        delegatedActorSnapshot: delegatedActorSnapshotJson,
+      },
+      creationAuthority,
+    );
 
     // cinatra#1056 connector edges + cinatra#1062 LLM-provider package identity.
     await enqueueAgentRun({ runId }, enqueueDepsForTemplate(template));
