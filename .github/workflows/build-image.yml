@@ -571,6 +571,112 @@ jobs:
           CINATRA_DB_INTEGRATION_TESTS: '1'
         run: pnpm exec vitest run src/lib/dashboards/__tests__/integration/dashboard-actor-team-roles.integration.test.ts
 
+      # cinatra#1943 (archive adversarial acceptance suite, tier A0 / PR
+      # #2207). The file's own header comment already claimed it runs in
+      # THIS job — it didn't; grep over .github/workflows/ found no step
+      # invoking it. That gap silently held back several of #1943's
+      # coverage-completeness manifest rows (ticket replay,
+      # delete-vs-completion, platform-admin denial, bounded-contention, and
+      # the already-landed #1939 two-connection race the manifest points at
+      # rather than re-authoring) from ever reaching a green, CI-verified
+      # state. This step closes it, using the SAME
+      # CINATRA_DB_INTEGRATION_TESTS=1 + SUPABASE_DB_URL (job-level env
+      # above) pattern as every other step in this job.
+      #
+      # Guarded on the file's existence: #2207 (which adds this test file)
+      # may not be merged yet. `hashFiles` returns '' when the path matches
+      # nothing, so this step — and its stub below — degrade gracefully:
+      # green no-op before #2207 merges, the real suite the moment it does,
+      # with no follow-up PR required to "turn it on".
+      - name: Archive-race adversarial acceptance integration tests (cinatra#1943)
+        if: ${{ hashFiles('src/lib/__tests__/integration/org-write-archive-race.integration.test.ts') != '' }}
+        env:
+          CINATRA_DB_INTEGRATION_TESTS: '1'
+        run: pnpm exec vitest run src/lib/__tests__/integration/org-write-archive-race.integration.test.ts
+
+      - name: Archive-race adversarial acceptance tests — not yet landed (cinatra#1943)
+        if: ${{ hashFiles('src/lib/__tests__/integration/org-write-archive-race.integration.test.ts') == '' }}
+        run: echo "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts not present yet (cinatra#2207 not merged) — reporting this CI-wiring step as a deliberate green no-op stub until it lands; see cinatra#1943."
+
+  # Archive-acceptance coverage-completeness gate (cinatra#1943 Decision 1 /
+  # the "P1-CI" wiring PR). Wires scripts/audit/archive-acceptance-gate.mjs
+  # (authored in #1943's A0 slice, PR #2207) into CI.
+  #
+  # WHY THIS LIVES HERE, NOT A SEPARATE WORKFLOW FILE: GitHub Actions
+  # `needs:` cannot express a cross-workflow-file edge. Every row in the
+  # coverage-completeness manifest that names a CI dependency today points at
+  # a job living in THIS file (`test`, `extension-lifecycle-db-tests`,
+  # `perpetual-loops-invariants`) — the gate script's own header documents
+  # this exact finding from #1943 A0's grounding pass, and also documents
+  # that the design's original sketch (a separate `org-write-boundary-
+  # gate.yml`) does not exist in this repo. Putting this job in a different
+  # workflow file would leave every one of those rows structurally unable to
+  # satisfy `--strict` mode's `needs:` check, no matter how green the
+  # underlying tests are.
+  #
+  # DEGRADES GRACEFULLY: #2207 (the manifest + gate script themselves) may
+  # not be merged yet. Every step below guards on
+  # scripts/audit/archive-acceptance-gate.mjs actually existing in the
+  # checked-out tree — a green no-op stub before #2207 merges, the real gate
+  # the moment it does, no follow-up PR needed to "turn it on".
+  #
+  # `needs:` lists every job a manifest row's ciDependency currently names,
+  # so this job structurally depends on each of them — the hard CI-graph
+  # edge Decision 1's `--strict` mode looks for when it parses this workflow
+  # file's own YAML. `always()` below means this job's own run is NOT gated
+  # on those jobs' pass/fail (audit mode doesn't assert whether the
+  # referenced tests currently pass, only that the manifest is well-formed
+  # and every reference is grep-findable — a different, unrelated concern
+  # from whether `test`/`extension-lifecycle-db-tests`/
+  # `perpetual-loops-invariants` happened to go green this run); it still
+  # respects `detect`'s docs-only/draft skip.
+  #
+  # Only `audit` mode is a real (blocking) check here — the manifest-hygiene
+  # check Decision 1 says runs on every PR. `--strict` mode is run for
+  # visibility only and never fails this job: most of the manifest's 15 rows
+  # are honestly red until tiers A1-A7 land over the following weeks (each
+  # gated on a named sibling PR per DESIGN.md's tier table) — that is the
+  # correct, by-design state, not something this wiring PR should turn red
+  # CI over.
+  #
+  # KNOWN MISMATCH, FLAGGED RATHER THAN FIXED HERE: the gate script's own
+  # SELF_WORKFLOW/SELF_JOB constants are currently hardcoded to
+  # `org-write-boundary-gate.yml` / `org-write-boundary-gate` (the design's
+  # original, since-revised sketch — see the paragraph above). This job is
+  # instead named `archive-acceptance-gate` inside `build-image.yml`, per
+  # the finding above. Updating those two constants is a change to the gate
+  # script itself, owned by #1943/#2207 — out of scope for this
+  # workflow-only PR, which touches no script/manifest content. Reported
+  # back rather than forked.
+  archive-acceptance-gate:
+    name: Archive acceptance coverage-completeness gate (#1943)
+    needs: [detect, test, extension-lifecycle-db-tests, perpetual-loops-invariants]
+    if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      - name: Coverage-completeness gate — audit mode (manifest hygiene)
+        if: ${{ hashFiles('scripts/audit/archive-acceptance-gate.mjs') != '' }}
+        run: node scripts/audit/archive-acceptance-gate.mjs
+
+      - name: Coverage-completeness gate — strict mode (informational V6-readiness signal; never blocking here)
+        if: ${{ hashFiles('scripts/audit/archive-acceptance-gate.mjs') != '' }}
+        run: |
+          node scripts/audit/archive-acceptance-gate.mjs --strict || echo "::notice::--strict reports NOT READY — expected while #1943's tiers A1-A7 are still landing (see cinatra#1943 for the current tier); not a failure of this wiring job."
+
+      - name: Coverage-completeness gate — not yet landed (cinatra#2207 not merged)
+        if: ${{ hashFiles('scripts/audit/archive-acceptance-gate.mjs') == '' }}
+        run: echo "scripts/audit/archive-acceptance-gate.mjs not present yet (cinatra#2207 not merged) — reporting this CI-wiring job as a deliberate green no-op stub until it lands; see cinatra#1943."
+
   # Gate the canonical-extension invariants as an independent job so the gate
   # is visible regardless of the agents-suite baseline. Runs the
   # `pnpm test:invariants` script from packages/extensions (dispatcher +
