@@ -57,7 +57,12 @@ export type InvokerErrorCode =
   // ── destructive-confirmation (cinatra#2020 S5, invoker step 3) ───────────
   | "pending_confirmation" // destructive call PARKED pending the user's explicit confirmation — NOT executed; the message text is the model-facing rendering (§2.1)
   | "confirmation_unavailable" // confirmation subsystem/store failure or pending-cap hit — REFUSED fail-closed rather than executing unconfirmed (§2.3)
-  | "confirmation_args_too_large"; // args exceed the 256 KB canonical-JSON confirmation cap — an uninspectable blob must not be one-click-approved (§2.3)
+  | "confirmation_args_too_large" // args exceed the 256 KB canonical-JSON confirmation cap — an uninspectable blob must not be one-click-approved (§2.3)
+  // ── content-review (cinatra#2022 S7 PR-σ, invoker step 3b — sibling to
+  // the destructive-confirmation hook above, same fail-closed doctrine) ────
+  | "content_review_hold" // a content-classified write was HELD pending review — NOT executed; message is the model-facing rendering, same contract shape as pending_confirmation
+  | "content_review_rejected" // a content-classified write was REJECTED by the review gate — NOT executed and will not silently be retried without rework
+  | "content_review_unavailable"; // the content-review subsystem failed inside the hook — REFUSED fail-closed rather than executing unreviewed (mirrors confirmation_unavailable)
 
 /**
  * STABLE machine prefix of the `pending_confirmation` InvokerError message
@@ -71,21 +76,28 @@ export const PENDING_CONFIRMATION_MESSAGE_PREFIX = "pending_confirmation:";
 
 /** A typed transport / invocation error. NEVER carries the auth header or any
  * credential; `message` is safe to surface. `wpErrorCode` carries a WP_Error /
- * structured error code passthrough when the tool returned `isError`. */
+ * structured error code passthrough when the tool returned `isError`.
+ * `reviewHoldId` (cinatra#2022 S7 PR-σ) carries the content-review hook's own
+ * `holdId` for `content_review_hold` / `content_review_rejected` — structured
+ * correlation for a caller that needs it programmatically, mirroring how the
+ * destructive-confirmation hook's `pendingCallId` is (today) message-text-only;
+ * this gives the newer content-review path a structured field instead. */
 export class InvokerError extends Error {
   readonly code: InvokerErrorCode;
   readonly wpErrorCode?: string;
   readonly httpStatus?: number;
+  readonly reviewHoldId?: string;
   constructor(
     code: InvokerErrorCode,
     message?: string,
-    extra?: { wpErrorCode?: string; httpStatus?: number },
+    extra?: { wpErrorCode?: string; httpStatus?: number; reviewHoldId?: string },
   ) {
     super(message ?? `connector instance invoker: ${code}`);
     this.name = "InvokerError";
     this.code = code;
     if (extra?.wpErrorCode) this.wpErrorCode = extra.wpErrorCode;
     if (extra?.httpStatus !== undefined) this.httpStatus = extra.httpStatus;
+    if (extra?.reviewHoldId) this.reviewHoldId = extra.reviewHoldId;
   }
 }
 

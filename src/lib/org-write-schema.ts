@@ -31,6 +31,17 @@ export function orgWriteSchemaQueries(schemaName: string): { text: string }[] {
   expires_at           timestamptz NOT NULL,
   PRIMARY KEY (org_id, archive_epoch, run_id)
 )` },
+    // cinatra#1940 P4: durable finalizer bookkeeping — three
+    // additive columns, appended beside the CREATE per the idempotent-
+    // bootstrap style every ALTER in this tree follows. `finalize_attempts`
+    // drives the retry/escalation clock (the atomic conditional UPDATE in
+    // leases.ts increments it and re-verifies the lease is still expired in
+    // one round trip); `finalize_last_attempt_at` is observability;
+    // `finalize_escalated_at` is the idempotent escalation stamp (force-settle
+    // fires once per lease, re-stamped is a no-op).
+    { text: `ALTER TABLE "${s}"."org_archive_lease" ADD COLUMN IF NOT EXISTS finalize_attempts integer NOT NULL DEFAULT 0` },
+    { text: `ALTER TABLE "${s}"."org_archive_lease" ADD COLUMN IF NOT EXISTS finalize_last_attempt_at timestamptz` },
+    { text: `ALTER TABLE "${s}"."org_archive_lease" ADD COLUMN IF NOT EXISTS finalize_escalated_at timestamptz` },
     { text: `CREATE TABLE IF NOT EXISTS "${s}"."org_write_completion_ticket" (
   org_id               text NOT NULL,
   archive_epoch        integer NOT NULL,

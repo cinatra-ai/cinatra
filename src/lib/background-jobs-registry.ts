@@ -26,6 +26,7 @@ import {
   LIFECYCLE_REVIEW_ORCHESTRATION_LOOP_JOB_ID,
   LIFECYCLE_GATE_MAINTENANCE_LOOP_JOB_ID,
   ANTHROPIC_SKILL_UPLOAD_RECONCILE_SWEEP_LOOP_JOB_ID,
+  LEASE_EXPIRY_FINALIZE_LOOP_JOB_ID,
 } from "@/lib/background-jobs-names";
 // TYPE-ONLY (erased at compile; not a route-graph edge) — the reaper VALUE is
 // boot-registered through the slot below, never imported here.
@@ -297,6 +298,55 @@ export function registerAnthropicSkillReconcileRunner(
 
 function resolveAnthropicSkillReconcileRunner(): AnthropicSkillReconcileRunner | null {
   return globalThis.__cinatraAnthropicSkillReconcileRunner ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Lease-expiry finalizer runner slot (cinatra#1940 P4).
+//
+// Same posture as the slots above: the finalizer core
+// (`@cinatra-ai/agents/lease-expiry-finalizer`, which reaches the org-write
+// kernel fence + A2A cancel + agents store graph) is BOOT-REGISTERED by the
+// system-loops phase — never imported here, even dynamically (route-graph
+// ratchet: this registry sits in the reachable graph of the LOCKED dev-perf
+// routes). The recurring handler resolves through this single slot; it
+// no-ops LOUDLY (and re-delays) when the slot is empty — a skipped tick is
+// safe (the lease table durably records `finalize_attempts` and every
+// expired lease is re-swept next cycle), and the boot seed always registers
+// the runner BEFORE it seeds the loop job.
+// ---------------------------------------------------------------------------
+
+// The sweep summary shape is defined LOCALLY (a structural mirror of the
+// finalizer's own summary), not imported from
+// @cinatra-ai/agents/lease-expiry-finalizer: same route-graph-ratchet
+// rationale as ArtifactReviewResumeSweepSummary above — even a TYPE-ONLY
+// cross-package import of the finalizer module grows this locked registry's
+// reachable graph.
+type LeaseExpiryFinalizerSweepSummary = {
+  swept: number;
+  skippedLeaseGone: number;
+  cancelDeferred: number;
+  settled: number;
+  settledLeaseOnly: number;
+  escalated: number;
+  failed: number;
+};
+
+type LeaseExpiryFinalizerRunner = {
+  sweep: () => Promise<LeaseExpiryFinalizerSweepSummary>;
+};
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __cinatraLeaseExpiryFinalizerRunner: LeaseExpiryFinalizerRunner | undefined;
+}
+
+/** Boot-time registration (system-loops phase). Idempotent (last write wins). */
+export function registerLeaseExpiryFinalizerRunner(runner: LeaseExpiryFinalizerRunner): void {
+  globalThis.__cinatraLeaseExpiryFinalizerRunner = runner;
+}
+
+function resolveLeaseExpiryFinalizerRunner(): LeaseExpiryFinalizerRunner | null {
+  return globalThis.__cinatraLeaseExpiryFinalizerRunner ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -2431,6 +2481,57 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           throw new Error(`[webhook-outbound] delivery retryable: ${safeErrMsg}`);
         }
       }
+    },
+  },
+  [BACKGROUND_JOB_NAMES.LEASE_EXPIRY_FINALIZE]: {
+    // Settles EXPIRED `org_archive_lease` rows: durable runtime cancel with
+    // retry/escalation, then the audited fence settle
+    // (`finalizeExpiredLeaseRun`, packages/agents/src/run-transition.ts).
+    // MINTABLE maintenance: the finalizer core mints a purpose-scoped system
+    // authority holding ONLY `run.lease-expire` (least privilege — narrowed
+    // from the S2 placeholder grant, cinatra#1940 P2) through the
+    // `"lease-expiry-finalizer"` purpose. Org axis is per swept lease row
+    // (row-sweep) — never a single job-level org.
+    authority: {
+      authorityKind: "system-maintenance",
+      actorSource: "dispatcher-system-identity",
+      orgExtractor: { source: "row-sweep", note: "expired org_archive_lease rows' org_id" },
+      capabilities: ["run.lease-expire"],
+      allowedPurposes: ["lease-expiry-finalizer"],
+    },
+    payloadSchema: looseObject(),
+    async handle(job) {
+      // ~60-second sweep (cinatra#1940 P4). Settle latency is
+      // product-visible (the archive story's "cancelled and settled cleanly"
+      // + wave-3's delete-blocker drainage), so the cadence is tighter than
+      // this file's other maintenance loops — escalation lands at ≈5 minutes
+      // (attempts×cadence) instead of ≈25. The sweep never throws per-lease
+      // (each lease's own try/catch isolates a failure to itself); any
+      // unexpected throw propagates to runRecurringLoop, which reports it and
+      // always re-delays (cinatra#849).
+      const SIXTY_SECONDS_MS = 60 * 1000;
+      await runRecurringLoop({
+        job,
+        loopJobId: LEASE_EXPIRY_FINALIZE_LOOP_JOB_ID,
+        delayMs: SIXTY_SECONDS_MS,
+        label: "lease-expiry-finalizer",
+        run: async () => {
+          // Boot-registered slot (kept out of this registry's route graph). A
+          // skipped cycle is safe — the lease table durably records
+          // finalize_attempts and every expired lease is re-swept next cycle.
+          const runner = resolveLeaseExpiryFinalizerRunner();
+          if (!runner) {
+            console.warn("[lease-expiry-finalizer] runner slot empty — skipping cycle");
+            return;
+          }
+          const summary = await runner.sweep();
+          if (summary.swept > 0) {
+            console.log(
+              `[lease-expiry-finalizer] swept=${summary.swept} settled=${summary.settled} settledLeaseOnly=${summary.settledLeaseOnly} skippedLeaseGone=${summary.skippedLeaseGone} cancelDeferred=${summary.cancelDeferred} escalated=${summary.escalated} failed=${summary.failed}`,
+            );
+          }
+        },
+      });
     },
   },
 };
