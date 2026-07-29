@@ -80,8 +80,8 @@ const registryEntries = Object.entries(BACKGROUND_JOB_REGISTRY) as [
 // ---------------------------------------------------------------------------
 
 describe("background-jobs authority — classification completeness", () => {
-  it("classifies exactly 34 registered jobs (total record)", () => {
-    expect(registryEntries).toHaveLength(34);
+  it("classifies exactly 35 registered jobs (total record)", () => {
+    expect(registryEntries).toHaveLength(35);
   });
 
   it("every entry has authority that passes the runtime validator (fail-closed backstop)", () => {
@@ -95,7 +95,7 @@ describe("background-jobs authority — classification completeness", () => {
     }
   });
 
-  it("kind distribution matches the design (17 / 4 / 2 / 11)", () => {
+  it("kind distribution matches the design (17 / 4 / 2 / 12)", () => {
     const counts: Record<string, number> = {
       "no-org-write": 0,
       "originating-actor": 0,
@@ -107,7 +107,8 @@ describe("background-jobs authority — classification completeness", () => {
       "no-org-write": 17,
       "originating-actor": 4,
       "grandfathered-run": 2,
-      "system-maintenance": 11,
+      // cinatra#1940 P4 adds LEASE_EXPIRY_FINALIZE (mintable system-maintenance).
+      "system-maintenance": 12,
     });
   });
 
@@ -135,7 +136,7 @@ describe("background-jobs authority — classification completeness", () => {
 // ---------------------------------------------------------------------------
 
 describe("background-jobs authority — per-row classification snapshot", () => {
-  it("pins the exact classification of all 34 jobs", () => {
+  it("pins the exact classification of all 35 jobs", () => {
     const actual = Object.fromEntries(
       registryEntries.map(([jobName, handler]) => [
         NAME_BY_VALUE[jobName] ?? jobName,
@@ -188,6 +189,10 @@ describe("background-jobs authority — per-row classification snapshot", () => 
       // Anthropic Skills API; the workspace skills catalog is READ only.
       ANTHROPIC_SKILL_UPLOAD_RECONCILE: { kind: "no-org-write", actorSource: "none", orgSource: null, caps: null, runField: null, purposes: null },
       ANTHROPIC_SKILL_UPLOAD_RECONCILE_SWEEP: { kind: "no-org-write", actorSource: "none", orgSource: null, caps: null, runField: null, purposes: null },
+      // cinatra#1940 P4 — the lease-expiry finalizer sweep: mintable
+      // system-maintenance holding ONLY `run.lease-expire` through the
+      // dedicated `"lease-expiry-finalizer"` purpose (least privilege).
+      LEASE_EXPIRY_FINALIZE: { kind: "system-maintenance", actorSource: "dispatcher-system-identity", orgSource: "row-sweep", caps: ["run.lease-expire"], runField: null, purposes: ["lease-expiry-finalizer"] },
     };
 
     expect(actual).toEqual(expected);

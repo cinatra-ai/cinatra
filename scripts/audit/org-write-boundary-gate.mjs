@@ -138,6 +138,12 @@ export const SYSTEM_MINT_ALLOWLIST = new Set([
   // export is restricted separately by the R5-job-system-mint named-consumer
   // rule below (EMPTY allowlist day-1 — dark seam, no production caller yet).
   join("src", "lib", "org-write", "job-system-authority-mint.ts"),
+  // The lease-expiry finalizer mint (cinatra#1940 P4) — the SOLE exposer of
+  // `mintLeaseExpiryFinalizerAuthority` for the `"lease-expiry-finalizer"`
+  // purpose. Kept OUT of agent-run-authority-mint.ts (see that module's own
+  // comment) so the finalizer's archive/lease audit domain stays disjoint
+  // from normal run dispatch.
+  join("src", "lib", "org-write", "lease-expiry-authority-mint.ts"),
 ]);
 
 /** R3: the one legal unwrap consumer outside the kernel. */
@@ -255,6 +261,12 @@ export const LEGACY_RULE_PREFILTER_STRINGS = [
   "agent-run-authority-mint",
   "job-system-authority-mint",
   "background-jobs-system-frame",
+  // cinatra#1940 P4: the lease-expiry finalizer mint module's own fragment —
+  // keeps the header comment's guarantee ("a new rule's moduleRel basename
+  // should be added here too") intact for R2's opaque-access net, even though
+  // this module gets no dedicated R5 named-consumer rule (matching the
+  // precedent cinatra#1940 P3 set for its own three new mint helpers).
+  "lease-expiry-authority-mint",
 ];
 
 /** True iff `text` contains any prefilter substring — the predicate `main()`
