@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { getPooledDb } from "@/lib/db/pooled";
@@ -30,8 +31,9 @@ import {
   type ServerStoreQuery,
 } from "@/lib/connector-instance-server-store";
 import {
-  allowSiteInventoryIpRequest,
+  allowSiteInventoryRequest,
   checkSiteInventoryDebounce,
+  markSiteInventoryAccepted,
 } from "@/lib/site-inventory-rate-limit";
 
 export const runtime = "nodejs";
@@ -71,8 +73,16 @@ export const dynamic = "force-dynamic";
 //     reconciler's server-row diff run inside ONE Postgres transaction (the
 //     S3 round-1 atomicity fix): a failed apply rolls the accepted-sequence
 //     advance back with it, so the two can never diverge under a race.
-//   - Secrets (the `cnx_` credential) are never logged; audit metadata never
-//     carries credential material, only ids/reasons/counts.
+//   - The pre-auth limiter charges BOTH a best-effort IP bucket AND a
+//     credential-hash bucket (the stable secondary key — rotating the
+//     forwarded-for header under one credential is still throttled), with a
+//     bounded bucket table that fails CLOSED at saturation. The per-site
+//     debounce window is recorded only after a successful COMMIT, so a
+//     rejected send never burns a legit sender's retry slot.
+//   - Secrets (the `cnx_` credential) are never logged; the limiter holds
+//     only a hash of it; audit metadata never carries credential material or
+//     the caller IP (the IP travels only in the audit event's dedicated,
+//     typed field), only ids/reasons/counts.
 //
 // DELIBERATE SCOPE LIMIT (disclosed, non-blocking): this route does not wire
 // in-process catalog-cache invalidation (`onServerInvalidated`) — that
@@ -114,22 +124,25 @@ function rateLimited(retryAfterSeconds: number): NextResponse {
 
 /** Best-effort audit — never throws into the response path (mirrors every
  * other connect/* route's audit posture: the audit sink is a side channel,
- * not a correctness dependency). */
+ * not a correctness dependency). The caller IP travels ONLY in the audit
+ * event's dedicated typed field — never duplicated into the free-form
+ * metadata blob, which has different retention/redaction handling. */
 async function auditReject(
   reason: string,
   fields: { ip?: string; siteId?: string; instanceId?: string } = {},
 ): Promise<void> {
+  const { ip, ...nonPiiFields } = fields;
   try {
     await logAuditEvent({
       resourceType: "connector_instance",
-      resourceId: fields.instanceId ?? "unresolved",
+      resourceId: nonPiiFields.instanceId ?? "unresolved",
       actorPrincipalType: "system",
       authSource: "route",
       operation: "enrichment_rejected",
       decision: "denied",
       policyVersion: "connector-instance-site-inventory-intake",
-      ip: fields.ip,
-      metadata: { connectorKey: CONNECTOR_KEY, reason, ...fields },
+      ip,
+      metadata: { connectorKey: CONNECTOR_KEY, reason, ...nonPiiFields },
     });
   } catch {
     /* audit is best-effort */
@@ -162,27 +175,31 @@ async function auditAccept(fields: {
 /**
  * Bounded body read (contract 256 KB cap). Reads the stream chunk-by-chunk and
  * aborts the instant the cumulative byte count exceeds the cap. Deliberately
- * does NOT trust `Content-Length` alone — a payload-bomb sender can omit it,
- * lie about it, or use chunked transfer encoding (which carries no length
- * header at all) — so the cap is enforced against bytes actually received.
+ * does NOT trust `Content-Length` to ALLOW anything — a payload-bomb sender
+ * can omit it, lie about it, or use chunked transfer encoding — the header is
+ * consulted only as a reject-early pre-screen (it can lie low, never high,
+ * for that check), and the cap is always enforced against bytes actually
+ * received. FAIL-CLOSED on shape: a request whose body exposes no stream
+ * reader is refused outright rather than buffered whole — there is no
+ * unbounded-buffering path through this function.
  */
 async function readBoundedBody(
   request: Request,
   maxBytes: number,
 ): Promise<{ ok: true; text: string } | { ok: false }> {
-  const reader = request.body?.getReader();
-  if (!reader) {
-    // Some runtimes/tests hand back a body with no stream reader — fall back
-    // to a single buffered read, still cap-checked before any further use.
-    let text: string;
-    try {
-      text = await request.text();
-    } catch {
-      return { ok: false };
-    }
-    if (Buffer.byteLength(text, "utf8") > maxBytes) return { ok: false };
-    return { ok: true, text };
+  // Reject-only pre-screen: a DECLARED length over the cap is refused before
+  // a single byte is read. Never used to allow (the chunked loop below is the
+  // enforcement either way).
+  const declared = Number(request.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > maxBytes) return { ok: false };
+
+  let reader;
+  try {
+    reader = request.body?.getReader();
+  } catch {
+    return { ok: false };
   }
+  if (!reader) return { ok: false };
 
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -210,16 +227,23 @@ async function readBoundedBody(
 export async function POST(request: Request): Promise<Response> {
   const ip = clientIp(request);
 
-  // 1. Pre-auth, IP-only rate limit — before any credential check, body read,
-  // or DB call (an unauthenticated flood never amplifies into real work).
-  if (!allowSiteInventoryIpRequest({ ip })) {
+  // 1. Pre-auth rate limit — before any credential VALIDATION, body read, or
+  // DB call (an unauthenticated flood never amplifies into real work). The
+  // limiter charges the best-effort IP bucket AND a bucket keyed on a hash of
+  // the presented credential (string ops only up to here — no validation has
+  // run), so rotating the forwarded-for header under one credential is still
+  // throttled. The hash means the limiter never holds a live secret.
+  const authHeader = request.headers.get("Authorization");
+  const credential = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  const credentialKey = credential
+    ? createHash("sha256").update(credential, "utf8").digest("base64url")
+    : "no-credential";
+  if (!allowSiteInventoryRequest({ ip, credentialKey })) {
     return rateLimited(60);
   }
 
   // 2. Transport auth FIRST — the body is never read for an invalid
   // credential (payload-bomb defense for the unauthenticated path).
-  const authHeader = request.headers.get("Authorization");
-  const credential = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
   const requestOrigin = request.headers.get("Origin");
 
   const site = resolveVerifiedSiteFromCredential({
@@ -293,7 +317,10 @@ export async function POST(request: Request): Promise<Response> {
 
   // 7. Post-auth per-site debounce (contract-required 429 + Retry-After) — run
   // before the heavier schema parse / transactional apply so a repeated call
-  // within the window never reaches either.
+  // within the window never reaches either. READ-ONLY here: the window is
+  // recorded only after a successful COMMIT below, so a send that fails
+  // version/schema/anti-replay validation never burns the site's retry slot
+  // (a corrected retry goes straight through).
   const debounce = checkSiteInventoryDebounce({ siteId: site.siteId });
   if (!debounce.allowed) {
     await auditReject("debounced", { ip, siteId: site.siteId, instanceId });
@@ -380,6 +407,10 @@ export async function POST(request: Request): Promise<Response> {
     );
 
     await client.query("COMMIT");
+
+    // Start the site's debounce window ONLY now that the inventory is
+    // durably accepted — rejected sends above never reach this.
+    markSiteInventoryAccepted({ siteId: site.siteId });
 
     await auditAccept({
       siteId: site.siteId,

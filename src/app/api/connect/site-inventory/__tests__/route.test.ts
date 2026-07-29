@@ -230,13 +230,50 @@ beforeEach(() => {
 });
 
 describe("POST /api/connect/site-inventory — pre-auth surface (generic 400, no oracle)", () => {
-  it("429s + never authenticates once the pre-auth per-IP bucket is exhausted", async () => {
+  it("429s BEFORE authentication once the per-IP bucket is exhausted — attributable to the IP bucket alone", async () => {
+    // Warm-ups fail authentication (mock returns null) so the per-site
+    // debounce is never touched, and each carries a UNIQUE credential so the
+    // per-credential bucket never masks the IP bucket: the only limit the
+    // final request can trip is the IP bucket.
+    resolveSiteMock.mockReturnValue(null);
     for (let i = 0; i < 30; i++) {
-      await POST(req(validBody(), { "x-forwarded-for": "9.9.9.9" }));
+      await POST(
+        req(validBody(), {
+          "x-forwarded-for": "9.9.9.9",
+          Authorization: `Bearer cnx_warmup_${i}`,
+        }),
+      );
     }
-    const res = await POST(req(validBody(), { "x-forwarded-for": "9.9.9.9" }));
+    resolveSiteMock.mockClear();
+    const res = await POST(
+      req(validBody(), { "x-forwarded-for": "9.9.9.9", Authorization: "Bearer cnx_final" }),
+    );
     expect(res.status).toBe(429);
     expect(res.headers.get("Retry-After")).toBeTruthy();
+    // Denied PRE-AUTH: the credential validator never ran for the final call.
+    expect(resolveSiteMock).not.toHaveBeenCalled();
+  });
+
+  it("429s BEFORE authentication when one credential rotates x-forwarded-for (the secondary bucket defeats IP spoofing)", async () => {
+    resolveSiteMock.mockReturnValue(null);
+    for (let i = 0; i < 10; i++) {
+      await POST(
+        req(validBody(), {
+          "x-forwarded-for": `10.0.0.${i}`,
+          Authorization: "Bearer cnx_rotating_spoofer",
+        }),
+      );
+    }
+    resolveSiteMock.mockClear();
+    const res = await POST(
+      req(validBody(), {
+        "x-forwarded-for": "10.0.99.99",
+        Authorization: "Bearer cnx_rotating_spoofer",
+      }),
+    );
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBeTruthy();
+    expect(resolveSiteMock).not.toHaveBeenCalled();
   });
 
   it("400s an invalid/missing credential BEFORE the body is ever read", async () => {
@@ -322,7 +359,7 @@ describe("POST /api/connect/site-inventory — pre-auth surface (generic 400, no
 });
 
 describe("POST /api/connect/site-inventory — post-auth debounce", () => {
-  it("429s + Retry-After on a second call within the 60s per-site debounce window", async () => {
+  it("429s + Retry-After on a second call within 60s of an ACCEPTED send", async () => {
     const first = await POST(req(validBody()));
     expect(first.status).toBe(200);
     const second = await POST(req(validBody({ inventorySeq: 43 })));
@@ -330,6 +367,16 @@ describe("POST /api/connect/site-inventory — post-auth debounce", () => {
     expect(second.headers.get("Retry-After")).toBeTruthy();
     // The debounced call must never reach the transactional apply path.
     expect(tryAdvanceSiteInventoryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT burn the debounce window on a rejected send — a corrected retry goes straight through", async () => {
+    // An unsupported-version send fails post-auth validation…
+    const bad = await POST(req(validBody({ contractVersion: "v2" })));
+    expect(bad.status).toBe(400);
+    // …and the immediate corrected retry is accepted: only COMMITTED sends
+    // start the per-site window.
+    const good = await POST(req(validBody()));
+    expect(good.status).toBe(200);
   });
 });
 
