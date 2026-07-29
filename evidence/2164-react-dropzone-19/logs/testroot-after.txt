@@ -1,0 +1,2 @@
+ Test Files  1167 passed | 3 skipped (1170)
+      Tests  14023 passed | 22 skipped | 3 todo (14048)

@@ -1,0 +1,21 @@
+SIGNED_IN as lane2164b@example.com
+RDZ_VERSION 15.0.0
+SHOT evidence/2164-react-dropzone-19/screenshots/before-01-upload-surface-idle.png
+INPUT_ATTRS {"ariaLabel":null,"accept":"application/zip,.zip","multiple":true,"className":"sr-only","inlineStyle":""}
+INPUT_ACCESSIBLE_NAME "Select an extension package Click here or drag and drop"
+DROPPED_TXT {"types":["Files"],"fileCount":1}
+REJECT_MESSAGE "Only .zip are allowed"
+FILE_LIST_AFTER_REJECT 0
+SHOT evidence/2164-react-dropzone-19/screenshots/before-02-rejection-wrong-type.png
+DROPPED_ZIP {"types":["Files"],"fileCount":1}
+ACCEPTED_ITEMS ["lane2164-agent.zipdraftRemove fileLane 2164 DnD Proof AgentFixture agent proving the react-dropzone 19 drag-and-drop upload path still completes end to end.Prove the drop path end to end."]
+SHOT evidence/2164-react-dropzone-19/screenshots/before-03-accepted-zip-parsed.png
+SHOT evidence/2164-react-dropzone-19/screenshots/before-04-before-submit.png
+UPLOAD_POST_STATUS [303]
+POST_SUBMIT_URL /agents
+SHOT evidence/2164-react-dropzone-19/screenshots/before-05-after-submit.png
+RAPID_DOUBLE_DROP_ITEMS ["rapid-a.zip","rapid-b.zip"]
+SHOT evidence/2164-react-dropzone-19/screenshots/before-06-rapid-double-drop.png
+CONSOLE_ERROR_COUNT 1
+CONSOLE_ERROR_KINDS ["A tree hydrated but some attributes of the server rendered H"]
+DRIVER_OK
