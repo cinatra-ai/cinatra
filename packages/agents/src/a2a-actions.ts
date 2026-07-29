@@ -4,6 +4,14 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { requireAuthSession } from "@/lib/auth-session";
 import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
+// cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded
+// (capability run.execute) — this file's external-A2A dispatch branch mints
+// the member session authority for its direct createAgentRun call; the
+// internal in-process branch resolves the SAME session's authority for the
+// executor's injected createRunWithAuthority contract (below).
+import { verifySessionAuthority } from "@/lib/org-write/authority";
+import { resolveRunCreationAuthority } from "@/lib/org-write/run-creation-authority";
+import { OrgWriteRefusedError } from "@cinatra-ai/org-write-kernel";
 import { getA2AMount } from "@/lib/a2a-server";
 import {
   createInProcessA2AClient,
@@ -240,20 +248,30 @@ export async function sendAgentBuilderMessage(input: {
     // subscribe by runId. The SSE proxy publishes on runId, not taskId.
     const runId = randomUUID();
     try {
-      await createAgentRun({
-        id: runId,
-        templateId: template.id,
-        runBy: session.user.id,
-        inputParams,
-        sourceType: "agent_builder",
-        a2aTaskId: externalTaskId,
-        orgId,
-        // External A2A has no parent run on this branch (it is the entry from
-        // an external peer). Resolve from the active MCP request frame if
-        // present, else NULL; when no project chat is active, NULL is expected.
-        projectId: null,
-      });
+      const authority = await verifySessionAuthority(session.user.id, orgId);
+      await createAgentRun(
+        {
+          id: runId,
+          templateId: template.id,
+          runBy: session.user.id,
+          inputParams,
+          sourceType: "agent_builder",
+          a2aTaskId: externalTaskId,
+          orgId,
+          // External A2A has no parent run on this branch (it is the entry from
+          // an external peer). Resolve from the active MCP request frame if
+          // present, else NULL; when no project chat is active, NULL is expected.
+          projectId: null,
+        },
+        authority,
+      );
     } catch (err) {
+      if (err instanceof OrgWriteRefusedError && err.reason === "capability-denied") {
+        return {
+          ok: false,
+          error: "This organization is archived — agents cannot start new work.",
+        };
+      }
       return {
         ok: false,
         error:
@@ -293,6 +311,17 @@ export async function sendAgentBuilderMessage(input: {
       enqueueJob: async (_name, data) => {
         const payload = data as { runId: string };
         await enqueueAgentRun({ runId: payload.runId });
+      },
+      // cinatra#1940 P3: the creation perimeter is now guarded — this
+      // in-process executor cannot resolve an authority itself (packages/a2a
+      // imports no @/lib host modules), so the host wires it here. Always a
+      // session dispatch (session.user.id is required above), never a
+      // non-human principal — the delegating-member resolution is enough.
+      createRunWithAuthority: async (runInput) => {
+        const authority = await resolveRunCreationAuthority(runInput.orgId, {
+          userId: session.user.id,
+        });
+        return createAgentRun(runInput, authority);
       },
     });
     task = await client.sendMessage({ json: inputParams });

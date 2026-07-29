@@ -29,6 +29,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
+import { Client } from "pg";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import {
   setTestDeliverySendPort,
@@ -43,6 +44,12 @@ const hasDb =
   !dbUrl.includes("unused:unused@localhost:5432/unused");
 
 const ORG = "org-td-authz-1958";
+// cinatra#1939 wave 2 / #1940 P3: createAgentRun now runs under guardOrgMutation
+// and REQUIRES a host-minted authority; the guard also reads the org's
+// lifecycle from `public."organization"` — this DB-gated suite needs an
+// ACTIVE org row for ORG for the guarded writes to pass at runtime (seeded in
+// beforeAll / cleaned up in afterAll below).
+const AUTH = { orgId: ORG, can: () => true };
 
 // The gate identity (binding ID) whose OWNER prefix must authorize the send, and
 // the relocated renderer's physical shipper (`declaredBy`), which must NOT.
@@ -79,10 +86,22 @@ beforeAll(async () => {
   const { createAgentBuilderPrimitiveHandlers } = await import("../mcp/handlers");
   handlers = createAgentBuilderPrimitiveHandlers() as Handlers;
   setTestDeliverySendPort(okPort);
+  const c = new Client({ connectionString: dbUrl });
+  await c.connect();
+  await c.query(
+    `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
+    [ORG, ORG, ORG],
+  );
+  await c.end();
 });
 
-afterAll(() => {
-  if (hasDb) setTestDeliverySendPort(null);
+afterAll(async () => {
+  if (!hasDb) return;
+  setTestDeliverySendPort(null);
+  const c = new Client({ connectionString: dbUrl });
+  await c.connect();
+  await c.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]);
+  await c.end();
 });
 
 // `agent_templates.package_name` is UNIQUE and the target agent is already
@@ -114,7 +133,7 @@ async function makeRun(packageName: string, runBy: string): Promise<{ runId: str
     inputParams: { campaignId },
     orgId: ORG,
     runBy,
-  });
+  }, AUTH);
   return { runId: run.id, campaignId };
 }
 

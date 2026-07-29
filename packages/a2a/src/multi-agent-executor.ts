@@ -12,7 +12,12 @@ import {
 import type { AgentTemplateRecord } from "@cinatra-ai/agents";
 
 import { InMemoryTaskStore } from "@a2a-js/sdk/server";
-import { InProcessAgentExecutor, type EnqueueJobFn, type CreateAndEnqueueAgentRunFn } from "./agent-executor";
+import {
+  InProcessAgentExecutor,
+  type EnqueueJobFn,
+  type CreateAndEnqueueAgentRunFn,
+  type CreateRunWithAuthorityFn,
+} from "./agent-executor";
 import { resolveVersionBeforeRun } from "./version-pinning";
 
 // ---------------------------------------------------------------------------
@@ -74,6 +79,11 @@ export type MultiAgentExecutorOptions = {
    * the BullMQ enqueue.
    */
   createAndEnqueueAgentRun?: CreateAndEnqueueAgentRunFn;
+  /**
+   * cinatra#1940 P3 — see `InProcessAgentExecutorOptions.createRunWithAuthority`.
+   * Forwarded to every owned InProcessAgentExecutor.
+   */
+  createRunWithAuthority?: CreateRunWithAuthorityFn;
   pollIntervalMs?: number;
   pollTimeoutMs?: number;
   /**
@@ -142,6 +152,7 @@ export class MultiAgentExecutor implements AgentExecutor {
           pollTimeoutMs: opts.pollTimeoutMs,
           enqueueJob: opts.enqueueJob,
           createAndEnqueueAgentRun: opts.createAndEnqueueAgentRun,
+          createRunWithAuthority: opts.createRunWithAuthority,
           getPinnedVersionForTask: pinnedLookup,
           getPinnedSnapshotIdForTask: pinnedSnapshotIdLookup,
           getPinnedDependentInstallIdForTask: pinnedDependentInstallIdLookup,

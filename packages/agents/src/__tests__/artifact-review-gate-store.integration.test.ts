@@ -149,10 +149,18 @@ beforeAll(async () => {
   dbMod = await import("../db");
   client = new Client({ connectionString: DB_URL });
   await client.connect();
+  // cinatra#1939 wave 2 / #1940 P3: createAgentRun (used by the ACCESS test
+  // below) runs under guardOrgMutation, which reads the org's lifecycle from
+  // public."organization" — seed the ACTIVE row this suite's guarded write needs.
+  await client.query(
+    `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
+    [ORG, ORG, ORG],
+  );
 }, 90_000);
 
 afterAll(async () => {
   if (!HAS_DB) return;
+  await client?.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]).catch(() => {});
   await client?.end().catch(() => {});
   await dbMod?.agentBuilderPool?.end().catch(() => {});
   const admin = new Client({ connectionString: DB_URL });
@@ -460,7 +468,10 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       orgId: ORG,
     });
     const runId = `run-${randomUUID()}`;
-    await store.createAgentRun({ id: runId, templateId, inputParams: {}, orgId: ORG, runBy: "user-owner" });
+    await store.createAgentRun(
+      { id: runId, templateId, inputParams: {}, orgId: ORG, runBy: "user-owner" },
+      { orgId: ORG, can: () => true },
+    );
 
     const owner = { actorType: "human" as const, userId: "user-owner", source: "route" as const };
     const foreign = { actorType: "human" as const, userId: "user-foreign", source: "route" as const };

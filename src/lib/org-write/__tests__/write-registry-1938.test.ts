@@ -165,20 +165,23 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     }
   });
 
-  it("the Stage-A exception ledger is EXACTLY the workflows-extension (#1939) + new-run (#1940) rows", () => {
+  it("the exception ledger is EXACTLY the workflows-extension (#1939) rows — #1940 P3 flipped the new-run rows out", () => {
+    // cinatra#1940 P3 (Decision 2): the two new-run creation rows
+    // (createAgentRun / createAgentRunPendingInput) were the #1940-linked
+    // remainder of the Stage-A ledger; the dispatch-freeze conversion guarded
+    // both inserts and flipped them to importBanned:true + allowedImporters,
+    // shrinking the ledger to the three workflows-extension rows.
     const ledger = ORG_WRITE_REGISTRY.filter((r) => r.importBanExemption)
       .map((r) => `${r.exportName}#${r.importBanExemption!.issue}`)
       .sort();
     expect(ledger).toEqual([
-      "createAgentRun#1940",
-      "createAgentRunPendingInput#1940",
       "materializeExtensionInstanceForProject#1939",
       "materializeExtensionTemplate#1939",
       "upgradeExtensionDashboards#1939",
     ]);
   });
 
-  it("the Stage-A flip set (already-converted writers + kernel rows) is import-banned", () => {
+  it("the flip set (already-converted writers + kernel rows) is import-banned", () => {
     const banned = new Set(
       ORG_WRITE_REGISTRY.filter((r) => r.importBanned).map((r) => r.exportName),
     );
@@ -192,12 +195,14 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
       "pairOneUntwinnedDashboardTwin", "backfillDashboardArtifactTwins", "dashboardArtifactTwinWriter",
       // agent-run lifecycle
       "transitionRunStatus", "updateAgentRunStatus", "resumeRunFromSetupApproval",
+      // new-run creation (#1940 P3 — the dispatch-freeze conversion's flip)
+      "createAgentRun", "createAgentRunPendingInput",
       // kernel entry points
       "redeemCompletionTicket", "snapshotLeasesQuery",
     ]) {
-      expect(banned.has(w), `${w} must be import-banned in Stage A`).toBe(true);
+      expect(banned.has(w), `${w} must be import-banned`).toBe(true);
     }
-    expect(banned.size).toBe(20);
+    expect(banned.size).toBe(22);
   });
 });
 

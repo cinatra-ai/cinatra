@@ -66,9 +66,14 @@ const DISPATCH_SITES: Record<string, { role: "child-dispatch" | "top-level"; why
     role: "child-dispatch",
     why: "PM-seat tick dispatches a worker agent under the PM run — threads the parent run's server-read oboCeiling.",
   },
-  "packages/a2a/src/agent-executor.ts": {
+  "src/lib/a2a-server.ts": {
     role: "child-dispatch",
-    why: "A2A inbound execution under an OBO actor frame — threads actorCtx.oboCeiling.",
+    why:
+      "A2A inbound execution under an OBO actor frame — cinatra#1940 P3 moved the literal " +
+      "createAgentRun call from packages/a2a/src/agent-executor.ts (which cannot resolve an " +
+      "authority itself) into this host-side injected createRunWithAuthority contract; " +
+      "actorCtx.oboCeiling is still threaded, just one frame up (set on `input` before this " +
+      "callback runs, re-affirmed explicitly in the call args here for the scanner).",
   },
   "packages/agents/src/mcp/agent-tools-registry.ts": {
     role: "child-dispatch",

@@ -1150,7 +1150,7 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
       // counter, and move the job to delayed via job.moveToDelayed (BullMQ flow
       // control — does NOT consume a retry attempt). The Redis worker
       // concurrency slot is released between gate-checks.
-      const { runAgentBuilderExecutionJob, TriggerGateClosedError } =
+      const { runAgentBuilderExecutionJob, TriggerGateClosedError, OrgArchivedFreezeError } =
         await import("@cinatra-ai/agents");
       try {
         await runAgentBuilderExecutionJob(
@@ -1172,6 +1172,19 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           // worker acknowledges the move (no retry consumed) instead of trying
           // to complete the now-delayed job (which logs a "missing lock"
           // error).
+          throw new DelayedError();
+        }
+        // cinatra#1940 P3 (Decision 1, worker-start row): the archived-org
+        // park — EXACTLY the TriggerGateClosedError pattern above (same
+        // BullMQ flow-control mechanics), no gateAttempt counter to advance
+        // (a flat re-delay, not an exponential backoff sequence). The row
+        // stays `queued` and this job survives, so unarchive recovery is
+        // automatic on the next re-delayed fire.
+        if (err instanceof OrgArchivedFreezeError) {
+          console.log(
+            `[dispatch-freeze] run ${err.runId} org archived — re-queuing in ${err.delayMs}ms`,
+          );
+          await job.moveToDelayed(Date.now() + err.delayMs, job.token);
           throw new DelayedError();
         }
         throw err;

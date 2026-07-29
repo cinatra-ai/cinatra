@@ -49,7 +49,7 @@ vi.mock("@cinatra-ai/llm", () => orchestrationStub);
 // `@cinatra-ai/agents` and `@cinatra/agent-builder` to the same stub path, so
 // a vi.mock factory registered against either name intercepts both imports.
 const agentBuilder = vi.hoisted(() => ({
-  createAgentRun: vi.fn(async () => undefined),
+  createAgentRun: vi.fn(async (_input: unknown) => undefined),
   readAgentRunById: vi.fn(async () => null as any),
   updateAgentRunA2ATaskId: vi.fn(async () => undefined),
   readAgentTemplateById: vi.fn(),
@@ -124,6 +124,12 @@ describe("InProcessAgentExecutor — org context required", () => {
     executor = new InProcessAgentExecutor({
       templateId: "tpl_1",
       enqueueJob: vi.fn(async () => undefined) as any,
+      // cinatra#1940 P3: the creation perimeter is now guarded — the
+      // executor requires this injected contract or it fails closed with
+      // AUTHORITY_REQUIRED before ever calling createAgentRun. The
+      // ORG_CONTEXT_REQUIRED check (this file's concern) runs BEFORE this
+      // gate either way, so wiring it here only affects the happy-path test.
+      createRunWithAuthority: (input: unknown) => agentBuilder.createAgentRun(input),
       pollIntervalMs: 1,
       pollTimeoutMs: 50,
     } as any);

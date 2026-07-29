@@ -68,6 +68,11 @@ import { markRepairDispatched } from "./lifecycle-repair-store";
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 
 import type { ChangesRequestedRequest, RepairFinding } from "@/lib/lifecycle/lifecycle-repair";
+// cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded — this
+// repair-delivery drain has no session, so it mints the SYSTEM
+// `agent-run-dispatch` authority (a caller the design's caller matrix did not
+// enumerate; found while grounding P3 against live source).
+import { mintLifecycleRepairDispatchAuthority } from "@/lib/org-write/agent-run-authority-mint";
 
 /** The prefix of the deterministic run a dispatched repair is delivered on. */
 export const REPAIR_RUN_PREFIX = "lifecycle-repair-run:";
@@ -215,21 +220,28 @@ export async function dispatchPendingProducerRepairs(opts?: {
         .limit(1);
       if (!already) {
         try {
-          await createAgentRun({
-            id: runId,
-            templateId: producer.templateId,
-            orgId: row.orgId,
-            inputParams: { lifecycleRepairRequest: request },
-            sourceType: "lifecycle_repair",
-            // CHILD DISPATCH (#1035): the repair run runs under the producing
-            // run. Its own ceiling is server-derived inside the primitive; the
-            // parent's PERSISTED chain is the compose operand only, never copied.
-            parentRunId: row.producerRunId ?? null,
-            parentOboCeiling: producer.parentOboCeiling,
-            // A re-drain re-derives the same key, so an at-least-once delivery
-            // converges on the SAME repair run.
-            idempotencyKey: `lifecycle-repair:${row.id}`,
-          });
+          // cinatra#1940 P3 (Decision 2): the guarded creation perimeter needs
+          // an authority — this drain has no session, so mint the system
+          // dispatcher authority scoped to the repair's org.
+          const dispatchAuthority = mintLifecycleRepairDispatchAuthority(row.orgId);
+          await createAgentRun(
+            {
+              id: runId,
+              templateId: producer.templateId,
+              orgId: row.orgId,
+              inputParams: { lifecycleRepairRequest: request },
+              sourceType: "lifecycle_repair",
+              // CHILD DISPATCH (#1035): the repair run runs under the producing
+              // run. Its own ceiling is server-derived inside the primitive; the
+              // parent's PERSISTED chain is the compose operand only, never copied.
+              parentRunId: row.producerRunId ?? null,
+              parentOboCeiling: producer.parentOboCeiling,
+              // A re-drain re-derives the same key, so an at-least-once delivery
+              // converges on the SAME repair run.
+              idempotencyKey: `lifecycle-repair:${row.id}`,
+            },
+            dispatchAuthority,
+          );
         } catch (err) {
           // A concurrent drain won the insert — the delivery is already durable.
           if ((err as { code?: string } | null)?.code !== "23505") throw err;

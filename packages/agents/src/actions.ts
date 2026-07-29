@@ -17,7 +17,7 @@ import {
 // the setup-run→failed transition. Owner ruling 2026-07-26 (ruling 2) DROPPED
 // cross-org run management: an actor cleared by requireAdminSession who is NOT
 // a member of the run's org (a pure platform admin) now fails closed here.
-import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
+import { sessionAuthorityFromResolvedRole, verifySessionAuthority } from "@/lib/org-write/authority";
 import { canDo, AuthzError, logAuditEvent } from "@/lib/authz";
 import type { ResourceRef, OwnerLevel } from "@/lib/authz";
 // Kernel-level authorization imports for installRegistryPackageAtScope.
@@ -1261,19 +1261,26 @@ export async function runFromRegistry(
   const canRun = await checkRegistryPermission(entryId, userId, isAdmin, "canRun");
   if (!canRun) throw new Error("Not authorized to run");
 
+  // cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded
+  // (capability run.execute) — mint the member session authority for it.
+  const authority = await verifySessionAuthority(userId, orgId);
+
   // Pin entry.versionId (not the latest version)
-  const run = await createAgentRun({
-    id: randomUUID(),
-    templateId: entry.templateId,
-    versionId: entry.versionId,
-    runBy: userId,
-    inputParams,
-    orgId,
-    // Registry server-action path is not chat-bound; there is no project
-    // context to inherit. Project-scoped runs originate from the chat MCP path
-    // (agent_run handler) or A2A.
-    projectId: null,
-  });
+  const run = await createAgentRun(
+    {
+      id: randomUUID(),
+      templateId: entry.templateId,
+      versionId: entry.versionId,
+      runBy: userId,
+      inputParams,
+      orgId,
+      // Registry server-action path is not chat-bound; there is no project
+      // context to inherit. Project-scoped runs originate from the chat MCP path
+      // (agent_run handler) or A2A.
+      projectId: null,
+    },
+    authority,
+  );
 
   await enqueueAgentRun(
     { runId: run.id },

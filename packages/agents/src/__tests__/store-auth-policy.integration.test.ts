@@ -27,8 +27,9 @@
  *   Group 3 (Test 17): updateAgentRunAuthPolicy round-trip via the public
  *     reader.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
+import { Client } from "pg";
 
 import * as authz from "@/lib/authz";
 
@@ -44,6 +45,26 @@ const hasDb =
   typeof dbUrl === "string" &&
   dbUrl.length > 0 &&
   !dbUrl.includes("unused:unused@localhost:5432/unused");
+
+// cinatra#1939 wave 2 / #1940 P3: createAgentRun now runs under guardOrgMutation
+// and REQUIRES a host-minted authority; the guard also reads the org's
+// lifecycle from `public."organization"`. The idempotent insert below is
+// shared with the sibling trigger-*/store-*/pm-link-store-reconcile
+// integration suites, which all use the SAME literal orgId and run in
+// parallel forks against the same DB — the row is never deleted so no suite
+// can pull it out from under another.
+const AUTH = { orgId: TEST_ORG_ID, can: () => true };
+
+beforeAll(async () => {
+  if (!hasDb) return;
+  const c = new Client({ connectionString: dbUrl });
+  await c.connect();
+  await c.query(
+    `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
+    [TEST_ORG_ID, "Test Org", TEST_ORG_ID],
+  );
+  await c.end();
+});
 
 const VALID_POLICY: AgentAuthPolicy = {
   runListVisibility: ["owner"],
@@ -348,7 +369,7 @@ describe.skipIf(!hasDb)("authPolicy round-trip on agent_runs via public store AP
       approvalPolicy: { steps: [] },
     });
     const runId = `r_${randomUUID()}`;
-    await createAgentRun({ id: runId, templateId, inputParams: {}, orgId: TEST_ORG_ID });
+    await createAgentRun({ id: runId, templateId, inputParams: {}, orgId: TEST_ORG_ID }, AUTH);
     await updateAgentRunAuthPolicy(runId, VALID_POLICY);
     const read = await readAgentRunById(runId);
     expect(read).not.toBeNull();
@@ -367,7 +388,7 @@ describe.skipIf(!hasDb)("authPolicy round-trip on agent_runs via public store AP
       approvalPolicy: { steps: [] },
     });
     const runId = `r_${randomUUID()}`;
-    await createAgentRun({ id: runId, templateId, inputParams: {}, orgId: TEST_ORG_ID });
+    await createAgentRun({ id: runId, templateId, inputParams: {}, orgId: TEST_ORG_ID }, AUTH);
     const read = await readAgentRunById(runId);
     expect(read!.authPolicy).toBeNull();
   });
@@ -407,7 +428,7 @@ describe("readAgentRunById — enforcement opt-in", () => {
         approvalPolicy: { steps: [] },
       });
       const runId = `r_${randomUUID()}`;
-      await createAgentRun({ id: runId, templateId, inputParams: {}, orgId: TEST_ORG_ID });
+      await createAgentRun({ id: runId, templateId, inputParams: {}, orgId: TEST_ORG_ID }, AUTH);
       const read = await readAgentRunById(runId);
       expect(read).not.toBeNull();
       expect(read!.id).toBe(runId);
@@ -429,7 +450,7 @@ describe("readAgentRunById — enforcement opt-in", () => {
         approvalPolicy: { steps: [] },
       });
       const runId = `r_${randomUUID()}`;
-      await createAgentRun({ id: runId, templateId, inputParams: {}, runBy: "u1", orgId: TEST_ORG_ID });
+      await createAgentRun({ id: runId, templateId, inputParams: {}, runBy: "u1", orgId: TEST_ORG_ID }, AUTH);
       const read = await readAgentRunById(runId, {
         actorType: "human",
         userId: "u1",
@@ -455,7 +476,7 @@ describe("readAgentRunById — enforcement opt-in", () => {
         approvalPolicy: { steps: [] },
       });
       const runId = `r_${randomUUID()}`;
-      await createAgentRun({ id: runId, templateId, inputParams: {}, runBy: "u1", orgId: TEST_ORG_ID });
+      await createAgentRun({ id: runId, templateId, inputParams: {}, runBy: "u1", orgId: TEST_ORG_ID }, AUTH);
       await expect(
         readAgentRunById(runId, {
           actorType: "human",
@@ -569,7 +590,7 @@ describe.skipIf(!hasDb)(
         approvalPolicy: { steps: [] },
       });
       const runId = `r_${randomUUID()}`;
-      await createAgentRun({ id: runId, templateId, inputParams: {}, orgId: TEST_ORG_ID });
+      await createAgentRun({ id: runId, templateId, inputParams: {}, orgId: TEST_ORG_ID }, AUTH);
 
       await updateAgentRunAuthPolicy(runId, VALID_POLICY);
       let read = await readAgentRunById(runId);

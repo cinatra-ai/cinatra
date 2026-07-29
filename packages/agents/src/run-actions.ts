@@ -4,6 +4,10 @@ import { requireAuthSession } from "@/lib/auth-session";
 // acting MEMBER's session (owner / org-admin, already checked above). A member
 // mint fail-closes if membership was revoked — acceptable per the design.
 import { verifySessionAuthority } from "@/lib/org-write/authority";
+// cinatra#1940 P3 (Decision 1): the archived-org pre-check for the admin
+// releaseTriggerNow fire path (routing/UX only — the kernel's run.execute
+// ruling on the subsequent transition is the real backstop).
+import { readOrgArchivedAtForDispatch } from "@/lib/org-write/dispatch-freeze";
 import { resolveTemplateVisibilityActor } from "./auth-policy";
 import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import type { AgentTemplateRecord } from "./store";
@@ -214,17 +218,26 @@ export async function createPendingRunForZeroInputTemplate(
   );
   if (!template) return { ok: false, error: "template not found" };
 
+  // cinatra#1940 P3 (Decision 2): the creation-perimeter conversion — every
+  // agent_runs INSERT now runs guarded (capability run.execute). This
+  // function never mints one today (it stays pending_input, no later
+  // transition), so mint the member session authority up front.
+  const authority = await verifySessionAuthority(userId, orgId);
+
   // Create an empty pending_input run owned by the actor. The setup loop in
   // execution.ts will emit INTERRUPTs for any required fields when the user
   // triggers the run.
-  const created = await createAgentRunPendingInput({
-    templateId: template.id,
-    runBy: userId,
-    inputParams: {},
-    orgId,
-    // Interactive UI/chat run-start → human-present (cinatra#2067).
-    humanPresent: true,
-  });
+  const created = await createAgentRunPendingInput(
+    {
+      templateId: template.id,
+      runBy: userId,
+      inputParams: {},
+      orgId,
+      // Interactive UI/chat run-start → human-present (cinatra#2067).
+      humanPresent: true,
+    },
+    authority,
+  );
 
   return { ok: true, runId: created.id };
 }
@@ -239,15 +252,23 @@ async function createAndTriggerRunCore(
 ): Promise<CreatePendingRunResult> {
   // orgId is resolved by the caller (do NOT re-resolve session inside this
   // helper) and threaded through to createAgentRunPendingInput.
-  const created = await createAgentRunPendingInput({
-    templateId: template.id,
-    runBy: userId,
-    inputParams: {},
-    orgId,
-    // Interactive UI/chat run-start → human-present (cinatra#2067). This run may
-    // park at the recommendation chip-row before it dispatches.
-    humanPresent: true,
-  });
+  // cinatra#1940 P3 (Decision 2): mint the member session authority ONCE, up
+  // front — reused for BOTH the guarded create below and the subsequent
+  // pending_input→queued transition (was previously minted only for the
+  // transition, after the — then unguarded — create).
+  const authority = await verifySessionAuthority(userId, orgId);
+  const created = await createAgentRunPendingInput(
+    {
+      templateId: template.id,
+      runBy: userId,
+      inputParams: {},
+      orgId,
+      // Interactive UI/chat run-start → human-present (cinatra#2067). This run may
+      // park at the recommendation chip-row before it dispatches.
+      humanPresent: true,
+    },
+    authority,
+  );
 
   // Run-start recommendation HOLD (cinatra#2067). A human-present run parks at
   // the recommendation interception before dispatch; the chip-row decision
@@ -270,9 +291,8 @@ async function createAndTriggerRunCore(
       err instanceof Error ? err.message : String(err),
     );
   }
-  // The caller-resolved member session (same userId/orgId the run is created
-  // under) grounds both the dispatch and its compensation revert.
-  const authority = await verifySessionAuthority(userId, orgId);
+  // `authority` (minted above, before the create) grounds both the dispatch
+  // and its compensation revert.
 
   // Atomically transition pending_input → queued then enqueue.
   try {
@@ -501,6 +521,17 @@ export async function releaseTriggerNow(
   const trigger = await readRunTriggerByRunId(args.runId);
   if (!trigger) return { ok: false, error: "no trigger configured for this run" };
 
+  // cinatra#1940 P3 (Decision 1): refuse BEFORE any side-effect (the gate
+  // flag, the transition) when the org is archived. Fail-open on `null`
+  // (unknown) — this is a pre-check, not the enforcement point; the guarded
+  // transition below refuses regardless.
+  if ((await readOrgArchivedAtForDispatch(run.orgId)) === true) {
+    return {
+      ok: false,
+      error: "This organization is archived — agents cannot start new work.",
+    };
+  }
+
   await markTriggerReleased(args.runId);
 
   // Admin (org-role admin, checked above) acts as a member of the run's org.
@@ -579,14 +610,22 @@ export async function startDevChildPreviewRun(
   }
   if (!template) return { ok: false, error: "template not found" };
 
-  const created = await createAgentRunPendingInput({
-    templateId: template.id,
-    runBy: userId,
-    inputParams: {},
-    orgId,
-    // Dev Stepper preview is an interactive, present-human run (cinatra#2067).
-    humanPresent: true,
-  });
+  // cinatra#1940 P3 (Decision 2): mint the member session authority ONCE, up
+  // front — reused for the guarded create below AND the transition later in
+  // this function (the mint at the former call site, after creation, is
+  // removed to avoid a duplicate membership read).
+  const authority = await verifySessionAuthority(userId, orgId);
+  const created = await createAgentRunPendingInput(
+    {
+      templateId: template.id,
+      runBy: userId,
+      inputParams: {},
+      orgId,
+      // Dev Stepper preview is an interactive, present-human run (cinatra#2067).
+      humanPresent: true,
+    },
+    authority,
+  );
 
   // For vendor-scoped packages (@vendor/name), agentSlug becomes "vendor/name"
   // so router.push paths match /agents/[vendor]/[pkg]/... routing.
@@ -632,7 +671,6 @@ export async function startDevChildPreviewRun(
     );
   }
 
-  const authority = await verifySessionAuthority(userId, orgId);
   try {
     await transitionRunStatus(created.id, "pending_input", "queued", undefined, authority);
   } catch (err) {
