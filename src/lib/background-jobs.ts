@@ -15,7 +15,12 @@ import "@/lib/notifications-host";
 // Wire the run human-wait notifier seam (cinatra #1559 / E9); idempotent with the same import in src/instrumentation.node.ts.
 import "@/lib/register-run-wait-notifier";
 import { getActorContext, withActorContext } from "@cinatra-ai/llm/actor-context";
-import { dispatchRegisteredJob } from "@/lib/background-jobs-registry";
+import {
+  BACKGROUND_JOB_REGISTRY,
+  dispatchRegisteredJob,
+  UnclassifiedBackgroundJobError,
+  type JobAuthorityMetadata,
+} from "@/lib/background-jobs-registry";
 // Job-lifecycle notification splices for the BullMQ worker.on hooks. Extracted
 // to the leaf module `background-jobs-notify.ts` (cinatra#2039 S1 ratchet slice)
 // to keep this runtime module under its file-size ceiling; behaviour unchanged.
@@ -40,6 +45,15 @@ export {
   LIFECYCLE_REVIEW_ORCHESTRATION_LOOP_JOB_ID, LIFECYCLE_GATE_MAINTENANCE_LOOP_JOB_ID,
 } from "@/lib/background-jobs-names";
 import type { BackgroundJobName } from "@/lib/background-jobs-names";
+// cinatra#1941 S2 — read-only slot access to the boot-registered job-system
+// runtime, extracted to a leaf module to keep THIS file under its file-size
+// ratchet ceiling (same extraction pattern as background-jobs-notify.ts
+// above). See that module's docstring for the route-graph-neutrality
+// rationale (this file never imports background-jobs-system-frame.ts).
+import {
+  resolveJobSystemRuntime,
+  warnJobSystemSlotEmpty,
+} from "@/lib/background-jobs-system-identity-reader";
 
 type BackgroundJobRuntime = {
   version: string;
@@ -185,8 +199,63 @@ export function runJobHandlerWithActorContext<T>(
 // the top, so the boot seed (instrumentation.node.ts), the registry handlers,
 // and the existing importers all share one source of truth (cinatra#304).
 
+/**
+ * cinatra#1941 S2 — mints the dispatcher's audited job-system identity +
+ * frame on top of the pre-existing HumanUser `__actorContext` behavior.
+ * Preserves every existing path byte-identically:
+ *   - a job with NO classified `authority` (should not happen post-S1's
+ *     total-Record guarantee, but the registry lookup is optional-chained
+ *     defensively) dispatches exactly as before S2 ever existed;
+ *   - a job whose payload carries `__actorContext` (HumanUser flows — blog,
+ *     skill-match attribution, the marketplace single-package admin action)
+ *     is UNCHANGED: `runJobHandlerWithActorContext` wins exactly as today;
+ *   - a `system-maintenance` job with NO payload context — today those run
+ *     with NO ALS frame at all — now dispatches under a freshly-minted
+ *     System `ActorContext` (`background-job:<name>:<jobId>`, never derived
+ *     from the forgeable payload). This is the one behavior delta (the
+ *     feature): `getActorContext()` moves from `undefined` to a System
+ *     principal for exactly this job class.
+ * Every dispatched job (any authority kind) is additionally wrapped in the
+ * job-system-frame ALS (`runWithJobFrame`) so `getActiveJobFrame()` is
+ * available to the mint seam — framing alone grants no authority; only the
+ * seam's own checks (job-system-authority-mint.ts) do that.
+ */
 async function dispatchBackgroundJob(job: Job, token?: string) {
-  return runJobHandlerWithActorContext(job.data, () => dispatchBackgroundJobImpl(job, token));
+  const jobId = String(job.id ?? "");
+  const authority: JobAuthorityMetadata | undefined =
+    BACKGROUND_JOB_REGISTRY[job.name as BackgroundJobName]?.authority;
+  const rt = resolveJobSystemRuntime();
+  const runImpl = () => dispatchBackgroundJobImpl(job, token);
+  const framed = () =>
+    rt && authority
+      ? rt.runWithJobFrame({ jobName: job.name, jobId, authority, payload: job.data }, runImpl)
+      : runImpl();
+
+  const payloadCtx = (job.data as { __actorContext?: ActorContext } | null)?.__actorContext;
+  const isSystemMaintenance = authority?.authorityKind === "system-maintenance";
+
+  if (!payloadCtx && isSystemMaintenance) {
+    if (!rt) {
+      warnJobSystemSlotEmpty(job.name, jobId, QUEUE_NAME);
+      return runJobHandlerWithActorContext(job.data, framed);
+    }
+    return withActorContext(rt.buildSystemIdentity(job.name, jobId), framed);
+  }
+
+  if (payloadCtx && isSystemMaintenance && payloadCtx.principalType !== "HumanUser") {
+    // Anomaly telemetry only (§3.1 rule 2) — honored exactly as today, just
+    // recorded so a system-maintenance job carrying a non-HumanUser payload
+    // context is visible rather than silent. Ratcheting to refusal is
+    // wave-3's call.
+    rt?.auditFrameAnomaly(job.name, jobId, payloadCtx.principalType);
+    console.warn(
+      `[background-jobs] system-maintenance job "${job.name}" carried a non-HumanUser payload __actorContext (principalType=${payloadCtx.principalType}) — honored as today (cinatra#1941 anomaly telemetry, no behavior change).`,
+    );
+  }
+
+  // Payload __actorContext present (HumanUser flows, or a logged anomaly
+  // above) or non-system-maintenance kinds: byte-identical to today.
+  return runJobHandlerWithActorContext(job.data, framed);
 }
 
 /**
@@ -203,6 +272,16 @@ async function dispatchBackgroundJobImpl(job: Job, _token?: string) {
   const jobId = String(job.id ?? "");
   try {
     await dispatchRegisteredJob(job, jobId);
+  } catch (err) {
+    // cinatra#1941 S2 — the unclassified-job denial audit rides the
+    // job-system slot so this file (and the registry) gain NO import edge to
+    // the audit module, not even a dynamic one (D7/§4). Best-effort: a
+    // slot-less unit test or pre-boot dispatch simply skips the audit row —
+    // the throw itself is the fail-closed behavior (S1), unconditionally.
+    if (err instanceof UnclassifiedBackgroundJobError) {
+      resolveJobSystemRuntime()?.auditUnclassifiedRefusal(job.name, jobId);
+    }
+    throw err;
   } finally {
     globalThis.__cinatraBackgroundJobExecutionDepth = Math.max(
       0,
@@ -219,6 +298,16 @@ async function dispatchBackgroundJobImpl(job: Job, _token?: string) {
  * `dispatchBackgroundJob` (above), not this.
  */
 export const __dispatchBackgroundJobForTests = dispatchBackgroundJobImpl;
+
+/**
+ * Test-only export of the OUTER dispatch function (cinatra#1941 S2) — unlike
+ * `__dispatchBackgroundJobForTests` above, this one INCLUDES the frame/
+ * identity-minting decision (the S2 feature under test): the ALS-frame
+ * wrapper it drives is exactly `resolveJobSystemRuntime()`'s globalThis slot,
+ * so a test can exercise it by setting `globalThis.__cinatraJobSystemRuntime`
+ * directly rather than importing anything.
+ */
+export const __dispatchBackgroundJobForS2Tests = dispatchBackgroundJob;
 
 export function isBackgroundJobExecutionContext() {
   return (globalThis.__cinatraBackgroundJobExecutionDepth ?? 0) > 0;

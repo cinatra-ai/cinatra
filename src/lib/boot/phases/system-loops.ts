@@ -18,6 +18,39 @@ import type { BootPhase } from "@/lib/boot/boot-phase";
 export function systemLoopPhases(): BootPhase[] {
   return [
     {
+      name: "register-job-system-runtime",
+      policy: "retryable",
+      run: async () => {
+        // cinatra#1941 S2 — register the boot-time job-system runtime BEFORE
+        // any loop seed below runs, so a system-maintenance job dispatched
+        // from a freshly-booted process never observes an empty slot (the
+        // ordering guarantee this array's comment already documents for the
+        // loop-seeds-then-eager-worker split). MUST stay the first element —
+        // pinned by a source-order test (system-loops-job-system-runtime-
+        // boot-seed.test.ts). Dynamic-imports the (boot-only)
+        // background-jobs-system-frame module ONLY — this phase (and that
+        // module) never appear in the locked dev-perf routes' reachable
+        // graph, mirroring the runner-slot pattern below (e.g.
+        // registerArtifactReviewResumeDeliveryRunner), which wires an
+        // implementation module into a slot the dispatcher/registry read
+        // WITHOUT importing it themselves.
+        const {
+          registerJobSystemRuntime,
+          runWithJobFrame,
+          buildJobSystemIdentity,
+          auditUnclassifiedRefusal,
+          auditFrameAnomaly,
+        } = await import("@/lib/background-jobs-system-frame");
+        registerJobSystemRuntime({
+          runWithJobFrame,
+          buildSystemIdentity: buildJobSystemIdentity,
+          auditUnclassifiedRefusal,
+          auditFrameAnomaly,
+        });
+        console.log("[background-jobs-system-frame] job-system runtime registered at boot");
+      },
+    },
+    {
       name: "seed-litellm-pricing-sync",
       policy: "retryable",
       run: async () => {

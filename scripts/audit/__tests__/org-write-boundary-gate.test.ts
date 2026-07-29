@@ -6,9 +6,9 @@
  * (returning kernel-internal paths for symlinked detours).
  */
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   collectModuleEdges,
   evaluateBoundaryRules,
@@ -16,6 +16,7 @@ import {
   evaluateR4,
   isTestFileRel,
   makeTsResolver,
+  shouldDeepParseForLegacyRules,
 } from "../org-write-boundary-gate.mjs";
 
 type Edge = {
@@ -284,6 +285,137 @@ describe("R2/R5: the agent-run mint file and its NAMED consumers (#1939 wave 2)"
 // the mint itself (owner ruling 2026-07-26, ruling 2: cross-org run management is
 // unsupported). authority.ts now carries no R5 named-consumer restriction; the
 // R5 mechanism stays covered end-to-end by the run-dispatch-mint suite above.
+
+describe("R5-job-system-mint / R5-job-frame (cinatra#1941 S2)", () => {
+  const JOB_MINT = "@/lib/org-write/job-system-authority-mint";
+  const JOB_FRAME = "@/lib/background-jobs-system-frame";
+
+  it("R2 allowlist: the job-system mint seam may import mintSystemWriteAuthority", () => {
+    expect(
+      check(
+        "src/lib/org-write/job-system-authority-mint.ts",
+        'import { mintSystemWriteAuthority } from "./authority";',
+        () => "src/lib/org-write/authority.ts",
+      ),
+    ).toEqual([]);
+  });
+
+  it("R5-job-system-mint: EMPTY allowlist day-1 — ANY named consumer is red", () => {
+    const v = check(
+      "src/lib/org-write/some-writer.ts",
+      `import { mintSystemAuthorityForJob } from "${JOB_MINT}";`,
+    );
+    expect(v.map((x) => x.rule)).toContain("R5-job-system-mint");
+  });
+
+  it("R5-job-system-mint: the seam's own __tests__ dir stays exempt (mirrors R2)", () => {
+    expect(
+      check(
+        "src/lib/org-write/__tests__/job-system-authority-mint.test.ts",
+        `import { mintSystemAuthorityForJob } from "${JOB_MINT}";`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("R5-job-frame: the sanctioned boot phase may name both privileged exports (green)", () => {
+    expect(
+      check(
+        "src/lib/boot/phases/system-loops.ts",
+        `import { registerJobSystemRuntime, runWithJobFrame } from "${JOB_FRAME}";`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("R5-job-frame: a non-consumer naming registerJobSystemRuntime or runWithJobFrame is red", () => {
+    const v1 = check(
+      "src/lib/rogue-frame.ts",
+      `import { registerJobSystemRuntime } from "${JOB_FRAME}";`,
+    );
+    expect(v1.map((x) => x.rule)).toContain("R5-job-frame");
+
+    const v2 = check(
+      "src/lib/rogue-frame-2.ts",
+      `import { runWithJobFrame } from "${JOB_FRAME}";`,
+    );
+    expect(v2.map((x) => x.rule)).toContain("R5-job-frame");
+  });
+
+  it("R5-job-frame: read-only exports (getActiveJobFrame, buildJobSystemIdentity, readPayloadField) stay freely importable", () => {
+    expect(
+      check(
+        "src/lib/rogue-frame-3.ts",
+        `import { getActiveJobFrame, buildJobSystemIdentity, readPayloadField } from "${JOB_FRAME}";`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("R5-job-frame: testsExempt lets the frame module's OWN unit test name both privileged exports", () => {
+    expect(
+      check(
+        "src/lib/__tests__/background-jobs-system-frame.test.ts",
+        `import { registerJobSystemRuntime, runWithJobFrame } from "${JOB_FRAME}";`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("R5-job-frame: the module lives OUTSIDE org-write and has NO opaque-access net (documented residual) — a namespace import is NOT flagged", () => {
+    // Unlike the org-write mint modules (covered by R2's opaque net), a bare
+    // namespace/dynamic import of background-jobs-system-frame.ts grants full
+    // access to registerJobSystemRuntime/runWithJobFrame undetected. This is
+    // the accepted residual documented in the gate's header comment and the
+    // module's own docstring — the sanctioned dynamic consumer IS the
+    // allowlisted boot phase (system-loops.ts imports it with a destructured
+    // dynamic import, which the classifier treats as NAMED, not opaque).
+    const v = check("src/lib/rogue-frame-ns.ts", `import * as f from "${JOB_FRAME}";`);
+    expect(v).toEqual([]);
+  });
+});
+
+describe("prefilter fix (cinatra#1941 S2 / eng#565): a file naming a restricted mint via specifier alone is now deep-parsed", () => {
+  it("the OLD 3-string prefilter would have missed a file naming a wrapper without any kernel string present", () => {
+    const OLD_PREFILTER_STRINGS = ["org-write-kernel", "mintSystemWriteAuthority", "guardedBatchQueries"];
+    const text =
+      'import { mintAgentRunExecutionAuthority } from "@/lib/org-write/agent-run-authority-mint";\n' +
+      "mintAgentRunExecutionAuthority(orgId);\n";
+    expect(OLD_PREFILTER_STRINGS.some((s) => text.includes(s))).toBe(false);
+  });
+
+  it("shouldDeepParseForLegacyRules recognizes each restricted module's own specifier fragment", () => {
+    expect(
+      shouldDeepParseForLegacyRules(
+        'import { mintAgentRunExecutionAuthority } from "@/lib/org-write/agent-run-authority-mint";',
+      ),
+    ).toBe(true);
+    expect(
+      shouldDeepParseForLegacyRules(
+        'import { mintSystemAuthorityForJob } from "@/lib/org-write/job-system-authority-mint";',
+      ),
+    ).toBe(true);
+    expect(
+      shouldDeepParseForLegacyRules(
+        'import { runWithJobFrame } from "@/lib/background-jobs-system-frame";',
+      ),
+    ).toBe(true);
+    // A file with NONE of the six substrings stays un-deep-parsed (unaffected
+    // — the original three-substring behavior is preserved for everything
+    // else, so this fix cannot widen the deep-parse set beyond restricted
+    // modules' own consumers).
+    expect(shouldDeepParseForLegacyRules("export function unrelated() {}")).toBe(false);
+    expect(shouldDeepParseForLegacyRules('// UPDATE "objects" someday')).toBe(false);
+  });
+
+  it("the concrete eng#565 miss: the live artifact-review-resume-delivery.ts file now trips the prefilter", () => {
+    // Reads the REAL file on disk (not a synthetic fixture) — pins the fix
+    // against the exact live miss the design round found: this file names
+    // mintAgentRunExecutionAuthority but contains none of the original three
+    // prefilter substrings.
+    const missedFileText = readFileSync(
+      resolve(__dirname, "..", "..", "..", "packages", "agents", "src", "artifact-review-resume-delivery.ts"),
+      "utf-8",
+    );
+    expect(shouldDeepParseForLegacyRules(missedFileText)).toBe(true);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // R4 — registry-driven writer import ban (#1939 wave 3, Decision 4)
