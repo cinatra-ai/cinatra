@@ -1,0 +1,186 @@
+{
+  "acceptance": "cinatra#2094 — skills-compliance S7 program acceptance (epic #2086)",
+  "ranAt": "2026-07-29",
+  "hostSha": "a57a6c4bad8fe353e018540fe3bf9c8508df617a",
+  "hostShaNote": "origin/main at the time of the run == the S6 squash (#2213). S0-S6 all landed.",
+  "extensionUniverse": {
+    "hydratedBy": "scripts/ci/sync-dev-extensions.mjs --pinned",
+    "packages": 111,
+    "note": "cloned back at the SHAs pinned in the two lock files"
+  },
+  "arms": [
+    {
+      "block": "API conformance (docs-pinned)",
+      "label": "LIVE",
+      "runner": "evidence/2094-s7-acceptance/drivers/live-skills-api-probe.mjs",
+      "results": "evidence/2094-s7-acceptance/live-results.json",
+      "namedChecks": 10,
+      "pass": 7,
+      "fail": 3,
+      "liveRequests": 68,
+      "cleanup": {
+        "order": "versions-then-skill",
+        "skillsDeleted": 11,
+        "versionsDeleted": 13,
+        "allReclaimed": true
+      },
+      "failing": [
+        "C3 GET /v1/skills cursor contract",
+        "C4 versions-list pagination to exhaustion",
+        "C10 30,000,000-byte boundary rejected by the API"
+      ]
+    },
+    {
+      "block": "API conformance — committed regression",
+      "label": "STUBBED (replays the captured LIVE envelope)",
+      "suite": "packages/llm/src/__tests__/anthropic-skills-api-wire-conformance.test.ts",
+      "passed": 5,
+      "expectedFail": 2,
+      "note": "the 2 expected-fails encode the CORRECT pagination contract and document finding F1 without turning CI red"
+    },
+    {
+      "block": "Regression — delivery / exposure / upload clients",
+      "label": "STUBBED",
+      "suite": "pnpm --filter @cinatra-ai/llm test",
+      "files": 48,
+      "passed": 487,
+      "skipped": 1,
+      "exitCode": 0
+    },
+    {
+      "block": "Regression — skills lifecycle + typed injection contract",
+      "label": "STUBBED",
+      "suite": "pnpm --filter @cinatra-ai/skills test",
+      "files": 101,
+      "filesSkipped": 1,
+      "passed": 933,
+      "skipped": 9,
+      "exitCode": 0,
+      "covers": [
+        "injection/__tests__/cap.test.ts (8-total cap incl. the personal delta)",
+        "injection/__tests__/contract.test.ts",
+        "injection/__tests__/inline-expansion.test.ts (whole-skill drop on budget overflow)",
+        "injection/__tests__/no-bypass-arch.test.ts (authoritative raw-skillIds / one-constructor gate)"
+      ]
+    },
+    {
+      "block": "Consent matrix",
+      "label": "REAL POSTGRES (no mocked DB on the path under test)",
+      "suite": "src/lib/__tests__/integration/anthropic-skill-upload-outbox.integration.test.ts",
+      "passed": 23,
+      "postgres": "postgres:18, lane-unique container on port 5741",
+      "covers": [
+        "transactional outbox in the same batch as the catalog write",
+        "crash window: request row survives, still pending, still claimable",
+        "rollback leaves no phantom request",
+        "derived allowAnthropicUpload projection",
+        "consent grant / revoke / bulk / lock",
+        "delayed uninstall GC after the grace window"
+      ]
+    },
+    {
+      "block": "Setup readiness saga (per-provider)",
+      "label": "REAL POSTGRES",
+      "suite": "src/lib/__tests__/integration/setup-readiness-walk.integration.test.ts",
+      "passed": 9
+    },
+    {
+      "block": "Regression — skill lifecycle store, readiness receipt, purpose-policy inventory",
+      "label": "STUBBED + REAL POSTGRES",
+      "suite": "src/lib/__tests__/*skill*.test.ts + setup-readiness*.test.ts + llm-purpose-policy-inventory.test.ts",
+      "files": 23,
+      "passed": 229
+    },
+    {
+      "block": "Migration regression — pinned universe",
+      "label": "SHARED PRODUCTION VERDICT",
+      "runner": "node scripts/audit/skill-packaging-gate.mjs",
+      "exitCode": 0,
+      "hostBundles": 4,
+      "extensionPackages": 111,
+      "legacyExceptions": 0,
+      "embeddedSkillsRatchet": 1,
+      "embeddedSkillsSurvivor": "@cinatra-ai/media-transcript-agent :: skills/transcribe-media/SKILL.md",
+      "survivorNote": "release-fenced pin lag only — the repo-side fold is merged on that repo's default branch (see the default-branch census below, which finds ZERO)"
+    },
+    {
+      "block": "Migration regression — org-wide DEFAULT BRANCHES",
+      "label": "LIVE GitHub",
+      "runner": "evidence/2094-s7-acceptance/drivers/org-migration-regression.mjs",
+      "results": "evidence/2094-s7-acceptance/migration-results.json",
+      "scannedRepos": 111,
+      "unreachableRepos": 1,
+      "agentRepos": 29,
+      "skillRepos": 27,
+      "nonSkillRepos": 83,
+      "embeddedSkillViolations": 0,
+      "skillReposNotExactlyOneBundle": 0,
+      "assistantRequiredInjectable": 5,
+      "assistantRequiredInternalExcluded": 1,
+      "cap": 8
+    }
+  ],
+  "notRun": [
+    {
+      "block": "E2E per wizard provider — browser-level",
+      "why": "A real `pnpm dev` boot driven through a browser with an assistant run per provider was NOT executed in this lane. S6 already drove all five /setup/ai wizard render flows on a live stack (evidence/2093-s6-setup); S7's delta — the post-setup assistant run showing container-delivered injection <=8 on Anthropic and tool-mount delivery <=8 on OpenAI, and the exact-binding failure surface — is NOT covered by this run.",
+      "whatIsCoveredInstead": "The <=8 cap and the per-provider delivery mechanism are covered at unit level by the green S4 suites (injection cap + provider mechanism map + delivery adapters) and the readiness saga is covered on real Postgres. That is NOT a substitute for the browser-level per-provider E2E.",
+      "fabricationGuard": "no screenshot, ledger, or verdict is claimed for this block"
+    },
+    {
+      "block": "Cross-provider router conformance — one bundle through all three adapters as a single new suite",
+      "why": "The constituent invariants are covered and green in the S4 suites (tool-mount on OpenAI, container on Anthropic, core one-hop inline expansion on Gemini, over-budget whole-skill drops, exposure ledger). A dedicated end-to-end 'same bundle, three providers' acceptance suite was NOT added in this lane.",
+      "fabricationGuard": "no new suite is claimed for this block"
+    }
+  ],
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "HIGH (latent)",
+      "class": "product defect",
+      "title": "Both Anthropic Skills list walks paginate on a cursor the API never returns",
+      "where": "packages/llm/src/tools/anthropic-custom-skills-client.ts — FetchAnthropicCustomSkillsGcClient.listSkillVersions and FetchAnthropicCustomSkillsClient.findCustomSkillByDisplayTitle",
+      "measured": "the live list envelope is {data, has_more, next_page}; there is no last_id, and the forward cursor is the `page` query parameter. Both walks advance on has_more + last_id -> after_id, so both terminate after page 1.",
+      "blastRadius": "both walks request limit=100, so a <=100-version history and a <=100-skill workspace behave correctly today (assuming the server honors the requested page size, which it did at limit=1 in C4). Past 100 versions the GC deletes only the first page and the subsequent skill delete is REFUSED (live check C5 confirmed the server enforces versions-before-skill). It does NOT wedge the whole reclaim: AnthropicSkillGcEngine isolates per-skill failures — the throw is caught into `errors`, local sync rows are deliberately retained so a later run resumes, and the run returns ok:false. The real consequence is a NON-CONVERGING reclaim: every later GC run re-deletes the same first 100 versions (idempotent 404s), fails the skill delete again, and surfaces the same error forever; the remote skill is never reclaimed. That is still precisely the failure S0's 'paginate to exhaustion before any deleteSkill' deliverable set out to remove. Past 100 custom skills, a display_title collision rethrows instead of adopting the existing remote identity, so a lost create response can strand a skill.",
+      "evidence": "live-results.json checks C3 + C4; deterministic replay in packages/llm/src/__tests__/anthropic-skills-api-wire-conformance.test.ts (2 expected-fail tests)",
+      "action": "NOT patched in this lane — product defect, routed for filing per the lane brief"
+    },
+    {
+      "id": "F2",
+      "severity": "LOW",
+      "class": "product defect (conservative gate)",
+      "title": "The 30,000,000-byte upload gate is stricter than the live API",
+      "where": "packages/llm/src/tools/anthropic-skill-content-hash.ts — ANTHROPIC_SKILL_MAX_UPLOAD_BYTES",
+      "measured": "a canonical rooted zip of 30,000,505 archive bytes (30,000,169 uncompressed) was ACCEPTED by POST /v1/skills with HTTP 200.",
+      "blastRadius": "a confirmed client-side false rejection relative to observed server behavior — a conservative compatibility mismatch. Large-but-valid bundles are refused at sync and preflight. No data-loss or over-delete risk, and no DOCUMENTED supported limit has been contradicted, so severity stays LOW. S0 wrote that this constant 'changes only on that evidence' — this live boundary probe is that evidence.",
+      "evidence": "live-results.json check C10",
+      "action": "NOT changed in this lane — the constant is a product decision; routed for filing"
+    },
+    {
+      "id": "F3",
+      "severity": "INFO",
+      "class": "premise verified",
+      "title": "The 8-per-request container.skills ceiling is stated and enforced by the server",
+      "measured": "8 distinct uploaded custom skills in one container.skills request were ACCEPTED; 9 were REJECTED with an explicit server-side validation message naming both the ceiling and the count: 'container.ContainerParams.skills: List should have at most 8 items after validation, not 9'.",
+      "note": "confirms the epic's core premise, and the quoted message is why this is more than an inference from a status code. Still a single observation on one workspace, not proof of a universal permanent cap. cinatra's hard cap of 8 matches the ceiling the API itself names.",
+      "evidence": "live-results.json check C8"
+    },
+    {
+      "id": "F4",
+      "severity": "INFO",
+      "class": "premise verified",
+      "title": "Unresolvable container.skills references fail closed at the API boundary",
+      "measured": "a syntactically valid but non-existent skill id was REJECTED by POST /v1/messages.",
+      "note": "a stale local sync mapping surfaces as an error rather than silently delivering nothing — the same fail-closed posture AnthropicSkillNotSyncedError enforces locally.",
+      "evidence": "live-results.json check C9"
+    },
+    {
+      "id": "F5",
+      "severity": "INFO",
+      "class": "premise verified",
+      "title": "display_title workspace-uniqueness is server-enforced and the shipped predicate matches the real body",
+      "measured": "a second create with the same display_title was rejected 4xx, and the shipped isDisplayTitleConflict predicate matches the real error body.",
+      "evidence": "live-results.json check C7"
+    }
+  ]
+}
