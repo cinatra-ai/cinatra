@@ -100,19 +100,21 @@ services:
 
   nango-db:
     image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
-    # Upgrade track: HELD at postgres 17-alpine as a CURRENT VALIDATED HOLD
+    # Upgrade track: HELD at postgres 17-alpine as a DELIBERATE VALIDATED HOLD
     # while the platform DB moved to 18 (see docs/internals/workflows/upgrade-track.md §3): this
     # store is app-coupled to Nango, whose upstream reference compose still
-    # pins postgres 16 — 17 is already a deliberate, validated divergence, and
-    # 18 is unvalidated by upstream (the works-after nango arm proves
-    # fresh-init, not a restored 17 cluster under 18). Revisit when Nango
-    # upstream moves; it keeps the LEGACY .../data mount for as long as it is
-    # a <=17 image. Digest-pinned to a CONFIRMED multi-arch (amd64/arm64)
-    # manifest so ARM dev hosts are safe AND the pg-major-cutover tool's digest
-    # read-back is satisfied. The prod PGDATA volume is migrated by the
-    # logical-dump -> fresh-volume restore in the ops pg-major-cutover tooling
-    # (hub-nango profile), which rebinds nango-db to the external restored
-    # volume via the ops prod override. See docs/internals/workflows/upgrade-track.md.
+    # pins an older postgres major — 17 is already a deliberate, validated
+    # divergence, and 18 is unvalidated by upstream (the works-after nango arm
+    # proves fresh-init, not a restored 17 cluster under 18). Revisit when
+    # Nango upstream moves; it keeps the LEGACY .../data mount for as long as
+    # it is a <=17 image. Digest-pinned to a CONFIRMED multi-arch (amd64/arm64)
+    # manifest so ARM dev hosts are safe; config/upgrade/upgrade-matrix.json
+    # carries this same digest as the nango-postgres baseline pin, and the
+    # check-upgrade-matrix gate keeps the two in lockstep (the works-after
+    # upgrade-postgres arm's Case B proves the 15 -> 17 exception onto these
+    # exact bytes). Base compose mounts the nango-postgres named volume below;
+    # Postgres initializes it when empty, and Nango runs its own schema
+    # migrations at boot.
     # Host port publication moved to docker-compose.dev.yml (base-safe-by-default):
     # a bare `docker compose up` no longer exposes 5435 on 0.0.0.0
     # (this is a Postgres with default nango/nango creds). Only the host-side CLI
