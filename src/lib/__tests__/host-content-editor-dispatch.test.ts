@@ -23,12 +23,16 @@ vi.mock("@cinatra-ai/llm", () => ({
 }));
 
 // --- agents store ------------------------------------------------------------
-const createAgentRun = vi.fn<(input: { id: string }) => Promise<unknown>>();
+// cinatra#1940 P3: createAgentRun's creation perimeter is now guarded — it
+// takes a REQUIRED trailing `authority` param. The mock forwards it so tests
+// below can assert it was minted BEFORE the guarded create (Decision 1,
+// content-editor row).
+const createAgentRun = vi.fn<(input: { id: string }, authority?: unknown) => Promise<unknown>>();
 const readAgentTemplateByPackageName = vi.fn<(pkg: string) => Promise<unknown>>();
 const readLatestAgentVersionIdForTemplate = vi.fn<(id: string) => Promise<unknown>>();
 const transitionRunStatus = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
 vi.mock("@cinatra-ai/agents", () => ({
-  createAgentRun: (input: { id: string }) => createAgentRun(input),
+  createAgentRun: (input: { id: string }, authority?: unknown) => createAgentRun(input, authority),
   readAgentTemplateByPackageName: (pkg: string) => readAgentTemplateByPackageName(pkg),
   readLatestAgentVersionIdForTemplate: (id: string) => readLatestAgentVersionIdForTemplate(id),
   transitionRunStatus: (...a: unknown[]) => transitionRunStatus(...a),
@@ -45,6 +49,10 @@ vi.mock("@/lib/content-editor-run-identity", () => ({
 }));
 
 import { dispatchContentEditorViaA2A } from "@/lib/host-content-editor-dispatch";
+// Real (unmocked) — used to construct the exact rejection shape the guarded
+// createAgentRun throws under an archived org, and to assert the typed
+// refusal it must become (cinatra#1940 P3, Decision 1 content-editor row).
+import { OrgWriteRefusedError } from "@cinatra-ai/org-write-kernel";
 
 function lastSentText(): string {
   const call = sendTask.mock.calls.at(-1)?.[0] as {
@@ -413,5 +421,80 @@ describe("dispatchContentEditorViaA2A — preCreateAuthorize at the run-creation
   it("an ABSENT hook keeps existing callers unchanged (baked-trust paths)", async () => {
     await dispatchContentEditorViaA2A(overrideInput);
     expect(createAgentRun).toHaveBeenCalledTimes(1);
+  });
+});
+
+// cinatra#1940 P3 (Decision 1, content-editor row; Decision 8 acceptance
+// map) — the archived-org typed refusal. CRITICAL semantics: this must NOT
+// degrade to the anonymous fallback — anonymous dispatch would still fire
+// the A2A task against the CMS agent (real external work) with the write
+// only failing later, silently, at the MCP boundary. Both creation sites
+// (actorOverride + install-identity) wrap the guarded create and re-throw a
+// typed `OrganizationArchivedDispatchError`, fail-loud to the connector.
+describe("dispatchContentEditorViaA2A — archived-org typed refusal (cinatra#1940 P3)", () => {
+  it("install-identity path: an archived-org capability-denied refusal becomes OrganizationArchivedDispatchError — NO anonymous fallback, NO A2A client opened", async () => {
+    createAgentRun.mockRejectedValue(new OrgWriteRefusedError("capability-denied"));
+    await expect(
+      dispatchContentEditorViaA2A({
+        agentUrl: "http://localhost:3021",
+        payload: { instanceId: "wp1", postId: "7", instructions: "do it" },
+        timeoutMs: 300_000,
+        packageName: "@cinatra-ai/wordpress-agent",
+      }),
+    ).rejects.toMatchObject({
+      name: "OrganizationArchivedDispatchError",
+      code: "ORG_ARCHIVED_DISPATCH_REFUSED",
+      surface: "content-editor",
+    });
+    expect(createExternalA2AClient).not.toHaveBeenCalled();
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(buildA2aBearerToken).not.toHaveBeenCalled();
+  });
+
+  it("actorOverride (per-user widget) path: the same typed refusal, no anonymous fallback", async () => {
+    createAgentRun.mockRejectedValue(new OrgWriteRefusedError("capability-denied"));
+    await expect(
+      dispatchContentEditorViaA2A({
+        agentUrl: "http://localhost:3021",
+        payload: { instanceId: "wp-1", postId: "7", instructions: "edit" },
+        timeoutMs: 300_000,
+        packageName: "@cinatra-ai/wordpress-agent",
+        actorOverride: {
+          runBy: "u_enduser",
+          orgId: "org_1",
+          instanceId: "wp-1",
+          sourceType: "public_site_widget",
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "OrganizationArchivedDispatchError",
+      surface: "content-editor",
+    });
+    expect(createExternalA2AClient).not.toHaveBeenCalled();
+    expect(sendTask).not.toHaveBeenCalled();
+  });
+
+  it("a non-archive createAgentRun failure is NOT reinterpreted as an archive refusal (only capability-denied maps)", async () => {
+    createAgentRun.mockRejectedValue(new Error("db connection reset"));
+    await expect(
+      dispatchContentEditorViaA2A({
+        agentUrl: "http://localhost:3021",
+        payload: { postId: "7" },
+        timeoutMs: 300_000,
+        packageName: "@cinatra-ai/wordpress-agent",
+      }),
+    ).rejects.toThrow("db connection reset");
+  });
+
+  it("threads a real authority (not undefined) into createAgentRun for both creation sites", async () => {
+    await dispatchContentEditorViaA2A({
+      agentUrl: "http://localhost:3021",
+      payload: { instanceId: "wp1", postId: "7", instructions: "do it" },
+      timeoutMs: 300_000,
+      packageName: "@cinatra-ai/wordpress-agent",
+    });
+    const [, authority] = createAgentRun.mock.calls[0] as [unknown, { orgId?: string } | undefined];
+    expect(authority).toBeDefined();
+    expect(authority?.orgId).toBe("org_1");
   });
 });

@@ -552,6 +552,9 @@ describe("happy path", () => {
         parentRunId: "run_parent",
         parentOboCeiling: null,
       }),
+      // cinatra#1940 P3: the guarded creation perimeter — the tick mints a
+      // system dispatch authority scoped to the project's org.
+      expect.objectContaining({ orgId: "org-A" }),
     );
     expect(mocks.enqueueAgentRun).toHaveBeenCalledWith(
       { runId: expect.stringMatching(/^run_/) },
@@ -570,6 +573,7 @@ describe("happy path", () => {
     await dispatchProjectWorker(baseInput());
     expect(mocks.createAgentRun).toHaveBeenCalledWith(
       expect.objectContaining({ parentRunId: "run_parent", parentOboCeiling: chain }),
+      expect.objectContaining({ orgId: "org-A" }), // #1940 P3 dispatch authority
     );
   });
 
@@ -581,6 +585,7 @@ describe("happy path", () => {
     await dispatchProjectWorker(baseInput());
     expect(mocks.createAgentRun).toHaveBeenCalledWith(
       expect.objectContaining({ projectId: "cin-proj-7" }),
+      expect.objectContaining({ orgId: "org-A" }), // #1940 P3 dispatch authority
     );
   });
 });
@@ -655,6 +660,7 @@ describe("crash-window recovery (Acceptance 2: no duplicate, no lost item)", () 
     expect(mocks.createAgentRun).toHaveBeenCalledTimes(1);
     expect(mocks.createAgentRun).toHaveBeenCalledWith(
       expect.objectContaining({ idempotencyKey: "project:org-A:proj-1/draft:0" }),
+      expect.objectContaining({ orgId: "org-A" }), // #1940 P3 dispatch authority
     );
     expect(mocks.enqueueAgentRun).toHaveBeenCalledTimes(1);
     expect(mocks.settleDispatchAttempt).toHaveBeenCalledWith(

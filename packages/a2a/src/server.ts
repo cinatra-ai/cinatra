@@ -12,6 +12,7 @@ import { InProcessAgentExecutor } from "./agent-executor";
 import type {
   EnqueueJobFn,
   InProcessAgentExecutorOptions,
+  CreateRunWithAuthorityFn,
 } from "./agent-executor";
 import type { CinatraA2AConfig } from "./types";
 
@@ -29,6 +30,12 @@ import type { CinatraA2AConfig } from "./types";
 
 export type CreateA2AServerForAgentInput = CinatraA2AConfig & {
   enqueueJob: EnqueueJobFn;
+  /**
+   * cinatra#1940 P3 — forwarded verbatim to the constructed
+   * `InProcessAgentExecutor`; see its `createRunWithAuthority` doc for the
+   * fail-closed contract when absent.
+   */
+  createRunWithAuthority?: CreateRunWithAuthorityFn;
   /**
    * Prototype-only. Do NOT set to true in production until
    * InProcessTransport.sendMessageStream is implemented.
@@ -99,6 +106,7 @@ export function createA2AServerForAgent(
     pollIntervalMs: input.pollIntervalMs,
     pollTimeoutMs: input.pollTimeoutMs,
     enqueueJob: input.enqueueJob,
+    createRunWithAuthority: input.createRunWithAuthority,
     taskStore,
   };
   const executor = new InProcessAgentExecutor(executorOptions);

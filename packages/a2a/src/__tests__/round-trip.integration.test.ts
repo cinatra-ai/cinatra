@@ -35,6 +35,12 @@ import {
   resolveFirstPublishedAgent,
 } from "../server";
 import type { EnqueueJobFn } from "../agent-executor";
+// cinatra#1940 P3: the creation perimeter is now guarded — createAgentRun
+// requires a real authority against a real org-write-kernel-managed org row.
+// This suite tests A2A protocol round-trip mechanics, not org-write security,
+// so a permissive authority preserves this test's pre-existing behavior.
+import { createAgentRun } from "@cinatra-ai/agents";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
 // ---------------------------------------------------------------------------
 // Env guards
@@ -43,6 +49,17 @@ import type { EnqueueJobFn } from "../agent-executor";
 const HAS_DB = Boolean(process.env.SUPABASE_DB_URL);
 const QUEUE_NAME = "cinatra-background-jobs";
 const REDIS_URL = process.env.REDIS_URL ?? "redis://127.0.0.1:6379";
+
+// cinatra#1940 P3: permissive test authority — this suite's real Postgres
+// org row is whatever ambient context resolveFirstPublishedAgent's org ends
+// up being; `can: () => true` preserves this test's pre-existing behavior
+// (it asserts A2A protocol mechanics, not org-write capability rulings).
+async function createRunWithAuthority(
+  input: Parameters<typeof createAgentRun>[0],
+) {
+  const authority: OrgWriteAuthority = { orgId: input.orgId, can: () => true };
+  return createAgentRun(input, authority);
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -122,6 +139,7 @@ describe.skipIf(!HAS_DB)(
           templateId,
           packageName,
           enqueueJob,
+          createRunWithAuthority,
           pollIntervalMs: 500,
           pollTimeoutMs: 60_000,
         });
@@ -197,6 +215,7 @@ describe.skipIf(!HAS_DB)(
           templateId,
           packageName,
           enqueueJob,
+          createRunWithAuthority,
           pollIntervalMs: 500,
           pollTimeoutMs: 120_000,
         });

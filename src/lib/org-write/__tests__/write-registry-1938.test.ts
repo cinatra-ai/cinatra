@@ -165,20 +165,24 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     }
   });
 
-  it("the exception ledger is EXACTLY the workflows-extension + new-run + Stage-D-deferred rows", () => {
-    // cinatra#1939 wave 3 Stage D additions: createSemanticArtifact (found
-    // during grounding to have a ~30-caller blast radius — its own dedicated
-    // wave, not this slice) and the three team-member actions (a
-    // platform-admin/team-admin authority-tier gap the kernel's session
-    // authority resolver cannot express yet — a design decision, not a
-    // mechanical thread). Both disclosed in the wave-3 Stage D PR body.
+  it("the exception ledger is EXACTLY the workflows-extension + Stage-D-deferred rows (#1940 P3 flipped the new-run rows out)", () => {
+    // COMBINED truth after the #2201 merge:
+    // - cinatra#1940 P3 (Decision 2): the two new-run creation rows
+    //   (createAgentRun / createAgentRunPendingInput) were the #1940-linked
+    //   remainder of the Stage-A ledger; the dispatch-freeze conversion
+    //   guarded both inserts and flipped them to importBanned:true — OUT of
+    //   the ledger.
+    // - cinatra#1939 wave 3 Stage D additions stay: createSemanticArtifact
+    //   (~30-caller blast radius — its own dedicated wave) and the three
+    //   team-member actions + createTeamAction (a platform-admin/team-admin/
+    //   org-admin authority-tier gap the kernel's session authority resolver
+    //   cannot express yet — a design decision, not a mechanical thread).
+    //   All disclosed in the wave-3 Stage D PR body.
     const ledger = ORG_WRITE_REGISTRY.filter((r) => r.importBanExemption)
       .map((r) => `${r.exportName}#${r.importBanExemption!.issue}`)
       .sort();
     expect(ledger).toEqual([
       "addTeamMemberAction#1939",
-      "createAgentRun#1940",
-      "createAgentRunPendingInput#1940",
       "createSemanticArtifact#1939",
       "createTeamAction#1939",
       "materializeExtensionInstanceForProject#1939",
@@ -189,7 +193,7 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     ]);
   });
 
-  it("the Stage-A flip set (already-converted writers + kernel rows) is import-banned", () => {
+  it("the flip set (already-converted writers + kernel rows) is import-banned", () => {
     const banned = new Set(
       ORG_WRITE_REGISTRY.filter((r) => r.importBanned).map((r) => r.exportName),
     );
@@ -203,17 +207,20 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
       "pairOneUntwinnedDashboardTwin", "backfillDashboardArtifactTwins", "dashboardArtifactTwinWriter",
       // agent-run lifecycle
       "transitionRunStatus", "updateAgentRunStatus", "resumeRunFromSetupApproval",
+      // new-run creation (#1940 P3 — the dispatch-freeze conversion's flip)
+      "createAgentRun", "createAgentRunPendingInput",
       // kernel entry points
       "redeemCompletionTicket", "snapshotLeasesQuery",
     ]) {
-      expect(banned.has(w), `${w} must be import-banned in Stage A`).toBe(true);
+      expect(banned.has(w), `${w} must be import-banned`).toBe(true);
     }
-    // Stage A's own set was exactly 20; cinatra#1939 wave 3 Stage D added 8
-    // more banned rows (historyAwareUpsert/SoftDelete/Undelete/Tombstone,
-    // restoreChangeSet, restoreObjectToVersion, runResourceProjectMove,
-    // runAgentRunMoveWithOutputs) — asserted in the Stage-D describe block
-    // below, not re-enumerated here.
-    expect(banned.size).toBe(28);
+    // COMBINED truth after the #2201 merge: Stage A's own set was exactly
+    // 20; cinatra#1939 wave 3 Stage D added 8 banned rows (historyAwareUpsert/
+    // SoftDelete/Undelete/Tombstone, restoreChangeSet, restoreObjectToVersion,
+    // runResourceProjectMove, runAgentRunMoveWithOutputs — asserted in the
+    // Stage-D describe block below); cinatra#1940 P3 added 2 (createAgentRun,
+    // createAgentRunPendingInput). 20 + 8 + 2 = 30.
+    expect(banned.size).toBe(30);
   });
 });
 

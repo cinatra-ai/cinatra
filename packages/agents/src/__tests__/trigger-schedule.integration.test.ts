@@ -34,7 +34,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   scheduleTrigger,
   cancelTriggerSchedule,
@@ -72,24 +72,35 @@ const AUTH = { orgId: TEST_ORG_ID, can: () => true };
 
 async function ensureParentRun(): Promise<string> {
   const id = `test-trigger-schedule-${randomUUID()}`;
-  await createAgentRun({
-    id,
-    templateId: `tmpl-${randomUUID()}`,
-    inputParams: { hello: "world" },
-    orgId: TEST_ORG_ID,
-  });
+  await createAgentRun(
+    {
+      id,
+      templateId: `tmpl-${randomUUID()}`,
+      inputParams: { hello: "world" },
+      orgId: TEST_ORG_ID,
+    },
+    AUTH,
+  );
   return id;
 }
 
 describe("trigger-schedule + trigger-release-job", () => {
   const createdRunIds: string[] = [];
 
-  beforeAll(() => {
+  beforeAll(async () => {
     if (!process.env.SUPABASE_DB_URL) {
       throw new Error(
         "trigger-schedule.test.ts requires SUPABASE_DB_URL — run `cinatra setup branch` first.",
       );
     }
+    // Idempotent — the guard needs an ACTIVE public."organization" row for
+    // TEST_ORG_ID (never deleted: shared with sibling suites running in
+    // parallel forks against the same DB).
+    await db.execute(sql`
+      INSERT INTO public."organization" (id, name, slug, "createdAt")
+      VALUES (${TEST_ORG_ID}, ${"Test Org"}, ${TEST_ORG_ID}, now())
+      ON CONFLICT (id) DO NOTHING
+    `);
   });
 
   afterAll(async () => {
