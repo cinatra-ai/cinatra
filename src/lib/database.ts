@@ -13,9 +13,8 @@ import {
   buildUpsertSkillPackageQuery,
   buildWriteMetadataQuery,
 } from "@/lib/drizzle-store";
-import type { ExtensionLifecycleAuditRow, SkillPackageIdentity } from "@/lib/drizzle-store";
+import type { ExtensionLifecycleAuditRow } from "@/lib/drizzle-store";
 import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
-import type { SkillLevel } from "@cinatra-ai/skills";
 import type {
   Campaign,
   OpenAIServiceTier,
@@ -27,8 +26,13 @@ import type {
 import { shadowUpsertObject } from "./objects-dual-write";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
-import { buildSkillLifecycleRevisionQueries, buildSkillRollbackQuery, type SkillLifecycleRevisionWrite, type SkillRollbackWrite } from "@/lib/skill-lifecycle-store";
+import { buildSkillLifecycleRevisionQueries, buildSkillRollbackQuery, deriveSkillPackageIdentity, buildSkillUploadConsentLockQuery, buildSkillUploadProjectionQuery, buildInsertReconcileOutboxQuery, buildInsertUploadGcOutboxQuery, buildGrantSkillUploadConsentQuery, buildRevokeSkillUploadConsentQuery, buildBulkSkillUploadConsentQuery, buildSelectSkillUploadConsentQuery, type SkillLifecycleRevisionWrite, type SkillRollbackWrite, type SkillUploadConsentScopeKind, type SkillUploadConsentSourceEvent } from "@/lib/skill-lifecycle-store";
 import { buildRevisionBundleQueries, readRevisionBundleFromDatabase } from "@/lib/skill-bundle-store";
+// cinatra#2092 (S5): best-effort promptness kick after a catalog/consent COMMIT.
+// A boot-bound globalThis slot, NOT a background-jobs import — this hub sits in
+// the locked dev-perf routes' graph (route-graph ratchet). The committed outbox
+// row is the durable trigger; the kick only shortens the latency.
+import { kickAnthropicSkillReconcileDrain } from "@/lib/skill-lifecycle-store";
 import {
   canonicalizeSealedFields,
   hasSecretFields,
@@ -68,6 +72,8 @@ export {
   readSkillRevisionContentForRollback,
   readSkillActiveRevisionFromDatabase,
   readSkillLifecycleStates,
+  // Extracted to the lifecycle leaf (file-size ratchet); stable surface here.
+  deriveSkillPackageIdentity,
 } from "@/lib/skill-lifecycle-store";
 export type {
   SkillLifecycleRevisionWrite,
@@ -388,176 +394,6 @@ export function readSkillCatalogFromDatabase() {
  * available — what changes is the failure mode when removing a row that
  * still has dependents (loud error, not silent CASCADE).
  */
-/**
- * Derive a SkillPackageIdentity tuple from a PersistedSkillPackage-shaped row.
- * Mirrors the bridge `deriveContextFromLegacy` in
- * `packages/skills/src/skills-store.ts` but returns the identity columns
- * directly, matching the typed-column SQL contract instead of the
- * SkillWriteContext TypeScript interface.
- *
- * Used by `replaceSkillCatalogInDatabase` so every UPSERT to skill_packages
- * populates the typed identity columns alongside the JSONB payload. Once
- * every write goes through this path, the identity columns can be enforced as
- * NOT NULL.
- *
- * Mapping rules (must stay in sync with deriveContextFromLegacy):
- *   - level="personal"  + installedByUserId → (personal, userId, owner, user-authored)
- *   - level="team"                          → (workspace, null, owner, user-authored)  [TEMP — full owner routing pending]
- *   - level="organization"                  → (workspace, null, owner, user-authored)  [TEMP]
- *   - level="workspace" / "system"          → (workspace, null, owner, installed)
- *   - level="project"                       → (workspace, null, owner, user-authored)  [TEMP]
- *   - level="agent"                         → (workspace, null, owner, user-authored)  [post-publish update promotes to binding=agent]
- *   - level=undefined / unrecognized        → (workspace, null, owner, user-authored)
- *
- * The catalog row's `slug` field becomes `skill_slug`. The `packageId`
- * pattern `github:<owner>/<repo>` or `zip:<slug>` yields vendor/package
- * when present; otherwise both are null.
- */
-const KNOWN_SKILL_LEVELS = new Set<SkillLevel>([
-  "personal",
-  "team",
-  "organization",
-  "workspace",
-  "project",
-  "system",
-  "agent",
-]);
-function isSkillLevel(value: unknown): value is SkillLevel {
-  return typeof value === "string" && KNOWN_SKILL_LEVELS.has(value as SkillLevel);
-}
-
-// Exported for unit testing. Pure function.
-export function deriveSkillPackageIdentity(
-  row: { id: string } & Record<string, unknown>,
-): SkillPackageIdentity {
-  // Type `level` strictly. Anything outside the SkillLevel union (including
-  // the legacy `"custom"` sentinel) falls into the explicit `undefined` arm of
-  // the switch; no silent default for unknown levels.
-  const level: SkillLevel | undefined = isSkillLevel(row.level) ? row.level : undefined;
-  const slug = typeof row.slug === "string" ? row.slug : row.id;
-  const packageId = typeof row.packageId === "string" ? row.packageId : null;
-  const installedByUserId =
-    typeof row.installedByUserId === "string" ? row.installedByUserId : null;
-
-  // Derive vendor/package from packageId pattern. The four shapes we know:
-  //   github:<owner>/<repo>   — GitHub-installed package
-  //   zip:<slug>              — uploaded ZIP package
-  //   installed:<slug>        — scanner-emitted fallback for plugin-less
-  //                             discovered packages (packages/skills/src/skills-store.ts)
-  //   custom:<slug>           — command-line emitted agent-skill package (packages/skills/src/cli.mjs)
-  //
-  // If the source_kind ends up "installed" or "bundled", the optional
-  // `skill_pkg_vendor_required_chk` CHECK requires non-null (vendor, package).
-  // Falling through to (null, null) would abort the transactional UPSERT batch
-  // from `replaceSkillCatalogInDatabase`. Provide a synthetic vendor for the
-  // two non-github/zip prefixes so the pair is always non-null when the regex
-  // matches.
-  let vendor: string | null = null;
-  let pkg: string | null = null;
-  if (packageId) {
-    const ghMatch = /^github:([^/]+)\/(.+)$/.exec(packageId);
-    const zipMatch = /^zip:(.+)$/.exec(packageId);
-    const installedMatch = /^installed:(.+)$/.exec(packageId);
-    const customMatch = /^custom:(.+)$/.exec(packageId);
-    if (ghMatch) {
-      vendor = ghMatch[1];
-      pkg = ghMatch[2];
-    } else if (zipMatch) {
-      vendor = "uploaded";
-      pkg = zipMatch[1];
-    } else if (installedMatch) {
-      vendor = "installed";
-      pkg = installedMatch[1];
-    } else if (customMatch) {
-      vendor = "custom";
-      pkg = customMatch[1];
-    }
-  }
-  // Defensive guard: `skill_pkg_vendor_required_chk` requires non-null (vendor,
-  // package) whenever source_kind is NOT 'user-authored'. If the packageId
-  // pattern pipeline above produced nulls (unknown prefix, missing packageId),
-  // fall back to a synthetic pair anchored on the slug so the INSERT never
-  // fails the constraint regardless of which level branch below sets
-  // source_kind to 'installed' or 'bundled'. Mirrors the per-prefix
-  // synthetic-vendor pattern (vendor="uploaded"/"installed"/"custom") for
-  // unknown shapes.
-  if ((vendor === null || pkg === null) && slug) {
-    vendor = vendor ?? "unknown";
-    pkg = pkg ?? slug;
-  }
-
-  switch (level) {
-    case "personal":
-      return {
-        owner_scope: "personal",
-        owner_id: installedByUserId ?? "local-user",
-        binding_scope: "owner",
-        source_kind: "user-authored",
-        vendor,
-        package: pkg,
-        agent_template_id: null,
-        skill_slug: slug,
-      };
-    case "system":
-    case "workspace":
-      return {
-        owner_scope: "workspace",
-        owner_id: null,
-        binding_scope: "owner",
-        source_kind: "installed",
-        vendor,
-        package: pkg,
-        agent_template_id: null,
-        skill_slug: slug,
-      };
-    case "team":
-    case "organization":
-    case "project":
-      // [TEMP — full owner routing pending] Identical to the
-      // deriveContextFromLegacy fallback for these levels. The catalog row
-      // currently carries no team_id / organization_id, so owner_id stays
-      // null and we collapse to (workspace, owner). Until replaceSkill
-      // CatalogInDatabase threads `targetScope` through, these levels are
-      // indistinguishable from system/workspace in the identity columns.
-      return {
-        owner_scope: "workspace",
-        owner_id: null,
-        binding_scope: "owner",
-        source_kind: "user-authored",
-        vendor,
-        package: pkg,
-        agent_template_id: null,
-        skill_slug: slug,
-      };
-    case "agent":
-      // agent-level packages: workspace-scoped, owner-bound at INSERT;
-      // post-publish update promotes binding_scope to "agent" once the
-      // agent_template_id is known.
-      return {
-        owner_scope: "workspace",
-        owner_id: null,
-        binding_scope: "owner",
-        source_kind: "user-authored",
-        vendor,
-        package: pkg,
-        agent_template_id: null,
-        skill_slug: slug,
-      };
-    case undefined:
-      // Unknown / missing level — safest workspace-scoped default. Matches
-      // the legacy "custom" fallback in deriveContextFromLegacy.
-      return {
-        owner_scope: "workspace",
-        owner_id: null,
-        binding_scope: "owner",
-        source_kind: "user-authored",
-        vendor,
-        package: pkg,
-        agent_template_id: null,
-        skill_slug: slug,
-      };
-  }
-}
 
 export function replaceSkillCatalogInDatabase(input: {
   skillPackages: Array<{ id: string } & Record<string, unknown>>;
@@ -569,11 +405,23 @@ export function replaceSkillCatalogInDatabase(input: {
   /** cinatra#1364 (locked rebuild only): FIRST statement locks the lease row and
    * aborts unless it still carries `guardToken` — see buildCatalogWriteLeaseGuardQuery. */
   writeGuard?: { guardKey: string; guardToken: string };
+  /** cinatra#2092 (S5): label the outbox row this write ALWAYS appends, and —
+   * uninstall only — additionally schedule the delayed GC row due at
+   * grace-window expiry. Post-commit enqueues are explicitly rejected as a
+   * trigger shape: the reconcile request commits IN THIS transaction. */
+  uploadReconcile?: { reason?: string; scheduleGcAtGraceExpiry?: boolean };
 }) {
   const keptPackageIds = input.skillPackages.map((row) => row.id);
   const keptSkillIds = input.skills.map((row) => row.id);
+  const reconcileReason = input.uploadReconcile?.reason ?? "catalog-write";
   runTransactionalBatch([
     ...(input.writeGuard ? [buildCatalogWriteLeaseGuardQuery(postgresSchema, input.writeGuard.guardKey, input.writeGuard.guardToken)] : []),
+    // cinatra#2092 (S5): serialize against the consent-ledger writers BEFORE
+    // reading the ledger for the projection below. Taken AFTER the #1364 lease
+    // guard so that guard keeps its "first statement" contract. Without it a
+    // catalog write and a concurrent revoke can each project from their own
+    // pre-other snapshot and the later commit wins with a stale answer.
+    buildSkillUploadConsentLockQuery(postgresSchema),
     // Bump the cross-process generation token IN THIS transaction (#1364).
     buildBumpSkillCatalogGenerationQuery(postgresSchema),
     // UPSERT skill_packages with full identity columns set. The legacy
@@ -597,11 +445,111 @@ export function replaceSkillCatalogInDatabase(input: {
       payload: JSON.stringify(row),
     })),
     buildDeleteRowsNotInQuery(postgresSchema, "skills", keptSkillIds),
+    // cinatra#2092 (S5): recompute the DERIVED `allowAnthropicUpload`
+    // projection from the consent ledger over the just-upserted rows, then
+    // append the reconcile-request row — BOTH inside this same transaction, so
+    // a crash after COMMIT can never lose the trigger and a crash before it
+    // never leaves a phantom request.
+    buildSkillUploadProjectionQuery(postgresSchema),
+    buildInsertReconcileOutboxQuery(postgresSchema, reconcileReason),
+    ...(input.uploadReconcile?.scheduleGcAtGraceExpiry
+      ? [buildInsertUploadGcOutboxQuery(postgresSchema, reconcileReason)]
+      : []),
     // Lifecycle revision + pointer writes LAST: the skill row is already
     // upserted (kept, never deleted), so the composite active-revision FK is
     // satisfied within this same transaction.
     ...buildSkillLifecycleRevisionQueries(postgresSchema, input.lifecycleWrites ?? []),
   ]);
+  kickAnthropicSkillReconcileDrain();
+}
+
+/**
+ * Consent-ledger writers (cinatra#2092, S5). Each runs as ONE transactional
+ * batch: the ledger write, the recomputed `allowAnthropicUpload` projection,
+ * the reconcile-outbox row, and the generation-token bump commit together —
+ * a consent change is itself a catalog mutation (it changes derived state),
+ * so it takes the same no-lost-trigger shape as a catalog write. AuthZ
+ * (admin session for workspace scopes, owner for personal) is enforced by the
+ * calling actions, never here.
+ */
+export function grantSkillUploadConsentInDatabase(input: {
+  scopeKind: SkillUploadConsentScopeKind;
+  scopeKey: string;
+  grantedBy: string | null;
+  sourceEvent: SkillUploadConsentSourceEvent;
+}): void {
+  runTransactionalBatch([
+    buildSkillUploadConsentLockQuery(postgresSchema),
+    buildGrantSkillUploadConsentQuery(postgresSchema, input),
+    buildSkillUploadProjectionQuery(postgresSchema),
+    buildInsertReconcileOutboxQuery(postgresSchema, `consent-grant:${input.sourceEvent}`),
+    buildBumpSkillCatalogGenerationQuery(postgresSchema),
+  ]);
+  kickAnthropicSkillReconcileDrain();
+}
+
+export function revokeSkillUploadConsentInDatabase(input: {
+  scopeKind: SkillUploadConsentScopeKind;
+  scopeKey: string;
+  revokedBy: string | null;
+}): void {
+  runTransactionalBatch([
+    buildSkillUploadConsentLockQuery(postgresSchema),
+    buildRevokeSkillUploadConsentQuery(postgresSchema, input),
+    buildSkillUploadProjectionQuery(postgresSchema),
+    buildInsertReconcileOutboxQuery(postgresSchema, "consent-revoke"),
+    buildBumpSkillCatalogGenerationQuery(postgresSchema),
+  ]);
+  kickAnthropicSkillReconcileDrain();
+}
+
+/** Setup-with-Anthropic BULK consent (source `setup-bulk`) — one grant per
+ * distinct already-installed non-personal package identity (incl. the
+ * core-system tier). Idempotent per scope target. */
+export function grantBulkSkillUploadConsentInDatabase(grantedBy: string | null): void {
+  runTransactionalBatch([
+    buildSkillUploadConsentLockQuery(postgresSchema),
+    buildBulkSkillUploadConsentQuery(postgresSchema, grantedBy),
+    buildSkillUploadProjectionQuery(postgresSchema),
+    buildInsertReconcileOutboxQuery(postgresSchema, "consent-grant:setup-bulk"),
+    buildBumpSkillCatalogGenerationQuery(postgresSchema),
+  ]);
+  kickAnthropicSkillReconcileDrain();
+}
+
+export type SkillUploadConsentRow = {
+  id: string;
+  scopeKind: SkillUploadConsentScopeKind;
+  scopeKey: string;
+  grantedBy: string | null;
+  grantedAt: string;
+  sourceEvent: SkillUploadConsentSourceEvent;
+  revokedAt: string | null;
+  revokedBy: string | null;
+};
+
+/** Read the full consent ledger (active + revoked), newest grant first. */
+export function readSkillUploadConsentFromDatabase(): SkillUploadConsentRow[] {
+  ensurePostgresSchema();
+  const [result] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [buildSelectSkillUploadConsentQuery(postgresSchema)],
+  });
+  const ts = (v: unknown): string | null =>
+    v == null ? null : v instanceof Date ? v.toISOString() : String(v);
+  return (result?.rows ?? []).map((r) => {
+    const row = r as Record<string, unknown>;
+    return {
+      id: String(row.id),
+      scopeKind: String(row.scope_kind) as SkillUploadConsentScopeKind,
+      scopeKey: String(row.scope_key),
+      grantedBy: row.granted_by == null ? null : String(row.granted_by),
+      grantedAt: ts(row.granted_at) ?? "",
+      sourceEvent: String(row.source_event) as SkillUploadConsentSourceEvent,
+      revokedAt: ts(row.revoked_at),
+      revokedBy: row.revoked_by == null ? null : String(row.revoked_by),
+    };
+  });
 }
 
 /**
@@ -627,20 +575,34 @@ export function updateSkillPrefillTextInDatabase(skillId: string, prefillText: s
     return false;
   }
 
-  const updatedSkill: Record<string, unknown> = {
-    ...(existingSkill as Record<string, unknown>),
-    prefillText: trimmedPrefillText,
-  };
-
   ensurePostgresSchema();
+  const schemaIdent = postgresSchema.replaceAll('"', '""');
   runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     transaction: true,
     queries: [
-      buildUpsertJsonRowQuery(postgresSchema, "skills", {
-        id: trimmedSkillId,
-        payload: JSON.stringify(updatedSkill),
-      }),
+      // cinatra#2092 (S5). This used to round-trip the WHOLE payload it read
+      // above — OUTSIDE the transaction — through an UPSERT. That made it a
+      // last-write-wins clobber of every other field: a catalog replace (or a
+      // consent revoke's projection) committing between the read and this
+      // write would be silently undone, including restoring
+      // `allowAnthropicUpload: true` for a package with no active consent
+      // (fail-OPEN), and an UPSERT would even resurrect a skill the catalog had
+      // just deleted.
+      //
+      // It is now a TARGETED in-database update of the single field this
+      // function owns: no other key can be affected, no vanished row can be
+      // recreated (UPDATE matches nothing), and the stale read above is used
+      // only for the existence/return decision. The consent lock + projection
+      // remain so the derived flag is re-asserted from the ledger.
+      buildSkillUploadConsentLockQuery(postgresSchema),
+      {
+        text: `UPDATE "${schemaIdent}"."skills"
+          SET payload = jsonb_set(payload::jsonb, '{prefillText}', to_jsonb($2::text))::text
+          WHERE id = $1`,
+        values: [trimmedSkillId, trimmedPrefillText],
+      },
+      buildSkillUploadProjectionQuery(postgresSchema),
       // Atomic cross-process cache invalidation (cinatra#1364).
       buildBumpSkillCatalogGenerationQuery(postgresSchema),
     ],
@@ -668,14 +630,32 @@ export function applySkillRollbackInDatabase(input: SkillRollbackWrite): { chang
     revisionId: input.newRevisionId, skillId: input.skillId,
     files: [{ path: "SKILL.md", bytes: Buffer.from(input.restoredContent, "utf8"), isRouter: true }],
   });
+  // The payload changes — bump the cross-process generation token in the SAME
+  // transaction (cinatra#1364). A CAS miss bumps too; harmless refetch.
+  // cinatra#2092 (S5): the rollback installs a RESTORED whole payload, so it
+  // takes the consent lock and re-derives the projection for the same
+  // fail-open reason as the prefill writer above — and it appends a reconcile
+  // request, because the skill's CONTENT changed and any uploaded remote copy
+  // is now stale.
+  //
+  // The CAS verdict is read POSITIONALLY, so the rollback query's index is
+  // computed rather than hardcoded: prepending the lock statement silently
+  // shifted it once, which turned every CAS MISS into a reported success.
+  const rollbackQueries = [
+    buildSkillUploadConsentLockQuery(postgresSchema),
+    buildSkillRollbackQuery(postgresSchema, { ...input, targetBundleDigest }),
+    ...preS1TargetQueries,
+    buildSkillUploadProjectionQuery(postgresSchema),
+    buildInsertReconcileOutboxQuery(postgresSchema, "skill-rollback"),
+    buildBumpSkillCatalogGenerationQuery(postgresSchema),
+  ];
+  const ROLLBACK_QUERY_INDEX = 1; // immediately after the consent lock
   const results = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     transaction: true,
-    // The payload changes — bump the cross-process generation token in the
-    // SAME transaction (cinatra#1364). A CAS miss bumps too; harmless refetch.
-    queries: [buildSkillRollbackQuery(postgresSchema, { ...input, targetBundleDigest }), ...preS1TargetQueries, buildBumpSkillCatalogGenerationQuery(postgresSchema)],
+    queries: rollbackQueries,
   });
-  return { changed: (results[0]?.rows?.length ?? 0) > 0 };
+  return { changed: (results[ROLLBACK_QUERY_INDEX]?.rows?.length ?? 0) > 0 };
 }
 
 export function readAgentCatalogFromDatabase() {

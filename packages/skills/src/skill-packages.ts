@@ -358,6 +358,10 @@ async function runLockedRebuild(
             guardKey: SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY,
             guardToken: leaseToken,
           },
+          // cinatra#2092 (S5): the lifecycle reason labels the reconcile-request
+          // row this rebuild's catalog transaction commits, and an
+          // uninstall reason additionally schedules the delayed GC row.
+          uploadReconcileReason: options.reason ?? "unspecified",
         }),
       );
     } catch (error) {

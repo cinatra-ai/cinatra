@@ -51,8 +51,15 @@ import {
  * so they are far shorter than that; if run durations ever grow, raise GRACE
  * accordingly. The `GRACE > lease TTL` half of the contract IS asserted at
  * module load so the invariant fails loud instead of relying on prose.
+ *
+ * cinatra#2092 (S5): the VALUE lives in the `skill-lifecycle-store` sync leaf
+ * (single source of truth) so the uninstall path's delayed-GC outbox row
+ * (`not_before = now() + grace`) is built inside the catalog transaction
+ * without dragging this service's module graph into `database.ts`. Re-exported
+ * here so every existing consumer keeps its import surface.
  */
-export const ANTHROPIC_SKILL_STALE_GRACE_MS = 30 * 60 * 1000;
+export { ANTHROPIC_SKILL_STALE_GRACE_MS } from "@/lib/skill-lifecycle-store";
+import { ANTHROPIC_SKILL_STALE_GRACE_MS } from "@/lib/skill-lifecycle-store";
 
 if (ANTHROPIC_SKILL_STALE_GRACE_MS <= ANTHROPIC_SKILL_LEASE_TTL_MS) {
   throw new Error(

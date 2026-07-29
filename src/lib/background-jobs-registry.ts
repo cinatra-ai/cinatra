@@ -25,6 +25,7 @@ import {
   ARTIFACT_REVIEW_RESUME_DELIVERY_LOOP_JOB_ID,
   LIFECYCLE_REVIEW_ORCHESTRATION_LOOP_JOB_ID,
   LIFECYCLE_GATE_MAINTENANCE_LOOP_JOB_ID,
+  ANTHROPIC_SKILL_UPLOAD_RECONCILE_SWEEP_LOOP_JOB_ID,
 } from "@/lib/background-jobs-names";
 // TYPE-ONLY (erased at compile; not a route-graph edge) — the reaper VALUE is
 // boot-registered through the slot below, never imported here.
@@ -253,6 +254,49 @@ export function registerLifecycleReviewRunner(runner: LifecycleReviewRunner): vo
 
 function resolveLifecycleReviewRunner(): LifecycleReviewRunner | null {
   return globalThis.__cinatraLifecycleReviewRunner ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Anthropic skill upload-reconcile runner slot (cinatra#2092, epic #2086 S5).
+//
+// Same posture as the slots above: the drain core
+// (`@/lib/anthropic-skill-reconcile-service`, which reaches the sync/GC
+// services + the @cinatra-ai/llm engine graph) is BOOT-REGISTERED by the
+// system-loops phase — never imported here, even dynamically (route-graph
+// ratchet). BOTH the one-shot ANTHROPIC_SKILL_UPLOAD_RECONCILE kick handler and
+// the recurring ..._SWEEP handler resolve this single slot; each no-ops LOUDLY
+// when empty — the durable outbox rows are recovered by the next sweep cycle
+// (the boot seed always registers the runner BEFORE it seeds the loop).
+// ---------------------------------------------------------------------------
+
+type AnthropicSkillReconcileDrainSummary = {
+  claimed: number;
+  reconciled: number;
+  skippedAlreadyReconciled: number;
+  noop: number;
+  gcCompleted: number;
+  failed: number;
+  exhausted: number;
+};
+
+type AnthropicSkillReconcileRunner = {
+  drain: (options?: { gcSweep?: boolean }) => Promise<AnthropicSkillReconcileDrainSummary>;
+};
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __cinatraAnthropicSkillReconcileRunner: AnthropicSkillReconcileRunner | undefined;
+}
+
+/** Boot-time registration (system-loops phase). Idempotent (last write wins). */
+export function registerAnthropicSkillReconcileRunner(
+  runner: AnthropicSkillReconcileRunner,
+): void {
+  globalThis.__cinatraAnthropicSkillReconcileRunner = runner;
+}
+
+function resolveAnthropicSkillReconcileRunner(): AnthropicSkillReconcileRunner | null {
+  return globalThis.__cinatraAnthropicSkillReconcileRunner ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1746,6 +1790,79 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           if (summary.attempted > 0) {
             console.log(
               `[unbound-output-sweep] attempted=${summary.attempted} done=${summary.done} no_match=${summary.no_match} no_produces=${summary.no_produces} skipped=${summary.skipped} failed=${summary.failed}`,
+            );
+          }
+        },
+      });
+    },
+  },
+  [BACKGROUND_JOB_NAMES.ANTHROPIC_SKILL_UPLOAD_RECONCILE]: {
+    // NO org-scoped writes (cinatra#1941 classification, cinatra#2092 S5). The
+    // drain writes only instance-scoped tables that carry no org column —
+    // `anthropic_skill_reconcile_outbox` (its own lease/status columns), the
+    // `anthropic_skill_sync` / `anthropic_skill_lease` mirror state the engine
+    // owns, and one `metadata` key holding the last-reconciled digest per
+    // namespace — plus external Anthropic Skills API HTTP. The skills catalog
+    // itself is the single workspace-wide catalog (`skills` / `skill_packages`
+    // have no org column) and is only READ here; its derived projection is
+    // written by the catalog transaction, never by this job. Terminal-failure
+    // notifications fan out to admin USER ids, not to an org row.
+    authority: { authorityKind: "no-org-write", actorSource: "none" },
+    payloadSchema: looseObject(),
+    async handle() {
+      // ONE-SHOT drain kick (cinatra#2092, epic #2086 S5). Enqueued best-effort
+      // AFTER a catalog/consent transaction commits; the reconcile-request row
+      // that transaction already COMMITTED is the durable trigger, so a lost or
+      // failed kick only defers the work to the sweep below. NOT
+      // self-rescheduling (no runRecurringLoop, no same-name enqueue).
+      const runner = resolveAnthropicSkillReconcileRunner();
+      if (!runner) {
+        console.warn(
+          "[anthropic-skill-upload-reconcile] runner slot empty (boot system-loops phase has not run in this bundle) — one-shot drain skipped; the sweep backstops",
+        );
+        return;
+      }
+      const summary = await runner.drain();
+      if (summary.claimed > 0) {
+        console.log(
+          `[anthropic-skill-upload-reconcile] claimed=${summary.claimed} reconciled=${summary.reconciled} alreadyReconciled=${summary.skippedAlreadyReconciled} noop=${summary.noop} gc=${summary.gcCompleted} failed=${summary.failed} exhausted=${summary.exhausted}`,
+        );
+      }
+    },
+  },
+  [BACKGROUND_JOB_NAMES.ANTHROPIC_SKILL_UPLOAD_RECONCILE_SWEEP]: {
+    // Same drain core on a timer, so the same classification: instance-scoped
+    // outbox / mirror-state / metadata writes and external Anthropic HTTP, no
+    // org-keyed write anywhere.
+    authority: { authorityKind: "no-org-write", actorSource: "none" },
+    payloadSchema: looseObject(),
+    async handle(job) {
+      // ~5-minute safety-net sweep (cinatra#2092). Re-drains pending/backing-off
+      // outbox rows (incl. every row whose one-shot kick was lost to a crash),
+      // reclaims expired worker leases, serves `kind='gc'` rows at their
+      // grace-window `not_before`, and runs the stale-GC reclaim EVERY cycle so a
+      // revocation-staled remote copy is reclaimed with no manual step. The drain
+      // never throws per row (failures back off on the row); any unexpected throw
+      // propagates to runRecurringLoop, which reports it and always re-delays
+      // (cinatra#849).
+      const FIVE_MINUTES_MS = 5 * 60 * 1000;
+      await runRecurringLoop({
+        job,
+        loopJobId: ANTHROPIC_SKILL_UPLOAD_RECONCILE_SWEEP_LOOP_JOB_ID,
+        delayMs: FIVE_MINUTES_MS,
+        label: "anthropic-skill-upload-reconcile-sweep",
+        run: async () => {
+          const runner = resolveAnthropicSkillReconcileRunner();
+          if (!runner) {
+            console.warn(
+              "[anthropic-skill-upload-reconcile-sweep] runner slot empty — skipping cycle",
+            );
+            return;
+          }
+          const summary = await runner.drain({ gcSweep: true });
+          if (summary.claimed > 0 || summary.gcCompleted > 0) {
+            console.log(
+              `[anthropic-skill-upload-reconcile-sweep] claimed=${summary.claimed} reconciled=${summary.reconciled} alreadyReconciled=${summary.skippedAlreadyReconciled} noop=${summary.noop} gc=${summary.gcCompleted} failed=${summary.failed} exhausted=${summary.exhausted}`,
             );
           }
         },

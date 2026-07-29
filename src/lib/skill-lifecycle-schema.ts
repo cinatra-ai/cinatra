@@ -251,6 +251,87 @@ export function skillEfficacySchemaQueries(schemaName: string): { text: string }
  * Bundle authority tables + the additive columns on `skill_revisions` and
  * `anthropic_skill_sync`. `schemaName` is the app schema (SUPABASE_SCHEMA).
  */
+// ---------------------------------------------------------------------------
+// Upload-on-install (cinatra#2092, epic #2086 S5) — bootstrap DDL for the
+// consent ledger + the transactional reconcile outbox:
+//
+//   - `skill_upload_consent`: the CONSENT LEDGER behind the derived
+//     `allowAnthropicUpload` projection. One row per grant; revocation stamps
+//     `revoked_at` on the granted row (grant/revoke pairs stay auditable; a
+//     re-grant INSERTs a new row). Scope kinds: `extension` / `core-system`
+//     rows key on the version-free skill-package identity
+//     (`skill_packages.packageId`, e.g. `verdaccio:@scope/pkg` /
+//     `github:owner/repo` — consent survives version updates by construction);
+//     `personal` rows key on the individual skill id (per-skill grants). The
+//     partial unique index allows at most ONE active (unrevoked) consent per
+//     scope target, so the projection's EXISTS join is unambiguous.
+//   - `anthropic_skill_reconcile_outbox`: the TRANSACTIONAL OUTBOX written in
+//     the SAME batch as every catalog write inside
+//     `replaceSkillCatalogInDatabase` (and every consent-ledger write). The
+//     drain worker (`anthropic-skill-reconcile-service`) leases `pending` rows
+//     and runs a whole-catalog strict reconcile; `kind='gc'` rows carry a
+//     `not_before` at grace-window expiry (uninstall's delayed GC). The queue
+//     job is only the drain KICK — these rows are the durable source of truth,
+//     so a crash between catalog commit and worker run loses no trigger.
+//
+// Same zero-import synchronous-leaf contract as the sections above. Additive
+// bootstrap DDL, no numbered migration (the cinatra#2017-#2020
+// connector_instance_* precedent for brand-new additive tables).
+// ---------------------------------------------------------------------------
+
+/** Consent-ledger + reconcile-outbox tables (cinatra#2092, epic #2086 S5). */
+export function skillUploadConsentSchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."skill_upload_consent" (
+      id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      scope_kind text NOT NULL,
+      scope_key text NOT NULL,
+      granted_by text,
+      granted_at timestamptz NOT NULL DEFAULT now(),
+      source_event text NOT NULL,
+      revoked_at timestamptz,
+      revoked_by text,
+      CONSTRAINT skill_upload_consent_scope_kind_check CHECK (scope_kind IN ('extension','core-system','personal')),
+      CONSTRAINT skill_upload_consent_scope_key_check CHECK (length(scope_key) > 0),
+      CONSTRAINT skill_upload_consent_source_event_check CHECK (source_event IN ('extension-install','setup-bulk','admin-grant','personal-grant'))
+    )` },
+    // At most ONE active consent per scope TARGET. The uniqueness key
+    // deliberately COLLAPSES `extension` and `core-system`: those two differ
+    // only in grant provenance and address the SAME package identity, so a
+    // key including `scope_kind` would admit two active rows for one package
+    // (bulk consent classifying it `core-system` while an install classified it
+    // `extension`) — and revoking one would leave the package still authorized.
+    // `personal` keys on a skill id, a disjoint namespace, so it gets its own
+    // index rather than sharing one.
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS skill_upload_consent_package_active_uk ON "${q}"."skill_upload_consent" (scope_key) WHERE revoked_at IS NULL AND scope_kind <> 'personal'` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS skill_upload_consent_personal_active_uk ON "${q}"."skill_upload_consent" (scope_key) WHERE revoked_at IS NULL AND scope_kind = 'personal'` },
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."anthropic_skill_reconcile_outbox" (
+      id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      kind text NOT NULL DEFAULT 'reconcile',
+      reason text NOT NULL,
+      status text NOT NULL DEFAULT 'pending',
+      attempts integer NOT NULL DEFAULT 0,
+      not_before timestamptz,
+      lease_token text,
+      lease_expires_at timestamptz,
+      outcome text,
+      last_error text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      completed_at timestamptz,
+      CONSTRAINT anthropic_skill_reconcile_outbox_kind_check CHECK (kind IN ('reconcile','gc')),
+      CONSTRAINT anthropic_skill_reconcile_outbox_status_check CHECK (status IN ('pending','running','done','exhausted'))
+    )` },
+    // PARTIAL due index: the drain only ever scans work that is not finished,
+    // and every catalog write appends a row (the insert is unconditional — see
+    // buildInsertReconcileOutboxQuery), so a full index would grow forever with
+    // completed rows the claim can never match.
+    { text: `CREATE INDEX IF NOT EXISTS anthropic_skill_reconcile_outbox_due_idx ON "${q}"."anthropic_skill_reconcile_outbox" (not_before) WHERE status IN ('pending','running')` },
+    // Retention support: the drain prunes completed rows past a window.
+    { text: `CREATE INDEX IF NOT EXISTS anthropic_skill_reconcile_outbox_done_idx ON "${q}"."anthropic_skill_reconcile_outbox" (completed_at) WHERE status = 'done'` },
+  ];
+}
+
 export function skillBundleSchemaQueries(schemaName: string): { text: string }[] {
   const q = schemaName.replaceAll('"', '""'); // identifier
   return [

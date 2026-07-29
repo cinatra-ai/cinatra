@@ -1,7 +1,7 @@
 // cinatra#1941 Stage S1 — runtime proof that every background job is classified
 // and that the unclassified case fails closed. Complements the compile-time
 // fences in background-jobs-authority.types.test.ts:
-//   - completeness: all 32 entries carry authority passing the runtime validator;
+//   - completeness: all 34 entries carry authority passing the runtime validator;
 //   - kind distribution + non-mintable count match the design;
 //   - a literal per-row snapshot so any reclassification is a visible diff;
 //   - the runtime fail-closed guard in dispatchRegisteredJob (D6);
@@ -80,8 +80,8 @@ const registryEntries = Object.entries(BACKGROUND_JOB_REGISTRY) as [
 // ---------------------------------------------------------------------------
 
 describe("background-jobs authority — classification completeness", () => {
-  it("classifies exactly 32 registered jobs (total record)", () => {
-    expect(registryEntries).toHaveLength(32);
+  it("classifies exactly 34 registered jobs (total record)", () => {
+    expect(registryEntries).toHaveLength(34);
   });
 
   it("every entry has authority that passes the runtime validator (fail-closed backstop)", () => {
@@ -95,7 +95,7 @@ describe("background-jobs authority — classification completeness", () => {
     }
   });
 
-  it("kind distribution matches the design (15 / 4 / 2 / 11)", () => {
+  it("kind distribution matches the design (17 / 4 / 2 / 11)", () => {
     const counts: Record<string, number> = {
       "no-org-write": 0,
       "originating-actor": 0,
@@ -104,7 +104,7 @@ describe("background-jobs authority — classification completeness", () => {
     };
     for (const [, handler] of registryEntries) counts[handler.authority.authorityKind]++;
     expect(counts).toEqual({
-      "no-org-write": 15,
+      "no-org-write": 17,
       "originating-actor": 4,
       "grandfathered-run": 2,
       "system-maintenance": 11,
@@ -135,7 +135,7 @@ describe("background-jobs authority — classification completeness", () => {
 // ---------------------------------------------------------------------------
 
 describe("background-jobs authority — per-row classification snapshot", () => {
-  it("pins the exact classification of all 32 jobs", () => {
+  it("pins the exact classification of all 34 jobs", () => {
     const actual = Object.fromEntries(
       registryEntries.map(([jobName, handler]) => [
         NAME_BY_VALUE[jobName] ?? jobName,
@@ -165,7 +165,7 @@ describe("background-jobs authority — per-row classification snapshot", () => 
       ARTIFACT_PROVIDER_CACHE_EVICT: { kind: "system-maintenance", actorSource: "dispatcher-system-identity", orgSource: "row-sweep", caps: [], runField: null, purposes: null },
       ENVIRONMENT_LAYER_GC_REAP: { kind: "system-maintenance", actorSource: "dispatcher-system-identity", orgSource: "global-org-attributed", caps: [], runField: null, purposes: null },
       PM_SCHEDULE_RECONCILE: { kind: "system-maintenance", actorSource: "dispatcher-system-identity", orgSource: "parent-ref", caps: [], runField: null, purposes: null },
-      // no-org-write (15)
+      // no-org-write (17)
       LITELLM_PRICING_SYNC: { kind: "no-org-write", actorSource: "none", orgSource: null, caps: null, runField: null, purposes: null },
       REGISTRY_POLL: { kind: "no-org-write", actorSource: "none", orgSource: null, caps: null, runField: null, purposes: null },
       SKILL_PREFILL_GENERATION: { kind: "no-org-write", actorSource: "none", orgSource: null, caps: null, runField: null, purposes: null },
@@ -181,6 +181,13 @@ describe("background-jobs authority — per-row classification snapshot", () => 
       MARKETPLACE_CATALOG_SYNC: { kind: "no-org-write", actorSource: "enqueuer-attribution-only", orgSource: null, caps: null, runField: null, purposes: null },
       VENDOR_APPLICATION_STATE_RECONCILE: { kind: "no-org-write", actorSource: "none", orgSource: null, caps: null, runField: null, purposes: null },
       WEBHOOK_OUTBOUND_DELIVERY: { kind: "no-org-write", actorSource: "none", orgSource: null, caps: null, runField: null, purposes: null },
+      // cinatra#2092 (epic #2086 S5) — the upload-on-install reconcile drain
+      // (one-shot commit kick) and its safety-net sweep. Both write only
+      // instance-scoped, org-column-free tables (the reconcile outbox, the
+      // anthropic_skill_sync/lease mirror state, one metadata key) and call the
+      // Anthropic Skills API; the workspace skills catalog is READ only.
+      ANTHROPIC_SKILL_UPLOAD_RECONCILE: { kind: "no-org-write", actorSource: "none", orgSource: null, caps: null, runField: null, purposes: null },
+      ANTHROPIC_SKILL_UPLOAD_RECONCILE_SWEEP: { kind: "no-org-write", actorSource: "none", orgSource: null, caps: null, runField: null, purposes: null },
     };
 
     expect(actual).toEqual(expected);
