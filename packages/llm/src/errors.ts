@@ -172,7 +172,7 @@ export class McpApprovalUnsupportedError extends Error {
 }
 
 /**
- * A catalog skill exceeds Anthropic's 30MB Custom Skills upload limit, OR a
+ * A catalog skill exceeds Anthropic's 30 MiB Custom Skills upload limit, OR a
  * single request's resolved skill set exceeds the per-request
  * `container.skills` cap of 8. Surfaced as a CONFIGURATION error by the
  * pre-enqueue preflight — never a mid-run partial failure after partial

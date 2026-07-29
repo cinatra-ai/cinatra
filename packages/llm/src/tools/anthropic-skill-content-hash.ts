@@ -126,13 +126,40 @@ export function computeSkillContentHash(
 // ===========================================================================
 
 /**
- * Anthropic Custom Skills upload boundary. The docs say uploads must be "under
- * 30 MB"; we conservatively REJECT at exactly 30,000,000 bytes (decimal MB, the
- * strict reading) measured against BOTH the archive bytes AND the uncompressed
- * file total. The value changes ONLY on evidence from the gated upstream
- * boundary contract test (`anthropic-skill-boundary.contract.test.ts`).
+ * Anthropic Custom Skills upload boundary — REJECT at or above this value,
+ * measured against BOTH the archive bytes AND the uncompressed file total.
+ *
+ * The docs say uploads must be "under 30 MB". This constant read that as
+ * decimal MB (30,000,000) until the S7 live acceptance measured the real
+ * boundary, which is the ONLY sanctioned trigger for moving it.
+ *
+ * ## Why 31,457,280 (= 30 × 1024 × 1024)
+ *
+ * The S7 live conformance run (check **C10**,
+ * `evidence/2094-s7-acceptance/live-results.json`) uploaded a rooted canonical
+ * zip of **30,000,505 archive bytes / 30,000,169 uncompressed** to the real
+ * `POST /v1/skills` and the API **ACCEPTED it with HTTP 200**, minting a skill
+ * that the run then reclaimed. That refutes the decimal reading outright: the
+ * server's true bound is strictly greater than 30,000,505, so the old constant
+ * was a confirmed client-side FALSE REJECTION.
+ *
+ * The narrowest reading of the same "under 30 MB" prose that is consistent with
+ * that observation is binary MB — 30 MiB = 31,457,280 — and 30,000,505 sits
+ * comfortably inside it. Independently, the API's documented request-size
+ * ceiling is 32 MB (`413 request_too_large`), so 30 MiB also leaves headroom
+ * for the multipart envelope that wraps these bytes on the wire under either
+ * reading of that 32.
+ *
+ * ## What the evidence does NOT establish
+ *
+ * Only a LOWER bound. A bundle between 30,000,505 and 31,457,280 bytes has not
+ * been observed in either direction, and no upper bound was probed to a
+ * rejection, so this stays a deliberately conservative client-side gate rather
+ * than a mirror of a known server limit. It is raised to the narrowest
+ * defensible value, not to the transport ceiling. Moving it again requires the
+ * same thing this move required: a live measurement, recorded.
  */
-export const ANTHROPIC_SKILL_MAX_UPLOAD_BYTES = 30_000_000;
+export const ANTHROPIC_SKILL_MAX_UPLOAD_BYTES = 31_457_280;
 
 /** A bundled file: path relative to the skill source dir + raw bytes. */
 export type SkillZipFile = { relPath: string; bytes: Buffer };
@@ -385,7 +412,7 @@ export type SkillBoundaryCheck =
 /**
  * Reject when EITHER the archive bytes OR the uncompressed file total reaches
  * `maxBytes` (default {@link ANTHROPIC_SKILL_MAX_UPLOAD_BYTES}). `>=` — at the
- * boundary is rejected (the docs say "under 30 MB").
+ * boundary is rejected (the docs say "under 30 MB", read as 30 MiB).
  */
 export function checkSkillBoundary(
   zip: CanonicalSkillZip,
