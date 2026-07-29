@@ -335,6 +335,7 @@ export function dependencyEdgeSchemaQueries(schemaName: string): { text: string 
   dependent_install_id text NOT NULL REFERENCES "${q}"."installed_extension"(id) ON DELETE CASCADE,
   declared_package_name text NOT NULL,
   declared_kind text,
+  declared_role text CONSTRAINT extension_dependency_edge_declared_role_chk CHECK (declared_role IS NULL OR declared_role IN ('matcher','authoring')),
   edge_type text NOT NULL CHECK (edge_type IN ('runtime','install-time','peer')),
   requirement text NOT NULL CHECK (requirement IN ('required','optional')),
   version_constraint jsonb NOT NULL,
@@ -344,6 +345,30 @@ export function dependencyEdgeSchemaQueries(schemaName: string): { text: string 
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 )` },
+    // cinatra#2090 S3 — the declared edge ROLE. ADDITIVE and nullable; the
+    // CREATE above only fires on a fresh schema, so an already-created table
+    // needs this ALTER (the operator-upgrade twin ships as
+    // migrations/core/core__0086). NULL = no role, which is what every edge
+    // persisted before the vocabulary existed means.
+    //
+    // The CREATE names its inline CHECK `..._declared_role_chk`, the SAME name
+    // the guarded ALTER below looks for, so a FRESH install ends up with ONE
+    // constraint and an UPGRADED install with an identical one — an anonymous
+    // inline CHECK would leave a fresh schema carrying two equivalent
+    // constraints while an upgrade carried one (codex round 2).
+    { text: `ALTER TABLE "${q}"."extension_dependency_edge" ADD COLUMN IF NOT EXISTS declared_role text` },
+    { text: `DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'extension_dependency_edge_declared_role_chk'
+      AND conrelid = '"${lit}"."extension_dependency_edge"'::regclass
+  ) THEN
+    ALTER TABLE "${q}"."extension_dependency_edge"
+      ADD CONSTRAINT extension_dependency_edge_declared_role_chk
+      CHECK (declared_role IS NULL OR declared_role IN ('matcher','authoring'));
+  END IF;
+END $$` },
     // One row per manifest-array position (NOT a semantic-dedupe constraint —
     // duplicate declared packages stay representable; the manifest reader owns
     // dedupe). Doubles as the hydration index (dependent, declared order).

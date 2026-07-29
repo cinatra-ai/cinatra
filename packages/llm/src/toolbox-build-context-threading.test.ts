@@ -27,6 +27,7 @@
  * toolbox sanitizer run, so the observed call is the genuine seam.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { emptyInjectedSkillSet } from "../tests/__helpers__/injected-skills";
 import type { GenerateInput, LlmResponse } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -160,8 +161,10 @@ describe("toolbox build-context threading — orchestration entry points (cinatr
   it("runSkillAwareDeterministicLlmTask without a context ⇒ the toolbox builder receives the agent_run default", async () => {
     const buildTools = mockToolboxOnce();
 
+    const injectedSkills = await emptyInjectedSkillSet();
     await runWithActor(() =>
       runSkillAwareDeterministicLlmTask({
+      injectedSkills,
         provider: "openai",
         system: "s",
         user: "u",
@@ -179,8 +182,10 @@ describe("toolbox build-context threading — orchestration entry points (cinatr
       connectorInstancePin: { connectorKey: "wordpress", instanceId: "inst-1" },
     };
 
+    const injectedSkills = await emptyInjectedSkillSet();
     await runWithActor(() =>
       runSkillAwareDeterministicLlmTask({
+      injectedSkills,
         provider: "openai",
         system: "s",
         user: "u",
@@ -222,8 +227,10 @@ describe("toolbox build-context threading — orchestration entry points (cinatr
   });
 
   it("the ALWAYS-INJECT path (no declaredToolboxIds) carries the agent_run default into the buildExternalMcpServerTools options", async () => {
+    const injectedSkills = await emptyInjectedSkillSet();
     await runWithActor(() =>
       runSkillAwareDeterministicLlmTask({
+      injectedSkills,
         provider: "openai",
         system: "s",
         user: "u",

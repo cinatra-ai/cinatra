@@ -53,7 +53,21 @@ export type InvokerErrorCode =
   | "tool_policy_denied" // per-instance policy denied the resolved tool (§2.6 step 2)
   | "ambiguous_tool" // toolName non-unique across servers; serverId required (§3.6)
   | "catalog_revision_changed" // a stale cursor was paged against a bumped snapshot (§3.5)
-  | "catalog_unavailable"; // an explicitly-targeted enrolled server has no obtainable snapshot (cinatra#2018 S3)
+  | "catalog_unavailable" // an explicitly-targeted enrolled server has no obtainable snapshot (cinatra#2018 S3)
+  // ── destructive-confirmation (cinatra#2020 S5, invoker step 3) ───────────
+  | "pending_confirmation" // destructive call PARKED pending the user's explicit confirmation — NOT executed; the message text is the model-facing rendering (§2.1)
+  | "confirmation_unavailable" // confirmation subsystem/store failure or pending-cap hit — REFUSED fail-closed rather than executing unconfirmed (§2.3)
+  | "confirmation_args_too_large"; // args exceed the 256 KB canonical-JSON confirmation cap — an uninspectable blob must not be one-click-approved (§2.3)
+
+/**
+ * STABLE machine prefix of the `pending_confirmation` InvokerError message
+ * (cinatra#2020 §2.1), exported beside the error code. Today's chat panel uses
+ * a client-side match on THIS constant as its poll trigger after a parked tool
+ * result, and a future #1216 first-class approval view keys on it without
+ * re-parsing prose — never re-word it. The full message contract lives in
+ * `buildPendingConfirmationMessage` (connector-instance-destructive-hook.ts).
+ */
+export const PENDING_CONFIRMATION_MESSAGE_PREFIX = "pending_confirmation:";
 
 /** A typed transport / invocation error. NEVER carries the auth header or any
  * credential; `message` is safe to surface. `wpErrorCode` carries a WP_Error /

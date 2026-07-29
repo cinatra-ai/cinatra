@@ -21,7 +21,10 @@ describe("deriveKindFromName", () => {
     expect(deriveKindFromName("@cinatra-ai/email-outreach-agent")).toBe("agent");
     expect(deriveKindFromName("@cinatra-ai/resend-connector")).toBe("connector");
     expect(deriveKindFromName("@cinatra-ai/default-artifact")).toBe("artifact");
-    expect(deriveKindFromName("@cinatra-ai/assistant-skills")).toBe("skill");
+    expect(deriveKindFromName("@cinatra-ai/chat-assistant-core-skill")).toBe("skill");
+    // The retired plural `-skills` suffix no longer derives a kind
+    // (cinatra#2090 consolidated the last plural pack).
+    expect(deriveKindFromName("@cinatra-ai/assistant-skills")).toBe(null);
     expect(deriveKindFromName("@cinatra-ai/blog-content-workflow")).toBe("workflow");
     expect(deriveKindFromName("@example-vendor/blog-connector")).toBe("connector");
   });

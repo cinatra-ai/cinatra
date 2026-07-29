@@ -10,6 +10,7 @@ import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 
 import { deriveSubstanceKey } from "./resource-store";
 import { createLocalDiskBlobStore } from "./local-disk-blob-store";
+import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 
 // ---------------------------------------------------------------------------
 // PINNED preview-capture store (cinatra#2044 S6, sub-lane L-B).
@@ -185,8 +186,10 @@ export interface PreviewCaptureWriteFacts {
  * mirroring `buildCmsSnapshotCaptureQueries`:
  *   [0] the capture `objects` row (deterministic PK — a duplicate rolls back).
  *   [1] the PNG content write, ONLY for a captured record.
+ *   [2] the artifact-writer PROVENANCE WITNESS for that PNG representation.
  * A degraded record is the objects row alone: the gate states the gap, and there
- * are no bytes to pretend otherwise.
+ * are no bytes to pretend otherwise — and with no representation there is
+ * nothing for a witness to vouch for, so ops [1] and [2] are omitted TOGETHER.
  */
 export function buildPreviewCaptureQueries(
   schema: string,
@@ -248,7 +251,27 @@ SELECT (SELECT id FROM rep_insert) AS representation_revision_id,
       f.producerRunId, // $12
     ],
   };
-  return [objectInsert, contentWrite];
+  // The WRITER PROVENANCE WITNESS for the PNG representation, in THIS
+  // transaction. A pinned capture is a host-authored FILE representation on an
+  // `isArtifact`-registered type, so it is governed by the same pack-typed serve
+  // arm as every other authored artifact: without the witness, a claim reserved
+  // over `@cinatra-ai/objects:cms-preview-capture` would stop the reviewer's own
+  // pinned picture from resolving. (`pinnable: false` on the type's registered
+  // dispositions keeps a capture out of the context/pin path either way — the
+  // witness is about SERVING the bytes the review surface renders.)
+  const witnessOp: QueryOp = buildArtifactWriterWitnessOp(schema, {
+    orgId: f.orgId,
+    artifactId: f.captureArtifactId,
+    representationRevisionId: img.representationRevisionId,
+    actor: f.createdBy,
+    detail: {
+      mime: CAPTURE_MIME,
+      size: img.sizeBytes,
+      originKind: "preview_capture",
+      role: f.data.role,
+    },
+  });
+  return [objectInsert, contentWrite, witnessOp];
 }
 
 /** A stored capture, as the view path reads it back. */

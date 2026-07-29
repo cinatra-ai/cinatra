@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS public."invitation" (
   "organizationId" text NOT NULL,
   "email" text NOT NULL,
   "role" text,
+  "teamId" text,
   "status" text NOT NULL,
   "expiresAt" timestamp with time zone NOT NULL,
   "createdAt" timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -214,7 +215,9 @@ CREATE TABLE IF NOT EXISTS public."organization" (
   "slug" text NOT NULL,
   "logo" text,
   "createdAt" timestamp with time zone NOT NULL,
-  "metadata" text
+  "metadata" text,
+  "archivedAt" timestamp with time zone,
+  "archiveEpoch" integer
 );
 CREATE TABLE IF NOT EXISTS public."run" (
   "run_id" uuid DEFAULT gen_random_uuid() NOT NULL,
@@ -241,7 +244,8 @@ CREATE TABLE IF NOT EXISTS public."session" (
   "userAgent" text,
   "userId" text NOT NULL,
   "impersonatedBy" text,
-  "activeOrganizationId" text
+  "activeOrganizationId" text,
+  "activeTeamId" text
 );
 CREATE TABLE IF NOT EXISTS public."store" (
   "prefix" text NOT NULL,
@@ -256,15 +260,16 @@ CREATE TABLE IF NOT EXISTS public."team" (
   "id" text NOT NULL,
   "name" text NOT NULL,
   "organizationId" text NOT NULL,
-  "createdAt" timestamp with time zone DEFAULT now() NOT NULL,
-  "updatedAt" timestamp with time zone DEFAULT now() NOT NULL,
+  "createdAt" timestamp with time zone NOT NULL,
+  "updatedAt" timestamp with time zone,
   "slug" text NOT NULL
 );
 CREATE TABLE IF NOT EXISTS public."teamMember" (
   "id" text NOT NULL,
   "teamId" text NOT NULL,
   "userId" text NOT NULL,
-  "createdAt" timestamp with time zone DEFAULT now() NOT NULL
+  "createdAt" timestamp with time zone,
+  "role" text DEFAULT 'member'::text NOT NULL
 );
 CREATE TABLE IF NOT EXISTS public."thread" (
   "thread_id" uuid DEFAULT gen_random_uuid() NOT NULL,
@@ -292,7 +297,10 @@ CREATE TABLE IF NOT EXISTS public."twoFactor" (
   "id" text NOT NULL,
   "secret" text NOT NULL,
   "backupCodes" text NOT NULL,
-  "userId" text NOT NULL
+  "userId" text NOT NULL,
+  "verified" boolean,
+  "failedVerificationCount" integer,
+  "lockedUntil" timestamp with time zone
 );
 CREATE TABLE IF NOT EXISTS public."user" (
   "id" text NOT NULL,
@@ -304,12 +312,12 @@ CREATE TABLE IF NOT EXISTS public."user" (
   "updatedAt" timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
   "username" text,
   "displayUsername" text,
+  "twoFactorEnabled" boolean,
   "role" text,
   "banned" boolean,
   "banReason" text,
   "banExpires" timestamp with time zone,
-  "twoFactorEnabled" boolean,
-  "userType" text DEFAULT 'human'::text NOT NULL,
+  "userType" text,
   "clientId" text,
   "accent_color" text
 );
@@ -364,7 +372,7 @@ DO $$ BEGIN
 END $$;
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cron_on_run_completed_check' AND connamespace = 'public'::regnamespace) THEN
-    ALTER TABLE public."cron" ADD CONSTRAINT "cron_on_run_completed_check" CHECK (((on_run_completed)::text = ANY ((ARRAY['delete'::character varying, 'keep'::character varying])::text[])));
+    ALTER TABLE public."cron" ADD CONSTRAINT "cron_on_run_completed_check" CHECK (((on_run_completed)::text = ANY (ARRAY[('delete'::character varying)::text, ('keep'::character varying)::text])));
   END IF;
 END $$;
 DO $$ BEGIN
@@ -418,6 +426,11 @@ DO $$ BEGIN
   END IF;
 END $$;
 DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'oauthRefreshToken_token_key' AND connamespace = 'public'::regnamespace) THEN
+    ALTER TABLE public."oauthRefreshToken" ADD CONSTRAINT "oauthRefreshToken_token_key" UNIQUE (token);
+  END IF;
+END $$;
+DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'organization_pkey' AND connamespace = 'public'::regnamespace) THEN
     ALTER TABLE public."organization" ADD CONSTRAINT "organization_pkey" PRIMARY KEY (id);
   END IF;
@@ -465,6 +478,11 @@ END $$;
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'teamMember_pkey' AND connamespace = 'public'::regnamespace) THEN
     ALTER TABLE public."teamMember" ADD CONSTRAINT "teamMember_pkey" PRIMARY KEY (id);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'teamMember_role_check' AND connamespace = 'public'::regnamespace) THEN
+    ALTER TABLE public."teamMember" ADD CONSTRAINT "teamMember_role_check" CHECK ((role = ANY (ARRAY['member'::text, 'admin'::text])));
   END IF;
 END $$;
 DO $$ BEGIN
@@ -643,9 +661,19 @@ CREATE INDEX IF NOT EXISTS checkpoints_run_id_idx ON public.checkpoints USING bt
 CREATE INDEX IF NOT EXISTS idx_cron_next_run_enabled ON public.cron USING btree (next_run_date) WHERE (enabled = true);
 CREATE INDEX IF NOT EXISTS invitation_email_idx ON public.invitation USING btree (email);
 CREATE INDEX IF NOT EXISTS "invitation_organizationId_idx" ON public.invitation USING btree ("organizationId");
+CREATE UNIQUE INDEX IF NOT EXISTS member_org_user_uniq ON public.member USING btree ("organizationId", "userId");
 CREATE INDEX IF NOT EXISTS "member_organizationId_idx" ON public.member USING btree ("organizationId");
 CREATE INDEX IF NOT EXISTS "member_userId_idx" ON public.member USING btree ("userId");
-CREATE UNIQUE INDEX IF NOT EXISTS member_org_user_uniq ON public."member" ("organizationId", "userId");
+CREATE INDEX IF NOT EXISTS "oauthAccessToken_clientId_idx" ON public."oauthAccessToken" USING btree ("clientId");
+CREATE INDEX IF NOT EXISTS "oauthAccessToken_refreshId_idx" ON public."oauthAccessToken" USING btree ("refreshId");
+CREATE INDEX IF NOT EXISTS "oauthAccessToken_sessionId_idx" ON public."oauthAccessToken" USING btree ("sessionId");
+CREATE INDEX IF NOT EXISTS "oauthAccessToken_userId_idx" ON public."oauthAccessToken" USING btree ("userId");
+CREATE INDEX IF NOT EXISTS "oauthClient_userId_idx" ON public."oauthClient" USING btree ("userId");
+CREATE INDEX IF NOT EXISTS "oauthConsent_clientId_idx" ON public."oauthConsent" USING btree ("clientId");
+CREATE INDEX IF NOT EXISTS "oauthConsent_userId_idx" ON public."oauthConsent" USING btree ("userId");
+CREATE INDEX IF NOT EXISTS "oauthRefreshToken_clientId_idx" ON public."oauthRefreshToken" USING btree ("clientId");
+CREATE INDEX IF NOT EXISTS "oauthRefreshToken_sessionId_idx" ON public."oauthRefreshToken" USING btree ("sessionId");
+CREATE INDEX IF NOT EXISTS "oauthRefreshToken_userId_idx" ON public."oauthRefreshToken" USING btree ("userId");
 CREATE UNIQUE INDEX IF NOT EXISTS organization_slug_uidx ON public.organization USING btree (slug);
 CREATE INDEX IF NOT EXISTS idx_run_thread_running ON public.run USING btree (thread_id) WHERE (status = 'running'::text);
 CREATE INDEX IF NOT EXISTS run_pending_by_thread_time_cover ON public.run USING btree (thread_id, created_at, run_id) WHERE (status = 'pending'::text);
@@ -654,7 +682,10 @@ CREATE INDEX IF NOT EXISTS "session_userId_idx" ON public.session USING btree ("
 CREATE INDEX IF NOT EXISTS idx_store_expires_at ON public.store USING btree (expires_at) WHERE (expires_at IS NOT NULL);
 CREATE INDEX IF NOT EXISTS store_prefix_idx ON public.store USING btree (prefix text_pattern_ops);
 CREATE INDEX IF NOT EXISTS team_org_idx ON public.team USING btree ("organizationId");
+CREATE INDEX IF NOT EXISTS "team_organizationId_idx" ON public.team USING btree ("organizationId");
 CREATE UNIQUE INDEX IF NOT EXISTS team_slug_uniq_in_org ON public.team USING btree ("organizationId", slug);
+CREATE INDEX IF NOT EXISTS "teamMember_teamId_idx" ON public."teamMember" USING btree ("teamId");
+CREATE INDEX IF NOT EXISTS "teamMember_userId_idx" ON public."teamMember" USING btree ("userId");
 CREATE INDEX IF NOT EXISTS team_member_team_idx ON public."teamMember" USING btree ("teamId");
 CREATE INDEX IF NOT EXISTS team_member_user_idx ON public."teamMember" USING btree ("userId");
 CREATE INDEX IF NOT EXISTS thread_created_at_idx ON public.thread USING btree (created_at DESC);
@@ -664,23 +695,7 @@ CREATE INDEX IF NOT EXISTS thread_status_idx ON public.thread USING btree (statu
 CREATE INDEX IF NOT EXISTS thread_values_idx ON public.thread USING gin ("values" jsonb_path_ops);
 CREATE INDEX IF NOT EXISTS idx_thread_ttl_expires_at ON public.thread_ttl USING btree (expires_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_ttl_thread_strategy ON public.thread_ttl USING btree (thread_id, strategy);
+CREATE INDEX IF NOT EXISTS "twoFactor_secret_idx" ON public."twoFactor" USING btree (secret);
+CREATE INDEX IF NOT EXISTS "twoFactor_userId_idx" ON public."twoFactor" USING btree ("userId");
 CREATE INDEX IF NOT EXISTS user_client_id_idx ON public."user" USING btree ("clientId") WHERE ("clientId" IS NOT NULL);
 CREATE INDEX IF NOT EXISTS verification_identifier_idx ON public.verification USING btree (identifier);
-
-
--- ---------------------------------------------------------------------------
--- Manual idempotent patch (cinatra#1957): the archive substrate (#1950)
--- declares organization.archivedAt in cinatraOrganizationOptions
--- additionalFields, so the RUNTIME Better Auth organization model expects the
--- column. Real installs get it from the auth migration (getMigrations owns
--- it); this committed snapshot predates #1950, and without the column a fresh
--- smoke database breaks the first-user org bootstrap (organization/list comes
--- back empty — dashboard-live-verify reds of 2026-07-21). Fold into the
--- generated DDL on the next scripts/dump-public-schema.mjs refresh and drop
--- this patch block.
-ALTER TABLE public."organization" ADD COLUMN IF NOT EXISTS "archivedAt" timestamp with time zone;
--- cinatra#1938 (archive S2): archiveEpoch additionalField — same runtime-model
--- expectation as archivedAt above; without it the smoke's org bootstrap breaks
--- identically. Fold into the generated DDL on the next dump-public-schema.mjs
--- refresh and drop with the archivedAt patch.
-ALTER TABLE public."organization" ADD COLUMN IF NOT EXISTS "archiveEpoch" integer;

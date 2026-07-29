@@ -163,6 +163,57 @@ describe("parseManifestDependencyEdges — dual-read matrix", () => {
     ).toThrowError(/duplicate/);
   });
 
+  // -------------------------------------------------------------------------
+  // The EDGE-ROLE vocabulary (cinatra#2090 S3). Additive and OPTIONAL, but
+  // fail-LOUD when present and wrong: a typo'd role silently stops resolving,
+  // and an artifact whose `matcher` edge does not resolve classifies nothing.
+  // -------------------------------------------------------------------------
+  it("accepts the declared skill-edge roles on a kind:\"skill\" edge", () => {
+    expect(
+      validateExtensionDependencyShape(edge("@x/b", { kind: "skill", role: "matcher" })),
+    ).toEqual([]);
+    expect(
+      validateExtensionDependencyShape(edge("@x/b", { kind: "skill", role: "authoring" })),
+    ).toEqual([]);
+    // absent role stays valid — every edge authored before the vocabulary
+    expect(validateExtensionDependencyShape(edge("@x/b", { kind: "skill" }))).toEqual([]);
+  });
+
+  it("REFUSES an unknown role value", () => {
+    expect(
+      validateExtensionDependencyShape(
+        edge("@x/b", { kind: "skill", role: "matchr" } as never),
+      ),
+    ).toEqual([expect.stringContaining("role, when present, must be one of matcher|authoring")]);
+  });
+
+  it("REFUSES a role on a non-skill edge", () => {
+    expect(
+      validateExtensionDependencyShape(edge("@x/b", { kind: "connector", role: "matcher" })),
+    ).toEqual([expect.stringContaining('role is only meaningful on a kind:"skill" edge')]);
+    expect(validateExtensionDependencyShape(edge("@x/b", { role: "matcher" }))).toEqual([
+      expect.stringContaining('role is only meaningful on a kind:"skill" edge'),
+    ]);
+  });
+
+  it("carries the role through parseManifestDependencyEdges verbatim", () => {
+    const deps = [
+      edge("@cinatra-ai/blog-idea-matcher-skill", { kind: "skill", role: "matcher" }),
+      edge("@cinatra-ai/blog-idea-authoring-skill", { kind: "skill", role: "authoring" }),
+    ];
+    const r = parseManifestDependencyEdges(manifest({ dependencies: deps }));
+    expect(r.source).toBe("canonical");
+    expect(r.edges.map((e) => e.role)).toEqual(["matcher", "authoring"]);
+  });
+
+  it("a malformed role fails the whole manifest read LOUDLY (never a silent drop)", () => {
+    expect(() =>
+      parseManifestDependencyEdges(
+        manifest({ dependencies: [edge("@cinatra-ai/b", { kind: "skill", role: "nope" } as never)] }),
+      ),
+    ).toThrowError(ManifestDependencyError);
+  });
+
   it("validateExtensionDependencyShape accepts all three versionConstraint kinds", () => {
     expect(validateExtensionDependencyShape(edge("@x/b"))).toEqual([]);
     expect(

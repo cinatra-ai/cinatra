@@ -146,15 +146,14 @@ export async function seedV12AnalyticsDashboard(opts: {
     await pool.query(
       `INSERT INTO ${schema}.dashboards
          (id, name, config_json, config_version, owner_level, owner_id,
-          organization_id, visibility, status, created_by)
-       VALUES ($1, $2, $3::jsonb, $6, 'user', $4, $5, 'private', 'published', $4)
+          organization_id, status, created_by)
+       VALUES ($1, $2, $3::jsonb, $6, 'user', $4, $5, 'published', $4)
        ON CONFLICT (id) DO UPDATE SET
          name = EXCLUDED.name,
          config_json = EXCLUDED.config_json,
          config_version = EXCLUDED.config_version,
          owner_id = EXCLUDED.owner_id,
          organization_id = EXCLUDED.organization_id,
-         visibility = EXCLUDED.visibility,
          status = EXCLUDED.status`,
       [
         V12_ANALYTICS_DASHBOARD_ID,
@@ -237,15 +236,14 @@ export async function seedDimsOnly1914Dashboard(opts: {
     await pool.query(
       `INSERT INTO ${schema}.dashboards
          (id, name, config_json, config_version, owner_level, owner_id,
-          organization_id, visibility, status, created_by)
-       VALUES ($1, $2, $3::jsonb, $6, 'user', $4, $5, 'private', 'published', $4)
+          organization_id, status, created_by)
+       VALUES ($1, $2, $3::jsonb, $6, 'user', $4, $5, 'published', $4)
        ON CONFLICT (id) DO UPDATE SET
          name = EXCLUDED.name,
          config_json = EXCLUDED.config_json,
          config_version = EXCLUDED.config_version,
          owner_id = EXCLUDED.owner_id,
          organization_id = EXCLUDED.organization_id,
-         visibility = EXCLUDED.visibility,
          status = EXCLUDED.status`,
       [
         DIMS_ONLY_1914_DASHBOARD_ID,
@@ -490,15 +488,14 @@ export async function seedExecSurface1911Dashboard(opts: {
     await pool.query(
       `INSERT INTO ${schema}.dashboards
          (id, name, config_json, config_version, owner_level, owner_id,
-          organization_id, visibility, status, created_by)
-       VALUES ($1, $2, $3::jsonb, $6, 'user', $4, $5, 'private', 'published', $4)
+          organization_id, status, created_by)
+       VALUES ($1, $2, $3::jsonb, $6, 'user', $4, $5, 'published', $4)
        ON CONFLICT (id) DO UPDATE SET
          name = EXCLUDED.name,
          config_json = EXCLUDED.config_json,
          config_version = EXCLUDED.config_version,
          owner_id = EXCLUDED.owner_id,
          organization_id = EXCLUDED.organization_id,
-         visibility = EXCLUDED.visibility,
          status = EXCLUDED.status`,
       [
         EXEC_SURFACE_1911_DASHBOARD_ID,

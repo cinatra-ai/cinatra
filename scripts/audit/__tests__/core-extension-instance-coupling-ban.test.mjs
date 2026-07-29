@@ -30,7 +30,7 @@ describe("core-extension-instance-coupling-ban gate", () => {
   it("derives extension names from package.json (same source as the import-ban gate)", () => {
     const names = discoverExtensionNames();
     expect(names.size).toBeGreaterThan(50);
-    expect(names.has("@cinatra-ai/blog-skills")).toBe(true);
+    expect(names.has("@cinatra-ai/blog-writing-skill")).toBe(true);
   });
 
   it("counts real hardcoded coupling (string + path literals) — fixture; the historic live sentinel is RETIRED", () => {

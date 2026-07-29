@@ -186,6 +186,13 @@ export function skillEfficacySchemaQueries(schemaName: string): { text: string }
   return [
     { text: `ALTER TABLE "${q}"."agent_run_skills_used" ADD COLUMN IF NOT EXISTS delivery_mode text` },
     { text: `ALTER TABLE "${q}"."agent_run_skills_used" ADD COLUMN IF NOT EXISTS invocation_attributable boolean` },
+    // cinatra#2091 (epic #2086 S4): a skill the typed injection contract
+    // RESOLVED but did NOT deliver (cap truncation, inline-budget overflow) is
+    // recorded on the SAME ledger row with the reason, so the efficacy surface
+    // can tell "never reached the model" apart from "reached it and was
+    // ignored". Additive + nullable: an existing row is untouched, and a later
+    // real exposure of the same (run, skill) clears it.
+    { text: `ALTER TABLE "${q}"."agent_run_skills_used" ADD COLUMN IF NOT EXISTS injection_drop_reason text` },
     { text: `CREATE INDEX IF NOT EXISTS agent_run_skills_used_skill_id_idx ON "${q}"."agent_run_skills_used" (skill_id)` },
     { text: `ALTER TABLE "${q}"."skills" ADD COLUMN IF NOT EXISTS deprecation_candidate_dismissed_at timestamptz` },
   ];

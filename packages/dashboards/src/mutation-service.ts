@@ -37,7 +37,6 @@ import type {
   DashboardStatus,
   NewDashboardRow,
   OwnerLevel,
-  Visibility,
 } from "./store/schema";
 import {
   OVERVIEW_DASHBOARD_NAME,
@@ -143,7 +142,6 @@ export type CreateDashboardInput = {
   readonly configVersion?: string; // defaults to CURRENT_CONFIG_VERSION
   readonly ownerLevel: OwnerLevel;
   readonly ownerId: string;
-  readonly visibility?: Visibility; // defaults to 'private'
   /** Initial status — defaults to 'draft'. AI jobs may pass 'generation_failed'. */
   readonly status?: DashboardStatus;
 };
@@ -153,7 +151,6 @@ export type UpdateDashboardPatch = {
   readonly description?: string;
   readonly config?: unknown;
   readonly configVersion?: string;
-  readonly visibility?: Visibility;
 };
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -537,7 +534,6 @@ export async function createDashboard(
   });
 
   const id = input.id ?? randomUUID();
-  const visibility: Visibility = input.visibility ?? "private";
 
   // cinatra#1738 (owner ruling D1): the required ownerLevel/ownerId IS the
   // dashboard's single scope — record the entity anchor at creation so
@@ -567,7 +563,6 @@ export async function createDashboard(
     ownerLevel: input.ownerLevel,
     ownerId: input.ownerId,
     organizationId: actor.organizationId,
-    visibility,
     status: input.status ?? "draft",
     createdBy: actor.userId,
     updatedBy: null,
@@ -618,7 +613,6 @@ export async function createDashboard(
         ownerLevel: input.ownerLevel,
         ownerId: input.ownerId,
         organizationId: actor.organizationId,
-        visibility,
         status: input.status ?? "draft",
         createdBy: actor.userId,
         entityType: anchor.entityType,
@@ -710,7 +704,6 @@ export async function updateDashboard(
       next.name = patch.name;
     }
     if (patch.description !== undefined) next.description = patch.description;
-    if (patch.visibility !== undefined) next.visibility = patch.visibility;
 
     const [updated] = await tx
       .update(dashboards)
@@ -876,7 +869,6 @@ export type UpsertDashboardConfigInput = {
   readonly config: unknown;
   readonly configVersion?: string;
   readonly name?: string;
-  readonly visibility?: Visibility;
   readonly ownerLevel?: OwnerLevel;
   readonly ownerId?: string;
 };
@@ -936,7 +928,6 @@ export async function upsertDashboardConfig(
         ownerLevel: patch.ownerLevel,
         ownerId: patch.ownerId,
         organizationId: actor.organizationId,
-        visibility: patch.visibility ?? "private",
         status: "draft",
         createdBy: actor.userId,
         updatedBy: null,
@@ -1023,7 +1014,6 @@ export async function upsertDashboardConfig(
       ownerLevel: effectiveOwnerLevel,
       ownerId: effectiveOwnerId,
       organizationId: actor.organizationId,
-      visibility: patch.visibility ?? existing?.visibility ?? "private",
       status: existing?.status ?? "draft",
       createdBy: existing?.createdBy ?? actor.userId,
       updatedBy: actor.userId,
@@ -1055,7 +1045,6 @@ export async function upsertDashboardConfig(
       }
       updateSet.name = patch.name;
     }
-    if (patch.visibility !== undefined) updateSet.visibility = patch.visibility;
 
     const [row] = await tx
       .insert(dashboards)
@@ -1156,7 +1145,6 @@ function buildAuthPseudoRow(args: {
   readonly organizationId: string;
   readonly ownerLevel: OwnerLevel;
   readonly ownerId: string;
-  readonly visibility: Visibility;
   readonly config: unknown;
   readonly configVersion: string;
   readonly name: string;
@@ -1176,7 +1164,6 @@ function buildAuthPseudoRow(args: {
     ownerLevel: args.ownerLevel,
     ownerId: args.ownerId,
     organizationId: args.organizationId,
-    visibility: args.visibility,
     status: "draft",
     createdBy: args.createdBy,
     updatedBy: null,
@@ -1225,7 +1212,7 @@ async function findDefaultRow(
 /**
  * List every dashboard for (entity, owner) the actor may read, Overview first.
  * Fail-closed: an incomplete ref/actor, a cross-tenant actor, or an actor the
- * shared owner/visibility/OBO resolver denies all yield ZERO rows. The exact
+ * shared owner-scope/OBO resolver denies all yield ZERO rows. The exact
  * (org, entity, owner) composite is the primary scope; `resolveDashboardAccess`
  * is re-applied per row as defense in depth.
  */
@@ -1287,7 +1274,6 @@ export type EnsureOverviewInput = {
   /** Bare drizzle-cube config to seed a NEW Overview with (wrapped into the
    *  apiVersion 1.2 envelope). Ignored when the Overview already exists. Defaults to empty. */
   readonly seedConfig?: unknown;
-  readonly visibility?: Visibility;
 };
 
 /**
@@ -1337,14 +1323,12 @@ export async function ensureOverview(
       fallbackScopeOwnerLevel: ref.ownerLevel,
     });
     const id = buildOverviewDashboardId(ref);
-    const visibility: Visibility = input.visibility ?? "private";
 
     const pseudo = buildAuthPseudoRow({
       id,
       organizationId: orgId,
       ownerLevel: ref.ownerLevel,
       ownerId: ref.ownerId,
-      visibility,
       config,
       configVersion,
       name: OVERVIEW_DASHBOARD_NAME,
@@ -1369,7 +1353,6 @@ export async function ensureOverview(
         ownerLevel: ref.ownerLevel,
         ownerId: ref.ownerId,
         organizationId: orgId,
-        visibility,
         status: "draft",
         createdBy: actor.userId,
         entityType: ref.entityType,
@@ -1395,7 +1378,6 @@ export type CreateEntityDashboardInput = {
   readonly name: string;
   /** Bare drizzle-cube config to seed with (wrapped into apiVersion 1.2). Defaults to empty. */
   readonly seedConfig?: unknown;
-  readonly visibility?: Visibility;
 };
 
 /**
@@ -1422,14 +1404,12 @@ export async function createEntityDashboard(
   // hit is the name index — making a 23505 unambiguously a name conflict (a
   // random-UUID primary-key collision is not a reachable case).
   const id = randomUUID();
-  const visibility: Visibility = input.visibility ?? "private";
 
   const pseudo = buildAuthPseudoRow({
     id,
     organizationId: orgId,
     ownerLevel: input.ref.ownerLevel,
     ownerId: input.ref.ownerId,
-    visibility,
     config,
     configVersion,
     name,
@@ -1462,7 +1442,6 @@ export async function createEntityDashboard(
           ownerLevel: input.ref.ownerLevel,
           ownerId: input.ref.ownerId,
           organizationId: orgId,
-          visibility,
           status: "draft",
           createdBy: actor.userId,
           entityType: input.ref.entityType,
@@ -1743,7 +1722,6 @@ export async function materializeExtensionTemplate(
             ownerLevel: input.scope.ownerLevel,
             ownerId: input.scope.ownerId,
             organizationId: input.organizationId,
-            visibility: "members",
             status: "published",
             createdBy: input.actor.userId,
             extensionId: input.extensionId,
@@ -1834,7 +1812,6 @@ export async function materializeExtensionInstanceForProject(
           ownerLevel: t.ownerLevel,
           ownerId: t.ownerId,
           organizationId: t.organizationId,
-          visibility: t.visibility,
           status: "published",
           createdBy: input.actor.userId,
           extensionId: input.extensionId,

@@ -1,19 +1,12 @@
 /**
- * Assembly contract test for custom skill instruction rendering.
+ * Assembly contract test for personal-delta rendering.
  *
- * Verifies that runSkillAwareDeterministicLlmTask renders customSkillContent
- * as a separate "Custom skill instructions:" section in the system prompt.
- *
- * The orchestration code at index.ts:404-408 already implements this
- * (personalContext is appended after input.system):
- *
- *   const personalContext = input.customSkillContent
- *     ? `\n\nCustom skill instructions:\n${input.customSkillContent}`
- *     : "";
- *   const system = [input.system, personalContext, skillContext].filter(Boolean).join("\n\n");
- *
- * This test locks the contract so customSkillContent support cannot be
- * dropped without breaking this assertion.
+ * cinatra#2091 (epic #2086 S4): the delta is no longer a bare
+ * `customSkillContent` string — it is a FIRST-CLASS MEMBER of the branded
+ * injected set, carrying its own catalog skill id and an inline delivery mode.
+ * This test locks the rendering contract (a separate "Custom skill
+ * instructions:" section after the base system) across that change, and pins
+ * that an injected set with NO delta renders no such section.
  *
  * The external registry mock uses the CORRECT shape:
  *   buildRegisteredExternalMcpServerTools + buildSingleExternalMcpTool
@@ -21,6 +14,10 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { GenerateInput, LlmResponse } from "./types";
+import {
+  emptyInjectedSkillSet,
+  makeInjectedSkillSet,
+} from "../tests/__helpers__/injected-skills";
 
 // ---------------------------------------------------------------------------
 // Mocks — registered BEFORE the module-under-test is imported
@@ -133,12 +130,15 @@ describe("runSkillAwareDeterministicLlmTask — personal skill rendering", () =>
     });
   });
 
-  it("appends Custom skill instructions: block when customSkillContent is provided", async () => {
+  it("appends Custom skill instructions: block when the set carries a personal delta", async () => {
+    const injectedSkills = await makeInjectedSkillSet({
+      delta: { skillId: "personal:delta-1", content: "DELTA-CONTENT-MARKER-XYZ" },
+    });
     await runWithActor(() => runSkillAwareDeterministicLlmTask({
       provider: "openai",
       system: "BASE-SYSTEM",
       user: "user prompt",
-      customSkillContent: "DELTA-CONTENT-MARKER-XYZ",
+      injectedSkills,
     }));
 
     expect(_capturedGenerateInput).toBeDefined();
@@ -157,12 +157,13 @@ describe("runSkillAwareDeterministicLlmTask — personal skill rendering", () =>
     expect(customIndex).toBeGreaterThan(baseIndex);
   });
 
-  it("does NOT include Custom skill instructions: block when customSkillContent is undefined", async () => {
+  it("does NOT include Custom skill instructions: block when the set carries no delta", async () => {
+    const injectedSkills = await emptyInjectedSkillSet();
     await runWithActor(() => runSkillAwareDeterministicLlmTask({
       provider: "openai",
       system: "BASE-SYSTEM",
       user: "user prompt",
-      // customSkillContent is deliberately omitted
+      injectedSkills,
     }));
 
     expect(_capturedGenerateInput).toBeDefined();

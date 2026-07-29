@@ -8,6 +8,7 @@
  * authoritative).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { emptyInjectedSkillSet } from "../../tests/__helpers__/injected-skills";
 import type {
   GenerateInput,
   LlmResponse,
@@ -144,6 +145,7 @@ describe("entry-point ActorContext wrapping", () => {
 
   it("runSkillAwareDeterministicLlmTask: wraps body in actorContext", async () => {
     await runSkillAwareDeterministicLlmTask({
+      injectedSkills: await emptyInjectedSkillSet(),
       provider: "openai",
       system: "s",
       user: "u",
@@ -155,6 +157,7 @@ describe("entry-point ActorContext wrapping", () => {
   it("runSkillAwareDeterministicLlmTask: outer frame wins", async () => {
     await withActorContext(outerCtx, async () => {
       await runSkillAwareDeterministicLlmTask({
+      injectedSkills: await emptyInjectedSkillSet(),
         provider: "openai",
         system: "s",
         user: "u",

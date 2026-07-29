@@ -4,7 +4,15 @@ Surface-scoped acknowledgements for the release-closeout skills-drift sweep
 (cinatra-ai/cinatra#188). The sweep reconciles every cinatra change in a release
 range against the `cinatra-watches` declarations in the release-current
 `@cinatra-ai/assistant-skills` pin, and refuses to honor a release-wide blanket
-`Skills-reviewed:` / `Skills-unaffected:`. Each entry below is attributed to the
+`Skills-reviewed:` / `Skills-unaffected:`.
+
+> **Post-consolidation note (cinatra#2090 S3):** the single assistant-skills
+> pack was consolidated into six successor skill repos; the per-PR gate now
+> pins the UNION of those repos (`skills_repos` in the caller, one
+> `owner/name@sha` entry per successor, each in STRICT LOCKSTEP with that
+> repo's `resolvedSha` in `cinatra-required-extensions.lock.json`). Entries
+> below this line predate the fold and reference the retired single-pack pin;
+> they are historical records, not current mechanics. Each entry below is attributed to the
 EXACT watched surface (the changed primitive / package / route / source-path glob)
 so the sweep can resolve it per-surface.
 

@@ -1,6 +1,9 @@
 /**
- * The canonical dashboard SCOPE-TUPLE mapping (epic #1883 §D7 Phase-2 ACL
- * cutover, cinatra#1898; owner ruling 2026-07-20 "ruling 5").
+ * The canonical dashboard SCOPE-TUPLE mapping (epic #1883 §D7 ACL cutover,
+ * cinatra#1898; product decision 2026-07-20 "ruling 5"). Introduced by Phase-2;
+ * with Phase-3 (migration core__0087) the demoted `dashboards.visibility` column
+ * is GONE, so this mapping is the ONLY place a dashboard's share axis is
+ * decided.
  *
  * PURE — no session, no I/O, no server-only deps — so BOTH the server-only twin
  * writer (`dashboard-artifact-twin-writer.ts`, which stamps the paired `objects`
@@ -8,12 +11,12 @@
  * without pulling a database or `server-only`.
  *
  * A dashboard's ACL is derived PURELY from its scope (owner tier + project
- * refinement) — the retired dashboard-local `{private, owners, members}`
- * visibility vocabulary no longer participates. Every dashboard maps onto the
+ * refinement) — the dashboard-local `{private, owners, members}` visibility
+ * vocabulary is retired and its column dropped. Every dashboard maps onto the
  * canonical `objects` ownership columns (owner_level / owner_id / visibility /
  * project_id — see `derived-store-ownership.ts`), so the single canonical
  * `object.read` filter is the ONE gate the library and every /dashboards surface
- * share (Phase-2 replaces the Phase-1 dual authorization with this mapping).
+ * share (Phase-2 replaced the Phase-1 dual authorization with this mapping).
  *
  * The mapping (owner ruling 5 / issue #1898):
  *   - personal (user) → user-owned, private

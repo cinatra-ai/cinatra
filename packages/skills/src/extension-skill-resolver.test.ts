@@ -10,7 +10,7 @@ import os from "node:os";
 // package-OWNED capability key (or a concrete skillId) and the resolver
 // discovers the active extension that provides it from the filesystem, then
 // lazily registers its SKILL.md body into the catalog. This pins:
-//   (1) deriveSkillRegistration: the assistant-skills→@cinatra-ai/chat auth
+//   (1) deriveSkillRegistration: the chat-successor→@cinatra-ai/chat auth
 //       carve-out is preserved; every other package uses its scoped name.
 //   (2) resolveSkillIdForCapability: capability key → active extension's skillId.
 //   (3) ensureInstalledSkillRegistered: registers the providing package's
@@ -48,6 +48,7 @@ import {
   resolveSkillIdForCapability,
   resolveInstalledSkillSourcePath,
   resolveDeclaredSkillEdgeForExtensionDir,
+  resolveDeclaredSkillEdgeForPackage,
   ensureInstalledSkillRegistered,
   ensureInstalledSkillsRegistered,
   scanSkillExtensions,
@@ -103,11 +104,57 @@ afterEach(async () => {
 });
 
 describe("deriveSkillRegistration", () => {
-  it("preserves the assistant-skills → @cinatra-ai/chat auth carve-out", () => {
-    expect(deriveSkillRegistration("@cinatra-ai/assistant-skills", "assistant-skills", "chat-core")).toEqual({
+  it("maps each allowlisted chat successor package → @cinatra-ai/chat (auth carve-out)", () => {
+    expect(
+      deriveSkillRegistration(
+        "@cinatra-ai/chat-assistant-core-skill",
+        "chat-assistant-core-skill",
+        "chat-assistant-core",
+      ),
+    ).toEqual({
       packageName: "@cinatra-ai/chat",
-      skillId: "@cinatra-ai/chat:chat-core",
+      skillId: "@cinatra-ai/chat:chat-assistant-core",
     });
+    expect(
+      deriveSkillRegistration("@cinatra-ai/blog-content-skill", "blog-content-skill", "blog-content").skillId,
+    ).toBe("@cinatra-ai/chat:blog-content");
+  });
+
+  it("the chat namespace is closed by EXACT package name — a foreign package in a look-alike dir cannot mint it", () => {
+    // Foreign scoped name sitting in an allowlisted dir basename: own namespace.
+    expect(deriveSkillRegistration("@evil/impostor", "chat-assistant-core-skill", "chat-anything")).toEqual({
+      packageName: "@evil/impostor",
+      skillId: "@evil/impostor:chat-anything",
+    });
+    // Allowlisted name in the WRONG dir: own namespace (dir must match too).
+    expect(
+      deriveSkillRegistration("@cinatra-ai/chat-assistant-core-skill", "somewhere-else", "chat-assistant-core")
+        .packageName,
+    ).toBe("@cinatra-ai/chat-assistant-core-skill");
+    // The retired pack's dir basename no longer remaps anything.
+    expect(deriveSkillRegistration("@cinatra-ai/assistant-skills", "assistant-skills", "chat-core")).toEqual({
+      packageName: "@cinatra-ai/assistant-skills",
+      skillId: "@cinatra-ai/assistant-skills:chat-core",
+    });
+    // The internal hitl package is deliberately NOT chat-namespaced.
+    expect(
+      deriveSkillRegistration(
+        "@cinatra-ai/hitl-prompt-drive-skill",
+        "hitl-prompt-drive-skill",
+        "chat-hitl-prompt-drive",
+      ).packageName,
+    ).toBe("@cinatra-ai/hitl-prompt-drive-skill");
+  });
+
+  it("REFUSES a package that claims the reserved @cinatra-ai/chat name outright (throws)", () => {
+    // Scoped form.
+    expect(() => deriveSkillRegistration("@cinatra-ai/chat", "chat", "chat-anything")).toThrow(
+      /reserved/,
+    );
+    // Bare form that normalization would @-prefix into the reserved name.
+    expect(() => deriveSkillRegistration("cinatra-ai/chat", "chat", "chat-anything")).toThrow(
+      /reserved/,
+    );
   });
 
   it("uses the package's own scoped name as the id prefix otherwise", () => {
@@ -210,27 +257,33 @@ describe("ensureInstalledSkillRegistered", () => {
 });
 
 describe("ensureInstalledSkillsRegistered (batch)", () => {
-  it("registers all co-located skills of a multi-skill package in ONE scan", async () => {
+  it("registers chat-namespace ids across SEVERAL successor packages in one batch", async () => {
+    // The chat namespace is no longer one package: each allowlisted successor
+    // ships one bundle and they all register under @cinatra-ai/chat.
     await writeExtension({
       vendor: "cinatra-ai",
-      pkgDir: "assistant-skills",
-      name: "@cinatra-ai/assistant-skills",
+      pkgDir: "chat-assistant-core-skill",
+      name: "@cinatra-ai/chat-assistant-core-skill",
       kind: "skill",
-      slugs: ["chat-core", "chat-run-polling", "blog-content"],
+      slugs: ["chat-assistant-core"],
+    });
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "blog-content-skill",
+      name: "@cinatra-ai/blog-content-skill",
+      kind: "skill",
+      slugs: ["blog-content"],
     });
     await ensureInstalledSkillsRegistered([
-      "@cinatra-ai/chat:chat-core",
-      "@cinatra-ai/chat:chat-run-polling",
+      "@cinatra-ai/chat:chat-assistant-core",
       "@cinatra-ai/chat:blog-content",
     ]);
-    // Every co-located slug registered exactly once (package scanned once).
     const ids = registerExtensionSkillMock.mock.calls.map((c) => c[0].skillId).sort();
     expect(ids).toEqual([
       "@cinatra-ai/chat:blog-content",
-      "@cinatra-ai/chat:chat-core",
-      "@cinatra-ai/chat:chat-run-polling",
+      "@cinatra-ai/chat:chat-assistant-core",
     ]);
-    // The auth-boundary packageName is preserved for the carve-out package.
+    // The auth-boundary packageName is preserved for the carve-out packages.
     expect(registerExtensionSkillMock).toHaveBeenCalledWith(
       expect.objectContaining({ packageName: "@cinatra-ai/chat" }),
     );
@@ -460,11 +513,11 @@ describe("resolveInstalledSkillSourcePath", () => {
     );
   });
 
-  it("resolves a chat skill id through the assistant-skills carve-out (no path candidates)", async () => {
+  it("resolves a chat skill id through the successor-package carve-out (no path candidates)", async () => {
     await writeExtension({
       vendor: "cinatra-ai",
-      pkgDir: "assistant-skills",
-      name: "@cinatra-ai/assistant-skills",
+      pkgDir: "chat-assistant-core-skill",
+      name: "@cinatra-ai/chat-assistant-core-skill",
       kind: "skill",
       slugs: ["chat-assistant-core"],
     });
@@ -474,7 +527,7 @@ describe("resolveInstalledSkillSourcePath", () => {
         process.cwd(),
         "extensions",
         "cinatra-ai",
-        "assistant-skills",
+        "chat-assistant-core-skill",
         "skills",
         "chat-assistant-core",
         "SKILL.md",
@@ -695,5 +748,224 @@ describe("resolveDeclaredSkillEdgeForExtensionDir", () => {
       ],
     });
     expect(await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The EDGE-ROLE vocabulary (cinatra#2090 S3).
+//
+// An artifact extension declares more than one skill edge — the classifier's
+// rules and the chat's authoring methodology — so the projection can no longer
+// mean "the single skill edge". Each surface reads the edge declared FOR it,
+// and an edge declared for another surface is NEVER a fallback.
+// ---------------------------------------------------------------------------
+describe("declared skill edge — ROLE selection", () => {
+  const skillEdgeLocal = (packageName: string, over: Record<string, unknown> = {}) => ({
+    packageName,
+    edgeType: "runtime",
+    versionConstraint: { kind: "semver-range", range: "*" },
+    requirement: "required",
+    kind: "skill",
+    ...over,
+  });
+
+  async function writeRolelessConsumerAndProvider() {
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "web-research-agent",
+      name: "@cinatra-ai/web-research-agent",
+      kind: "agent",
+      dependencies: [skillEdgeLocal("@cinatra-ai/web-research-skill")],
+      slugs: [],
+    });
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "web-research-skill",
+      name: "@cinatra-ai/web-research-skill",
+      kind: "skill",
+      slugs: ["web-research"],
+    });
+  }
+
+  const roledEdge = (packageName: string, role?: string) => ({
+    packageName,
+    edgeType: "runtime",
+    versionConstraint: { kind: "semver-range", range: "*" },
+    requirement: "required",
+    kind: "skill",
+    ...(role ? { role } : {}),
+  });
+
+  async function writeArtifactWithBothRoles(over?: { deps?: unknown[] }) {
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "blog-idea-artifact",
+      name: "@cinatra-ai/blog-idea-artifact",
+      kind: "artifact",
+      dependencies:
+        over?.deps ?? [
+          roledEdge("@cinatra-ai/blog-idea-authoring-skill", "authoring"),
+          roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher"),
+        ],
+      slugs: [],
+    });
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "blog-idea-matcher-skill",
+      name: "@cinatra-ai/blog-idea-matcher-skill",
+      kind: "skill",
+      slugs: ["blog-idea-matcher"],
+    });
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "blog-idea-authoring-skill",
+      name: "@cinatra-ai/blog-idea-authoring-skill",
+      kind: "skill",
+      slugs: ["blog-idea-authoring"],
+    });
+  }
+
+  it("resolves each role to ITS OWN provider on a consumer declaring both", async () => {
+    await writeArtifactWithBothRoles();
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "matcher"),
+    ).toEqual(
+      expect.objectContaining({
+        packageName: "@cinatra-ai/blog-idea-matcher-skill",
+        skillId: "@cinatra-ai/blog-idea-matcher-skill:blog-idea-matcher",
+        slug: "blog-idea-matcher",
+      }),
+    );
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "authoring"),
+    ).toEqual(
+      expect.objectContaining({
+        packageName: "@cinatra-ai/blog-idea-authoring-skill",
+        skillId: "@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring",
+        slug: "blog-idea-authoring",
+      }),
+    );
+  });
+
+  it("a role the consumer does not declare resolves to null (no cross-role fallback)", async () => {
+    await writeArtifactWithBothRoles({
+      deps: [roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher")],
+    });
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "authoring"),
+    ).toBeNull();
+  });
+
+  it("the run-MOUNT surface refuses a roled edge — a classifier prompt is never mounted as instructions", async () => {
+    // The regression this closes: before roles existed, an artifact that
+    // declared exactly ONE skill edge (its matcher's rules) satisfied the
+    // "exactly one runtime skill edge" predicate, so the bridge would have
+    // mounted the classifier prompt into the run.
+    await writeArtifactWithBothRoles({
+      deps: [roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher")],
+    });
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("blog-idea-artifact")).toBeNull();
+  });
+
+  it("the run-MOUNT surface still resolves a ROLE-LESS edge (wave-2 behaviour is untouched)", async () => {
+    await writeRolelessConsumerAndProvider();
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("web-research-agent")).toEqual(
+      expect.objectContaining({ skillId: "@cinatra-ai/web-research-skill:web-research" }),
+    );
+  });
+
+  it("a role-less edge is NOT a matcher edge (resolveDeclaredSkillEdgeForPackage is role-exact)", async () => {
+    await writeRolelessConsumerAndProvider();
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/web-research-agent", "matcher"),
+    ).toBeNull();
+  });
+
+  it("an UNKNOWN role string resolves for neither the mount surface nor a named role", async () => {
+    await writeArtifactWithBothRoles({
+      deps: [roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matchr")],
+    });
+    expect(await resolveDeclaredSkillEdgeForExtensionDir("blog-idea-artifact")).toBeNull();
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "matcher"),
+    ).toBeNull();
+  });
+
+  it("TWO edges carrying the SAME role fail closed", async () => {
+    await writeArtifactWithBothRoles({
+      deps: [
+        roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher"),
+        roledEdge("@cinatra-ai/blog-idea-authoring-skill", "matcher"),
+      ],
+    });
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "matcher"),
+    ).toBeNull();
+  });
+
+  it("a peer / install-time edge NEVER resolves, role or not", async () => {
+    for (const edgeType of ["peer", "install-time"]) {
+      await rm(path.join(tmpDir, "extensions"), { recursive: true, force: true });
+      await writeArtifactWithBothRoles({
+        deps: [{ ...roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher"), edgeType }],
+      });
+      expect(
+        await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "matcher"),
+      ).toBeNull();
+    }
+  });
+
+  it("an OPTIONAL roled edge never resolves (required-only, same as wave 2)", async () => {
+    await writeArtifactWithBothRoles({
+      deps: [
+        { ...roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher"), requirement: "optional" },
+      ],
+    });
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "matcher"),
+    ).toBeNull();
+  });
+
+  it("a kind:\"skill\" package cannot chain through a roled edge either", async () => {
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "chaining-skill",
+      name: "@cinatra-ai/chaining-skill",
+      kind: "skill",
+      dependencies: [roledEdge("@cinatra-ai/blog-idea-matcher-skill", "matcher")],
+      slugs: ["chaining"],
+    });
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "blog-idea-matcher-skill",
+      name: "@cinatra-ai/blog-idea-matcher-skill",
+      kind: "skill",
+      slugs: ["blog-idea-matcher"],
+    });
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/chaining-skill", "matcher"),
+    ).toBeNull();
+  });
+
+  it("a tombstoned provider drops the roled resolution", async () => {
+    await writeArtifactWithBothRoles();
+    readEffectiveStatusMock.mockResolvedValue(
+      new Map([["@cinatra-ai/blog-idea-matcher-skill", "archived"]]),
+    );
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "matcher"),
+    ).toBeNull();
+    // the OTHER role is unaffected
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/blog-idea-artifact", "authoring"),
+    ).toEqual(expect.objectContaining({ packageName: "@cinatra-ai/blog-idea-authoring-skill" }));
+  });
+
+  it("an unknown consumer package name resolves to null", async () => {
+    await writeArtifactWithBothRoles();
+    expect(
+      await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/nope-artifact", "matcher"),
+    ).toBeNull();
+    expect(await resolveDeclaredSkillEdgeForPackage("", "matcher")).toBeNull();
   });
 });

@@ -301,9 +301,12 @@ export type SkillExtensionRole = (typeof SKILL_EXTENSION_ROLES)[number];
  * from being delivered. The two restricted roles are opt-in and explicit.
  *
  * TRANSITIONAL: the pre-S2 convention was a boolean `internal: true` on the
- * manifest (core consumes `chat-hitl-prompt-drive` by exact repository path).
- * That flag is honoured as `internal` so a package that has not yet migrated
- * keeps its meaning; an explicit `skillRole` always wins.
+ * manifest. That flag is honoured as `internal` so a package that has not yet
+ * migrated keeps its meaning; an explicit `skillRole` always wins. (The
+ * `chat-hitl-prompt-drive` bundle that motivated the flag now ships in
+ * `@cinatra-ai/hitl-prompt-drive-skill` with an explicit
+ * `skillRole:"internal"` and is consumed by capability, not by path —
+ * cinatra#2090 S3.)
  *
  * An UNKNOWN `skillRole` value resolves to `null` — the caller decides, and the
  * packaging verdict has already refused such a package at every install and

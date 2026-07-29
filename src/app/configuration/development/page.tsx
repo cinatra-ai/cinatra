@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { getEmailSystemDevelopmentSettings } from "@/lib/email-system";
-import { getMcpPublicBaseUrl } from "@cinatra-ai/mcp-server/credentials";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Main } from "@/components/layout/main";
@@ -11,13 +10,8 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/in
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { SettingsTabNav } from "@/components/settings-tab-nav";
-import Link from "next/link";
 import { SaveEmailSafetyForm } from "./save-development-form";
-import { PublicBaseUrlForm } from "./public-base-url-form";
-// Dev-tunnel status resolves through the `dev-tunnel-status` capability the
-// tailscale connector registers at activation (lazy/guarded host-access
-// cutover) — absence degrades to the "connect Tailscale" state below.
-import { getDevTunnelStatus } from "@/lib/dev-tunnel-status";
+import { TunnelTabContent } from "./tunnel-tab";
 import { ExtensionsTabContent } from "./extensions-tab";
 
 export const metadata: Metadata = { title: "Development" };
@@ -120,72 +114,6 @@ function EmailTabContent({ isDevMode }: { isDevMode: boolean }) {
             </Button>
           </CardFooter>
         </SaveEmailSafetyForm>
-      </Card>
-    </div>
-  );
-}
-
-function TunnelTabContent({ isDevMode }: { isDevMode: boolean }) {
-  const { publicBaseUrl } = getMcpPublicBaseUrl();
-
-  // The dedicated Tailscale Funnel URL is deterministic — derived from
-  // this dev instance's schema-based hostname + the resolved tailnet.
-  // It's shown in the flyout as a pickable option REGARDLESS of whether
-  // a sidecar has been provisioned yet (the provisioning path registers
-  // the node under exactly this hostname, so picking + saving it now is
-  // safe). `null` only when Tailscale isn't connected (no tailnet) — or
-  // when the connector is absent (degraded mode of the capability read).
-  const { connected: tailscaleConnected, funnelUrlPreview: tailscaleUrl } = getDevTunnelStatus();
-
-  return (
-    <div className="flex flex-col gap-6">
-      <Card className="max-w-3xl border-line bg-surface backdrop-blur-none">
-        <CardHeader>
-          <CardTitle>Tunnel</CardTitle>
-          <CardDescription className="leading-6">
-            Externally reachable HTTPS URL that maps onto this
-            workspace&apos;s local app server. External MCP and A2A clients
-            (hosted ChatGPT connectors, remote Claude Code instances, A2A
-            peers) connect through this URL. Leave empty to disable
-            external reachability.
-            {tailscaleConnected ? (
-              <>
-                {" "}Tailscale is connected — click the field below to pick
-                its Funnel URL, or{" "}
-                <Link
-                  href="/connectors/tailscale"
-                  className="underline underline-offset-4 hover:text-foreground"
-                >
-                  manage the connector
-                </Link>
-                .
-              </>
-            ) : (
-              <>
-                {" "}For an auto-managed Funnel URL,{" "}
-                <Link
-                  href="/connectors/tailscale"
-                  className="underline underline-offset-4 hover:text-foreground"
-                >
-                  connect Tailscale
-                </Link>
-                .
-              </>
-            )}
-            {!isDevMode && (
-              <>
-                {" "}In production, set the deployed app&apos;s URL via the{" "}
-                <code>BETTER_AUTH_URL</code> env var; this is a per-instance
-                override.
-              </>
-            )}
-          </CardDescription>
-        </CardHeader>
-        <PublicBaseUrlForm
-          initialUrl={publicBaseUrl ?? ""}
-          tailscaleConnected={tailscaleConnected}
-          tailscaleUrl={tailscaleUrl}
-        />
       </Card>
     </div>
   );

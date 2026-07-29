@@ -68,28 +68,34 @@ beforeAll(() => {
   fixtureRoot = mkdtempSync(path.join(tmpdir(), "widget-chat-skill-"));
   cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(fixtureRoot);
 
-  // A connector that declares a widget-chat capability (WordPress shape).
+  // A CONNECTOR that co-locates its widget-chat bundle. No first-party package
+  // is shaped this way any more (cinatra#2090 moved both widget bundles into
+  // their own `-skill` extensions), but the predicate still scans connector
+  // kinds so a third-party connector that ships its own widget prompt keeps
+  // resolving — hence a third-party fixture rather than a first-party one.
   writeExtension(
     fixtureRoot,
-    "cinatra-ai",
-    "wordpress-mcp-connector",
+    "acme",
+    "cms-connector",
     {
-      name: "@cinatra-ai/wordpress-mcp-connector",
+      name: "@acme/cms-connector",
       cinatra: {
         kind: "connector",
-        capabilities: { "widget-chat.wordpress-content-editor": "wordpress-widget-chat" },
+        capabilities: { "widget-chat.acme-content-editor": "acme-widget-chat" },
       },
     },
-    ["wordpress-widget-chat"],
+    ["acme-widget-chat"],
   );
 
-  // A skill package that declares a widget-chat capability (Drupal shape).
+  // The first-party shape: a `kind:"skill"` package that declares the
+  // widget-chat capability its connector NAMES (Drupal + WordPress both look
+  // like this since cinatra#2090).
   writeExtension(
     fixtureRoot,
     "cinatra-ai",
-    "drupal-skills",
+    "drupal-widget-chat-skill",
     {
-      name: "@cinatra-ai/drupal-skills",
+      name: "@cinatra-ai/drupal-widget-chat-skill",
       cinatra: {
         kind: "skill",
         capabilities: { "widget-chat.drupal-content-editor": "drupal-widget-chat" },
@@ -163,23 +169,21 @@ beforeEach(() => {
 
 describe("isWidgetChatSkillId", () => {
   it("recognises a connector-co-located widget-chat skill", async () => {
-    await expect(
-      isWidgetChatSkillId("@cinatra-ai/wordpress-mcp-connector:wordpress-widget-chat"),
-    ).resolves.toBe(true);
+    await expect(isWidgetChatSkillId("@acme/cms-connector:acme-widget-chat")).resolves.toBe(true);
   });
 
-  it("recognises a sibling skill-package widget-chat skill", async () => {
+  it("recognises a skill-package widget-chat skill", async () => {
     await expect(
-      isWidgetChatSkillId("@cinatra-ai/drupal-skills:drupal-widget-chat"),
+      isWidgetChatSkillId("@cinatra-ai/drupal-widget-chat-skill:drupal-widget-chat"),
     ).resolves.toBe(true);
   });
 
   it("recognises a widget skill whose owning package is affirmatively active", async () => {
     lifecycleStatusMock.mockResolvedValue(
-      new Map([["@cinatra-ai/wordpress-mcp-connector", "active"]]),
+      new Map([["@cinatra-ai/drupal-widget-chat-skill", "active"]]),
     );
     await expect(
-      isWidgetChatSkillId("@cinatra-ai/wordpress-mcp-connector:wordpress-widget-chat"),
+      isWidgetChatSkillId("@cinatra-ai/drupal-widget-chat-skill:drupal-widget-chat"),
     ).resolves.toBe(true);
   });
 
@@ -203,7 +207,7 @@ describe("isWidgetChatSkillId", () => {
   it("FAIL-CLOSED: denies a widget skill when the lifecycle-status read fails", async () => {
     lifecycleStatusMock.mockRejectedValue(new Error("status store down"));
     await expect(
-      isWidgetChatSkillId("@cinatra-ai/wordpress-mcp-connector:wordpress-widget-chat"),
+      isWidgetChatSkillId("@cinatra-ai/drupal-widget-chat-skill:drupal-widget-chat"),
     ).resolves.toBe(false);
   });
 

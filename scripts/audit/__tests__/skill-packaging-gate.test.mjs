@@ -344,14 +344,32 @@ describe("legacy exception ledger", () => {
     readFileSync(join(REPO_ROOT, "config", "skill-packaging-legacy-exceptions.json"), "utf8"),
   );
 
-  it("waives ONLY the recorded (package, code) pairs", () => {
+  it("the committed ledger is EMPTY — the cinatra#2090 migration completion proof", () => {
+    // The ledger's own note declares an empty `exceptions` array THE proof the
+    // S2/S3 packaging migration is complete. The last entry
+    // (@cinatra-ai/assistant-skills) was deleted by the S3 consolidation fold;
+    // a NEW entry needs an issue reference and a very good reason.
+    expect(ledger.exceptions).toEqual([]);
+  });
+
+  it("waives ONLY the recorded (package, code) pairs (synthetic entry — the committed ledger is empty)", () => {
     const violations = [
       { code: "package-suffix", message: "m" },
       { code: "dangling-reference", message: "m" },
     ];
     const listed = applyLegacyExceptions(violations, {
-      packageName: "@cinatra-ai/drupal-skills",
-      ledger,
+      packageName: "@cinatra-ai/synthetic-legacy-skills",
+      ledger: {
+        ...ledger,
+        exceptions: [
+          {
+            packageName: "@cinatra-ai/synthetic-legacy-skills",
+            codes: ["package-suffix"],
+            reason: "synthetic fixture — the committed ledger is empty",
+            migratedBy: "cinatra#2090",
+          },
+        ],
+      },
     });
     expect(codes(listed.waived)).toEqual(["package-suffix"]);
     expect(codes(listed.blocking)).toEqual(["dangling-reference"]);

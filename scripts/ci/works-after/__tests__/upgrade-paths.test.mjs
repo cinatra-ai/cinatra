@@ -292,6 +292,42 @@ test("upgrade-postgres fixture: digest-bound TARGET pins, bare-major sources, dr
   assert.match(src, /scripts\/upgrade\/postgres-upgrade-major\.sh/, "must drive the committed pg family path");
 });
 
+test("upgrade-postgres + nango fixture defaults EQUAL the matrix pins (drift guard, cinatra#2194)", () => {
+  // Digest-bound FORMAT alone let the Case B default drift onto a retired
+  // digest once (cinatra#2194) — pin the defaults to the matrix VALUES so a
+  // compose/matrix pin move reds this suite until the fixtures follow.
+  const matrix = JSON.parse(
+    readFileSync(resolve(REPO_ROOT, "config/upgrade/upgrade-matrix.json"), "utf8"),
+  );
+  const byId = new Map(matrix.services.map((s) => [s.id, s]));
+  const defaultOf = (src, v) => {
+    const m = src.match(new RegExp(`${v}="\\$\\{${v}:-([^}]+)\\}"`));
+    assert.ok(m, `missing overridable default for ${v}`);
+    return m[1];
+  };
+  const upgSrc = readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after/upgrade-postgres.sh"), "utf8");
+  assert.equal(
+    `postgres:${defaultOf(upgSrc, "PG_CASEA_TO_TAG")}`,
+    byId.get("platform-postgres").baselinePin.image,
+    "PG_CASEA_TO_TAG default must be the platform-postgres matrix baseline pin",
+  );
+  assert.equal(
+    `postgres:${defaultOf(upgSrc, "PG_CASEB_TO_TAG")}`,
+    byId.get("nango-postgres").baselinePin.image,
+    "PG_CASEB_TO_TAG default must be the nango-postgres matrix baseline pin (the compose nango-db hold)",
+  );
+  const nangoSrc = readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after/nango.sh"), "utf8");
+  const coupled = (byId.get("nango-postgres").coupledAppImages ?? []).find((c) =>
+    c.image.startsWith("nangohq/nango-server:"),
+  );
+  assert.ok(coupled, "matrix must couple nangohq/nango-server to nango-postgres");
+  assert.equal(
+    defaultOf(nangoSrc, "NANGO_SERVER_IMAGE"),
+    coupled.image,
+    "NANGO_SERVER_IMAGE default must be the matrix coupled nango-server pin",
+  );
+});
+
 // ── neo4j family (cinatra#1421) ──────────────────────────────────────────────
 // The one non-Postgres stateful family whose supported hop is a real
 // DATA-MIGRATING transition (the semver->CalVer store-format upgrade). The LIVE

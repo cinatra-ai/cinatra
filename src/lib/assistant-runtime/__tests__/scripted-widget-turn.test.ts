@@ -40,6 +40,7 @@ vi.mock("@cinatra-ai/skills/mcp-client", () => ({
 vi.mock("@cinatra-ai/skills", () => ({
   ensureInstalledSkillsRegistered: vi.fn(async () => undefined),
   resolveInstalledSkillSourcePath: vi.fn(async () => null),
+  retireSupersededChatSkillsOnce: vi.fn(async () => undefined),
 }));
 vi.mock("@/lib/wizard-staging-store", () => ({ getAllStagedByType: () => [] }));
 vi.mock("@/lib/wizard-manifest-registry", () => ({ getAllManifests: vi.fn(async () => []) }));
@@ -52,7 +53,11 @@ vi.mock("@cinatra-ai/llm", () => ({
   checkPublicMcpReachability: vi.fn(async () => ({ status: "reachable", url: "https://mcp.example.test/api/mcp" })),
   resolveDefaultAdapter: () => resolveDefaultAdapter(),
   stream: (...a: unknown[]) => stream(...a),
-  buildSkillTools: vi.fn(async () => []),
+  // cinatra#2091 S4: skill delivery runs through the provider seam.
+  selectSkillDeliveryAdapter: vi.fn(() => ({
+    provider: "openai",
+    deliver: vi.fn(async () => ({ tools: [], systemContext: "", exposure: [] })),
+  })),
   resolveChatExternalMcpTools: vi.fn(async () => []),
   buildLlmMcpServerToolForChat: vi.fn(async () => ({ type: "mcp", name: "cinatra" })),
   buildLlmMcpServerToolForWidget: vi.fn(async () => ({ type: "mcp", name: "cinatra" })),

@@ -6,7 +6,7 @@ import type { DashboardRow } from "../store/schema";
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 
 // W3 (#1052) — OBO scope-ceiling adoption in resolveDashboardAccess. The
-// containment check runs FIRST (before the owner/member/visibility gates), so a
+// containment check runs FIRST (before the owner/member scope gates), so a
 // delegated agent run cannot reach a dashboard outside the agent's anchored
 // scope even when the invoking user is the row's owner.
 
@@ -22,7 +22,6 @@ function row(overrides: Partial<DashboardRow>): DashboardRow {
     ownerLevel: "user",
     ownerId: "u1",
     organizationId: "org-a",
-    visibility: "private",
     status: "draft",
     createdBy: "u1",
     updatedBy: null,
@@ -78,7 +77,7 @@ describe("resolveDashboardAccess — OBO ceiling containment", () => {
 
   it("denies an org-visible dashboard under a user anchor", () => {
     const access = resolveDashboardAccess(
-      row({ ownerLevel: "organization", ownerId: "org-a", visibility: "members" }),
+      row({ ownerLevel: "organization", ownerId: "org-a" }),
       actor({ oboCeiling: USER_ANCHOR }),
     );
     expect(access.canRead).toBe(false);

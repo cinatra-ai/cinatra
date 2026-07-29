@@ -50,8 +50,7 @@ targets). `profile` = the service only starts under an opt-in compose profile.
 | twenty-server / twenty-worker | docker-compose.yml | image tag `twentycrm/twenty:${TWENTY_TAG:-v2.7.3}` | Twenty v2 currency | profile `twenty`; already release-pinned by default |
 | node (app image) | Dockerfile | `node:24-alpine` | stay node 24 (LTS) | engines require node 24; no major offered |
 | python (wayflow) | docker/wayflow/Dockerfile | `python:3.14-slim` (was `3.11-slim`, bumped — cinatra#354) | (at target) | wayflowcore runtime; the Wayflow agent-runtime major-upgrade lane (§6) |
-| php (drupal) | docker/drupal/Dockerfile | `php:8.3-apache` | php 8.5-apache | |
-| composer (drupal) | docker/drupal/Dockerfile | `composer:2` | composer 2.x | |
+| drupal (dev/demo companion) | docker/drupal/Dockerfile | `drupal:11-apache@sha256:7a93…d6b` (was a hand-built `php:8.3-apache` + `composer:2` + `composer create-project` stack — **rebased onto the official image, cinatra#2178**) | follows docker-library/drupal | dev/demo-only, deliberately OFF this track: PHP, Apache, the extensions and the Drupal codebase are now upstream's. The only pin we own is this one image reference — bump it by re-resolving the multi-arch index digest of the tag |
 | tailscale (wayflow clone) | docker/wayflow/compose.clone.template.yml | `tailscale/tailscale:v1.78.3` | tailscale v1.98.4 | **held on purpose** — in-file TODO cites the upstream containerboot SIGSEGV (tailscale/tailscale#14354); obsoleted-by = that upstream fix lands |
 
 wayflow Python deps (exact `==` pins in `docker/wayflow/Dockerfile`, not docker
@@ -143,7 +142,7 @@ prerelease-only, so 18.4 is the latest-stable bar). Two coupled facts:
 | Patch | Patches | Why | Obsoleted by version |
 |---|---|---|---|
 | `patches/@a2a-js__sdk@0.3.13.patch` | `@a2a-js/sdk@0.3.13` dist `parseSseStream` | upstream SSE parser overwrote multi-line `data:` instead of accumulating with `\n`; the patch accumulates | an `@a2a-js/sdk` release that ships the multi-line `data:` accumulation fix upstream. The `patchedDependencies` key embeds the exact version, so every `@a2a-js/sdk` bump must re-key + re-verify or the patch silently stops applying |
-| `docker/drupal/patches/mcp_tools-audit-logger-strtolower.patch` | Drupal `mcp_tools_content` AuditLogger `strtolower($key)` | PHP 8 throws a `TypeError` when an `int` array key reaches `strtolower`; the patch casts `(string)` | an upstream `mcp_tools` (Drupal contrib) release that null/int-safes the key. Tied to the contrib module, **not** to the PHP image bump (the php 8.5 bump does not retire it) |
+| `docker/drupal/patches/mcp_tools-audit-logger-strtolower.patch` | Drupal `mcp_tools_content` AuditLogger `strtolower($key)` | PHP 8 throws a `TypeError` when an `int` array key reaches `strtolower`; the patch casts `(string)` | an upstream `mcp_tools` (Drupal contrib) release that null/int-safes the key. Tied to the contrib module, **not** to the PHP image bump — confirmed empirically on the official-image rebase (cinatra#2178), which lands PHP 8.5 and still needs the cast |
 
 ### 4.2 `pnpm-workspace.yaml` — `overrides`
 
@@ -193,6 +192,7 @@ story could change).
 | `eslint.config.mjs` (react `settings.version`) | hard-sets `settings.react.version` to a fixed string because `eslint-plugin-react@7.37.5` (via `eslint-config-next`) calls the removed ESLint-9 `context.getFilename()` under ESLint 10 when version is `"detect"` | an `eslint-plugin-react` release that is ESLint-10-compatible (this is the gating workaround for the ESLint 10 major). Minor drift to align: that fixed string is `19.2.5` while the overrides pin react `19.2.6` — harmless (it only skips detection) but worth aligning on the next touch |
 | `packages/dashboards/src/mcp-cubes/registry.ts` | an `any`-cast to attach drizzle-cube `_meta` past the MCP SDK's narrow `Tool` type | an MCP SDK release that exposes a typed annotations/meta slot (and/or drizzle-cube typing) |
 | `extensions/cinatra-ai/pdf-artifact/src/renderers/pdf-promise-with-resolvers-polyfill.ts` | a `Promise.withResolvers` polyfill for the react-pdf / pdfjs-dist path on older Safari (migrated into the pdf-artifact base by the Slice B G2 cutover — cinatra#1630) | a **browser baseline** move (Safari 17.4+, Mar 2024) — runtime/browser-version-tied, **not** a dependency upgrade; remove when the supported-browser floor moves past Safari 17.4. Listed for completeness; out of scope for the dependency-majors track |
+| `src/components/__tests__/access-picker-jsdom-shims.ts` + `packages/dashboards/src/components/__tests__/jsdom-shims.ts` | no-op shims the DOM-environment suites install before mounting Radix / cmdk / drizzle-cube: `window.matchMedia`, `ResizeObserver`, `Element.prototype.scrollIntoView`, the three pointer-capture methods, plus a desktop `window.innerWidth` override for the responsive tier | a `jsdom` release that implements layout and pointer capture. **Re-confirmed on `jsdom` 30.0.0 (§13.3): all still missing, both shims kill-tested as load-bearing, nothing dropped.** Re-run that check on the next `jsdom` major |
 
 (The `bpmn-moddle` ambient-`.d.ts` workaround that was formerly listed here was
 retired by the workflow-kind engine removal — see §4.6.)
@@ -771,3 +771,454 @@ simulation over the real matrix shows every matrix pin pairing to its compose
 image with the sibling digest kept in sync and the gate green on a paired bump
 (and red on an unpaired one, the old status quo). The definitive proof is the
 first Renovate digest PR that lands green without a manual matrix sync.
+
+---
+
+## 13. Refresh 2026-07-28 — npm-major re-grounding: `cron-parser` 5 + `jsdom` 30 applied, `node-pg-migrate` 9 BLOCKED
+
+A re-grounding of the §5 / §11 stack-major candidate list against the live npm
+registry and the repo's own manifests. Three items moved; each is recorded here
+with the works-after evidence the track requires.
+
+### 13.1 `cron-parser` `^4.9.0` → `^5.6.2` — MAJOR APPLIED (`packages/agents`)
+
+`packages/agents` pinned `cron-parser: "^4.9.0"`; the latest stable is `5.6.2`
+(the 5 line has been the stable line for some time — this repo was a full major
+behind on a PRODUCTION dependency). The sole consumer is the recurring-trigger
+arm-time validator in `trigger-service.ts`. `luxon` is already in the tree (the
+4 line depends on it too), so the bump adds no new transitive dependency.
+
+**Two breaking changes, both real for this repo:**
+
+1. **The top-level `parseExpression` helper is gone.** The 5 line exposes the
+   parser as the `CronExpressionParser` class (also the module default);
+   `parse` is a static method. The pre-change validator probed
+   `mod.default?.parseExpression ?? mod.parseExpression` and had a fail-closed
+   branch returning `{ ok: false, error: "cron-parser unavailable" }` when
+   neither resolved. On the 5 line that probe yields `undefined`, so a bare
+   dependency bump would have silently refused **every** recurring trigger
+   while staying green. Verified directly against the installed package:
+
+   ```
+   pre-change resolution on cron-parser 5 -> typeof parseExpression = undefined
+   pre-change validator verdict for "0 9 * * MON":
+     { ok: false, error: "cron-parser unavailable" }  <-- EVERY recurring trigger refused
+   post-change resolution -> typeof CronExpressionParser.parse = function
+   ```
+
+2. **Timezone validation moved from `parse()` to the first iteration step.**
+   On the 4 line, `parseExpression("0 9 * * MON", { tz: "Not/AZone" })` THREW
+   at parse time, so an unknown IANA zone was refused at arm time. On the 5
+   line the same call returns a parsed expression and only the first `next()`
+   throws (`CronDate: unhandled timestamp: Invalid Date`) — i.e. the bad zone
+   would be accepted at arm time and blow up when the schedule first came due.
+   The validator therefore takes **one iteration step** as part of validation,
+   which restores the arm-time contract.
+
+   The step is deliberately NOT described as a satisfiability check. Iteration
+   behaviour was compared expression-by-expression across the two lines, and
+   they agree everywhere except that the 5 line's own loop-limit check is
+   unreliable: `0 0 31 2,4,6,9,11 *` (day 31 in months that have none — never
+   matches) THROWS `Invalid expression, loop limit exceeded` on the 4 line but
+   returns a NON-MATCHING date (`2053-12-12`) on the 5 line. So an
+   unsatisfiable expression can still pass validation; that is an upstream
+   defect on the 5 line, recorded here rather than papered over. Everything a
+   caller could legitimately want is unaffected — sparse-but-real expressions
+   iterate identically on both lines (`0 0 * 2 1#5` → `2044-02-29`,
+   `0 0 29 2 *` → `2028-02-29`), and `0 0 * * L` fails iteration on BOTH lines
+   (so nothing schedulable is newly refused; it is merely refused earlier).
+
+**What changed.** The validation stays INSIDE `trigger-service.ts` (the parser
+resolution and the iteration step are local to it) — deliberately not extracted
+into a helper module, because the route-graph ratchet
+(`scripts/audit/route-graph-ratchet.mjs`) is a no-new-rot ceiling and a new
+first-party module adds +1 reachable module to five locked routes. Extracting
+it was tried first and the ratchet correctly refused it; the sanctioned
+`absorbs` raise was NOT used, because growing five route ceilings for a
+convenience helper is exactly the pressure that gate exists to resist. Error
+strings and their ordering are unchanged.
+
+**Works-after proof.** The branch that covers this path in the existing suites
+lives in `trigger-handlers.integration.test.ts`, a DB-backed
+`*.integration.test.ts` file: the default unit run excludes it and CI skips the
+integration step when no test database is provisioned — so the unit tier could
+not have caught either breaking change. This lane closes that hole with
+`packages/agents/src/__tests__/trigger-service-cron-validation.test.ts`, which
+drives the REAL `setRunTriggerForActor` against the REAL `cron-parser`
+(deliberately unmocked — only the run read, the store/schedule writes and the
+PM bridge are stubbed, so it needs no database) and pins: a 5-field expression,
+a macro expression, an explicit IANA zone, an **unknown zone**, an unparseable
+expression, an out-of-range field, the missing/over-long guards, an explicit
+assertion that the fail-closed `cron-parser unavailable` verdict does not
+occur, and that a failed validation writes neither a trigger row nor a
+schedule. It runs in the DEFAULT unit run — i.e. inside the existing required
+`Unit tests (packages/agents)` CI step — so the next `cron-parser` major cannot
+repeat either failure silently. Locally: 9/9 on the new file, `packages/agents`
+unit tier green, route-graph ratchet OK, root `tsgo --noEmit` clean, eslint
+clean on the touched files.
+
+**Rollback.** Revert the lane commit (manifest + lockfile + the two source
+files move together). No persisted state: the validator is a pure arm-time
+check; already-armed schedules are untouched.
+
+**Obsolete-on-upgrade check (§4).** Nothing is retired by this bump — no patch,
+override, `allowBuilds` entry or code workaround was tied to the 4 line. The
+`cronstrue` humanizer (a separate package) is unaffected.
+
+### 13.2 `node-pg-migrate` `8.0.4` → `9.0.0` — offered, GROUNDED, and BLOCKED
+
+`node-pg-migrate` 9 is published and is a genuine offered major (the Renovate
+dashboard lists it). It was taken through a real candidate build in this lane
+and **it cannot land**: the 9 line's migration-file loader is incompatible with
+this repo's namespaced migration filenames, and there is no configuration
+escape hatch.
+
+**The incompatibility.** Migration modules here are namespaced by design (the
+shared-ledger scheme): `migrations/core/core__NNNN_short-description.mjs`, and
+extension migrations record as `ext_<scope>_<pkg>__NNNN`. The 8 line derived a
+file's sort key with `filename.split("_")[0]`, and when that was not numeric it
+logged a benign error and **returned 0** — every file compared equal, so the
+loader fell through to its locale-numeric comparator and sorted correctly.
+(That fall-through is load-bearing today: `buildRunnerLogger` in
+`packages/migrations/src/core-migrations.mjs` explicitly suppresses the 8
+line's `Can't determine timestamp for ` message.) The 9 line replaced that with
+a fail-closed `/^(\d+)/` match on the filename that **throws** when the name
+does not START with digits — and both loader branches (directory scan AND the
+glob branch) route through the same comparator, so `useGlob` does not avoid it.
+A candidate run reproduced it exactly:
+
+```
+Error loading migration files: Cannot determine numeric prefix for "core__0002_drop-agent-templates-durable.mjs"
+ERROR: candidate core migration chain failed against the upgraded database.
+```
+
+(from `scripts/ci/upgrade-proof.sh` against the last published release image on
+`postgres:18-alpine`: the previous-release schema provisioned, the candidate
+bootstrap DDL applied 825/825, then the candidate chain failed at LOAD before
+executing a single migration.)
+
+**Why renaming is not the answer.** The `core__` / `ext_<scope>_<pkg>__`
+prefixes are the ledger namespace: the name is what `pgmigrations.name` stores
+for every already-applied migration on every existing deployment, and it is
+enforced by `CORE_MIGRATION_FILE_RE` plus the schema-migration audit gate.
+Renaming would orphan every ledger row and break the per-namespace down-fence.
+
+**PARKED** on the same shape as the TypeScript 7 entry (§8.1/§11.1): record the
+target, and lift when upstream restores a non-throwing sort key for files
+without a numeric prefix (or exposes a pluggable comparator / sort-key option
+alongside the loader strategies the 9 line introduced). The pinned 8.0.4 stays;
+re-drive the hop through `scripts/ci/upgrade-proof.sh` at that point — it is
+the works-after gate for this dependency, and it caught this cleanly.
+
+### 13.3 `jsdom` `29.1.1` → `30.0.0` — MAJOR APPLIED (four test manifests)
+
+`jsdom` is the DOM implementation behind vitest's `jsdom` environment. It is a
+`devDependencies` entry in four manifests that had to move together — the root
+`package.json` (`^29.1.1`), `packages/agents` (`^29.1.1`), `packages/chat`
+(`^29.1.1`) and `packages/dashboards` (`29.1.1`, exact by house style). No
+production surface: nothing outside a test imports it, and it is absent from
+every `dependencies` block.
+
+**The breaking surface, read off the 29.1.1…30.0.0 commit range** (a small
+major — ten upstream commits) and then re-checked against this repo:
+
+1. **Node floor raised** to `^22.22.2 || ^24.15.0 || >=26.0.0` (the 29 line
+   accepted `^20.19.0 || ^22.13.0 || >=24.0.0`). This is the actual major
+   trigger. Every place this repo resolves Node clears it: the build and
+   runtime images are `node:24-alpine`, and every workflow that installs the
+   workspace pins `node-version: 24`, which the hosted runner resolves from
+   its tool cache to **24.18.0** — read off a live `main` run log, whose
+   setup step reports the cached `node/24.18.0` toolchain and then prints
+   `24.18.0` as the active Node.
+   The single `node-version: 20` step in the tree
+   (`verdaccio-publish-proof.yml`) neither checks out this repo nor installs
+   the workspace — it publishes a throwaway canary package from a temp dir —
+   so it is unaffected. **Residual, recorded not fixed:** `setup-node` defaults
+   `check-latest` to `false` and accepts any cached `24.x`, and the root
+   `package.json` declares no `engines` block (so pnpm only warns rather than
+   refusing). A runner or developer machine parked on a pre-`24.15.0` /
+   pre-`22.22.2` build would get a warning and a possible runtime fault instead
+   of a clean refusal. Declaring the floor in the workspace is a separate
+   decision, not part of this hop.
+2. **`getComputedStyle` now resolves lengths to pixels.** Measured directly on
+   both lines with the same document: `font-size: 2em` reads back `2em` on 29
+   and `32px` on 30; `width: 10rem` → `10rem` vs `160px`; `margin: 1em` →
+   `1em` vs `32px`. `vw`/`vh` resolve against `window.innerWidth` /
+   `innerHeight`. Any assertion comparing a computed length to an authored
+   string would break — this repo has none (the only `getComputedStyle` call
+   site in first-party source is `packages/chat/src/dancing-robot.tsx`, which
+   reads `transform`, not a length).
+3. **`CSS.escape()` and `CSS.supports()` are now implemented.** `window.CSS`
+   was `undefined` on 29 and is an object with both functions on 30. Nothing
+   first-party feature-detects or shims them, so this only means third-party
+   render-path code takes its native branch instead of its fallback; the suites
+   below cover that empirically.
+4. **`document.evaluate()` validates the result type.** A non-`ANY_TYPE`
+   request against a `null` value now raises a `TypeError` instead of slipping
+   through (`typeof null === "object"`), and the non-node-set case raises a
+   plain `TypeError` rather than an `XPathException`. Zero `document.evaluate`
+   call sites in this repo.
+5. **`background-position` gained `-x` / `-y` longhands**, and CSS function
+   values serialize with a space after commas. Cosmetic for this repo.
+6. Transitively: `undici` `^7` → `^8`, `whatwg-url` `16` → `17`,
+   `@asamuzakjp/dom-selector` `7` → `8`, `@asamuzakjp/css-color` `5` → `6`.
+   The repo's own `undici` was already on the 8 line, so no new MAJOR line
+   appears; jsdom's `^8` does resolve independently to 8.9.0 next to the
+   repo's own lock-held 8.5.0 — a second 8.x resolution in the dev tree,
+   collapsible by a `pnpm dedupe` that is its own (prod-affecting) decision.
+   The selector-engine hop is the one with teeth: `dom-selector` 8 is what
+   backs `querySelector`/`querySelectorAll`/`matches`/`closest`, and it drops
+   `:target-within` and `:closed`. Neither appears anywhere in this tree, and
+   no test passes a `:has()` / `:is()` / `:where()` / `:not()` selector to any
+   of those four DOM methods (the complex pseudo-selectors in `globals.css` are
+   authored CSS, not test queries). The optional `canvas` peer floor also rose
+   to `^3.2.3`; `canvas` is not installed, so it is inert.
+
+**Shim re-confirmation (the §4 obsolete-on-upgrade rule).** Two shim modules
+exist because jsdom implements no layout and no pointer capture:
+`src/components/__tests__/access-picker-jsdom-shims.ts` (matchMedia,
+`scrollIntoView`, the three pointer-capture methods, `ResizeObserver`) and
+`packages/dashboards/src/components/__tests__/jsdom-shims.ts` (a desktop
+`innerWidth`, matchMedia, `ResizeObserver`). Every guarded capability was
+probed inside the real vitest `jsdom` environment on 30.0.0 and is still
+missing — `matchMedia`, `ResizeObserver`, `scrollIntoView`,
+`hasPointerCapture`, `setPointerCapture`, `releasePointerCapture` all report
+`undefined`, and `window.innerWidth` still defaults to 1024, so the dashboards
+desktop override still does real work. Each shim was then kill-tested by
+emptying it and re-running its importers on 30.0.0: the root shim's removal
+fails 15 tests across its 4 importing files (`ReferenceError: ResizeObserver is
+not defined`), the dashboards shim's removal fails 7 of its 8 importing files
+(`TypeError: window.matchMedia is not a function`). **Nothing is dropped —
+both shims stay, both proven load-bearing.** The only capability the 30 line
+newly provides (`CSS.escape` / `CSS.supports`) was never shimmed here, so there
+is no redundant code to retire.
+
+**Works-after proof.** Both sides of the hop paired at ONE named base commit
+(`72368a900`), same worktree, same commands: the root run (`pnpm test:root`),
+`packages/chat`, `packages/dashboards` and `packages/agents`. Test counts are
+identical before and after — no suite stopped executing:
+
+| Tier | on 29.1.1 | on 30.0.0 |
+|---|---|---|
+| root (`pnpm test:root`) | 1157 files passed, 2 skipped; 13842 tests passed, 21 skipped, 3 todo | identical |
+| `packages/chat` | 38 files, 395 tests passed | identical |
+| `packages/dashboards` | 73 files, 675 tests passed | identical |
+| `packages/agents` | 267 files passed, 1 failed, 2 skipped; 2855 tests passed, 2 failed | identical |
+
+Re-verified on the 30 line after rebasing onto a newer `main` (which had added
+3 files / 90 tests of its own): root 1160 files + 13932 tests passed, chat
+38/395, dashboards 73/675, agents unchanged. Re-verified a second time after
+rebasing past the wave-4 extension re-pins, with the lockfile regenerated from
+the merged manifests rather than merged textually: root 1166 files + 14019
+tests passed, chat 40/407, dashboards 74/680, agents 268 files + 2861 tests
+passed with the same two macOS-only temp-path failures. The paired A/B numbers
+above stay anchored to the base commit named at the top of this paragraph —
+that is the comparison; the rebase re-runs only confirm the hop still holds as
+`main` moves.
+
+The two `packages/agents` failures are the same two on both lines and are not
+jsdom-related: `agent-source-write-files-name-rescoping.test.ts` compares a
+`node:os` temp path against the resolved one, which differ by the `/private`
+prefix on a macOS developer machine only. They are a node-environment file, run
+green in the Linux CI tier, and are recorded here so the before/after delta
+reads as exactly zero.
+
+Matching aggregate counts prove cardinality, not identity, so the inventory was
+compared directly as well: `vitest list` (the full `file > suite > test` id
+list, not just file names) was captured for all four tiers on BOTH lines and
+diffed — **17,769 test ids, zero diff lines**. Nothing was renamed, re-homed or
+silently dropped. The environment assignment was pinned the same way: a
+throwaway sentinel asserting `navigator.userAgent` and `typeof CSS.supports`
+was run under each config and reported `jsdom/30.0.0` + `CSS.supports=function`
+for the root, `packages/agents` and `packages/dashboards` DOM suites — i.e.
+the pragma files really are executing on the new line, not quietly falling back
+to the node environment.
+
+**Grounding correction found while pinning that** (pre-existing, NOT caused by
+this hop, and deliberately left alone here): `packages/chat/vitest.config.ts`
+carries an `environmentMatchGlobs` entry mapping
+`src/**/__tests__/**/*.test.tsx` to `jsdom`, annotated with a `@ts-ignore`
+claiming the option is "valid vitest option but missing from InlineConfig
+types". Under `vitest` 4 that option **no longer exists** — it is absent from
+the installed distribution entirely and is silently ignored. The sentinel run
+under the chat config confirms it: a `.test.tsx` file matching that glob with
+no pragma executes on `Node.js/22`, not jsdom. In practice nothing is broken —
+8 of the 9 matching files carry an explicit `@vitest-environment jsdom` pragma
+(9 files as of the post-wave-4 rebase; `main` added one), and the 9th
+(`renderer-surface.test.tsx`) is a pure export-surface guard that needs no
+DOM — so `packages/chat`'s real DOM surface is the 8 pragma files.
+The dead config line is obsoleted by the `vitest` 4 major, not by this one, so
+retiring it belongs to its own lane; it is recorded here so the next reader
+does not trust the glob.
+
+**Rollback.** Revert the lane commit; the four manifests and the lockfile move
+together. Nothing else changes — no source file, no shim, no config.
+
+**Residual.** Two companion connector extension packages
+(`a2a-server-connector`, `linkedin-connector`) declare their own `jsdom`
+`^29.0.0`, and a set of artifact extensions declare `^25.0.1`; those manifests
+live in their own repos and keep their own resolutions in the lockfile. They
+are outside this hop's four manifests and are recorded for their own lanes.
+
+### 13.4 Net for this repo
+
+Re-grounded against the live registry, the platform manifests are otherwise at
+their latest stable major: `next` / `eslint-config-next` 16, `react` /
+`react-dom` 19, `eslint` 10, `vitest` 4, `vite` 8 (held — §4.2), `drizzle-orm`
+0.45.2 and `pg` 8.22.0 at the top of their lines, `bullmq` 5, `ioredis` 5,
+`zod` 4, `tailwindcss` 4, `@modelcontextprotocol/sdk` 1, `@opentelemetry/*` 2
+(§10), `undici` 8, `tar` 7, `knip` 6, `node` 24 (image + `@types/node` 24,
+runtime-coupled — do not lead the image), `pnpm` 11. `typescript` stays at the
+standing peer ceiling (§8.1/§11.1). `jsdom` is now 30 (§13.3). Remaining
+offered npm majors NOT taken in this lane, each recorded for its own staged
+lane: `pdfjs-dist` 5 → 6 (coupled with
+`react-pdf` — re-check its peer range first), `react-dropzone` 15 → 19 (four
+majors published inside one week upstream; let the line settle),
+and `node-pg-migrate` 9 (blocked, §13.2). `libnpmpublish` 11 → 12 and `pacote`
+21 → 22 were the registry/publish-path group and are **APPLIED** — see §13.5.
+Image-side majors remain as recorded in §1: the profile-gated demo images
+(mariadb 12, wordpress 7, rabbitmq 4, valkey 9, and the Twenty/Plane postgres
+and redis pins) are upstream-dictated and tracked, not led; `tailscale` stays
+held on the upstream fix (§1); `php` 8.5 for the Drupal image is the one
+non-demo image major still open.
+
+### 13.5 libnpmpublish 11 → 12 + pacote 21 → 22 — APPLIED (registry/publish path)
+
+Taken as ONE group (cinatra#2163): both packages ride the npm CLI's release
+train and their majors move the shared `npm-registry-fetch` /
+`npm-package-arg` / `ssri` floors together. Splitting them into two PRs would
+leave the tree carrying two parallel fetch stacks for a whole window — pnpm
+resolves that fine, but the wire behaviour under proof would then be a mix of
+both, which is precisely what the round-trip below exists to pin down.
+
+| Package | Manifest(s) | Before | After |
+|---|---|---|---|
+| `libnpmpublish` | `packages/agents` | `^11.2.0` | `^12.0.0` |
+| `pacote` | `packages/agents`, `packages/registries` | `^21.5.1` | `^22.0.0` |
+
+Transitives moved with the group: `npm-registry-fetch` 19.1.1 → 20.0.1,
+`make-fetch-happen` 15 → 16, `npm-package-arg` 13 → 14,
+`npm-pick-manifest` 11 → 12, `npm-packlist` 10 → 11, `ssri` 13 → 14,
+`cacache` 20 → 21, `sigstore` 4 → 5, `proc-log` 6 → 7, `node-gyp` 12 → 13,
+plus the `@npmcli/*` line. `proxy-agent-negotiate` (via `@npmcli/agent` 5) is
+the ONLY entirely new package NAME the hop introduces; everything else added
+is a new version of a name the tree already carried. A `pacote@21.5.1` copy
+remains in the lockfile: it is pulled by the PUBLISHED `@cinatra-ai/cinatra`
+CLI package, not by this repo's own manifests, so it clears only once that
+package ships a release on the 22 line AND this repo consumes that release —
+it is not carried along by this hop.
+
+**Node engine.** Both majors declare `^22.22.2 || ^24.15.0 || >=26.0.0` — note
+the 24 arm floors at 24.15.0, so "on node 24" is not by itself sufficient.
+Verified at the exact versions: the app image (`node:24-alpine`) resolves
+24.17.0 and the CI `node-version: "24"` setup resolves the current 24 line
+(24.18.0) — both inside the floor. Nothing in the repo pins a 24 release below
+24.15.0, and there is no `engines` field or engine-strict setting that would
+turn a drop below the floor into an install-time failure, so any environment
+deliberately held on an older 24 patch is the case to watch.
+
+**`allowBuilds` re-confirmed unchanged.** `pnpm-workspace.yaml` is untouched by
+this hop, and none of the packages the group moves — checked across the full
+added/changed name set in the lockfile diff, `pacote` and `libnpmpublish`
+included — appears in the `allowBuilds` map. The install requested no new build
+script.
+
+**What actually changed in the code paths this repo uses.** `pacote` 22's own
+`lib/` diff against 21.5.1 is confined to `lib/dir.js` (pack-time
+`patchedDependencies` stripping via `onWriteEntry`), `lib/fetcher.js`
+(`--global=false` on the inner git-prepare install), `lib/git.js` (hosted
+SSH-vs-HTTPS selection, `ignoreScripts` now honoured during git prepare, and a
+tarball→clone fallback keyed on the status code rather than the error class)
+and `lib/util/add-git-sha.js`. `lib/registry.js`, `lib/remote.js` and
+`lib/index.js` are byte-identical. `npm-registry-fetch` 20's only direct `lib/`
+change is a richer `HttpErrorGeneral` message (see the redaction note below);
+`lib/auth.js` is byte-identical, so the registry-scoped
+`//<host><path>:_authToken` nerf-dart key this repo threads through
+`registryScopedAuthOptions` resolves exactly as before.
+
+Because "unchanged registry fetcher" does not by itself prove "unchanged
+`extract()`" — `extract` dispatches on the SPEC, so a directory or git spec
+reaches the changed fetchers — the two majors were also run side by side
+against the same fixtures: a local DIRECTORY spec whose `package.json` declares
+`patchedDependencies` (exactly the `lib/dir.js` change), a local TARBALL spec, a
+local bare git repo, a HOSTED shortcut (`github:owner/repo#tag`), an explicit
+`git+https://` hosted URL, and a registry spec on a live Verdaccio — each for
+`extract` and `manifest`, plus the registry tarball and its wrong-SRI refusal.
+
+Every case is identical between 21.5.1 and 22.0.0 with ONE exception, which the
+probe is there to catch: for an explicit `git+https://github.com/…` spec,
+21.5.1 resolves to `git+ssh://git@github.com/…` while 22.0.0 keeps
+`git+https://…`. That is the `h.default === 'https'` change in `lib/git.js` /
+`lib/util/add-git-sha.js` — an explicit HTTPS spec is no longer silently
+rewritten to SSH. The bare `github:owner/repo` shortcut still resolves to SSH on
+both.
+
+That one difference is unreachable from this repo. The three pacote call sites
+build their spec as `name` or `name@version` and use only `packument`,
+`tarball` and `extract` — `manifest` (where the difference surfaces) is never
+called. And `extract` on ANY git spec, hosted or bare, refuses identically on
+both majors with `GitFetcher requires an Arborist constructor to pack a
+tarball`, exactly as a directory spec refuses with the `DirFetcher` equivalent,
+because this repo supplies no Arborist — which is also why the publish path
+builds its tarball with `tar` directly rather than through pacote. The changed
+git-prepare code (the `--global=false` inner install and the newly honoured
+`ignoreScripts`) sits behind that refusal, and both of those changes are
+hardening in any case.
+
+Worth recording as a standing (not new) observation: the extract entry points
+accept an arbitrary spec string rather than enforcing a registry package name,
+so the dispatch surface itself is real. It is unchanged in kind by this hop and
+is the pre-existing shape; narrowing it is its own change.
+
+**A credential-exposure widening this hop closes.** From `npm-registry-fetch`
+20, `HttpErrorGeneral.message` folds in the response body's `error` OR
+`message` OR — failing both — the whole body serialized; 19 folded only
+`error`. A registry, reverse proxy, or diagnostic error handler that echoes the
+inbound request back therefore lands the bearer token in `Error.message`, the
+field that reaches logs, telemetry and surfaced error text. Measured against a
+hostile in-process registry stub: pacote 21 / fetch 19 leaves the token out of
+`Error.message`; pacote 22 / fetch 20 includes it verbatim. Closed here by
+routing every pacote call through a token-redacting facade
+(in `packages/registries/src/verdaccio/registry-auth.ts`, beside the
+registry-scoped credential derivation it is the mirror of, re-exported from the
+package barrel and used by `packages/registries` and both `packages/agents`
+call sites) that recovers the credential(s) from the same options object the
+caller passed and scrubs them from the error's `message`, `stack`, attached
+`body` string values and a one-level `cause`. EVERY scoped `_authToken` value
+in the options is scrubbed, not just the first: the fetch layer selects the
+longest matching path prefix, so re-deriving that choice here would be a way to
+redact the wrong one. The facade mutates rather than re-wraps so the
+`statusCode` / `code` fields the 404 branches depend on survive. It is
+deliberately not a general sanitizer — nested body objects, headers, other
+custom properties and transformed copies of the credential stay out of scope.
+Pinned by `packages/registries/tests/registry-error-redaction.test.ts`: each
+protected path asserts the stub actually received `Bearer <token>` and that the
+error is the stub's own 500 carrying the redaction marker, so a request that
+never left could not pass it, and a control case asserts the RAW pacote call —
+built through the same auth derivation — does still leak against that stub.
+
+**`libnpmpublish` has no call site.** The publish path in
+`packages/agents/src/verdaccio/client.ts` performs the npm registry HTTP PUT
+directly (explicit Bearer header via `registryJson`) rather than delegating to
+`libnpmpublish`; the package is carried in the manifest and listed in knip's
+`ignoreDependencies` for exactly that reason. The bump is manifest + lockfile
+currency for the group; the wire behaviour it would govern is already this
+repo's own code. Retiring the dependency outright changes the package's
+declared dependency contract and is a separate decision, not part of this hop.
+
+**Works-after proof.** `WORKS_AFTER_ONLY=verdaccio WORKS_AFTER_GATE_MODE=1 bash
+scripts/ci/works-after-proof.sh` green — publish → install round-trip against a
+Verdaccio that mounts the repo's real `docker/verdaccio/config.yaml`. That arm
+drives the npm CLI, so it was paired with a round-trip through the repo's OWN
+registry code on the candidate pins: `createNpmUser` →
+`publishExtensionPackageFromDir` → `getPublishedExtensionSummary`
+(`pacote.packument`) → `resolveExtensionDistIntegrity` →
+`resolveMaxSatisfyingVersion` → `fetchExtensionTarballBytes` (`pacote.tarball`
+with SRI enforcement, plus the wrong-SRI `EINTEGRITY` negative) →
+`extractExtensionPackage` (`pacote.extract`, sentinel compare) → the
+`publish: $authenticated` refusal negative → the overwrite guard. The
+`packages/registries` suite (including the live-wire
+`registry-auth.integration.test.ts`, which drives the real pacote +
+npm-registry-fetch stack against an auth-required in-process registry stub, and
+the redaction suite above) and `pnpm gate:gatekept-install` are the standing
+regression tiers for this dependency pair.

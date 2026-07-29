@@ -34,7 +34,27 @@ const { mockLlmTask, mockSkillAwareLlmTask } = vi.hoisted(() => ({
 const { AnthropicSkillDeliveryError, isAnthropicSkillDeliveryError } = await vi.hoisted(async () => {
   return await import("../../../llm/src/errors");
 });
+// cinatra#2091 S4: the preflight's declared-dependency cap check is CROSS-
+// PROVIDER and runs BEFORE the pin gate, so these pure helpers are reached on
+// the pin-inactive default path too. Hoisted direct-file imports (same reason
+// as the sentinel above: the package index pulls an unresolvable connector
+// chain in vitest's node-ESM loader).
+const { preflightSkillRequestSet, preflightAnthropicSkillSyncSizes } =
+  await vi.hoisted(async () => {
+    return await import("../../../llm/src/tools/anthropic-skill-sync-engine");
+  });
+const { injectedCatalogSkillIds: injectedSkillSetCatalogIds } = await vi.hoisted(
+  async () => {
+    return await import("../../../skills/src/injection/index");
+  },
+);
 vi.mock("@cinatra-ai/llm", () => ({
+  // cinatra#2091 S4: the preflight's declared-dependency cap check is now
+  // CROSS-PROVIDER and runs BEFORE the pin gate, so this helper is reached even
+  // on the pin-inactive default path. Real implementation (a pure predicate).
+  preflightSkillRequestSet,
+  preflightAnthropicSkillSyncSizes,
+  injectedSkillSetCatalogIds,
   runDeterministicLlmTask: mockLlmTask,
   runSkillAwareDeterministicLlmTask: mockSkillAwareLlmTask,
   // Sentinel class + its cross-realm structural recognizer — re-exported from
