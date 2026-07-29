@@ -78,14 +78,11 @@ function makeJob(name: string, data: Record<string, unknown> = {}): FakeJob {
   return { name, id: "job-1", data };
 }
 
-const globalSlot = globalThis as unknown as {
-  __cinatraJobSystemRuntime?: {
-    runWithJobFrame: <T>(frame: unknown, fn: () => T | Promise<T>) => T | Promise<T>;
-    buildSystemIdentity: (jobName: string, jobId: string) => unknown;
-    auditUnclassifiedRefusal: (jobName: string, jobId: string) => void;
-    auditFrameAnomaly: (jobName: string, jobId: string, principalType: string) => void;
-  };
-};
+// Typed `unknown` deliberately: the production reader casts the slot to its
+// own structural type at the read site, so the test writes its typed vi.fn
+// mock object here without re-declaring the (generic) runtime signature — a
+// Mock<> cannot satisfy the generic `runWithJobFrame<T>` shape directly.
+const globalSlot = globalThis as unknown as { __cinatraJobSystemRuntime?: unknown };
 const priorSlot = globalSlot.__cinatraJobSystemRuntime;
 
 function installRuntimeSlot() {

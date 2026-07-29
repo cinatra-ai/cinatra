@@ -45,15 +45,59 @@ export {
   LIFECYCLE_REVIEW_ORCHESTRATION_LOOP_JOB_ID, LIFECYCLE_GATE_MAINTENANCE_LOOP_JOB_ID,
 } from "@/lib/background-jobs-names";
 import type { BackgroundJobName } from "@/lib/background-jobs-names";
-// cinatra#1941 S2 — read-only slot access to the boot-registered job-system
-// runtime, extracted to a leaf module to keep THIS file under its file-size
-// ratchet ceiling (same extraction pattern as background-jobs-notify.ts
-// above). See that module's docstring for the route-graph-neutrality
-// rationale (this file never imports background-jobs-system-frame.ts).
-import {
-  resolveJobSystemRuntime,
-  warnJobSystemSlotEmpty,
-} from "@/lib/background-jobs-system-identity-reader";
+
+// cinatra#1941 S2 — read-only access to the boot-registered job-system runtime
+// (src/lib/background-jobs-system-frame.ts). That module is NEVER imported here
+// — not statically, not dynamically, not even type-only: this file sits in the
+// reachable graph of the LOCKED dev-perf routes and the route-graph ratchet
+// counts every import specifier, dynamic ones included, so the slot is read via
+// a local structural cast instead. The shape is pinned by the contract tests in
+// background-jobs-system-frame.test.ts / the boot-seed test.
+type JobSystemRuntimeSlot = {
+  runWithJobFrame: <T>(
+    frame: { jobName: string; jobId: string; authority: JobAuthorityMetadata; payload: unknown },
+    fn: () => T | Promise<T>,
+  ) => T | Promise<T>;
+  buildSystemIdentity: (jobName: string, jobId: string) => ActorContext;
+  auditUnclassifiedRefusal: (jobName: string, jobId: string) => void;
+  auditFrameAnomaly: (jobName: string, jobId: string, principalType: string) => void;
+};
+
+function resolveJobSystemRuntime(): JobSystemRuntimeSlot | undefined {
+  return (globalThis as unknown as { __cinatraJobSystemRuntime?: JobSystemRuntimeSlot })
+    .__cinatraJobSystemRuntime;
+}
+
+const JOB_SYSTEM_SLOT_EMPTY_WARN_INTERVAL_MS = 60_000;
+let lastJobSystemSlotEmptyWarnAt = 0;
+
+// Rate-limited visibility for a system-maintenance job dispatching before the
+// boot phase registers the runtime (design §3.2 slot-empty policy). A hard
+// refusal here would recreate the cinatra#849 recurring-loop-death mode while
+// adding zero write protection (pre-wave-3 writers don't consult the frame), so
+// this warns + Sentry-captures only; the durable fail-closed point is the mint
+// seam, which refuses every mint with no active frame.
+function warnJobSystemSlotEmpty(jobName: string, jobId: string) {
+  const now = Date.now();
+  if (now - lastJobSystemSlotEmptyWarnAt < JOB_SYSTEM_SLOT_EMPTY_WARN_INTERVAL_MS) return;
+  lastJobSystemSlotEmptyWarnAt = now;
+  console.warn(
+    `[background-jobs] system-maintenance job "${jobName}" dispatched with the job-system runtime slot EMPTY — no audited System frame this cycle (cinatra#1941; expected only before boot's system-loops phase registers it).`,
+  );
+  // Same dynamic-import target the worker.on handlers below already use — zero
+  // new route-graph modules.
+  void import("@cinatra-ai/errors/server")
+    .then(({ captureBackgroundJobError }) =>
+      captureBackgroundJobError(new Error(`job-system runtime slot empty for "${jobName}"`), {
+        jobName,
+        jobId,
+        queueName: QUEUE_NAME,
+      }),
+    )
+    .catch(() => {
+      // Sentry helper unavailable — never break the worker.
+    });
+}
 
 type BackgroundJobRuntime = {
   version: string;
@@ -200,25 +244,15 @@ export function runJobHandlerWithActorContext<T>(
 // and the existing importers all share one source of truth (cinatra#304).
 
 /**
- * cinatra#1941 S2 — mints the dispatcher's audited job-system identity +
- * frame on top of the pre-existing HumanUser `__actorContext` behavior.
- * Preserves every existing path byte-identically:
- *   - a job with NO classified `authority` (should not happen post-S1's
- *     total-Record guarantee, but the registry lookup is optional-chained
- *     defensively) dispatches exactly as before S2 ever existed;
- *   - a job whose payload carries `__actorContext` (HumanUser flows — blog,
- *     skill-match attribution, the marketplace single-package admin action)
- *     is UNCHANGED: `runJobHandlerWithActorContext` wins exactly as today;
- *   - a `system-maintenance` job with NO payload context — today those run
- *     with NO ALS frame at all — now dispatches under a freshly-minted
- *     System `ActorContext` (`background-job:<name>:<jobId>`, never derived
- *     from the forgeable payload). This is the one behavior delta (the
- *     feature): `getActorContext()` moves from `undefined` to a System
- *     principal for exactly this job class.
- * Every dispatched job (any authority kind) is additionally wrapped in the
- * job-system-frame ALS (`runWithJobFrame`) so `getActiveJobFrame()` is
- * available to the mint seam — framing alone grants no authority; only the
- * seam's own checks (job-system-authority-mint.ts) do that.
+ * cinatra#1941 S2 — dispatcher identity + frame decision. A payload
+ * `__actorContext` (HumanUser flows) always wins, byte-identical to pre-S2; a
+ * `system-maintenance` job with NO payload context — which previously ran with
+ * no ALS frame at all — now dispatches under a freshly-minted System
+ * ActorContext (`background-job:<name>:<jobId>`, never derived from the
+ * forgeable payload). That is the one behavior delta (the feature). Every
+ * dispatched job is additionally wrapped in the job-system-frame ALS so the
+ * mint seam can read `getActiveJobFrame()` — framing alone grants NO authority
+ * (only the seam's own checks in job-system-authority-mint.ts do).
  */
 async function dispatchBackgroundJob(job: Job, token?: string) {
   const jobId = String(job.id ?? "");
@@ -236,17 +270,15 @@ async function dispatchBackgroundJob(job: Job, token?: string) {
 
   if (!payloadCtx && isSystemMaintenance) {
     if (!rt) {
-      warnJobSystemSlotEmpty(job.name, jobId, QUEUE_NAME);
+      warnJobSystemSlotEmpty(job.name, jobId);
       return runJobHandlerWithActorContext(job.data, framed);
     }
     return withActorContext(rt.buildSystemIdentity(job.name, jobId), framed);
   }
 
   if (payloadCtx && isSystemMaintenance && payloadCtx.principalType !== "HumanUser") {
-    // Anomaly telemetry only (§3.1 rule 2) — honored exactly as today, just
-    // recorded so a system-maintenance job carrying a non-HumanUser payload
-    // context is visible rather than silent. Ratcheting to refusal is
-    // wave-3's call.
+    // Anomaly telemetry only (§3.1) — honored exactly as today, just recorded
+    // as visible rather than silent; ratcheting to refusal is wave-3's call.
     rt?.auditFrameAnomaly(job.name, jobId, payloadCtx.principalType);
     console.warn(
       `[background-jobs] system-maintenance job "${job.name}" carried a non-HumanUser payload __actorContext (principalType=${payloadCtx.principalType}) — honored as today (cinatra#1941 anomaly telemetry, no behavior change).`,
@@ -273,11 +305,9 @@ async function dispatchBackgroundJobImpl(job: Job, _token?: string) {
   try {
     await dispatchRegisteredJob(job, jobId);
   } catch (err) {
-    // cinatra#1941 S2 — the unclassified-job denial audit rides the
-    // job-system slot so this file (and the registry) gain NO import edge to
-    // the audit module, not even a dynamic one (D7/§4). Best-effort: a
-    // slot-less unit test or pre-boot dispatch simply skips the audit row —
-    // the throw itself is the fail-closed behavior (S1), unconditionally.
+    // cinatra#1941 S2 — the unclassified-job denial audit rides the job-system
+    // slot so this file gains NO import edge to the audit module (D7/§4);
+    // slot-less dispatch skips the row, and the throw stays fail-closed (S1).
     if (err instanceof UnclassifiedBackgroundJobError) {
       resolveJobSystemRuntime()?.auditUnclassifiedRefusal(job.name, jobId);
     }
@@ -302,10 +332,8 @@ export const __dispatchBackgroundJobForTests = dispatchBackgroundJobImpl;
 /**
  * Test-only export of the OUTER dispatch function (cinatra#1941 S2) — unlike
  * `__dispatchBackgroundJobForTests` above, this one INCLUDES the frame/
- * identity-minting decision (the S2 feature under test): the ALS-frame
- * wrapper it drives is exactly `resolveJobSystemRuntime()`'s globalThis slot,
- * so a test can exercise it by setting `globalThis.__cinatraJobSystemRuntime`
- * directly rather than importing anything.
+ * identity-minting decision; tests drive it by setting the
+ * `globalThis.__cinatraJobSystemRuntime` slot directly.
  */
 export const __dispatchBackgroundJobForS2Tests = dispatchBackgroundJob;
 

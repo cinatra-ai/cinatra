@@ -371,7 +371,7 @@ describe("R5-job-system-mint / R5-job-frame (cinatra#1941 S2)", () => {
   });
 });
 
-describe("prefilter fix (cinatra#1941 S2 / eng#565): a file naming a restricted mint via specifier alone is now deep-parsed", () => {
+describe("prefilter blind-spot fix (cinatra#1941 S2): a file naming a restricted mint via specifier alone is now deep-parsed", () => {
   it("the OLD 3-string prefilter would have missed a file naming a wrapper without any kernel string present", () => {
     const OLD_PREFILTER_STRINGS = ["org-write-kernel", "mintSystemWriteAuthority", "guardedBatchQueries"];
     const text =
@@ -404,7 +404,7 @@ describe("prefilter fix (cinatra#1941 S2 / eng#565): a file naming a restricted 
     expect(shouldDeepParseForLegacyRules('// UPDATE "objects" someday')).toBe(false);
   });
 
-  it("the concrete eng#565 miss: the live artifact-review-resume-delivery.ts file now trips the prefilter", () => {
+  it("the concrete disclosed miss: the live artifact-review-resume-delivery.ts file now trips the prefilter", () => {
     // Reads the REAL file on disk (not a synthetic fixture) — pins the fix
     // against the exact live miss the design round found: this file names
     // mintAgentRunExecutionAuthority but contains none of the original three
