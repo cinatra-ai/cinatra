@@ -53,6 +53,12 @@ export type RemovalActionResult =
  * one module instance still classifies). Mirrors the error surface of the
  * removal choke-point:
  *  - `SystemExtensionRemovalError`  (code SYSTEM_EXTENSION_PROTECTED) → system
+ *  - `ProtectedExtensionRemovalError` (code DECLARED_PROTECTED_EXTENSION,
+ *      cinatra#1927 — the extension's OWN declaration marks it protected) →
+ *      system. Deliberately the SAME user-facing reason as the host-declared
+ *      system guard: to an operator both mean "this extension can be updated
+ *      but not removed", and the existing copy already says exactly that, so
+ *      no new UI surface is minted for a second flavor of the same refusal.
  *  - `DependencyClosureError`       (code ARCHIVE_BREAKS_CLOSURE, .dependents[]) → dependents
  *  - `ActiveDependentError`         (name, .dependentName) → dependents([one])
  *  - `PlatformArtifactLifecycleOrgInstallsError`
@@ -70,7 +76,7 @@ export function classifyRemovalFailure(error: unknown): RemovalActionResult {
   const code = typeof e?.code === "string" ? e.code : undefined;
   const name = typeof e?.name === "string" ? e.name : undefined;
 
-  if (code === "SYSTEM_EXTENSION_PROTECTED") {
+  if (code === "SYSTEM_EXTENSION_PROTECTED" || code === "DECLARED_PROTECTED_EXTENSION") {
     return { ok: false, reason: "system" };
   }
   if (code === "PLATFORM_ARTIFACT_ORG_INSTALLS_PRESENT" && Array.isArray(e?.organizations)) {

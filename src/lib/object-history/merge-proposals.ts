@@ -21,6 +21,7 @@ import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 
 import { historyAwareUpsert } from "./canonical-writer";
 import type { HistoryActor } from "./types";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
 export type MergeProposalStatus =
   | "pending"
@@ -213,6 +214,9 @@ export type ApproveMergeProposalInput = {
   // captured baseVersion as the CAS expectation, so a stale base will be
   // rejected with VersionConflict.
   currentData: Record<string, unknown>;
+  // Org-write kernel authority (cinatra#1939 wave 3 Stage D) — threaded to
+  // the canonical writer's guarded batch below. Minted by the caller.
+  authority: OrgWriteAuthority;
 };
 
 export function approveMergeProposal(input: ApproveMergeProposalInput): {
@@ -290,6 +294,7 @@ export function approveMergeProposal(input: ApproveMergeProposalInput): {
         expectedBaseVersion: proposal.baseVersion,
         historyEffect: "reversible-internal",
         actor: input.actor,
+        authority: input.authority,
       },
     );
 

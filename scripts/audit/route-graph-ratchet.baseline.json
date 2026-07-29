@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1641,
-    "/api/mcp": 1637,
-    "/chat": 1715,
-    "/api/a2a": 1642,
-    "/api/llm-bridge": 1652
+    "/sign-in": 1647,
+    "/api/mcp": 1643,
+    "/chat": 1721,
+    "/api/a2a": 1648,
+    "/api/llm-bridge": 1658
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1639,
-      "to": 1641,
-      "reason": "cinatra#1940 P3 (dispatch freeze under org archive): two new leaf modules, src/lib/org-write/dispatch-freeze.ts (the archived-org pre-check + typed refusal) and src/lib/org-write/run-creation-authority.ts (the run-creation authority resolver), become reachable from every locked route via packages/agents (execution.ts, trigger-release-job.ts, mcp/handlers.ts, mcp/agent-tools-registry.ts — already universally reachable) — +2 first-party modules on every locked route. Both are leaves (dispatch-freeze.ts has zero further first-party dependencies of its own); re-measured on the post-merge tree (origin/main at 8cf2d33e, which already carries PR #2205's +1 absorb) with the companion extensions cloned pinned.",
-      "pr": 2201
+      "from": 1645,
+      "to": 1647,
+      "reason": "cinatra#2093 (epic #2086 S6) setup-time provider choice: the setup wizard AI step stops reading a cached OpenAI connection boolean and reads the READINESS RECEIPT instead, so src/lib/setup-wizard.ts (statically reachable from all five locked routes via the app-shell setup redirect) now reaches setup-readiness-saga.ts and, behind it, llm-purpose-policy.ts — +2 first-party modules on every locked route. The raise cannot be narrowed: the receipt read IS the wizard-completeness signal (a valid receipt is the only honest answer to 'is the AI step done' once Anthropic setup involves a skill upload plus a native-skills probe), and the purpose policy is what lets the step state the OpenAI-only skill-matcher constraint honestly. A lazy import would NOT change the measured graph — scripts/route-graph.mjs follows dynamic import() — so deferring it would move runtime cost while pretending the graph shrank. The delta is STILL +2 after the F1/F2 review fixes (the credential-save failure state and the performable MCP-mode fix-forward): both were written into modules already on these graphs, so neither adds a module. Re-measured on this PR head rebased onto main after #2208, with the companion extensions cloned pinned; the #2208 records this raise supersedes are retired by --write-baseline per the gate's retire-on-re-raise rule.",
+      "pr": 2213
     },
     "/api/mcp": {
-      "from": 1635,
-      "to": 1637,
-      "reason": "cinatra#1940 P3 (dispatch freeze under org archive): two new leaf modules, src/lib/org-write/dispatch-freeze.ts (the archived-org pre-check + typed refusal) and src/lib/org-write/run-creation-authority.ts (the run-creation authority resolver), become reachable from every locked route via packages/agents (execution.ts, trigger-release-job.ts, mcp/handlers.ts, mcp/agent-tools-registry.ts — already universally reachable) — +2 first-party modules on every locked route. Both are leaves (dispatch-freeze.ts has zero further first-party dependencies of its own); re-measured on the post-merge tree (origin/main at 8cf2d33e, which already carries PR #2205's +1 absorb) with the companion extensions cloned pinned.",
-      "pr": 2201
+      "from": 1641,
+      "to": 1643,
+      "reason": "cinatra#2093 (epic #2086 S6) setup-time provider choice: the setup wizard AI step stops reading a cached OpenAI connection boolean and reads the READINESS RECEIPT instead, so src/lib/setup-wizard.ts (statically reachable from all five locked routes via the app-shell setup redirect) now reaches setup-readiness-saga.ts and, behind it, llm-purpose-policy.ts — +2 first-party modules on every locked route. The raise cannot be narrowed: the receipt read IS the wizard-completeness signal (a valid receipt is the only honest answer to 'is the AI step done' once Anthropic setup involves a skill upload plus a native-skills probe), and the purpose policy is what lets the step state the OpenAI-only skill-matcher constraint honestly. A lazy import would NOT change the measured graph — scripts/route-graph.mjs follows dynamic import() — so deferring it would move runtime cost while pretending the graph shrank. The delta is STILL +2 after the F1/F2 review fixes (the credential-save failure state and the performable MCP-mode fix-forward): both were written into modules already on these graphs, so neither adds a module. Re-measured on this PR head rebased onto main after #2208, with the companion extensions cloned pinned; the #2208 records this raise supersedes are retired by --write-baseline per the gate's retire-on-re-raise rule.",
+      "pr": 2213
     },
     "/chat": {
-      "from": 1713,
-      "to": 1715,
-      "reason": "cinatra#1940 P3 (dispatch freeze under org archive): two new leaf modules, src/lib/org-write/dispatch-freeze.ts (the archived-org pre-check + typed refusal) and src/lib/org-write/run-creation-authority.ts (the run-creation authority resolver), become reachable from every locked route via packages/agents (execution.ts, trigger-release-job.ts, mcp/handlers.ts, mcp/agent-tools-registry.ts — already universally reachable) — +2 first-party modules on every locked route. Both are leaves (dispatch-freeze.ts has zero further first-party dependencies of its own); re-measured on the post-merge tree (origin/main at 8cf2d33e, which already carries PR #2205's +1 absorb) with the companion extensions cloned pinned.",
-      "pr": 2201
+      "from": 1719,
+      "to": 1721,
+      "reason": "cinatra#2093 (epic #2086 S6) setup-time provider choice: the setup wizard AI step stops reading a cached OpenAI connection boolean and reads the READINESS RECEIPT instead, so src/lib/setup-wizard.ts (statically reachable from all five locked routes via the app-shell setup redirect) now reaches setup-readiness-saga.ts and, behind it, llm-purpose-policy.ts — +2 first-party modules on every locked route. The raise cannot be narrowed: the receipt read IS the wizard-completeness signal (a valid receipt is the only honest answer to 'is the AI step done' once Anthropic setup involves a skill upload plus a native-skills probe), and the purpose policy is what lets the step state the OpenAI-only skill-matcher constraint honestly. A lazy import would NOT change the measured graph — scripts/route-graph.mjs follows dynamic import() — so deferring it would move runtime cost while pretending the graph shrank. The delta is STILL +2 after the F1/F2 review fixes (the credential-save failure state and the performable MCP-mode fix-forward): both were written into modules already on these graphs, so neither adds a module. Re-measured on this PR head rebased onto main after #2208, with the companion extensions cloned pinned; the #2208 records this raise supersedes are retired by --write-baseline per the gate's retire-on-re-raise rule.",
+      "pr": 2213
     },
     "/api/a2a": {
-      "from": 1640,
-      "to": 1642,
-      "reason": "cinatra#1940 P3 (dispatch freeze under org archive): two new leaf modules, src/lib/org-write/dispatch-freeze.ts (the archived-org pre-check + typed refusal) and src/lib/org-write/run-creation-authority.ts (the run-creation authority resolver), become reachable from every locked route via packages/agents (execution.ts, trigger-release-job.ts, mcp/handlers.ts, mcp/agent-tools-registry.ts — already universally reachable) — +2 first-party modules on every locked route. Both are leaves (dispatch-freeze.ts has zero further first-party dependencies of its own); re-measured on the post-merge tree (origin/main at 8cf2d33e, which already carries PR #2205's +1 absorb) with the companion extensions cloned pinned.",
-      "pr": 2201
+      "from": 1646,
+      "to": 1648,
+      "reason": "cinatra#2093 (epic #2086 S6) setup-time provider choice: the setup wizard AI step stops reading a cached OpenAI connection boolean and reads the READINESS RECEIPT instead, so src/lib/setup-wizard.ts (statically reachable from all five locked routes via the app-shell setup redirect) now reaches setup-readiness-saga.ts and, behind it, llm-purpose-policy.ts — +2 first-party modules on every locked route. The raise cannot be narrowed: the receipt read IS the wizard-completeness signal (a valid receipt is the only honest answer to 'is the AI step done' once Anthropic setup involves a skill upload plus a native-skills probe), and the purpose policy is what lets the step state the OpenAI-only skill-matcher constraint honestly. A lazy import would NOT change the measured graph — scripts/route-graph.mjs follows dynamic import() — so deferring it would move runtime cost while pretending the graph shrank. The delta is STILL +2 after the F1/F2 review fixes (the credential-save failure state and the performable MCP-mode fix-forward): both were written into modules already on these graphs, so neither adds a module. Re-measured on this PR head rebased onto main after #2208, with the companion extensions cloned pinned; the #2208 records this raise supersedes are retired by --write-baseline per the gate's retire-on-re-raise rule.",
+      "pr": 2213
     },
     "/api/llm-bridge": {
-      "from": 1650,
-      "to": 1652,
-      "reason": "cinatra#1940 P3 (dispatch freeze under org archive): two new leaf modules, src/lib/org-write/dispatch-freeze.ts (the archived-org pre-check + typed refusal) and src/lib/org-write/run-creation-authority.ts (the run-creation authority resolver), become reachable from every locked route via packages/agents (execution.ts, trigger-release-job.ts, mcp/handlers.ts, mcp/agent-tools-registry.ts — already universally reachable) — +2 first-party modules on every locked route. Both are leaves (dispatch-freeze.ts has zero further first-party dependencies of its own); re-measured on the post-merge tree (origin/main at 8cf2d33e, which already carries PR #2205's +1 absorb) with the companion extensions cloned pinned.",
-      "pr": 2201
+      "from": 1656,
+      "to": 1658,
+      "reason": "cinatra#2093 (epic #2086 S6) setup-time provider choice: the setup wizard AI step stops reading a cached OpenAI connection boolean and reads the READINESS RECEIPT instead, so src/lib/setup-wizard.ts (statically reachable from all five locked routes via the app-shell setup redirect) now reaches setup-readiness-saga.ts and, behind it, llm-purpose-policy.ts — +2 first-party modules on every locked route. The raise cannot be narrowed: the receipt read IS the wizard-completeness signal (a valid receipt is the only honest answer to 'is the AI step done' once Anthropic setup involves a skill upload plus a native-skills probe), and the purpose policy is what lets the step state the OpenAI-only skill-matcher constraint honestly. A lazy import would NOT change the measured graph — scripts/route-graph.mjs follows dynamic import() — so deferring it would move runtime cost while pretending the graph shrank. The delta is STILL +2 after the F1/F2 review fixes (the credential-save failure state and the performable MCP-mode fix-forward): both were written into modules already on these graphs, so neither adds a module. Re-measured on this PR head rebased onto main after #2208, with the companion extensions cloned pinned; the #2208 records this raise supersedes are retired by --write-baseline per the gate's retire-on-re-raise rule.",
+      "pr": 2213
     }
   }
 }

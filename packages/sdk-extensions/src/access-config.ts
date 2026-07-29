@@ -49,6 +49,7 @@
 // nesting level.
 
 import { z } from "zod";
+import { extensionProtectedFlagSchema } from "./extension-protection";
 
 /** The full platform scope vocabulary, day one (cinatra#950). */
 export const CONNECTOR_ACCESS_SCOPES = [
@@ -98,6 +99,12 @@ const configFileSchema = z
   .object({
     formatVersion: z.literal(CONNECTOR_ACCESS_CONFIG_FORMAT_VERSION),
     access: accessDomainSchema.optional(),
+    // The generic, KIND-AGNOSTIC protection domain (cinatra#1927). Accepted
+    // structurally here (shared schema, by reference) so a connector that
+    // declares itself protected still parses under this `.strict()` file
+    // schema; INTERPRETED only by `extension-protection.ts` — this parser owns
+    // the `access` domain and nothing else.
+    protected: extensionProtectedFlagSchema.optional(),
   })
   .strict();
 

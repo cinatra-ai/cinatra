@@ -47,6 +47,10 @@ const COVERED_PREFIXES = [
   "src/lib/objects-store.ts",
   "src/lib/dashboards/dashboard-artifact-twin-writer.ts",
   "src/lib/organization-delete.ts",
+  // cinatra#1939 wave 3 Stage D: registered (runResourceProjectMove /
+  // runAgentRunMoveWithOutputs rows) + converted onto the kernel's guarded
+  // fixed-batch — baseline entry removed (the ratchet shrinks).
+  "src/lib/resource-project-move.ts",
   "src/lib/drizzle-store.ts", // DDL owner
   "packages/org-write-kernel/",
   "packages/migrations/",

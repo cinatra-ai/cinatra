@@ -30,9 +30,16 @@ import "server-only";
  * `runAgentRunMoveWithOutputs` for that path.
  */
 
-import { runPostgresQueriesSync } from "@/lib/postgres-sync";
-import { ensurePostgresSchema, postgresSchema, getPostgresConnectionString } from "@/lib/database";
+import { ensurePostgresSchema, postgresSchema } from "@/lib/database";
 import { randomUUID } from "node:crypto";
+// Org-write kernel guard (cinatra#1939 wave 3 Stage D): this module is a
+// raw-SQL (postgres-sync, fixed-batch) world writer — the same shape as
+// canonical-writer.ts — so it uses the kernel's fixed-batch adapter rather
+// than `guardOrgMutation` (no drizzle transaction to hand it). The lock +
+// in-SQL capability ruling prepend to THIS module's own query list and run
+// atomically with it in one postgres-sync transaction.
+import { buildGuardedOrgWriteBatch, type OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
+import { runGuardedOrgWriteBatchSync } from "@/lib/org-write/batch-wrapper";
 
 export type ResourceKind = "object" | "agent_run" | "project";
 
@@ -57,6 +64,13 @@ export type ResourceProjectMoveArgs = {
   sourceThreadId?: string | null;
   /** Optional caller-supplied reason annotation (capped at 500 chars). */
   reason?: string | null;
+  /** The moved resource's organization (cinatra#1939 wave 3 Stage D) — the
+   *  org-write kernel's lock + lifecycle-ruling axis. The resource itself is
+   *  always org-scoped (objects.org_id / agent_runs.org_id); the caller
+   *  already resolved it to authorize the move. */
+  orgId: string;
+  /** Org-write kernel authority, minted by the caller. */
+  authority: OrgWriteAuthority;
 };
 
 /**
@@ -64,8 +78,17 @@ export type ResourceProjectMoveArgs = {
  * helper. Extracted as a pure builder so unit tests can capture the
  * emitted SQL + values without a live Postgres instance (mirrors the
  * buildChatThreadUpsertQuery pattern).
+ *
+ * cinatra#1939 wave 3 Stage D: the builder deliberately OMITS the guard-only
+ * fields (`orgId`, `authority`) — it emits SQL text and binds values, nothing
+ * more; the kernel guard is `runResourceProjectMove`'s concern (which wraps
+ * these queries in the guarded batch). Keeping the builder authority-free
+ * also keeps its pure-SQL unit tests free of stub authorities.
  */
-export function buildResourceProjectMoveQueries(args: ResourceProjectMoveArgs & {
+export function buildResourceProjectMoveQueries(args: Omit<
+  ResourceProjectMoveArgs,
+  "orgId" | "authority"
+> & {
   schemaName: string;
   auditId: string;
 }): Array<{ text: string; values: unknown[] }> {
@@ -124,12 +147,16 @@ export function runResourceProjectMove(
     schemaName: postgresSchema,
     auditId,
   });
-  const results = runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    transaction: true,
+  const batch = buildGuardedOrgWriteBatch(
+    { orgId: args.orgId, capability: "content.write", authority: args.authority },
     queries,
-  });
-  const updateResult = results[0];
+  );
+  const results = runGuardedOrgWriteBatchSync(batch);
+  // The guarded batch PREPENDS lock/refusal/ruling statements ahead of
+  // `queries` ([UPDATE, audit INSERT]) — index from the END: the audit INSERT
+  // is last, the visible-row UPDATE second-to-last. Reading index 0 here
+  // would silently read the lock statement's result instead of the UPDATE's.
+  const updateResult = results.at(-2);
   if (!updateResult || updateResult.rowCount === 0) {
     // The UPDATE matched zero rows. This is either:
     //   1) A concurrent move race (someone else moved the row first).
@@ -169,6 +196,11 @@ export function runAgentRunMoveWithOutputs(args: {
   newProjectId: string | null;
   actorId: string;
   reason?: string | null;
+  /** The run's organization (cinatra#1939 wave 3 Stage D) — org-write kernel
+   *  lock + lifecycle-ruling axis (agent_runs.org_id). */
+  orgId: string;
+  /** Org-write kernel authority, minted by the caller. */
+  authority: OrgWriteAuthority;
 }): { auditId: string; movedOutputIds: string[] } {
   ensurePostgresSchema();
   const schema = postgresSchema.replaceAll('"', '""');
@@ -237,12 +269,14 @@ export function runAgentRunMoveWithOutputs(args: {
     ],
   };
 
-  const results = runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    transaction: true,
-    queries: [compositeQuery],
-  });
-  const row = results[0]?.rows?.[0] as
+  const batch = buildGuardedOrgWriteBatch(
+    { orgId: args.orgId, capability: "content.write", authority: args.authority },
+    [compositeQuery],
+  );
+  const results = runGuardedOrgWriteBatchSync(batch);
+  // Guarded batch prepends lock/refusal/ruling statements — the composite
+  // CTE is the LAST entry, never index 0 (see runResourceProjectMove).
+  const row = results.at(-1)?.rows?.[0] as
     | { run_id: string | null; obj_ids: string[] | null; run_audit_id: string | null }
     | undefined;
   if (!row || !row.run_id) {
