@@ -51,6 +51,12 @@ const hasDb =
 // named by SUPABASE_SCHEMA (default "cinatra"). Provision that exact schema.
 const SCHEMA = process.env.SUPABASE_SCHEMA?.trim() || "cinatra";
 const ORG = "org-1947-idem";
+// cinatra#1939 wave 2 / #1940 P3: createAgentRun now runs under guardOrgMutation
+// and REQUIRES a host-minted authority; the guard also reads the org's
+// lifecycle from `public."organization"` — this DB-gated suite needs an
+// ACTIVE org row for ORG for the guarded writes to pass at runtime (seeded in
+// beforeAll / cleaned up in afterAll below).
+const AUTH = { orgId: ORG, can: () => true };
 // The gate-owning agent package (binding-ID owner of the test-delivery renderer);
 // the send-authz gate admits ONLY a run whose package hosts the gate (#1958).
 const GATE_OWNER_PKG = "@cinatra-ai/email-test-delivery-agent";
@@ -115,6 +121,10 @@ beforeAll(async () => {
   pg = new Client({ connectionString: dbUrl });
   await pg.connect();
   await provisionSchema(pg);
+  await pg.query(
+    `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
+    [ORG, ORG, ORG],
+  );
 
   store = await import("../store");
   ledger = await import("../agent-run-test-sends");
@@ -126,6 +136,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!hasDb) return;
   setTestDeliverySendPort(null);
+  await pg.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]).catch(() => {});
   await pg.end();
 });
 
@@ -161,7 +172,7 @@ async function makeRun(userId: string): Promise<{ runId: string; campaignId: str
     inputParams: { campaignId },
     orgId: ORG,
     runBy: userId,
-  });
+  }, AUTH);
   return { runId: run.id, campaignId };
 }
 

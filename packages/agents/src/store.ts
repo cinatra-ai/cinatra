@@ -24,6 +24,10 @@ import type { AgentRunStatus } from "./run-status";
 // cinatra#1940 P1 (Decision 4): bulkStop* thread a host-minted authority through
 // the canonical transitionRunStatus primitive (killing the direct-UPDATE bypass).
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
+// cinatra#1940 P3 (Decision 2): the creation-perimeter conversion — the two
+// `agent_runs` INSERT sites below now run guarded, the same seam
+// transitionRunStatus already uses.
+import { guardedRunWrite } from "./org-write-run-seam";
 // cinatra#1893 (epic #1883 A5): terminal-success-with-derivation-outbox seam
 // (file-size ratchet #1893). Its producer transitionRunStatus now lives in
 // ./run-transition; only the option TYPE is re-exported for `./store` importers.
@@ -1494,6 +1498,14 @@ export async function createAgentVersion(
 
 export async function createAgentRun(
   input: CreateAgentRunInput,
+  // cinatra#1940 P3 (Decision 2): REQUIRED trailing param (the
+  // transitionRunStatus precedent) — every caller must consciously supply
+  // whatever authority it has, `undefined` included, so the seam's own
+  // fail-closed refusal (not a silently-omitted-argument bug) is what a
+  // caller with none observes. Bound to the FRESH run id below: a run-scoped
+  // authority (VerifiedRunRef) can never satisfy `runId === input.id`, so a
+  // run can never create another run even if its own authority is forwarded.
+  authority: OrgWriteAuthority | undefined,
 ): Promise<AgentRunRecord> {
   const oboCeilingJson = await deriveRunOboCeilingJson({
     templateId: input.templateId,
@@ -1542,9 +1554,19 @@ export async function createAgentRun(
     humanPresent: input.humanPresent ?? null, // cinatra#2067 presence discriminator
   } as const;
 
-  // Fast path: no idempotency key → plain insert, legacy behavior unchanged.
+  // Fast path: no idempotency key → guarded insert, legacy behavior
+  // unchanged otherwise (#1940 P3: the insert now runs inside guardedRunWrite;
+  // archived-org / missing/mismatched authority refuses BEFORE the insert).
   if (!input.idempotencyKey) {
-    const [row] = await db.insert(agentRuns).values(values).returning();
+    const row = await guardedRunWrite(
+      authority,
+      { orgId: input.orgId, runId: input.id, capability: "run.execute" },
+      async (tx) => {
+        const dtx = tx as unknown as typeof db;
+        const [inserted] = await dtx.insert(agentRuns).values(values).returning();
+        return inserted;
+      },
+    );
     return deserializeRun(row);
   }
 
@@ -1555,8 +1577,25 @@ export async function createAgentRun(
   // guarantees one child run per key; the loser of the race catches the unique
   // violation (pg 23505), re-reads, and verifies provenance before returning
   // the winning row — a reused or forged key can never alias onto a foreign run.
+  //
+  // #1940 P3 (design review, adopted as intentional): the guard now refuses
+  // BEFORE the insert on an archived org, so a retried dispatch that
+  // committed its first attempt while active gets the archived refusal
+  // INSTEAD of the idempotent existing-row return (the 23505 re-read path
+  // below is only reached when the insert itself ran) — a retry under
+  // archive creates nothing and reports the org's real state, rather than
+  // handing a dispatcher a stale "success" it would act on (enqueue) against
+  // a frozen org.
   try {
-    const [row] = await db.insert(agentRuns).values(values).returning();
+    const row = await guardedRunWrite(
+      authority,
+      { orgId: input.orgId, runId: input.id, capability: "run.execute" },
+      async (tx) => {
+        const dtx = tx as unknown as typeof db;
+        const [inserted] = await dtx.insert(agentRuns).values(values).returning();
+        return inserted;
+      },
+    );
     return deserializeRun(row);
   } catch (insertErr: unknown) {
     // drizzle-orm wraps the driver error, so the Postgres SQLSTATE may live on
@@ -3033,17 +3072,22 @@ export async function resolveDefaultOrgId(): Promise<string | null> {
  * template recompiles. `orgId` is required (NOT NULL column) — every caller
  * resolves it before insert.
  */
-export async function createAgentRunPendingInput(input: {
-  templateId: string;
-  runBy: string | null;
-  orgId: string;
-  inputParams?: Record<string, unknown>;
-  // nullable project refinement. Pending
-  // runs inherit projectId from the same boundary as createAgentRun (chat
-  // path / server action). Set NULL for non-project invocations.
-  projectId?: string | null;
-  humanPresent?: boolean | null; // cinatra#2067 presence discriminator (interactive callers pass true)
-}): Promise<AgentRunRecord> {
+export async function createAgentRunPendingInput(
+  input: {
+    templateId: string;
+    runBy: string | null;
+    orgId: string;
+    inputParams?: Record<string, unknown>;
+    // nullable project refinement. Pending
+    // runs inherit projectId from the same boundary as createAgentRun (chat
+    // path / server action). Set NULL for non-project invocations.
+    projectId?: string | null;
+    humanPresent?: boolean | null; // cinatra#2067 presence discriminator (interactive callers pass true)
+  },
+  // cinatra#1940 P3 (Decision 2): see createAgentRun's authority param doc —
+  // same REQUIRED-trailing-param, same fail-closed-on-undefined contract.
+  authority: OrgWriteAuthority | undefined,
+): Promise<AgentRunRecord> {
   const id = randomUUID();
   const versionIdToPin = await readLatestAgentVersionIdForTemplate(input.templateId);
   // persist-at-dispatch OBO ceiling — same derivation as createAgentRun, so a
@@ -3054,26 +3098,35 @@ export async function createAgentRunPendingInput(input: {
     orgId: input.orgId,
     projectId: input.projectId,
   });
-  await db.insert(agentRuns).values({
-    id,
-    templateId: input.templateId,
-    versionId: versionIdToPin,
-    runBy: input.runBy,
-    // propagate org boundary; column is NOT NULL after the DDL.
-    orgId: input.orgId,
-    status: "pending_input",
-    inputParams: JSON.stringify(input.inputParams ?? {}),
-    // pending-input runs share the same AG-UI capability marker as
-    // the main createAgentRun path. Without this, a setup → run transition
-    // would appear as legacy (agUiEnabled=null) to the panel.
-    agUiEnabled: true,
-    // propagate projectId at pending-input
-    // create time so the eventual queued→running transition's worker sees
-    // the same project frame.
-    projectId: input.projectId ?? null,
-    oboCeiling: oboCeilingJson,
-    humanPresent: input.humanPresent ?? null, // cinatra#2067 presence discriminator
-  });
+  await guardedRunWrite(
+    authority,
+    { orgId: input.orgId, runId: id, capability: "run.execute" },
+    async (tx) => {
+      const dtx = tx as unknown as typeof db;
+      await dtx.insert(agentRuns).values({
+        id,
+        templateId: input.templateId,
+        versionId: versionIdToPin,
+        runBy: input.runBy,
+        // propagate org boundary; column is NOT NULL after the DDL.
+        orgId: input.orgId,
+        status: "pending_input",
+        inputParams: JSON.stringify(input.inputParams ?? {}),
+        // pending-input runs share the same AG-UI capability marker as
+        // the main createAgentRun path. Without this, a setup → run transition
+        // would appear as legacy (agUiEnabled=null) to the panel.
+        agUiEnabled: true,
+        // propagate projectId at pending-input
+        // create time so the eventual queued→running transition's worker sees
+        // the same project frame.
+        projectId: input.projectId ?? null,
+        oboCeiling: oboCeilingJson,
+        humanPresent: input.humanPresent ?? null, // cinatra#2067 presence discriminator
+      });
+    },
+  );
+  // Post-insert re-read stays OUTSIDE the guard — a committed insert cannot
+  // vanish (Decision 2).
   const created = await readAgentRunById(id);
   if (!created) throw new Error(`Failed to create pending_input agent run: ${id}`);
   return created;

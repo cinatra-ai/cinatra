@@ -11,8 +11,9 @@
  * compile-smoke, ref-resolver) are pure and do not require a DB. This file
  * intentionally touches the real store and so gates on a real connection.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
+import { Client } from "pg";
 import type { AgentRunRecord, CreateAgentRunInput } from "../store";
 
 // Fixture orgId so the NOT NULL DDL does not break this suite.
@@ -23,6 +24,26 @@ const hasDb =
   typeof dbUrl === "string"
   && dbUrl.length > 0
   && !dbUrl.includes("unused:unused@localhost:5432/unused"); // align with parent-run-id.test.ts:21 and AGENTS.md
+
+// cinatra#1939 wave 2 / #1940 P3: createAgentRun now runs under guardOrgMutation
+// and REQUIRES a host-minted authority; the guard also reads the org's
+// lifecycle from `public."organization"`. The idempotent insert below is
+// shared with the sibling trigger-*/store-*/pm-link-store-reconcile
+// integration suites, which all use the SAME literal orgId and run in
+// parallel forks against the same DB — the row is never deleted so no suite
+// can pull it out from under another.
+const AUTH = { orgId: TEST_ORG_ID, can: () => true };
+
+beforeAll(async () => {
+  if (!hasDb) return;
+  const c = new Client({ connectionString: dbUrl });
+  await c.connect();
+  await c.query(
+    `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
+    [TEST_ORG_ID, "Test Org", TEST_ORG_ID],
+  );
+  await c.end();
+});
 
 describe.skipIf(!hasDb)("agent_runs.packageVersion roundtrip", () => {
   it("persists packageVersion when provided", async () => {
@@ -44,7 +65,7 @@ describe.skipIf(!hasDb)("agent_runs.packageVersion roundtrip", () => {
       packageVersion: "1.2.3",
       orgId: TEST_ORG_ID,
     };
-    const created = await createAgentRun(input);
+    const created = await createAgentRun(input, AUTH);
     expect(created.packageVersion).toBe("1.2.3");
 
     const reread = await readAgentRunById(runId);
@@ -64,7 +85,7 @@ describe.skipIf(!hasDb)("agent_runs.packageVersion roundtrip", () => {
       approvalPolicy: { steps: [] },
     });
     const runId = `r_${randomUUID()}`;
-    const created = await createAgentRun({ id: runId, templateId, inputParams: {}, orgId: TEST_ORG_ID });
+    const created = await createAgentRun({ id: runId, templateId, inputParams: {}, orgId: TEST_ORG_ID }, AUTH);
     expect(created.packageVersion).toBeNull();
 
     const reread = await readAgentRunById(runId);

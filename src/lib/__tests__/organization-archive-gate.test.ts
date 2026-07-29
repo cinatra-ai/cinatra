@@ -5,6 +5,8 @@
 // `not-implemented` even when the gate is on (no S1 code path archives).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const readConnectorConfigFromDatabase = vi.fn();
 vi.mock("@/lib/database", () => ({
@@ -66,5 +68,26 @@ describe("archiveOrganization — S1 refusing stub", () => {
       ok: false,
       reason: "not-implemented",
     });
+  });
+});
+
+// cinatra#1940 P3 (Decision 7, design review) — the compile-time structural
+// coupling: this file is the ONE gate every activation consumer flows
+// through, so it must statically import the dispatch-freeze module (its
+// `DISPATCH_FREEZE_S3` sentinel). This is a SOURCE-TEXT pin, deliberately
+// static rather than behavioral: the point is to fail a future refactor that
+// silently drops the import edge (which would not necessarily change any
+// runtime behavior this file's other tests observe), independent of
+// anything the S6 activation runbook does.
+describe("organization-archive.ts → dispatch-freeze.ts structural coupling (cinatra#1940 P3, Decision 7)", () => {
+  it("statically imports the dispatch-freeze module and references its sentinel", () => {
+    const source = readFileSync(
+      join(__dirname, "..", "organization-archive.ts"),
+      "utf-8",
+    );
+    expect(source).toMatch(
+      /from\s+["']@\/lib\/org-write\/dispatch-freeze["']/,
+    );
+    expect(source).toMatch(/\bDISPATCH_FREEZE_S3\b/);
   });
 });

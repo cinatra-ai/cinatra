@@ -17,7 +17,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   recordPmLinkSuccess,
   recordPmLinkError,
@@ -28,6 +28,15 @@ import { db, agentBuilderPool } from "../db";
 import { agentRuns, agentTemplates } from "../schema";
 
 const TEST_ORG_ID = "org-test";
+// cinatra#1939 wave 2 / #1940 P3: createAgentRun now runs under guardOrgMutation
+// and REQUIRES a host-minted authority; the guard also reads the org's
+// lifecycle from `public."organization"`. A member-shaped authority grounds the
+// guarded write; the idempotent insert in beforeAll below (shared with the
+// sibling trigger-*/store-*/pm-link-store-reconcile integration suites, which
+// all use the SAME literal orgId and run in parallel forks against the same
+// DB) ensures the row exists without any suite ever deleting a row another
+// might still need.
+const AUTH = { orgId: TEST_ORG_ID, can: () => true };
 const createdTemplateIds: string[] = [];
 const createdRunIds: string[] = [];
 
@@ -45,18 +54,25 @@ async function ensureParentRun(): Promise<string> {
   });
   createdTemplateIds.push(templateId);
   const id = `test-pmlink-${randomUUID()}`;
-  await createAgentRun({ id, templateId, inputParams: {}, orgId: TEST_ORG_ID });
+  await createAgentRun({ id, templateId, inputParams: {}, orgId: TEST_ORG_ID }, AUTH);
   createdRunIds.push(id);
   return id;
 }
 
 describe("listPmLinksForReconcile", () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     if (!process.env.SUPABASE_DB_URL) {
       throw new Error(
         "pm-link-store-reconcile.integration.test.ts requires SUPABASE_DB_URL — run `cinatra setup branch` first.",
       );
     }
+    // Idempotent — see the TEST_ORG_ID comment above (never deleted: shared
+    // with sibling suites running in parallel forks against the same DB).
+    await db.execute(sql`
+      INSERT INTO public."organization" (id, name, slug, "createdAt")
+      VALUES (${TEST_ORG_ID}, ${"Test Org"}, ${TEST_ORG_ID}, now())
+      ON CONFLICT (id) DO NOTHING
+    `);
   });
 
   afterAll(async () => {

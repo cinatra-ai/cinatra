@@ -214,6 +214,13 @@ import {
   type AddManualServerRouteResult,
   type RemoveManualServerRouteResult,
 } from "@/lib/connector-instance-server-enrollment";
+// cinatra#2021 S6 (design D8, PR α) — the additive, lenient-parse read of the
+// dormant `site_meta` column on the S3 companion inventory row (tri-state
+// return; see the module doc comment). No new capability, no registry entry.
+import {
+  resolveConnectedSiteMetadata,
+  type ConnectedSiteMetadata,
+} from "@/lib/connector-instance-site-metadata";
 // cinatra#2019 S4 — the trusted-site native-injection OPT-IN store + the
 // org-admin consent members bound onto the `wordpress-mcp` publication below.
 import {
@@ -593,6 +600,21 @@ type HostWordPressMcpServerEnrollmentSurface = HostWordPressMcpService & {
   /** Manual "refresh now": evict the instance's catalog snapshots + the
    * site's probe verdicts so the next acquire reloads from the wire. */
   invalidateInstanceCatalog(instanceId: string): Promise<void>;
+};
+
+// Host-LOCAL structural extension of the SDK `HostWordPressMcpService` for the
+// cinatra#2021 S6 site-metadata read (design D8, PR α) — same additive,
+// no-SDK-edit precedent as the surface above. A single read member; no
+// authorization gate inside it (mirrors this file's other plain per-instance
+// reads, e.g. `readInstanceById`/`getAPISettings` above — the caller's own
+// settings-surface layer is where session/org-admin gating for an instance
+// already happens, same as those).
+type WordPressSiteMetadataSurface = {
+  /** Tri-state read of the dormant `site_meta` column (bound to `"wordpress"`
+   * here; see connector-instance-site-metadata.ts). Never throws for a
+   * missing/malformed row (resolves to `status:"unknown"` instead) — a
+   * genuine store/DB failure still propagates. */
+  resolveConnectedSiteMetadata(instanceId: string): Promise<ConnectedSiteMetadata>;
 };
 
 /** Build the invoker deps for a host-bound connectorKey (closes over the shared
@@ -1257,10 +1279,16 @@ export function registerHostConnectorServices(): void {
       },
       isKnownDestructiveToolName: (name) => isKnownDestructiveToolName(name),
     }),
+    // cinatra#2021 S6 (design D8, PR α) — bound to "wordpress" (the only
+    // connectorKey this publication ever serves), mirroring how the S3
+    // enrollment members above bind their own connectorKey internally.
+    resolveConnectedSiteMetadata: (instanceId) =>
+      resolveConnectedSiteMetadata("wordpress", instanceId),
   } satisfies HostWordPressMcpServerEnrollmentSurface &
     WordPressNativeInjectionConsentSurface &
     WordPressConfirmationPolicySurface &
-    WordPressNativeReadInjectionSurface);
+    WordPressNativeReadInjectionSurface &
+    WordPressSiteMetadataSurface);
 
   // The WordPress post/media CONTENT surface (`@cinatra-ai/host:
   // wordpress-content`, cinatra#172 Stage H3) is NO LONGER host-published:

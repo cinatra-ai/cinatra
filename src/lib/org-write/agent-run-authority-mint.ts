@@ -37,3 +37,40 @@ export function mintTriggerReleaseAuthority(orgId: string): OrgWriteAuthority {
 export function mintContentEditorDispatchAuthority(orgId: string): OrgWriteAuthority {
   return mintSystemWriteAuthority("agent-run-dispatch", orgId);
 }
+
+/**
+ * cinatra#1940 (P3) — a THIRD context-named helper added by the creation-
+ * conversion PR (the design's "the ONLY new mint" was drafted before this
+ * caller's authority gap was found while grounding P3 against live source;
+ * disclosed in the PR body). External-A2A peer dispatch
+ * (`src/lib/a2a-server.ts`'s `createRunWithAuthority` wiring) for a
+ * NON-`HumanUser` principal (Service/Internal/External A2A peers) — the one
+ * genuinely principal-less child-run dispatch surface; a `HumanUser` A2A
+ * dispatch instead resolves the delegating member via
+ * `resolveRunCreationAuthority` like every other caller.
+ */
+export function mintExternalA2ADispatchAuthority(orgId: string): OrgWriteAuthority {
+  return mintSystemWriteAuthority("agent-run-dispatch", orgId);
+}
+
+/**
+ * cinatra#1940 (P3) — a caller the design's caller matrix did not enumerate
+ * (found while grounding P3 against live source, not present at the design's
+ * `a728c95b` grounding commit's relevant paths). The PM dynamic-dispatch tick
+ * (`src/lib/project-dispatch.ts`, cinatra#1032) creates a project worker run
+ * with no session — same system-dispatcher shape as the three helpers above.
+ */
+export function mintProjectDispatchAuthority(orgId: string): OrgWriteAuthority {
+  return mintSystemWriteAuthority("agent-run-dispatch", orgId);
+}
+
+/**
+ * cinatra#1940 (P3) — a second caller the design's caller matrix did not
+ * enumerate (found while grounding P3 against live source). The lifecycle-
+ * repair delivery drain (`packages/agents/src/lifecycle-repair-dispatch-store.ts`,
+ * cinatra#2047/#2037) creates a deterministic repair run with no session —
+ * same system-dispatcher shape as the helpers above.
+ */
+export function mintLifecycleRepairDispatchAuthority(orgId: string): OrgWriteAuthority {
+  return mintSystemWriteAuthority("agent-run-dispatch", orgId);
+}

@@ -98,12 +98,14 @@ vi.mock("@cinatra-ai/llm", () => ({
   buildA2aBearerToken: (...a: unknown[]) => buildA2aBearerToken(...(a as [])),
 }));
 
-const createAgentRun = vi.fn<(input: { id: string }) => Promise<unknown>>();
+// cinatra#1940 P3: createAgentRun now takes a REQUIRED trailing `authority`
+// param (the guarded creation perimeter); the mock forwards it.
+const createAgentRun = vi.fn<(input: { id: string }, authority?: unknown) => Promise<unknown>>();
 const readAgentTemplateByPackageName = vi.fn<(pkg: string) => Promise<unknown>>();
 const readLatestAgentVersionIdForTemplate = vi.fn<(id: string) => Promise<unknown>>();
 const transitionRunStatus = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
 vi.mock("@cinatra-ai/agents", () => ({
-  createAgentRun: (input: { id: string }) => createAgentRun(input),
+  createAgentRun: (input: { id: string }, authority?: unknown) => createAgentRun(input, authority),
   readAgentTemplateByPackageName: (pkg: string) => readAgentTemplateByPackageName(pkg),
   readLatestAgentVersionIdForTemplate: (id: string) =>
     readLatestAgentVersionIdForTemplate(id),
