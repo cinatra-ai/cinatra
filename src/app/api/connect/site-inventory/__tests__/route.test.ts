@@ -38,7 +38,13 @@ const {
     resolveSiteMock: vi.fn(),
     resolveInstanceMock: vi.fn(),
     readConnectorConfigMock: vi.fn(),
-    logAuditEventMock: vi.fn(async () => {}),
+    // Typed spy: the implementation's parameter type flows into `mock.calls`
+    // (Parameters<T>[]), so call-record assertions below need no casts. The
+    // shape is the structural subset of the real AuditEventInput this suite
+    // actually asserts on.
+    logAuditEventMock: vi.fn(
+      async (_input: { metadata?: { reason?: string } & Record<string, unknown> }) => {},
+    ),
     poolConnectMock: vi.fn(),
     clientQueryMock: vi.fn(async (text: string) => {
       if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK") return { rows: [] };
@@ -256,7 +262,7 @@ describe("POST /api/connect/site-inventory — pre-auth surface (generic 400, no
     expect(await res.json()).toEqual({ error: "invalid_request" });
     expect(tryAdvanceSiteInventoryMock).not.toHaveBeenCalled();
     const rejectCall = logAuditEventMock.mock.calls.find(
-      (c) => (c[0] as { metadata?: { reason?: string } }).metadata?.reason === "payload_too_large",
+      (c) => c[0].metadata?.reason === "payload_too_large",
     );
     expect(rejectCall).toBeDefined();
   });
