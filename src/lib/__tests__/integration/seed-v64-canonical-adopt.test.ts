@@ -4,7 +4,7 @@
  *
  *   DEFECT 1 (FK crash / adopt-not-shadow): the canonical-extension demo rows
  *   share a platform identity with the REAL bundled installs (code-reviewer-agent,
- *   assistant-skills — owner_id='__platform__', is_default=true). The pre-fix seed
+ *   chat-assistant-core-skill — owner_id='__platform__', is_default=true). The pre-fix seed
  *   claimed is_default=true, collided on installed_extension_one_default_platform_idx,
  *   was SILENTLY skipped by `ON CONFLICT DO NOTHING`, then resolved the dependency
  *   edge from an in-memory id that never landed → FK 23503 → the whole seed aborted.
@@ -40,7 +40,7 @@ const suite = dbUrl ? describe : describe.skip;
 
 const ORG_ACME = "org-acme-group";
 const CODE_REVIEWER = "@cinatra-ai/code-reviewer-agent";
-const ASSISTANT_SKILLS = "@cinatra-ai/assistant-skills";
+const ASSISTANT_CORE_SKILL = "@cinatra-ai/chat-assistant-core-skill";
 
 suite("cinatra#1238 demo-seed fix (real Postgres)", () => {
   let client: Client;
@@ -83,7 +83,7 @@ suite("cinatra#1238 demo-seed fix (real Postgres)", () => {
 
   it("DEFECT 1 — with a real bundled collision present, the seed COMPLETES, ADOPTS the bundled install as the edge target, and never shadows it", async () => {
     await insertBundledPlatformInstall("iext_bundled_crv", CODE_REVIEWER, "agent");
-    await insertBundledPlatformInstall("iext_bundled_skills", ASSISTANT_SKILLS, "skill");
+    await insertBundledPlatformInstall("iext_bundled_skills", ASSISTANT_CORE_SKILL, "skill");
 
     // The pre-fix code threw FK 23503 here. Must not throw now.
     await expect(
@@ -128,7 +128,7 @@ suite("cinatra#1238 demo-seed fix (real Postgres)", () => {
 
   it("DEFECT 1 — re-running the seed is idempotent (no duplicate rows/edges, still adopted)", async () => {
     await insertBundledPlatformInstall("iext_bundled_crv", CODE_REVIEWER, "agent");
-    await insertBundledPlatformInstall("iext_bundled_skills", ASSISTANT_SKILLS, "skill");
+    await insertBundledPlatformInstall("iext_bundled_skills", ASSISTANT_CORE_SKILL, "skill");
 
     await seedV64CanonicalDemo({ q: makeQ(schema), schema, orgAcmeId: ORG_ACME, log: () => {} });
     await seedV64CanonicalDemo({ q: makeQ(schema), schema, orgAcmeId: ORG_ACME, log: () => {} });

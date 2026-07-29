@@ -13,7 +13,7 @@ const REPO_ROOT = resolve(new URL("../..", import.meta.url).pathname);
 // Files where platform-level identity copy lives. If you add a new
 // identity surface, list it here.
 const IDENTITY_FILES = [
-  "extensions/cinatra-ai/assistant-skills/skills/chat-assistant-core/SKILL.md",
+  "extensions/cinatra-ai/chat-assistant-core-skill/skills/chat-assistant-core/SKILL.md",
   "src/app/api/chat/runner.ts",
   "packages/llm/src/mcp-access.ts",
   "packages/llm/src/tools/skills.ts",

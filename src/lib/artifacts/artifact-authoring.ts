@@ -4,7 +4,8 @@ import "server-only";
 // Chat-driven authoring-skill invocation.
 //
 // Server-side authoring emission. The chat assistant follows the
-// `chat-create-artifact` skill, gathers user inputs, composes the
+// chat-create-artifact guidance (a reference of the `chat-assistant-core`
+// router bundle), gathers user inputs, composes the
 // artifact content as markdown text, and calls the server through
 // the `artifact_authoring_emit` MCP primitive (or the
 // `createArtifactFromAuthoring` server action). This module is the

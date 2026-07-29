@@ -92,7 +92,7 @@ export function detectExplicitDispatchDirective(
     "include obvious prompt inputs in `inputParams` as a stringified JSON",
     "object). After dispatch returns `{ runId, status: \"queued\" }`, poll with",
     "`agent_run_get` until the run reaches `completed | failed | pending_approval | stopped`",
-    "(see the `chat-run-polling` skill).",
+    "(see the run-polling guidance in the `chat-assistant-core` skill's references).",
     "",
     "If dispatch returns a structured rejection (e.g. `WAYFLOW_AGENT_NOT_REGISTERED`),",
     "surface the `error` verbatim to the user and stop.",

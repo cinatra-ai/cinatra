@@ -23,24 +23,24 @@ import {
   type AssistantRuntimeConfig,
 } from "./ports";
 
-// The chat SKILL.md is split into focused sub-skills. The core skill
-// (`chat-assistant-core`, first) is the always-loaded system prompt; every
-// other sub-skill is mounted via the shell tool so the LLM reads
-// concern-specific guidance on demand. Order is load-bearing: skillBundle[0] is
-// the system skill. This IS the former `CHAT_SKILL_SLUGS`.
+// The chat guidance is delivered as five consolidated router bundles (the
+// assistant-skills S3 fold, cinatra#2090): each slug below is the single
+// router SKILL.md of one successor `kind:"skill"` extension, and the absorbed
+// sub-skill bodies ride as `references/*.md` beside the router, read on demand
+// via the shell tool (one hop). The core skill (`chat-assistant-core`, first)
+// is the always-loaded system prompt. Order is load-bearing: skillBundle[0]
+// is the system skill. This IS the former `CHAT_SKILL_SLUGS`.
+//
+// SIZE CONTRACT (#2188 merge-safety): keep this bundle at 5 slugs — at most 7.
+// The typed injection contract caps the resolved set at 8 INCLUDING the
+// personal delta, so 5 + delta = 6 ≤ 8 never truncates; a bundle larger than
+// 7 would let the cap silently drop assistant skills again. Pinned by
+// cinatra-assistant-config.test.ts.
 export const CINATRA_ASSISTANT_SKILL_BUNDLE = [
   "chat-assistant-core",
-  "chat-extension-authoring-core",
-  "chat-agent-authoring",
-  "chat-workflow-extension-authoring",
-  "chat-artifact-extension-authoring",
-  "chat-skill-extension-authoring",
-  "chat-agent-dispatch",
-  "chat-campaign-creation",
-  "chat-appointment-schedules",
-  "chat-run-polling",
-  "chat-create-artifact",
-  "chat-workflow-authoring",
+  "chat-extension-authoring",
+  "chat-automation-authoring",
+  "company-research",
   "blog-content",
 ] as const;
 

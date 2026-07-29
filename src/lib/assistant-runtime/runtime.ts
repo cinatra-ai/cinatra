@@ -36,6 +36,7 @@ import { createDeterministicSkillsClient } from "@cinatra-ai/skills/mcp-client";
 import {
   ensureInstalledSkillsRegistered,
   resolveInstalledSkillSourcePath,
+  retireSupersededChatSkillsOnce,
 } from "@cinatra-ai/skills";
 import { getAllStagedByType } from "@/lib/wizard-staging-store";
 import { getAllManifests } from "@/lib/wizard-manifest-registry";
@@ -272,16 +273,24 @@ async function loadSystemPromptFromDisk(systemSkillId: string): Promise<string |
 // `buildSkillTools` requires a registered skill to emit the shell tool; this
 // preflight is the load-bearing path that makes shell delivery work.
 //
-// All Cinatra chat sub-skills are co-located in the `assistant-skills`
-// extension package, so the generic, install/uninstall-aware batch resolver
-// materializes every co-located SKILL.md body into the catalog in a SINGLE scan
-// (`registerColocatedWorkspaceSkills` registers the whole providing package
-// once), while keeping each requested id independently retryable on a transient
-// upsert failure. The resolver memoizes successful registration per-id
-// per-process and drops the memo for an id that failed to register so a later
-// turn retries it, so this is safe to call every turn.
-function ensureAssistantSkillsRegistered(skillIds: string[]): Promise<void> {
-  return ensureInstalledSkillsRegistered(skillIds);
+// Each Cinatra chat router bundle is co-located in its own successor
+// `kind:"skill"` extension package (the cinatra#2090 S3 fold of the former
+// `assistant-skills` pack), so the generic, install/uninstall-aware batch
+// resolver materializes every requested bundle's SKILL.md body into the
+// catalog per providing package (`registerColocatedWorkspaceSkills` registers
+// a whole providing package once), while keeping each requested id
+// independently retryable on a transient upsert failure. The resolver
+// memoizes successful registration per-id per-process and drops the memo for
+// an id that failed to register so a later turn retries it, so this is safe
+// to call every turn.
+//
+// AFTER the successors register, the superseded `@cinatra-ai/chat:<old-slug>`
+// rows the retired pack left behind are retired by exact id (idempotent,
+// memoized, never throws) — the upsert-only store would keep them resolving
+// forever otherwise.
+async function ensureAssistantSkillsRegistered(skillIds: string[]): Promise<void> {
+  await ensureInstalledSkillsRegistered(skillIds);
+  await retireSupersededChatSkillsOnce();
 }
 
 async function loadSystemPrompt(

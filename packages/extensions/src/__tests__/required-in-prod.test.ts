@@ -34,7 +34,15 @@ describe("root package.json declares required extensions", () => {
     // Sanity: canonical system extensions are listed.
     expect(list).toContain("@cinatra-ai/nango-connector");
     expect(list).toContain("@cinatra-ai/security-reviewer-agent");
-    expect(list).toContain("@cinatra-ai/assistant-skills");
+    // The assistant-skills pack was consolidated (cinatra#2090 S3): its five
+    // injectable successors AND the internal hitl package (prod chat needs it
+    // at runtime) are all required in prod.
+    expect(list).toContain("@cinatra-ai/chat-assistant-core-skill");
+    expect(list).toContain("@cinatra-ai/extension-authoring-skill");
+    expect(list).toContain("@cinatra-ai/automation-authoring-skill");
+    expect(list).toContain("@cinatra-ai/company-research-skill");
+    expect(list).toContain("@cinatra-ai/blog-content-skill");
+    expect(list).toContain("@cinatra-ai/hitl-prompt-drive-skill");
   });
 
   it("reports false for non-required packages", () => {
