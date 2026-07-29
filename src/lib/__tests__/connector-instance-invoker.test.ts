@@ -22,6 +22,9 @@ import type { InstanceToolPolicyRecord } from "@cinatra-ai/mcp-server/instance-t
 // Real-signature spy type for the step-3 hook so `mock.calls` rows are
 // indexable, typed tuples.
 type DestructiveHookFire = NonNullable<ConnectorInstanceInvokerDeps["destructiveHook"]>["fire"];
+// Real-signature spy type for the step-3b content-review hook (cinatra#2022
+// S7 PR-σ) — same reasoning as DestructiveHookFire above.
+type ContentReviewHookFire = NonNullable<ConnectorInstanceInvokerDeps["contentReviewHook"]>["fire"];
 
 const ACTOR: InvokerTrustedActor = {
   actor: { principalType: "HumanUser", principalId: "u1", organizationId: "org1" } as never,
@@ -448,6 +451,226 @@ describe("invokeConnectorInstanceTool — destructive hook (step 3, cinatra#2020
       deps,
     ).catch((e: unknown) => e);
     expect((err as InvokerError).code).toBe("confirmation_unavailable");
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("invokeConnectorInstanceTool — content-review hook (step 3b, cinatra#2022 S7 PR-σ slot)", () => {
+  it("fires the hook when enabled AND the resolved tool is non-read (write-classified); an explicit continue verdict executes", async () => {
+    const fire = vi.fn<ContentReviewHookFire>(async () => ({ action: "continue" as const }));
+    const { deps, callWireTool } = makeDeps({ contentReviewHook: { enabled: () => true, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "content/update-thing" }]));
+    await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "content/update-thing", args: {}, actor: ACTOR },
+      deps,
+    );
+    expect(fire).toHaveBeenCalledTimes(1);
+    expect(callWireTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT fire for a read-classified tool", async () => {
+    const fire = vi.fn<ContentReviewHookFire>(async () => ({ action: "continue" as const }));
+    const { deps } = makeDeps({ contentReviewHook: { enabled: () => true, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "safe", rawAnnotations: { readOnlyHint: true } }]));
+    await invokeConnectorInstanceTool({ connectorKey: "wordpress", toolName: "safe", args: {}, actor: ACTOR }, deps);
+    expect(fire).not.toHaveBeenCalled();
+  });
+
+  it("absent hook (deps.contentReviewHook undefined) — never called, executes (identical to today)", async () => {
+    const { deps, callWireTool } = makeDeps();
+    deps.cache.set("inst-1", triadSnapshot([{ name: "content/update-thing" }]));
+    await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "content/update-thing", args: {}, actor: ACTOR },
+      deps,
+    );
+    expect(callWireTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("enabled() false → never fires, executes (the S2/S5 kill-switch semantics mirrored)", async () => {
+    const fire = vi.fn<ContentReviewHookFire>(async () => ({ action: "continue" as const }));
+    const { deps, callWireTool } = makeDeps({ contentReviewHook: { enabled: () => false, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "content/update-thing" }]));
+    await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "content/update-thing", args: {}, actor: ACTOR },
+      deps,
+    );
+    expect(fire).not.toHaveBeenCalled();
+    expect(callWireTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("a synchronously-throwing enabled() propagates uncaught, BEFORE any wire call (same latent posture step 3's destructive hook already has)", async () => {
+    const fire = vi.fn<ContentReviewHookFire>(async () => ({ action: "continue" as const }));
+    const enabled = () => {
+      throw new Error("enabled() blew up");
+    };
+    const { deps, callWireTool } = makeDeps({ contentReviewHook: { enabled, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "content/update-thing" }]));
+    const err = await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "content/update-thing", args: {}, actor: ACTOR },
+      deps,
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("enabled() blew up");
+    expect(fire).not.toHaveBeenCalled();
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+
+  it("an unrecognized verdict `action` at runtime (outside the TS contract) executes — SAME posture as step 3's `action === \"park\"`-only check", async () => {
+    // A misbehaving hook impl (a JS caller unchecked by the TS contract) resolving
+    // an unknown action shape. TypeScript's contract, not a runtime tag switch, is
+    // the real guard on both hooks (documented explicitly on the deps-literal).
+    const fire = vi.fn<ContentReviewHookFire>(
+      async () => ({ action: "unknown-verdict" }) as unknown as Awaited<ReturnType<ContentReviewHookFire>>,
+    );
+    const { deps, callWireTool } = makeDeps({ contentReviewHook: { enabled: () => true, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "content/update-thing" }]));
+    const result = await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "content/update-thing", args: {}, actor: ACTOR },
+      deps,
+    );
+    expect(result).toEqual({ success: true, data: { ok: 1 } });
+    expect(callWireTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("BLOCKS on a hold verdict: typed content_review_hold, verdict-message passthrough, holdId threaded onto the error, NO wire call, NO step-5 audit", async () => {
+    const fire = vi.fn<ContentReviewHookFire>(async () => ({
+      action: "hold" as const,
+      holdId: "crh_x1",
+      message: "held pending content review",
+    }));
+    const { deps, callWireTool, audit } = makeDeps({ contentReviewHook: { enabled: () => true, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "content/update-thing" }]));
+    const err = await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "content/update-thing", args: { id: 1 }, actor: ACTOR },
+      deps,
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InvokerError);
+    expect((err as InvokerError).code).toBe("content_review_hold");
+    expect((err as InvokerError).message).toBe("held pending content review");
+    expect((err as InvokerError).reviewHoldId).toBe("crh_x1");
+    expect(callWireTool).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("BLOCKS on a reject verdict: typed content_review_rejected, NO wire call", async () => {
+    const fire = vi.fn<ContentReviewHookFire>(async () => ({
+      action: "reject" as const,
+      message: "rejected — needs rework",
+    }));
+    const { deps, callWireTool } = makeDeps({ contentReviewHook: { enabled: () => true, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "content/update-thing" }]));
+    const err = await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "content/update-thing", args: {}, actor: ACTOR },
+      deps,
+    ).catch((e: unknown) => e);
+    expect((err as InvokerError).code).toBe("content_review_rejected");
+    expect((err as InvokerError).message).toBe("rejected — needs rework");
+    expect((err as InvokerError).reviewHoldId).toBeUndefined();
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+
+  it("a continue verdict executes normally and the ordinary step-5 audit still fires", async () => {
+    const fire = vi.fn<ContentReviewHookFire>(async () => ({ action: "continue" as const, reason: "not_content_classified" }));
+    const { deps, callWireTool, audit } = makeDeps({ contentReviewHook: { enabled: () => true, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "content/update-thing" }]));
+    const result = await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "content/update-thing", args: {}, actor: ACTOR },
+      deps,
+    );
+    expect(result).toEqual({ success: true, data: { ok: 1 } });
+    expect(callWireTool).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledTimes(1);
+  });
+
+  it("ORDERING: a destructive PARK short-circuits before step 3b — the content-review hook never fires", async () => {
+    const destructiveFire = vi.fn<DestructiveHookFire>(async () => ({
+      action: "park" as const,
+      pendingCallId: "cipc_z1",
+      expiresAt: "2026-07-28T10:15:00.000Z",
+      message: `${PENDING_CONFIRMATION_MESSAGE_PREFIX} parked`,
+    }));
+    const reviewFire = vi.fn<ContentReviewHookFire>(async () => ({ action: "hold" as const, holdId: "crh_z1", message: "held" }));
+    const { deps, callWireTool } = makeDeps({
+      destructiveHook: { enabled: () => true, fire: destructiveFire },
+      contentReviewHook: { enabled: () => true, fire: reviewFire },
+    });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "danger", rawAnnotations: { destructiveHint: true } }]));
+    const err = await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "danger", args: {}, actor: ACTOR },
+      deps,
+    ).catch((e: unknown) => e);
+    expect((err as InvokerError).code).toBe("pending_confirmation");
+    expect(destructiveFire).toHaveBeenCalledTimes(1);
+    expect(reviewFire).not.toHaveBeenCalled(); // step 3b never reached
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+
+  it("ORDERING: a destructive CONTINUE lets step 3b still evaluate — both hooks fire in order for an overlapping call", async () => {
+    const destructiveFire = vi.fn<DestructiveHookFire>(async () => ({ action: "continue" as const, reason: "org_disabled" }));
+    const reviewFire = vi.fn<ContentReviewHookFire>(async () => ({ action: "continue" as const }));
+    const { deps, callWireTool } = makeDeps({
+      destructiveHook: { enabled: () => true, fire: destructiveFire },
+      contentReviewHook: { enabled: () => true, fire: reviewFire },
+    });
+    // "danger" is destructive-annotated (non-read) so BOTH triggers match.
+    deps.cache.set("inst-1", triadSnapshot([{ name: "danger", rawAnnotations: { destructiveHint: true } }]));
+    await invokeConnectorInstanceTool({ connectorKey: "wordpress", toolName: "danger", args: {}, actor: ACTOR }, deps);
+    expect(destructiveFire).toHaveBeenCalledTimes(1);
+    expect(reviewFire).toHaveBeenCalledTimes(1);
+    expect(callWireTool).toHaveBeenCalledTimes(1);
+    // step 3 ran strictly before step 3b (call-order proof, not just call counts).
+    const destructiveOrder = destructiveFire.mock.invocationCallOrder[0];
+    const reviewOrder = reviewFire.mock.invocationCallOrder[0];
+    expect(destructiveOrder).toBeLessThan(reviewOrder);
+  });
+
+  it("fire input carries the full call material: args, class, surface, endpoint (no auth header), tool-shape, correlation", async () => {
+    const fire = vi.fn<ContentReviewHookFire>(async () => ({ action: "continue" as const }));
+    const { deps } = makeDeps({ contentReviewHook: { enabled: () => true, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "content/update-thing", rawAnnotations: { foo: "bar" } }]));
+    await invokeConnectorInstanceTool(
+      {
+        connectorKey: "wordpress",
+        toolName: "content/update-thing",
+        args: { id: 3 },
+        actor: ACTOR,
+        sourceType: "agent_run",
+        causation: "run-1",
+        intent: "publish",
+      },
+      deps,
+    );
+    expect(fire.mock.calls[0][0]).toMatchObject({
+      connectorKey: "wordpress",
+      instanceId: "inst-1",
+      serverId: CATALOG_DEFAULT_SERVER_ID,
+      toolName: "content/update-thing",
+      args: { id: 3 },
+      derivedClass: "write",
+      sourceType: "agent_run",
+      endpointUrl: "https://site/x",
+      inputSchema: {},
+      rawAnnotations: { foo: "bar" },
+      intent: "publish",
+      primitiveName: "connector_instance_tool_call",
+      catalogRevision: "rev-1",
+      causation: "run-1",
+    });
+    const serialized = JSON.stringify(fire.mock.calls[0][0]);
+    expect(serialized).not.toContain("Basic zzz"); // the resolved auth header must never leak into the hook input
+  });
+
+  it("a typed refusal thrown inside fire (content_review_unavailable) propagates fail-closed — no wire call", async () => {
+    const fire = vi.fn<ContentReviewHookFire>(async () => {
+      throw new InvokerError("content_review_unavailable", "review subsystem unavailable — the call was NOT executed");
+    });
+    const { deps, callWireTool } = makeDeps({ contentReviewHook: { enabled: () => true, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "content/update-thing" }]));
+    const err = await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: "content/update-thing", args: {}, actor: ACTOR },
+      deps,
+    ).catch((e: unknown) => e);
+    expect((err as InvokerError).code).toBe("content_review_unavailable");
     expect(callWireTool).not.toHaveBeenCalled();
   });
 });

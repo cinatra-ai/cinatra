@@ -727,9 +727,10 @@ describe("conformance-gate — cinatra.views (fail-closed at publish)", () => {
 // vocabularies are DERIVED from the live leaf.
 // ---------------------------------------------------------------------------
 
-// A valid v1 declaration mirroring the anthropic build-known catalog entry.
+// A valid v2 declaration mirroring the anthropic build-known catalog entry
+// (ABI v2 per cinatra#2093, epic #2086 S6 — adds the two setup-time flags).
 const validLlmProvider = {
-  abiVersion: 1,
+  abiVersion: 2,
   provider: "anthropic",
   capabilities: {
     function_tools: true,
@@ -737,6 +738,8 @@ const validLlmProvider = {
     native_mcp: { status: "native", approval: "unsupported" },
   },
   models: { default: "claude-sonnet-4-6", allowed: ["claude-sonnet-4-6", "claude-opus-4-7"] },
+  defaultCapable: true,
+  wizardEligible: true,
 };
 function connectorWithLlmProvider(llmProvider) {
   return cleanConnectorFiles({ pkg: { cinatra: { ...CLEAN_CONNECTOR_PKG.cinatra, llmProvider } } });
@@ -747,7 +750,7 @@ const llmProviderBlockingRules = (result) =>
 describe("conformance-gate — cinatra.llmProvider derivation + leaf parity (cinatra#1712)", () => {
   it("derives the llmProvider ABI version + vocabularies from live leaf source", () => {
     expect(UI_RULES.ok).toBe(true);
-    expect(UI_RULES.llmProviderAbiVersion).toBe(1);
+    expect(UI_RULES.llmProviderAbiVersion).toBe(2);
     expect([...UI_RULES.llmProviders].sort()).toEqual(["anthropic", "gemini", "openai"]);
     expect(UI_RULES.llmCapabilities).toEqual(["media_input", "function_tools", "native_mcp"]);
     expect([...UI_RULES.nativeMcpStatuses].sort()).toEqual(["dormant", "native", "unsupported"]);
@@ -778,7 +781,7 @@ describe("conformance-gate — cinatra.llmProvider (optional; fail-closed at pub
     rmSync(pkgDir, { recursive: true, force: true });
   });
 
-  it("conforms cleanly with a valid v1 llmProvider block", () => {
+  it("conforms cleanly with a valid v2 llmProvider block", () => {
     const pkgDir = writeFixture(connectorWithLlmProvider(validLlmProvider));
     const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
     expect(result.infra).toBe(false);
@@ -788,10 +791,67 @@ describe("conformance-gate — cinatra.llmProvider (optional; fail-closed at pub
   });
 
   it("flags a wrong abiVersion (derived, fail-closed)", () => {
-    const pkgDir = writeFixture(connectorWithLlmProvider({ ...validLlmProvider, abiVersion: 2 }));
+    const pkgDir = writeFixture(connectorWithLlmProvider({ ...validLlmProvider, abiVersion: 3 }));
     const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
     expect(result.conform).toBe(false);
     expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-abi-version");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  // cinatra#2093 (epic #2086 S6) — the ABI v2 flags. PUBLISH is fail-closed on
+  // v1 even though the HOST transitionally accepts an allowlisted v1 block:
+  // a release is exactly the moment a connector can and must carry v2, and this
+  // is the one door the v1-retirement ratchet exists to close.
+  it("flags a RETIRING v1 block at publish (the host-side allowlist is not honoured here)", () => {
+    const { defaultCapable: _dc, wizardEligible: _we, ...v1 } = validLlmProvider;
+    const pkgDir = writeFixture(connectorWithLlmProvider({ ...v1, abiVersion: 1, provider: "gemini", models: { default: "g", allowed: ["g"] } }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-abi-version");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a MISSING v2 flag", () => {
+    const { wizardEligible: _omitted, ...noFlag } = validLlmProvider;
+    const pkgDir = writeFixture(connectorWithLlmProvider(noFlag));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-flag-type");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a NON-BOOLEAN v2 flag (no truthiness coercion)", () => {
+    const pkgDir = writeFixture(connectorWithLlmProvider({ ...validLlmProvider, defaultCapable: "true" }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-flag-type");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags the INCOHERENT wizardEligible-without-defaultCapable combination", () => {
+    const pkgDir = writeFixture(
+      connectorWithLlmProvider({ ...validLlmProvider, defaultCapable: false, wizardEligible: true }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-wizard-subset");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("accepts the GEMINI matrix (defaultCapable true, wizardEligible false)", () => {
+    const pkgDir = writeFixture(
+      connectorWithLlmProvider({
+        ...validLlmProvider,
+        provider: "gemini",
+        capabilities: { function_tools: true, media_input: true, native_mcp: { status: "unsupported" } },
+        models: { default: "gemini-3.5-flash", allowed: ["gemini-3.5-flash"] },
+        defaultCapable: true,
+        wizardEligible: false,
+      }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(llmProviderBlockingRules(result)).toEqual([]);
+    expect(result.conform).toBe(true);
     rmSync(pkgDir, { recursive: true, force: true });
   });
 

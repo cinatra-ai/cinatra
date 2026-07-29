@@ -21,6 +21,25 @@ import type { WidgetPrincipal } from "../widget-principal";
 
 // --- capture whether the NON-scripted adapter-resolution path was taken ------
 const resolveDefaultAdapter = vi.fn(async () => null as unknown);
+// S6 exact binding (cinatra#2093): the runtime now resolves through the
+// THROWING variant. This test's subject is the scripted short-circuit — it
+// asserts the adapter path is never REACHED — so the stub simply records the
+// call and throws the named error the real resolver would.
+// `vi.hoisted` so the error class exists before the hoisted `vi.mock` factory
+// runs, and so the stub throws the SAME class the mock exports (the runtime
+// branches on `instanceof` to render its fail-closed frame).
+const { BoundDefaultProviderUnavailableError } = vi.hoisted(() => ({
+  BoundDefaultProviderUnavailableError: class BoundDefaultProviderUnavailableError extends Error {},
+}));
+// Mirrors the REAL semantics: resolve the stored provider, and THROW the named
+// error only when it is unavailable. Delegating to `resolveDefaultAdapter` keeps
+// every existing per-test knob (`mockResolvedValueOnce`, the
+// `not.toHaveBeenCalled()` short-circuit assertions) working unchanged.
+const resolveBoundDefaultAdapter = vi.fn(async () => {
+  const adapter = await resolveDefaultAdapter();
+  if (!adapter) throw new BoundDefaultProviderUnavailableError("No LLM provider configured.");
+  return adapter;
+});
 const stream = vi.fn((..._args: unknown[]) => Promise.resolve(undefined));
 
 vi.mock("@/lib/register-host-connector-services", () => ({}));
@@ -52,6 +71,8 @@ vi.mock("@cinatra-ai/llm", () => ({
   hasConfiguredLlmRuntime: vi.fn(async () => false),
   checkPublicMcpReachability: vi.fn(async () => ({ status: "reachable", url: "https://mcp.example.test/api/mcp" })),
   resolveDefaultAdapter: () => resolveDefaultAdapter(),
+  resolveBoundDefaultAdapter: () => resolveBoundDefaultAdapter(),
+  BoundDefaultProviderUnavailableError,
   stream: (...a: unknown[]) => stream(...a),
   // cinatra#2091 S4: skill delivery runs through the provider seam.
   selectSkillDeliveryAdapter: vi.fn(() => ({
@@ -108,6 +129,7 @@ afterEach(() => {
 describe("runAssistantTurn scripted-provider short-circuit (widget path)", () => {
   beforeEach(() => {
     resolveDefaultAdapter.mockClear();
+    resolveBoundDefaultAdapter.mockClear();
     stream.mockClear();
   });
 

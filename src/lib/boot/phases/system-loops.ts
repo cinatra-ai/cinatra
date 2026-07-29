@@ -616,6 +616,59 @@ export function systemLoopPhases(): BootPhase[] {
       },
     },
     {
+      name: "seed-lease-expiry-finalizer",
+      policy: "retryable",
+      run: async () => {
+        // Seed the lease-expiry finalizer sweep (cinatra#1940 P4).
+        // The sweep NEVER runs at boot — boot only creates this delayed job;
+        // the worker handler settles EXPIRED org_archive_lease rows (durable
+        // runtime cancel with retry/escalation, then the audited fence
+        // settle) and self-reschedules at ~60s cadence via moveToDelayed.
+        //
+        // The finalizer core is registered here (boot-only graph) through the
+        // runner slot rather than imported into background-jobs-registry —
+        // same route-graph-ratchet posture as the sweep runners above: the
+        // registry sits in the LOCKED dev-perf routes' graph, so the org-write
+        // kernel fence + A2A cancel + agents store graph must not be
+        // reachable (even dynamically) from it. Register BEFORE seeding so
+        // the loop never observes an empty slot on a healthy boot.
+        const { registerLeaseExpiryFinalizerRunner } = await import(
+          "@/lib/background-jobs-registry"
+        );
+        const { runLeaseExpiryFinalizerSweep } = await import(
+          "@cinatra-ai/agents/lease-expiry-finalizer"
+        );
+        registerLeaseExpiryFinalizerRunner({
+          sweep: () => runLeaseExpiryFinalizerSweep(),
+        });
+        const { enqueueBackgroundJob, BACKGROUND_JOB_NAMES } = await import(
+          "@/lib/background-jobs"
+        );
+        // Imported directly from the leaf constants module (not the
+        // `background-jobs` barrel re-export) — the barrel sits at its
+        // file-size ceiling and this leaf is already reachable from this
+        // same boot phase via `background-jobs-registry`'s static import
+        // above, so this adds no new route-graph edge.
+        const { LEASE_EXPIRY_FINALIZE_LOOP_JOB_ID } = await import(
+          "@/lib/background-jobs-names"
+        );
+        await enqueueBackgroundJob(
+          BACKGROUND_JOB_NAMES.LEASE_EXPIRY_FINALIZE,
+          {},
+          {
+            jobId: LEASE_EXPIRY_FINALIZE_LOOP_JOB_ID,
+            delay: 60 * 1000, // 60s
+            overwriteIfStale: true,
+            skipWorker: true,
+            inheritActorContext: false,
+          },
+        );
+        console.log(
+          "[lease-expiry-finalizer] ~60-second lease-expiry sweep loop scheduled (60s delay)",
+        );
+      },
+    },
+    {
       name: "eager-background-worker",
       policy: "degraded",
       run: async () => {

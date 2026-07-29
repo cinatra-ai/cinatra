@@ -51,6 +51,11 @@ export {
   invalidateLeasesBeforeEpochQuery,
   settleLeaseForRunStatement,
   settleLeaseForRunQuery,
+  sweepExpiredLeasesQuery,
+  incrementLeaseFinalizeAttemptsQuery,
+  escalateLeaseFinalizeQuery,
+  leaseStillExpiredQuery,
+  expiredLeaseForUpdateStatement,
 } from "./leases";
 export {
   type OrgWriteAuthority,

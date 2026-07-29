@@ -23,6 +23,25 @@
  * and hands them in, so this stays a pure render (unit-testable without a DB).
  * ARCHIVE ships via the #1510 archive program — substrate dark since S1
  * (cinatra#1937); S6 (cinatra#1942) mounts its controls here.
+ *
+ * Read-only posture while archived (cinatra#1942 V4): when
+ * `isArchived`, the Settings and Members & invitations cards still render
+ * (so an owner can see what they'd be editing) but their interactive
+ * controls are neutralized via a wrapping `<fieldset disabled inert>`:
+ * `disabled` cascades to every descendant NATIVE form control, and `inert`
+ * additionally blocks ALL interaction (clicks, focus, anchors, `asChild`
+ * triggers) in the subtree — so a Radix portal (Select dropdown,
+ * AlertDialog, invite dialog) can never even be OPENED from a read-only
+ * card, without this component needing to know the internals of
+ * `OrganizationSettingsForm` / `OrganizationMembersManager`. This is the UI
+ * AFFORDANCE layer only (hide/disable sits ON TOP of authority); the actual
+ * SERVER ACTION rejection while archived is a separate, later authority
+ * change to `organization-manage-actions.ts` (out of V4's scope).
+ * Deliberately unaffected: Teams & projects (global navigation links to the
+ * /teams and /projects list surfaces, not org-scoped mutations) and the
+ * Danger zone — delete stays reachable while archived BY DESIGN (the
+ * archive program's end state is archived-only delete; the delete action's
+ * own server gate owns its state semantics).
  */
 import Link from "next/link";
 
@@ -58,6 +77,12 @@ export type OrganizationManagePanelProps = {
   readonly deleteBlockers?: OrganizationDeleteBlockers;
   readonly members: readonly OrganizationManageMember[];
   readonly invitations: readonly OrganizationPendingInvitation[];
+  /**
+   * `archivedAt !== null` on the viewed org (cinatra#1942 V4). Disables the
+   * Settings and Members & invitations form controls (read-only posture);
+   * defaults to `false` so every pre-#1942 call site is unaffected.
+   */
+  readonly isArchived?: boolean;
 };
 
 export function OrganizationManagePanel({
@@ -71,6 +96,7 @@ export function OrganizationManagePanel({
   deleteBlockers,
   members,
   invitations,
+  isArchived = false,
 }: OrganizationManagePanelProps) {
   return (
     <div className="flex flex-col gap-6" data-cinatra-org-manage="true">
@@ -81,13 +107,27 @@ export function OrganizationManagePanel({
             <CardDescription>
               Rename {orgName || "this organization"} or change its slug.
             </CardDescription>
+            {isArchived ? (
+              <p
+                data-cinatra-org-manage-readonly="settings"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Read-only — this organization is archived.
+              </p>
+            ) : null}
           </CardHeader>
           <CardContent>
-            <OrganizationSettingsForm
-              organizationId={organizationId}
-              currentName={orgName}
-              currentSlug={currentSlug}
-            />
+            <fieldset
+              disabled={isArchived}
+              inert={isArchived}
+              className="m-0 min-w-0 border-0 p-0"
+            >
+              <OrganizationSettingsForm
+                organizationId={organizationId}
+                currentName={orgName}
+                currentSlug={currentSlug}
+              />
+            </fieldset>
           </CardContent>
         </Card>
       ) : null}
@@ -99,14 +139,28 @@ export function OrganizationManagePanel({
             <CardDescription>
               Change roles, remove members, and manage pending invitations.
             </CardDescription>
+            {isArchived ? (
+              <p
+                data-cinatra-org-manage-readonly="members"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Read-only — this organization is archived.
+              </p>
+            ) : null}
           </CardHeader>
           <CardContent>
-            <OrganizationMembersManager
-              organizationId={organizationId}
-              currentUserId={currentUserId}
-              members={members}
-              invitations={invitations}
-            />
+            <fieldset
+              disabled={isArchived}
+              inert={isArchived}
+              className="m-0 min-w-0 border-0 p-0"
+            >
+              <OrganizationMembersManager
+                organizationId={organizationId}
+                currentUserId={currentUserId}
+                members={members}
+                invitations={invitations}
+              />
+            </fieldset>
           </CardContent>
         </Card>
       ) : null}

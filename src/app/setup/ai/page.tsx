@@ -1,31 +1,52 @@
 // Deeplink: Initial setup wizard AI-provider step; navigated to from setup orchestration, not from app chrome.
+//
+// PROVIDER-AGNOSTIC AI STEP (cinatra#2093, epic #2086 S6).
+//
+// Before S6 this page WAS the OpenAI connection form: the wizard hardcoded one
+// provider, and "the key is saved" was treated as "setup is done". Now it is an
+// orchestrator over the WIZARD-ELIGIBLE providers (declared via
+// `cinatra.llmProvider` ABI v2 `wizardEligible`):
+//
+//   1. offer the eligible providers and record the owner's pick;
+//   2. render THAT provider's own connection form;
+//   3. run the READINESS SAGA, which is the only thing that commits
+//      `llm_default_provider` — and only after proving the provider works
+//      (on Anthropic: bulk consent + strict initial sync + a native-skills
+//      probe against an actually-uploaded revision);
+//   4. show the resulting receipt, or the actionable failure + fix-forward.
+//
+// Gemini is deliberately NOT offered here (`wizardEligible: false`): it is a
+// perfectly valid global default, but admin-configured after setup.
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Check, TriangleAlert } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { FieldGroup, Field, FieldLabel } from "@/components/ui/field";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-import { saveOpenAIConnectionAction } from "@/app/campaigns/actions";
-import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
-import { readOpenAIConnection } from "@/lib/openai-connection-store";
+import { buildKnownWizardEligibleProviders } from "@cinatra-ai/sdk-extensions/llm-provider-contract";
 import { getSetupWizardSteps, getFirstIncompleteStep } from "@/lib/setup-wizard";
-// Every OpenAI reader resolves through the `llm-provider-surface` capability
-// the openai connector registers at activation (lazy/guarded host-access
-// cutover). Connector absent → the degraded info state below
-// replaces the connection form.
 import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
+import { readSetupReadinessState, readAnthropicMcpMode } from "@/lib/setup-readiness-saga";
+import { describeMatcherProviderConstraint } from "@/lib/llm-purpose-policy";
+import {
+  SETUP_CREDENTIAL_SAVE_STEP_ID,
+  readSetupProviderSelection,
+  readSetupReadinessFailure,
+} from "@/app/setup/ai/readiness-state";
+import {
+  selectSetupProviderAction,
+  completeAiSetupAction,
+  enableAnthropicNativeSkillDeliveryAction,
+} from "@/app/setup/ai/actions";
+import { SetupOpenAIProviderStep } from "@/app/setup/ai/openai-provider-step";
+import { SetupAnthropicProviderStep } from "@/app/setup/ai/anthropic-provider-step";
 
 export const metadata: Metadata = { title: "Setup: AI" };
 
-// "Standard" is the human label of the "default" tier (see OPENAI_SERVICE_TIER_OPTIONS).
-const REQUIRED_SERVICE_TIER = "default" as const;
-
-type SetupOpenAIPageProps = {
+type SetupAiPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
@@ -33,200 +54,193 @@ function pickSearchParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
 
-export default async function SetupOpenAIPage({ searchParams }: SetupOpenAIPageProps) {
-  const resolvedSearchParams = await (searchParams ?? Promise.resolve({} as Record<string, string | string[] | undefined>));
-  const openAISurface = getLlmProviderSurface("openai");
-  if (!openAISurface) {
-    // Degraded mode: the openai connector is not installed/active on this
-    // host. Render an explanatory state instead of a connection form that
-    // could never validate or save.
-    return (
-      <div className="flex flex-col gap-6">
-        <div>
-          <p className="text-base font-semibold text-foreground">OpenAI credentials</p>
-        </div>
-        <Alert>
-          <AlertTitle>OpenAI connector unavailable</AlertTitle>
-          <AlertDescription>
-            The OpenAI connector extension is not installed or active on this instance, so the
-            default LLM provider cannot be configured here. Install/activate it (or configure a
-            different provider in Administration) and reload this step.
-          </AlertDescription>
-        </Alert>
-      </div>
-    );
-  }
-  const connection = readOpenAIConnection();
-  const configuredConnection = (await openAISurface.getConfiguredConnection?.(
-    connection ?? undefined,
-  )) as { apiKey?: string; projectId?: string; organizationId?: string; availableModels?: string[]; serviceTier?: string; defaultModel?: string } | null | undefined;
-  const isConnected =
-    openAISurface.isConnectionReady?.(configuredConnection ?? connection ?? undefined) === true;
-  const hasApiKey = Boolean(configuredConnection?.apiKey || connection?.apiKey);
-  const errorMessage = pickSearchParam(resolvedSearchParams.error);
+const PROVIDER_COPY: Record<string, { label: string; blurb: string }> = {
+  openai: {
+    label: "OpenAI",
+    blurb:
+      "Runs the assistant, agents and skill generation. Also the only provider that can run automatic skill matching today.",
+  },
+  anthropic: {
+    label: "Anthropic",
+    blurb:
+      "Runs the assistant, agents and skill generation, and delivers your skills natively to Claude. Setup uploads your installed skills to your Anthropic workspace — you will be asked to confirm.",
+  },
+};
+
+export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
+  const resolvedSearchParams = await (searchParams ??
+    Promise.resolve({} as Record<string, string | string[] | undefined>));
   const stay = pickSearchParam(resolvedSearchParams.stay) === "1";
 
-  let availableModels = connection?.availableModels ?? configuredConnection?.availableModels ?? [];
-  if (configuredConnection?.apiKey) {
-    try {
-      const fetchedModels = await openAISurface.listAvailableModels?.({
-        projectId: configuredConnection.projectId,
-        organizationId: configuredConnection.organizationId,
-      });
-      if (fetchedModels && fetchedModels.length > 0) {
-        availableModels = fetchedModels;
-      }
-    } catch {
-      // Keep the last validated model list if the live refresh fails.
-    }
-  }
-  availableModels = openAISurface.filterVisibleModels?.(availableModels) ?? availableModels;
-  const selectableModels = new Set(
-    openAISurface.filterSelectableModels?.(availableModels) ?? availableModels,
-  );
+  const eligible = buildKnownWizardEligibleProviders();
+  const selected = readSetupProviderSelection();
+  const readiness = readSetupReadinessState();
+  const failure = readSetupReadinessFailure();
+  // A CREDENTIAL-SAVE failure is rendered by the provider's own form section
+  // (the control the operator used); the readiness alert reports on saga runs.
+  const readinessFailure =
+    failure && failure.step !== SETUP_CREDENTIAL_SAVE_STEP_ID ? failure : null;
+  // A `native-skills-probe` failure whose cause is the `function-tools` MCP
+  // mode is the one readiness failure with a remedy the wizard can PERFORM.
+  // (The same step can also fail with the mode already native — a workspace
+  // without custom skills enabled — and that one has no in-product remedy, so
+  // no control is offered.) Gate on the STORED mode, the authority the saga
+  // itself reads; the action re-checks the same condition before mutating.
+  const offerNativeMcpSwitch =
+    selected === "anthropic" &&
+    readinessFailure?.step === "native-skills-probe" &&
+    readAnthropicMcpMode() === "function-tools";
 
-  // Auto-forward to next incomplete step unless the operator explicitly came
-  // back here via the stepper (?stay=1) or there's an error to surface.
+  // Auto-forward once the step is genuinely done (a VALID receipt — not merely
+  // a saved key), unless the operator came back via the stepper or a readiness
+  // failure is still standing.
+  //
+  // The suppression keys off the DURABLE failure record rather than an `?error`
+  // param: the failure is real state the operator has to act on, not a
+  // one-shot flash. The transient flash itself goes through the wizard's
+  // codes-only <SearchParamToast> (see setup-flash.ts) — this page never reads
+  // notification text from the URL.
   const steps = await getSetupWizardSteps();
   const nextStep = getFirstIncompleteStep(steps);
-  if (isConnected && !errorMessage && !stay) {
+  if (readiness.ready && !failure && !stay) {
     if (!nextStep || nextStep.id !== "ai") {
       redirect(nextStep?.href ?? "/setup/complete");
     }
   }
-  const continueHref =
-    !nextStep || nextStep.id === "ai" ? "/setup/complete" : nextStep.href;
-
-  const lockedServiceTier = REQUIRED_SERVICE_TIER;
+  const continueHref = !nextStep || nextStep.id === "ai" ? "/setup/complete" : nextStep.href;
 
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <p className="text-base font-semibold text-foreground">OpenAI credentials</p>
+        <p className="text-base font-semibold text-foreground">Choose your AI provider</p>
         <p className="mt-0.5 text-sm text-muted-foreground">
-          Configure your secret key, project, and organization from platform.openai.com.
+          Cinatra runs on one provider by default. You can add and switch providers later in
+          Administration.
         </p>
       </div>
 
-      <p className="text-sm text-muted-foreground">
-        OpenAI is the default LLM provider for Cinatra. After setup, you can update this OpenAI
-        configuration and add other providers (Anthropic, Gemini, etc.) in Administration.
-      </p>
+      {/* Step 1 — the choice. */}
+      <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
+        <p className="text-base font-semibold text-foreground">Provider</p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          {eligible.map((provider) => {
+            const copy = PROVIDER_COPY[provider] ?? { label: provider, blurb: "" };
+            const installed = getLlmProviderSurface(provider) !== null;
+            const isSelected = selected === provider;
+            return (
+              <form action={selectSetupProviderAction} key={provider}>
+                <Input type="hidden" name="provider" value={provider} />
+                <Button
+                  type="submit"
+                  variant="outline"
+                  disabled={!installed}
+                  aria-pressed={isSelected}
+                  data-testid={`setup-provider-${provider}`}
+                  className={[
+                    "h-auto w-full flex-col items-start gap-1 whitespace-normal rounded-card border p-4 text-left",
+                    isSelected ? "border-primary bg-primary/5" : "border-line hover:border-primary/50",
+                  ].join(" ")}
+                >
+                  <span className="flex w-full items-center justify-between">
+                    <span className="text-sm font-semibold text-foreground">{copy.label}</span>
+                    {isSelected ? <Check className="size-4 text-primary" aria-hidden /> : null}
+                  </span>
+                  <span className="block text-xs font-normal text-muted-foreground">
+                    {installed
+                      ? copy.blurb
+                      : `The ${copy.label} connector is not installed or active on this instance.`}
+                  </span>
+                </Button>
+              </form>
+            );
+          })}
+        </div>
+      </section>
 
-      {isConnected ? (
+      {/* Step 2 — the chosen provider's own connection form. */}
+      {selected === "openai" ? (
+        <SetupOpenAIProviderStep searchParams={searchParams} />
+      ) : selected === "anthropic" ? (
+        <SetupAnthropicProviderStep />
+      ) : (
         <Alert>
-          <AlertTitle>OpenAI connection saved</AlertTitle>
+          <AlertTitle>Pick a provider to continue</AlertTitle>
           <AlertDescription>
-            Your OpenAI API key, as well as the project and organization ID and other administration
-            have been configured.
+            Choose OpenAI or Anthropic above, then enter that provider&apos;s credentials.
           </AlertDescription>
         </Alert>
+      )}
+
+      {/* Step 3 — the readiness run + its outcome. */}
+      {selected ? (
+        <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
+          <p className="text-base font-semibold text-foreground">Finish AI setup</p>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            {selected === "anthropic"
+              ? "Cinatra will validate your key, ask your permission to upload your installed skills to your Anthropic workspace, upload them, and verify that Claude actually accepts them before saving this choice."
+              : "Cinatra will validate your key and confirm the connection is ready before saving this choice."}
+          </p>
+
+          {readiness.ready && readiness.receipt ? (
+            <Alert className="mt-4">
+              <Check className="size-4" aria-hidden />
+              <AlertTitle>AI setup complete</AlertTitle>
+              <AlertDescription>
+                {readiness.receipt.provider === "anthropic"
+                  ? `Verified on ${new Date(readiness.receipt.completedAt).toLocaleString()}. ${readiness.receipt.syncedSkillCount ?? 0} skill(s) uploaded, and Claude accepted a container.skills request${readiness.receipt.probe?.disposable ? " (verified with a temporary probe skill, since no skills are installed yet)" : ""}.`
+                  : `Verified on ${new Date(readiness.receipt.completedAt).toLocaleString()}.`}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {!readiness.ready && readinessFailure ? (
+            <Alert variant="destructive" className="mt-4" data-testid="setup-readiness-failure">
+              <TriangleAlert className="size-4" aria-hidden />
+              <AlertTitle>AI setup did not complete ({readinessFailure.step})</AlertTitle>
+              <AlertDescription>
+                <span className="block">{readinessFailure.message}</span>
+                {readinessFailure.fixForward ? (
+                  <span className="mt-2 block font-medium">{readinessFailure.fixForward}</span>
+                ) : null}
+                {/* The fix-forward, PERFORMABLE. Without this the instruction
+                    names a setting no surface renders and no admin route
+                    reaches during setup. */}
+                {offerNativeMcpSwitch ? (
+                  <form action={enableAnthropicNativeSkillDeliveryAction} className="mt-3">
+                    <Button
+                      type="submit"
+                      variant="outline"
+                      size="sm"
+                      data-testid="setup-enable-native-mcp"
+                    >
+                      Switch to native MCP delivery
+                    </Button>
+                  </form>
+                ) : null}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {/* Honest constraint surfacing: skill auto-matching is pinned to
+              OpenAI by a hard Batch-API dependency. Say so BEFORE the owner
+              commits, not after they wonder why matching never runs. */}
+          {describeMatcherProviderConstraint(selected) ? (
+            <Alert className="mt-4" data-testid="setup-matcher-constraint">
+              <AlertTitle>One feature needs OpenAI</AlertTitle>
+              <AlertDescription>{describeMatcherProviderConstraint(selected)}</AlertDescription>
+            </Alert>
+          ) : null}
+
+          <form action={completeAiSetupAction} className="mt-5 flex justify-end">
+            <Input type="hidden" name="provider" value={selected} />
+            <Button type="submit" data-testid="setup-run-readiness">
+              {readiness.ready ? "Re-verify" : "Verify and save"}
+            </Button>
+          </form>
+        </section>
       ) : null}
 
-      {/* A failed save surfaces via the shell-bypass setup layout's
-          <SearchParamToast> (codes-only wizard toast). `errorMessage` is still
-          read above to suppress the auto-forward; its inline <Alert> that
-          duplicated the wizard toast is retired. */}
-
-      {/* Card 1: API key + project + organization */}
-      <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
-        <form action={saveOpenAIConnectionAction} className="grid gap-4">
-          <Input type="hidden" name="redirectTo" value="/setup/ai?stay=1" />
-          <Field>
-            <FieldLabel>API key</FieldLabel>
-            <Input
-              name="apiKey"
-              type="password"
-              autoComplete="off"
-              placeholder={hasApiKey ? "••••••••••••••••" : "sk-..."}
-            />
-          </Field>
-          <div className="grid items-start gap-4 sm:grid-cols-2">
-            <Field>
-              <FieldLabel>Project ID</FieldLabel>
-              <Input name="projectId" defaultValue={connection?.projectId ?? ""} />
-            </Field>
-            <Field>
-              <FieldLabel>Organization ID</FieldLabel>
-              <Input name="organizationId" defaultValue={connection?.organizationId ?? ""} />
-            </Field>
-          </div>
-          <div className="flex justify-end">
-            <Button type="submit">{hasApiKey ? "Change" : "Save"}</Button>
-          </div>
-        </form>
-      </section>
-
-      {/* Card 2: Service tier + default model */}
-      <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
-        <p className="text-base font-semibold text-foreground">Additional administration</p>
-        {!hasApiKey ? (
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            Save your API key above to unlock these settings.
-          </p>
-        ) : null}
-        <form action={saveOpenAIConnectionAction} className="mt-5">
-          <Input type="hidden" name="redirectTo" value="/setup/ai?stay=1" />
-          <fieldset disabled={!hasApiKey} className="grid items-start gap-4 sm:grid-cols-2 disabled:opacity-50">
-            <Field>
-              <FieldLabel>Service tier</FieldLabel>
-              <Input type="hidden" name="serviceTier" value={lockedServiceTier} />
-              <Select value={lockedServiceTier} disabled={!hasApiKey}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Standard" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(openAISurface.serviceTierOptions ?? []).map((option) => (
-                    <SelectItem
-                      key={option.value}
-                      value={option.value}
-                      disabled={option.value !== lockedServiceTier}
-                    >
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <span className="text-xs font-normal text-muted-foreground">
-                Standard is required to ensure Cinatra&apos;s base functionality.
-              </span>
-            </Field>
-            <Field>
-              <FieldLabel>Default model</FieldLabel>
-              {availableModels.length > 0 ? (
-                <Select
-                  name="defaultModel"
-                  defaultValue={
-                    connection?.defaultModel && selectableModels.has(connection.defaultModel)
-                      ? connection.defaultModel
-                      : DEFAULT_OPENAI_MODEL_ID
-                  }
-                  disabled={!hasApiKey}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableModels.map((model) => (
-                      <SelectItem key={model} value={model} disabled={!selectableModels.has(model)}>
-                        {model}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <Input name="defaultModel" defaultValue={connection?.defaultModel ?? DEFAULT_OPENAI_MODEL_ID} />
-              )}
-            </Field>
-            <div className="sm:col-span-2 flex justify-end">
-              <Button type="submit">Save</Button>
-            </div>
-          </fieldset>
-        </form>
-      </section>
-
-      {/* Continue lives outside any card and only appears when the connection is live. */}
-      {isConnected ? (
+      {readiness.ready ? (
         <div className="flex justify-end">
           <Button asChild>
             <Link href={continueHref}>

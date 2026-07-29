@@ -204,6 +204,12 @@ export const BACKGROUND_JOB_NAMES = {
   // grace-window `not_before`, and runs the stale-GC reclaim each cycle so
   // revocation-staled remote copies reclaim without manual intervention.
   ANTHROPIC_SKILL_UPLOAD_RECONCILE_SWEEP: "anthropic-skill-upload-reconcile-sweep",
+  // Lease-expiry finalizer (cinatra#1940 P4). Self-rescheduling ~60s sweep
+  // over expired `org_archive_lease` rows: durable runtime cancellation with
+  // retry/escalation, then the audited settle under the archive fence
+  // (`finalizeExpiredLeaseRun`, packages/agents/src/run-transition.ts). The
+  // sweep NEVER runs at boot — boot only creates this delayed job.
+  LEASE_EXPIRY_FINALIZE: "lease-expiry-finalize",
 } as const;
 
 export type BackgroundJobName = (typeof BACKGROUND_JOB_NAMES)[keyof typeof BACKGROUND_JOB_NAMES];
@@ -327,3 +333,12 @@ export const LIFECYCLE_GATE_MAINTENANCE_LOOP_JOB_ID = "lifecycle-gate-maintenanc
  */
 export const ANTHROPIC_SKILL_UPLOAD_RECONCILE_SWEEP_LOOP_JOB_ID =
   "anthropic-skill-upload-reconcile-sweep-loop";
+/**
+ * Canonical loop-job id for the lease-expiry finalizer sweep (cinatra#1940 P4).
+ * Same contract as the other loop ids above: the boot seed creates the job
+ * under this id and the handler re-delays THIS job via moveToDelayed each
+ * cycle; any other id is a legacy anonymous duplicate that runs once WITHOUT
+ * rescheduling. Drift here re-introduces the per-restart queue storm guarded
+ * by the perpetual-system-loops CI gate.
+ */
+export const LEASE_EXPIRY_FINALIZE_LOOP_JOB_ID = "lease-expiry-finalize-loop";

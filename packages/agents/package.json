@@ -59,7 +59,8 @@
     "./artifact-binding": "./src/artifact-binding.ts",
     "./run-stepper-steps": "./src/run-stepper-steps.ts",
     "./hitl-conversation-panel": "./src/hitl-conversation-panel.tsx",
-  "./owner-containment-port": "./src/owner-containment-port.ts"
+  "./owner-containment-port": "./src/owner-containment-port.ts",
+  "./lease-expiry-finalizer": "./src/lease-expiry-finalizer.ts"
   },
   "scripts": {
     "test": "vitest run",

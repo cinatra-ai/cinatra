@@ -111,10 +111,23 @@ describe("default-llm-provider PUT", () => {
     expect(writeDefaultLlmProviderToDatabase).not.toHaveBeenCalled();
   });
 
-  it("400 on an invalid provider (after the platform gate passes)", async () => {
+  // S6 UN-FENCING (cinatra#2093, epic #2086): Anthropic is `defaultCapable` and
+  // is therefore ACCEPTED here. Before S6 this route hardcoded
+  // ["openai","gemini"] and 400'd it — one of the four fences the ABI v2
+  // `defaultCapable` flag replaces.
+  it("ACCEPTS anthropic as the global default (S6 un-fencing)", async () => {
     getActorContext.mockResolvedValue(platformAdmin());
     const { PUT } = await import("../route");
     const res = await PUT(putReq({ provider: "anthropic" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ provider: "anthropic" });
+  });
+
+  it("400 on an invalid provider (after the platform gate passes)", async () => {
+    getActorContext.mockResolvedValue(platformAdmin());
+    const { PUT } = await import("../route");
+    // Still fail-closed on anything with no `defaultCapable` declaration.
+    const res = await PUT(putReq({ provider: "mistral" }));
     expect(res.status).toBe(400);
     expect(writeDefaultLlmProviderToDatabase).not.toHaveBeenCalled();
   });

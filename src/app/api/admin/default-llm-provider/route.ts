@@ -8,14 +8,21 @@ import {
   DefaultLlmProviderAuthzError,
   DefaultLlmProviderAuditError,
 } from "@/lib/admin/default-llm-provider-mutation";
+import { buildKnownDefaultCapableProviders } from "@cinatra-ai/sdk-extensions/llm-provider-contract";
+import type { LlmProvider } from "@cinatra-ai/agents/llm-provider-policy";
 
-// Standing invariant: the GLOBAL default LLM provider may only be OpenAI or
-// Gemini — Anthropic is selectable per-purpose only and is never the global
-// default. `writeDefaultLlmProviderToDatabase` is the authoritative fail-closed
-// gate; this enum is defense-in-depth so a bad request is rejected with a clear
-// 400 before it ever reaches the sink.
+// Standing invariant: the GLOBAL default LLM provider may only be a provider
+// whose `cinatra.llmProvider` ABI v2 declaration sets `defaultCapable`.
+// `writeDefaultLlmProviderToDatabase` is the authoritative fail-closed gate;
+// this enum is defense-in-depth so a bad request is rejected with a clear 400
+// before it ever reaches the sink.
+//
+// S6 (cinatra#2093) replaced the hardcoded `["openai","gemini"]` literal here —
+// one of the four sites that architecturally barred Anthropic — with the
+// DERIVED set, so the un-fencing lands in every gate at once rather than
+// leaving this route rejecting a provider the sink would have accepted.
 const providerSchema = z.object({
-  provider: z.enum(["openai", "gemini"]),
+  provider: z.enum(buildKnownDefaultCapableProviders() as [string, ...string[]]),
 });
 
 export async function GET() {
@@ -57,7 +64,7 @@ export async function PUT(request: Request) {
     // every write path is gated and audited identically.
     await updateDefaultLlmProvider({
       actor,
-      provider: parsed.data.provider,
+      provider: parsed.data.provider as LlmProvider,
       requestId: request.headers.get("x-request-id") ?? undefined,
     });
     return NextResponse.json({ provider: parsed.data.provider });

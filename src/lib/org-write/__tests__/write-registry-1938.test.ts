@@ -244,6 +244,11 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
       "createAgentRun", "createAgentRunPendingInput",
       // kernel entry points
       "redeemCompletionTicket", "snapshotLeasesQuery",
+      // lease-expiry finalizer's fenced settle (#1940 P4)
+      "finalizeExpiredLeaseRun",
+      // lease-expiry finalizer's phase-1 pooled bookkeeping writers (#1940 P4
+      // — registered + banned to the finalizer module)
+      "incrementLeaseFinalizeAttemptsQuery", "escalateLeaseFinalizeQuery",
     ]) {
       expect(banned.has(w), `${w} must be import-banned`).toBe(true);
     }
@@ -252,11 +257,13 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     // SoftDelete/Undelete/Tombstone, restoreChangeSet, restoreObjectToVersion,
     // runResourceProjectMove, runAgentRunMoveWithOutputs — asserted in the
     // Stage-D describe block below); cinatra#1940 P3 added 2 (createAgentRun,
-    // createAgentRunPendingInput); the edge-family sweep added 3 total bans on
+    // createAgentRunPendingInput); cinatra#1940 P4 added 3 (the lease-expiry
+    // finalizer's fenced settle plus its two pooled bookkeeping writers, all
+    // enumerated above); the edge-family sweep added 3 more total bans on
     // DEAD write exports with zero production callers (confirmAssertion,
     // archiveAssertion, bindAssistantThread — banned so an unguarded dead
-    // writer cannot gain a caller). 20 + 8 + 2 + 3 = 33.
-    expect(banned.size).toBe(33);
+    // writer cannot gain a caller). 20 + 8 + 2 + 3 + 3 = 36.
+    expect(banned.size).toBe(36);
   });
 });
 
