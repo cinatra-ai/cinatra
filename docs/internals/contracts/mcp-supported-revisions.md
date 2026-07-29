@@ -190,7 +190,7 @@ list as the server side.
 | Surface | Client | Offers on `initialize` | Accepts from server |
 | --- | --- | --- | --- |
 | `src/lib/connector-instance-mcp-transport.ts` | SDK `Client` + `StreamableHTTPClientTransport` | `2025-11-25` | the five legacy revisions |
-| `packages/marketplace-mcp-client/src/http-client.ts` | SDK `Client` + `StreamableHTTPClientTransport` | `2025-11-25` | the five legacy revisions |
+| `http-client.ts` in `packages/marketplace-mcp-client` | SDK `Client` + `StreamableHTTPClientTransport` | `2025-11-25` | the five legacy revisions |
 | `packages/objects/src/graphiti-client.ts` | SDK `Client` + `StreamableHTTPClientTransport` | `2025-11-25` | the five legacy revisions |
 | `packages/agents/src/external-mcp-caller.ts` | hand-rolled JSON-RPC over `fetch` | **nothing — no `initialize` at all** | n/a (no negotiation) |
 
@@ -205,8 +205,8 @@ peer it fails.
 Not MCP protocol surfaces, listed so they are not mistaken for gaps:
 `src/lib/wordpress-mcp-connection.ts` and `src/lib/drupal-mcp-connection.ts`
 issue `HEAD` reachability probes only and carry no MCP traffic; the raw `fetch`
-calls in `packages/marketplace-mcp-client/src/http-client.ts` are REST catalog
-`GET`s, distinct from the `Client` on the same file's MCP path.
+calls in that same `http-client.ts` are REST catalog `GET`s, distinct from the
+`Client` on the same file's MCP path.
 
 **Known divergence — documentation, not wire.**
 `src/lib/connector-instance-mcp-transport.ts` exports
@@ -244,7 +244,7 @@ Per surface:
 | Surface | TARGET client | TARGET negotiation | TARGET accepted from server |
 | --- | --- | --- | --- |
 | `src/lib/connector-instance-mcp-transport.ts` | `@modelcontextprotocol/client@2.0.0` | `'auto'` | `2026-07-28` preferred; the five legacy revisions via fallback |
-| `packages/marketplace-mcp-client/src/http-client.ts` | `@modelcontextprotocol/client@2.0.0` | `'auto'` | `2026-07-28` preferred; the five legacy revisions via fallback |
+| `http-client.ts` in `packages/marketplace-mcp-client` | `@modelcontextprotocol/client@2.0.0` | `'auto'` | `2026-07-28` preferred; the five legacy revisions via fallback |
 | `packages/objects/src/graphiti-client.ts` | `@modelcontextprotocol/client@2.0.0` | `'auto'` | `2026-07-28` preferred; the five legacy revisions via fallback |
 | `packages/agents/src/external-mcp-caller.ts` | `@modelcontextprotocol/client@2.0.0` — **migrate off hand-rolled `fetch`** | `'auto'` | `2026-07-28` preferred; the five legacy revisions via fallback |
 
