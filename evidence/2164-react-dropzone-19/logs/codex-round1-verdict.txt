@@ -1,0 +1,51 @@
+Verdict: the source change is MERGE-SAFE, conditional on a clean `pnpm build`. I found no additional migration required, but several claims and the evidence narrative need tightening.
+
+### Claims 1–5
+
+1. **Claim 1’s conclusion is safe, but “ONLY because” is wrong.**  
+   `DEFAULT_MIME_TYPES` does retain ZIP, but the `.zip` accept arm independently matches `file.name` during drop validation—even if `file.type` remains empty or incorrect. ZIP therefore has two independent acceptance paths, not two jointly required conditions. See the [accept map](packages/agents/src/import-form.tsx:180) and upstream’s [18.0.0 break](https://github.com/react-dropzone/react-dropzone/releases/tag/v18.0.0).
+
+2. **Claim 2 is correct about v19.0.0.**  
+   Since the root hook receives neither `maxFiles` nor `multiple`, it remains `multiple=true`, `maxFiles=0`; the changed limit branch is unreachable. [v19.0.0’s split behavior](https://github.com/react-dropzone/react-dropzone/releases/tag/v19.0.0) cannot activate here.
+
+   However, “the wrapper enforces maxFiles itself” is overstated. With `shiftOnMaxFiles=true`, a simultaneous two-ZIP batch bypasses slicing and can exceed `maxFiles`; dropping two more files when one already exists can dereference `fileStatuses[1].id`. That is pre-existing on v15 and unrelated to this upgrade, but visible in [the wrapper logic](src/components/ui/dropzone.tsx:337).
+
+3. **Claim 3 is correct.**  
+   Upstream spreads caller props last, so `style: { display: undefined }` replaces—not merges—the hiding style. The rendered style is empty on both evidence runs.
+
+4. **Claim 4’s conclusion is correct, but the rationale is too narrow.**  
+   `isFileDialogActive` can be set through root click, root keyboard activation, or programmatic `open()`. This wrapper wires/exposes none of those; native activation through the wrapping label bypasses `openFileDialog`. Thus the [19.1.1 guard](https://github.com/react-dropzone/react-dropzone/releases/tag/v19.1.1) is unreachable here.
+
+5. **Claim 5 is correct for this consumer.**  
+   Clearing the generic label is the right migration. `aria-label` takes precedence over associated `<label>` text, so retaining `"file upload"` would discard the more descriptive visible name. [`undefined` correctly removes it](src/components/ui/dropzone.tsx:757). [MDN confirms that precedence](https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Reference/Attributes/aria-label).
+
+### Missed reachable arm
+
+The one reachable delta you missed is v19.1.0 processing supersession:
+
+- `isProcessing` does **not** stay false without a validator.
+- Every drop/selection calls `beginProcessing()`.
+- A newer drop aborts an earlier still-pending `getFilesFromEvent` operation.
+
+That means rapid overlapping drops are now latest-wins, whereas v15 could process both. See [the shipped processing logic](node_modules/react-dropzone/src/index.tsx:271). Given this consumer’s one-file replacement intent, it does not require a source change, but the documentation should acknowledge it; a rapid double-drop test would close the remaining behavioral gap.
+
+### ESM / production build
+
+v16+ is not ESM-only. It publishes:
+
+- ESM through `import → dist/index.js`
+- CJS through `require → dist/index.cjs`
+
+under a valid exports map, as shown in the [installed package manifest](node_modules/react-dropzone/package.json:35) and the [v16 release](https://github.com/react-dropzone/react-dropzone/releases/tag/v16.0.0). Both Node import and require resolve locally. The repo uses a bare import, Node 24, and the actual App Router client route compiled and ran under Next’s dev bundler. `transpilePackages` should not be necessary for this precompiled dependency.
+
+I see no specific production-only ESM trap. Nevertheless, this repo requires `pnpm build`, and the submitted evidence does not show one. I did not run it because it writes `.next`, contrary to the read-only request.
+
+### Evidence corrections
+
+Two non-code inconsistencies should be fixed:
+
+- The baseline log remains on `/configuration/extensions/upload`, while the v19 log reaches `/agents`; therefore the claim that submit/navigation was identical is not supported. The driver also does not record the asserted HTTP 303.
+- Both runs contain the same hydration warning, so it is pre-existing, not an upgrade regression.
+- The driver records `aria-label` presence, not the computed accessible name. The naming conclusion is sound, but “measured” needs an actual accessibility-name assertion.
+
+So: **source MERGE-SAFE; run `pnpm build`, correct the v19.1.0 analysis and evidence wording, and track the pre-existing multi-file `shiftOnMaxFiles` bug separately.**

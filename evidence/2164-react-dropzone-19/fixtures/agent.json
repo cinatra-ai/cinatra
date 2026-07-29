@@ -1,0 +1,59 @@
+{
+  "agentspec_version": "26.1.0",
+  "component_type": "Flow",
+  "id": "lane2164-dnd-proof-flow",
+  "name": "Lane 2164 DnD Proof Agent",
+  "description": "Fixture agent proving the react-dropzone 19 drag-and-drop upload path still completes end to end.",
+  "status": "draft",
+  "sourceNl": "Prove the drop path end to end.",
+  "metadata": { "cinatra": { "type": "leaf" } },
+  "inputs": [{ "title": "topic", "type": "string" }],
+  "outputs": [],
+  "start_node": { "$component_ref": "startNode" },
+  "nodes": [
+    { "$component_ref": "startNode" },
+    { "$component_ref": "agentStep" },
+    { "$component_ref": "endNode" }
+  ],
+  "control_flow_connections": [
+    {
+      "component_type": "ControlFlowEdge",
+      "name": "start-to-agent",
+      "from_node": { "$component_ref": "startNode" },
+      "to_node": { "$component_ref": "agentStep" }
+    },
+    {
+      "component_type": "ControlFlowEdge",
+      "name": "agent-to-end",
+      "from_node": { "$component_ref": "agentStep" },
+      "to_node": { "$component_ref": "endNode" }
+    }
+  ],
+  "$referenced_components": {
+    "startNode": {
+      "component_type": "StartNode",
+      "id": "startNode",
+      "name": "Start",
+      "inputs": [{ "title": "topic", "type": "string" }],
+      "metadata": { "cinatra": { "required": ["topic"] } }
+    },
+    "agentStep": {
+      "component_type": "AgentNode",
+      "id": "agentStep",
+      "name": "Agent Step",
+      "agent": { "$component_ref": "coreAgent" }
+    },
+    "coreAgent": {
+      "component_type": "Agent",
+      "id": "coreAgent",
+      "name": "Core Agent",
+      "system_prompt": "You are the lane 2164 drag-and-drop proof agent."
+    },
+    "endNode": {
+      "component_type": "EndNode",
+      "id": "endNode",
+      "name": "End",
+      "outputs": [{ "title": "result", "type": "string" }]
+    }
+  }
+}
