@@ -40,6 +40,7 @@ vi.mock("@cinatra-ai/skills/mcp-client", () => ({
 vi.mock("@cinatra-ai/skills", () => ({
   ensureInstalledSkillsRegistered: vi.fn(async () => undefined),
   resolveInstalledSkillSourcePath: vi.fn(async () => null),
+  retireSupersededChatSkillsOnce: vi.fn(async () => undefined),
 }));
 vi.mock("@/lib/wizard-staging-store", () => ({ getAllStagedByType: () => [] }));
 vi.mock("@/lib/wizard-manifest-registry", () => ({ getAllManifests: vi.fn(async () => []) }));
@@ -52,13 +53,18 @@ vi.mock("@cinatra-ai/llm", () => ({
   checkPublicMcpReachability: vi.fn(async () => ({ status: "reachable", url: "https://mcp.example.test/api/mcp" })),
   resolveDefaultAdapter: () => resolveDefaultAdapter(),
   stream: (...a: unknown[]) => stream(...a),
-  buildSkillTools: vi.fn(async () => []),
+  // cinatra#2091 S4: skill delivery runs through the provider seam.
+  selectSkillDeliveryAdapter: vi.fn(() => ({
+    provider: "openai",
+    deliver: vi.fn(async () => ({ tools: [], systemContext: "", exposure: [] })),
+  })),
   resolveChatExternalMcpTools: vi.fn(async () => []),
   buildLlmMcpServerToolForChat: vi.fn(async () => ({ type: "mcp", name: "cinatra" })),
   buildLlmMcpServerToolForWidget: vi.fn(async () => ({ type: "mcp", name: "cinatra" })),
 }));
 
 import { runAssistantTurn } from "../runtime";
+import { resolveChatExternalMcpTools } from "@cinatra-ai/llm";
 import { UAT_SENTINEL } from "@cinatra-ai/llm/scripted-test-provider";
 import { buildCinatraAssistantRuntimeConfig } from "../cinatra-assistant-config";
 
@@ -158,6 +164,29 @@ describe("runAssistantTurn scripted-provider short-circuit (widget path)", () =>
     // canonical error frame; the scripted branch did NOT leak into prod.
     expect(resolveDefaultAdapter).toHaveBeenCalledTimes(1);
     expect(frames).toContainEqual({ event: "error", data: { message: "No LLM provider configured." } });
+  });
+
+  it("a REAL (non-scripted) widget turn resolves external MCP tools with the public_site_widget build context (cinatra#2019 S4)", async () => {
+    delete process.env.CINATRA_TEST_LLM_PROVIDER;
+    // Let the widget turn proceed past adapter resolution into tool assembly.
+    resolveDefaultAdapter.mockResolvedValueOnce({
+      provider: "openai",
+      defaultModel: "gpt-4o",
+    });
+
+    const frames: Array<{ event: string; data: unknown }> = [];
+    await runAssistantTurn(
+      buildCinatraAssistantRuntimeConfig(),
+      argsWith((e, d) => frames.push({ event: e, data: d }), wpPrincipal, "Please rewrite the title."),
+    );
+
+    // The widget principal drives the surface — a surface-gating toolbox
+    // (trusted-site native read-injection) sees "public_site_widget" and
+    // refuses the build fail-closed instead of leaking chat-scoped
+    // injections onto public-site widget turns.
+    expect(vi.mocked(resolveChatExternalMcpTools)).toHaveBeenCalledWith("openai", {
+      surface: "public_site_widget",
+    });
   });
 
   it("SCOPE: the cookie-session path (no widget principal) is NEVER short-circuited, even with the flag on", async () => {

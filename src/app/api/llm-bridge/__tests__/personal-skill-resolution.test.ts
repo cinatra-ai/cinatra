@@ -29,6 +29,10 @@
  * driven via the `readAgentRunByTokenHash` mock.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  injectedCatalogSkillIds,
+  injectedPersonalDelta,
+} from "@cinatra-ai/skills/injection";
 
 const PERSONAL_DELTA = "PERSONAL-DELTA-WAYFLOW-XYZ";
 
@@ -130,6 +134,10 @@ vi.mock("@cinatra-ai/llm", () => ({
 }));
 
 vi.mock("@cinatra-ai/skills", () => ({
+  // cinatra#2090 S3: the declared-edge projection the route consults when a
+  // co-located bundle probe misses. Null here = "no declared skill edge",
+  // which keeps every case in this file on the co-located path.
+  resolveDeclaredSkillEdgeForExtensionDir: vi.fn(async () => null),
   getCustomSkillForCurrentUserAndAgent: getCustomSkillForCurrentUserAndAgentMock,
   // A3 (cinatra#1363): faithful copy of the real runtime-delivery predicate
   // (the real one is drift-guarded by the skills-package matrix test).
@@ -178,6 +186,13 @@ vi.mock("@cinatra-ai/agents", async () => {
     // runs declare NO environment, so the resolver reports `kind:"none"` and the
     // binding resolves to L0 — the route path under test is unchanged.
     resolveRunExecutionEnvironment: () => ({ kind: "none" }),
+    // …and the DECLARATION-SOURCE reader's pin classifier (epic #1705). These
+    // runs carry no A2A version pin, so the classifier is never invoked; the
+    // readers exist only to satisfy the module's imports.
+    resolvePinnedRunSnapshot: async () => null,
+    readAgentTemplateVersionById: async () => null,
+    readAgentTemplateVersionBySemver: async () => null,
+    PinnedRunSnapshotUnreachableError: class extends Error {},
     // Capability-matrix helpers consumed by _llm-dispatch.ts (engineering#417).
     // Pure mirrors of llm-provider-policy.ts so the dispatch capability gate +
     // actionable 503 message resolve without the heavy real barrel.
@@ -336,6 +351,19 @@ beforeEach(async () => {
   readAgentTemplateByIdMock.mockResolvedValue(null);
 });
 
+/**
+ * cinatra#2091 S4: the bridge no longer forwards `skillIds` /
+ * `customSkillContent` — it forwards ONE branded `injectedSkills` set. These
+ * read the delivered set through the contract's own accessors, so the tests
+ * still pin the SAME observable facts (which catalog skills, which delta).
+ */
+function deliveredCatalogSkillIds(): string[] {
+  return injectedCatalogSkillIds(firstCallArg().injectedSkills);
+}
+function deliveredDeltaContent(): string | undefined {
+  return injectedPersonalDelta(firstCallArg().injectedSkills)?.content;
+}
+
 /** Read the first argument of the first call to the LLM task mock. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function firstCallArg(): any {
@@ -385,7 +413,7 @@ describe("/api/llm-bridge personal delta-skill identity (#1360)", () => {
       "agent-x",
       VERIFIED_RUN.runBy,
     );
-    expect(firstCallArg().customSkillContent).toBe(PERSONAL_DELTA);
+    expect(deliveredDeltaContent()).toBe(PERSONAL_DELTA);
   });
 
   it("VERIFIED run (context-id channel): delivers the run owner's personal delta", async () => {
@@ -399,7 +427,7 @@ describe("/api/llm-bridge personal delta-skill identity (#1360)", () => {
       "agent-x",
       VERIFIED_RUN.runBy,
     );
-    expect(firstCallArg().customSkillContent).toBe(PERSONAL_DELTA);
+    expect(deliveredDeltaContent()).toBe(PERSONAL_DELTA);
   });
 
   it("A3 (cinatra#1363): an ARCHIVED personal delta is WITHHELD from delivery (fail-closed), even for the verified owner", async () => {
@@ -423,7 +451,7 @@ describe("/api/llm-bridge personal delta-skill identity (#1360)", () => {
         "agent-x",
         VERIFIED_RUN.runBy,
       );
-      expect(firstCallArg().customSkillContent).toBeUndefined();
+      expect(deliveredDeltaContent()).toBeUndefined();
     } finally {
       personalLifecycleReader = defaultPersonalLifecycleReader;
     }
@@ -433,11 +461,11 @@ describe("/api/llm-bridge personal delta-skill identity (#1360)", () => {
     // No run token, no context-id → runForPorts is null → owner undefined.
     const req = makeRequest({ user: "hi", agent_id: "agent-x" });
     await POST(req);
-    expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledWith(
-      "agent-x",
-      undefined,
-    );
-    expect(firstCallArg().customSkillContent).toBeUndefined();
+    // cinatra#2091 S4: with no server-verified owner the contract does not
+    // merely pass `undefined` — it never asks for a personal delta at all.
+    // Strictly stronger than the pre-contract fail-closed.
+    expect(getCustomSkillForCurrentUserAndAgentMock).not.toHaveBeenCalled();
+    expect(deliveredDeltaContent()).toBeUndefined();
   });
 
   it("FORGED/unresolvable run token: refused, and it SUPPRESSES a co-present context-id (fail closed)", async () => {
@@ -453,11 +481,11 @@ describe("/api/llm-bridge personal delta-skill identity (#1360)", () => {
       },
     );
     await POST(req);
-    expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledWith(
-      "agent-x",
-      undefined,
-    );
-    expect(firstCallArg().customSkillContent).toBeUndefined();
+    // cinatra#2091 S4: with no server-verified owner the contract does not
+    // merely pass `undefined` — it never asks for a personal delta at all.
+    // Strictly stronger than the pre-contract fail-closed.
+    expect(getCustomSkillForCurrentUserAndAgentMock).not.toHaveBeenCalled();
+    expect(deliveredDeltaContent()).toBeUndefined();
   });
 
   it("MISMATCH: token selects one run but a co-present context-id names a DIFFERENT run ⇒ refused (no personal delta)", async () => {
@@ -473,11 +501,11 @@ describe("/api/llm-bridge personal delta-skill identity (#1360)", () => {
     );
     await POST(req);
     // Divergence nulls runForPorts → owner undefined → no personal delta.
-    expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledWith(
-      "agent-x",
-      undefined,
-    );
-    expect(firstCallArg().customSkillContent).toBeUndefined();
+    // cinatra#2091 S4: with no server-verified owner the contract does not
+    // merely pass `undefined` — it never asks for a personal delta at all.
+    // Strictly stronger than the pre-contract fail-closed.
+    expect(getCustomSkillForCurrentUserAndAgentMock).not.toHaveBeenCalled();
+    expect(deliveredDeltaContent()).toBeUndefined();
   });
 
   it("MISMATCH: token probe resolves but the fresh re-read row DIVERGES (orgId changed) ⇒ refused", async () => {
@@ -488,11 +516,11 @@ describe("/api/llm-bridge personal delta-skill identity (#1360)", () => {
       { "x-cinatra-run-token": RUN_TOKEN },
     );
     await POST(req);
-    expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledWith(
-      "agent-x",
-      undefined,
-    );
-    expect(firstCallArg().customSkillContent).toBeUndefined();
+    // cinatra#2091 S4: with no server-verified owner the contract does not
+    // merely pass `undefined` — it never asks for a personal delta at all.
+    // Strictly stronger than the pre-contract fail-closed.
+    expect(getCustomSkillForCurrentUserAndAgentMock).not.toHaveBeenCalled();
+    expect(deliveredDeltaContent()).toBeUndefined();
   });
 
   it("a forged body.agent_run_id can NEVER select the owner (only a verified run can)", async () => {
@@ -502,11 +530,11 @@ describe("/api/llm-bridge personal delta-skill identity (#1360)", () => {
     const req = makeRequest({ user: "hi", agent_id: "agent-x", agent_run_id: VERIFIED_RUN.id });
     await POST(req);
     expect(readAgentRunByIdMock).not.toHaveBeenCalled();
-    expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledWith(
-      "agent-x",
-      undefined,
-    );
-    expect(firstCallArg().customSkillContent).toBeUndefined();
+    // cinatra#2091 S4: with no server-verified owner the contract does not
+    // merely pass `undefined` — it never asks for a personal delta at all.
+    // Strictly stronger than the pre-contract fail-closed.
+    expect(getCustomSkillForCurrentUserAndAgentMock).not.toHaveBeenCalled();
+    expect(deliveredDeltaContent()).toBeUndefined();
   });
 });
 
@@ -521,7 +549,7 @@ describe("/api/llm-bridge org/shared skill delivery is unchanged (#1360)", () =>
     await POST(req);
     expect(getAssignedSkillIdsForAgentMock).toHaveBeenCalledOnce();
     expect(getAssignedSkillIdsForAgentMock).toHaveBeenCalledWith("agent-x");
-    expect(firstCallArg().skillIds).toEqual(["@cinatra-ai/asset-blog:generate-blog-ideas"]);
+    expect(deliveredCatalogSkillIds()).toEqual(["@cinatra-ai/asset-blog:generate-blog-ideas"]);
   });
 
   it("delivers org/shared skillIds even when NO personal delta applies (unattributable run)", async () => {
@@ -530,8 +558,8 @@ describe("/api/llm-bridge org/shared skill delivery is unchanged (#1360)", () =>
     const req = makeRequest({ user: "hi", agent_id: "agent-x" });
     await POST(req);
     expect(getAssignedSkillIdsForAgentMock).toHaveBeenCalledWith("agent-x");
-    expect(firstCallArg().skillIds).toEqual(["@cinatra-ai/asset-blog:generate-blog-ideas"]);
-    expect(firstCallArg().customSkillContent).toBeUndefined();
+    expect(deliveredCatalogSkillIds()).toEqual(["@cinatra-ai/asset-blog:generate-blog-ideas"]);
+    expect(deliveredDeltaContent()).toBeUndefined();
   });
 
   it("does NOT call personal-skill or skill-id resolvers when agent_id is omitted", async () => {
@@ -539,8 +567,8 @@ describe("/api/llm-bridge org/shared skill delivery is unchanged (#1360)", () =>
     await POST(req);
     expect(getCustomSkillForCurrentUserAndAgentMock).not.toHaveBeenCalled();
     expect(getAssignedSkillIdsForAgentMock).not.toHaveBeenCalled();
-    expect(firstCallArg().skillIds).toEqual([]);
-    expect(firstCallArg().customSkillContent).toBeUndefined();
+    expect(deliveredCatalogSkillIds()).toEqual([]);
+    expect(deliveredDeltaContent()).toBeUndefined();
   });
 });
 
@@ -555,7 +583,7 @@ describe("/api/llm-bridge personal skill resolution — resolver-null + cleanup"
       { "x-cinatra-run-token": RUN_TOKEN },
     );
     await POST(req);
-    expect(firstCallArg().customSkillContent).toBeUndefined();
+    expect(deliveredDeltaContent()).toBeUndefined();
   });
 
   it("clearRunContext still runs in finally even if the personal-skill lookup throws", async () => {

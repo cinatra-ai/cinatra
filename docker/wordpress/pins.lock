@@ -1,0 +1,33 @@
+{
+  "$comment": "Pinned community-stack fixture pin record for the WP MCP gateway (issue #2016, S1). SINGLE SOURCE OF TRUTH for the version/URL/sha256/digest literals consumed by docker/wordpress/Dockerfile, docker-compose.yml (WordPress block), and scripts/wordpress-entrypoint.sh. Every value was resolved on a GitHub runner by the bring-up job (tests/e2e/wp-mcp-gateway/capture-bringup.mjs) and committed as tests/e2e/wp-mcp-gateway/captures/adapter-0.5.0-api-map.json (C0). NO placeholder tokens are permitted here — scripts/audit/wordpress-fixture-pins-gate.mjs (a required PR check) fails the build if any value is a placeholder or drifts from the literals in the three substrate files. The REMOTE-ARTIFACT hashes are actually verified at image-build time on runners: the Dockerfile RUN does `sha256sum -c` against these values (fail-closed) and the base image is pulled BY DIGEST. Re-resolve at bump time via the capture workflow bring-up mode; bump this file + the three substrate files in the SAME commit (the pin gate enforces lockstep).",
+  "schemaVersion": 1,
+  "resolvedFrom": {
+    "apiMap": "tests/e2e/wp-mcp-gateway/captures/adapter-0.5.0-api-map.json",
+    "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30199282018"
+  },
+  "baseImage": {
+    "ref": "wordpress:6.9-php8.3-apache",
+    "digest": "sha256:5d2c212561c4b5442ebc4d98933a9cbadcf3dee8888ed3fd9ed44667c27cc905"
+  },
+  "mcpAdapter": {
+    "version": "0.5.0",
+    "tag": "v0.5.0",
+    "commit": "7bfc49f46b3ea7544dded49d5a606089f825a80b",
+    "url": "https://github.com/WordPress/mcp-adapter/releases/download/v0.5.0/mcp-adapter.zip",
+    "sha256": "a13f253c7bf4314b6cce7e238be2d5857eee66242bfe5ff5cb5576f74dc41593",
+    "sizeBytes": 372587,
+    "bundlesVendor": true
+  },
+  "enableAbilitiesForMcp": {
+    "version": "2.0.20",
+    "url": "https://downloads.wordpress.org/plugin/enable-abilities-for-mcp.2.0.20.zip",
+    "sha256": "5c3a2b287c73d85503e5118957475fbec598c548f50bc873f05f0293a131553a",
+    "sizeBytes": 123755
+  },
+  "wpCli": {
+    "version": "2.12.0",
+    "tag": "v2.12.0",
+    "url": "https://github.com/wp-cli/wp-cli/releases/download/v2.12.0/wp-cli-2.12.0.phar",
+    "sha256": "ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c"
+  }
+}

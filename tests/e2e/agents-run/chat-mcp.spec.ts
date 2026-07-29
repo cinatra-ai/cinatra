@@ -300,7 +300,7 @@ for (const fixture of CHAT_MCP_FIXTURES) {
       // setup-loop inputs and skip the URL/account-scope gate that the
       // Track A fixture exercises first, so an index-driven walk
       // attempts to drive `schema-field-fallback` against a gate that's
-      // really `@cinatra-ai/reviewer-agent:output`. Build a lookup by
+      // really a pack-owned review gate. Build a lookup by
       // xRenderer + iterate by the gate currently in pending_approval.
       const hitlScreens = fixture.agentFixture?.hitlScreens ?? [];
       const screensByRenderer = new Map<string, typeof hitlScreens[number]>();

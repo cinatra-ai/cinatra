@@ -109,6 +109,14 @@ export { listExtensionPackages } from "./verdaccio/client";
 // packages/agents' pacote call sites use the same canonical derivation.
 export { registryScopedAuthOptions } from "./verdaccio/registry-auth";
 
+// Token-redacting facade over pacote. Re-exported for the SAME reason as
+// registryScopedAuthOptions above: packages/agents' pacote call sites must use
+// one canonical construct, not their own copy. Since pacote 22 /
+// npm-registry-fetch 20 a registry response body's `message` is folded into
+// the thrown `Error.message`, so an echoing registry or proxy would otherwise
+// surface the bearer token there (cinatra#2163).
+export { createRedactingPacote, redactTokenInError } from "./verdaccio/registry-auth";
+
 export {
   loadVerdaccioConfig,
   requireVerdaccioConfig,

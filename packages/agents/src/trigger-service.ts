@@ -23,12 +23,21 @@ import {
   type TriggerRecord,
 } from "./trigger-store";
 import { scheduleTrigger, cancelTriggerSchedule } from "./trigger-schedule";
+// Run-start recommendation hold (cinatra#2067 C3 / #2148 finding 3) — the
+// immediate-trigger transition is a run-START dispatch and must consult the same
+// hold every other interactive run-start does.
+import { maybeHoldRunForRecommendation } from "./recommendation-hold";
 import {
   transitionRunStatus,
   RunTransitionError,
   readAgentRunById,
   readAgentTemplateById,
 } from "./store";
+// cinatra#1939 wave 2 (§2a): the acting owner/org-admin member session grounds
+// the trigger's run-status flips. A member mint fail-closes for a non-member
+// principal (e.g. a cross-org platform admin) — the design's deliberate
+// member-session choice for trigger ops (not a §2d′ non-member site).
+import { verifySessionAuthority } from "@/lib/org-write/authority";
 // Schedule↔PM-task sync (cinatra#317). packages/agents calls OUT to the
 // host-owned PM provider bridge via the Next.js "@/lib/*" alias (Option 2 / the
 // host-owned PM provider bridge); it NEVER imports the SDK PM registry or any
@@ -101,6 +110,29 @@ export type DeleteTriggerForActorResult =
  * the Intl.DateTimeFormat API (no external dependency) to resolve the
  * offset at the exact moment, handling DST transitions correctly.
  */
+/**
+ * `cron-parser` module shapes the recurring-trigger validator accepts.
+ * See the resolution note at the call site in {@link setRunTriggerForActor}.
+ */
+type ParsedCronExpression = { next: () => unknown };
+type CronParser = {
+  parse: (expression: string, options?: { tz?: string }) => ParsedCronExpression;
+};
+type CronParserModule = {
+  CronExpressionParser?: Partial<CronParser>;
+  default?: Partial<CronParser> & { CronExpressionParser?: Partial<CronParser> };
+};
+
+function resolveCronParser(mod: CronParserModule): CronParser | null {
+  const candidates = [mod.CronExpressionParser, mod.default?.CronExpressionParser, mod.default];
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate.parse === "function") {
+      return candidate as CronParser;
+    }
+  }
+  return null;
+}
+
 function naiveDatetimeToUtcMs(naive: string, timezone: string): number {
   // Normalise to full seconds precision.
   const padded = naive.length === 16 ? naive + ":00" : naive;
@@ -253,19 +285,32 @@ export async function setRunTriggerForActor(
       };
     }
     try {
-      const parser = await import("cron-parser");
-      const parseExpression =
-        (
-          parser as {
-            default?: { parseExpression?: (e: string, o?: unknown) => unknown };
-          }
-        ).default?.parseExpression ??
-        (parser as { parseExpression?: (e: string, o?: unknown) => unknown })
-          .parseExpression;
-      if (typeof parseExpression !== "function") {
+      // PARSER API. `cron-parser` exposes the parser as the
+      // `CronExpressionParser` class (also the module default); `parse` is a
+      // STATIC method, so it is called on the class and never detached. The
+      // resolution accepts the named export, a default-wrapped namespace
+      // (CJS/ESM interop), and a default that IS the class — the three shapes
+      // a bundler or interop wrapper can hand back for the same module. If
+      // none resolves we fail CLOSED rather than arm a schedule whose
+      // expression was never validated.
+      const mod = (await import("cron-parser")) as unknown as CronParserModule;
+      const parser = resolveCronParser(mod);
+      if (!parser) {
         return { ok: false, error: "cron-parser unavailable" };
       }
-      parseExpression(args.cronExpression, { tz: args.timezone ?? "UTC" });
+      const parsed = parser.parse(args.cronExpression, { tz: args.timezone ?? "UTC" });
+      // Take ONE iteration step as part of validation. `parse()` alone accepts
+      // an unknown IANA zone and defers the failure to the first iteration —
+      // i.e. to the moment the schedule is due, long after this call returned
+      // "ok". Stepping once refuses it at ARM time instead, which is the
+      // contract both call surfaces already assume.
+      //
+      // This is NOT a satisfiability guarantee: the parser's own
+      // iteration-limit check is unreliable, and an expression that can never
+      // match may return a non-matching date here rather than throwing. The
+      // step exists to surface the LAZY failures (bad zone, un-iterable field
+      // syntax), not to prove the schedule will ever fire.
+      parsed.next();
     } catch (err) {
       return {
         ok: false,
@@ -361,6 +406,9 @@ export async function setRunTriggerForActor(
     jobSchedulerId: scheduleResult.jobSchedulerId,
   });
 
+  // Owner/org-admin member session grounds the status flips (§2a).
+  const authority = await verifySessionAuthority(actor.userId, run.orgId);
+
   // Flip status based on trigger type:
   //   scheduled / recurring → pending_input (or pending_trigger) → armed
   //                           (gate will be opened later by the release job)
@@ -369,14 +417,14 @@ export async function setRunTriggerForActor(
   //                           can pick up the run.
   if (args.triggerType === "scheduled" || args.triggerType === "recurring") {
     try {
-      await transitionRunStatus(args.runId, "pending_input", "armed");
+      await transitionRunStatus(args.runId, "pending_input", "armed", undefined, authority);
     } catch (err) {
       if (
         err instanceof RunTransitionError &&
         err.code === "stale_from_status"
       ) {
         try {
-          await transitionRunStatus(args.runId, "pending_trigger", "armed");
+          await transitionRunStatus(args.runId, "pending_trigger", "armed", undefined, authority);
         } catch (err2) {
           if (
             err2 instanceof RunTransitionError &&
@@ -394,21 +442,72 @@ export async function setRunTriggerForActor(
       }
     }
   } else if (args.triggerType === "immediate") {
-    // Gate is already open; transition directly to queued.
+    // Run-start recommendation HOLD (cinatra#2148 finding 3). An immediate
+    // trigger IS a run-start dispatch, so it must consult the same hold every
+    // other interactive run-start does; before this it transitioned
+    // pending_input → queued directly and a human-present run never paused.
+    //
+    // The trigger row + open gate are already durable at this point, so a park
+    // costs nothing: the run simply stays pending_input until the chip-row
+    // decision releases the park and dispatches through the canonical
+    // `triggerAgentRun` (which performs the pending_input → queued CAS + enqueue
+    // with the gate already open). A headless run (`humanPresent` null/false —
+    // e.g. every programmatic MCP-created run) never parks, so the MCP surface
+    // is byte-unchanged. Best-effort: any hold failure fails OPEN to the direct
+    // transition below.
+    //
+    // A RETRIED immediate trigger on an ALREADY-parked run is covered by the
+    // hold itself: it answers `held:true` with the existing park id and writes
+    // no second park, so the retry cannot dispatch past the live park.
+    let heldForRecommendation = false;
     try {
-      await transitionRunStatus(args.runId, "pending_input", "queued");
-    } catch (err) {
-      if (
-        !(err instanceof RunTransitionError && err.code === "stale_from_status")
-      ) {
-        throw err;
+      const template = await readAgentTemplateById(run.templateId);
+      if (template?.packageName) {
+        const hold = await maybeHoldRunForRecommendation({
+          run,
+          template: {
+            packageName: template.packageName,
+            lifecycleConfig: (template as { lifecycleConfig?: string | null }).lifecycleConfig,
+          },
+        });
+        heldForRecommendation = hold.held;
       }
-      // stale_from_status means the run was already in another status
-      // (e.g. was reset to pending_trigger or already queued). Log and
-      // continue — gate is already open.
-      console.log(
-        `[setRunTriggerForActor] immediate: run ${args.runId} not in pending_input — status left as-is`,
+    } catch (err) {
+      // runId passed as a discrete ARGUMENT (never interpolated into the format
+      // string) so a `%`-bearing id can never be read as a util.format specifier
+      // (CodeQL js/tainted-format-string).
+      console.warn(
+        "[setRunTriggerForActor] immediate: recommendation hold evaluation failed for run",
+        args.runId,
+        "— dispatching normally:",
+        err instanceof Error ? err.message : String(err),
       );
+    }
+    if (heldForRecommendation) {
+      // Parked at the recommendation interception — the chip-row's
+      // confirm/adjust/skip releases the park and dispatches. Do NOT transition
+      // here (the run stays pending_input; the run view renders the chip-row).
+      console.log(
+        "[setRunTriggerForActor] immediate: run held at the run-start recommendation interception; the chip-row decision dispatches it —",
+        args.runId,
+      );
+    } else {
+      // Gate is already open; transition directly to queued.
+      try {
+        await transitionRunStatus(args.runId, "pending_input", "queued", undefined, authority);
+      } catch (err) {
+        if (
+          !(err instanceof RunTransitionError && err.code === "stale_from_status")
+        ) {
+          throw err;
+        }
+        // stale_from_status means the run was already in another status
+        // (e.g. was reset to pending_trigger or already queued). Log and
+        // continue — gate is already open.
+        console.log(
+          `[setRunTriggerForActor] immediate: run ${args.runId} not in pending_input — status left as-is`,
+        );
+      }
     }
   }
 
@@ -518,8 +617,10 @@ export async function deleteRunTriggerForActor(
     trigger.triggerType === "scheduled" ||
     trigger.triggerType === "recurring"
   ) {
+    // Owner/org-admin member session grounds the armed→stopped teardown (§2a).
+    const authority = await verifySessionAuthority(actor.userId, run.orgId);
     try {
-      await transitionRunStatus(args.runId, "armed", "stopped");
+      await transitionRunStatus(args.runId, "armed", "stopped", undefined, authority);
     } catch (err) {
       if (
         err instanceof RunTransitionError &&

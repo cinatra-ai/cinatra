@@ -204,10 +204,37 @@ install_mcp_tools() {
   fi
 }
 
+# Set to 1 by activate_widget_module only when the cinatra module is confirmed
+# enabled this boot. bootstrap() gates export_config on it so a boot that could
+# NOT enable the widget never persists a cinatra-less config to config/sync.
+WIDGET_ENABLED=0
+
 activate_widget_module() {
-  if ! drush --root="$WEB_ROOT" pm:list --status=enabled --field=name 2>/dev/null | grep -qx "cinatra"; then
+  if drush --root="$WEB_ROOT" pm:list --status=enabled --field=name 2>/dev/null | grep -qx "cinatra"; then
+    WIDGET_ENABLED=1
+  else
+    # ROOT CAUSE (cinatra#1238): on a clean `make setup-demo` boot the Drupal
+    # container is brought up BEFORE the dev clone-back populates the
+    # bind-mounted module dir dev/drupal-module/cinatra, so the module can be
+    # absent (or, when present but freshly mounted, not yet in Drupal's cached
+    # extension list). A bare `drush en cinatra` then fails with "Unable to
+    # install modules cinatra due to missing modules cinatra". A cache rebuild
+    # rescans modules/custom so a present-but-freshly-mounted module becomes
+    # discoverable before we enable it.
+    log "Rebuilding cache so the bind-mounted cinatra module is discovered..."
+    drush --root="$WEB_ROOT" cr || true
     log "Enabling cinatra module..."
-    drush --root="$WEB_ROOT" en cinatra -y
+    # NON-FATAL: the cinatra module is the display-side editing WIDGET; it is not
+    # a prerequisite for seed_content (which creates article/page nodes via
+    # drush php:script and only needs the content types ensured earlier). Guard
+    # the enable so a not-yet-mounted widget module can never abort the background
+    # bootstrap (`set -e`) before seed_content runs. The connector still
+    # auto-connects; the widget re-enables idempotently on the next boot.
+    if drush --root="$WEB_ROOT" en cinatra -y; then
+      WIDGET_ENABLED=1
+    else
+      log "WARNING: enabling the cinatra widget module failed (non-fatal) — continuing to seed_content; the module re-enables on the next boot"
+    fi
   fi
   # NOTE: cinatra_url is intentionally NOT set here. It is the BROWSER-reachable
   # widget origin (e.g. http://localhost:3000), which a container-side
@@ -233,6 +260,18 @@ import_config_if_available() {
 }
 
 export_config() {
+  # Only persist config when the cinatra widget module actually enabled this
+  # boot (cinatra#1238). On a boot where the module was not yet mounted, the
+  # active config lists NO cinatra module; exporting it would overwrite
+  # config/sync (a writable bind mount) with a cinatra-less core.extension.yml,
+  # and a later config:import would then keep the widget disabled even once the
+  # module IS present. Skipping the export leaves the last good config in place;
+  # the seeded content is in the DB regardless, and the next boot with the module
+  # present enables the widget and re-exports a complete config.
+  if [ "$WIDGET_ENABLED" != "1" ]; then
+    log "Skipping config export — cinatra widget module not enabled this boot (would persist an incomplete config)"
+    return 0
+  fi
   log "Exporting config to $CONFIG_SYNC_DIR for fresh-setup reproducibility..."
   drush --root="$WEB_ROOT" config:export --destination="$CONFIG_SYNC_DIR" -y || \
     log "WARNING: config:export failed — check permissions on $CONFIG_SYNC_DIR"

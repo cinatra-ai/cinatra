@@ -104,6 +104,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Durable Postgres store behind the EnvironmentLayerCache (exec-plane S3 A2/A3, cinatra#1708). Its reads/writes run on the build / retention-GC / lifecycle-reference cold paths (a later process reusing an earlier layer build; the GC reap), never a per-request hot store. Migrates with the exec-plane store async conversion.",
   },
+  "src/lib/execution/execution-audit-read.ts": {
+    class: "migratable-background-setup",
+    justification:
+      "Org-admin READ of execution-plane audit rows for the Execution health screen (exec-plane S1b, cinatra#2138). One bounded, indexed SELECT over audit_events on an admin configuration page — never a per-request hot path — and it degrades to an empty list rather than throwing. Migrates with the surrounding execution stores.",
+  },
   "src/lib/postgres-schema-init.ts": {
     class: "migratable-background-setup",
     justification:
@@ -251,6 +256,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Skill-lifecycle DB write primitives (cinatra#1361): records an immutable skill_revisions row on the custom/personal upsertSkill write path and applies the audited lifecycle-state compare-and-swap transition. Built as a sync leaf mirroring skills-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf) so it composes into the synchronous store graph; migrates to async typed writes with the skills subsystem.",
   },
+  "src/lib/skill-bundle-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Bundle-aware skill content authority DB primitives (cinatra#2088): the content-addressed blob + revision-file manifest write, the atomic bundle read, and the current-bundle head read. Built as a sync leaf mirroring skill-lifecycle-store.ts's synchronous access pattern so its query BUILDER can be appended to the same synchronous catalog/lifecycle transaction (the reason it cannot be async today); the standalone read/write entry points migrate to async typed access together with the skills subsystem.",
+  },
   "packages/skills/src/llm-matching/skill-matches-store.ts": {
     class: "migratable-request-path",
     justification:
@@ -274,7 +284,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/agent-run-skills-used.ts": {
     class: "migratable-request-path",
     justification:
-      "Records skills used during an agent run — snapshot, exposure telemetry, and per-invocation counting (cinatra#1368). Request/run-time write; migratable to async pooled access.",
+      "Records skills used during an agent run — snapshot, exposure telemetry, per-invocation counting (cinatra#1368), and the typed injection contract's resolved-but-dropped markers (cinatra#2091 S4). Request/run-time write; migratable to async pooled access.",
   },
   "src/lib/run-selected-skill-revisions.ts": {
     class: "migratable-request-path",
@@ -365,6 +375,16 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     class: "migratable-request-path",
     justification:
       "Context-selection finalization (cinatra#1430): one transaction that re-validates the selection triple's coherence in SQL, appends the run_context_selections audit row, and writes a real artifact_refs retention pin — all under the SAME resource-level advisory lock the resource GC takes, closing the pin-vs-GC race. Request-time (context-agent) finalization; sync leaf composing into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
+  },
+  "src/lib/artifacts/cms-content-snapshot-capture.ts": {
+    class: "migratable-request-path",
+    justification:
+      "CMS content-snapshot capture (cinatra#2043, epic #2037 S5): persists fetched CMS content as a real artifact (resource + artifact_blobs + append-only representation) and, in the SAME transaction (the S0 same-tx ordering), splices the transactional ArtifactProduced event and the cms_snapshot_targets apply-binding row. Driven by the connector staged-write adapter (a follow-up lane); sync leaf mirroring object-content-snapshot/representation-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
+  },
+  "src/lib/artifacts/cms-preview-capture-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Pinned CMS preview-capture store (cinatra#2044, epic #2037 S6): writes ONE immutable capture record per (pinned review target, role) — the capture objects row plus, for a captured record, the resource + artifact_blobs + representation triple for the screenshot — in a single transaction whose deterministic objects PK makes a re-drive roll back rather than duplicate; plus the two gate-scoped reads the review surface serves from. Runs on the staged-write/gate-creation path and on the review view path; sync leaf mirroring cms-content-snapshot-capture/representation-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
   },
   "src/lib/artifacts/semantic-assertion-store.ts": {
     class: "migratable-request-path",

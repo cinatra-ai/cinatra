@@ -49,6 +49,8 @@ export {
   leaseHeldStatement,
   snapshotLeasesQuery,
   invalidateLeasesBeforeEpochQuery,
+  settleLeaseForRunStatement,
+  settleLeaseForRunQuery,
 } from "./leases";
 export {
   type OrgWriteAuthority,
@@ -56,6 +58,7 @@ export {
   type GuardOrgMutationRequest,
   OrgWriteRefusedError,
   guardOrgMutation,
+  guardOrgLifecycleMutation,
 } from "./guard";
 export {
   type QueryInput,

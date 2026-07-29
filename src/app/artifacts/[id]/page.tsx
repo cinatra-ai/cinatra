@@ -60,6 +60,7 @@ import {
   type ArtifactRenderDispatch,
 } from "./renderer-dispatch";
 import { resolveArtifactDispatchInputs } from "./renderer-resolution";
+import { ensureActivatedRepresentationProviders } from "@/lib/artifacts/system-artifact-renderer-registrar";
 import { ExtensionRendererMount } from "./extension-renderer-mount";
 import { RendererDegradedNotice } from "./renderer-degraded-notice";
 import { MarkdownHandler } from "./handlers/markdown-handler";
@@ -148,6 +149,13 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
   // degrades to requires-rebuild. Read authorization is already enforced above —
   // a row the viewer may not read never reaches here. Unit-tested in
   // `renderer-dispatch.test.ts`; resolution seam in `renderer-resolution.ts`.
+  // ACTIVATION-COUPLED BINDING (cinatra#2044 L-A3): reconcile the org's
+  // build-bundled NON-SYSTEM (`guardedOptional`) renderer providers from the
+  // canonical install rows before the SYNC dispatch below, so an org that has
+  // actually INSTALLED such a pack resolves its representation renderer — and an
+  // org that has not (or that uninstalled it) does not. The system bases keep
+  // their own unconditional reconcile inside `resolveRepresentationDispatch`.
+  if (!forceGeneric) await ensureActivatedRepresentationProviders(orgId);
   const dispatch: ArtifactRenderDispatch = forceGeneric
     ? { kind: "fallback" }
     : pickArtifactRenderer(

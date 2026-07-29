@@ -3,36 +3,36 @@ import "server-only";
 // ---------------------------------------------------------------------------
 // auditor-snapshot-store (cinatra#1625)
 //
-// The immutable per-run proposal snapshot + single-use approval-receipt access
-// layer for the auditor HITL flow. This is the trust-boundary core: /api/auditor
-// /run-skills WRITES exactly one snapshot per run; /api/auditor/apply READS that
-// one snapshot (never a union) to bound which patches may apply, and CONSUMES a
-// single-use Separation-of-Duties receipt minted by the admin-gated approval.
+// The immutable per-run proposal snapshot access layer.
+//
+// cinatra#1796 / #2047 row 8 — the RETIREMENT teardown removed the legacy
+// single-use Separation-of-Duties APPROVAL-RECEIPT path (`mintApprovalReceipt` /
+// `consumeApprovalReceipt`) together with the `/api/auditor/apply` +
+// `/api/auditor/exclude` endpoints that were its only callers. That receipt was
+// a second approval-bearing store on the lifecycle surface, outside the gate
+// store — the exact "parallel decision path" #2047 row 8 forbids. Approval on
+// this surface is now recorded ONLY by the gate store
+// (`artifact-review-gate-store`) and its gate-anchored S4 child
+// `suggestion_decision_ledger`, which stay untouched.
+//
+// The `auditor_approval_receipts` TABLE is deliberately left in place: dropping
+// it needs a migration (high-risk, owner-gated) and it carries no live writer
+// after this change. It is inert, not load-bearing.
 //
 //   writeProposalSnapshot      — idempotent upsert keyed by agent_run_id.
 //                                Same input digest → returns the stored snapshot
 //                                (idempotent retry). DIFFERENT digest for an
-//                                existing run → fail closed (throws): never
-//                                overwrite a snapshot a receipt may be bound to.
+//                                existing run → fail closed (throws).
 //                                Malformed patches (empty, duplicate/blank ids)
 //                                → fail closed.
 //   readProposalSnapshotForRun — the single snapshot for a run, or null.
-//   mintApprovalReceipt        — insert a LIVE receipt (agent_run_id,
-//                                snapshot_hash, reviewer_id). Idempotent on the
-//                                live-uniq index (a re-mint is a no-op).
-//   consumeApprovalReceipt     — single-shot CAS: consume the LIVE receipt whose
-//                                snapshot_hash matches. Returns the consumed row
-//                                or null (already consumed / none / hash drift).
 // ---------------------------------------------------------------------------
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "./db";
 import { auditorApprovalSnapshotError } from "./auditor-snapshot-errors";
-import {
-  auditorApprovalReceipts,
-  auditorProposalSnapshots,
-} from "./schema";
+import { auditorProposalSnapshots } from "./schema";
 import type { SuggestionPatch } from "./auditor-apply";
 
 // A proposal patch as surfaced to the reviewer (the { id, fieldPath, op, message }
@@ -62,17 +62,6 @@ export type ProposalSnapshot = {
   inputDataDigest: string;
   snapshotHash: string;
   edited: string;
-  createdAt: Date;
-};
-
-export type ApprovalReceipt = {
-  id: string;
-  agentRunId: string;
-  snapshotHash: string;
-  reviewerId: string;
-  acceptedPatchIds: string[] | null;
-  dismissedPatchIds: string[] | null;
-  consumedAt: Date | null;
   createdAt: Date;
 };
 
@@ -135,19 +124,6 @@ function rowToSnapshot(row: typeof auditorProposalSnapshots.$inferSelect): Propo
     inputDataDigest: row.inputDataDigest,
     snapshotHash: row.snapshotHash,
     edited: row.edited,
-    createdAt: row.createdAt,
-  };
-}
-
-function rowToReceipt(row: typeof auditorApprovalReceipts.$inferSelect): ApprovalReceipt {
-  return {
-    id: row.id,
-    agentRunId: row.agentRunId,
-    snapshotHash: row.snapshotHash,
-    reviewerId: row.reviewerId,
-    acceptedPatchIds: (row.acceptedPatchIds as string[] | null) ?? null,
-    dismissedPatchIds: (row.dismissedPatchIds as string[] | null) ?? null,
-    consumedAt: row.consumedAt,
     createdAt: row.createdAt,
   };
 }
@@ -223,82 +199,7 @@ export async function readProposalSnapshotForRun(
   return rows[0] ? rowToSnapshot(rows[0]) : null;
 }
 
-/**
- * Mint a LIVE single-use approval receipt bound to (run, snapshot_hash,
- * reviewer). Idempotent: the live-uniq index means a second live mint for the
- * same run is a no-op (returns the existing live receipt). A hash mismatch on
- * an existing live receipt is surfaced by the caller at consume time (the CAS
- * matches on snapshot_hash), so mint stays a simple upsert.
- */
-export async function mintApprovalReceipt(args: {
-  agentRunId: string;
-  snapshotHash: string;
-  reviewerId: string;
-  acceptedPatchIds?: string[];
-  dismissedPatchIds?: string[];
-}): Promise<ApprovalReceipt> {
-  const { agentRunId, snapshotHash, reviewerId } = args;
-  const [inserted] = await db
-    .insert(auditorApprovalReceipts)
-    .values({
-      id: randomUUID(),
-      agentRunId,
-      snapshotHash,
-      reviewerId,
-      acceptedPatchIds: args.acceptedPatchIds ?? null,
-      dismissedPatchIds: args.dismissedPatchIds ?? null,
-    })
-    // Partial-unique on (agent_run_id) WHERE consumed_at IS NULL — one live
-    // receipt per run.
-    .onConflictDoNothing()
-    .returning();
-
-  if (inserted) return rowToReceipt(inserted);
-
-  const existing = await db
-    .select()
-    .from(auditorApprovalReceipts)
-    .where(
-      and(
-        eq(auditorApprovalReceipts.agentRunId, agentRunId),
-        isNull(auditorApprovalReceipts.consumedAt),
-      ),
-    )
-    .limit(1);
-  if (existing[0]) return rowToReceipt(existing[0]);
-  throw auditorApprovalSnapshotError(
-    "receipt_mint_failed",
-    "Approval receipt could not be minted or reconciled for run",
-  );
-}
-
-/**
- * Single-shot CAS consume of the LIVE receipt whose snapshot_hash matches.
- * Returns the consumed receipt, or null if there is no live receipt for the run
- * or its hash does not match (already consumed, never minted, or snapshot
- * drifted). The DB WHERE consumed_at IS NULL guard makes a concurrent double
- * consume impossible.
- */
-export async function consumeApprovalReceipt(args: {
-  agentRunId: string;
-  snapshotHash: string;
-}): Promise<ApprovalReceipt | null> {
-  const { agentRunId, snapshotHash } = args;
-  const [consumed] = await db
-    .update(auditorApprovalReceipts)
-    .set({ consumedAt: sql`now()` })
-    .where(
-      and(
-        eq(auditorApprovalReceipts.agentRunId, agentRunId),
-        eq(auditorApprovalReceipts.snapshotHash, snapshotHash),
-        isNull(auditorApprovalReceipts.consumedAt),
-      ),
-    )
-    .returning();
-  return consumed ? rowToReceipt(consumed) : null;
-}
-
-/** Whether a pending (never-consumed) auditor snapshot+receipt-eligible run exists. */
+/** Whether a proposal snapshot exists for the run. */
 export async function hasPendingAuditorSnapshot(agentRunId: string): Promise<boolean> {
   const snap = await readProposalSnapshotForRun(agentRunId);
   return snap != null;

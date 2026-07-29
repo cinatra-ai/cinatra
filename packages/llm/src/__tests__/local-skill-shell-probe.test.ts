@@ -4,7 +4,7 @@
  *
  * Root cause: the local skill shell tool (`createLocalSkillShellTool`) supports
  * only `cat`/`head`/`tail`. The model probes the mounted skills with `find` /
- * `ls` (e.g. `find /skills/chat-agent-authoring`), gets a stderr/exit-1 result,
+ * `ls` (e.g. `find /skills/chat-extension-authoring`), gets a stderr/exit-1 result,
  * and then ECHOES that raw `{stdout,stderr,exit_code}` output verbatim into its
  * user-visible message. The fix makes the unsupported-command error
  * self-correcting and non-alarming — naming the exact supported verb + path
@@ -42,12 +42,13 @@ import { createLocalSkillShellTool } from "../tools/skills";
 
 const MOUNTED = [
   {
-    id: "@cinatra-ai/chat:chat-agent-authoring",
-    name: "chat-agent-authoring",
-    slug: "chat-agent-authoring",
-    description: "Author a new agent",
-    sourcePath: "/real/extensions/assistant-skills/skills/chat-agent-authoring/SKILL.md",
-    directoryPath: "/real/extensions/assistant-skills/skills/chat-agent-authoring",
+    id: "@cinatra-ai/chat:chat-extension-authoring",
+    name: "chat-extension-authoring",
+    slug: "chat-extension-authoring",
+    description: "Author a new extension",
+    sourcePath:
+      "/real/extensions/extension-authoring-skill/skills/chat-extension-authoring/SKILL.md",
+    directoryPath: "/real/extensions/extension-authoring-skill/skills/chat-extension-authoring",
   },
 ];
 
@@ -59,7 +60,7 @@ describe("local skill shell — probe handling (cinatra#361)", () => {
   it("returns self-correcting guidance for a `find /skills/<slug>` probe (no throw, exit 1)", async () => {
     const tool = shell();
     const [out] = await tool.execute({
-      commands: ["find /skills/chat-agent-authoring"],
+      commands: ["find /skills/chat-extension-authoring"],
     });
 
     expect(out.stdout).toBe("");
@@ -74,7 +75,7 @@ describe("local skill shell — probe handling (cinatra#361)", () => {
   it("returns the same guidance for an `ls /skills/<slug>` probe", async () => {
     const tool = shell();
     const [out] = await tool.execute({
-      commands: ["ls /skills/chat-agent-authoring"],
+      commands: ["ls /skills/chat-extension-authoring"],
     });
     expect(out.outcome).toEqual({ type: "exit", exitCode: 1 });
     expect(out.stderr).toContain("cat /skills/<slug>/SKILL.md");
@@ -83,7 +84,7 @@ describe("local skill shell — probe handling (cinatra#361)", () => {
   it("the guidance does NOT read as an alarming raw failure — no `No such file or directory`", async () => {
     const tool = shell();
     const [out] = await tool.execute({
-      commands: ["find /skills/chat-extension-authoring-core"],
+      commands: ["find /skills/chat-extension-authoring"],
     });
     // The pre-fix model echoed `find: '...': No such file or directory` arrays.
     // Our executor never emits that shape; it emits guidance.
@@ -91,18 +92,18 @@ describe("local skill shell — probe handling (cinatra#361)", () => {
   });
 
   it("still reads a mounted skill via `cat /skills/<slug>/SKILL.md`", async () => {
-    readSkillFileContentMock.mockResolvedValueOnce("# chat-agent-authoring body");
+    readSkillFileContentMock.mockResolvedValueOnce("# chat-extension-authoring body");
     const tool = shell();
     const [out] = await tool.execute({
-      commands: ["cat /skills/chat-agent-authoring/SKILL.md"],
+      commands: ["cat /skills/chat-extension-authoring/SKILL.md"],
     });
 
     expect(out.outcome).toEqual({ type: "exit", exitCode: 0 });
-    expect(out.stdout).toContain("chat-agent-authoring body");
+    expect(out.stdout).toContain("chat-extension-authoring body");
     expect(out.stderr).toBe("");
     // Resolved against the real on-disk dir, never exposing it to the caller.
     expect(readSkillFileContentMock).toHaveBeenCalledWith(
-      "/real/extensions/assistant-skills/skills/chat-agent-authoring/SKILL.md",
+      "/real/extensions/extension-authoring-skill/skills/chat-extension-authoring/SKILL.md",
     );
   });
 });

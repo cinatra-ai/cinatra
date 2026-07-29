@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { listSkillsUsedForRun } from "@/lib/agent-run-skills-used";
+import { readRunSelectedSkillRevisions } from "@/lib/run-selected-skill-revisions";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
@@ -7,6 +8,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 export const metadata: Metadata = { title: "Agent — Skills" };
+
+// Selection-source → run-visible ledger label (cinatra#2067 item 6). A ledger
+// skill sourced from a run's authoritative selection set is labeled by HOW it
+// was selected — confirmed by a human, auto-applied headless, or human-forced —
+// distinguishing it from a computed-default skill (no selection row → no label).
+const SELECTION_LABEL: Record<string, { text: string; variant: "default" | "secondary" | "outline" }> = {
+  recommended_confirmed: { text: "Confirmed", variant: "default" },
+  recommended_auto_applied: { text: "Auto-applied", variant: "secondary" },
+  user_forced: { text: "Forced", variant: "outline" },
+};
 
 type Props = {
   params: Promise<{ vendor: string; packageName: string; instanceId: string }>;
@@ -25,6 +36,11 @@ type Props = {
 export default async function AgentPackageInstanceSkillsPage({ params }: Props) {
   const { instanceId } = await params;
   const skills = listSkillsUsedForRun({ runId: instanceId });
+  // Join the telemetry ledger against the authoritative per-run selection set so
+  // each ledger row can be labeled by its selection source (cinatra#2067 item 6).
+  const selectionSourceBySkillId = new Map(
+    readRunSelectedSkillRevisions(instanceId).map((s) => [s.skillId, s.selectionSource]),
+  );
 
   return (
     <Main className="min-h-screen">
@@ -61,6 +77,15 @@ export default async function AgentPackageInstanceSkillsPage({ params }: Props) 
                       </span>
                     </div>
                     <div className="flex flex-row items-center gap-2">
+                      {(() => {
+                        const src = selectionSourceBySkillId.get(s.skillId);
+                        const label = src ? SELECTION_LABEL[src] : undefined;
+                        return label ? (
+                          <Badge variant={label.variant} data-selection-source={src}>
+                            {label.text}
+                          </Badge>
+                        ) : null;
+                      })()}
                       <Badge variant="secondary">{s.skillKind}</Badge>
                       <Badge variant="outline">{s.invocationCount}×</Badge>
                     </div>

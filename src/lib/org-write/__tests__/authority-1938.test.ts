@@ -24,9 +24,34 @@ vi.mock("@/lib/postgres-sync", () => ({
 vi.mock("@/lib/postgres-config", () => ({
   getPostgresConnectionString: () => "postgres://test",
 }));
+// Real policy table for real roles; two synthetic roles are injected to isolate
+// the mappings from each other (no REAL role holds archive-without-delete or
+// delete-without-archive — org_owner holds both): "archive_only_test_role"
+// holds ONLY organization.archive, "delete_only_test_role" holds ONLY
+// organization.delete. Together they pin org.delete↔organization.delete and
+// org.lifecycle↔organization.archive with no cross-satisfaction (#1939 wave 3,
+// Decision 1).
+vi.mock("@/lib/authz/policies", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/authz/policies")>();
+  const realRoleHasPermission = actual.roleHasPermission as (
+    role: unknown,
+    permission: unknown,
+  ) => boolean;
+  return {
+    ...actual,
+    roleHasPermission: (role: unknown, permission: unknown): boolean => {
+      if (role === "archive_only_test_role")
+        return permission === "organization.archive";
+      if (role === "delete_only_test_role")
+        return permission === "organization.delete";
+      return realRoleHasPermission(role, permission);
+    },
+  };
+});
 
 import {
   verifySessionAuthority,
+  sessionAuthorityFromResolvedRole,
   verifyRunAuthority,
   isVerifiedRunRef,
   mintSystemWriteAuthority,
@@ -37,8 +62,10 @@ import {
 import { runGuardedOrgWriteBatchSync } from "../batch-wrapper";
 import {
   buildGuardedOrgWriteBatch,
+  ORG_WRITE_CAPABILITIES,
   type GuardedOrgWriteBatch,
 } from "@cinatra-ai/org-write-kernel";
+import type { Role } from "@/lib/authz/policies";
 
 beforeEach(() => {
   shared.role = undefined;
@@ -79,6 +106,29 @@ describe("verifySessionAuthority (#1938)", () => {
     expect(auth.can("membership.write")).toBe(false);
     expect(auth.can("org.settings")).toBe(true);
     expect(auth.can("org.lifecycle")).toBe(false);
+  });
+});
+
+describe("sessionAuthorityFromResolvedRole (#1939 S3, sync transport mint)", () => {
+  it("answers capability-for-capability identically to verifySessionAuthority for every org role, across the FULL kernel capability set", async () => {
+    // Iterating ORG_WRITE_CAPABILITIES (not a hand-copied list) pins
+    // SESSION_PERMISSION_FOR totality: every capability — org.delete included —
+    // resolves through BOTH mint paths consistently, or this red-lines.
+    for (const role of ["member", "org_admin", "org_owner"] as const) {
+      shared.role = role;
+      const viaMembershipRead = await verifySessionAuthority("u1", "org-1");
+      const viaResolvedRole = sessionAuthorityFromResolvedRole("org-1", role);
+      expect(viaResolvedRole.orgId).toBe("org-1");
+      for (const capability of ORG_WRITE_CAPABILITIES) {
+        expect(viaResolvedRole.can(capability)).toBe(viaMembershipRead.can(capability));
+      }
+    }
+  });
+
+  it("membership-only capabilities hold for ANY resolved role — the role's existence is the membership proof", () => {
+    const auth = sessionAuthorityFromResolvedRole("org-1", "member");
+    expect(auth.can("content.write")).toBe(true);
+    expect(auth.can("membership.write")).toBe(false);
   });
 });
 
@@ -171,10 +221,43 @@ describe("mintSystemWriteAuthority (#1938)", () => {
     expect(lifecycle.can("org.lifecycle")).toBe(true);
     expect(lifecycle.can("content.write")).toBe(false);
 
+    // cinatra#1940: lease-expiry-finalizer narrowed to ONLY run.lease-expire
+    // (from the never-exercised S2 placeholder run.execute/run.complete grant).
     const finalizer = mintSystemWriteAuthority("lease-expiry-finalizer", "org-1");
-    expect(finalizer.can("run.execute")).toBe(true);
-    expect(finalizer.can("run.complete")).toBe(true);
+    expect(finalizer.can("run.lease-expire")).toBe(true);
+    expect(finalizer.can("run.execute")).toBe(false);
+    expect(finalizer.can("run.complete")).toBe(false);
     expect(finalizer.can("org.lifecycle")).toBe(false);
+  });
+
+  it("the extension-dashboard-lifecycle purpose is CONTENT-ONLY (#1939 wave 1)", () => {
+    const hook = mintSystemWriteAuthority("extension-dashboard-lifecycle", "org-1");
+    expect(hook.orgId).toBe("org-1");
+    expect(hook.can("content.write")).toBe(true);
+    expect(hook.can("run.execute")).toBe(false);
+    expect(hook.can("membership.write")).toBe(false);
+    expect(hook.can("org.settings")).toBe(false);
+    expect(hook.can("org.lifecycle")).toBe(false);
+  });
+
+  it("the dashboard-contribution-reconciler purpose is CONTENT-ONLY (#1939 wave 1)", () => {
+    const reconciler = mintSystemWriteAuthority("dashboard-contribution-reconciler", "org-1");
+    expect(reconciler.orgId).toBe("org-1");
+    expect(reconciler.can("content.write")).toBe(true);
+    expect(reconciler.can("run.execute")).toBe(false);
+    expect(reconciler.can("membership.write")).toBe(false);
+    expect(reconciler.can("org.settings")).toBe(false);
+    expect(reconciler.can("org.lifecycle")).toBe(false);
+  });
+
+  it("the dashboard-twin-backfill purpose is CONTENT-ONLY (#1939 wave 1)", () => {
+    const backfill = mintSystemWriteAuthority("dashboard-twin-backfill", "org-1");
+    expect(backfill.orgId).toBe("org-1");
+    expect(backfill.can("content.write")).toBe(true);
+    expect(backfill.can("run.execute")).toBe(false);
+    expect(backfill.can("membership.write")).toBe(false);
+    expect(backfill.can("org.settings")).toBe(false);
+    expect(backfill.can("org.lifecycle")).toBe(false);
   });
 });
 
@@ -232,5 +315,142 @@ describe("run-capability ceiling hook", () => {
     expect(ref.can("run.complete")).toBe(false); // floor allows, ceiling denies
     expect(ref.can("org.lifecycle")).toBe(false); // floor denies regardless
     expect(consulted).toContain("run.complete");
+  });
+});
+
+describe("org.delete session mapping (#1939 wave 3, stage B)", () => {
+  it("owners can delete — org.delete maps to the owner-held organization.delete", async () => {
+    shared.role = "org_owner";
+    const auth = await verifySessionAuthority("u1", "org-1");
+    expect(auth.can("org.delete")).toBe(true);
+  });
+
+  it("non-owners cannot delete (organization.delete is owner-only)", async () => {
+    for (const role of ["member", "org_admin"] as const) {
+      shared.role = role;
+      const auth = await verifySessionAuthority("u1", "org-1");
+      expect(auth.can("org.delete")).toBe(false);
+    }
+  });
+
+  it("delete is a MANAGEMENT capability, never a membership-only grant", async () => {
+    // A plain member holds membership-only capabilities but must not inherit
+    // delete just by being a member.
+    shared.role = "member";
+    const auth = await verifySessionAuthority("u1", "org-1");
+    expect(auth.can("content.write")).toBe(true); // membership-only
+    expect(auth.can("org.delete")).toBe(false); // permission-gated
+  });
+
+  it("org.delete is NEVER satisfiable by organization.archive (the Decision-1 invariant)", () => {
+    // Synthetic role holds organization.archive but NOT organization.delete. If
+    // org.delete were (wrongly) mapped to organization.archive, this actor would
+    // pass the delete gate. It must not — archive permission can never stand in
+    // for delete permission.
+    const archiveOnly = sessionAuthorityFromResolvedRole(
+      "org-1",
+      "archive_only_test_role" as Role,
+    );
+    expect(archiveOnly.can("org.lifecycle")).toBe(true); // has organization.archive
+    expect(archiveOnly.can("org.delete")).toBe(false); // lacks organization.delete
+  });
+
+  it("org.delete IS satisfied specifically by organization.delete (converse pin)", () => {
+    // Synthetic role holds organization.delete but NOT organization.archive: it
+    // CAN delete but CANNOT archive/unarchive. Proves the mapping is EXACTLY
+    // organization.delete — not merely "some owner-only permission" that a
+    // future non-delete grant could accidentally satisfy.
+    const deleteOnly = sessionAuthorityFromResolvedRole(
+      "org-1",
+      "delete_only_test_role" as Role,
+    );
+    expect(deleteOnly.can("org.delete")).toBe(true); // has organization.delete
+    expect(deleteOnly.can("org.lifecycle")).toBe(false); // lacks organization.archive
+  });
+});
+
+describe("no system purpose grants org.delete (#1939 wave 3 — delete is human-only)", () => {
+  // The full current purpose set (SYSTEM_PURPOSE_CAPABILITIES); mintSystemWriteAuthority's
+  // typed purpose param compile-forces these to stay real keys.
+  const PURPOSES = [
+    "org-lifecycle-transition",
+    "lease-expiry-finalizer",
+    "agent-run-dispatch",
+    "extension-dashboard-lifecycle",
+    "dashboard-contribution-reconciler",
+    "dashboard-twin-backfill",
+  ] as const;
+
+  it("every system write purpose denies org.delete", () => {
+    for (const purpose of PURPOSES) {
+      expect(mintSystemWriteAuthority(purpose, "org-1").can("org.delete")).toBe(false);
+    }
+  });
+
+  it("org-lifecycle-transition keeps EXACTLY org.lifecycle — the archive tx, not delete", () => {
+    const lifecycle = mintSystemWriteAuthority("org-lifecycle-transition", "org-1");
+    expect(lifecycle.can("org.lifecycle")).toBe(true);
+    expect(lifecycle.can("org.delete")).toBe(false);
+  });
+});
+
+describe("run.lease-expire vocab (#1940) — system-only, fence-only", () => {
+  it("the lease-expiry-finalizer purpose grants EXACTLY run.lease-expire (narrowed from the S2 placeholder)", () => {
+    const finalizer = mintSystemWriteAuthority("lease-expiry-finalizer", "org-1");
+    expect(finalizer.orgId).toBe("org-1");
+    // Iterating the FULL kernel set pins "exactly one" — narrowed AWAY from the
+    // never-exercised S2 placeholder ["run.execute","run.complete"].
+    for (const capability of ORG_WRITE_CAPABILITIES) {
+      expect(finalizer.can(capability)).toBe(capability === "run.lease-expire");
+    }
+  });
+
+  it('NO session authority, at ANY role, can mint run.lease-expire (the "never" marker)', () => {
+    for (const role of ["member", "org_admin", "org_owner"] as const) {
+      const auth = sessionAuthorityFromResolvedRole("org-1", role);
+      expect(auth.can("run.lease-expire")).toBe(false);
+    }
+  });
+
+  it("NO run authority can hold run.lease-expire (a run never expires its own lease)", async () => {
+    const NOW = Date.parse("2026-07-27T00:00:00Z");
+    const ref = await verifyRunAuthority(
+      { runId: "run-1", orgId: "org-1", claimedAttemptId: "att-1" },
+      {
+        readRunRow: async () => ({
+          orgId: "org-1",
+          status: "running",
+          executionAttemptId: "att-1",
+          executionDeadlineAt: new Date(NOW + 60_000).toISOString(),
+          humanWaitAttemptId: null,
+        }),
+        nowMs: () => NOW,
+      },
+    );
+    // Not in RUN_CAPABILITIES: a run may land its OWN outputs (run.complete),
+    // never force-settle a lease.
+    expect(ref.can("run.lease-expire")).toBe(false);
+    expect(ref.can("run.complete")).toBe(true); // sanity: own-completion still holds
+  });
+
+  it("EXACTLY the lease-expiry-finalizer purpose grants run.lease-expire — no other, ever", () => {
+    // Full SYSTEM_PURPOSE_CAPABILITIES key set (mintSystemWriteAuthority's typed
+    // purpose param compile-forces these to stay real keys — same discipline as
+    // the org.delete purpose sweep above). Asserting exactly-one, WITH the
+    // finalizer in the loop, means a future purpose that wrongly granted
+    // run.lease-expire — or a regression un-granting the finalizer — red-lines.
+    const ALL_PURPOSES = [
+      "org-lifecycle-transition",
+      "lease-expiry-finalizer",
+      "agent-run-dispatch",
+      "extension-dashboard-lifecycle",
+      "dashboard-contribution-reconciler",
+      "dashboard-twin-backfill",
+    ] as const;
+    for (const purpose of ALL_PURPOSES) {
+      expect(mintSystemWriteAuthority(purpose, "org-1").can("run.lease-expire")).toBe(
+        purpose === "lease-expiry-finalizer",
+      );
+    }
   });
 });

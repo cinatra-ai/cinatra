@@ -2,8 +2,8 @@
 // (cinatra#550).
 //
 // `agent_templates.package_name` stores the npm-SCOPED name
-// (e.g. "@cinatra-ai/auditor-agent"), but the skill-store disk layout is
-// UNSCOPED ("~agents/cinatra-ai/auditor-agent/..."). The trigger previously
+// (e.g. "@cinatra-ai/author-agent"), but the skill-store disk layout is
+// UNSCOPED ("~agents/cinatra-ai/author-agent/..."). The trigger previously
 // composed the relocation path from the raw scoped value, emitting
 // "~agents/@cinatra-ai/..." — a directory that never exists on disk, so every
 // owner-move relocation for a scoped agent targeted the wrong subtree.
@@ -100,7 +100,7 @@ describe("scope-strip regex semantics (mirror of agentPackageNameToPath)", () =>
   };
 
   it.each([
-    ["@cinatra-ai/auditor-agent", "cinatra-ai/auditor-agent"],
+    ["@cinatra-ai/author-agent", "cinatra-ai/author-agent"],
     ["@cinatra-ai/blog-draft-writer-agent", "cinatra-ai/blog-draft-writer-agent"],
     ["@marcushorndt-local/page-summarizer-agent", "marcushorndt-local/page-summarizer-agent"],
     ["@cinatra/system-scrape", "cinatra/system-scrape"],
@@ -108,14 +108,14 @@ describe("scope-strip regex semantics (mirror of agentPackageNameToPath)", () =>
     ["@scope/a/b", "scope/a/b"],
     // non-scoped legacy names pass through unchanged
     ["cinatra/blog-draft-writer-agent", "cinatra/blog-draft-writer-agent"],
-    ["cinatra-ai/auditor-agent", "cinatra-ai/auditor-agent"],
+    ["cinatra-ai/author-agent", "cinatra-ai/author-agent"],
   ])("strip(%s) === %s", (input, want) => {
     expect(strip(input)).toBe(want);
   });
 
   it("yields an unscoped on-disk relocation path for a real scoped package", () => {
-    const composed = `organization/acme/~agents/${strip("@cinatra-ai/auditor-agent")}`;
-    expect(composed).toBe("organization/acme/~agents/cinatra-ai/auditor-agent");
+    const composed = `organization/acme/~agents/${strip("@cinatra-ai/author-agent")}`;
+    expect(composed).toBe("organization/acme/~agents/cinatra-ai/author-agent");
     expect(composed).not.toContain("@");
   });
 });

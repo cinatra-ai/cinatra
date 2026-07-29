@@ -6,17 +6,17 @@ import { SchemaOnlyFloorRenderer } from "./schema-field-renderer";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 // Host-bundled renderer for blog-pipeline's `idea_selection_gate`
-// (cinatra#1796 Stage 2). It is keyed in RENDERER_KIND_TABLE under the neutral
+// (cinatra#1796). It is keyed in RENDERER_KIND_TABLE under the neutral
 // kind "blog-idea-selection" and activated by the DEDICATED binding id
 // `@cinatra-ai/blog-pipeline-agent:idea-selection` (strict-id condition — see
-// register-default-renderers.ts). Stage 2 relocates the idea-chooser OFF the
-// shared `@cinatra-ai/reviewer-agent:output` reviewer binding onto this
-// dedicated one; the inline IdeaChooserRenderer in
-// reviewer-agent-output-renderer.tsx is intentionally LEFT IN PLACE — its
-// teardown is Stage 3 (strictly later), so this renderer is purely ADDITIVE.
+// register-default-renderers.ts). The idea-chooser relocated OFF the shared
+// (now RETIRED) reviewer binding onto this dedicated one
+// (blog-pipeline-agent#40); that shared binding, its package and the
+// reviewer-output dispatcher the inline chooser lived in were all deleted by the
+// cinatra#1796 retirement teardown, so this is the sole idea-selection renderer.
 //
-// PAYLOAD CONTRACT (byte-identical to the inline IdeaChooserRenderer — ground
-// truth: the #839 chooser tests + the blog OAS idea_selection_gate
+// PAYLOAD CONTRACT (ground truth: this renderer's tests + the blog OAS
+// idea_selection_gate
 // InputMessageNode): the gate is an InputMessageNode whose one string output
 // (`selectedIdeaJson`) becomes the WayFlow resume text (`userResponse`). The
 // chosen idea is committed as JSON.stringify(idea) into BOTH keys. A default
@@ -65,8 +65,8 @@ export function BlogIdeaSelectionRenderer(props: FieldRendererProps) {
 }
 
 /**
- * Radio-per-idea chooser. Extracted/adapted from the inline IdeaChooserRenderer
- * (reviewer-agent-output-renderer.tsx). Commits the chosen idea as
+ * Radio-per-idea chooser for the dedicated idea-selection binding. Commits the
+ * chosen idea as
  * JSON.stringify(idea) into { selectedIdeaJson, userResponse } — the exact shape
  * idea_selection_gate + its downstream `selected_idea` passthrough seam expect.
  */

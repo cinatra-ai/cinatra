@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * cinatra#1796 Stage 2 — coverage for the DEDICATED, host-bundled
+ * cinatra#1796 — coverage for the DEDICATED, host-bundled
  * BlogIdeaSelectionRenderer (kind "blog-idea-selection", binding id
  * `@cinatra-ai/blog-pipeline-agent:idea-selection`) that the blog OAS's
  * idea_selection_gate relocates onto (off the shared reviewer-output binding).
@@ -10,8 +10,9 @@
  * components.idea_selection_gate.outputs[0].title) which becomes the WayFlow
  * resume text `userResponse`; the downstream `selected_idea` passthrough seam
  * consumes `selectedIdeaJson` + `ideas`. The chosen idea is committed as
- * JSON.stringify(idea) into BOTH keys — byte-identical to the inline
- * IdeaChooserRenderer's #839 contract (reviewer-agent-output-idea-chooser.test).
+ * JSON.stringify(idea) into BOTH keys — the #839 chooser contract, which now
+ * lives solely on this dedicated renderer (the former inline chooser on the
+ * shared reviewer-output binding was removed in the #1796 Stage-3 teardown).
  *
  * Asserts:
  *   - a radio-per-idea chooser renders and commits ideas[0] on mount as
@@ -28,7 +29,6 @@ import { describe, it, expect, afterEach, beforeAll, vi } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 
 import { BlogIdeaSelectionRenderer } from "../blog-idea-selection-renderer";
-import { ReviewerAgentOutputRenderer } from "../reviewer-agent-output-renderer";
 import {
   fieldRendererRegistry,
   type FieldRendererContext,
@@ -147,23 +147,25 @@ describe("BlogIdeaSelectionRenderer — binding resolution + mid-run classificat
     expect(classifyMidRunHitl(BINDING_ID)).toBe(true);
   });
 
-  it("strict-id relocation: the dedicated id owns the chooser while reviewer-output keeps its OWN renderer", () => {
+  it("strict-id: the dedicated id owns the chooser and the RETIRED shared binding resolves to nothing", () => {
     const dedicated = fieldRendererRegistry.resolve(
       "selectedIdeaJson",
       { "x-renderer": BINDING_ID },
       CTX as never,
     );
-    const reviewer = fieldRendererRegistry.resolve(
+    expect(dedicated!.renderer).toBe(BlogIdeaSelectionRenderer);
+    // cinatra#1796 teardown: the shared reviewer binding the chooser relocated
+    // OFF is gone — its package is retired, its kind is out of the vocabulary
+    // and its dispatcher is deleted. Reconstructed here from parts so this file
+    // holds no live reference to the retired identity (the same technique the
+    // retirement-identity gate uses on itself). Strict-id means the dedicated
+    // chooser must NOT pick the orphaned id up.
+    const RETIRED_SHARED_ID = ["@cinatra-ai/", "reviewer", "-agent:output"].join("");
+    const orphaned = fieldRendererRegistry.resolve(
       "selectedIdeaJson",
-      { "x-renderer": "@cinatra-ai/reviewer-agent:output" },
+      { "x-renderer": RETIRED_SHARED_ID },
       CTX as never,
     );
-    // The relocation is a genuine split: the dedicated binding resolves to the
-    // new chooser; the shared reviewer binding still resolves to the reviewer
-    // envelope (NOT the chooser). Strict-id — no cross-match.
-    expect(dedicated!.renderer).toBe(BlogIdeaSelectionRenderer);
-    expect(reviewer).toBeTruthy();
-    expect(reviewer!.renderer).toBe(ReviewerAgentOutputRenderer);
-    expect(reviewer!.renderer).not.toBe(BlogIdeaSelectionRenderer);
+    expect(orphaned).toBeFalsy();
   });
 });

@@ -16,6 +16,7 @@ const {
   buildPortsMock,
   assertSemanticTypeMock,
   lazyRegisterMock,
+  resolveEdgeMock,
 } = vi.hoisted(() => ({
   runPgMock: vi.fn(),
   registerAllObjectTypesMock: vi.fn(),
@@ -27,6 +28,7 @@ const {
   buildPortsMock: vi.fn(),
   assertSemanticTypeMock: vi.fn(),
   lazyRegisterMock: vi.fn(),
+  resolveEdgeMock: vi.fn(),
 }));
 
 vi.mock("@/lib/postgres-sync", () => ({ runPostgresQueriesSync: runPgMock }));
@@ -54,6 +56,11 @@ vi.mock("@cinatra-ai/llm", () => ({
 vi.mock("@cinatra-ai/skills", () => ({
   listInstalledSkills: listSkillsMock,
   parseFrontmatter: parseFrontmatterMock,
+  // cinatra#2090 S3: the matcher runtime resolves each candidate's declared
+  // `role:"matcher"` edge to decide WHICH package is allowed to own the
+  // classifier row. Omitting it here would make every resolution throw, silently
+  // collapsing the post-extraction anchor back onto the package-owned one.
+  resolveDeclaredSkillEdgeForPackage: resolveEdgeMock,
 }));
 vi.mock("../attachment-resolver-ports", () => ({
   buildAttachmentResolverPorts: buildPortsMock,
@@ -134,15 +141,46 @@ function registerAllAsArtifactDefs() {
     })),
   );
 }
+/** The package that OWNS a matcher bundle: the namespace of its catalog id —
+ *  the artifact itself while the bundle is co-located, the provider
+ *  `-skill` package once cinatra#2090 S3 has extracted it. */
+function matcherOwnerPackage(matcherSkillId: string): string {
+  return matcherSkillId.split(":")[0] ?? "";
+}
+
+/** What `resolveDeclaredSkillEdgeForPackage(pkg, "matcher")` would return for a
+ *  pack member: null while the bundle still ships inside the artifact (no
+ *  role-carrying edge to resolve — the package-owned anchor applies), and the
+ *  resolved provider edge once it has been extracted. */
+function declaredMatcherEdge(p: PackDef) {
+  const skillId = p.manifest.skills!.matchers![0]!;
+  const owner = matcherOwnerPackage(skillId);
+  if (owner === p.pkgName) return null;
+  return {
+    packageName: owner,
+    slug: skillId.split(":")[1] ?? "",
+    skillId,
+    sourcePath: `/fixture/${owner}/skills/${skillId.split(":")[1] ?? ""}/SKILL.md`,
+  };
+}
+
 function registerAllAsSkills() {
   listSkillsMock.mockResolvedValue(
-    PACK_DEFS.map((p) => ({
-      id: p.manifest.skills!.matchers![0],
-      packageName: p.pkgName,
-      packageSlug: p.pkgName.replace("/", "-").replace("@", ""),
-      content: `Classifier prompt body for ${p.pkgName}.`,
-    })),
+    PACK_DEFS.map((p) => {
+      const id = p.manifest.skills!.matchers![0]!;
+      const owner = matcherOwnerPackage(id);
+      return {
+        id,
+        packageName: owner,
+        packageSlug: owner.replace("/", "-").replace("@", ""),
+        content: `Classifier prompt body for ${p.pkgName}.`,
+      };
+    }),
   );
+  resolveEdgeMock.mockImplementation(async (pkgName: string) => {
+    const def = PACK_DEFS.find((p) => p.pkgName === pkgName);
+    return def ? declaredMatcherEdge(def) : null;
+  });
 }
 function targetAwareLlmMock(targetPkg: string) {
   runLlmMock.mockImplementation(async (input: { user: string }) => {
@@ -177,6 +215,7 @@ describe("Email+Legal pack — target-aware matcher integration", () => {
     buildPortsMock.mockReset();
     assertSemanticTypeMock.mockReset();
     lazyRegisterMock.mockReset();
+    resolveEdgeMock.mockReset();
     buildPortsMock.mockReturnValue({});
     parseFrontmatterMock.mockImplementation((c: string) => ({ body: c }));
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });

@@ -37,7 +37,6 @@ import type {
   DashboardStatus,
   NewDashboardRow,
   OwnerLevel,
-  Visibility,
 } from "./store/schema";
 import {
   OVERVIEW_DASHBOARD_NAME,
@@ -74,6 +73,8 @@ import {
 // surface (DashboardTwinContext / TwinTx) is erased at compile time and adds no
 // graph pressure.
 import type { DashboardTwinContext, TwinTx } from "./twin-writer-seam";
+import { guardedDashboardsWrite } from "./org-write-seam";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
 export class DashboardForbiddenError extends Error {
   readonly code = "dashboard_forbidden";
@@ -141,7 +142,6 @@ export type CreateDashboardInput = {
   readonly configVersion?: string; // defaults to CURRENT_CONFIG_VERSION
   readonly ownerLevel: OwnerLevel;
   readonly ownerId: string;
-  readonly visibility?: Visibility; // defaults to 'private'
   /** Initial status — defaults to 'draft'. AI jobs may pass 'generation_failed'. */
   readonly status?: DashboardStatus;
 };
@@ -151,7 +151,6 @@ export type UpdateDashboardPatch = {
   readonly description?: string;
   readonly config?: unknown;
   readonly configVersion?: string;
-  readonly visibility?: Visibility;
 };
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -535,7 +534,6 @@ export async function createDashboard(
   });
 
   const id = input.id ?? randomUUID();
-  const visibility: Visibility = input.visibility ?? "private";
 
   // cinatra#1738 (owner ruling D1): the required ownerLevel/ownerId IS the
   // dashboard's single scope — record the entity anchor at creation so
@@ -565,7 +563,6 @@ export async function createDashboard(
     ownerLevel: input.ownerLevel,
     ownerId: input.ownerId,
     organizationId: actor.organizationId,
-    visibility,
     status: input.status ?? "draft",
     createdBy: actor.userId,
     updatedBy: null,
@@ -591,9 +588,18 @@ export async function createDashboard(
     throw new DashboardForbiddenError("dashboards.create", id);
   }
 
-  const db = getDashboardsDb();
   try {
-    return await db.transaction(async (tx) => {
+    // First converted writer on the org-write seam (cinatra#1939 S3 wave 1):
+    // the kernel guard opens the transaction, takes the ORGANIZATION locks and
+    // rules `content.write` against the org lifecycle BEFORE this body runs —
+    // the per-dashboard twin lock below is therefore always second (org-first
+    // lock order, no org↔id inversion). The actor's authority is minted
+    // host-side at the MCP transport; an actor without one refuses up front.
+    return await guardedDashboardsWrite(
+      actor,
+      { schema: backfillSchemaName() },
+      async (guardedTx) => {
+      const tx = guardedTx as unknown as DashboardsDb;
       // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
       await acquireTwinLockFirst(tx as unknown as TwinTx, id);
       const insertRow: NewDashboardRow = {
@@ -607,14 +613,13 @@ export async function createDashboard(
         ownerLevel: input.ownerLevel,
         ownerId: input.ownerId,
         organizationId: actor.organizationId,
-        visibility,
         status: input.status ?? "draft",
         createdBy: actor.userId,
         entityType: anchor.entityType,
         entityId: anchor.entityId,
       };
       const [row] = await tx.insert(dashboards).values(insertRow).returning();
-      await writeAudit(tx as unknown as DashboardsDb, {
+      await writeAudit(tx, {
         operation: "dashboards.create",
         actor,
         row,
@@ -622,7 +627,8 @@ export async function createDashboard(
       });
       await pairTwin(tx as unknown as TwinTx, twinCtx(row, "upsert", actor.userId));
       return row;
-    });
+      },
+    );
   } catch (e) {
     // Writing anchors activates dashboards_entity_name_uniq for this path
     // (NULL entity buckets never collided — Postgres NULLs are distinct).
@@ -641,11 +647,17 @@ export async function updateDashboard(
   patch: UpdateDashboardPatch,
   actor: DashboardActor,
 ): Promise<DashboardRow> {
-  const db = getDashboardsDb();
-  return db.transaction(async (tx) => {
+  // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
+  // lifecycle ruling run BEFORE this body — the per-dashboard twin lock below
+  // stays second (org-first lock order; see org-write-seam.ts).
+  return guardedDashboardsWrite(
+    actor,
+    { schema: backfillSchemaName() },
+    async (guardedTx) => {
+    const tx = guardedTx as unknown as DashboardsDb;
     // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
     await acquireTwinLockFirst(tx as unknown as TwinTx, id);
-    const row = await selectForUpdate(tx as unknown as DashboardsDb, id);
+    const row = await selectForUpdate(tx, id);
     if (!row) throw new DashboardNotFoundError(id);
     const access = resolveDashboardAccess(row, actor);
     if (!access.canWrite) {
@@ -692,7 +704,6 @@ export async function updateDashboard(
       next.name = patch.name;
     }
     if (patch.description !== undefined) next.description = patch.description;
-    if (patch.visibility !== undefined) next.visibility = patch.visibility;
 
     const [updated] = await tx
       .update(dashboards)
@@ -700,7 +711,7 @@ export async function updateDashboard(
       .where(eq(dashboards.id, id))
       .returning();
 
-    await writeAudit(tx as unknown as DashboardsDb, {
+    await writeAudit(tx, {
       operation: "dashboards.update",
       actor,
       row: updated,
@@ -711,18 +722,24 @@ export async function updateDashboard(
     });
     await pairTwin(tx as unknown as TwinTx, twinCtx(updated, "upsert", actor.userId));
     return updated;
-  });
+    },
+  );
 }
 
 export async function publishDashboard(
   id: string,
   actor: DashboardActor,
 ): Promise<DashboardRow> {
-  const db = getDashboardsDb();
-  return db.transaction(async (tx) => {
+  // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
+  // lifecycle ruling run BEFORE this body (see org-write-seam.ts).
+  return guardedDashboardsWrite(
+    actor,
+    { schema: backfillSchemaName() },
+    async (guardedTx) => {
+    const tx = guardedTx as unknown as DashboardsDb;
     // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
     await acquireTwinLockFirst(tx as unknown as TwinTx, id);
-    const row = await selectForUpdate(tx as unknown as DashboardsDb, id);
+    const row = await selectForUpdate(tx, id);
     if (!row) throw new DashboardNotFoundError(id);
     const access = resolveDashboardAccess(row, actor);
     if (!access.canWrite) {
@@ -758,7 +775,7 @@ export async function publishDashboard(
       .where(eq(dashboards.id, id))
       .returning();
 
-    await writeAudit(tx as unknown as DashboardsDb, {
+    await writeAudit(tx, {
       operation: "dashboards.publish",
       actor,
       row: updated,
@@ -770,18 +787,24 @@ export async function publishDashboard(
     });
     await pairTwin(tx as unknown as TwinTx, twinCtx(updated, "upsert", actor.userId));
     return updated;
-  });
+    },
+  );
 }
 
 export async function archiveDashboard(
   id: string,
   actor: DashboardActor,
 ): Promise<DashboardRow> {
-  const db = getDashboardsDb();
-  return db.transaction(async (tx) => {
+  // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
+  // lifecycle ruling run BEFORE this body (see org-write-seam.ts).
+  return guardedDashboardsWrite(
+    actor,
+    { schema: backfillSchemaName() },
+    async (guardedTx) => {
+    const tx = guardedTx as unknown as DashboardsDb;
     // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
     await acquireTwinLockFirst(tx as unknown as TwinTx, id);
-    const row = await selectForUpdate(tx as unknown as DashboardsDb, id);
+    const row = await selectForUpdate(tx, id);
     if (!row) throw new DashboardNotFoundError(id);
     const access = resolveDashboardAccess(row, actor);
     if (!access.canWrite) {
@@ -806,7 +829,7 @@ export async function archiveDashboard(
       .where(and(eq(dashboards.id, id), eq(dashboards.status, prevStatus)))
       .returning();
 
-    await writeAudit(tx as unknown as DashboardsDb, {
+    await writeAudit(tx, {
       operation: "dashboards.archive",
       actor,
       row: updated,
@@ -814,7 +837,8 @@ export async function archiveDashboard(
     });
     await pairTwin(tx as unknown as TwinTx, twinCtx(updated, "upsert", actor.userId));
     return updated;
-  });
+    },
+  );
 }
 
 // Exported for read-paths that want type-narrowing. Not used as a writer.
@@ -845,7 +869,6 @@ export type UpsertDashboardConfigInput = {
   readonly config: unknown;
   readonly configVersion?: string;
   readonly name?: string;
-  readonly visibility?: Visibility;
   readonly ownerLevel?: OwnerLevel;
   readonly ownerId?: string;
 };
@@ -862,8 +885,13 @@ export async function upsertDashboardConfig(
   // config content is never inspected for auth).
   const requestedVersion = patch.configVersion ?? CURRENT_CONFIG_VERSION;
 
-  const db = getDashboardsDb();
-  return db.transaction(async (tx) => {
+  // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
+  // lifecycle ruling run BEFORE this body (see org-write-seam.ts).
+  return guardedDashboardsWrite(
+    actor,
+    { schema: backfillSchemaName() },
+    async (guardedTx) => {
+    const tx = guardedTx as unknown as DashboardsDb;
     // 0. Advisory lock keyed by dashboard id — serializes concurrent
     //    writers on this id. Transaction-scoped, safe under transaction-
     //    mode connection poolers.
@@ -900,7 +928,6 @@ export async function upsertDashboardConfig(
         ownerLevel: patch.ownerLevel,
         ownerId: patch.ownerId,
         organizationId: actor.organizationId,
-        visibility: patch.visibility ?? "private",
         status: "draft",
         createdBy: actor.userId,
         updatedBy: null,
@@ -934,7 +961,7 @@ export async function upsertDashboardConfig(
     //     the save (cinatra#326 §3c). The effective ownerLevel used for a fresh
     //     wrap's scopeLevel matches the row's resolved ownerLevel.
     const effectiveOwnerLevel: OwnerLevel =
-      patch.ownerLevel ?? existing?.ownerLevel ?? "user";
+      patch.ownerLevel ?? (existing?.ownerLevel as OwnerLevel | undefined) ?? "user";
     const { config: nextConfig, configVersion } = await normalizeConfigForWrite({
       config: patch.config,
       hasConfig: true,
@@ -987,7 +1014,6 @@ export async function upsertDashboardConfig(
       ownerLevel: effectiveOwnerLevel,
       ownerId: effectiveOwnerId,
       organizationId: actor.organizationId,
-      visibility: patch.visibility ?? existing?.visibility ?? "private",
       status: existing?.status ?? "draft",
       createdBy: existing?.createdBy ?? actor.userId,
       updatedBy: actor.userId,
@@ -1019,7 +1045,6 @@ export async function upsertDashboardConfig(
       }
       updateSet.name = patch.name;
     }
-    if (patch.visibility !== undefined) updateSet.visibility = patch.visibility;
 
     const [row] = await tx
       .insert(dashboards)
@@ -1034,7 +1059,7 @@ export async function upsertDashboardConfig(
     //    === 1 ⇒ newly created in this TX; > 1 ⇒ updated existing row.
     const operation: "dashboards.create" | "dashboards.update" =
       row.dashboardVersion === 1 ? "dashboards.create" : "dashboards.update";
-    await writeAudit(tx as unknown as DashboardsDb, {
+    await writeAudit(tx, {
       operation,
       actor,
       row,
@@ -1042,7 +1067,8 @@ export async function upsertDashboardConfig(
     });
     await pairTwin(tx as unknown as TwinTx, twinCtx(row, "upsert", actor.userId));
     return row;
-  });
+    },
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1119,7 +1145,6 @@ function buildAuthPseudoRow(args: {
   readonly organizationId: string;
   readonly ownerLevel: OwnerLevel;
   readonly ownerId: string;
-  readonly visibility: Visibility;
   readonly config: unknown;
   readonly configVersion: string;
   readonly name: string;
@@ -1139,7 +1164,6 @@ function buildAuthPseudoRow(args: {
     ownerLevel: args.ownerLevel,
     ownerId: args.ownerId,
     organizationId: args.organizationId,
-    visibility: args.visibility,
     status: "draft",
     createdBy: args.createdBy,
     updatedBy: null,
@@ -1188,7 +1212,7 @@ async function findDefaultRow(
 /**
  * List every dashboard for (entity, owner) the actor may read, Overview first.
  * Fail-closed: an incomplete ref/actor, a cross-tenant actor, or an actor the
- * shared owner/visibility/OBO resolver denies all yield ZERO rows. The exact
+ * shared owner-scope/OBO resolver denies all yield ZERO rows. The exact
  * (org, entity, owner) composite is the primary scope; `resolveDashboardAccess`
  * is re-applied per row as defense in depth.
  */
@@ -1235,6 +1259,12 @@ export async function getEntityDashboard(
   const rows = await db.select().from(dashboards).where(eq(dashboards.id, id)).limit(1);
   const row = rows[0];
   if (!row) return undefined;
+  // This is the ENTITY-dashboard fetch (personal/team/org surfaces); entity
+  // dashboards are never project-scoped. Exclude project rows explicitly:
+  // `resolveDashboardAccess` returns canRead: true for a project row at the owner
+  // tier (the project GRANT is the real gate, applied only by the project-aware
+  // callers), so a bare canRead check here must NOT serve a project instance.
+  if (row.projectId) return undefined;
   if (!resolveDashboardAccess(row, actor).canRead) return undefined;
   return row;
 }
@@ -1244,7 +1274,6 @@ export type EnsureOverviewInput = {
   /** Bare drizzle-cube config to seed a NEW Overview with (wrapped into the
    *  apiVersion 1.2 envelope). Ignored when the Overview already exists. Defaults to empty. */
   readonly seedConfig?: unknown;
-  readonly visibility?: Visibility;
 };
 
 /**
@@ -1267,8 +1296,16 @@ export async function ensureOverview(
 
   const lockKey = ["overview", orgId, ref.entityType, ref.entityId, ref.ownerLevel, ref.ownerId].join(":");
 
-  const db = getDashboardsDb();
-  return db.transaction(async (tx) => {
+  // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
+  // lifecycle ruling run BEFORE this body (see org-write-seam.ts). The
+  // find-path returns without writing, but the ensure is one writer — it
+  // holds the guard uniformly (an archived org must not lazily CREATE its
+  // missing Overview either).
+  return guardedDashboardsWrite(
+    actor,
+    { schema: backfillSchemaName() },
+    async (guardedTx) => {
+    const tx = guardedTx as unknown as DashboardsDb;
     // Advisory-first on the canonical overview id (uniform lock order across
     // writers, see acquireTwinLockFirst) THEN the composite ensure-lock. The
     // create path pairs the twin for exactly this id.
@@ -1276,7 +1313,7 @@ export async function ensureOverview(
     // Serialize concurrent ensures on the composite; released at COMMIT/ROLLBACK.
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
 
-    const found = await findDefaultRow(tx as unknown as DashboardsDb, orgId, ref);
+    const found = await findDefaultRow(tx, orgId, ref);
     if (found) return found;
 
     const { config, configVersion } = await normalizeConfigForWrite({
@@ -1286,14 +1323,12 @@ export async function ensureOverview(
       fallbackScopeOwnerLevel: ref.ownerLevel,
     });
     const id = buildOverviewDashboardId(ref);
-    const visibility: Visibility = input.visibility ?? "private";
 
     const pseudo = buildAuthPseudoRow({
       id,
       organizationId: orgId,
       ownerLevel: ref.ownerLevel,
       ownerId: ref.ownerId,
-      visibility,
       config,
       configVersion,
       name: OVERVIEW_DASHBOARD_NAME,
@@ -1318,7 +1353,6 @@ export async function ensureOverview(
         ownerLevel: ref.ownerLevel,
         ownerId: ref.ownerId,
         organizationId: orgId,
-        visibility,
         status: "draft",
         createdBy: actor.userId,
         entityType: ref.entityType,
@@ -1327,7 +1361,7 @@ export async function ensureOverview(
       } as NewDashboardRow)
       .returning();
 
-    await writeAudit(tx as unknown as DashboardsDb, {
+    await writeAudit(tx, {
       operation: "dashboards.create",
       actor,
       row,
@@ -1335,7 +1369,8 @@ export async function ensureOverview(
     });
     await pairTwin(tx as unknown as TwinTx, twinCtx(row, "upsert", actor.userId));
     return row;
-  });
+    },
+  );
 }
 
 export type CreateEntityDashboardInput = {
@@ -1343,7 +1378,6 @@ export type CreateEntityDashboardInput = {
   readonly name: string;
   /** Bare drizzle-cube config to seed with (wrapped into apiVersion 1.2). Defaults to empty. */
   readonly seedConfig?: unknown;
-  readonly visibility?: Visibility;
 };
 
 /**
@@ -1370,14 +1404,12 @@ export async function createEntityDashboard(
   // hit is the name index — making a 23505 unambiguously a name conflict (a
   // random-UUID primary-key collision is not a reachable case).
   const id = randomUUID();
-  const visibility: Visibility = input.visibility ?? "private";
 
   const pseudo = buildAuthPseudoRow({
     id,
     organizationId: orgId,
     ownerLevel: input.ref.ownerLevel,
     ownerId: input.ref.ownerId,
-    visibility,
     config,
     configVersion,
     name,
@@ -1390,9 +1422,14 @@ export async function createEntityDashboard(
     throw new DashboardForbiddenError("dashboards.create", id);
   }
 
-  const db = getDashboardsDb();
   try {
-    return await db.transaction(async (tx) => {
+    // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
+    // lifecycle ruling run BEFORE this body (see org-write-seam.ts).
+    return await guardedDashboardsWrite(
+      actor,
+      { schema: backfillSchemaName() },
+      async (guardedTx) => {
+      const tx = guardedTx as unknown as DashboardsDb;
       // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
       await acquireTwinLockFirst(tx as unknown as TwinTx, id);
       const [row] = await tx
@@ -1405,7 +1442,6 @@ export async function createEntityDashboard(
           ownerLevel: input.ref.ownerLevel,
           ownerId: input.ref.ownerId,
           organizationId: orgId,
-          visibility,
           status: "draft",
           createdBy: actor.userId,
           entityType: input.ref.entityType,
@@ -1413,7 +1449,7 @@ export async function createEntityDashboard(
           isDefault: false,
         } as NewDashboardRow)
         .returning();
-      await writeAudit(tx as unknown as DashboardsDb, {
+      await writeAudit(tx, {
         operation: "dashboards.create",
         actor,
         row,
@@ -1421,7 +1457,8 @@ export async function createEntityDashboard(
       });
       await pairTwin(tx as unknown as TwinTx, twinCtx(row, "upsert", actor.userId));
       return row;
-    });
+      },
+    );
   } catch (e) {
     // The only unique index a non-default create can hit is the name index.
     if (isUniqueViolation(e)) throw new DashboardNameConflictError(name);
@@ -1441,12 +1478,17 @@ export async function renameDashboard(
   actor: DashboardActor,
 ): Promise<DashboardRow> {
   const name = assertCreatableName(newName);
-  const db = getDashboardsDb();
   try {
-    return await db.transaction(async (tx) => {
+    // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
+    // lifecycle ruling run BEFORE this body (see org-write-seam.ts).
+    return await guardedDashboardsWrite(
+      actor,
+      { schema: backfillSchemaName() },
+      async (guardedTx) => {
+      const tx = guardedTx as unknown as DashboardsDb;
       // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
       await acquireTwinLockFirst(tx as unknown as TwinTx, id);
-      const row = await selectForUpdate(tx as unknown as DashboardsDb, id);
+      const row = await selectForUpdate(tx, id);
       if (!row) throw new DashboardNotFoundError(id);
       if (!resolveDashboardAccess(row, actor).canWrite) {
         throw new DashboardForbiddenError("dashboards.rename", id);
@@ -1464,7 +1506,7 @@ export async function renameDashboard(
         })
         .where(eq(dashboards.id, id))
         .returning();
-      await writeAudit(tx as unknown as DashboardsDb, {
+      await writeAudit(tx, {
         operation: "dashboards.rename",
         actor,
         row: updated,
@@ -1472,7 +1514,8 @@ export async function renameDashboard(
       });
       await pairTwin(tx as unknown as TwinTx, twinCtx(updated, "upsert", actor.userId));
       return updated;
-    });
+      },
+    );
   } catch (e) {
     if (isUniqueViolation(e)) throw new DashboardNameConflictError(name);
     throw e;
@@ -1488,11 +1531,16 @@ export async function deleteEntityDashboard(
   id: string,
   actor: DashboardActor,
 ): Promise<void> {
-  const db = getDashboardsDb();
-  await db.transaction(async (tx) => {
+  // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
+  // lifecycle ruling run BEFORE this body (see org-write-seam.ts).
+  await guardedDashboardsWrite(
+    actor,
+    { schema: backfillSchemaName() },
+    async (guardedTx) => {
+    const tx = guardedTx as unknown as DashboardsDb;
     // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
     await acquireTwinLockFirst(tx as unknown as TwinTx, id);
-    const row = await selectForUpdate(tx as unknown as DashboardsDb, id);
+    const row = await selectForUpdate(tx, id);
     if (!row) throw new DashboardNotFoundError(id);
     if (!resolveDashboardAccess(row, actor).canWrite) {
       throw new DashboardForbiddenError("dashboards.delete", id);
@@ -1500,7 +1548,7 @@ export async function deleteEntityDashboard(
     if (row.isDefault) {
       throw new DashboardOverviewProtectedError("dashboards.delete", id);
     }
-    await writeAudit(tx as unknown as DashboardsDb, {
+    await writeAudit(tx, {
       operation: "dashboards.delete",
       actor,
       row,
@@ -1511,7 +1559,8 @@ export async function deleteEntityDashboard(
     // mints no dedicated claim, so the tombstone + delete outbox suffice.
     await pairTwin(tx as unknown as TwinTx, twinCtx(row, "delete", actor.userId));
     await tx.delete(dashboards).where(eq(dashboards.id, id));
-  });
+    },
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1673,7 +1722,6 @@ export async function materializeExtensionTemplate(
             ownerLevel: input.scope.ownerLevel,
             ownerId: input.scope.ownerId,
             organizationId: input.organizationId,
-            visibility: "members",
             status: "published",
             createdBy: input.actor.userId,
             extensionId: input.extensionId,
@@ -1764,7 +1812,6 @@ export async function materializeExtensionInstanceForProject(
           ownerLevel: t.ownerLevel,
           ownerId: t.ownerId,
           organizationId: t.organizationId,
-          visibility: t.visibility,
           status: "published",
           createdBy: input.actor.userId,
           extensionId: input.extensionId,
@@ -1803,7 +1850,7 @@ export async function archiveExtensionDashboards(
   tx: DashboardsDb | undefined,
   input: { extensionId: string; organizationId: string; actor: DashboardActor; reason?: string },
 ): Promise<number> {
-  return withDashboardsTx(tx, async (q) => {
+  const body = async (q: DashboardsDb): Promise<number> => {
     // Shared predicate so the pre-lock SELECT and the UPDATE can never drift.
     const where = and(
       eq(dashboards.extensionId, input.extensionId),
@@ -1830,14 +1877,22 @@ export async function archiveExtensionDashboards(
     }
     await pairTwinBulk(q as unknown as TwinTx, rows, "upsert", input.actor.userId);
     return rows.length;
-  });
+  };
+  // Org-write kernel guard (cinatra#1939 S3) when this writer opens its own
+  // transaction (every in-repo caller; the lifecycle hook mints the
+  // "extension-dashboard-lifecycle" system purpose). An OUTER tx rides its
+  // caller's guard — that composed path converts with its caller's wave.
+  if (tx) return withDashboardsTx(tx, body);
+  return guardedDashboardsWrite(input.actor, { schema: backfillSchemaName() }, (g) =>
+    body(g as unknown as DashboardsDb),
+  );
 }
 
 export async function restoreExtensionDashboards(
   tx: DashboardsDb | undefined,
   input: { extensionId: string; organizationId: string; actor: DashboardActor },
 ): Promise<number> {
-  return withDashboardsTx(tx, async (q) => {
+  const body = async (q: DashboardsDb): Promise<number> => {
     const where = and(
       eq(dashboards.extensionId, input.extensionId),
       eq(dashboards.organizationId, input.organizationId),
@@ -1856,7 +1911,15 @@ export async function restoreExtensionDashboards(
     }
     await pairTwinBulk(q as unknown as TwinTx, rows, "upsert", input.actor.userId);
     return rows.length;
-  });
+  };
+  // Org-write kernel guard (cinatra#1939 S3) when this writer opens its own
+  // transaction — see archiveExtensionDashboards directly above for the
+  // outer-tx contract. An org archived at the ORG level refuses this restore:
+  // extension restore inside an archived org must not write.
+  if (tx) return withDashboardsTx(tx, body);
+  return guardedDashboardsWrite(input.actor, { schema: backfillSchemaName() }, (g) =>
+    body(g as unknown as DashboardsDb),
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1939,7 +2002,7 @@ export async function adoptExtensionDashboards(
 ): Promise<number> {
   if (input.matchLineageIds.length === 0) return 0;
   const lineageIds = [...input.matchLineageIds];
-  return withDashboardsTx(tx, async (q) => {
+  const body = async (q: DashboardsDb): Promise<number> => {
     const setPatch: Record<string, unknown> = {
       extensionId: input.successorPackage,
       contributionId: input.successorContributionId,
@@ -1989,7 +2052,15 @@ export async function adoptExtensionDashboards(
     }
     await pairTwinBulk(q as unknown as TwinTx, rows, "upsert", input.actor.userId);
     return rows.length;
-  });
+  };
+  // Org-write kernel guard (cinatra#1939 S3) when this writer opens its own
+  // transaction (the reconciler mints the "dashboard-contribution-reconciler"
+  // system purpose and passes tx=undefined). An OUTER tx rides its caller's
+  // guard — the composed path converts with its caller's wave.
+  if (tx) return withDashboardsTx(tx, body);
+  return guardedDashboardsWrite(input.actor, { schema: backfillSchemaName() }, (g) =>
+    body(g as unknown as DashboardsDb),
+  );
 }
 
 
@@ -2246,6 +2317,14 @@ export interface BackfillTwinsDeps {
   maxBatches?: number;
   /** optional logger for a non-trivial run. */
   log?: (msg: string) => void;
+  /**
+   * Host-supplied org-write mint (cinatra#1939 S3): called once per row's org
+   * so each per-id transaction runs under the kernel guard for ITS org. The
+   * boot phase wires the "dashboard-twin-backfill" system purpose. ABSENT →
+   * every row fails closed into `failed` (isolated, retried next boot) —
+   * never an unguarded write.
+   */
+  mintOrgAuthority?: (orgId: string) => OrgWriteAuthority;
 }
 
 /** The app schema name — mirrors `SCHEMA_NAME` in `store/schema.ts`. */
@@ -2263,9 +2342,20 @@ function backfillSchemaName(): string {
 export async function pairOneUntwinnedDashboardTwin(
   id: string,
   schemaName: string,
+  guard: { organizationId: string; authority: OrgWriteAuthority },
 ): Promise<"paired" | "already" | "collision" | "gone"> {
   const objTable = sql.raw(`"${schemaName.replaceAll('"', '""')}"."objects"`);
-  return getDashboardsDb().transaction(async (tx) => {
+  // Org-write kernel guard (cinatra#1939 S3): the sweep resolved the row's org
+  // in its scan; each per-id transaction is ruled against that org's
+  // lifecycle. The system actor mirrors the twin audit provenance.
+  const actor: DashboardActor = {
+    userId: "system:dashboard-twin-backfill",
+    organizationId: guard.organizationId,
+    teamIds: [],
+    authority: guard.authority,
+  };
+  return guardedDashboardsWrite(actor, { schema: schemaName }, async (guardedTx) => {
+    const tx = guardedTx as unknown as DashboardsDb;
     // Uniform advisory-first lock (the SAME order every forward writer takes),
     // then the dashboard row lock — serializes this backfill against a forward
     // mutation racing the same id.
@@ -2278,6 +2368,13 @@ export async function pairOneUntwinnedDashboardTwin(
       .limit(1);
     const row = rows[0];
     if (!row) return "gone";
+    // The org is immutable on a dashboards row; a mismatch against the scan's
+    // org means the guard ruled the WRONG org — refuse, never write.
+    if (row.organizationId !== guard.organizationId) {
+      throw new Error(
+        `twin backfill: row ${id} belongs to org ${row.organizationId}, guarded as ${guard.organizationId}`,
+      );
+    }
     // Re-check UNDER THE LOCK — this is what makes the backfill idempotent even
     // when a forward mutation twins the id between the scan and here. A
     // non-dashboard object at the id is a collision: skip + surface, never
@@ -2346,7 +2443,7 @@ export async function backfillDashboardArtifactTwins(
   let cursor = "";
   for (let b = 0; b < maxBatches; b++) {
     const scan = sql`
-      SELECT d.id AS id
+      SELECT d.id AS id, d.organization_id AS org_id
       FROM ${dashTable} d
       WHERE d.id > ${cursor}
         AND NOT EXISTS (
@@ -2361,10 +2458,26 @@ export async function backfillDashboardArtifactTwins(
     if (rows.length === 0) break;
     for (const r of rows) {
       const id = String(r.id);
+      const orgId = String(r.org_id ?? "");
       result.scanned += 1;
       cursor = id; // advance past every processed id (paired, skipped, or failed)
+      // Fail-closed per row (cinatra#1939 S3): no host mint wired, or no org on
+      // the row, means no kernel authority — the row stays untwinned (isolated,
+      // retried next boot), never an unguarded write.
+      if (!deps.mintOrgAuthority || !orgId) {
+        result.failed.push({
+          id,
+          error: !orgId
+            ? "row has no organization_id"
+            : "no org-write mint wired (deps.mintOrgAuthority)",
+        });
+        continue;
+      }
       try {
-        const outcome = await pairOneUntwinnedDashboardTwin(id, schemaName);
+        const outcome = await pairOneUntwinnedDashboardTwin(id, schemaName, {
+          organizationId: orgId,
+          authority: deps.mintOrgAuthority(orgId),
+        });
         if (outcome === "paired") result.paired += 1;
         else if (outcome === "already") result.alreadyTwinned += 1;
         else if (outcome === "collision") result.collisions += 1;

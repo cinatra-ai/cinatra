@@ -100,12 +100,30 @@ except Exception:  # pragma: no cover
 #     test_input_message_gate_reconcile.py), so that form mounts too.
 # A conditional xfail would have no failing state to represent and could conceal
 # a future regression, so the entry is removed unconditionally.
-_KNOWN_FAILING_GATE_AGENTS: set[str] = set()
+#
+# ``security-reviewer-agent`` also formerly sat here (cinatra#2140): the FIRST run
+# of this guard against the real pinned extension tree — see the
+# ``validate-wayflow-mount`` job in .github/workflows/validate-agents.yml, which
+# that issue wired up — surfaced one genuine pre-existing mount failure. It was
+# NOT a HITL-gate defect: at pin ``aa44488c`` the ``review`` node's ``data.system``
+# prompt contained a LITERAL ``{{ ... }}`` inside prose ("interpolate untrusted
+# input via ``{{ ... }}``"), which wayflowcore parses as a Jinja expression and
+# rejects with ``TemplateSyntaxError: unexpected '.'`` — so the agent never
+# mounted. The fix belonged in the agent repo and LANDED there
+# (security-reviewer-agent#33, escaping the literal moustache example); the pin
+# moved to ``8e978e46`` in the same core change that removes this entry, so the
+# agent mounts and the strict xfail would XPASS-red. Removed exactly as designed:
+# the allowlist never outlives the failure it records.
+#
+# The allowlist maps slug → a SUBSTRING of the expected failure, and the check is
+# BOUNDED (below): only that exact failure xfails. A different exception on an
+# allowlisted agent is a real FAILURE (a blanket slug xfail would have masked it),
+# and an allowlisted agent that starts mounting fails too, forcing the entry out.
+_KNOWN_FAILING_GATE_AGENTS: dict[str, str] = {}
 _KNOWN_FAILING_REASON = (
-    "known-failing HITL gate mount (see _KNOWN_FAILING_GATE_AGENTS) — awaits a "
-    "separately-tracked fix; strict-xfail keeps the red visible without failing "
-    "the guard. Remove the entry when the agent mounts (a strict-xfail PASS "
-    "forces it)."
+    "known-failing mount (see _KNOWN_FAILING_GATE_AGENTS) — awaits a "
+    "separately-tracked fix; the bounded xfail keeps the red visible without "
+    "failing the guard, and only for the recorded failure."
 )
 
 
@@ -113,20 +131,16 @@ def _agent_oas_params() -> list["pytest.ParameterSet"]:
     """Enumerate every mountable OAS via the runtime's own ``discover_agents``
     two-level walk, so the guard's parametrization is byte-identical to the set
     the loader mounts at boot. Each param is keyed by the canonical ``slug``
-    (from ``metadata.cinatra.packageName``), and a known-failing gate agent is
-    marked strict-xfail."""
+    (from ``metadata.cinatra.packageName``). A known-failing agent is NOT marked
+    here: the xfail is applied in the test body so it can be bounded to the
+    recorded failure instead of blanketing the slug."""
     # No point discovering (and parsing OAS) when the suite can't mount anyway —
     # keeps collection inert on a host missing the runtime deps.
     if agent_loader is None or AgentSpecLoader is None or not AGENTS_DIR.is_dir():
         return []
     out: list["pytest.ParameterSet"] = []
     for vendor, slug, oas_path, _sha in agent_loader.discover_agents(AGENTS_DIR):
-        marks = (
-            [pytest.mark.xfail(reason=_KNOWN_FAILING_REASON, strict=True)]
-            if slug in _KNOWN_FAILING_GATE_AGENTS
-            else []
-        )
-        out.append(pytest.param(oas_path, marks=marks, id=f"{vendor}/{slug}"))
+        out.append(pytest.param(oas_path, slug, id=f"{vendor}/{slug}"))
     return out
 
 
@@ -145,13 +159,23 @@ def _runtime_preload(raw_text: str, label: str) -> str:
 
 
 @pytest.mark.skipif(AgentSpecLoader is None, reason="wayflowcore not installed (run inside the wayflow image)")
-@pytest.mark.parametrize("oas_path", _agent_oas_params())
-def test_oas_loads_via_agentspec_loader(oas_path: Path) -> None:
+@pytest.mark.parametrize("oas_path,slug", _agent_oas_params())
+def test_oas_loads_via_agentspec_loader(oas_path: Path, slug: str) -> None:
     """Each discoverable oas.json must mount through the real runtime pre-load
     pipeline + AgentSpecLoader without exception."""
     raw = oas_path.read_text(encoding="utf-8")
     label = oas_path.parent.parent.name
     substituted = _runtime_preload(raw, label)
-    # Will raise on validation/conversion failure — pytest reports it.
-    agent = AgentSpecLoader().load_json(substituted)
+    expected_failure = _KNOWN_FAILING_GATE_AGENTS.get(slug)
+    try:
+        agent = AgentSpecLoader().load_json(substituted)
+    except Exception as exc:  # noqa: BLE001 — the message decides the verdict
+        if expected_failure is not None and expected_failure in str(exc):
+            pytest.xfail(f"{slug}: {_KNOWN_FAILING_REASON} [{expected_failure}]")
+        raise
     assert agent is not None, f"AgentSpecLoader returned None for {oas_path}"
+    if expected_failure is not None:
+        pytest.fail(
+            f"{slug} is in _KNOWN_FAILING_GATE_AGENTS but now mounts — remove its "
+            f"entry (the allowlist must never outlive the failure it records)."
+        )

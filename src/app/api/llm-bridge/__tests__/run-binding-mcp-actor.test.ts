@@ -116,6 +116,10 @@ vi.mock("@/lib/a2a-auth", () => ({
   })),
 }));
 vi.mock("@cinatra-ai/skills", () => ({
+  // cinatra#2090 S3: the declared-edge projection the route consults when a
+  // co-located bundle probe misses. Null here = "no declared skill edge",
+  // which keeps every case in this file on the co-located path.
+  resolveDeclaredSkillEdgeForExtensionDir: vi.fn(async () => null),
   getCustomSkillForCurrentUserAndAgent: vi.fn(async () => null),
 }));
 vi.mock("@/lib/agents-store", () => ({
@@ -140,6 +144,13 @@ vi.mock("@cinatra-ai/agents", async () => {
     // runs declare NO environment, so the resolver reports `kind:"none"` and the
     // binding resolves to L0 — the route path under test is unchanged.
     resolveRunExecutionEnvironment: () => ({ kind: "none" }),
+    // …and the DECLARATION-SOURCE reader's pin classifier (epic #1705). These
+    // runs carry no A2A version pin, so the classifier is never invoked; the
+    // readers exist only to satisfy the module's imports.
+    resolvePinnedRunSnapshot: async () => null,
+    readAgentTemplateVersionById: async () => null,
+    readAgentTemplateVersionBySemver: async () => null,
+    PinnedRunSnapshotUnreachableError: class extends Error {},
     // Capability-matrix helpers consumed by _llm-dispatch.ts (engineering#417).
     // Pure mirrors of llm-provider-policy.ts so the dispatch capability gate +
     // actionable 503 message resolve without the heavy real barrel.

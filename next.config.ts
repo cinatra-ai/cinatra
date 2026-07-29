@@ -142,6 +142,32 @@ const nextConfig: NextConfig = {
     // The gating env variable was verified via
     // `next/dist/build/define-env.js:195`.
     reactDebugChannel: false,
+    // ---------------------------------------------------------------------
+    // Turbopack DEV filesystem cache — opt-OUT for constrained CI hosts.
+    //
+    // Next 16 defaults `turbopackFileSystemCacheForDev` to true: the dev server
+    // persists its compilation graph to `.next/cache` and periodically compacts
+    // that database. On a developer machine that is a pure win (warm restarts).
+    // On a 4-vCPU / 16-GB hosted CI runner that is ALSO hosting the docker
+    // WordPress + Drupal + nango + wayflow stack, Postgres/Redis service
+    // containers and a Playwright Chromium, the cache write + compaction cycle
+    // is the marginal workload that pushes the box over its memory/IO cliff.
+    //
+    // Observed failure mode (WP/Drupal UAT gate): compaction time escalates
+    // 11.8s → 14.0s → 21.3s → 31.7s → 49s → 98s → 2.1min → 8.7min inside one
+    // run, after which the whole VM stops making progress — no Playwright
+    // per-test timeout ever fires (the test runner process is wedged too) and
+    // the job dies silently when the runner is torn down. The suite is
+    // COLD-cached on every CI run anyway (a fresh runner has no `.next/cache`),
+    // so persisting it buys nothing there and only costs the write + compaction.
+    //
+    // Env-gated rather than unconditional so local `pnpm dev` keeps its warm
+    // restarts; only the UAT config's webServer command sets the flag (see
+    // tests/e2e/config/wp-drupal-uat.config.ts).
+    // ---------------------------------------------------------------------
+    ...(process.env.CINATRA_TURBOPACK_DEV_FS_CACHE === "0"
+      ? { turbopackFileSystemCacheForDev: false }
+      : {}),
   },
   serverExternalPackages: [
     // Crawlee packages use native binaries and must stay external.

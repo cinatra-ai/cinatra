@@ -12,6 +12,9 @@ import {
   ORG_WRITE_REGISTRY,
   DECLARED_FKLESS_ORG_REFERENCES,
   DECLARED_ORG_FK_CASCADES,
+  ORG_DELETE_TIME_RULING,
+  BA_PUBLIC_TABLE_DELETE_RULING,
+  orgDeleteBlockTables,
 } from "../write-registry";
 
 const MUTATION_SERVICE = "packages/dashboards/src/mutation-service.ts";
@@ -118,5 +121,153 @@ describe("per-function write-site ratchet + R4 seed", () => {
     for (const row of ORG_WRITE_REGISTRY) {
       expect(row.importBanned).toBe(false);
     }
+  });
+});
+
+describe("org.delete capability vocab — delete row swap (#1939 wave 3, stage B)", () => {
+  const DELETE_MODULE = "src/lib/organization-delete.ts";
+  const deleteRow = ORG_WRITE_REGISTRY.find(
+    (e) =>
+      e.module === DELETE_MODULE &&
+      e.exportName === "deleteOrganizationReferenceGuarded",
+  )!;
+
+  it("the guarded delete writer demands org.delete, not org.lifecycle", () => {
+    expect(deleteRow).toBeDefined();
+    expect(deleteRow.capability).toBe("org.delete");
+  });
+
+  it("discloses org.lifecycle as the pre-activation transitional demand (Decision 1)", () => {
+    // The transitional fallback lives ONLY here (and in the writer's own
+    // module-private gate helper, stage C) — a reviewed, per-surface disclosure
+    // that the S6 closeout removes.
+    expect(deleteRow.conditionalCapabilities).toEqual(["org.lifecycle"]);
+  });
+
+  it("swaps ONLY the capability — the rest of the delete row is untouched", () => {
+    // importBanned flips in stage C, not here; the delete-furniture taxonomy and
+    // org-axis extractor are unchanged by the vocab stage.
+    expect(deleteRow.importBanned).toBe(false);
+    expect(deleteRow.cascadeOwnership).toBe("app-furniture");
+    expect(deleteRow.storageReferences).toEqual([
+      "organization",
+      "member",
+      "invitation",
+      "session",
+      "dashboards",
+    ]);
+  });
+
+  it("the archive lease-snapshot writer KEEPS org.lifecycle (only the delete row swapped)", () => {
+    const leaseRow = ORG_WRITE_REGISTRY.find(
+      (e) => e.exportName === "snapshotLeasesQuery",
+    )!;
+    expect(leaseRow.capability).toBe("org.lifecycle");
+    expect(leaseRow.conditionalCapabilities).toBeUndefined();
+  });
+});
+
+describe("delete-time rulings — registry-derived blocker inventory (#1939 wave 3, Decision 5)", () => {
+  it("ORG_DELETE_TIME_RULING rules EVERY declared reference (compile-total; runtime pin)", () => {
+    const declared = [
+      ...DECLARED_FKLESS_ORG_REFERENCES,
+      ...DECLARED_ORG_FK_CASCADES,
+    ].sort();
+    expect(Object.keys(ORG_DELETE_TIME_RULING).sort()).toEqual(declared);
+    // block/furniture rulings name the reference's OWN table (no cross-wiring).
+    for (const [ref, ruling] of Object.entries(ORG_DELETE_TIME_RULING)) {
+      if (ruling.kind === "block" || ruling.kind === "furniture") {
+        expect(ruling.table).toBe(ref.split(".")[0]);
+        expect(ruling.orgColumn.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("the block set is the rebaselined inventory incl. the two #1939 tightenings", () => {
+    const blockRefs = Object.entries(ORG_DELETE_TIME_RULING)
+      .filter(([, r]) => r.kind === "block")
+      .map(([ref]) => ref)
+      .sort();
+    expect(blockRefs).toEqual([
+      "agent_runs.org_id",
+      "agent_templates.org_id",
+      "dashboards.organization_id",
+      "installed_extension.organization_id",
+      "projects.organization_id",
+    ]);
+    // Tightening 1: installed_extension blocks ALL kinds (no `kind='connector'`).
+    const ext = ORG_DELETE_TIME_RULING["installed_extension.organization_id"];
+    expect(ext.kind).toBe("block");
+    if (ext.kind === "block") expect(ext.blockWhere).toBeUndefined();
+    // Tightening 2: agent_runs blocks NON-TERMINAL runs (a new blocker kind).
+    const runs = ORG_DELETE_TIME_RULING["agent_runs.org_id"];
+    expect(runs.kind).toBe("block");
+    if (runs.kind === "block") {
+      expect(runs.nonTerminalRunsOnly).toBe(true);
+      expect(runs.blockerKey).toBe("liveAgentRuns");
+    }
+    // agent_templates keeps its compound org axis (org_id OR origin.scope).
+    const tmpl = ORG_DELETE_TIME_RULING["agent_templates.org_id"];
+    if (tmpl.kind === "block") expect(tmpl.alsoOriginScope).toBe(true);
+  });
+
+  it("kernel tables are new furniture; canonical history is inert; the 3 FKs cascade", () => {
+    expect(ORG_DELETE_TIME_RULING["org_archive_lease.org_id"].kind).toBe("furniture");
+    expect(ORG_DELETE_TIME_RULING["org_write_completion_ticket.org_id"].kind).toBe(
+      "furniture",
+    );
+    for (const ref of [
+      "objects.org_id",
+      "resource.org_id",
+      "artifact_blobs.org_id",
+      "change_set.org_id",
+      "object_change_event.org_id",
+    ] as const) {
+      expect(ORG_DELETE_TIME_RULING[ref].kind).toBe("inert-history");
+    }
+    for (const ref of DECLARED_ORG_FK_CASCADES) {
+      expect(ORG_DELETE_TIME_RULING[ref].kind).toBe("db-cascade");
+    }
+  });
+
+  it("block rulings feed exactly the app-schema blocker fields (teams is a BA table, ruled separately)", () => {
+    const keys = Object.values(ORG_DELETE_TIME_RULING).flatMap((r) =>
+      r.kind === "block" ? [r.blockerKey] : [],
+    );
+    expect([...new Set(keys)].sort()).toEqual([
+      "activeProjects",
+      "agents",
+      "dashboards",
+      "installedExtensions",
+      "liveAgentRuns",
+    ]);
+    // teams is NOT in the declared ruling record — it is a BA public table.
+    expect(BA_PUBLIC_TABLE_DELETE_RULING.team).toBe("block");
+  });
+
+  it("cascadeOwnership stays consistent with the delete-time rulings (no db-cascade on a block table)", () => {
+    const blockTables = orgDeleteBlockTables();
+    for (const row of ORG_WRITE_REGISTRY) {
+      const touchesBlock = row.storageReferences.some((t) => blockTables.has(t));
+      if (row.cascadeOwnership === "db-cascade") {
+        expect(
+          touchesBlock,
+          `${row.exportName} claims db-cascade but touches a block-ruled table`,
+        ).toBe(false);
+      }
+      if (row.cascadeOwnership === "block") {
+        expect(
+          touchesBlock,
+          `${row.exportName} is classified block but touches no block-ruled table`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("createTeamAction is corrected to block (team has no org FK; the delete blocks on teams)", () => {
+    const row = ORG_WRITE_REGISTRY.find((e) => e.exportName === "createTeamAction")!;
+    expect(row.cascadeOwnership).toBe("block");
+    expect(row.storageReferences).toContain("team");
+    expect(orgDeleteBlockTables().has("team")).toBe(true);
   });
 });

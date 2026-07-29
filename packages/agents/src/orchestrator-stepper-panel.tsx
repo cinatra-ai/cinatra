@@ -71,6 +71,11 @@ import {
   resumeStoppedOrchestratorAction,
 } from "./orchestrator-actions";
 import { startDevChildPreviewRun, buildSubmissionMapByStepIndex, type SubmissionMapEntry, type SubmissionMapEntries } from "./run-actions";
+import { RunRecommendationChipRow } from "./run-recommendation-chip-row";
+import {
+  getRunRecommendationHoldStateAction,
+  type RunRecommendationHoldState,
+} from "./run-recommendation-actions";
 import { ensureOrCheckRunNameAction } from "./run-name-actions";
 import { approveReviewTask } from "./hitl-actions";
 // Wrap the legacy `userResponse` text with the WayFlow `user_envelope`
@@ -1171,6 +1176,75 @@ function ReadOnlyHitlReplay(props: {
 }
 
 // ---------------------------------------------------------------------------
+// DevPreviewRecommendationRow (cinatra#2148 finding 2)
+//
+// The Dev-Stepper child preview now consults the run-start recommendation hold,
+// so a preview run whose checkpoint fires PARKS at pending_input instead of
+// dispatching. Without a decision affordance the embedded card would sit on
+// "Queueing agent…" forever, so the dev preview mounts the SAME shared chip-row
+// the run view and the chat panel use. Renders NOTHING for an unheld preview
+// (`state: "none"`), which is every preview that did not park — so the unheld
+// path is visually byte-unchanged.
+//
+// Mirrors the AgenticRunPanel mount exactly: poll while held, stop as soon as
+// the hold resolves to a terminal state.
+// ---------------------------------------------------------------------------
+function DevPreviewRecommendationRow({
+  runId,
+  agentPackageName,
+}: {
+  runId: string;
+  agentPackageName: string;
+}) {
+  const [recHold, setRecHold] = useState<RunRecommendationHoldState | null>(null);
+  useEffect(() => {
+    if (!runId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const fetchState = () => {
+      getRunRecommendationHoldStateAction({ runId })
+        .then((s) => {
+          if (cancelled) return;
+          setRecHold(s);
+          if (s.state !== "held" && timer) {
+            clearInterval(timer);
+            timer = null;
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setRecHold({ state: "none" });
+        });
+    };
+    fetchState();
+    timer = setInterval(fetchState, 4000);
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [runId]);
+
+  if (!recHold || recHold.state === "none") return null;
+  return (
+    <RunRecommendationChipRow
+      runId={runId}
+      agentPackageName={
+        recHold.state === "held" ? recHold.agentPackageName : agentPackageName
+      }
+      promptText={recHold.state === "held" ? recHold.promptText : undefined}
+      initialRecommendations={recHold.state === "held" ? recHold.recommendations : undefined}
+      decision={
+        recHold.state === "held"
+          ? { kind: "pending" }
+          : recHold.state === "confirmed"
+            ? { kind: "confirmed", skillNames: recHold.skillNames }
+            : { kind: "skipped" }
+      }
+      variant="inline"
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
 // OrchestratorStepperPanel (main component)
 // ---------------------------------------------------------------------------
 
@@ -1273,6 +1347,9 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     templateName: string;
     packageName: string;
     agUiEnabled: boolean;
+    /** cinatra#2148: the preview PARKED at the run-start recommendation hold,
+     * so it is pending_input awaiting the chip-row decision — not queued. */
+    held: boolean;
   } | null>(null);
   const [devLoading, setDevLoading] = useState(false);
 
@@ -1310,6 +1387,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           templateName: result.templateName,
           packageName: result.packageName,
           agUiEnabled: result.agUiEnabled,
+          held: result.heldForRecommendation === true,
         });
       } else {
         toast.error(`Could not start dev preview: ${result.error}`);
@@ -1753,11 +1831,19 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
             <X className="h-3.5 w-3.5" />
           </Button>
         </div>
+        {/* cinatra#2148 finding 2: a dev-preview run that PARKED at the
+            run-start recommendation interception is decided right here — the
+            same confirm/adjust/skip that releases the park and dispatches.
+            Renders nothing for an unheld preview. */}
+        <DevPreviewRecommendationRow
+          runId={devActiveChild.runId}
+          agentPackageName={devActiveChild.packageName}
+        />
         <OrchestratorStepperPanel
           key={devActiveChild.runId}
           embedMode
           runId={devActiveChild.runId}
-          initialStatus="queued"
+          initialStatus={devActiveChild.held ? "pending_input" : "queued"}
           initialError={null}
           agUiEnabled={devActiveChild.agUiEnabled}
           agentPackageName={devActiveChild.packageName}

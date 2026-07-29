@@ -54,6 +54,7 @@ vi.mock("@cinatra-ai/skills/mcp-client", () => ({
 vi.mock("@cinatra-ai/skills", () => ({
   ensureInstalledSkillsRegistered: vi.fn(async () => undefined),
   resolveInstalledSkillSourcePath: vi.fn(async () => null),
+  retireSupersededChatSkillsOnce: vi.fn(async () => undefined),
 }));
 vi.mock("@/lib/wizard-staging-store", () => ({
   getAllStagedByType: () => [],
@@ -83,7 +84,18 @@ vi.mock("@cinatra-ai/llm", () => ({
     provider: "openai",
     defaultModel: "gpt-4o",
   })),
-  buildSkillTools: vi.fn(async () => [{ type: "function", name: "shell" }]),
+  // cinatra#2091 S4: the runtime routes skill delivery through the provider
+  // seam instead of calling buildSkillTools directly. The stub returns the same
+  // single shell tool the previous buildSkillTools stub did, so the assembled
+  // tool array stays byte-identical.
+  selectSkillDeliveryAdapter: vi.fn(() => ({
+    provider: "openai",
+    deliver: vi.fn(async () => ({
+      tools: [{ type: "function", name: "shell" }],
+      systemContext: "",
+      exposure: [],
+    })),
+  })),
   resolveChatExternalMcpTools: vi.fn(async () => []),
   buildLlmMcpServerToolForChat: vi.fn(async () => ({
     type: "mcp",
@@ -98,6 +110,7 @@ vi.mock("@cinatra-ai/llm", () => ({
 }));
 
 import { runAssistantTurn } from "../runtime";
+import { resolveChatExternalMcpTools } from "@cinatra-ai/llm";
 import {
   buildCinatraAssistantRuntimeConfig,
   CINATRA_ASSISTANT_SKILL_BUNDLE,
@@ -190,6 +203,16 @@ describe("runAssistantTurn(cinatra) → stream() byte-parity on the covered path
     await runAssistantTurn(buildCinatraAssistantRuntimeConfig(), makeArgs(send));
     expect(send).toHaveBeenCalledWith("text", { content: "Hello" });
     expect(send).toHaveBeenCalledWith("done", {});
+  });
+
+  it("resolves external MCP tools with the chat build context on a cookie-session turn (cinatra#2019 S4)", async () => {
+    const send = vi.fn();
+    await runAssistantTurn(buildCinatraAssistantRuntimeConfig(), makeArgs(send));
+    // No widget principal ⇒ the surface is "chat" — a surface-gating toolbox
+    // may emit here and ONLY here.
+    expect(vi.mocked(resolveChatExternalMcpTools)).toHaveBeenCalledWith("openai", {
+      surface: "chat",
+    });
   });
 });
 

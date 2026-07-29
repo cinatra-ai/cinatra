@@ -19,6 +19,8 @@ export type SyncRowDao = {
   anthropicSkillId: string;
   anthropicVersion: string;
   contentHash: string;
+  revisionId: string | null;
+  bundleDigest: string | null;
   stale: boolean;
 };
 
@@ -45,6 +47,8 @@ export async function readSyncRow(
     anthropicSkillId: r.anthropicSkillId,
     anthropicVersion: r.anthropicVersion,
     contentHash: r.contentHash,
+    revisionId: r.revisionId ?? null,
+    bundleDigest: r.bundleDigest ?? null,
     stale: r.stale,
   };
 }
@@ -57,6 +61,8 @@ export async function upsertSyncRow(
     anthropicSkillId: string;
     anthropicVersion: string;
     contentHash: string;
+    revisionId: string;
+    bundleDigest: string;
   },
 ): Promise<void> {
   await anthropicSkillSyncDb
@@ -68,6 +74,8 @@ export async function upsertSyncRow(
       anthropicSkillId: row.anthropicSkillId,
       anthropicVersion: row.anthropicVersion,
       contentHash: row.contentHash,
+      revisionId: row.revisionId,
+      bundleDigest: row.bundleDigest,
       stale: false,
       updatedAt: new Date(),
     })
@@ -81,7 +89,15 @@ export async function upsertSyncRow(
         anthropicSkillId: row.anthropicSkillId,
         anthropicVersion: row.anthropicVersion,
         contentHash: row.contentHash,
+        revisionId: row.revisionId,
+        bundleDigest: row.bundleDigest,
         stale: false,
+        // Reactivation MUST clear stale_at. Otherwise a later stale transition
+        // (which COALESCE-preserves an existing stale_at) would inherit the OLD
+        // pre-reactivation timestamp and could age past the GC grace window
+        // immediately — bypassing the grace clock. A row that is active again
+        // has no staleness; the next stale event stamps a fresh now().
+        staleAt: null,
         updatedAt: new Date(),
       },
     });

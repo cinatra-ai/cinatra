@@ -154,10 +154,27 @@ describe("wp-drupal UAT bridge-token provisioning wiring", () => {
       path.join(REPO_ROOT, ".github/workflows/wp-drupal-uat.yml"),
       "utf8",
     );
-    const deriveCount = (
-      wf.match(/CINATRA_BRIDGE_TOKEN=\$\(openssl rand -hex 32\)/g) ?? []
-    ).length;
-    expect(deriveCount).toBe(2); // uat-gate + nightly
+    // The derivation is a multi-line block since cinatra#2131: the value is
+    // registered with the runner's log masker at mint time and only then
+    // written to $GITHUB_ENV. Pin the SHAPE that matters — an `openssl rand`
+    // mint written into the job env — rather than one literal line, so
+    // reformatting does not break the pin while a lost derivation still does.
+    const deriveBlocks =
+      wf.match(
+        /minted="\$\(openssl rand -hex 32\)"[\s\S]{0,200}?printf 'CINATRA_BRIDGE_TOKEN=%s\\n' "\$minted" >> "\$GITHUB_ENV"/g,
+      ) ?? [];
+    expect(deriveBlocks.length).toBe(2); // uat-gate + nightly
+    // MASK BEFORE WRITE. The runner prints the whole job env in every
+    // subsequent step's group header, and the masker only redacts output that
+    // comes AFTER registration — so a block that writes first and masks second
+    // renders the value in a public log. The mask-verify job asserts this on
+    // the real rendered log; this pin catches the reordering in review.
+    for (const block of deriveBlocks) {
+      expect(block.indexOf('echo "::add-mask::$minted"')).toBeGreaterThan(-1);
+      expect(block.indexOf('echo "::add-mask::$minted"')).toBeLessThan(
+        block.indexOf('>> "$GITHUB_ENV"'),
+      );
+    }
     expect(wf).toMatch(/\$\{CINATRA_BRIDGE_TOKEN:\?/); // presence assert
     // The app-side reload target: without WAYFLOW_BASE_URL in the job env the
     // agent-marker-backfill phase's wayflow reload is a silent no-op

@@ -71,11 +71,31 @@ export const cinatraExtensionDependencySchema = z
     // extension's kind). cinatraExtensionKindSchema above is the narrower
     // package-self enum.
     kind: z.enum(["agent", "connector", "artifact", "skill"]).optional(),
+    // The declared skill-edge ROLE (cinatra#2090 S3) — mirrors
+    // `canonical-types.ts DEPENDENCY_SKILL_ROLES`. This object is `.strict()`,
+    // so the field is not merely undocumented without this line: an edge
+    // carrying a role would be REFUSED outright at publish/install parse, and a
+    // consumer that declares which surface each of its skill edges feeds could
+    // not be published at all.
+    role: z.enum(["matcher", "authoring"]).optional(),
     edgeType: z.enum(["runtime", "install-time", "peer"]),
     versionConstraint: cinatraVersionConstraintSchema,
     requirement: z.enum(["required", "optional"]),
   })
-  .strict();
+  .strict()
+  // The authority's second role rule: a role is meaningful ONLY on a
+  // kind:"skill" edge (`validateExtensionDependencyShape`). Keyed on the target
+  // KIND alone — `edgeType` is deliberately not constrained, so a role on an
+  // install-time or peer skill edge parses here exactly as it does at install.
+  .superRefine((dep, ctx) => {
+    if (dep.role !== undefined && dep.kind !== "skill") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["role"],
+        message: `role is only meaningful on a kind:"skill" edge (got kind ${JSON.stringify(dep.kind ?? null)})`,
+      });
+    }
+  });
 
 export const cinatraDependenciesSchema = z.array(cinatraExtensionDependencySchema);
 
@@ -136,6 +156,29 @@ export const agentProducesSchema = z.array(
     .strict(),
 );
 
+// The `lifecycle` block (cinatra#2038 S0 → cinatra#2047 D-1) — the agent
+// manifest's LIFECYCLE declarations, compiled onto `agent_templates.lifecycle_config`
+// exactly as `trigger_mode` / `gated_steps` are (epic #2037's "agent-manifest
+// declarations (`metadata.cinatra` block compiled onto `agent_templates`,
+// trigger-style)"). STRICT: an unknown key or a bad checkpoint name REFUSES the
+// manifest at parse time rather than silently laundering a typo into an absent
+// declaration — a silently-dropped `repairCapable` is exactly the D-1 failure.
+export const agentLifecycleDeclarationSchema = z
+  .object({
+    /** Checkpoints the agent requests SKIPPED. Honored ONLY where the org is
+     * silent AND the class is non-external (the lattice enforces both). */
+    requestedSkips: z.array(z.enum(["recommendation", "review", "verification"])).optional(),
+    /** Artifact types this agent declares it produces. */
+    producedTypes: z.array(z.string().min(1)).optional(),
+    /** Whether this producer implements the typed repair round-trip (S2). The
+     * `changes_requested` route keys on it: true ⇒ the repair is dispatched to
+     * the producer; absent/false ⇒ an org route or a human escalation. */
+    repairCapable: z.boolean().optional(),
+  })
+  .strict();
+
+export type AgentLifecycleDeclaration = z.infer<typeof agentLifecycleDeclarationSchema>;
+
 export const cinatraAgentPackageMetadataSchema = z.object({
   packageType: z.literal(CINATRA_AGENT_PACKAGE_TYPE),
   manifestVersion: z.literal(CINATRA_AGENT_MANIFEST_VERSION),
@@ -181,6 +224,10 @@ export const cinatraAgentPackageMetadataSchema = z.object({
   // `packages/extensions/src/__tests__/agent-produces-reader.test.ts`, which
   // parses against both schemas and asserts byte-equivalent acceptance.
   produces: agentProducesSchema.optional(),
+  // The manifest LIFECYCLE declaration (cinatra#2047 D-1). Optional for
+  // back-compat with every already-published package; when present it compiles
+  // onto `agent_templates.lifecycle_config` at install, trigger-style.
+  lifecycle: agentLifecycleDeclarationSchema.optional(),
 });
 
 export type CinatraAgentPackageMetadata = z.infer<typeof cinatraAgentPackageMetadataSchema>;

@@ -219,15 +219,16 @@ echo "==> prod-boot e2e: image=${IMAGE} origin=${APP_ORIGIN}"
 # ── 1. Infrastructure: isolated network + fresh Postgres + Redis ────────────
 docker network create "$NET" >/dev/null
 
-# Redis matches the platform compose major (redis:8). Postgres DELIBERATELY
-# stays 17 here until the 17->18 cutover wave: this script boots the RELEASED
-# image, and released images deploy against the LIVE platform postgres, which
-# is 17 until the owner-gated cutover (the compose pin is already 18; this
-# stand-in is the representative released-app-on-17 proof). Flip to 18 WITH
-# the cutover wave.
+# Redis matches the platform compose major (redis:8). Postgres matches the
+# platform compose major too: the temporary "released-app-on-17" hold is
+# superseded — the compose pin is postgres 18 and deployments provision 18
+# directly (fresh initdb on the parent-layout mount), so a released image now
+# deploys against 18. The works-after prev-release arm
+# (scripts/ci/upgrade-proof.sh) already proved the released image
+# provisions+migrates on a postgres:18 stand-in.
 docker run -d --name "$PG" --network "$NET" \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres \
-  postgres:17 >/dev/null
+  postgres:18 >/dev/null
 docker run -d --name "$REDIS" --network "$NET" redis:8 >/dev/null
 
 echo "==> waiting for postgres + redis readiness"

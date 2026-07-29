@@ -16,7 +16,7 @@
 // STRICT (hard fail), NOT a ratchet:
 //   1. every manifest declares `cinatra.dependencies` as an array;
 //   2. every entry is a valid ExtensionDependency (right shape + kind matches the
-//      target's actual kind);
+//      target's actual kind + a well-formed optional skill-edge `role`);
 //   3. every CONFIDENT structural edge from→to is declared in `from`'s manifest.
 // The LLM-inferred OAS-mention candidate edges are ADVISORY (printed as warnings,
 // never fail CI) — they need human review before they become declared edges.
@@ -27,7 +27,11 @@
 //
 // Exit codes: 0 = clean, 1 = drift/violation, 2 = internal error.
 
-import { buildInventory, isValidExtensionDependency } from "../extensions/inventory.mjs";
+import {
+  buildInventory,
+  dependencyRoleProblem,
+  isValidExtensionDependency,
+} from "../extensions/inventory.mjs";
 
 const showWarnings = process.argv.includes("--warnings");
 
@@ -57,7 +61,16 @@ async function main() {
     const valid = new Map();
     for (const dep of decl) {
       if (!isValidExtensionDependency(dep, nameToKind)) {
-        errors.push(`${x.name}: malformed dependency entry ${JSON.stringify(dep)} (need {packageName, edgeType, versionConstraint, requirement[, kind]}, kind must match the target's actual kind).`);
+        // A `role` problem is named PRECISELY — the generic shape message would
+        // send a maintainer hunting through an otherwise well-formed edge for a
+        // typo in one optional field. The entry JSON rides along either way, so
+        // a second problem in the same entry stays visible.
+        const roleProblem = dependencyRoleProblem(dep);
+        errors.push(
+          roleProblem !== null
+            ? `${x.name}: malformed dependency entry ${JSON.stringify(dep)} (${roleProblem}).`
+            : `${x.name}: malformed dependency entry ${JSON.stringify(dep)} (need {packageName, edgeType, versionConstraint, requirement[, kind][, role]}, kind must match the target's actual kind, role∈{matcher,authoring} only on a kind:"skill" edge).`,
+        );
         continue;
       }
       valid.set(dep.packageName, dep);

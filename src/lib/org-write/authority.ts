@@ -30,13 +30,28 @@ import { resolveOrgRoleForUser } from "@/lib/auth-session";
 
 /** Session capability rules: membership-only capabilities need any org role;
  *  management capabilities need the mapped authz permission. */
-const SESSION_PERMISSION_FOR: Record<OrgWriteCapability, Permission | "member"> = {
+const SESSION_PERMISSION_FOR: Record<
+  OrgWriteCapability,
+  Permission | "member" | "never"
+> = {
   "content.write": "member",
   "run.execute": "member",
   "run.complete": "member",
   "membership.write": "organization.manageMembers",
   "org.settings": "organization.update",
   "org.lifecycle": "organization.archive",
+  // cinatra#1939 wave 3: org.delete maps to organization.delete, NEVER
+  // organization.archive — the org STATE (kernel capability) decides whether a
+  // delete may proceed, the ACTOR's organization.delete decides whether THIS
+  // actor may delete. An "archive" permission can never stand in for "delete".
+  "org.delete": "organization.delete",
+  // cinatra#1940: run.lease-expire is SYSTEM-ONLY (the lease-expiry finalizer,
+  // under the exclusive fence). NO session, at ANY role, may ever mint it —
+  // "never" short-circuits in can() below BEFORE any permission lookup. Mapping
+  // it to a real permission (e.g. organization.archive) would silently hand
+  // org-owners a forced-settle capability through the session path; "never" is
+  // the honest total-record cell.
+  "run.lease-expire": "never",
 };
 
 export class OrgWriteAuthorityError extends Error {
@@ -55,15 +70,40 @@ export async function verifySessionAuthority(
   if (role === undefined) {
     throw new OrgWriteAuthorityError(`user ${userId} is not a member of ${orgId}`);
   }
+  return sessionAuthorityFromResolvedRole(orgId, role);
+}
+
+/**
+ * Sync session-mint for call sites that ALREADY resolved the membership role
+ * for the SAME (userId, orgId) pair they stamp on the surrounding frame — the
+ * MCP transport resolves it once at context-build (cinatra#1939 S3) and must
+ * not pay a second membership read per request. The resolved role's existence
+ * IS the membership proof; capability rules are byte-identical to
+ * `verifySessionAuthority` (this is its extracted body).
+ */
+export function sessionAuthorityFromResolvedRole(
+  orgId: string,
+  role: Role,
+): OrgWriteAuthority {
   return {
     orgId,
     can: (capability) => {
       const rule = SESSION_PERMISSION_FOR[capability];
+      if (rule === "never") return false; // system-only (#1940 run.lease-expire)
       if (rule === "member") return true;
-      return roleHasPermission(role as Role, rule);
+      return roleHasPermission(role, rule);
     },
   };
 }
+
+// cinatra#1939 wave 2 (§2d′) DROPPED — owner ruling 2026-07-26 (groganz,
+// ruling 2): cross-org run management is UNSUPPORTED. The
+// authorized-non-member mint `runManagementAuthority` was removed end-to-end;
+// authorized-non-member run-management flows (a cross-org co-owner / platform
+// admin who is NOT a member of the run's org) now fail closed — the seam
+// refuses a missing authority, and each run-management call site maps that to
+// its own denied/forbidden idiom. Org-member paths are unaffected (they mint a
+// session authority via sessionAuthorityFromResolvedRole).
 
 // ---------------------------------------------------------------------------
 // Verified run authority
@@ -168,8 +208,45 @@ export async function verifyRunAuthority(
 const SYSTEM_PURPOSE_CAPABILITIES: Record<string, readonly OrgWriteCapability[]> = {
   /** The S6 archive/unarchive transaction itself. */
   "org-lifecycle-transition": ["org.lifecycle"],
-  /** The S3/S4 lease-expiry finalizer landing terminal transitions. */
-  "lease-expiry-finalizer": ["run.execute", "run.complete"],
+  /** The lease-expiry finalizer settling an EXPIRED archive lease to terminal
+   *  state under the exclusive fence (cinatra#1940). LEAST PRIVILEGE: it holds
+   *  ONLY `run.lease-expire` — its sole DB write is the fence settle tx (runtime
+   *  cancellation is not a DB write; the sweep's reads need no authority).
+   *  Narrowed from the S2 placeholder ["run.execute","run.complete"] (never
+   *  exercisable — zero minting sites ever existed). Kept SEPARATE from
+   *  `agent-run-dispatch` so the finalizer's archive/lease audit domain is not
+   *  conflated with normal execution. */
+  "lease-expiry-finalizer": ["run.lease-expire"],
+  /** The agent-run job contexts driving a run's FULL lifecycle with no session
+   *  (cinatra#1939 wave 2): dispatch (`run.execute`) + terminal finalize
+   *  (`run.complete`). Kept SEPARATE from `lease-expiry-finalizer` (narrowed to
+   *  `run.lease-expire` in cinatra#1940) so the finalizer's archive/lease audit
+   *  domain is not conflated with normal execution. Sole minting site:
+   *  src/lib/org-write/agent-run-authority-mint.ts (R2-allowlisted in the
+   *  boundary gate); §5.2 further restricts its consumers to the three jobs. */
+  "agent-run-dispatch": ["run.execute", "run.complete"],
+  /** The committed extension archive/restore transition's dashboard hook
+   *  (cinatra#1939 wave 1): archives/restores that org's extension-shipped
+   *  dashboards AFTER install/uninstall authz gated the transition upstream.
+   *  Content-only — the hook can never touch membership/settings/lifecycle.
+   *  Sole minting site: src/lib/dashboards/extension-dashboard-lifecycle.ts
+   *  (R2-allowlisted in the boundary gate). */
+  "extension-dashboard-lifecycle": ["content.write"],
+  /** The dashboardContribution adopt-in-place reconciler (cinatra#1939 wave 1):
+   *  re-keys orphaned/legacy extension dashboard rows onto their live
+   *  successor package for one org — a lifecycle-triggered system write like
+   *  the hook above, install authz gated upstream. Content-only. Sole minting
+   *  site: src/lib/dashboards/reconcile-contribution-adoptions.ts
+   *  (R2-allowlisted in the boundary gate). */
+  "dashboard-contribution-reconciler": ["content.write"],
+  /** The boot-phase dashboard artifact-twin backfill (cinatra#1939 wave 1):
+   *  pairs the substrate twin for pre-existing dashboards that lack one —
+   *  minted PER ORG inside the multi-org sweep, so each per-id transaction is
+   *  ruled against ITS row's org lifecycle (an archived org's rows stay
+   *  untwinned until restore; the reader gate covers them meanwhile).
+   *  Content-only. Sole minting site: src/lib/boot/phases/core-boot.ts
+   *  (R2-allowlisted in the boundary gate). */
+  "dashboard-twin-backfill": ["content.write"],
 };
 
 export type SystemWritePurpose = keyof typeof SYSTEM_PURPOSE_CAPABILITIES;

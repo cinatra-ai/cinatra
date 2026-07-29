@@ -69,10 +69,69 @@ export function isAutoReviewTaskId(reviewTaskId: string): boolean {
  * below) encodes no single event id, so it returns null: the store re-derives a
  * batch gate's requiredness from its PINNED target set, not from one event. */
 export function autoReviewEventId(reviewTaskId: string): string | null {
-  if (isBatchAutoReviewTaskId(reviewTaskId)) return null;
+  // A BATCH partition gate, an S2 REPAIR-SUCCESSOR gate, or an S4 VERIFICATION-
+  // REOPEN gate encodes no single event id; the store re-derives their requiredness
+  // from the PINNED target set.
+  if (
+    isBatchAutoReviewTaskId(reviewTaskId) ||
+    isRepairSuccessorTaskId(reviewTaskId) ||
+    isVerificationReopenTaskId(reviewTaskId)
+  ) {
+    return null;
+  }
   return isAutoReviewTaskId(reviewTaskId)
     ? reviewTaskId.slice(AUTO_REVIEW_TASK_PREFIX.length)
     : null;
+}
+
+// ---------------------------------------------------------------------------
+// S2 (cinatra#2040) — repair-successor gate ids.
+// ---------------------------------------------------------------------------
+
+/** The prefix a REPAIR-SUCCESSOR gate's `reviewTaskId` carries — the NEW gate that
+ * pins a producer's repaired (successor) revision after a `changes_requested`
+ * decision (never re-pinned under the reviewer; always a fresh gate). A superset of
+ * `AUTO_REVIEW_TASK_PREFIX` so `isAutoReviewTaskId` recognizes it (the expiry drain
+ * reasons over it; the resume-delivery worker still skips it, being non-`wayflow-`),
+ * and DISJOINT from the batch prefix. */
+export const REPAIR_SUCCESSOR_TASK_PREFIX = `${AUTO_REVIEW_TASK_PREFIX}repair:`;
+
+/** Derive the successor gate's `reviewTaskId` from the repair lineage id + the
+ * attempt ordinal. Deterministic + injective on `(repairId, attempt)`, so a
+ * re-driven pin of the SAME successor is idempotent on `(run, task)` and two
+ * distinct repair attempts never collide. */
+export function repairSuccessorReviewTaskId(repairId: string, attempt: number): string {
+  return `${REPAIR_SUCCESSOR_TASK_PREFIX}${repairId}:${attempt}`;
+}
+
+/** Whether a `reviewTaskId` names an S2 repair-successor gate. */
+export function isRepairSuccessorTaskId(reviewTaskId: string): boolean {
+  return reviewTaskId.startsWith(REPAIR_SUCCESSOR_TASK_PREFIX);
+}
+
+// ---------------------------------------------------------------------------
+// S4 (cinatra#2042) — post-change verification-reopen gate ids.
+// ---------------------------------------------------------------------------
+
+/** The prefix a VERIFICATION-REOPEN gate's `reviewTaskId` carries — the ONE bounded
+ * gate a FAILED post-change verification reopens on the same run (S4, epic spine
+ * item 5). A superset of `AUTO_REVIEW_TASK_PREFIX` so `isAutoReviewTaskId`
+ * recognizes it (the expiry drain reasons over it; the resume-delivery worker skips
+ * it, being non-`wayflow-`), and DISJOINT from the repair-successor + batch
+ * prefixes. It re-derives the repaired target's requiredness from the PINNED set. */
+export const VERIFICATION_REOPEN_TASK_PREFIX = `${AUTO_REVIEW_TASK_PREFIX}verify:`;
+
+/** Derive the verification-reopen gate's `reviewTaskId` from the verification
+ * record id. Deterministic + injective, so a re-driven verification of the SAME
+ * repair re-derives the identical reopen gate (idempotent on `(run, task)`) — a
+ * failed verification reopens EXACTLY ONE bounded gate, never a fresh one per drive. */
+export function verificationReopenReviewTaskId(verificationId: string): string {
+  return `${VERIFICATION_REOPEN_TASK_PREFIX}${verificationId}`;
+}
+
+/** Whether a `reviewTaskId` names an S4 verification-reopen gate. */
+export function isVerificationReopenTaskId(reviewTaskId: string): boolean {
+  return reviewTaskId.startsWith(VERIFICATION_REOPEN_TASK_PREFIX);
 }
 
 // ---------------------------------------------------------------------------
@@ -161,9 +220,6 @@ export type ReviewOrchestrationPlan =
       reviewTaskId: string;
       /** The lattice outcome (`required` | `fire`). */
       outcome: PolicyOutcome;
-      /** True only for an org-`required` gate without a self-approval opt-in —
-       * the producing actor may not be the sole approver (SoD). */
-      separationOfDutiesRequired: boolean;
       /** How the producing run continues:
        *   - `checkpointed` → the run PARKS (the store calls `maybeParkCheckpoint`
        *     with `park`); the park is released by the decision / TTL sweeper.
@@ -228,7 +284,6 @@ export function planReviewForEvent(
     action: "create-gate",
     reviewTaskId: autoReviewTaskId(event.eventId),
     outcome: decision.outcome,
-    separationOfDutiesRequired: decision.separationOfDutiesRequired,
     continuationMode: event.continuationMode,
     park,
     heldEffect,
@@ -249,11 +304,29 @@ export interface EffectHoldFacts {
   /** The gate the event's `continuationAddress` points at, resolved by the store
    * (null when the address is unset or the gate row is gone). */
   gateStatus: "pending" | "resolved" | null;
+  /** The terminal disposition of a RESOLVED gate (S2, cinatra#2040). A gate
+   * resolved as `changes_requested` has NOT released its held effect — a repair is
+   * in flight; the effect stays held until the successor gate approves. `approve`
+   * releases; `reject` terminates the effect (still not held — a tombstoned
+   * artifact publishes nothing). Null/absent for a pending gate or a pre-S2 gate. */
+  gateDisposition?: "approve" | "reject" | "changes_requested" | null;
+  /** TRUE when a CHECKPOINTED continuation park protecting THIS revision's effect
+   * was TTL-fail-closed into the terminal `policy_unresolved` state (cinatra#2047
+   * defect D-7). S0's continuation contract: "TTL always-resumes with the protected
+   * effect in a terminal `policy_unresolved` blocked state" — the block lands on
+   * the EFFECT, not merely on the park row. Resolved by the store from
+   * `lifecycle_continuation_park` (joined on the produced-event id). */
+  policyUnresolvedPark?: boolean;
 }
 
 export interface EffectHoldVerdict {
   held: boolean;
   reason: string;
+  /** TRUE only for the TERMINAL `policy_unresolved` block (a TTL-expired park):
+   * the effect is not merely waiting on a decision — the policy was never resolved
+   * and only an explicit later policy decision releases it. Distinguishes an
+   * ops-actionable dead end from an ordinary pending-gate hold. */
+  policyUnresolved?: boolean;
 }
 
 /**
@@ -262,6 +335,12 @@ export interface EffectHoldVerdict {
  *
  *   - No event, or a NON-external (`none`) destination → nothing to hold; the
  *     effect flows immediately (the "ungated artifact's effects flow" invariant).
+ *   - An external-effect revision whose CHECKPOINTED park was TTL-fail-closed into
+ *     `policy_unresolved` → HELD *terminally* (cinatra#2047 D-7). This outranks
+ *     every gate state: the always-resume path released the RUN, but the protected
+ *     EFFECT stays blocked until an explicit later policy decision (S0's
+ *     continuation contract). Without this the always-resume path would publish an
+ *     artifact whose policy was never resolved.
  *   - An external-effect event still `pending` (not yet orchestrated) → HELD,
  *     fail-closed: the effect must not race ahead of the review decision that the
  *     consumer has not yet made.
@@ -277,6 +356,18 @@ export function evaluateEffectHold(facts: EffectHoldFacts): EffectHoldVerdict {
   if (!isExternalEffectClass(event.destinationClass)) {
     return { held: false, reason: "no external effect to hold (destination 'none')" };
   }
+  // D-7 (cinatra#2047): a TTL-fail-closed park's terminal `policy_unresolved`
+  // block lands HERE, on the effect — checked BEFORE any gate state, because the
+  // block survives a resolved gate (the park expired precisely because no decision
+  // ever resolved the policy). Released only by an explicit later policy decision.
+  if (facts.policyUnresolvedPark === true) {
+    return {
+      held: true,
+      policyUnresolved: true,
+      reason:
+        "external effect terminally blocked — a checkpointed park TTL-expired with the policy unresolved (policy_unresolved)",
+    };
+  }
   if (event.status === "pending") {
     return { held: true, reason: "external effect awaiting review orchestration — fail-closed" };
   }
@@ -285,6 +376,14 @@ export function evaluateEffectHold(facts: EffectHoldFacts): EffectHoldVerdict {
   }
   if (gateStatus === "pending") {
     return { held: true, reason: "external effect held by a pending review gate" };
+  }
+  // S2 (cinatra#2040): a gate resolved as `changes_requested` has NOT released —
+  // the repair is in flight. The effect stays HELD until the store re-points the
+  // event to the successor gate (which then holds it while pending, releases on
+  // its approval). Fail-closed: without this, `changes_requested` would look like
+  // any resolved gate and release the external effect on an unrepaired artifact.
+  if (gateStatus === "resolved" && facts.gateDisposition === "changes_requested") {
+    return { held: true, reason: "external effect held pending repair (changes_requested)" };
   }
   return { held: false, reason: "review gate resolved — effect released" };
 }

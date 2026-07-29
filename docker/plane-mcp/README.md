@@ -31,8 +31,11 @@ with `docker buildx imagetools inspect makeplane/plane-mcp-server:<tag>`.
      `PLANE_WORKSPACE_SLUG`, `PLANE_BASE_URL=http://api:8000` — the bridge's env.
    - `.env.local` — `PLANE_MCP_URL=http://localhost:3450/mcp` plus the demo
      admin creds the connector's dev-setup auto-connect reads.
-3. `docker compose --profile plane-mcp up -d --build` starts this bridge holding
-   that PAT.
+3. `docker compose --profile plane --profile plane-mcp up -d --build` starts this
+   bridge holding that PAT. Both profiles are activated in one pass because the
+   bridge `depends_on: plane-api` (a `plane`-profile service); activating
+   `plane-mcp` alone leaves plane-api undefined and the bridge fails to resolve
+   its dependency. The already-running `plane` containers are left untouched.
 4. On the next `pnpm dev`, the Plane connector's `dev-setup` hook probes
    `PLANE_MCP_URL` with the real MCP handshake and wires an enabled
    `external_mcp_servers` row (`transport: streamable-http`).

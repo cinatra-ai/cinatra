@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "./db";
-import { auditorProposalSnapshots, auditorApprovalReceipts } from "./schema";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
@@ -12,7 +11,13 @@ import {
   requireAdminSession,
   buildCanDoOptsFromSession,
   isPlatformAdmin,
+  resolveOrgRoleForUser,
 } from "@/lib/auth-session";
+// cinatra#1939 wave 2: rejectReviewTask mints a member SESSION authority for
+// the setup-run→failed transition. Owner ruling 2026-07-26 (ruling 2) DROPPED
+// cross-org run management: an actor cleared by requireAdminSession who is NOT
+// a member of the run's org (a pure platform admin) now fails closed here.
+import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import { canDo, AuthzError, logAuditEvent } from "@/lib/authz";
 import type { ResourceRef, OwnerLevel } from "@/lib/authz";
 // Kernel-level authorization imports for installRegistryPackageAtScope.
@@ -230,32 +235,6 @@ async function resolveRunForApprovalTask(
   return { kind: "not-found" };
 }
 
-// Resolve the concrete agent_run id backing an approval task (setup- / wayflow-
-// prefixes + the Redis reverse-map fallback), or null. Used to condition the
-// auditor SoD-receipt mint on the presence of a pending proposal snapshot for
-// the run — non-auditor approvals resolve no snapshot and never mint.
-async function resolveRunIdForApprovalTask(taskId: string): Promise<string | null> {
-  if (taskId.startsWith("setup-")) {
-    const runId = taskId.slice("setup-".length);
-    const run = await readAgentRunById(runId);
-    return run ? run.id : null;
-  }
-  if (taskId.startsWith("wayflow-")) {
-    const wayflowTaskId = taskId.slice("wayflow-".length);
-    const run = await readAgentRunByTaskId(wayflowTaskId);
-    if (run) return run.id;
-    const { resolveRunIdByWayflowTaskId } = await import("@cinatra-ai/a2a");
-    const fallbackRunId = await resolveRunIdByWayflowTaskId(wayflowTaskId);
-    if (fallbackRunId) {
-      const fallbackRun = await readAgentRunById(fallbackRunId);
-      if (fallbackRun) return fallbackRun.id;
-    }
-    return null;
-  }
-  const direct = await readAgentRunById(taskId);
-  return direct ? direct.id : null;
-}
-
 // approveReviewTask
 
 export async function approveReviewTask(
@@ -331,51 +310,13 @@ export async function approveReviewTask(
     // approveReviewTaskInternal raises the canonical not-found error.
   }
 
-  // Auditor per-item accept (cinatra#1625): mint the single-use SoD receipt for
-  // the resolved run — CONDITIONALLY, only when a pending auditor proposal
-  // snapshot exists for it (non-auditor approvals resolve no snapshot and never
-  // mint). The receipt binds (agent_run_id, snapshot_hash, reviewer=userId);
-  // /api/auditor/apply CONSUMES it with a single-shot CAS, so a forged resume
-  // replay of the apply node finds no live receipt. Minted here (the admin-gated
-  // approval, past the SoD self-approval guard) so the approver — not the run
-  // author — is the recorded reviewer. Idempotent (mintApprovalReceipt returns
-  // the existing live receipt on the live-uniq conflict), so a re-approval is
-  // safe.
-  // Resilient: a snapshot-store read/mint failure must never break an unrelated
-  // (non-auditor) approval; and for an auditor run a failure to mint fails
-  // CLOSED at /api/auditor/apply (no live receipt → 403), so swallowing here is
-  // safe. Normal operation still mints for every pending auditor snapshot.
-  try {
-    const auditorRunId = await resolveRunIdForApprovalTask(taskId);
-    if (auditorRunId) {
-      // Read the pending snapshot's hash + insert the live receipt DIRECTLY via
-      // db + the schema tables (both already reachable from the barrel) rather
-      // than importing the auditor-snapshot-store module. A static OR literal
-      // dynamic import of that module would pull it into every barrel-importing
-      // route's first-party graph and trip the route-graph dev-perf ratchet;
-      // db/schema add zero new modules. The insert mirrors
-      // auditor-snapshot-store.mintApprovalReceipt (live-uniq partial index →
-      // onConflictDoNothing makes a re-mint idempotent).
-      const [snapshot] = await db
-        .select({ snapshotHash: auditorProposalSnapshots.snapshotHash })
-        .from(auditorProposalSnapshots)
-        .where(eq(auditorProposalSnapshots.agentRunId, auditorRunId))
-        .limit(1);
-      if (snapshot) {
-        await db
-          .insert(auditorApprovalReceipts)
-          .values({
-            id: randomUUID(),
-            agentRunId: auditorRunId,
-            snapshotHash: snapshot.snapshotHash,
-            reviewerId: userId,
-          })
-          .onConflictDoNothing();
-      }
-    }
-  } catch (err) {
-    console.warn("[approveReviewTask] auditor receipt mint skipped", err);
-  }
+  // cinatra#1796 / #2047 row 8: the legacy auditor SoD APPROVAL-RECEIPT mint was
+  // REMOVED with the retirement teardown. It wrote an approval-bearing row
+  // (auditor_approval_receipts) outside the gate store — the "parallel decision
+  // path" row 8 forbids — and its only consumer, /api/auditor/apply, is gone.
+  // Approval on this surface is recorded solely by the gate store and its
+  // gate-anchored S4 child (suggestion_decision_ledger). The SoD self-approval
+  // guard itself is unchanged: it lives on the gate, not on the receipt.
 
   await approveReviewTaskInternal(taskId, userId, values, fieldName, schemaSnapshot);
 }
@@ -394,8 +335,23 @@ export async function rejectReviewTask(taskId: string, reason?: string): Promise
     const runId = taskId.slice("setup-".length);
     const run = await readAgentRunById(runId);
     if (!run) throw new Error(`[rejectReviewTask] run ${runId} not found`);
+    // Ground the setup-run→failed transition on the acting principal's member
+    // SESSION authority. Owner ruling 2026-07-26 (ruling 2): cross-org run
+    // management is unsupported, so an admin-cleared actor who is NOT a member
+    // of the run's org fails closed here rather than driving the run.
+    const role = await resolveOrgRoleForUser(run.orgId, session.user.id);
+    if (role === undefined) {
+      throw new AuthzError({
+        statusCode: 403,
+        reason: "forbidden",
+        message:
+          `[rejectReviewTask] actor ${session.user.id} is not a member of org ${run.orgId}; ` +
+          `cross-org run management is unsupported`,
+      });
+    }
+    const authority = sessionAuthorityFromResolvedRole(run.orgId, role);
     const { transitionRunStatus, RunTransitionError } = await import("./store");
-    await transitionRunStatus(runId, run.status as AgentRunStatus, "failed").catch((err) => {
+    await transitionRunStatus(runId, run.status as AgentRunStatus, "failed", undefined, authority).catch((err) => {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
         // Race: another path terminated this run between our read and the CAS.
         // Safe to ignore — the run is terminal either way.

@@ -90,15 +90,16 @@ test.describe("dashboards directory-page retirement (#2058) live-verify", () => 
 
       // Seed one ORGANIZATION-anchored operator dashboard (entity_type/entity_id
       // set → canonical URL is the nested `/organizations/{orgId}/dashboards/{id}`).
-      // owner_level='organization' + visibility='members' → the org owner (this
-      // test user) passes the read gate, so the flat route REDIRECTS (rather than
-      // 404s) to the canonical URL. Idempotent on id.
+      // owner_level='organization' → every member of that org passes the read
+      // gate (cinatra#1898: a dashboard is always visible to everyone in its
+      // scope; the demoted `visibility` column is gone), so the flat route
+      // REDIRECTS (rather than 404s) to the canonical URL. Idempotent on id.
       await pool.query(
         `INSERT INTO ${schema}.dashboards
            (id, name, config_json, config_version, owner_level, owner_id,
-            organization_id, entity_type, entity_id, visibility, status, created_by)
+            organization_id, entity_type, entity_id, status, created_by)
          VALUES ($1, $2, $3::jsonb, $4, 'organization', $5, $5,
-                 'organization', $5, 'members', 'published', $6)
+                 'organization', $5, 'published', $6)
          ON CONFLICT (id) DO UPDATE SET
            name = EXCLUDED.name,
            config_json = EXCLUDED.config_json,
@@ -108,7 +109,6 @@ test.describe("dashboards directory-page retirement (#2058) live-verify", () => 
            organization_id = EXCLUDED.organization_id,
            entity_type = EXCLUDED.entity_type,
            entity_id = EXCLUDED.entity_id,
-           visibility = EXCLUDED.visibility,
            status = EXCLUDED.status`,
         [
           ORG_ANCHORED_ID,

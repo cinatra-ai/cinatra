@@ -1,0 +1,8 @@
+{
+  "note": "ENUMERATED, EXPIRING legacy exceptions to the skill-packaging verdict (cinatra#2089, epic #2086 S2). The epic's DAG runs S2 (this enforcement) BEFORE S3 (the migration wave, cinatra#2090), so on the day the gate lands every `kind:\"skill\"` package that exists carries the retired plural `-skills` name and one of them ships eighteen bundles. Refusing them outright would make the platform un-installable before its own migration could run. Instead the gate is fail-closed WITH THIS LEDGER: exactly the (packageName, code) pairs below are downgraded to WAIVED and reported by name; a NEW package, or a NEW violation class on a listed package, still fails at CI, at store install and at publish. S3 renames/splits these packages and DELETES their entries — an empty `exceptions` array is the proof the migration is complete. Do not add an entry without an issue reference. The `embeddedSkills` array is the companion RATCHET for the separation rule: each entry is a `<packageName> :: <package-relative SKILL.md path>` that a NON-skill extension ships TODAY in the pinned clone-back universe. A NEW embedded skill (any entry not listed) fails CI, store install and publish; the S3 wave deletes these entries as it extracts or folds each one, and an empty array is the proof the rule holds org-wide. Regenerate with `node scripts/audit/skill-packaging-gate.mjs --write-baseline` ONLY with the clone-back universe hydrated.",
+  "schemaVersion": 1,
+  "exceptions": [],
+  "embeddedSkills": [
+    "@cinatra-ai/media-transcript-agent :: skills/transcribe-media/SKILL.md"
+  ]
+}

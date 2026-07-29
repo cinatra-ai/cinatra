@@ -100,19 +100,21 @@ services:
 
   nango-db:
     image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
-    # Upgrade track: HELD at postgres 17-alpine as a CURRENT VALIDATED HOLD
+    # Upgrade track: HELD at postgres 17-alpine as a DELIBERATE VALIDATED HOLD
     # while the platform DB moved to 18 (see docs/internals/workflows/upgrade-track.md §3): this
     # store is app-coupled to Nango, whose upstream reference compose still
-    # pins postgres 16 — 17 is already a deliberate, validated divergence, and
-    # 18 is unvalidated by upstream (the works-after nango arm proves
-    # fresh-init, not a restored 17 cluster under 18). Revisit when Nango
-    # upstream moves; it keeps the LEGACY .../data mount for as long as it is
-    # a <=17 image. Digest-pinned to a CONFIRMED multi-arch (amd64/arm64)
-    # manifest so ARM dev hosts are safe AND the pg-major-cutover tool's digest
-    # read-back is satisfied. The prod PGDATA volume is migrated by the
-    # logical-dump -> fresh-volume restore in the ops pg-major-cutover tooling
-    # (hub-nango profile), which rebinds nango-db to the external restored
-    # volume via the ops prod override. See docs/internals/workflows/upgrade-track.md.
+    # pins an older postgres major — 17 is already a deliberate, validated
+    # divergence, and 18 is unvalidated by upstream (the works-after nango arm
+    # proves fresh-init, not a restored 17 cluster under 18). Revisit when
+    # Nango upstream moves; it keeps the LEGACY .../data mount for as long as
+    # it is a <=17 image. Digest-pinned to a CONFIRMED multi-arch (amd64/arm64)
+    # manifest so ARM dev hosts are safe; config/upgrade/upgrade-matrix.json
+    # carries this same digest as the nango-postgres baseline pin, and the
+    # check-upgrade-matrix gate keeps the two in lockstep (the works-after
+    # upgrade-postgres arm's Case B proves the 15 -> 17 exception onto these
+    # exact bytes). Base compose mounts the nango-postgres named volume below;
+    # Postgres initializes it when empty, and Nango runs its own schema
+    # migrations at boot.
     # Host port publication moved to docker-compose.dev.yml (base-safe-by-default):
     # a bare `docker compose up` no longer exposes 5435 on 0.0.0.0
     # (this is a Postgres with default nango/nango creds). Only the host-side CLI
@@ -244,18 +246,22 @@ services:
     # rather than forcing a global COMPOSE_PROJECT_NAME (which would rename every
     # project-scoped volume). Container names are host-global → one dev stack.
     container_name: cinatra-wordpress-1
-    # Custom dev image (docker/wordpress/Dockerfile) bakes git/composer/wp-cli +
-    # WordPress/abilities-api + WordPress/mcp-adapter at BUILD time, so the slow
-    # clone+composer work no longer runs inside the uat-gate's ~5-min readiness
-    # window (#260 Step 6). `docker compose up` builds a missing image before the
-    # readiness poll begins; pull_policy: build prevents a stale registry image
-    # from shadowing a rebuild. Mirrors the docker/drupal/Dockerfile bake pattern.
+    # Custom dev image (docker/wordpress/Dockerfile) bakes git/wp-cli + the pinned,
+    # checksummed MCP plugins (mcp-adapter + enable-abilities-for-mcp) at BUILD
+    # time, so the slow network work no longer runs inside the uat-gate's ~5-min
+    # readiness window (#260 Step 6). `docker compose up` builds a missing image
+    # before the readiness poll begins; pull_policy: build prevents a stale
+    # registry image from shadowing a rebuild. Mirrors docker/drupal/Dockerfile.
+    # WP 6.9 ships the Abilities API in core, so the abilities-api plugin is
+    # dropped. Version build-args MUST match docker/wordpress/pins.lock
+    # (scripts/audit/wordpress-fixture-pins-gate.mjs enforces lockstep).
     build:
       context: ./docker/wordpress
       args:
-        ABILITIES_API_VERSION: "0.4.0"
-        MCP_ADAPTER_VERSION: "0.4.1"
-    image: cinatra-wordpress-dev:6.8-php8.3
+        MCP_ADAPTER_VERSION: "0.5.0"
+        EAFM_VERSION: "2.0.20"
+        WP_CLI_VERSION: "2.12.0"
+    image: cinatra-wordpress-dev:6.9-php8.3
     pull_policy: build
     ports:
       - "8080:80"
@@ -266,7 +272,6 @@ services:
       WORDPRESS_DB_NAME: wordpress
       WORDPRESS_CONFIG_EXTRA: |
         define( 'WP_ENVIRONMENT_TYPE', 'local' );
-      MCP_ADAPTER_REF: v0.4.1
       WP_DEV_URL: http://localhost:8080
       WP_DEV_ADMIN_USER: admin
       WP_DEV_ADMIN_PASS: admin

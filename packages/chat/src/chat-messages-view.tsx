@@ -19,11 +19,19 @@
 // the four identical embed/citation adjunct blocks are factored into local
 // components that emit byte-identical DOM.
 
-import { Component, useCallback, useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import Link from "next/link";
 import { RotateCcw, PauseCircle, PlayCircle, Copy, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+// cinatra#2020 S5 (PR-4) — destructive-tool confirmation cards, mounted at the
+// bottom of the conversation column (directly above the composer chat-page
+// renders below this view) so a parked call is actionable regardless of
+// scroll position. The prefix match on tool results is the poll trigger.
+import {
+  PendingToolConfirmationCards,
+  PENDING_CONFIRMATION_RESULT_PREFIX,
+} from "./pending-tool-confirmation-card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 // Direct per-icon imports — avoid Turbopack processing the full simple-icons barrel (see apis-page.tsx note)
 import SiAnthropic from "@icons-pack/react-simple-icons/icons/SiAnthropic.mjs";
@@ -865,6 +873,27 @@ export function ChatMessagesView({
   typingIndicators,
   chatViews,
 }: ChatMessagesViewProps) {
+  // cinatra#2020 S5 (PR-4): bump the confirmation-cards refresh whenever a
+  // turn carried a parked destructive call (stable §2.1 prefix). BEST-EFFORT
+  // over the text surfaces this view holds (assistant text + tool-part
+  // labels); the cards' own open/focus polling is the designed self-healing
+  // fallback, and the deciding client gets its outcome synchronously.
+  const pendingConfirmationSignal = useMemo(() => {
+    let parked = 0;
+    for (const message of messages) {
+      if (message.content?.includes(PENDING_CONFIRMATION_RESULT_PREFIX)) parked += 1;
+      for (const part of message.parts ?? []) {
+        if (
+          part.kind === "tool_call" &&
+          part.resultLabel?.startsWith(PENDING_CONFIRMATION_RESULT_PREFIX)
+        ) {
+          parked += 1;
+        }
+      }
+    }
+    return parked;
+  }, [messages]);
+
   // Hydrate shiki placeholders after render — replace fallback <pre> blocks with
   // syntax-highlighted HTML loaded lazily from shiki. (Moved with the view: the
   // placeholders it queries exist only in this component's DOM.)
@@ -1359,6 +1388,10 @@ export function ChatMessagesView({
           </div>
         </div>
       ))}
+      {/* cinatra#2020 S5 (PR-4): parked destructive-call confirmation cards —
+          sticky above the composer, visible whether or not the parked turn's
+          text is on screen. Renders nothing when the viewer has no cards. */}
+      <PendingToolConfirmationCards pollSignal={pendingConfirmationSignal} />
     </div>
   );
 }

@@ -45,15 +45,19 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import { and, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
 import { db } from "./db";
+import { dispatchAutoGateResolved } from "./run-wait-notifier";
 import {
   artifactReviewGates,
   artifactReviewAudit,
   artifactReviewDispositions,
   artifactReviewResumeOutbox,
+  gateAdvisoryComments,
+  artifactVerificationRecords,
+  gateSuggestionSnapshots,
   type PinnedReviewTargetRow,
 } from "./schema";
 import {
@@ -125,6 +129,17 @@ export class ArtifactReviewGateError extends Error {
   }
 }
 
+// A drizzle query executor — the module-level `db` OR a `tx` handle from
+// `db.transaction`. Both expose the identical query-builder surface, so the emit
+// primitive can run STANDALONE (its own implicit statement) or ENLISTED in a
+// caller's open transaction. The enlisted form is what makes the repair
+// successor-gate emit + finalize ATOMIC (cinatra#2065 Seam A): a rollback before
+// the caller's commit leaves NO gate row, so a fresh-target retry never strands a
+// gate or hits a pin conflict.
+type GateStoreExecutor =
+  | typeof db
+  | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 // ---------------------------------------------------------------------------
 // The emitting gate.
 // ---------------------------------------------------------------------------
@@ -158,6 +173,13 @@ export interface EmitReviewGateResult {
  * set AND org returns the existing gate; a re-emit with a DIFFERENT set or a
  * DIFFERENT org is fail-closed (throws pin-conflict) — the gate is never silently
  * re-pinned, and never re-tagged to another org, under a reviewer.
+ *
+ * `executor` (cinatra#2065): the query handle the emit runs through — the
+ * module-level `db` by default, or a caller's open `tx` so the emit is ATOMIC
+ * with the caller's other writes (the repair successor-gate emit + finalize; the
+ * insert AND the conflict reconcile read both run on it, so an in-transaction
+ * re-emit sees the caller's own uncommitted rows). Existing callers pass none and
+ * keep the standalone semantics unchanged.
  */
 export async function emitArtifactReviewGate(input: {
   runId: string;
@@ -170,7 +192,7 @@ export async function emitArtifactReviewGate(input: {
    * none (null — the expiry drain never touches it). Set only on the INSERT: a
    * re-emit onto an existing gate never re-stamps the expiry (idempotent pin). */
   expiresAt?: Date | null;
-}): Promise<EmitReviewGateResult> {
+}, executor: GateStoreExecutor = db): Promise<EmitReviewGateResult> {
   const normalized = normalizeReviewTargets(input.targets);
   if (!normalized.ok) {
     throw new ArtifactReviewGateError("invalid-targets", normalized.error);
@@ -178,7 +200,7 @@ export async function emitArtifactReviewGate(input: {
   const pinned = canonicalPinnedSet(normalized.targets);
 
   const gateId = randomUUID();
-  const [inserted] = await db
+  const [inserted] = await executor
     .insert(artifactReviewGates)
     .values({
       id: gateId,
@@ -200,8 +222,10 @@ export async function emitArtifactReviewGate(input: {
   }
 
   // Conflict: a gate already exists for this (run, task). Idempotent iff the
-  // pinned set AND org match; otherwise fail closed (never re-pin / re-tag).
-  const existing = await readReviewGate(input.runId, input.reviewTaskId);
+  // pinned set AND org match; otherwise fail closed (never re-pin / re-tag). The
+  // reconcile read runs on the SAME executor as the insert so an in-transaction
+  // re-emit resolves against the caller's own (possibly uncommitted) row.
+  const existing = await readReviewGateVia(executor, input.runId, input.reviewTaskId);
   if (!existing) {
     // Extremely narrow race (row vanished between insert-conflict and read).
     throw new ArtifactReviewGateError(
@@ -247,7 +271,18 @@ export async function readReviewGate(
   runId: string,
   reviewTaskId: string,
 ): Promise<ReviewGateRow | null> {
-  const rows = await db
+  return readReviewGateVia(db, runId, reviewTaskId);
+}
+
+/** `readReviewGate` through an explicit executor — used by `emitArtifactReviewGate`
+ * so an enlisted (in-transaction) re-emit reconciles against the caller's own
+ * uncommitted row. Identical projection to `readReviewGate`. */
+async function readReviewGateVia(
+  executor: GateStoreExecutor,
+  runId: string,
+  reviewTaskId: string,
+): Promise<ReviewGateRow | null> {
+  const rows = await executor
     .select()
     .from(artifactReviewGates)
     .where(
@@ -272,6 +307,130 @@ export async function readReviewGate(
     resolvedAt: row.resolvedAt,
     createdAt: row.createdAt,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Run-scoped gate reader (cinatra#2066, C0). Every OTHER gate reader is pair- or
+// gate-keyed — a run could not enumerate its own gates, so a RESOLVED gate was
+// invisible from any run surface (the run-embedding audit's lack #2). This is the
+// missing run-scoped reader: it lists EVERY gate a run owns (pending AND
+// resolved), ordered by creation so the canonical run view can weave them into
+// the step rail as live steps and as read-only history. It reads the SAME table
+// through the SAME run-scoped index the emit path anchors on
+// (`artifact_review_gates_run_task_uniq`); no schema change. Access enforcement
+// is the aggregate reader's job (readRunDetailAggregate) — this port is a plain
+// read, exactly like `readReviewGate`.
+// ---------------------------------------------------------------------------
+export async function listReviewGatesForRun(runId: string): Promise<ReviewGateRow[]> {
+  const rows = await db
+    .select()
+    .from(artifactReviewGates)
+    .where(eq(artifactReviewGates.runId, runId))
+    .orderBy(artifactReviewGates.createdAt);
+  return rows.map((row) => ({
+    id: row.id,
+    runId: row.runId,
+    orgId: row.orgId,
+    reviewTaskId: row.reviewTaskId,
+    status: row.status as "pending" | "resolved",
+    pinnedTargets: row.pinnedTargets as PinnedReviewTargetRow[],
+    disposition: row.disposition,
+    fingerprint: row.fingerprint,
+    resolvedBy: row.resolvedBy,
+    resolvedAt: row.resolvedAt,
+    createdAt: row.createdAt,
+  }));
+}
+
+/** One advisory-seam comment attached to a gate (zero-authority, decision-free). */
+export interface GateAdvisoryCommentRow {
+  id: string;
+  gateId: string;
+  authorId: string;
+  authorKind: string;
+  body: string;
+  createdAt: Date;
+}
+
+/** One post-change verification record bound to a gate. */
+export interface GateVerificationRecordRow {
+  id: string;
+  gateId: string;
+  reviewedArtifactId: string;
+  reviewedRepresentationRevisionId: string;
+  repairedArtifactId: string;
+  repairedRepresentationRevisionId: string;
+  outcome: string;
+  createdAt: Date;
+}
+
+/** One immutable auditor-re-home suggestion snapshot bound to a gate. */
+export interface GateSuggestionSnapshotRow {
+  id: string;
+  gateId: string;
+  payload: unknown;
+  createdAt: Date;
+}
+
+/** Batch-read the advisory comments for a set of gates (run-scoped fan-out from
+ * `listReviewGatesForRun`). Empty gate set ⇒ no query. Ordered by (gate, time). */
+export async function readAdvisoryCommentsForGates(
+  gateIds: readonly string[],
+): Promise<GateAdvisoryCommentRow[]> {
+  if (gateIds.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(gateAdvisoryComments)
+    .where(inArray(gateAdvisoryComments.gateId, gateIds as string[]))
+    .orderBy(gateAdvisoryComments.gateId, gateAdvisoryComments.createdAt);
+  return rows.map((r) => ({
+    id: r.id,
+    gateId: r.gateId,
+    authorId: r.authorId,
+    authorKind: r.authorKind,
+    body: r.body,
+    createdAt: r.createdAt,
+  }));
+}
+
+/** Batch-read the verification records for a set of gates (run-scoped fan-out). */
+export async function readVerificationRecordsForGates(
+  gateIds: readonly string[],
+): Promise<GateVerificationRecordRow[]> {
+  if (gateIds.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(artifactVerificationRecords)
+    .where(inArray(artifactVerificationRecords.gateId, gateIds as string[]))
+    .orderBy(artifactVerificationRecords.gateId, artifactVerificationRecords.createdAt);
+  return rows.map((r) => ({
+    id: r.id,
+    gateId: r.gateId,
+    reviewedArtifactId: r.reviewedArtifactId,
+    reviewedRepresentationRevisionId: r.reviewedRepresentationRevisionId,
+    repairedArtifactId: r.repairedArtifactId,
+    repairedRepresentationRevisionId: r.repairedRepresentationRevisionId,
+    outcome: r.outcome,
+    createdAt: r.createdAt,
+  }));
+}
+
+/** Batch-read the suggestion snapshots for a set of gates (run-scoped fan-out). */
+export async function readSuggestionSnapshotsForGates(
+  gateIds: readonly string[],
+): Promise<GateSuggestionSnapshotRow[]> {
+  if (gateIds.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(gateSuggestionSnapshots)
+    .where(inArray(gateSuggestionSnapshots.gateId, gateIds as string[]))
+    .orderBy(gateSuggestionSnapshots.gateId, gateSuggestionSnapshots.createdAt);
+  return rows.map((r) => ({
+    id: r.id,
+    gateId: r.gateId,
+    payload: r.payload,
+    createdAt: r.createdAt,
+  }));
 }
 
 /** The PREPARATION core's `readGatePinnedTargets` port. */
@@ -329,18 +488,45 @@ export async function readReviewGateState(
 export async function commitReviewDecision(
   plan: ReviewDecisionCommitPlan,
 ): Promise<ReviewCommitOutcome> {
-  return db.transaction(async (tx) => {
+  const outcome: ReviewCommitOutcome = await db.transaction(async (tx): Promise<ReviewCommitOutcome> => {
     let gateId: string;
     let orgId: string;
 
+    // PLAN SELF-CONSISTENCY (cinatra#2047 D-2, convergence round). `terminal` is
+    // DERIVED from the disposition, never independent: only a `comment` is
+    // non-terminal. Without this check a direct store caller could hand in
+    // {disposition:"approve", terminal:false} — a plan that skips the gate CAS
+    // entirely and lands an APPROVE audit row on a still-PENDING gate, leaving
+    // the gate's decision trail disagreeing with the gate's own state. The pure
+    // decision core never builds such a plan; these two checks make it
+    // structurally impossible for every other caller too.
+    const expectedTerminal = plan.disposition !== "comment";
+    if (plan.terminal !== expectedTerminal) {
+      throw new Error(
+        `artifact-review commit: plan.terminal=${plan.terminal} disagrees with disposition "${plan.disposition}" (terminal is derived: only a comment is non-terminal)`,
+      );
+    }
+    // ...and every audit row must carry the plan's OWN disposition, so no row of a
+    // different disposition can ride along inside an otherwise-consistent plan.
+    for (const row of plan.auditRows) {
+      if (row.disposition !== plan.disposition) {
+        throw new Error(
+          `artifact-review commit: audit row disposition "${row.disposition}" disagrees with the plan disposition "${plan.disposition}"`,
+        );
+      }
+    }
+
     if (plan.terminal) {
-      // Terminal CAS: pending → resolved, stamping fingerprint + disposition.
+      // Terminal CAS: pending → resolved, stamping fingerprint + disposition + the
+      // DECIDING ACTOR. `resolved_by` has existed (and been read) since #1796 and
+      // was never written: a resolved gate carried no decider of record at all.
       const casRows = await tx
         .update(artifactReviewGates)
         .set({
           status: "resolved",
           disposition: plan.disposition,
           fingerprint: plan.fingerprint,
+          resolvedBy: plan.decidedBy ?? null,
           resolvedAt: sql`now()`,
         })
         .where(
@@ -459,6 +645,20 @@ export async function commitReviewDecision(
 
     return { status: "committed" };
   });
+  // cinatra#2066 C2 — a TERMINAL decision resolved this gate: clear the
+  // auto-gate-open run-view notification (if this gate minted one). Fired AFTER
+  // the transaction commits — best-effort and OUTSIDE the tx so a notification
+  // failure can never roll back a committed decision. Idempotent by
+  // (runId, reviewTaskId): a delete that names no row (a flow-authored gate, an
+  // initiator-less run, or an `already-resolved` race that minted nothing new) is
+  // a harmless no-op.
+  if (plan.terminal && outcome.status === "committed") {
+    await dispatchAutoGateResolved({
+      runId: plan.runId,
+      reviewTaskId: plan.reviewTaskId,
+    });
+  }
+  return outcome;
 }
 
 async function readReviewGateWithinTx(
@@ -695,17 +895,44 @@ export interface DeadLetteredResumeRow {
   maxAttempts: number;
   lastError: string | null;
   deadLetteredAt: Date | null;
+  /** The org that owns the gate this resume intent belongs to (the resume outbox
+   * itself carries no org column — it is joined from the gate, which is also what
+   * makes the ops surface org-scopable). Null only for a gate that no longer
+   * exists (the FK cascades, so in practice never). */
+  orgId: string | null;
 }
 
-/** Ops visibility: the dead-lettered resume intents (delivery attempts
- * exhausted). The surface the AC's "surfaced in ops visibility" requires. */
-export async function readDeadLetteredResumeIntents(limit = 100): Promise<DeadLetteredResumeRow[]> {
+/**
+ * Ops visibility: the dead-lettered resume intents (delivery attempts exhausted).
+ * The surface the S0 AC's "dead-letter transition … surfaced in ops visibility"
+ * requires — consumed by `/configuration/lifecycle-operations` (cinatra#2047 D-4);
+ * before that lane nothing in production read this set, so a stuck review release
+ * was silent.
+ *
+ * `orgId` SCOPES the read through the joined gate (a multi-tenant ops surface must
+ * never show another org's stuck releases); omitting it returns the unscoped set
+ * (tests / a single-org instance script).
+ */
+export async function readDeadLetteredResumeIntents(opts?: {
+  orgId?: string;
+  limit?: number;
+}): Promise<DeadLetteredResumeRow[]> {
+  const limit = Math.max(1, Math.min(opts?.limit ?? 100, 500));
   const rows = await db
-    .select()
+    .select({ row: artifactReviewResumeOutbox, orgId: artifactReviewGates.orgId })
     .from(artifactReviewResumeOutbox)
-    .where(isNotNull(artifactReviewResumeOutbox.deadLetteredAt))
-    .limit(Math.max(1, Math.min(limit, 500)));
-  return rows.map((r) => ({
+    .leftJoin(artifactReviewGates, eq(artifactReviewGates.id, artifactReviewResumeOutbox.gateId))
+    .where(
+      opts?.orgId
+        ? and(
+            isNotNull(artifactReviewResumeOutbox.deadLetteredAt),
+            eq(artifactReviewGates.orgId, opts.orgId),
+          )
+        : isNotNull(artifactReviewResumeOutbox.deadLetteredAt),
+    )
+    .orderBy(desc(artifactReviewResumeOutbox.deadLetteredAt))
+    .limit(limit);
+  return rows.map(({ row: r, orgId }) => ({
     gateId: r.gateId,
     runId: r.runId,
     reviewTaskId: r.reviewTaskId,
@@ -714,6 +941,7 @@ export async function readDeadLetteredResumeIntents(limit = 100): Promise<DeadLe
     maxAttempts: r.maxAttempts,
     lastError: r.lastError,
     deadLetteredAt: r.deadLetteredAt,
+    orgId: orgId ?? null,
   }));
 }
 

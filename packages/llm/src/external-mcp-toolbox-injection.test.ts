@@ -135,7 +135,12 @@ describe("buildExternalMcpServerTools — manifest capability-marker selection",
 
     const tools = await buildExternalMcpServerTools("openai");
 
-    expect(buildTools).toHaveBeenCalledWith("openai");
+    // DIRECT helper call with no build context ⇒ the builder receives
+    // undefined for it (cinatra#2019 S4) — surface-gating toolboxes fail
+    // closed on that. (Orchestration entry points supply their own
+    // agent_run default at a higher layer; that is pinned in
+    // toolbox-build-context-threading.test.ts.)
+    expect(buildTools).toHaveBeenCalledWith("openai", undefined);
     expect(tools).toEqual([builderTool]);
     expect(vi.mocked(buildSingleExternalMcpTool)).not.toHaveBeenCalled();
   });
@@ -229,6 +234,132 @@ describe("buildExternalMcpServerTools — manifest capability-marker selection",
 
     expect(tools).toEqual([registryTool]);
     expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-entry collision scope (cinatra#2015 S0) — one colliding row never drops
+// the batch, and managed connector entries win over BYO registry rows.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Toolbox build-context threading (cinatra#2019 S4) — the host-built
+// `{ surface, connectorInstancePin? }` context reaches every first-party
+// builder verbatim, and threading it is behavior-inert for existing
+// one-argument builders (they ignore the extra parameter).
+// ---------------------------------------------------------------------------
+
+describe("buildExternalMcpServerTools — build-context threading (cinatra#2019 S4)", () => {
+  it("threads a caller-supplied build context verbatim into first-party builders", async () => {
+    h.builderRecord.providesExternalMcpToolbox = true;
+    const buildTools = vi.fn(async () => [builderTool]);
+    h.toolboxEntries[builderSlug] = {
+      load: async () => ({ createFixtureExternalMcpToolbox: () => ({ buildTools }) }),
+      factory: "createFixtureExternalMcpToolbox",
+    };
+
+    const context = {
+      surface: "chat" as const,
+      connectorInstancePin: { connectorKey: "wordpress", instanceId: "inst-1" },
+    };
+    const tools = await buildExternalMcpServerTools("openai", { context });
+
+    expect(buildTools).toHaveBeenCalledWith("openai", context);
+    expect(tools).toEqual([builderTool]);
+  });
+
+  it("is behavior-inert for a legacy one-argument builder: output byte-identical with and without a context", async () => {
+    h.builderRecord.providesExternalMcpToolbox = true;
+    // A pre-widening builder shape: declares ONLY (provider) and ignores the
+    // threaded context entirely — the S0-guarded connector toolboxes today.
+    h.toolboxEntries[builderSlug] = {
+      load: async () => ({
+        createFixtureExternalMcpToolbox: () => ({
+          buildTools: async (provider: string) => [
+            { ...builderTool, serverDescription: `built-for-${provider}` },
+          ],
+        }),
+      }),
+      factory: "createFixtureExternalMcpToolbox",
+    };
+
+    const withoutContext = await buildExternalMcpServerTools("openai");
+    const withContext = await buildExternalMcpServerTools("openai", {
+      context: { surface: "chat" },
+    });
+
+    expect(withContext).toEqual(withoutContext);
+    expect(withoutContext).toEqual([
+      { ...builderTool, serverDescription: "built-for-openai" },
+    ]);
+  });
+
+  it("does NOT thread the context into the registry fallback resolver (BYO rows carry no build context)", async () => {
+    h.fixtureRecord.providesExternalMcpToolbox = true;
+    vi.mocked(buildSingleExternalMcpTool).mockResolvedValueOnce(registryTool);
+
+    await buildExternalMcpServerTools("openai", { context: { surface: "chat" } });
+
+    expect(vi.mocked(buildSingleExternalMcpTool)).toHaveBeenCalledWith(fixtureSlug);
+  });
+});
+
+describe("buildExternalMcpServerTools — collision resolution", () => {
+  it("a BYO registry row colliding with a managed toolbox label is suppressed with a warning; the managed tool injects", async () => {
+    h.fixtureRecord.providesExternalMcpToolbox = true;
+    h.builderRecord.providesExternalMcpToolbox = true;
+    // Managed first-party toolbox emits "Fixture Builder"; the BYO registry row
+    // for the other slug normalizes to the same name ("fixture_builder").
+    h.toolboxEntries[builderSlug] = {
+      load: async () => ({
+        createFixtureExternalMcpToolbox: () => ({ buildTools: async () => [builderTool] }),
+      }),
+      factory: "createFixtureExternalMcpToolbox",
+    };
+    vi.mocked(buildSingleExternalMcpTool).mockResolvedValueOnce({
+      ...registryTool,
+      serverLabel: "Fixture builder",
+      serverUrl: "https://byo-collider.example.com/mcp",
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const tools = await buildExternalMcpServerTools("openai");
+
+    // Managed wins regardless of enumeration order; the BYO collider is gone.
+    expect(tools).toEqual([builderTool]);
+    expect(
+      warn.mock.calls.some((c) => String(c[0]).includes("suppressed")),
+    ).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("the non-colliding rest of the batch still injects alongside a suppressed collider", async () => {
+    h.fixtureRecord.providesExternalMcpToolbox = true;
+    h.builderRecord.providesExternalMcpToolbox = true;
+    h.toolboxEntries[builderSlug] = {
+      load: async () => ({
+        createFixtureExternalMcpToolbox: () => ({
+          buildTools: async () => [
+            builderTool,
+            { ...builderTool, serverLabel: "Unrelated Survivor", serverUrl: "https://s.example.com/mcp" },
+          ],
+        }),
+      }),
+      factory: "createFixtureExternalMcpToolbox",
+    };
+    vi.mocked(buildSingleExternalMcpTool).mockResolvedValueOnce({
+      ...registryTool,
+      serverLabel: "fixture-builder", // collides with builderTool only
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const tools = await buildExternalMcpServerTools("openai");
+
+    expect(tools.map((t) => t.serverLabel).sort()).toEqual([
+      "Unrelated Survivor",
+      "fixture-builder",
+    ].sort());
     warn.mockRestore();
   });
 });

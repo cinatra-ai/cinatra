@@ -581,7 +581,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
     inputSchema: z.object({
       packageSlug: z
         .string()
-        .describe("Directory name under extensions/cinatra-ai/ (e.g. 'blog-skills'). Must not contain path separators. Convention: kind at the END (-skills)."),
+        .describe("Directory name under extensions/cinatra-ai/ (e.g. 'blog-writing-skill'). Must not contain path separators. Convention: kind at the END, SINGULAR (-skill)."),
       packageJson: z
         .string()
         .describe("JSON string for package.json (npm manifest; cinatra.kind is normalized to \"skill\"; cinatra.capabilities maps capability keys to skill slugs)."),

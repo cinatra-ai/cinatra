@@ -25,23 +25,47 @@
  * global opt-in.
  */
 
-import { computeSkillContentHash } from "./anthropic-skill-content-hash";
 import type { AnthropicCustomSkillsClient } from "./anthropic-custom-skills-client";
 import type { AnthropicSkillUploadGate } from "./anthropic-skill-upload-gate";
-import { AnthropicSkillPreflightError } from "../errors";
+import {
+  ANTHROPIC_SKILL_MAX_UPLOAD_BYTES,
+  buildCanonicalSkillZip,
+  checkSkillBoundary,
+  computeSkillContentHash,
+  deriveAnthropicDisplayTitle,
+  deriveSkillRootDir,
+  type CanonicalSkillZip,
+} from "./anthropic-skill-content-hash";
+import { AnthropicSkillDeliveryError, AnthropicSkillPreflightError } from "../errors";
 
-/** 30MB Anthropic Custom Skills per-skill upload limit (spec §3). */
-export const ANTHROPIC_SKILL_MAX_BYTES = 30 * 1024 * 1024;
+/**
+ * Anthropic Custom Skills per-skill upload boundary. The docs say "under 30 MB";
+ * we reject at exactly 30,000,000 bytes measured against BOTH the canonical
+ * archive bytes AND the uncompressed file total (see the bundle-zip module).
+ */
+export const ANTHROPIC_SKILL_MAX_BYTES = ANTHROPIC_SKILL_MAX_UPLOAD_BYTES;
 
-/** A catalog skill prepared for sync (already read off disk by the app layer). */
+/**
+ * A catalog skill prepared for sync. As of byte-bound sync (cinatra#2088, epic
+ * #2086 S1) the bytes are read atomically FROM the content authority (the
+ * revision-file manifest + content-addressed blobs), NOT off disk — so the
+ * uploaded zip is provably derived from the stored revision. `revisionId` +
+ * `bundleDigest` are that revision's identity; they are persisted on the sync
+ * row so drift and preflight are a pure manifest comparison, never a disk
+ * re-hash.
+ */
 export type SyncCandidateSkill = {
   /** Cinatra catalog skill id. */
   catalogSkillId: string;
   /** Display name. */
   name: string;
-  /** Raw SKILL.md bytes. */
+  /** The stored revision the bytes below were resolved from (byte-bound sync). */
+  revisionId: string;
+  /** The revision's bundle identity — digest over the sorted (path, digest) set. */
+  bundleDigest: string;
+  /** Raw SKILL.md bytes (from the authority, not disk). */
   skillMd: Buffer;
-  /** Bundled files (relPath + raw bytes); symlinks already excluded by caller. */
+  /** Bundled files (relPath + raw bytes, from the authority); no symlinks. */
   bundledFiles: { relPath: string; bytes: Buffer }[];
   /**
    * The per-skill `allowAnthropicUpload` flag value AS STORED (passed through
@@ -57,6 +81,11 @@ export type SyncRow = {
   anthropicSkillId: string;
   anthropicVersion: string;
   contentHash: string;
+  /** Byte-bound sync binding (cinatra#2088): the stored revision the uploaded
+   * bytes derived from + its bundle identity. NULL on a pre-S1 row that has not
+   * yet been re-baselined (a null binding forces exactly one re-upload). */
+  revisionId: string | null;
+  bundleDigest: string | null;
   stale: boolean;
 };
 
@@ -68,12 +97,15 @@ export type SyncRow = {
 export interface AnthropicSkillSyncStatePort {
   /** Read the row for a catalog skill in the current namespace, or null. */
   readRow(catalogSkillId: string): Promise<SyncRow | null>;
-  /** Insert/update the row for a catalog skill (clears stale). */
+  /** Insert/update the row for a catalog skill (clears stale). Persists the
+   * byte-bound sync binding (revisionId + bundleDigest) alongside the hash. */
   upsertRow(row: {
     catalogSkillId: string;
     anthropicSkillId: string;
     anthropicVersion: string;
     contentHash: string;
+    revisionId: string;
+    bundleDigest: string;
   }): Promise<void>;
   /** Mark a single catalog skill's row stale (governance exclusion). */
   markStale(catalogSkillId: string): Promise<void>;
@@ -113,38 +145,66 @@ export type SyncResult = {
   };
 };
 
-function skillByteSize(s: SyncCandidateSkill): number {
+function uncompressedByteSize(s: SyncCandidateSkill): number {
   let total = s.skillMd.length;
   for (const f of s.bundledFiles) total += f.bytes.length;
   return total;
 }
 
 function humanMb(bytes: number): string {
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  return `${(bytes / 1_000_000).toFixed(1)}MB`;
+}
+
+function boundaryPreflightError(
+  catalogSkillId: string,
+  dimension: "archive" | "uncompressed",
+  bytes: number,
+  maxBytes: number,
+): AnthropicSkillPreflightError {
+  return new AnthropicSkillPreflightError({
+    kind: "size",
+    offendingSkillIds: [catalogSkillId],
+    byteSize: bytes,
+    message:
+      `Anthropic skill sync preflight failed: skill "${catalogSkillId}" ` +
+      `${dimension} size is ${humanMb(bytes)}, which reaches the ` +
+      `${humanMb(maxBytes)} Anthropic Custom Skills upload limit (the docs say ` +
+      `"under 30 MB"; both the canonical archive bytes and the uncompressed ` +
+      `total are bounded). This is a configuration error — shrink the skill ` +
+      `bundle before enabling/running sync (never a mid-run partial failure).`,
+  });
 }
 
 /**
- * Size preflight over ALL candidates. Runs BEFORE any HTTP call
- * and BEFORE any state mutation; a failure ⇒ zero remote + zero local change.
- * Reports the EXACT first offending skill + its size.
+ * Size preflight over ALL candidates against the canonical upload artifact.
+ * Runs BEFORE any HTTP call and BEFORE any state mutation; a failure ⇒ zero
+ * remote + zero local change. Rejects when EITHER the uncompressed total OR the
+ * canonical archive bytes reach the limit. A candidate whose bundle cannot be
+ * framed (bad path) is skipped here — the sync pass surfaces it as a
+ * `validationError` instead. Reports the EXACT first offending skill + size.
  */
 export function preflightAnthropicSkillSyncSizes(
   candidates: SyncCandidateSkill[],
   maxBytes: number = ANTHROPIC_SKILL_MAX_BYTES,
 ): AnthropicSkillPreflightError | null {
   for (const c of candidates) {
-    const size = skillByteSize(c);
-    if (size > maxBytes) {
-      return new AnthropicSkillPreflightError({
-        kind: "size",
-        offendingSkillIds: [c.catalogSkillId],
-        byteSize: size,
-        message:
-          `Anthropic skill sync preflight failed: skill "${c.catalogSkillId}" is ` +
-          `${humanMb(size)}, exceeds the ${humanMb(maxBytes)} Anthropic Custom ` +
-          `Skills upload limit. This is a configuration error — fix the skill ` +
-          `bundle before enabling/running sync (never a mid-run partial failure).`,
+    const uncompressed = uncompressedByteSize(c);
+    if (uncompressed >= maxBytes) {
+      return boundaryPreflightError(c.catalogSkillId, "uncompressed", uncompressed, maxBytes);
+    }
+    let zip: CanonicalSkillZip;
+    try {
+      zip = buildCanonicalSkillZip({
+        skillMd: c.skillMd,
+        bundledFiles: c.bundledFiles,
+        rootDir: deriveSkillRootDir(c.skillMd, c.name),
       });
+    } catch {
+      continue; // unframeable bundle ⇒ validationError path handles it
+    }
+    const boundary = checkSkillBoundary(zip, maxBytes);
+    if (boundary.exceeded) {
+      return boundaryPreflightError(c.catalogSkillId, boundary.dimension, boundary.bytes, maxBytes);
     }
   }
   return null;
@@ -176,6 +236,29 @@ export function preflightSkillRequestSet(
   return null;
 }
 
+/** A candidate measured once (hash + canonical zip + display title). */
+type MeasuredCandidate = {
+  hash: string;
+  zip: CanonicalSkillZip;
+  displayTitle: string;
+};
+
+/**
+ * Result of the strict expected-set verification: an expected injectable
+ * revision is satisfied only when it has a NON-STALE remote row whose content
+ * hash matches the candidate offered this run. `ok` is false if any expected id
+ * is missing, stale, mismatched, or was never offered as a candidate.
+ */
+export type ExpectedSetVerification = {
+  ok: boolean;
+  /** Expected ids with no remote row (incl. governance-denied with no prior). */
+  missing: string[];
+  /** Expected ids whose remote row is stale (governance-excluded / removed). */
+  stale: string[];
+  /** Expected ids whose remote row content hash != the candidate's. */
+  mismatched: string[];
+};
+
 export class AnthropicSkillSyncEngine {
   constructor(
     private readonly client: AnthropicCustomSkillsClient,
@@ -205,23 +288,18 @@ export class AnthropicSkillSyncEngine {
       return { ok: true, outcomes: [] };
     }
 
-    // Size preflight over ALL candidates BEFORE any HTTP / state mutation.
-    const preflightError = preflightAnthropicSkillSyncSizes(candidates);
-    if (preflightError) {
-      return { ok: false, outcomes: [], preflightError };
-    }
-
-    // Hash + path validation over ALL candidates
-    // BEFORE any upload/state write — a bad bundled path in candidate N must
-    // not land after candidates 1..N-1 were already uploaded. computeSkill-
-    // ContentHash throws on absolute/`..`/duplicate normalized paths.
-    const hashes = new Map<string, string>();
+    // Single measure pass over ALL candidates BEFORE any HTTP / state mutation.
+    // Per candidate: (1) hash + path validation — a bad bundled path must not
+    // land after earlier candidates already uploaded (computeSkillContentHash
+    // throws on absolute/`..`/duplicate paths ⇒ validationError); (2) build the
+    // canonical rooted zip ONCE — the single measured+uploaded artifact — and
+    // reject at the boundary on either dimension (⇒ preflightError). Both are
+    // config errors detected before any partial run.
+    const measured = new Map<string, MeasuredCandidate>();
     for (const c of candidates) {
+      let hash: string;
       try {
-        hashes.set(
-          c.catalogSkillId,
-          computeSkillContentHash(c.skillMd, c.bundledFiles),
-        );
+        hash = computeSkillContentHash(c.skillMd, c.bundledFiles);
       } catch (err) {
         return {
           ok: false,
@@ -232,6 +310,57 @@ export class AnthropicSkillSyncEngine {
           },
         };
       }
+      const uncompressed = uncompressedByteSize(c);
+      if (uncompressed >= ANTHROPIC_SKILL_MAX_BYTES) {
+        return {
+          ok: false,
+          outcomes: [],
+          preflightError: boundaryPreflightError(
+            c.catalogSkillId,
+            "uncompressed",
+            uncompressed,
+            ANTHROPIC_SKILL_MAX_BYTES,
+          ),
+        };
+      }
+      // Paths were validated by the hash above, but the zip writer also rejects
+      // classic-ZIP ceilings (>65,535 entries / over-long path) ⇒ surface those
+      // as a clean validationError, never a mid-run crash.
+      let zip: CanonicalSkillZip;
+      try {
+        zip = buildCanonicalSkillZip({
+          skillMd: c.skillMd,
+          bundledFiles: c.bundledFiles,
+          rootDir: deriveSkillRootDir(c.skillMd, c.name),
+        });
+      } catch (err) {
+        return {
+          ok: false,
+          outcomes: [],
+          validationError: {
+            catalogSkillId: c.catalogSkillId,
+            message: err instanceof Error ? err.message : String(err),
+          },
+        };
+      }
+      const boundary = checkSkillBoundary(zip, ANTHROPIC_SKILL_MAX_BYTES);
+      if (boundary.exceeded) {
+        return {
+          ok: false,
+          outcomes: [],
+          preflightError: boundaryPreflightError(
+            c.catalogSkillId,
+            boundary.dimension,
+            boundary.bytes,
+            ANTHROPIC_SKILL_MAX_BYTES,
+          ),
+        };
+      }
+      measured.set(c.catalogSkillId, {
+        hash,
+        zip,
+        displayTitle: deriveAnthropicDisplayTitle(c.name, c.catalogSkillId),
+      });
     }
 
     const outcomes: SyncOutcome[] = [];
@@ -268,15 +397,27 @@ export class AnthropicSkillSyncEngine {
         continue;
       }
 
-      const hash = hashes.get(c.catalogSkillId)!;
+      const m = measured.get(c.catalogSkillId)!;
+      const hash = m.hash;
       const row = await this.state.readRow(c.catalogSkillId);
       const upload = {
-        displayName: c.name,
-        skillMd: c.skillMd,
-        bundledFiles: c.bundledFiles,
+        displayTitle: m.displayTitle,
+        rootDir: m.zip.rootDir,
+        zipBytes: m.zip.zipBytes,
       };
 
-      if (row && row.contentHash === hash && !row.stale) {
+      // Unchanged only when BOTH the content hash AND the byte-bound binding
+      // (revision + bundle identity) match. A pre-S1 row carries a NULL
+      // binding, so `row.bundleDigest === c.bundleDigest` is false and the skill
+      // is re-uploaded exactly ONCE to record its binding — the one-time remote
+      // re-baseline (the superseded remote version is reclaimed by GC).
+      if (
+        row &&
+        row.contentHash === hash &&
+        row.bundleDigest === c.bundleDigest &&
+        row.revisionId === c.revisionId &&
+        !row.stale
+      ) {
         outcomes.push({ catalogSkillId: c.catalogSkillId, action: "unchanged" });
         continue;
       }
@@ -320,6 +461,8 @@ export class AnthropicSkillSyncEngine {
           anthropicSkillId,
           anthropicVersion,
           contentHash: hash,
+          revisionId: c.revisionId,
+          bundleDigest: c.bundleDigest,
         });
       } catch (err) {
         return {
@@ -354,5 +497,125 @@ export class AnthropicSkillSyncEngine {
     );
 
     return { ok: true, outcomes };
+  }
+
+  /**
+   * Strict variant of {@link sync}. Unlike `sync` (which returns `{ ok: false }`
+   * on a config error and is otherwise `ok: true` even when EVERY candidate was
+   * governance-skipped), this:
+   *
+   *  1. THROWS {@link AnthropicSkillSyncFailedError} carrying the full result on
+   *     any `!ok` (size/validation/namespace/reconcile failure) so a durable
+   *     caller (e.g. an install-triggered reconcile job) can retry rather than
+   *     swallow it; and
+   *  2. when `expectedInjectableIds` is supplied, verifies every expected
+   *     injectable revision ended with a non-stale remote row whose content
+   *     matches (all-governance-skipped is NOT success) and THROWS
+   *     {@link AnthropicSkillExpectedSetError} otherwise.
+   */
+  async syncStrict(
+    candidates: SyncCandidateSkill[],
+    resolveGlobalEnabled: () => boolean,
+    opts?: { expectedInjectableIds?: string[] },
+  ): Promise<SyncResult> {
+    const result = await this.sync(candidates, resolveGlobalEnabled);
+    if (!result.ok) throw new AnthropicSkillSyncFailedError(result);
+    const expected = opts?.expectedInjectableIds ?? [];
+    if (expected.length > 0) {
+      const verification = await this.verifyExpectedSet(expected, candidates);
+      if (!verification.ok) throw new AnthropicSkillExpectedSetError(verification);
+    }
+    return result;
+  }
+
+  /**
+   * Verify each expected injectable revision has a NON-STALE remote row whose
+   * content hash matches the candidate offered this run. Read-only (no HTTP, no
+   * state mutation) — consulted after a sync to assert a specific expected set
+   * actually landed. An expected id not offered as a candidate is `missing`.
+   */
+  async verifyExpectedSet(
+    expectedInjectableIds: string[],
+    candidates: SyncCandidateSkill[],
+  ): Promise<ExpectedSetVerification> {
+    const byId = new Map(candidates.map((c) => [c.catalogSkillId, c]));
+    const missing: string[] = [];
+    const stale: string[] = [];
+    const mismatched: string[] = [];
+    for (const id of expectedInjectableIds) {
+      const c = byId.get(id);
+      if (!c) {
+        missing.push(id); // not even offered to sync this run
+        continue;
+      }
+      const row = await this.state.readRow(id);
+      if (!row) {
+        missing.push(id);
+        continue;
+      }
+      if (row.stale) {
+        stale.push(id);
+        continue;
+      }
+      // Byte-bound verification (cinatra#2088): the expected revision is
+      // satisfied only when the remote row's binding matches the candidate's
+      // stored revision + bundle identity — a pure manifest comparison, NO disk
+      // re-hash. A pre-S1 row with a NULL binding is `mismatched` (not yet
+      // re-baselined), forcing the caller to converge before relying on it.
+      if (row.bundleDigest !== c.bundleDigest || row.revisionId !== c.revisionId) {
+        mismatched.push(id);
+      }
+    }
+    return {
+      ok: missing.length === 0 && stale.length === 0 && mismatched.length === 0,
+      missing,
+      stale,
+      mismatched,
+    };
+  }
+}
+
+/**
+ * Thrown by {@link AnthropicSkillSyncEngine.syncStrict} when the underlying sync
+ * returned `ok: false` (a size/validation/namespace/reconcile config error). The
+ * full {@link SyncResult} is carried so a caller can inspect and retry.
+ */
+export class AnthropicSkillSyncFailedError extends AnthropicSkillDeliveryError {
+  readonly code = "anthropic_skill_sync_failed" as const;
+  readonly result: SyncResult;
+  constructor(result: SyncResult) {
+    const detail =
+      result.preflightError?.message ??
+      (result.validationError
+        ? `${result.validationError.catalogSkillId}: ${result.validationError.message}`
+        : undefined) ??
+      result.reconcileWarning?.message ??
+      "Anthropic skill sync reported a configuration error.";
+    super(`Anthropic skill sync failed (strict mode): ${detail}`);
+    this.name = "AnthropicSkillSyncFailedError";
+    this.result = result;
+  }
+}
+
+/**
+ * Thrown by {@link AnthropicSkillSyncEngine.syncStrict} when a supplied expected
+ * injectable set was not fully satisfied after sync (a missing/stale/mismatched
+ * expected revision — e.g. an all-governance-skipped run).
+ */
+export class AnthropicSkillExpectedSetError extends AnthropicSkillDeliveryError {
+  readonly code = "anthropic_skill_expected_set_unsatisfied" as const;
+  readonly verification: ExpectedSetVerification;
+  constructor(verification: ExpectedSetVerification) {
+    const parts: string[] = [];
+    if (verification.missing.length) parts.push(`missing: ${verification.missing.join(", ")}`);
+    if (verification.stale.length) parts.push(`stale: ${verification.stale.join(", ")}`);
+    if (verification.mismatched.length)
+      parts.push(`content-mismatched: ${verification.mismatched.join(", ")}`);
+    super(
+      `Anthropic skill sync expected-set verification failed — every expected ` +
+        `injectable revision must have a non-stale matching remote row. ${parts.join("; ")}.`,
+    );
+    this.name = "AnthropicSkillExpectedSetError";
+    this.verification = verification;
   }
 }

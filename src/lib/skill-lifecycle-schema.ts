@@ -186,7 +186,154 @@ export function skillEfficacySchemaQueries(schemaName: string): { text: string }
   return [
     { text: `ALTER TABLE "${q}"."agent_run_skills_used" ADD COLUMN IF NOT EXISTS delivery_mode text` },
     { text: `ALTER TABLE "${q}"."agent_run_skills_used" ADD COLUMN IF NOT EXISTS invocation_attributable boolean` },
+    // cinatra#2091 (epic #2086 S4): a skill the typed injection contract
+    // RESOLVED but did NOT deliver (cap truncation, inline-budget overflow) is
+    // recorded on the SAME ledger row with the reason, so the efficacy surface
+    // can tell "never reached the model" apart from "reached it and was
+    // ignored". Additive + nullable: an existing row is untouched, and a later
+    // real exposure of the same (run, skill) clears it.
+    { text: `ALTER TABLE "${q}"."agent_run_skills_used" ADD COLUMN IF NOT EXISTS injection_drop_reason text` },
     { text: `CREATE INDEX IF NOT EXISTS agent_run_skills_used_skill_id_idx ON "${q}"."agent_run_skills_used" (skill_id)` },
     { text: `ALTER TABLE "${q}"."skills" ADD COLUMN IF NOT EXISTS deprecation_candidate_dismissed_at timestamptz` },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// BUNDLE-AWARE content authority (cinatra#2088, epic #2086 S1) — bootstrap DDL
+// for the additive half that turns the single-blob content
+// authority (core__0031's `skill_revision_contents`, one immutable UTF-8 text
+// blob per revision) into a multi-file, binary-capable bundle authority:
+//
+//   - `skill_bundle_blobs`: a RAW-BYTE content-addressable blob store keyed by
+//     the sha256 hex of the bytes. Uniform for text AND binary resources (a
+//     UTF-8 file is just its bytes), so a non-UTF-8 reference (an image, a
+//     compiled fixture) survives byte-exact where `skill_revision_contents`
+//     (a `text` column) could not. Two DB CHECKs make a wrong blob IMPOSSIBLE —
+//     content_digest = sha256(content) and byte_length = octet_length(content).
+//     A BEFORE UPDATE OR DELETE trigger raises: a blob is a pure function of its
+//     digest and can only ever be inserted.
+//   - `skill_revision_files`: the immutable revision-file MANIFEST — one row per
+//     `(revision_id, path)` binding a bundled file's normalized path to its
+//     content_digest (into `skill_bundle_blobs`), byte_length, unix mode, and an
+//     `is_router` flag distinguishing the single `SKILL.md`. Append-only trigger.
+//     A CHECK enforces exactly-one-router shape at the row level (is_router ⇒
+//     path='SKILL.md') and a forward-slash-normalized, traversal-free path.
+//   - `skill_bundle_heads`: the bundle authority's CURRENT-BUNDLE POINTER, one
+//     row per skill — `(skill_id) → (revision_id, bundle_digest)`. A pointer, so
+//     it is deliberately MUTABLE (no append-only trigger) exactly like
+//     `skills.active_revision_id`; the history it points into stays immutable.
+//     It exists because the lifecycle revision layer (core__0029) covers ONLY
+//     custom/personal skills — a DERIVED (extension/package) skill has a NULL
+//     `skills.active_revision_id` forever — so without a bundle-authority-owned
+//     pointer the byte-bound sync path could not resolve a bundle for the
+//     extension skills that are the bulk of the mirror. A custom skill's head is
+//     written in the SAME transaction as its lifecycle revision; a derived
+//     skill's head is written by the capture phase under a deterministic
+//     content-addressed revision id (`bundle:<bundleDigest>`).
+//   - `skill_revisions.bundle_digest`: the REVISION IDENTITY — the deterministic
+//     digest over the sorted `(path, content_digest)` set (computed by the pure
+//     `computeBundleDigest`). Nullable: a legacy (pre-S1) revision carries NULL
+//     until its bundle is ingested.
+//   - `anthropic_skill_sync.revision_id` + `.bundle_digest`: the byte-bound sync
+//     binding — a remote mirror row records WHICH stored revision (and its
+//     bundle identity) the uploaded bytes were derived from, so drift is a pure
+//     manifest comparison and never a disk re-hash. Nullable for pre-S1 rows.
+//
+// Lives in THIS leaf (rather than its own module) so it inherits the same
+// zero-import synchronous-leaf contract drizzle-store.ts's require() composition
+// depends on, and so composing it costs the hub no new lines. The operator-upgrade twin is migrations/core/
+// core__0084; the two paths converge (idempotent, fully-guarded DDL). Spread
+// into buildCreateStoreSchemaQueries AFTER skillLifecycleSchemaQueries (needs
+// `skill_revisions` to exist for the ADD COLUMN) and AFTER the anthropic skill
+// tables (needs `anthropic_skill_sync` to exist for its ADD COLUMNs).
+
+/**
+ * Bundle authority tables + the additive columns on `skill_revisions` and
+ * `anthropic_skill_sync`. `schemaName` is the app schema (SUPABASE_SCHEMA).
+ */
+export function skillBundleSchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    // ---- skill_bundle_blobs: raw-byte content-addressable authority ----
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."skill_bundle_blobs" (
+      content_digest text PRIMARY KEY,
+      content bytea NOT NULL,
+      byte_length integer NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT skill_bundle_blobs_digest_check CHECK (content_digest = encode(sha256(content), 'hex')),
+      CONSTRAINT skill_bundle_blobs_length_check CHECK (byte_length = octet_length(content))
+    )` },
+    { text: `CREATE OR REPLACE FUNCTION "${q}"."fn_skill_bundle_blobs_append_only"() RETURNS trigger LANGUAGE plpgsql AS $body$
+BEGIN
+  RAISE EXCEPTION 'skill_bundle_blobs is append-only: % forbidden — content is immutable per digest', TG_OP;
+END;
+$body$` },
+    { text: `DROP TRIGGER IF EXISTS trg_skill_bundle_blobs_append_only ON "${q}"."skill_bundle_blobs"` },
+    { text: `CREATE TRIGGER trg_skill_bundle_blobs_append_only BEFORE UPDATE OR DELETE ON "${q}"."skill_bundle_blobs" FOR EACH ROW EXECUTE FUNCTION "${q}"."fn_skill_bundle_blobs_append_only"()` },
+
+    // ---- skill_revision_files: the immutable revision-file manifest ----
+    // `revision_id` + `skill_id` carry NO FK (mirrors skill_revisions: durable
+    // history that survives a hard skill delete; an ON DELETE CASCADE would fire
+    // the append-only trigger during a catalog-replace and abort the whole
+    // transaction). `mode` is the unix file mode (0o644 = 420 default). The
+    // path CHECK rejects an absolute path, a `\` (must be POSIX-normalized before
+    // insert), a `..` traversal segment, and the empty string; `is_router`
+    // implies path='SKILL.md' so a manifest can never mark a non-router file the
+    // router.
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."skill_revision_files" (
+      revision_id text NOT NULL,
+      skill_id text NOT NULL,
+      path text NOT NULL,
+      content_digest text NOT NULL,
+      byte_length integer NOT NULL,
+      mode integer NOT NULL DEFAULT 420,
+      is_router boolean NOT NULL DEFAULT false,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT skill_revision_files_pk PRIMARY KEY (revision_id, path),
+      CONSTRAINT skill_revision_files_path_check CHECK (
+        length(path) > 0
+        AND left(path, 1) <> '/'
+        AND position('\\' in path) = 0
+        AND path NOT LIKE '%/..'
+        AND path NOT LIKE '../%'
+        AND path NOT LIKE '%/../%'
+        AND path <> '..'
+      ),
+      CONSTRAINT skill_revision_files_router_check CHECK (is_router = false OR path = 'SKILL.md')
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS skill_revision_files_skill_idx ON "${q}"."skill_revision_files" (skill_id)` },
+    { text: `CREATE INDEX IF NOT EXISTS skill_revision_files_digest_idx ON "${q}"."skill_revision_files" (content_digest)` },
+    { text: `CREATE OR REPLACE FUNCTION "${q}"."fn_skill_revision_files_append_only"() RETURNS trigger LANGUAGE plpgsql AS $body$
+BEGIN
+  RAISE EXCEPTION 'skill_revision_files is append-only: % forbidden — record a NEW revision instead', TG_OP;
+END;
+$body$` },
+    { text: `DROP TRIGGER IF EXISTS trg_skill_revision_files_append_only ON "${q}"."skill_revision_files"` },
+    { text: `CREATE TRIGGER trg_skill_revision_files_append_only BEFORE UPDATE OR DELETE ON "${q}"."skill_revision_files" FOR EACH ROW EXECUTE FUNCTION "${q}"."fn_skill_revision_files_append_only"()` },
+
+    // ---- skill_bundle_heads: the current-bundle pointer (one row per skill) ----
+    // MUTABLE by design (a pointer, not history) — no append-only trigger. No FK
+    // to `skills` (same reasoning as skill_revisions: a catalog-replace deletes
+    // vanished skill rows and an ON DELETE CASCADE would be a surprising
+    // cross-table effect); a head whose skill vanished is simply never read
+    // (every read is skill-scoped from the catalog).
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."skill_bundle_heads" (
+      skill_id text PRIMARY KEY,
+      revision_id text NOT NULL,
+      bundle_digest text NOT NULL,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS skill_bundle_heads_revision_idx ON "${q}"."skill_bundle_heads" (revision_id)` },
+
+    // ---- skill_revisions.bundle_digest: the revision identity ----
+    // Nullable: a pre-S1 revision has none until ingestion computes it.
+    { text: `ALTER TABLE "${q}"."skill_revisions" ADD COLUMN IF NOT EXISTS bundle_digest text` },
+
+    // ---- anthropic_skill_sync: byte-bound sync binding ----
+    // Which stored revision (+ its bundle identity) the uploaded bytes derive
+    // from. Nullable so an already-provisioned namespace upgrades additively;
+    // populated on the next byte-bound sync.
+    { text: `ALTER TABLE "${q}"."anthropic_skill_sync" ADD COLUMN IF NOT EXISTS revision_id text` },
+    { text: `ALTER TABLE "${q}"."anthropic_skill_sync" ADD COLUMN IF NOT EXISTS bundle_digest text` },
   ];
 }

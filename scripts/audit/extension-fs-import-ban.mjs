@@ -30,11 +30,17 @@
 //
 // SCOPE: every extension's SOURCE tree (kind-agnostic — `src/`, `cinatra/`,
 // `skills/`, `widgets/`, … — the whole extension package directory), MINUS:
-//   - `extension-kind-gate.mjs` — the self-contained, zero-dependency
-//     per-repo CI validator the extraction script pushes into EVERY extension
-//     repo (scripts/extensions/extract-extension-repos.mjs); it is repo-CI
-//     tooling that runs standalone against the local checkout, not shipped
-//     extension code the host loads at runtime.
+//   - the AUTHOR-FACING GATE SCRIPTS (`AUTHOR_FACING_GATE_SCRIPTS` below) —
+//     self-contained, zero-dependency per-repo CI validators that run
+//     standalone against the local checkout, NOT shipped extension code the
+//     host loads at runtime. `extension-kind-gate.mjs` is the one the
+//     extraction script pushes into EVERY extension repo
+//     (scripts/extensions/extract-extension-repos.mjs);
+//     `renderer-binding-gate.mjs` is the per-pack renderer-binding lock the
+//     #1959 self-owned-renderer template introduced. Both are excluded from
+//     the packages' `files` allowlist, so neither is ever published or
+//     imported — reading their own repo's package.json/oas.json with node:fs
+//     is their whole job.
 //   - a top-level `scripts/` directory — dev/bootstrap tooling (e.g. a
 //     connector's local database-seed script), never on the host's
 //     `register(ctx)`/serverEntry import graph.
@@ -108,6 +114,16 @@ export const FS_IMPORT_ALLOWLIST = new Set([
   // a follow-up reference (keys are `${extensionName}::${posix path}`).
 ]);
 
+// Author-facing per-repo CI gate scripts: standalone validators that read the
+// pack's OWN package.json / cinatra/oas.json from disk and are excluded from the
+// package `files` allowlist, so they are never published and never reach the
+// host's import graph. Scanning them for node:fs would flag the one thing they
+// exist to do. See the SCOPE note in the module header.
+const AUTHOR_FACING_GATE_SCRIPTS = new Set([
+  "extension-kind-gate.mjs",
+  "renderer-binding-gate.mjs",
+]);
+
 function walkSourceFiles(dir, acc = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "__tests__") continue;
@@ -116,7 +132,7 @@ function walkSourceFiles(dir, acc = []) {
       walkSourceFiles(full, acc);
       continue;
     }
-    if (entry.name === "extension-kind-gate.mjs") continue;
+    if (AUTHOR_FACING_GATE_SCRIPTS.has(entry.name)) continue;
     if (/\.(test|spec)\./.test(entry.name)) continue;
     const dot = entry.name.lastIndexOf(".");
     if (dot < 0 || !SOURCE_EXTENSIONS.has(entry.name.slice(dot))) continue;

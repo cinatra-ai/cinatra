@@ -1,13 +1,20 @@
 import "server-only";
 
-import { and, eq, sql, type SQL } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import { enqueueBackgroundJob, BACKGROUND_JOB_NAMES } from "@/lib/background-jobs";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
-import { db } from "./db";
 import { agentRuns } from "./schema";
 import { enforceRunAccess, type ActorRoleHints } from "./auth-policy";
 import type { AgentAuthPolicy } from "./auth-policy-types";
+import { resolveOrgRoleForUser } from "@/lib/auth-session";
+// cinatra#1939 wave 2 (§2d): the setup + WayFlow resumes below are grounded by
+// the RESUMING PRINCIPAL (actorId — authorized by the caller: the admin-session
+// approve action, the A2A resume route's verified actor, or the MCP resume
+// frame's delegating user), NEVER the run's own RUN authority. Owner ruling
+// 2026-07-26 (ruling 2) DROPPED cross-org run management: a member mints a session
+// authority; an authorized NON-member fails closed (no non-member mint).
+import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import {
   readAgentRunById,
   readAgentRunByTaskId,
@@ -15,6 +22,11 @@ import {
   readRunCoOwners,
   writeHitlPrompt,
 } from "./store";
+// cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
+// inputParams-merge + pending_approval->queued CAS now runs inside the org-write
+// kernel guard instead of directly on the module `db` (owner ruling 2026-07-26,
+// ruling 1: "now").
+import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import {
   WAYFLOW_A2A_TIMEOUT_MS,
   createWayflowFetch,
@@ -251,35 +263,39 @@ export async function approveReviewTaskInternal(
       }
     }
 
-    // Single atomic CAS UPDATE (#76): merge the approved value(s) into
-    // inputParams (when present) AND transition the run back to "queued" — so
-    // runAgentBuilderExecutionJob won't skip — in ONE statement. Both writes
-    // target the same agent_runs row; combining them removes the partial-state
-    // window entirely (a crash can no longer land between the merge and the
-    // status flip). Postgres evaluates the self-referential JSONB merge
-    // against the pre-update row, so mixing it with the plain status
-    // assignment is safe.
+    // Single atomic CAS UPDATE (#76), now GUARDED (§7.1): merge the approved
+    // value(s) into inputParams (when present) AND transition the run back to
+    // "queued" — so runAgentBuilderExecutionJob won't skip — in ONE statement,
+    // run INSIDE the org-write kernel guard on its transaction (capability
+    // run.execute; pending_approval->queued is non-terminal). Combining the two
+    // writes removes the partial-state window entirely (a crash can no longer
+    // land between the merge and the status flip); Postgres evaluates the
+    // self-referential JSONB merge against the pre-update row, so mixing it with
+    // the plain status assignment is safe. The org-scoped CAS
+    // (`status = 'pending_approval' AND org_id = <authority org>`, mirroring
+    // updateAgentRunStatusConditional) makes the early `run.status` read a mere
+    // fast-fail: a concurrent reject/stop/fail — or a runId in another org —
+    // updates 0 rows ⇒ stale ⇒ throw (RunTransitionError), and the resume job is
+    // never enqueued.
     //
-    // The `status = 'pending_approval'` guard in the WHERE clause makes the
-    // statement compare-and-swap-shaped (mirroring
-    // store.ts:updateAgentRunStatusConditional): the early `run.status`
-    // read above is only a fast-fail, so a concurrent reject/stop/fail that
-    // lands between that read and this write must NOT be clobbered back to
-    // "queued". Zero rows updated ⇒ stale approval ⇒ throw, and the resume
-    // job is never enqueued.
-    const casResult = await db
-      .update(agentRuns)
-      .set({
-        ...(inputParamsMerge !== null ? { inputParams: inputParamsMerge } : {}),
-        status: "queued",
-      })
-      .where(and(eq(agentRuns.id, runId), eq(agentRuns.status, "pending_approval")))
-      .returning({ id: agentRuns.id });
-    if (casResult.length !== 1) {
+    // Ground the write on the RESUMING PRINCIPAL (actorId — the approving admin
+    // session, the A2A resume route's verified actor, or the MCP resume frame's
+    // delegating user). Owner ruling 2026-07-26 (ruling 2): cross-org run
+    // management is unsupported, so an authorized NON-member of the run's org
+    // fails closed here rather than resuming. The member path mints a session
+    // authority and its merge + enqueue are byte-for-byte unchanged.
+    const setupRole = await resolveOrgRoleForUser(run.orgId, actorId);
+    if (setupRole === undefined) {
       throw new Error(
-        `Setup approval rejected: run ${runId} left pending_approval before the approval committed (concurrent transition)`,
+        `[approveReviewTaskInternal] actor ${actorId} is not a member of org ${run.orgId}; ` +
+          `cross-org run management is unsupported`,
       );
     }
+    await resumeRunFromSetupApproval(
+      runId,
+      inputParamsMerge,
+      sessionAuthorityFromResolvedRole(run.orgId, setupRole),
+    );
 
     await enqueueBackgroundJob(
       BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
@@ -379,6 +395,20 @@ export async function approveReviewTaskInternal(
     // Vendor-namespaced routing via resolveWayflowUrl. Throws on malformed
     // packageName or unset WAYFLOW_BASE_URL.
     const wayflowUrl = resolveWayflowUrl(template.packageName);
+
+    // §2d: ground the resume on the RESUMING PRINCIPAL (actorId), resolved
+    // BEFORE any side-effect (writeHitlPrompt / sendTask / the status
+    // transition). Owner ruling 2026-07-26 (ruling 2): cross-org run management is
+    // unsupported, so an authorized NON-member of the run's org fails closed
+    // here — no WayFlow message is dispatched — rather than driving the resume.
+    const resumeRole = await resolveOrgRoleForUser(run.orgId, actorId);
+    if (resumeRole === undefined) {
+      throw new Error(
+        `[approveReviewTaskInternal] actor ${actorId} is not a member of org ${run.orgId}; ` +
+          `cross-org run management is unsupported`,
+      );
+    }
+    const resumeAuthority = sessionAuthorityFromResolvedRole(run.orgId, resumeRole);
 
     // Precedence for the WayFlow resume message:
     //   1. values.userResponse (string, non-empty after trim)  — structured-form path
@@ -530,9 +560,9 @@ export async function approveReviewTaskInternal(
     // Lazy import to avoid circular dep (review-task-actions ← actions.ts ←
     // index.ts ← @cinatra-ai/a2a). fromStatus is the literal "pending_approval"
     // because the guard at line 180 already enforced run.status === "pending_approval"
-    // before we reached here.
+    // before we reached here. resumeAuthority was minted above (before sendTask).
     const { handleWayflowTaskState } = await import("./execution");
-    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task });
+    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority: resumeAuthority });
 
     console.log(
       `[approveReviewTaskInternal] wayflow-path resumed run=${run.id} task=${taskId} ` +

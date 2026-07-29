@@ -6,6 +6,7 @@
 
 import "server-only";
 
+import type { ExtensionToolboxBuildContext } from "@cinatra-ai/sdk-extensions";
 import type { LlmProvider, LlmMcpServerTool } from "./types";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import {
@@ -14,6 +15,7 @@ import {
 } from "@/lib/external-mcp-toolbox-loader.server";
 import { buildSingleExternalMcpTool } from "@/lib/external-mcp-registry";
 import { buildAllToolboxProviderTools } from "@/lib/llm-toolbox-providers";
+import { normalizeMcpServerName } from "./mcp-materializer";
 import { getPublicMcpServerUrl, getLlmMcpCredentials, getLocalTokenEndpointUrl, getLocalMcpServerUrl } from "@cinatra-ai/mcp-server/credentials";
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 
@@ -135,6 +137,12 @@ export type AgentRunMcpActor = {
    * mirrors the app-layer `AgentRunMcpActor` (agent-run-mcp-actor-token.ts).
    */
   oboCeiling: OboCeilingChain;
+  /**
+   * The run's CURRENT execution attempt id (`att` claim, cinatra#1939 S3) —
+   * threaded from the run row at the bridge so the org-write run authority
+   * can refuse stale attempts. Optional; mirrors the app-layer type.
+   */
+  executionAttemptId?: string;
 };
 
 export type AgentRunMcpActorTokenIssuer = (actor: AgentRunMcpActor) => string;
@@ -453,19 +461,28 @@ export async function buildA2aBearerToken(provider: LlmProvider = "openai"): Pro
  * Never throws — a failing extension degrades to "no tools from this
  * extension" with a warning, without dropping the other toolboxes.
  */
+/** A tool tagged with where it came from — first-party connector toolboxes
+ *  and capability providers are "managed"; `external_mcp_servers` registry
+ *  rows are "byo". On a normalized-label collision the managed entry wins
+ *  (cinatra#2015 S0). */
+type TaggedMcpServerTool = { tool: LlmMcpServerTool; origin: "managed" | "byo" };
+
 async function buildToolboxToolsForSlug(
   slug: string,
   provider: LlmProvider,
   skipRegistryFallback: boolean,
-): Promise<LlmMcpServerTool[]> {
+  context?: ExtensionToolboxBuildContext,
+): Promise<TaggedMcpServerTool[]> {
   try {
     const toolbox = await loadExternalMcpToolboxBySlug(slug);
     if (toolbox) {
-      return sanitizeExternalMcpToolboxTools(slug, await toolbox.buildTools(provider));
+      return sanitizeExternalMcpToolboxTools(slug, await toolbox.buildTools(provider, context)).map(
+        (tool) => ({ tool, origin: "managed" as const }),
+      );
     }
     if (skipRegistryFallback) return [];
     const registryTool = await buildSingleExternalMcpTool(slug);
-    if (registryTool) return [registryTool];
+    if (registryTool) return [{ tool: registryTool, origin: "byo" }];
     console.warn(
       `[mcp-access] external-MCP toolbox extension "${slug}" has no first-party builder and no external_mcp_servers row — injecting nothing for it`,
     );
@@ -479,6 +496,46 @@ async function buildToolboxToolsForSlug(
   }
 }
 
+/**
+ * Collision scope is PER ENTRY (cinatra#2015 S0 — was exact-label first-wins
+ * with no detection): duplicate NORMALIZED labels keep exactly one tool — the
+ * first managed one if any, else the first seen — and every suppressed entry
+ * is audit-warned individually. One colliding row never drops the batch.
+ */
+function resolveInjectionCollisions(
+  tagged: readonly TaggedMcpServerTool[],
+): LlmMcpServerTool[] {
+  const winners = new Map<string, TaggedMcpServerTool>();
+  const suppressed: Array<{ loser: TaggedMcpServerTool; winner: TaggedMcpServerTool }> = [];
+  for (const entry of tagged) {
+    const key = normalizeMcpServerName(entry.tool.serverLabel);
+    const incumbent = winners.get(key);
+    if (!incumbent) {
+      winners.set(key, entry);
+      continue;
+    }
+    if (incumbent.origin !== "managed" && entry.origin === "managed") {
+      winners.set(key, entry);
+      suppressed.push({ loser: incumbent, winner: entry });
+    } else {
+      suppressed.push({ loser: entry, winner: incumbent });
+    }
+  }
+  for (const { loser, winner } of suppressed) {
+    console.warn(
+      `[mcp-access] external-MCP server "${loser.tool.serverLabel}" (${loser.origin}) suppressed — ` +
+        `its label collides with "${winner.tool.serverLabel}" (${winner.origin}); the rest of the batch injects.`,
+    );
+  }
+  const out: LlmMcpServerTool[] = [];
+  for (const entry of tagged) {
+    if (winners.get(normalizeMcpServerName(entry.tool.serverLabel)) === entry) {
+      out.push(entry.tool);
+    }
+  }
+  return out;
+}
+
 export type BuildExternalMcpServerToolsOptions = {
   /**
    * When true, marker-bearing extensions WITHOUT a first-party builder are
@@ -488,6 +545,18 @@ export type BuildExternalMcpServerToolsOptions = {
    * through the manifest fallback either.
    */
   skipRegistryFallback?: boolean;
+  /**
+   * Host-built, identity-free toolbox build context (cinatra#2019 S4) —
+   * WHERE this injection is being assembled (surface) and, on run surfaces,
+   * WHICH connector instance the run is pinned to. Threaded verbatim into
+   * every first-party toolbox's `buildTools(provider, context)`; surface-
+   * gating toolboxes treat an ABSENT context as "emit nothing" (fail-closed
+   * on unwidened callers). Existing one-arg toolboxes ignore it — passing a
+   * context never changes their output. DELIBERATELY NOT threaded into the
+   * `llm-toolbox` capability-provider path (`buildAllToolboxProviderTools`):
+   * those providers do no per-instance site injection.
+   */
+  context?: ExtensionToolboxBuildContext;
 };
 
 /**
@@ -501,8 +570,12 @@ export type BuildExternalMcpServerToolsOptions = {
  * flattened in the manifest's deterministic (packageName-sorted) order.
  *
  * REGISTRATION-DRIVEN (appended): every `llm-toolbox` capability provider a
- * serverEntry registered at activation contributes its tools as well — the
- * registry call sites collapse duplicate server labels first-wins.
+ * serverEntry registered at activation contributes its tools as well.
+ *
+ * Duplicate normalized labels resolve PER ENTRY via
+ * `resolveInjectionCollisions` — managed connector entries win over BYO
+ * registry rows, every suppressed entry is audit-warned, and one colliding
+ * row never drops the rest of the batch (cinatra#2015 S0).
  *
  * Returns an empty array on failure or when no external MCP servers are
  * configured — never throws. The caller is responsible for prepending the
@@ -520,17 +593,20 @@ export async function buildExternalMcpServerTools(
     const [manifestToolLists, capabilityTools] = await Promise.all([
       Promise.all(
         slugs.map((slug) =>
-          buildToolboxToolsForSlug(slug, provider, options.skipRegistryFallback === true),
+          buildToolboxToolsForSlug(slug, provider, options.skipRegistryFallback === true, options.context),
         ),
       ),
       // Registration-driven: every `llm-toolbox` capability provider (apify
       // today) ALSO contributes its tools to the legacy always-inject set. A
       // connector resolving through BOTH paths (manifest marker + capability
-      // provider) yields identical tool definitions; the registry call sites
-      // collapse duplicate server labels first-wins.
+      // provider) yields identical tool definitions; collision resolution
+      // below keeps the managed one.
       buildAllToolboxProviderTools(provider),
     ]);
-    return [...manifestToolLists.flat(), ...capabilityTools];
+    return resolveInjectionCollisions([
+      ...manifestToolLists.flat(),
+      ...capabilityTools.map((tool) => ({ tool, origin: "managed" as const })),
+    ]);
   } catch (err) {
     console.warn(
       `[mcp-access] buildExternalMcpServerTools(${provider}): failed — returning empty list`,

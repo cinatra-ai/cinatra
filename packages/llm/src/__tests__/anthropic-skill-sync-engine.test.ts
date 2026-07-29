@@ -26,7 +26,10 @@ import {
   type SyncRow,
   type AnthropicSkillSyncStatePort,
 } from "../tools/anthropic-skill-sync-engine";
-import { computeSkillContentHash } from "../tools/anthropic-skill-content-hash";
+import {
+  computeSkillContentHash,
+  deriveAnthropicDisplayTitle,
+} from "../tools/anthropic-skill-content-hash";
 import { defaultAnthropicSkillUploadGate } from "../tools/anthropic-skill-upload-gate";
 import { AnthropicSkillPreflightError } from "../errors";
 import type { AnthropicCustomSkillsClient } from "../tools/anthropic-custom-skills-client";
@@ -35,6 +38,9 @@ function candidate(over: Partial<SyncCandidateSkill> = {}): SyncCandidateSkill {
   return {
     catalogSkillId: "skill-a",
     name: "Skill A",
+    // Byte-bound sync binding (cinatra#2088) — resolved from the content authority.
+    revisionId: "rev-a",
+    bundleDigest: "bundle-a",
     skillMd: Buffer.from("---\nname: A\n---\nbody"),
     bundledFiles: [{ relPath: "ref/x.md", bytes: Buffer.from("ref") }],
     allowAnthropicUpload: true,
@@ -53,6 +59,8 @@ class FakeState implements AnthropicSkillSyncStatePort {
     anthropicSkillId: string;
     anthropicVersion: string;
     contentHash: string;
+    revisionId: string;
+    bundleDigest: string;
   }) {
     this.rows.set(r.catalogSkillId, { ...r, stale: false });
   }
@@ -127,6 +135,8 @@ describe("AnthropicSkillSyncEngine — first sync & drift", () => {
       anthropicSkillId: "skill_existing",
       anthropicVersion: "v9",
       contentHash: computeSkillContentHash(c.skillMd, c.bundledFiles),
+      revisionId: "rev-a",
+      bundleDigest: "bundle-a",
       stale: false,
     });
     const engine = new AnthropicSkillSyncEngine(client, state, defaultAnthropicSkillUploadGate);
@@ -146,6 +156,8 @@ describe("AnthropicSkillSyncEngine — first sync & drift", () => {
       anthropicSkillId: "skill_existing",
       anthropicVersion: "v-old",
       contentHash: "STALE_OLD_HASH",
+      revisionId: "rev-a",
+      bundleDigest: "bundle-a",
       stale: false,
     });
     const engine = new AnthropicSkillSyncEngine(client, state, defaultAnthropicSkillUploadGate);
@@ -154,9 +166,17 @@ describe("AnthropicSkillSyncEngine — first sync & drift", () => {
     const result = await engine.sync([c], () => true);
 
     expect(client.createSkill).not.toHaveBeenCalled();
+    // The upload payload is now the canonical rooted-zip form. This drift
+    // candidate's SKILL.md has no frontmatter, so the root falls back to the
+    // normalized catalog name ("Skill A" → "skill-a"); the display title is the
+    // stable workspace-unique title.
     expect(client.createSkillVersion).toHaveBeenCalledWith(
       "skill_existing",
-      expect.objectContaining({ displayName: "Skill A" }),
+      expect.objectContaining({
+        rootDir: "skill-a",
+        displayTitle: deriveAnthropicDisplayTitle("Skill A", "skill-a"),
+        zipBytes: expect.any(Buffer),
+      }),
     );
     const row = state.rows.get("skill-a")!;
     expect(row.anthropicSkillId).toBe("skill_existing"); // skill id never changes
@@ -223,6 +243,8 @@ describe("AnthropicSkillSyncEngine — governance per-skill deny", () => {
       anthropicSkillId: "skill_existing",
       anthropicVersion: "v1",
       contentHash: "h",
+      revisionId: "rev-a",
+      bundleDigest: "bundle-a",
       stale: false,
     });
     const engine = new AnthropicSkillSyncEngine(client, state, defaultAnthropicSkillUploadGate);
@@ -341,6 +363,8 @@ describe("AnthropicSkillSyncEngine — race-safe OFF flip", () => {
       anthropicSkillId: "skill_pre",
       anthropicVersion: "v1",
       contentHash: "old",
+      revisionId: "rev-a",
+      bundleDigest: "bundle-a",
       stale: false,
     });
     const markStaleSpy = vi.spyOn(state, "markStale");

@@ -182,6 +182,20 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
   // agentAuthPolicy: template-level AgentAuthPolicy (JSON-as-text). Nullable;
   // null = use DEFAULT_AGENT_AUTH_POLICY. See packages/agent-builder/src/auth-policy.ts.
   agentAuthPolicy:   text("agent_auth_policy"),
+  // Per-agent EXECUTION config (exec-plane S3 slice B, cinatra#1708; epic #1705).
+  // executionEnvironment: the PROJECT-agent authoring surface for the L1 declared
+  // environment — the raw ExecutionEnvironmentSpec as JSON-as-text (the
+  // compiled_plan / gated_steps / lifecycle_config convention on this table),
+  // read through the SAME fail-closed parser packaged-agent manifests go through
+  // so both authoring surfaces resolve to one internal type. Nullable; null = no
+  // declared environment (L0).
+  executionEnvironment: text("execution_environment"),
+  // executionEnabled: the per-agent execution opt-out (epic D4). THREE-valued on
+  // purpose — null = inherit the instance/org posture, true = explicitly on,
+  // false = explicitly opted out. A DEFAULT would silently re-decide the posture
+  // for every pre-slice-B row. Physical columns added additively by core__0085 +
+  // the bootstrap DDL mirror in src/lib/drizzle-store.ts.
+  executionEnabled:  boolean("execution_enabled"),
   createdAt:         timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt:         timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
@@ -337,6 +351,20 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // reads run.dependentInstallId to carry it onto the ActorContext.
   // Migration: src/lib/drizzle-store.ts dependent_install_id entry + core__0030.
   dependentInstallId: text("dependent_install_id"),
+  // human_present: the run-start presence discriminator (cinatra#2067, epic
+  // #2037 C3). TRUE only for runs interactively started by a present human from
+  // the UI/chat (the run-actions.ts + chat run-start seams); NULL/false for
+  // every headless origin (scheduled/recurring triggers, A2A/API dispatch,
+  // worker child dispatch). ONLY a human-present run may PARK at the run-start
+  // recommendation interception for the confirm/adjust/skip chip-row; a headless
+  // run auto-applies and never parks (the S3 engine behavior stays byte-
+  // identical — NULL reads as "not present"). Nullable + additive: pre-existing
+  // rows read NULL (headless-safe default; unchanged behavior).
+  // Migration: additive nullable column via src/lib/drizzle-store.ts
+  //   (ADD COLUMN IF NOT EXISTS human_present boolean) — the timeout_seconds /
+  //   streamed_text precedent; no numbered migration (schema-migration-gate
+  //   classifies a new nullable column as additive).
+  humanPresent: boolean("human_present"),
 }, (t) => ({
   templateIdIdx:    index("agent_runs_template_id_idx").on(t.templateId),
   statusIdx:        index("agent_runs_status_idx").on(t.status),
@@ -609,6 +637,9 @@ export const lifecyclePolicyRules = cinatraSchema.table("lifecycle_policy_rules"
   destinationClass:  text("destination_class").notNull(), // none | external_publish | visibility_promotion | pipeline_handoff
   originKind:        text("origin_kind").notNull(),       // agent_produced | user_provided | intermediate
   bound:             text("bound").notNull(),             // required | forbidden
+  // INERT (cinatra#2047, row-3 re-scope): nothing reads or writes this — a policy bound controls
+  // whether a review is required, never who may decide it. Declared only so the table definition
+  // still mirrors the shipped DDL; dropping the physical column would need a migration.
   selfApprovalOptIn: boolean("self_approval_opt_in").notNull().default(false),
   createdAt:         timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt:         timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -747,6 +778,101 @@ export const suggestionDecisionLedger = cinatraSchema.table("suggestion_decision
   decidedAt:    timestamp("decided_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   suggestionUniq: uniqueIndex("suggestion_decision_ledger_uniq").on(t.suggestionId),
+}));
+
+// ---------------------------------------------------------------------------
+// lifecycle-interceptions S2 (cinatra#2040, epic #2037) — the repair loop tables
+// + the routed rejected-recommendation efficacy row. DDL twin: the
+// lifecycleRepairSchemaQueries function in
+// src/lib/artifacts/artifact-review-gate-schema.ts + migration core__0081.
+// ---------------------------------------------------------------------------
+
+/** The DURABLE sealed-membership epoch (replaces S1's in-memory seal). The frozen
+ * membership is persisted BEFORE any gate emit + keyed on (org, run,
+ * membershipHash), so a re-sweep after a crash recovers the FROZEN set (never
+ * re-snapshots a grown pending set). At most ONE 'sealed' (open) epoch per
+ * production (the partial-unique open index). */
+export const lifecycleBatchEpoch = cinatraSchema.table("lifecycle_batch_epoch", {
+  id:             text("id").primaryKey(),
+  orgId:          text("org_id").notNull(),
+  producerRunId:  text("producer_run_id").notNull(),
+  membershipHash: text("membership_hash").notNull(),
+  membership:     jsonb("membership").notNull(),
+  targetCount:    integer("target_count").notNull(),
+  status:         text("status").notNull().default("sealed"), // sealed | partitioned
+  sealedAt:       timestamp("sealed_at", { withTimezone: true }).notNull().defaultNow(),
+  partitionedAt:  timestamp("partitioned_at", { withTimezone: true }),
+}, (t) => ({
+  membershipUniq: uniqueIndex("lifecycle_batch_epoch_uniq").on(t.orgId, t.producerRunId, t.membershipHash),
+  openUniq:       uniqueIndex("lifecycle_batch_epoch_open_uniq")
+    .on(t.orgId, t.producerRunId)
+    .where(sql`status = 'sealed'`),
+  runIdx:         index("lifecycle_batch_epoch_run_idx").on(t.orgId, t.producerRunId),
+}));
+
+/** The durable per-epoch AGGREGATE disposition (S2 owns the repair-side aggregate:
+ * approved / changes_requested / rejected / partially_approved). One per epoch. */
+export const lifecycleBatchDisposition = cinatraSchema.table("lifecycle_batch_disposition", {
+  id:                text("id").primaryKey(),
+  epochId:           text("epoch_id").notNull().references(() => lifecycleBatchEpoch.id, { onDelete: "cascade" }),
+  aggregate:         text("aggregate").notNull(),
+  terminal:          boolean("terminal").notNull(),
+  effectsReleasable: boolean("effects_releasable").notNull(),
+  repairScope:       jsonb("repair_scope").notNull().default(sql`'[]'::jsonb`),
+  unionFindings:     jsonb("union_findings").notNull().default(sql`'[]'::jsonb`),
+  perTargetOutcomes: jsonb("per_target_outcomes").notNull().default(sql`'[]'::jsonb`),
+  createdAt:         timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  epochUniq: uniqueIndex("lifecycle_batch_disposition_epoch_uniq").on(t.epochId),
+}));
+
+/** The repair LINEAGE: a changes_requested request (base target + CAS witness +
+ * structured findings), the cycle-guard attempt counter, the route, and the
+ * successor gate + repaired revision the producer returns. One repair per gate. */
+export const lifecycleRepair = cinatraSchema.table("lifecycle_repair", {
+  id:                              text("id").primaryKey(),
+  lineageId:                       text("lineage_id").notNull(),
+  gateId:                          text("gate_id").notNull(),
+  orgId:                           text("org_id").notNull(),
+  producerRunId:                   text("producer_run_id"),
+  producerAgentId:                 text("producer_agent_id"),
+  baseArtifactId:                  text("base_artifact_id").notNull(),
+  baseRepresentationRevisionId:    text("base_representation_revision_id").notNull(),
+  expectedBaseRevisionId:          text("expected_base_revision_id").notNull(),
+  findings:                        jsonb("findings").notNull(),
+  continuationMode:                text("continuation_mode").notNull(),
+  continuationAddress:             text("continuation_address"),
+  attempt:                         integer("attempt").notNull(),
+  route:                           text("route").notNull(),
+  status:                          text("status").notNull().default("requested"),
+  successorGateId:                 text("successor_gate_id"),
+  successorArtifactId:             text("successor_artifact_id"),
+  successorRepresentationRevisionId: text("successor_representation_revision_id"),
+  findingOutcomes:                 jsonb("finding_outcomes"),
+  changeSummary:                   text("change_summary"),
+  idempotencyKey:                  text("idempotency_key").notNull(),
+  createdAt:                       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:                       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  gateUniq:    uniqueIndex("lifecycle_repair_gate_uniq").on(t.gateId),
+  lineageIdx:  index("lifecycle_repair_lineage_idx").on(t.lineageId),
+  statusIdx:   index("lifecycle_repair_status_idx").on(t.status, t.createdAt),
+}));
+
+/** ROUTED ADDITION — the AC-6 rejected-recommendation efficacy row (S3 computed it
+ * transiently in summarizeRecommendationEfficacy and DROPPED it). Mirrors
+ * run_selected_skill_revisions (the ACCEPTED half). */
+export const runRejectedRecommendations = cinatraSchema.table("run_rejected_recommendations", {
+  id:                   text("id").primaryKey(),
+  runId:                text("run_id").notNull(),
+  skillId:              text("skill_id").notNull(),
+  skillRevisionId:      text("skill_revision_id"),
+  recommendationSource: text("recommendation_source").notNull(),
+  recommendedRank:      integer("recommended_rank"),
+  createdAt:            timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  runSkillUniq: uniqueIndex("run_rejected_recommendations_uniq").on(t.runId, t.skillId),
+  runIdx:       index("run_rejected_recommendations_run_idx").on(t.runId),
 }));
 
 // ---------------------------------------------------------------------------

@@ -23,7 +23,6 @@ import {
 } from "../field-renderer-components";
 import type { GeneratedFieldRendererComponentEntry } from "@/lib/generated/field-renderer-components";
 import { EmailDraftsReviewRenderer } from "../email-drafts-review-renderer";
-import { ReviewerAgentOutputRenderer } from "../reviewer-agent-output-renderer";
 import type { FieldRendererProps } from "../field-renderer-registry";
 
 const BINDING_ID = "@cinatra-ai/email-drafting-agent:email-drafts-review";
@@ -149,13 +148,14 @@ describe("registration resolution", () => {
   });
 
   it("resolves to the host KIND component when the binding is absent from the build map (behavior-preserving)", () => {
-    // cinatra#1959: BINDING_ID (the non-reviewer drafting gate) is now PRESENT in
-    // the real build map (pack-served). The reviewer `:output` gates of the same
-    // kind are DELIBERATELY absent from the map — they KEEP the host renderer
-    // (the retain-host guardrail) — so they prove the behavior-preserving
-    // unmapped-binding → host-KIND-component path against the real map.
-    const HOST_ONLY_ID = "@cinatra-ai/reviewer-agent:drafts-output";
-    expect(hasFieldRendererComponent(HOST_ONLY_ID)).toBe(false); // real map: reviewer gate keeps the host renderer
+    // cinatra#1959: BINDING_ID (the drafting gate) is PRESENT in the real build
+    // map (pack-served). A binding of the SAME kind that the map does not carry
+    // must still resolve — to the host KIND component. Use a synthetic id here:
+    // after the cinatra#1796 retirement teardown no real unmapped binding of
+    // this kind survives, and the point under test is the unmapped→host path,
+    // not any particular package.
+    const HOST_ONLY_ID = "@cinatra-ai/email-drafting-agent:unmapped-fixture";
+    expect(hasFieldRendererComponent(HOST_ONLY_ID)).toBe(false); // absent from the real map
     registerFieldRendererBindings([
       { id: HOST_ONLY_ID, kind: BINDING_KIND, priority: 80 },
     ]);
@@ -168,9 +168,9 @@ describe("registration resolution", () => {
   });
 
   it("scoped-id resolution is map-first per binding even when a kind is shared; the unscoped bare alias stays first-registered (documented shared-alias caveat)", () => {
-    // Two real bindings share kind "email-drafts-review" (and its bare alias).
-    // Migrate ONLY the reviewer one.
-    const REVIEWER_ID = "@cinatra-ai/reviewer-agent:drafts-output";
+    // Two bindings share kind "email-drafts-review" (and its bare alias).
+    // Migrate ONLY the second one.
+    const REVIEWER_ID = "@cinatra-ai/email-follow-up-agent:email-drafts-review";
     __setFieldRendererComponentMapForTests({
       [REVIEWER_ID]: Entry(async () => ({ default: FixtureExtensionRenderer })),
     });
@@ -197,15 +197,19 @@ describe("registration resolution", () => {
     ).toBe(EmailDraftsReviewRenderer);
   });
 
-  it("keeps the retired-scope standalone alias resolving to its host component", () => {
-    // The spine must not disturb the host-registered legacy aliases wired by
-    // ensureDefaultFieldRenderersRegistered() (real, empty build map).
+  it("cinatra#1796: the retired-scope reviewer alias resolves to NOTHING", () => {
+    // `@cinatra/email-reviewer-agent:output` was the last legacy-scope alias
+    // pointing at the deleted reviewer-output dispatcher. The teardown removed
+    // the registration, so a stored pre-rename interrupt carrying it now
+    // resolves to no renderer — the same accepted backward-compat dead-end as
+    // the ai-review-panel alias retired before it. Asserted so a future
+    // re-registration is a deliberate act, not an accident.
     ensureDefaultFieldRenderersRegistered();
     const resolved = fieldRendererRegistry.resolve(
       "f",
       { "x-renderer": "@cinatra/email-reviewer-agent:output" },
       { connectedApps: [] },
     );
-    expect(resolved?.renderer).toBe(ReviewerAgentOutputRenderer);
+    expect(resolved).toBeFalsy();
   });
 });

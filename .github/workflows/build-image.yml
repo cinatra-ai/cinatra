@@ -535,6 +535,16 @@ jobs:
           CINATRA_DB_INTEGRATION_TESTS: '1'
         run: pnpm exec vitest run src/lib/__tests__/integration/demote-optional-extension-anchors.test.ts
 
+      # cinatra#2091 (epic #2086 S4). The injection contract's drop ledger lives
+      # entirely in two upserts' ON CONFLICT clauses (a delivery supersedes a
+      # drop; a drop never erases a delivery; neither resets invocation_count),
+      # so a mock proves nothing — this runs the real SQL against the real store
+      # DDL on the service Postgres already provisioned for this job.
+      - name: Skill-injection drop-ledger DB test (cinatra#2091)
+        env:
+          CINATRA_DB_INTEGRATION_TESTS: '1'
+        run: pnpm exec vitest run src/lib/__tests__/integration/skill-injection-drop-ledger.integration.test.ts
+
       # cinatra#1988 — the shared dashboards session→actor builder must thread
       # `teamRoles` end-to-end. Real-store regression: seeds team memberships in
       # a lane-unique DB and drives buildDashboardActorFromSession → the real
@@ -727,6 +737,39 @@ jobs:
 
       - name: Extension license-field gate tests
         run: pnpm exec vitest run scripts/extensions/__tests__/license-cleanup.test.mjs
+
+      # WP MCP gateway pinned-fixture pin-integrity gate (#2016 S1). Pure static
+      # consistency check (no download): the pinned version/URL/sha256/digest
+      # literals in docker/wordpress/Dockerfile + docker-compose.yml +
+      # scripts/wordpress-entrypoint.sh MUST agree with docker/wordpress/pins.lock,
+      # no pin may be a placeholder, and the mcp-adapter bundlesVendor path must
+      # match the Dockerfile. The REMOTE-artifact hashes are actually verified at
+      # image-build time on runners (the Dockerfile sha256sum -c + digest pull);
+      # this closes the pin-DRIFT gap. It rides this already-required job so it
+      # inherits required-ness with no branch-protection change, and no-ops
+      # cleanly (exit 0) when docker/wordpress/pins.lock is absent, so unrelated
+      # PRs are unaffected. Pure node (no pnpm) — like actions-pinned-gate.
+      - name: WP MCP gateway fixture pin-integrity gate
+        run: node scripts/audit/wordpress-fixture-pins-gate.mjs
+
+      - name: WP MCP gateway fixture pin-integrity gate tests
+        run: node --test scripts/audit/__tests__/wordpress-fixture-pins-gate.test.mjs
+
+      # WP MCP gateway capture-freshness gate (#2016 S1). Offline anti-staleness
+      # check: for every committed capture under tests/e2e/wp-mcp-gateway/captures/
+      # that carries a `provenance` block, it recomputes the recorded hashes from
+      # the CURRENT tree (pins.lock, the fixture-plugin tree, the capture
+      # producer, the api-map) and FAILS if any drifts — so a pins/plugin/producer
+      # change committed WITHOUT re-capturing can no longer keep PR CI green. Shares
+      # its hashing verbatim with the producer (tests/e2e/wp-mcp-gateway/
+      # provenance.mjs). Rides this already-required job so it inherits
+      # required-ness with no branch-protection change, and no-ops cleanly (exit 0)
+      # when there are no provenanced captures yet. Pure node (no pnpm).
+      - name: WP MCP gateway capture-freshness gate
+        run: node scripts/audit/wp-gateway-capture-freshness.mjs
+
+      - name: WP MCP gateway capture-freshness gate tests
+        run: node --test scripts/audit/__tests__/wp-gateway-capture-freshness.test.mjs
 
       # Every extension must declare its cross-kind dependency edges in
       # cinatra.dependencies, kept in sync with the confident graph re-derived
@@ -1246,6 +1289,56 @@ jobs:
           cd packages/dashboards && pnpm exec vitest run src/extension/__tests__/cube-guard.test.ts --no-coverage && cd ../..
           cd packages/registries && pnpm exec vitest run tests/resolve-dist-integrity.test.ts tests/registry-auth-options.test.ts tests/registry-auth.integration.test.ts --no-coverage && cd ../..
           cd packages/sdk-extensions && pnpm exec vitest run src/__tests__/runtime-loader.test.ts --no-coverage && cd ../..
+
+      # Seed-pack manifest parity tier (packages/objects). These four suites are
+      # the ONLY host-side assertion that each seeded artifact extension's typed
+      # manifest export still equals the `cinatra.artifact` block in its own
+      # package.json — the manifest OF RECORD that the object-registry bridge
+      # reads at boot — plus the matcher catalog-id shape, the exact
+      # representation forms, and the LLM capability-registry guard on every
+      # declared MIME. Host CI ran exactly ONE packages/objects file
+      # (registry-package-provenance, pinned in the step above), so this tier had
+      # no runner at all and could sit silently diverged from the extension
+      # fleet; it only surfaced when a fleet-wide pin move made it green again.
+      #
+      # It rides THIS job rather than a job of its own deliberately. The tier is
+      # sub-second of vitest (120 assertions over 4 files, ~0.7s; ~2s wall
+      # including process start). A dedicated job would pay a fresh checkout, a
+      # companion-extension clone and a full `pnpm install` — minutes of setup —
+      # to run it, which is out of all proportion. This job already has the
+      # PINNED extension tree on disk (clone-extensions, above) and node_modules
+      # installed, so the marginal cost is one vitest process.
+      #
+      # NOT vacuous: this job carries no path filter and runs on every
+      # non-docs-only, non-draft PR (the `detect` guard at the top of the job),
+      # so every PR that can move an input runs the tier for real. The GROUNDED
+      # input set is: packages/objects/** (the suites plus the manifest parser
+      # and claim schema they call), packages/llm/**'s attachment capability
+      # registry (what the per-MIME provider guard probes), and the dev/required
+      # extension lock pins, which decide WHICH extension sources
+      # clone-extensions puts on disk. The generated host maps
+      # (src/lib/generated/extensions.server.ts and siblings) are deliberately
+      # NOT in that set: these suites read each extension's package.json and its
+      # typed export straight off the cloned tree, never through a generated
+      # map. So a PR that moves ONLY a lock pin — touching no host source at
+      # all — is enough to turn this step red, which is exactly the case the
+      # tier existed for and never caught.
+      #
+      # Why four PINNED files and not `cd packages/objects && pnpm test`: the
+      # rest of that package carries a pre-existing red baseline (the objects
+      # MCP handler / bridge suites), so a whole-package invocation could not be
+      # made required today. Pinning the parity tier gates what is green and
+      # keeps the named failure surface tight; the pinned-test existence gate
+      # (above) is what stops a pin from silently going stale.
+      - name: Seed-pack manifest parity tier (packages/objects)
+        working-directory: packages/objects
+        run: >-
+          pnpm exec vitest run
+          src/__tests__/seed-pack-gtm-manifest.test.ts
+          src/__tests__/seed-pack-content-manifest.test.ts
+          src/__tests__/seed-pack-email-legal-manifest.test.ts
+          src/__tests__/blog-image-artifact-manifest.test.ts
+          --no-coverage
 
       # Apollo connector suite. Lives in the extension tree (not covered by the
       # root vitest include), so it is run explicitly here from the package dir.

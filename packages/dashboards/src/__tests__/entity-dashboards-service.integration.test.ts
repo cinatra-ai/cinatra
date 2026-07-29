@@ -55,6 +55,8 @@ const actor: DashboardActor = {
   teamIds: [],
   orgRole: "owner",
   teamRoles: {},
+  // cinatra#1939 S3 — seam-converted writers run under the org-write kernel guard.
+  authority: { orgId: "org-700", can: (c) => c === "content.write" },
 };
 const agentsRef: DashboardEntityRef = {
   entityType: "agents",
@@ -83,7 +85,6 @@ async function provision(pool: Pool): Promise<void> {
     owner_level text NOT NULL,
     owner_id text NOT NULL,
     organization_id text NOT NULL,
-    visibility text NOT NULL DEFAULT 'private',
     status text NOT NULL DEFAULT 'draft',
     created_by text NOT NULL,
     updated_by text,
@@ -97,7 +98,16 @@ async function provision(pool: Pool): Promise<void> {
     template_scope text,
     entity_type text,
     entity_id text,
-    is_default boolean NOT NULL DEFAULT false
+    is_default boolean NOT NULL DEFAULT false,
+    -- dashboardContribution lineage columns (cinatra#1628 S11a). The fixture
+    -- predated them, so every drizzle SELECT (which lists the full row) errored
+    -- with a missing contribution_id column and this suite could not run at
+    -- all. Mirrors store/schema.ts.
+    contribution_id text,
+    applied_contribution_version integer,
+    applied_default_json jsonb,
+    applied_default_hash text,
+    archive_reason text
   )`);
   await pool.query(`CREATE TABLE "${SCHEMA}".dashboard_revisions (
     dashboard_id text NOT NULL REFERENCES "${SCHEMA}".dashboards(id) ON DELETE CASCADE,
@@ -120,6 +130,23 @@ async function provision(pool: Pool): Promise<void> {
   await pool.query(`CREATE UNIQUE INDEX dashboards_entity_default_uniq ON "${SCHEMA}".dashboards (organization_id, entity_type, entity_id, owner_level, owner_id) WHERE is_default = true AND entity_type IS NOT NULL`);
   await pool.query(`CREATE UNIQUE INDEX dashboards_entity_name_uniq ON "${SCHEMA}".dashboards (organization_id, entity_type, entity_id, owner_level, owner_id, name) WHERE entity_type IS NOT NULL`);
   await pool.query(`CREATE INDEX dashboards_entity_idx ON "${SCHEMA}".dashboards (organization_id, entity_type, entity_id, owner_level, owner_id) WHERE entity_type IS NOT NULL`);
+  // cinatra#1939 S3: the org-write kernel guard reads public."organization"
+  // FOR SHARE before every guarded write — seed the test org (shape-tolerant:
+  // minimal table when no better-auth schema exists, archive columns added
+  // when an older real table lacks them, richer insert on NOT NULL demands).
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS public."organization" (id text PRIMARY KEY, name text, "archivedAt" timestamptz, "archiveEpoch" int)`,
+  );
+  await pool.query(`ALTER TABLE public."organization" ADD COLUMN IF NOT EXISTS "archivedAt" timestamptz`);
+  await pool.query(`ALTER TABLE public."organization" ADD COLUMN IF NOT EXISTS "archiveEpoch" int`);
+  await pool
+    .query(`INSERT INTO public."organization" (id, name) VALUES ($1, $1) ON CONFLICT (id) DO NOTHING`, [actor.organizationId])
+    .catch(() =>
+      pool.query(
+        `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $1, $1, now()) ON CONFLICT (id) DO NOTHING`,
+        [actor.organizationId],
+      ),
+    );
 }
 
 async function truncate(pool: Pool): Promise<void> {
@@ -151,6 +178,7 @@ describe.skipIf(!RUN_IT)("cinatra#700 per-entity dashboards (real Postgres)", ()
   afterAll(async () => {
     if (pool) {
       await pool.query(`DROP SCHEMA IF EXISTS "${SCHEMA}" CASCADE`).catch(() => {});
+      await pool.query(`DELETE FROM public."organization" WHERE id = $1`, [actor.organizationId]).catch(() => {});
       await pool.end();
     }
   });
@@ -279,7 +307,7 @@ describe.skipIf(!RUN_IT)("cinatra#700 per-entity dashboards (real Postgres)", ()
     const bareDc = { portlets: [], layoutMode: "grid", grid: { cols: 12, rowHeight: 50, minW: 3, minH: 4 } };
     await upsertDashboardConfig(
       legacyId,
-      { config: bareDc, name: "Agents", ownerLevel: "user", ownerId: actor.userId, visibility: "private" },
+      { config: bareDc, name: "Agents", ownerLevel: "user", ownerId: actor.userId },
       actor,
     );
     // The row is born mapped: entity_type/entity_id/is_default set, name forced to Overview.

@@ -17,6 +17,17 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// cinatra#1939 wave 2 (§7.1): the setup CAS runs INSIDE the org-write kernel
+// guard now (resumeRunFromSetupApproval). `../db` hands the guard a fake tx that
+// answers its own lock/lifecycle/lease queries from kernelAnswers (active org)
+// and delegates the writer's CAS to dbMock.update — so the dbMock.update
+// assertions below still observe the guarded write.
+const kernelAnswers = vi.hoisted(() => ({
+  organization: { archivedAt: null as string | null, archiveEpoch: 0 } as
+    | { archivedAt: string | null; archiveEpoch: number }
+    | null,
+  leaseHeld: false,
+}));
 const dbMock = vi.hoisted(() => {
   const update = vi.fn(() => ({
     set: vi.fn(() => ({
@@ -27,10 +38,19 @@ const dbMock = vi.hoisted(() => {
   }));
   return { update };
 });
-vi.mock("../db", () => ({
-  db: dbMock,
-  agentBuilderPool: { on: () => {}, listenerCount: () => 1 },
-}));
+vi.mock("../db", async () => {
+  const { wrapTxWithOrgWriteKernel } = await import(
+    "@cinatra-ai/org-write-kernel/testing"
+  );
+  const tx = wrapTxWithOrgWriteKernel(
+    { update: dbMock.update, execute: async () => ({ rows: [] }) },
+    kernelAnswers,
+  );
+  return {
+    db: { transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx) },
+    agentBuilderPool: { on: () => {}, listenerCount: () => 1 },
+  };
+});
 
 const bgJobs = vi.hoisted(() => ({
   enqueueBackgroundJob: vi.fn(),
@@ -56,6 +76,15 @@ vi.mock("../wayflow-url", () => ({
   resolveWayflowUrl: vi.fn(() => "http://wayflow.test"),
   createWayflowFetch: vi.fn(() => globalThis.fetch),
   WAYFLOW_A2A_TIMEOUT_MS: 60_000,
+}));
+
+// cinatra#1939 wave 2 (§7.1): the setup + wayflow resumes ground on the resuming
+// principal via resolveOrgRoleForUser; stub the membership read to a member so
+// the (real) session mint succeeds on the "allows" / back-compat paths (the
+// deny paths throw at enforceRunAccess before ever reaching it).
+vi.mock("@/lib/auth-session", async (orig) => ({
+  ...(await orig<typeof import("@/lib/auth-session")>()),
+  resolveOrgRoleForUser: vi.fn(async () => "member"),
 }));
 
 import { approveReviewTaskInternal } from "../review-task-actions";

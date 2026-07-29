@@ -30,6 +30,8 @@
  * are the total functions it drives.
  */
 
+import { createHash } from "node:crypto";
+
 import type { RepairFinding } from "./lifecycle-repair";
 
 /** The per-gate atomicity + partition bound (mirrors the existing
@@ -104,6 +106,22 @@ export function sealBatch(spec: BatchMembershipSpec): SealBatchResult {
     }
   }
   return { ok: true, sealed: true, targets: deduped };
+}
+
+/**
+ * The DETERMINISTIC content hash of a sealed membership (cinatra#2040 S2). Sorts
+ * the targets by their canonical INJECTIVE key, then sha256s the length-prefixed
+ * join — so the SAME membership always hashes identically regardless of input
+ * order, and two distinct memberships never collide. S2's durable batch-epoch row
+ * is keyed on `(production, membershipHash)`, so a re-seal of the identical
+ * membership lands on the SAME durable epoch (idempotent) while a GROWN membership
+ * (a new revision arrived) hashes differently → a distinct successor epoch. This
+ * is exactly what closes S1's in-memory-seal crash-window: the frozen membership
+ * is recovered from the durable row, never re-snapshotted from a grown pending set.
+ */
+export function batchMembershipHash(targets: readonly BatchTarget[]): string {
+  const material = [...targets].map(batchTargetKey).sort().join("\u0000");
+  return createHash("sha256").update(material).digest("hex");
 }
 
 // ---------------------------------------------------------------------------

@@ -20,6 +20,18 @@ export type { CreateNpmUserOptions } from "../../packages/registries/src/verdacc
 
 export { VerdaccioUnexpectedResponseError } from "../../packages/registries/src/verdaccio/errors";
 
+// Token-redacting pacote facade (cinatra#2163). Pure and dependency-free — it
+// imports no pacote, only wraps whatever module it is handed — so the stub
+// re-exports the REAL implementation. It must be present here because
+// packages/agents' verdaccio client builds its facade at MODULE LOAD, not
+// lazily inside a function like the other barrel symbols it consumes: a
+// missing symbol is a load-time TypeError for every host test that transitively
+// imports that client, not a deferred failure the call-site mock would absorb.
+export {
+  createRedactingPacote,
+  redactTokenInError,
+} from "../../packages/registries/src/verdaccio/registry-auth";
+
 // Async config loader + listAgentPackages used by the
 // host-app verdaccio-config wrapper and the settings/instance reconciliation
 // path. The real listAgentPackages pulls in pacote / install transitive

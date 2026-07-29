@@ -66,6 +66,10 @@ vi.mock("@cinatra-ai/a2a", async (orig) => {
 });
 
 import { handleWayflowTaskState } from "../execution";
+// cinatra#1939 wave 2: handleWayflowTaskState now requires an org-write authority
+// (§2d). transitionRunStatus is mocked here (no-op), so an inert member-shaped
+// authority satisfies the type without affecting behavior.
+const TEST_AUTHORITY = { orgId: "org-1", can: () => true };
 import type { AgentRunRecord } from "../store";
 
 function makeRun(inputParams: Record<string, unknown> = {}): AgentRunRecord {
@@ -99,6 +103,8 @@ function makeRun(inputParams: Record<string, unknown> = {}): AgentRunRecord {
     idempotencyKey: null,
     oboCeiling: null,
     dependentInstallId: null,
+    humanPresent: null, // cinatra#2067 presence discriminator (headless fixture)
+    executionAttemptId: null,
   };
 }
 
@@ -157,7 +163,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
       selectedRefs: [],
       slotMeta: { slotId: "offeringContext", resolutionMode: "accumulate", selectionMode: "interactive" },
     };
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -175,7 +181,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
 
   it("is generic: an arbitrary JSON object's keys are spread (not context-specific)", async () => {
     const run = makeRun();
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -200,7 +206,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
         },
       ],
     };
-    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task });
     const values = onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>;
     // No top-level confirmedRecipients spread — only `output` carries the prose.
     expect(values.confirmedRecipients).toBeUndefined();
@@ -209,7 +215,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
 
   it("parsed output does NOT clobber reserved `output`/`stepNumber`", async () => {
     const run = makeRun();
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -238,7 +244,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
         { role: "agent", parts: [{ kind: "text", text: "Ideas are ready for review." }] },
       ],
     };
-    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task });
     const values = onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>;
     expect(values.ideas).toEqual(ideas);
     expect(values.agent_run_id).toBe("run-ctx-1");
@@ -246,7 +252,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
     expect(values.output).toBe("Ideas are ready for review.");
   });
 
-  it("#839: strips host-reserved envelope keys from surfaced gate inputs", async () => {
+  it("#839/#1796: strips host TRANSPORT keys from surfaced gate inputs, and only those", async () => {
     const run = makeRun();
     const task = {
       id: "task-idea-2",
@@ -255,29 +261,35 @@ describe("execution.ts — generic interrupt-output spread", () => {
       metadata: {
         pendingApproval: {
           ideas: [{ title: "Alpha" }],
-          contentType: "evil",
-          summary: "evil",
-          contentBundle: { text: "evil" },
+          output: "evil",
+          stepNumber: 999,
+          contentType: "extension-owned",
         },
       },
       history: [
         { role: "agent", parts: [{ kind: "text", text: "prose only" }] },
       ],
     };
-    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task });
     const values = onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>;
     expect(values.ideas).toBeDefined();
-    // Reserved envelope keys from pendingApproval must NOT leak in (they would
-    // disable reviewer-output envelope synthesis / shadow a real bundle).
-    expect(values.contentType).not.toBe("evil");
-    expect(values.summary).not.toBe("evil");
-    expect(values.contentBundle).toBeUndefined();
+    // `output` and `stepNumber` are HOST transport: the host sets them from the
+    // history-derived output and the WayFlow step number, so a gate input of the
+    // same name must never shadow them.
+    expect(values.output).not.toBe("evil");
+    expect(values.stepNumber).not.toBe(999);
+    // cinatra#1796: `contentType`/`contentBundle`/`summary` are NO LONGER
+    // reserved. The host synthesized the reviewer envelope those names protected;
+    // that synthesis is deleted, so there is nothing left for a gate input to
+    // disable or shadow, and a gate that genuinely declares one of those names as
+    // a render input now reaches its renderer.
+    expect(values.contentType).toBe("extension-owned");
   });
 
   // #839: the strip must ALSO cover the history-EMPTY fallback, where
   // interruptOutput = JSON.stringify(pendingApproval) and spreadFromOutput
   // re-parses the whole (unfiltered) pendingApproval.
-  it("#839: strips reserved keys even when history is empty (pendingApproval fallback)", async () => {
+  it("#839/#1796: strips transport keys even when history is empty (pendingApproval fallback)", async () => {
     const run = makeRun();
     const task = {
       id: "task-idea-3",
@@ -286,19 +298,18 @@ describe("execution.ts — generic interrupt-output spread", () => {
       metadata: {
         pendingApproval: {
           ideas: [{ title: "Alpha" }],
-          contentType: "evil",
-          summary: "evil",
-          contentBundle: { text: "evil" },
+          stepNumber: 999,
+          contentType: "extension-owned",
         },
       },
       history: [], // EMPTY → spreadFromOutput = parsed pendingApproval (unfiltered)
     };
-    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task });
     const values = onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>;
     expect(values.ideas).toEqual([{ title: "Alpha" }]);
-    expect(values.contentType).not.toBe("evil");
-    expect(values.summary).not.toBe("evil");
-    expect(values.contentBundle).toBeUndefined();
+    expect(values.stepNumber).not.toBe(999);
+    // Envelope names pass through on this path too (see the note above).
+    expect(values.contentType).toBe("extension-owned");
   });
 
   // #1625 (D2): on the pinned runtime the a2a worker never writes
@@ -319,7 +330,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
       defaultSpecificInitialDraftIds: ["d1"],
       defaultSpecificFollowUpDraftIds: [],
     };
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",
@@ -344,7 +355,7 @@ describe("execution.ts — generic interrupt-output spread", () => {
       defaultSpecificInitialDraftIds: null,
       defaultSpecificFollowUpDraftIds: null,
     };
-    await handleWayflowTaskState({
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY,
       runId: run.id,
       run,
       fromStatus: "running",

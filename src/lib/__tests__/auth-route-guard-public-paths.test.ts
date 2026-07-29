@@ -52,7 +52,7 @@ describe("auth-route-guard PUBLIC_PATH_PREFIXES - WayFlow ApiNode bridge routes"
     expect(guardSource).toMatch(/"\/api\/review"/);
   });
 
-  it("contains /api/auditor (auditor-agent run-skills/apply WayFlow ApiNode callbacks)", () => {
+  it("contains /api/auditor (the run-skills WayFlow ApiNode callback; /apply + /exclude retired in cinatra#1796)", () => {
     expect(guardSource).toMatch(/"\/api\/auditor"/);
   });
 

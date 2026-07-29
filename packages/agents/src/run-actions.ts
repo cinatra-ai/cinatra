@@ -1,5 +1,9 @@
 "use server";
 import { requireAuthSession } from "@/lib/auth-session";
+// cinatra#1939 wave 2 (§2a): every run-status transition here is grounded by the
+// acting MEMBER's session (owner / org-admin, already checked above). A member
+// mint fail-closes if membership was revoked — acceptable per the design.
+import { verifySessionAuthority } from "@/lib/org-write/authority";
 import { resolveTemplateVisibilityActor } from "./auth-policy";
 import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import type { AgentTemplateRecord } from "./store";
@@ -26,6 +30,10 @@ import {
 import type { TriggerType } from "./trigger-store";
 import { readRunTriggerByRunId } from "./trigger-store";
 import { markTriggerReleased } from "./trigger-gate";
+import {
+  maybeHoldRunForRecommendation,
+  readRecommendationParkForRun,
+} from "./recommendation-hold";
 
 export type TriggerAgentRunArgs = {
   runId: string;
@@ -78,10 +86,51 @@ export async function triggerAgentRun(
     return { ok: false, error: "template mismatch" };
   }
 
+  // 5b. Run-start recommendation HOLD (cinatra#2067, epic #2037 C3). A
+  //     human-present run parks at the recommendation interception until the
+  //     chip-row confirm/adjust/skip decision releases it. If a live park
+  //     already exists, the run is awaiting that decision — the Run button must
+  //     not re-dispatch (the run view shows the chip-row instead). If no
+  //     decision yet AND the checkpoint fires with candidates, park now and
+  //     return ok WITHOUT dispatching (the run stays pending_input; the run
+  //     view renders the chip-row). Best-effort: any failure fails OPEN to a
+  //     normal dispatch — a recommendation hold must never block a run.
+  const livePark = await readRecommendationParkForRun(args.runId).catch(() => null);
+  if (livePark?.status === "parked") {
+    return { ok: true };
+  }
+  try {
+    const hold = await maybeHoldRunForRecommendation({
+      run,
+      template: {
+        packageName: template.packageName,
+        lifecycleConfig: (template as { lifecycleConfig?: string | null }).lifecycleConfig,
+      },
+    });
+    if (hold.held) {
+      // Parked — the chip-row (via confirm/skipRunRecommendationAction) releases
+      // it and dispatches. Do NOT transition or enqueue here.
+      return { ok: true };
+    }
+  } catch (err) {
+    // The run id is a request-controlled value; keep it OUT of the console
+    // format-string position (pass it as a discrete argument) so a `%`-bearing
+    // id can never be interpreted as a util.format specifier (CodeQL
+    // js/tainted-format-string).
+    console.warn(
+      "[triggerAgentRun] recommendation hold evaluation failed for run",
+      args.runId,
+      "— dispatching normally:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+  // Owner's member session grounds both the dispatch and its compensation.
+  const authority = await verifySessionAuthority(userId, run.orgId);
+
   // 6. Atomic compare-and-swap: pending_input → queued. Returns false if
   //    a concurrent request already won the race.
   try {
-    await transitionRunStatus(args.runId, "pending_input", "queued");
+    await transitionRunStatus(args.runId, "pending_input", "queued", undefined, authority);
   } catch (err) {
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
       return { ok: false, error: "run is not in pending_input state" };
@@ -107,6 +156,8 @@ export async function triggerAgentRun(
       args.runId,
       "queued",
       "pending_input",
+      undefined,
+      authority,
     ).catch(() => {
       // Best-effort: log but do not mask the original error.
       console.error(
@@ -171,6 +222,8 @@ export async function createPendingRunForZeroInputTemplate(
     runBy: userId,
     inputParams: {},
     orgId,
+    // Interactive UI/chat run-start → human-present (cinatra#2067).
+    humanPresent: true,
   });
 
   return { ok: true, runId: created.id };
@@ -191,11 +244,39 @@ async function createAndTriggerRunCore(
     runBy: userId,
     inputParams: {},
     orgId,
+    // Interactive UI/chat run-start → human-present (cinatra#2067). This run may
+    // park at the recommendation chip-row before it dispatches.
+    humanPresent: true,
   });
+
+  // Run-start recommendation HOLD (cinatra#2067). A human-present run parks at
+  // the recommendation interception before dispatch; the chip-row decision
+  // releases it. Best-effort — a hold failure fails OPEN to normal dispatch.
+  try {
+    const hold = await maybeHoldRunForRecommendation({
+      run: created,
+      template: {
+        packageName: template.packageName,
+        lifecycleConfig: (template as { lifecycleConfig?: string | null }).lifecycleConfig,
+      },
+    });
+    if (hold.held) {
+      // Parked — do NOT transition/enqueue. The run view shows the chip-row.
+      return { ok: true, runId: created.id };
+    }
+  } catch (err) {
+    console.warn(
+      `[createAndTriggerRun] recommendation hold evaluation failed for run ${created.id}; dispatching normally:`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+  // The caller-resolved member session (same userId/orgId the run is created
+  // under) grounds both the dispatch and its compensation revert.
+  const authority = await verifySessionAuthority(userId, orgId);
 
   // Atomically transition pending_input → queued then enqueue.
   try {
-    await transitionRunStatus(created.id, "pending_input", "queued");
+    await transitionRunStatus(created.id, "pending_input", "queued", undefined, authority);
   } catch (err) {
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
       return { ok: true, runId: created.id }; // best-effort; run exists
@@ -218,6 +299,8 @@ async function createAndTriggerRunCore(
       created.id,
       "queued",
       "pending_input",
+      undefined,
+      authority,
     ).catch((err) => {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
         console.warn(
@@ -315,8 +398,9 @@ export async function resetAgentRun(
     return { ok: false, error: "run is not in failed state" };
   }
 
+  const authority = await verifySessionAuthority(userId, run.orgId);
   try {
-    await transitionRunStatus(args.runId, "failed", "pending_input");
+    await transitionRunStatus(args.runId, "failed", "pending_input", undefined, authority);
   } catch (err) {
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
       return { ok: false, error: "run is not in failed state" };
@@ -419,11 +503,14 @@ export async function releaseTriggerNow(
 
   await markTriggerReleased(args.runId);
 
+  // Admin (org-role admin, checked above) acts as a member of the run's org.
+  const authority = await verifySessionAuthority(userId, run.orgId);
+
   // Transition armed → queued so the dispatcher can pick up the run.
   // Swallow stale_from_status: the run may already be queued (race with the
   // scheduled release job) or in a terminal state.
   try {
-    await transitionRunStatus(args.runId, "armed", "queued");
+    await transitionRunStatus(args.runId, "armed", "queued", undefined, authority);
   } catch (err) {
     if (
       !(err instanceof RunTransitionError && err.code === "stale_from_status")
@@ -454,6 +541,11 @@ export type StartDevChildPreviewResult =
       templateName: string;
       packageName: string;
       agUiEnabled: boolean;
+      /** cinatra#2148 finding 2: TRUE when the preview run PARKED at the
+       * run-start recommendation interception. The caller renders the chip-row
+       * (the decision releases the park and dispatches) and treats the run as
+       * `pending_input`, not `queued`. */
+      heldForRecommendation: boolean;
     }
   | { ok: false; error: string };
 
@@ -492,10 +584,57 @@ export async function startDevChildPreviewRun(
     runBy: userId,
     inputParams: {},
     orgId,
+    // Dev Stepper preview is an interactive, present-human run (cinatra#2067).
+    humanPresent: true,
   });
 
+  // For vendor-scoped packages (@vendor/name), agentSlug becomes "vendor/name"
+  // so router.push paths match /agents/[vendor]/[pkg]/... routing.
+  const resolvedPkg = template.packageName ?? packageName;
+  const resolvedMatch = resolvedPkg.match(/^@([^/]+)\/(.+)$/);
+  const agentSlug = resolvedMatch ? `${resolvedMatch[1]}/${resolvedMatch[2]}` : fallbackSlug;
+  const previewResult = (heldForRecommendation: boolean): StartDevChildPreviewResult => ({
+    ok: true,
+    runId: created.id,
+    templateId: template.id,
+    agentSlug,
+    templateName: template.name,
+    packageName: resolvedPkg,
+    agUiEnabled: true,
+    heldForRecommendation,
+  });
+
+  // Run-start recommendation HOLD (cinatra#2148 finding 2). The Dev Stepper
+  // preview marks its run humanPresent and used to transition + enqueue
+  // DIRECTLY, so under the default-on chip-row it was the one interactive
+  // run-start that never paused — contradicting "a human-present run pauses when
+  // recommendations exist". It now consults the SAME hold as every other
+  // interactive run-start: parked ⇒ return the panel metadata WITHOUT
+  // dispatching (the embedded child panel renders the chip-row, whose
+  // confirm/adjust/skip releases the park and dispatches through the canonical
+  // `triggerAgentRun`). Best-effort — a hold failure fails OPEN to the previous
+  // direct dispatch.
   try {
-    await transitionRunStatus(created.id, "pending_input", "queued");
+    const hold = await maybeHoldRunForRecommendation({
+      run: created,
+      template: {
+        packageName: template.packageName,
+        lifecycleConfig: (template as { lifecycleConfig?: string | null }).lifecycleConfig,
+      },
+    });
+    if (hold.held) return previewResult(true);
+  } catch (err) {
+    console.warn(
+      "[startDevChildPreviewRun] recommendation hold evaluation failed for run",
+      created.id,
+      "— dispatching normally:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
+  const authority = await verifySessionAuthority(userId, orgId);
+  try {
+    await transitionRunStatus(created.id, "pending_input", "queued", undefined, authority);
   } catch (err) {
     if (!(err instanceof RunTransitionError && err.code === "stale_from_status")) {
       throw err;
@@ -511,21 +650,7 @@ export async function startDevChildPreviewRun(
     console.error("[startDevChildPreviewRun] enqueue failed", err);
   }
 
-  // For vendor-scoped packages (@vendor/name), agentSlug becomes "vendor/name"
-  // so router.push paths match /agents/[vendor]/[pkg]/... routing.
-  const resolvedPkg = template.packageName ?? packageName;
-  const resolvedMatch = resolvedPkg.match(/^@([^/]+)\/(.+)$/);
-  const agentSlug = resolvedMatch ? `${resolvedMatch[1]}/${resolvedMatch[2]}` : fallbackSlug;
-
-  return {
-    ok: true,
-    runId: created.id,
-    templateId: template.id,
-    agentSlug,
-    templateName: template.name,
-    packageName: resolvedPkg,
-    agUiEnabled: true,
-  };
+  return previewResult(false);
 }
 
 // ---------------------------------------------------------------------------

@@ -13,7 +13,10 @@
     "./delegated-widget-tool-policy": "./src/delegated-widget-tool-policy.ts",
     "./in-admin-cms-tool-policy": "./src/in-admin-cms-tool-policy.ts",
     "./dev-admin-bypass": "./src/dev-admin-bypass.ts",
-    "./obo-ceiling": "./src/obo-ceiling.ts"
+    "./obo-ceiling": "./src/obo-ceiling.ts",
+    "./annotation-classifier": "./src/annotation-classifier.ts",
+    "./instance-tool-policy": "./src/instance-tool-policy.ts",
+    "./known-destructive-floor": "./src/known-destructive-floor.ts"
   },
   "scripts": {
     "test": "vitest run"

@@ -30,6 +30,8 @@ import {
 } from "../mutation-service";
 import type { DashboardActor } from "../permissions";
 import { resolveDashboardAccess } from "../permissions";
+import { OrgWriteRefusedError } from "@cinatra-ai/org-write-kernel";
+import { DashboardOrgWriteAuthorityError } from "../org-write-seam";
 import {
   dashboardRevisions,
   dashboards,
@@ -78,6 +80,12 @@ function getActor(actor: PrimitiveActorContext): DashboardActor | null {
   // from the request frame). Threaded onto the resolver actor so the ceiling
   // gate in resolveDashboardAccess runs for delegated agent tool calls.
   const oboCeiling = ext["oboCeiling"] as DashboardActor["oboCeiling"];
+  // Host-minted org-write authority (cinatra#1939 S3), forwarded opaquely by
+  // the registry from the request frame. Narrowed FAIL-CLOSED here: anything
+  // not structurally an authority (orgId string + can function) reads as "no
+  // authority", and the org-write seam then refuses the write. Exported-for-
+  // tests via narrowOrgWriteAuthority.
+  const authority = narrowOrgWriteAuthority(ext["orgWriteAuthority"]);
   return {
     userId,
     organizationId: orgId,
@@ -85,7 +93,25 @@ function getActor(actor: PrimitiveActorContext): DashboardActor | null {
     orgRole,
     teamRoles,
     ...(oboCeiling ? { oboCeiling } : {}),
+    ...(authority ? { authority } : {}),
   };
+}
+
+/** Fail-closed structural narrow for the opaquely-forwarded org-write
+ *  authority (see McpRequestContext.orgWriteAuthority). Exported for unit
+ *  tests only. */
+export function narrowOrgWriteAuthority(
+  value: unknown,
+): DashboardActor["authority"] | undefined {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    typeof (value as { orgId?: unknown }).orgId === "string" &&
+    typeof (value as { can?: unknown }).can === "function"
+  ) {
+    return value as DashboardActor["authority"];
+  }
+  return undefined;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -98,7 +124,6 @@ export type DashboardDto = {
   readonly ownerLevel: string;
   readonly ownerId: string;
   readonly organizationId: string;
-  readonly visibility: string;
   readonly status: string;
   readonly configVersion: string;
   readonly dashboardVersion: number;
@@ -125,7 +150,6 @@ function toDto(row: DashboardRow): DashboardDto {
     ownerLevel: row.ownerLevel,
     ownerId: row.ownerId,
     organizationId: row.organizationId,
-    visibility: row.visibility,
     status: row.status,
     configVersion: row.configVersion,
     dashboardVersion: row.dashboardVersion,
@@ -188,7 +212,6 @@ export function createDashboardPrimitiveHandlers() {
       conditions.push(or(isNull(dashboards.templateScope), ne(dashboards.templateScope, "project"))!);
       if (input.ownerLevel) conditions.push(eq(dashboards.ownerLevel, input.ownerLevel));
       if (input.ownerId) conditions.push(eq(dashboards.ownerId, input.ownerId));
-      if (input.visibility) conditions.push(eq(dashboards.visibility, input.visibility));
       if (input.search) {
         // ILIKE on name; description is nullable so we omit it from the
         // search to keep the WHERE simple.
@@ -197,7 +220,8 @@ export function createDashboardPrimitiveHandlers() {
 
       // Fetch a slice + permission-filter in JS. The org-scope condition
       // already eliminates the vast majority of irrelevant rows. The
-      // remaining permission check is per-row (visibility × ownership).
+      // remaining permission check is per-row (scope membership; cinatra#1898
+      // Phase-3 retired the dashboard-local visibility axis with its column).
       const slice = await db
         .select()
         .from(dashboards)
@@ -320,7 +344,6 @@ export function createDashboardPrimitiveHandlers() {
             configVersion: input.configVersion,
             ownerLevel: input.ownerLevel,
             ownerId: resolvedOwnerId,
-            visibility: input.visibility,
           },
           actor,
         );
@@ -342,7 +365,6 @@ export function createDashboardPrimitiveHandlers() {
             description: input.description,
             config: input.config,
             configVersion: input.configVersion,
-            visibility: input.visibility,
           },
           actor,
         );
@@ -381,6 +403,15 @@ export function createDashboardPrimitiveHandlers() {
 /** Convert a thrown mutation-service error into the MCP error envelope. */
 function mutationError(err: unknown): { error: { code: string; message: string } } {
   if (err instanceof DashboardForbiddenError) {
+    return { error: { code: "forbidden", message: err.message } };
+  }
+  // Org-write seam refusals (cinatra#1939 S3): a frame without a host-minted
+  // authority, or a kernel lifecycle ruling against content.write (archived /
+  // missing organization), are authorization outcomes — forbidden, not 500s.
+  if (err instanceof DashboardOrgWriteAuthorityError) {
+    return { error: { code: "forbidden", message: err.message } };
+  }
+  if (err instanceof OrgWriteRefusedError) {
     return { error: { code: "forbidden", message: err.message } };
   }
   if (err instanceof DashboardNotFoundError) {

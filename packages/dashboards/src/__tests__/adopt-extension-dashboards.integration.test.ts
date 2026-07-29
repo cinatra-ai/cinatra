@@ -64,9 +64,9 @@ async function seedRow(
 ) {
   await pool.query(
     `INSERT INTO "${SCHEMA}".dashboards
-       (id, name, config_json, config_version, owner_level, owner_id, organization_id, visibility, status,
+       (id, name, config_json, config_version, owner_level, owner_id, organization_id, status,
         created_by, extension_id, is_template, template_scope, project_id, contribution_id)
-     VALUES ($1,$2,$3,'1.2','organization','owner-1',$4,'members',$5,'sys',$6,$7,$8,$9,$10)`,
+     VALUES ($1,$2,$3,'1.2','organization','owner-1',$4,$5,'sys',$6,$7,$8,$9,$10)`,
     [
       row.id,
       `${row.id} name`,
@@ -119,7 +119,6 @@ describe.skipIf(!RUN_IT)("adoptExtensionDashboards + reconciler (real Postgres)"
       owner_level text NOT NULL,
       owner_id text NOT NULL,
       organization_id text NOT NULL,
-      visibility text NOT NULL DEFAULT 'private',
       status text NOT NULL DEFAULT 'draft',
       created_by text NOT NULL,
       updated_by text,
@@ -256,8 +255,8 @@ describe.skipIf(!RUN_IT)("adoptExtensionDashboards + reconciler (real Postgres)"
 
   it("scopes to the org — an orphan in another org is not adopted", async () => {
     await pool.query(
-      `INSERT INTO "${SCHEMA}".dashboards (id, name, config_json, config_version, owner_level, owner_id, organization_id, visibility, status, created_by, extension_id, is_template, template_scope, contribution_id)
-       VALUES ('other-org-tmpl','n',$1,'1.2','organization','o','org-OTHER','members','archived','sys',$2,true,'project',$3)`,
+      `INSERT INTO "${SCHEMA}".dashboards (id, name, config_json, config_version, owner_level, owner_id, organization_id, status, created_by, extension_id, is_template, template_scope, contribution_id)
+       VALUES ('other-org-tmpl','n',$1,'1.2','organization','o','org-OTHER','archived','sys',$2,true,'project',$3)`,
       [JSON.stringify(CONFIG), LEGACY_PKG, LEGACY_LINEAGE],
     );
     const n = await adoptExtensionDashboards(undefined, {

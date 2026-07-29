@@ -1,16 +1,18 @@
 /**
- * email-drafting-agent must not wire auditor-agent through an edited-response
- * predicate in the parent OAS.
+ * email-drafting-agent must not wire an auditor sub-flow through an
+ * edited-response predicate in the parent OAS.
  *
  * The parent OAS must not add:
- *   - a PluginTemplateNode predicate downstream of the reviewer approval_gate
- *     reading userResponse.edited
- *   - a ControlFlowEdge {from: predicate, branch:"edited"} to an auditor-agent node
+ *   - a PluginTemplateNode predicate downstream of the approval gate reading
+ *     userResponse.edited
+ *   - a ControlFlowEdge {from: predicate, branch:"edited"} to an auditor node
  *   - a ControlFlowEdge {from: predicate, branch:"clean"} to end or next
  *
- * Auditor review belongs to the auditor-agent flow, not the parent email-drafting
- * flow. These assertions prevent accidental re-introduction of parent-level
- * auditor routing.
+ * ORIGINALLY this guarded a boundary (auditor review belongs to the auditor
+ * flow, not the parent). After the cinatra#1796 / #2047-row-8 retirement the
+ * auditor agent does not exist at all, so the guard is now absolute: no auditor
+ * routing may EVER reappear in this parent, and review is owned by core
+ * interception on the run-embedded gate.
  *
  * Run: cd packages/agent-builder && pnpm exec vitest run src/__tests__/email-drafting-auditor-wiring.test.ts
  */
@@ -87,13 +89,17 @@ describe("email-drafting-agent auditor wiring", () => {
     expect(auditorTarget).toBeUndefined();
   });
 
-  it("leaves metadata.cinatra.hitlScreens unchanged", () => {
-    // Auditor's own HITL screen lives in auditor-agent's own OAS, not parent.
-    // Parent hitlScreens should not gain '@cinatra-ai/auditor-agent:review'.
+  it("declares only its OWN pack-served review screen (post-retirement)", () => {
+    // The gate did not move: it is still the flow's own `approval_gate` between
+    // draft and apply (email-drafting-agent#41, hold decision (a)). What changed
+    // is WHO renders it — the pack's own `:email-drafts-review` binding, no
+    // longer a retired reviewer/auditor screen. Retired ids are reassembled from
+    // parts so this file holds no live reference to either identity.
     const oas = JSON.parse(fs.readFileSync(OAS_PATH, "utf8")) as OasShape;
     const screens = oas.metadata?.cinatra?.hitlScreens ?? [];
-    expect(screens).toContain("@cinatra-ai/reviewer-agent:output");
-    // Conservative: it must contain only reviewer's screens because auditor is a child flow.
-    expect(screens).not.toContain("@cinatra-ai/auditor-agent:review");
+    expect(screens).toContain("@cinatra-ai/email-drafting-agent:email-drafts-review");
+    const SCOPE = "@cinatra-ai/";
+    expect(screens).not.toContain(`${SCOPE}${"reviewer"}-agent:output`);
+    expect(screens).not.toContain(`${SCOPE}${"auditor"}-agent:review`);
   });
 });

@@ -67,7 +67,12 @@ import {
   saveTwentyConnectionAction,
   disconnectTwentyConnectionAction,
 } from "@/app/campaigns/connector-setup-actions";
-import { requireAuthSession, isPlatformAdmin } from "@/lib/auth-session";
+import {
+  requireAuthSession,
+  isPlatformAdmin,
+  resolveOrgRoleForSession,
+  resolveOrgRoleForUser,
+} from "@/lib/auth-session";
 import { getNangoStatus } from "@/lib/nango-system";
 import { encryptSecret, decryptSecret } from "@/lib/instance-secrets";
 import { buildAppMcpSelfClientHeaders } from "@/lib/mcp-self-client";
@@ -90,6 +95,13 @@ import {
   resolveTrustedSessionBinding,
 } from "@/lib/instance-connection-actor";
 import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
+// TYPE-ONLY (erased at compile; NOT a route-graph edge) — the concrete seam is
+// built at boot by register-cms-review-host-seam-runtime and read off globalThis
+// below, so this route-reachable binder pulls no cms-review module onto a route.
+import type { CmsReviewHostSeam } from "@/lib/cms-review-host-seam";
+// The review fence is a PURE env leaf (no import cost; already reachable from
+// every route) — read directly so `isReviewActive` needs no runtime slot.
+import { isLifecycleReviewOrchestrationActive } from "@/lib/lifecycle/lifecycle-activation";
 import {
   type NangoConnectionMaterializer,
   type NangoConnectionMaterializerInput,
@@ -98,6 +110,7 @@ import {
   type HostDrupalMcpService,
   type HostWordPressMcpService,
   type HostInstanceWriteAuthorityService,
+  type HostConnectorInstanceInvokerService,
   type HostExternalMcpRegistryService,
   type HostYouTubeConnectionService,
   type HostInstanceConnectionGateService,
@@ -152,7 +165,97 @@ import { resolveWidgetActorFromFrame } from "./widget-actor-frame";
 import {
   createInstanceListAuthority,
   createInstanceWriteAuthorityService,
+  resolveTrustedWriteActor,
+  InstanceWriteAuthorityError,
 } from "./connector-instance-write-authority";
+// cinatra#2017 S2 — the governed connector-instance invoker (Plane C) + its
+// transport / catalog cache / policy store. Published below beside the
+// instance-write-authority as `@cinatra-ai/host:connector-instance-invoker`.
+import {
+  invokeConnectorInstanceTool,
+  listConnectorInstanceTools,
+  type ConnectorInstanceInvokerDeps,
+  type InvokerTrustedActor,
+  type ResolvedInstanceEndpoint,
+  acquireSnapshots as acquireConnectorInstanceCatalogSnapshots,
+} from "@/lib/connector-instance-invoker";
+import {
+  callConnectorInstanceMcpTool,
+  listConnectorInstanceMcpTools,
+  InvokerError,
+} from "@/lib/connector-instance-mcp-transport";
+import {
+  CATALOG_DEFAULT_SERVER_ID,
+  createInMemoryConnectorInstanceCatalogCache,
+} from "@/lib/connector-instance-catalog-cache";
+import {
+  readInstanceToolPolicy,
+  ensureDefaultOpenPolicy,
+} from "@/lib/connector-instance-tool-policy-store";
+// cinatra#2018 S3 — multi-server enrollment: the persisted per-(instance,
+// server) store read/write surface the invoker deps + snapshot loader bind,
+// and the sibling enrollment module carrying the reconciler + manual-route
+// machinery + the S7-facing health-refresh read. This binder only WIRES them.
+import {
+  ensureDefaultServerEnrollment,
+  listEnrolledServers,
+  readServer,
+  recordServerExposureMode,
+  recordServerStatus,
+  retireServersForInstance,
+  type ConnectorInstanceServerRecord,
+} from "@/lib/connector-instance-server-store";
+import { createConnectorInstanceSnapshotLoader } from "@/lib/connector-instance-snapshot-loader";
+import {
+  addManualServerRoute,
+  createWordPressServerEnrollmentDeps,
+  listInstanceServersWithHealthRefresh,
+  removeManualServerRoute,
+  type AddManualServerRouteResult,
+  type RemoveManualServerRouteResult,
+} from "@/lib/connector-instance-server-enrollment";
+// cinatra#2019 S4 — the trusted-site native-injection OPT-IN store + the
+// org-admin consent members bound onto the `wordpress-mcp` publication below.
+import {
+  readNativeInjectionPolicy,
+  setNativeInjectionMode,
+} from "@/lib/connector-instance-native-injection-store";
+import {
+  createWordPressNativeInjectionConsentMembers,
+  type WordPressNativeInjectionConsentSurface,
+} from "@/lib/connector-instance-native-injection-consent";
+// cinatra#2020 S5 (PR-4) — the per-instance destructive-confirmation override
+// surface (org-disable). Same structural-member pattern as the S4 consent
+// members above: the gate lives INSIDE the members; this binder only WIRES
+// the live host deps.
+import {
+  createConfirmationPolicySurfaceMembers,
+  type WordPressConfirmationPolicySurface,
+} from "@/lib/connector-instance-confirmation-policy-surface";
+// cinatra#2020 S5 (PR-3) — the destructive-confirmation hook impl. The surface
+// matrix + park + §7.3 audits live in the sibling module; this binder only
+// BINDS it into the invoker deps literal, derives the host-side
+// ConfirmationSurface from the VERIFIED delegation (D6), and stashes the
+// frame's {runId, clientId} forensics into the park-row context.
+import {
+  buildConnectorInstanceDestructiveHook,
+  deriveConfirmationSurface,
+  type ConfirmationSurface,
+} from "@/lib/connector-instance-destructive-hook";
+// cinatra#2019 S4 (verifier slice) — the trusted-site native READ-INJECTION
+// builder + org-admin dry-run preview, bound beside the consent members. The
+// binder only WIRES host closures: the acquire closure rides the governed
+// invoker's own snapshot path (same deps shape, same shared cache — one
+// freshness policy), pinned to a single enrollment read so the completeness
+// check and the acquire loop see the SAME server list.
+import {
+  createWordPressNativeReadInjectionMembers,
+  type WordPressNativeReadInjectionSurface,
+} from "@/lib/connector-instance-native-read-injection";
+import { isKnownDestructiveToolName } from "@cinatra-ai/mcp-server/known-destructive-floor";
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
+import { logAuditEvent } from "@/lib/authz/audit";
+import { Buffer } from "node:buffer";
 // The vendor connection/instance CLIENTS are GONE from core (cinatra#975
 // Wave 3 CORE EVICTION, epic #978): each owning connector registers its
 // relocated client under the SAME capability id from its `register(ctx)`.
@@ -178,6 +281,7 @@ import {
 // the connectors' `mcp-toolbox` modules carry no `@/` edge.
 import {
   probeWordPressInstanceMcpAdapter,
+  probeWordPressInstanceMcpServer,
   resolveWordPressMcpEndpoint,
   resolveWordPressMcpFallbackEndpoint,
   invalidateWordPressMcpProbeCache,
@@ -307,6 +411,339 @@ export function resolveConnectorConfigEnvOverrides(packageName: string): Record<
   );
 }
 
+// ---------------------------------------------------------------------------
+// cinatra#2017 S2 — governed connector-instance invoker (Plane C) wiring.
+//
+// The host publishes ONE shared `{ invokeSiteTool, listSiteTools }` guard; the
+// connector resolves it via `hostService(ctx, …)` and calls it with NO
+// connectorKey/kind (M6). `connectorKey` is HOST-DERIVED — never connector-
+// selected. The host-authoritative source available to this shared impl at call
+// time is the SIGNED, host-minted connector-instance pin on the ambient delegated
+// actor (§2.7); an absent pin (the org-scope-via-shared-primitive path §1.6 flags
+// as the danger) FAILS CLOSED (`connector_key_underivable`). The job path (S7
+// seam) supplies `connectorKey` from a host-minted enqueue binding to the
+// low-level core API directly — never a payload field (R3-B1).
+//
+// SHIP-DARK (§1.5): nothing in production reaches these methods yet — delegated
+// chat/widget deny-by-default keeps the connector primitives off every live
+// perimeter until the S7 cutover. This publication only lets the connector's
+// `register(ctx)` RESOLVE the capability fail-loud at boot.
+// ---------------------------------------------------------------------------
+
+/** Per-process catalog cache (S3 owns TTL/invalidation/lifecycle — N6). */
+const connectorInstanceCatalogCache = createInMemoryConnectorInstanceCatalogCache();
+/** The shared authority service — `selectForConnector(kind).requireUse` is the
+ * invoker's single live per-instance USE authority pass (M4). */
+const connectorInstanceUseAuthority = createInstanceWriteAuthorityService();
+/** The connector kinds the invoker guard host-derives a connectorKey for. */
+const CONNECTOR_INSTANCE_INVOKER_KINDS = new Set(["wordpress", "drupal"]);
+
+/** Resolve a connector instance's MCP endpoint + single-source Basic auth
+ * HOST-SIDE (never connector input). The optional `serverId` (cinatra#2018 S3)
+ * targets a dedicated ENROLLED server's route: omitted / the default id keeps
+ * the exact pre-S3 default-route behavior; an unknown or non-enrolled serverId
+ * resolves null (fail closed — a retired server's endpoint is unreachable even
+ * mid-race). Drupal endpoint resolution stays null (later issue). The
+ * credential is the host-resolved instance row's application password
+ * (host-authoritative — NOT the connector toolbox's raw field, §1.3); it never
+ * appears in error text. */
+async function resolveConnectorInstanceEndpoint(
+  connectorKey: string,
+  instanceId: string,
+  serverId?: string,
+): Promise<ResolvedInstanceEndpoint | null> {
+  if (connectorKey !== "wordpress") return null;
+  const row = resolveWordPressInstanceAdmin()?.readInstanceById(instanceId) ?? null;
+  if (!row || !row.siteUrl || !row.username || !row.applicationPassword) return null;
+  const authHeader = `Basic ${Buffer.from(`${row.username}:${row.applicationPassword}`, "utf8").toString("base64")}`;
+  if (!serverId || serverId === CATALOG_DEFAULT_SERVER_ID) {
+    return { endpoint: resolveWordPressMcpFallbackEndpoint(row.siteUrl), authHeader };
+  }
+  const server = await readServer(connectorKey, instanceId, serverId);
+  if (!server || server.status !== "enrolled") return null;
+  return {
+    endpoint: resolveWordPressMcpFallbackEndpoint(row.siteUrl, server.restPath),
+    authHeader,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#2018 S3 — multi-server enrollment wiring (implementation lives in
+// the sibling modules; this section only binds host closures).
+// ---------------------------------------------------------------------------
+
+/** Per-server snapshot loader: exposure-mode dispatch + classification
+ * write-back + flip audit (connector-instance-snapshot-loader.ts). */
+const loadConnectorInstanceServerSnapshot = createConnectorInstanceSnapshotLoader({
+  callWireTool: (input) => callConnectorInstanceMcpTool(input),
+  listTools: (input) => listConnectorInstanceMcpTools(input),
+  readExposureMode: async (connectorKey, instanceId, serverId) =>
+    (await readServer(connectorKey, instanceId, serverId))?.exposureMode ?? null,
+  recordExposureMode: (input) => recordServerExposureMode(input),
+  invalidateSnapshot: (instanceId, serverId) =>
+    connectorInstanceCatalogCache.invalidate(instanceId, serverId),
+});
+
+/** Per-server cache + probe eviction (§6 invalidation events). Omitting
+ * `serverId` evicts the whole instance's catalog. Probe eviction is site-wide
+ * by design (`invalidateWordPressMcpProbeCache` evicts every per-server entry
+ * for the site by prefix — coarse but always safe). */
+function invalidateWordPressServerArtifacts(instanceId: string, serverId?: string): void {
+  connectorInstanceCatalogCache.invalidate(instanceId, serverId);
+  const row = resolveWordPressInstanceAdmin()?.readInstanceById(instanceId) ?? null;
+  if (row?.siteUrl) invalidateWordPressMcpProbeCache(row.siteUrl);
+}
+
+/** Linear trailing-slash trim (the codebase's ReDoS-safe standard form). */
+function trimTrailingSlashesForSiteMatch(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--; // 47 = "/"
+  return value.slice(0, end);
+}
+
+/** Site-keyed invalidation for the credential-materialization paths (§6 event
+ * 4): evict the site's probe verdicts AND every matching instance's catalog so
+ * the next acquire re-resolves against the fresh credential binding. */
+function invalidateWordPressCatalogBySiteUrl(siteUrl: string): void {
+  invalidateWordPressMcpProbeCache(siteUrl);
+  const wanted = trimTrailingSlashesForSiteMatch(siteUrl);
+  const instances = resolveWordPressInstanceAdmin()?.getAPISettings().instances ?? [];
+  for (const instance of instances) {
+    if (trimTrailingSlashesForSiteMatch(instance.siteUrl) === wanted) {
+      connectorInstanceCatalogCache.invalidate(instance.id);
+    }
+  }
+}
+
+/** Probe/credential target for manual-route verification + health refresh. */
+function resolveWordPressProbeTarget(
+  instanceId: string,
+): { siteUrl: string; username: string; applicationPassword: string } | null {
+  const row = resolveWordPressInstanceAdmin()?.readInstanceById(instanceId) ?? null;
+  if (!row?.siteUrl || !row.username || !row.applicationPassword) return null;
+  return {
+    siteUrl: row.siteUrl,
+    username: row.username,
+    applicationPassword: row.applicationPassword,
+  };
+}
+
+/** The enrollment module's production deps (real store + real verifier bound
+ * inside the sibling module; only the host-owned invalidation + instance
+ * resolution close over this binder). */
+const wordpressServerEnrollmentDeps = createWordPressServerEnrollmentDeps({
+  // The vendor-named probe/endpoint helpers are injected HERE (the enrollment
+  // module deliberately names no vendor module — epic cinatra#978 gate).
+  probeServer: (target, restPath) => probeWordPressInstanceMcpServer(target, restPath),
+  resolveEndpoint: (siteUrl, restPath) => resolveWordPressMcpFallbackEndpoint(siteUrl, restPath),
+  onServerInvalidated: (instanceId, serverId) =>
+    invalidateWordPressServerArtifacts(instanceId, serverId),
+  resolveInstance: resolveWordPressProbeTarget,
+});
+
+/**
+ * Org-admin gate for the S3 server-enrollment members — enforced INSIDE each
+ * member (so the S7 settings UI is a pure consumer). Fail-closed: unknown
+ * instance, an unbound instance row, a foreign-org binding, or a non-admin org
+ * role all deny; a platform admin passes regardless of org binding (the
+ * host-admin posture every host settings surface carries).
+ */
+async function requireWordPressInstanceOrgAdmin(instanceId: string): Promise<{ actorId: string }> {
+  const session = await requireAuthSession();
+  const row = resolveWordPressInstanceAdmin()?.readInstanceById(instanceId) ?? null;
+  if (!row) {
+    throw new Error("wordpress-mcp server enrollment: unknown instance");
+  }
+  if (isPlatformAdmin(session)) return { actorId: session.user.id };
+  const activeOrgId = session.session?.activeOrganizationId ?? null;
+  const rawOrgId = (row as { orgId?: unknown }).orgId;
+  const rowOrgId = typeof rawOrgId === "string" && rawOrgId.trim() ? rawOrgId.trim() : null;
+  if (!activeOrgId || !rowOrgId || rowOrgId !== activeOrgId) {
+    throw new Error(
+      "wordpress-mcp server enrollment: instance is not bound to the caller's active organization",
+    );
+  }
+  const orgRole = await resolveOrgRoleForSession(session);
+  if (orgRole !== "org_admin" && orgRole !== "org_owner") {
+    throw new Error("wordpress-mcp server enrollment: org-admin role required");
+  }
+  return { actorId: session.user.id };
+}
+
+// Host-LOCAL structural extension of the SDK `HostWordPressMcpService` for the
+// S3 server-enrollment surface (the `HostExternalMcpRegistrySetupSurface`
+// precedent — NO SDK edit): S7's settings UI resolves these members
+// structurally; org-admin authorization runs INSIDE each member.
+type HostWordPressMcpServerEnrollmentSurface = HostWordPressMcpService & {
+  /** Full enrollment row set (enrolled + present_unenrolled + retired) — the
+   * S7 health/catalog matrix read. Also kicks the debounced background probe
+   * health refresh for KNOWN enrolled rows. */
+  listInstanceServers(instanceId: string): Promise<ConnectorInstanceServerRecord[]>;
+  /** Verify-then-enroll a manual server route (probe + real MCP handshake;
+   * nothing persists on failure). */
+  addManualServerRoute(input: {
+    instanceId: string;
+    restPath: string;
+  }): Promise<AddManualServerRouteResult>;
+  /** Delete a manual route (manual rows only — typed rejection otherwise). */
+  removeManualServerRoute(input: {
+    instanceId: string;
+    serverId: string;
+  }): Promise<RemoveManualServerRouteResult>;
+  /** Manual "refresh now": evict the instance's catalog snapshots + the
+   * site's probe verdicts so the next acquire reloads from the wire. */
+  invalidateInstanceCatalog(instanceId: string): Promise<void>;
+};
+
+/** Build the invoker deps for a host-bound connectorKey (closes over the shared
+ * authority / transport / cache / policy store, §1.6). */
+function buildConnectorInstanceInvokerDeps(boundConnectorKey: string): ConnectorInstanceInvokerDeps {
+  const authority = connectorInstanceUseAuthority.selectForConnector(boundConnectorKey);
+  return {
+    requireUse: (actor, gateInput) => authority.requireUse(actor, gateInput),
+    ensureDefaultOpenPolicy: (input) => ensureDefaultOpenPolicy(input),
+    resolveInstanceEndpoint: resolveConnectorInstanceEndpoint,
+    cache: connectorInstanceCatalogCache,
+    // Per-server exposure dispatch (cinatra#2018 S3): the default server keeps
+    // the pre-S3 triad expansion; a dedicated server classifies from the wire
+    // `tools/list` (sibling module connector-instance-snapshot-loader.ts).
+    loadServerSnapshot: loadConnectorInstanceServerSnapshot,
+    callWireTool: (input) => callConnectorInstanceMcpTool(input),
+    // Multi-server enrollment deps (cinatra#2018 S3) — WordPress only for now:
+    // drupal keeps the exact S2 single-default-server acquire path until its
+    // own enrollment lands (a later issue), so no drupal rows are ever minted.
+    ...(boundConnectorKey === "wordpress"
+      ? {
+          listEnrolledServers: (connectorKey: string, instanceId: string) =>
+            listEnrolledServers(connectorKey, instanceId),
+          ensureDefaultServerEnrollment: async (input: {
+            connectorKey: string;
+            instanceId: string;
+          }) => {
+            await ensureDefaultServerEnrollment(input);
+          },
+          recordServerCatalogStatus: async (input: {
+            connectorKey: string;
+            instanceId: string;
+            serverId: string;
+            status: "catalog_unavailable" | "unreachable" | "auth_error";
+            at: number;
+          }) => {
+            await recordServerStatus({
+              connectorKey: input.connectorKey,
+              instanceId: input.instanceId,
+              serverId: input.serverId,
+              status: input.status,
+              at: new Date(input.at).toISOString(),
+            });
+          },
+        }
+      : {}),
+    readPolicy: (connectorKey, instanceId) => readInstanceToolPolicy(connectorKey, instanceId),
+    audit: (event) =>
+      logAuditEvent({
+        resourceType: event.resourceType,
+        resourceId: event.resourceId,
+        actorPrincipalType: "human",
+        ...(event.actorPrincipalId ? { actorPrincipalId: event.actorPrincipalId } : {}),
+        ...(event.organizationId ? { organizationId: event.organizationId } : {}),
+        authSource: "mcp",
+        operation: event.operation,
+        decision: event.decision,
+        policyVersion: "connector-instance-invoker",
+        metadata: { ...event.metadata, ...(event.causation ? { causation: event.causation } : {}) },
+      }),
+    // cinatra#2020 S5 (PR-3) — the destructive-confirmation hook, ARMED by
+    // binding (the S7 entry criterion is "S5 stages merged AND the hook bound +
+    // enabled", design §7.2). Dark today by construction: only pin-carrying
+    // delegations (agent_run / public_site_widget) can reach the invoker and
+    // both default confirmation OFF in the D7 matrix — chat exposure is S7's
+    // switch. The impl owns matrix + park + audits; the binder stashes the
+    // ambient frame's {runId, clientId} as park-row forensics (correlation
+    // only, never a decision input).
+    destructiveHook: buildConnectorInstanceDestructiveHook({
+      getForensicsContext: () => {
+        const frame = mcpRequestContextStorage.getStore();
+        if (!frame) return undefined;
+        return {
+          ...(frame.runId ? { runId: frame.runId } : {}),
+          ...(frame.clientId ? { clientId: frame.clientId } : {}),
+        };
+      },
+    }),
+    warnAbsentPolicy: (connectorKey, instanceId) => {
+      console.warn(
+        `[connector-instance-invoker] no persisted policy for ${connectorKey}/${instanceId} — ` +
+          `compatibility fallback OPEN (transient; reconcile + first-touch converge it).`,
+      );
+    },
+    // Fail-closed INVALID policy (§10-A3): denies-all AND emits an audit warn —
+    // an invalid/malformed persisted record is a security signal, not the benign
+    // absent-fallback. Loud + audited so an operator sees a corrupt policy row.
+    warnInvalidPolicy: (connectorKey, instanceId) => {
+      console.error(
+        `[connector-instance-invoker] INVALID policy record for ${connectorKey}/${instanceId} — ` +
+          `evaluating as DENY-ALL (fail-closed). A malformed policy row must be repaired.`,
+      );
+      void logAuditEvent({
+        resourceType: "connector_instance",
+        resourceId: instanceId,
+        actorPrincipalType: "system",
+        authSource: "worker",
+        operation: "policy_invalid_deny_all",
+        decision: "denied",
+        policyVersion: "connector-instance-tool-policy",
+        metadata: { connectorKey, reason: "invalid_policy_deny_all" },
+      });
+    },
+  };
+}
+
+/** Resolve the HOST-DERIVED connectorKey + trusted actor for a guard call.
+ * cinatra#2020 S5 (D6): additionally derives the ConfirmationSurface from the
+ * VERIFIED `delegatedActor.delegation` discriminant (null → `session`) — the
+ * members pass it as the invoker input's existing `sourceType` (guard-set;
+ * the connector-facing shape has no such field, so it is unforgeable by
+ * construction — the M6 pattern) — plus the ambient frame `runId` the members
+ * forward as advisory `causation`. */
+async function resolveConnectorInstanceInvokerContext(): Promise<{
+  actor: InvokerTrustedActor;
+  boundConnectorKey: string;
+  surface: ConfirmationSurface;
+  frameRunId?: string;
+}> {
+  const frame = mcpRequestContextStorage.getStore();
+  const delegated = frame?.delegatedActor;
+  // The `chat` delegation member carries no pin; narrow via `in` before reading.
+  const pin =
+    delegated && "connectorInstancePin" in delegated ? delegated.connectorInstancePin : undefined;
+  // connectorKey is HOST-DERIVED from the signed pin (host-authoritative) — never
+  // connector-selected (M6/R2-B1). No pin / unknown kind ⇒ fail closed.
+  if (!pin || !CONNECTOR_INSTANCE_INVOKER_KINDS.has(pin.connectorKey)) {
+    throw new InvokerError(
+      "connector_key_underivable",
+      "the governed invoker requires a signed connector-instance pin to host-derive the connector",
+    );
+  }
+  const resolved = await resolveTrustedWriteActor();
+  if (!resolved) {
+    // Fail closed — no anonymous/synthetic invoker calls (the gate would deny
+    // no_trusted_actor; surface it here before touching any endpoint/cache).
+    throw new InstanceWriteAuthorityError("no_trusted_actor");
+  }
+  return {
+    actor: { ...resolved, connectorInstancePin: pin },
+    boundConnectorKey: pin.connectorKey,
+    surface: deriveConfirmationSurface(delegated?.delegation),
+    ...(frame?.runId ? { frameRunId: frame.runId } : {}),
+  };
+}
+
+// cinatra#2020 S5 §8 — the ONE additive builder export (no structural
+// extraction): the PR-4 resume executor imports THIS builder so park-time and
+// resume-time invoker deps are the same object graph by construction.
+export { buildConnectorInstanceInvokerDeps };
+
 /**
  * Publish the per-concern host connector services into the capability
  * registry. A serverEntry transport's `register(ctx)` resolves exactly the
@@ -399,6 +836,10 @@ export function registerHostConnectorServices(): void {
           providerConfigKey: input.providerConfigKey,
           connectionId: input.connectionId,
         });
+        // Credential (re)materialization (cinatra#2018 S3 §6 event 4): evict
+        // the site's probe verdicts + catalog snapshots so the next acquire
+        // re-resolves against the fresh credential binding.
+        invalidateWordPressCatalogBySiteUrl(siteUrl);
         return { handled: true };
       }
       if (input.connectorKey === "linkedin") {
@@ -629,8 +1070,22 @@ export function registerHostConnectorServices(): void {
     resolveServerUrl: resolveWordPressMcpFallbackEndpoint,
     isPrivateUrl,
     // Instance hard-delete behind the connector's manage-gated relocated
-    // action (the relocated client already returns Promise<void>).
-    deleteInstance: (id) => requireWordPressInstanceAdmin().deleteInstance(id),
+    // action — wrapped (cinatra#2018 S3 §6 event 5) to evict the instance's
+    // catalog snapshots and retire every enrollment row (tombstones keep
+    // identity/health continuity). The retire is post-delete hygiene: a
+    // failure is loud but never resurrects the already-deleted instance.
+    deleteInstance: async (id) => {
+      await requireWordPressInstanceAdmin().deleteInstance(id);
+      connectorInstanceCatalogCache.invalidate(id);
+      try {
+        await retireServersForInstance("wordpress", id);
+      } catch (err) {
+        console.error(
+          "[wordpress-mcp] failed to retire enrollment rows after instance delete",
+          err,
+        );
+      }
+    },
     // Connection/instance-admin surface (cinatra#172 Stage H3), delegated to
     // the connector-owned client. The webhook writers (register/remove) sit
     // behind the assistant connector's manage-gated "use server" actions —
@@ -663,8 +1118,149 @@ export function registerHostConnectorServices(): void {
         await requireWordPressInstanceAdmin().persistLocalDevWordPressInstanceUnvalidated(input);
       return { id: persisted.id, connectionId: persisted.connectionId };
     },
-    devInvalidateProbeCache: invalidateWordPressMcpProbeCache,
-  } satisfies HostWordPressMcpService);
+    // Credential-rotate eviction (cinatra#2018 S3 §6 event 4): the dev
+    // reconcile already evicted the probe cache here; the per-instance catalog
+    // snapshots now go with it so a rotated application password never serves
+    // a snapshot resolved under the dead credential.
+    devInvalidateProbeCache: invalidateWordPressCatalogBySiteUrl,
+    // --- cinatra#2018 S3 — multi-server enrollment surface (S7 consumes) -----
+    // Org-admin gated INSIDE each member; implementation lives in the sibling
+    // enrollment module. S3 ships the machinery + tests; S7 ships the controls.
+    listInstanceServers: async (instanceId) => {
+      await requireWordPressInstanceOrgAdmin(instanceId);
+      return listInstanceServersWithHealthRefresh(
+        { connectorKey: "wordpress", instanceId },
+        wordpressServerEnrollmentDeps,
+      );
+    },
+    addManualServerRoute: async (input) => {
+      const { actorId } = await requireWordPressInstanceOrgAdmin(input.instanceId);
+      return addManualServerRoute(
+        {
+          connectorKey: "wordpress",
+          instanceId: input.instanceId,
+          restPath: input.restPath,
+          actor: actorId,
+        },
+        wordpressServerEnrollmentDeps,
+      );
+    },
+    removeManualServerRoute: async (input) => {
+      const { actorId } = await requireWordPressInstanceOrgAdmin(input.instanceId);
+      return removeManualServerRoute(
+        {
+          connectorKey: "wordpress",
+          instanceId: input.instanceId,
+          serverId: input.serverId,
+          actor: actorId,
+        },
+        wordpressServerEnrollmentDeps,
+      );
+    },
+    invalidateInstanceCatalog: async (instanceId) => {
+      await requireWordPressInstanceOrgAdmin(instanceId);
+      invalidateWordPressServerArtifacts(instanceId);
+    },
+    // --- trusted-site native-injection OPT-IN surface (cinatra#2019 S4) ------
+    // ADDITIVE host-local members (the S3 manual-route / #982 structural
+    // precedent — the frozen SDK `HostWordPressMcpService` is untouched; the
+    // connector resolves these structurally and an older host simply lacks
+    // them, which reads as "cannot enable" fail-closed). Authorization lives
+    // INSIDE the members: cookie session + `connector.update` (org_admin+) in
+    // the org that OWNS the instance, resolved from the persisted row — never
+    // caller input, no platform-admin synthesis. On enable/re-acknowledge the
+    // member stamps the persisted consent with the HOST-shipped descriptor-set
+    // version/hash + disclosure version (the caller can only choose the mode).
+    // DORMANT: nothing consumes the persisted mode until the connector's
+    // toolbox guard replacement lands; enabling changes no injection behavior.
+    ...createWordPressNativeInjectionConsentMembers({
+      requireSession: () => requireAuthSession(),
+      resolveInstanceOrgId: (instanceId) => {
+        // Mirrors the instance-write-authority org-binding read: the persisted
+        // row's org (cinatra#274), trimmed; unknown/unbound → null (refused).
+        const row = resolveWordPressInstanceAdmin()?.readInstanceById(instanceId) ?? null;
+        if (!row) return null;
+        return typeof row.orgId === "string" && row.orgId.trim() ? row.orgId.trim() : null;
+      },
+      resolveOrgRole: (orgId, userId) => resolveOrgRoleForUser(orgId, userId),
+      readPolicy: (connectorKey, instanceId, ownerOrgId) =>
+        readNativeInjectionPolicy(connectorKey, instanceId, ownerOrgId),
+      writeMode: (input) => setNativeInjectionMode(input),
+    }),
+    // --- destructive-confirmation org-disable surface (cinatra#2020 S5) -----
+    // ADDITIVE host-local members (same precedent as the consent members
+    // above; frozen SDK contract untouched). `disabled` turns the D7 require
+    // rows OFF for ONE instance; the store audits every change
+    // (`confirmation_policy_changed`). S5 ships the machinery + tests; S7
+    // ships the settings toggle that calls these.
+    ...createConfirmationPolicySurfaceMembers({
+      connectorKey: "wordpress",
+      requireSession: () => requireAuthSession(),
+      resolveInstanceOrgId: (instanceId) => {
+        const row = resolveWordPressInstanceAdmin()?.readInstanceById(instanceId) ?? null;
+        if (!row) return null;
+        return typeof row.orgId === "string" && row.orgId.trim() ? row.orgId.trim() : null;
+      },
+      resolveOrgRole: (orgId, userId) => resolveOrgRoleForUser(orgId, userId),
+    }),
+    // --- trusted-site native READ-INJECTION builder + preview (cinatra#2019
+    // S4 verifier slice). ADDITIVE host-local members (same structural
+    // precedent as the consent members above): `buildNativeReadInjection` is
+    // the toolbox-facing eligibility computation (ambient trusted actor + the
+    // SAME explicit-actor per-instance USE gate core the governed invoker
+    // runs; only `surface:"chat"` can ever emit), and
+    // `explainNativeReadInjection` is the org-admin-gated dry-run for the
+    // settings card (no audits, no credential material, works while off).
+    // Descriptor/fingerprint logic lives host-side in the sibling modules —
+    // the connector only renders what the member returns. On the pinned
+    // community stack the verified set is EMPTY by construction (the shipped
+    // v1 descriptor set is empty), so these members emit nothing anywhere
+    // until a future capture-backed descriptor-population change lands.
+    ...createWordPressNativeReadInjectionMembers({
+      requireSession: () => requireAuthSession(),
+      resolveInstanceOrgId: (instanceId) => {
+        const row = resolveWordPressInstanceAdmin()?.readInstanceById(instanceId) ?? null;
+        if (!row) return null;
+        return typeof row.orgId === "string" && row.orgId.trim() ? row.orgId.trim() : null;
+      },
+      resolveOrgRole: (orgId, userId) => resolveOrgRoleForUser(orgId, userId),
+      readPolicy: (connectorKey, instanceId, ownerOrgId) =>
+        readNativeInjectionPolicy(connectorKey, instanceId, ownerOrgId),
+      resolveTrustedActor: () => resolveTrustedWriteActor(),
+      requireUse: (actor, gateInput) =>
+        connectorInstanceUseAuthority.selectForConnector("wordpress").requireUse(actor, gateInput),
+      // The governed invoker's OWN acquire path (exported surface, same deps
+      // shape, same shared per-process cache ⇒ one freshness policy). The
+      // enrollment list is read ONCE and pinned into the acquire deps so the
+      // builder's completeness check and the acquire loop can never see two
+      // different server sets. Endpoint + credential resolution stays inside
+      // this closure — the builder module never sees an auth header.
+      acquireEnrolledSnapshots: async (connectorKey, instanceId) => {
+        const resolved = await resolveConnectorInstanceEndpoint(connectorKey, instanceId);
+        if (!resolved) {
+          throw new Error("wordpress native-read-injection: instance endpoint unresolvable");
+        }
+        const enrolled = await listEnrolledServers(connectorKey, instanceId);
+        const snapshots = await acquireConnectorInstanceCatalogSnapshots(
+          {
+            connectorKey,
+            instanceId,
+            endpoint: resolved.endpoint,
+            authHeader: resolved.authHeader,
+          },
+          {
+            ...buildConnectorInstanceInvokerDeps("wordpress"),
+            listEnrolledServers: async () => enrolled,
+          },
+        );
+        return { enrolled, snapshots };
+      },
+      isKnownDestructiveToolName: (name) => isKnownDestructiveToolName(name),
+    }),
+  } satisfies HostWordPressMcpServerEnrollmentSurface &
+    WordPressNativeInjectionConsentSurface &
+    WordPressConfirmationPolicySurface &
+    WordPressNativeReadInjectionSurface);
 
   // The WordPress post/media CONTENT surface (`@cinatra-ai/host:
   // wordpress-content`, cinatra#172 Stage H3) is NO LONGER host-published:
@@ -690,6 +1286,96 @@ export function registerHostConnectorServices(): void {
   // audit row). `selectForConnector` maps the connector KIND to BOTH the package
   // id and the instance reader host-side — neither is ever caller-supplied.
   register(svc.instanceWriteAuthority, createInstanceWriteAuthorityService() satisfies HostInstanceWriteAuthorityService);
+
+  // cinatra#2017 S2 — the governed connector-instance invoker (Plane C). ONE
+  // shared guard; `connectorKey` is HOST-DERIVED from the signed instance pin on
+  // the ambient delegated actor (M6/R2-B1), never a connector/kind selector on
+  // the connector-facing shape. `listSiteTools` runs the SAME pin + live USE
+  // authority gate BEFORE any catalog read (B2). Ship-dark: no live perimeter
+  // reaches these until S7 (delegated deny-by-default keeps them off, untouched).
+  register(svc.connectorInstanceInvoker, {
+    invokeSiteTool: async (input) => {
+      const { actor, boundConnectorKey, surface, frameRunId } =
+        await resolveConnectorInstanceInvokerContext();
+      return invokeConnectorInstanceTool(
+        {
+          connectorKey: boundConnectorKey,
+          toolName: input.toolName,
+          args: input.args,
+          ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+          ...(input.serverId ? { serverId: input.serverId } : {}),
+          actor,
+          primitiveName: `${boundConnectorKey}_site_tool_call`,
+          // cinatra#2020 D6 — host-derived surface as `sourceType` (also makes
+          // the existing widget platform-admin suppression at the USE gate
+          // apply to widget-surface invoker calls) + frame runId as advisory
+          // causation for the audit/park correlation trail.
+          sourceType: surface,
+          ...(frameRunId ? { causation: frameRunId } : {}),
+        },
+        buildConnectorInstanceInvokerDeps(boundConnectorKey),
+      );
+    },
+    listSiteTools: async (input) => {
+      const { actor, boundConnectorKey, surface, frameRunId } =
+        await resolveConnectorInstanceInvokerContext();
+      return listConnectorInstanceTools(
+        {
+          connectorKey: boundConnectorKey,
+          ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+          ...(input.serverId ? { serverId: input.serverId } : {}),
+          ...(input.cursor ? { cursor: input.cursor } : {}),
+          actor,
+          primitiveName: `${boundConnectorKey}_site_tools_list`,
+          sourceType: surface,
+          ...(frameRunId ? { causation: frameRunId } : {}),
+        },
+        buildConnectorInstanceInvokerDeps(boundConnectorKey),
+      );
+    },
+  } satisfies HostConnectorInstanceInvokerService);
+
+  // cinatra#2043 S5 — the CMS review-before-publish capability. A NEW host-local
+  // capability id (the anthropic-skill-config precedent — an arbitrary string,
+  // NOT a HOST_CONNECTOR_SERVICE_CAPABILITIES / sdk-extensions ABI entry). The
+  // wordpress-mcp-connector's staged-write trigger resolves it OPTIONALLY +
+  // lazily and is INERT until it is published here; the four bound seams
+  // (`isReviewActive` / `captureStagedWrite` / `resolveDisposition` /
+  // `recordApplyVerification`) delegate to the core capture + read-back +
+  // effect-disposition, deriving org/run/actor from the trusted MCP request
+  // frame — never connector input. Publication is UNCONDITIONAL at module load
+  // (the connector no-ops on the fence-off path); the capability reports the
+  // review fence truthfully. This is a thin DEFERRED wrapper that does NO
+  // host-service resolution and NO I/O here: `isReviewActive` is the pure fence,
+  // and the three write-driving members delegate to the REAL seam built at boot
+  // by register-cms-review-host-seam-runtime and installed into the globalThis
+  // slot by the system-loops `bind-cms-review-host-seam` phase. The heavy store
+  // bindings are deliberately kept OUT of this route-reachable binder — a literal
+  // dynamic-import specifier here would still grow every locked route's reachable
+  // graph (route-graph ratchet), so the runtime rides only the boot graph, never
+  // a route (the background-jobs-registry runner-slot precedent). If the boot
+  // phase never bound the slot (a swallowed boot-phase failure), a write-driving
+  // member fails CLOSED with a loud error rather than silently dropping a
+  // capture — but it is only reached when `isReviewActive()` is true, which on a
+  // healthy boot implies the slot is bound. A host-LOCAL capability id defined
+  // INLINE (the anthropic-skill-config precedent above) so this binder imports no
+  // value from the seam module — a value import would pull it onto a route.
+  const CMS_REVIEW_CAPABILITY = "@cinatra-ai/host:cms-review";
+  const requireBoundCmsReviewSeam = (): CmsReviewHostSeam => {
+    const seam = globalThis.__cinatraCmsReviewHostSeam;
+    if (!seam) {
+      throw new Error(
+        "[cms-review] the host seam was not bound at boot (system-loops `bind-cms-review-host-seam` phase) — refusing to capture/verify a staged CMS write fail-closed.",
+      );
+    }
+    return seam;
+  };
+  register(CMS_REVIEW_CAPABILITY, {
+    isReviewActive: () => isLifecycleReviewOrchestrationActive(),
+    captureStagedWrite: (input) => requireBoundCmsReviewSeam().captureStagedWrite(input),
+    resolveDisposition: (input) => requireBoundCmsReviewSeam().resolveDisposition(input),
+    recordApplyVerification: (input) => requireBoundCmsReviewSeam().recordApplyVerification(input),
+  } satisfies CmsReviewHostSeam);
 
   // The wordpress widget auth-config store INVERTED to the
   // wordpress-mcp-connector (cinatra#975 Wave 2): it now registers

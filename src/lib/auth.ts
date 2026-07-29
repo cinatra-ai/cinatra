@@ -107,6 +107,17 @@ const baseAuthServerScopes = [
   "mcp:connect",
   "a2a:connect",
 ];
+// MODULE EVAL — and the `validAudiences` this derives from the saved public
+// base URL are FROZEN here for the process lifetime. `oauthProvider` spreads
+// its options into its own object at construction, so the audience allowlist
+// cannot be made live by deriving it lazily; unlike `trustedOrigins` below (a
+// function, re-evaluated per request), a public-base-URL change saved at
+// /configuration/development?tab=tunnel needs an app RESTART: until then a token
+// request naming the new URL is rejected, and the PREVIOUS public audience (the
+// MCP audience plus its `/api/cli` sibling below) stays accepted — so clearing
+// the field is not a revocation on its own. That restart requirement is stated
+// on the tunnel tab + `setMcpPublicBaseUrlAction`, and its mechanism is pinned
+// by packages/mcp-server/src/__tests__/auth-plugins.test.ts.
 const mcpServerAuthPlugins = createMcpServerAuthPlugins({
   authBasePath: "/api/auth",
   mcpBasePath: "/api/mcp",

@@ -109,6 +109,21 @@ export default defineConfig({
         find: "@cinatra-ai/projects",
         replacement: path.join(__dirname, "packages/projects/src/index.ts"),
       },
+      // cinatra#2017 S2: the governed connector-instance invoker
+      // (src/lib/connector-instance-invoker.ts) imports these two mcp-server leaf
+      // subpaths — the pure per-instance tool-policy evaluator and the annotation
+      // classifier. tsconfig has the path aliases; the root vitest run needs the
+      // mirrored entries so every suite transitively reaching the invoker (via the
+      // host connector-service registration) resolves them instead of failing to
+      // collect.
+      {
+        find: "@cinatra-ai/mcp-server/instance-tool-policy",
+        replacement: path.join(__dirname, "packages/mcp-server/src/instance-tool-policy.ts"),
+      },
+      {
+        find: "@cinatra-ai/mcp-server/annotation-classifier",
+        replacement: path.join(__dirname, "packages/mcp-server/src/annotation-classifier.ts"),
+      },
       // `@cinatra-ai/objects/classifier-signals` is a leaf subpath. Listed
       // here so tests under `src/lib/artifacts/` (root vitest scope) can
       // import the leaf without the heavy objects barrel. tsconfig has the
@@ -185,6 +200,30 @@ export default defineConfig({
         replacement: path.join(
           __dirname,
           "packages/llm/src/scripted-test-provider.ts",
+        ),
+      },
+      // Execution-plane session/injection barrel (exec-plane, cinatra#1706 +
+      // #2138). Dependency-light: node:crypto plus type-only imports of
+      // ../types. The app's boot phase + surface issuers import it directly, so
+      // — like /actor-context — it must be aliased BEFORE the bare entry or the
+      // prefix matcher rewrites it into the actor-context leaf.
+      {
+        find: "@cinatra-ai/llm/execution-plane",
+        replacement: path.join(
+          __dirname,
+          "packages/llm/src/execution-plane/index.ts",
+        ),
+      },
+      // cinatra#2019 (provider-scale proof harness): the pure, dependency-free
+      // MCP-server-tool materializer (no I/O, no `@/` imports — see the
+      // module header). Like the other `@cinatra-ai/llm/*` leaves above, it
+      // must be aliased BEFORE the bare entry so the prefix matcher does not
+      // rewrite it into the actor-context leaf.
+      {
+        find: "@cinatra-ai/llm/mcp-materializer",
+        replacement: path.join(
+          __dirname,
+          "packages/llm/src/mcp-materializer.ts",
         ),
       },
       {
@@ -403,6 +442,11 @@ export default defineConfig({
       // route-graph-ratchet, crm-pointer-gate, schema-migration-gate,
       // sdk-abi-readme-gate), NOT as vitest tests.
       "scripts/audit/__tests__/gatekept-install-no-direct-registry.test.mjs",
+      // wordpress-fixture-pins-gate + wp-gateway-capture-freshness are the S1
+      // (#2016) node:test companions — each has its own dedicated `node --test`
+      // step in build-image.yml, same convention as the entries above.
+      "scripts/audit/__tests__/wordpress-fixture-pins-gate.test.mjs",
+      "scripts/audit/__tests__/wp-gateway-capture-freshness.test.mjs",
       "scripts/audit/__tests__/actions-pinned-gate.test.mjs",
       "scripts/audit/__tests__/workspace-phantom-deps.test.mjs",
       "scripts/audit/__tests__/workspace-dep-cycles.test.mjs",

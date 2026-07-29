@@ -63,6 +63,12 @@ const REDIS_KEY = (runId: string) => `trigger:released:${runId}`;
 
 // Fixture orgId required by the run schema.
 const TEST_ORG_ID = "org-test";
+// cinatra#1939 wave 2: transitionRunStatus now runs under guardOrgMutation and
+// REQUIRES a host-minted authority. A member-shaped authority for the fixture org
+// grounds the guarded writes. NOTE (integration-harness): the guard reads the
+// org lifecycle from `public."organization"` — this DB-gated suite needs an
+// ACTIVE org row for TEST_ORG_ID for the guarded writes to pass at runtime.
+const AUTH = { orgId: TEST_ORG_ID, can: () => true };
 
 async function ensureParentRun(): Promise<string> {
   const id = `test-trigger-schedule-${randomUUID()}`;
@@ -278,8 +284,8 @@ describe("trigger-schedule + trigger-release-job", () => {
     });
     // Move the run into 'armed' so the release job's transition can succeed.
     // queued (default) → pending_input → armed
-    await transitionRunStatus(runId, "queued", "pending_input");
-    await transitionRunStatus(runId, "pending_input", "armed");
+    await transitionRunStatus(runId, "queued", "pending_input", undefined, AUTH);
+    await transitionRunStatus(runId, "pending_input", "armed", undefined, AUTH);
 
     const runtime = await ensureBackgroundJobRuntime();
     const addSpy = vi.spyOn(runtime.queue, "add");
@@ -403,8 +409,8 @@ describe("trigger-schedule + trigger-release-job", () => {
       timezone: "UTC",
       enabled: true,
     });
-    await transitionRunStatus(runId, "queued", "pending_input");
-    await transitionRunStatus(runId, "pending_input", "armed");
+    await transitionRunStatus(runId, "queued", "pending_input", undefined, AUTH);
+    await transitionRunStatus(runId, "pending_input", "armed", undefined, AUTH);
 
     const runtime = await ensureBackgroundJobRuntime();
     const addSpy = vi.spyOn(runtime.queue, "add");

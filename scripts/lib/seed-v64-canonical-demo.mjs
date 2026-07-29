@@ -8,7 +8,7 @@
 // calls it with a per-test schema and a pg Client.
 //
 // ADOPT-NOT-SHADOW (the #1238 live-acceptance fix):
-//   The two PLATFORM rows (code-reviewer-agent, assistant-skills) share their
+//   The two PLATFORM rows (code-reviewer-agent, chat-assistant-core-skill) share their
 //   identity (owner_level=platform, owner_id='__platform__', package_name) with
 //   the REAL bundled installs that land at boot with is_default=true. Claiming
 //   is_default=true again collides on installed_extension_one_default_platform_idx
@@ -131,13 +131,13 @@ export async function seedV64CanonicalDemo({
     },
     {
       id: "iext_seed-v64-07",
-      pkg: "@cinatra-ai/assistant-skills",
+      pkg: "@cinatra-ai/chat-assistant-core-skill",
       ownerLevel: "platform",
       ownerId: PLATFORM_SENTINEL,
       orgId: null,
       kind: "skill",
       status: "locked",
-      source: { type: "verdaccio", registryUrl: "http://localhost:4873", packageName: "@cinatra-ai/assistant-skills", version: "0.2.1", integrity: "sha512-seed-v64-07" },
+      source: { type: "verdaccio", registryUrl: "http://localhost:4873", packageName: "@cinatra-ai/chat-assistant-core-skill", version: "0.2.1", integrity: "sha512-seed-v64-07" },
       requiredInProd: true,
       deps: [],
     },

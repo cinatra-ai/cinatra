@@ -37,7 +37,9 @@ const KIND_SUFFIXES = [
   ["-agent", "agent"],
   ["-connector", "connector"],
   ["-artifact", "artifact"],
-  ["-skills", "skill"],
+  // The retired plural `-skills` suffix is deliberately NOT accepted: the
+  // ratified packaging contract (cinatra#2089/#2090) names skill packages
+  // with the SINGULAR `-skill`, and the last plural pack was consolidated.
   ["-skill", "skill"],
   ["-workflow", "workflow"],
 ];

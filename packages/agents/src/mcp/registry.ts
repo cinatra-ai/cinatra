@@ -72,6 +72,13 @@ function buildActorFromMcpContext(): Record<string, unknown> {
       // the delegated run to its anchored scope (W2/#1051). Undefined for
       // ordinary external-A2A calls — a no-op spread.
       ...(requestCtx?.oboCeiling ? { oboCeiling: requestCtx.oboCeiling } : {}),
+      // Host-minted org-write authority (cinatra#1939) forwarded OPAQUELY from
+      // the same frame so run-lifecycle handlers (e.g. agent_run_stop) can
+      // thread it. DARK until the run-status writer converts (wave 2 Commit B);
+      // the seam narrows it fail-closed. Mirrors the dashboards MCP forward.
+      ...(requestCtx?.orgWriteAuthority
+        ? { orgWriteAuthority: requestCtx.orgWriteAuthority }
+        : {}),
     };
   }
 
@@ -92,6 +99,14 @@ function buildActorFromMcpContext(): Record<string, unknown> {
     // `actor.oboCeiling` to confine the delegated run (W2/#1051). Undefined for
     // non-OBO model calls — a no-op spread.
     ...(requestCtx?.oboCeiling ? { oboCeiling: requestCtx.oboCeiling } : {}),
+    // Host-minted org-write authority (cinatra#1939) forwarded OPAQUELY from
+    // the same frame so run-lifecycle handlers (e.g. agent_run_stop) can thread
+    // it — chat/session carries a SESSION authority, agent_run OBO a RUN
+    // authority. DARK until the run-status writer converts (wave 2 Commit B);
+    // the seam narrows it fail-closed. Mirrors the dashboards MCP forward.
+    ...(requestCtx?.orgWriteAuthority
+      ? { orgWriteAuthority: requestCtx.orgWriteAuthority }
+      : {}),
   };
 }
 

@@ -87,6 +87,10 @@ vi.mock("@/lib/a2a-auth", () => ({
 }));
 
 vi.mock("@cinatra-ai/skills", () => ({
+  // cinatra#2090 S3: the declared-edge projection the route consults when a
+  // co-located bundle probe misses. Null here = "no declared skill edge",
+  // which keeps every case in this file on the co-located path.
+  resolveDeclaredSkillEdgeForExtensionDir: vi.fn(async () => null),
   getCustomSkillForCurrentUserAndAgent: vi.fn(async () => null),
   // A3 (cinatra#1363): the explicit-path lifecycle gate reads the catalog. An
   // empty catalog ⇒ the containment-test SKILL.md is not a custom skill ⇒

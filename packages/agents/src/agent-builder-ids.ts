@@ -58,8 +58,9 @@ export const TRIGGER_WAIT_STATUS_RENDERER_ID = id("trigger-wait-status");
 /** x-renderer id: the artifact-review REDIRECT card (cinatra#1796, epic #1620
  * S13). Emitted at an `input-required` interrupt whose gate carries the
  * `cinatra.artifactReview.targetsInput` marker — the host has PINNED the run's
- * immutable review targets and routes the human to the generic artifact-review
- * surface (`/artifacts/review/[runId]/[reviewTaskId]`, the #2014 chrome) instead
+ * immutable review targets and routes the human to the agent-run review surface
+ * (`/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]`, the #2014
+ * chrome mounted under the agent run per owner ruling 2026-07-25 (3)) instead
  * of the legacy in-panel reviewer envelope. The card is display-only: a link to
  * the pinned review surface, NO approve/continue affordance (the typed decision
  * is taken on the review surface and delivered by the resume-delivery worker), so

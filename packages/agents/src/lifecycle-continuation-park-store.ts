@@ -24,7 +24,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray, lte, sql } from "drizzle-orm";
 
 import { db } from "./db";
-import { lifecycleContinuationPark } from "./schema";
+import { artifactProducedOutbox, lifecycleContinuationPark } from "./schema";
 import {
   isStrandable,
   resolvePark,
@@ -253,16 +253,80 @@ export async function strandPark(parkId: string): Promise<void> {
   await db.delete(lifecycleContinuationPark).where(eq(lifecycleContinuationPark.id, parkId));
 }
 
-/** Ops visibility: the parks the sweeper fail-closed into a terminal
- * `policy_unresolved` block (their protected effect is blocked pending an
- * explicit policy decision). */
-export async function readPolicyUnresolvedParks(limit = 100): Promise<ParkRow[]> {
+/** Run-scoped park reader (cinatra#2066, C0). Lists EVERY checkpointed
+ * continuation park a run owns — parked, released, or policy_unresolved — so the
+ * canonical run-detail aggregate can surface a run's parked continuations
+ * alongside its gates. Ordered by creation for a stable rail projection. */
+export async function readContinuationParksForRun(runId: string): Promise<ParkRow[]> {
   const rows = await db
     .select()
     .from(lifecycleContinuationPark)
-    .where(eq(lifecycleContinuationPark.status, "policy_unresolved"))
-    .limit(Math.max(1, Math.min(limit, 500)));
+    .where(eq(lifecycleContinuationPark.runId, runId))
+    .orderBy(lifecycleContinuationPark.createdAt);
   return rows.map(toParkRow);
+}
+
+/** An ops row: the park PLUS the produced-event coordinates an operator needs to
+ * act on it (which artifact/revision, and which org owns it). The park table
+ * carries no org column — the org lives on the produced event the park is keyed
+ * to, so the ops read JOINS it (which is also what makes the surface org-scopable
+ * at all). */
+export interface PolicyUnresolvedParkRow extends ParkRow {
+  orgId: string | null;
+  artifactId: string | null;
+  representationRevisionId: string | null;
+}
+
+/**
+ * Ops visibility: the parks the sweeper fail-closed into a terminal
+ * `policy_unresolved` block (their protected effect is blocked pending an explicit
+ * policy decision). Consumed by the lifecycle-operations ops surface
+ * (`/configuration/lifecycle-operations`, cinatra#2047 D-7) — S0's continuation
+ * contract calls this state "ops-surfaced", and until #2047 nothing read it.
+ *
+ * `orgId` SCOPES the read through the joined produced event (a multi-tenant ops
+ * surface must never show another org's blocked effects); omitting it returns the
+ * unscoped set (tests / a single-org instance script).
+ */
+export async function readPolicyUnresolvedParks(opts?: {
+  orgId?: string;
+  limit?: number;
+}): Promise<PolicyUnresolvedParkRow[]> {
+  const limit = Math.max(1, Math.min(opts?.limit ?? 100, 500));
+  const rows = await db
+    .select({
+      park: lifecycleContinuationPark,
+      orgId: artifactProducedOutbox.orgId,
+      artifactId: artifactProducedOutbox.artifactId,
+      representationRevisionId: artifactProducedOutbox.representationRevisionId,
+    })
+    .from(lifecycleContinuationPark)
+    // LEFT join so an ORPHANED park (its produced event purged) still resolves in
+    // the UNSCOPED read, carrying null artifact coordinates. Note the org-scoped
+    // read necessarily drops those orphans — a park with no event has no org, and
+    // a multi-tenant surface cannot show a row it cannot attribute. That is the
+    // deliberate trade: the product surface is org-scoped; the unscoped read is
+    // the operator/script path that can still see an orphan.
+    .leftJoin(
+      artifactProducedOutbox,
+      eq(artifactProducedOutbox.eventId, lifecycleContinuationPark.eventId),
+    )
+    .where(
+      opts?.orgId
+        ? and(
+            eq(lifecycleContinuationPark.status, "policy_unresolved"),
+            eq(artifactProducedOutbox.orgId, opts.orgId),
+          )
+        : eq(lifecycleContinuationPark.status, "policy_unresolved"),
+    )
+    .orderBy(lifecycleContinuationPark.resolvedAt)
+    .limit(limit);
+  return rows.map((r) => ({
+    ...toParkRow(r.park),
+    orgId: r.orgId ?? null,
+    artifactId: r.artifactId ?? null,
+    representationRevisionId: r.representationRevisionId ?? null,
+  }));
 }
 
 function toParkRow(r: typeof lifecycleContinuationPark.$inferSelect): ParkRow {

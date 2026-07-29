@@ -259,7 +259,7 @@ describe.skipIf(!hasDb)("core__0017 org-anchor backfill — real Postgres (DB-ga
       );
     }
     await client.query(
-      `INSERT INTO public."team" (id, name, "organizationId", slug) VALUES ($1,'T1',$2,$3)`,
+      `INSERT INTO public."team" (id, name, "organizationId", slug, "createdAt") VALUES ($1,'T1',$2,$3, now())`,
       [team1, O1, `team-${t}`],
     );
     const member = async (org: string, user: string, role: string) =>

@@ -1,6 +1,6 @@
 import { eq, ne, desc, max, asc, and, or, ilike, sql, inArray, isNull, isNotNull, lt, type SQL } from "drizzle-orm";
 import type { AgentIOSpec } from "@cinatra-ai/objects";
-import { expireRunStream } from "@cinatra-ai/a2a";
+import { EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY } from "@cinatra-ai/sdk-extensions";
 import { listSavedNangoConnections } from "@/lib/nango-system";
 import { randomUUID } from "node:crypto";
 import semver from "semver";
@@ -19,16 +19,35 @@ import {
   excludeAssistantTemplates,
 } from "./a2a-publication-guard";
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
-import { dispatchRunWaitTransition } from "./run-wait-notifier"; // #1559/E9: zero-dep leaf seam
-import { LEGAL_TRANSITIONS, TERMINAL_RUN_STATUSES, CannotReassignAfterFirstRun, RunTransitionError, __LEGAL_TRANSITIONS__ } from "./run-status";
+import { TERMINAL_RUN_STATUSES, CannotReassignAfterFirstRun, RunTransitionError, __LEGAL_TRANSITIONS__ } from "./run-status";
 import type { AgentRunStatus } from "./run-status";
-// cinatra#1893 (epic #1883 A5): terminal-success-with-derivation-outbox seam extracted from store.ts (file-size ratchet #1893); transitionRunStatus delegates its `derivationOutbox` branch here (option type re-used in the unchanged public signature).
-import { transitionRunToCompletedWithDerivationOutbox, type DerivationOutboxCapture } from "./run-terminal-derivation-outbox";
+// cinatra#1940 P1 (Decision 4): bulkStop* thread a host-minted authority through
+// the canonical transitionRunStatus primitive (killing the direct-UPDATE bypass).
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
+// cinatra#1893 (epic #1883 A5): terminal-success-with-derivation-outbox seam
+// (file-size ratchet #1893). Its producer transitionRunStatus now lives in
+// ./run-transition; only the option TYPE is re-exported for `./store` importers.
+import type { DerivationOutboxCapture } from "./run-terminal-derivation-outbox";
 // Re-export the run-status state machine (extracted to ./run-status, #1037 P1
 // file-size ratchet) so store.ts's public surface is unchanged for existing
 // `./store` importers.
 export { TERMINAL_RUN_STATUSES, CannotReassignAfterFirstRun, RunTransitionError, __LEGAL_TRANSITIONS__ };
 export type { AgentRunStatus, DerivationOutboxCapture };
+// Re-export the run-transition primitives (transitionRunStatus + its two
+// CAS/meta helpers + the dispatch-fields type) extracted to ./run-transition
+// (cinatra#1939 wave 2 file-size ratchet). Grouped with the other seam
+// re-exports per the SSR export-hoisting note below. Public surface unchanged.
+import {
+  updateAgentRunStatus,
+  updateAgentRunStatusConditional,
+  transitionRunStatus,
+} from "./run-transition";
+export {
+  updateAgentRunStatus,
+  updateAgentRunStatusConditional,
+  transitionRunStatus,
+};
+export type { AgentRunDispatchFields } from "./run-transition";
 // Re-export the agent_run_hitl_prompts persistence seam (extracted to
 // ./agent-run-hitl-prompts, file-size ratchet #1803 repair). Grouped with the
 // other extracted-seam re-exports at the top: an interspersed `export … from`
@@ -167,6 +186,13 @@ export type AgentTemplateRecord = {
   // JSON-as-text persisted (matches compiledPlan/hitlScreens convention);
   // deserialized to GatedStep[] here so callers can read it as a typed array.
   gatedSteps: GatedStep[] | null;
+  // The compiled agent-manifest LIFECYCLE declaration (cinatra#2047 D-1),
+  // JSON-as-text exactly like gatedSteps. Read by the lifecycle policy lattice
+  // and by the `changes_requested` repair route. Null for templates whose
+  // manifest declares no lifecycle block. OPTIONAL in the type (like `origin`)
+  // so legacy fixture objects in tests remain valid; `deserializeTemplate`
+  // always populates it.
+  lifecycleConfig?: string | null;
   // template-level default AgentAuthPolicy. null = use
   // DEFAULT_AGENT_AUTH_POLICY from auth-policy.ts. Persisted as JSON-as-text
   // in agent_templates.agent_auth_policy.
@@ -189,6 +215,11 @@ export type AgentTemplateRecord = {
   // save time (see ./template-snapshot buildSnapshotFromTemplate) so pin runs
   // their environment from the pinned snapshot, never the live row.
   executionEnvironment?: unknown;
+  // Per-agent execution opt-out (epic #1705 D4), THREE-valued: null = inherit
+  // the instance/org posture, true = explicitly on, false = explicitly off.
+  // Optional in the type so legacy fixture objects stay valid;
+  // deserializeTemplate always populates it.
+  executionEnabled?: boolean | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -253,6 +284,13 @@ export type AgentRunRecord = {
   // column; re-derived + containment-checked at mint.
   oboCeiling: OboCeilingChain | null;
   dependentInstallId: string | null; // installed_extension row id this run executes AS (cinatra#1392 Gap 2)
+  // The CURRENT execution attempt id (set by the queued→running dispatch CAS,
+  // re-minted on every resume). Carried so the llm-bridge can stamp the
+  // attempt onto the agent-run MCP OBO token (`att` claim, cinatra#1939 S3) —
+  // the org-write run mint refuses a claimed attempt that no longer matches
+  // this column (stale-worker refusal). NULL pre-dispatch.
+  executionAttemptId: string | null;
+  humanPresent: boolean | null; // cinatra#2067 run-start presence discriminator; true only for interactive UI/chat runs, null/false headless
 };
 
 export type CreateAgentTemplateInput = {
@@ -283,6 +321,9 @@ export type CreateAgentTemplateInput = {
   // agent_source_compile on every recompile.
   triggerMode?: "full" | "start-only" | null;
   gatedSteps?: GatedStep[] | null;
+  // The compiled manifest LIFECYCLE declaration as JSON-as-text (cinatra#2047
+  // D-1). null clears it; omit to leave the column unchanged.
+  lifecycleConfig?: string | null;
   // template-level default policy; pass null or omit to leave unset
   // (resolves to DEFAULT_AGENT_AUTH_POLICY at read time).
   agentAuthPolicy?: AgentAuthPolicy | null;
@@ -351,6 +392,7 @@ export type CreateAgentRunInput = {
   // schema-only paths) omit; new MCP handlers populate it from the actor.
   delegatedActorSnapshot?: string | null;
   dependentInstallId?: string | null; // SERVER-ONLY trusted dispatch id (cinatra#1392 Gap 2) — never from client input
+  humanPresent?: boolean | null; // cinatra#2067 presence discriminator; true only from interactive UI/chat run-start callers
 };
 
 // ---------------------------------------------------------------------------
@@ -447,6 +489,9 @@ function serializeTemplate(input: CreateAgentTemplateInput) {
     // agent_source_compile on the first recompile.
     triggerMode: input.triggerMode ?? null,
     gatedSteps: input.gatedSteps ? JSON.stringify(input.gatedSteps) : null,
+    // The compiled manifest lifecycle declaration (already JSON-as-text from the
+    // install seed / builder). null on create when the manifest declares none.
+    lifecycleConfig: input.lifecycleConfig ?? null,
     // template-level AgentAuthPolicy as JSON-as-text. null = use
     // DEFAULT_AGENT_AUTH_POLICY at read time.
     agentAuthPolicy: input.agentAuthPolicy ? JSON.stringify(input.agentAuthPolicy) : null,
@@ -516,6 +561,9 @@ export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): Ag
                 : row.triggerMode === "start-only" ? "start-only"
                 : null) as "full" | "start-only" | null,
     gatedSteps: row.gatedSteps ? (JSON.parse(row.gatedSteps) as GatedStep[]) : null,
+    // Compiled manifest lifecycle stays JSON-as-text on the record; the lifecycle
+    // readers parse it fail-soft at their own call sites.
+    lifecycleConfig: row.lifecycleConfig ?? null,
     // JSON-as-text deserialization. Returns null when column is null.
     // fix: defensive parse — see parseAuthPolicySafe definition above.
     agentAuthPolicy: parseAuthPolicySafe(row.agentAuthPolicy ?? null),
@@ -529,9 +577,35 @@ export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): Ag
     // origin JSONB deserialized as-is; null for legacy rows.
     // Callers that need visibility should read origin?.visibility ?? 'public' (grandfather clause).
     origin: (row.origin as ExtensionOrigin | null | undefined) ?? null,
+    // Per-agent execution config (cinatra#1708 slice B). The declared
+    // environment stays RAW on the record — every consumer runs it through the
+    // fail-closed `parseExecutionEnvironment` (a JSON.parse here would have to
+    // choose a failure mode for malformed stored text, and "silently no
+    // environment" is exactly the outcome the fail-closed doctrine forbids).
+    // Unparseable text therefore surfaces as an INVALID declaration downstream,
+    // never as "no environment".
+    executionEnvironment: parseStoredExecutionEnvironment(row.executionEnvironment),
+    executionEnabled: row.executionEnabled ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+/**
+ * JSON-as-text → the RAW declared value handed to `parseExecutionEnvironment`.
+ * `null`/empty column ⇒ `null` ("no declared environment"). Text that is not
+ * JSON at all cannot be "no environment" (that would silently drop a
+ * declaration the author made), so it resolves to the sdk leaf's
+ * present-but-malformed POISON marker, which the parser rejects with a precise
+ * error at consumption — the same doctrine the manifest claim resolver uses.
+ */
+function parseStoredExecutionEnvironment(stored: string | null | undefined): unknown {
+  if (stored == null || stored.trim() === "") return null;
+  try {
+    return JSON.parse(stored) as unknown;
+  } catch {
+    return { [EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY]: true };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -861,6 +935,10 @@ async function _updateAgentTemplateImpl(
   // legacy template can be cleared back to null (e.g. on schema downgrade).
   // gatedSteps is JSON-stringified so the text column stays canonical.
   if (patch.triggerMode !== undefined) updates.triggerMode = patch.triggerMode ?? null;
+  // Compiled manifest lifecycle patch guard (cinatra#2047 D-1): a re-install must
+  // re-project the declaration (including CLEARING it when the new version drops
+  // the block), exactly as triggerMode does. Omit to leave the column unchanged.
+  if (patch.lifecycleConfig !== undefined) updates.lifecycleConfig = patch.lifecycleConfig ?? null;
   if (patch.gatedSteps !== undefined)
     updates.gatedSteps = patch.gatedSteps ? JSON.stringify(patch.gatedSteps) : null;
   // template-level AgentAuthPolicy patch handler. null clears the
@@ -1461,6 +1539,7 @@ export async function createAgentRun(
     // anchor → fails closed at mint).
     oboCeiling: oboCeilingJson,
     dependentInstallId: input.dependentInstallId ?? null, // server-only trusted id (cinatra#1392 Gap 2)
+    humanPresent: input.humanPresent ?? null, // cinatra#2067 presence discriminator
   } as const;
 
   // Fast path: no idempotency key → plain insert, legacy behavior unchanged.
@@ -1509,47 +1588,6 @@ export async function createAgentRun(
   }
 }
 
-export async function updateAgentRunStatus(
-  id: string,
-  status: string,
-  patch?: Partial<AgentRunRecord>,
-): Promise<void> {
-  // unified terminal-status detection via TERMINAL_RUN_STATUSES
-  // (defined below). This was once a local `terminalStatuses` array;
-  // unifying prevents drift if a new terminal state is ever added.
-  const isTerminal = TERMINAL_RUN_STATUSES.has(status as AgentRunStatus);
-  const updates: Partial<typeof agentRuns.$inferInsert> = { status };
-
-  if (isTerminal) {
-    updates.completedAt = new Date();
-  }
-
-  if (patch?.stepResults !== undefined) {
-    updates.stepResults = JSON.stringify(patch.stepResults);
-  }
-  if (patch?.error !== undefined) {
-    updates.error = patch.error;
-  }
-  if (patch?.startedAt !== undefined) {
-    updates.startedAt = patch.startedAt ?? undefined;
-  }
-
-  await db.update(agentRuns).set(updates).where(eq(agentRuns.id, id));
-
-  // centralized Redis Streams TTL cleanup. Every terminal
-  // transition (completed/failed/stopped) schedules a 1h EXPIRE on the
-  // per-run stream key so durable event logs are bounded. Fire-and-forget:
-  // a Redis outage must NEVER block terminal status propagation to callers.
-  // This is the SINGLE hook for all terminal paths in the agent-builder
-  // package — every worker (agentic-execution, execution, langgraph-
-  // execution, orchestrator-execution, agentic-resume, resume) and the
-  // MCP cancel handler funnel through this function, so new paths inherit
-  // TTL scheduling automatically without additional patches.
-  if (isTerminal) {
-    void expireRunStream(id).catch(() => { /* best-effort */ });
-  }
-}
-
 // ---------------------------------------------------------------------------
 // OTel trace ID setter.
 // Called by agentic-execution.ts  after a root span is started.
@@ -1563,141 +1601,6 @@ export async function updateAgentRunTraceId(
     .update(agentRuns)
     .set({ traceId })
     .where(eq(agentRuns.id, runId));
-}
-
-/**
- * Atomically transition an agent run's status from a specific expected
- * state to a new state. Returns true if exactly one row was updated
- * (i.e. the previous status matched), false otherwise.
- *
- * This is the compare-and-swap primitive that triggerAgentRun uses to
- * guarantee that two concurrent "Run" clicks cannot both enqueue a job:
- * only the first request whose UPDATE matches `pending_input` succeeds.
- */
-export async function updateAgentRunStatusConditional(
-  id: string,
-  expectedStatus: string,
-  nextStatus: string,
-  dispatch?: AgentRunDispatchFields,
-): Promise<boolean> {
-  // cinatra#1937: a queued→running CAS IS a dispatch — it stamps per-dispatch
-  // bookkeeping ATOMICALLY with the status flip at the deepest layer, so no
-  // caller can bypass it and `running` rows never carry stale attempt ids.
-  const isDispatchTransition = expectedStatus === "queued" && nextStatus === "running";
-  if (isDispatchTransition && !dispatch) {
-    throw new Error(
-      `updateAgentRunStatusConditional: queued→running for run ${id} requires dispatch fields (executionAttemptId; the deadline is computed in SQL)`,
-    );
-  }
-  // Inverse guard: dispatch bookkeeping belongs ONLY to the dispatch edge.
-  if (!isDispatchTransition && dispatch) {
-    throw new Error(
-      `updateAgentRunStatusConditional: dispatch fields supplied for non-dispatch transition ${expectedStatus}→${nextStatus} on run ${id}`,
-    );
-  }
-  const result = await db
-    .update(agentRuns)
-    .set({
-      status: nextStatus,
-      ...(dispatch
-        ? {
-            executionAttemptId: dispatch.attemptId,
-            // DB clock: the row's own timeout (COALESCE default 24h) from now().
-            executionDeadlineAt: sql`now() + make_interval(secs => COALESCE(${agentRuns.timeoutSeconds}, 86400))`,
-            humanWaitAttemptId: null, // #1938: a fresh dispatch drops any wait marker
-          }
-        : {}),
-      // cinatra#1938: durable in-attempt wait marker (rationale on the agent_runs
-      // column). running→pending_approval stamps the attempt id; else clears.
-      ...(nextStatus === "pending_approval"
-        ? { humanWaitAttemptId: expectedStatus === "running" ? sql`${agentRuns.executionAttemptId}` : null }
-        : {}),
-    })
-    .where(and(eq(agentRuns.id, id), eq(agentRuns.status, expectedStatus)))
-    .returning({ id: agentRuns.id });
-  return result.length === 1;
-}
-
-/** Per-dispatch bookkeeping stamped by the queued→running CAS (cinatra#1937). */
-export type AgentRunDispatchFields = {
-  /** Fresh per-dispatch id — mint with crypto.randomUUID() at each dispatch. */
-  attemptId: string;
-};
-
-// ---------------------------------------------------------------------------
-// canonical run-status transition primitive
-// ---------------------------------------------------------------------------
-//
-// transitionRunStatus is the single entry point for every agent_runs.status
-// change. It enforces:
-//   (1) the from→to edge is one of LEGAL_TRANSITIONS (illegal → throws);
-//   (2) the DB row is still in the expected `from` state (stale → throws);
-//   (3) terminal-state side-effects fire exactly once (delegates to
-//       updateAgentRunStatus, which owns expireRunStream in that helper).
-//
-// DO NOT call updateAgentRunStatusConditional directly from any other file.
-// DO NOT call updateAgentRunStatus for status CHANGES from any other file —
-// use transitionRunStatus. updateAgentRunStatus is still the correct call for
-// the narrow meta-only case handled by updateAgentRunMeta below.
-
-/**
- * single canonical entry point for agent_runs.status changes.
- *
- * @throws {RunTransitionError} code="illegal_transition" when (from, to) ∉ LEGAL_TRANSITIONS
- * @throws {RunTransitionError} code="stale_from_status" when CAS row-count is 0
- */
-export async function transitionRunStatus(
-  runId: string,
-  from: AgentRunStatus,
-  to: AgentRunStatus,
-  meta?: {
-    error?: string;
-    startedAt?: Date;
-    completedAt?: Date;
-    stepResults?: unknown[];
-    /** Flags the ONE genuine human-wait `→pending_input` (stop-run-hitl, #1058) so it notifies; every other `pending_input` reason leaves it unset. Not a DB column — only feeds the run-wait-notifier classification below. (The archive program's durable in-attempt marker is edge-derived on `→pending_approval` inside the CAS — cinatra#1938 — and deliberately independent of this flag: the #1058 wait fires pre-dispatch from `queued`, so it is parked, not in-flight.) */
-    humanWaitGate?: boolean;
-    /** REQUIRED on queued→running (cinatra#1937): per-dispatch bookkeeping stamped atomically with the CAS. The primitive below throws without it. */
-    dispatch?: AgentRunDispatchFields;
-    /** cinatra#1893 (epic #1883 A5): when present, delegate to transitionRunToCompletedWithDerivationOutbox — terminal CAS + final-output snapshot + derivation-outbox INSERT in ONE transaction (legal ONLY for `to === "completed"`). Absent for every other caller — the historical two-write path is unchanged. */
-    derivationOutbox?: DerivationOutboxCapture;
-  },
-): Promise<void> {
-  if (!LEGAL_TRANSITIONS.has(`${from}->${to}` as const)) {
-    throw new RunTransitionError({ code: "illegal_transition", runId, from, to });
-  }
-
-  // cinatra#1893: delegate the terminal-success-with-derivation-outbox path (atomic CAS + snapshot + outbox INSERT, then side-effects; asserts to==="completed"; legality checked above) to ./run-terminal-derivation-outbox.
-  if (meta?.derivationOutbox) {
-    await transitionRunToCompletedWithDerivationOutbox(runId, from, to, meta, meta.derivationOutbox);
-    return;
-  }
-
-  const won = await updateAgentRunStatusConditional(runId, from, to, meta?.dispatch);
-  if (!won) {
-    throw new RunTransitionError({ code: "stale_from_status", runId, from, to });
-  }
-  try {
-    // Delegate terminal-state side-effects + meta patching to
-    // updateAgentRunStatus. The CAS already wrote the status column; re-writing
-    // it here is a no-op that still runs the terminal-detection branch
-    // (expireRunStream) and meta-patch logic. The CONTROL keys (`dispatch` —
-    // written BY the CAS — and `humanWaitGate` — not a DB column) are stripped
-    // first: only genuine DB meta reaches the delegated write.
-    const { dispatch: _dispatch, humanWaitGate: _humanWaitGate, ...dbMeta } = meta ?? {};
-    const hasDelegatedMeta =
-      dbMeta.error !== undefined ||
-      dbMeta.startedAt !== undefined ||
-      dbMeta.completedAt !== undefined ||
-      dbMeta.stepResults !== undefined;
-    if (hasDelegatedMeta || TERMINAL_RUN_STATUSES.has(to)) {
-      await updateAgentRunStatus(runId, to, dbMeta as Partial<AgentRunRecord>);
-    }
-  } finally {
-    // Run human-wait notify (#1559/E9) in `finally` so a terminal clear still fires
-    // if the side-effect above throws (status CAS already committed). Best-effort no-op.
-    await dispatchRunWaitTransition({ runId, from, to, humanWaitGate: meta?.humanWaitGate === true });
-  }
 }
 
 /**
@@ -2100,57 +2003,106 @@ export type BulkStopResult = {
   total: number;
 };
 
-/** Stop all active runs matching the given IDs. Returns stopped/alreadyTerminal counts. */
-export async function bulkStopAgentRuns(runIds: string[]): Promise<BulkStopResult> {
-  if (runIds.length === 0) return { stopped: 0, alreadyTerminal: 0, total: 0 };
+// cinatra#1940 P1 (Decision 4/5): the FULL non-terminal status set bulk-stop
+// terminalizes — EXTENDED to also cover armed / pending_trigger / waiting_trigger
+// (every non-terminal status now has a legal ->stopped edge; Decision 5 added
+// pending_trigger->stopped), so bulk-stop no longer silently skips them (disclosed).
+const BULK_STOPPABLE_STATUSES: AgentRunStatus[] = [
+  "queued", "running", "pending_approval", "pending_input",
+  "armed", "pending_trigger", "waiting_trigger",
+];
 
-  const activeStatuses = ["queued", "running", "pending_approval", "pending_input"];
-  const rows = await db.select({ id: agentRuns.id, status: agentRuns.status })
-    .from(agentRuns)
-    .where(inArray(agentRuns.id, runIds));
-
-  const toStop = rows.filter((r) => activeStatuses.includes(r.status)).map((r) => r.id);
-  const alreadyTerminal = rows.length - toStop.length;
-
-  if (toStop.length > 0) {
-    await db.update(agentRuns)
-      .set({ status: "stopped", completedAt: new Date() })
-      .where(inArray(agentRuns.id, toStop));
-    // compatibility — fire expireRunStream for each stopped run so
-    // Redis Streams TTL cleanup applies to bulk-stopped runs the same as
-    // single-stop runs routed through updateAgentRunStatus.
-    for (const id of toStop) {
-      void expireRunStream(id).catch(() => { /* best-effort */ });
+/** Terminalize one run to "stopped" through the canonical, kernel-guarded
+ *  transition (cinatra#1940 P1 Decision 4 — no direct-UPDATE bypass). Returns
+ *  true iff a guarded drive terminalized the run.
+ *
+ *  A `stale_from_status` CAS means the row moved between our bulk read and the
+ *  CAS. It does NOT necessarily mean the run terminalized — it may have raced to
+ *  ANOTHER live status (e.g. queued→running, pending_trigger→armed). Counting
+ *  that as `alreadyTerminal` would let a "stop all" silently leave a running run
+ *  going (a regression vs the old blanket UPDATE). So on stale we
+ *  re-read the LIVE status and retry the guarded CAS from it while the row is
+ *  still ours and stoppable; we return false (→ alreadyTerminal) ONLY once the
+ *  row is genuinely terminal, gone, or another org's. Non-stale errors (illegal
+ *  edge, authority refusal) propagate. Retries are bounded — bulk stop is a rare
+ *  admin path and pathological churn gives up (reported alreadyTerminal). */
+async function stopRunOrSwallowStale(
+  row: { id: string; status: string },
+  authority: OrgWriteAuthority | undefined,
+): Promise<boolean> {
+  let from = row.status;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      await transitionRunStatus(row.id, from as AgentRunStatus, "stopped", undefined, authority);
+      return true;
+    } catch (err) {
+      if (!(err instanceof RunTransitionError && err.code === "stale_from_status")) throw err;
+      const [cur] = await db
+        .select({ status: agentRuns.status, orgId: agentRuns.orgId })
+        .from(agentRuns)
+        .where(eq(agentRuns.id, row.id));
+      // Gone, another org's, or genuinely terminal (terminal ∉ the stoppable
+      // set) ⇒ a real alreadyTerminal. Otherwise retry the guarded CAS from the
+      // fresh live status so a race to another live state is still stopped.
+      if (
+        !cur ||
+        cur.orgId !== authority?.orgId ||
+        !BULK_STOPPABLE_STATUSES.includes(cur.status as AgentRunStatus)
+      ) {
+        return false;
+      }
+      from = cur.status;
     }
   }
-
-  return { stopped: toStop.length, alreadyTerminal, total: rows.length };
+  return false;
 }
 
-/** Stop all active runs for a given template. Returns stopped/alreadyTerminal counts. */
-export async function bulkStopAgentRunsByTemplate(templateId: string): Promise<BulkStopResult> {
-  const activeStatuses = ["queued", "running", "pending_approval", "pending_input"];
-  const rows = await db.select({ id: agentRuns.id, status: agentRuns.status })
+/**
+ * Stop all active runs matching the given IDs (stopped/alreadyTerminal counts).
+ * cinatra#1940 P1 (Decision 4): per-run canonical transitions under the kernel
+ * guard with the threaded frame `authority` — no direct `db.update(agentRuns)`
+ * bypass; the terminal Redis-TTL hook fires POST-COMMIT inside the primitive
+ * (the old hand-rolled expireRunStream loop is gone).
+ */
+export async function bulkStopAgentRuns(
+  runIds: string[],
+  authority: OrgWriteAuthority | undefined,
+): Promise<BulkStopResult> {
+  if (runIds.length === 0) return { stopped: 0, alreadyTerminal: 0, total: 0 };
+  const rows = await db
+    .select({ id: agentRuns.id, status: agentRuns.status, orgId: agentRuns.orgId })
     .from(agentRuns)
-    .where(
-      and(
-        eq(agentRuns.templateId, templateId),
-        inArray(agentRuns.status, activeStatuses),
-      ),
-    );
-
-  if (rows.length === 0) return { stopped: 0, alreadyTerminal: 0, total: 0 };
-
-  const ids = rows.map((r) => r.id);
-  await db.update(agentRuns)
-    .set({ status: "stopped", completedAt: new Date() })
-    .where(inArray(agentRuns.id, ids));
-  // compatibility — fire expireRunStream for each stopped run.
-  for (const id of ids) {
-    void expireRunStream(id).catch(() => { /* best-effort */ });
+    .where(inArray(agentRuns.id, runIds));
+  const toStop = rows.filter((r) => BULK_STOPPABLE_STATUSES.includes(r.status as AgentRunStatus));
+  let stopped = 0;
+  let alreadyTerminal = rows.length - toStop.length;
+  for (const row of toStop) {
+    if (await stopRunOrSwallowStale(row, authority)) stopped += 1;
+    else alreadyTerminal += 1;
   }
+  return { stopped, alreadyTerminal, total: rows.length };
+}
 
-  return { stopped: rows.length, alreadyTerminal: 0, total: rows.length };
+/**
+ * Stop all active runs for a template (same canonical-transition rewrite as
+ * bulkStopAgentRuns; the SQL pre-filters to the stoppable set). cinatra#1940 P1.
+ */
+export async function bulkStopAgentRunsByTemplate(
+  templateId: string,
+  authority: OrgWriteAuthority | undefined,
+): Promise<BulkStopResult> {
+  const rows = await db
+    .select({ id: agentRuns.id, status: agentRuns.status, orgId: agentRuns.orgId })
+    .from(agentRuns)
+    .where(and(eq(agentRuns.templateId, templateId), inArray(agentRuns.status, BULK_STOPPABLE_STATUSES)));
+  if (rows.length === 0) return { stopped: 0, alreadyTerminal: 0, total: 0 };
+  let stopped = 0;
+  let alreadyTerminal = 0;
+  for (const row of rows) {
+    if (await stopRunOrSwallowStale(row, authority)) stopped += 1;
+    else alreadyTerminal += 1;
+  }
+  return { stopped, alreadyTerminal, total: rows.length };
 }
 
 /**
@@ -3074,21 +3026,12 @@ export async function resolveDefaultOrgId(): Promise<string | null> {
 // ---------------------------------------------------------------------------
 
 /**
- * create an agent_runs row in `pending_input` status with the
- * supplied (typically empty) inputParams. The dispatcher's setup-interrupt
- * loop emits AG-UI INTERRUPTs for any required schema fields
- * once the run is triggered. versionId is pinned to the latest snapshot so
- * the run stays consistent across template recompiles after creation.
- *
- * Replaces the legacy `createAgentRunForSetup` + `findAgentRunBySetupNonce`
- * pair. Idempotency was nonce-based and only mattered
- * for the wizard's per-step save loop, which no longer exists.
- *
- * Added `orgId` so callers can clone
- * the originating run's organization onto the pending row.
- * `orgId` is now required — every caller must resolve it before insert.
- * run-actions.ts + 1 in trigger-release-job.ts) now populates it, and the
- * underlying column is NOT NULL.
+ * Create an agent_runs row in `pending_input` status with the supplied
+ * (typically empty) inputParams. The dispatcher's setup-interrupt loop emits
+ * AG-UI INTERRUPTs for any required schema fields once the run is triggered.
+ * versionId is pinned to the latest snapshot so the run stays consistent across
+ * template recompiles. `orgId` is required (NOT NULL column) — every caller
+ * resolves it before insert.
  */
 export async function createAgentRunPendingInput(input: {
   templateId: string;
@@ -3099,6 +3042,7 @@ export async function createAgentRunPendingInput(input: {
   // runs inherit projectId from the same boundary as createAgentRun (chat
   // path / server action). Set NULL for non-project invocations.
   projectId?: string | null;
+  humanPresent?: boolean | null; // cinatra#2067 presence discriminator (interactive callers pass true)
 }): Promise<AgentRunRecord> {
   const id = randomUUID();
   const versionIdToPin = await readLatestAgentVersionIdForTemplate(input.templateId);
@@ -3128,6 +3072,7 @@ export async function createAgentRunPendingInput(input: {
     // the same project frame.
     projectId: input.projectId ?? null,
     oboCeiling: oboCeilingJson,
+    humanPresent: input.humanPresent ?? null, // cinatra#2067 presence discriminator
   });
   const created = await readAgentRunById(id);
   if (!created) throw new Error(`Failed to create pending_input agent run: ${id}`);

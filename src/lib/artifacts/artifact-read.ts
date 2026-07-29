@@ -8,6 +8,7 @@ import {
 import { SEMANTIC_ARTIFACT_OBJECT_TYPE } from "@cinatra-ai/artifacts";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
+import { artifactWriterWitnessExistsSql } from "./artifact-writer-witness";
 
 // Serve-side resolver. Tenant isolation is enforced HERE: a representation is
 // only resolvable when org_id + artifact_id + representation.id all match. Blob
@@ -93,12 +94,65 @@ WHERE rep.id = $1 AND rep.artifact_id = $2 AND rep.org_id = $3
     -- binding) keeps serving ONLY through its content snapshot above
     -- (cinatra#1430 claimant-isolation/redaction preserved), never its
     -- latest representation.
+    --
+    -- ...EXCEPT a representation THIS HOST'S ARTIFACT WRITER authored
+    -- (cinatra#2047 OBS-1). A4's not-claimed guard was written when the A3
+    -- writer minted NO binding, so "pack-typed AND claimed" could only mean a
+    -- TYPED-DATA row — a row with no bytes of its own, whose only legitimate
+    -- content is the policy-keyed object_content_snapshots representation #1430
+    -- mints from objects.data (that IS the claimant-isolation/redaction surface:
+    -- one claimant must not serve another claimant's snapshot of the SAME row
+    -- data). cinatra#1868 then made createSemanticArtifact compose the binding
+    -- reconcile into Tx2, so a genuine FILE artifact written on an org that
+    -- HOLDS the pack's claim now carries an eligible binding too — and this
+    -- guard stranded it: serve -> null, review target "revision-not-member",
+    -- typed changes-request BLOCKED on a tombstoned-base witness (the #2047
+    -- re-acceptance repro).
+    --
+    -- The admission is keyed to WRITER PROVENANCE OF THE EXACT REPRESENTATION,
+    -- never to caller-supplied data. SCOPE, stated exactly: the predicate admits
+    -- representations authored by a HOST ARTIFACT WRITER — createSemanticArtifact
+    -- (the artifact write CHOKE POINT the lifecycle contract names and every
+    -- materializer calls) and the two CMS capture writers, each emitting the
+    -- 'create' artifact_audit row carrying this representation_revision_id inside
+    -- the SAME transaction as the representation it describes. The table is
+    -- append-only and NO objects/MCP write path, route, extension DB port,
+    -- migration or trigger can reach it. It is a TRUST-BOUNDARY witness, not a
+    -- DB-enforced one: trusted server code or direct SQL could mint it, the same
+    -- trust boundary every server-only store already sits behind.
+    --
+    -- (An objects.data marker such as data.artifactType would NOT do:
+    -- objects_save/objects_update merge caller-supplied fields into objects.data,
+    -- so a claimed typed-DATA row could forge it and serve unredacted row content
+    -- — the codex round caught exactly that; the forgery control in
+    -- claimed-production-write-serve-review-2047.integration.test.ts pins it.)
+    --
+    -- Such a representation has NO snapshot policy to bypass: its bytes ARE its
+    -- authored content, not a rendering of the mutable object row, so admitting it
+    -- neither reads objects.data as content nor crosses a claimant boundary. A
+    -- typed-DATA row keeps the strict snapshot-only path unchanged.
+    --
+    -- The witness predicate is the SHARED one (artifact-writer-witness.ts), the
+    -- same fragment the context-candidate rule, the resolver and both
+    -- selection-finalizer statements test — a writer and a reader cannot drift
+    -- into "authored bytes no read path admits". The former gap here (the two CMS
+    -- capture writers minted form='file' representations WITHOUT the audit row,
+    -- so a future claim over either type would have stranded them) is CLOSED:
+    -- both now emit the witness from that same builder, inside their own capture
+    -- transaction.
     OR (
       o.type = ANY($5::text[])
-      AND NOT EXISTS (
-        SELECT 1 FROM "${schema}"."semantic_assertion" bnd
-        WHERE bnd.org_id = rep.org_id AND bnd.artifact_id = rep.artifact_id
-          AND bnd.assertion_basis = 'binding' AND bnd.eligibility = 'eligible'
+      AND (
+        NOT EXISTS (
+          SELECT 1 FROM "${schema}"."semantic_assertion" bnd
+          WHERE bnd.org_id = rep.org_id AND bnd.artifact_id = rep.artifact_id
+            AND bnd.assertion_basis = 'binding' AND bnd.eligibility = 'eligible'
+        )
+        OR ${artifactWriterWitnessExistsSql(schema, {
+          orgId: "rep.org_id",
+          artifactId: "rep.artifact_id",
+          representationRevisionId: "rep.id",
+        })}
       )
     )
   )

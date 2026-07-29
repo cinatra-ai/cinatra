@@ -79,6 +79,26 @@ export type AgentRunMcpActor = {
    * an un-ceilinged OBO actor.
    */
   oboCeiling: OboCeilingChain;
+  /**
+   * The signed connector-instance pin (cinatra#2017 S2 / D6 / B1). OPTIONAL: an
+   * absent pin ⇒ org scope (the governed invoker then requires an explicit
+   * `instanceId`). When present it binds the token to ONE connector instance —
+   * the invoker asserts `pin.connectorKey === boundConnectorKey` and derives
+   * `effectiveInstanceId = input.instanceId ?? pin.instanceId` (§1.2 step 0). A
+   * PRESENT-but-MALFORMED pin fails the WHOLE token closed at verify (matching the
+   * `cl` treatment) — never an un-pinned reconstruction of a pinned token.
+   */
+  connectorInstancePin?: { connectorKey: string; instanceId: string };
+  /**
+   * The run's CURRENT execution attempt id at mint time (the `att` claim,
+   * cinatra#1939 S3) — the stale-worker witness for the org-write run
+   * authority: the mint refuses when this no longer matches the row's
+   * current attempt. OPTIONAL for token validity (tokens minted before this
+   * claim existed stay verifiable through their TTL), but the run authority
+   * NEVER mints without it — absence just means an unstamped frame, and
+   * org-write-seam writers refuse. Never widens anything.
+   */
+  executionAttemptId?: string;
 };
 
 type AgentRunMcpActorTokenClaims = {
@@ -89,12 +109,31 @@ type AgentRunMcpActorTokenClaims = {
   prole: AgentRunMcpPlatformRole;
   /** Scope-ceiling chain claim — validated on verify; missing → fail closed. */
   cl: OboCeilingChain;
+  /** Compact signed connector-instance pin (cinatra#2017 S2). OPTIONAL (absent ⇒
+   * org scope); present-but-malformed fails the whole token closed at verify. */
+  pin?: { ck: string; iid: string };
+  /** Current execution attempt id (cinatra#1939 S3) — optional; see
+   *  `AgentRunMcpActor.executionAttemptId` for the tolerance contract. */
+  att?: string;
   scope: "mcp:connect";
   aud: string;
   iss: string;
   iat: number;
   exp: number;
 };
+
+/** A present pin claim is valid only when both `ck` (connectorKey) and `iid`
+ * (instanceId) are non-blank strings; anything else is malformed → fail closed. */
+function isValidPinClaim(value: unknown): value is { ck: string; iid: string } {
+  if (!value || typeof value !== "object") return false;
+  const p = value as Record<string, unknown>;
+  return (
+    typeof p.ck === "string" &&
+    p.ck.trim().length > 0 &&
+    typeof p.iid === "string" &&
+    p.iid.trim().length > 0
+  );
+}
 
 export const AGENT_RUN_MCP_TOKEN_TYPE = "cinatra.agent-run.mcp-obo";
 const TOKEN_SCOPE = "mcp:connect";
@@ -151,6 +190,17 @@ export function issueAgentRunMcpActorToken(input: AgentRunMcpActor): string {
     run: input.runId,
     prole: input.platformRole,
     cl: input.oboCeiling,
+    // Compact connector-instance pin (cinatra#2017 S2) — minted only when the
+    // dispatch pins the run to one instance; absent ⇒ org scope.
+    ...(input.connectorInstancePin
+      ? {
+          pin: {
+            ck: input.connectorInstancePin.connectorKey,
+            iid: input.connectorInstancePin.instanceId,
+          },
+        }
+      : {}),
+    ...(input.executionAttemptId ? { att: input.executionAttemptId } : {}),
     scope: TOKEN_SCOPE,
     aud: issueAudience(),
     iss: issueIssuer(),
@@ -241,6 +291,11 @@ export function verifyAgentRunMcpActorToken(input: {
     // actor is not reconstructed, so the caller falls back to the machine token
     // (denied at the boundary), never an un-ceilinged agent-run OBO actor.
     if (!isOboCeilingChain(payload.cl)) return null;
+    // Connector-instance pin (cinatra#2017 S2 / B1): OPTIONAL (absent ⇒ org
+    // scope). A PRESENT-but-MALFORMED pin fails the WHOLE token closed — never
+    // reconstruct a pinned token as un-pinned (matching the `cl` treatment).
+    const pinClaim: unknown = payload.pin;
+    if (pinClaim !== undefined && !isValidPinClaim(pinClaim)) return null;
     if (typeof payload.aud !== "string" || payload.aud !== expectedAudience) {
       return null;
     }
@@ -262,6 +317,22 @@ export function verifyAgentRunMcpActorToken(input: {
       runId: payload.run,
       platformRole: payload.prole,
       oboCeiling: payload.cl,
+      // Surface the validated pin (cinatra#2017 S2); absent ⇒ no pin (org scope).
+      ...(isValidPinClaim(pinClaim)
+        ? {
+            connectorInstancePin: {
+              connectorKey: pinClaim.ck,
+              instanceId: pinClaim.iid,
+            },
+          }
+        : {}),
+      // `att` is tolerated-absent (pre-claim tokens stay valid through their
+      // TTL); a non-string/empty value reads as absent — the org-write run
+      // mint then simply never fires for this frame. Fail-closed downstream,
+      // never here.
+      ...(typeof payload.att === "string" && payload.att.length > 0
+        ? { executionAttemptId: payload.att }
+        : {}),
     };
   } catch {
     return null;

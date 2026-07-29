@@ -24,7 +24,18 @@ vi.mock("@cinatra-ai/skills", () => {
     pkgDirName: string,
     slug: string,
   ): { packageName: string; skillId: string } => {
-    if (pkgDirName === "assistant-skills") {
+    // Mirrors the canonical exact-pair allowlist (the five injectable chat
+    // successor packages, cinatra#2090 S3 fold): canonical dir basename AND
+    // manifest name equal to `@cinatra-ai/<dir>` — dir-basename matching
+    // alone was retired with the assistant-skills pack.
+    const chatNamespaceDirs = new Set([
+      "chat-assistant-core-skill",
+      "extension-authoring-skill",
+      "automation-authoring-skill",
+      "company-research-skill",
+      "blog-content-skill",
+    ]);
+    if (chatNamespaceDirs.has(pkgDirName) && pkgName === `@cinatra-ai/${pkgDirName}`) {
       return { packageName: "@cinatra-ai/chat", skillId: `@cinatra-ai/chat:${slug}` };
     }
     const packageName = pkgName.startsWith("@") ? pkgName : `@${pkgName}`;
@@ -152,9 +163,9 @@ describe("loadOnePackage — multi-scope discovery (anthropics carve-out)", () =
   });
 
   it("registers an @cinatra-ai/<slug>-skills bundle under its own packageName (parity)", async () => {
-    // Use a fixture name that doesn't collide with the assistant-skills
-    // `@cinatra-ai/chat:*` legacy-namespace carve-out (see
-    // extensions-dev-watcher.ts:39 — only `assistant-skills` is remapped).
+    // Use a fixture name that doesn't collide with the chat successor
+    // packages' `@cinatra-ai/chat:*` namespace carve-out (only the exact
+    // allowlisted successor packages are remapped).
     const pkgDir = writePkg(
       "cinatra-ai",
       "fixture-vendor-scope-skills",

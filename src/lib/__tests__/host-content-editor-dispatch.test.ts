@@ -102,8 +102,9 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
     expect(sent.postId).toBe("7");
 
     // Lifecycle: queued→running before dispatch, running→completed after.
-    expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "queued", "running", expect.anything());
-    expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "running", "completed", expect.anything());
+    // cinatra#1939 wave 2: the trailing arg is the D-HOST system dispatch authority.
+    expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "queued", "running", expect.anything(), expect.anything());
+    expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "running", "completed", expect.anything(), expect.anything());
 
     expect(reply).toBe('{"postId":"7"}');
   });
@@ -210,7 +211,7 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
       }),
     ).rejects.toThrow("a2a boom");
     const runArg = createAgentRun.mock.calls[0][0] as { id: string };
-    expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "running", "failed", expect.anything());
+    expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "running", "failed", expect.anything(), expect.anything());
   });
 
   it("marks the carrier run queued→failed (never orphaned in queued) when client creation throws", async () => {
@@ -230,8 +231,8 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
     const runArg = createAgentRun.mock.calls[0][0] as { id: string };
     // The failure happens before queued→running, so the carrier run transitions
     // FROM queued (not running) to failed — and never reaches sendTask.
-    expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "queued", "failed", expect.anything());
-    expect(transitionRunStatus).not.toHaveBeenCalledWith(runArg.id, "queued", "running", expect.anything());
+    expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "queued", "failed", expect.anything(), expect.anything());
+    expect(transitionRunStatus).not.toHaveBeenCalledWith(runArg.id, "queued", "running", expect.anything(), expect.anything());
     expect(sendTask).not.toHaveBeenCalled();
   });
 
@@ -247,7 +248,7 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
     ).rejects.toThrow("token mint boom");
 
     const runArg = createAgentRun.mock.calls[0][0] as { id: string };
-    expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "queued", "failed", expect.anything());
+    expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "queued", "failed", expect.anything(), expect.anything());
     expect(createExternalA2AClient).not.toHaveBeenCalled();
   });
 });

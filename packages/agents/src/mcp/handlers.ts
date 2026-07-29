@@ -284,7 +284,17 @@ import { assertProjectReadAccess } from "@/lib/sealed-room";
 // `agent_run_move_with_outputs` cascade.
 import { assertProjectWritable } from "@/lib/project-writable";
 import { runResourceProjectMove, runAgentRunMoveWithOutputs } from "@/lib/resource-project-move";
-import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
+import { getAuthSession, isPlatformAdmin, resolveOrgRoleForUser } from "@/lib/auth-session";
+// cinatra#1939 wave 2: run_stop threads the FORWARDED FRAME authority (§2e —
+// chat/session SESSION auth, or agent_run OBO RUN auth self-bound to its own
+// run); resume grounds on the RESUMING PRINCIPAL (§2d D-OBO-RESUME), minting a
+// member session AFTER the resume handler's own enforceRunAccess re-authorization
+// — NEVER the frame's RUN authority (a lifecycle-driving resume must never be
+// grounded by a run's own OBO). Owner ruling 2026-07-26 (ruling 2) DROPPED cross-org
+// run management: a resuming principal who is NOT a member of the run's org fails
+// closed (Run access denied) instead of minting a non-member run-management authority.
+import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import {
   readTeamsForUser,
   readProjectGrantsForUser,
@@ -1965,6 +1975,29 @@ async function handleAgentBuilderRunResume(
     // includes an explicit response payload.
     await enforceRunAccess(runWithCoOwners, actor, "approveHitl", roles);
 
+    // §2d D-OBO-RESUME: resume is a lifecycle-DRIVING action (it can move a run
+    // → pending_approval = run.execute), which a run's OWN OBO/RUN authority must
+    // NEVER hold. Ground the WayFlow resume below on the RESUMING PRINCIPAL —
+    // re-authorized just above via enforceRunAccess execute + approveHitl —
+    // resolved from the frame's delegating user (a member SESSION authority),
+    // NEVER request.actor.orgWriteAuthority (which for an agent_run OBO frame is a
+    // RUN authority). §8.1 (verified against the MCP transport,
+    // src/lib/mcp-server.ts): the agent_run OBO token ALWAYS carries the run
+    // owner's identity (userId), so a pure autonomous no-principal resume does NOT
+    // exist as a live path — this refusal is the explicit defense-in-depth
+    // contract (an autonomous run can never self-drive its lifecycle).
+    if (!actor.userId) {
+      return { error: "Resume requires a delegating principal; an autonomous run cannot self-drive its own lifecycle." };
+    }
+    // Owner ruling 2026-07-26 (ruling 2): cross-org run management is unsupported.
+    // A resuming principal who is authorized on the run but NOT a member of the
+    // run's org fails closed here rather than driving the resume.
+    const resumeRole = await resolveOrgRoleForUser(run.orgId, actor.userId);
+    if (resumeRole === undefined) {
+      return { error: "Run access denied." };
+    }
+    const resumeAuthority: OrgWriteAuthority = sessionAuthorityFromResolvedRole(run.orgId, resumeRole);
+
     // Detect explicit hitl response payload in the input. If a typed field
     // (e.g. hitlResponse) is added, branch on its presence here.
     // For now we look for any non-undefined hitl* field beyond the
@@ -2086,7 +2119,7 @@ async function handleAgentBuilderRunResume(
       // because run.a2aTaskId was set, which only happens when the run paused at
       // an A2A gate (status === "pending_approval").
       const { handleWayflowTaskState } = await import("../execution");
-      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task });
+      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority: resumeAuthority });
 
       const finalState = task.status?.state;
       return {
@@ -2210,7 +2243,15 @@ async function handleAgentBuilderRunStop(
     if (["stopped", "completed", "failed"].includes(run.status)) {
       return { runId, status: run.status, message: `Run already in terminal state: ${run.status}` };
     }
-    await transitionRunStatus(runId, run.status as AgentRunStatus, "stopped").catch((err) => {
+    // §2e: run_stop USES the forwarded frame authority (buildActorFromMcpContext
+    // forwards McpRequestContext.orgWriteAuthority). chat/session → a SESSION
+    // authority (run.complete = member); agent_run OBO → a RUN authority
+    // (run.complete only, self-bound via §1a) — so an OBO agent can stop/complete
+    // ITS OWN run but never another. →stopped is terminal ⇒ run.complete. Absent
+    // (e.g. public_site_widget, which does not call run_stop) ⇒ the seam
+    // fail-closes with AgentRunOrgWriteAuthorityError("missing").
+    const frameAuthority = (request.actor as { orgWriteAuthority?: OrgWriteAuthority }).orgWriteAuthority;
+    await transitionRunStatus(runId, run.status as AgentRunStatus, "stopped", undefined, frameAuthority).catch((err) => {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
         // Race: status changed between our read and the CAS. Safe to ignore — the
         // run is terminal either way by the time this path unwinds.
@@ -2271,6 +2312,12 @@ async function handleAgentBuilderRunsStop(
     }
     const actor = request.actor as PrimitiveActorContext;
     const roles = await resolveRoleHintsFromSession();
+    // cinatra#1940 P1 (Decision 4): thread the MCP frame authority into the
+    // canonical transitionRunStatus primitive the bulk stop now loops through
+    // (the run_stop §2e pattern). chat/session frames carry a SESSION authority
+    // (no runId → may drive every allowed run); a frame lacking one fail-closes
+    // per-run at the seam. Per-run/template authz was already enforced above.
+    const frameAuthority = (request.actor as { orgWriteAuthority?: OrgWriteAuthority }).orgWriteAuthority;
 
     let result: { stopped: number; alreadyTerminal: number; total: number };
     if (hasRunIds) {
@@ -2306,7 +2353,7 @@ async function handleAgentBuilderRunsStop(
         }
       }
       if (allowedIds.length === 0) return { stopped: 0, alreadyTerminal: 0, total: 0 };
-      result = await bulkStopAgentRuns(allowedIds);
+      result = await bulkStopAgentRuns(allowedIds, frameAuthority);
     } else {
       // Template path: verify the template is owned by the actor's org (or
       // isAdmin) before issuing the bulk stop.
@@ -2315,7 +2362,7 @@ async function handleAgentBuilderRunsStop(
       if (!isAdmin && tpl.orgId !== organizationId) {
         return { error: `Template not found: ${templateId}` }; // hide-existence
       }
-      result = await bulkStopAgentRunsByTemplate(templateId!);
+      result = await bulkStopAgentRunsByTemplate(templateId!, frameAuthority);
     }
 
     void logAuditEvent({

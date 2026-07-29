@@ -29,7 +29,8 @@
 // committed extension universe. Without the flag (local `make setup`, the
 // floating-HEAD canary) it tracks branch tips as before.
 import path from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import process from "node:process";
 import {
   syncCinatraDevExtensions,
@@ -91,6 +92,73 @@ const present = expected - missing.length;
 if (missing.length > 0) {
   console.error(
     `[ci sync-dev-extensions] FAIL: ${present}/${expected} extension repos present after sync. Missing:\n  - ${missing.join("\n  - ")}`,
+  );
+  process.exit(1);
+}
+
+// Prune-on-sync for REMOVED `cinatra.devExtensions` entries (cinatra#2090 S3).
+// The sync above materializes declared repos but never deletes one that left
+// the manifest — and both the skill resolver scan and the dev watcher walk
+// every on-disk extension dir, so a stale checkout (e.g. the retired
+// assistant-skills pack after its consolidation) keeps re-registering skills
+// that no declared package ships. Fail-closed posture:
+//   - a stale dir that is a CLEAN git checkout is removed (it is reproducible
+//     from its remote — nothing local is lost);
+//   - a stale dir with LOCAL modifications (or that is not a git checkout at
+//     all) FAILS the sync by name, so a developer's in-progress work is never
+//     deleted silently and a non-reproducible tree never survives unnoticed.
+const declaredDirs = new Set(
+  Object.keys(config).map((name) => {
+    const m = String(name).match(/^@([^/]+)\/(.+)$/);
+    return m ? path.join(m[1], m[2]) : null;
+  }).filter(Boolean),
+);
+const stale = [];
+const pruned = [];
+if (existsSync(extRoot)) {
+  for (const vendor of readdirSync(extRoot, { withFileTypes: true })) {
+    if (!vendor.isDirectory() || vendor.name.startsWith(".") || vendor.name === "node_modules") continue;
+    const vendorDir = path.join(extRoot, vendor.name);
+    for (const pkg of readdirSync(vendorDir, { withFileTypes: true })) {
+      if (!pkg.isDirectory() || pkg.name.startsWith(".") || pkg.name === "node_modules") continue;
+      if (declaredDirs.has(path.join(vendor.name, pkg.name))) continue;
+      const pkgDir = path.join(vendorDir, pkg.name);
+      let clean = false;
+      try {
+        // The dir must be its OWN git checkout: `git -C <non-repo-dir>`
+        // discovers the PARENT repository (the cinatra worktree), whose clean
+        // status must never vouch for deleting a child that is not a repo at
+        // all. Require the discovered toplevel to BE the extension dir.
+        const toplevel = execFileSync("git", ["-C", pkgDir, "rev-parse", "--show-toplevel"], {
+          encoding: "utf8",
+          timeout: 60_000,
+        }).trim();
+        if (realpathSync(toplevel) === realpathSync(pkgDir)) {
+          const status = execFileSync("git", ["-C", pkgDir, "status", "--porcelain"], {
+            encoding: "utf8",
+            timeout: 60_000,
+          });
+          clean = status.trim().length === 0;
+        }
+      } catch {
+        clean = false; // not a git checkout / git failed → never auto-delete
+      }
+      if (clean) {
+        rmSync(pkgDir, { recursive: true, force: true });
+        pruned.push(path.join(vendor.name, pkg.name));
+      } else {
+        stale.push(path.join(vendor.name, pkg.name));
+      }
+    }
+  }
+}
+for (const p of pruned) {
+  console.log(`[ci sync-dev-extensions] pruned stale extension checkout extensions/${p} (no longer in cinatra.devExtensions).`);
+}
+if (stale.length > 0) {
+  console.error(
+    `[ci sync-dev-extensions] FAIL: stale extension dir(s) not in cinatra.devExtensions and NOT a clean git checkout — ` +
+      `remove them manually (they would keep re-registering undeclared skills):\n  - ${stale.map((s) => `extensions/${s}`).join("\n  - ")}`,
   );
   process.exit(1);
 }

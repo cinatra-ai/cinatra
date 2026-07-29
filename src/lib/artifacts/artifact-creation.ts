@@ -18,6 +18,7 @@ import { mimeAcceptedByAccepts } from "./upload-artifact-type-map";
 type ResolvedObjectTypeDef = ReturnType<typeof objectTypeRegistry.resolve>;
 import { createLocalDiskBlobStore } from "./local-disk-blob-store";
 import { deriveSubstanceKey } from "./resource-store";
+import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 import { buildObjectsWithOutboxQuery } from "@/lib/objects-store";
 import { maybeBuildProducedEventInsertOp } from "@/lib/lifecycle/lifecycle-emit";
 import {
@@ -1015,24 +1016,23 @@ VALUES ($1::text, $2::text, $3::text, $4::text, 1, 'file', $5::text, $6::text, $
               : null,
           ],
         },
-        // Audit row — representation_revision_id is the representation pin.
-        {
-          text: `INSERT INTO "${schema}"."artifact_audit"
-  (id, org_id, artifact_id, representation_revision_id, action, actor, detail)
-VALUES (gen_random_uuid()::text, $1::text, $2::text, $3::text, 'create', $4::text, $5::jsonb)`,
-          values: [
-            input.orgId,
-            artifactId,
-            representationRevisionId,
-            input.createdBy ?? null,
-            JSON.stringify({
-              mime: authoritative.mime,
-              size: authoritative.sizeBytes,
-              originKind,
-              dedupe: authoritative.isDedupe,
-            }),
-          ],
-        },
+        // The WRITER PROVENANCE WITNESS — the append-only `artifact_audit`
+        // 'create' row whose `representation_revision_id` is the representation
+        // pin above. Emitted from the shared builder so this writer and the two
+        // CMS capture writers mint the IDENTICAL row every claimed-row read gate
+        // tests for (see artifact-writer-witness.ts).
+        buildArtifactWriterWitnessOp(schema, {
+          orgId: input.orgId,
+          artifactId,
+          representationRevisionId,
+          actor: input.createdBy ?? null,
+          detail: {
+            mime: authoritative.mime,
+            size: authoritative.sizeBytes,
+            originKind,
+            dedupe: authoritative.isDedupe,
+          },
+        }),
         // Producer assertion ops spliced HERE (after audit). Empty when there
         // is no trusted producer. The default-floor rebalance INSERT/UPDATE that
         // used to follow is RETIRED (epic #1785 wave A3) — the row carries its
@@ -1079,9 +1079,11 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
         // ArtifactProduced event, written in THIS same held-lock tx as the
         // artifact/representation so review is driven by a durable, same-tx
         // idempotent event (deterministic event_id → ON CONFLICT DO NOTHING).
-        // FENCED default-OFF: `maybeBuildProducedEventInsertOp` returns null when
-        // the S1 activation fence is off, so this splices NOTHING and the tx is
-        // byte-identical to origin/main. Appended LAST so every fixed result
+        // SWITCHED default-ON (cinatra#2047, ruling 2026-07-27): the op is
+        // spliced unless a deployment sets
+        // `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`, in which case
+        // `maybeBuildProducedEventInsertOp` returns null, this splices NOTHING and
+        // the tx is byte-identical to the pre-flip one. Appended LAST so every fixed result
         // offset above (PRODUCER_OPS_OFFSET + the producer splice) is untouched;
         // its result is never parsed. `originKind` is the physical
         // ArtifactOriginKind — the emitter maps it onto the lattice axis.

@@ -11,6 +11,18 @@ export default defineConfig({
   resolve: {
     alias: [
       { find: "server-only", replacement: serverOnlyStub },
+      // cinatra#2088 — `src/lib/skill-bundle-store.ts` (reachable from
+      // `src/lib/database.ts`, which this project's MCP-cube tests load) needs
+      // four PURE helpers from @cinatra-ai/llm: the bundle digest, the one-hop
+      // router lint, the bundled-path normalizer, and the router path constant.
+      // Resolving the package BARREL here drags its entire graph in and breaks
+      // module resolution for unrelated packages; nothing in packages/dashboards
+      // uses the barrel itself, so map it to the leaf that actually holds those
+      // helpers (node:crypto only). Must precede the generic patterns below.
+      {
+        find: /^@cinatra-ai\/llm$/,
+        replacement: path.join(root, "packages/llm/src/tools/anthropic-skill-content-hash.ts"),
+      },
       { find: /^@cinatra\/mcp-server$/, replacement: mcpServerStub },
       // Stub `@/lib/better-auth-db` before the generic `@/` pattern below;
       // otherwise the real module eagerly opens a Postgres pool and chains
@@ -66,6 +78,19 @@ export default defineConfig({
       {
         find: /^@cinatra-ai\/sdk-dashboard$/,
         replacement: path.join(root, "packages/sdk-dashboard/src/index.ts"),
+      },
+      // cinatra#1939 S3: ROOT-side files reached from this package (e.g.
+      // @/lib/dashboards/dashboard-actor → @/lib/org-write/authority) import
+      // the kernel, but the ROOT has no node_modules link for it — alias both
+      // entry points to the workspace source (same realpath the package-side
+      // symlink resolves to, so class identity/instanceof stays intact).
+      {
+        find: "@cinatra-ai/org-write-kernel/testing",
+        replacement: path.join(root, "packages/org-write-kernel/src/testing.ts"),
+      },
+      {
+        find: /^@cinatra-ai\/org-write-kernel$/,
+        replacement: path.join(root, "packages/org-write-kernel/src/index.ts"),
       },
     ],
   },

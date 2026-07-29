@@ -5,6 +5,8 @@
  * unforgeability (the WeakSet claim, not the type brand).
  */
 import { describe, it, expect } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
+import type { SQL } from "drizzle-orm";
 import {
   ORG_WRITE_CAPABILITIES,
   ORG_LIFECYCLE_STATES,
@@ -18,8 +20,15 @@ import {
   isLiveAttempt,
   liveAttemptSqlCondition,
   assertPermitUsable,
+  guardOrgMutation,
+  guardOrgLifecycleMutation,
+  OrgWriteRefusedError,
   OrgWritePermitError,
   type OrgWritePermit,
+  type OrgWriteAuthority,
+  type OrgWriteCapability,
+  type OrgWriteDb,
+  type OrgWriteTx,
   type LiveAttemptRow,
 } from "../src/index";
 import { mintPermit, revokePermit } from "../src/permit";
@@ -49,19 +58,51 @@ describe("capability table (#1938)", () => {
     }
   });
 
-  it("archived denies everything except lease-gated completion and lifecycle exit", () => {
+  it("archived denies everything except lease-gated completion and lifecycle exits", () => {
     expect(ruleFor("archived", "content.write")).toBe("deny");
     expect(ruleFor("archived", "run.execute")).toBe("deny");
     expect(ruleFor("archived", "membership.write")).toBe("deny");
     expect(ruleFor("archived", "org.settings")).toBe("deny");
     expect(ruleFor("archived", "run.complete")).toBe("lease-gated");
     expect(ruleFor("archived", "org.lifecycle")).toBe("allow");
+    expect(ruleFor("archived", "org.delete")).toBe("allow");
   });
 
-  it("active allows every capability", () => {
+  it("active allows every capability except org.delete and run.lease-expire (both archived-only, #1939/#1940)", () => {
+    const activeDenies = new Set<string>(["org.delete", "run.lease-expire"]);
     for (const capability of ORG_WRITE_CAPABILITIES) {
-      expect(ruleFor("active", capability)).toBe("allow");
+      expect(ruleFor("active", capability)).toBe(
+        activeDenies.has(capability) ? "deny" : "allow",
+      );
     }
+  });
+
+  it("org.delete is archived-only and distinct from org.lifecycle (#1939 wave 3)", () => {
+    // The whole reason org.delete is a SEPARATE capability: org.lifecycle is
+    // active-allow (it authorizes archiving an active org), so one capability
+    // could never express "archive active: yes, delete active: no".
+    expect(ruleFor("active", "org.delete")).toBe("deny");
+    expect(ruleFor("archived", "org.delete")).toBe("allow");
+    expect(ruleFor("active", "org.lifecycle")).toBe("allow");
+    expect(ruleFor("active", "org.delete")).not.toBe(
+      ruleFor("active", "org.lifecycle"),
+    );
+  });
+
+  it("run.lease-expire is a system-only, fence-only settle capability: active deny / archived allow (#1940)", () => {
+    // Leases exist ONLY for archived orgs (minted by the archive snapshot,
+    // killed on the unarchive epoch bump), so an active-org lease-expiry write
+    // is a bug/forgery ⇒ deny (fail-closed). Archived ⇒ allow — NOT lease-gated:
+    // the settled lease is EXPIRED, so the lease-gated machinery cannot admit
+    // it; the finalizer re-verifies the expired row FOR UPDATE in-fence.
+    expect(ruleFor("active", "run.lease-expire")).toBe("deny");
+    expect(ruleFor("archived", "run.lease-expire")).toBe("allow");
+    // Distinct from run.complete's archived cell (lease-gated) BY DESIGN — the
+    // whole reason a new capability exists rather than reusing run.complete.
+    expect(ruleFor("archived", "run.complete")).toBe("lease-gated");
+    expect(ruleFor("archived", "run.lease-expire")).not.toBe(
+      ruleFor("archived", "run.complete"),
+    );
   });
 
   it("derives state from the archive marker", () => {
@@ -173,6 +214,54 @@ describe("live-attempt predicate (#1938, shared by leases AND authority)", () =>
   });
 });
 
+// ---------------------------------------------------------------------------
+// cinatra#1940 P1 (Decision 5) — the live-attempt predicate stays byte-identical
+// while `pending_trigger` GAINS terminal outbound edges (->stopped, ->failed) in
+// the agents run-status table. Adding OUTBOUND edges must NOT change which states
+// are mid-attempt: a future edit that (accidentally or otherwise) smuggled
+// `pending_trigger` into lease eligibility would fail here.
+// ---------------------------------------------------------------------------
+describe("live-attempt: pending_trigger never live + SQL byte-identical (#1940 P1 Decision 5)", () => {
+  it("liveAttemptSqlCondition('r') is EXACTLY the pinned text (no drift)", () => {
+    expect(liveAttemptSqlCondition("r")).toBe(
+      "(r.execution_attempt_id IS NOT NULL" +
+        " AND r.execution_deadline_at IS NOT NULL AND r.execution_deadline_at > now()" +
+        " AND (r.status IN ('running','waiting_trigger')" +
+        " OR (r.status = 'pending_approval'" +
+        " AND r.human_wait_attempt_id IS NOT NULL" +
+        " AND r.human_wait_attempt_id = r.execution_attempt_id)))",
+    );
+    // pending_trigger must not even be MENTIONED by the eligibility SQL.
+    expect(liveAttemptSqlCondition("r")).not.toContain("pending_trigger");
+  });
+
+  it("isLiveAttempt(pending_trigger) is false for EVERY attempt/deadline/marker combination", () => {
+    const attemptIds = [null, "attempt-1"] as const;
+    const deadlines = [null, PAST, FUTURE] as const;
+    const markers = [null, "attempt-1", "attempt-0"] as const;
+    for (const executionAttemptId of attemptIds) {
+      for (const executionDeadlineAt of deadlines) {
+        for (const humanWaitAttemptId of markers) {
+          expect(
+            isLiveAttempt(
+              {
+                status: "pending_trigger",
+                executionAttemptId,
+                executionDeadlineAt,
+                humanWaitAttemptId,
+              },
+              NOW,
+            ),
+            `pending_trigger must be parked for attempt=${executionAttemptId} deadline=${String(
+              executionDeadlineAt,
+            )} marker=${humanWaitAttemptId}`,
+          ).toBe(false);
+        }
+      }
+    }
+  });
+});
+
 describe("permit unforgeability (#1938, runtime WeakSet)", () => {
   const tx = {};
   const fields = {
@@ -234,5 +323,131 @@ describe("null execution deadline is fail-closed", () => {
     const cond = liveAttemptSqlCondition("r");
     expect(cond).toContain("r.execution_deadline_at IS NOT NULL");
     expect(cond).not.toContain("execution_deadline_at IS NULL OR");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// guardOrgLifecycleMutation — the epoch→write (BOTH-locks) entry point
+// (#1939 wave 3). Pins the exclusive lock order and refusal parity with the
+// write-only guardOrgMutation. A recording fake renders every kernel query to
+// real SQL so the lock ORDER (what makes a second write deterministically
+// block behind a lifecycle mutation) is asserted on the wire, not on intent.
+// ---------------------------------------------------------------------------
+describe("guardOrgLifecycleMutation (#1939 wave 3)", () => {
+  const dialect = new PgDialect();
+
+  type Recorded = { text: string; params: unknown[] };
+  function recordingDb(
+    org: { archivedAt: Date | string | null; archiveEpoch?: number } | null,
+  ): { db: OrgWriteDb<OrgWriteTx>; executed: Recorded[] } {
+    const executed: Recorded[] = [];
+    const tx: OrgWriteTx = {
+      execute: async (query: SQL | string) => {
+        const rendered =
+          typeof query === "string"
+            ? { sql: query, params: [] as unknown[] }
+            : dialect.sqlToQuery(query);
+        executed.push({ text: rendered.sql, params: rendered.params });
+        if (rendered.sql.includes('COALESCE("archiveEpoch"')) {
+          return org === null
+            ? { rows: [] }
+            : { rows: [{ archivedAt: org.archivedAt, archiveEpoch: org.archiveEpoch ?? 0 }] };
+        }
+        return { rows: [] };
+      },
+    };
+    return {
+      db: { transaction: async <R>(fn: (t: OrgWriteTx) => Promise<R>) => fn(tx) },
+      executed,
+    };
+  }
+
+  const authorityFor = (
+    orgId: string,
+    caps: readonly OrgWriteCapability[],
+  ): OrgWriteAuthority => ({ orgId, can: (c) => caps.includes(c) });
+
+  const ORG = "org-life";
+
+  it("acquires epoch→write (both locks, global order) BEFORE the locked state read", async () => {
+    const { db, executed } = recordingDb({ archivedAt: new Date() });
+    const out = await guardOrgLifecycleMutation(
+      db,
+      { orgId: ORG, capability: "org.delete", authority: authorityFor(ORG, ["org.delete"]) },
+      async () => "done",
+    );
+    expect(out).toBe("done");
+    // Epoch lock first, write lock second (the redeemCompletionTicket order).
+    expect(executed[0].params[0]).toBe(ORG_ARCHIVE_EPOCH_LOCK_NAMESPACE);
+    expect(executed[1].params[0]).toBe(ORG_WRITE_LOCK_NAMESPACE);
+    // The locked lifecycle-state read comes AFTER both locks.
+    expect(executed[2].text).toContain('COALESCE("archiveEpoch"');
+  });
+
+  it("the write-only guardOrgMutation never takes the epoch lock (the two entry points differ only in lock set)", async () => {
+    const { db, executed } = recordingDb({ archivedAt: null });
+    await guardOrgMutation(
+      db,
+      { orgId: ORG, capability: "content.write", authority: authorityFor(ORG, ["content.write"]) },
+      async () => undefined,
+    );
+    expect(executed[0].params[0]).toBe(ORG_WRITE_LOCK_NAMESPACE);
+    for (const q of executed) {
+      expect(q.params).not.toContain(ORG_ARCHIVE_EPOCH_LOCK_NAMESPACE);
+    }
+  });
+
+  it("refusal parity with guardOrgMutation: org-not-found, org-mismatch, lacks-capability all refuse identically", async () => {
+    for (const guard of [guardOrgMutation, guardOrgLifecycleMutation]) {
+      // organization-not-found (locked state read returns no row)
+      await expect(
+        guard(
+          recordingDb(null).db,
+          { orgId: ORG, capability: "org.lifecycle", authority: authorityFor(ORG, ["org.lifecycle"]) },
+          async () => undefined,
+        ),
+      ).rejects.toMatchObject({ reason: "organization-not-found" });
+      // authority minted for a different org
+      await expect(
+        guard(
+          recordingDb({ archivedAt: null }).db,
+          { orgId: ORG, capability: "org.lifecycle", authority: authorityFor("other-org", ["org.lifecycle"]) },
+          async () => undefined,
+        ),
+      ).rejects.toMatchObject({ reason: "authority-org-mismatch" });
+      // authority lacks the demanded capability
+      await expect(
+        guard(
+          recordingDb({ archivedAt: null }).db,
+          { orgId: ORG, capability: "org.lifecycle", authority: authorityFor(ORG, []) },
+          async () => undefined,
+        ),
+      ).rejects.toBeInstanceOf(OrgWriteRefusedError);
+    }
+  });
+
+  it("org.delete ruling under the lifecycle fence: active org DENIES (capability-denied), archived org RUNS the callback", async () => {
+    // active → deny
+    let ran = false;
+    await expect(
+      guardOrgLifecycleMutation(
+        recordingDb({ archivedAt: null }).db,
+        { orgId: ORG, capability: "org.delete", authority: authorityFor(ORG, ["org.delete"]) },
+        async () => {
+          ran = true;
+        },
+      ),
+    ).rejects.toMatchObject({ reason: "capability-denied" });
+    expect(ran).toBe(false);
+    // archived → allow, callback runs under the permit
+    const result = await guardOrgLifecycleMutation(
+      recordingDb({ archivedAt: new Date() }).db,
+      { orgId: ORG, capability: "org.delete", authority: authorityFor(ORG, ["org.delete"]) },
+      async (_tx, permit) => {
+        expect(permit).toBeDefined();
+        return "deleted";
+      },
+    );
+    expect(result).toBe("deleted");
   });
 });

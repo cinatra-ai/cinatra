@@ -22,6 +22,7 @@ import "server-only";
 import { makeOwnershipGrantInstallDeps } from "@/lib/extension-capability-ownership-grants";
 import { readConnectorAccessDeclarationFromStore } from "@/lib/connector-access-config-host";
 import { readAssistantInstallSignalsFromStore } from "@/lib/assistant-declaration-host";
+import { readSkillPackagingSignalsFromStore } from "@/lib/skill-packaging-install-gate";
 import type { InstallPipelineDeps } from "@/lib/extension-install-pipeline";
 
 /**
@@ -164,6 +165,10 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
     // resolve of the agent-kind cinatra/config.json assistant block + the XOR
     // executor signal, through the shared SDK parser.
     readAssistantInstallSignals: (storeDir) => readAssistantInstallSignalsFromStore(storeDir),
+    // cinatra#2089 (S2): the packaging/structure verdict at the pre-journal
+    // seam — one bundle per skill extension, singular `-skill`, Anthropic-clean
+    // SKILL.md, and no embedded skill in a non-skill extension.
+    readSkillPackagingSignals: (storeDir) => readSkillPackagingSignalsFromStore(storeDir),
     // FORWARD INSTALL GATE (#180 item 5): edgeType-aware closure check over the
     // canonical snapshot, scoped to the install's org.
     assertForwardInstallClosure: async (p) => {

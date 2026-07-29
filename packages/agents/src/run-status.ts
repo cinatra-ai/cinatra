@@ -104,6 +104,9 @@ export const LEGAL_TRANSITIONS = new Set<`${AgentRunStatus}->${AgentRunStatus}`>
   "pending_input->pending_trigger",   // user opens the trigger form
   "pending_trigger->pending_input",   // user navigates away without submitting
   "pending_trigger->armed",           // form submit with scheduled/recurring fallback
+  // cinatra#1940 P1 (Decision 5): terminal edges from the form-open state.
+  "pending_trigger->stopped",         // cancel/bulk-stop from the form-open state (single CAS, no pending_input detour)
+  "pending_trigger->failed",          // defensive — arming/template failure while the form is open (mirrors armed->failed)
   // TriggerWaitNode pause/resume in-flight WayFlow run.
   // Distinct lifecycle from `armed` (clone-on-tick); `waiting_trigger` resumes
   // the same a2aContextId.

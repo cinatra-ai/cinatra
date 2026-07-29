@@ -26,6 +26,12 @@ import { isTriggerReleased } from "./trigger-gate";
 import { resolveTemplateInputSchema } from "./input-schema-resolver";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import { snapshotSkillsAtRunStart } from "@/lib/agent-run-skills-used";
+// cinatra#1939 wave 2 (§2b): the worker + WayFlow state handler drive a run's
+// FULL lifecycle with NO session, so they mint the SYSTEM `agent-run-dispatch`
+// authority (run.execute + run.complete) once per job entry, scoped to the run's
+// org, and thread it into every transitionRunStatus.
+import { mintAgentRunExecutionAuthority } from "@/lib/org-write/agent-run-authority-mint";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { readRunSelectedSkillRevisions } from "@/lib/run-selected-skill-revisions";
 import { resolveRunSkillDelivery } from "@cinatra-ai/skills/recommendation";
 import {
@@ -133,6 +139,17 @@ export type PinnedVersionRow = {
 export type PinnedRunSnapshotFields = {
   compiledPlan?: unknown;
   taskSpec?: string | null;
+  /**
+   * The L1 declared execution environment captured in THIS snapshot (exec-plane
+   * S3, cinatra#1708; epic #1705). `null` means the pinned version was saved
+   * without one — which, for a resolved pin, means the run declares NO
+   * environment; it is NEVER a fallback to the live template row (that would
+   * swap the recipe under the pin, the exact thing the version-snapshot
+   * doctrine forbids). Consumed by the `/api/llm-bridge` run seam via
+   * `resolveRunEnvironmentSources`; the worker's own overlay ignores it (the
+   * environment is bound at the seam, not on the template object).
+   */
+  executionEnvironment?: unknown;
 };
 
 export type ResolvePinnedRunSnapshotDeps = {
@@ -235,7 +252,11 @@ export async function resolvePinnedRunSnapshot(
     if (typeof snap !== "object" || snap === null || Array.isArray(snap)) {
       return fail("pinned snapshot payload is structurally unusable (not a structured object)");
     }
-    const s = snap as { compiledPlan?: unknown; taskSpec?: string | null };
+    const s = snap as {
+      compiledPlan?: unknown;
+      taskSpec?: string | null;
+      executionEnvironment?: unknown;
+    };
     // (5) EXECUTION-FIELD COMPLETENESS — a required pin FULLY replaces the
     //     execution plan, so an ABSENT or `undefined` compiledPlan cannot pin
     //     the run: the worker overlays a field only when it is `!== undefined`,
@@ -248,7 +269,11 @@ export async function resolvePinnedRunSnapshot(
     // Both execution fields are now DEFINED (compiledPlan verified above;
     // taskSpec normalized to null), so the worker's `!== undefined` overlay is a
     // FULL replacement for a required pin — never a partial overlay onto live.
-    return { compiledPlan: s.compiledPlan, taskSpec: s.taskSpec ?? null };
+    return {
+      compiledPlan: s.compiledPlan,
+      taskSpec: s.taskSpec ?? null,
+      executionEnvironment: s.executionEnvironment ?? null,
+    };
   }
 
   // NON-REQUIRED with a resolved semver — best-effort load, live-template
@@ -258,8 +283,20 @@ export async function resolvePinnedRunSnapshot(
     if (!row) return null; // live-template fallback (unchanged)
     const snap = row.snapshot;
     if (typeof snap !== "object" || snap === null) return null;
-    const s = snap as { compiledPlan?: unknown; taskSpec?: string | null };
-    return { compiledPlan: s.compiledPlan, taskSpec: s.taskSpec };
+    const s = snap as {
+      compiledPlan?: unknown;
+      taskSpec?: string | null;
+      executionEnvironment?: unknown;
+    };
+    // A RESOLVED best-effort snapshot is authoritative for this run exactly as
+    // it is for compiledPlan/taskSpec above — the environment does not fall back
+    // to the live row once the snapshot was found (only a MISSING row falls
+    // back, which is the `return null` a line up).
+    return {
+      compiledPlan: s.compiledPlan,
+      taskSpec: s.taskSpec,
+      executionEnvironment: s.executionEnvironment ?? null,
+    };
   }
 
   // `versionId`-only (inert pin) or neither → live template.
@@ -666,6 +703,17 @@ export type HandleWayflowTaskStateArgs = {
   runId: string;
   run: AgentRunRecord;
   fromStatus: AgentRunStatus;
+  /**
+   * cinatra#1939 wave 2 (§2d) — the org-write authority grounding this handler's
+   * internal transitions (→pending_approval / →failed / →completed). Each of the
+   * 3 callers supplies its own: the worker (execution.ts) supplies the SYSTEM
+   * dispatch authority; the two RESUME callers (review-task-actions.ts,
+   * mcp/handlers.ts) supply the RESUMING PRINCIPAL's authority (D-OBO-RESUME),
+   * NEVER the frame's own RUN authority — a lifecycle-driving resume can move a
+   * run forward (→pending_approval = run.execute), which a run's own OBO
+   * authority must never hold.
+   */
+  authority: OrgWriteAuthority;
   // The `task` shape intentionally accepts WayFlow's @a2a-js/sdk `Task` type
   // (status.message.parts is a discriminated union of TextPart | DataPart | FilePart;
   // history.parts is the same union). We narrow at access time inside the helper
@@ -680,8 +728,22 @@ export type HandleWayflowTaskStateArgs = {
   };
 };
 
+/**
+ * Build the run's canonical `/agents/{vendor}/{pkg}/{runId}` base path from a
+ * scoped package name. A VERBATIM copy of `src/lib/agent-url.ts`'s
+ * `buildAgentInstancePath` (4 lines, zero deps) — inlined so the universally-
+ * reachable execution path grows no new first-party module edge (the route-graph
+ * ratchet guards this hot path), mirroring the same duplication precedent in
+ * packages/notifications/src/agent-run-href.ts.
+ */
+function buildReviewRunBasePath(agentPackageName: string, instanceId: string): string {
+  const match = agentPackageName.match(/^@([^/]+)\/(.+)$/);
+  if (match) return `/agents/${match[1]}/${match[2]}/${instanceId}`;
+  return `/agents/${agentPackageName}/${instanceId}`;
+}
+
 export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): Promise<void> {
-  const { runId, run, fromStatus, task } = args;
+  const { runId, run, fromStatus, task, authority } = args;
   const taskState = task.status?.state;
 
   // Defensive resync (idempotent if unchanged): persist task.id / contextId
@@ -952,7 +1014,27 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         }
       }
       if (routeToReviewSurface) {
-        const reviewSurfaceUrl = `/artifacts/review/${encodeURIComponent(runId)}/${encodeURIComponent(reviewTaskId)}`;
+        // The review surface lives UNDER the agent run (owner ruling 2026-07-25
+        // (3), cinatra#2063): `/agents/[vendor]/[packageName]/[instanceId]/review/
+        // [reviewTaskId]`, where instanceId == this run. Build the run's canonical
+        // `/agents/{vendor}/{pkg}/{runId}` base from the template packageName (the
+        // same resolution the notification deep-link + run-detail redirect use),
+        // then append the review sub-path. packageName is present for a marked
+        // reviewer gate (a published orchestrator/flow template); the fallback must
+        // still emit the route's FIVE-segment shape (…/[vendor]/[packageName]/
+        // [instanceId]/review/[reviewTaskId]) with the runId in the instanceId slot,
+        // because the review page keys ONLY on instanceId (== runId) — a shorter
+        // `/agents/{runId}/…` would 404. So an unresolved/absent package degrades to
+        // placeholder vendor+package segments, never a dead/misrouted link.
+        const reviewTemplate = await readAgentTemplateById(run.templateId).catch(() => null);
+        const reviewPackageName =
+          typeof reviewTemplate?.packageName === "string" && reviewTemplate.packageName.trim().length > 0
+            ? reviewTemplate.packageName.trim()
+            : null;
+        const reviewRunBase = reviewPackageName
+          ? buildReviewRunBasePath(reviewPackageName, runId)
+          : `/agents/unknown/unknown/${encodeURIComponent(runId)}`;
+        const reviewSurfaceUrl = `${reviewRunBase}/review/${encodeURIComponent(reviewTaskId)}`;
         // Route: emit the display-only redirect interrupt (the review-surface
         // link) — NOT the legacy reviewer envelope. The card carries no approve
         // affordance, so the paused run stays in pending_approval and the human's
@@ -976,7 +1058,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         if (fromStatus === "pending_approval") {
           return;
         }
-        await transitionRunStatus(runId, fromStatus, "pending_approval").catch((e) => {
+        await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
         });
@@ -989,25 +1071,27 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // WayFlow runtime propagates through task.metadata.pendingApproval
     // (interruptPayload) — to the renderer. blog-pipeline's idea_selection_gate
     // needs its `ideas[]` render input present to show an idea chooser (see
-    // reviewer-agent-output-renderer.tsx). Merged BELOW spreadFromOutput and the
+    // blog-idea-selection-renderer.tsx, the dedicated renderer the chooser
+    // relocated onto). Merged BELOW spreadFromOutput and the
     // explicit stepNumber/output so history-derived output still WINS: data-review
     // gates that parse `output` are unaffected.
     //
-    // Reserved host-synthesized envelope keys (set by the reviewer-output
-    // envelope synthesis below) must never be SOURCED from a gate's
-    // pendingApproval — else a gate input could disable synthesis or shadow a
-    // real content bundle. Strip them from ALL pendingApproval-derived values:
-    // the explicit gate-input merge AND the `spreadFromOutput` fallback that
-    // re-parses pendingApproval when history is empty. A `spreadFromOutput`
-    // derived from HISTORY (a subflow that really emits {contentType,...}) is
-    // preserved (`historyText !== undefined`).
-    const RESERVED_ENRICHED_KEYS = new Set([
-      "contentType",
-      "contentBundle",
-      "summary",
-      "output",
-      "stepNumber",
-    ]);
+    // Reserved HOST TRANSPORT keys must never be SOURCED from a gate's
+    // pendingApproval — the host sets them explicitly below from the WayFlow
+    // step number and the history-derived output, and a gate input of the same
+    // name would shadow the real value. Strip them from ALL
+    // pendingApproval-derived values: the explicit gate-input merge AND the
+    // `spreadFromOutput` fallback that re-parses pendingApproval when history is
+    // empty. A `spreadFromOutput` derived from HISTORY is preserved
+    // (`historyText !== undefined`).
+    //
+    // cinatra#1796 teardown: the reviewer-output envelope keys
+    // (`contentType`/`contentBundle`/`summary`) are NO LONGER reserved — the
+    // host synthesizes no envelope, so there is nothing for a gate input to
+    // disable or shadow. A gate that genuinely declares one of those names as a
+    // render input now reaches its renderer, which is the correct behaviour for
+    // an extension-owned key the host has no opinion about.
+    const RESERVED_ENRICHED_KEYS = new Set(["output", "stepNumber"]);
     const stripReserved = (o: Record<string, unknown>): Record<string, unknown> =>
       Object.fromEntries(
         Object.entries(o).filter(([k]) => !RESERVED_ENRICHED_KEYS.has(k)),
@@ -1022,57 +1106,6 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       ...(wayflowStepNumber !== null ? { stepNumber: wayflowStepNumber } : {}),
       ...(interruptOutput !== undefined ? { output: interruptOutput } : {}),
     };
-    // Synthesize the {contentType, contentBundle, summary}
-    // envelope for `@cinatra-ai/reviewer-agent:output` gates when the upstream
-    // subflow didn't emit one. Without it the renderer falls back to
-    // SchemaFieldRenderer fallback path and the LLM-produced
-    // review text never reaches the user-facing SummaryLine component.
-    //
-    // The reviewer-agent's purpose is "human reviews the LLM's output text"
-    // — that text lives in `output` (history-derived). For orchestrators
-    // whose reviewer subflow doesn't construct a typed envelope yet, we
-    // inject a minimal "text" envelope here so the renderer's SummaryLine
-    // displays the LLM output and the fallback SchemaFieldRenderer renders
-    // an empty approve/edit input. Subflows that DO emit the envelope (any
-    // value with `contentType` already present) are passed through
-    // unchanged.
-    // The reviewer output-gate ID is resolved by KIND from the manifest
-    // bindings (the reviewer agent's `cinatra.fieldRenderers` declaration) —
-    // undefined when no present/installed package binds "reviewer-output",
-    // in which case the gate class is absent and synthesis correctly no-ops
-    // (the renderer falls back to the schema-field path, as before).
-    if (
-      wayflowXRenderer === resolveRendererIdForKind("reviewer-output") &&
-      typeof enrichedValues["contentType"] !== "string"
-    ) {
-      // Do not gate envelope synthesis on `typeof output === "string"`:
-      // some reviewer gates fire BEFORE any LLM produced a history.last_assistant text
-      // (e.g. an orchestrator's reviewer subflow gets the title
-      // via DFE, not from a preceding LLM step). In that case `output` is
-      // undefined and the synthesis no-ops, leaving the renderer to fall
-      // back to the schema-field-fallback path — un-advanceable on
-      // last-HITL steps. Always set a minimal envelope so the renderer's
-      // text-case branch (with its own Continue button) always fires.
-      const inputParams = (run.inputParams as Record<string, unknown> | null) ?? {};
-      const out =
-        typeof enrichedValues["output"] === "string"
-          ? (enrichedValues["output"] as string)
-          : "";
-      // Best-effort body: prefer the LLM output, then any title/summaryLine
-      // in inputParams or the interruptPayload — anything to give the user
-      // SOMETHING to read while approving.
-      const fallbackTitle =
-        (typeof inputParams["title"] === "string" && (inputParams["title"] as string)) ||
-        (typeof inputParams["summaryLine"] === "string" && (inputParams["summaryLine"] as string)) ||
-        "";
-      const text = out || fallbackTitle || "(reviewer agent — approve to continue)";
-      enrichedValues["contentType"] = "text";
-      enrichedValues["summary"] = text.length > 200 ? `${text.slice(0, 197)}...` : text;
-      enrichedValues["contentBundle"] = {
-        text,
-        url: (inputParams["url"] as string | undefined) ?? "",
-      };
-    }
     const wayflowSchemaToSend = await enrichSchemaWithResolvedData(
       (wayflowSchema ?? interruptPayload) as Record<string, unknown>,
       enrichmentContextFor(run.runBy),
@@ -1090,7 +1123,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     }
     // Otherwise (initial-dispatch path: fromStatus === "running"), perform the
     // legal running -> pending_approval transition.
-    await transitionRunStatus(runId, fromStatus, "pending_approval").catch((e) => {
+    await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority).catch((e) => {
       if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
       throw e;
     });
@@ -1114,7 +1147,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     if (fromStatus === "failed") {
       return;
     }
-    await transitionRunStatus(runId, fromStatus, "failed", { error: errMsg }).catch((e) => {
+    await transitionRunStatus(runId, fromStatus, "failed", { error: errMsg }, authority).catch((e) => {
       if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
       throw e;
     });
@@ -1267,7 +1300,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         history: scrubbedHistory,
       },
     ],
-  }).catch((err) => {
+  }, authority).catch((err) => {
     // stale_from_status: a concurrent stop/cancel already moved the row;
     // skip RUN_FINISHED so the UI reflects the DB winner, not us.
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
@@ -1495,6 +1528,11 @@ async function runAgentBuilderExecutionJobInner(
     console.log(`[agent-builder] run ${runId} not found, skipping`);
     return;
   }
+  // cinatra#1939 wave 2 (§2b): mint the SYSTEM dispatch authority ONCE at job
+  // entry (scoped to this run's org) and thread it into every status transition
+  // this worker drives — dispatch (run.execute) and terminal finalize
+  // (run.complete) — including handleWayflowTaskState below.
+  const executionAuthority = mintAgentRunExecutionAuthority(run.orgId);
   if (run.status !== "queued") {
     // Federated children parked by WaitingForHumanError may retry
     // after resume transitions them to a terminal state. If the child reached
@@ -1519,7 +1557,7 @@ async function runAgentBuilderExecutionJobInner(
   if (!template) {
     await transitionRunStatus(runId, "queued", "failed", {
       error: `Template ${run.templateId} not found`,
-    });
+    }, executionAuthority);
     return;
   }
 
@@ -1652,7 +1690,7 @@ async function runAgentBuilderExecutionJobInner(
       // FAIL CLOSED (cinatra#1040 S7): a REQUIRED explicit version pin whose
       // immutable snapshot cannot be served must NEVER silently fall back to the
       // live template. Refuse the run with the full evidence set.
-      await transitionRunStatus(runId, "queued", "failed", { error: err.message });
+      await transitionRunStatus(runId, "queued", "failed", { error: err.message }, executionAuthority);
       return;
     }
     throw err;
@@ -1688,12 +1726,12 @@ async function runAgentBuilderExecutionJobInner(
       await transitionRunStatus(runId, "queued", "pending_input", {
         error: err.message,
         humanWaitGate: true,
-      });
+      }, executionAuthority);
       return;
     }
     await transitionRunStatus(runId, "queued", "failed", {
       error: err instanceof Error ? err.message : String(err),
-    });
+    }, executionAuthority);
     return;
   }
 
@@ -1771,7 +1809,7 @@ async function runAgentBuilderExecutionJobInner(
       (fieldSchema as { "x-renderer"?: string })["x-renderer"]
         ?? SCHEMA_FIELD_FALLBACK_RENDERER_ID;
 
-    await transitionRunStatus(runId, "queued", "pending_approval");
+    await transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority);
 
     // No DB writes — use synthetic ID so approveReviewTaskInternal
     // routes to the "setup-" branch, which re-enqueues AGENT_BUILDER_EXECUTION.
@@ -1841,7 +1879,7 @@ async function runAgentBuilderExecutionJobInner(
 
     const xRenderer = GROUPED_SETUP_FORM_RENDERER_ID;
 
-    await transitionRunStatus(runId, "queued", "pending_approval");
+    await transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority);
 
     // No DB writes — use synthetic ID so approveReviewTaskInternal
     // routes to the "setup-" branch, which re-enqueues AGENT_BUILDER_EXECUTION.
@@ -1894,14 +1932,14 @@ async function runAgentBuilderExecutionJobInner(
     if (!template.agentUrl) {
       await transitionRunStatus(runId, "queued", "failed", {
         error: "external template missing agentUrl",
-      });
+      }, executionAuthority);
       return;
     }
     const saved = findSavedConnectionForAgentUrl(template.agentUrl);
     if (!saved) {
       await transitionRunStatus(runId, "queued", "failed", {
         error: `no saved connection for external A2A server: ${template.agentUrl}`,
-      });
+      }, executionAuthority);
       return;
     }
 
@@ -1931,7 +1969,7 @@ async function runAgentBuilderExecutionJobInner(
     try {
       await transitionRunStatus(runId, "queued", "running", {
         dispatch: { attemptId: randomUUID() },
-      });
+      }, executionAuthority);
     } catch (err) {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
         console.log(`[external-a2a] run ${runId} status no longer "queued" — skipping stale transition`);
@@ -1950,7 +1988,7 @@ async function runAgentBuilderExecutionJobInner(
       stream = client.streamTask(JSON.stringify((run.inputParams ?? {}) as Record<string, unknown>));
       const first = await stream.next();
       if (first.done) {
-        await transitionRunStatus(runId, "running", "failed", { error: "external streamTask returned empty stream" });
+        await transitionRunStatus(runId, "running", "failed", { error: "external streamTask returned empty stream" }, executionAuthority);
         return;
       }
       firstEvent = first.value;
@@ -1960,7 +1998,7 @@ async function runAgentBuilderExecutionJobInner(
     } catch (err) {
       await transitionRunStatus(runId, "running", "failed", {
         error: err instanceof Error ? err.message : "external streamTask failed",
-      });
+      }, executionAuthority);
       return;
     }
 
@@ -1983,7 +2021,7 @@ async function runAgentBuilderExecutionJobInner(
       // cancel has already moved the run off "running"). illegal_transition or
       // any other error must surface so future refactor bugs (typos, wrong
       // "from" argument) are caught at test/CI time, not silently masked.
-      await transitionRunStatus(runId, "running", "completed").catch((err) => {
+      await transitionRunStatus(runId, "running", "completed", undefined, executionAuthority).catch((err) => {
         if (err instanceof RunTransitionError && err.code === "stale_from_status") {
           console.log(
             `[external-a2a] run ${runId} no longer running — skipping running→completed transition`,
@@ -1997,7 +2035,7 @@ async function runAgentBuilderExecutionJobInner(
       // Apply the same discrimination on the failed-branch transition.
       await transitionRunStatus(runId, "running", "failed", {
         error: err instanceof Error ? err.message : String(err),
-      }).catch((e) => {
+      }, executionAuthority).catch((e) => {
         if (e instanceof RunTransitionError && e.code === "stale_from_status") {
           console.log(
             `[external-a2a] run ${runId} no longer running — skipping running→failed transition`,
@@ -2070,7 +2108,7 @@ async function runAgentBuilderExecutionJobInner(
     try {
       await transitionRunStatus(runId, "queued", "running", {
         dispatch: { attemptId: randomUUID() },
-      });
+      }, executionAuthority);
     } catch (err) {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
         console.log(`[wayflow] run ${runId} no longer queued — skipping stale transition`);
@@ -2201,7 +2239,7 @@ async function runAgentBuilderExecutionJobInner(
       // fromStatus is the literal "running" — NOT run.status — because the
       // in-memory run object loaded at line 137 still has the stale "queued"
       // status (the DB row was just moved to "running" by the CAS at line 760).
-      await handleWayflowTaskState({ runId, run, fromStatus: "running", task });
+      await handleWayflowTaskState({ runId, run, fromStatus: "running", task, authority: executionAuthority });
     } catch (err) {
       // #562: a bare `TypeError: fetch failed` from the sendTask transport
       // (WayFlow runtime unreachable) was being recorded verbatim — no target
@@ -2234,7 +2272,7 @@ async function runAgentBuilderExecutionJobInner(
       ).catch(() => undefined);
       await transitionRunStatus(runId, "running", "failed", {
         error: runError,
-      }).catch((e) => {
+      }, executionAuthority).catch((e) => {
         if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
         throw e;
       });

@@ -31,6 +31,10 @@ import {
   enforceAssistantInstallGateInertly,
   type AssistantDeclarationInstallDeps,
 } from "@/lib/assistant-declaration-host";
+import {
+  enforceSkillPackagingGateInertly,
+  type SkillPackagingInstallDeps,
+} from "@/lib/skill-packaging-install-gate";
 import { resolveSignatureVerdict } from "@/lib/extension-signature";
 import {
   computeClosureHash,
@@ -395,7 +399,7 @@ export type InstallPipelineDeps = {
   // The assistant-declaration install-gate slice (cinatra#1874 W1) lives in
   // assistant-declaration-host.ts: readAssistantInstallSignals (pre-finalize
   // XOR + platform-scope gate).
-} & ConnectorAccessDeclarationInstallDeps & AssistantDeclarationInstallDeps & OwnershipGrantInstallHooks & WidgetAuthTokenKeysInstallDeps;
+} & ConnectorAccessDeclarationInstallDeps & AssistantDeclarationInstallDeps & SkillPackagingInstallDeps & OwnershipGrantInstallHooks & WidgetAuthTokenKeysInstallDeps;
 
 /**
  * Structured operational event for a FAILED durable-restore step (cinatra#158).
@@ -658,6 +662,38 @@ export async function installExtensionFromRegistry(
     orgId: input.orgId,
     packageName: input.packageName,
     isLiveDigest: () => priorOp?.phase === "finalized" && priorOp.digest === mat.digest,
+  });
+
+  // SKILL-PACKAGING PRE-FINALIZE GATE (cinatra#2089, epic #2086 S2) — same EARLY
+  // placement + inertness/GC contract as the reads above. Runs THE shared
+  // verdict (scripts/audit/_lib/skill-packaging-verdict.mjs — the same module CI
+  // runs and the extension repos' publish gate vendors) over the materialized
+  // (SRI-verified) package, so a non-conforming extension is refused at store
+  // install with the SAME verdict text it would get at publish and in CI:
+  //   - kind:"skill"  → exactly one Anthropic-schema bundle, singular `-skill`
+  //     package name, valid frontmatter, bundle-directory ≡ frontmatter name,
+  //     router length, the fail-closed ONE-HOP reference lint (the enforcement
+  //     half of #2088's `captureDiagnostics.danglingReferences` diagnostic) and
+  //     the upload size boundary;
+  //   - any other kind → NO `SKILL.md` at ANY path outside the shared fixture
+  //     allowlist.
+  // Non-conformance that the enumerated legacy ledger still records is WAIVED
+  // and logged (the S3 migration wave, cinatra#2090, empties the ledger). A
+  // refusal is fully inert: the just-materialized dir is GC'd unless it IS the
+  // live install's dir, and nothing durable has mutated.
+  await enforceSkillPackagingGateInertly(deps, {
+    storeDir: mat.storeDir,
+    packageName: input.packageName,
+    // FAIL-SAFE same-digest guard. The sibling seams compare
+    // `priorOp.digest === mat.digest`, which reads FALSE for a LEGACY finalized
+    // op that recorded no digest (`digest: null`) — and on a same-bytes
+    // re-install of such a package the just-materialized dir IS the live dir, so
+    // GC'ing it would delete a working install. This gate therefore treats an
+    // undeterminable prior digest as LIVE: it never GCs when it cannot prove the
+    // dir is disposable. Over-keeping a dir is recovered by a later retry's
+    // store gate; over-deleting one is not.
+    isLiveDigest: () =>
+      priorOp?.phase === "finalized" && (priorOp.digest == null || priorOp.digest === mat.digest),
   });
 
   // Classify the in-process import trust tier (vendor-agnostic). The host

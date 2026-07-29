@@ -39,11 +39,17 @@ const agentDir = path.resolve(
   "../../../../extensions/cinatra-ai/media-feed-lister-agent",
 );
 const oasPath = path.join(agentDir, "cinatra/oas.json");
-const skillPath = path.join(agentDir, "skills/media-feed-lister-agent/SKILL.md");
 const packageJsonPath = path.join(agentDir, "package.json");
 
 const oas = JSON.parse(fs.readFileSync(oasPath, "utf8")) as Record<string, unknown>;
-const skill = fs.readFileSync(skillPath, "utf8");
+// cinatra#2090 (epic #2086 S3): this agent ships no skill bundle. Its
+// instructions are the `list` node's system prompt, so the contract
+// assertions below read THAT — same bytes, new home.
+const skill = [
+  (oas as { description?: string }).description ?? "",
+  (oas as { $referenced_components: Record<string, { data?: { system?: string } }> })
+    .$referenced_components["list"].data?.system ?? "",
+].join("\n\n");
 const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as Record<string, unknown>;
 
 describe("media-feed-lister-agent OAS validates", () => {
@@ -125,7 +131,7 @@ describe("media-feed-lister-agent — 7 structural pins", () => {
   });
 });
 
-describe("media-feed-lister-agent — SKILL.md contract", () => {
+describe("media-feed-lister-agent — inline instruction contract", () => {
   it("mentions media_feed_youtube_list + media_feed_podcast_list (the only allowed primitives)", () => {
     expect(skill).toContain("media_feed_youtube_list");
     expect(skill).toContain("media_feed_podcast_list");

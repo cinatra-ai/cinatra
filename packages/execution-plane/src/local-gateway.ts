@@ -77,9 +77,22 @@ export async function startLocalGateway(
     adminHostPort?: number;
     imageRef?: string;
     docker?: DockerCli;
+    /**
+     * Absolute host path of the gateway script to bind-mount (exec-plane S1b
+     * activation, cinatra#2138 deliverable 4). Defaults to the package-relative
+     * `runtime/egress-gateway.cjs` resolved from `import.meta.url`, which is
+     * correct when the package runs from source (tests, E2E battery). The APP
+     * consumes this package through a bundler, where `import.meta.url` points
+     * into the build output rather than the workspace — so the boot wiring
+     * passes the repo-resolved absolute path explicitly. The gateway is trusted
+     * infrastructure, not a sandbox: the no-host-mount invariant binds sandbox
+     * containers only.
+     */
+    scriptPath?: string;
   },
 ): Promise<LocalGateway> {
   const docker = opts.docker ?? runDocker;
+  const gatewayScript = opts.scriptPath ?? GATEWAY_SCRIPT;
   const imageRef = resolveL0ImageRef(opts.imageRef);
   const adminHostPort = opts.adminHostPort ?? GATEWAY_ADMIN_PORT;
   // Control secret for the broker→gateway control channel. Generated fresh per
@@ -100,7 +113,7 @@ export async function startLocalGateway(
     "-p",
     `127.0.0.1:${adminHostPort}:${GATEWAY_ADMIN_PORT}`,
     "--volume",
-    `${GATEWAY_SCRIPT}:/gateway/egress-gateway.cjs:ro`,
+    `${gatewayScript}:/gateway/egress-gateway.cjs:ro`,
   ];
   for (const [key, value] of Object.entries(env)) {
     args.push("--env", `${key}=${value}`);

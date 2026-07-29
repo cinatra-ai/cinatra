@@ -1,0 +1,49 @@
+NOT MERGE-SAFE.
+
+One blocker remains: F2 is not actually closed. `c.status = 'active'` does not prove that the binding belongs to the current claim winner.
+
+1. R1 — Single statement
+
+The CTE rewrite correctly removes both original defects:
+
+- One PostgreSQL statement uses one MVCC snapshot.
+- `sa_one_active_binding_idx` permits at most one eligible binding per object.
+- The lateral `LIMIT 1` permits at most one direct representation.
+- The outer `ORDER BY` and single `LIMIT 500` provide a genuine global cap.
+
+However, a canonical winner in `retiring` state with `snapshotPolicy='none'` now matches neither arm; with content policy it incorrectly falls into the snapshot arm instead of using its authored representation.
+
+2. R2 — Active status
+
+The gate is insufficient. The canonical winner logic:
+
+- Accepts both `active` and `retiring`.
+- Resolves against the object’s current type.
+- Gives org scope precedence over platform scope.
+
+See [binding-write-path.ts](<lane-worktree>/src/lib/objects/binding-write-path.ts:73) and [claims.ts](<lane-worktree>/packages/objects/src/claims.ts:410).
+
+A concrete failing window:
+
+- Platform claim P and its binding are active.
+- Org claim O activates for the same type; both claims may remain active because uniqueness is per scope.
+- O immediately becomes the canonical winner, but reconciliation has not yet replaced P’s eligible binding.
+- P passes the new candidate and finalizer `status='active'` checks.
+
+A pack-A→pack-B type change has the same problem: the stale A binding and claim remain active, while the generic pack-type predicate accepts current type B. The direct checks never require `c.object_type_id = o.type` or the canonical winner tuple.
+
+The snapshot arm may remain unchanged if preserving its shipped queue-lag contract is intentional. Copying `status='active'` there would not solve winner identity and would reject legitimate retiring winners.
+
+3. R3 — Resolver predicate
+
+Fixed correctly. `type` is projected into `visible_objects`; `o.type` is the right alias; `artifactTypeIdsPh` is correctly populated and numbered; and the predicate is confined to the claimed-row witness branch.
+
+4. Required fix
+
+Re-derive the canonical winner for the DIRECT arm and require the binding’s exact `(claim id, generation, extension)` tuple to match it in candidate selection, resolver, and both finalizers. Add coverage for:
+
+- Active org claim overriding an active platform claim before queue drain.
+- Registered pack-A→registered pack-B before queue drain.
+- A `retiring` claim remaining the current winner.
+
+The added `active → retiring` test currently asserts behavior contrary to the repository’s documented claim state machine.

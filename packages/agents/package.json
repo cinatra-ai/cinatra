@@ -15,6 +15,7 @@
     "./extension-handler-rollback": "./src/extension-handler-rollback.ts",
     "./package-contract": "./src/verdaccio/package-contract.ts",
     "./auth-policy": "./src/auth-policy.ts",
+    "./execution-config": "./src/execution-config.ts",
     "./auth-policy-types": "./src/auth-policy-types.ts",
     "./install-targets": "./src/install-targets.ts",
     "./install-target-authz": "./src/install-target-authz.ts",
@@ -30,13 +31,20 @@
     "./client-entry": "./src/client-entry.ts",
     "./cli": "./src/cli/index.ts",
     "./wayflow-url": "./src/wayflow-url.ts",
+    "./run-status": "./src/run-status.ts",
     "./schema": "./src/schema.ts",
     "./auditor-apply": "./src/auditor-apply.ts",
     "./auditor-snapshot-store": "./src/auditor-snapshot-store.ts",
     "./artifact-review-gate-store": "./src/artifact-review-gate-store.ts",
+    "./lifecycle-verification-store": "./src/lifecycle-verification-store.ts",
+    "./cms-snapshot-readback-store": "./src/cms-snapshot-readback-store.ts",
     "./artifact-review-gate-seam": "./src/artifact-review-gate-seam.ts",
     "./artifact-review-resume-delivery": "./src/artifact-review-resume-delivery.ts",
     "./lifecycle-review-orchestration": "./src/lifecycle-review-orchestration-store.ts",
+    "./lifecycle-continuation-park-store": "./src/lifecycle-continuation-park-store.ts",
+    "./lifecycle-policy-store": "./src/lifecycle-policy-store.ts",
+    "./lifecycle-review-changes-requested": "./src/lifecycle-review-changes-requested-store.ts",
+    "./lifecycle-repair-dispatch-store": "./src/lifecycle-repair-dispatch-store.ts",
     "./auditor-snapshot-errors": "./src/auditor-snapshot-errors.ts",
     "./db": "./src/db.ts",
     "./pm-link-store": "./src/pm-link-store.ts",
@@ -49,6 +57,8 @@
     "./verdaccio/client": "./src/verdaccio/client.ts",
     "./verdaccio/publish-metadata": "./src/verdaccio/publish-metadata.ts",
     "./artifact-binding": "./src/artifact-binding.ts",
+    "./run-stepper-steps": "./src/run-stepper-steps.ts",
+    "./hitl-conversation-panel": "./src/hitl-conversation-panel.tsx",
   "./owner-containment-port": "./src/owner-containment-port.ts"
   },
   "scripts": {
@@ -62,16 +72,17 @@
     "@cinatra-ai/mcp-client": "workspace:*",
     "@cinatra-ai/mcp-server": "workspace:*",
     "@cinatra-ai/objects": "workspace:*",
+    "@cinatra-ai/org-write-kernel": "workspace:*",
     "@cinatra-ai/registries": "workspace:*",
     "@cinatra-ai/sdk-extensions": "workspace:*",
     "@cinatra-ai/sdk-ui": "workspace:*",
     "@cinatra-ai/skills": "workspace:*",
-    "cron-parser": "^4.9.0",
+    "cron-parser": "^5.6.2",
     "cronstrue": "^3.14.0",
     "diff": "9.0.0",
-    "libnpmpublish": "^11.2.0",
+    "libnpmpublish": "^12.0.0",
     "marked": "^18.0.5",
-    "pacote": "^21.5.1",
+    "pacote": "^22.0.0",
     "semver": "7.8.0",
     "tar": "^7.5.16",
     "undici": "^8.5.0"
@@ -79,6 +90,6 @@
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
-    "jsdom": "^29.1.1"
+    "jsdom": "^30.0.0"
   }
 }

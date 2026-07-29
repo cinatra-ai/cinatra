@@ -24,25 +24,61 @@ import {
 import { betterAuthDb } from "@/lib/better-auth-db";
 import { sql } from "drizzle-orm";
 import { runDeterministicLlmTask } from "@cinatra-ai/llm";
-import { readLocalPackageSkillContent } from "@cinatra-ai/skills";
+import {
+  ensureSkillForCapability,
+  readSkillsCatalog,
+  stripSkillFrontmatter,
+} from "@cinatra-ai/skills";
 import { classifyMentions } from "./classify-mentions";
 import { buildAudienceRoutingContext } from "./server-audience-resolver";
 import { decideMessageRouting } from "./route-decision";
 import type { MessageRoutingResult } from "./chat-routing";
 import type { ChatThread } from "./types";
 
-// Chat prompt-window HITL extraction skill, loaded once at module init
-// (synchronous; matches the mcp-instructions pattern). Static LLM instructions
-// live in SKILL.md per repo rule, never inlined in TS.
-const HITL_PROMPT_DRIVE_SKILL: string =
-  readLocalPackageSkillContent({
-    extensionDir: "assistant-skills",
-    skillSlug: "chat-hitl-prompt-drive",
-    stripFrontmatter: true,
-  }) ??
-  // Fail-soft: a missing skill file degrades to "extract nothing" rather
-  // than "free-form hallucinate values".
-  "Return ONLY {} \u2014 the HITL prompt-drive skill file was not found.";
+// Chat prompt-window HITL extraction skill, resolved through the canonical
+// catalog by its package-OWNED capability key (`chat.hitl-prompt-drive`,
+// declared by the internal `@cinatra-ai/hitl-prompt-drive-skill` extension) \u2014
+// the same true-IoC contract as `skill-prefill-generation`. No hardcoded
+// extension dir or on-disk path (the pre-fold module-init read of
+// `extensions/cinatra-ai/assistant-skills/...` died with that pack,
+// cinatra#2090 S3). Static LLM instructions live in SKILL.md per repo rule,
+// never inlined in TS.
+//
+// Semantics (fail-closed where it matters, fail-soft where it doesn't):
+//   - EXACTLY ONE active provider (`unique: true`) \u2014 an internal system
+//     prompt must never depend on filesystem scan order between two rival
+//     capability providers; ambiguity resolves to "skill unavailable".
+//   - Lazily registered, then the body is read from the CATALOG ROW the
+//     registration wrote (never the raw extension path): a swallowed
+//     registration failure inside the fail-soft resolver surfaces here as a
+//     catalog miss and correctly fails closed. Frontmatter stripped; memoized
+//     per process on SUCCESS only, so a transient miss retries next call.
+//   - On ANY failure the caller returns "{}" WITHOUT invoking the LLM \u2014
+//     "extract nothing" rather than "free-form hallucinate values",
+//     preserving the pre-fold fail-soft contract.
+const HITL_PROMPT_DRIVE_CAPABILITY = "chat.hitl-prompt-drive";
+let hitlPromptDriveSkillMemo: string | null = null;
+
+async function loadHitlPromptDriveSkill(): Promise<string | null> {
+  if (hitlPromptDriveSkillMemo !== null) return hitlPromptDriveSkillMemo;
+  try {
+    const skillId = await ensureSkillForCapability(HITL_PROMPT_DRIVE_CAPABILITY, {
+      unique: true,
+    });
+    // The registration path above is deliberately fail-soft; the catalog row
+    // is the proof it actually happened. No row (or empty content) \u21d2 null \u21d2
+    // the caller answers "{}" without an LLM call.
+    const catalog = await readSkillsCatalog();
+    const row = catalog.skills.find((skill) => skill.id === skillId);
+    const content = typeof row?.content === "string" ? row.content : "";
+    const body = stripSkillFrontmatter(content).trim();
+    if (!body) return null;
+    hitlPromptDriveSkillMemo = body;
+    return body;
+  } catch {
+    return null;
+  }
+}
 
 export type HitlGateField = {
   name: string;
@@ -92,10 +128,15 @@ export async function extractHitlGateValuesAction(
     additionalProperties: false,
   };
 
+  // Resolve the extraction skill BEFORE any LLM work: no skill, no call —
+  // "{}" means "not a gate response → route to normal chat".
+  const hitlPromptDriveSkill = await loadHitlPromptDriveSkill();
+  if (!hitlPromptDriveSkill) return "{}";
+
   try {
     const result = await runDeterministicLlmTask({
       provider: "openai",
-      system: HITL_PROMPT_DRIVE_SKILL,
+      system: hitlPromptDriveSkill,
       user: message,
       outputSchema: responseSchema,
       logLabel: "chat-hitl-prompt-drive",

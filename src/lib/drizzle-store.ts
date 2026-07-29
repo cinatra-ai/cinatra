@@ -17,8 +17,8 @@ import {
 import { assistantThreadSchemaQueries, assistantHandleSchemaQueries } from "@/lib/assistant-thread-schema";
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
-import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema";
-import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries } from "@/lib/skill-lifecycle-schema";
+import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema";
+import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries } from "@/lib/skill-lifecycle-schema";
 import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import {
   artifactClaimSchemaQueries,
@@ -26,9 +26,9 @@ import {
   runContextSelectionsSchemaQueries,
 } from "@/lib/artifact-claim-schema";
 import { publicationOperationLedgerSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
-import { environmentLayerStoreSchemaQueries } from "@/lib/execution/environment-layer-schema";
+import { environmentLayerStoreSchemaQueries, agentExecutionConfigSchemaQueries } from "@/lib/execution/environment-layer-schema";
 import { auditorSnapshotSchemaQueries } from "@/lib/auditor-snapshot-schema";
-import { artifactReviewGateSchemaQueries, lifecycleInterceptionsSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
+import { artifactReviewGateSchemaQueries, lifecycleInterceptionsSchemaQueries, lifecycleRepairSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
 import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
@@ -1201,6 +1201,7 @@ END $$` },
     ...artifactReviewGateSchemaQueries(schemaName),
     // lifecycle-interceptions S0 (cinatra#2038, epic #2037): policy lattice bounds, ArtifactProduced outbox, continuation park, advisory seam, decided S3/S4/S5 schemas + gate-store extensions. DDL co-located in artifact-review-gate-schema.ts (already route-reachable, so no new route-graph node); migration twin core__0079. Spread AFTER artifactReviewGateSchemaQueries so its additive ALTERs land on the existing gate tables.
     ...lifecycleInterceptionsSchemaQueries(schemaName),
+    ...lifecycleRepairSchemaQueries(schemaName), // S2 (cinatra#2040): repair loop (durable batch epoch, per-epoch aggregate, repair lineage) + changes_requested CHECK-widen + rejected-efficacy row; migration twin core__0081. AFTER the S0 spread (its CHECK-expansions land on the existing gate/audit tables).
     // dashboards + dashboard_revisions for @cinatra-ai/dashboards.
     // Idempotent — ALTERs below handle older schemas that lack CHECK constraints + lifecycle columns.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."dashboards" (
@@ -1214,7 +1215,12 @@ END $$` },
       owner_level               text NOT NULL CHECK (owner_level IN ('user','team','organization','workspace')),
       owner_id                  text NOT NULL,
       organization_id           text NOT NULL,
-      visibility                text NOT NULL DEFAULT 'private' CHECK (visibility IN ('private','owners','members')),
+      -- NO visibility column: the dashboard-local {private,owners,members} ACL
+      -- vocabulary RETIRED with the cinatra#1898 Phase-3 cutover (epic #1883
+      -- section D7) — a dashboard is always visible to everyone in its scope, so
+      -- owner_level/owner_id (+ project_id) ARE the share axis and the canonical
+      -- visibility lives on the paired objects twin. Existing deployments drop
+      -- the column via migration core__0087 (this shape's operator-upgrade twin).
       status                    text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published','archived','generation_failed')),
       created_by                text NOT NULL,
       updated_by                text,
@@ -1245,11 +1251,6 @@ END $$` },
       ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards"
         ADD CONSTRAINT dashboards_owner_level_check
         CHECK (owner_level IN ('user','team','organization','workspace'));
-    EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
-    { text: `DO $$ BEGIN
-      ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards"
-        ADD CONSTRAINT dashboards_visibility_check
-        CHECK (visibility IN ('private','owners','members'));
     EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
     { text: `DO $$ BEGIN
       ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards"
@@ -1702,12 +1703,12 @@ END $$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS run_token_hash text` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_run_token_hash_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (run_token_hash) WHERE run_token_hash IS NOT NULL` },
     // cinatra#1392 Gap 2 — dependent_install_id: the installed_extension row id a
-    // run executes AS, carried onto the run's signed lineage (ActorContext) so
-    // the A2A dispatch seam resolves edge-bound serving against a TRUSTED
-    // dependent id (never client-supplied). Additive nullable; mirrors schema.ts
-    // + migration core__0030. No index (read as part of the run row, never
-    // queried by it).
+    // run executes AS, carried onto the run's signed lineage (ActorContext) so the
+    // A2A dispatch seam resolves edge-bound serving against a TRUSTED dependent id
+    // (never client-supplied). Additive nullable; mirrors schema.ts + core__0030.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS dependent_install_id text` },
+    // human_present: cinatra#2067 run-start presence discriminator (additive nullable; NULL=headless). No migration — schema-migration-gate scopes a new nullable column additive (timeout_seconds/streamed_text precedent).
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS human_present boolean` },
     // Delegated execution-actor snapshot.
     // Captured at instantiate from the requesting user's ActorContext and
     // replayed at run-start re-authz + mid-run authz checks. Nullable JSON
@@ -2126,7 +2127,7 @@ $body$` },
     // (reuse an earlier build; one shared GC/teardown source of truth). DDL in
     // the pure-strings leaf src/lib/execution/environment-layer-schema.ts;
     // existing deployments also converge via migration core__0057.
-    ...environmentLayerStoreSchemaQueries(schemaName),
+    ...environmentLayerStoreSchemaQueries(schemaName), ...agentExecutionConfigSchemaQueries(schemaName),
     // ---- authoring_invocation_ledger ----
 
     // Operational recursion-control table for authoring-skill chains.
@@ -3670,7 +3671,7 @@ END $$` },
     },
 
     // 2.5 agent_templates.(owner_level, owner_id) → <owner-prefix>/~agents/<vendor>/<package>.
-    // Path derived at enqueue from package_name (npm, e.g. "@cinatra-ai/auditor-agent"); on-disk
+    // Path derived at enqueue from package_name (npm, e.g. "@cinatra-ai/author-agent"); on-disk
     // store is UNSCOPED so "@<scope>/" is stripped (agentPackageNameToPath; cinatra#550). Quoted
     // $fn$ (not $body$) so agent-owner-move-scope-strip.test.ts slices the body to the "$body$" end.
     {
@@ -3786,7 +3787,7 @@ END $$` },
       PRIMARY KEY (api_key_fingerprint, environment, catalog_skill_id, anthropic_version, lease_id)
     )` },
     { text: `CREATE INDEX IF NOT EXISTS anthropic_skill_lease_skill_idx ON "${schemaName.replaceAll('"', '""')}"."anthropic_skill_lease" (api_key_fingerprint, environment, anthropic_skill_id)` },
-    { text: `CREATE INDEX IF NOT EXISTS anthropic_skill_lease_expires_idx ON "${schemaName.replaceAll('"', '""')}"."anthropic_skill_lease" (expires_at)` },
+    { text: `CREATE INDEX IF NOT EXISTS anthropic_skill_lease_expires_idx ON "${schemaName.replaceAll('"', '""')}"."anthropic_skill_lease" (expires_at)` }, ...skillBundleSchemaQueries(schemaName), // cinatra#2088 bundle authority — spread HERE: needs skill_revisions (above) AND anthropic_skill_sync (just created)
 
     // authoring_step_artifacts — linkage from a committed ledger step to every
     // artifact representation it emitted. FK ON DELETE CASCADE so a ledger
@@ -4017,7 +4018,7 @@ END $$` },
       created_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS widget_stream_tokens_expires_at_idx ON "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (expires_at)` },
-    ...extensionUpdateReadModelSchemaQueries(schemaName), ...skillEfficacySchemaQueries(schemaName), // DDL in pure-strings leaves for file-size-ratchet headroom (#1041 outcome-3 / #1317 / #1405 pattern): extension update read-model + cinatra#1368 skill-efficacy exposure telemetry (runs late — both agent_run_skills_used and skills already exist)
+    ...extensionUpdateReadModelSchemaQueries(schemaName), ...skillEfficacySchemaQueries(schemaName), ...connectorInstanceToolPolicySchemaQueries(schemaName), ...connectorInstanceServerSchemaQueries(schemaName), ...connectorInstancePendingCallSchemaQueries(schemaName), ...connectorInstanceConfirmationPolicySchemaQueries(schemaName), ...connectorInstanceNativeInjectionSchemaQueries(schemaName), // DDL in pure-strings leaves for file-size-ratchet headroom (#1041 outcome-3 / #1317 / #1405 pattern): extension update read-model + cinatra#1368 skill-efficacy exposure telemetry + cinatra#2017 S2 connector_instance_tool_policy + cinatra#2018 S3 connector_instance_server & site_inventory + cinatra#2020 S5 connector_instance_pending_call & confirmation_policy + cinatra#2019 S4 connector_instance_native_injection_policy opt-in (additive bootstrap DDL, no numbered migration; all run late)
     // -----------------------------------------------------------------------
     // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
     //

@@ -127,8 +127,7 @@ describe("materializeExternalMcpServers", () => {
         transport: "streamable-http",
       }),
     ]);
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    expect(res.skipped).toEqual([]);
     expect(res.servers[0]).toEqual({
       serverLabel: "twenty_crm",
       serverUrl: "https://twenty.example/mcp",
@@ -146,56 +145,93 @@ describe("materializeExternalMcpServers", () => {
       base({ serverLabel: "First", serverUrl: "https://first.example/mcp" }),
       base({ serverLabel: "Second", serverUrl: "https://second.example/mcp" }),
     ]);
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    expect(res.skipped).toEqual([]);
     expect(res.servers.map((s) => s.serverLabel)).toEqual(["first", "second"]);
     expect(res.servers[0]).toEqual({ serverLabel: "first", serverUrl: "https://first.example/mcp" });
   });
 
   it("carries approval_required through untouched — enforcement is the adapters' job (#1713 AC2)", () => {
     const res = materializeExternalMcpServers([base({ approval: "approval_required" })]);
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    expect(res.skipped).toEqual([]);
     expect(res.servers[0].approval).toBe("approval_required");
   });
 
-  it("fails closed on an invalid URL", () => {
-    const res = materializeExternalMcpServers([base({ serverUrl: "not-a-url" })]);
-    expect(res.ok).toBe(false);
-    if (res.ok) return;
-    expect(res.error.code).toBe("invalid_url");
-  });
-
-  it("fails closed on an empty-normalizing label", () => {
-    const res = materializeExternalMcpServers([base({ serverLabel: "***" })]);
-    expect(res.ok).toBe(false);
-    if (res.ok) return;
-    expect(res.error.code).toBe("empty_label");
-  });
-
-  it("fails closed on a dual authorization source", () => {
+  // === Per-entry skip scope (cinatra#2015 S0) — one bad row must never drop
+  // === every other server. Previously ANY failure aborted the whole batch.
+  it("an invalid URL suppresses ONLY that entry — the rest of the batch materializes", () => {
     const res = materializeExternalMcpServers([
-      base({ authorization: "tok", headers: { Authorization: "Bearer other" } }),
+      base({ serverLabel: "Good One", serverUrl: "https://good.example/mcp" }),
+      base({ serverLabel: "Bad", serverUrl: "not-a-url" }),
+      base({ serverLabel: "Good Two", serverUrl: "https://good2.example/mcp" }),
     ]);
-    expect(res.ok).toBe(false);
-    if (res.ok) return;
-    expect(res.error.code).toBe("authorization_conflict");
+    expect(res.servers.map((s) => s.serverLabel)).toEqual(["good_one", "good_two"]);
+    expect(res.skipped).toHaveLength(1);
+    expect(res.skipped[0].code).toBe("invalid_url");
+    expect(res.skipped[0].label).toBe("Bad");
   });
 
-  it("detects a normalized-name collision across distinct labels and reports both", () => {
+  it("an empty-normalizing label suppresses only itself", () => {
+    const res = materializeExternalMcpServers([
+      base({ serverLabel: "***" }),
+      base({ serverLabel: "Survivor", serverUrl: "https://s.example/mcp" }),
+    ]);
+    expect(res.servers.map((s) => s.serverLabel)).toEqual(["survivor"]);
+    expect(res.skipped[0].code).toBe("empty_label");
+  });
+
+  it("a dual authorization source suppresses only itself", () => {
+    const res = materializeExternalMcpServers([
+      base({
+        serverLabel: "Conflicted",
+        authorization: "tok",
+        headers: { Authorization: "Bearer other" },
+      }),
+      base({ serverLabel: "Clean", serverUrl: "https://c.example/mcp" }),
+    ]);
+    expect(res.servers.map((s) => s.serverLabel)).toEqual(["clean"]);
+    expect(res.skipped[0].code).toBe("authorization_conflict");
+    expect(res.skipped[0].label).toBe("Conflicted");
+  });
+
+  it("a normalized-name collision keeps the FIRST entry and suppresses the later one, naming the winner", () => {
     const res = materializeExternalMcpServers([
       base({ serverLabel: "Server A", serverUrl: "https://a.example/mcp" }),
       base({ serverLabel: "server-a", serverUrl: "https://b.example/mcp" }),
     ]);
-    expect(res.ok).toBe(false);
-    if (res.ok) return;
-    expect(res.error.code).toBe("name_collision");
-    if (res.error.code !== "name_collision") return;
-    expect(res.error.normalized).toBe("server_a");
-    expect(res.error.labels).toEqual(["Server A", "server-a"]);
+    expect(res.servers.map((s) => s.serverUrl)).toEqual(["https://a.example/mcp"]);
+    expect(res.skipped).toHaveLength(1);
+    expect(res.skipped[0]).toMatchObject({
+      code: "name_collision",
+      label: "server-a",
+      winnerLabel: "Server A",
+    });
+  });
+
+  it("a MANAGED entry wins a collision against an earlier BYO row (managed over BYO)", () => {
+    const res = materializeExternalMcpServers([
+      base({ serverLabel: "WordPress X", serverUrl: "https://byo.example/mcp", origin: "byo" }),
+      base({ serverLabel: "wordpress-x", serverUrl: "https://managed.example/mcp", origin: "managed" }),
+    ]);
+    expect(res.servers).toHaveLength(1);
+    expect(res.servers[0].serverUrl).toBe("https://managed.example/mcp");
+    expect(res.attribution).toEqual({ wordpress_x: "wordpress-x" });
+    expect(res.skipped[0]).toMatchObject({
+      code: "name_collision",
+      label: "WordPress X",
+      winnerLabel: "wordpress-x",
+    });
+  });
+
+  it("an UNTAGGED origin ranks as BYO — it never displaces a managed entry", () => {
+    const res = materializeExternalMcpServers([
+      base({ serverLabel: "Thing", serverUrl: "https://managed.example/mcp", origin: "managed" }),
+      base({ serverLabel: "thing", serverUrl: "https://untagged.example/mcp" }),
+    ]);
+    expect(res.servers[0].serverUrl).toBe("https://managed.example/mcp");
+    expect(res.skipped[0].label).toBe("thing");
   });
 
   it("returns an empty result set for no inputs", () => {
-    expect(materializeExternalMcpServers([])).toEqual({ ok: true, servers: [], attribution: {} });
+    expect(materializeExternalMcpServers([])).toEqual({ servers: [], attribution: {}, skipped: [] });
   });
 });

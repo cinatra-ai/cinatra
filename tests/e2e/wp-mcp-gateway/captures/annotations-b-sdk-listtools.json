@@ -1,0 +1,294 @@
+{
+  "schemaVersion": 1,
+  "subClaim": "b",
+  "description": "MCP SDK Client.listTools() (StreamableHTTP + SSE fallback); tools[].annotations preserved",
+  "defaultServer": {
+    "url": "http://localhost:8080/wp-json/mcp/mcp-adapter-default-server",
+    "sdkAvailable": true,
+    "transport": "streamable-http",
+    "tools": [
+      {
+        "name": "mcp-adapter-discover-abilities",
+        "title": "Discover Abilities",
+        "description": "Discover all available WordPress abilities in the system. Returns a list of all registered abilities with their basic information.",
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "abilities": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "label",
+                  "description"
+                ]
+              }
+            }
+          },
+          "required": [
+            "abilities"
+          ]
+        },
+        "annotations": {
+          "title": "Discover Abilities",
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true
+        }
+      },
+      {
+        "name": "mcp-adapter-get-ability-info",
+        "title": "Get Ability Info",
+        "description": "Get detailed information about a specific WordPress ability including its input/output schema, description, and usage examples.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ability_name": {
+              "type": "string",
+              "description": "The full name of the ability to get information about"
+            }
+          },
+          "required": [
+            "ability_name"
+          ]
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "input_schema": {
+              "type": "object",
+              "description": "JSON Schema for the ability input parameters"
+            },
+            "output_schema": {
+              "type": "object",
+              "description": "JSON Schema for the ability output structure"
+            },
+            "meta": {
+              "type": "object",
+              "description": "Additional metadata about the ability"
+            }
+          },
+          "required": [
+            "name",
+            "label",
+            "description",
+            "input_schema"
+          ]
+        },
+        "annotations": {
+          "title": "Get Ability Info",
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true
+        }
+      },
+      {
+        "name": "mcp-adapter-execute-ability",
+        "title": "Execute Ability",
+        "description": "Execute a WordPress ability with the provided parameters. This is the primary execution layer that can run any registered ability.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ability_name": {
+              "type": "string",
+              "description": "The full name of the ability to execute"
+            },
+            "parameters": {
+              "type": "object",
+              "description": "Parameters to pass to the ability"
+            }
+          },
+          "required": [
+            "ability_name",
+            "parameters"
+          ]
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "success": {
+              "type": "boolean"
+            },
+            "data": {
+              "type": [
+                "object",
+                "array",
+                "string",
+                "number",
+                "integer",
+                "boolean",
+                "null"
+              ],
+              "description": "The result data from the ability execution"
+            },
+            "error": {
+              "type": "string",
+              "description": "Error message if execution failed"
+            }
+          },
+          "required": [
+            "success"
+          ]
+        },
+        "annotations": {
+          "title": "Execute Ability",
+          "readOnlyHint": false,
+          "destructiveHint": true,
+          "idempotentHint": false
+        }
+      }
+    ]
+  },
+  "fixtureServer": {
+    "url": "http://localhost:8080/wp-json/fixturelabs/fixturelabs-server",
+    "sdkAvailable": true,
+    "transport": "streamable-http",
+    "tools": [
+      {
+        "name": "fixturelabs-note-get",
+        "title": "Get Note",
+        "description": "Return the note stored by the Fixture Labs fixture plugin.",
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "note": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "note"
+          ]
+        },
+        "annotations": {
+          "title": "Get Note",
+          "readOnlyHint": true,
+          "destructiveHint": false
+        }
+      },
+      {
+        "name": "fixturelabs-note-set",
+        "title": "Set Note",
+        "description": "Create or update the Fixture Labs note.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "note": {
+              "type": "string",
+              "description": "Note text to store."
+            }
+          },
+          "required": [
+            "note"
+          ]
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "note": {
+              "type": "string"
+            }
+          }
+        },
+        "annotations": {
+          "title": "Set Note",
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": true
+        }
+      },
+      {
+        "name": "fixturelabs-note-delete",
+        "title": "Delete Note",
+        "description": "Delete the Fixture Labs note.",
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          }
+        },
+        "annotations": {
+          "title": "Delete Note",
+          "readOnlyHint": false,
+          "destructiveHint": true
+        }
+      },
+      {
+        "name": "fixturelabs-note-get-unannotated",
+        "title": "Get Note (unannotated)",
+        "description": "Read variant with NO MCP annotations declared — proves absent-annotation behavior.",
+        "inputSchema": {
+          "type": "object"
+        }
+      },
+      {
+        "name": "fixturelabs-note-get-malformed",
+        "title": "Get Note (malformed annotations)",
+        "description": "Read variant whose annotation values are malformed types — proves malformed-annotation handling.",
+        "inputSchema": {
+          "type": "object"
+        },
+        "annotations": {
+          "title": "Get Note (malformed annotations)",
+          "readOnlyHint": true
+        }
+      },
+      {
+        "name": "fixturelabs-note-get-contradictory",
+        "title": "Get Note (contradictory annotations)",
+        "description": "Read variant declaring readOnly AND destructive both true — proves contradictory-annotation behavior.",
+        "inputSchema": {
+          "type": "object"
+        },
+        "annotations": {
+          "title": "Get Note (contradictory annotations)",
+          "readOnlyHint": true,
+          "destructiveHint": true
+        }
+      }
+    ]
+  },
+  "provenance": {
+    "capturedAtCommit": "e062837f5976e49eb0a22812cf744a7dc2c26f10",
+    "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30202762361",
+    "capturedAt": "2026-07-26T12:49:46.029Z",
+    "pinsLockSha256": "7bddc5015bbbf794a15229a4753d7973b40dfd364e0050e578e7121bab72ad7a",
+    "fixturePluginSha256": "435ff97d89701d402398d589aa5b4570cc77b6ac65e8fa8c74be0e9c07195231",
+    "producerSha256": "9f81bb67bd5eb378ea498c379dca7bd8eacc0dc25bc578d8d6ae8d1973545a81",
+    "apiMapSha256": "55749cb32fb96c5443510eb61a353bb63a9277c1600af212e25846b997c2dac8"
+  }
+}

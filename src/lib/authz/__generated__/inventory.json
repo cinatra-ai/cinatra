@@ -1230,67 +1230,77 @@
     {
       "primitiveName": "wordpress_content_editor_run",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 70
+      "line": 72
     },
     {
       "primitiveName": "wordpress_instances_list",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 19
+      "line": 21
     },
     {
       "primitiveName": "wordpress_media_upload",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 37
+      "line": 39
     },
     {
       "primitiveName": "wordpress_pages_list",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 46
+      "line": 48
     },
     {
       "primitiveName": "wordpress_post_create_draft",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 23
+      "line": 25
     },
     {
       "primitiveName": "wordpress_post_delete",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 32
+      "line": 34
     },
     {
       "primitiveName": "wordpress_post_get",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 56
+      "line": 58
     },
     {
       "primitiveName": "wordpress_post_get_latest",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 51
+      "line": 53
     },
     {
       "primitiveName": "wordpress_post_status",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 27
+      "line": 29
     },
     {
       "primitiveName": "wordpress_post_update",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 65
+      "line": 67
     },
     {
       "primitiveName": "wordpress_post_update_meta",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 60
+      "line": 62
     },
     {
       "primitiveName": "wordpress_posts_list",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 41
+      "line": 43
+    },
+    {
+      "primitiveName": "wordpress_site_tool_call",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 80
+    },
+    {
+      "primitiveName": "wordpress_site_tools_list",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 85
     },
     {
       "primitiveName": "wordpress_status",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 14
+      "line": 16
     }
   ]
 }

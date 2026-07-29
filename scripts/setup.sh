@@ -216,6 +216,23 @@ info "Nango is ready."
 # own demo content from their entrypoints; Twenty + Plane content is seeded from
 # the app-side demo path once their connections converge.
 if [ "$DEMO" = "1" ]; then
+  # The `wordpress` + `drupal` profiles below ALSO bring up the shared `wayflow`
+  # runtime container (docker-compose.yml: the wayflow service declares
+  # `profiles: [wayflow, drupal, wordpress]`). That container authenticates every
+  # callback to /api/llm-bridge with CINATRA_BRIDGE_TOKEN, which it reads from the
+  # NARROW generated file docker/wayflow/.wayflow.env (its `env_file`,
+  # `required: false`). `npm run services` regenerates that file on every
+  # bring-up (gen-wayflow-env.mjs); the demo/setup path never did, so a fresh
+  # `make setup-demo` started wayflow with NO token and agent_loader.py
+  # crash-looped ("FATAL: CINATRA_BRIDGE_TOKEN is unset or empty") — widget agent
+  # replies then stayed empty until the token was populated by hand
+  # (cinatra#2075). Generate the file HERE, from the per-install random token
+  # minted into .env.local above (never a shared constant, never printed), BEFORE
+  # the bring-up. `--require-bridge-token` mirrors `npm run services` and turns a
+  # missing token into a loud, actionable failure instead of a silent 403.
+  info "Provisioning the WayFlow bridge-token env (docker/wayflow/.wayflow.env) from .env.local..."
+  node scripts/gen-wayflow-env.mjs --require-bridge-token
+
   info "Bringing up the four demo app profiles (wordpress, drupal, twenty, plane)..."
   docker compose -f docker-compose.yml -f docker-compose.dev.yml \
     --profile wordpress --profile drupal --profile twenty --profile plane up -d
@@ -256,11 +273,17 @@ if [ "$DEMO" = "1" ]; then
   # ready / unsupported version) writes no env file — the bridge waits for a
   # later re-run and the connector still auto-connects its REST config.
   if [ -f docker/plane-mcp/.plane-mcp.env ] && grep -q '^PLANE_API_KEY=.' docker/plane-mcp/.plane-mcp.env; then
-    info "Bringing up the Plane MCP bridge (--profile plane-mcp)..."
-    docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile plane-mcp up -d --build \
-      || warn "Plane MCP bridge failed to start — the connector still auto-connects its REST config; re-run \`docker compose --profile plane-mcp up -d --build\` to expose Plane tools to agents."
+    info "Bringing up the Plane MCP bridge (--profile plane --profile plane-mcp)..."
+    # The bridge (profile `plane-mcp`) declares `depends_on: plane-api`, which
+    # lives in the `plane` profile. Activating `plane-mcp` alone leaves plane-api
+    # an undefined service, so the bridge's dependency can't resolve and it fails
+    # on the first pass (cinatra#1238 finding). Activate BOTH profiles in one set
+    # so the dependency is defined; the already-running `plane` containers from the
+    # bring-up above are left in place (up -d is a no-op for healthy services).
+    docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile plane --profile plane-mcp up -d --build \
+      || warn "Plane MCP bridge failed to start — the connector still auto-connects its REST config; re-run \`docker compose --profile plane --profile plane-mcp up -d --build\` to expose Plane tools to agents."
   else
-    warn "Plane PAT not provisioned yet (Plane still booting or version mismatch) — skipping the MCP bridge. Re-run \`node scripts/fixtures/provision-plane.mjs\` once Plane is healthy, then \`docker compose --profile plane-mcp up -d --build\`."
+    warn "Plane PAT not provisioned yet (Plane still booting or version mismatch) — skipping the MCP bridge. Re-run \`node scripts/fixtures/provision-plane.mjs\` once Plane is healthy, then \`docker compose --profile plane --profile plane-mcp up -d --build\`."
   fi
 
   info "Demo app profiles up. Connections converge at the first \`pnpm dev\` boot."
@@ -356,29 +379,17 @@ else
   rm -f "$SETUP_DEV_LOG"; trap - EXIT
 fi
 
-# The OpenAI shell sandbox image builds from whichever extension ships a
-# runtime/Dockerfile (today the OpenAI connector, cloned back under extensions/).
-# Core does not hardcode a specific extension, but exactly ONE extension may own
-# the `cinatra/skill-shell:latest` tag: collect ALL matches so an AMBIGUOUS tree
-# (>1 extension shipping a runtime/Dockerfile) fails loud instead of silently
-# re-tagging the shell image from whichever the glob happened to enumerate first.
-# Build only when exactly one is present -- never abort `make setup`
-# (set -euo pipefail) when the clone-back has not delivered it yet (the OpenAI
-# shell tool just stays unavailable until then).
-shell_runtime_contexts=()
-for dockerfile in extensions/*/*/runtime/Dockerfile; do
-  if [ -f "$dockerfile" ]; then
-    shell_runtime_contexts+=("$(dirname "$dockerfile")")
-  fi
-done
-if [ "${#shell_runtime_contexts[@]}" -gt 1 ]; then
-  error "Ambiguous OpenAI shell runtime: ${#shell_runtime_contexts[@]} extensions ship a runtime/Dockerfile (${shell_runtime_contexts[*]}). Exactly one (the OpenAI connector) may provide cinatra/skill-shell:latest; resolve the ambiguity before setup can build the shell image."
-elif [ "${#shell_runtime_contexts[@]}" -eq 1 ]; then
-  info "Building OpenAI shell Docker image..."
-  docker build -t cinatra/skill-shell:latest "${shell_runtime_contexts[0]}"
-else
-  warn "Skipping OpenAI shell Docker image: no extension ships a runtime/Dockerfile. The OpenAI shell tool stays unavailable until the runtime Dockerfile is restored to the OpenAI connector."
-fi
+# NOTE: setup no longer builds a per-extension shell sandbox image. The
+# `cinatra/skill-shell:latest` runtime an extension used to contribute as
+# `runtime/Dockerfile` was retired together with the shell-tools capability.
+# Its successor is the platform-owned execution-plane L0 image
+# (docker/sandbox/Dockerfile): CI builds and publishes it, and a developer
+# builds it locally on demand with
+# `docker build -t cinatra-sandbox-l0:dev docker/sandbox` — the sandbox worker
+# names that exact command in its own "image not available" error, so setup
+# does not pre-build it. With the pinned extension set nothing in the tree
+# matches `extensions/*/*/runtime/Dockerfile`, so the removed build step only
+# ever printed its own "skipped" warning here.
 
 # ── Sample data (optional) ────────────────────────────────────────────────────
 

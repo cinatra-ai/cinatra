@@ -1,0 +1,13 @@
+12:[static-bundle-lifecycle] anchored 16 bundled serverEntry/required-in-prod package(s) live: @cinatra-ai/assistant-skills, @cinatra-ai/audio-artifact, @cinatra-ai/author-agent, @cinatra-ai/chart-artifact, @cinatra-ai/code-reviewer-agent, @cinatra-ai/dashboard-artifact, @cinatra-ai/document-artifact, @cinatra-ai/image-artifact, @cinatra-ai/json-artifact, @cinatra-ai/lint-policy-agent, @cinatra-ai/pdf-artifact, @cinatra-ai/planner-agent, @cinatra-ai/security-reviewer-agent, @cinatra-ai/text-artifact, @cinatra-ai/video-artifact, @cinatra-ai/zip-artifact
+59:[lifecycle-review-orchestration] S1 activation ACTIVE (default) — review-orchestration (30s) + gate-maintenance (60s) loops scheduled
+167: GET /agents/cinatra-ai/blog-draft-writer-agent/run-flip-34457b99/review/lifecycle-review%3A26f8edf11f1367497c79f21993601cb5eb441f5c49e92cd4ad2b2dbc90bd8c27 200 in 10.3s (next.js: 3.0s, proxy.ts: 63ms, application-code: 7.3s)
+185: GET /agents/cinatra-ai/blog-draft-writer-agent/run-flip-34457b99/review/lifecycle-review%3A26f8edf11f1367497c79f21993601cb5eb441f5c49e92cd4ad2b2dbc90bd8c27 200 in 1445ms (next.js: 11ms, proxy.ts: 6ms, application-code: 1428ms)
+201: POST /agents/cinatra-ai/blog-draft-writer-agent/run-flip-34457b99/review/lifecycle-review%3A26f8edf11f1367497c79f21993601cb5eb441f5c49e92cd4ad2b2dbc90bd8c27 200 in 1694ms (next.js: 1208ms, proxy.ts: 3ms, application-code: 484ms)
+203: GET /agents/cinatra-ai/blog-draft-writer-agent/run-flip-34457b99/review/lifecycle-review%3A26f8edf11f1367497c79f21993601cb5eb441f5c49e92cd4ad2b2dbc90bd8c27 200 in 733ms (next.js: 5ms, proxy.ts: 3ms, application-code: 726ms)
+217:[artifact-review-resume] gate=2baa4ca3-d8a2-422e-827a-3474b9864018 is an S1 auto-gate (task=lifecycle-review:26f8edf11f1367497c79f21993601cb5eb441f5c49e92cd4ad2b2dbc90bd8c27); run continuation is the lifecycle park — marked done
+219:[lifecycle-review-orchestration] scanned=1 gatesCreated=1 noGate=0 notClassifiable=0 failed=0
+220: GET /agents/cinatra-ai/blog-draft-writer-agent/run-flip-2195473a/review/lifecycle-review%3A4687e0f14ce402fe21ab390b77dc8ce5284f310cfc55c93bb939e0e3f4baef05 200 in 2.2s (next.js: 19ms, proxy.ts: 14ms, application-code: 2.2s)
+228: POST /agents/cinatra-ai/blog-draft-writer-agent/run-flip-2195473a/review/lifecycle-review%3A4687e0f14ce402fe21ab390b77dc8ce5284f310cfc55c93bb939e0e3f4baef05 200 in 98ms (next.js: 6ms, proxy.ts: 2ms, application-code: 90ms)
+516: GET /configuration/lifecycle-operations%20FLIP-06-ops-lifecycle-operations 404 in 3.0s (next.js: 2.1s, proxy.ts: 6ms, application-code: 888ms)
+540:○ Compiling /configuration/lifecycle-operations ...
+541: GET /configuration/lifecycle-operations 200 in 5.1s (next.js: 4.0s, proxy.ts: 7ms, application-code: 1179ms)

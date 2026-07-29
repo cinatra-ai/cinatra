@@ -33,6 +33,10 @@ import {
   enforceReviewRunAccess,
 } from "@cinatra-ai/agents/artifact-review-gate-store";
 import {
+  recordReviewSurfaceChangesRequested,
+  type RecordChangesRequestedResult,
+} from "@cinatra-ai/agents/lifecycle-review-changes-requested";
+import {
   buildActorContextFromPrimitive,
   type ActorRoleHints,
 } from "@/lib/authz/build-actor-context";
@@ -45,7 +49,17 @@ import {
   type PreparedReviewTarget,
   type RunAccessOutcome,
 } from "@/lib/artifacts/artifact-review-preparation";
-import type { ReviewSurfaceModel } from "@/app/artifacts/review/review-surface-model";
+import {
+  pinnedCaptureKey,
+  type ReviewSurfaceModel,
+} from "@/lib/artifacts/review-surface-model";
+import { readPinnedPreviewCaptures } from "@/lib/artifacts/cms-preview-capture-store";
+import {
+  buildPinnedCaptureViews,
+  buildPinnedCapturePair,
+  type PinnedCapturePairKind,
+  type PinnedCapturePairView,
+} from "@/lib/artifacts/cms-preview-capture-view";
 import {
   submitReviewDecisionCore,
   type ArtifactReviewDecision,
@@ -161,6 +175,11 @@ export function bindSubmitDecisionPorts(ctx: ReviewActorContext): SubmitDecision
     revisionMember: (artifactId, representationRevisionId) =>
       artifactPorts.revisionMember(artifactId, representationRevisionId),
     deriveProvenance,
+    // The DECIDING actor (cinatra#2047 D-2) — taken from the SAME verified actor
+    // context run access was just enforced against, never from the request body.
+    // A carrier with no user id (an A2A/system principal) yields null, and the
+    // gate then records no decider rather than a fabricated one.
+    actingActorId: () => ctx.actor.userId ?? null,
     commit: (plan) => commitReviewDecision(plan),
   };
 }
@@ -196,6 +215,59 @@ export async function enforceReviewDecisionAccess(args: {
 }
 
 /**
+ * The LIFECYCLE `changes_requested` binder (cinatra#2063; owner ruling 2026-07-25).
+ * The review surface's prompt-window feedback (the existing Comment path) drives a
+ * `changes_requested` decision on a LIFECYCLE review gate: the base gate closes and
+ * a repair opens through the S2 store's `recordChangesRequested` entry point (via
+ * the surface composer) — no parallel write path.
+ *
+ * The ONE fact the composer needs that the surface holds is the base-revision CAS
+ * witness (`currentBaseRevisionId`). It is resolved HERE through the SAME
+ * `revisionMember` (liveOnly) port the preparation core uses: the reviewer decides
+ * on the exact pinned revision, so the witness is that revision WHEN it is still a
+ * live member, and null when it was tombstoned between prepare and submit (a
+ * fail-closed `tombstoned-base`). No new artifact read path is introduced.
+ *
+ * Authorization is the CALLER's job and is UNCHANGED from the base Comment
+ * decision: the action enforces `respondToHitl` on the run for the comment op
+ * BEFORE this binder is reached, exactly as it does for a plain comment.
+ */
+export async function submitReviewSurfaceChangesRequested(args: {
+  runId: string;
+  reviewTaskId: string;
+  baseTarget: ArtifactReviewTarget;
+  /** The reviewer's typed prompt-window feedback (trimmed, non-empty). */
+  feedback: string;
+  actorCtx: ReviewActorContext;
+}): Promise<RecordChangesRequestedResult> {
+  const kernelActor = buildActorContextFromPrimitive(
+    args.actorCtx.actor,
+    args.actorCtx.orgId,
+    args.actorCtx.roleHints,
+  );
+  const artifactPorts = bindArtifactReviewPorts({ orgId: args.actorCtx.orgId, actor: kernelActor });
+  const member = await artifactPorts.revisionMember(
+    args.baseTarget.artifactId,
+    args.baseTarget.representationRevisionId,
+  );
+  const currentBaseRevisionId = member ? args.baseTarget.representationRevisionId : null;
+
+  return recordReviewSurfaceChangesRequested({
+    runId: args.runId,
+    reviewTaskId: args.reviewTaskId,
+    baseTarget: {
+      artifactId: args.baseTarget.artifactId,
+      representationRevisionId: args.baseTarget.representationRevisionId,
+    },
+    currentBaseRevisionId,
+    feedback: args.feedback,
+    // The DECIDING actor (cinatra#2047 D-2) — the same verified session actor the
+    // approve/reject commit stamps, from the context run access was enforced against.
+    decidedBy: args.actorCtx.actor.userId ?? null,
+  });
+}
+
+/**
  * Read a gate's FROZEN pinned target set (the whole gate) — the host reviews
  * every pinned target, so a terminal decision covers them all (§IV). Returns the
  * pinned set for ANY existing gate (pending OR resolved), null only when the gate
@@ -221,7 +293,7 @@ export async function readReviewGatePinnedTargets(
 
 // ---------------------------------------------------------------------------
 // SURFACE LOADER — the host decision-chrome page's single server entrypoint
-// (cinatra#1795 S12 item 4; spec design@30a0f9c9 §I–VI). Composes the run/gate
+// (cinatra#1795 S12 item 4; spec design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891 §I–VI). Composes the run/gate
 // ports into the discriminated `ReviewSurfaceModel` the page renders: reads the
 // pinned gate, prepares EVERY pinned target (the host reviews the whole gate —
 // the reviewer never supplies targets), and resolves the terminal/comment
@@ -289,10 +361,74 @@ export async function loadReviewGateSurface(args: {
     runId,
     reviewTaskId,
     targets,
+    // S6 (#2044 L-B + L-D) — the PINNED before/after PAIR for each pinned
+    // target. A STORE read
+    // only: the surface shows the picture taken at gate creation and performs no
+    // network fetch at view time (the inert-by-contract rule, asserted by
+    // `cms-preview-capture-view.test.ts`). A target with no capture yields an
+    // empty list and renders nothing.
+    pinnedCapturePairs: loadPinnedCapturePairsForTargets(actorCtx.orgId, targets),
     // The producing agent's one-line summary (§I/II) is rendered "when present";
     // no gate/run column carries it in this slice, so it is absent (the chrome
     // renders nothing rather than an empty summary).
     agentSummary: null,
     permissions: { canDecide: decide.ok, canComment: comment.ok },
   };
+}
+
+// ---------------------------------------------------------------------------
+// PINNED CAPTURES (cinatra#2044 S6, sub-lane L-B).
+//
+// The whole point of the capture pipeline is that the reviewer sees the page as
+// it was WHEN THE GATE WAS CREATED. This read is therefore deliberately dumb: a
+// single store lookup per pinned target and a pure projection — no fetch, no
+// resolver, no remote URL anywhere in the produced model. The only URL it emits
+// is the host's own version-pinned artifact byte route for the stored PNG, which
+// applies the same session/actor/tenant/tombstone gating as every other artifact
+// and serves under the host's sandbox CSP.
+//
+// A store failure degrades to "no capture" rather than failing the surface: a
+// reviewer must always be able to decide the DATA even when the context picture
+// is unavailable (#2044's honest-fallback rule).
+// ---------------------------------------------------------------------------
+
+/**
+ * Read one pinned target's captures and project ONE comparison out of them.
+ * Shared by the gate surface (`review` — live page vs proposal) and the S4
+ * verification view (`verification` — reviewed vs applied), so both pairs are
+ * built by exactly the same store read + pure projection.
+ */
+export function loadPinnedCapturePair(
+  orgId: string,
+  target: { artifactId: string; representationRevisionId: string },
+  kind: PinnedCapturePairKind,
+  driftedRegions: readonly string[] = [],
+): PinnedCapturePairView | null {
+  try {
+    const stored = readPinnedPreviewCaptures({
+      orgId,
+      boundArtifactId: target.artifactId,
+      boundSnapshotRevisionId: target.representationRevisionId,
+    });
+    if (stored.length === 0) return null;
+    return buildPinnedCapturePair(buildPinnedCaptureViews(stored), kind, driftedRegions);
+  } catch (err) {
+    console.warn(
+      "[review-gate-ports] pinned capture lookup failed (the review is unaffected):",
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+function loadPinnedCapturePairsForTargets(
+  orgId: string,
+  targets: readonly PreparedReviewTarget[],
+): Record<string, PinnedCapturePairView> {
+  const out: Record<string, PinnedCapturePairView> = {};
+  for (const prepared of targets) {
+    const pair = loadPinnedCapturePair(orgId, prepared.target, "review");
+    if (pair) out[pinnedCaptureKey(prepared.target)] = pair;
+  }
+  return out;
 }

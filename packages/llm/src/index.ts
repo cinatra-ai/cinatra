@@ -86,7 +86,7 @@ export type {
   McpTransport,
   McpMaterializerInput,
   MaterializedMcpServer,
-  McpMaterializerError,
+  McpMaterializerSkip,
   McpMaterializerResult,
 } from "./mcp-materializer";
 
@@ -144,12 +144,17 @@ export {
 
 // Skill tools. `createShellTool` (the connector-Docker executor) is RETIRED
 // (exec-plane S2, cinatra#1707): skill execution runs on the execution plane.
+// cinatra#2091 S4: `buildSkillTools` — the RAW shell-mount builder — is
+// deliberately NOT re-exported from the package index any more. It is the
+// delivery seam's own primitive (and rides to a relocated connector adapter
+// through the core-owned `SkillDeliveryFloor`, never through this barrel), so
+// removing it from the public surface makes the bypass the arch gate forbids
+// unavailable rather than merely unused.
 export {
   createLocalSkillShellTool,
   createMcpServerTool,
   createWebSearchTool,
   buildMcpTools,
-  buildSkillTools,
   resolveSkillSummaries,
   resolveStagedSkillFiles,
 } from "./tools/skills";
@@ -186,11 +191,20 @@ export {
 export {
   computeSkillContentHash,
   normalizeBundledRelPath,
+  ANTHROPIC_SKILL_MAX_UPLOAD_BYTES,
+  buildCanonicalSkillZip,
+  checkSkillBoundary,
+  deriveAnthropicDisplayTitle,
+  deriveSkillRootDir,
   type SkillBundledFile,
+  type CanonicalSkillZip,
+  type SkillZipFile,
+  type SkillBoundaryCheck,
 } from "./tools/anthropic-skill-content-hash";
 export {
   FetchAnthropicCustomSkillsClient,
   ANTHROPIC_SKILLS_BETAS,
+  isDisplayTitleConflict,
   type AnthropicCustomSkillsClient,
   type AnthropicSkillUpload,
   type CreateSkillResult,
@@ -209,6 +223,8 @@ export {
 } from "./tools/anthropic-skill-gc-engine";
 export {
   AnthropicSkillSyncEngine,
+  AnthropicSkillSyncFailedError,
+  AnthropicSkillExpectedSetError,
   preflightAnthropicSkillSyncSizes,
   preflightSkillRequestSet,
   ANTHROPIC_SKILL_MAX_BYTES,
@@ -216,6 +232,7 @@ export {
   type SyncRow,
   type SyncResult,
   type SyncOutcome,
+  type ExpectedSetVerification,
   type AnthropicSkillSyncStatePort,
 } from "./tools/anthropic-skill-sync-engine";
 export {
@@ -258,9 +275,36 @@ export type {
 // Provider-neutral structured-JSON extraction (relocated from the openai
 // connector — cinatra#151 Stage 2; identical signature and behavior).
 export { parseStructuredJson } from "./structured-json";
+// Core-owned INLINE skill delivery (cinatra#2091 S4). Exported so the assistant
+// runtime — which assembles its own request rather than going through the
+// deterministic entry points — can short-circuit an inline-mechanism provider
+// through the SAME core expansion the entry points use.
+export { deliverInjectedSkillsInline } from "./tools/skills";
+export type { InlineSkillDeliveryResult } from "./tools/skills";
+// The typed skill-injection contract (cinatra#2091, epic #2086 S4). Re-exported
+// so an orchestration caller has ONE import site; the canonical home stays
+// `@cinatra-ai/skills/injection` (a pure leaf).
+export {
+  resolveInjectedSkillSet,
+  injectedSkillMembers as injectedSkillSetMembers,
+  injectedCatalogSkillIds as injectedSkillSetCatalogIds,
+  injectedSkillDrops as injectedSkillSetDrops,
+  INJECTED_SKILL_CAP,
+  SkillInjectionAuthorizationError,
+  UnattributedSkillContentError,
+  type ResolvedInjectedSkillSet,
+  type InjectionIntent,
+  type InjectionResolverPorts,
+  type InjectedSkillDrop,
+} from "@cinatra-ai/skills/injection";
 
 // Legacy compatibility — skill artifact loader (used by campaign-email-outreach)
-export { createSkillArtifactLoader, type SkillArtifactLoader, type SkillArtifact } from "./skills";
+// `packages/llm/src/skills.ts` — the pre-contract skill-ARTIFACT loader and its
+// markdown renderers — is DELETED (cinatra#2091 S4). It was the last vestige of
+// the `{ skillIds, customSkillContent }` shape this slice removes: a loader that
+// took an arbitrary id list plus an unattributed content blob and rendered them
+// into a prompt. It had no consumer anywhere in the repo, and the typed
+// injection contract is what replaces it.
 
 // AsyncLocalStorage carrier for the triggering ActorContext.
 // All four orchestration entry points wrap their bodies in withActorContext
@@ -323,6 +367,7 @@ export type {
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
+import type { ExtensionToolboxBuildContext } from "@cinatra-ai/sdk-extensions";
 import type { LlmProvider, LlmCapabilityRequirement, LlmProviderAdapter, LlmFileReference, GenerateInput, LlmTool, LlmUsageData, LlmResponse, LlmMcpServerTool, OrchestrateGenerateInput, OrchestrateStreamInput, OrchestrateUploadFileInput, OrchestrateFileInputGenerateInput, LlmAttachmentRef, SandboxExecutor, SandboxEnvironmentMount } from "./types";
 // `OpenAIConnectionConfig` is defined+exported above (host-local structural type;
 // the openai provider that once owned it relocated into its connector, #1715).
@@ -339,8 +384,26 @@ import {
   resolveDefaultAdapter,
   resolveMcpToolsForDeclaredIds,
 } from "./registry";
+import { deliverInjectedSkillsInline } from "./tools/skills";
 import { selectSkillDeliveryAdapter } from "./tools/skill-delivery";
 import type { SkillSelectionMode } from "./tools/skill-delivery";
+// The typed injection contract (cinatra#2091, epic #2086 S4). Pure leaf — no
+// server-only, no fs, no DB — so importing it here adds no module graph.
+import {
+  assertAttributedInjectedSkillSet,
+  describeInjectedSelection,
+  injectedCatalogSkillIds,
+  injectedIntentLabel,
+  injectedPersonalDelta,
+  injectedSkillDrops,
+  injectedSkillMembers,
+  isEmptyInjectedSkillSet,
+  isInlineSkillMechanism,
+} from "@cinatra-ai/skills/injection";
+import type {
+  InjectedSkillDrop,
+  ResolvedInjectedSkillSet,
+} from "@cinatra-ai/skills/injection";
 import {
   injectExecutionCapability,
   stripSandboxExecutionTools,
@@ -531,30 +594,56 @@ export type DeterministicLlmExecutionInput = {
    * (byte-identical S1/S2 dispatch).
    */
   executionEnvironment?: SandboxEnvironmentMount;
+  /**
+   * Host-built, identity-free toolbox build context (cinatra#2019 S4),
+   * threaded to `injectMcpTools` → first-party toolbox
+   * `buildTools(provider, context)`. Carries WHERE the injection is being
+   * assembled (`surface`) and, on run surfaces, WHICH connector instance the
+   * run is pinned to (`connectorInstancePin` — host-derived run data only,
+   * never request payload). Identity NEVER rides here — per-instance
+   * authority derives host-side from the ambient trusted actor stores.
+   * Absent ⇒ the deterministic entry points supply
+   * `{ surface: "agent_run" }` at their own `injectMcpTools` call sites
+   * (every entry point of this package is agent-plane orchestration;
+   * chat/widget turns resolve their external tools via
+   * `resolveChatExternalMcpTools` in the host runtime instead).
+   */
+  toolboxBuildContext?: ExtensionToolboxBuildContext;
 };
 
 export type SkillAwareDeterministicLlmExecutionInput = DeterministicLlmExecutionInput & {
-  skillIds?: string[];
   /**
-   * Skill-selection policy mode for the Anthropic container-skills delivery.
-   * Absent ⇒ `"creation"` semantics (over-8 is a HARD
-   * `AnthropicSkillCapError` — a fixed pre-synced allowlist is never silently
-   * truncated). The general selectable path (llm-bridge) passes `"general"` to
-   * engage deterministic rank-and-truncate-to-8 with visible `droppedSkillIds`
-   * reporting. Ignored by OpenAI/Gemini delivery (no cap).
+   * The AUTHORITATIVE injected-skill set for this request (cinatra#2091, epic
+   * #2086 S4). This replaces the former `skillIds: string[]` /
+   * `customSkillContent` / `customSkillId` triple platform-wide.
+   *
+   * It is an OPAQUE BRANDED value constructible only by
+   * `resolveInjectedSkillSet` (`@cinatra-ai/skills/injection`), so no caller can
+   * name skills directly and no unattributed content can reach a provider: every
+   * member carries a catalog skill id and a delivery mode, the personal delta is
+   * a first-class member, and the hard cap of 8 TOTAL (delta included) has
+   * already been applied by the resolver.
+   *
+   * REQUIRED — an intentionally skill-free call belongs on
+   * `runDeterministicLlmTask` (the non-skill-aware API), not on an empty array
+   * here.
+   */
+  injectedSkills: ResolvedInjectedSkillSet;
+  /**
+   * Skill-selection policy mode forwarded to the provider's delivery adapter,
+   * whose per-provider cap is now a DEFENCE-IN-DEPTH invariant only (the
+   * authoritative cap lives in the injection contract and has already run).
+   * Absent ⇒ `"creation"` semantics at the adapter.
    */
   skillSelectionMode?: SkillSelectionMode;
-  customSkillContent?: string;
   /**
-   * Catalog id of the personal-delta skill whose body is `customSkillContent`
-   * (S10 efficacy loop, cinatra#1368). When both are set, the delta is recorded
-   * as a `"personal_inline"` exposure (NON-attributable — injected system-prompt
-   * content has no per-skill invocation signal), giving the personal delta a
-   * skill identity in the exposure telemetry it previously lacked. Content
-   * without an id still delivers; it just cannot be attributed.
+   * Structured injection DROPS (cap truncation + inline-budget overflow), handed
+   * back to the caller so it can feed the exposure/efficacy ledger. A core-owned
+   * callback on the ENTRY input deliberately, so no new skill-delivery payload
+   * field has to cross the provider-adapter v1 ABI. Called at most once, only
+   * when something was dropped.
    */
-  customSkillId?: string;
-  skillLoader?: { load(input: { skillIds?: string[]; customSkillContent?: string }): Promise<unknown[]> };
+  onInjectionDrops?: (drops: readonly InjectedSkillDrop[]) => void;
   useLiveTooling?: boolean;
   extraRequestBody?: Record<string, unknown>;
   /** Additional tools to pass alongside skill tools (e.g. createWebSearchTool()). */
@@ -716,6 +805,20 @@ export async function injectMcpTools(params: {
    * path either way.
    */
   cinatraMcpToolOverride?: () => Promise<LlmMcpServerTool | null>;
+  /**
+   * Host-built toolbox build context (cinatra#2019 S4) — see
+   * `DeterministicLlmExecutionInput.toolboxBuildContext`. PASS-THROUGH:
+   * this exported helper never invents a context — an absent value stays
+   * absent all the way to the toolbox boundary, where surface-gating
+   * toolboxes emit nothing (the fail-closed rule for unwidened callers).
+   * The four orchestration entry points (`runDeterministicLlmTask`,
+   * `runSkillAwareDeterministicLlmTask`, `generate`, `stream`) each supply
+   * `{ surface: "agent_run" }` themselves — they are agent-plane surfaces;
+   * the chat/widget runtime assembles its external MCP tools via
+   * `resolveChatExternalMcpTools` and reaches this site only with MCP tools
+   * already present (dedup passthrough above).
+   */
+  toolboxBuildContext?: ExtensionToolboxBuildContext;
 }): Promise<LlmTool[] | undefined> {
   // Gemini has no native MCP — pass through.
   if (params.provider === "gemini") return params.tools;
@@ -734,6 +837,7 @@ export async function injectMcpTools(params: {
     declaredToolboxIds: params.declaredToolboxIds,
     skipExternalMcpRegistry: params.skipExternalMcpRegistry,
     cinatraMcpToolOverride: params.cinatraMcpToolOverride,
+    context: params.toolboxBuildContext,
   });
   if (mcpTools.length === 0) return params.tools;
   // Stream-only function-tool stripping.
@@ -855,6 +959,10 @@ async function runDeterministicLlmTaskImpl(input: DeterministicLlmExecutionInput
     provider: input.provider,
     tools: undefined,
     declaredToolboxIds: input.declaredToolboxIds,
+    // Agent-plane entry point: default the build context HERE (not inside
+    // the exported injectMcpTools) so direct helper callers keep the
+    // absent-context fail-closed semantics (cinatra#2019 S4).
+    toolboxBuildContext: input.toolboxBuildContext ?? { surface: "agent_run" },
   });
   // Execution-capability injection — exactly once, alongside (independent of)
   // MCP injection. Passthrough + byte-identical while the rollout flag is off.
@@ -947,33 +1055,96 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
   const skillExposure: LlmResponse["skillExposure"] = [];
   const invokedSkillIds = new Set<string>();
 
-  if (input.skillIds && input.skillIds.length > 0) {
-    // Provider-specific skill delivery is centralized in the
-    // `SkillDeliveryAdapter` seam. OpenAI (native shell, no system cue) and
-    // Gemini (inline into system prompt) behavior is byte-for-byte preserved
-    // by `OpenAiShellSkillDelivery` / `GeminiInlineSkillDelivery`. Anthropic
-    // is routed through `AnthropicContainerSkillDelivery` (container.skills,
-    // never function tools).
-    const delivery = selectSkillDeliveryAdapter(input.provider);
-    const result = await delivery.deliver({
-      skillIds: input.skillIds,
-      // Absent ⇒ "creation" (hard cap). The general selectable path
-      // (llm-bridge) passes "general" to engage deterministic
-      // rank-and-truncate-to-8 with visible droppedSkillIds reporting.
-      selectionMode: input.skillSelectionMode,
-      // Attributable per-skill invocations (OpenAI shell reads) accrue here.
-      onSkillRead: (id) => invokedSkillIds.add(id),
-    });
-    skillTools = result.tools;
-    skillContext = result.systemContext;
-    skillExposure.push(...result.exposure);
-    // Set ONLY when the general path actually truncated.
-    if (result.droppedSkillIds && result.selectionReason) {
-      skillSelection = {
-        droppedSkillIds: result.droppedSkillIds,
-        selectionReason: result.selectionReason,
-      };
+  // The typed injection contract is the ONLY source of delivered skills
+  // (cinatra#2091 S4). Refuse unattributed content BEFORE any provider work —
+  // the runtime half of "every member carries a skill id and a delivery mode".
+  assertAttributedInjectedSkillSet(input.injectedSkills);
+
+  // The contract's own drops (cap truncation) plus any inline-expansion drops
+  // below. Surfaced on the response and recorded in the efficacy ledger.
+  const injectionDrops: InjectedSkillDrop[] = [
+    ...injectedSkillDrops(input.injectedSkills),
+  ];
+  // The personal delta is a first-class MEMBER of the set, always inline.
+  const deltaMember = injectedPersonalDelta(input.injectedSkills);
+  let personalContext = "";
+
+  if (!isEmptyInjectedSkillSet(input.injectedSkills)) {
+    // Core-owned provider -> mechanism map. An INLINE provider SHORT-CIRCUITS
+    // here: core performs the budgeted one-hop reference expansion itself and
+    // never consults a delivery adapter or a connector surface, so a router
+    // skill's reference files are reachable on an inline provider exactly as
+    // they are through tool-mount / container delivery.
+    if (isInlineSkillMechanism(input.provider)) {
+      const inline = await deliverInjectedSkillsInline({
+        set: input.injectedSkills,
+      });
+      skillContext = inline.systemContext;
+      skillExposure.push(...inline.exposure);
+      injectionDrops.push(...inline.dropped);
+    } else {
+      // Provider-specific skill delivery stays centralized in the
+      // `SkillDeliveryAdapter` seam (OpenAI native shell / Anthropic
+      // container.skills). The adapter receives the ALREADY-CAPPED catalog
+      // member ids; its own cap is a defence-in-depth invariant.
+      const catalogSkillIds = injectedCatalogSkillIds(input.injectedSkills);
+      // Resolve the adapter only when there IS something catalog-backed to
+      // deliver — a delta-only set never touches the provider seam.
+      if (catalogSkillIds.length > 0) {
+        const delivery = selectSkillDeliveryAdapter(input.provider);
+        const result = await delivery.deliver({
+          skillIds: catalogSkillIds,
+          selectionMode: input.skillSelectionMode,
+          // Attributable per-skill invocations (OpenAI shell reads) accrue here.
+          onSkillRead: (id) => invokedSkillIds.add(id),
+        });
+        skillTools = result.tools;
+        skillContext = result.systemContext;
+        skillExposure.push(...result.exposure);
+      }
+      // On a non-inline provider the delta still rides the system prompt.
+      if (deltaMember?.content) {
+        personalContext = `\n\nCustom skill instructions:\n${deltaMember.content}`;
+        skillExposure.push({
+          skillId: deltaMember.skillId,
+          deliveryMode: "personal_inline",
+          invocationAttributable: false,
+        });
+      }
     }
+  }
+
+  if (injectionDrops.length > 0) {
+    // The contract's own cap drops come first (they were resolved before this
+    // call); anything appended after them is an inline-expansion drop this call
+    // produced. Both are surfaced, each described by the layer that made it —
+    // the cap summary understates on its own.
+    const capDropCount = injectedSkillDrops(input.injectedSkills).length;
+    const capSummary = describeInjectedSelection(input.injectedSkills);
+    const expansionDrops = injectionDrops.slice(capDropCount);
+    skillSelection = {
+      droppedSkillIds: injectionDrops.map((d) => d.skillId),
+      selectionReason: [
+        capSummary?.selectionReason,
+        expansionDrops.length > 0
+          ? `Core-side inline expansion additionally dropped ` +
+            `${expansionDrops.length} whole skill(s): ` +
+            expansionDrops.map((d) => `${d.skillId} (${d.reason})`).join(", ") +
+            "."
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    };
+    // Structured drops go back to the CALLER through a core-owned callback,
+    // NOT through the provider-adapter response: no new skill-delivery payload
+    // field crosses either v1 ABI.
+    input.onInjectionDrops?.(injectionDrops);
+    console.warn(
+      `[skill-injection] ${injectionDrops.length} skill(s) dropped for intent ` +
+        `"${injectedIntentLabel(input.injectedSkills)}": ` +
+        injectionDrops.map((d) => `${d.skillId} (${d.reason})`).join(", "),
+    );
   }
 
   // Merge extraTools (e.g. createWebSearchTool()) into the tools array.
@@ -986,25 +1157,10 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
     declaredToolboxIds: input.declaredToolboxIds,
     skipExternalMcpRegistry: input.skipExternalMcpRegistry,
     cinatraMcpToolOverride: input.cinatraMcpToolOverride,
+    // Agent-plane entry point: default the build context HERE (not inside
+    // the exported injectMcpTools) — see runDeterministicLlmTaskImpl.
+    toolboxBuildContext: input.toolboxBuildContext ?? { surface: "agent_run" },
   })) ?? baseTools;
-
-  // If personal skill content is provided, include it in context
-  const personalContext = input.customSkillContent
-    ? `\n\nCustom skill instructions:\n${input.customSkillContent}`
-    : "";
-
-  // Record the personal delta as a NON-attributable `personal_inline` exposure
-  // when its identity is known (S10 efficacy loop). The delta is injected as
-  // system-prompt content on every provider, so it has no per-skill invocation
-  // signal — but it now carries a skill id in the exposure telemetry it
-  // previously lacked. Content without an id still delivers, just unattributed.
-  if (input.customSkillContent && input.customSkillId) {
-    skillExposure.push({
-      skillId: input.customSkillId,
-      deliveryMode: "personal_inline",
-      invocationAttributable: false,
-    });
-  }
 
   // Resolve attachments AFTER MCP/skill injection, BEFORE the adapter call.
   // The not-readable manifest is prepended at the TOP of the composed system
@@ -1069,7 +1225,7 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
       model: response.model ?? input.model,
       operation: "generate",
       logLabel: input.logLabel,
-      skillLabel: input.skillIds?.length ? input.skillIds[0] : null,
+      skillLabel: injectedSkillMembers(input.injectedSkills)[0]?.skillId ?? null,
       usage: response.usage,
       idempotencyKey,
       requestedProvider: input.telemetryRequestedProvider ?? null,
@@ -1187,6 +1343,12 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
     provider: adapter.provider,
     tools: adapterInput.tools,
     declaredToolboxIds: adapterInput.declaredToolboxIds,
+    // Agent-plane entry point (cinatra#2019 S4). OrchestrateGenerateInput is
+    // deliberately NOT widened with a context field — its remaining fields
+    // spread into the provider adapter call below, and a context there would
+    // cross the provider boundary. The fixed agent_run surface is supplied
+    // here instead.
+    toolboxBuildContext: { surface: "agent_run" },
   });
   // Execution-capability injection — exactly once, independent of MCP.
   const exec = applyExecutionInjection({
@@ -1273,6 +1435,10 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<voi
     declaredToolboxIds: input.declaredToolboxIds,
     skipMcpInjection: input.skipMcpInjection,
     preserveFunctionTools: input.preserveFunctionTools,
+    // Agent-plane entry point (cinatra#2019 S4) — OrchestrateStreamInput is
+    // not widened (chat streams pass pre-assembled MCP tools and hit the
+    // dedup/skip passthroughs above); the fixed surface is supplied here.
+    toolboxBuildContext: { surface: "agent_run" },
   });
   // Execution-capability injection — exactly once, independent of MCP. Stream is
   // a multi-step tool loop already, so no step-budget widening (streaming:true).

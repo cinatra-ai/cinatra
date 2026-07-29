@@ -1,8 +1,82 @@
-import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { copyFile, mkdir, readFile, readdir } from "node:fs/promises";
+import { existsSync, lstatSync } from "node:fs";
 import path from "node:path";
 import { parseFrontmatter } from "./skills-registry";
 import { upsertSkill } from "./skills-store";
+
+/**
+ * Mirror the NON-SKILL.md files of a source bundle dir (references/**, and any
+ * other co-shipped assets) into the canonical storage dir beside the stored
+ * SKILL.md (cinatra#2090 S3 fold, delivered-surface completeness).
+ *
+ * Why: `upsertSkill` writes ONLY the SKILL.md body into the canonical copy,
+ * but the shell tool serves reads from the canonical dir
+ * (`dirname(sourcePath)`), and a router SKILL.md points the model at
+ * `references/<slug>.md` one hop away. Without this mirror every consolidated
+ * router registers with a body that promises references the canonical dir
+ * does not contain (pre-existing for chat-agent-authoring's deep-dives;
+ * load-bearing for ALL five successor routers after the fold).
+ *
+ * Fail-closed on symlinks (same posture as the store's dangling-leaf
+ * confinement: nothing outside the source bundle can be pulled in, nothing
+ * outside the storage dir can be written through); IO errors throw so the
+ * fail-soft per-skill registration loop skips the skill entirely rather than
+ * registering a router with missing references.
+ */
+export async function mirrorSkillBundleAssets(
+  sourceBundleDir: string,
+  storageBundleDir: string,
+): Promise<void> {
+  const src = path.resolve(sourceBundleDir);
+  const dest = path.resolve(storageBundleDir);
+  if (!existsSync(src) || src === dest) return;
+
+  /** lstat that treats ENOENT as "absent" and rethrows anything else. */
+  function lstatOrNull(p: string) {
+    try {
+      return lstatSync(p);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw err;
+    }
+  }
+
+  async function copyDir(fromDir: string, toDir: string, isRoot: boolean): Promise<void> {
+    const entries = await readdir(fromDir, { withFileTypes: true });
+    for (const entry of entries) {
+      // The SKILL.md leaf is owned by `upsertSkill` (it writes the catalog
+      // body); never overwrite it from here.
+      if (isRoot && entry.name === "SKILL.md") continue;
+      const from = path.join(fromDir, entry.name);
+      const to = path.join(toDir, entry.name);
+      if (entry.isSymbolicLink()) continue; // fail-closed: never follow links
+      if (entry.isDirectory()) {
+        // Never DESCEND through a pre-existing symlinked directory in the
+        // storage tree either — a linked `references/` (or deeper) would
+        // redirect every copied leaf outside the canonical dir.
+        const destStat = lstatOrNull(to);
+        if (destStat?.isSymbolicLink()) {
+          throw new Error(
+            `mirrorSkillBundleAssets: refusing to write through symlinked directory ${to}`,
+          );
+        }
+        await mkdir(to, { recursive: true });
+        await copyDir(from, to, false);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      // Never write THROUGH a pre-existing symlink leaf in the storage dir.
+      if (lstatOrNull(to)?.isSymbolicLink()) {
+        throw new Error(
+          `mirrorSkillBundleAssets: refusing to write through symlink leaf ${to}`,
+        );
+      }
+      await copyFile(from, to);
+    }
+  }
+
+  await copyDir(src, dest, true);
+}
 
 /**
  * Derive a source-mirroring storage path from the absolute SKILL.md path.
@@ -26,10 +100,10 @@ import { upsertSkill } from "./skills-store";
  * its `skillSlug` argument so the full path comes out right.
  *
  * The skillId namespace (e.g. `@cinatra-ai/chat:<slug>`) is independent of
- * this storage path — that's why a special-cased package like
- * `assistant-skills` (registered under `@cinatra-ai/chat` for runtime auth
- * carve-out reasons) still lands under `cinatra-ai/assistant-skills/` on
- * disk, mirroring its source dir.
+ * this storage path — that's why an allowlisted chat successor package like
+ * `chat-assistant-core-skill` (registered under `@cinatra-ai/chat` for
+ * runtime auth carve-out reasons) still lands under
+ * `cinatra-ai/chat-assistant-core-skill/` on disk, mirroring its source dir.
  *
  * Returns null when the SKILL.md does not live under an
  * `extensions/<v>/<p>/.../SKILL.md` tree (e.g. legacy or test fixtures);
@@ -95,8 +169,8 @@ export async function registerExtensionSkill(input: {
 
   // Derive a source-mirroring storage path so the on-disk layout mirrors the
   // source package directory (e.g.
-  // `data/skills/workspace/cinatra-ai/assistant-skills/<slug>/`), not the
-  // packageName-slugified flat path (`cinatra-ai-chat/`). The skillId
+  // `data/skills/workspace/cinatra-ai/chat-assistant-core-skill/skills/<slug>/`),
+  // not the packageName-slugified flat path (`cinatra-ai-chat/`). The skillId
   // namespace stays whatever the caller passed.
   const storagePackagePath =
     deriveStoragePackagePathFromSkillMd(input.skillMdPath) ?? undefined;
@@ -126,6 +200,13 @@ export async function registerExtensionSkill(input: {
         `skills-layer invariant violated (shell-tool delivery requires an on-disk path)`,
     );
   }
+
+  // Delivered-surface completeness (cinatra#2090 S3): mirror the bundle's
+  // references/** beside the stored SKILL.md so a router's one-hop reference
+  // reads resolve through the shell tool. Throws on failure — the fail-soft
+  // caller then skips the skill instead of registering a broken router.
+  await mirrorSkillBundleAssets(path.dirname(input.skillMdPath), path.dirname(sourcePath));
+
   return { id: upserted.id, sourcePath };
 }
 

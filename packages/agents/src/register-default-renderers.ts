@@ -35,7 +35,6 @@ import { ListPickerRenderer } from "./list-picker-renderer";
 import { ContextSelectorRenderer } from "./context-selector-renderer";
 import { CampaignRecipientsReviewRenderer } from "./campaign-recipients-review-renderer";
 import { EmailDraftsReviewRenderer } from "./email-drafts-review-renderer";
-import { ReviewerAgentOutputRenderer } from "./reviewer-agent-output-renderer";
 import { BlogIdeaSelectionRenderer } from "./blog-idea-selection-renderer";
 import { CtaRenderer } from "./cta-renderer";
 import {
@@ -97,22 +96,14 @@ const RENDERER_KIND_TABLE: Record<
     makeCondition?: (matchIds: readonly string[]) => FieldRendererCondition;
   }
 > = {
-  // MIGRATED (cinatra#1625): the auditor-review component moved into
-  // @cinatra-ai/auditor-agent (the pure snapshot->onChange renderer). The KIND
-  // stays (the manifest still declares it — kind-vocabulary set-equality), but
-  // the host ships no component: a bundled binding resolves map-first to the
-  // extension wrapper (hasFieldRendererComponent -> makeExtensionFieldRenderer),
-  // and a not-in-build binding of this kind degrades to the SchemaFieldRenderer
-  // floor here (AC4 never-blank). Same shape as final-list-review /
-  // linkedin-draft-review / wordpress-draft-confirm below.
-  "auditor-review": { renderer: SchemaOnlyFloorRenderer },
-  // cinatra#1796 Stage 2: the DEDICATED idea-selection chooser for
-  // blog-pipeline's `idea_selection_gate`, activated by the binding id
+  // cinatra#1796: the DEDICATED idea-selection chooser for blog-pipeline's
+  // `idea_selection_gate`, activated by the binding id
   // `@cinatra-ai/blog-pipeline-agent:idea-selection` (strict-id condition). The
-  // host ships this component (unlike the migrated *-review kinds above): the
-  // gate relocates OFF the shared reviewer-output binding onto this one. The
-  // inline IdeaChooserRenderer in reviewer-agent-output-renderer.tsx stays until
-  // its Stage-3 teardown — this entry is additive.
+  // host ships this component (unlike the migrated *-review kinds below): the
+  // gate relocated OFF the shared reviewer-output binding onto this one
+  // (blog-pipeline-agent#40). Both the former inline chooser and the
+  // reviewer-output dispatcher it lived in are now gone (#1796 teardown); this
+  // dedicated binding is the only path to the chooser.
   "blog-idea-selection": { renderer: BlogIdeaSelectionRenderer },
   "campaign-recipients-review": {
     renderer: CampaignRecipientsReviewRenderer,
@@ -173,7 +164,6 @@ const RENDERER_KIND_TABLE: Record<
   // Same shape as final-list-review / scrape-schema-review above.
   "linkedin-draft-review": { renderer: SchemaOnlyFloorRenderer },
   "list-picker": { renderer: ListPickerRenderer, bareAliases: ["list-picker"] },
-  "reviewer-output": { renderer: ReviewerAgentOutputRenderer },
   // See the final-list-review note above — the component migrated; the kind + its
   // floor stay host so the vocabulary holds and a not-in-build binding never blanks.
   "scrape-schema-review": { renderer: SchemaOnlyFloorRenderer },
@@ -376,13 +366,13 @@ export function ensureDefaultFieldRenderersRegistered(): void {
   // persisted before the rename keep resolving.
   // -------------------------------------------------------------------------
 
-  fieldRendererRegistry.register({
-    id: "@cinatra/email-reviewer-agent:output",
-    priority: 80,
-    condition: (_fieldName, schema) =>
-      xRendererOf(schema) === "@cinatra/email-reviewer-agent:output",
-    renderer: ReviewerAgentOutputRenderer,
-  });
+  // The `@cinatra/email-reviewer-agent:output` legacy-scope alias was DELETED
+  // (cinatra#1796 teardown): it pointed at the reviewer-output dispatcher, which
+  // no longer exists — no merged flow emits either the retired scope or the
+  // retiring reviewer binding it aliased, because every
+  // dependent flow now holds on its own gate or on the core-opened review gate.
+  // A stored pre-rename interrupt carrying this id resolves to NO renderer, the
+  // same accepted backward-compat dead-end as ai-review-panel below.
 
   // The `@cinatra/email-reviewer-agent:ai-review-panel` legacy-scope alias was
   // DELETED (cinatra#1625 S8/M3, owner action-boundary ruling 2026-07-18): a

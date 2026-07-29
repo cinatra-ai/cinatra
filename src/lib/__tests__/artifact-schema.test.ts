@@ -198,7 +198,12 @@ describe("artifact storage-spine DDL", () => {
     // `semantic_assertion` floor row is ever written at creation. Assert the
     // producer splice still trails the audit AND that the retired floor write
     // is gone (never resurrected).
-    const auditPos = src.indexOf('INSERT INTO "${schema}"."artifact_audit"');
+    //
+    // The audit op is now emitted by the SHARED writer-provenance-witness
+    // builder (cinatra#2139) rather than an inline INSERT, so the position is
+    // anchored on the builder call. Same op, same slot in the list — and
+    // PRODUCER_OPS_OFFSET below still counts it as one.
+    const auditPos = src.indexOf("buildArtifactWriterWitnessOp(schema, {");
     const splicePos = src.indexOf("...producerOps");
     const floorPos = src.indexOf(
       'INSERT INTO "${schema}"."semantic_assertion"',

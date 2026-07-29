@@ -31,13 +31,13 @@ platform secrets in the platform DB).
 | Volume | Service (profile) | Image pin (resolved) | Class | Migration mechanism |
 | --- | --- | --- | --- | --- |
 | `cinatra-postgres` | `postgres` (default) | `postgres:18-alpine@sha256:9a8afca5…` | canonical-data | logical dump→fresh-volume→restore |
-| `nango-postgres` | `nango-db` (default) | `postgres:17-alpine@sha256:979c4379…` | canonical-data | logical dump→fresh-volume→restore |
+| `nango-postgres` | `nango-db` (default) | `postgres:17-alpine@sha256:742f40ea…` | canonical-data | logical dump→fresh-volume→restore |
 | `cinatra-redis` | `redis` (default) | `redis:8-alpine@sha256:9d317178…` | cache | discard-recreate |
-| `cinatra-verdaccio-storage` | `verdaccio` (default) | `verdaccio/verdaccio:6@sha256:e3ac7e33…` | package-storage | discard-recreate (re-publish repopulates) |
+| `cinatra-verdaccio-storage` | `verdaccio` (default) | `verdaccio/verdaccio:6@sha256:bcd0dc5f…` | package-storage | discard-recreate (re-publish repopulates) |
 | `cinatra-neo4j-data` | `neo4j` (default) | `neo4j:2026.05-community@sha256:6c162e24…` | canonical-data | in-place store-format (one-way; dump first) |
 | — (no volume) | `graphiti` (default) | `zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2@sha256:c9e0efd3…` | derived-index | rebuild (state lives in Neo4j) |
 | `cinatra-wordpress-db` | `wordpress-db` (wordpress) | `mariadb:11.4` | canonical-data | in-place store-format (sequential majors) |
-| `cinatra-wordpress` | `wordpress` (wordpress) | `cinatra-wordpress-dev:6.8-php8.3` | object-store (uploads/plugins tree) | app-managed boot migration |
+| `cinatra-wordpress` | `wordpress` (wordpress) | `cinatra-wordpress-dev:6.9-php8.3` | object-store (uploads/plugins tree) | app-managed boot migration |
 | `cinatra-drupal-db` | `drupal-db` (drupal) | `mariadb:11.4` | canonical-data | in-place store-format (sequential majors) |
 | `cinatra-drupal` | `drupal` (drupal) | locally built (`docker/drupal`) | object-store (site files tree) | app-managed boot migration |
 | `cinatra-twenty-db` | `twenty-db` (twenty) | `postgres:16` | canonical-data | logical dump→fresh-volume→restore |

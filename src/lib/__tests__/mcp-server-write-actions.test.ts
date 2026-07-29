@@ -54,6 +54,13 @@ class ExternalMcpServerWriteConflictError extends Error {
   }
 }
 
+class ExternalMcpServerManagedEndpointError extends Error {
+  constructor(message = "managed endpoint") {
+    super(message);
+    this.name = "ExternalMcpServerManagedEndpointError";
+  }
+}
+
 function guardMatches(
   real: Row | undefined,
   expected: { scope: string; userId: string | null; nangoConnectionId?: string | null },
@@ -77,6 +84,7 @@ vi.mock("@/lib/auth-session", () => ({
 
 vi.mock("@/lib/external-mcp-registry", () => ({
   ExternalMcpServerWriteConflictError,
+  ExternalMcpServerManagedEndpointError,
   // llm-providers S2 (#1713): the write handler coerces a posted transport
   // through this helper; mirror the real closed-vocabulary coercion.
   normalizeExternalMcpTransport: (value: unknown) =>

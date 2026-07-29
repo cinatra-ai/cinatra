@@ -36,6 +36,7 @@ import { createDeterministicSkillsClient } from "@cinatra-ai/skills/mcp-client";
 import {
   ensureInstalledSkillsRegistered,
   resolveInstalledSkillSourcePath,
+  retireSupersededChatSkillsOnce,
 } from "@cinatra-ai/skills";
 import { getAllStagedByType } from "@/lib/wizard-staging-store";
 import { getAllManifests } from "@/lib/wizard-manifest-registry";
@@ -47,7 +48,8 @@ import { shouldDeliverChatShellSkillTools } from "@/app/api/chat/shell-skill-gat
 import {
   hasConfiguredLlmRuntime,
   stream,
-  buildSkillTools,
+  selectSkillDeliveryAdapter,
+  deliverInjectedSkillsInline,
   resolveDefaultAdapter,
   resolveProviderAdapter,
   resolveChatExternalMcpTools,
@@ -56,11 +58,27 @@ import {
   checkPublicMcpReachability,
 } from "@cinatra-ai/llm";
 import type { LlmTool, LlmProvider } from "@cinatra-ai/llm";
+// cinatra#2091 (epic #2086 S4): the assistant runtime routes through the ONE
+// typed injection contract + the provider delivery seam. Its former direct
+// `buildSkillTools` call was the last production bypass of that seam.
+import {
+  resolveInjectedSkillSet,
+  injectedCatalogSkillIds,
+  injectedSkillDrops,
+  isInlineSkillMechanism,
+  type InjectionAuthorization,
+  type InjectionResolverPorts,
+} from "@cinatra-ai/skills/injection";
 import {
   assertScriptedProviderNotProduction,
   isScriptedTestProviderEnabled,
   runScriptedWidgetAssistantTurn,
 } from "@cinatra-ai/llm/scripted-test-provider";
+import {
+  observeSurfaceExecutionDispatches,
+  resolveSurfaceExecutionBinding,
+} from "@/lib/execution/surface-execution-session";
+import { evaluateExecutionProvenance } from "@cinatra-ai/llm/execution-plane";
 import { issueChatMcpActorToken } from "@/lib/chat-mcp-actor-token";
 import { issueWidgetMcpActorToken } from "@/lib/widget-mcp-actor-token";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
@@ -68,6 +86,10 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 import {
   buildExtensionImplementationConfirmationPolicy,
 } from "@/app/api/chat/extension-confirmation";
+// cinatra#2020 S5 (PR-4) — the bounded pending-confirmation outcome section
+// (§6.3): one term in the system-context assembly below; empty string when
+// the viewer has no recent confirmation transitions.
+import { buildPendingConfirmationContext } from "./pending-confirmation-context";
 // Chat-side resolver ports are scoped to the session's active org
 // (auth-derived; never caller-controlled).
 import { buildAttachmentResolverPorts } from "@/lib/artifacts/attachment-resolver-ports";
@@ -114,6 +136,20 @@ export type RunChatTurnArgs = {
   /** Aborted when the client disconnects (#503) so the run stops LLM/MCP work
    *  promptly instead of running to completion with nobody listening. */
   signal?: AbortSignal;
+  /**
+   * The assistant PRINCIPAL identity this turn runs as (cinatra#2091 S4) — the
+   * `assistant` injection intent's subject. Absent ⇒ the runtime uses the
+   * config's skill-id namespace, which is the assistant's own stable package
+   * identity (`@cinatra-ai/chat`, `@cinatra-ai/wordpress`, …).
+   */
+  assistantId?: string;
+  /**
+   * The session this turn belongs to (cinatra#2091 S4). Absent ⇒ the runtime
+   * mints a per-turn server-side binding so the intent subject is complete; the
+   * load-bearing authorization checks are the assistant identity and the
+   * AUTHENTICATED user, both of which the runtime holds directly.
+   */
+  sessionId?: string;
   /**
    * S5 public-site (WordPress/Drupal) widget path. When present, the caller is
    * the broker-auth widget branch of `/api/assistants/chat`, which has already
@@ -263,16 +299,24 @@ async function loadSystemPromptFromDisk(systemSkillId: string): Promise<string |
 // `buildSkillTools` requires a registered skill to emit the shell tool; this
 // preflight is the load-bearing path that makes shell delivery work.
 //
-// All Cinatra chat sub-skills are co-located in the `assistant-skills`
-// extension package, so the generic, install/uninstall-aware batch resolver
-// materializes every co-located SKILL.md body into the catalog in a SINGLE scan
-// (`registerColocatedWorkspaceSkills` registers the whole providing package
-// once), while keeping each requested id independently retryable on a transient
-// upsert failure. The resolver memoizes successful registration per-id
-// per-process and drops the memo for an id that failed to register so a later
-// turn retries it, so this is safe to call every turn.
-function ensureAssistantSkillsRegistered(skillIds: string[]): Promise<void> {
-  return ensureInstalledSkillsRegistered(skillIds);
+// Each Cinatra chat router bundle is co-located in its own successor
+// `kind:"skill"` extension package (the cinatra#2090 S3 fold of the former
+// `assistant-skills` pack), so the generic, install/uninstall-aware batch
+// resolver materializes every requested bundle's SKILL.md body into the
+// catalog per providing package (`registerColocatedWorkspaceSkills` registers
+// a whole providing package once), while keeping each requested id
+// independently retryable on a transient upsert failure. The resolver
+// memoizes successful registration per-id per-process and drops the memo for
+// an id that failed to register so a later turn retries it, so this is safe
+// to call every turn.
+//
+// AFTER the successors register, the superseded `@cinatra-ai/chat:<old-slug>`
+// rows the retired pack left behind are retired by exact id (idempotent,
+// memoized, never throws) — the upsert-only store would keep them resolving
+// forever otherwise.
+async function ensureAssistantSkillsRegistered(skillIds: string[]): Promise<void> {
+  await ensureInstalledSkillsRegistered(skillIds);
+  await retireSupersededChatSkillsOnce();
 }
 
 async function loadSystemPrompt(
@@ -386,6 +430,53 @@ function buildInstanceContext(): string {
 // Cinatra assistant's reference config reproduces the former hardcoded chat
 // constants exactly (see cinatra-assistant-config.ts + cinatra-parity.test.ts).
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Injection ports for the assistant surface (cinatra#2091, epic #2086 S4).
+// Co-located with its only caller: the factory closes over the AUTHENTICATED
+// identity this turn already resolved, and the authorization port compares the
+// intent against it.
+// ---------------------------------------------------------------------------
+
+export type AssistantInjectionPortsInput = {
+  /** The assistant agent identity the surface resolved. */
+  agentId: string;
+  /** The AUTHENTICATED user this turn runs for. */
+  userId: string;
+  /** The session id the surface bound. */
+  sessionId: string;
+  /** The assistant's own required injectable set (its runtime config bundle). */
+  requiredSkillIds: readonly string[];
+};
+
+export function buildAssistantInjectionPorts(
+  input: AssistantInjectionPortsInput,
+): InjectionResolverPorts {
+  return {
+    async authorizeAssistantSession(intent): Promise<InjectionAuthorization> {
+      if (intent.agentId !== input.agentId) {
+        return {
+          ok: false,
+          reason: `intent names assistant "${intent.agentId}" but the surface vetted "${input.agentId}"`,
+        };
+      }
+      if (intent.userId !== input.userId) {
+        return {
+          ok: false,
+          reason: "the intent names a user this session is not authenticated as",
+        };
+      }
+      if (!intent.sessionId || intent.sessionId !== input.sessionId) {
+        return { ok: false, reason: "the intent names a different session" };
+      }
+      return { ok: true, runOwnerUserId: input.userId };
+    },
+    async resolveAssistantRequiredSkills() {
+      return input.requiredSkillIds.map((skillId) => ({ skillId }));
+    },
+  };
+}
+
 
 export async function runAssistantTurn(
   runtimeConfig: AssistantRuntimeConfig,
@@ -508,7 +599,66 @@ export async function runAssistantTurn(
   // MCP/skill assembly + the dead-ingress reachability probe is skipped for them.
   // Tool-capable providers (OpenAI/Anthropic) assemble the full array below,
   // byte-identical to before.
+  // cinatra#2091 S4 — the assistant declares its INTENT; the resolver derives
+  // the members (its own required injectable set) and applies the hard cap of
+  // 8 TOTAL. Resolved BEFORE the provider branch so the cap is enforced
+  // IDENTICALLY on every provider, including the conversation-only (no-native-
+  // MCP) branch that assembles no tools at all.
+  const assistantAgentId = args.assistantId ?? runtimeConfig.skillIdNamespace;
+  const assistantSessionId = args.sessionId ?? `assistant-turn:${randomUUID()}`;
+  const injectedSkills = await resolveInjectedSkillSet(
+    {
+      kind: "assistant",
+      agentId: assistantAgentId,
+      userId,
+      sessionId: assistantSessionId,
+    },
+    buildAssistantInjectionPorts({
+      agentId: assistantAgentId,
+      userId,
+      sessionId: assistantSessionId,
+      requiredSkillIds: runtimeConfig.skillIds,
+    }),
+  );
+  // The CINATRA assistant never truncates BY DESIGN: its bundle's SIZE
+  // CONTRACT (cinatra-assistant-config.ts, pinned by its test) keeps the
+  // required set at 5 slugs — at most 7 — so 5 + the personal delta = 6 ≤ the
+  // hard cap of 8. This guard therefore exists for the OTHER configs that
+  // reach this runtime: an extension-declared assistant's `skillBundle` is
+  // schema-unbounded, and a drop the resolver recorded must reach an operator
+  // rather than vanish here.
+  const injectionDrops = injectedSkillDrops(injectedSkills);
+  if (injectionDrops.length > 0) {
+    console.error(
+      `[assistant-runtime] the injection contract dropped ${injectionDrops.length} ` +
+        `skill(s) for assistant "${assistantAgentId}" — its required bundle of ` +
+        `${runtimeConfig.skillIds.length} exceeds the hard cap of 8 per request: ` +
+        injectionDrops.map((d) => `${d.skillId} (${d.reason})`).join(", "),
+    );
+  }
+
   let tools: LlmTool[] = [];
+  // The provider's skill contribution to the system prompt: an availability cue
+  // on a tool-mount/container provider, the EXPANDED skill bodies on an inline
+  // provider. Declared out here because both branches below feed it.
+  let skillSystemContext = "";
+  if (isInlineSkillMechanism(adapter.provider)) {
+    // Inline mechanism (Gemini): core SHORT-CIRCUITS — no delivery adapter, no
+    // connector surface. It reads each member's router body plus its ONE-HOP
+    // references and merges them under the per-request byte budget, so a
+    // conversation-only turn still receives the assistant's skills instead of
+    // silently losing every one of them.
+    await ensureAssistantSkillsRegistered(runtimeConfig.skillIds);
+    const inline = await deliverInjectedSkillsInline({ set: injectedSkills });
+    skillSystemContext = inline.systemContext;
+    if (inline.dropped.length > 0) {
+      console.warn(
+        `[assistant-runtime] inline expansion dropped ${inline.dropped.length} ` +
+          `whole skill(s) for assistant "${assistantAgentId}": ` +
+          inline.dropped.map((d) => `${d.skillId} (${d.reason})`).join(", "),
+      );
+    }
+  }
   if (isNativeMcpProvider(adapter.provider)) {
   // adapter.provider is narrowed to "openai" | "anthropic" in this block
   // (equivalent to `!conversationOnly`), so the tool-assembly calls type-check.
@@ -530,9 +680,20 @@ export async function runAssistantTurn(
         "turn continues with MCP + web_search tools only)",
     );
   }
-  const skillTools = deliverShellSkillTools
-    ? await buildSkillTools({ skillIds: runtimeConfig.skillIds })
-    : [];
+  let skillTools: LlmTool[] = [];
+  if (deliverShellSkillTools) {
+    const catalogSkillIds = injectedCatalogSkillIds(injectedSkills);
+    if (catalogSkillIds.length > 0) {
+      const delivery = await selectSkillDeliveryAdapter(adapter.provider).deliver({
+        skillIds: catalogSkillIds,
+        // The authoritative cap already ran in the contract; the adapter's own
+        // cap is a defence-in-depth invariant.
+        selectionMode: "general",
+      });
+      skillTools = delivery.tools;
+      skillSystemContext = delivery.systemContext;
+    }
+  }
   // Dead-ingress guard (#1699): a configured-but-unreachable public MCP URL
   // is WORSE than a missing one — OpenAI silently omits the hosted MCP server
   // (200 completed, no mcp_list_tools, no 424), chat loses every Cinatra tool
@@ -593,7 +754,15 @@ export async function runAssistantTurn(
     return;
   }
 
-  const externalMcpTools = await resolveChatExternalMcpTools(adapter.provider);
+  // cinatra#2019 S4: cookie-chat and widget-principal turns share this
+  // external-tool assembly, so the build context carries the REAL surface —
+  // surface-gating toolboxes (trusted-site native read-injection) emit only
+  // for "chat" and refuse widget builds fail-closed instead of leaking
+  // chat-scoped injections onto public-site widget turns.
+  const externalMcpTools = await resolveChatExternalMcpTools(
+    adapter.provider,
+    widgetPrincipal ? { surface: "public_site_widget" } : { surface: "chat" },
+  );
   const assembledTools: LlmTool[] = [
     chatCinatraMcpTool,
     ...externalMcpTools,
@@ -626,6 +795,14 @@ export async function runAssistantTurn(
   const instanceContext = buildInstanceContext();
 
   const extensionConfirmationPolicy = buildExtensionImplementationConfirmationPolicy();
+
+  // cinatra#2020 S5 (PR-4): the viewer's recent destructive-confirmation
+  // outcomes (max 5 lines, last hour; "" when none — byte-identical system
+  // string for users with no confirmation activity).
+  const pendingConfirmationContext =
+    userId && sessionOrgId
+      ? await buildPendingConfirmationContext({ orgId: sessionOrgId, userId })
+      : "";
 
   // Deterministic explicit-dispatch pre-router.
   //
@@ -713,19 +890,84 @@ export async function runAssistantTurn(
       ? buildAttachmentResolverPorts({ orgId: sessionOrgId })
       : undefined;
 
+  // exec-plane S1b (cinatra#2138 deliverable 2): the chat surface is a TRUSTED
+  // execution-session issuer. `sessionOrgId` is auth-derived
+  // (session.activeOrganizationId) and `userId` is the authenticated human — a
+  // chat turn carries NO run binding, so the session is minted without a runId.
+  // Rollout flag off ⇒ an empty spread ⇒ this call stays byte-identical.
+  const chatExecutionBinding = resolveSurfaceExecutionBinding({
+    surface: "chat",
+    orgId: sessionOrgId,
+    userId,
+  });
+  // cinatra#2175 — render-side execution provenance. A live turn with the
+  // capability fully injected answered a "run this" request with prose shaped
+  // exactly like captured stdout: no tool call, no `execution_sandbox` audit
+  // row, a wrong digest. The audit trail was right (nothing ran) and the
+  // surface was wrong (it looked like something had). So the turn now carries
+  // its own provenance: the executor is wrapped to COUNT completed dispatches
+  // — each one is the broker round-trip that writes the audit row — and the
+  // assistant's own text is accumulated alongside. At the end of the turn the
+  // two are compared and an unbacked execution claim is MARKED in the
+  // transcript (below), never blocked and never rewritten.
+  //
+  // `executionCapabilityOffered` is the runtime's own view of the offer: a
+  // minted session AND a registered executor, i.e. everything the injection
+  // layer needs. It over-approximates that layer's `injected` verdict on
+  // purpose — a turn refused deeper in (unsealable session, opted-out org)
+  // still ran nothing, so marking a claim there is equally true. Flag off ⇒
+  // empty binding ⇒ `false` ⇒ the guard is inert and this turn is
+  // byte-identical to before.
+  const chatExecutionObserver =
+    observeSurfaceExecutionDispatches(chatExecutionBinding);
+  const executionCapabilityOffered = Boolean(
+    chatExecutionBinding.executionSession &&
+      chatExecutionBinding.executionExecutor,
+  );
+  let assistantTurnText = "";
+  let executionProvenanceEmitted = false;
+  // Emitted on BOTH terminal paths. A turn that streamed fabricated output and
+  // then failed (provider timeout, client abort) still PERSISTS that text, so
+  // marking only the clean path would leave the worst case — a half-finished
+  // turn nobody re-ran — unmarked. Idempotent: at most one marker per turn.
+  const markUnverifiedExecutionClaim = () => {
+    if (executionProvenanceEmitted) return;
+    const verdict = evaluateExecutionProvenance({
+      capabilityOffered: executionCapabilityOffered,
+      dispatches: chatExecutionObserver.readLog(),
+      text: assistantTurnText,
+    });
+    if (verdict.status !== "unverified") return;
+    executionProvenanceEmitted = true;
+    console.warn(
+      "[execution-plane] chat: execution claim with NO sandbox dispatch that " +
+        `reached a sandbox — marking the turn unverified (claims: ${verdict.matchedClaims.join(", ")})`,
+    );
+    send("text", { content: verdict.notice });
+  };
+
   try {
     await stream({
       provider: adapter.provider,
       actorContext,
+      ...chatExecutionObserver.binding,
       // An explicit `model` pref overrides the connection default; absent, the
       // field is omitted so the call is byte-identical to the legacy chat.
       ...(modelPrefs.model ? { model: modelPrefs.model } : {}),
       system:
         explicitDispatchDirective +
         systemPrompt +
+        // The provider's skill contribution: an availability cue (Anthropic
+        // container listing; empty for OpenAI shell delivery, which must not be
+        // told about a read_skill tool) or, on an inline provider, the expanded
+        // skill bodies. Separated explicitly — the fragment carries no leading
+        // blank line of its own, and a trimmed/fallback persona would otherwise
+        // run straight into its first heading.
+        (skillSystemContext ? `\n\n${skillSystemContext}` : "") +
         userContext +
         instanceContext +
         extensionConfirmationPolicy +
+        pendingConfirmationContext +
         // AC#5: the conversation-only degrade notice (empty for tool-capable
         // providers, so their system string is byte-identical to before).
         conversationOnlyNotice,
@@ -759,6 +1001,9 @@ export async function runAssistantTurn(
         : AbortSignal.timeout(120_000),
       logLabel: "chat",
       onTextDelta: (delta) => {
+        // Accumulated for the end-of-turn execution-provenance verdict
+        // (cinatra#2175); the sink emission itself is unchanged.
+        assistantTurnText += delta;
         send("text", { content: delta });
       },
       onToolCall: (call) => {
@@ -799,12 +1044,29 @@ export async function runAssistantTurn(
         send("citations", { citations });
       },
       onError: (error) => {
+        // `error` is a TERMINAL sink frame: the AG-UI adapter ignores every
+        // event after the first terminal. An adapter that reports through this
+        // callback and then RESOLVES would therefore have its marker dropped
+        // if we only evaluated after the stream — so the verdict is taken here,
+        // on the text accumulated so far, before the terminal goes out.
+        markUnverifiedExecutionClaim();
         send("error", { message: error.message });
       },
     });
 
+    // Execution-provenance verdict (cinatra#2175). Rides the EXISTING text
+    // path, so the marker persists with the turn (`assistant_turns.content`),
+    // renders through the same markdown the reply does, and needs no new
+    // stream vocabulary or component. `not_applicable` (the default, and the
+    // only reachable status while the plane is dark) emits nothing.
+    markUnverifiedExecutionClaim();
+
     send("done", {});
   } catch (error) {
+    // Same verdict before the terminal error frame: the partial text is
+    // persisted either way, so an unbacked claim inside it must be marked
+    // either way.
+    markUnverifiedExecutionClaim();
     const message = error instanceof Error ? error.message : "Chat request failed.";
     send("error", { message });
   }

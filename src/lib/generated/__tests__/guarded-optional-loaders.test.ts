@@ -163,6 +163,8 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "wordpress-mcp-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "youtube-connector", resolution: "guardedOptional" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/audio-artifact::detail", resolution: "required" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/cms-snapshot-artifact::detail", resolution: "guardedOptional" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/cms-snapshot-artifact::preview", resolution: "guardedOptional" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/document-artifact::detail", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/image-artifact::detail", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/image-artifact::preview", resolution: "required" },

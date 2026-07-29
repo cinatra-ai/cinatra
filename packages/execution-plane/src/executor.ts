@@ -14,8 +14,11 @@
  *    workspace persistence contract). Staged skill snapshots are resolved
  *    (content + digests) exactly once, at open time.
  *  - Failures are STRUCTURED, never thrown into the model loop: an open/exec
- *    refusal becomes a per-command output with a non-zero exit code and the
- *    broker's fail-closed message on stderr; a worker timeout maps to the
+ *    refusal becomes a per-command output with a non-zero exit code, the
+ *    broker's fail-closed message on stderr, and `refusedByPlane` set so
+ *    callers above can tell "the plane said no" from "the sandbox ran and the
+ *    command exited non-zero" (cinatra#2175 — the surface provenance guard
+ *    must not read a refusal as an execution); a worker timeout maps to the
  *    `timeout` outcome.
  *  - Per-command resource limits are BROKER-owned (quotas/limits ride
  *    `ExecutionBrokerOptions`); the model-supplied `timeoutMs` /
@@ -147,6 +150,8 @@ export function createBrokerSandboxExecutor(
         stdout: "",
         stderr: `The execution plane refused to open a job — ${job.message}`,
         outcome: { type: "exit" as const, exitCode: REFUSED_EXIT_CODE },
+        // Nothing ran: no sandbox, no audit row (cinatra#2175).
+        refusedByPlane: true as const,
       }));
     }
 
@@ -158,6 +163,8 @@ export function createBrokerSandboxExecutor(
           stdout: "",
           stderr: `The execution plane refused the command — ${result.reason}: ${result.message}`,
           outcome: { type: "exit", exitCode: REFUSED_EXIT_CODE },
+          // Nothing ran for this command (cinatra#2175).
+          refusedByPlane: true,
         });
         continue;
       }

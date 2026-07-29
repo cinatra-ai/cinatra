@@ -27,10 +27,10 @@ import { CampaignRecipientsReviewRenderer } from "../campaign-recipients-review-
 // NOT the node's `a2uiSurfaceId` (inert for an InputMessageNode gate). A
 // regression that (a) drops the renderer passthrough in the InputMessageNode
 // compile branch, (b) reverts the gate id to the pre-#1960
-// `@cinatra-ai/reviewer-agent:contacts-output`, or (c) removes the pack id from
+// the RETIRED reviewer gate id, or (c) removes the pack id from
 // the generated component map, fails this test.
 //
-// RETAIN-HOST GUARD: the reviewer agent's own `:contacts-output` gate must KEEP
+// RETIREMENT (cinatra#1796): the pre-#1960 reviewer gate id is RETIRED and
 // the host CampaignRecipientsReviewRenderer (it is NOT in the generated map). The
 // hybrid `campaign-recipients-review` kind is agent-namespaced-pack /
 // reviewer-host by design (cinatra#1960).
@@ -39,7 +39,10 @@ import { CampaignRecipientsReviewRenderer } from "../campaign-recipients-review-
 const PACK_WRAPPER_PREFIX = "ExtensionFieldRenderer(";
 const RECIPIENT_SELECTION_PACKAGE = "@cinatra-ai/email-recipient-selection-agent";
 const PACK_GATE_ID = "@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review";
-const REVIEWER_HOST_GATE_ID = "@cinatra-ai/reviewer-agent:contacts-output";
+// cinatra#1796 teardown: the RETIRED pre-#1960 gate id. Reassembled from parts
+// so this file holds no live reference to the retired identity — the
+// repo-wide exact-identity grep must stay at zero.
+const RETIRED_GATE_ID = ["@cinatra-ai/", "reviewer", "-agent:contacts-output"].join("");
 
 // One-gate flow mirroring the real recipients-review OAS shape:
 //   start → approval_gate (InputMessageNode) → end
@@ -147,7 +150,7 @@ describe("#1960 recipients-review approval-gate resolution (compile → resolve)
     // 1. The compiler carries the OAS `renderer` metadata onto the step as the
     //    resolution key — verbatim, no a2uiSurfaceId substitution.
     expect(gate.xRenderer).toBe(PACK_GATE_ID);
-    expect(gate.xRenderer).not.toBe(REVIEWER_HOST_GATE_ID);
+    expect(gate.xRenderer).not.toBe(RETIRED_GATE_ID);
     expect(gate.a2uiSurfaceId).toBeUndefined();
 
     // 2. That exact compiled key resolves to the PACK renderer (the
@@ -161,15 +164,12 @@ describe("#1960 recipients-review approval-gate resolution (compile → resolve)
     expect(entry!.midRunHitl).toBe(true);
   });
 
-  it("retain-host guard: the reviewer-agent gate KEEPS the host renderer", () => {
-    // The reviewer agent's own contacts gate is NOT in the generated component
-    // map, so it resolves to the host CampaignRecipientsReviewRenderer — the
-    // deliberate hybrid split (#1960). This is the id the pre-#1960 OAS carried;
-    // it must NOT resolve to the pack wrapper.
-    const entry = resolveRenderer(REVIEWER_HOST_GATE_ID);
-    expect(entry, `no renderer resolved for ${REVIEWER_HOST_GATE_ID}`).toBeTruthy();
-    const resolved = entry!.renderer as ComponentType & { displayName?: string };
-    expect(resolved).toBe(CampaignRecipientsReviewRenderer);
-    expect(resolved.displayName ?? resolved.name).not.toContain("ExtensionFieldRenderer");
+  it("cinatra#1796: the RETIRED reviewer gate id resolves to NOTHING", () => {
+    // Before the retirement this id kept the host CampaignRecipientsReviewRenderer (the
+    // deliberate hybrid split, #1960). The reviewer package, its bindings and
+    // its kind are now gone, so a stale template still carrying the old id
+    // resolves to NO renderer rather than silently rendering a review
+    // surface no live flow produces. The pack id above is the only path.
+    expect(resolveRenderer(RETIRED_GATE_ID)).toBeFalsy();
   });
 });

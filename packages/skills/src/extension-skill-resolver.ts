@@ -37,10 +37,19 @@ import "server-only";
 // rows cannot regress), and a failed status read keeps everything (fail-open).
 
 import { existsSync, realpathSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { revalidatePath } from "next/cache";
+import { replaceSkillCatalogInDatabase } from "@/lib/database";
 import { registerExtensionSkill } from "./register-extension-skill";
 import { resolveSkillOwnerPackageCandidates } from "./manifest-identity";
+import { commitSkillChange } from "./storage/git-commit";
+import {
+  getSkillStoreRootPath,
+  getSkillsDataRootPath,
+  isRealpathContained,
+  readSkillsCatalog,
+} from "./skills-store";
 
 // ---------------------------------------------------------------------------
 // Skill-ID derivation (canonical home — re-exported by the dev watcher).
@@ -49,12 +58,49 @@ import { resolveSkillOwnerPackageCandidates } from "./manifest-identity";
 export type SkillRegistration = { packageName: string; skillId: string };
 
 /**
- * Skill-ID derivation. The chat's `assistant-skills` package is a special
- * case: its skills register under the `@cinatra-ai/chat:` namespace so they
- * stay consistent with the runner's chat skill-ids and the auth-policy
- * carve-out (which matches the `@cinatra-ai/chat:chat-` prefix — a
- * security-sensitive auth boundary + DB row key; do NOT change). Every other
- * skill package uses its own scoped name as the id prefix.
+ * The FIVE injectable successor packages of the retired
+ * `@cinatra-ai/assistant-skills` pack (cinatra#2090 S3 fold). Their bundles
+ * register under the `@cinatra-ai/chat:` namespace so they stay consistent
+ * with the runner's chat skill-ids and the auth-policy carve-out (which
+ * matches the `@cinatra-ai/chat:chat-` prefix — a security-sensitive auth
+ * boundary + DB row key; do NOT change).
+ *
+ * SECURITY: this is an EXACT (manifest-name, dir) allowlist. Matching the
+ * dir basename alone (the pre-fold `assistant-skills` special case) would let
+ * a foreign package mint privileged `@cinatra-ai/chat:chat-*` ids just by
+ * sitting in a directory with the right name; membership therefore requires
+ * BOTH the canonical dir basename AND the manifest `name` equal to that
+ * basename under the first-party vendor scope — i.e. exactly the five
+ * (`@cinatra-ai/<dir>`, `<dir>`) pairs, nothing wider. Expressed as
+ * dir-basename + scope-equality (not literal scoped names) per the
+ * instance-coupling gate: core carries no extension package-name literal;
+ * the semantics are the same exact-pair allowlist. The internal
+ * hitl-prompt-drive package is deliberately NOT here — it registers under
+ * its own scoped namespace and is resolved by capability, never by
+ * chat-namespace id.
+ */
+const CHAT_NAMESPACE_DIR_BASENAMES: ReadonlySet<string> = new Set([
+  "chat-assistant-core-skill",
+  "extension-authoring-skill",
+  "automation-authoring-skill",
+  "company-research-skill",
+  "blog-content-skill",
+]);
+const CHAT_NAMESPACE_VENDOR_SCOPE = "@cinatra-ai/";
+
+/**
+ * Skill-ID derivation. The five injectable chat successor packages (exact
+ * scoped-name allowlist above) register under the `@cinatra-ai/chat:`
+ * namespace; every other skill package uses its own scoped name as the id
+ * prefix.
+ *
+ * RESERVED-NAMESPACE guard: `@cinatra-ai/chat` is a privileged VIRTUAL
+ * namespace (the auth carve-out reads `@cinatra-ai/chat:chat-*`), never a
+ * real installable package. Without this guard a foreign package could mint
+ * carve-out ids by simply NAMING itself `@cinatra-ai/chat` (or the bare
+ * `cinatra-ai/chat`, which the normalization below would @-prefix) — the
+ * generic branch would emit the privileged prefix verbatim. Such a package
+ * is refused outright (throws); the fail-soft registration loop skips it.
  *
  * The storage path (separate from the skillId namespace) mirrors the on-disk
  * source package path; that mapping lives in `register-extension-skill.ts`.
@@ -64,11 +110,38 @@ export function deriveSkillRegistration(
   pkgDirName: string,
   slug: string,
 ): SkillRegistration {
-  if (pkgDirName === "assistant-skills") {
+  if (
+    CHAT_NAMESPACE_DIR_BASENAMES.has(pkgDirName) &&
+    pkgName === `${CHAT_NAMESPACE_VENDOR_SCOPE}${pkgDirName}`
+  ) {
     return { packageName: "@cinatra-ai/chat", skillId: `@cinatra-ai/chat:${slug}` };
   }
   const packageName = pkgName.startsWith("@") ? pkgName : `@${pkgName}`;
+  if (packageName === "@cinatra-ai/chat") {
+    throw new Error(
+      `deriveSkillRegistration: package "${pkgName}" (dir "${pkgDirName}") claims the reserved ` +
+        `@cinatra-ai/chat namespace but is not an allowlisted successor package — refusing to mint a privileged skill id.`,
+    );
+  }
   return { packageName, skillId: `${packageName}:${slug}` };
+}
+
+/**
+ * Scan-loop-safe variant: a package the reserved-namespace guard refuses
+ * yields `null` (skip THIS package) instead of aborting the surrounding
+ * extension scan — an installed impostor must degrade only itself, never all
+ * skill delivery.
+ */
+function safeDeriveSkillRegistration(
+  pkgName: string,
+  pkgDirName: string,
+  slug: string,
+): SkillRegistration | null {
+  try {
+    return deriveSkillRegistration(pkgName, pkgDirName, slug);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -99,12 +172,16 @@ export async function registerColocatedWorkspaceSkills(input: {
     const slug = slugEntry.name;
     const skillMdPath = path.join(skillsRoot, slug, "SKILL.md");
     if (!existsSync(skillMdPath)) continue;
-    const { packageName, skillId } = deriveSkillRegistration(
-      input.pkgName,
-      input.pkgDirName,
-      slug,
-    );
     try {
+      // Inside the fail-soft frame: the reserved-namespace guard in
+      // `deriveSkillRegistration` throws for a package impersonating
+      // `@cinatra-ai/chat`, and that refusal must skip THIS package's slug,
+      // never abort the whole scan.
+      const { packageName, skillId } = deriveSkillRegistration(
+        input.pkgName,
+        input.pkgDirName,
+        slug,
+      );
       await registerExtensionSkill({ skillId, packageName, skillMdPath });
       registered.push(skillId);
     } catch (err) {
@@ -123,6 +200,52 @@ export async function registerColocatedWorkspaceSkills(input: {
 
 const DEFAULT_ALLOW_KINDS = ["skill"] as const;
 
+/**
+ * One `cinatra.dependencies` entry, narrowed to the fields the projection needs.
+ *
+ * Deliberately re-declared here instead of imported from
+ * `@cinatra-ai/extensions`: that package already consumes `@cinatra-ai/skills`,
+ * so importing it back would invert the layering (the same reason the lifecycle
+ * gate above reaches for it only through a fail-soft dynamic import). The shape
+ * is the canonical `ExtensionDependency`; the structural filter below accepts
+ * only entries that carry the fields it reads.
+ */
+export type DeclaredExtensionDependency = {
+  packageName: string;
+  edgeType: string;
+  requirement: string;
+  kind?: string;
+  /**
+   * The edge ROLE (cinatra#2090) — which host surface this skill edge feeds.
+   * `matcher` / `authoring` per `DEPENDENCY_SKILL_ROLES`; ABSENT means the
+   * plain injectable delivery wave 2 landed. Read as an opaque string here for
+   * the same layering reason the rest of this type is re-declared: the
+   * canonical vocabulary lives in `@cinatra-ai/extensions`, which already
+   * consumes this package.
+   */
+  role?: string;
+};
+
+/** Keep only structurally well-formed `cinatra.dependencies` entries. */
+function readDeclaredDependencies(raw: unknown): DeclaredExtensionDependency[] {
+  if (!Array.isArray(raw)) return [];
+  const out: DeclaredExtensionDependency[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.packageName !== "string" || e.packageName.length === 0) continue;
+    if (typeof e.edgeType !== "string" || typeof e.requirement !== "string") continue;
+    out.push({
+      packageName: e.packageName,
+      edgeType: e.edgeType,
+      requirement: e.requirement,
+      kind: typeof e.kind === "string" ? e.kind : undefined,
+      role: typeof e.role === "string" ? e.role : undefined,
+    });
+  }
+  return out;
+}
+
 export type SkillExtensionDescriptor = {
   /** Absolute path to the extension package dir. */
   pkgDir: string;
@@ -132,6 +255,14 @@ export type SkillExtensionDescriptor = {
   pkgDirName: string;
   /** `cinatra.kind`. */
   kind: string;
+  /**
+   * The package's DECLARED `cinatra.dependencies` edges, structurally filtered
+   * to the well-formed entries (cinatra#2090 S3). Carried on the descriptor so
+   * the dependency→injection projection below can read a consumer's declared
+   * skill edge from the SAME single filesystem scan the rest of this module
+   * uses. `[]` when the manifest declares none / declares them malformed.
+   */
+  dependencies: DeclaredExtensionDependency[];
   /** `cinatra.capabilities` map: stable capability key → co-located skill slug. */
   capabilities: Record<string, string>;
   /** Co-located `skills/<slug>` dirs that contain a `SKILL.md`. */
@@ -213,7 +344,10 @@ export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]>
         if (seenPkgDir.has(realPkgDir)) continue;
         const pkgJsonPath = path.join(pkgDir, "package.json");
         if (!existsSync(pkgJsonPath)) continue;
-        let pkgJson: { name?: string; cinatra?: { kind?: string; capabilities?: unknown } };
+        let pkgJson: {
+          name?: string;
+          cinatra?: { kind?: string; capabilities?: unknown; dependencies?: unknown };
+        };
         try {
           pkgJson = JSON.parse(await readFile(pkgJsonPath, "utf8"));
         } catch {
@@ -247,6 +381,7 @@ export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]>
           pkgName: pkgJson.name ?? pkg.name,
           pkgDirName: pkg.name,
           kind,
+          dependencies: readDeclaredDependencies(pkgJson?.cinatra?.dependencies),
           capabilities,
           slugs,
         });
@@ -355,9 +490,9 @@ async function isSkillExtensionLiveFailClosed(
 /**
  * The subset of `skillIds` whose OWNER package is explicitly tombstoned.
  * Owner identity is derived from the skillId's package prefix (`@scope/pkg:slug`)
- * through the same candidate union as the scan filter; the assistant-skills
- * carve-out prefix (`@cinatra-ai/chat`) has no lifecycle rows → kept, by the
- * no-row rule. Fail-open: a failed status read tombstones nothing.
+ * through the same candidate union as the scan filter; the chat successor
+ * packages' carve-out prefix (`@cinatra-ai/chat`) has no lifecycle rows →
+ * kept, by the no-row rule. Fail-open: a failed status read tombstones nothing.
  */
 async function tombstonedSkillIds(skillIds: readonly string[]): Promise<Set<string>> {
   const out = new Set<string>();
@@ -422,7 +557,7 @@ export function ensureInstalledSkillRegistered(
     for (const ext of exts) {
       if (!allow.has(ext.kind)) continue;
       const provides = ext.slugs.some(
-        (slug) => deriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug).skillId === skillId,
+        (slug) => safeDeriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug)?.skillId === skillId,
       );
       if (!provides) continue;
       const registered = await registerColocatedWorkspaceSkills({
@@ -499,9 +634,10 @@ export async function ensureInstalledSkillsRegistered(
       for (const ext of exts) {
         if (!allow.has(ext.kind)) continue;
         if (packagesDone.has(ext.pkgDir)) continue;
-        const provided = ext.slugs.map(
-          (slug) => deriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug).skillId,
-        );
+        const provided = ext.slugs.flatMap((slug) => {
+          const reg = safeDeriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug);
+          return reg ? [reg.skillId] : [];
+        });
         // Register a package only if it provides at least one still-pending id,
         // and register each providing package at most once.
         if (!pending.some((id) => provided.includes(id))) continue;
@@ -560,7 +696,7 @@ export async function resolveInstalledSkillSourcePath(
   for (const ext of exts) {
     if (!allow.has(ext.kind)) continue;
     for (const slug of ext.slugs) {
-      if (deriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug).skillId === skillId) {
+      if (safeDeriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug)?.skillId === skillId) {
         return path.join(ext.pkgDir, "skills", slug, "SKILL.md");
       }
     }
@@ -574,20 +710,38 @@ export async function resolveInstalledSkillSourcePath(
  * `cinatra.capabilities`. Returns null when no active extension provides the
  * capability. This is the indirection that lets core name a capability instead
  * of a specific extension/package/skillId.
+ *
+ * `opts.unique` (fail-closed ambiguity): when true, MORE than one active
+ * extension declaring the capability throws instead of returning the first
+ * match. First-match is fine for a delivery the user sees and can correct; a
+ * capability that feeds an INTERNAL system prompt (e.g.
+ * `chat.hitl-prompt-drive`) must never depend on filesystem scan order to
+ * pick between two rival providers.
  */
 export async function resolveSkillIdForCapability(
   capabilityKey: string,
-  opts?: { allowKinds?: readonly string[] },
+  opts?: { allowKinds?: readonly string[]; unique?: boolean },
 ): Promise<string | null> {
   const allow = new Set(opts?.allowKinds ?? DEFAULT_ALLOW_KINDS);
   const exts = await filterRetiredSkillExtensions(await scanSkillExtensions());
+  const matches: { pkgName: string; skillId: string }[] = [];
   for (const ext of exts) {
     if (!allow.has(ext.kind)) continue;
     const slug = ext.capabilities[capabilityKey];
     if (!slug) continue;
-    return deriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug).skillId;
+    const skillId = safeDeriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug)?.skillId;
+    if (!skillId) continue;
+    if (!opts?.unique) return skillId;
+    matches.push({ pkgName: ext.pkgName, skillId });
   }
-  return null;
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    throw new Error(
+      `Capability "${capabilityKey}" is declared by ${matches.length} active extensions ` +
+        `(${matches.map((m) => m.pkgName).join(", ")}) — refusing an order-dependent pick.`,
+    );
+  }
+  return matches[0].skillId;
 }
 
 /**
@@ -631,7 +785,7 @@ export async function isWidgetChatSkillId(skillId: string): Promise<boolean> {
       if (ext.kind !== "skill" && ext.kind !== "connector") continue;
       for (const [capabilityKey, slug] of Object.entries(ext.capabilities)) {
         if (!capabilityKey.startsWith(WIDGET_CHAT_CAPABILITY_PREFIX)) continue;
-        if (deriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug).skillId !== skillId) {
+        if (safeDeriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug)?.skillId !== skillId) {
           continue;
         }
         // The capability must point at a slug that actually ships a bundled
@@ -650,11 +804,13 @@ export async function isWidgetChatSkillId(skillId: string): Promise<boolean> {
 /**
  * Resolve a capability key to its skillId AND ensure that skill's body is in
  * the catalog, returning the skillId. Throws when no active extension provides
- * the capability (a configuration/install error the caller should surface).
+ * the capability (a configuration/install error the caller should surface),
+ * and — with `opts.unique` — when MORE than one does (fail-closed ambiguity;
+ * see `resolveSkillIdForCapability`).
  */
 export async function ensureSkillForCapability(
   capabilityKey: string,
-  opts?: { allowKinds?: readonly string[] },
+  opts?: { allowKinds?: readonly string[]; unique?: boolean },
 ): Promise<string> {
   const skillId = await resolveSkillIdForCapability(capabilityKey, opts);
   if (!skillId) {
@@ -665,4 +821,346 @@ export async function ensureSkillForCapability(
   }
   await ensureInstalledSkillRegistered(skillId, opts);
   return skillId;
+}
+
+// ---------------------------------------------------------------------------
+// Dependency → injection projection (cinatra#2090 S3, epic #2086).
+//
+// The separation rule says a non-skill extension must not SHIP a skill: the
+// bundle moves into its own `kind:"skill"` extension and the producing
+// extension DECLARES a dependency edge on it. Nothing consumed that edge at
+// runtime — the declared graph drove install closure only — so an extracted
+// bundle would simply stop reaching the run.
+//
+// This is the projection that closes that gap for the extension-mount surface:
+// consumer dir slug → its declared skill edge → the RESOLVED provider package's
+// single bundle (its on-disk router plus the skillId the catalog knows it by).
+// It is deliberately the same filesystem substrate as the rest of this module,
+// so an uninstalled/tombstoned provider stops resolving, exactly like every
+// other resolver entry point here.
+//
+// FAIL-CLOSED at every RESOLUTION ambiguity, because the alternative is mounting
+// the WRONG instructions into a run:
+//   - the consumer dir must resolve to exactly ONE scanned package;
+//   - the consumer must be a kind the separation rule actually covers (agent /
+//     artifact / connector). A `kind:"skill"` package is a PROVIDER; letting one
+//     resolve its own declared edge would chain skill→skill deliveries that no
+//     plan text describes;
+//   - it must declare exactly ONE `kind:"skill"` edge that is `runtime` AND
+//     `required` AND carries the ROLE the calling surface asked for
+//     (cinatra#2090 S3 — see `edgeMatchesRole`). Deliberately NARROWER than the
+//     install closure's install-blocking predicate (which also admits
+//     `install-time`): an install-time edge says "must be present to install",
+//     not "deliver these instructions into every run". Zero or several ⇒ null.
+//     An edge declared for ANOTHER role is never a fallback: mounting a
+//     classifier's rules into a run as instructions to follow, because they
+//     were the only skill edge on the package, is exactly the confusion the
+//     role vocabulary exists to prevent;
+//   - the provider must be a `kind:"skill"` package shipping exactly ONE bundle
+//     (the S2 packaging contract) ⇒ otherwise null.
+//
+// LIFECYCLE liveness is NOT fail-closed here, and the difference matters enough
+// to name: this uses `filterRetiredSkillExtensions`, which drops an EXPLICITLY
+// tombstoned provider (canonical rows all `archived`) but KEEPS everything when
+// the status read itself fails (fail-OPEN), exactly like the registration path
+// above. That is deliberate — the surface this feeds is an extension mounting
+// its own declared instructions, not an authorization decision, and the
+// behaviour it REPLACES (a bundle embedded in the consumer) had no lifecycle
+// check at all, so a degraded status store must not newly strip an installed
+// extension's own skill. The fail-CLOSED posture belongs to the auth carve-out
+// (`isWidgetChatSkillId`), which denies on a degraded read.
+//
+// The declared VERSION CONSTRAINT is not re-checked here: what is on disk is
+// what the install closure resolved and materialized, and this module never
+// selects among versions. Version-pinned revision selection belongs to the S4
+// injection contract (cinatra#2091), which consumes this projection.
+// ---------------------------------------------------------------------------
+
+/** A consumer's declared skill edge, resolved to a concrete bundle. */
+export type DeclaredSkillEdgeResolution = {
+  /** The PROVIDER package (`@vendor/<slug>-skill`). */
+  packageName: string;
+  /** The provider's single bundle slug (its `skills/<slug>/` dir name). */
+  slug: string;
+  /** The canonical catalog id — `deriveSkillRegistration`, one derivation. */
+  skillId: string;
+  /** Absolute path to the provider's `SKILL.md` router. */
+  sourcePath: string;
+};
+
+/**
+ * Is this edge a RUNTIME skill dependency — the only kind that means "deliver
+ * this skill into the run"? Narrower than the closure's install-blocking
+ * predicate on purpose (see the block comment above).
+ */
+function isRuntimeSkillEdge(dep: DeclaredExtensionDependency): boolean {
+  return dep.kind === "skill" && dep.requirement === "required" && dep.edgeType === "runtime";
+}
+
+/**
+ * The EDGE-ROLE selector (cinatra#2090 S3).
+ *
+ * `null` selects the ROLE-LESS edge — the plain injectable delivery wave 2
+ * landed, where the consumer's whole declared bundle is mounted into its own
+ * run. A named role (`"matcher"` / `"authoring"`) selects the edge that feeds
+ * that specific host surface.
+ *
+ * The distinction is load-bearing, not cosmetic. Before roles existed the
+ * projection matched ANY single runtime skill edge, so an artifact extension
+ * that declared exactly one edge — its CLASSIFIER's rules — would have had
+ * that classifier prompt mounted into runs as if it were instructions for the
+ * model to follow. Selecting by role means each surface reads only the edge
+ * that was declared FOR it, and an edge declared for another surface is not a
+ * fallback.
+ */
+function edgeMatchesRole(dep: DeclaredExtensionDependency, role: string | null): boolean {
+  return role === null ? dep.role === undefined : dep.role === role;
+}
+
+/**
+ * The one place a consumer's declared edge is turned into a concrete bundle.
+ * Shared by both entry points below; `matchConsumer` is the only thing that
+ * differs (directory slug vs package name).
+ */
+async function resolveDeclaredSkillEdge(
+  matchConsumer: (ext: SkillExtensionDescriptor) => boolean,
+  role: string | null,
+  onScanFailure: "null" | "throw",
+): Promise<DeclaredSkillEdgeResolution | null> {
+  let exts: SkillExtensionDescriptor[];
+  try {
+    exts = await filterRetiredSkillExtensions(await scanSkillExtensions());
+  } catch (err) {
+    // ABSENT vs UNAVAILABLE (cinatra#2090 S3, codex round 2). A clean `null`
+    // means "this consumer declares no such edge" — a fact about the
+    // declaration. A SCAN FAILURE means the question could not be asked at
+    // all, and collapsing the two lets an fs blip look exactly like a
+    // deliberate non-declaration. The run-MOUNT surface must never throw, so
+    // it asks for `"null"`; the surfaces whose fail-closed policy would be
+    // user-visible ask for `"throw"` and fall back on it.
+    if (onScanFailure === "throw") throw err;
+    return null;
+  }
+
+  const consumers = exts.filter(matchConsumer);
+  // A bare dir slug cannot disambiguate two vendors shipping the same slug —
+  // the same fail-closed rule the bridge's own mount probe applies.
+  if (consumers.length !== 1) return null;
+  if (!DECLARED_EDGE_CONSUMER_KINDS.has(consumers[0]!.kind)) return null;
+
+  const edges = consumers[0]!.dependencies
+    .filter(isRuntimeSkillEdge)
+    .filter((dep) => edgeMatchesRole(dep, role));
+  if (edges.length !== 1) return null;
+  const providerName = edges[0]!.packageName;
+
+  const providers = exts.filter((e) => e.kind === "skill" && e.pkgName === providerName);
+  if (providers.length !== 1) return null;
+  const provider = providers[0]!;
+  // The S2 packaging contract: one `kind:"skill"` extension ships exactly one
+  // bundle. Anything else is not a package this projection can mount from.
+  if (provider.slugs.length !== 1) return null;
+  const slug = provider.slugs[0]!;
+
+  const reg = safeDeriveSkillRegistration(provider.pkgName, provider.pkgDirName, slug);
+  if (!reg) return null; // reserved-namespace impostor: never mount from it
+  const { packageName, skillId } = reg;
+  return {
+    packageName,
+    slug,
+    skillId,
+    sourcePath: path.join(provider.pkgDir, "skills", slug, "SKILL.md"),
+  };
+}
+
+/**
+ * The extension kinds the separation rule makes CONSUMERS: the non-skill kinds
+ * that used to embed a bundle. A `kind:"skill"` package is a provider, never a
+ * consumer, on this surface.
+ */
+const DECLARED_EDGE_CONSUMER_KINDS: ReadonlySet<string> = new Set([
+  "agent",
+  "artifact",
+  "connector",
+]);
+
+/**
+ * Resolve the skill bundle a consumer extension DECLARES a dependency on, by
+ * the consumer's package DIRECTORY name (the identity the agent runtime and the
+ * llm-bridge carry — a bare slug like `web-research-agent`, never a scoped npm
+ * name).
+ *
+ * Returns null — never throws — when the consumer is unknown or ambiguous, when
+ * it is not a consumer kind, when it declares no single runtime skill edge, or when the provider is
+ * absent/tombstoned/not a one-bundle skill package. A null means "no
+ * declared-edge skill for this extension", which every caller treats as
+ * "deliver nothing extra", not as an error. A FAILED lifecycle-status read
+ * keeps the provider (fail-open — see the block comment above).
+ */
+export async function resolveDeclaredSkillEdgeForExtensionDir(
+  consumerDirName: string,
+): Promise<DeclaredSkillEdgeResolution | null> {
+  if (typeof consumerDirName !== "string" || consumerDirName.length === 0) return null;
+  // ROLE-LESS only: this surface MOUNTS the resolved bundle as instructions the
+  // model follows. An edge declared for the classifier (`matcher`) or for the
+  // chat's authoring path (`authoring`) is delivered by those surfaces, not
+  // here, and must never be mounted into a run as a fallback.
+  return resolveDeclaredSkillEdge((e) => e.pkgDirName === consumerDirName, null, "null");
+}
+
+/**
+ * Resolve the skill bundle a consumer extension declares for ONE named ROLE,
+ * by the consumer's npm PACKAGE NAME — the identity the artifact surfaces
+ * carry (`matcherManifestRegistry` entries, the artifact manifest view), as
+ * opposed to the bare directory slug the agent runtime and llm-bridge carry.
+ *
+ * This is the trust anchor the matcher/authoring surfaces re-key onto: a skill
+ * is honoured because it is the RESOLVED TARGET of the consumer's declared
+ * edge for that role, not because it happens to sit in the consumer's own
+ * package. Same fail-closed resolution rules as
+ * {@link resolveDeclaredSkillEdgeForExtensionDir}, with ONE difference that
+ * matters: a `null` return means "this consumer declares no such edge" — a
+ * fact about the DECLARATION — while a filesystem-SCAN FAILURE throws. The
+ * callers of this function apply a fail-closed policy to `null` (refuse the
+ * skill / refuse the emit), and a policy that refuses work must not be
+ * triggered by an fs blip that made the question unanswerable. Callers catch
+ * the throw and fall back to their pre-cutover behaviour.
+ */
+export async function resolveDeclaredSkillEdgeForPackage(
+  consumerPackageName: string,
+  role: "matcher" | "authoring",
+): Promise<DeclaredSkillEdgeResolution | null> {
+  if (typeof consumerPackageName !== "string" || consumerPackageName.length === 0) return null;
+  return resolveDeclaredSkillEdge((e) => e.pkgName === consumerPackageName, role, "throw");
+}
+
+// ---------------------------------------------------------------------------
+// Superseded chat-namespace retirement (cinatra#2090 S3 fold).
+// ---------------------------------------------------------------------------
+
+/**
+ * EXACT-ID retirement of superseded extension-registered workspace skills
+ * (cinatra#2090 S3 fold). The store is upsert-only for extension registration
+ * and `isCustom`-preserving, so a catalog row whose slug was absorbed or
+ * renamed by a package consolidation survives forever unless something
+ * removes it — and a stale `@cinatra-ai/chat:<old-slug>` row keeps resolving
+ * for matching/injection long after its package stopped shipping the bundle.
+ *
+ * Deliberately NARROW, never a namespace sweep:
+ *   - only ids in the caller's EXACT list are touched (never "everything in
+ *     the namespace that isn't current" — a user/personal row that happens to
+ *     share the namespace must survive);
+ *   - a row is only removed when it is NOT personally owned and NOT
+ *     agent-bound (`ownerUserId`/`agentId` unset — the shape extension
+ *     registration writes);
+ *   - disk removal reuses the same lexical + realpath confinement as
+ *     `deleteCustomSkill` (nothing outside the store/data roots is deleted).
+ *
+ * Idempotent: ids with no matching row are skipped silently. Returns the ids
+ * actually retired.
+ */
+export async function retireExtensionSkillsByExactId(
+  skillIds: readonly string[],
+): Promise<string[]> {
+  if (skillIds.length === 0) return [];
+  const catalog = await readSkillsCatalog();
+  const wanted = new Set(skillIds);
+  const toRetire = catalog.skills.filter(
+    (skill) =>
+      wanted.has(skill.id) &&
+      !skill.ownerUserId &&
+      !skill.agentId,
+  );
+  if (toRetire.length === 0) return [];
+  const retiredIds = new Set(toRetire.map((s) => s.id));
+
+  replaceSkillCatalogInDatabase({
+    skillPackages: catalog.skillPackages,
+    skills: catalog.skills.filter((skill) => !retiredIds.has(skill.id)),
+  });
+
+  for (const skill of toRetire) {
+    const skillDiskDir = skill.sourcePath ? path.dirname(skill.sourcePath) : null;
+    if (!skillDiskDir) continue;
+    const resolvedSkillDiskDir = path.resolve(skillDiskDir);
+    const storeRoot = path.resolve(getSkillStoreRootPath());
+    const legacyRoot = path.resolve(getSkillsDataRootPath());
+    const insideStore =
+      resolvedSkillDiskDir.startsWith(storeRoot + path.sep) &&
+      isRealpathContained(resolvedSkillDiskDir, storeRoot);
+    const insideLegacy =
+      resolvedSkillDiskDir.startsWith(legacyRoot + path.sep) &&
+      isRealpathContained(resolvedSkillDiskDir, legacyRoot);
+    if (insideStore || insideLegacy) {
+      await rm(resolvedSkillDiskDir, { recursive: true, force: true });
+    }
+  }
+  commitSkillChange(
+    `skill: retire superseded extension skills (${[...retiredIds].join(", ")})`,
+  ).catch(() => undefined);
+
+  try { revalidatePath("/skills"); } catch { /* best-effort: non-RSC contexts (boot/instrumentation) lack the static-generation store */ }
+
+  return [...retiredIds];
+}
+
+
+/**
+ * The `@cinatra-ai/chat:<slug>` catalog rows the retired
+ * `@cinatra-ai/assistant-skills` pack registered whose slug NO LONGER exists
+ * in the successor bundle set. Registration is upsert-only and the store
+ * preserves `isCustom` rows, so without an explicit retirement these rows
+ * survive the fold and keep resolving (matching, injection, shell mounts)
+ * even though no installed package ships their bundle any more.
+ *
+ * EXACT ids, frozen at the fold: the successor routers keep
+ * `chat-assistant-core`, `company-research` and `blog-content` under the same
+ * namespace (those ids are NOT here), and `chat-hitl-prompt-drive` moved to
+ * the internal package's own namespace (its OLD chat-namespace id IS here).
+ * Never widen this to a namespace sweep — see
+ * `retireExtensionSkillsByExactId`.
+ */
+export const RETIRED_CHAT_NAMESPACE_SKILL_IDS = [
+  "@cinatra-ai/chat:chat-extension-authoring-core",
+  "@cinatra-ai/chat:chat-agent-authoring",
+  "@cinatra-ai/chat:chat-workflow-extension-authoring",
+  "@cinatra-ai/chat:chat-artifact-extension-authoring",
+  "@cinatra-ai/chat:chat-skill-extension-authoring",
+  "@cinatra-ai/chat:chat-agent-dispatch",
+  "@cinatra-ai/chat:chat-campaign-creation",
+  "@cinatra-ai/chat:chat-appointment-schedules",
+  "@cinatra-ai/chat:chat-run-polling",
+  "@cinatra-ai/chat:chat-create-artifact",
+  "@cinatra-ai/chat:chat-workflow-authoring",
+  "@cinatra-ai/chat:chat-extension-discovery",
+  "@cinatra-ai/chat:create-campaign",
+  "@cinatra-ai/chat:create-trigger",
+  "@cinatra-ai/chat:chat-hitl-prompt-drive",
+] as const;
+
+let retiredSupersededChatSkills: Promise<void> | null = null;
+
+/**
+ * Idempotent, memoized-per-process retirement of the superseded
+ * chat-namespace rows, run AFTER the successor bundle registers (the caller
+ * sequences it). Failures clear the memo so a later turn retries; they never
+ * propagate — a failed cleanup must not take down a chat turn.
+ */
+export function retireSupersededChatSkillsOnce(): Promise<void> {
+  if (retiredSupersededChatSkills) return retiredSupersededChatSkills;
+  retiredSupersededChatSkills = (async () => {
+    const retired = await retireExtensionSkillsByExactId(RETIRED_CHAT_NAMESPACE_SKILL_IDS);
+    if (retired.length > 0) {
+      console.log(
+        `[cinatra:skills] retired ${retired.length} superseded chat skill row(s): ${retired.join(", ")}`,
+      );
+    }
+  })().catch((err) => {
+    retiredSupersededChatSkills = null;
+    console.warn(
+      "[cinatra:skills] superseded chat-skill retirement failed (will retry):",
+      err instanceof Error ? err.message : err,
+    );
+  });
+  return retiredSupersededChatSkills;
 }

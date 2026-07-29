@@ -468,6 +468,8 @@ function isValidVersionConstraint(vc) {
 // (`dependency-closure.ts` treats any non-`"required"` requirement as optional).
 // `kind`, when present, must be a valid ExtensionKind and match the depended-on
 // extension's actual kind (looked up via `nameToKind`).
+// `role`, when present, must be a valid DependencySkillRole ON a kind:"skill"
+// edge — see `dependencyRoleProblem` below.
 export function isValidExtensionDependency(dep, nameToKind = new Map()) {
   if (!dep || typeof dep !== "object") return false;
   if (typeof dep.packageName !== "string" || dep.packageName.length === 0) return false;
@@ -479,7 +481,41 @@ export function isValidExtensionDependency(dep, nameToKind = new Map()) {
     const targetKind = nameToKind.get(dep.packageName);
     if (targetKind && dep.kind !== targetKind) return false;
   }
+  if (dependencyRoleProblem(dep) !== null) return false;
   return true;
+}
+
+// The declared skill-edge ROLE vocabulary (cinatra#2090 S3) — mirrors
+// `packages/extensions/src/canonical-types.ts DEPENDENCY_SKILL_ROLES`.
+const VALID_DEPENDENCY_SKILL_ROLES = new Set(["matcher", "authoring"]);
+
+/**
+ * The OPTIONAL skill-edge `role` on ONE `cinatra.dependencies` entry. Returns a
+ * precise problem string, or null when the role is absent or valid.
+ *
+ * MIRROR, not authority: `validateExtensionDependencyShape`
+ * (packages/extensions/src/manifest-dependencies.ts) is what actually runs at
+ * install, and this reproduces its rule exactly — including the ORDER of the two
+ * checks (an unknown VALUE is reported before the target-kind mismatch).
+ *
+ * Fail-LOUD rather than ignore-unknown, because both failure modes are silent at
+ * runtime: a typo'd role simply stops resolving, and a consumer whose `matcher`
+ * edge does not resolve classifies NOTHING at all. Accepting one here would let
+ * an in-tree manifest pass this gate and then fail the install read.
+ *
+ * The rule keys on the TARGET KIND only. `edgeType` is deliberately NOT part of
+ * it — the authority does not constrain it, so a role on an install-time or peer
+ * skill edge is a valid shape here exactly as it is at install.
+ */
+export function dependencyRoleProblem(dep) {
+  if (!dep || typeof dep !== "object" || dep.role === undefined) return null;
+  if (!VALID_DEPENDENCY_SKILL_ROLES.has(dep.role)) {
+    return `role, when present, must be one of ${[...VALID_DEPENDENCY_SKILL_ROLES].join("|")} (got ${JSON.stringify(dep.role)})`;
+  }
+  if (dep.kind !== "skill") {
+    return `role is only meaningful on a kind:"skill" edge (got kind ${JSON.stringify(dep.kind ?? null)})`;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

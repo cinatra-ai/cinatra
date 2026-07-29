@@ -59,6 +59,61 @@ vi.mock("@/lib/anthropic-skill-upload-governance", () => ({
   isAnthropicSkillUploadAllowedFromConfig: () => false,
 }));
 
+// Byte-bound sync (cinatra#2088): the disk→authority CAPTURE phase and the
+// authority-only CANDIDATES phase are separate. Stand in for the DB authority
+// with an in-memory one that behaves like the real store: capture
+// content-addresses the router bytes and advances a head; the candidate read
+// resolves ONLY from that head (never from disk). The real DB round-trip
+// (DB → dir → zip, identical bundle digest, binary byte-exact) is proven by
+// skill-bundle-store.integration.test.ts.
+type FakeBundle = {
+  revisionId: string;
+  bundleDigest: string;
+  files: { path: string; digest: string; byteLength: number; mode: number; isRouter: boolean; bytes: Buffer }[];
+};
+const bundleHeads = new Map<string, FakeBundle>();
+const { lintRouterOneHopReferences } = await import(
+  "../../../scripts/audit/_lib/skill-packaging-verdict.mjs"
+);
+vi.mock("@/lib/skill-bundle-store", () => ({
+  captureSkillBundleFromDisk: async (skillId: string, skillMdPath: string) => {
+    const { readFileSync } = await import("node:fs");
+    const bytes = readFileSync(skillMdPath);
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const bundleDigest = `bundle-${digest.slice(0, 16)}`;
+    const prev = bundleHeads.get(skillId);
+    const changed = !prev || prev.bundleDigest !== bundleDigest;
+    if (changed) {
+      bundleHeads.set(skillId, {
+        revisionId: `bundle:${bundleDigest}`,
+        bundleDigest,
+        files: [
+          { path: "SKILL.md", digest, byteLength: bytes.length, mode: 420, isRouter: true, bytes },
+        ],
+      });
+    }
+    return {
+      skillId,
+      revisionId: bundleHeads.get(skillId)!.revisionId,
+      bundleDigest,
+      changed,
+      authorityOwnedDivergence: false,
+      lint: { ok: true, missing: [] },
+    };
+  },
+  readCurrentSkillBundleFromDatabase: (skillId: string) => {
+    const head = bundleHeads.get(skillId);
+    if (!head) return null;
+    return { revisionId: head.revisionId, skillId, bundleDigest: head.bundleDigest, files: head.files };
+  },
+  // The REAL one-hop lint (cinatra#2089): the shared verdict's
+  // `lintRouterOneHopReferences` is pinned byte-for-behaviour to the store's
+  // `lintBundleRouterReferences` by the agreement test in
+  // scripts/audit/__tests__/skill-packaging-gate.test.mjs, so the fail-closed
+  // candidate refusal below is exercised against the actual rules — not a stub.
+  lintBundleRouterReferences: lintRouterOneHopReferences,
+}));
+
 vi.mock("@/lib/anthropic-skill-sync-dao", () => ({
   readSyncRow: vi.fn(),
   upsertSyncRow: vi.fn(),
@@ -71,8 +126,16 @@ const {
   deriveApiKeyFingerprint,
   deriveEnvironmentNamespace,
   buildSyncCandidates,
+  buildSyncCandidatesWithRefusals,
+  captureSkillBundlesFromDisk,
   syncCatalogSkillsToAnthropic,
 } = await import("../anthropic-skill-sync-service");
+
+/** Run the two byte-bound phases the sync entry point runs, in order. */
+async function captureThenBuildCandidates() {
+  await captureSkillBundlesFromDisk();
+  return buildSyncCandidates();
+}
 
 const { mkdtempSync, writeFileSync, mkdirSync, rmSync } = await import("node:fs");
 const { tmpdir } = await import("node:os");
@@ -234,7 +297,7 @@ describe("broad recommendable-pool sync", () => {
     vi.mocked(skillsPkg.readSkillsCatalogSnapshot).mockReset().mockResolvedValue(catalog as never);
     vi.mocked(skillsPkg.getSkillAnthropicUploadFlag).mockReset().mockReturnValue(true as never);
 
-    const candidates = await buildSyncCandidates();
+    const candidates = await captureThenBuildCandidates();
     const ids = candidates.map((c) => c.catalogSkillId).sort();
     // The full recommendable pool: every sourcePath skill, incl. the arbitrary
     // general one — NOT just the creation-allowlist-shaped ids.
@@ -244,6 +307,96 @@ describe("broad recommendable-pool sync", () => {
       "security-review",
     ]);
     expect(ids).toContain("general-recommendable-skill");
+    // Byte-bound: every candidate carries the stored revision + bundle identity.
+    for (const c of candidates) {
+      expect(typeof c.revisionId).toBe("string");
+      expect(c.revisionId.length).toBeGreaterThan(0);
+      expect(typeof c.bundleDigest).toBe("string");
+      expect(c.bundleDigest.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("cinatra#2089 (S2): a stored bundle whose router DEAD-ENDS is REFUSED as an upload candidate, by name", async () => {
+    // S1 (#2088) computed the one-hop router lint as a DIAGNOSTIC and assigned
+    // its fail-closed enforcement to S2. The lint runs over the STORED bytes —
+    // the exact bytes the canonical zip is built from — so a router that points
+    // at a file the bundle does not ship never reaches the provider. The
+    // refusal is per-skill and NAMED: every other skill still syncs.
+    tmpRoot = mkdtempSync(nodePath.join(tmpdir(), "dangling-router-"));
+    const mk = (id: string, body: string) => {
+      const dir = nodePath.join(tmpRoot, id);
+      mkdirSync(dir, { recursive: true });
+      const p = nodePath.join(dir, "SKILL.md");
+      writeFileSync(p, body);
+      return p;
+    };
+    vi.mocked(skillsPkg.readSkillsCatalogSnapshot)
+      .mockReset()
+      .mockResolvedValue({
+        skills: [
+          { id: "broken", name: "Broken", sourcePath: mk("broken", "# broken\nRead [more](references/missing.md).") },
+          { id: "sound", name: "Sound", sourcePath: mk("sound", "# sound\nNo references at all.") },
+        ],
+      } as never);
+    vi.mocked(skillsPkg.getSkillAnthropicUploadFlag).mockReset().mockReturnValue(true as never);
+
+    await captureSkillBundlesFromDisk();
+    const { candidates, refusedForDanglingReferences } = await buildSyncCandidatesWithRefusals();
+
+    expect(candidates.map((c) => c.catalogSkillId)).toEqual(["sound"]);
+    expect(refusedForDanglingReferences).toEqual([
+      { catalogSkillId: "broken", missing: ["references/missing.md"] },
+    ]);
+  });
+
+  it("cinatra#2088: a DERIVED (extension) skill — which never gets a lifecycle revision — is still a byte-bound candidate", async () => {
+    // Regression guard: the lifecycle revision layer (core__0029) covers
+    // custom/personal skills ONLY, so an extension skill's
+    // `skills.active_revision_id` is NULL forever. Binding candidates to that
+    // pointer would silently drop the extension skills that ARE the mirror —
+    // and, worse, let markStaleForRemovedCatalogSkills reclaim their remote
+    // copies. The bundle authority's OWN head is what makes them candidates.
+    tmpRoot = mkdtempSync(nodePath.join(tmpdir(), "derived-skill-"));
+    const dir = nodePath.join(tmpRoot, "extension-skill");
+    mkdirSync(dir, { recursive: true });
+    const p = nodePath.join(dir, "SKILL.md");
+    writeFileSync(p, "# extension skill\nbody");
+    vi.mocked(skillsPkg.readSkillsCatalogSnapshot)
+      .mockReset()
+      .mockResolvedValue({ skills: [{ id: "extension-skill", name: "Extension Skill", sourcePath: p }] } as never);
+    vi.mocked(skillsPkg.getSkillAnthropicUploadFlag).mockReset().mockReturnValue(true as never);
+    // Lifecycle state NULL = derived — exactly the extension-skill shape.
+    syncLifecycleReader = (ids) => ({ ok: true, states: new Map(ids.map((id) => [id, null])) });
+    try {
+      const candidates = await captureThenBuildCandidates();
+      expect(candidates.map((c) => c.catalogSkillId)).toEqual(["extension-skill"]);
+      expect(candidates[0].bundleDigest).toMatch(/^bundle-/);
+    } finally {
+      syncLifecycleReader = () => ({ ok: true, states: new Map() });
+    }
+  });
+
+  it("cinatra#2088: candidate construction reads ZERO disk — the bytes come from the authority", async () => {
+    tmpRoot = mkdtempSync(nodePath.join(tmpdir(), "no-disk-candidates-"));
+    const dir = nodePath.join(tmpRoot, "authority-only");
+    mkdirSync(dir, { recursive: true });
+    const p = nodePath.join(dir, "SKILL.md");
+    writeFileSync(p, "# authority-only\nstored body");
+    vi.mocked(skillsPkg.readSkillsCatalogSnapshot)
+      .mockReset()
+      .mockResolvedValue({ skills: [{ id: "authority-only", name: "Authority Only", sourcePath: p }] } as never);
+    vi.mocked(skillsPkg.getSkillAnthropicUploadFlag).mockReset().mockReturnValue(true as never);
+
+    // Phase 1: capture (the only disk boundary).
+    await captureSkillBundlesFromDisk();
+    // Now DELETE the on-disk skill entirely. A candidate builder that touched
+    // disk would throw or drop the skill; the authority-backed one still yields
+    // the stored bytes.
+    rmSync(dir, { recursive: true, force: true });
+
+    const candidates = await buildSyncCandidates();
+    expect(candidates.map((c) => c.catalogSkillId)).toEqual(["authority-only"]);
+    expect(candidates[0].skillMd.toString("utf8")).toBe("# authority-only\nstored body");
   });
 
   it("A3 (cinatra#1363): EXCLUDES an archived skill (⇒ stale ⇒ GC reclaims mirror); keeps active + derived NULL", async () => {
@@ -271,7 +424,7 @@ describe("broad recommendable-pool sync", () => {
       ),
     });
     try {
-      const ids = (await buildSyncCandidates()).map((c) => c.catalogSkillId).sort();
+      const ids = (await captureThenBuildCandidates()).map((c) => c.catalogSkillId).sort();
       // archived-one is EXCLUDED (its existing mirror row is then marked stale by
       // markStaleForRemovedCatalogSkills → GC reclaims). Derived (NULL) is kept.
       expect(ids).toEqual(["derived-null", "keep-active"]);

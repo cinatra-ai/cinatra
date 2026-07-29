@@ -381,6 +381,32 @@ export function systemLoopPhases(): BootPhase[] {
       },
     },
     {
+      name: "bind-cms-review-host-seam",
+      policy: "retryable",
+      run: async () => {
+        // Bind the `@cinatra-ai/host:cms-review` capability's runtime deps
+        // (cinatra#2043 S5) to the globalThis DI slot, BEFORE any run can reach
+        // the wordpress-mcp-connector's staged-write trigger. The capability
+        // PROVIDER is published from register-host-connector-services.ts (a
+        // route-reachable module) as a DEFERRED wrapper; the REAL deps — whose
+        // members lazy-import the heavy capture / read-back / effect-disposition
+        // stores — live in the boot-only register-cms-review-host-seam-runtime
+        // module, resolved off globalThis here so those stores ride only boot,
+        // never a route (a literal dynamic-import specifier in the seam module
+        // still grows every locked route's reachable graph and trips the
+        // route-graph ratchet — the same posture as bind-artifact-review-gate-seam
+        // above and the background-jobs-registry runner slots). UNCONDITIONAL:
+        // capability publication is fence-independent (the fence is read per-call
+        // by isReviewActive), so a fence-off host stays byte-identical while the
+        // capability is present. Idempotent (last write wins).
+        const { bindCmsReviewHostSeamRuntime } = await import(
+          "@/lib/register-cms-review-host-seam-runtime"
+        );
+        bindCmsReviewHostSeamRuntime();
+        console.log("[cms-review] host seam runtime deps bound to the S5 stores at boot");
+      },
+    },
+    {
       name: "seed-artifact-review-resume-delivery",
       policy: "retryable",
       run: async () => {
@@ -439,18 +465,18 @@ export function systemLoopPhases(): BootPhase[] {
         // tombstones, TTL expiry, checkpointed-park release). Neither runs at
         // boot — boot only creates the delayed loop jobs.
         //
-        // FENCED default-OFF: the whole slice is behind the S1 activation fence
-        // (CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION). When the fence is OFF (the
-        // default, and origin/main), the runner slot is NEVER registered and the
-        // loops are NEVER seeded — so no new BullMQ loop appears and the emitters
-        // (already fenced) add no outbox row. This keeps the slice INERT until an
-        // operator flips the fence on.
+        // SWITCHED default-ON (the #2047 activation ruling): the whole slice is
+        // behind CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION, which is ACTIVE unless a
+        // deployment sets it to `off`. On the opted-out path the runner slot is
+        // NEVER registered and the loops are NEVER seeded — so no new BullMQ loop
+        // appears and the emitters (switched the same way) add no outbox row,
+        // keeping the slice INERT for that deployment.
         const { isLifecycleReviewOrchestrationActive } = await import(
           "@/lib/lifecycle/lifecycle-activation"
         );
         if (!isLifecycleReviewOrchestrationActive()) {
           console.log(
-            "[lifecycle-review-orchestration] S1 activation fence OFF (default) — not seeding the orchestration/maintenance loops",
+            "[lifecycle-review-orchestration] S1 activation switch explicitly OFF — not seeding the orchestration/maintenance loops",
           );
           return;
         }
@@ -460,7 +486,7 @@ export function systemLoopPhases(): BootPhase[] {
         // registry sits in the LOCKED dev-perf routes' graph, so the agents
         // gate/park/outbox + objects-store graph must not be reachable (even
         // dynamically) from it. Register BEFORE seeding so neither loop observes
-        // an empty slot on a healthy fence-on boot.
+        // an empty slot on a healthy activated boot.
         const { registerLifecycleReviewRunner } = await import(
           "@/lib/background-jobs-registry"
         );
@@ -500,7 +526,7 @@ export function systemLoopPhases(): BootPhase[] {
           },
         );
         console.log(
-          "[lifecycle-review-orchestration] S1 fence ON — review-orchestration (30s) + gate-maintenance (60s) loops scheduled",
+          "[lifecycle-review-orchestration] S1 activation ACTIVE (default) — review-orchestration (30s) + gate-maintenance (60s) loops scheduled",
         );
       },
     },

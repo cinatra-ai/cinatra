@@ -41,7 +41,15 @@ describe("resolvePinnedRunSnapshot — REQUIRED pin (versionId + packageVersion)
       { templateId: TEMPLATE, packageVersion: SEMVER, versionId: SNAP_ID },
       deps({ readAgentTemplateVersionById: byId, readAgentTemplateVersionBySemver: bySemver }),
     );
-    expect(out).toEqual({ compiledPlan: [{ step: 1 }], taskSpec: "do the thing" });
+    expect(out).toEqual({
+      compiledPlan: [{ step: 1 }],
+      taskSpec: "do the thing",
+      // exec-plane S3 (epic #1705): the snapshot's declared L1 recipe rides the
+      // SAME classifier so the /api/llm-bridge seam has one definition of
+      // "this run is pinned". Absent on the snapshot ⇒ null ⇒ the pinned
+      // version declared no environment (never a fallback to the live row).
+      executionEnvironment: null,
+    });
     // Loads by id ONLY — never the semver best-effort path.
     expect(byId).toHaveBeenCalledWith(SNAP_ID);
     expect(bySemver).not.toHaveBeenCalled();
@@ -56,7 +64,7 @@ describe("resolvePinnedRunSnapshot — REQUIRED pin (versionId + packageVersion)
         ),
       }),
     );
-    expect(out).toEqual({ compiledPlan: [], taskSpec: null });
+    expect(out).toEqual({ compiledPlan: [], taskSpec: null, executionEnvironment: null });
   });
 
   it("REFUSES (fail-closed) when the pinned snapshot was purged mid-flight", async () => {
@@ -162,7 +170,7 @@ describe("resolvePinnedRunSnapshot — REQUIRED pin (versionId + packageVersion)
         ),
       }),
     );
-    expect(out).toEqual({ compiledPlan: [], taskSpec: "leaf work" });
+    expect(out).toEqual({ compiledPlan: [], taskSpec: "leaf work", executionEnvironment: null });
   });
 });
 
@@ -176,7 +184,11 @@ describe("resolvePinnedRunSnapshot — NON-required runs keep pre-S7 behavior", 
         readAgentTemplateVersionBySemver: vi.fn(async () => validSnapshotRow()),
       }),
     );
-    expect(out).toEqual({ compiledPlan: [{ step: 1 }], taskSpec: "do the thing" });
+    expect(out).toEqual({
+      compiledPlan: [{ step: 1 }],
+      taskSpec: "do the thing",
+      executionEnvironment: null,
+    });
     expect(byId).not.toHaveBeenCalled(); // never the fail-closed path
   });
 
@@ -218,5 +230,51 @@ describe("resolvePinnedRunSnapshot — NON-required runs keep pre-S7 behavior", 
       deps(),
     );
     expect(out).toBeNull();
+  });
+});
+
+// exec-plane S3 / epic #1705: the SAME classifier now carries the snapshot's
+// declared L1 execution environment, so the `/api/llm-bridge` run seam resolves
+// a pinned run's recipe through the one merged definition of "this run is
+// pinned" instead of inventing a second rule.
+describe("resolvePinnedRunSnapshot — declared execution environment (epic #1705)", () => {
+  const ENV = { pip: ["pandas==2.2.1"] };
+
+  it("a REQUIRED pin carries its snapshot's declared environment", async () => {
+    const out = await resolvePinnedRunSnapshot(
+      { templateId: TEMPLATE, packageVersion: SEMVER, versionId: SNAP_ID },
+      deps({
+        readAgentTemplateVersionById: vi.fn(async () =>
+          validSnapshotRow({
+            snapshot: { compiledPlan: [], taskSpec: null, executionEnvironment: ENV },
+          }),
+        ),
+      }),
+    );
+    expect(out?.executionEnvironment).toEqual(ENV);
+  });
+
+  it("a BEST-EFFORT semver pin carries it too (a resolved snapshot is authoritative)", async () => {
+    const out = await resolvePinnedRunSnapshot(
+      { templateId: TEMPLATE, packageVersion: SEMVER, versionId: null },
+      deps({
+        readAgentTemplateVersionBySemver: vi.fn(async () =>
+          validSnapshotRow({
+            snapshot: { compiledPlan: [], taskSpec: null, executionEnvironment: ENV },
+          }),
+        ),
+      }),
+    );
+    expect(out?.executionEnvironment).toEqual(ENV);
+  });
+
+  it("the INERT versionId-only pin resolves to no pin at all — the live recipe governs", async () => {
+    const byId = vi.fn(async () => validSnapshotRow());
+    const out = await resolvePinnedRunSnapshot(
+      { templateId: TEMPLATE, packageVersion: null, versionId: SNAP_ID },
+      deps({ readAgentTemplateVersionById: byId }),
+    );
+    expect(out).toBeNull();
+    expect(byId).not.toHaveBeenCalled();
   });
 });

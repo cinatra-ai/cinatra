@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 
 import { postgresSchema } from "@/lib/postgres-config";
 import { rawWithParams } from "@/lib/dashboards/raw-with-params";
+import { deriveDashboardScopeTuple } from "@/lib/dashboards/dashboard-scope-tuple";
 import { buildBindingReconcileQueries } from "@/lib/objects/binding-write-path";
 import { buildObjectsWithOutboxQuery, buildSoftDeleteObjectQuery } from "@/lib/objects-store";
 import { buildAssertSemanticTypeQueries } from "@/lib/artifacts/semantic-assertion-store";
@@ -38,9 +39,10 @@ import {
  *   1. `resource` (kind='dashboard') — a deterministic-id, substance-keyed row so
  *      the append-only `representation` has a stable resource to point at. Idempotent.
  *   2. `objects` + `graphiti_projection_outbox` — the SHARED single-CTE builder in
- *      UPSERT mode: scope axis (owner_level/owner_id/project_id) copied VERBATIM
- *      from the dashboards row, visibility derived conservatively. The graphiti
- *      outbox fires ONLY on a REAL objects-row change (delta D3).
+ *      UPSERT mode: scope axis (owner_level/owner_id/visibility/project_id) is the
+ *      canonical Phase-2 scope-tuple mapping (cinatra#1898 — `deriveDashboardScopeTuple`),
+ *      NOT the retired conservative floor. The graphiti outbox fires ONLY on a
+ *      REAL objects-row change (delta D3).
  *   3. `representation` — a NEW revision `COALESCE(MAX(revision),0)+1` under the
  *      advisory lock (delta D2: rev=1 is merely the empty-history result). NOT
  *      outbox-gated — a no-op object update still advances the revision (D3).
@@ -84,32 +86,6 @@ const DASHBOARD_RESOURCE_MIME = "application/vnd.cinatra.dashboard+json";
 const TWIN_SOURCE = "dashboards-twin";
 
 type SubstrateQuery = { text: string; values: readonly unknown[] };
-
-/**
- * Derive the substrate `objects.visibility` CONSERVATIVELY from the dashboards
- * row's owner axis (cinatra#1894 scope-axis section). A project-scoped dashboard
- * floors to `private`; otherwise the owner tier maps to its natural share axis,
- * with `workspace` taking the conservative floor. Phase-1 dual-auth
- * (`resolveDashboardAccess` still gates dashboard-typed rows) is the safety
- * margin that permits the floor.
- */
-export function deriveConservativeVisibility(
-  ownerLevel: string,
-  projectId: string | null,
-): "private" | "team" | "organization" {
-  if (projectId != null) return "private";
-  switch (ownerLevel) {
-    case "team":
-      return "team";
-    case "organization":
-      return "organization";
-    case "user":
-      return "private";
-    // workspace (and any unknown tier) → conservative floor.
-    default:
-      return "private";
-  }
-}
 
 /** A stable, per-dashboard `resource.id`. The resource is 1:1 with the dashboard
  *  (substance_key = dashboardId), so a deterministic id lets the representation
@@ -207,7 +183,20 @@ export function buildDashboardTwinQueries(ctx: DashboardTwinContext): SubstrateQ
   // here (not inside the builder) so the lifecycle produced-event (below) can pin
   // it as its review target, matching the substrate revision the twin allocates.
   const representationRevisionId = randomUUID();
-  const visibility = deriveConservativeVisibility(ctx.ownerLevel, ctx.projectId);
+  // Phase-2 canonical scope-tuple mapping (cinatra#1898, epic #1883 §D7): the
+  // object row's ownership axis derives PURELY from the dashboard's scope (owner
+  // ruling 5) — user→private, team→team, org→organization, workspace→org-local
+  // public, project→organization-owned/private/project-refined. The retired
+  // conservative floor + Phase-1 dual authorization are gone; the single
+  // canonical object.read filter now gates dashboard-typed rows outright, so this
+  // tuple IS the ACL (a project row is org-owned+private so the filter admits it
+  // only via the project clause — never a bare user/team owner clause).
+  const scope = deriveDashboardScopeTuple({
+    ownerLevel: ctx.ownerLevel,
+    ownerId: ctx.ownerId,
+    organizationId: ctx.orgId,
+    projectId: ctx.projectId,
+  });
   const objectsOutbox = buildObjectsWithOutboxQuery(schema, "upsert", {
     id: ctx.dashboardId,
     type: DASHBOARD_OBJECT_TYPE,
@@ -220,11 +209,13 @@ export function buildDashboardTwinQueries(ctx: DashboardTwinContext): SubstrateQ
     createdBy: ctx.actorId ?? null,
     orgId: ctx.orgId,
     source: TWIN_SOURCE,
-    // Scope axis copied VERBATIM from the dashboards row.
-    ownerLevel: ctx.ownerLevel,
-    ownerId: ctx.ownerId,
-    visibility,
-    projectId: ctx.projectId,
+    // Scope axis = the canonical Phase-2 mapping (NOT verbatim — a project row is
+    // re-owned to the organization so the object.read filter gates it purely on
+    // project membership).
+    ownerLevel: scope.ownerLevel,
+    ownerId: scope.ownerId,
+    visibility: scope.visibility,
+    projectId: scope.projectId,
   });
 
   const bindingOps = buildBindingReconcileQueries(schema, {
@@ -295,9 +286,11 @@ export function buildDashboardTwinQueries(ctx: DashboardTwinContext): SubstrateQ
   // ── LIFECYCLE-INTERCEPTIONS S1 PRODUCED EVENT (cinatra#2039, epic #2037) ──
   // The transactional ArtifactProduced event for the dashboard twin, written in
   // THIS same dashboards tx so review is driven by a durable, same-tx idempotent
-  // event. FENCED default-OFF: `maybeBuildProducedEventInsertOp` returns null when
-  // the S1 activation fence is off, so this splices NOTHING (the twin query list
-  // is byte-identical to origin/main). ORIGIN: an extension-MATERIALIZED dashboard
+  // event. SWITCHED default-ON (cinatra#2047, ruling 2026-07-27): the op is
+  // spliced unless a deployment sets `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`,
+  // in which case `maybeBuildProducedEventInsertOp` returns null and this splices
+  // NOTHING (the twin query list is byte-identical to the pre-flip one).
+  // ORIGIN: an extension-MATERIALIZED dashboard
   // (`extensionId` set) is `agent_generated` (review-eligible per policy); a
   // user/operator-built dashboard is `upload` (→ user_provided → the review core
   // default SKIPS, unless an org bound requires it). The dashboard produces no

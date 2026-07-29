@@ -73,8 +73,13 @@ describe("email-recipient-selection-agent - list-only scope", () => {
     expect(system).not.toContain("lists_get");
   });
 
-  it("package.json is at the v0.1.0 standard", () => {
-    expect(pkg.version).toBe("0.1.1");
+  it("package.json carries a published semver", () => {
+    // Pinned by COMMIT (cinatra-dev-extensions.lock.json), not by range, so the
+    // exact patch moves whenever the pack ships — cinatra#2090's fold and
+    // cinatra#1796's reviewer-coupling retirement both landed on 0.1.2, and the
+    // next pin bump moves it again. Assert the SHAPE, not a frozen literal, so a
+    // routine pin bump is never a core-test break.
+    expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
   });
 });
 

@@ -221,6 +221,20 @@ export type SandboxExecuteOutput = {
   stdout: string;
   stderr: string;
   outcome: { type: "exit"; exitCode: number } | { type: "timeout" };
+  /**
+   * Set by the executor when the EXECUTION PLANE refused before any command
+   * ran on a sandbox — the job could not be opened, or the broker refused this
+   * command (quota, liveness, egress). Refusals are returned STRUCTURED rather
+   * than thrown (the model must stay usable), so without this marker a refusal
+   * is indistinguishable from a real non-zero exit at every layer above the
+   * executor.
+   *
+   * It exists for the surface provenance guard (cinatra#2175): "the executor
+   * resolved" is NOT "something ran", and a turn whose only dispatch was
+   * refused has no execution to back a claim of having run code. Absent means
+   * the command reached a sandbox; only the executor sets it.
+   */
+  refusedByPlane?: true;
 };
 /**
  * The distinct execution-plane tool (epic #1705 / S1 #1706 / S2 #1707).

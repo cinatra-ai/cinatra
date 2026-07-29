@@ -41,6 +41,12 @@ import {
 } from "./resolve-agent-creation-dispatch";
 import { resolveRequiredCreationSkillIds } from "./resolve-required-creation-skill-ids";
 import {
+  resolveInjectedSkillSet,
+  type InjectionAuthorization,
+  type InjectionResolverPorts,
+  type InjectionSkillRef,
+} from "@cinatra-ai/skills/injection";
+import {
   extractAuthorDraftFromText,
   type AuthorDraft,
 } from "./author-draft";
@@ -96,6 +102,48 @@ async function loadAuthorAgentSystemPrompt(): Promise<string> {
   }
   return FALLBACK_AUTHOR_SYSTEM;
 }
+
+// ---------------------------------------------------------------------------
+// Injection ports for the AUTHOR run (cinatra#2091, epic #2086 S4). Co-located
+// with its only caller: the factory closes over the authoring package the
+// SURFACE resolved (never request input).
+// ---------------------------------------------------------------------------
+
+function toRefs(skillIds: readonly string[]): InjectionSkillRef[] {
+  return skillIds.map((skillId) => ({ skillId }));
+}
+
+export function buildAgentAuthoringInjectionPorts(input: {
+  /** The authoring agent package the SURFACE resolved (never request input). */
+  authoringPackageName: string;
+  /**
+   * Pre-resolved skill ids, when the caller already ran the strict catalog
+   * resolver (it must, to run its own empty-skill dispatch guard). Absent ⇒
+   * this module resolves them.
+   */
+  preResolvedSkillIds?: readonly string[];
+}): InjectionResolverPorts {
+  return {
+    async authorizeAuthoringSurface(subject): Promise<InjectionAuthorization> {
+      if (subject.agentSpecRef !== input.authoringPackageName) {
+        return {
+          ok: false,
+          reason:
+            "the authoring intent names a spec the authoring surface did not bind",
+        };
+      }
+      return { ok: true };
+    },
+    async resolveAuthoringSkills() {
+      if (input.preResolvedSkillIds) return toRefs(input.preResolvedSkillIds);
+      const lanes = await resolveRequiredCreationSkillIds([
+        input.authoringPackageName,
+      ]);
+      return toRefs(lanes[0]?.skillIds ?? []);
+    },
+  };
+}
+
 
 /** Build the user prompt with the documented envelope reminder. */
 function buildAuthorAgentUserPrompt(input: { packageSlug: string; spec: string }): string {
@@ -161,13 +209,29 @@ export async function runAuthorAgent(input: RunAuthorAgentInput): Promise<Author
     logLabel: AUTHOR_AGENT_LOG_LABEL,
     actorContext: input.actorContext,
   };
+  // cinatra#2091 S4 — the author run declares the `agent-authoring` PURPOSE;
+  // the resolver derives the authoring skill set and applies the hard cap. The
+  // strict catalog resolution above still runs first because the Anthropic
+  // empty-skill dispatch guard needs it, and its result is handed to the ports
+  // so the catalog is read exactly once.
+  const injectedSkills = await resolveInjectedSkillSet(
+    {
+      kind: "explicit-purpose",
+      purpose: "agent-authoring",
+      subject: { agentSpecRef: AUTHOR_AGENT_PACKAGE_NAME },
+    },
+    buildAgentAuthoringInjectionPorts({
+      authoringPackageName: AUTHOR_AGENT_PACKAGE_NAME,
+      preResolvedSkillIds: skillIds,
+    }),
+  );
   const response = dispatch.useSkillAware
     ? await runSkillAwareDeterministicLlmTask({
         ...common,
-        skillIds,
-        // The author-agent creation lane is a FIXED
-        // pre-synced allowlist. Pin "creation" so an over-cap is a HARD
-        // AnthropicSkillCapError, never silently rank-and-truncated.
+        injectedSkills,
+        // The author-agent creation lane is a FIXED pre-synced allowlist. Pin
+        // "creation" so the delivery adapter's defence-in-depth cap is a HARD
+        // error rather than a silent rank-and-truncate.
         skillSelectionMode: "creation" as const,
       })
     : await runDeterministicLlmTask(common);

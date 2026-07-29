@@ -170,6 +170,17 @@ export interface ReviewDecisionCommitPlan {
   dispositionOps: ReviewDispositionOp[];
   /** The exactly-once-persisted resume outbox intent (terminal only). */
   resumeIntent: ReviewResumeIntent | null;
+  /**
+   * The DECIDING actor (cinatra#2047 defect D-2) — SERVER-resolved from the live
+   * session at submit through the `actingActorId` port, exactly like renderer
+   * provenance, and never a client claim. The binder stamps it on the resolved
+   * gate (`artifact_review_gates.resolved_by`, a column declared and READ since
+   * #1796 and until now never written), which is what finally gives a resolved
+   * gate an accountable decider of record. Null only where the host cannot
+   * resolve an actor id (a non-human carrier); the gate then records no decider
+   * rather than a fabricated one.
+   */
+  decidedBy: string | null;
 }
 
 /** The outcome of the atomic commit CAS. */
@@ -220,6 +231,10 @@ export interface SubmitDecisionPorts {
   deriveProvenance(
     target: ArtifactReviewTarget,
   ): Promise<ReviewRendererProvenance> | ReviewRendererProvenance;
+  /** The LIVE acting actor's id (cinatra#2047 D-2) — resolved server-side from
+   * the verified session/carrier the run-access check just ran against. Returns
+   * null when the host cannot name an actor id. Never a client input. */
+  actingActorId(): string | null;
   /** Persist the plan ATOMICALLY (gate CAS stamping `fingerprint` + audit rows +
    * dispositions + the resume outbox intent, in ONE transaction). Returns
    * committed / already-resolved (matching-fingerprint race) / conflict; MUST
@@ -373,6 +388,7 @@ export async function submitReviewDecisionCore(
     auditRows,
     dispositionOps,
     resumeIntent,
+    decidedBy: ports.actingActorId(),
   };
 
   // 7. Atomic commit (gate CAS + audit + dispositions + resume outbox intent).

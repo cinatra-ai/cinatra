@@ -20,7 +20,7 @@ type ThreadForCodex = {
  * persist it as an assistant message rather than crashing the thread.
  *
  * @param thread  - The chat thread (last 10 messages used as context)
- * @param userMessage - The new user message that triggered the @chatgpt mention
+ * @param userMessage - The new user message that triggered the local-CLI turn
  */
 export async function callCodexCliAssistant(thread: ThreadForCodex, userMessage: string): Promise<string> {
   // Build conversation context from the last 10 messages in the thread
@@ -32,11 +32,11 @@ export async function callCodexCliAssistant(thread: ThreadForCodex, userMessage:
   const prompt = `${context}\n\nUser: ${userMessage}\n\nRespond directly and concisely.`;
 
   // Create a temp dir for output file
-  const tmpDir = mkdtempSync(join(tmpdir(), "chatgpt-"));
+  const tmpDir = mkdtempSync(join(tmpdir(), "codex-cli-"));
   const outFile = join(tmpDir, "response.txt");
 
   return new Promise<string>((resolve) => {
-    let stderrChunks: string[] = [];
+    const stderrChunks: string[] = [];
     let settled = false;
 
     const child = spawn(
@@ -73,10 +73,10 @@ export async function callCodexCliAssistant(thread: ThreadForCodex, userMessage:
           resolve(text);
         } else {
           const stderrTail = stderrChunks.join("").slice(-500).trim();
-          resolve(`@chatgpt failed (exit ${code}): ${stderrTail}`);
+          resolve(`Codex CLI failed (exit ${code}): ${stderrTail}`);
         }
       } catch (err) {
-        resolve(`@chatgpt failed: ${err instanceof Error ? err.message : String(err)}`);
+        resolve(`Codex CLI failed: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -87,7 +87,7 @@ export async function callCodexCliAssistant(thread: ThreadForCodex, userMessage:
       if (settled) return;
       settled = true;
       rmSync(tmpDir, { recursive: true, force: true });
-      resolve(`@chatgpt failed: ${err.message}`);
+      resolve(`Codex CLI failed: ${err.message}`);
     });
   });
 }

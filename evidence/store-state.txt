@@ -1,0 +1,45 @@
+# pa2064f — PASSING walk store-state (PR #2064 / lane 1898)
+# Live stack: Next dev :3065, pg 127.0.0.1:5634 db=pa2064f, redis :6579.
+# Head under test: fix(projects) #1898 sealed-room grant gate (commit d36d2d444).
+
+## project P (USER-owned, private, Default org)
+                  id                  |   name    | owner_level |               owner_id               |           organization_id            | visibility
+--------------------------------------+-----------+-------------+--------------------------------------+--------------------------------------+------------
+ bf1af615-c9f8-4ab4-80a8-4de75ffeaab6 | Project P | user        | d1313901- (alice)                    | 8c823818- (Default org)              | private
+
+## project-scoped dashboards (#2064 path)
+        name         | owner_level | entity_type |              entity_id
+---------------------+-------------+-------------+--------------------------------------
+ Overview            | user        | project     | bf1af615- (Project P)
+ P Revenue Dashboard | user        | project     | bf1af615- (Project P)
+
+## project_access grants written via the settings picker
+ principal_level |          principal_id            | role | note
+-----------------+----------------------------------+------+-------------------------------------------
+ organization    | 8c823818- (Default org)          | read | reaches EVERY org member (Source 2 org)
+ user            | 611f7fdd- (carol)                | read | direct user-level grant (Source 2 user)
+
+## Default-org members
+          email          |  role
+-------------------------+--------
+ alice@pa2064f.test      | owner   (project owner)
+ bob@pa2064f.test        | member  (relies on the ORG-level grant)
+ carol@pa2064f.test      | member  (also holds the USER-level grant)
+
+## Walk verdicts (store-verified at each rung)
+RUNG 1  A creates Project P + "P Revenue Dashboard"; A (owner) reads it.            PASS
+RUNG 2  B (member, NO grant) — /projects list: P absent; /projects/{id}: 404;       PASS (sealed room closed)
+        /artifacts: dashboard absent.
+RUNG 3  A grants ORGANIZATION-level read via the settings picker.                   PASS (project_access org row written)
+RUNG 4  B reloads — /projects list: sees "Project P"; /projects/{id}: HTTP 200      PASS (grant flows to authz)
+        (not 404) with the "P Revenue Dashboard" tab; /projects/{id}/dashboards:
+        authorized (reached, not redirected to /not-authorized).
+RUNG 5  A grants Carol a direct USER-level read; both grants coexist in            PASS (project_access user row written)
+        project_access.
+RUNG 6  Carol reads /projects/{id}: HTTP 200, dashboard visible.                    PASS
+
+Note on /artifacts: the project entity-dashboard is NOT surfaced in the general
+/artifacts library for ANYONE (the OWNER sees "No artifacts yet" too), so the
+prior lane's "dashboard invisible in /artifacts" was a non-surface, not a
+project.read denial. The real authz surfaces (list, detail, settings,
+/dashboards route) all now honor the grant.

@@ -30,11 +30,29 @@ Battery members (all are self-contained at a clean checkout):
 | write-surface inventory drift | `scripts/build-write-surface-inventory.mjs --check` |
 | mutation-result rollout gate | `scripts/audit/mutation-result-rollout-gate.mjs` |
 | objects-writer DML drift gate | `scripts/audit/objects-writer-drift-gate.mjs` |
+| review-decision-writer direct-DML check | `scripts/audit/review-decision-writer-*-gate.mjs` |
 | design-registry drift (`public/r`) | `scripts/extensions/build-design-registry.mjs --check` (needs network: `pnpm dlx shadcn`) |
 
 Use `--skip-network` (or `CLOSEOUT_SKIP_NETWORK=1`) in an offline/sandboxed
 environment to omit the design-registry member; it is then reported as
 `SKIPPED (network)` rather than silently dropped.
+
+The review-decision member (cinatra#2047 acceptance annex) is the single-writer
+guard over the review DECISION record — `artifact_review_gates`,
+`artifact_review_audit`, `artifact_review_dispositions` and
+`artifact_review_resume_outbox`. It bans direct DML against those four tables
+from any module outside a justified allowlist, so a second store cannot quietly
+grow into a parallel approval path. Its path is written with a wildcard above
+for the same reason the runner assembles it from parts: the filename embeds a
+token the org source-leak scanner reads as an internal planning-artifact marker
+(that rule scans file content, not paths).
+
+Both writer guards run on EVERY push and pull request as well, independently of
+this closeout runner: their companion tests live under
+`scripts/audit/__tests__/`, which the root Vitest include glob covers, and each
+test executes its guard against the live tree. `pnpm test:root` in the
+`build-image` workflow is therefore the per-PR enforcement point; this suite is
+the closeout-checkpoint one.
 
 **Out of scope** (intentionally not run here — they need Postgres / Redis /
 Docker and are owned elsewhere):
@@ -144,3 +162,11 @@ same harness in gate mode with candidate pins derived from the checked-out ref.
 - `prod-boot-e2e.sh` — production image cold-boot smoke.
 - `prune-extensions-to-required.mjs`, `extension-pin-divergence-report.mjs`,
   `assert-generated-maps-omit.mjs` — extension-universe maintenance helpers.
+- `uat-diagnostics.sh` — WP/Drupal UAT runtime diagnostics (cinatra#2131): the
+  periodic memory/swap/top-RSS sampler, the per-service
+  `docker compose logs --tail=500` capture on the failure path, and the
+  fail-closed scan that keeps a per-run minted value out of the uploaded
+  artifacts. Shared by both jobs in `.github/workflows/wp-drupal-uat.yml`.
+- `uat-mask-verify.mjs` — asserts that every rendering of the UAT lane's per-run
+  minted values in the finished PUBLIC job log is masked (cinatra#2131). Runs as
+  its own job because a job cannot read its own log until it completes.

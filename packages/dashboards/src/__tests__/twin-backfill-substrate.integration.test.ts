@@ -54,6 +54,8 @@ const actor: DashboardActor = {
   teamIds: [TEAM],
   orgRole: "owner",
   teamRoles: { [TEAM]: "admin" },
+  // cinatra#1939 S3 — createDashboard runs under the org-write kernel guard.
+  authority: { orgId: ORG, can: (c) => c === "content.write" },
 };
 
 const bareConfig = {
@@ -103,6 +105,24 @@ d("dashboards-artifact twin BACKFILL — substrate proof (cinatra#1894 B1c / #20
     }
     (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 
+    // cinatra#1939 S3: the org-write kernel guard reads public."organization"
+    // FOR SHARE before every guarded write — seed the test org (shape-tolerant:
+    // minimal table when no better-auth schema exists, archive columns added
+    // when an older real table lacks them, richer insert on NOT NULL demands).
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS public."organization" (id text PRIMARY KEY, name text, "archivedAt" timestamptz, "archiveEpoch" int)`,
+    );
+    await pool.query(`ALTER TABLE public."organization" ADD COLUMN IF NOT EXISTS "archivedAt" timestamptz`);
+    await pool.query(`ALTER TABLE public."organization" ADD COLUMN IF NOT EXISTS "archiveEpoch" int`);
+    await pool
+      .query(`INSERT INTO public."organization" (id, name) VALUES ($1, $1) ON CONFLICT (id) DO NOTHING`, [ORG])
+      .catch(() =>
+        pool.query(
+          `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $1, $1, now()) ON CONFLICT (id) DO NOTHING`,
+          [ORG],
+        ),
+      );
+
     resetDashboardArtifactTwinWriter();
     setDashboardArtifactTwinWriter(dashboardArtifactTwinWriter);
 
@@ -142,6 +162,7 @@ d("dashboards-artifact twin BACKFILL — substrate proof (cinatra#1894 B1c / #20
     resetDashboardArtifactTwinWriter();
     if (pool) {
       await pool.query(`DROP SCHEMA IF EXISTS "${SCHEMA}" CASCADE`).catch(() => {});
+      await pool.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]).catch(() => {});
       await pool.end();
     }
   });
@@ -160,7 +181,7 @@ d("dashboards-artifact twin BACKFILL — substrate proof (cinatra#1894 B1c / #20
     const audBefore = await countRows("artifact_audit", "artifact_id = $1", [alreadyTwinnedId]);
 
     // Small batch to exercise multi-batch keyset pagination.
-    const result = await backfillDashboardArtifactTwins({ batchSize: 2 });
+    const result = await backfillDashboardArtifactTwins({ batchSize: 2, mintOrgAuthority: (orgId) => ({ orgId, can: (c) => c === "content.write" }) });
 
     expect(result.paired).toBe(4);
     expect(result.collisions).toBe(1);
@@ -171,14 +192,17 @@ d("dashboards-artifact twin BACKFILL — substrate proof (cinatra#1894 B1c / #20
     // excluded by the NOT EXISTS predicate, never scanned).
     expect(result.scanned).toBe(5);
 
-    // Each paired dashboard now has a COMPLETE twin with verbatim axis, the
-    // conservative visibility, the 'dashboards-twin' source, and the full
-    // resource/representation/audit/outbox set.
+    // Each paired dashboard now has a COMPLETE twin carrying the CANONICAL
+    // scope tuple (`deriveDashboardScopeTuple`, cinatra#1898), the
+    // 'dashboards-twin' source, and the full resource/representation/audit/
+    // outbox set. NOTE the project row: its tuple is ORGANIZATION-owned +
+    // private + project-refined (never its underlying user/team owner), so the
+    // canonical object filter admits it ONLY via the project clause.
     const cases: Array<{ id: string; ownerLevel: string; ownerId: string; projectId: string | null; visibility: string }> = [
       { id: "bf-01-user", ownerLevel: "user", ownerId: USER, projectId: null, visibility: "private" },
       { id: "bf-02-team", ownerLevel: "team", ownerId: TEAM, projectId: null, visibility: "team" },
       { id: "bf-03-org", ownerLevel: "organization", ownerId: ORG, projectId: null, visibility: "organization" },
-      { id: "bf-04-proj", ownerLevel: "user", ownerId: USER, projectId: PROJECT, visibility: "private" },
+      { id: "bf-04-proj", ownerLevel: "organization", ownerId: ORG, projectId: PROJECT, visibility: "private" },
     ];
     for (const c of cases) {
       const objs = await q<{
@@ -233,7 +257,7 @@ d("dashboards-artifact twin BACKFILL — substrate proof (cinatra#1894 B1c / #20
     const repBefore = await countRows("representation", "artifact_id = 'bf-01-user'", []);
     const audBefore = await countRows("artifact_audit", "artifact_id = 'bf-01-user'", []);
 
-    const again = await backfillDashboardArtifactTwins({ batchSize: 2 });
+    const again = await backfillDashboardArtifactTwins({ batchSize: 2, mintOrgAuthority: (orgId) => ({ orgId, can: (c) => c === "content.write" }) });
 
     // Only the (still-untwinned-as-dashboard) collision is re-scanned; the four
     // paired rows are now excluded.
@@ -252,24 +276,24 @@ d("dashboards-artifact twin BACKFILL — substrate proof (cinatra#1894 B1c / #20
     await seedUntwinned("bf-06-race", "user", USER, null);
 
     // First pairing (as the sweep would do) → paired.
-    expect(await pairOneUntwinnedDashboardTwin("bf-06-race", SCHEMA)).toBe("paired");
+    expect(await pairOneUntwinnedDashboardTwin("bf-06-race", SCHEMA, { organizationId: ORG, authority: { orgId: ORG, can: (c) => c === "content.write" } })).toBe("paired");
     expect(await countRows("representation", "artifact_id = 'bf-06-race'", [])).toBe(1);
     expect(await countRows("artifact_audit", "artifact_id = 'bf-06-race'", [])).toBe(1);
 
     // Second call models the race: the scan saw it untwinned, but by the time the
     // per-id transaction runs the twin already exists. The in-tx re-check under the
     // advisory lock returns "already" and writes NOTHING — no duplicate revision.
-    expect(await pairOneUntwinnedDashboardTwin("bf-06-race", SCHEMA)).toBe("already");
+    expect(await pairOneUntwinnedDashboardTwin("bf-06-race", SCHEMA, { organizationId: ORG, authority: { orgId: ORG, can: (c) => c === "content.write" } })).toBe("already");
     expect(await countRows("representation", "artifact_id = 'bf-06-race'", [])).toBe(1);
     expect(await countRows("artifact_audit", "artifact_id = 'bf-06-race'", [])).toBe(1);
 
     // And the collision id, driven directly, is refused (never clobbered).
-    expect(await pairOneUntwinnedDashboardTwin("bf-05-collision", SCHEMA)).toBe("collision");
+    expect(await pairOneUntwinnedDashboardTwin("bf-05-collision", SCHEMA, { organizationId: ORG, authority: { orgId: ORG, can: (c) => c === "content.write" } })).toBe("collision");
     expect(await countRows("representation", "artifact_id = 'bf-05-collision'", [])).toBe(0);
   });
 
   it("GONE: a dashboard that vanished between the scan and the per-id tx yields 'gone', writes nothing", async () => {
-    expect(await pairOneUntwinnedDashboardTwin("bf-does-not-exist", SCHEMA)).toBe("gone");
+    expect(await pairOneUntwinnedDashboardTwin("bf-does-not-exist", SCHEMA, { organizationId: ORG, authority: { orgId: ORG, can: (c) => c === "content.write" } })).toBe("gone");
     expect(await countRows("objects", "id = 'bf-does-not-exist'", [])).toBe(0);
     expect(await countRows("representation", "artifact_id = 'bf-does-not-exist'", [])).toBe(0);
   });
@@ -284,7 +308,7 @@ d("dashboards-artifact twin BACKFILL — substrate proof (cinatra#1894 B1c / #20
     });
 
     // The run must NOT throw — each failure is isolated + recorded.
-    const result = await backfillDashboardArtifactTwins({ batchSize: 1 });
+    const result = await backfillDashboardArtifactTwins({ batchSize: 1, mintOrgAuthority: (orgId) => ({ orgId, can: (c) => c === "content.write" }) });
 
     const failedIds = result.failed.map((f) => f.id).sort();
     expect(failedIds).toContain("bf-08-fail-a");

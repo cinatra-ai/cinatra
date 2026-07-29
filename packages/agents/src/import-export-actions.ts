@@ -84,6 +84,11 @@ export type LocalAgentTemplateSeed = {
   lgGraphCode?: string | null;
   lgGraphId?: string | null;
   executionProvider?: "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default";
+  /** The compiled agent-manifest LIFECYCLE declaration as JSON-as-text
+   * (cinatra#2047 D-1) — threaded so a FRESH registry install seeds
+   * `agent_templates.lifecycle_config` with the same value the upsert / race
+   * branches write (three-branch parity, exactly like hitlScreens). */
+  lifecycleConfig?: string | null;
   // Install-time owner tier. NULL means a row whose owner tier has not been
   // normalized yet. Threaded from installRegistryPackageAtScope's target
   // through installAgentPackageWithDependencies -> installAgentFromPackage.
@@ -175,6 +180,7 @@ export async function createLocalAgentTemplateVersion(input: {
     lgGraphCode: input.seed.lgGraphCode ?? null,
     lgGraphId: input.seed.lgGraphId ?? null,
     executionProvider: input.seed.executionProvider ?? undefined,
+    lifecycleConfig: input.seed.lifecycleConfig ?? null,
     status: (input.seed.status as "draft" | "published") ?? "draft",
   });
 

@@ -384,3 +384,129 @@ describe("agent-run-mcp-actor-token verify", () => {
     ]);
   });
 });
+
+// cinatra#2017 S2 slice K7 — the signed connector-instance pin claim (B1 / D6).
+describe("agent-run-mcp-actor-token connector-instance pin (cinatra#2017 S2)", () => {
+  const PINNED_ACTOR: AgentRunMcpActor = {
+    ...AGENT_RUN_ACTOR,
+    connectorInstancePin: { connectorKey: "wordpress", instanceId: "inst-42" },
+  };
+
+  it("mints the compact pin claim and verify surfaces the normalized connectorInstancePin", () => {
+    const token = issueAgentRunMcpActorToken(PINNED_ACTOR);
+    // Compact on the wire: pin:{ck,iid}.
+    const [, payload] = token.split(".");
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    expect(claims.pin).toEqual({ ck: "wordpress", iid: "inst-42" });
+    const verified = verifyAgentRunMcpActorToken({
+      authHeader: `Bearer ${token}`,
+      request: new Request(PUBLIC_MCP_URL),
+      expectedAudience: PUBLIC_MCP_URL,
+      expectedIssuer: PUBLIC_AUTH_URL,
+    });
+    expect(verified?.connectorInstancePin).toEqual({ connectorKey: "wordpress", instanceId: "inst-42" });
+  });
+
+  it("absent pin ⇒ org scope (no connectorInstancePin on the verified actor)", () => {
+    const token = issueAgentRunMcpActorToken(AGENT_RUN_ACTOR);
+    const verified = verifyAgentRunMcpActorToken({
+      authHeader: `Bearer ${token}`,
+      request: new Request(PUBLIC_MCP_URL),
+      expectedAudience: PUBLIC_MCP_URL,
+      expectedIssuer: PUBLIC_AUTH_URL,
+    });
+    expect(verified).not.toBeNull();
+    expect(verified?.connectorInstancePin).toBeUndefined();
+  });
+
+  it("a PRESENT-but-MALFORMED pin fails the WHOLE token closed (matching the `cl` treatment)", () => {
+    const { createHmac } = require("node:crypto");
+    const secret = process.env.BETTER_AUTH_SECRET;
+    const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" }), "utf8").toString("base64url");
+    const now = Math.floor(Date.now() / 1000);
+    const sign = (claims: Record<string, unknown>): string => {
+      const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+      const signingInput = `${header}.${payload}`;
+      const signature = createHmac("sha256", secret!).update(signingInput).digest("base64url");
+      return `${signingInput}.${signature}`;
+    };
+    const base = {
+      t: "cinatra.agent-run.mcp-obo",
+      sub: "u-test",
+      org: "org-test",
+      run: "run-test-uuid",
+      prole: "member",
+      cl: [{ tier: "organization", id: "org-test" }],
+      scope: "mcp:connect",
+      aud: PUBLIC_MCP_URL,
+      iss: PUBLIC_AUTH_URL,
+      iat: now,
+      exp: now + 30 * 60,
+    };
+    const malformedPins: unknown[] = [
+      { ck: "", iid: "inst-42" }, // blank ck
+      { ck: "wordpress", iid: "" }, // blank iid
+      { ck: "wordpress" }, // missing iid
+      { iid: "inst-42" }, // missing ck
+      "wordpress:inst-42", // not an object
+      42,
+    ];
+    for (const pin of malformedPins) {
+      const token = sign({ ...base, pin });
+      const verified = verifyAgentRunMcpActorToken({
+        authHeader: `Bearer ${token}`,
+        request: new Request(PUBLIC_MCP_URL),
+        expectedAudience: PUBLIC_MCP_URL,
+        expectedIssuer: PUBLIC_AUTH_URL,
+      });
+      expect(verified).toBeNull();
+    }
+  });
+});
+
+describe("`att` execution-attempt claim (cinatra#1939 S3)", () => {
+  it("round-trips the attempt id when the actor carries one", () => {
+    const token = issueAgentRunMcpActorToken({
+      ...AGENT_RUN_ACTOR,
+      executionAttemptId: "attempt-7",
+    });
+    const payload = decodePayload(token) as { att?: string };
+    expect(payload.att).toBe("attempt-7");
+    const verified = verifyAgentRunMcpActorToken({
+      authHeader: `Bearer ${token}`,
+      request: new Request(PUBLIC_MCP_URL),
+      expectedAudience: PUBLIC_MCP_URL,
+      expectedIssuer: PUBLIC_AUTH_URL,
+    });
+    expect(verified?.executionAttemptId).toBe("attempt-7");
+  });
+
+  it("tolerates a pre-claim token: no `att` → valid actor WITHOUT executionAttemptId (never a rejection)", () => {
+    const token = issueAgentRunMcpActorToken(AGENT_RUN_ACTOR);
+    const payload = decodePayload(token) as { att?: string };
+    expect(payload.att).toBeUndefined();
+    const verified = verifyAgentRunMcpActorToken({
+      authHeader: `Bearer ${token}`,
+      request: new Request(PUBLIC_MCP_URL),
+      expectedAudience: PUBLIC_MCP_URL,
+      expectedIssuer: PUBLIC_AUTH_URL,
+    });
+    expect(verified).not.toBeNull();
+    expect(verified && "executionAttemptId" in verified ? verified.executionAttemptId : undefined).toBeUndefined();
+  });
+
+  it("an empty-string att reads as absent (the run mint can never fire on it)", () => {
+    const token = issueAgentRunMcpActorToken({
+      ...AGENT_RUN_ACTOR,
+      executionAttemptId: "",
+    });
+    const verified = verifyAgentRunMcpActorToken({
+      authHeader: `Bearer ${token}`,
+      request: new Request(PUBLIC_MCP_URL),
+      expectedAudience: PUBLIC_MCP_URL,
+      expectedIssuer: PUBLIC_AUTH_URL,
+    });
+    expect(verified).not.toBeNull();
+    expect(verified?.executionAttemptId).toBeUndefined();
+  });
+});
