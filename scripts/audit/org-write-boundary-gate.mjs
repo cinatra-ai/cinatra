@@ -37,19 +37,23 @@
 //           R2's opaque net (it lives under src/lib/org-write/) — this row
 //           adds the missing NAMED-import restriction, same rationale as
 //           R5-run-dispatch-mint above.
-//         - R5-job-frame: NAMING the privileged write-side exports of the
+//         - R5-job-frame: the privileged write-side exports of the
 //           job-system frame module (`registerJobSystemRuntime`,
 //           `runWithJobFrame`, src/lib/background-jobs-system-frame.ts —
 //           deliberately OUTSIDE org-write, so R2's opaque net does NOT cover
 //           it) — restricted to its sole sanctioned consumer
-//           (src/lib/boot/phases/system-loops.ts). Documented residual (same
-//           class as every lexical gate here): OPAQUE (namespace/dynamic
-//           without destructuring) access to this non-org-write module is not
-//           flagged by this rule — the sanctioned dynamic consumer IS the
-//           allowlisted boot phase; anything else is deliberate-evasion
-//           territory that review owns. `getActiveJobFrame`,
+//           (src/lib/boot/phases/system-loops.ts). Because no other net
+//           covers this module, the rule carries its OWN opaque
+//           net (`opaqueFailClosed`): a namespace import, a bindingless bare
+//           import, a non-destructured dynamic import(), require(), or CJS
+//           import-equals of the module reaches EVERY export — including the
+//           privileged two — without naming them, so those forms are
+//           R5-job-frame-opaque violations unless the file is allowlisted or
+//           test-exempt (review finding on PR #2199: a `import * as frame`
+//           bypass of the named-binding check). `getActiveJobFrame`,
 //           `buildJobSystemIdentity`, and `readPayloadField` are read-only
-//           and stay unrestricted.
+//           and stay freely NAMEABLE — only opaque whole-module access and
+//           the two privileged names are restricted.
 //
 //       eng#565 ALSO fixes a prefilter blind spot found during the #1941
 //       design round: the cheap textual prefilter gating R1/R2/R3/R5's deep
@@ -211,6 +215,15 @@ const NAMED_CONSUMER_RULES = [
     // (src/lib/__tests__/background-jobs-system-frame.test.ts, which
     // legitimately names both bindings to test them directly).
     testsExempt: true,
+    // …and, for the same reason, NO other rule fail-closes opaque access to
+    // it (R2's net only covers @/lib/org-write/**): without this flag a
+    // `import * as frame` / bare / non-destructured dynamic import() /
+    // require() edge would reach frame.registerJobSystemRuntime and
+    // frame.runWithJobFrame without ever NAMING them — the exact bypass of
+    // this rule flagged in review on PR #2199. The two org-write rules above
+    // deliberately OMIT the flag: their opaque forms are already violations
+    // via R2-system-mint-opaque, and double-reporting would be noise.
+    opaqueFailClosed: true,
   },
 ];
 
@@ -517,6 +530,18 @@ export function evaluateBoundaryRules(fileRel, edges, resolveSpecifier) {
         (edge.specifier.startsWith(".") &&
           resolveSpecifier(edge.specifier) === spec.moduleRel);
       if (!touchesSpecModule) continue;
+      // Per-rule opaque net (cinatra#1941 S2, PR #2199 review finding): when
+      // NO other rule fail-closes opaque access to this module (unlike the
+      // org-write modules, covered by R2's net above), an opaque edge —
+      // namespace, bindingless bare, non-destructured dynamic import(),
+      // require(), CJS import-equals — reaches every export including the
+      // restricted bindings WITHOUT naming them. Fail closed on the form
+      // itself; a destructured dynamic import stays a NAMED edge and falls
+      // through to the binding check below.
+      if (spec.opaqueFailClosed && isOpaqueAccess) {
+        violations.push({ rule: `${spec.rule}-opaque`, fileRel, ...edge });
+        continue;
+      }
       if (edge.valueBindings.some((b) => spec.bindings.has(b))) {
         violations.push({ rule: spec.rule, fileRel, ...edge });
       }

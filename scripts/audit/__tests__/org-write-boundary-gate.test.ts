@@ -358,16 +358,56 @@ describe("R5-job-system-mint / R5-job-frame (cinatra#1941 S2)", () => {
     ).toEqual([]);
   });
 
-  it("R5-job-frame: the module lives OUTSIDE org-write and has NO opaque-access net (documented residual) — a namespace import is NOT flagged", () => {
-    // Unlike the org-write mint modules (covered by R2's opaque net), a bare
-    // namespace/dynamic import of background-jobs-system-frame.ts grants full
-    // access to registerJobSystemRuntime/runWithJobFrame undetected. This is
-    // the accepted residual documented in the gate's header comment and the
-    // module's own docstring — the sanctioned dynamic consumer IS the
-    // allowlisted boot phase (system-loops.ts imports it with a destructured
-    // dynamic import, which the classifier treats as NAMED, not opaque).
+  it("R5-job-frame-opaque: a namespace import of the frame module is red (the PR #2199 review bypass — `frame.runWithJobFrame` reachable without naming it)", () => {
     const v = check("src/lib/rogue-frame-ns.ts", `import * as f from "${JOB_FRAME}";`);
-    expect(v).toEqual([]);
+    expect(v.map((x) => x.rule)).toContain("R5-job-frame-opaque");
+  });
+
+  it("R5-job-frame-opaque: every other opaque form is red too (bare / non-destructured dynamic / require)", () => {
+    expect(
+      check("src/lib/rogue-frame-bare.ts", `import "${JOB_FRAME}";`).map((x) => x.rule),
+    ).toContain("R5-job-frame-opaque");
+    expect(
+      check("src/lib/rogue-frame-dyn.ts", `const m = await import("${JOB_FRAME}");`).map(
+        (x) => x.rule,
+      ),
+    ).toContain("R5-job-frame-opaque");
+    expect(
+      check("src/lib/rogue-frame-req.ts", `const m = require("${JOB_FRAME}");`).map(
+        (x) => x.rule,
+      ),
+    ).toContain("R5-job-frame-opaque");
+  });
+
+  it("R5-job-frame: a DESTRUCTURED dynamic import is a NAMED edge — restricted bindings red, read-only bindings green", () => {
+    // A destructured dynamic import names exactly its bindings, so it is not
+    // opaque: naming a privileged export from a rogue file is the plain named
+    // violation…
+    const v = check(
+      "src/lib/rogue-frame-dyn-named.ts",
+      `const { runWithJobFrame } = await import("${JOB_FRAME}");`,
+    );
+    expect(v.map((x) => x.rule)).toContain("R5-job-frame");
+    // …while naming only read-only exports stays green (the opaque net must
+    // not swallow the named-edge path).
+    expect(
+      check(
+        "src/lib/rogue-frame-dyn-readonly.ts",
+        `const { getActiveJobFrame } = await import("${JOB_FRAME}");`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("R5-job-frame-opaque: the allowlisted boot phase stays green in EVERY form (its real destructured dynamic import AND an opaque one)", () => {
+    expect(
+      check(
+        "src/lib/boot/phases/system-loops.ts",
+        `const { registerJobSystemRuntime, runWithJobFrame } = await import("${JOB_FRAME}");`,
+      ),
+    ).toEqual([]);
+    expect(
+      check("src/lib/boot/phases/system-loops.ts", `import * as frame from "${JOB_FRAME}";`),
+    ).toEqual([]);
   });
 });
 
