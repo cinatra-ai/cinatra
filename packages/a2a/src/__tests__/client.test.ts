@@ -27,10 +27,15 @@ import {
   updateAgentRunA2ATaskId,
 } from "@cinatra-ai/agents";
 import { createInProcessA2AClient } from "../client";
+import type { CreateRunWithAuthorityFn } from "../agent-executor";
 
 const mockReadTemplates =
   readPublishedAgentTemplates as unknown as ReturnType<typeof vi.fn>;
 const mockCreateRun = createAgentRun as unknown as ReturnType<typeof vi.fn>;
+// cinatra#1940 P3: a CALLABLE view of the same mock for the injected
+// createRunWithAuthority passthrough (ReturnType<typeof vi.fn> is
+// Mock<Constructable | Procedure>, which TS refuses to invoke directly).
+const createRunViaMock = createAgentRun as unknown as CreateRunWithAuthorityFn;
 const mockReadRun = readAgentRunById as unknown as ReturnType<typeof vi.fn>;
 const mockReadTemplateById =
   readAgentTemplateById as unknown as ReturnType<typeof vi.fn>;
@@ -78,7 +83,7 @@ describe("createInProcessA2AClient", () => {
     const client = await createInProcessA2AClient({
       packageName: "pkg-a",
       enqueueJob: vi.fn().mockResolvedValue(undefined),
-      createRunWithAuthority: (input: unknown) => mockCreateRun(input),
+      createRunWithAuthority: createRunViaMock,
       pollIntervalMs: 5,
       pollTimeoutMs: 2_000,
     });
@@ -97,7 +102,7 @@ describe("createInProcessA2AClient", () => {
     const client = await createInProcessA2AClient({
       packageName: "pkg-a",
       enqueueJob: vi.fn().mockResolvedValue(undefined),
-      createRunWithAuthority: (input: unknown) => mockCreateRun(input),
+      createRunWithAuthority: createRunViaMock,
       pollIntervalMs: 5,
       pollTimeoutMs: 2_000,
     });
@@ -121,7 +126,7 @@ describe("createInProcessA2AClient", () => {
     const client = await createInProcessA2AClient({
       packageName: "pkg-a",
       enqueueJob,
-      createRunWithAuthority: (input: unknown) => mockCreateRun(input),
+      createRunWithAuthority: createRunViaMock,
       pollIntervalMs: 5,
       pollTimeoutMs: 2_000,
     });
@@ -138,7 +143,7 @@ describe("createInProcessA2AClient", () => {
     const client = await createInProcessA2AClient({
       packageName: "pkg-a",
       enqueueJob: vi.fn().mockResolvedValue(undefined),
-      createRunWithAuthority: (input: unknown) => mockCreateRun(input),
+      createRunWithAuthority: createRunViaMock,
       pollIntervalMs: 5,
       pollTimeoutMs: 2_000,
     });
@@ -149,7 +154,7 @@ describe("createInProcessA2AClient", () => {
     const client = await createInProcessA2AClient({
       packageName: "pkg-a",
       enqueueJob: vi.fn().mockResolvedValue(undefined),
-      createRunWithAuthority: (input: unknown) => mockCreateRun(input),
+      createRunWithAuthority: createRunViaMock,
       pollIntervalMs: 5,
       pollTimeoutMs: 2_000,
     });

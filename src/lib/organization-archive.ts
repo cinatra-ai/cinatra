@@ -17,7 +17,7 @@ import "server-only";
  * closeout is the only place that will ever write it in production.
  */
 
-// cinatra#1940 P3 (Decision 7, codex r0 #19) — compile-time structural
+// cinatra#1940 P3 (Decision 7, design review) — compile-time structural
 // coupling, not merely an S6 checklist item: this module is the ONE gate
 // every activation consumer already flows through (this S1 stub consults it
 // first; S6's real archive transaction will too). Statically importing the

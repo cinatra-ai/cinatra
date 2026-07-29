@@ -49,7 +49,7 @@ vi.mock("@cinatra-ai/llm", () => orchestrationStub);
 // `@cinatra-ai/agents` and `@cinatra/agent-builder` to the same stub path, so
 // a vi.mock factory registered against either name intercepts both imports.
 const agentBuilder = vi.hoisted(() => ({
-  createAgentRun: vi.fn(async () => undefined),
+  createAgentRun: vi.fn(async (_input: unknown) => undefined),
   readAgentRunById: vi.fn(async () => null as any),
   updateAgentRunA2ATaskId: vi.fn(async () => undefined),
   readAgentTemplateById: vi.fn(),

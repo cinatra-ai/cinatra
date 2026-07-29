@@ -1578,7 +1578,7 @@ export async function createAgentRun(
   // violation (pg 23505), re-reads, and verifies provenance before returning
   // the winning row — a reused or forged key can never alias onto a foreign run.
   //
-  // #1940 P3 (codex r0 #7, adopted as intentional): the guard now refuses
+  // #1940 P3 (design review, adopted as intentional): the guard now refuses
   // BEFORE the insert on an archived org, so a retried dispatch that
   // committed its first attempt while active gets the archived refusal
   // INSTEAD of the idempotent existing-row return (the 23505 re-read path

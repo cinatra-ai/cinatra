@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const agentBuilder = vi.hoisted(() => ({
-  createAgentRun: vi.fn(async () => undefined),
+  createAgentRun: vi.fn(async (_input: unknown) => undefined),
   readAgentRunById: vi.fn(async () => null as any),
   updateAgentRunA2ATaskId: vi.fn(async () => undefined),
   readAgentTemplateById: vi.fn(),

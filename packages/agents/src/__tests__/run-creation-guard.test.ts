@@ -18,7 +18,7 @@
  * `capability-denied` (`OrgWriteRefusedError`) — the free structural win
  * that a run-bound authority can never create a DIFFERENT run; active org
  * succeeds for both functions; the archived idempotent-retry polarity
- * (codex r0 #7): a retry under archive gets the archived refusal INSTEAD of
+ * (design review, Decision 2): a retry under archive gets the archived refusal INSTEAD of
  * the idempotent existing-row return, and creates no new row either way.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -221,7 +221,7 @@ describe("createAgentRun — the guarded creation perimeter", () => {
     expect(run.id).toBe("run-winner");
   });
 
-  it("(codex r0 #7) idempotent retry under an ARCHIVED org gets the archived refusal INSTEAD of the existing-row return — no new row either way", async () => {
+  it("idempotent retry under an ARCHIVED org gets the archived refusal INSTEAD of the existing-row return — no new row either way (Decision 2)", async () => {
     shared.runRows = [
       { ...fakeRunRowDefaults(), id: "run-winner", templateId: "tmpl-1", orgId: ORG, idempotencyKey: "key-1" },
     ];

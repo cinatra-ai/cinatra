@@ -6,7 +6,7 @@ import { betterAuthDb } from "@/lib/better-auth-db";
 /**
  * cinatra#1940 (P3) — the dispatch-freeze leaf module.
  *
- * Layered model (Decision 1 of .claude/scratch/r-1940/DESIGN.md): the kernel
+ * Layered model (cinatra#1940, design Decision 1): the kernel
  * is the ENFORCEMENT layer — `run.execute`/`run.complete` are ruled
  * deny/lease-gated for an archived org since #1939 wave 2/3, and #1940 P3
  * converts the two `agent_runs` creation entry points onto that ruling
@@ -20,7 +20,7 @@ import { betterAuthDb } from "@/lib/better-auth-db";
  */
 
 /**
- * Compile-time structural coupling (Decision 7 / codex r0 #19): this const's
+ * Compile-time structural coupling (Decision 7, design review): this const's
  * only purpose is to be IMPORTED by `src/lib/organization-archive.ts`'s
  * activation gate, so no build can evaluate `isArchiveActivationEnabled()`
  * without also containing the dispatch freeze. A module-graph test pins the

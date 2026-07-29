@@ -71,7 +71,7 @@ describe("archiveOrganization — S1 refusing stub", () => {
   });
 });
 
-// cinatra#1940 P3 (Decision 7, codex r0 #19) — the compile-time structural
+// cinatra#1940 P3 (Decision 7, design review) — the compile-time structural
 // coupling: this file is the ONE gate every activation consumer flows
 // through, so it must statically import the dispatch-freeze module (its
 // `DISPATCH_FREEZE_S3` sentinel). This is a SOURCE-TEXT pin, deliberately
