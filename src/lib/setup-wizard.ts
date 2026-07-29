@@ -1,10 +1,23 @@
-// The OpenAI readiness read resolves through the `llm-provider-surface`
-// capability (lazy/guarded host-access cutover). Connector
-// absent → the AI step reads as not-ready (the wizard keeps prompting —
-// correct on a host without the openai connector).
-import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
+// S6 (cinatra#2093, epic #2086): the AI step's readiness is the validity of the
+// setup READINESS RECEIPT, not a cached connection boolean.
+//
+// The pre-S6 read asked the OpenAI surface "does this connection look ready?".
+// That hardcoded OpenAI as the only possible provider AND — on the Anthropic
+// path — would have answered "yes" for a connection whose `function-tools` MCP
+// mode rejects every `container.skills` request, so setup would complete while
+// skills silently never reached the model. Readiness is now the RECEIPT the
+// saga earns (key validated, skills uploaded and injectable, probe accepted),
+// which expires when the credential, the MCP mode, or the catalog changes.
+//
+// ROUTE-GRAPH NOTE: this module is statically reachable from the LOCKED routes
+// through the app-shell setup redirect, so the readiness module (+ the purpose
+// policy behind it) adds a measured +2 first-party modules to each. That raise
+// is ABSORBED with a record in route-graph-ratchet.baseline.json rather than
+// hidden — the route-graph analyzer follows `import()` too, so a lazy import
+// would move the runtime cost without changing the measured graph, and
+// pretending otherwise would be the dishonest fix.
+import { readSetupReadinessState } from "@/lib/setup-readiness-saga";
 import { getNangoStatus } from "@/lib/nango-system";
-import { readOpenAIConnection } from "@/lib/openai-connection-store";
 // Instance identity presence determines whether the name step is ready.
 // The setup wizard uses /setup/key, /setup/name, and /setup/ai route segments.
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
@@ -19,14 +32,11 @@ export type SetupWizardStep = {
 export async function getSetupWizardSteps(): Promise<SetupWizardStep[]> {
   const identity = readInstanceIdentity();
   const nangoStatus = getNangoStatus();
-  const openAIConnection = readOpenAIConnection();
-  const openAISurface = getLlmProviderSurface("openai");
-  const configuredConnection = await openAISurface?.getConfiguredConnection?.(
-    openAIConnection ?? undefined,
-  );
-  const openAIReady =
-    openAISurface?.isConnectionReady?.(configuredConnection ?? openAIConnection ?? undefined) ===
-    true;
+  // Provider-AGNOSTIC readiness: valid receipt ⇒ the chosen provider (whichever
+  // it is) was actually proven to work, including the Anthropic upload+probe
+  // arms. No receipt, a receipt for a provider that is no longer the stored
+  // default, or a receipt whose configuration fingerprint drifted ⇒ not ready.
+  const aiReady = readSetupReadinessState().ready;
 
   const steps: SetupWizardStep[] = [];
 
@@ -62,7 +72,7 @@ export async function getSetupWizardSteps(): Promise<SetupWizardStep[]> {
     id: "ai",
     title: "AI",
     href: "/setup/ai",
-    ready: openAIReady,
+    ready: aiReady,
   });
 
   return steps;
@@ -76,7 +86,7 @@ export function getFirstIncompleteStep(steps: SetupWizardStep[]): SetupWizardSte
 // 1. CINATRA_ENCRYPTION_KEY is set, which gates all setup
 // 2. Instance name (namespace) is configured, which gates registry access
 // 3. Nango is connected, which gates OAuth connections
-// 4. OpenAI is ready as the required LLM provider
+// 4. The AI step holds a VALID readiness receipt for the chosen LLM provider
 function isStepsComplete(steps: SetupWizardStep[]): boolean {
   // The key must be ready as a hard precondition.
   const keyStep = steps.find((s) => s.id === "key");
@@ -101,7 +111,7 @@ function isStepsComplete(steps: SetupWizardStep[]): boolean {
 // entries whose step definitions no longer match the current wizard.
 declare global {
   // eslint-disable-next-line no-var
-  var __cinatraSetupCompleteCacheV5: { result: boolean; expiresAt: number } | null | undefined;
+  var __cinatraSetupCompleteCacheV6: { result: boolean; expiresAt: number } | null | undefined;
 }
 
 export async function isSetupWizardComplete(): Promise<boolean> {
@@ -116,7 +126,7 @@ export async function isSetupWizardComplete(): Promise<boolean> {
     return true;
   }
   const now = Date.now();
-  const cached = globalThis.__cinatraSetupCompleteCacheV5;
+  const cached = globalThis.__cinatraSetupCompleteCacheV6;
   if (cached && cached.expiresAt > now) {
     return cached.result;
   }
@@ -143,12 +153,12 @@ export async function isSetupWizardComplete(): Promise<boolean> {
   // secret-key presence + OpenAI state reads, no live network call). This is
   // also robust to multi-worker dev where globalThis invalidation is unreliable.
   if (result) {
-    globalThis.__cinatraSetupCompleteCacheV5 = { result, expiresAt: now + 60_000 };
+    globalThis.__cinatraSetupCompleteCacheV6 = { result, expiresAt: now + 60_000 };
   }
   return result;
 }
 
 /** Call this after saving API connection administration so the next navigation reflects the new state. */
 export function invalidateSetupWizardCache(): void {
-  globalThis.__cinatraSetupCompleteCacheV5 = null;
+  globalThis.__cinatraSetupCompleteCacheV6 = null;
 }

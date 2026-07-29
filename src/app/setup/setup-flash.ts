@@ -18,6 +18,14 @@
 import type { SearchParamToastConfig } from "@cinatra-ai/sdk-ui/search-param-toast";
 
 export const SETUP_ERROR_MESSAGES = {
+  // S6 (cinatra#2093) AI step: the provider choice + the readiness saga.
+  // The saga's ACTIONABLE detail (and its fix-forward prompt) is rendered
+  // inline on the step from the stored failure record — never carried in the
+  // query string, per this module's codes-only protocol.
+  "setup-provider-invalid":
+    "Choose one of the offered AI providers and enter its credentials.",
+  "setup-readiness-failed":
+    "AI setup could not be verified. The step shows what failed and how to fix it.",
   "operator-email-missing": "Could not determine operator email. Please sign in again.",
   "identity-exists":
     "Instance namespace is already configured. Use Administration → Instance to edit or rename.",

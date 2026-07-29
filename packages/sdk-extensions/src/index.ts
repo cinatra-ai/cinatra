@@ -714,6 +714,8 @@ export type {
   EmailTransportCorrelation,
   HostExtensionActionGuardService,
   LlmProviderSurface,
+  // S6 (cinatra#2093): the ABI v2 native-skills probe verdict.
+  LlmNativeSkillsProbeResult,
   LlmProviderAdapterSurface,
   LlmSkillDeliveryAdapterSurface,
 } from "./host-connector-services-contract";

@@ -50,7 +50,8 @@ import {
   stream,
   selectSkillDeliveryAdapter,
   deliverInjectedSkillsInline,
-  resolveDefaultAdapter,
+  resolveBoundDefaultAdapter,
+  BoundDefaultProviderUnavailableError,
   resolveProviderAdapter,
   resolveChatExternalMcpTools,
   buildLlmMcpServerToolForChat,
@@ -566,11 +567,32 @@ export async function runAssistantTurn(
   // fails) — an assistant declared for Anthropic never silently downgrades to the
   // global default. Consumes #1711's live resolver via `resolveProviderAdapter`
   // (declaration ∩ activation ∩ readiness) once its surfaces land.
+  //
+  // PURPOSE POLICY: exact-default (llm-purpose-policy.ts, purpose
+  // "assistant-runtime"). S6 (cinatra#2093) AC: "the assistant uses exactly the
+  // stored provider; unavailability is a VISIBLE error, not a silent hop."
+  // `resolveBoundDefaultAdapter` binds to the stored provider exactly (unless
+  // the admin stored the explicit "ordered" failover policy) and THROWS a
+  // provider-naming error instead of returning null, so the operator is told
+  // WHICH provider is down rather than the useless "No LLM provider configured".
   const { modelPrefs } = runtimeConfig;
   const pinnedProvider = selectAdapterProvider(modelPrefs);
-  const adapter = pinnedProvider
-    ? await resolveProviderAdapter(pinnedProvider as Parameters<typeof resolveProviderAdapter>[0])
-    : await resolveDefaultAdapter();
+  let adapter: Awaited<ReturnType<typeof resolveProviderAdapter>> = null;
+  if (pinnedProvider) {
+    adapter = await resolveProviderAdapter(
+      pinnedProvider as Parameters<typeof resolveProviderAdapter>[0],
+    );
+  } else {
+    try {
+      adapter = await resolveBoundDefaultAdapter();
+    } catch (err) {
+      if (err instanceof BoundDefaultProviderUnavailableError) {
+        send("error", { message: err.message });
+        return;
+      }
+      throw err;
+    }
+  }
   if (!adapter) {
     send("error", {
       message: pinnedProvider
