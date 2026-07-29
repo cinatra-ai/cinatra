@@ -192,6 +192,18 @@ export const BACKGROUND_JOB_NAMES = {
   //     checkpointed parks whose auto-gate resolved.
   LIFECYCLE_REVIEW_ORCHESTRATION: "lifecycle-review-orchestration",
   LIFECYCLE_GATE_MAINTENANCE: "lifecycle-gate-maintenance",
+  // Upload-on-install reconcile (cinatra#2092, epic #2086 S5). The DRAIN is a
+  // ONE-SHOT best-effort kick enqueued post-commit by the catalog/consent
+  // writers (via the globalThis kick slot bound at boot) — the durable
+  // `anthropic_skill_reconcile_outbox` rows written INSIDE the catalog
+  // transaction are the source of truth, so a lost kick only defers work to
+  // the sweep. NOT self-rescheduling.
+  ANTHROPIC_SKILL_UPLOAD_RECONCILE: "anthropic-skill-upload-reconcile",
+  // Periodic safety-net loop (~5 min): re-drains pending/backing-off outbox
+  // rows, reclaims expired worker leases, serves `kind='gc'` rows at their
+  // grace-window `not_before`, and runs the stale-GC reclaim each cycle so
+  // revocation-staled remote copies reclaim without manual intervention.
+  ANTHROPIC_SKILL_UPLOAD_RECONCILE_SWEEP: "anthropic-skill-upload-reconcile-sweep",
 } as const;
 
 export type BackgroundJobName = (typeof BACKGROUND_JOB_NAMES)[keyof typeof BACKGROUND_JOB_NAMES];
@@ -305,3 +317,13 @@ export const ARTIFACT_REVIEW_RESUME_DELIVERY_LOOP_JOB_ID =
 export const LIFECYCLE_REVIEW_ORCHESTRATION_LOOP_JOB_ID =
   "lifecycle-review-orchestration-loop";
 export const LIFECYCLE_GATE_MAINTENANCE_LOOP_JOB_ID = "lifecycle-gate-maintenance-loop";
+/**
+ * Canonical loop-job id for the upload-on-install reconcile safety-net sweep
+ * (cinatra#2092, epic #2086 S5). Same contract as the other loop ids above: the
+ * boot seed creates the job under this id and the handler re-delays THIS job via
+ * moveToDelayed each cycle; any other id is a legacy anonymous duplicate that
+ * runs once WITHOUT rescheduling. Drift here re-introduces the per-restart queue
+ * storm guarded by the perpetual-system-loops CI gate.
+ */
+export const ANTHROPIC_SKILL_UPLOAD_RECONCILE_SWEEP_LOOP_JOB_ID =
+  "anthropic-skill-upload-reconcile-sweep-loop";

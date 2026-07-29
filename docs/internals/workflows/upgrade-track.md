@@ -1072,10 +1072,12 @@ runtime-coupled — do not lead the image), `pnpm` 11. `typescript` stays at the
 standing peer ceiling (§8.1/§11.1). `jsdom` is now 30 (§13.3). Remaining
 offered npm majors NOT taken in this lane, each recorded for its own staged
 lane: `pdfjs-dist` 5 → 6 (coupled with
-`react-pdf` — re-check its peer range first), `react-dropzone` 15 → 19 (four
-majors published inside one week upstream; let the line settle),
+`react-pdf` — re-check its peer range first),
 and `node-pg-migrate` 9 (blocked, §13.2). `libnpmpublish` 11 → 12 and `pacote`
 21 → 22 were the registry/publish-path group and are **APPLIED** — see §13.5.
+`react-dropzone` 15 → 19 was held here on "four majors published inside one week
+upstream; let the line settle"; the line settled at `19.1.1` and the hold was
+lifted — the hop is **APPLIED**, see §13.6.
 Image-side majors remain as recorded in §1: the profile-gated demo images
 (mariadb 12, wordpress 7, rabbitmq 4, valkey 9, and the Twenty/Plane postgres
 and redis pins) are upstream-dictated and tracked, not led; `tailscale` stays
@@ -1222,3 +1224,229 @@ with SRI enforcement, plus the wrong-SRI `EINTEGRITY` negative) →
 npm-registry-fetch stack against an auth-required in-process registry stub, and
 the redaction suite above) and `pnpm gate:gatekept-install` are the standing
 regression tiers for this dependency pair.
+
+### 13.6 `react-dropzone` `^15.0.0` → `^19.1.1` — MAJOR APPLIED (four-major hop, upload UI)
+
+Recorded 2026-07-29 (cinatra#2164). §13.4 held this one on "four majors
+published inside one week upstream; let the line settle". The line settled:
+`19.1.1` shipped 2026-07-19 and has been the unchanged `latest` since. The hold
+is lifted here and the hop taken in one step, 15 → 19.1.1.
+
+**Surface.** One manifest entry (root `package.json`, `dependencies`) and
+exactly one import site — `src/components/ui/dropzone.tsx`, the shadcn-style
+wrapper that re-exports its own `useDropzone` plus the `Dropzone*` parts. That
+wrapper has exactly one consumer, `packages/agents/src/import-form.tsx` (the
+`/configuration/extensions/upload` "File" tab). `src/components/artifacts/
+library-upload.tsx` also carries a drop target but is hand-rolled and does not
+touch this package. Transitives: `file-selector` `2.1.2` → `4.0.2`,
+`prop-types` dropped entirely; `attr-accept` unchanged. No new package NAME
+enters the tree.
+
+**Every intervening major's breaking notes, read off the upstream releases and
+then re-checked against this repo:**
+
+1. **16.0.0** — toolchain major: drops the UMD build and `dist/es/`; the package
+   becomes `"type": "module"` with an `exports` map (`dist/index.js` ESM +
+   `dist/index.cjs` CJS); Node `>= 20` to build. Deep imports of the old paths
+   must migrate. **Inert here:** the repo imports the bare specifier only, has
+   no UMD/CDN or deep-path consumer, and both the app image (`node:24-alpine`)
+   and every workflow that installs the workspace resolve Node 24. The public
+   API surface is byte-identical across this major — a diff of the 15.0.0 and
+   16.0.0 typings is empty.
+2. **17.0.0** — requires React `>= 18`; `prop-types` and `defaultProps` are
+   removed in favour of TypeScript types and default parameter values; the
+   hand-written `typings/react-dropzone.d.ts` is replaced by declarations
+   generated from source at `dist/index.d.ts`. **Inert here:** the repo is on
+   `react` 19.2.7, nothing imports the typings by path, and no first-party code
+   reads `propTypes`/`defaultProps` off the package. The declared shape the
+   wrapper depends on (`Accept`, `FileRejection`, `useDropzone`,
+   `getRootProps`/`getInputProps` as `<T extends …>(props?: T) => T`) survives
+   the regeneration unchanged.
+3. **18.0.0** — `file-selector` v4. Upstream's note has two arms: (a)
+   `FileWithPath` now requires `path`/`relativePath`, so a plain `File` is no
+   longer assignable — type drop handlers as `File[]`; (b) **the full
+   extension→MIME table is no longer bundled**; pass `COMMON_MIME_TYPES` from
+   `file-selector/mime` via `getFilesFromEvent` to restore it. **(a) is inert:**
+   the wrapper's `onDropAccepted` is contextually typed `<T extends File>`, and
+   `FileWithPath extends File`, so every downstream position (`FileStatus.file`,
+   `_uploadFile(file: File, …)`) still accepts it — the full `tsgo --noEmit`
+   run is clean. **(b) is the arm with teeth.** It is inert here because the
+   sole consumer's accept map, `{ "application/zip": [".zip"] }`, has TWO
+   INDEPENDENT acceptance paths, either of which suffices: `attr-accept` matches
+   a file against the accept attribute by MIME **or** by filename suffix. The
+   `.zip` suffix arm matches on `file.name` regardless of what `file.type` says,
+   so even a dropped file with an empty or wrong MIME is accepted; and
+   separately, the trimmed built-in `DEFAULT_MIME_TYPES` still carries 37 common
+   entries including `["zip", "application/zip"]`, so `file.type` is populated
+   from the extension **when the browser left it empty** (`withMimeType` never
+   replaces a non-empty MIME — read off `file-selector@4.0.2`'s own
+   `src/file.ts` / `src/mime-default.ts`).
+   **The residual risk is a future accept map on this wrapper that names a
+   long-tail extension whose MIME is NOT in the trimmed defaults AND relies on
+   the MIME arm rather than the suffix arm** — that combination is where this
+   major bites, and it must be re-checked whenever the accept map changes.
+   18.x also brought, all additive: `isDragUnknown` + a `getDragVerdict` that
+   never runs a custom `validator` during a drag (18.3.0), a `getErrorMessage`
+   override (18.2.0), human-readable size-rejection messages (18.1.0), a
+   native-input fallback on a `NotAllowedError` picker (18.2.1), an
+   `aria-disabled` root when disabled and an `aria-label` on the hidden input
+   (18.0.2 — see the migration below), and a document-level drop guard that now
+   also fires for `disabled`/`noDrag` zones (18.2.2). The wrapper passes no
+   `validator`, `maxFiles`, `multiple` or `disabled` down to the root hook, so
+   the drag-verdict and disabled-state arms are unreachable from here.
+4. **18.0.1** — `acceptPropAsAcceptAttr` gained
+   `omitWildcardMimeTypesWithExtensions`: a wildcard MIME (`image/*`) paired
+   with extensions is now dropped from the input `accept` attribute and from
+   drop-time validation so the extensions actually bind. **Inert here** — the
+   accept map names a concrete MIME, not a wildcard. The rendered attribute is
+   `accept="application/zip,.zip"` on BOTH lines, read off the live input.
+5. **19.0.0** — the only change upstream FLAGS as breaking (item 7 below is a
+   behavioural delta upstream shipped as a feature):
+   `acceptedFiles`/`onDropAccepted` now return the in-limit files that used to
+   be rejected wholesale. Previously an over-limit batch emptied `acceptedFiles`
+   and rejected everything; now the batch is capped and only the surplus is
+   rejected. **Inert here because the wrapper never delegates the limit:** it
+   calls the root hook with `accept`/`minSize`/`maxSize` only — `maxFiles` and
+   `multiple` are deliberately withheld and the count is instead ATTEMPTED in
+   the wrapper's own `onDropAccepted` (its comment says as much: the hook only
+   counts per batch). That attempt is itself unsound — see the residual at the
+   end of this entry. With `multiple` defaulting to `true` and `maxFiles`
+   defaulting to `0`, the library's limit branch cannot fire, so the changed
+   split is unreachable. **A future change that starts passing `maxFiles` or
+   `multiple: false` through to the root hook inherits this break.**
+6. **19.0.1 / 19.0.2 / 19.1.1** — the hidden input's inline hiding style changed
+   from the `position: absolute` clip-rect idiom to an in-flow zero-size
+   transparent block (19.0.1, fixes a focus-scroll jump); dragged-file detection
+   also accepts a `kind: "file"` item when `dataTransfer.types` omits `"Files"`
+   (19.0.2); and drops landing on the zone while the file dialog is open are
+   ignored (19.1.1). **All inert here:** the wrapper REPLACES the inline style
+   wholesale (`getInputProps` spreads caller overrides last, and it passes
+   `style: { display: undefined }` plus `className: "sr-only"`), so the 19.0.1
+   restyle never reaches the DOM — the live input's `style` attribute is empty
+   on both lines. The 19.1.1 dialog guard keys on the library's own
+   `isFileDialogActive`, which is set only by the library's own
+   `openFileDialog` — reachable via the ROOT's `onClick`, the ROOT's keyboard
+   activation, or the `open()` ref handle. This wrapper wires NONE of those: it
+   takes only `onFocus`/`onBlur`/`onDragEnter`/`onDragLeave`/`onDrop` off
+   `getRootProps`, never spreads the rest, and never exposes the ref handle —
+   the picker opens through native `<label>` activation, which bypasses
+   `openFileDialog` entirely. So the flag stays false and the guard is
+   unreachable.
+7. **19.1.0 — the one arm that IS reachable here.** Upstream describes it as
+   "support async validator", which reads as inert for a caller that passes no
+   `validator`. It is not. Every drop now calls `beginProcessing()`
+   unconditionally, and `beginProcessing` **aborts the run still in flight** so
+   a slow earlier drop cannot resolve late and clobber newer state. The net
+   effect for THIS wrapper — which passes no validator — is that a drop landing
+   while an earlier drop's processing run is still pending became latest-wins,
+   where the 15 line processed both. (Precisely: the newer run aborts the older
+   *processing run*, not the underlying `getFilesFromEvent` call — the older
+   call still resolves, its result is simply discarded. And the window is not
+   inherently same-tick: any newer drop arriving while earlier processing is
+   pending wins, which a slow read such as a directory traversal could widen to
+   human timescales.) Characterised empirically on both lines with a rapid
+   double-drop — two `drop` events dispatched back to back with no await
+   between them:
+
+   | | on 15.0.0 | on 19.1.1 |
+   |---|---|---|
+   | rapid double-drop, file list | `["rapid-a.zip", "rapid-b.zip"]` | `["rapid-b.zip"]` |
+
+   **Recorded, not fixed.** The sole consumer is a single-file replacement
+   picker (`maxFiles: 1`, `shiftOnMaxFiles: true`) whose intent is exactly
+   latest-wins, and with the plain-`File` reads this surface performs the window
+   closes within a microtask — the step above had to synthesise the overlap.
+   `isProcessing` itself is not consumed by the wrapper. A future multi-file
+   consumer of this wrapper, or one with a slower `getFilesFromEvent`, inherits
+   the supersession semantics and must account for them.
+
+**The one migration this hop actually required.** 18.0.2 added a blanket
+`aria-label="file upload"` to the hidden input so that a bare, unlabelled input
+still has an accessible name (upstream #1458 / #1430). In THIS wrapper the input
+is always rendered inside `DropzoneTrigger`'s own `<label>`, and `aria-label`
+wins over a wrapping label in the accessible-name computation — so the generic
+name silently displaced the caller's descriptive copy. Measured on the live
+surface — the COMPUTED name off Chromium's accessibility tree, not an
+`aria-label` presence check — the file input's accessible name is
+`"Select an extension package Click here or drag and drop"` on 15.0.0 and
+`"file upload"` on 19.1.1. `DropzoneTrigger` now clears the attribute
+(`"aria-label": undefined` through `getInputProps`, which removes it rather than
+emitting an empty one), handing naming back to the wrapping `<label>`;
+re-measured on 19.1.1 the name is the pre-hop string again. This is the ONLY
+first-party source change in the hop.
+
+**Works-after proof — a real drag-and-drop upload, both lines, one base commit.**
+Both sides were driven at base `fa360364e`, same worktree, same fixtures, same
+driver, against a REAL dev boot (lane-unique port, isolated Chromium profile,
+never a stub or a fixture route). The driver builds a genuine `DataTransfer`
+in page context and dispatches `dragenter`/`dragover`/`drop` on the zone, so the
+library's own `onDrop` → `getFilesFromEvent` → `fileAccepted` path runs — it is
+not the `<input>` shortcut. Drivers, fixtures, logs and screenshots are under
+`evidence/2164-react-dropzone-19/`.
+
+| Works-after obligation | on 15.0.0 | on 19.1.1 |
+|---|---|---|
+| rendered input `accept` | `application/zip,.zip` | identical |
+| wrong type (`.txt`) rejected, root message | `"Only .zip are allowed"` | identical |
+| wrong type leaves the file list empty | 0 items | identical |
+| `.zip` accepted, parsed, preview rendered | yes | identical |
+| upload `POST` response status (captured, not asserted) | `303` | identical |
+| success navigation after submit | `/agents` | identical |
+| upload LANDS (`cinatra.agent_templates` row) | row created | row created |
+| file-input computed accessible name | `"Select an extension package Click here or drag and drop"` | identical (after the migration above) |
+| console errors during the walk | 1, a hydration warning | 1, same warning |
+| rapid double-drop (the §13.6.7 delta) | both files | later file only |
+
+Every cell is machine-read, not eyeballed: the POST status comes from the
+browser's own response event, and the accessible name is the COMPUTED name off
+Chromium's accessibility tree (CDP `Accessibility.getPartialAXTree`), not an
+`aria-label` presence check. The single console error is a React hydration
+warning of the same kind on both lines (the driver records the count plus a
+normalised prefix, so "same kind", not a byte-compare); it is pre-existing on
+the 15 line and therefore not an artefact of the hop.
+
+The landed row is the proof that the upload completed rather than merely
+rendered: the row was deleted before EACH side's run and a fresh
+`@cinatra-ai/lane2164-dnd-proof-agent` row was created by that side's drop.
+
+**Regression tiers.** `pnpm test:root` was run on BOTH lines at the same base
+commit and once more on the final tree (hop + migration): **1167 files passed |
+3 skipped; 14023 tests passed | 22 skipped | 3 todo** — the same three numbers
+all three times, so no suite stopped executing and the migration moved nothing.
+`tsgo --noEmit` is clean. **`pnpm build` (the production Next bundler, not just
+the dev boot) is clean on the 19.1.1 tree** — the arm that would surface an
+`exports`-map / ESM-vs-CJS resolution fault the dev server can hide, which is
+the real residual risk of the 16.0.0 packaging major. No test in the tree
+imports `react-dropzone` or the wrapper, so the suite is a regression net here,
+not the proof — the browser walk above is.
+
+**Rollback.** Revert the lane commit; the root manifest, the lockfile and the
+single `DropzoneTrigger` hunk move together. Nothing else changes.
+
+**Residuals, recorded not fixed.**
+
+- The wrapper hides the input with Tailwind's `sr-only` (`position: absolute`),
+  which is exactly the idiom upstream moved OFF in 19.0.1 to fix the
+  focus-scroll jump (#1413). Because the wrapper overrides the library's style
+  wholesale, this repo does not pick up that fix. Pre-existing on both lines and
+  orthogonal to the hop; adopting the in-flow hiding idiom is its own (visual)
+  decision.
+- `DropZoneArea` consumes only five of `getRootProps`' handlers and never
+  spreads the rest, so root-level additions upstream makes (the 18.0.2
+  `aria-disabled`, plus `onDragOver`, `onKeyDown`, `role`, `tabIndex`) never
+  reach the DOM. Drops still work because the library's document-level
+  `dragover` listener preventDefaults for the page. Pre-existing and unchanged
+  by this hop.
+- **Pre-existing wrapper defect, NOT caused by this hop and deliberately not
+  fixed here** (it is equally present on 15.0.0): the wrapper's own `maxFiles`
+  handling in `onDropAccepted` is unsound for multi-file batches. With
+  `shiftOnMaxFiles: true` the slice is skipped entirely, so a single batch can
+  exceed `maxFiles`; and the shift branch indexes `fileStatuses[index]` while
+  iterating the NEW files, which can dereference an absent entry when more
+  files arrive than are already held. **This IS reachable on the shipped
+  surface** — the rendered input carries `multiple` (verified on both lines:
+  `multiple: true`), so a user can select or drop several `.zip` files in one
+  batch. It is out of scope for this lane because it predates the upgrade and
+  is unchanged by it; landing a behavioural fix here would conflate an
+  unrelated change with the before/after comparison this entry rests on. **It
+  needs its own follow-up issue against `src/components/ui/dropzone.tsx`.**

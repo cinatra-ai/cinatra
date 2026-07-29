@@ -6,9 +6,16 @@
  * (returning kernel-internal paths for symlinked detours).
  */
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   collectModuleEdges,
   evaluateBoundaryRules,
+  extractR4Rules,
+  evaluateR4,
+  isTestFileRel,
+  makeTsResolver,
 } from "../org-write-boundary-gate.mjs";
 
 type Edge = {
@@ -277,3 +284,273 @@ describe("R2/R5: the agent-run mint file and its NAMED consumers (#1939 wave 2)"
 // the mint itself (owner ruling 2026-07-26, ruling 2: cross-org run management is
 // unsupported). authority.ts now carries no R5 named-consumer restriction; the
 // R5 mechanism stays covered end-to-end by the run-dispatch-mint suite above.
+
+// ---------------------------------------------------------------------------
+// R4 — registry-driven writer import ban (#1939 wave 3, Decision 4)
+// ---------------------------------------------------------------------------
+
+/** Run evaluateR4 over in-memory files (source strings parsed by the real
+ *  classifier) with a map-backed resolver. */
+function r4(
+  bannedRows: { module: string; exportName: string; allowedImporters: string[] }[],
+  files: Array<[fileRel: string, source: string]>,
+  resolveMap: Record<string, string>,
+) {
+  const parsed = files.map(([fileRel, source]) => ({
+    fileRel,
+    edges: collectModuleEdges(fileRel, source),
+  }));
+  const resolve = (_from: string, spec: string) => resolveMap[spec] ?? null;
+  return evaluateR4(bannedRows, parsed, resolve);
+}
+
+const MUT = "packages/dashboards/src/mutation-service.ts";
+const STORE = "packages/agents/src/store.ts";
+
+describe("R4 registry parser (extractR4Rules) — fail-closed", () => {
+  it("expands the dashboardsWriter helper AND explicit rows from literal data", () => {
+    const rows = extractR4Rules(`
+      const DASHBOARDS_MODULE = "packages/dashboards/src/mutation-service.ts";
+      export const ORG_WRITE_REGISTRY = [
+        dashboardsWriter("createDashboard", ["dashboards"], "upsert", 1, {
+          importBanned: true, allowedImporters: ["packages/dashboards/src/actions.ts"],
+        }),
+        dashboardsWriter("materializeExtensionTemplate", ["dashboards"], "upsert", 2, {
+          importBanned: false, importBanExemption: { issue: 1939, reason: "ext wave" },
+        }),
+        { module: "packages/agents/src/store.ts", exportName: "transitionRunStatus",
+          importBanned: true, allowedImporters: ["packages/agents/src/index.ts"] },
+      ];
+    `);
+    expect(rows).toEqual([
+      { module: MUT, exportName: "createDashboard", importBanned: true, allowedImporters: ["packages/dashboards/src/actions.ts"] },
+      { module: MUT, exportName: "materializeExtensionTemplate", importBanned: false, importBanExemption: { issue: 1939, reason: "ext wave" } },
+      { module: STORE, exportName: "transitionRunStatus", importBanned: true, allowedImporters: ["packages/agents/src/index.ts"] },
+    ]);
+  });
+
+  it("HARD-FAILS on a spread registry row (never silently omits a rule)", () => {
+    expect(() =>
+      extractR4Rules(`export const ORG_WRITE_REGISTRY = [ ...OTHER_ROWS ];`),
+    ).toThrow();
+  });
+
+  it("HARD-FAILS on a non-literal module / importBanned field", () => {
+    expect(() =>
+      extractR4Rules(
+        `export const ORG_WRITE_REGISTRY = [ { module: someVar, exportName: "x", importBanned: true, allowedImporters: [] } ];`,
+      ),
+    ).toThrow();
+    expect(() =>
+      extractR4Rules(
+        `export const ORG_WRITE_REGISTRY = [ { module: "a.ts", exportName: "x", importBanned: FLAG } ];`,
+      ),
+    ).toThrow();
+  });
+
+  it("HARD-FAILS on a row that OMITS importBanned (no fail-open default)", () => {
+    expect(() =>
+      extractR4Rules(
+        `export const ORG_WRITE_REGISTRY = [ { module: "a.ts", exportName: "x", allowedImporters: [] } ];`,
+      ),
+    ).toThrow();
+    // ...and on a dashboardsWriter() call missing its literal ban argument.
+    expect(() =>
+      extractR4Rules(
+        `const DASHBOARDS_MODULE = "m.ts"; export const ORG_WRITE_REGISTRY = [ dashboardsWriter("x", ["a"], "upsert", 1) ];`,
+      ),
+    ).toThrow();
+  });
+});
+
+describe("R4 writer import ban (evaluateR4)", () => {
+  const banned = [
+    { module: MUT, exportName: "createDashboard", allowedImporters: ["packages/dashboards/src/actions.ts"] },
+  ];
+
+  it("a banned import from a NON-allowlisted file turns the gate red (the acceptance fixture)", () => {
+    const v = r4(
+      banned,
+      [["src/lib/rogue.ts", 'import { createDashboard } from "@cinatra-ai/dashboards";']],
+      { "@cinatra-ai/dashboards": MUT },
+    );
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatchObject({ rule: "R4-writer-import", fileRel: "src/lib/rogue.ts", writer: `${MUT}#createDashboard` });
+  });
+
+  it("the allowlisted caller stays green", () => {
+    const v = r4(
+      banned,
+      [["packages/dashboards/src/actions.ts", 'import { createDashboard } from "./mutation-service";']],
+      { "./mutation-service": MUT },
+    );
+    expect(v).toEqual([]);
+  });
+
+  it("an alias resolves to the original banned name and is caught", () => {
+    const v = r4(
+      banned,
+      [["src/lib/rogue.ts", 'import { createDashboard as cd } from "@cinatra-ai/dashboards";']],
+      { "@cinatra-ai/dashboards": MUT },
+    );
+    expect(v.map((x) => x.rule)).toContain("R4-writer-import");
+  });
+
+  it("transitive re-export closure: a barrel re-export is a violation AND poisons imports of the barrel", () => {
+    const barrel = "packages/dashboards/src/index.ts";
+    const v = r4(
+      banned,
+      [
+        // the barrel re-exports the banned writer from the origin
+        [barrel, 'export { createDashboard } from "./mutation-service";'],
+        // a consumer imports it via the barrel (root specifier)
+        ["src/lib/consumer.ts", 'import { createDashboard } from "@cinatra-ai/dashboards";'],
+      ],
+      { "./mutation-service": MUT, "@cinatra-ai/dashboards": barrel },
+    );
+    // both the barrel (leak) and the consumer (via poisoned barrel) are caught
+    expect(v.map((x) => x.fileRel).sort()).toEqual([barrel, "src/lib/consumer.ts"]);
+    expect(v.every((x) => x.rule === "R4-writer-import")).toBe(true);
+  });
+
+  it("opaque access is fail-closed on the ORIGIN module AND on a poisoned re-export barrel", () => {
+    const barrel = "packages/dashboards/src/index.ts";
+    const files: Array<[string, string]> = [
+      [barrel, 'export { createDashboard } from "./mutation-service";'],
+      ["src/lib/ns-origin.ts", 'import * as m from "@cinatra-ai/dashboards/mutation";'], // origin → opaque violation
+      ["src/lib/ns-barrel.ts", 'import * as b from "@cinatra-ai/dashboards";'], // poisoned barrel → also a violation
+    ];
+    const v = r4(banned, files, {
+      "./mutation-service": MUT,
+      "@cinatra-ai/dashboards/mutation": MUT,
+      "@cinatra-ai/dashboards": barrel,
+    });
+    const opaque = v.filter((x) => x.rule === "R4-writer-import-opaque").map((x) => x.fileRel).sort();
+    expect(opaque).toEqual(["src/lib/ns-barrel.ts", "src/lib/ns-origin.ts"]);
+  });
+
+  it("opaque access requires the file be allowed for EVERY banned export of the module (intersection)", () => {
+    const twoBanned = [
+      { module: STORE, exportName: "transitionRunStatus", allowedImporters: ["src/lib/one.ts"] },
+      { module: STORE, exportName: "updateAgentRunStatus", allowedImporters: [] },
+    ];
+    // Allowed for transitionRunStatus but NOT updateAgentRunStatus → a namespace
+    // import still reaches the delegate, so it is flagged.
+    const flagged = r4(
+      twoBanned,
+      [["src/lib/one.ts", 'import * as s from "@cinatra-ai/agents/store";']],
+      { "@cinatra-ai/agents/store": STORE },
+    );
+    expect(flagged.map((x) => x.rule)).toEqual(["R4-writer-import-opaque"]);
+    // Allowed for BOTH → clean.
+    const both = [
+      { module: STORE, exportName: "transitionRunStatus", allowedImporters: ["src/lib/both.ts"] },
+      { module: STORE, exportName: "updateAgentRunStatus", allowedImporters: ["src/lib/both.ts"] },
+    ];
+    expect(
+      r4(both, [["src/lib/both.ts", 'import * as s from "@cinatra-ai/agents/store";']], { "@cinatra-ai/agents/store": STORE }),
+    ).toEqual([]);
+  });
+
+  it("an ALIASED re-export cannot leak a banned writer past the closure", () => {
+    const barrel = "packages/dashboards/src/index.ts";
+    const v = r4(
+      banned,
+      [
+        [barrel, 'export { createDashboard as makeDashboard } from "./mutation-service";'],
+        ["src/lib/consumer.ts", 'import { makeDashboard } from "@cinatra-ai/dashboards";'],
+      ],
+      { "./mutation-service": MUT, "@cinatra-ai/dashboards": barrel },
+    );
+    // The barrel re-exports the banned SOURCE name (violation) and the consumer
+    // importing the ALIASED name is caught (closure poisoned `makeDashboard`).
+    expect(v.map((x) => x.fileRel).sort()).toEqual([barrel, "src/lib/consumer.ts"]);
+    expect(v.every((x) => x.rule === "R4-writer-import")).toBe(true);
+  });
+
+  it("a namespace re-export (`export * as ns from banned`) cannot leak via `import { ns }`", () => {
+    const barrel = "packages/dashboards/src/index.ts";
+    const v = r4(
+      banned,
+      [
+        [barrel, 'export * as dash from "./mutation-service";'],
+        ["src/lib/consumer.ts", 'import { dash } from "@cinatra-ai/dashboards";'],
+      ],
+      { "./mutation-service": MUT, "@cinatra-ai/dashboards": barrel },
+    );
+    const files = v.map((x) => x.fileRel).sort();
+    // the barrel is an opaque violation; importing the `dash` namespace is caught
+    expect(files).toContain(barrel);
+    expect(files).toContain("src/lib/consumer.ts");
+  });
+
+  it("a destructured dynamic import is treated as a NAMED import (precise, not opaque)", () => {
+    const hit = r4(
+      banned,
+      [["src/lib/dyn.ts", 'const { createDashboard } = await import("@cinatra-ai/dashboards");']],
+      { "@cinatra-ai/dashboards": MUT },
+    );
+    expect(hit.map((x) => x.rule)).toEqual(["R4-writer-import"]);
+    const miss = r4(
+      banned,
+      [["src/lib/dyn2.ts", 'const { somethingElse } = await import("@cinatra-ai/dashboards");']],
+      { "@cinatra-ai/dashboards": MUT },
+    );
+    expect(miss).toEqual([]);
+  });
+
+  it("empty allowlist = total ban (an internal delegate has zero legal importers)", () => {
+    const v = r4(
+      [{ module: STORE, exportName: "updateAgentRunStatus", allowedImporters: [] }],
+      [["src/lib/rogue.ts", 'import { updateAgentRunStatus } from "@cinatra-ai/agents/store";']],
+      { "@cinatra-ai/agents/store": STORE },
+    );
+    expect(v.map((x) => x.rule)).toEqual(["R4-writer-import"]);
+  });
+
+  it("test files are exempt (runtime authority still binds them via the kernel fakes)", () => {
+    expect(isTestFileRel("src/lib/__tests__/x.test.ts")).toBe(true);
+    const v = r4(
+      banned,
+      [["src/lib/__tests__/x.test.ts", 'import { createDashboard } from "@cinatra-ai/dashboards";']],
+      { "@cinatra-ai/dashboards": MUT },
+    );
+    expect(v).toEqual([]);
+  });
+
+  it("type-only imports are erased and never a violation", () => {
+    const v = r4(
+      banned,
+      [["src/lib/rogue.ts", 'import type { createDashboard } from "@cinatra-ai/dashboards";']],
+      { "@cinatra-ai/dashboards": MUT },
+    );
+    expect(v).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// makeTsResolver — fail closed when its foundational tsconfig can't be trusted
+// (cinatra#1939 wave 3). A swallowed config error yields default options with no
+// `paths`, so aliased specifiers resolve to null and their opaque-access edges
+// are skipped — the gate would pass for the wrong reason. Both TS error channels
+// must turn the gate red instead.
+// ---------------------------------------------------------------------------
+describe("makeTsResolver is fail-closed on a broken tsconfig", () => {
+  it("throws on a MISSING tsconfig instead of degrading to paths-less resolution", () => {
+    // readConfigFile sets `.error` (TS5083) — the missing/unreadable channel.
+    const root = mkdtempSync(join(tmpdir(), "owbg-no-tsconfig-"));
+    expect(() => makeTsResolver(root)).toThrow(/cannot read|tsconfig/i);
+  });
+
+  it("throws on a tsconfig with a resolver-relevant option error (not a silent default)", () => {
+    // Valid JSON, bogus compiler option → parseJsonConfigFileContent reports it
+    // (TS6046) and yields degraded options; the file-list diagnostics
+    // (TS18002/18003) are filtered out, so this must still fail closed.
+    const root = mkdtempSync(join(tmpdir(), "owbg-bad-tsconfig-"));
+    writeFileSync(
+      join(root, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { moduleResolution: "not-a-real-value" } }),
+    );
+    expect(() => makeTsResolver(root)).toThrow(/invalid tsconfig|fail-closed/i);
+  });
+});

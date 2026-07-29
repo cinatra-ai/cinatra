@@ -18,7 +18,7 @@ import { assistantThreadSchemaQueries, assistantHandleSchemaQueries } from "@/li
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema";
-import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries } from "@/lib/skill-lifecycle-schema";
+import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries, skillUploadConsentSchemaQueries } from "@/lib/skill-lifecycle-schema";
 import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import {
   artifactClaimSchemaQueries,
@@ -3787,7 +3787,7 @@ END $$` },
       PRIMARY KEY (api_key_fingerprint, environment, catalog_skill_id, anthropic_version, lease_id)
     )` },
     { text: `CREATE INDEX IF NOT EXISTS anthropic_skill_lease_skill_idx ON "${schemaName.replaceAll('"', '""')}"."anthropic_skill_lease" (api_key_fingerprint, environment, anthropic_skill_id)` },
-    { text: `CREATE INDEX IF NOT EXISTS anthropic_skill_lease_expires_idx ON "${schemaName.replaceAll('"', '""')}"."anthropic_skill_lease" (expires_at)` }, ...skillBundleSchemaQueries(schemaName), // cinatra#2088 bundle authority — spread HERE: needs skill_revisions (above) AND anthropic_skill_sync (just created)
+    { text: `CREATE INDEX IF NOT EXISTS anthropic_skill_lease_expires_idx ON "${schemaName.replaceAll('"', '""')}"."anthropic_skill_lease" (expires_at)` }, ...skillBundleSchemaQueries(schemaName), ...skillUploadConsentSchemaQueries(schemaName), // cinatra#2088 bundle authority + cinatra#2092 S5 consent ledger / reconcile outbox — spread HERE: needs skill_revisions (above) AND anthropic_skill_sync (just created)
 
     // authoring_step_artifacts — linkage from a committed ledger step to every
     // artifact representation it emitted. FK ON DELETE CASCADE so a ledger
