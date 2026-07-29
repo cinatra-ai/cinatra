@@ -53,12 +53,14 @@ WORKS_AFTER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 
 # Case A target is DIGEST-BOUND (the platform-postgres matrix pin); Case B target
-# is the nango-postgres matrix pin. Sources are bare majors (no canonical field
-# digest — cinatra#1417).
+# is the nango-postgres matrix pin — the compose nango-db DELIBERATE 17-alpine
+# HOLD (docker-compose.yml pins this exact digest), so Case B proves the 15 -> 17
+# exception onto the bytes the hold actually ships. Sources are bare majors (no
+# canonical field digest — cinatra#1417).
 PG_CASEA_FROM_TAG="${PG_CASEA_FROM_TAG:-17-alpine}"
 PG_CASEA_TO_TAG="${PG_CASEA_TO_TAG:-18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15}"
 PG_CASEB_FROM_TAG="${PG_CASEB_FROM_TAG:-15-alpine}"
-PG_CASEB_TO_TAG="${PG_CASEB_TO_TAG:-17-alpine@sha256:979c4379dd698aba0b890599a6104e082035f98ef31d9b9291ec22f2b13059ca}"
+PG_CASEB_TO_TAG="${PG_CASEB_TO_TAG:-17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193}"
 
 RUN_ID="wa-upgpg-$$"
 SEED="${RUN_ID}-seed"
