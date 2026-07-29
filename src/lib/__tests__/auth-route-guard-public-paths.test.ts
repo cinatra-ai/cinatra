@@ -74,6 +74,15 @@ describe("auth-route-guard PUBLIC_PATH_PREFIXES - WayFlow ApiNode bridge routes"
     expect((line ?? "").toLowerCase()).toMatch(/auth enforced inside/);
   });
 
+  it("contains /api/connect/site-inventory (cinatra#2018 S3 PR-D, absorbed by cinatra#2021 S6; server-to-server, in-handler cnx_ + Origin auth)", () => {
+    expect(guardSource).toMatch(/"\/api\/connect\/site-inventory"/);
+    const line = guardSource
+      .split("\n")
+      .find((l) => l.includes('"/api/connect/site-inventory"'));
+    expect(line).toBeDefined();
+    expect((line ?? "").toLowerCase()).toMatch(/auth enforced inside/);
+  });
+
   it("contains the /webhook generic inbound-webhook namespace (cinatra#340; in-handler Standard-Webhooks signature auth)", () => {
     expect(guardSource).toMatch(/"\/webhook"/);
     const line = guardSource.split("\n").find((l) => /"\/webhook",/.test(l));
