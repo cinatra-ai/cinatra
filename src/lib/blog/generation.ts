@@ -420,6 +420,9 @@ export async function runWordPressDraftCreationJob(
       contentIsHtml: convertedPost.contentIsHtml,
       imageArtifactId: post.imageArtifactId,
       imageRepresentationRevisionId: post.imageRepresentationRevisionId,
+      // cinatra#2022 — thread the job id into the invoker's audit rows for
+      // the re-pointed legs (create-post/update-post-meta/get-posts).
+      causation: _jobId,
       onProgress: async (message, instanceName) => {
         if (controller.signal.aborted) {
           return;
