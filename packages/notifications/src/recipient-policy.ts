@@ -200,6 +200,15 @@ const SYSTEM_JOBS = new Set<string>([
   // an unexpected cycle failure fans out to admins.
   "lifecycle-review-orchestration",
   "lifecycle-gate-maintenance",
+  // Anthropic upload-on-install reconcile (cinatra#2092, epic #2086 S5). BOTH
+  // are system-initiated: the one-shot drain KICK enqueued after a catalog /
+  // consent transaction commits, and the boot-seeded ~5-minute safety-net sweep
+  // (canonical-id re-delay). Neither carries a user initiator — an install's
+  // human actor is recorded in the consent ledger, not on the job. Silent on
+  // success; an unexpected cycle failure fans out to admins (the drain
+  // additionally notifies admins itself when a request exhausts its retries).
+  "anthropic-skill-upload-reconcile",
+  "anthropic-skill-upload-reconcile-sweep",
 ]);
 
 // `started` is included so worker.on("active") can resolve a recipient for

@@ -84,6 +84,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   },
 
   // --- migratable-background-setup: boot / settings / dev / cold paths ---
+  "src/lib/anthropic-skill-reconcile-service.ts": {
+    class: "migratable-background-setup",
+    justification:
+      "Upload-on-install reconcile drain (cinatra#2092, epic #2086 S5): claims/completes/releases rows in the anthropic_skill_reconcile_outbox from a BACKGROUND WORKER only — never a request path. Sync today purely to share one runner shape with the catalog-transaction writers that append these rows; nothing here is authorization-adjacent, so it migrates with the core-store async conversion.",
+  },
   "src/lib/database.ts": {
     class: "migratable-background-setup",
     justification:
