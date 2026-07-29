@@ -28,6 +28,48 @@
 //       named/aliased/re-exported path. (The runManagementAuthority named-
 //       consumer rule was REMOVED with the mint itself — owner ruling 2026-07-26,
 //       ruling 2: cross-org run management is unsupported.)
+//
+//       cinatra#1941 S2 / eng#565 adds two more R5 rows:
+//         - R5-job-system-mint: NAMING the cross-job system-authority mint
+//           seam (`mintSystemAuthorityForJob`,
+//           src/lib/org-write/job-system-authority-mint.ts) — EMPTY allowlist
+//           day-1 (dark seam; no production caller yet). Already covered by
+//           R2's opaque net (it lives under src/lib/org-write/) — this row
+//           adds the missing NAMED-import restriction, same rationale as
+//           R5-run-dispatch-mint above.
+//         - R5-job-frame: the privileged write-side exports of the
+//           job-system frame module (`registerJobSystemRuntime`,
+//           `runWithJobFrame`, src/lib/background-jobs-system-frame.ts —
+//           deliberately OUTSIDE org-write, so R2's opaque net does NOT cover
+//           it) — restricted to its sole sanctioned consumer
+//           (src/lib/boot/phases/system-loops.ts). Because no other net
+//           covers this module, the rule carries its OWN opaque
+//           net (`opaqueFailClosed`): a namespace import, a bindingless bare
+//           import, a non-destructured dynamic import(), require(), or CJS
+//           import-equals of the module reaches EVERY export — including the
+//           privileged two — without naming them, so those forms are
+//           R5-job-frame-opaque violations unless the file is allowlisted or
+//           test-exempt (review finding on PR #2199: a `import * as frame`
+//           bypass of the named-binding check). `getActiveJobFrame`,
+//           `buildJobSystemIdentity`, and `readPayloadField` are read-only
+//           and stay freely NAMEABLE — only opaque whole-module access and
+//           the two privileged names are restricted.
+//
+//       eng#565 ALSO fixes a prefilter blind spot found during the #1941
+//       design round: the cheap textual prefilter gating R1/R2/R3/R5's deep
+//       parse (`shouldDeepParseForLegacyRules`, below) only recognized three
+//       substrings, so a file that NAMED a restricted mint wrapper via its
+//       module specifier alone (no other kernel string present) was never
+//       deep-parsed and R5 could never fire on it — the concrete miss:
+//       `packages/agents/src/artifact-review-resume-delivery.ts` (imports
+//       `mintAgentRunExecutionAuthority`, live on main, invisible to this gate
+//       until now). Fixed by anchoring the prefilter on each restricted
+//       module's own specifier fragment (`LEGACY_RULE_PREFILTER_STRINGS`)
+//       rather than a fixed 3-string list, closing this class of miss for
+//       every current AND future NAMED_CONSUMER_RULES entry. The live miss
+//       itself is legitimized with a justification row in
+//       RUN_DISPATCH_MINT_CONSUMER_ALLOWLIST below — an honesty fix (the
+//       import already existed on main), not new authority.
 //   R4  registry-driven writer import ban (cinatra#1939 wave 3, Decision 4):
 //       the R5 named-consumer machinery generalized from ONE hand-written rule
 //       to rules DERIVED from src/lib/org-write/write-registry.ts. Each row with
@@ -89,6 +131,13 @@ export const SYSTEM_MINT_ALLOWLIST = new Set([
   // three context-named wrappers (cinatra#1939 wave 2). Its OWN consumers are
   // restricted separately by RUN_DISPATCH_MINT_CONSUMER_ALLOWLIST below.
   join("src", "lib", "org-write", "agent-run-authority-mint.ts"),
+  // The cross-job system-authority mint seam (cinatra#1941 S2) — the sole
+  // exposer of `mintSystemAuthorityForJob`, which reads the active job
+  // dispatch frame (src/lib/background-jobs-system-frame.ts) and refuses
+  // cross-job purpose/capability misuse before delegating here. Its OWN
+  // export is restricted separately by the R5-job-system-mint named-consumer
+  // rule below (EMPTY allowlist day-1 — dark seam, no production caller yet).
+  join("src", "lib", "org-write", "job-system-authority-mint.ts"),
 ]);
 
 /** R3: the one legal unwrap consumer outside the kernel. */
@@ -104,6 +153,14 @@ export const RUN_DISPATCH_MINT_CONSUMER_ALLOWLIST = new Set([
   join("packages", "agents", "src", "execution.ts"),
   join("packages", "agents", "src", "trigger-release-job.ts"),
   join("src", "lib", "host-content-editor-dispatch.ts"),
+  // cinatra#1941 S2 / eng#565: the artifact-review resume-delivery worker
+  // already names `mintAgentRunExecutionAuthority` on main (import L2, call
+  // L227) — it releases held approve/reject effects by resuming a run, a
+  // run-dispatch continuation like the three jobs above. The import predates
+  // this design; the gate's prefilter simply never parsed this file (fixed
+  // above), so the reference was invisible. Sanctioning it here is an
+  // honesty fix, not new authority — disclosed to the owner in the PR body.
+  join("packages", "agents", "src", "artifact-review-resume-delivery.ts"),
 ]);
 
 /**
@@ -115,6 +172,17 @@ export const RUN_DISPATCH_MINT_CONSUMER_ALLOWLIST = new Set([
  * aliased names resolve to the ORIGINAL imported name and re-exports are value
  * edges, so alias / re-export / path-variant are all caught here.
  */
+/** R5-job-system-mint (cinatra#1941 S2): EMPTY day-1 — the seam is dark, no
+ *  production caller exists yet. Wave-3 adds each migrating writer here as a
+ *  reviewed design event. */
+export const JOB_SYSTEM_MINT_CONSUMER_ALLOWLIST = new Set([]);
+
+/** R5-job-frame (cinatra#1941 S2): the ONLY sanctioned
+ *  wirer of the job-system runtime slot. */
+export const JOB_SYSTEM_FRAME_CONSUMER_ALLOWLIST = new Set([
+  join("src", "lib", "boot", "phases", "system-loops.ts"),
+]);
+
 const NAMED_CONSUMER_RULES = [
   {
     rule: "R5-run-dispatch-mint",
@@ -128,7 +196,74 @@ const NAMED_CONSUMER_RULES = [
     allowlist: RUN_DISPATCH_MINT_CONSUMER_ALLOWLIST,
     testsExempt: false,
   },
+  {
+    rule: "R5-job-system-mint",
+    bindings: new Set(["mintSystemAuthorityForJob"]),
+    moduleRel: join("src", "lib", "org-write", "job-system-authority-mint.ts"),
+    aliasSpecifier: "@/lib/org-write/job-system-authority-mint",
+    allowlist: JOB_SYSTEM_MINT_CONSUMER_ALLOWLIST,
+    testsExempt: false,
+  },
+  {
+    rule: "R5-job-frame",
+    bindings: new Set(["registerJobSystemRuntime", "runWithJobFrame"]),
+    moduleRel: join("src", "lib", "background-jobs-system-frame.ts"),
+    aliasSpecifier: "@/lib/background-jobs-system-frame",
+    allowlist: JOB_SYSTEM_FRAME_CONSUMER_ALLOWLIST,
+    // The module lives OUTSIDE src/lib/org-write/ (deliberately — see the
+    // header comment), so `isOrgWriteTest` never exempts ITS OWN unit test
+    // (src/lib/__tests__/background-jobs-system-frame.test.ts, which
+    // legitimately names both bindings to test them directly).
+    testsExempt: true,
+    // …and, for the same reason, NO other rule fail-closes opaque access to
+    // it (R2's net only covers @/lib/org-write/**): without this flag a
+    // `import * as frame` / bare / non-destructured dynamic import() /
+    // require() edge would reach frame.registerJobSystemRuntime and
+    // frame.runWithJobFrame without ever NAMING them — the exact bypass of
+    // this rule flagged in review on PR #2199. The two org-write rules above
+    // deliberately OMIT the flag: their opaque forms are already violations
+    // via R2-system-mint-opaque, and double-reporting would be noise.
+    opaqueFailClosed: true,
+  },
 ];
+
+/**
+ * Cheap textual prefilter gating the R1/R2/R3/R5 deep-parse
+ * (`evaluateBoundaryRules`) path in `main()`'s single file-walk — R4 (the
+ * writer-import ban) is unconditional and unaffected (every file's edges are
+ * collected regardless; see `r4files.push` in `main()`).
+ *
+ * cinatra#1941 S2 / eng#565: extended from the original 3 substrings with one
+ * fragment PER restricted module (its own specifier string is always present
+ * in any file that imports it, named or not). Before this fix, a file that
+ * only NAMED a restricted mint wrapper via its module specifier — without
+ * ALSO containing one of the original three substrings — was never
+ * deep-parsed, so R5 could never fire on it. The concrete miss:
+ * `packages/agents/src/artifact-review-resume-delivery.ts` imports
+ * `mintAgentRunExecutionAuthority` from `@/lib/org-write/agent-run-authority-mint`
+ * but names neither "org-write-kernel", "mintSystemWriteAuthority", nor
+ * "guardedBatchQueries" — so it was invisible to every R1–R5 rule despite
+ * being a live, uncovered R5 consumer. Anchoring on each restricted module's
+ * own specifier fragment closes this class of miss for every present AND
+ * future NAMED_CONSUMER_RULES entry (a new rule's `moduleRel` basename should
+ * be added here too).
+ */
+export const LEGACY_RULE_PREFILTER_STRINGS = [
+  "org-write-kernel",
+  "mintSystemWriteAuthority",
+  "guardedBatchQueries",
+  "agent-run-authority-mint",
+  "job-system-authority-mint",
+  "background-jobs-system-frame",
+];
+
+/** True iff `text` contains any prefilter substring — the predicate `main()`
+ *  uses to decide whether a file is worth deep-parsing for R1/R2/R3/R5.
+ *  Exported and pure (no fs access) so it is unit-testable directly, rather
+ *  than only indirectly through a full `main()` run. */
+export function shouldDeepParseForLegacyRules(text) {
+  return LEGACY_RULE_PREFILTER_STRINGS.some((s) => text.includes(s));
+}
 
 const SCAN_ROOTS = ["src", "packages", "scripts"];
 const SKIP_DIRS = new Set(["node_modules", "dist", ".next", "__generated__"]);
@@ -395,6 +530,18 @@ export function evaluateBoundaryRules(fileRel, edges, resolveSpecifier) {
         (edge.specifier.startsWith(".") &&
           resolveSpecifier(edge.specifier) === spec.moduleRel);
       if (!touchesSpecModule) continue;
+      // Per-rule opaque net (cinatra#1941 S2, PR #2199 review finding): when
+      // NO other rule fail-closes opaque access to this module (unlike the
+      // org-write modules, covered by R2's net above), an opaque edge —
+      // namespace, bindingless bare, non-destructured dynamic import(),
+      // require(), CJS import-equals — reaches every export including the
+      // restricted bindings WITHOUT naming them. Fail closed on the form
+      // itself; a destructured dynamic import stays a NAMED edge and falls
+      // through to the binding check below.
+      if (spec.opaqueFailClosed && isOpaqueAccess) {
+        violations.push({ rule: `${spec.rule}-opaque`, fileRel, ...edge });
+        continue;
+      }
       if (edge.valueBindings.some((b) => spec.bindings.has(b))) {
         violations.push({ rule: spec.rule, fileRel, ...edge });
       }
@@ -943,11 +1090,7 @@ function main() {
       const text = readFileSync(fileAbs, "utf-8");
       const edges = collectModuleEdges(fileAbs, text);
       r4files.push({ fileRel, edges });
-      if (
-        text.includes("org-write-kernel") ||
-        text.includes("mintSystemWriteAuthority") ||
-        text.includes("guardedBatchQueries")
-      ) {
+      if (shouldDeepParseForLegacyRules(text)) {
         if (listMode) {
           for (const e of edges) {
             if (e.specifier.includes("org-write")) {
