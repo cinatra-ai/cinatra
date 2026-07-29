@@ -102,3 +102,57 @@ describe("OrganizationManagePanel — catalog-truth visibility split", () => {
     expect(screen.queryByTestId("delete-danger-form")).toBeNull();
   });
 });
+
+describe("OrganizationManagePanel — read-only posture while archived (cinatra#1942 V4)", () => {
+  test("isArchived=false (default): the Settings + Members fieldsets are NOT disabled/inert, no read-only note", () => {
+    render(
+      <OrganizationManagePanel {...BASE} canManageSettings canManageMembers />,
+    );
+    const settingsFieldset = screen.getByTestId("settings-form").closest("fieldset");
+    const membersFieldset = screen.getByTestId("members-manager").closest("fieldset");
+    expect(settingsFieldset?.disabled).toBe(false);
+    expect(membersFieldset?.disabled).toBe(false);
+    expect(settingsFieldset?.hasAttribute("inert")).toBe(false);
+    expect(membersFieldset?.hasAttribute("inert")).toBe(false);
+    expect(screen.queryByText("Read-only — this organization is archived.")).toBeNull();
+  });
+
+  test("isArchived=true: both fieldsets disable AND go inert (anchors + portaled Radix triggers blocked too), each with a read-only note", () => {
+    render(
+      <OrganizationManagePanel {...BASE} canManageSettings canManageMembers isArchived />,
+    );
+    const settingsFieldset = screen.getByTestId("settings-form").closest("fieldset");
+    const membersFieldset = screen.getByTestId("members-manager").closest("fieldset");
+    expect(settingsFieldset?.disabled).toBe(true);
+    expect(membersFieldset?.disabled).toBe(true);
+    // `inert` is the belt over the `disabled` suspenders: it neutralizes
+    // clicks/focus on EVERYTHING in the subtree (anchors, asChild triggers),
+    // so a Radix portal (Select dropdown, dialogs) can never even be opened
+    // from a read-only card.
+    expect(settingsFieldset?.hasAttribute("inert")).toBe(true);
+    expect(membersFieldset?.hasAttribute("inert")).toBe(true);
+    expect(screen.getAllByText("Read-only — this organization is archived.")).toHaveLength(2);
+  });
+
+  test("isArchived=true still renders the cards (owner can see what they'd edit), just disabled", () => {
+    render(
+      <OrganizationManagePanel {...BASE} canManageSettings canManageMembers isArchived />,
+    );
+    expect(screen.getByTestId("settings-form")).toBeTruthy();
+    expect(screen.getByTestId("members-manager")).toBeTruthy();
+  });
+
+  test("isArchived=true does NOT affect the Danger zone (delete stays reachable)", () => {
+    render(
+      <OrganizationManagePanel
+        {...BASE}
+        canManageSettings
+        canManageMembers
+        canDelete
+        deleteBlockers={NO_BLOCKERS}
+        isArchived
+      />,
+    );
+    expect(screen.getByTestId("delete-danger-form")).toBeTruthy();
+  });
+});

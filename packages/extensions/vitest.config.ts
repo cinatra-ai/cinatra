@@ -154,6 +154,14 @@ export default defineConfig({
         __dirname,
         "src/__tests__/__mocks__/gatekept-install.ts",
       ),
+      // cinatra#1927: the declaration-driven protection gate consults a host
+      // reader that walks the materialized extension store — out of reach in
+      // this sandbox. Stub answers "declares nothing"; the refusal tests
+      // vi.mock this same specifier.
+      "@/lib/extension-protection-host": path.join(
+        __dirname,
+        "src/__tests__/__mocks__/extension-protection-host.ts",
+      ),
       // aliases for marketplace-listing-card.test.tsx (cinatra#1003 — the §IV
       // ListingCard's CompatMeta plain-row + RatingRow rating-star-token
       // fixes). All real source (no stubs needed): every one of these is a

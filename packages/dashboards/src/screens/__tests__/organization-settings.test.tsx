@@ -37,7 +37,7 @@ vi.mock("@/lib/auth-session", () => ({ getAuthSession: h.getAuthSession }));
 vi.mock("@/lib/better-auth-db", () => ({
   betterAuthDb: { select: h.select, execute: h.execute },
   betterAuthMembers: { id: "m.id", userId: "m.userId", role: "m.role", organizationId: "m.orgId" },
-  betterAuthOrganizations: { id: "o.id", name: "o.name", slug: "o.slug" },
+  betterAuthOrganizations: { id: "o.id", name: "o.name", slug: "o.slug", archivedAt: "o.archivedAt" },
   betterAuthUsers: { id: "u.id", name: "u.name", email: "u.email" },
   listTeamsForOrg: h.listTeams,
   readUserIsOrgMember: h.isMember,
@@ -79,7 +79,14 @@ vi.mock("../../components/organization-delete-danger-form", () => ({
 
 import { OrganizationSettingsPage } from "../organization-settings";
 
-const ORG_ROW = { name: "Acme Inc", slug: "acme" };
+const ORG_ROW = { name: "Acme Inc", slug: "acme", archivedAt: null };
+// cinatra#1942 V4 — a planted archived org (the read-only posture + the
+// archived badge).
+const ARCHIVED_ORG_ROW = {
+  name: "Acme Inc",
+  slug: "acme",
+  archivedAt: new Date("2026-01-01T00:00:00.000Z"),
+};
 const MEMBER_ROWS = [
   { id: "m1", userId: "u1", role: "owner", name: "Jane", email: "j@x.com" },
   { id: "m2", userId: "u2", role: "member", name: "Bob", email: "b@x.com" },
@@ -185,5 +192,40 @@ describe("organization settings screen (#1734)", () => {
     h.state.queue = [[], MEMBER_ROWS];
     h.listTeams.mockResolvedValue([]);
     await expect(renderScreen()).rejects.toThrow(/NEXT_NOT_FOUND/);
+  });
+});
+
+describe("archived org read-only posture (cinatra#1942 V4)", () => {
+  test("planted archived org: header shows the Archived badge, and the manage panel renders read-only (fieldsets disabled + note)", async () => {
+    primeSession();
+    h.isMember.mockResolvedValue(true);
+    h.state.queue = [[ARCHIVED_ORG_ROW], MEMBER_ROWS];
+    h.listTeams.mockResolvedValue([]);
+    h.resolveCaps.mockResolvedValue(ALL_CAPS);
+    h.execute.mockResolvedValue({ rows: [] });
+    h.countBlockers.mockResolvedValue(NO_BLOCKERS);
+
+    const html = await renderScreen();
+    expect(html).toContain("Archived");
+    expect(html).toContain("Read-only — this organization is archived.");
+    expect(html).toMatch(/<fieldset[^>]*disabled/);
+    // The inert hardening: the whole subtree is non-interactive, not just
+    // native form controls.
+    expect(html).toMatch(/<fieldset[^>]*inert/);
+  });
+
+  test("active org: no Archived badge, no read-only note, fieldsets NOT disabled/inert", async () => {
+    primeSession();
+    h.isMember.mockResolvedValue(true);
+    h.state.queue = [[ORG_ROW], MEMBER_ROWS];
+    h.listTeams.mockResolvedValue([]);
+    h.resolveCaps.mockResolvedValue(ALL_CAPS);
+    h.execute.mockResolvedValue({ rows: [] });
+    h.countBlockers.mockResolvedValue(NO_BLOCKERS);
+
+    const html = await renderScreen();
+    expect(html).not.toContain("Read-only — this organization is archived.");
+    expect(html).not.toMatch(/<fieldset[^>]*disabled/);
+    expect(html).not.toMatch(/<fieldset[^>]*inert/);
   });
 });

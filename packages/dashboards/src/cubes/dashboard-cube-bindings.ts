@@ -61,15 +61,23 @@ export const projectsForCube = cinatraSchema.table("projects", {
 
 /**
  * Better Auth `public."organization"` projection (the canonical
- * `betterAuthOrganizations` binding at `src/lib/better-auth-db.ts:111`
- * has the same shape; we rebind here to avoid a cross-package import
- * from `packages/dashboards` into the cinatra-app `src/lib/`).
+ * `betterAuthOrganizations` binding in `src/lib/better-auth-db.ts` has the
+ * same shape; we rebind here to avoid a cross-package import from
+ * `packages/dashboards` into the cinatra-app `src/lib/`).
+ *
+ * `archivedAt` (cinatra#1942 archive program): the canonical binding already
+ * declares this column (NULL = active; written only by the gate-off-until-S6
+ * archive transaction). The `organizations` cube needs a column reference for
+ * its `lifecycle_status`/`archived_at` dimensions, so we widen the narrow
+ * projection here — same pattern as `projectsForCube.archivedAt` above. This
+ * only widens the Drizzle TYPE surface; the column already exists in the DB.
  */
 export const organizationsForCube = pgTable("organization", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   slug: text("slug"),
   createdAt: timestamp("createdAt", { withTimezone: true, mode: "date" }),
+  archivedAt: timestamp("archivedAt", { withTimezone: true, mode: "date" }),
 });
 
 /**

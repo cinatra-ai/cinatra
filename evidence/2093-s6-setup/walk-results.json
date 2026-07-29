@@ -1,0 +1,82 @@
+{
+  "results": [
+    {
+      "name": "a1 both wizard-eligible providers render",
+      "verdict": "PASS",
+      "detail": "cards = setup-provider-openai, setup-provider-anthropic"
+    },
+    {
+      "name": "a2 Gemini is NOT offered (wizardEligible:false)",
+      "verdict": "PASS",
+      "detail": "no setup-provider-gemini node in the DOM"
+    },
+    {
+      "name": "a3 no Gemini affordance in the choice section",
+      "verdict": "PASS",
+      "detail": "the word 'Gemini' does not appear above the fold copy"
+    },
+    {
+      "name": "a4 disabled cards say why",
+      "verdict": "PASS",
+      "detail": "both connectors installed/active on this instance — no disabled card to render"
+    },
+    {
+      "name": "b1 OpenAI form renders under the choice",
+      "verdict": "PASS",
+      "detail": "input[name=apiKey] + project/organization + service-tier + default-model"
+    },
+    {
+      "name": "b2 key validated + saved",
+      "verdict": "PASS",
+      "detail": "the 'OpenAI connection saved' alert renders after the live model-list validation"
+    },
+    {
+      "name": "b3 readiness saga completes on OpenAI",
+      "verdict": "PASS",
+      "detail": "the receipt panel renders"
+    },
+    {
+      "name": "b4 ZERO Anthropic egress on the OpenAI path",
+      "verdict": "PASS",
+      "detail": "2 provider call(s) recorded during the run, all openai: /v1/models, /v1/models"
+    },
+    {
+      "name": "b5 Continue offered once the receipt is valid",
+      "verdict": "PASS",
+      "detail": "Continue link renders"
+    },
+    {
+      "name": "e1 matcher constraint surfaces on Anthropic",
+      "verdict": "PASS",
+      "detail": "One feature needs OpenAI Skill auto-matching requires OpenAI. This instance's default LLM provider is Anthropic, so automatic skill matching stays off until an OpenAI connection is configured. Everything else — the assistant, agents, skill generation — runs on Anthropic. Skills can still be attached to agents manually."
+    },
+    {
+      "name": "e2 Anthropic key form + egress advisory render",
+      "verdict": "PASS",
+      "detail": "setup-anthropic-api-key present"
+    },
+    {
+      "name": "d0 Anthropic key SAVE through the wizard form",
+      "verdict": "NOT-DRIVEN",
+      "detail": "the connector's writer requires a configured connection service (Nango) and THROWS; the setup action does not catch it, so the step renders an unhandled server error instead of an in-page actionable state. Recorded as a FINDING — see PROOF.md §Findings."
+    },
+    {
+      "name": "d1 readiness failure renders actionably",
+      "verdict": "PASS",
+      "detail": "AI setup did not complete (native-skills-probe) This Anthropic connection's MCP mode is 'function-tools'. In that mode Cinatra cannot deliver custom skills to Claude — every container.skills request is rejected. This connection's MCP mode is set to 'function-tools', which cannot deliver custom skills — every container.skills request is rejected. Switch the Anthropic connector's MCP mode to 'native' in its settings, then run this step again."
+    },
+    {
+      "name": "c1 Anthropic readiness saga reaches a valid receipt",
+      "verdict": "PASS",
+      "detail": "receipt panel renders; probe reference = {\"skill_id\":\"skill_lane2093_45\",\"version\":\"v1\",\"type\":\"custom\"}"
+    },
+    {
+      "name": "c2 probe carried BOTH halves of the container.skills reference",
+      "verdict": "PASS",
+      "detail": "{\"skill_id\":\"skill_lane2093_45\",\"version\":\"v1\",\"type\":\"custom\"}"
+    }
+  ],
+  "consoleErrors": [
+    "Configure the connection service first so Anthropic API requests can authenticate."
+  ]
+}

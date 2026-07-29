@@ -19,6 +19,7 @@
 // ---------------------------------------------------------------------------
 
 import { assertCanRemoveExtension } from "@cinatra-ai/extensions/system-extension-inventory";
+import { assertExtensionNotProtected } from "@cinatra-ai/extensions/protected-extension";
 import {
   assertArchivePackageDoesNotBreakClosure,
   listArchiveClosureBlockersForPackage,
@@ -57,6 +58,16 @@ export async function assertAgentTemplateRemovable(packageName: string): Promise
   // (1) System-extension protection (#1036). Runs first, before any store read,
   // so a system package is refused regardless of store reachability.
   assertCanRemoveExtension(packageName, "uninstall");
+
+  // (1b) DECLARATION-DRIVEN protection (cinatra#1927). The DIRECT agent-registry
+  // removal path must refuse a protected extension identically to the generic
+  // dispatcher — this gate is what the agent-catalog `uninstallRegistryPackage`
+  // action and the agents MCP delete handler reach, and it bypasses
+  // `extensionRegistry.uninstall` entirely. Both paths refuse through the SAME
+  // shared predicate (`assertNotDeclaredProtected`) so they can never drift.
+  // Server-side and request-independent: a forged delete call is refused too.
+  // Core names NO package — the package's own declaration decides.
+  await assertExtensionNotProtected(packageName, "uninstall");
 
   // (2) Canonical closure. FAIL-CLOSED on store outage (#1061): the canonical
   // manifest is the authoritative status store; if it cannot be read we cannot

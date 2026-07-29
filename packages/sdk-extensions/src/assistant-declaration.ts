@@ -34,6 +34,7 @@
 // zod v4 (optional peerDependency — same precedent as `access-config.ts`).
 
 import { z } from "zod";
+import { extensionProtectedFlagSchema } from "./extension-protection";
 import {
   assistantConfigSchema,
   type AssistantConfig,
@@ -133,6 +134,13 @@ const declarationFileSchema = z
     formatVersion: z.literal(ASSISTANT_DECLARATION_FORMAT_VERSION),
     access: z.unknown().optional(),
     assistant: assistantBlockSchema.optional(),
+    // The generic, KIND-AGNOSTIC protection domain (cinatra#1927) — a TOP-LEVEL
+    // sibling of `assistant`, not a member of the block: protection is a
+    // property of the EXTENSION, so every kind declares it identically.
+    // Accepted structurally here (shared schema, by reference) so the
+    // `.strict()` file schema does not reject a protected assistant;
+    // INTERPRETED only by `extension-protection.ts`.
+    protected: extensionProtectedFlagSchema.optional(),
   })
   .strict();
 

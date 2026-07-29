@@ -29,6 +29,7 @@ import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
+import { LifecycleBadge } from "@/components/lifecycle-badge";
 import { getAuthSession } from "@/lib/auth-session";
 import { CrumbContributions } from "@/components/crumb-contributions";
 import {
@@ -83,6 +84,12 @@ export async function OrganizationDetailDashboardPage({
       .select({
         name: betterAuthOrganizations.name,
         slug: betterAuthOrganizations.slug,
+        // cinatra#1942 V4 — threaded through for the "Archived — read-only"
+        // banner below; reads `archivedAt` directly, never the archive
+        // activation gate (visibility surfaces are gate-blind by design:
+        // with the gate off no org has archivedAt set, so they are inert
+        // without needing a second switch).
+        archivedAt: betterAuthOrganizations.archivedAt,
       })
       .from(betterAuthOrganizations)
       .where(eq(betterAuthOrganizations.id, id))
@@ -108,6 +115,11 @@ export async function OrganizationDetailDashboardPage({
   }
 
   const orgName = org.name ?? "";
+  // cinatra#1942 V4 — read-only posture: an archived org's dashboards stay
+  // viewable but the surface is presented as read-only chrome (the banner
+  // below); no write path on this screen is gated on it (there is none —
+  // the Dashboards surface here has no org-mutating actions).
+  const isArchived = org.archivedAt !== null;
   // Access model retained ONLY for its counts (Overview portlets) — the full
   // view + management moved to /organizations/[id]/settings (#1734).
   const accessModel = buildOrganizationAccessModel(memberRows, teams);
@@ -152,15 +164,36 @@ export async function OrganizationDetailDashboardPage({
         description="Dashboards for this organization."
         divider={false}
         actions={
-          <Button asChild variant="outline">
-            <Link href={`/organizations/${encodeURIComponent(id)}/settings`}>
-              <Settings data-icon="inline-start" aria-hidden="true" />
-              Organization settings
-            </Link>
-          </Button>
+          <div className="flex items-center gap-2">
+            {isArchived ? <LifecycleBadge status="archived" /> : null}
+            <Button asChild variant="outline">
+              <Link href={`/organizations/${encodeURIComponent(id)}/settings`}>
+                <Settings data-icon="inline-start" aria-hidden="true" />
+                Organization settings
+              </Link>
+            </Button>
+          </div>
         }
       />
       <PageContent className="flex flex-col gap-6 pb-8">
+        {/* cinatra#1942 V4 — "Archived — read-only" banner.
+            Reads `archivedAt` directly, never the activation gate. The copy
+            deliberately claims read-only for the ORG's settings/membership
+            only — the viewer's own dashboards ABOUT the org (per-user rows,
+            not org data) stay editable, so the banner must not overclaim. */}
+        {isArchived ? (
+          <div
+            data-cinatra-archived-banner="true"
+            className="soft-panel border-line bg-surface-muted px-4 py-3 text-xs text-muted-foreground"
+          >
+            <p className="font-medium text-foreground">Archived — read-only</p>
+            <p>
+              This organization is archived. Its settings and membership
+              can&apos;t be changed until it&apos;s unarchived.
+            </p>
+          </div>
+        ) : null}
+
         <OrganizationDashboards
           dataSource={dataSource}
           overviewPortlets={overviewConfig.portlets}

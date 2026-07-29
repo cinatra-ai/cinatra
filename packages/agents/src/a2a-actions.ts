@@ -2,7 +2,20 @@
 
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { requireAuthSession } from "@/lib/auth-session";
+import {
+  requireAuthSession,
+  // cinatra#2202: the canonical session-lineage ActorContext RESOLVER (org
+  // role + team ids/roles + project grants). Aliased on import because
+  // `@cinatra-ai/llm/actor-context` exports a same-named `getActorContext` that
+  // is a different thing entirely — the ALS frame READER. Keeping the resolver
+  // and the reader visibly distinct at the import site avoids exactly the
+  // confusion that let this branch ship with no frame at all.
+  getActorContext as resolveSessionActorContext,
+} from "@/lib/auth-session";
+// cinatra#2202: the SAME actor-context primitive the EXTERNAL A2A surface uses
+// (src/app/api/a2a/route.ts wraps `mount.handle` in it). Not a parallel
+// invention — one ALS carrier, read by InProcessAgentExecutor.execute().
+import { withActorContext } from "@cinatra-ai/llm/actor-context";
 import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
 // cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded
 // (capability run.execute) — this file's external-A2A dispatch branch mints
@@ -302,29 +315,100 @@ export async function sendAgentBuilderMessage(input: {
 
     return { ok: true, taskId: externalTaskId, runId };
   }
-  // Internal branch.
+  // -------------------------------------------------------------------------
+  // Internal (in-process) dispatch branch.
+  //
+  // cinatra#2202 — ESTABLISH THE ACTOR IDENTITY FIRST.
+  //
+  // This branch reaches the very same `InProcessAgentExecutor.execute()` the
+  // external HTTP surface reaches, and that executor reads the ActorContext ALS
+  // frame for the run's `orgId`, its `runBy` attribution and its parent OBO
+  // ceiling chain. The external surface sets the frame up correctly
+  // (src/app/api/a2a/route.ts: `withActorContext(resolvedActorContext,
+  // () => mount.handle(body, ctx))`); this branch used to dispatch with NO
+  // frame at all, so every downstream authority check and audit attribution saw
+  // nothing (the executor's terminal ORG_CONTEXT_REQUIRED event then surfaced
+  // here as the misleading "run created but bridge missing").
+  //
+  // Roleless-actor doctrine: a missing actor FAILS LOUD. We refuse BEFORE any
+  // dispatch — never a synthesized/anonymous principal, never a silent
+  // continue. `packages/a2a`'s `requireInProcessDispatchActor` re-asserts the
+  // same precondition at the seam itself, so no future caller can slip past it.
+  // -------------------------------------------------------------------------
+  const actorContext = await resolveSessionActorContext();
+  if (!actorContext) {
+    return {
+      ok: false,
+      error: "no actor context for in-process dispatch",
+    };
+  }
+  // IDENTITY COHERENCE. The executor stamps the run's org AND its `runBy` from
+  // the FRAME, while the creation authority below is resolved from the SESSION.
+  // If those two identities could ever disagree, the run would be authorized as
+  // one principal and attributed to another — so assert they are the same
+  // principal and the same org, and refuse otherwise. Today `getAuthSession`
+  // memoizes one session promise per request, so both reads see the identical
+  // user/active-org snapshot: this is a cheap invariant, not a live bypass.
+  if (
+    actorContext.principalType !== "HumanUser" ||
+    actorContext.principalId !== session.user.id ||
+    actorContext.organizationId !== orgId
+  ) {
+    return {
+      ok: false,
+      error: "actor context does not match the dispatching session",
+    };
+  }
+
+  // Resolve the creation authority BEFORE dispatching. Doing it here (rather
+  // than only inside the executor's injected contract) turns a stale session
+  // whose active-org membership was revoked into a loud, accurate refusal
+  // instead of a run that dies deep inside the executor and resurfaces here as
+  // the misleading "run created but bridge missing".
+  const runAuthority = await resolveRunCreationAuthority(orgId, {
+    userId: session.user.id,
+  });
+  if (!runAuthority) {
+    return {
+      ok: false,
+      error: "no run-creation authority for this organization",
+    };
+  }
 
   let task;
   try {
-    const client = await createInProcessA2AClient({
-      packageName,
-      enqueueJob: async (_name, data) => {
-        const payload = data as { runId: string };
-        await enqueueAgentRun({ runId: payload.runId });
-      },
-      // cinatra#1940 P3: the creation perimeter is now guarded — this
-      // in-process executor cannot resolve an authority itself (packages/a2a
-      // imports no @/lib host modules), so the host wires it here. Always a
-      // session dispatch (session.user.id is required above), never a
-      // non-human principal — the delegating-member resolution is enough.
-      createRunWithAuthority: async (runInput) => {
-        const authority = await resolveRunCreationAuthority(runInput.orgId, {
-          userId: session.user.id,
-        });
-        return createAgentRun(runInput, authority);
-      },
+    // The frame wraps client construction too — deliberately the SAME scope the
+    // external surface uses (`withActorContext(ctx, () => mount.handle(...))`
+    // covers the executor's own template reads). Narrowing it to `sendMessage`
+    // alone would make the two A2A surfaces diverge for no gain.
+    task = await withActorContext(actorContext, async () => {
+      const client = await createInProcessA2AClient({
+        packageName,
+        enqueueJob: async (_name, data) => {
+          const payload = data as { runId: string };
+          await enqueueAgentRun({ runId: payload.runId });
+        },
+        // cinatra#1940 P3: the creation perimeter is now guarded — this
+        // in-process executor cannot resolve an authority itself (packages/a2a
+        // imports no @/lib host modules), so the host wires it here. Always a
+        // session dispatch (session.user.id is required above), never a
+        // non-human principal — the delegating-member resolution is enough.
+        createRunWithAuthority: async (runInput) => {
+          // The executor derives `runInput.orgId` from the same frame this
+          // action asserted above, so the pre-resolved authority applies. Never
+          // ASSUME it: on any divergence re-resolve for the org actually being
+          // written (and `undefined` ⇒ the guarded write refuses "missing").
+          const authority =
+            runInput.orgId === orgId
+              ? runAuthority
+              : await resolveRunCreationAuthority(runInput.orgId, {
+                  userId: session.user.id,
+                });
+          return createAgentRun(runInput, authority);
+        },
+      });
+      return client.sendMessage({ json: inputParams });
     });
-    task = await client.sendMessage({ json: inputParams });
   } catch (err) {
     return {
       ok: false,
