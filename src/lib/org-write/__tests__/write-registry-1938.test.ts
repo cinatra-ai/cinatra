@@ -180,6 +180,7 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
       "createAgentRun#1940",
       "createAgentRunPendingInput#1940",
       "createSemanticArtifact#1939",
+      "createTeamAction#1939",
       "materializeExtensionInstanceForProject#1939",
       "materializeExtensionTemplate#1939",
       "removeTeamMemberAction#1939",
@@ -207,12 +208,12 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     ]) {
       expect(banned.has(w), `${w} must be import-banned in Stage A`).toBe(true);
     }
-    // Stage A's own set was exactly 20; cinatra#1939 wave 3 Stage D added 9
+    // Stage A's own set was exactly 20; cinatra#1939 wave 3 Stage D added 8
     // more banned rows (historyAwareUpsert/SoftDelete/Undelete/Tombstone,
     // restoreChangeSet, restoreObjectToVersion, runResourceProjectMove,
-    // runAgentRunMoveWithOutputs, createTeamAction) — asserted in the Stage-D
-    // describe block below, not re-enumerated here.
-    expect(banned.size).toBe(29);
+    // runAgentRunMoveWithOutputs) — asserted in the Stage-D describe block
+    // below, not re-enumerated here.
+    expect(banned.size).toBe(28);
   });
 });
 
@@ -365,7 +366,7 @@ describe("delete-time rulings — registry-derived blocker inventory (#1939 wave
 });
 
 describe("wave 3 Stage D — chokepoint writer conversions", () => {
-  it("the canonical-writer.ts / restore-engine.ts / resource-project-move.ts / createTeamAction flip set is import-banned", () => {
+  it("the canonical-writer.ts / restore-engine.ts / resource-project-move.ts flip set is import-banned", () => {
     const banned = new Set(
       ORG_WRITE_REGISTRY.filter((r) => r.importBanned).map((r) => r.exportName),
     );
@@ -378,7 +379,6 @@ describe("wave 3 Stage D — chokepoint writer conversions", () => {
       "restoreObjectToVersion",
       "runResourceProjectMove",
       "runAgentRunMoveWithOutputs",
-      "createTeamAction",
     ]) {
       expect(banned.has(w), `${w} must be import-banned in Stage D`).toBe(true);
     }

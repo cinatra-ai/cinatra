@@ -538,11 +538,20 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     // cascade. Pinned by the cascadeOwnership↔ORG_DELETE_TIME_RULING consistency
     // test (a writer touching a "block" table can never be db-cascade).
     cascadeOwnership: "block",
-    // cinatra#1939 wave 3 Stage D: converted onto guardOrgMutation (the
-    // caller-authenticated org owner/admin mints its own authority; no
-    // external caller threading needed — the action IS the entry point).
-    importBanned: true,
-    allowedImporters: ["src/app/teams/new/new-team-form.tsx"],
+    // NOT converted in Stage D — the SAME authority-tier gap as the
+    // member-actions rows above, verified concretely: the action's own gate
+    // (readTeamCreatableOrganizationsForUser) admits org OWNER + ADMIN roles
+    // (and platform admins with any membership), but the kernel's session
+    // mapping for membership.write is organization.manageMembers — an
+    // org_owner-ONLY permission in authz/policies.ts. Converting would turn a
+    // working org-admin team creation into a refusal (a functional
+    // regression, not a guard). Same design decision as above.
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "kernel membership.write maps to org_owner-only organization.manageMembers; the action legitimately admits org admins — needs the tiered authority design decision, not a mechanical thread",
+    },
   },
   // cinatra#1939 wave 3 Stage D correction: the prior row (exportName
   // "ensureBuiltinAssistantRegistration", capability "membership.write",
