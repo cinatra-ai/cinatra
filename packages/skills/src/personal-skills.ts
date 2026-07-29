@@ -351,13 +351,18 @@ export async function createOrUpdateCustomSkillForAgent(input: {
     .join("\n");
 
   const logLabel = existingPersonalSkill ? "personal-skill-update" : "personal-skill-create";
-  // Personal-skill generation is a per-purpose task that may legitimately run on
-  // Anthropic. Opt into Anthropic as a LAST-RESORT fallback so an Anthropic-only
-  // install can persist a personal skill; multi-provider installs keep their
-  // existing openai/gemini winner (cinatra#1850). This is the shared chokepoint
-  // for the auditor drawer action, the background skill-autosave job, and the MCP
+  // PURPOSE POLICY: exact-default (llm-purpose-policy.ts, purpose
+  // "personal-skill-generation"). The `allowAnthropicFallback: true` special
+  // case this call used to carry is RETIRED in S6 (cinatra#2093): it existed
+  // only because Anthropic was architecturally barred from the global default,
+  // so an Anthropic-only install needed a per-purpose escape hatch to reach it
+  // at all (cinatra#1850). Anthropic is now `defaultCapable`, so an
+  // Anthropic-only install resolves Anthropic because it IS the stored default
+  // — and a multi-provider install no longer risks this purpose silently
+  // running on a provider the operator did not choose. Shared chokepoint for
+  // the auditor drawer action, the background skill-autosave job, and the MCP
   // skills_personal_skill_create_or_update primitive.
-  const runtime = await resolveConfiguredLlmRuntime({ allowAnthropicFallback: true });
+  const runtime = await resolveConfiguredLlmRuntime();
   if (!runtime) {
     throw new Error("No LLM provider configured for personal skill generation.");
   }
@@ -555,11 +560,11 @@ export async function createOrUpdateChatCaptureSkill(input: {
     `Provenance (record under a final "## Provenance" section as a bullet, appending to any existing bullets): captured from chat thread ${input.provenance.threadId}, turn ${input.provenance.turnId}.`,
   ].join("\n");
 
-  // Chat-capture distillation is the same class of per-purpose personal-skill
-  // generation as createOrUpdateCustomSkillForAgent above — opt into the
-  // Anthropic last-resort fallback so an Anthropic-only install works here too
-  // (cinatra#1850). Global precedence for multi-provider installs is unchanged.
-  const runtime = await resolveConfiguredLlmRuntime({ allowAnthropicFallback: true });
+  // PURPOSE POLICY: exact-default (llm-purpose-policy.ts, purpose
+  // "chat-capture-distillation"). Same retirement as
+  // createOrUpdateCustomSkillForAgent above — the Anthropic last-resort opt-in
+  // is gone with the global Anthropic exclusion it existed to work around.
+  const runtime = await resolveConfiguredLlmRuntime();
   if (!runtime) {
     throw new Error("No LLM provider configured for chat-capture distillation.");
   }

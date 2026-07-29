@@ -1,9 +1,12 @@
 // Regression locks for standing provider-selection invariants:
 //
-//   1. OpenAI stays the resolved GLOBAL default LLM provider. Anthropic is
-//      ALWAYS only selectable per-purpose and can NEVER become the global
-//      default — enforced at the `writeDefaultLlmProviderToDatabase`
-//      chokepoint via `isGlobalDefaultLlmProviderEligible`.
+//   1. Only a provider whose `cinatra.llmProvider` ABI v2 declaration sets
+//      `defaultCapable` may be the resolved GLOBAL default LLM provider —
+//      enforced at the `writeDefaultLlmProviderToDatabase` chokepoint via
+//      `isGlobalDefaultLlmProviderEligible`. (Pre-S6 this was a hardcoded
+//      {openai,gemini} set that barred Anthropic architecturally; cinatra#2093
+//      un-fenced it. The fail-closed rejection of undeclared/tampered provider
+//      strings — the part that carries the safety — is unchanged.)
 //   2. The agent-creation Anthropic pin is PLUMBING ONLY:
 //      `isAgentCreationPinActive()` is inert (always false) until the
 //      governance and sync paths activate it.
@@ -21,7 +24,7 @@ import {
   isAgentCreationPinActive,
 } from "../database";
 
-describe("standing invariant — OpenAI stays the global default", () => {
+describe("standing invariant — the global default is declaration-derived", () => {
   it("openai is eligible to be the global default LLM provider", () => {
     expect(isGlobalDefaultLlmProviderEligible("openai")).toBe(true);
   });
@@ -30,8 +33,15 @@ describe("standing invariant — OpenAI stays the global default", () => {
     expect(isGlobalDefaultLlmProviderEligible("gemini")).toBe(true);
   });
 
-  it("anthropic is NEVER eligible to be the global default (invariant 1)", () => {
-    expect(isGlobalDefaultLlmProviderEligible("anthropic")).toBe(false);
+  // RETIRED INVARIANT (cinatra#2093, epic #2086 S6). Anthropic being barred
+  // from the global default was the pre-S6 architecture, deliberately undone:
+  // eligibility now DERIVES from the `cinatra.llmProvider` ABI v2
+  // `defaultCapable` flag, which Anthropic declares. The invariant that
+  // SURVIVES — and is the one that ever mattered for safety — is the
+  // fail-closed rejection of undeclared/tampered provider strings, covered
+  // below and unchanged.
+  it("anthropic IS eligible to be the global default (S6 un-fencing)", () => {
+    expect(isGlobalDefaultLlmProviderEligible("anthropic")).toBe(true);
   });
 
   it("unknown / tampered provider strings are rejected (fail-closed)", () => {
