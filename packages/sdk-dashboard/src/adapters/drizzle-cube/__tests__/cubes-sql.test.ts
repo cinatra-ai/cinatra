@@ -45,6 +45,7 @@ const fakeOrganizations = pgTable("organization", {
   name: text("name").notNull(),
   slug: text("slug"),
   createdAt: timestamp("createdAt", { withTimezone: true, mode: "date" }),
+  archivedAt: timestamp("archivedAt", { withTimezone: true, mode: "date" }),
 });
 
 const fakeTeams = pgTable("team", {
@@ -290,6 +291,7 @@ describe("organizations cube — accessibleOrgIds predicate", () => {
         name: fakeOrganizations.name,
         slug: fakeOrganizations.slug,
         createdAt: fakeOrganizations.createdAt,
+        archivedAt: fakeOrganizations.archivedAt,
       },
       membersTableRef: fakeMembers,
       memberColumns: {
@@ -324,6 +326,7 @@ describe("organizations cube — accessibleOrgIds predicate", () => {
         name: fakeOrganizations.name,
         slug: fakeOrganizations.slug,
         createdAt: fakeOrganizations.createdAt,
+        archivedAt: fakeOrganizations.archivedAt,
       },
       membersTableRef: fakeMembers,
       memberColumns: {
@@ -343,6 +346,82 @@ describe("organizations cube — accessibleOrgIds predicate", () => {
     );
     expect(sql).toMatch(/\bfalse\b/i);
     expect(params ?? []).not.toContain("-");
+  });
+
+  // cinatra#1942 — the lifecycle_status / archived_at dimensions.
+  const mkOrganizationsCube = () => {
+    const layer = stubLayer();
+    const cube = createOrganizationsCube({
+      tableRef: fakeOrganizations,
+      columns: {
+        id: fakeOrganizations.id,
+        name: fakeOrganizations.name,
+        slug: fakeOrganizations.slug,
+        createdAt: fakeOrganizations.createdAt,
+        archivedAt: fakeOrganizations.archivedAt,
+      },
+      membersTableRef: fakeMembers,
+      memberColumns: {
+        organizationId: fakeMembers.organizationId,
+        userId: fakeMembers.userId,
+        role: fakeMembers.role,
+      },
+    });
+    layer.registerCube(cube.dcCube);
+    return layer;
+  };
+  const ctx = { organizationId: "org_acme", userId: "u1", accessibleOrgIds: ["org_acme", "org_b"] };
+
+  it("lifecycle_status emits a CASE WHEN archivedAt IS NULL THEN 'active' ELSE 'archived' END expression", async () => {
+    const { sql } = await mkOrganizationsCube().generateSQL(
+      "organizations",
+      { measures: ["organizations.count"], dimensions: ["organizations.lifecycle_status"] },
+      ctx,
+    );
+    expect(sql).toMatch(/case\s+when/i);
+    expect(sql).toMatch(/archivedAt/);
+    expect(sql).toMatch(/'active'/);
+    expect(sql).toMatch(/'archived'/);
+  });
+
+  it("archived_at emits the raw archivedAt column (the predicate-shaped sibling dimension)", async () => {
+    const { sql } = await mkOrganizationsCube().generateSQL(
+      "organizations",
+      { measures: ["organizations.count"], dimensions: ["organizations.archived_at"] },
+      ctx,
+    );
+    expect(sql).toMatch(/archivedAt/);
+    // Not the computed CASE expression — a bare column reference.
+    expect(sql).not.toMatch(/case\s+when/i);
+  });
+
+  it("AND-intersects a lifecycle_status equals filter WITH the accessibleOrgIds predicate (EDD security invariant)", async () => {
+    // Mirrors the teams-cube pin above: the default-active seed filter (and the
+    // fixed Archived section's flipped filter) must be an ADDITIONAL predicate
+    // on top of the cube's `WHERE id IN (accessibleOrgIds)` security predicate
+    // — never a replacement.
+    const base = await mkOrganizationsCube().generateSQL(
+      "organizations",
+      { dimensions: ["organizations.name"] },
+      ctx,
+    );
+    const scoped = await mkOrganizationsCube().generateSQL(
+      "organizations",
+      {
+        dimensions: ["organizations.name"],
+        filters: [{ member: "organizations.lifecycle_status", operator: "equals", values: ["active"] }],
+      },
+      ctx,
+    );
+    expect(base.params ?? []).toEqual(expect.arrayContaining(["org_acme", "org_b"]));
+    expect(scoped.params ?? []).toEqual(expect.arrayContaining(["org_acme", "org_b"]));
+    expect((scoped.params ?? []).length).toBeGreaterThan((base.params ?? []).length);
+    // Stronger than a param-count check alone: assert the predicates are
+    // actually CONJOINED with AND, not silently OR'd or replaced — count
+    // `AND` occurrences rather than just inferring it from param growth.
+    const andCount = (s: string) => (s.match(/\bAND\b/gi) ?? []).length;
+    expect(andCount(scoped.sql)).toBeGreaterThan(andCount(base.sql));
+    expect(scoped.sql).toMatch(/case\s+when/i);
   });
 });
 
