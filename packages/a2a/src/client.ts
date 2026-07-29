@@ -7,7 +7,7 @@ import type { AgentCard, MessageSendParams, Task } from "@a2a-js/sdk";
 import { resolveAgentByPackageName } from "./agent-resolver";
 import { createA2AServerForAgent } from "./server";
 import { InProcessTransport } from "./in-process-transport";
-import type { EnqueueJobFn } from "./agent-executor";
+import type { EnqueueJobFn, CreateRunWithAuthorityFn } from "./agent-executor";
 
 // ---------------------------------------------------------------------------
 // createInProcessA2AClient
@@ -23,6 +23,14 @@ export type CreateInProcessA2AClientInput = {
   enqueueJob: EnqueueJobFn;
   pollIntervalMs?: number;
   pollTimeoutMs?: number;
+  /**
+   * cinatra#1940 P3 — REQUIRED in production since the creation perimeter
+   * (`createAgentRun`) is now guarded and this package cannot resolve an
+   * authority itself. Forwarded verbatim to `createA2AServerForAgent`; see
+   * `InProcessAgentExecutorOptions.createRunWithAuthority` for the fail-closed
+   * contract when absent.
+   */
+  createRunWithAuthority?: CreateRunWithAuthorityFn;
 };
 
 export type InProcessA2AClient = {
@@ -46,6 +54,7 @@ export async function createInProcessA2AClient(
     enqueueJob: input.enqueueJob,
     pollIntervalMs: input.pollIntervalMs,
     pollTimeoutMs: input.pollTimeoutMs,
+    createRunWithAuthority: input.createRunWithAuthority,
   });
   const transport = new InProcessTransport(bundle.handler, bundle.agentCard);
 

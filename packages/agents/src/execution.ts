@@ -31,8 +31,7 @@ import { snapshotSkillsAtRunStart } from "@/lib/agent-run-skills-used";
 // authority (run.execute + run.complete) once per job entry, scoped to the run's
 // org, and thread it into every transitionRunStatus.
 import { mintAgentRunExecutionAuthority } from "@/lib/org-write/agent-run-authority-mint";
-import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
-import { OrgWriteRefusedError } from "@cinatra-ai/org-write-kernel";
+import { OrgWriteRefusedError, type OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 // cinatra#1940 P3 (Decision 1, worker-start row): the archived-org pre-check
 // at job entry, before any dispatch work.
 import { readOrgArchivedAtForDispatch } from "@/lib/org-write/dispatch-freeze";

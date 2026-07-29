@@ -602,6 +602,26 @@ export class InProcessAgentExecutor implements AgentExecutor {
           eventBus.finished();
           return;
         }
+        // cinatra#1940 P3 (Decision 1, run-creation row): the guarded create
+        // refuses an archived org with `OrgWriteRefusedError("capability-
+        // denied")`. Matched structurally (by `.reason`, not `instanceof`) —
+        // same cross-package/cross-bundle discipline as OBO_CEILING_DISJOINT_CODE
+        // above (this package does not depend on @cinatra-ai/org-write-kernel).
+        // Without this mapping the refusal would escape execute() as an
+        // uncaught exception instead of a clean terminal failed task.
+        const reason = (dispatchErr as { reason?: unknown } | null)?.reason;
+        if (reason === "capability-denied") {
+          eventBus.publish(
+            buildStatusUpdate(requestContext, "failed", {
+              final: true,
+              errorMessage:
+                "This organization is archived — agents cannot start new work.",
+              errorCode: "ORG_ARCHIVED",
+            }),
+          );
+          eventBus.finished();
+          return;
+        }
         throw dispatchErr;
       }
       this.taskToRun.set(requestContext.taskId, runId);

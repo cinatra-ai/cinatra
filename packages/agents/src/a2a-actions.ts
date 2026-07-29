@@ -6,8 +6,11 @@ import { requireAuthSession } from "@/lib/auth-session";
 import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
 // cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded
 // (capability run.execute) — this file's external-A2A dispatch branch mints
-// the member session authority for its direct createAgentRun call.
+// the member session authority for its direct createAgentRun call; the
+// internal in-process branch resolves the SAME session's authority for the
+// executor's injected createRunWithAuthority contract (below).
 import { verifySessionAuthority } from "@/lib/org-write/authority";
+import { resolveRunCreationAuthority } from "@/lib/org-write/run-creation-authority";
 import { OrgWriteRefusedError } from "@cinatra-ai/org-write-kernel";
 import { getA2AMount } from "@/lib/a2a-server";
 import {
@@ -308,6 +311,17 @@ export async function sendAgentBuilderMessage(input: {
       enqueueJob: async (_name, data) => {
         const payload = data as { runId: string };
         await enqueueAgentRun({ runId: payload.runId });
+      },
+      // cinatra#1940 P3: the creation perimeter is now guarded — this
+      // in-process executor cannot resolve an authority itself (packages/a2a
+      // imports no @/lib host modules), so the host wires it here. Always a
+      // session dispatch (session.user.id is required above), never a
+      // non-human principal — the delegating-member resolution is enough.
+      createRunWithAuthority: async (runInput) => {
+        const authority = await resolveRunCreationAuthority(runInput.orgId, {
+          userId: session.user.id,
+        });
+        return createAgentRun(runInput, authority);
       },
     });
     task = await client.sendMessage({ json: inputParams });
