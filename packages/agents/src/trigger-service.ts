@@ -110,6 +110,29 @@ export type DeleteTriggerForActorResult =
  * the Intl.DateTimeFormat API (no external dependency) to resolve the
  * offset at the exact moment, handling DST transitions correctly.
  */
+/**
+ * `cron-parser` module shapes the recurring-trigger validator accepts.
+ * See the resolution note at the call site in {@link setRunTriggerForActor}.
+ */
+type ParsedCronExpression = { next: () => unknown };
+type CronParser = {
+  parse: (expression: string, options?: { tz?: string }) => ParsedCronExpression;
+};
+type CronParserModule = {
+  CronExpressionParser?: Partial<CronParser>;
+  default?: Partial<CronParser> & { CronExpressionParser?: Partial<CronParser> };
+};
+
+function resolveCronParser(mod: CronParserModule): CronParser | null {
+  const candidates = [mod.CronExpressionParser, mod.default?.CronExpressionParser, mod.default];
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate.parse === "function") {
+      return candidate as CronParser;
+    }
+  }
+  return null;
+}
+
 function naiveDatetimeToUtcMs(naive: string, timezone: string): number {
   // Normalise to full seconds precision.
   const padded = naive.length === 16 ? naive + ":00" : naive;
@@ -262,19 +285,32 @@ export async function setRunTriggerForActor(
       };
     }
     try {
-      const parser = await import("cron-parser");
-      const parseExpression =
-        (
-          parser as {
-            default?: { parseExpression?: (e: string, o?: unknown) => unknown };
-          }
-        ).default?.parseExpression ??
-        (parser as { parseExpression?: (e: string, o?: unknown) => unknown })
-          .parseExpression;
-      if (typeof parseExpression !== "function") {
+      // PARSER API. `cron-parser` exposes the parser as the
+      // `CronExpressionParser` class (also the module default); `parse` is a
+      // STATIC method, so it is called on the class and never detached. The
+      // resolution accepts the named export, a default-wrapped namespace
+      // (CJS/ESM interop), and a default that IS the class — the three shapes
+      // a bundler or interop wrapper can hand back for the same module. If
+      // none resolves we fail CLOSED rather than arm a schedule whose
+      // expression was never validated.
+      const mod = (await import("cron-parser")) as unknown as CronParserModule;
+      const parser = resolveCronParser(mod);
+      if (!parser) {
         return { ok: false, error: "cron-parser unavailable" };
       }
-      parseExpression(args.cronExpression, { tz: args.timezone ?? "UTC" });
+      const parsed = parser.parse(args.cronExpression, { tz: args.timezone ?? "UTC" });
+      // Take ONE iteration step as part of validation. `parse()` alone accepts
+      // an unknown IANA zone and defers the failure to the first iteration —
+      // i.e. to the moment the schedule is due, long after this call returned
+      // "ok". Stepping once refuses it at ARM time instead, which is the
+      // contract both call surfaces already assume.
+      //
+      // This is NOT a satisfiability guarantee: the parser's own
+      // iteration-limit check is unreliable, and an expression that can never
+      // match may return a non-matching date here rather than throwing. The
+      // step exists to surface the LAZY failures (bad zone, un-iterable field
+      // syntax), not to prove the schedule will ever fire.
+      parsed.next();
     } catch (err) {
       return {
         ok: false,

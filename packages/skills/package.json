@@ -10,6 +10,7 @@
     "./actions": "./src/actions.ts",
     "./cli": "./src/cli.mjs",
     "./extension-handler": "./src/extension-handler.ts",
+    "./injection": "./src/injection/index.ts",
     "./llm-matching/constants": "./src/llm-matching/constants.ts",
     "./llm-matching/types": "./src/llm-matching/types.ts",
     "./mcp-client": "./src/mcp/client/deterministic-client.ts",

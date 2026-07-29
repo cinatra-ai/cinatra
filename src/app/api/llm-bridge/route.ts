@@ -1,7 +1,7 @@
 import "server-only";
 
 import * as path from "node:path";
-import { existsSync, realpathSync, readdirSync } from "node:fs";
+import { existsSync, realpathSync, readdirSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -31,12 +31,24 @@ import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import { readSkillLifecycleStates } from "@/lib/database";
 import {
   recordSkillExposure,
+  recordSkillInjectionDrops,
   incrementSkillInvocation,
   type SkillKind,
 } from "@/lib/agent-run-skills-used";
 import { readRunSelectedSkillRevisions } from "@/lib/run-selected-skill-revisions";
+import {
+  resolveInjectedSkillSet,
+  injectedPersonalDelta,
+  extractOneHopReferences,
+  planInlineExpansion,
+  resolveInlineSkillBudgetBytes,
+  type InjectedSkillDrop,
+  type InjectionAuthorization,
+  type InjectionPersonalDelta,
+  type InjectionResolverPorts,
+  type InjectionSkillRef,
+} from "@cinatra-ai/skills/injection";
 import { resolveSurfaceExecutionBinding } from "@/lib/execution/surface-execution-session";
-import { resolveRunSkillDelivery } from "@cinatra-ai/skills/recommendation";
 import {
   readAgentRunByContextId,
   readAgentRunById,
@@ -499,13 +511,276 @@ async function resolveBridgeSkillContent(body: {
     return "";
   }
 
-  // Read + return content. Any IO error → "".
+  // Read the router + its ONE-HOP references. cinatra#2091 S4: the media branch
+  // is the ONE place a skill reaches an INLINE-mechanism provider (Gemini) as
+  // literal system text, and until now it inlined the SKILL.md body ALONE — a
+  // router that says "read references/guide.md" pointed at a file the model
+  // could never reach on that provider. The expansion runs through the SAME
+  // core planner the entry points use (whole-file granularity, per-request byte
+  // budget, whole-skill drop on overflow), so the two inline paths cannot drift.
+  let routerBody: string;
   try {
-    return await readFile(resolvedPath, "utf8");
+    routerBody = await readFile(resolvedPath, "utf8");
   } catch {
     return "";
   }
+  const skillDir = path.dirname(resolvedPath);
+  const budgetBytes = resolveInlineSkillBudgetBytes(process.env);
+  const references: Array<{ path: string; content: string }> = [];
+  let oversized = false;
+  for (const relativePath of extractOneHopReferences(routerBody)) {
+    // Containment on the FULLY RESOLVED path: a symlink anywhere in the chain
+    // (including a symlinked `references/` directory) is caught.
+    try {
+      const containedIn = realpathSync(skillDir);
+      const absolute = realpathSync(path.resolve(containedIn, relativePath));
+      const relative = path.relative(containedIn, absolute);
+      if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+        continue;
+      }
+      const stat = statSync(absolute);
+      if (!stat.isFile()) continue;
+      // SIZE-CHECK BEFORE READ: a reference bigger than the whole request
+      // budget can never be inlined, so it is never pulled into memory just to
+      // be discarded — it marks the skill oversized and the planner drops it.
+      if (stat.size > budgetBytes) {
+        oversized = true;
+        continue;
+      }
+      references.push({ path: relativePath, content: await readFile(absolute, "utf8") });
+    } catch {
+      // Named-but-absent / unreadable: the router still ships without it.
+      continue;
+    }
+  }
+  const plan = planInlineExpansion({
+    units: [
+      {
+        skillId: path.basename(skillDir),
+        rank: "declared_dependency",
+        body: routerBody,
+        references,
+        oversized,
+      },
+    ],
+    budgetBytes,
+  });
+  if (plan.dropped.length > 0) {
+    console.warn(
+      `[llm-bridge] media-branch inline expansion dropped the skill at ` +
+        `${resolvedPath}: ${plan.dropped.map((d) => d.reason).join(", ")}`,
+    );
+  }
+  return plan.systemContext;
 }
+
+// ---------------------------------------------------------------------------
+// Injection ports for this surface (cinatra#2091, epic #2086 S4).
+//
+// `resolveInjectedSkillSet` owns the POLICY and no I/O; this is where THIS
+// surface supplies the facts. Co-located with its only caller on purpose: the
+// factory closes over `runForPorts` — the run this request already PROVED it
+// owns — and the returned authorization port compares the INTENT against that
+// handle, so a caller cannot widen its own authority by editing the intent.
+// ---------------------------------------------------------------------------
+
+/** The minimal shape of a server-vetted run row the ports need. */
+export type VettedRunHandle = {
+  id: string;
+  runBy?: string | null;
+  orgId?: string | null;
+} | null;
+
+/**
+ * The DECLARED runtime skill dependency of a consumer extension — the S3
+ * dependency-to-injection projection at top rank. Fail-soft by contract: the
+ * projection returns null (never throws) on this surface, and a null means
+ * "this extension declares no runtime skill edge", not an error.
+ */
+async function declaredDependencySkills(
+  consumerRef: string,
+): Promise<InjectionSkillRef[]> {
+  if (!consumerRef) return [];
+  try {
+    const edge = await resolveDeclaredSkillEdgeForExtensionDir(consumerRef);
+    return edge ? [{ skillId: edge.skillId }] : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The run's authoritative selected-revision set when one exists, else today's
+ * computed assignment. This is the SAME set-vs-computed seam the execution
+ * snapshot uses; the selected set additionally carries the PINNED revision id,
+ * which now rides all the way into the injected member.
+ */
+function runSelectedSkills(input: {
+  runId?: string;
+}): Promise<InjectionSkillRef[]> {
+  return (async () => {
+    if (input.runId) {
+      let selected: ReturnType<typeof readRunSelectedSkillRevisions> = [];
+      try {
+        selected = readRunSelectedSkillRevisions(input.runId);
+      } catch (err) {
+        // Best-effort, exactly as the pre-contract bridge read was: a
+        // selection-read failure falls back to the computed assignment rather
+        // than failing the request.
+        console.warn(
+          `[skill-injection] selected-skill-revision read failed for run ${input.runId}:`,
+          err instanceof Error ? err.message : String(err),
+        );
+        selected = [];
+      }
+      if (selected.length > 0) {
+        const seen = new Set<string>();
+        const refs: InjectionSkillRef[] = [];
+        for (const row of selected) {
+          if (seen.has(row.skillId)) continue;
+          seen.add(row.skillId);
+          refs.push({ skillId: row.skillId, revisionId: row.skillRevisionId });
+        }
+        return refs;
+      }
+    }
+    return [];
+  })();
+}
+
+export type AgentRunInjectionPortsInput = {
+  /** The run this request already PROVED it owns. Null ⇒ unattributable call. */
+  run: VettedRunHandle;
+  /** The agent the dispatch names. */
+  agentId: string;
+  /**
+   * The consumer's DECLARED runtime skill dependencies, when the surface
+   * ALREADY resolved the S3 projection for its own purposes. Supplying them
+   * keeps the filesystem scan to ONE per request and — critically — lets the
+   * surface exclude a bundle it is mounting through another channel, so the
+   * same bytes are never delivered twice and never consume two cap slots.
+   * Absent ⇒ these ports resolve the projection themselves.
+   */
+  declaredDependencySkillIds?: readonly string[];
+  /**
+   * Catalog skill ids the SURFACE already delivers through another channel
+   * (the bridge's own path-mounted SKILL.md shell tool). Excluded from EVERY
+   * rank, not just declared dependencies: an assignment or a recommendation can
+   * name the same catalog id, and delivering it twice would put the same bytes
+   * in front of the model through two channels and count it twice.
+   */
+  alreadyDeliveredSkillIds?: ReadonlySet<string>;
+  /**
+   * Resolve the computed assignment for an actor (or actor-less when null) —
+   * supplied by the surface because the scope-aware actor build is surface
+   * logic, not injection policy.
+   */
+  resolveAssignedSkillIds: (
+    actorUserId: string | null,
+  ) => Promise<readonly string[]>;
+  /**
+   * Filter a resolved personal delta down to the runtime-deliverable ones
+   * (lifecycle gate). Absent ⇒ no filtering.
+   */
+  isPersonalDeltaDeliverable?: (skillId: string) => boolean;
+};
+
+export function buildAgentRunInjectionPorts(
+  input: AgentRunInjectionPortsInput,
+): InjectionResolverPorts {
+  const vettedRunId = input.run?.id ?? null;
+  const vettedOwnerUserId =
+    typeof input.run?.runBy === "string" && input.run.runBy.length > 0
+      ? input.run.runBy
+      : null;
+
+  const excluded = input.alreadyDeliveredSkillIds ?? new Set<string>();
+  const withoutExcluded = (refs: readonly InjectionSkillRef[]): InjectionSkillRef[] =>
+    refs.filter((r) => !excluded.has(r.skillId));
+
+  return {
+    async authorizeAgentRun(intent): Promise<InjectionAuthorization> {
+      // The AGENT axis is the caller's declaration on this surface — the bridge
+      // has always resolved assignments by the dispatched `agent_id`, and a run
+      // row carries no agent identity to bind it against. This comparison is
+      // therefore a DRIFT guard (the intent must name what the surface passed),
+      // not an authorization of the agent. The axis that IS authorized is the
+      // OWNER: `runOwnerUserId` below comes only from the server-verified run,
+      // and it alone gates the personal delta and the scope-aware actor.
+      if (intent.agentId !== input.agentId) {
+        return {
+          ok: false,
+          reason: `intent names agent "${intent.agentId}" but the surface passed "${input.agentId}"`,
+        };
+      }
+      // A CLAIMED run must be the run this request proved it owns. Claiming a
+      // different run id is a confused-deputy attempt and is refused.
+      if (intent.runId) {
+        if (!vettedRunId || intent.runId !== vettedRunId) {
+          return {
+            ok: false,
+            reason:
+              "the intent claims a run this request did not prove ownership of",
+          };
+        }
+        return { ok: true, runOwnerUserId: vettedOwnerUserId };
+      }
+      // No run claimed ⇒ an unattributable dispatch. Allowed, but with NO
+      // verified owner, so the personal delta is withheld and the assignment
+      // resolves actor-less. Strictly less than the run-bound path.
+      return { ok: true, runOwnerUserId: null };
+    },
+
+    async resolveDeclaredDependencySkills({ consumerRef }) {
+      if (input.declaredDependencySkillIds) {
+        return withoutExcluded(
+          input.declaredDependencySkillIds.map((skillId) => ({ skillId })),
+        );
+      }
+      return withoutExcluded(await declaredDependencySkills(consumerRef));
+    },
+
+    async resolveRunRecommendedSkills({ runId, actorUserId }) {
+      const selected = await runSelectedSkills({ runId });
+      if (selected.length > 0) return withoutExcluded(selected);
+      const assigned = await input.resolveAssignedSkillIds(
+        actorUserId ?? null,
+      );
+      return withoutExcluded(assigned.map((skillId) => ({ skillId })));
+    },
+
+    async resolvePersonalDelta({ agentId, userId }) {
+      if (!agentId) return null;
+      try {
+        const skill = await getCustomSkillForCurrentUserAndAgent(
+          agentId,
+          userId,
+        );
+        return toPersonalDelta(skill, input.isPersonalDeltaDeliverable);
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+function toPersonalDelta(
+  skill: unknown,
+  isDeliverable?: (skillId: string) => boolean,
+): InjectionPersonalDelta | null {
+  if (!skill || typeof skill !== "object") return null;
+  const record = skill as { id?: unknown; content?: unknown; revisionId?: unknown };
+  const skillId = typeof record.id === "string" ? record.id : "";
+  const content = typeof record.content === "string" ? record.content : "";
+  if (skillId === "" || content.trim() === "") return null;
+  if (isDeliverable && !isDeliverable(skillId)) return null;
+  return {
+    skillId,
+    content,
+    revisionId: typeof record.revisionId === "string" ? record.revisionId : null,
+  };
+}
+
 
 export async function POST(req: Request): Promise<Response> {
   // Dual auth: bridge token (WayFlow TS) OR Bearer JWT (Python containers).
@@ -843,6 +1118,10 @@ export async function POST(req: Request): Promise<Response> {
   // Path traversal guard: must be under an allowed skill root and end with SKILL.md.
   // ---------------------------------------------------------------------------
   const extraTools: LlmTool[] = [];
+  // cinatra#2091 S4: catalog skill ids this route mounts through its OWN shell
+  // channel below. The injection contract must not ALSO deliver them — the same
+  // bytes would reach the model twice and consume two of the eight cap slots.
+  const bridgeMountedSkillIds = new Set<string>();
 
   // Both branches (explicit skill_source_path and auto-discovery via agent_id)
   // feed into the same path.relative containment check below, so a malicious
@@ -974,6 +1253,7 @@ export async function POST(req: Request): Promise<Response> {
             (err as Error).message,
           );
         }
+        bridgeMountedSkillIds.add(skillId);
         extraTools.push(
           createLocalSkillShellTool({
             mountedSkills: [
@@ -1267,99 +1547,72 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   try {
-    // Resolve custom skill delta + assigned base skill IDs for this agent.
-    // Both lookups are INSIDE the try block so clearRunContext always runs
-    // in finally even if a DB lookup throws.
-    // #1360 — the personal delta skill is USER-SCOPED content, so its owner is
-    // derived SOLELY from the TRUSTED resolved run context, never from a
-    // caller-supplied identifier. `runForPorts` is the exact run this route
-    // already vetted to mint the user's MCP OBO actor token (run-token-first →
-    // context-id → dispatcher-signed binding, minus the confused-deputy
-    // disqualifications); its `runBy` is the verified run owner. Gating personal
-    // delivery on that same handle keeps it FAIL CLOSED:
-    //   - a verified run bound to a user ⇒ that user's delta is delivered;
-    //   - an unattributable call (no verified run, or a run with no runBy), or a
-    //     forged / mismatched / divergent run token (runForPorts is null) ⇒
-    //     `personalSkillOwnerUserId` stays undefined, so
-    //     getCustomSkillForCurrentUserAndAgent resolves to none — it throws for
-    //     an absent owner outside dev-bypass and the .catch swallows that to
-    //     null (no personal delta, no error noise), never a guess.
-    // #1401 — org/shared assigned-skill delivery (getAssignedSkillIdsForAgent)
-    // now resolves with a TRUSTWORTHY actor derived from the SAME vetted run
-    // handle (`runForPorts`) so ownership-scoped (team/project/org/workspace)
-    // custom-skill assignments reach the run. `resolveAssignedSkillsActorForRun`
-    // is fail-closed: an unverifiable identity (no run, no human runBy, or a
-    // membership-build failure) yields `undefined` and the resolver falls back
-    // to EXACTLY today's actor-less delivery — never more. No caller-supplied
-    // identity is ever consulted for scope (the run is server-vetted, never a
-    // body id).
-    const personalSkillOwnerUserId =
-      typeof runForPorts?.runBy === "string" && runForPorts.runBy.length > 0
-        ? runForPorts.runBy
-        : undefined;
-    // S3 (cinatra#2041, epic #2037): read the AUTHORITATIVE per-run selected
-    // skill-revision set for the vetted run FIRST. When a set exists (Point R
-    // confirmed / headless auto-applied), the bridge delivers FROM IT and never
-    // recomputes the agent-wide assignment; with no set (or an unattributable
-    // call with no vetted run), delivery falls back to today's computed
-    // assignment — behavior unchanged. Only the server-vetted `runForPorts.id`
-    // keys the set (never a caller-supplied id).
-    //
-    // BEST-EFFORT (matches the execution-start read in
-    // packages/agents/src/execution.ts, and the store's own contract: "throws
-    // only on a genuine DB error, which the caller wraps"): a selection-read
-    // failure must never fail the bridge request — it falls back to today's
-    // computed assignment (empty set ⇒ no override), behavior unchanged.
-    let runSelectedSet: ReturnType<typeof readRunSelectedSkillRevisions> = [];
-    if (runForPorts?.id) {
-      try {
-        runSelectedSet = readRunSelectedSkillRevisions(runForPorts.id);
-      } catch (err) {
-        console.warn(
-          `[llm-bridge] selected-skill-revision read failed for run ${runForPorts.id}:`,
-          err instanceof Error ? err.message : String(err),
-        );
-        runSelectedSet = [];
-      }
-    }
-    const [personalSkill, assignedSkillIds] = body.agent_id
-      ? await Promise.all([
-          getCustomSkillForCurrentUserAndAgent(
-            body.agent_id,
-            personalSkillOwnerUserId,
-          )
-            // A3 (cinatra#1363): a personal delta whose lifecycle_state is not
-            // runtime-deliverable (archived/draft/unknown) — or unresolvable —
-            // is withheld (fail-closed), so it never reaches provider delivery.
-            .then((skill) =>
-              skill && typeof (skill as { id?: unknown }).id === "string" &&
-              isBridgeSkillRuntimeDeliverable((skill as { id: string }).id)
-                ? skill
-                : null,
-            )
-            .catch(() => null),
-          // Derived lazily inside this Promise.all member so the membership
-          // expansion runs CONCURRENTLY with the personal-delta lookup above.
-          // Actor present ⇒ scope-aware resolution; absent (fail-closed) ⇒ the
-          // exact actor-less call delivered today (arity preserved). S3: when an
-          // authoritative selection set exists, SKIP the recompute entirely —
-          // the bridge never recomputes when a set exists.
-          (async () => {
-            if (runSelectedSet.length > 0) return [] as string[];
-            const assignedSkillsActor =
-              await resolveAssignedSkillsActorForRun(runForPorts);
-            return assignedSkillsActor
-              ? getAssignedSkillIdsForAgent(body.agent_id!, assignedSkillsActor)
-              : getAssignedSkillIdsForAgent(body.agent_id!);
-          })(),
-        ])
-      : [null, [] as string[]];
-    // The single set-vs-computed delivery seam (shared with the execution
-    // snapshot). Selected set wins; else the computed assignment.
-    const { skillIds: deliverySkillIds } = resolveRunSkillDelivery({
-      selectedSet: runSelectedSet,
-      computedAssignedIds: assignedSkillIds,
+    // Typed injection contract (cinatra#2091, epic #2086 S4). The bridge no
+    // longer NAMES the skills it wants: it declares the `agent-run` INTENT and
+    // `resolveInjectedSkillSet` derives the members itself — declared runtime
+    // skill dependencies (the S3 projection) -> the run's authoritative
+    // selected-revision set (else today's computed assignment) -> the personal
+    // delta — then ranks them and applies the hard cap of 8 TOTAL, delta
+    // included. Every prior authorization property is preserved and now lives in
+    // ONE place: the ports close over `runForPorts` (the run this request
+    // already proved it owns via run-token-first -> context-id ->
+    // dispatcher-signed binding), so the personal delta and the scope-aware
+    // assignment actor derive SOLELY from that vetted handle and an intent that
+    // claims any other run is refused outright.
+    const injectionPorts = buildAgentRunInjectionPorts({
+      run: runForPorts
+        ? {
+            id: runForPorts.id,
+            runBy: runForPorts.runBy ?? null,
+            orgId: runForPorts.orgId ?? null,
+          }
+        : null,
+      agentId: body.agent_id ?? "",
+      // The S3 declared-edge projection was ALREADY resolved above for the mount
+      // probe, so it is handed over rather than re-scanned. A bundle this route
+      // mounts itself is EXCLUDED: it already reaches the model through the
+      // shell channel, and injecting it again would double-deliver the bytes and
+      // burn a second cap slot. When the mount degraded (shell-incompatible
+      // model, registration failure) the edge is still delivered — through the
+      // contract, at declared-dependency rank.
+      declaredDependencySkillIds: declaredSkillEdge
+        ? [declaredSkillEdge.skillId]
+        : [],
+      // Excluded from EVERY rank (an assignment can name the same id), so the
+      // shell-mounted bundle is delivered exactly once and counted once.
+      alreadyDeliveredSkillIds: bridgeMountedSkillIds,
+      // #1401 — a TRUSTWORTHY actor derived from the SAME vetted run handle, so
+      // ownership-scoped (team/project/org/workspace) assignments reach the run.
+      // Fail-closed: an unverifiable identity yields `undefined` and the resolver
+      // falls back to EXACTLY today's actor-less delivery, never more.
+      resolveAssignedSkillIds: async (actorUserId) => {
+        if (!body.agent_id) return [];
+        const assignedSkillsActor = actorUserId
+          ? await resolveAssignedSkillsActorForRun(runForPorts)
+          : undefined;
+        return assignedSkillsActor
+          ? getAssignedSkillIdsForAgent(body.agent_id, assignedSkillsActor)
+          : getAssignedSkillIdsForAgent(body.agent_id);
+      },
+      // A3 (cinatra#1363): a personal delta whose lifecycle_state is not
+      // runtime-deliverable (archived/draft/unknown) is withheld, fail-closed.
+      isPersonalDeltaDeliverable: (skillId) =>
+        isBridgeSkillRuntimeDeliverable(skillId),
     });
+    const injectedSkills = await resolveInjectedSkillSet(
+      {
+        kind: "agent-run",
+        agentId: body.agent_id ?? "",
+        ...(runForPorts?.id ? { runId: runForPorts.id } : {}),
+        ...(typeof runForPorts?.runBy === "string" && runForPorts.runBy.length > 0
+          ? { userId: runForPorts.runBy }
+          : {}),
+      },
+      injectionPorts,
+    );
+    // Structured drops (cap truncation + inline-budget overflow) land here and
+    // are written to the exposure/efficacy ledger below.
+    let injectionDrops: readonly InjectedSkillDrop[] = [];
 
     // Provider dispatch overrides.
     // When kind === "dispatch", the helper picked an explicit
@@ -1682,26 +1935,22 @@ export async function POST(req: Request): Promise<Response> {
         runtime: resolvedRuntime,
         model: body.model_id,
         declaredToolboxIds: mcpToolboxIds,
-        // S3 (cinatra#2041): the authoritative per-run selection set when one
-        // exists, else the computed assignment (resolved above).
-        skillIds: deliverySkillIds,
-        // This is the general selectable path (WayFlow
-        // ApiNodes / Python containers; any admin-selected provider incl.
-        // Anthropic). The recommendation agent may resolve >8 skills here, so
-        // engage the deterministic rank-and-truncate-to-8 policy (vs the
-        // creation path's fixed-allowlist hard cap). Drops surface via
-        // `result.skillSelection` (returned in the JSON response below).
+        // The AUTHORITATIVE injected set (cinatra#2091 S4) — already ranked and
+        // capped at 8 TOTAL including the personal delta. There is no
+        // `skillIds` / `customSkillContent` channel any more.
+        injectedSkills,
+        // Structured drops back to this route so they reach the efficacy ledger
+        // (no new payload field crosses the provider-adapter v1 ABI).
+        onInjectionDrops: (drops) => {
+          injectionDrops = drops;
+        },
+        // Forwarded to the provider's delivery adapter, whose own cap is now a
+        // defence-in-depth invariant: the authoritative cap already ran.
         skillSelectionMode: "general",
         // llm-providers S1 (#1712): thread the agent's pinned capability down to
         // the adapter so it can fail closed at runtime (Anthropic native_mcp —
         // no silent function-tool degrade). Absent ⇒ no capability gate.
         capabilityRequired: body.cinatra_llm?.capabilityRequired,
-        customSkillContent: personalSkill?.content,
-        // S10 efficacy loop (cinatra#1368): carry the personal delta's identity
-        // alongside its content so exposure telemetry can attribute it (the
-        // bridge previously passed content with NO skill id). Recorded as a
-        // NON-attributable personal_inline exposure.
-        customSkillId: (personalSkill as { id?: string } | null | undefined)?.id,
         system: body.system ?? "",
         user: envelope.text,
         maxSteps,
@@ -1774,7 +2023,10 @@ export async function POST(req: Request): Promise<Response> {
     // ledger writes must never fail a bridge run.
     if (runForPorts?.id) {
       const runId = runForPorts.id;
-      const personalDeltaId = (personalSkill as { id?: string } | null | undefined)?.id;
+      // The delta's identity now comes from the injected SET, not from a
+      // separately-resolved row: it is a first-class member of the contract.
+      const personalDeltaId =
+        injectedPersonalDelta(injectedSkills)?.skillId ?? null;
       try {
         const exposures = (result.skillExposure ?? []).map((e) => ({
           skillId: e.skillId,
@@ -1793,6 +2045,22 @@ export async function POST(req: Request): Promise<Response> {
             skillId,
             skillKind: "installed",
             deliveryMode: "openai_shell",
+          });
+        }
+        // cinatra#2091 S4: a skill the contract RESOLVED but did not deliver
+        // (cap truncation, inline-budget overflow) is recorded with its reason
+        // so the efficacy surface can tell "never delivered" apart from
+        // "delivered and ignored".
+        if (injectionDrops.length > 0) {
+          recordSkillInjectionDrops({
+            runId,
+            drops: injectionDrops.map((d) => ({
+              skillId: d.skillId,
+              skillKind: (d.skillId === personalDeltaId
+                ? "custom"
+                : "installed") as SkillKind,
+              reason: d.reason,
+            })),
           });
         }
       } catch (err) {

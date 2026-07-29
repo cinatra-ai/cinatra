@@ -33,11 +33,13 @@ import {
   preflightSkillRequestSet,
   type SyncCandidateSkill,
 } from "@cinatra-ai/llm";
+import { INJECTED_SKILL_CAP } from "@cinatra-ai/skills/injection";
 
-// Anthropic hard per-request Custom Skills maximum, mirrored from
-// `packages/llm/src/providers/anthropic-skill-tools.ts:23` —
-// not re-exported from the package index, so duplicated here as a constant.
-const ANTHROPIC_MAX_SKILLS_PER_REQUEST = 8;
+// The per-request skill cap. cinatra#2091 (epic #2086 S4) makes this ONE number
+// platform-wide: the typed injection contract owns it (INJECTED_SKILL_CAP) and
+// every provider is held to it, so the preflight reads the contract's constant
+// instead of mirroring Anthropic's.
+const MAX_SKILLS_PER_REQUEST = INJECTED_SKILL_CAP;
 
 // ---------------------------------------------------------------------------
 // Failure-code union
@@ -57,10 +59,34 @@ export type AgentCreationPreflightFailure =
   | { code: "skill_size_cap_exceeded"; message: string; offendingCatalogSkillIds: string[]; byteSize?: number }
   | { code: "skill_request_cap_exceeded"; message: string; resolvedCount: number; maxPerRequest: number };
 
+/**
+ * Non-blocking observations. cinatra#2091 S4: a lane whose REQUIRED skill
+ * dependencies sit exactly ON the cap is legal but has no slot left for the
+ * personal delta, so it is warned rather than failed.
+ */
+export type AgentCreationPreflightWarning = {
+  code: "skill_request_cap_reached";
+  message: string;
+  agentPackageName: string;
+  resolvedCount: number;
+  maxPerRequest: number;
+};
+
 export type AgentCreationPreflightResult =
-  | { ok: true; pinActive: false }
-  | { ok: true; pinActive: true; provider: "openai" | "anthropic" | "gemini"; model: string }
-  | { ok: false; pinActive: boolean; errors: AgentCreationPreflightFailure[] };
+  | { ok: true; pinActive: false; warnings?: AgentCreationPreflightWarning[] }
+  | {
+      ok: true;
+      pinActive: true;
+      provider: "openai" | "anthropic" | "gemini";
+      model: string;
+      warnings?: AgentCreationPreflightWarning[];
+    }
+  | {
+      ok: false;
+      pinActive: boolean;
+      errors: AgentCreationPreflightFailure[];
+      warnings?: AgentCreationPreflightWarning[];
+    };
 
 export type AgentCreationPreflightInput = {
   /** Flat de-duped catalog skill ids the dispatched lane(s) will reference. */
@@ -86,14 +112,65 @@ export async function preflightAgentCreation(
   input: AgentCreationPreflightInput,
 ): Promise<AgentCreationPreflightResult> {
   const errors: AgentCreationPreflightFailure[] = [];
+  const warnings: AgentCreationPreflightWarning[] = [];
 
-  // (1) Pin-active gate — no-op when inactive.
+  // The pin flag is read FIRST so every result below reports `pinActive`
+  // truthfully — the cross-provider cap check that follows runs whether or not
+  // the pin is active, but it must not misreport the pin's state.
   const { isAgentCreationPinActive, readAgentCreationLlmProviderFromDatabase,
           readAgentCreationModelFromDatabase, readAnthropicSkillSyncEnabledFromDatabase } =
     await import("@/lib/database");
+  const pinActive = isAgentCreationPinActive();
 
-  if (!isAgentCreationPinActive()) {
-    return { ok: true, pinActive: false };
+  // (0) CROSS-PROVIDER declared-dependency cap (cinatra#2091, epic #2086 S4).
+  //
+  // Runs BEFORE the pin gate and independently of the provider, because the
+  // per-request cap of 8 is no longer an Anthropic API limit that only the
+  // Anthropic lane has to respect — the typed injection contract enforces it
+  // identically on every provider. A lane whose REQUIRED skill dependencies
+  // exceed the cap cannot be delivered anywhere without dropping a required
+  // skill, so it FAILS here as a configuration error rather than being silently
+  // truncated at dispatch. Exactly ON the cap is legal, but leaves no slot for
+  // the personal delta — that WARNS.
+  //
+  // The cap is per-REQUEST and dispatch sends one request per lane, so the
+  // check is per-lane: the UNION would falsely block 3 lanes x 3 unique skills
+  // as 9-over-8 even though no single request carries more than 3.
+  for (const lane of input.laneSkillSets) {
+    const requestCapError = preflightSkillRequestSet(
+      lane.skillIds,
+      MAX_SKILLS_PER_REQUEST,
+    );
+    if (requestCapError) {
+      errors.push({
+        code: "skill_request_cap_exceeded",
+        message: `lane ${lane.agentPackageName}: ${requestCapError.message}`,
+        resolvedCount: lane.skillIds.length,
+        maxPerRequest: MAX_SKILLS_PER_REQUEST,
+      });
+    } else if (lane.skillIds.length === MAX_SKILLS_PER_REQUEST) {
+      warnings.push({
+        code: "skill_request_cap_reached",
+        message:
+          `lane ${lane.agentPackageName} resolves exactly ${MAX_SKILLS_PER_REQUEST} ` +
+          `required skill dependencies — the per-request cap. No slot remains for ` +
+          `a personal delta, which the injection contract will drop and record.`,
+        agentPackageName: lane.agentPackageName,
+        resolvedCount: lane.skillIds.length,
+        maxPerRequest: MAX_SKILLS_PER_REQUEST,
+      });
+    }
+  }
+  if (errors.length > 0) {
+    // A required set that cannot be delivered is a configuration error on EVERY
+    // provider — surfaced before the pin gate so it fires even when the pin is
+    // inactive (the OpenAI default path).
+    return { ok: false, pinActive, errors, warnings };
+  }
+
+  // (1) Pin-active gate — the Anthropic-specific checks below are pin-gated.
+  if (!pinActive) {
+    return { ok: true, pinActive: false, warnings };
   }
 
   // (2) Provider/model configured.
@@ -104,21 +181,21 @@ export async function preflightAgentCreation(
       code: "pin_not_configured",
       message: `Agent-creation pin active but configuration is incomplete (provider=${JSON.stringify(providerRaw)}, model=${JSON.stringify(model)}). Configure agent_creation_llm_provider and agent_creation_model in the admin LLM UI.`,
     });
-    return { ok: false, pinActive: true, errors };
+    return { ok: false, pinActive: true, errors, warnings };
   }
   if (providerRaw !== "openai" && providerRaw !== "anthropic" && providerRaw !== "gemini") {
     errors.push({
       code: "invalid_provider_config",
       message: `Invalid agent_creation_llm_provider value: "${providerRaw}". Must be one of openai, anthropic, gemini.`,
     });
-    return { ok: false, pinActive: true, errors };
+    return { ok: false, pinActive: true, errors, warnings };
   }
   const provider = providerRaw as "openai" | "anthropic" | "gemini";
 
   // OpenAI/Gemini pinned → only need provider/model configured. Skip
   // Anthropic-specific checks.
   if (provider !== "anthropic") {
-    return { ok: true, pinActive: true, provider, model };
+    return { ok: true, pinActive: true, provider, model, warnings };
   }
 
   // ---------------------------------------------------------------------
@@ -158,7 +235,7 @@ export async function preflightAgentCreation(
       message: `Could not derive Anthropic sync namespace: ${err instanceof Error ? err.message : String(err)}.`,
     });
     // No point continuing the per-skill checks without a namespace.
-    return { ok: false, pinActive: true, errors };
+    return { ok: false, pinActive: true, errors, warnings };
   }
 
   if (!fingerprint) {
@@ -169,7 +246,7 @@ export async function preflightAgentCreation(
       message: "No Anthropic API key configured — no sync rows can exist.",
       missingCatalogSkillIds: [...input.requiredCatalogSkillIds],
     });
-    return { ok: false, pinActive: true, errors };
+    return { ok: false, pinActive: true, errors, warnings };
   }
 
   // (3d) Per-skill sync-row check + content-hash + governance + size cap.
@@ -185,7 +262,7 @@ export async function preflightAgentCreation(
       code: "catalog_unavailable",
       message: `Could not load Anthropic skill sync helpers: ${err instanceof Error ? err.message : String(err)}.`,
     });
-    return { ok: false, pinActive: true, errors };
+    return { ok: false, pinActive: true, errors, warnings };
   }
 
   // Read each sync row.
@@ -229,7 +306,7 @@ export async function preflightAgentCreation(
       code: "catalog_unavailable",
       message: `Could not read catalog skills off disk: ${err instanceof Error ? err.message : String(err)}.`,
     });
-    return { ok: false, pinActive: true, errors };
+    return { ok: false, pinActive: true, errors, warnings };
   }
   const requiredSet = new Set(input.requiredCatalogSkillIds);
   const requiredCandidates = allCandidates.filter((c) => requiredSet.has(c.catalogSkillId));
@@ -290,25 +367,8 @@ export async function preflightAgentCreation(
     });
   }
 
-  // ≤8 per request cap.
-  // The cap is per-REQUEST, but dispatch sends one request per lane. Checking
-  // the UNION would falsely block 3 lanes × 3 unique skills as 9-over-8 even
-  // though no single request exceeds 3. Apply preflightSkillRequestSet to EACH
-  // lane's skill set individually.
-  for (const lane of input.laneSkillSets) {
-    const requestCapError = preflightSkillRequestSet(lane.skillIds, ANTHROPIC_MAX_SKILLS_PER_REQUEST);
-    if (requestCapError) {
-      errors.push({
-        code: "skill_request_cap_exceeded",
-        message: `lane ${lane.agentPackageName}: ${requestCapError.message}`,
-        resolvedCount: lane.skillIds.length,
-        maxPerRequest: ANTHROPIC_MAX_SKILLS_PER_REQUEST,
-      });
-    }
-  }
-
   if (errors.length > 0) {
-    return { ok: false, pinActive: true, errors };
+    return { ok: false, pinActive: true, errors, warnings };
   }
-  return { ok: true, pinActive: true, provider, model };
+  return { ok: true, pinActive: true, provider, model, warnings };
 }

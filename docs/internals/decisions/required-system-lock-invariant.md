@@ -14,10 +14,14 @@ Today, three artifacts agree on the same set of **8 packages**:
 | `cinatra.systemExtensions` | the **system/locked** set (locked on install; destructive ops — archive/uninstall/force-delete/purge/registry-removal — are refused; update preserves the lock) | root `package.json` |
 | `cinatra-required-extensions.lock.json` | the SHA-pinned **acquisition lock** for the prod bootable set (one entry per `extensions` package) | repo root |
 
-All three are length **8** and name the same 8 packages
+All three are the same length and name the same packages
 (`@cinatra-ai/nango-connector`, `code-reviewer-agent`, `planner-agent`,
 `author-agent`, `lint-policy-agent`, `security-reviewer-agent`,
-`assistant-skills`, `default-artifact`).
+`default-artifact`, …). The set was **8** when this ruling was recorded; it
+has since grown (system artifact kinds, and the cinatra#2090 S3 fold that
+replaced `assistant-skills` with its six successor skill packages — five
+injectable routers plus the internal `hitl-prompt-drive-skill`), and the
+equality — not the number — is the asserted invariant.
 
 ## The ruling: this equality is a CURRENT INVARIANT, not a permanent law
 

@@ -5,7 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // re-keyed authoritative read (file-form + registered type, NOT the retired
 // generic); orphan-guard exit; unregistered-own-type skip; no-candidate exit;
 // runtime-unconfigured skip; channel-keyed candidate ownership; run-ALL-matchers;
-// package-owned trust; boot-order lazy-register-then-retry; frontmatter-strip;
+// skill trust (declared `matcher`-edge anchor + the pre-extraction package-owned
+// anchor); boot-order lazy-register-then-retry; frontmatter-strip;
 // strict response parse; threshold gate; assert + blockedByPrecedence; and the
 // HONEST RETRY paths (DB read throw, LLM call throw, assert throw all rethrow
 // as retryable; a malformed response does NOT).
@@ -31,6 +32,7 @@ const {
   lazyRegisterMock,
   writeAllowedMock,
   ensureSchemaMock,
+  resolveMatcherEdgeMock,
 } = vi.hoisted(() => ({
   runPgMock: vi.fn(),
   registerAllObjectTypesMock: vi.fn(),
@@ -45,6 +47,9 @@ const {
   lazyRegisterMock: vi.fn(),
   writeAllowedMock: vi.fn(async (): Promise<boolean> => true),
   ensureSchemaMock: vi.fn(),
+  resolveMatcherEdgeMock: vi.fn(
+    async (): Promise<{ skillId: string; packageName: string } | null> => null,
+  ),
 }));
 
 vi.mock("@/lib/postgres-sync", () => ({
@@ -73,6 +78,10 @@ vi.mock("@cinatra-ai/llm", () => ({
 vi.mock("@cinatra-ai/skills", () => ({
   listInstalledSkills: listSkillsMock,
   parseFrontmatter: parseFrontmatterMock,
+  // cinatra#2090 S3 — the declared-edge trust anchor. Default: NO declared
+  // matcher edge (the pre-extraction fleet), so every pre-existing case here
+  // still exercises the package-owned anchor unchanged.
+  resolveDeclaredSkillEdgeForPackage: resolveMatcherEdgeMock,
 }));
 vi.mock("../attachment-resolver-ports", () => ({
   buildAttachmentResolverPorts: buildPortsMock,
@@ -189,25 +198,96 @@ describe("matcher-runtime pure helpers", () => {
       __test.mimeMatches("text/plain; charset=utf-8", "text/plain"),
     ).toBe(true);
   });
-  it("skillTrusted: exact packageName, slug compat fallback, foreign rejected", () => {
+  it("skillPackageOwned: exact packageName, slug compat fallback, foreign rejected", () => {
+    // The PRE-EXTRACTION anchor. It survives for exactly as long as a pinned
+    // artifact extension still SHIPS its matcher bundle (cinatra#2090's
+    // migration is rolling, one extension repo at a time).
     expect(
-      __test.skillTrusted(
+      __test.skillPackageOwned(
         { id: "s", packageName: "@v/icp-artifact", packageSlug: "x", content: "" },
+        "@v/icp-artifact:icp-matcher",
         "@v/icp-artifact",
       ),
     ).toBe(true);
     expect(
-      __test.skillTrusted(
+      __test.skillPackageOwned(
         { id: "s", packageName: "WRONG", packageSlug: "v-icp-artifact", content: "" },
+        "@v/icp-artifact:icp-matcher",
         "@v/icp-artifact",
       ),
     ).toBe(true); // slug compat
     expect(
-      __test.skillTrusted(
+      __test.skillPackageOwned(
         { id: "s", packageName: "@evil/pkg", packageSlug: "evil-pkg", content: "" },
+        "@v/icp-artifact:icp-matcher",
         "@v/icp-artifact",
       ),
     ).toBe(false);
+    // A FOREIGN skill id is refused even when the catalog row claims the
+    // artifact package owns it — the migrated-manifest + unresolved-edge case.
+    expect(
+      __test.skillPackageOwned(
+        { id: "s", packageName: "@v/icp-artifact", packageSlug: "v-icp-artifact", content: "" },
+        "@v/icp-matcher-skill:icp-matcher",
+        "@v/icp-artifact",
+      ),
+    ).toBe(false);
+  });
+
+  // cinatra#2090 S3 — the DECLARED-EDGE anchor that replaces same-package
+  // ownership once an artifact's matcher bundle has been extracted.
+  describe("skillMatchesResolvedEdge (declared-edge trust)", () => {
+    const resolved = {
+      skillId: "@v/icp-matcher-skill:icp-matcher",
+      packageName: "@v/icp-matcher-skill",
+    };
+    const row = (over: Partial<{ packageName: string; packageSlug: string }> = {}) => ({
+      id: "s",
+      packageName: "@v/icp-matcher-skill",
+      packageSlug: "v-icp-matcher-skill",
+      content: "",
+      ...over,
+    });
+
+    it("trusts the catalog row the declared edge RESOLVED to", () => {
+      expect(
+        __test.skillMatchesResolvedEdge(row(), "@v/icp-matcher-skill:icp-matcher", resolved),
+      ).toBe(true);
+    });
+
+    it("accepts the slugified packageName the catalog sometimes carries", () => {
+      expect(
+        __test.skillMatchesResolvedEdge(
+          row({ packageName: "WRONG" }),
+          "@v/icp-matcher-skill:icp-matcher",
+          resolved,
+        ),
+      ).toBe(true);
+    });
+
+    it("REFUSES a same-named row owned by a package the edge did NOT resolve to", () => {
+      // The substitution the anchor exists to refuse: an id match alone is not
+      // provenance.
+      expect(
+        __test.skillMatchesResolvedEdge(
+          row({ packageName: "@evil/pkg", packageSlug: "evil-pkg" }),
+          "@v/icp-matcher-skill:icp-matcher",
+          resolved,
+        ),
+      ).toBe(false);
+    });
+
+    it("REFUSES an id the edge did not resolve to", () => {
+      expect(
+        __test.skillMatchesResolvedEdge(row(), "@v/other-skill:other", resolved),
+      ).toBe(false);
+    });
+
+    it("an UNRESOLVED edge is not trust", () => {
+      expect(
+        __test.skillMatchesResolvedEdge(row(), "@v/icp-matcher-skill:icp-matcher", null),
+      ).toBe(false);
+    });
   });
 });
 
@@ -328,6 +408,8 @@ describe("runArtifactMatch", () => {
     resolveMock.mockReset().mockReturnValue({ isArtifact: {} });
     resolveRuntimeMock.mockReset();
     runLlmMock.mockReset();
+    resolveMatcherEdgeMock.mockReset();
+    resolveMatcherEdgeMock.mockResolvedValue(null);
     listSkillsMock.mockReset();
     parseFrontmatterMock.mockReset();
     buildPortsMock.mockReset();
@@ -371,7 +453,7 @@ describe("runArtifactMatch", () => {
     // Definer uninstalled after the row was minted → resolve returns null.
     resolveMock.mockReturnValue(null);
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1" }),
     ]);
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
     expect(resolveRuntimeMock).not.toHaveBeenCalled();
@@ -383,7 +465,7 @@ describe("runArtifactMatch", () => {
       digest: "sha", mime: "text/csv", storage_key: "k", origin_kind: "upload",
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1", mimeTypes: ["application/pdf"] }),
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1", mimeTypes: ["application/pdf"] }),
     ]);
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
     expect(resolveRuntimeMock).not.toHaveBeenCalled();
@@ -395,7 +477,7 @@ describe("runArtifactMatch", () => {
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue(null);
     await expect(
@@ -414,11 +496,11 @@ describe("runArtifactMatch", () => {
     // same provenance the presentation resolver's live/threshold policy keys on,
     // so the asserted `extension` and the surfacing policy agree.
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@provenance/owner", matcherSkillId: "s1" }),
+      matcherEntry({ pkg: "@provenance/owner", matcherSkillId: "@provenance/owner:s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
-      { id: "s1", packageName: "@provenance/owner", packageSlug: "provenance-owner", content: "b" },
+      { id: "@provenance/owner:s1", packageName: "@provenance/owner", packageSlug: "provenance-owner", content: "b" },
     ]);
     parseFrontmatterMock.mockReturnValue({ body: "b" });
     runLlmMock.mockResolvedValue({ text: JSON.stringify({ matches: true, confidence: 0.9 }) });
@@ -434,13 +516,13 @@ describe("runArtifactMatch", () => {
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillIds: ["s1", "s2", "s3"] }),
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillIds: ["@v/pdf-artifact:s1", "@v/pdf-artifact:s2", "@v/pdf-artifact:s3"] }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
-      { id: "s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "m1" },
-      { id: "s2", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "m2" },
-      { id: "s3", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "m3" },
+      { id: "@v/pdf-artifact:s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "m1" },
+      { id: "@v/pdf-artifact:s2", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "m2" },
+      { id: "@v/pdf-artifact:s3", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "m3" },
     ]);
     parseFrontmatterMock.mockImplementation((c: string) => ({ body: c }));
     runLlmMock.mockResolvedValue({ text: JSON.stringify({ matches: false, confidence: 0.1 }) });
@@ -462,11 +544,11 @@ describe("runArtifactMatch", () => {
       },
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/md-artifact", matcherSkillId: "s1", mimeTypes: ["text/markdown"] }),
+      matcherEntry({ pkg: "@v/md-artifact", matcherSkillId: "@v/md-artifact:s1", mimeTypes: ["text/markdown"] }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
-      { id: "s1", packageName: "@v/md-artifact", packageSlug: "v-md-artifact", content: "b" },
+      { id: "@v/md-artifact:s1", packageName: "@v/md-artifact", packageSlug: "v-md-artifact", content: "b" },
     ]);
     parseFrontmatterMock.mockReturnValue({ body: "b" });
     runLlmMock.mockResolvedValue({ text: JSON.stringify({ matches: false, confidence: 0.1 }) });
@@ -488,11 +570,11 @@ describe("runArtifactMatch", () => {
       classifier_signals: null, // no persisted upload filename
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/md-artifact", matcherSkillId: "s1", mimeTypes: ["text/markdown"] }),
+      matcherEntry({ pkg: "@v/md-artifact", matcherSkillId: "@v/md-artifact:s1", mimeTypes: ["text/markdown"] }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
-      { id: "s1", packageName: "@v/md-artifact", packageSlug: "v-md-artifact", content: "b" },
+      { id: "@v/md-artifact:s1", packageName: "@v/md-artifact", packageSlug: "v-md-artifact", content: "b" },
     ]);
     parseFrontmatterMock.mockReturnValue({ body: "b" });
     runLlmMock.mockResolvedValue({ text: JSON.stringify({ matches: false, confidence: 0.1, rationale: "n" }) });
@@ -511,11 +593,11 @@ describe("runArtifactMatch", () => {
       classifier_signals: { upload: { filename: "marketing-strategy.md", originKind: "upload" } },
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/md-artifact", matcherSkillId: "s1", mimeTypes: ["text/markdown"] }),
+      matcherEntry({ pkg: "@v/md-artifact", matcherSkillId: "@v/md-artifact:s1", mimeTypes: ["text/markdown"] }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
-      { id: "s1", packageName: "@v/md-artifact", packageSlug: "v-md-artifact", content: "b" },
+      { id: "@v/md-artifact:s1", packageName: "@v/md-artifact", packageSlug: "v-md-artifact", content: "b" },
     ]);
     parseFrontmatterMock.mockReturnValue({ body: "b" });
     runLlmMock.mockResolvedValue({ text: JSON.stringify({ matches: false, confidence: 0.1, rationale: "n" }) });
@@ -529,11 +611,11 @@ describe("runArtifactMatch", () => {
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
-      { id: "s1", packageName: "@evil/other", packageSlug: "evil-other", content: "body" },
+      { id: "@v/pdf-artifact:s1", packageName: "@evil/other", packageSlug: "evil-other", content: "body" },
     ]);
     lazyRegisterMock.mockResolvedValue(0); // lazy register finds nothing
     await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
@@ -541,18 +623,176 @@ describe("runArtifactMatch", () => {
     expect(assertSemanticTypeMock).not.toHaveBeenCalled();
   });
 
+  // -------------------------------------------------------------------------
+  // cinatra#2090 S3 — TRUST RE-KEYING onto the declared `matcher` edge.
+  // Post-extraction the matcher skill is owned by the PROVIDER package, so the
+  // pre-extraction package-owned anchor rejects it by construction; the
+  // declared edge is what makes it trustworthy.
+  // -------------------------------------------------------------------------
+  const EXTRACTED_SKILL_ID = "@v/pdf-matcher-skill:pdf-matcher";
+
+  function stageExtractedArtifact() {
+    stageAuthoritative({
+      digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
+    });
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: EXTRACTED_SKILL_ID }),
+    ]);
+    resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
+    runLlmMock.mockResolvedValue({
+      text: JSON.stringify({ matches: true, confidence: 0.95, rationale: "r" }),
+    });
+    assertSemanticTypeMock.mockResolvedValue({ ok: true });
+  }
+
+  it("declared matcher edge: a PROVIDER-owned skill is honoured (same-package ownership no longer required)", async () => {
+    stageExtractedArtifact();
+    resolveMatcherEdgeMock.mockResolvedValue({
+      skillId: EXTRACTED_SKILL_ID,
+      packageName: "@v/pdf-matcher-skill",
+    });
+    listSkillsMock.mockResolvedValue([
+      {
+        id: EXTRACTED_SKILL_ID,
+        packageName: "@v/pdf-matcher-skill",
+        packageSlug: "v-pdf-matcher-skill",
+        content: "classifier body",
+      },
+    ]);
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    expect(resolveMatcherEdgeMock).toHaveBeenCalledWith("@v/pdf-artifact", "matcher");
+    expect(runLlmMock).toHaveBeenCalledTimes(1);
+    expect(runLlmMock.mock.calls[0][0].system).toBe("classifier body");
+    expect(assertSemanticTypeMock).toHaveBeenCalled();
+  });
+
+  it("declared matcher edge: a SAME-NAMED skill from an UNDECLARED package is REJECTED", async () => {
+    // The acceptance criterion: trust is the resolved target of the declared
+    // edge, so an identically-named catalog row registered by another package
+    // buys nothing.
+    stageExtractedArtifact();
+    resolveMatcherEdgeMock.mockResolvedValue({
+      skillId: EXTRACTED_SKILL_ID,
+      packageName: "@v/pdf-matcher-skill",
+    });
+    listSkillsMock.mockResolvedValue([
+      {
+        id: EXTRACTED_SKILL_ID,
+        packageName: "@evil/lookalike-skill",
+        packageSlug: "evil-lookalike-skill",
+        content: "attacker body",
+      },
+    ]);
+    lazyRegisterMock.mockResolvedValue(0);
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    expect(runLlmMock).not.toHaveBeenCalled();
+    expect(assertSemanticTypeMock).not.toHaveBeenCalled();
+  });
+
+  it("declared matcher edge: boot-order lazy register targets the PROVIDER, not the artifact package", async () => {
+    // Post-extraction the artifact package has no `skills/` dir at all, so
+    // re-scanning IT would never heal a catalog miss.
+    stageExtractedArtifact();
+    resolveMatcherEdgeMock.mockResolvedValue({
+      skillId: EXTRACTED_SKILL_ID,
+      packageName: "@v/pdf-matcher-skill",
+    });
+    listSkillsMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        {
+          id: EXTRACTED_SKILL_ID,
+          packageName: "@v/pdf-matcher-skill",
+          packageSlug: "v-pdf-matcher-skill",
+          content: "classifier body",
+        },
+      ]);
+    lazyRegisterMock.mockResolvedValue(1);
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    expect(lazyRegisterMock).toHaveBeenCalledWith("@v/pdf-matcher-skill");
+    expect(assertSemanticTypeMock).toHaveBeenCalled();
+  });
+
+  it("declared matcher edge: once it resolves, the pre-extraction anchor is OFF (exclusive, not a widening OR)", async () => {
+    // A stale/forged catalog row keyed by the PROVIDER's skill id but owned by
+    // the ARTIFACT package positively DISAGREES with what the edge resolved
+    // to. Keeping the package-owned arm live alongside the edge would let it
+    // through.
+    stageExtractedArtifact();
+    resolveMatcherEdgeMock.mockResolvedValue({
+      skillId: EXTRACTED_SKILL_ID,
+      packageName: "@v/pdf-matcher-skill",
+    });
+    listSkillsMock.mockResolvedValue([
+      {
+        id: EXTRACTED_SKILL_ID,
+        packageName: "@v/pdf-artifact",
+        packageSlug: "v-pdf-artifact",
+        content: "stale co-located body",
+      },
+    ]);
+    lazyRegisterMock.mockResolvedValue(0);
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    expect(runLlmMock).not.toHaveBeenCalled();
+    expect(assertSemanticTypeMock).not.toHaveBeenCalled();
+  });
+
+  it("declared matcher edge: an UNRESOLVED edge leaves the pre-extraction anchor in force", async () => {
+    // The rolling-migration case: an extension that still ships its bundle
+    // declares no edge, so nothing about its classification changes.
+    stageAuthoritative({
+      digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
+    });
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1" }),
+    ]);
+    resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
+    resolveMatcherEdgeMock.mockResolvedValue(null);
+    listSkillsMock.mockResolvedValue([
+      { id: "@v/pdf-artifact:s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "co-located body" },
+    ]);
+    runLlmMock.mockResolvedValue({
+      text: JSON.stringify({ matches: true, confidence: 0.95, rationale: "r" }),
+    });
+    assertSemanticTypeMock.mockResolvedValue({ ok: true });
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    expect(runLlmMock).toHaveBeenCalledTimes(1);
+    expect(lazyRegisterMock).not.toHaveBeenCalled();
+    expect(assertSemanticTypeMock).toHaveBeenCalled();
+  });
+
+  it("declared matcher edge: a THROWING resolver degrades to the pre-extraction anchor, never aborts the run", async () => {
+    stageAuthoritative({
+      digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
+    });
+    matcherListMock.mockReturnValue([
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1" }),
+    ]);
+    resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
+    resolveMatcherEdgeMock.mockRejectedValue(new Error("scan exploded"));
+    listSkillsMock.mockResolvedValue([
+      { id: "@v/pdf-artifact:s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "co-located body" },
+    ]);
+    runLlmMock.mockResolvedValue({
+      text: JSON.stringify({ matches: true, confidence: 0.95, rationale: "r" }),
+    });
+    assertSemanticTypeMock.mockResolvedValue({ ok: true });
+    await expect(runArtifactMatch(PAYLOAD, { actorContext: ACTOR })).resolves.toBeUndefined();
+    expect(assertSemanticTypeMock).toHaveBeenCalled();
+  });
+
   it("boot-order: catalog miss → lazy register → reload → match asserts", async () => {
     stageAuthoritative({
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
-        { id: "s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "---\nx: 1\n---\nClassify it." },
+        { id: "@v/pdf-artifact:s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "---\nx: 1\n---\nClassify it." },
       ]);
     lazyRegisterMock.mockResolvedValue(1); // registered 1 skill
     parseFrontmatterMock.mockReturnValue({ body: "Classify it." });
@@ -580,7 +820,7 @@ describe("runArtifactMatch", () => {
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     writeAllowedMock.mockResolvedValue(false);
@@ -594,11 +834,11 @@ describe("runArtifactMatch", () => {
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
-      { id: "s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
+      { id: "@v/pdf-artifact:s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
     ]);
     parseFrontmatterMock.mockReturnValue({ body: "b" });
     runLlmMock.mockResolvedValue({
@@ -615,11 +855,11 @@ describe("runArtifactMatch", () => {
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1", threshold: 0.8 }),
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1", threshold: 0.8 }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
-      { id: "s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
+      { id: "@v/pdf-artifact:s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
     ]);
     parseFrontmatterMock.mockReturnValue({ body: "b" });
     runLlmMock.mockResolvedValue({
@@ -634,11 +874,11 @@ describe("runArtifactMatch", () => {
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
-      { id: "s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
+      { id: "@v/pdf-artifact:s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
     ]);
     parseFrontmatterMock.mockReturnValue({ body: "b" });
     runLlmMock.mockResolvedValue({
@@ -685,11 +925,11 @@ describe("runArtifactMatch", () => {
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
-      { id: "s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
+      { id: "@v/pdf-artifact:s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
     ]);
     parseFrontmatterMock.mockReturnValue({ body: "b" });
     runLlmMock.mockRejectedValue(new Error("provider 503"));
@@ -703,7 +943,7 @@ describe("runArtifactMatch", () => {
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1" }),
     ]);
     resolveRuntimeMock.mockRejectedValue(new Error("nango down"));
     await expect(
@@ -716,11 +956,11 @@ describe("runArtifactMatch", () => {
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
-      { id: "s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
+      { id: "@v/pdf-artifact:s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
     ]);
     parseFrontmatterMock.mockReturnValue({ body: "b" });
     runLlmMock.mockResolvedValue({ text: JSON.stringify({ matches: true, confidence: 0.95 }) });
@@ -758,11 +998,11 @@ describe("runArtifactMatch", () => {
     ]);
     runPgMock.mockReturnValue([{ rows: [], rowCount: 0 }]); // re-check: gone
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
-      { id: "s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
+      { id: "@v/pdf-artifact:s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
     ]);
     parseFrontmatterMock.mockReturnValue({ body: "b" });
     runLlmMock.mockResolvedValue({
@@ -788,11 +1028,11 @@ describe("runArtifactMatch", () => {
       digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
     });
     matcherListMock.mockReturnValue([
-      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+      matcherEntry({ pkg: "@v/pdf-artifact", matcherSkillId: "@v/pdf-artifact:s1" }),
     ]);
     resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
     listSkillsMock.mockResolvedValue([
-      { id: "s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
+      { id: "@v/pdf-artifact:s1", packageName: "@v/pdf-artifact", packageSlug: "v-pdf-artifact", content: "b" },
     ]);
     parseFrontmatterMock.mockReturnValue({ body: "b" });
     runLlmMock.mockResolvedValue({

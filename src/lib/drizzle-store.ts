@@ -1215,7 +1215,12 @@ END $$` },
       owner_level               text NOT NULL CHECK (owner_level IN ('user','team','organization','workspace')),
       owner_id                  text NOT NULL,
       organization_id           text NOT NULL,
-      visibility                text NOT NULL DEFAULT 'private' CHECK (visibility IN ('private','owners','members')),
+      -- NO visibility column: the dashboard-local {private,owners,members} ACL
+      -- vocabulary RETIRED with the cinatra#1898 Phase-3 cutover (epic #1883
+      -- section D7) — a dashboard is always visible to everyone in its scope, so
+      -- owner_level/owner_id (+ project_id) ARE the share axis and the canonical
+      -- visibility lives on the paired objects twin. Existing deployments drop
+      -- the column via migration core__0087 (this shape's operator-upgrade twin).
       status                    text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published','archived','generation_failed')),
       created_by                text NOT NULL,
       updated_by                text,
@@ -1246,11 +1251,6 @@ END $$` },
       ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards"
         ADD CONSTRAINT dashboards_owner_level_check
         CHECK (owner_level IN ('user','team','organization','workspace'));
-    EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
-    { text: `DO $$ BEGIN
-      ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards"
-        ADD CONSTRAINT dashboards_visibility_check
-        CHECK (visibility IN ('private','owners','members'));
     EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
     { text: `DO $$ BEGIN
       ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards"

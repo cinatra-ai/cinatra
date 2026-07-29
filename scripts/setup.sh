@@ -379,29 +379,17 @@ else
   rm -f "$SETUP_DEV_LOG"; trap - EXIT
 fi
 
-# The OpenAI shell sandbox image builds from whichever extension ships a
-# runtime/Dockerfile (today the OpenAI connector, cloned back under extensions/).
-# Core does not hardcode a specific extension, but exactly ONE extension may own
-# the `cinatra/skill-shell:latest` tag: collect ALL matches so an AMBIGUOUS tree
-# (>1 extension shipping a runtime/Dockerfile) fails loud instead of silently
-# re-tagging the shell image from whichever the glob happened to enumerate first.
-# Build only when exactly one is present -- never abort `make setup`
-# (set -euo pipefail) when the clone-back has not delivered it yet (the OpenAI
-# shell tool just stays unavailable until then).
-shell_runtime_contexts=()
-for dockerfile in extensions/*/*/runtime/Dockerfile; do
-  if [ -f "$dockerfile" ]; then
-    shell_runtime_contexts+=("$(dirname "$dockerfile")")
-  fi
-done
-if [ "${#shell_runtime_contexts[@]}" -gt 1 ]; then
-  error "Ambiguous OpenAI shell runtime: ${#shell_runtime_contexts[@]} extensions ship a runtime/Dockerfile (${shell_runtime_contexts[*]}). Exactly one (the OpenAI connector) may provide cinatra/skill-shell:latest; resolve the ambiguity before setup can build the shell image."
-elif [ "${#shell_runtime_contexts[@]}" -eq 1 ]; then
-  info "Building OpenAI shell Docker image..."
-  docker build -t cinatra/skill-shell:latest "${shell_runtime_contexts[0]}"
-else
-  warn "Skipping OpenAI shell Docker image: no extension ships a runtime/Dockerfile. The OpenAI shell tool stays unavailable until the runtime Dockerfile is restored to the OpenAI connector."
-fi
+# NOTE: setup no longer builds a per-extension shell sandbox image. The
+# `cinatra/skill-shell:latest` runtime an extension used to contribute as
+# `runtime/Dockerfile` was retired together with the shell-tools capability.
+# Its successor is the platform-owned execution-plane L0 image
+# (docker/sandbox/Dockerfile): CI builds and publishes it, and a developer
+# builds it locally on demand with
+# `docker build -t cinatra-sandbox-l0:dev docker/sandbox` — the sandbox worker
+# names that exact command in its own "image not available" error, so setup
+# does not pre-build it. With the pinned extension set nothing in the tree
+# matches `extensions/*/*/runtime/Dockerfile`, so the removed build step only
+# ever printed its own "skipped" warning here.
 
 # ── Sample data (optional) ────────────────────────────────────────────────────
 

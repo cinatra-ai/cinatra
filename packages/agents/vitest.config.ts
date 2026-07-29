@@ -185,6 +185,14 @@ export default defineConfig({
         root,
         "packages/mcp-server/src/annotation-classifier.ts",
       ),
+      // cinatra#2020 S5: invoker step 3 additionally imports the pure
+      // known-destructive name floor by subpath (same species as the two
+      // above: no React/host deps) — alias to REAL source, BEFORE the barrel
+      // stub, or the stub swallows it and the invoker import is unresolved.
+      "@cinatra-ai/mcp-server/known-destructive-floor": path.join(
+        root,
+        "packages/mcp-server/src/known-destructive-floor.ts",
+      ),
       // Stub the mcp-server barrel itself. The real index.tsx imports React UI components from the host app
       // (`@/components/ui/*`), which are out of reach for this package's
       // vitest config. Our stub exports the runtime values used by

@@ -8,9 +8,8 @@ import type { DashboardRow } from "../store/schema";
 // fields the resolver reads need real values; the rest can be empty
 // strings / nulls because the resolver doesn't touch them.
 //
-// Phase-2 (cinatra#1898): the resolver no longer reads `visibility` — it is a
-// demoted, write-only column pending the Phase-3 drop. The stub still carries a
-// value (the column exists) but NO test below depends on it: access is scope-only.
+// Phase-3 (cinatra#1898): the `visibility` column is DROPPED — the row shape has
+// no such field, so the stub cannot carry one. Access is scope-only.
 function row(overrides: Partial<DashboardRow>): DashboardRow {
   return {
     id: "d1",
@@ -23,7 +22,6 @@ function row(overrides: Partial<DashboardRow>): DashboardRow {
     ownerLevel: "user",
     ownerId: "u1",
     organizationId: "org-a",
-    visibility: "private",
     status: "draft",
     createdBy: "u1",
     updatedBy: null,
@@ -79,8 +77,10 @@ describe("resolveDashboardAccess — Phase-2 scope-only ACL (cinatra#1898)", () 
   });
   it("WIDENED: team member (non-admin) now gets READ (was owner-only under private/owners)", () => {
     // Pre-flip: a 'private'/'owners' team dashboard was admin-only (canRead:false
-    // for a non-admin member). Phase-2: everyone in the team scope may read.
-    const r = row({ ownerLevel: "team", ownerId: "team-1", visibility: "private" });
+    // for a non-admin member). Post-cutover: everyone in the team scope may read.
+    // Phase-3 dropped the column outright, so the row carries no visibility at
+    // all — the SCOPE alone decides.
+    const r = row({ ownerLevel: "team", ownerId: "team-1" });
     const a = actor({ teamIds: ["team-1"], teamRoles: { "team-1": "member" } });
     expect(resolveDashboardAccess(r, a)).toEqual({ canRead: true, canWrite: false });
   });
@@ -102,14 +102,14 @@ describe("resolveDashboardAccess — Phase-2 scope-only ACL (cinatra#1898)", () 
     expect(resolveDashboardAccess(r, a)).toEqual({ canRead: true, canWrite: true });
   });
   it("WIDENED: org member now gets READ (was owner-only under private/owners)", () => {
-    const r = row({ ownerLevel: "organization", ownerId: "org-a", visibility: "owners" });
+    const r = row({ ownerLevel: "organization", ownerId: "org-a" });
     const a = actor({ orgRole: "member" });
     expect(resolveDashboardAccess(r, a)).toEqual({ canRead: true, canWrite: false });
   });
 
   // ─── owner_level=workspace ───
   it("WIDENED: workspace member gets READ; workspace admin gets read+write", () => {
-    const r = row({ ownerLevel: "workspace", ownerId: "org-a", visibility: "private" });
+    const r = row({ ownerLevel: "workspace", ownerId: "org-a" });
     expect(resolveDashboardAccess(r, actor({ orgRole: "member" }))).toEqual({
       canRead: true,
       canWrite: false,

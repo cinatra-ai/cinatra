@@ -33,12 +33,19 @@ export const dashboards = cinatraSchema.table(
     dashboardVersion: integer("dashboard_version").notNull().default(1),
     /** Pointer at the latest published revision; NULL while status='draft'. */
     publishedRevisionNumber: integer("published_revision_number"),
-    /** 'user' | 'team' | 'organization' | 'workspace' — enforced by CHECK in DDL. */
+    /** 'user' | 'team' | 'organization' | 'workspace' — enforced by CHECK in DDL.
+     *  The SCOPE axis: the sole ownership input the canonical ACL derives from
+     *  (`deriveDashboardScopeTuple` / `resolveDashboardAccess`). NOT demoted by
+     *  the #1898 cutover — the column that retired was `visibility` (see below). */
     ownerLevel: text("owner_level").notNull(),
     ownerId: text("owner_id").notNull(),
     organizationId: text("organization_id").notNull(),
-    /** 'private' | 'owners' | 'members' — enforced by CHECK in DDL. */
-    visibility: text("visibility").notNull().default("private"),
+    // ACL cutover Phase-3 (cinatra#1898, epic #1883 §D7): the dashboard-local
+    // `visibility` column ('private'|'owners'|'members') is DROPPED here
+    // (migration core__0087). Phase-2 stopped reading it — a dashboard is always
+    // visible to everyone in its scope — and this phase removes the demoted
+    // column plus its CHECK after the resolver soak. Scope-derived visibility
+    // lives exclusively on the paired `objects` twin's canonical tuple.
     /** 'draft' | 'published' | 'archived' | 'generation_failed' — enforced by CHECK in DDL. */
     status: text("status").notNull().default("draft"),
     createdBy: text("created_by").notNull(),
@@ -222,8 +229,12 @@ export type ListingScopeKind = (typeof LISTING_SCOPE_KINDS)[number];
 export const OWNER_LEVELS = ["user", "team", "organization", "workspace"] as const;
 export type OwnerLevel = (typeof OWNER_LEVELS)[number];
 
-export const VISIBILITIES = ["private", "owners", "members"] as const;
-export type Visibility = (typeof VISIBILITIES)[number];
+// The dashboard-local `{private, owners, members}` VISIBILITY VOCABULARY is
+// RETIRED (cinatra#1898 ACL cutover): Phase-2 stopped consulting it, Phase-3
+// (migration core__0087) dropped its column. A dashboard is always visible to
+// everyone in its scope, so the only share axis is the canonical one carried by
+// the paired `objects` twin (see `deriveDashboardScopeTuple`). Deliberately no
+// replacement export here — a re-introduction would resurrect a second ACL.
 
 export const DASHBOARD_STATUSES = [
   "draft",

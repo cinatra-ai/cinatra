@@ -16,6 +16,7 @@ const {
   tombstoneArtifactMock,
   findFinalizedDeclarativeMock,
   recordLlmEmitMock,
+  resolveAuthoringEdgeMock,
 } = vi.hoisted(() => ({
   listArtifactsMock: vi.fn(),
   registerAllObjectTypesMock: vi.fn(),
@@ -27,10 +28,19 @@ const {
   tombstoneArtifactMock: vi.fn(),
   findFinalizedDeclarativeMock: vi.fn(async (): Promise<unknown> => null),
   recordLlmEmitMock: vi.fn(async () => undefined),
+  resolveAuthoringEdgeMock: vi.fn(
+    async (): Promise<{ skillId: string; packageName: string } | null> => null,
+  ),
 }));
 
 vi.mock("@cinatra-ai/objects/registry", () => ({
   objectTypeRegistry: { listArtifacts: listArtifactsMock },
+}));
+// cinatra#2090 S3 — the authoring skill id is re-keyed onto the extension's
+// declared `role:"authoring"` edge. Default: NO declared edge (an extension
+// that still ships its own bundle), so the manifest list stands.
+vi.mock("@cinatra-ai/skills", () => ({
+  resolveDeclaredSkillEdgeForPackage: resolveAuthoringEdgeMock,
 }));
 vi.mock("@/lib/register-all-object-types", () => ({
   registerAllObjectTypes: registerAllObjectTypesMock,
@@ -88,7 +98,7 @@ const ACTOR: ActorContext = {
   policyVersion: "v2",
 };
 
-function makeIcpDef() {
+function makeIcpDef(over: { authoring?: string[] } = {}) {
   return {
     type: "@cinatra-ai/marketing-icp-artifact:artifact",
     isArtifact: {
@@ -96,7 +106,7 @@ function makeIcpDef() {
         file: { mimeTypes: ["text/markdown", "text/plain"] },
       },
       skills: {
-        authoring: [
+        authoring: over.authoring ?? [
           "@cinatra-ai/marketing-icp-artifact:marketing-icp-author",
         ],
         matchers: [
@@ -547,10 +557,56 @@ describe("searchArtifactExtensions", () => {
   });
 });
 
+describe("searchArtifactExtensions — hasAuthoringSkill is the RE-KEYED set", () => {
+  beforeEach(() => {
+    listArtifactsMock.mockReset();
+    registerAllObjectTypesMock.mockReset();
+    resolveAuthoringEdgeMock.mockReset();
+    resolveAuthoringEdgeMock.mockResolvedValue(null);
+  });
+
+  it("reports TRUE when the declared authoring edge resolves", async () => {
+    listArtifactsMock.mockReturnValue([
+      makeIcpDef({
+        authoring: ["@cinatra-ai/marketing-icp-authoring-skill:marketing-icp-authoring"],
+      }),
+    ]);
+    resolveAuthoringEdgeMock.mockResolvedValue({
+      skillId: "@cinatra-ai/marketing-icp-authoring-skill:marketing-icp-authoring",
+      packageName: "@cinatra-ai/marketing-icp-authoring-skill",
+    });
+    const [hit] = await searchArtifactExtensions({ query: "marketing icp" });
+    expect(hit.hasAuthoringSkill).toBe(true);
+  });
+
+  it("reports FALSE for a migrated manifest whose provider does not resolve", async () => {
+    // The chat's documented ladder is "hasAuthoringSkill: true → read
+    // authoringSkillIds[0] and follow it". A `true` here with an empty
+    // re-keyed set would send it to fetch a skill that does not exist.
+    listArtifactsMock.mockReturnValue([
+      makeIcpDef({
+        authoring: ["@cinatra-ai/marketing-icp-authoring-skill:marketing-icp-authoring"],
+      }),
+    ]);
+    resolveAuthoringEdgeMock.mockResolvedValue(null);
+    const [hit] = await searchArtifactExtensions({ query: "marketing icp" });
+    expect(hit.hasAuthoringSkill).toBe(false);
+  });
+
+  it("still reports TRUE for an un-migrated same-package authoring id", async () => {
+    listArtifactsMock.mockReturnValue([makeIcpDef()]);
+    resolveAuthoringEdgeMock.mockResolvedValue(null);
+    const [hit] = await searchArtifactExtensions({ query: "marketing icp" });
+    expect(hit.hasAuthoringSkill).toBe(true);
+  });
+});
+
 describe("getArtifactExtension", () => {
   beforeEach(() => {
     listArtifactsMock.mockReset();
     registerAllObjectTypesMock.mockReset();
+    resolveAuthoringEdgeMock.mockReset();
+    resolveAuthoringEdgeMock.mockResolvedValue(null);
   });
 
   it("returns the manifest view for an installed extension", async () => {
@@ -567,6 +623,64 @@ describe("getArtifactExtension", () => {
     expect(view.matcherSkillIds.length).toBe(1);
     expect(view.acceptedMimes).toContain("text/markdown");
     expect(view.agentDependencies).toEqual([]);
+  });
+
+  // cinatra#2090 S3 — the RESOLVED authoring edge is authoritative. A manifest
+  // string is only a claim once the bundle lives in a different package.
+  it("re-keys authoringSkillIds onto the RESOLVED declared authoring edge", async () => {
+    listArtifactsMock.mockReturnValue([makeIcpDef()]);
+    resolveAuthoringEdgeMock.mockResolvedValue({
+      skillId: "@cinatra-ai/marketing-icp-authoring-skill:marketing-icp-authoring",
+      packageName: "@cinatra-ai/marketing-icp-authoring-skill",
+    });
+    const view = await getArtifactExtension("@cinatra-ai/marketing-icp-artifact");
+    expect(resolveAuthoringEdgeMock).toHaveBeenCalledWith(
+      "@cinatra-ai/marketing-icp-artifact",
+      "authoring",
+    );
+    expect(view?.authoringSkillIds).toEqual([
+      "@cinatra-ai/marketing-icp-authoring-skill:marketing-icp-authoring",
+    ]);
+  });
+
+  it("falls back to the manifest list when NO authoring edge is declared (rolling migration)", async () => {
+    listArtifactsMock.mockReturnValue([makeIcpDef()]);
+    resolveAuthoringEdgeMock.mockResolvedValue(null);
+    const view = await getArtifactExtension("@cinatra-ai/marketing-icp-artifact");
+    expect(view?.authoringSkillIds).toEqual([
+      "@cinatra-ai/marketing-icp-artifact:marketing-icp-author",
+    ]);
+  });
+
+  it("a MIGRATED manifest whose provider does not resolve yields NO authoring skill (fail-closed)", async () => {
+    // `null` also covers a MISSING / tombstoned / ambiguous provider. A
+    // manifest string naming a foreign package must not be honoured there —
+    // it would let an extension nominate any package's skill at
+    // `authoring_skill` precedence, which outranks the matcher.
+    listArtifactsMock.mockReturnValue([
+      makeIcpDef({
+        authoring: ["@cinatra-ai/marketing-icp-authoring-skill:marketing-icp-authoring"],
+      }),
+    ]);
+    resolveAuthoringEdgeMock.mockResolvedValue(null);
+    const view = await getArtifactExtension("@cinatra-ai/marketing-icp-artifact");
+    expect(view?.authoringSkillIds).toEqual([]);
+  });
+
+  it("an UNAVAILABLE resolver (scan failed) degrades to the manifest list, even for a MIGRATED id", async () => {
+    // Absent vs unavailable: a scan failure must not turn into the same
+    // fail-closed outcome as a deliberate non-declaration, or an fs blip
+    // silently refuses an extension that was authoring fine a moment earlier.
+    listArtifactsMock.mockReturnValue([
+      makeIcpDef({
+        authoring: ["@cinatra-ai/marketing-icp-authoring-skill:marketing-icp-authoring"],
+      }),
+    ]);
+    resolveAuthoringEdgeMock.mockRejectedValue(new Error("scan exploded"));
+    const view = await getArtifactExtension("@cinatra-ai/marketing-icp-artifact");
+    expect(view?.authoringSkillIds).toEqual([
+      "@cinatra-ai/marketing-icp-authoring-skill:marketing-icp-authoring",
+    ]);
   });
 
   it("returns null for a not-installed extension", async () => {

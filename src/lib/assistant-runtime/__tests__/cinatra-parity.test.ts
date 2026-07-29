@@ -54,6 +54,7 @@ vi.mock("@cinatra-ai/skills/mcp-client", () => ({
 vi.mock("@cinatra-ai/skills", () => ({
   ensureInstalledSkillsRegistered: vi.fn(async () => undefined),
   resolveInstalledSkillSourcePath: vi.fn(async () => null),
+  retireSupersededChatSkillsOnce: vi.fn(async () => undefined),
 }));
 vi.mock("@/lib/wizard-staging-store", () => ({
   getAllStagedByType: () => [],
@@ -83,7 +84,18 @@ vi.mock("@cinatra-ai/llm", () => ({
     provider: "openai",
     defaultModel: "gpt-4o",
   })),
-  buildSkillTools: vi.fn(async () => [{ type: "function", name: "shell" }]),
+  // cinatra#2091 S4: the runtime routes skill delivery through the provider
+  // seam instead of calling buildSkillTools directly. The stub returns the same
+  // single shell tool the previous buildSkillTools stub did, so the assembled
+  // tool array stays byte-identical.
+  selectSkillDeliveryAdapter: vi.fn(() => ({
+    provider: "openai",
+    deliver: vi.fn(async () => ({
+      tools: [{ type: "function", name: "shell" }],
+      systemContext: "",
+      exposure: [],
+    })),
+  })),
   resolveChatExternalMcpTools: vi.fn(async () => []),
   buildLlmMcpServerToolForChat: vi.fn(async () => ({
     type: "mcp",

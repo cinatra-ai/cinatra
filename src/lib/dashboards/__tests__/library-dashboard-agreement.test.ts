@@ -1,6 +1,7 @@
-// Phase-2 ACL cutover (cinatra#1898, epic #1883 §D7) — the PROPERTY-STYLE
-// AGREEMENT proof for acceptance item 1: "library and dashboard surfaces agree
-// on every row".
+// ACL cutover (cinatra#1898, epic #1883 §D7) — the PROPERTY-STYLE AGREEMENT
+// proof for acceptance item 1: "library and dashboard surfaces agree on every
+// row". Re-pinned at Phase-3: the demoted `visibility` column is GONE, so the
+// corpus row shape no longer carries one at all.
 //
 // The library gates a dashboard-typed artifact via the SINGLE canonical
 // `object.read` filter over the dashboard's scope tuple
@@ -12,9 +13,11 @@
 // non-member × grant/no-grant, same-org and cross-org) through BOTH and asserts
 // they never disagree. A disagreement here is a real ACL divergence.
 //
-// The corpus deliberately sets each row's demoted `visibility` column to a value
-// that would, under the RETIRED {private, owners, members} vocabulary, have
-// changed the verdict — proving the vocabulary no longer participates.
+// Phase-2 proved the retired {private, owners, members} vocabulary no longer
+// participates by feeding hostile `visibility` values through both surfaces.
+// Phase-3 DROPPED the column (migration core__0087), so the corpus row shape is
+// now scope-only — there is no visibility value left to feed, and the agreement
+// must still hold row-for-row.
 import { describe, expect, it } from "vitest";
 
 import { filterReadableDashboards, type DashboardAuthzActor } from "@/lib/dashboards/authz";
@@ -28,20 +31,19 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 
 const ORG = "org-1";
 
-// A dashboard row as the resolver reads it (the retired `visibility` value is
-// intentionally hostile — under the old vocabulary a 'private'/'owners' row was
-// owner-only; here it must NOT change the verdict).
+// A dashboard row as the resolver reads it — SCOPE ONLY. Post-Phase-3 the
+// `dashboards` table has no `visibility` column, so a row genuinely cannot carry
+// one; the owner tier + the project refinement are the whole ACL input.
 type Row = {
   id: string;
   organizationId: string;
   ownerLevel: string;
   ownerId: string;
   projectId: string | null;
-  visibility: string;
 };
 
 function r(id: string, ownerLevel: string, ownerId: string, projectId: string | null, organizationId = ORG): Row {
-  return { id, organizationId, ownerLevel, ownerId, projectId, visibility: "private" };
+  return { id, organizationId, ownerLevel, ownerId, projectId };
 }
 
 // Team ids (t*) and project ids (p*) are org-SCOPED — globally unique to exactly
@@ -134,7 +136,7 @@ function librarySurfaceCanRead(row: Row, a: ActorSpec): boolean {
   return evaluateOwnershipVisibility(vantageFromActor(actorCtx), evalRow);
 }
 
-describe("Phase-2 library ⇄ dashboard AGREEMENT (cinatra#1898 acceptance 1)", () => {
+describe("library ⇄ dashboard AGREEMENT, visibility-column-free (cinatra#1898 acceptance 1)", () => {
   it("the two surfaces return the identical read verdict for EVERY (row, actor) pair", () => {
     const disagreements: string[] = [];
     for (const row of ROWS) {

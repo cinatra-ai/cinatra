@@ -15,7 +15,11 @@ import {
   type BridgePortEndpoint,
   type EmbedBridgeOptions,
 } from "@/lib/embed/embed-bridge.client";
-import { EMBED_MESSAGE_TYPES, EMBED_PROTOCOL_VERSION } from "@/lib/embed/bridge-protocol";
+import {
+  EMBED_MESSAGE_TYPES,
+  EMBED_PROTOCOL_VERSION,
+  type EmbedBootstrap,
+} from "@/lib/embed/bridge-protocol";
 
 const PARENT_ORIGIN = "https://cms.example.com";
 const CIT = "cit_site_transport_token";
@@ -393,7 +397,23 @@ describe("embed-bridge.client — real MessageChannel end-to-end (§12b)", () =>
   it("delivers the bootstrap over a REAL entangled port from the transferred endpoint", async () => {
     const self = makeWindow();
     const parent = makeWindow();
-    const onBootstrap = vi.fn();
+    // Wait on the bridge's OWN completion signal rather than on a timer turn.
+    // `onBootstrap` is the callback the bridge invokes at the end of
+    // `acceptBootstrap`, so this promise settles exactly when the port-delivered
+    // bootstrap has been applied. The `setTimeout(resolve, 0)` hop this replaces
+    // was not a completion signal at all: it only ASSUMED that a real MessagePort
+    // is drained within one macrotask turn, and on any runtime where that does not
+    // hold the assertions below read a bridge that has not dispatched yet. The
+    // explicit per-test timeout at the bottom of this case bounds the other side:
+    // a bootstrap that is never applied fails in seconds rather than sitting until
+    // the suite-wide default.
+    let signalBootstrapped!: () => void;
+    const bootstrapApplied = new Promise<void>((resolve) => {
+      signalBootstrapped = resolve;
+    });
+    const onBootstrap = vi.fn<(bootstrap: EmbedBootstrap) => void>(() => {
+      signalBootstrapped();
+    });
     const bridge = installEmbedBridge({
       expectedParentOrigin: PARENT_ORIGIN,
       expectedAssistant: "wordpress",
@@ -409,12 +429,14 @@ describe("embed-bridge.client — real MessageChannel end-to-end (§12b)", () =>
     const remote = parent.posts[0].transfer?.[0] as MessagePort;
     expect(remote).toBeInstanceOf(MessagePort);
     remote.postMessage(bootstrapMessage(bridge.nonce));
-    await new Promise((r) => setTimeout(r, 0));
+    await bootstrapApplied;
     expect(bridge.bootstrapped).toBe(true);
     expect(onBootstrap).toHaveBeenCalledTimes(1);
     expect(onBootstrap.mock.calls[0][0].auth.citToken).toBe(CIT);
     bridge.dispose();
-  });
+    // Bounded failure path: awaiting a signal that never arrives would otherwise
+    // burn the suite-wide 30s default before reporting.
+  }, 5_000);
 });
 
 describe("embed-bridge.client — mintBridgeNonce", () => {

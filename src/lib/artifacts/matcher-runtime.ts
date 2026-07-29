@@ -31,8 +31,10 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 //   - orphan-assertion guard: authoritative read FIRST; absent ⇒
 //     clean exit, no LLM / no assert;
 //   - runtime-unconfigured ⇒ structured log + skip (no crash);
-//   - package-owned skill trust anchor (matcher skill MUST belong to
-//     the artifact extension's own package);
+//   - skill trust anchor: the matcher skill is the RESOLVED TARGET of the
+//     artifact extension's declared `role:"matcher"` dependency edge
+//     (cinatra#2090 S3), or — for an extension whose bundle has not been
+//     extracted yet — belongs to the extension's own package;
 //   - frontmatter-stripped system prompt;
 //   - declaredToolboxIds:[] (no MCP tools in a classifier);
 //   - strict Zod re-parse of the LLM response (confidence 0..1);
@@ -187,11 +189,16 @@ function resolveMatcherAttachmentFilename(args: {
 }
 
 // Test-only exports of the pure matching helpers (mime normalization /
-// wildcard / package-owned trust). Not part of the production surface.
+// wildcard / both trust anchors). Not part of the production surface.
 export const __test = {
   normalizeMime: (m: string) => normalizeMime(m),
   mimeMatches: (a: string, x: string) => mimeMatches(a, x),
-  skillTrusted: (s: SkillEntry, e: string) => skillTrusted(s, e),
+  skillPackageOwned: (s: SkillEntry, id: string, e: string) => skillPackageOwned(s, id, e),
+  skillMatchesResolvedEdge: (
+    s: SkillEntry,
+    id: string,
+    r: { skillId: string; packageName: string } | null,
+  ) => skillMatchesResolvedEdge(s, id, r),
   renderClassifierSignalsForPrompt: (s: ClassifierSignalsForPrompt | null) =>
     renderClassifierSignalsForPrompt(s),
   parseClassifierSignals: (raw: unknown) => parseClassifierSignals(raw),
@@ -585,16 +592,60 @@ async function runArtifactMatchImpl(
   };
   const ports = buildAttachmentResolverPorts({ orgId: payload.orgId });
 
+  // cinatra#2090 S3 — TRUST RE-KEYING. Resolve each candidate extension's
+  // declared `role:"matcher"` skill edge ONCE (a filesystem scan per candidate
+  // is the same substrate the rest of the skills package uses; the candidate
+  // set is capped, and the resolution is needed before the first LLM call
+  // either way). An extension that has been extracted resolves to the provider
+  // package that now owns its rules; an extension still shipping its bundle
+  // resolves to `null` and keeps the pre-extraction package-owned anchor.
+  const declaredMatcherEdge = new Map<string, { skillId: string; packageName: string } | null>();
+  for (const cand of candidates) {
+    if (declaredMatcherEdge.has(cand.extPackageName)) continue;
+    let resolved: { skillId: string; packageName: string } | null = null;
+    try {
+      const { resolveDeclaredSkillEdgeForPackage } = await import("@cinatra-ai/skills");
+      resolved = await resolveDeclaredSkillEdgeForPackage(cand.extPackageName, "matcher");
+    } catch (err) {
+      // Never fail the job on a resolution hiccup — an unresolved edge simply
+      // is not trust, and the package-owned anchor still applies. The import
+      // lives INSIDE the try on purpose: this must degrade, never abort the
+      // classification run.
+      console.warn(
+        `[artifact-matcher] declared matcher-edge resolution failed for ${cand.extPackageName}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+    declaredMatcherEdge.set(cand.extPackageName, resolved);
+  }
+
   // 4) Per-candidate classification.
   for (const cand of candidates) {
-    // Trust anchor — the matcher skill MUST belong to the artifact
-    // extension's OWN package. Boot-order resilience: a catalog miss
-    // for this package triggers a one-shot co-located registration for
-    // it, then a single map reload + retry.
+    // Trust anchor — the matcher skill is either the RESOLVED TARGET of the
+    // artifact extension's declared `matcher` edge (post-extraction) or ships
+    // in the extension's OWN package (pre-extraction). Boot-order resilience:
+    // a catalog miss triggers a one-shot co-located registration for the
+    // OWNING package, then a single map reload + retry. Post-extraction the
+    // owner is the PROVIDER, so the lazy register has to target it — lazily
+    // registering the artifact package would re-scan a directory that no
+    // longer has a `skills/` dir at all.
+    //
+    // The two anchors are EXCLUSIVE, not a widening OR (codex round 1): once a
+    // declared edge resolves, it is the ONLY thing that confers trust. Leaving
+    // the package-owned arm live alongside it would let a stale or forged
+    // catalog row keyed by the PROVIDER's skill id but owned by the ARTIFACT
+    // package pass — a row that positively DISAGREES with what the declared
+    // edge resolved to.
+    const resolvedEdge = declaredMatcherEdge.get(cand.extPackageName) ?? null;
+    const trusted = (s: SkillEntry): boolean =>
+      resolvedEdge
+        ? skillMatchesResolvedEdge(s, cand.matcherSkillId, resolvedEdge)
+        : skillPackageOwned(s, cand.matcherSkillId, cand.extPackageName);
+    const owningPackage = resolvedEdge?.packageName ?? cand.extPackageName;
     let skill = skillMap.get(cand.matcherSkillId);
-    if (!skill || !skillTrusted(skill, cand.extPackageName)) {
+    if (!skill || !trusted(skill)) {
       const reloaded = await tryLazyRegisterAndReload(
-        cand.extPackageName,
+        owningPackage,
         listInstalledSkills,
       );
       if (reloaded) {
@@ -608,9 +659,13 @@ async function runArtifactMatchImpl(
       );
       continue;
     }
-    if (!skillTrusted(skill, cand.extPackageName)) {
+    if (!trusted(skill)) {
       console.warn(
-        `[artifact-matcher] matcher skill ${cand.matcherSkillId} is NOT package-owned by ${cand.extPackageName} (foreign packageName "${skill.packageName}") — refusing to honor it`,
+        `[artifact-matcher] matcher skill ${cand.matcherSkillId} is not ${
+          resolvedEdge
+            ? `the resolved target of ${cand.extPackageName}'s declared matcher edge (${resolvedEdge.packageName}:${resolvedEdge.skillId})`
+            : `package-owned by ${cand.extPackageName}`
+        } (catalog packageName "${skill.packageName}") — refusing to honor it`,
       );
       continue;
     }
@@ -821,13 +876,63 @@ async function loadSkillMap(
   return map;
 }
 
-/** Package-owned trust: the matcher skill MUST ship in the artifact
- *  extension's OWN package. Primary check is exact `packageName`
- *  equality; the slugified `packageSlug` is only a COMPAT fallback
- *  (never compare the slug raw against `@scope/pkg`). */
-function skillTrusted(skill: SkillEntry, extPackageName: string): boolean {
+/** Package-owned trust: the matcher skill ships in the artifact
+ *  extension's OWN package. BOTH halves must be same-package — the declared
+ *  skill ID's namespace AND the catalog row's owner. Primary check is exact
+ *  `packageName` equality; the slugified `packageSlug` is only a COMPAT
+ *  fallback (never compare the slug raw against `@scope/pkg`).
+ *
+ *  The ID half matters as much as the row half (codex round 2): a MIGRATED
+ *  artifact's manifest names a FOREIGN provider id, so if its declared edge
+ *  fails to resolve — provider missing, tombstoned, ambiguous, or a transient
+ *  scan failure — a stale or forged catalog row registered under that foreign
+ *  id but OWNED by the artifact package would otherwise satisfy this anchor.
+ *  Requiring the id to be self-namespaced keeps this anchor to exactly what it
+ *  was built for: a bundle that genuinely ships inside the artifact.
+ *
+ *  This is the PRE-EXTRACTION anchor. It stays for exactly as long as a
+ *  pinned artifact extension still SHIPS its matcher bundle: cinatra#2090's
+ *  migration is rolling, one extension repo at a time, so during the wave the
+ *  fleet holds both shapes at once. An extension that has been extracted no
+ *  longer satisfies it (its matcher skill is owned by the provider package),
+ *  which is precisely why the declared-edge anchor below exists. */
+function skillPackageOwned(
+  skill: SkillEntry,
+  matcherSkillId: string,
+  extPackageName: string,
+): boolean {
+  const idNamespace = matcherSkillId.split(":")[0] ?? "";
+  const idIsSelfNamespaced =
+    idNamespace === extPackageName || idNamespace === slugify(extPackageName);
+  if (!idIsSelfNamespaced) return false;
   if (skill.packageName === extPackageName) return true;
   return skill.packageSlug === slugify(extPackageName);
+}
+
+/**
+ * DECLARED-EDGE trust (cinatra#2090 S3): the matcher skill is honoured because
+ * it is the RESOLVED TARGET of the artifact extension's own declared
+ * `role:"matcher"` dependency edge — revision-pinned by whatever the install
+ * closure materialized on disk — not because of where it happens to live.
+ *
+ * Fail-CLOSED and deliberately strict: BOTH the catalog id AND the owning
+ * package of the catalog row must equal what the edge resolved to. Checking
+ * the id alone would let a same-named row registered by some other package
+ * satisfy a declared edge, which is the exact substitution the anchor exists
+ * to refuse. A `null` resolution (no such edge declared, provider missing,
+ * tombstoned, ambiguous, or not a one-bundle skill package) is NOT trust.
+ */
+function skillMatchesResolvedEdge(
+  skill: SkillEntry,
+  matcherSkillId: string,
+  resolved: { skillId: string; packageName: string } | null,
+): boolean {
+  if (!resolved) return false;
+  if (resolved.skillId !== matcherSkillId) return false;
+  return (
+    skill.packageName === resolved.packageName ||
+    skill.packageSlug === slugify(resolved.packageName)
+  );
 }
 
 /** Boot-order resilience: the dev/boot extension scan is

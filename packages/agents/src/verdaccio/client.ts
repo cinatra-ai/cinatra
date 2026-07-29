@@ -22,10 +22,19 @@ import { randomUUID } from "node:crypto";
 const execFileAsync = promisify(execFile);
 import { tmpdir } from "node:os";
 import path from "node:path";
-import * as pacote from "pacote";
+import * as pacoteImpl from "pacote";
 import { c as tarCreate } from "tar";
 import { requireVerdaccioToken, type VerdaccioConfig } from "./config";
-import { ensureConfig, registryScopedAuthOptions } from "@cinatra-ai/registries";
+import { createRedactingPacote, ensureConfig, registryScopedAuthOptions } from "@cinatra-ai/registries";
+
+/**
+ * Redacting facade over pacote — see @cinatra-ai/registries verdaccio/registry-auth.
+ * Since pacote 22 / npm-registry-fetch 20 a registry response body's `message`
+ * is folded into the thrown `Error.message`, so a registry or proxy that echoes
+ * the inbound request would otherwise surface the bearer token there. Every
+ * pacote call in this module goes through this binding, never the raw module.
+ */
+const pacote = createRedactingPacote(pacoteImpl);
 import { buildRegistryAuthArgs } from "./cli-flags";
 import { buildAgentPackageFiles, type BuildAgentPackageInput } from "./package-files";
 import { compileOasAgentJson } from "../oas-compiler";

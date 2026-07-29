@@ -4,7 +4,8 @@ import "server-only";
 // Chat-driven authoring-skill invocation.
 //
 // Server-side authoring emission. The chat assistant follows the
-// `chat-create-artifact` skill, gathers user inputs, composes the
+// chat-create-artifact guidance (a reference of the `chat-assistant-core`
+// router bundle), gathers user inputs, composes the
 // artifact content as markdown text, and calls the server through
 // the `artifact_authoring_emit` MCP primitive (or the
 // `createArtifactFromAuthoring` server action). This module is the
@@ -246,17 +247,28 @@ export async function authorArtifact(
     }
   }
 
-  // Require the extension to declare at least one `skills.authoring`
-  // entry. Without this gate, a chat could
-  // self-classify arbitrary content as ANY compatible extension at
-  // `authoring_skill` precedence (which outranks the matcher), turning
-  // emit into a high-precedence type-laundering primitive.
-  const authoringSkills = manifest.skills?.authoring ?? [];
+  // Require the extension to have at least one HONOURABLE authoring skill.
+  // Without this gate, a chat could self-classify arbitrary content as ANY
+  // compatible extension at `authoring_skill` precedence (which outranks the
+  // matcher), turning emit into a high-precedence type-laundering primitive.
+  //
+  // cinatra#2090 S3: the gate reads the RE-KEYED set, not the raw manifest
+  // array (codex round 1). A migrated extension's manifest names a PROVIDER
+  // package, so a raw non-empty check would keep authorizing the emit even
+  // when that provider is absent, archived or ambiguous — i.e. when nothing
+  // actually resolves the instructions the precedence is granted for. The
+  // re-keyed set is exactly the ids `getArtifactExtension` hands the chat, so
+  // the surface that tells the chat "follow this skill" and the surface that
+  // authorizes the emit can never disagree.
+  const authoringSkills = await resolveAuthoringSkillIds(
+    input.extension,
+    manifest.skills?.authoring ?? [],
+  );
   if (authoringSkills.length === 0) {
     return {
       ok: false,
       reason: "extension-has-no-authoring-skill",
-      message: `Extension "${input.extension}" declares no authoring skill (manifest.skills.authoring is empty). Authoring emits require an authoring-skill-declared extension. Use the deterministic template path (createArtifactFromTemplate) for un-authored starters.`,
+      message: `Extension "${input.extension}" has no resolvable authoring skill (it declares none, or the authoring skill it depends on is not installed). Authoring emits require an authoring-skill-declared extension. Use the deterministic template path (createArtifactFromTemplate) for un-authored starters.`,
     };
   }
 
@@ -485,6 +497,9 @@ export async function searchArtifactExtensions(opts: {
   if (queryTokens.length === 0) return [];
 
   const results: ExtensionSearchResult[] = [];
+  // Raw declared authoring ids per package, kept for the re-key pass below
+  // (the manifest is not in scope there).
+  const authoringIdsByPackage = new Map<string, string[]>();
   for (const d of defs) {
     if (!d.type.endsWith(ARTIFACT_TYPE_SUFFIX)) continue;
     const packageName = d.type.slice(0, -ARTIFACT_TYPE_SUFFIX.length);
@@ -508,6 +523,7 @@ export async function searchArtifactExtensions(opts: {
     if (hits === 0) continue;
     const score = hits / queryTokens.length;
     const acceptedMimes = manifest.accepts?.file?.mimeTypes ?? [];
+    authoringIdsByPackage.set(packageName, manifest.skills?.authoring ?? []);
     results.push({
       packageName,
       label,
@@ -515,6 +531,7 @@ export async function searchArtifactExtensions(opts: {
       authorableMimes: acceptedMimes.filter((m) =>
         TEXT_AUTHORING_COMPATIBLE_MIMES.has(m),
       ),
+      // Provisional — RE-KEYED below on the returned page (cinatra#2090 S3).
       hasAuthoringSkill: (manifest.skills?.authoring ?? []).length > 0,
       score,
     });
@@ -531,7 +548,23 @@ export async function searchArtifactExtensions(opts: {
       visible.push(r);
     }
   }
-  return opts.limit ? visible.slice(0, opts.limit) : visible;
+  const page = opts.limit ? visible.slice(0, opts.limit) : visible;
+
+  // cinatra#2090 S3 — `hasAuthoringSkill` reports the RE-KEYED set, the same
+  // one `getArtifactExtension` hands the chat and the same one the emit gate
+  // authorizes on. The chat's documented ladder is "hasAuthoringSkill: true →
+  // read authoringSkillIds[0] and follow it", so a `true` computed from the
+  // raw manifest while the re-key yields nothing would send the chat to fetch
+  // an authoring skill that does not exist. Computed on the RETURNED page only,
+  // so the resolution cost is bounded by the caller's own limit.
+  return Promise.all(
+    page.map(async (r) => ({
+      ...r,
+      hasAuthoringSkill:
+        (await resolveAuthoringSkillIds(r.packageName, authoringIdsByPackage.get(r.packageName) ?? []))
+          .length > 0,
+    })),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -558,6 +591,57 @@ export type ExtensionManifestView = {
   agentDependencies: string[];
 };
 
+/**
+ * The authoring skill ids the chat may follow, RE-KEYED onto the extension's
+ * declared `role:"authoring"` dependency edge (cinatra#2090 S3).
+ *
+ * Before the extraction, an artifact extension's authoring skill id came from
+ * its own manifest and named its OWN package, so the manifest string WAS the
+ * provenance. Post-extraction the bundle lives in a separate package, and a
+ * manifest string alone is just a claim — it could name any package's skill.
+ *
+ * So the rule is: the RESOLVED edge wins when one resolves; otherwise ONLY
+ * SAME-PACKAGE manifest ids survive. The fallback is deliberately NOT "trust
+ * whatever the manifest says" (codex round 1): `null` also covers a MISSING,
+ * tombstoned or ambiguous provider, and in that state a manifest string naming
+ * a foreign package must not be honoured — it would let an extension nominate
+ * any package's skill at `authoring_skill` precedence, which outranks the
+ * matcher. A same-package id is safe by construction: it is the
+ * pre-extraction shape, where the bundle ships in the extension itself.
+ *
+ * Consequence, stated out loud: a MIGRATED extension whose provider is missing
+ * or archived resolves to `[]`, and the emit gate below refuses the emit. That
+ * is the correct fail-closed outcome — better a refused emit than a
+ * high-precedence type assertion driven by unresolvable instructions.
+ */
+async function resolveAuthoringSkillIds(
+  packageName: string,
+  declared: string[],
+): Promise<string[]> {
+  try {
+    const { resolveDeclaredSkillEdgeForPackage } = await import("@cinatra-ai/skills");
+    const edge = await resolveDeclaredSkillEdgeForPackage(packageName, "authoring");
+    if (edge) return [edge.skillId];
+  } catch (err) {
+    // UNAVAILABLE, not ABSENT (codex round 2). The resolver throws only when
+    // the scan itself failed, i.e. the question could not be asked. Narrowing
+    // to same-package ids here would turn an fs blip into a user-visible
+    // `extension-has-no-authoring-skill` refusal on an extension that was
+    // authoring fine a moment earlier. Fall back to the pre-cutover behaviour
+    // — the manifest's own declaration — which is what this surface did
+    // before the re-keying and is no weaker than the status quo it replaces.
+    console.warn(
+      `[artifact-authoring] declared authoring-edge resolution UNAVAILABLE for ${packageName} ` +
+        "(scan failed) — falling back to the manifest declaration:",
+      err instanceof Error ? err.message : err,
+    );
+    return declared;
+  }
+  // ABSENT: the scan ran and this extension declares no resolvable authoring
+  // edge. Keep only SAME-PACKAGE ids — see the doc comment above.
+  return declared.filter((id) => id.startsWith(`${packageName}:`));
+}
+
 export async function getArtifactExtension(
   packageName: string,
   actor?: ActorContext | null,
@@ -581,7 +665,10 @@ export async function getArtifactExtension(
     authorableMimes: acceptedMimes.filter((m) =>
       TEXT_AUTHORING_COMPATIBLE_MIMES.has(m),
     ),
-    authoringSkillIds: manifest.skills?.authoring ?? [],
+    authoringSkillIds: await resolveAuthoringSkillIds(
+      packageName,
+      manifest.skills?.authoring ?? [],
+    ),
     matcherSkillIds: manifest.skills?.matchers ?? [],
     agentDependencies: manifest.agentDependencies ?? [],
   };

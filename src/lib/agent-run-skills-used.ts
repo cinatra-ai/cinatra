@@ -172,7 +172,61 @@ export function recordSkillExposure(input: {
                  -- as false for the OR.
                  invocation_attributable =
                    COALESCE(${table}.invocation_attributable, false)
-                   OR EXCLUDED.invocation_attributable`,
+                   OR EXCLUDED.invocation_attributable,
+                 -- cinatra#2091 S4: a real exposure supersedes any earlier
+                 -- injection DROP marker for the same (run, skill) — the skill
+                 -- did reach the model on this step.
+                 injection_drop_reason = NULL`,
+        values: params,
+      },
+    ],
+  });
+}
+
+/**
+ * Record skills the typed injection contract RESOLVED but did NOT deliver
+ * (cinatra#2091, epic #2086 S4) — cap truncation and inline-budget overflow.
+ *
+ * A dropped skill never reached the model, so it gets NO delivery mode and NO
+ * attributability; it is stamped with `injection_drop_reason` on the same
+ * ledger row so the efficacy surface can distinguish "never delivered" from
+ * "delivered and never invoked". `DO UPDATE` deliberately does NOT overwrite a
+ * row that already carries a delivery mode: within one run a skill may be
+ * dropped on one step and delivered on another, and the delivery is the
+ * stronger fact.
+ *
+ * Best-effort and idempotent, exactly like the exposure writer — the caller
+ * wraps it and a ledger write must never fail a run.
+ */
+export function recordSkillInjectionDrops(input: {
+  runId: string;
+  drops: Array<{ skillId: string; skillKind: SkillKind; reason: string }>;
+}): void {
+  if (input.drops.length === 0) return;
+  const connectionString = getPostgresConnectionString();
+  const schema = postgresSchema;
+  const table = `"${schema.replaceAll('"', '""')}"."agent_run_skills_used"`;
+  const valuesSql: string[] = [];
+  const params: unknown[] = [];
+  let p = 1;
+  for (const d of input.drops) {
+    valuesSql.push(`($${p++}, $${p++}, $${p++}, 0, $${p++})`);
+    params.push(input.runId, d.skillId, d.skillKind, d.reason);
+  }
+  runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `INSERT INTO ${table}
+                 (run_id, skill_id, skill_kind, invocation_count, injection_drop_reason)
+               VALUES ${valuesSql.join(", ")}
+               ON CONFLICT (run_id, skill_id)
+               DO UPDATE SET
+                 injection_drop_reason =
+                   CASE WHEN ${table}.delivery_mode IS NULL
+                        THEN EXCLUDED.injection_drop_reason
+                        ELSE ${table}.injection_drop_reason
+                   END`,
         values: params,
       },
     ],

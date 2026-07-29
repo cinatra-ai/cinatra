@@ -107,6 +107,15 @@ RUN set -eux; \
 COPY --chown=www-data:www-data fixture-plugin/ \
     /usr/src/wordpress/wp-content/plugins/fixture-thirdparty-mcp/
 
+# Bake the scale-smoke-only fixture plugin (cinatra#2019) into the STAGING
+# tree — same pattern as fixture-thirdparty-mcp above: committed in-repo
+# source, no download, plain COPY is the whole bake. Kept as a SEPARATE plugin
+# directory (not added to fixture-plugin/) so its own churn never marks the
+# S1 captures stale (scripts/audit/wp-gateway-capture-freshness.mjs hashes the
+# fixture-plugin/ tree only).
+COPY --chown=www-data:www-data scale-smoke-plugin/ \
+    /usr/src/wordpress/wp-content/plugins/scale-smoke-plugin/
+
 # Re-assert the official image defaults — FROM resets nothing here, but being
 # explicit documents that our entrypoint is layered on by docker-compose
 # (entrypoint: cinatra-wp-entrypoint.sh), which still exec's docker-entrypoint.sh.

@@ -43,9 +43,10 @@ const ALLOWED_EXACT = new Set<string>([
   "extensions_search",
 
   // Chat-driven semantic-artifact authoring. Allowlisted because the
-  // chat-create-artifact skill
-  // (assistant-skills/skills/chat-create-artifact) is the model-
-  // facing dispatcher for the "create me an X artifact" intent. The
+  // chat-create-artifact guidance (a reference of the chat-assistant-core
+  // router bundle, chat-assistant-core-skill/skills/chat-assistant-core/
+  // references/chat-create-artifact.md) is the model-facing dispatcher for
+  // the "create me an X artifact" intent. The
   // emit primitive is gated server-side (recursion ledger + extension
   // validation + content-size cap + MIME + manifest.skills.authoring
   // presence) — the chat allowlist entry just exposes the dispatch

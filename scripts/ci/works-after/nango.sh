@@ -30,13 +30,13 @@ set -euo pipefail
 #
 # Env: NANGO_SERVER_IMAGE (default = the origin/main digest pin),
 #      NANGO_DB_TAG (default 17-alpine — the compose nango-db validated hold;
-#      CI derives the actual repo pin), REDIS_TAG (default 8-alpine).
+#      CI derives the compose tag, digest stripped), REDIS_TAG (default 8-alpine).
 
 WORKS_AFTER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ci/works-after/lib.sh
 source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 
-NANGO_SERVER_IMAGE="${NANGO_SERVER_IMAGE:-nangohq/nango-server:hosted@sha256:fa3db52396f1ddba8fd7c7c0203c8226916042442a0dd782f8848354c1f95198}"
+NANGO_SERVER_IMAGE="${NANGO_SERVER_IMAGE:-nangohq/nango-server:hosted@sha256:1b3be71c869cd480c24b2426bbc597e0447808db878896ccaa279f98c295431e}"
 NANGO_DB_TAG="${NANGO_DB_TAG:-17-alpine}"
 REDIS_TAG="${REDIS_TAG:-8-alpine}"
 RUN_ID="wa-nango-$$"

@@ -145,6 +145,31 @@ export type DependencyEdgeType = (typeof DEPENDENCY_EDGE_TYPES)[number];
 export const DEPENDENCY_REQUIREMENTS = ["required", "optional"] as const;
 export type DependencyRequirement = (typeof DEPENDENCY_REQUIREMENTS)[number];
 
+/**
+ * The EDGE-ROLE vocabulary (cinatra#2090 S3, epic #2086).
+ *
+ * The separation rule turns a co-located skill bundle into a declared
+ * dependency edge. A consumer may declare SEVERAL skill edges (an artifact
+ * extension declares both the classifier's rules and the chat's authoring
+ * methodology), so the edge has to say WHICH surface it feeds — otherwise the
+ * host would have to guess from the provider's name, which is exactly the
+ * naming-convention trust the extraction exists to kill.
+ *
+ *   - `matcher`   — the artifact classifier may honour this skill. It is the
+ *                   TRUST ANCHOR that replaces same-package ownership: a
+ *                   matcher skill is honoured because it is the resolved
+ *                   target of this edge, not because it sits in the
+ *                   consumer's own package.
+ *   - `authoring` — the chat-driven authoring path follows this skill.
+ *
+ * A skill edge with NO role is the plain injectable delivery wave 2 landed
+ * (`@cinatra-ai/web-research-agent` → `@cinatra-ai/web-research-skill`): the
+ * whole bundle is mounted into the consumer's own run. Roles are additive and
+ * OPTIONAL — every edge persisted before this vocabulary existed stays valid.
+ */
+export const DEPENDENCY_SKILL_ROLES = ["matcher", "authoring"] as const;
+export type DependencySkillRole = (typeof DEPENDENCY_SKILL_ROLES)[number];
+
 export type VersionConstraint =
   | { kind: "semver-range"; range: string }
   | { kind: "exact"; version: string }
@@ -158,6 +183,12 @@ export type ExtensionDependency = {
   // the SDK draft contract (`@cinatra-ai/sdk-extensions` `dependencies.ts`) so
   // the two dependency shapes stay assignable across the ABI boundary.
   kind?: DependencyEdgeKind;
+  /**
+   * Which host surface this edge feeds (cinatra#2090). Only meaningful on a
+   * `kind:"skill"` edge; absent = the plain injectable delivery. See
+   * {@link DEPENDENCY_SKILL_ROLES}.
+   */
+  role?: DependencySkillRole;
   edgeType: DependencyEdgeType;
   versionConstraint: VersionConstraint;
   requirement: DependencyRequirement;

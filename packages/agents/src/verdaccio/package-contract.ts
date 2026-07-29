@@ -71,11 +71,31 @@ export const cinatraExtensionDependencySchema = z
     // extension's kind). cinatraExtensionKindSchema above is the narrower
     // package-self enum.
     kind: z.enum(["agent", "connector", "artifact", "skill"]).optional(),
+    // The declared skill-edge ROLE (cinatra#2090 S3) — mirrors
+    // `canonical-types.ts DEPENDENCY_SKILL_ROLES`. This object is `.strict()`,
+    // so the field is not merely undocumented without this line: an edge
+    // carrying a role would be REFUSED outright at publish/install parse, and a
+    // consumer that declares which surface each of its skill edges feeds could
+    // not be published at all.
+    role: z.enum(["matcher", "authoring"]).optional(),
     edgeType: z.enum(["runtime", "install-time", "peer"]),
     versionConstraint: cinatraVersionConstraintSchema,
     requirement: z.enum(["required", "optional"]),
   })
-  .strict();
+  .strict()
+  // The authority's second role rule: a role is meaningful ONLY on a
+  // kind:"skill" edge (`validateExtensionDependencyShape`). Keyed on the target
+  // KIND alone — `edgeType` is deliberately not constrained, so a role on an
+  // install-time or peer skill edge parses here exactly as it does at install.
+  .superRefine((dep, ctx) => {
+    if (dep.role !== undefined && dep.kind !== "skill") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["role"],
+        message: `role is only meaningful on a kind:"skill" edge (got kind ${JSON.stringify(dep.kind ?? null)})`,
+      });
+    }
+  });
 
 export const cinatraDependenciesSchema = z.array(cinatraExtensionDependencySchema);
 

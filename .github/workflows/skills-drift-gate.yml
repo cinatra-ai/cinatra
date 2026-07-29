@@ -2,11 +2,12 @@ name: skills-drift-gate
 
 # Thin caller for the reusable cinatra-ai/ci skills-drift-gate (cinatra#188).
 #
-# Flags when a cinatra change touches a surface an assistant-skills SKILL.md
-# depends on — a declared `cinatra-watches` surface (MCP primitive / @cinatra-ai/*
-# package / route / source-path glob) or, for skills without a watch block, a
-# verbatim-identifier heuristic — so the impacted skill is reviewed before it
-# silently goes stale.
+# Flags when a cinatra change touches a surface a successor-skill SKILL.md
+# depends on (cinatra#2090 S3: the pinned skills universe is the UNION of the
+# successor skill repos below) — a declared `cinatra-watches` surface (MCP
+# primitive / @cinatra-ai/* package / route / source-path glob) or, for skills
+# without a watch block, a verbatim-identifier heuristic — so the impacted
+# skill is reviewed before it silently goes stale.
 #
 # ENFORCE mode: the gate now FAILS on an UNACKNOWLEDGED declared-watch finding.
 # Heuristic findings remain advisory (reported, never gating), so only a precise,
@@ -54,28 +55,30 @@ jobs:
   # context prefix.
   skills-drift-gate:
     # Double-pin per the workflow-pinning convention: the workflow ref (@<sha>) and the
-    # `ref` input below are pinned to the SAME cinatra-ai/ci commit (the v2 gate),
-    # so the gate code is never pulled from mutable main.
-    uses: cinatra-ai/ci/.github/workflows/skills-drift-gate.yml@72d0b1caa9b11e33a9ba3e65e55aae46ad844bf1 # v0.1.2-next.72d0b1c
+    # `ref` input below are pinned to the SAME cinatra-ai/ci commit (the
+    # multi-repo-capable gate, cinatra-ai/ci#82), so the gate code is never
+    # pulled from mutable main.
+    uses: cinatra-ai/ci/.github/workflows/skills-drift-gate.yml@89f7df4e7040d4b042f93ab44832cc37be070925 # v0.1.2-next.89f7df4
     with:
-      # assistant-skills pin: points at the commit that carries the skills'
-      # `cinatra-watches` declarations. Kept in STRICT LOCKSTEP with the
-      # @cinatra-ai/assistant-skills resolvedSha in
-      # cinatra-required-extensions.lock.json — at each required-extensions
-      # lock refresh, re-pin this skills_ref to the new resolvedSha written
-      # into the lock, in the SAME change.
-      #
-      # cinatra#2047 (row 8, final): re-pinned from e9d5a7e to 92fb85a
-      # alongside the lock bump in the same PR. e9d5a7e was the v0.1.7 closeout
-      # reconciliation pin (#1086's lock refresh); it lagged the pre-bump lock
-      # (36b55a1) by eight assistant-skills commits and would otherwise lag the
-      # newly bumped lock by nine, including the #55 removal of the two
-      # archived lifecycle-helper agents. Enumerated at both snapshots the lag
-      # was a pure SHRINK — 90 watch entries at e9d5a7e, 89 at 92fb85a, one
-      # removal (chat-assistant-core no longer watching a retired package) and
-      # ZERO additions — so on the ENFORCED declared-watch surface the stale
-      # pin could only over-report, never miss drift. This restores the
-      # documented lockstep rather than fixing an observed miss.
-      skills_ref: 92fb85a67733d419632c2dc160413b54ffedc434
+      # Successor-skill pins (cinatra#2090 S3): the former single
+      # @cinatra-ai/assistant-skills pack was consolidated into six successor
+      # skill repos; the watch-bearing SKILL.mds (and their cinatra-watches
+      # unions) now live in the five injectable routers, and the internal
+      # hitl bundle rides along so the whole required set is watched. Each
+      # entry below is kept in STRICT LOCKSTEP with that repo's resolvedSha
+      # in cinatra-required-extensions.lock.json — at each required-extensions
+      # lock refresh, re-pin the matching entry to the new resolvedSha written
+      # into the lock, in the SAME change (the same rule the retired single
+      # skills_ref pin followed; its last value, 92fb85a, lagged the final
+      # assistant-skills lock pin fef2b294 by one commit — this re-pin absorbs
+      # that lag by construction, since the successor tips were extracted from
+      # fef2b294).
+      skills_repos: |
+        cinatra-ai/chat-assistant-core-skill@2cb491e1e3ccf7fe946b253254f2e7a4d509bc55
+        cinatra-ai/extension-authoring-skill@01c040e6453a08f8de128bc40b7b9047793fde1a
+        cinatra-ai/automation-authoring-skill@596afabf6a10b8f1f297521fcb7d1f78fb70213b
+        cinatra-ai/company-research-skill@639fdc073b7d600a8436900843bfd3ac42778743
+        cinatra-ai/blog-content-skill@163f73c05b441b61799a2db203f8ce873ec8aae7
+        cinatra-ai/hitl-prompt-drive-skill@81edce91254e677d7e68269503f3cf22fe7c9a2d
       mode: enforce
-      ref: 72d0b1caa9b11e33a9ba3e65e55aae46ad844bf1 # same SHA as the workflow @ref
+      ref: 89f7df4e7040d4b042f93ab44832cc37be070925 # same SHA as the workflow @ref
