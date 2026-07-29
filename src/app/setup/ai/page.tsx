@@ -29,13 +29,18 @@ import { Input } from "@/components/ui/input";
 import { buildKnownWizardEligibleProviders } from "@cinatra-ai/sdk-extensions/llm-provider-contract";
 import { getSetupWizardSteps, getFirstIncompleteStep } from "@/lib/setup-wizard";
 import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
-import { readSetupReadinessState } from "@/lib/setup-readiness-saga";
+import { readSetupReadinessState, readAnthropicMcpMode } from "@/lib/setup-readiness-saga";
 import { describeMatcherProviderConstraint } from "@/lib/llm-purpose-policy";
 import {
+  SETUP_CREDENTIAL_SAVE_STEP_ID,
   readSetupProviderSelection,
   readSetupReadinessFailure,
 } from "@/app/setup/ai/readiness-state";
-import { selectSetupProviderAction, completeAiSetupAction } from "@/app/setup/ai/actions";
+import {
+  selectSetupProviderAction,
+  completeAiSetupAction,
+  enableAnthropicNativeSkillDeliveryAction,
+} from "@/app/setup/ai/actions";
 import { SetupOpenAIProviderStep } from "@/app/setup/ai/openai-provider-step";
 import { SetupAnthropicProviderStep } from "@/app/setup/ai/anthropic-provider-step";
 
@@ -71,6 +76,20 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
   const selected = readSetupProviderSelection();
   const readiness = readSetupReadinessState();
   const failure = readSetupReadinessFailure();
+  // A CREDENTIAL-SAVE failure is rendered by the provider's own form section
+  // (the control the operator used); the readiness alert reports on saga runs.
+  const readinessFailure =
+    failure && failure.step !== SETUP_CREDENTIAL_SAVE_STEP_ID ? failure : null;
+  // A `native-skills-probe` failure whose cause is the `function-tools` MCP
+  // mode is the one readiness failure with a remedy the wizard can PERFORM.
+  // (The same step can also fail with the mode already native — a workspace
+  // without custom skills enabled — and that one has no in-product remedy, so
+  // no control is offered.) Gate on the STORED mode, the authority the saga
+  // itself reads; the action re-checks the same condition before mutating.
+  const offerNativeMcpSwitch =
+    selected === "anthropic" &&
+    readinessFailure?.step === "native-skills-probe" &&
+    readAnthropicMcpMode() === "function-tools";
 
   // Auto-forward once the step is genuinely done (a VALID receipt — not merely
   // a saved key), unless the operator came back via the stepper or a readiness
@@ -174,14 +193,29 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
             </Alert>
           ) : null}
 
-          {!readiness.ready && failure ? (
+          {!readiness.ready && readinessFailure ? (
             <Alert variant="destructive" className="mt-4" data-testid="setup-readiness-failure">
               <TriangleAlert className="size-4" aria-hidden />
-              <AlertTitle>AI setup did not complete ({failure.step})</AlertTitle>
+              <AlertTitle>AI setup did not complete ({readinessFailure.step})</AlertTitle>
               <AlertDescription>
-                <span className="block">{failure.message}</span>
-                {failure.fixForward ? (
-                  <span className="mt-2 block font-medium">{failure.fixForward}</span>
+                <span className="block">{readinessFailure.message}</span>
+                {readinessFailure.fixForward ? (
+                  <span className="mt-2 block font-medium">{readinessFailure.fixForward}</span>
+                ) : null}
+                {/* The fix-forward, PERFORMABLE. Without this the instruction
+                    names a setting no surface renders and no admin route
+                    reaches during setup. */}
+                {offerNativeMcpSwitch ? (
+                  <form action={enableAnthropicNativeSkillDeliveryAction} className="mt-3">
+                    <Button
+                      type="submit"
+                      variant="outline"
+                      size="sm"
+                      data-testid="setup-enable-native-mcp"
+                    >
+                      Switch to native MCP delivery
+                    </Button>
+                  </form>
                 ) : null}
               </AlertDescription>
             </Alert>

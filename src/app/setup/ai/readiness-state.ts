@@ -29,6 +29,16 @@ export const SETUP_PROVIDER_SELECTION_CONFIG_KEY = "setup_provider_selection";
  */
 export const SETUP_READINESS_FAILURE_CONFIG_KEY = "setup_readiness_last_failure";
 
+/**
+ * The failure record's `step` for a failure that happened BEFORE the saga —
+ * saving the provider credential from this step's own form. Deliberately NOT a
+ * member of `SETUP_READINESS_STEPS`: the saga never ran, so labelling it with
+ * one of the saga's step ids would misreport where the run stopped. The step
+ * renders this class at the credential FORM (where the operator acted) rather
+ * than in the readiness alert.
+ */
+export const SETUP_CREDENTIAL_SAVE_STEP_ID = "credential-save";
+
 export type SetupReadinessFailureRecord = {
   step: string;
   message: string;

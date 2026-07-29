@@ -264,9 +264,57 @@ function readAnthropicCredentialFingerprint(): string | null {
  * (`mcpMode ?? "function-tools"`) so an unset value is treated as the
  * fail-closed mode it actually behaves as, never as "probably fine".
  */
-function readAnthropicMcpMode(): "native" | "function-tools" {
+export function readAnthropicMcpMode(): "native" | "function-tools" {
   const settings = readConnectorConfigFromDatabase<{ mcpMode?: string }>("anthropic", {});
   return settings?.mcpMode === "native" ? "native" : "function-tools";
+}
+
+/**
+ * Set the connector's stored MCP mode — the WRITE half of the reader directly
+ * above, deliberately co-located with it so both sides of this one setting keep
+ * a single authority and a single default.
+ *
+ * WHY THE HOST WRITES THIS ROW AT ALL. The saga's `native-skills-probe` failure
+ * has exactly one remedy — flip this setting to `"native"` — and until now
+ * nothing anywhere could perform it: the connector's `cinatra.configSchema`
+ * declares no `mcpMode` field (so its settings surface cannot render one), and
+ * the host's legacy `setAnthropicMcpModeAction` is a documented stub that
+ * writes nothing. So the failure's fix-forward named a control that does not
+ * exist, which is worse than the reported symptom (that admin routes redirect
+ * back into the wizard during setup): exempting a settings route from that
+ * redirect would land the operator on a page that still cannot perform the
+ * switch. The honest minimum is to make the wizard itself able to do it.
+ *
+ * SCOPE OF THE BOUNDARY CROSSING, stated rather than glossed. `saveAPISettings`
+ * (the CREDENTIAL) still goes through the connector's own gated writer and this
+ * function must never grow to cover credentials or any other field: it is a
+ * read-modify-write of ONE non-secret key on the same row the reader above
+ * already treats as authoritative, mirroring the connector's own `saveMcpMode`
+ * exactly.
+ *
+ * WHAT "PRESERVES THE OTHER SETTINGS" DOES AND DOES NOT MEAN (codex round-4
+ * finding 4). It writes back every field it READ, so a sequential save of an
+ * unrelated setting is not clobbered. It is NOT atomic: a connector settings
+ * save landing between this read and this write would be lost. That is not a
+ * regression the host introduces — the connector's own `saveMcpMode` and
+ * `saveAnthropicPromptCachingEnabled` are the same unconditional
+ * read-modify-write over the same row, so routing this through the connector
+ * (or through an `llm-provider-surface` writer) would inherit the identical
+ * window. Closing it needs a CAS/atomic connector-config write, which does not
+ * exist yet. The exposure here is deliberately tiny: one admin, one click,
+ * during setup, on an instance whose connector settings surface is not even
+ * reachable yet. The durable fix — an `mcpMode` writer on the
+ * `llm-provider-surface` ABI (or the field on the connector's configSchema),
+ * over an atomic write — is connector-side, beyond this PR's repo, and is
+ * recorded as follow-up on cinatra#2093.
+ */
+export function writeAnthropicMcpMode(mode: "native" | "function-tools"): void {
+  const settings = readConnectorConfigFromDatabase<Record<string, unknown> | null>(
+    "anthropic",
+    {},
+  );
+  const preserved = settings && typeof settings === "object" ? settings : {};
+  writeConnectorConfigToDatabase("anthropic", { ...preserved, mcpMode: mode });
 }
 
 /**
@@ -590,8 +638,16 @@ export async function runSetupReadinessSaga(
           "native-skills-probe",
           result.reason ??
             "Anthropic rejected a container.skills request, so uploaded skills would not reach the model.",
+          // The fix-forward must name something the operator can DO from where
+          // they are standing. It used to say "in its settings" — accurate
+          // about the setting, unfollowable in practice: admin routes redirect
+          // back into the wizard while setup is incomplete, and no settings
+          // surface renders this field in the first place. It now names the
+          // in-step control (see writeAnthropicMcpMode above). It is also
+          // purely the REMEDY: the diagnosis is the `message` right above it,
+          // and the two render adjacently.
           result.mode === "function-tools"
-            ? "This connection's MCP mode is set to 'function-tools', which cannot deliver custom skills — every container.skills request is rejected. Switch the Anthropic connector's MCP mode to 'native' in its settings, then run this step again."
+            ? "Use “Switch to native MCP delivery” below to set the Anthropic connector's MCP mode to 'native', then run this step again."
             : "Confirm the Anthropic workspace has custom skills enabled for this API key, then run this step again.",
         );
       }

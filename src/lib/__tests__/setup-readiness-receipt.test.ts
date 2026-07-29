@@ -42,6 +42,8 @@ import {
   writeSetupReadinessReceipt,
   clearSetupReadinessReceipt,
   readSetupReadinessReceipt,
+  readAnthropicMcpMode,
+  writeAnthropicMcpMode,
   SETUP_READINESS_RECEIPT_CONFIG_KEY,
   type SetupReadinessReceipt,
 } from "@/lib/setup-readiness-saga";
@@ -179,6 +181,84 @@ describe("readiness receipt — fail-closed reads", () => {
       throw new Error("db down");
     });
     expect(readSetupReadinessState().ready).toBe(false);
+  });
+});
+
+/**
+ * THE MCP-MODE WRITER (the F2 finding on PR #2213).
+ *
+ * The `native-skills-probe` failure's only remedy is flipping this setting, and
+ * nothing in the product could perform it — the connector declares no `mcpMode`
+ * field on its settings schema and the host's legacy setter is a stub. The
+ * wizard now performs it, so the write has to be exactly the read's inverse,
+ * and it has to leave the rest of the connector's settings alone.
+ */
+describe("mcpMode — the writer that makes the fix-forward performable", () => {
+  it("round-trips through the SAME reader the fingerprint uses", () => {
+    dbState.connectorConfig.set("anthropic", { mcpMode: "function-tools" });
+    expect(readAnthropicMcpMode()).toBe("function-tools");
+
+    writeAnthropicMcpMode("native");
+    expect(readAnthropicMcpMode()).toBe("native");
+  });
+
+  it("PRESERVES every other connector setting — it is one field, not a row replacement", () => {
+    dbState.connectorConfig.set("anthropic", {
+      mcpMode: "function-tools",
+      defaultModel: "claude-sonnet-4-6",
+      promptCachingEnabled: true,
+    });
+
+    writeAnthropicMcpMode("native");
+
+    expect(dbState.connectorConfig.get("anthropic")).toEqual({
+      mcpMode: "native",
+      defaultModel: "claude-sonnet-4-6",
+      promptCachingEnabled: true,
+    });
+  });
+
+  it("writes onto an ABSENT settings row without inventing other fields", () => {
+    dbState.connectorConfig.delete("anthropic");
+    writeAnthropicMcpMode("native");
+    expect(dbState.connectorConfig.get("anthropic")).toEqual({ mcpMode: "native" });
+  });
+
+  it("INVALIDATES a receipt earned under the old mode — the switch is a readiness input", () => {
+    dbState.connectorConfig.set("anthropic", { mcpMode: "native" });
+    earnReceipt("anthropic");
+    expect(readSetupReadinessState().ready).toBe(true);
+
+    // Flipping AWAY from native through the writer must expire the receipt, the
+    // same as any other change to this input.
+    writeAnthropicMcpMode("function-tools");
+    expect(readSetupReadinessState().ready).toBe(false);
+  });
+
+  it("an invalidated receipt is only DORMANT — restoring the mode makes it valid again (why the switch must clear it)", () => {
+    // This is the hazard the wizard's switch action has to defuse, pinned here
+    // so the reason it clears the receipt cannot quietly stop being true. A
+    // fingerprint mismatch does NOT delete a receipt: `readSetupReadinessState`
+    // returns it with `ready:false`. Put the input back and the SAME receipt is
+    // authoritative again — setup would read ready on a probe that failed.
+    dbState.connectorConfig.set("anthropic", { mcpMode: "native" });
+    earnReceipt("anthropic");
+
+    writeAnthropicMcpMode("function-tools");
+    const dormant = readSetupReadinessState();
+    expect(dormant.ready).toBe(false);
+    expect(dormant.reason).toBe("configuration-changed");
+    expect(dormant.receipt).not.toBeNull(); // still there — merely not matching
+
+    writeAnthropicMcpMode("native");
+    expect(readSetupReadinessState().ready).toBe(true); // RESURRECTED
+
+    // The action's own defusal: clear first, then write the mode.
+    clearSetupReadinessReceipt();
+    writeAnthropicMcpMode("function-tools");
+    writeAnthropicMcpMode("native");
+    expect(readSetupReadinessState().ready).toBe(false);
+    expect(readSetupReadinessState().reason).toBe("no-receipt");
   });
 });
 

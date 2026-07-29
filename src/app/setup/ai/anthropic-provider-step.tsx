@@ -11,6 +11,8 @@
 // anthropic connector registers at activation. Connector absent → the degraded
 // info state replaces the form (never a form that could not possibly save).
 
+import { TriangleAlert } from "lucide-react";
+
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,6 +20,10 @@ import { Field, FieldLabel } from "@/components/ui/field";
 
 import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 import { saveAnthropicSetupKeyAction } from "@/app/setup/ai/actions";
+import {
+  SETUP_CREDENTIAL_SAVE_STEP_ID,
+  readSetupReadinessFailure,
+} from "@/app/setup/ai/readiness-state";
 
 export async function SetupAnthropicProviderStep() {
   const surface = getLlmProviderSurface("anthropic");
@@ -40,6 +46,13 @@ export async function SetupAnthropicProviderStep() {
     | undefined;
   const hasApiKey = Boolean(configured?.apiKey);
 
+  // A failed KEY SAVE renders here, at the control the operator used — not in
+  // the readiness section below, which reports on a saga run that never
+  // started. The wizard's flash protocol carries codes only, so the actionable
+  // text comes from the durable failure record.
+  const failure = readSetupReadinessFailure();
+  const saveFailure = failure?.step === SETUP_CREDENTIAL_SAVE_STEP_ID ? failure : null;
+
   return (
     <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
       <p className="text-base font-semibold text-foreground">Anthropic credentials</p>
@@ -57,6 +70,19 @@ export async function SetupAnthropicProviderStep() {
           Administration.
         </AlertDescription>
       </Alert>
+
+      {saveFailure ? (
+        <Alert variant="destructive" className="mt-4" data-testid="setup-anthropic-key-save-failure">
+          <TriangleAlert className="size-4" aria-hidden />
+          <AlertTitle>Could not save the Anthropic API key</AlertTitle>
+          <AlertDescription>
+            <span className="block">{saveFailure.message}</span>
+            {saveFailure.fixForward ? (
+              <span className="mt-2 block font-medium">{saveFailure.fixForward}</span>
+            ) : null}
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <form action={saveAnthropicSetupKeyAction} className="mt-5 grid gap-4">
         <Field>

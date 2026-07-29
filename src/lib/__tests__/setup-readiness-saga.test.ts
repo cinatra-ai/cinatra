@@ -303,6 +303,14 @@ describe("setup readiness saga — failure + compensation", () => {
       expect(result.failure.step).toBe("native-skills-probe");
       expect(result.failure.message).toContain("container.skills");
       expect(result.failure.fixForward).toContain("'native'");
+      // FOLLOWABLE, not merely accurate (the F2 finding on PR #2213). The
+      // prompt used to say "in its settings" — but no settings surface renders
+      // this field and, during setup, every admin route redirects back into the
+      // wizard, so the instruction named a control that did not exist. It must
+      // name the in-step control, which `enableAnthropicNativeSkillDeliveryAction`
+      // provides.
+      expect(result.failure.fixForward).toContain("Switch to native MCP delivery");
+      expect(result.failure.fixForward).not.toContain("in its settings");
     }
     // The decisive property: setup did NOT complete, so nothing reads as ready.
     expect(r.receipts).toEqual([]);
