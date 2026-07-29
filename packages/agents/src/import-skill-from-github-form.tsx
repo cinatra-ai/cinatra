@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Select,
@@ -36,6 +37,13 @@ import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 const LATEST_CODE_VALUE = "__latest_code__";
 
 type RepoMetadata = Extract<FetchGitHubSkillRepoMetadataResult, { ok: true }>["metadata"];
+/** The pre-install Anthropic-upload confirmation (cinatra#2092, epic #2086 S5):
+ *  the FULL resolved dependency closure, the data-egress advisory, and the
+ *  digest the install call must echo back as the operator's consent evidence. */
+type UploadConsentPrompt = Extract<
+  FetchGitHubSkillRepoMetadataResult,
+  { ok: true }
+>["uploadConsentPrompt"];
 
 // Default policy applied when the operator doesn't open the advanced
 // "Configure access & ownership" panel. Mirrors the skill-package detail
@@ -62,6 +70,17 @@ export function ImportSkillFromGitHubForm({ availableScopes }: ImportSkillFromGi
   const [isFetching, startFetch] = useTransition();
   const [isInstalling, startInstall] = useTransition();
 
+  // cinatra#2092 (epic #2086 S5) — the interactive upload-consent confirmation.
+  // Resolved SERVER-SIDE by the pre-install lookup so the operator sees the
+  // FULL resolved dependency closure and the data-egress advisory BEFORE they
+  // install. Default OFF: consent is an explicit act, and the install sends
+  // nothing unless the box is ticked (the server is the boundary — it
+  // re-resolves the closure and refuses a confirmation whose digest does not
+  // match what was actually shown).
+  const [uploadConsentPrompt, setUploadConsentPrompt] =
+    useState<UploadConsentPrompt | null>(null);
+  const [uploadConsentChecked, setUploadConsentChecked] = useState(false);
+
   // Controlled draft for upload-time access/ownership capture. Collapsed by
   // default ("Configure access & ownership (advanced)") so the happy-path
   // remains 2-click. When the operator opens the panel, the draft state is
@@ -84,6 +103,8 @@ export function ImportSkillFromGitHubForm({ availableScopes }: ImportSkillFromGi
         return;
       }
       setMetadata(result.metadata);
+      setUploadConsentPrompt(result.uploadConsentPrompt);
+      setUploadConsentChecked(false);
       // Preselect the latest non-prerelease release when one exists; else stay
       // on "Latest code". The releases array preserves the listReleases order
       // (newest first), so the first non-prerelease is the latest stable.
@@ -107,7 +128,24 @@ export function ImportSkillFromGitHubForm({ availableScopes }: ImportSkillFromGi
             coOwnerUserIds: permissionsDraft.coOwners.map((c) => c.userId),
           }
         : undefined;
-      const result = await installGitHubSkillExtension({ repoUrl, ref, permissions });
+      // cinatra#2092 (S5): send the consent decision ONLY when the operator
+      // ticked the box on a prompt that actually applies. `interactive: true`
+      // makes the server require the closure-confirmation digest to match the
+      // closure it re-resolves — the box alone is never sufficient.
+      const anthropicUploadConsent =
+        uploadConsentPrompt?.consentApplies && uploadConsentChecked
+          ? {
+              granted: true,
+              confirmedClosureDigest: uploadConsentPrompt.closureDigest,
+              interactive: true,
+            }
+          : undefined;
+      const result = await installGitHubSkillExtension({
+        repoUrl,
+        ref,
+        permissions,
+        anthropicUploadConsent,
+      });
       if (!result.ok) {
         setError(result.error);
         return;
@@ -249,6 +287,41 @@ export function ImportSkillFromGitHubForm({ availableScopes }: ImportSkillFromGi
               </FieldDescription>
             )}
           </Field>
+
+          {/* Anthropic upload consent (cinatra#2092, epic #2086 S5). Rendered
+              only when the workspace opt-in is ON — with it OFF nothing can
+              egress, so asking for consent would be misleading. Lists the FULL
+              resolved dependency closure and carries the data-egress advisory;
+              the checkbox is the operator's explicit consent act. */}
+          {uploadConsentPrompt?.consentApplies && (
+            <Alert data-testid="anthropic-upload-consent">
+              <AlertTitle>{uploadConsentPrompt.headline}</AlertTitle>
+              <AlertDescription className="flex flex-col gap-2">
+                <span>{uploadConsentPrompt.advisory}</span>
+                <ul className="flex flex-col gap-1">
+                  {uploadConsentPrompt.closureLines.map((line) => (
+                    <li key={line} className="font-mono text-xs">
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+                <label className="flex items-start gap-2 text-sm">
+                  <Checkbox
+                    className="mt-0.5"
+                    checked={uploadConsentChecked}
+                    onCheckedChange={(checked) => setUploadConsentChecked(checked === true)}
+                    disabled={isInstalling}
+                    data-testid="anthropic-upload-consent-checkbox"
+                  />
+                  <span>
+                    Allow uploading these skills to the Anthropic Skills API. Leave
+                    unchecked to install without any upload — you can grant consent
+                    later.
+                  </span>
+                </label>
+              </AlertDescription>
+            </Alert>
+          )}
 
           {/* Optional access & ownership capture. Collapsed by default. When
               opened, the values are threaded through installGitHubSkillExtension

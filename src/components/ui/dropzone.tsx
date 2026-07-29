@@ -760,6 +760,16 @@ const DropzoneTrigger = forwardRef<HTMLLabelElement, DropzoneTriggerProps>(
             },
             className: "sr-only",
             tabIndex: undefined,
+            // react-dropzone 18.0.2 started emitting a generic
+            // `aria-label="file upload"` on the hidden input so that a bare,
+            // unlabelled input still has an accessible name (upstream #1458 /
+            // #1430). Here the input is ALWAYS rendered inside this component's
+            // own <label>, so that generic name would win over — and discard —
+            // the caller's descriptive trigger copy. Clearing it hands naming
+            // back to the wrapping <label>, which is what this surface had
+            // before the hop. `getInputProps` spreads these overrides last, so
+            // `undefined` removes the attribute rather than adding an empty one.
+            "aria-label": undefined,
           })}
           aria-describedby={
             context.isInvalid

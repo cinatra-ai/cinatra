@@ -166,6 +166,28 @@ export function createSkillExtensionHandler(): ExtensionTypeHandler {
       // whose defensive filter drops rows for skills no longer in the rebuilt
       // catalog — so the uninstalled package's matches disappear with no extra
       // match-store reconcile pass here.
+      // cinatra#2092 (S5): an uninstall REVOKES the package identity's upload
+      // consent BEFORE the rebuild. Two reasons: the rebuild's projection then
+      // sees no grant (so nothing can transiently re-qualify), and a later
+      // re-install of the same package must ask for consent again instead of
+      // silently inheriting the old grant. The rebuild's catalog transaction
+      // schedules the delayed GC row at grace-window expiry, so the remote
+      // copies are reclaimed with no manual step. Never fatal — the uninstall
+      // itself must complete.
+      try {
+        const { revokeSkillPackageUploadConsent } = await import(
+          "@/lib/anthropic-skill-config-service"
+        );
+        revokeSkillPackageUploadConsent({
+          packageId: source.packageId,
+          revokedBy: null,
+        });
+      } catch (err) {
+        console.warn(
+          "[skills/extension-handler] upload-consent revoke on uninstall failed:",
+          err instanceof Error ? err.message : err,
+        );
+      }
       await rebuildSkillsCatalog({ reason: "skill-extension-uninstall" });
     },
 

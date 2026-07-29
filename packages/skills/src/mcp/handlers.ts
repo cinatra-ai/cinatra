@@ -161,6 +161,19 @@ export const deleteSkillSchema = z.object({
 export const installFromGitHubSchema = z.object({
   repoRef: z.string().min(1).describe("GitHub owner/repo (e.g. 'acme/my-skills')"),
   connectionId: z.string().optional(),
+  // cinatra#2092 (S5) — EXPLICIT upload consent for a NONINTERACTIVE install.
+  // A programmatic caller has no confirmation dialog, so passing this flag IS
+  // the consent act. Omit it (the default) and the installed skills stay
+  // upload-ineligible: the derived `allowAnthropicUpload` projection stays
+  // false, nothing egresses, and the fail-closed outcome is returned on the
+  // result as `uploadConsent`. Only ever effective while the workspace
+  // Anthropic opt-in is ON — that outer gate is checked independently.
+  consentToAnthropicUpload: z
+    .boolean()
+    .optional()
+    .describe(
+      "Explicitly consent to uploading this package's skills (and every skill extension it pulls in) to the Anthropic Skills API. Omitted/false = the skills stay excluded from upload.",
+    ),
 });
 
 export const uninstallPackageSchema = z.object({
@@ -450,13 +463,73 @@ export function createSkillsPrimitiveHandlers() {
       // authenticated MCP callers cannot install and read arbitrary
       // GitHub-hosted skill content.
       await requireAdminActor(request.actor as PrimitiveActorContext);
-      const { repoRef, connectionId } = installFromGitHubSchema.parse(request.input);
+      const { repoRef, connectionId, consentToAnthropicUpload } =
+        installFromGitHubSchema.parse(request.input);
       const { installSkillPackageFromGitHub } = await import("../github");
+      // cinatra#2092 (S5): snapshot BEFORE the install so the consent closure is
+      // exactly what this install produced (root + transitive skill extensions).
+      const { snapshotSkillPackageIds } = await import(
+        "@/lib/anthropic-skill-config-service"
+      );
+      const packageIdsBeforeInstall = snapshotSkillPackageIds();
       const result = await installSkillPackageFromGitHub(repoRef, connectionId);
 
       // Explicit lifecycle rebuild (cinatra#1364): merge the newly-installed
       // package into the catalog NOW instead of on some later implicit read.
       await rebuildSkillsCatalog({ reason: "mcp-skill-package-install" });
+
+      // cinatra#2092 (S5) — FAIL-CLOSED headless consent. Without an explicit
+      // `consentToAnthropicUpload: true` no consent row is written, so the
+      // derived projection keeps the installed skills upload-INELIGIBLE and
+      // nothing egresses. The outcome is RECORDED on the response either way.
+      let uploadConsent: {
+        granted: boolean;
+        reason: string;
+        outcome: string;
+        scopeKeys: string[];
+      };
+      try {
+        const { resolveInstalledClosure, recordSkillInstallConsent } = await import(
+          "@/lib/anthropic-skill-config-service"
+        );
+        const rootPackageId =
+          typeof (result as { packageId?: unknown })?.packageId === "string"
+            ? (result as { packageId: string }).packageId
+            : "";
+        const recorded = recordSkillInstallConsent({
+          consent:
+            consentToAnthropicUpload === true ? { granted: true } : null,
+          closure: resolveInstalledClosure({
+            before: packageIdsBeforeInstall,
+            rootPackageId,
+          }),
+          grantedBy:
+            typeof (request.actor as { userId?: unknown })?.userId === "string"
+              ? ((request.actor as { userId: string }).userId)
+              : null,
+          // Programmatic: no confirmation surface rendered the closure, so the
+          // explicit parameter alone is the act (no digest check).
+          interactive: false,
+        });
+        uploadConsent = {
+          granted: recorded.grant,
+          reason: recorded.reason,
+          outcome: recorded.outcome,
+          scopeKeys: recorded.granted,
+        };
+      } catch (err) {
+        console.warn(
+          "[skills/mcp] Anthropic upload consent recording failed (skills stay upload-ineligible):",
+          err instanceof Error ? err.message : err,
+        );
+        uploadConsent = {
+          granted: false,
+          reason: "consent-record-failed",
+          outcome:
+            "The upload consent could not be recorded — the installed skills stay excluded from upload.",
+          scopeKeys: [],
+        };
+      }
 
       // Fan out one inline re-evaluation job per newly-installed skill.
       // Failures here MUST NOT abort the install; log and continue. BullMQ
@@ -487,7 +560,10 @@ export function createSkillsPrimitiveHandlers() {
           );
         }
       }
-      return result;
+      // cinatra#2092 (S5): the consent outcome rides the response so a
+      // programmatic caller can SEE that its install stayed upload-ineligible
+      // rather than having to infer it.
+      return { ...(result as Record<string, unknown>), uploadConsent };
     },
 
     "skills_packages_uninstall": async (request: PrimitiveInvocationRequest<unknown>) => {
@@ -507,6 +583,22 @@ export function createSkillsPrimitiveHandlers() {
       const removed = await uninstallSkillPackage(packageId);
 
       if (removed) {
+        // cinatra#2092 (S5): revoke the package identity's upload consent
+        // BEFORE the rebuild, so a later re-install must ask again instead of
+        // inheriting the old grant. The rebuild's own transaction schedules the
+        // delayed GC row at grace-window expiry, reclaiming the remote copies
+        // with no manual step. Never fatal to the uninstall.
+        try {
+          const { revokeSkillPackageUploadConsent } = await import(
+            "@/lib/anthropic-skill-config-service"
+          );
+          revokeSkillPackageUploadConsent({ packageId, revokedBy: null });
+        } catch (err) {
+          console.warn(
+            "[skills/mcp] upload-consent revoke on uninstall failed:",
+            err instanceof Error ? err.message : err,
+          );
+        }
         // Explicit lifecycle rebuild (cinatra#1364) — reconcile the catalog
         // after the uninstall's disk + row removal; never abort the uninstall.
         try {

@@ -180,6 +180,17 @@ export {
   isAnthropicSkillUploadAllowed,
   defaultAnthropicSkillUploadGate,
   type AnthropicSkillUploadGate,
+  // Upload-on-install consent policy (cinatra#2092, epic #2086 S5) — the pure
+  // fail-closed decision every install surface shares.
+  ANTHROPIC_SKILL_UPLOAD_EGRESS_ADVISORY,
+  closureConsentDigest,
+  buildAnthropicUploadConsentPrompt,
+  resolveAnthropicUploadConsentDecision,
+  type ConsentClosureMember,
+  type ConsentPrompt,
+  type ConsentDecision,
+  type ConsentDecisionReason,
+  type AnthropicUploadConsentInput,
 } from "./tools/anthropic-skill-upload-gate";
 export {
   AnthropicSkillDeliveryError,

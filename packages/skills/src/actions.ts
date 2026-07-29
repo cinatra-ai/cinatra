@@ -342,7 +342,23 @@ export async function deletePersonalSkillAction(
 }
 
 export type FetchGitHubSkillRepoMetadataResult =
-  | { ok: true; metadata: import("./github").GitHubRepoMetadata }
+  | {
+      ok: true;
+      metadata: import("./github").GitHubRepoMetadata;
+      /**
+       * The Anthropic-upload install CONFIRMATION for this repository
+       * (cinatra#2092, epic #2086 S5): the FULL resolved dependency closure
+       * plus the data-egress advisory, and the `closureDigest` the install call
+       * must echo back as `anthropicUploadConsent.confirmedClosureDigest`.
+       *
+       * Returned from THIS pre-install lookup on purpose — it is the moment the
+       * operator is already being shown what they are about to install, so the
+       * closure listing and the advisory land before the install, never after.
+       * `consentApplies: false` means the workspace opt-in is OFF: nothing can
+       * egress, so the surface states that instead of asking for consent.
+       */
+      uploadConsentPrompt: import("@cinatra-ai/llm").ConsentPrompt;
+    }
   | { ok: false; error: string };
 
 /**
@@ -360,14 +376,38 @@ export async function fetchGitHubSkillRepoMetadata(repoUrl: string): Promise<Fet
 
   try {
     const { fetchGitHubRepoMetadata, parseGitHubRepositoryReference } = await import("./github");
-    if (!parseGitHubRepositoryReference(trimmed)) {
+    const parsed = parseGitHubRepositoryReference(trimmed);
+    if (!parsed) {
       return { ok: false, error: "Only github.com repository URLs are supported (e.g. https://github.com/owner/repo)." };
     }
     const metadata = await fetchGitHubRepoMetadata(trimmed);
     if (!metadata) {
       return { ok: false, error: "Could not parse the repository reference." };
     }
-    return { ok: true, metadata };
+    // cinatra#2092 (S5): build the install confirmation HERE, from the same
+    // parsed reference — the pre-install moment the operator is already
+    // looking at. A repository-sourced skill package is a clone with no
+    // registry dependency edges, so its resolved closure is the root package
+    // alone; stated explicitly rather than assumed, so the surface stays
+    // honest if that ever changes.
+    const repositoryPath = `${parsed.owner}/${parsed.repo}`;
+    const { buildInstallConsentPrompt } = await import(
+      "@/lib/anthropic-skill-config-service"
+    );
+    return {
+      ok: true,
+      metadata,
+      uploadConsentPrompt: buildInstallConsentPrompt({
+        rootPackageName: repositoryPath,
+        closure: [
+          {
+            packageId: `github:${repositoryPath}`,
+            packageName: repositoryPath,
+            isRoot: true,
+          },
+        ],
+      }),
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to fetch repository metadata.";
     return { ok: false, error: message };
@@ -388,6 +428,21 @@ export type InstallGitHubSkillExtensionInput = {
     policy?: import("@cinatra-ai/agents/auth-policy").AgentAuthPolicy | null;
     coOwnerUserIds?: string[];
   };
+  /**
+   * Anthropic upload consent (cinatra#2092, epic #2086 S5). EXPLICIT and
+   * fail-closed: omit it and the installed skills stay upload-ineligible (the
+   * derived `allowAnthropicUpload` projection stays false) and the no-op is
+   * recorded on the result. Pass `{ granted: true, confirmedClosureDigest }`
+   * from an interactive confirmation that rendered the FULL resolved closure
+   * plus the data-egress advisory; a headless caller passes `{ granted: true }`
+   * as its own explicit act (`interactive: false`).
+   */
+  anthropicUploadConsent?: {
+    granted?: unknown;
+    confirmedClosureDigest?: unknown;
+    /** Interactive callers MUST set this; it makes the digest check mandatory. */
+    interactive?: boolean;
+  };
 };
 
 export type InstallGitHubSkillExtensionResult =
@@ -405,6 +460,17 @@ export type InstallGitHubSkillExtensionResult =
        * operator clarity.
        */
       warnings: string[];
+      /**
+       * The RECORDED Anthropic-upload consent outcome (cinatra#2092, S5).
+       * Always present — a fail-closed install carries the reason it stayed
+       * upload-ineligible instead of silently doing nothing.
+       */
+      uploadConsent: {
+        granted: boolean;
+        reason: string;
+        outcome: string;
+        scopeKeys: string[];
+      };
     }
   | { ok: false; error: string };
 
@@ -432,6 +498,14 @@ export async function installGitHubSkillExtension(
     if (!parseGitHubRepositoryReference(repoUrl)) {
       return { ok: false, error: "Only github.com repository URLs are supported (e.g. https://github.com/owner/repo)." };
     }
+
+    // cinatra#2092 (S5): snapshot the skill-package identities BEFORE the
+    // install so the consent closure below is exactly what this install
+    // produced — the root plus every transitive skill extension it pulled in.
+    const { snapshotSkillPackageIds } = await import(
+      "@/lib/anthropic-skill-config-service"
+    );
+    const packageIdsBeforeInstall = snapshotSkillPackageIds();
 
     const result = await installSkillPackageFromGitHub(repoUrl, { ref });
 
@@ -552,15 +626,180 @@ export async function installGitHubSkillExtension(
       );
     }
 
+    // cinatra#2092 (S5): record the Anthropic-upload consent decision for the
+    // closure this install actually produced. Runs AFTER the catalog rebuild
+    // (so the closure is real) and NEVER rolls the install back — a fail-closed
+    // decision just leaves the skills upload-ineligible, with the reason
+    // reported to the caller.
+    let uploadConsent = {
+      granted: false,
+      reason: "no-explicit-consent",
+      outcome:
+        "No explicit upload consent was passed — the skill stays upload-ineligible (fail-closed).",
+      scopeKeys: [] as string[],
+    };
+    try {
+      const { resolveInstalledClosure, recordSkillInstallConsent } = await import(
+        "@/lib/anthropic-skill-config-service"
+      );
+      const closure = resolveInstalledClosure({
+        before: packageIdsBeforeInstall,
+        rootPackageId: result.packageId,
+      });
+      const recorded = recordSkillInstallConsent({
+        consent: input.anthropicUploadConsent ?? null,
+        closure,
+        grantedBy: installerUserId,
+        interactive: input.anthropicUploadConsent?.interactive === true,
+      });
+      uploadConsent = {
+        granted: recorded.grant,
+        reason: recorded.reason,
+        outcome: recorded.outcome,
+        scopeKeys: recorded.granted,
+      };
+    } catch (consentErr) {
+      // Fail-closed by construction: a consent-write failure means NO grant.
+      console.warn(
+        "[skills/actions] Anthropic upload consent recording failed (skills stay upload-ineligible):",
+        consentErr instanceof Error ? consentErr.message : consentErr,
+      );
+      warnings.push(
+        "Could not record the Anthropic upload consent — the installed skills stay excluded from upload.",
+      );
+    }
+
     return {
       ok: true,
       packageId: result.packageId,
       repositoryPath: result.repositoryPath,
       ref: ref ?? null,
       warnings,
+      uploadConsent,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to install skill package from GitHub.";
     return { ok: false, error: message };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Personal per-skill Anthropic-upload consent (cinatra#2092, epic #2086 S5).
+//
+// Extension / core-system packages acquire consent through the install act (or
+// the setup-with-Anthropic bulk step); PERSONAL skills keep an explicit
+// per-skill grant, because a personal skill has no package identity an admin
+// could reasonably consent to on the owner's behalf. AuthZ: the SKILL OWNER
+// grants their own; a platform admin may act on any personal skill.
+// ---------------------------------------------------------------------------
+
+export type PersonalSkillUploadConsentResult =
+  | { ok: true; granted: boolean }
+  | { ok: false; error: string };
+
+async function assertPersonalSkillConsentAuthority(
+  skillId: string,
+): Promise<{ ok: true; userId: string } | { ok: false; error: string }> {
+  const { requireAuthSession, isPlatformAdmin } = await import("@/lib/auth-session");
+  const session = await requireAuthSession();
+  const userId = session.user?.id ?? "";
+  if (!userId) return { ok: false, error: "Sign in to change upload consent." };
+
+  const { readSkillCatalogFromDatabase } = await import("@/lib/database");
+  const record = readSkillCatalogFromDatabase().skills.find(
+    (entry) => (entry as { id?: unknown }).id === skillId,
+  ) as { level?: unknown; ownerUserId?: unknown; scope?: unknown } | undefined;
+  if (!record) return { ok: false, error: "Skill not found." };
+  if (record.level !== "personal") {
+    // Fail-closed: a workspace/system skill's eligibility comes from its
+    // PACKAGE consent, never from a per-skill grant. Allowing one here would
+    // create a second, weaker acquisition path around the install act.
+    return {
+      ok: false,
+      error: "Only personal skills use a per-skill upload consent.",
+    };
+  }
+  const owner =
+    typeof record.ownerUserId === "string" && record.ownerUserId
+      ? record.ownerUserId
+      : typeof record.scope === "string"
+        ? record.scope
+        : "";
+  if (owner !== userId && !isPlatformAdmin(session)) {
+    return { ok: false, error: "You do not own this skill." };
+  }
+  return { ok: true, userId };
+}
+
+/** Grant this personal skill's Anthropic-upload consent. */
+export async function grantPersonalSkillUploadConsentAction(input: {
+  skillId: string;
+}): Promise<PersonalSkillUploadConsentResult> {
+  const skillId = input.skillId?.trim() ?? "";
+  if (!skillId) return { ok: false, error: "Skill id is required." };
+  const authority = await assertPersonalSkillConsentAuthority(skillId);
+  if (!authority.ok) return authority;
+  const { grantPersonalSkillUploadConsent } = await import(
+    "@/lib/anthropic-skill-config-service"
+  );
+  grantPersonalSkillUploadConsent({ skillId, grantedBy: authority.userId });
+  return { ok: true, granted: true };
+}
+
+/** Revoke it. The projection flips at this write; the reconcile marks the
+ *  remote copy stale and the GC reclaims it after the grace window. */
+export async function revokePersonalSkillUploadConsentAction(input: {
+  skillId: string;
+}): Promise<PersonalSkillUploadConsentResult> {
+  const skillId = input.skillId?.trim() ?? "";
+  if (!skillId) return { ok: false, error: "Skill id is required." };
+  const authority = await assertPersonalSkillConsentAuthority(skillId);
+  if (!authority.ok) return authority;
+  const { revokePersonalSkillUploadConsent } = await import(
+    "@/lib/anthropic-skill-config-service"
+  );
+  revokePersonalSkillUploadConsent({ skillId, revokedBy: authority.userId });
+  return { ok: true, granted: false };
+}
+
+/**
+ * ADMIN revoke for a whole package identity (cinatra#2092, S5 AC4): flips the
+ * derived projection to false in this write's own transaction, which the
+ * reconcile turns into a STALE remote row and the GC reclaims.
+ */
+export async function revokeSkillPackageUploadConsentAction(input: {
+  packageId: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const packageId = input.packageId?.trim() ?? "";
+  if (!packageId) return { ok: false, error: "Package id is required." };
+  const { requireAdminSession } = await import("@/lib/auth-session");
+  const session = await requireAdminSession();
+  const { revokeSkillPackageUploadConsent } = await import(
+    "@/lib/anthropic-skill-config-service"
+  );
+  revokeSkillPackageUploadConsent({
+    packageId,
+    revokedBy: session.user?.id ?? null,
+  });
+  return { ok: true };
+}
+
+/**
+ * Read the Anthropic-upload CONSENT LEDGER (cinatra#2092, S5) — active and
+ * revoked rows, newest grant first. The ledger is the audit record behind the
+ * derived `allowAnthropicUpload` projection: who consented to which scope, when,
+ * through which event, and when it was revoked. Admin-gated (it enumerates
+ * installed package identities).
+ */
+export async function readSkillUploadConsentLedgerAction(): Promise<
+  | {
+      ok: true;
+      rows: import("@/lib/database").SkillUploadConsentRow[];
+    }
+  | { ok: false; error: string }
+> {
+  const { requireAdminSession } = await import("@/lib/auth-session");
+  await requireAdminSession();
+  const { readSkillUploadConsentFromDatabase } = await import("@/lib/database");
+  return { ok: true, rows: readSkillUploadConsentFromDatabase() };
 }

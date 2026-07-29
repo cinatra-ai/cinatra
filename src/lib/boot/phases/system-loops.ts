@@ -531,6 +531,58 @@ export function systemLoopPhases(): BootPhase[] {
       },
     },
     {
+      name: "seed-anthropic-skill-upload-reconcile",
+      policy: "retryable",
+      run: async () => {
+        // Upload-on-install reconcile (cinatra#2092, epic #2086 S5). Boot binds
+        // the two seams and seeds the safety-net sweep; NOTHING reconciles at
+        // boot itself.
+        //
+        //   1. the DRAIN runner slot the one-shot kick handler and the sweep
+        //      handler both resolve, and
+        //   2. the KICK slot `@/lib/database` fires after a catalog / consent
+        //      transaction COMMITS.
+        //
+        // Both are boot-only bindings rather than imports, for the same
+        // route-graph-ratchet reason as the runner slots above: the drain core
+        // reaches the Anthropic sync/GC services and the @cinatra-ai/llm engine
+        // graph, and the kick reaches the BullMQ runtime — neither may be
+        // reachable from `background-jobs-registry` / `database`, even
+        // dynamically. Register BEFORE seeding so no handler observes an empty
+        // slot on a healthy boot.
+        //
+        // UNCONDITIONAL (no activation fence): the slice is INERT by data, not
+        // by flag — the drain no-ops and RECORDS the no-op whenever the
+        // workspace Anthropic opt-in is OFF or no API key is configured, and the
+        // derived per-skill projection stays `false` until a consent row exists.
+        const { bindAnthropicSkillReconcileRuntime } = await import(
+          "@/lib/register-anthropic-skill-reconcile-runtime"
+        );
+        await bindAnthropicSkillReconcileRuntime();
+
+        const {
+          enqueueBackgroundJob,
+          BACKGROUND_JOB_NAMES,
+          ANTHROPIC_SKILL_UPLOAD_RECONCILE_SWEEP_LOOP_JOB_ID,
+        } = await import("@/lib/background-jobs");
+
+        await enqueueBackgroundJob(
+          BACKGROUND_JOB_NAMES.ANTHROPIC_SKILL_UPLOAD_RECONCILE_SWEEP,
+          {},
+          {
+            jobId: ANTHROPIC_SKILL_UPLOAD_RECONCILE_SWEEP_LOOP_JOB_ID,
+            delay: 5 * 60 * 1000, // 5 min
+            overwriteIfStale: true,
+            skipWorker: true,
+            inheritActorContext: false,
+          },
+        );
+        console.log(
+          "[anthropic-skill-upload-reconcile] drain runner + commit kick bound; ~5-minute safety-net sweep scheduled",
+        );
+      },
+    },
+    {
       name: "eager-background-worker",
       policy: "degraded",
       run: async () => {
