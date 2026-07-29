@@ -31,7 +31,7 @@ import { getAuthSession } from "@/lib/auth-session";
 import {
   betterAuthDb,
   betterAuthUsers,
-  readOrgsWithTeamsForUser,
+  readOrgsWithTeamsForUserActiveOnly,
   readProjectsForUser,
 } from "@/lib/better-auth-db";
 import {
@@ -83,7 +83,7 @@ export async function ConnectionSharingSection({
   );
   if (ownRows.length === 0) return null;
 
-  const orgs = await readOrgsWithTeamsForUser(userId);
+  const orgs = await readOrgsWithTeamsForUserActiveOnly(userId);
   const projects = activeOrgId ? await readProjectsForUser(userId, activeOrgId) : [];
   const scopes: AvailableScopes = {
     orgs: orgs.map((org) => ({
