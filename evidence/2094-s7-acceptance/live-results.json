@@ -1,0 +1,266 @@
+{
+  "probe": "cinatra#2094 S7 live Anthropic Skills API conformance",
+  "ranAt": "2026-07-29T21:21:09.016Z",
+  "live": true,
+  "docsPin": {
+    "surface": "Anthropic Skills API",
+    "betaRevision": "skills-2025-10-02",
+    "stackedBetas": "code-execution-2025-08-25,skills-2025-10-02,files-api-2025-04-14",
+    "anthropicVersion": "2023-06-01",
+    "consulted": "claude-api skill reference bundle 2.1.220 (shared/managed-agents-api-reference.md Skills + Pagination sections; shared/tool-use-concepts.md Agent Skills (Messages API)); live API treated as authoritative where docs prose and wire disagree"
+  },
+  "checks": [
+    {
+      "name": "C1 rooted-zip multipart create accepted (display_title + single files[] zip)",
+      "verdict": "PASS",
+      "status": 200,
+      "request": {
+        "method": "POST",
+        "path": "/v1/skills",
+        "contentType": "multipart/form-data",
+        "fields": [
+          "display_title",
+          "files[]"
+        ],
+        "filesPartCount": 1,
+        "filesPartType": "application/zip",
+        "zipRootedAt": "c2094-probe-a-ms6laduh/",
+        "zipEntries": [
+          "c2094-probe-a-ms6laduh/SKILL.md"
+        ],
+        "zipBytes": 355
+      },
+      "responseShape": [
+        "created_at",
+        "display_title",
+        "id",
+        "latest_version",
+        "source",
+        "type",
+        "updated_at"
+      ],
+      "responseRedacted": {
+        "id": "sk#48320cd4",
+        "latest_version": "1785360069482729",
+        "type": "skill"
+      }
+    },
+    {
+      "name": "C2 POST /v1/skills/{id}/versions mints a NEW immutable version (multi-file bundle)",
+      "verdict": "PASS",
+      "status": 200,
+      "request": {
+        "zipRootedAt": "c2094-probe-a-ms6laduh/",
+        "zipEntries": [
+          "c2094-probe-a-ms6laduh/SKILL.md",
+          "c2094-probe-a-ms6laduh/references/notes.md"
+        ],
+        "zipBytes": 587
+      },
+      "responseShape": [
+        "created_at",
+        "description",
+        "directory",
+        "id",
+        "name",
+        "skill_id",
+        "type",
+        "version"
+      ],
+      "versionChanged": true,
+      "responseRedacted": {
+        "version": "1785360070364116"
+      }
+    },
+    {
+      "name": "C3 GET /v1/skills real cursor contract (client assumes has_more+last_id -> after_id)",
+      "verdict": "FAIL",
+      "status": 200,
+      "responseShape": [
+        "data",
+        "has_more",
+        "next_page"
+      ],
+      "observed": {
+        "has_more": false,
+        "last_id_present": false,
+        "next_page_present": false,
+        "after_id_advances_page": null,
+        "page_param_advances_page": null
+      },
+      "note": "wire does NOT return last_id; the client's paginated walk terminates after page 1"
+    },
+    {
+      "name": "C4 versions-list pagination to exhaustion over a multi-page history",
+      "verdict": "FAIL",
+      "status": 200,
+      "responseShape": [
+        "data",
+        "has_more",
+        "next_page"
+      ],
+      "observed": {
+        "limit_requested": 1,
+        "rows_on_page_1": 1,
+        "has_more": true,
+        "last_id_present": false,
+        "next_page_present": true,
+        "trueVersionCount": 3,
+        "clientWalkVersionCount": 3,
+        "clientWalkSawEveryVersion": true
+      },
+      "note": "wire returns next_page, not last_id: the client's walk reads only page 1. With limit=100 a <=100-version history still fits one page, so the GC is correct today and becomes wrong past 100 versions."
+    },
+    {
+      "name": "C5 skill delete is REFUSED while undeleted versions remain (delete-order enforcement)",
+      "verdict": "PASS",
+      "status": 400,
+      "refused": true,
+      "errorRedacted": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Cannot delete skill with existing versions. Delete all versions first.\"},\"request_id\":\"req_011CdX3pEg7ArMCmmh9qrGDX\"}",
+      "note": "API refused, matching the documented versions-before-skill ordering"
+    },
+    {
+      "name": "C6 versions-then-skill delete order reclaims the remote skill",
+      "verdict": "PASS",
+      "versionsDeleted": 3,
+      "skillDeleteStatus": 200,
+      "everyVersionDeleteAccepted": true
+    },
+    {
+      "name": "C7 display_title collision is rejected AND classified by isDisplayTitleConflict",
+      "verdict": "PASS",
+      "firstCreateStatus": 200,
+      "secondCreateStatus": 400,
+      "duplicateAccepted": false,
+      "errorRedacted": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Skill cannot reuse an existing display_title: cinatra 2094 S7 probe B ms6laduh\"},\"request_id\":\"req_011CdX3pb6CDzTW8at6dh48R\"}",
+      "coreClassifierMatchesRealBody": true,
+      "note": "real 4xx body is matched by the shipped isDisplayTitleConflict predicate"
+    },
+    {
+      "name": "C8 container.skills per-request cap — 8 accepted, 9 rejected",
+      "verdict": "PASS",
+      "uploadedRefs": 9,
+      "at8": {
+        "n": 8,
+        "status": 200,
+        "accepted": true,
+        "errorRedacted": null
+      },
+      "at9": {
+        "n": 9,
+        "status": 400,
+        "accepted": false,
+        "errorRedacted": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"container.ContainerParams.skills: List should have at most 8 items after validation, not 9\"},\"request_id\":\"req_011CdX3qeXbGpys9Q7CcJ8UN\"}"
+      },
+      "requestShape": {
+        "container": {
+          "skills": [
+            {
+              "type": "custom",
+              "skill_id": "<redacted>",
+              "version": "<version>"
+            }
+          ]
+        },
+        "tools": [
+          {
+            "type": "code_execution_20260521",
+            "name": "code_execution"
+          }
+        ],
+        "betas": "code-execution-2025-08-25,skills-2025-10-02,files-api-2025-04-14"
+      },
+      "note": "the 8-per-request ceiling is real and server-enforced"
+    },
+    {
+      "name": "C9 an unresolvable container.skills reference fails CLOSED at the API boundary",
+      "verdict": "PASS",
+      "status": 400,
+      "rejected": true,
+      "errorRedacted": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Skill not found: sk#5b34f19a\"},\"request_id\":\"req_011CdX3qfT9oqe2GsmV3Jq5x\"}",
+      "note": "unknown skill id is rejected, so a stale mapping surfaces rather than silently dropping the skill"
+    },
+    {
+      "name": "C10 an upload at/over the 30,000,000-byte boundary is rejected by the API",
+      "verdict": "FAIL",
+      "localGateConstant": 30000000,
+      "archiveBytes": 30000505,
+      "uncompressedTotalBytes": 30000169,
+      "status": 200,
+      "rejected": false,
+      "errorRedacted": "{\"type\":\"skill\",\"id\":\"sk#2101eb37\",\"created_at\":\"2026-07-29T21:22:04.971748Z\",\"updated_at\":\"2026-07-29T21:22:04.971748Z\",\"display_title\":\"cinatra 2094 S7 probe size ms6laduh\",\"source\":\"custom\",\"latest_version\":\"1785360123964145\"}",
+      "note": "the live API ACCEPTED an artifact at/over 30,000,000 bytes — the documented 'under 30 MB' limit is either higher or measured differently; the local gate is conservative, not wrong"
+    }
+  ],
+  "cleanup": {
+    "attempted": [
+      {
+        "skill": "sk#48320cd4",
+        "versions": 3,
+        "finalStatus": 200
+      },
+      {
+        "skill": "sk#297f5e07",
+        "versions": 1,
+        "finalStatus": 200
+      },
+      {
+        "skill": "sk#4208d29e",
+        "versions": 1,
+        "finalStatus": 200
+      },
+      {
+        "skill": "sk#8459b57e",
+        "versions": 1,
+        "finalStatus": 200
+      },
+      {
+        "skill": "sk#8a9c4250",
+        "versions": 1,
+        "finalStatus": 200
+      },
+      {
+        "skill": "sk#98550550",
+        "versions": 1,
+        "finalStatus": 200
+      },
+      {
+        "skill": "sk#701d7ab6",
+        "versions": 1,
+        "finalStatus": 200
+      },
+      {
+        "skill": "sk#f37a5307",
+        "versions": 1,
+        "finalStatus": 200
+      },
+      {
+        "skill": "sk#08d681ac",
+        "versions": 1,
+        "finalStatus": 200
+      },
+      {
+        "skill": "sk#ff65e901",
+        "versions": 1,
+        "finalStatus": 200
+      },
+      {
+        "skill": "sk#2101eb37",
+        "versions": 1,
+        "finalStatus": 200
+      }
+    ],
+    "versionDeletes": 13,
+    "skillDeletes": 11,
+    "order": "versions-then-skill",
+    "allReclaimed": true,
+    "leftoverCount": 0
+  },
+  "requestCount": 68,
+  "summary": {
+    "total": 10,
+    "pass": 7,
+    "fail": 3,
+    "other": []
+  }
+}
