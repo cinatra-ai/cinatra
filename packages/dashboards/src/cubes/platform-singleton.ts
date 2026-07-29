@@ -178,6 +178,7 @@ function buildBundledCubesById(): Map<string, RegisteredCube> {
         name: organizationsForCube.name,
         slug: organizationsForCube.slug,
         createdAt: organizationsForCube.createdAt,
+        archivedAt: organizationsForCube.archivedAt,
       },
       membersTableRef: membersForCube,
       memberColumns: {
