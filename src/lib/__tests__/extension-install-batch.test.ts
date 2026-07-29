@@ -78,6 +78,12 @@ function makeHarness(opts: {
   /** Simulate a caller-entered grant context (the MCP surface) to ADOPT. */
   adoptCtx?: ReturnType<InstallBatchSagaDeps["getActiveGrantContext"]>;
   ledgerFailOn?: string; // event name prefix that makes the ledger throw
+  /** cinatra#1927: packages whose OWN declaration marks them protected — the
+   *  saga must never tear one down on either compensation inverse. */
+  protectedPackages?: string[];
+  /** cinatra#1927: make the protection reader THROW (present-but-unreadable
+   *  declaration) so the fail-closed skip can be asserted. */
+  protectionReadFails?: boolean;
 }) {
   const events: string[] = [];
   const sbsTeardownCapsules: Array<{ packageName: string; capsule: unknown }> = [];
@@ -170,6 +176,17 @@ function makeHarness(opts: {
     }),
     uninstallMember: vi.fn(async (m) => {
       events.push(`uninstall:${m.packageName}`);
+    }),
+    // cinatra#1927: the declaration-driven protection verdict the saga consults
+    // before EITHER compensation inverse.
+    isMemberProtected: vi.fn(async (packageName: string) => {
+      if (opts.protectionReadFails) {
+        // The real default dep swallows a reader throw and answers PROTECTED
+        // (fail-closed); the harness models that resolved answer directly.
+        events.push(`protection-unreadable:${packageName}`);
+        return true;
+      }
+      return (opts.protectedPackages ?? []).includes(packageName);
     }),
     // #1042 slice-2: row-scoped compensation inverse.
     uninstallMemberRowScoped: vi.fn(async (m) => {
@@ -1728,5 +1745,142 @@ describe("gcOrphanedSideBySideCapsules — orphan GC of spent capsules on termin
     expect(cleared).toEqual([
       { batchId: "comp-1", pkg: "@cinatra-ai/shared", patch: { grantCapsule: null } },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#1927 — DECLARATION-DRIVEN PROTECTION in the install saga.
+//
+// The saga's compensation inverse is the one place core TEARS DOWN an extension
+// outside the removal surfaces, and one of its two routes
+// (`uninstallMemberRowScoped` → `deleteScopedCanonicalRow`) BYPASSES the
+// dispatcher, so the dispatcher's refusal does not cover it. The saga therefore
+// consults the same declaration verdict itself and SKIPS a protected member.
+// ---------------------------------------------------------------------------
+describe("installExtensionWithDependencies — protected members are never compensated (#1927)", () => {
+  const PROTECTED_DEP = "@cinatra-ai/protected-dep";
+
+  it("SKIPS the dispatcher-route teardown of a protected member when a later member fails", async () => {
+    const h = makeHarness({
+      plan: [member(PROTECTED_DEP), member("@cinatra-ai/dep-b"), member(ROOT)],
+      installFail: ROOT,
+      protectedPackages: [PROTECTED_DEP],
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+
+    // The ordinary member IS compensated; the protected one is left installed.
+    expect(h.events).toContain("uninstall:@cinatra-ai/dep-b");
+    expect(h.events).not.toContain(`uninstall:${PROTECTED_DEP}`);
+    expect(h.deps.uninstallMember).not.toHaveBeenCalledWith(
+      expect.objectContaining({ packageName: PROTECTED_DEP }),
+      expect.anything(),
+    );
+  });
+
+  it("SKIPS the ROW-SCOPED teardown too — the route that bypasses the dispatcher", async () => {
+    const h = makeHarness({
+      plan: [member(PROTECTED_DEP), member("@cinatra-ai/dep-b"), member(ROOT)],
+      installFail: ROOT,
+      protectedPackages: [PROTECTED_DEP],
+    });
+    await expect(
+      installExtensionWithDependencies(
+        { packageName: ROOT, version: "1.0.0", actor, rowScopedCompensation: true },
+        h.deps,
+      ),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+
+    expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-b"]);
+    expect(h.rowScopedUninstalls).not.toContain(PROTECTED_DEP);
+  });
+
+  it("records the skip HONESTLY on the ledger (not a silent compensation gap)", async () => {
+    const h = makeHarness({
+      plan: [member(PROTECTED_DEP), member(ROOT)],
+      installFail: ROOT,
+      protectedPackages: [PROTECTED_DEP],
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+
+    const batch = [...h.ledgerRows.values()][0]!;
+    const protectedMember = batch.members.find((m) => m.packageName === PROTECTED_DEP)!;
+    expect(protectedMember.detail).toMatch(/protected-declaration/);
+    // A skip is NOT a compensation failure — the member never entered the
+    // failed-teardown class.
+    expect(protectedMember.status).not.toBe("compensation-failed");
+  });
+
+  it("FAILS CLOSED: an unreadable protection declaration also skips the teardown", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
+      installFail: ROOT,
+      protectionReadFails: true,
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+    expect(h.events).toContain("protection-unreadable:@cinatra-ai/dep-a");
+    expect(h.events).not.toContain("uninstall:@cinatra-ai/dep-a");
+  });
+
+  it("an UNPROTECTED batch compensates exactly as before (no behavior change)", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member("@cinatra-ai/dep-b"), member(ROOT)],
+      installFail: ROOT,
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+    // Inverse install order, every fresh member torn down.
+    expect(h.events.filter((e) => e.startsWith("uninstall:"))).toEqual([
+      "uninstall:@cinatra-ai/dep-b",
+      "uninstall:@cinatra-ai/dep-a",
+    ]);
+  });
+
+  it("BOOT RECOVERY skips a protected member too", async () => {
+    const swept: string[] = [];
+    const staleBatch: InstallBatch = {
+      batchId: "b-protected",
+      rootPackage: ROOT,
+      orgId: null,
+      phase: "installing",
+      members: [
+        {
+          packageName: PROTECTED_DEP,
+          version: "1.0.0",
+          typeId: "connector",
+          status: "installed",
+          action: "install",
+          preState: { present: false },
+        },
+        {
+          packageName: "@cinatra-ai/dep-b",
+          version: "1.0.0",
+          typeId: "connector",
+          status: "installed",
+          action: "install",
+          preState: { present: false },
+        },
+      ],
+      createdAt: "now",
+      updatedAt: "now",
+    };
+
+    const res = await sweepStaleInstallBatches({ olderThanMs: 0 }, {
+      listStale: async () => [staleBatch],
+      setPhase: async () => staleBatch,
+      updateMember: async () => staleBatch,
+      isMemberProtected: async (pkg: string) => pkg === PROTECTED_DEP,
+      uninstallMember: async (m) => {
+        swept.push(m.packageName);
+      },
+    });
+    expect(res.swept).toBe(1);
+    expect(swept).toEqual(["@cinatra-ai/dep-b"]);
   });
 });

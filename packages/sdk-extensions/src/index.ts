@@ -330,6 +330,17 @@ export type {
   ParseAssistantDeclarationResult,
 } from "./assistant-declaration";
 
+// The generic, kind-agnostic extension PROTECTION declaration (cinatra#1927).
+export {
+  EXTENSION_PROTECTION_KEY,
+  extensionProtectedFlagSchema,
+  ExtensionProtectionDeclarationError,
+  safeParseDeclaredProtection,
+  parseDeclaredProtection,
+  hasProtectionDeclaration,
+} from "./extension-protection";
+export type { ParseDeclaredProtectionResult } from "./extension-protection";
+
 export {
   EXTENSION_KINDS,
   DEPENDENCY_EDGE_TYPES,

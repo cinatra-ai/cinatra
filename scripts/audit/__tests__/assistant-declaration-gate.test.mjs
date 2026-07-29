@@ -94,6 +94,15 @@ const FIXTURES = [
   { raw: file(mut({ delivery: { kind: "carrier-pigeon" } })), ok: false },
   { raw: file(mut({ delivery: {} })), ok: false }, // kind required
   { raw: file(mut({ surprise: 1 })), ok: false }, // unknown block key
+  // ---- cinatra#1927: the generic, KIND-AGNOSTIC `protected` top-level domain ----
+  { raw: file(VALID_BLOCK, { protected: true }), ok: true },
+  { raw: file(VALID_BLOCK, { protected: false }), ok: true },
+  { raw: { formatVersion: 1, protected: true }, ok: true }, // no assistant block
+  { raw: { formatVersion: 1, protected: true, access: { scope: { default: "user" } } }, ok: true },
+  { raw: file(VALID_BLOCK, { protected: "true" }), ok: false }, // fail-closed: never coerced
+  { raw: file(VALID_BLOCK, { protected: 1 }), ok: false },
+  { raw: file(VALID_BLOCK, { protected: null }), ok: false },
+  { raw: file(VALID_BLOCK, { protectd: true }), ok: false }, // a misspelling is still an unknown domain
 ];
 
 describe("assistant-declaration-gate — mirror rules", () => {

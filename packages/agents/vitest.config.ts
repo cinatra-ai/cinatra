@@ -106,6 +106,14 @@ export default defineConfig({
       "@cinatra-ai/extensions": path.join(root, "packages/extensions/src"),
       // server-only stub so packages guarded by import("server-only") don't crash.
       "server-only": path.join(__dirname, "src/__tests__/__mocks__/server-only.ts"),
+      // cinatra#1927: host reader behind the declaration-driven protection gate
+      // (`@cinatra-ai/extensions/protected-extension`). The real module walks the
+      // materialized extension store; the stub answers "declares nothing" and the
+      // refusal tests vi.mock this same specifier.
+      "@/lib/extension-protection-host": path.join(
+        __dirname,
+        "src/__tests__/__mocks__/extension-protection-host.ts",
+      ),
       // Sandbox stub for the host-app verdaccio-config wrapper. The real
       // wrapper at src/lib/verdaccio-config.ts wires
       // loadVerdaccioConfigAsync with the host-app's identity reader +

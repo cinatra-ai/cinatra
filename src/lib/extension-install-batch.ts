@@ -186,6 +186,27 @@ export type InstallBatchSagaDeps = {
   /** Uninstall ONE package through the real dispatcher (compensation inverse). */
   uninstallMember: (member: { typeId: string; packageName: string; version: string }, actor: Actor) => Promise<void>;
   /**
+   * DECLARATION-DRIVEN PROTECTION (cinatra#1927) — does this member's own
+   * `cinatra/config.json` declare `protected: true`? Consulted BEFORE every
+   * compensation teardown so the saga never removes a protected extension:
+   *
+   *  - `uninstallMember` routes through `extensionRegistry.uninstall`, whose
+   *    `assertNoLockedCanonicalRow` backstop now REFUSES a protected package —
+   *    without this check the member would deterministically land in
+   *    `compensationFailures` instead of being honestly recorded as protected;
+   *  - `uninstallMemberRowScoped` reaches `deleteScopedCanonicalRow` directly and
+   *    BYPASSES the dispatcher entirely — this check is the only thing standing
+   *    between a row-scoped compensation and a protected extension's row.
+   *
+   * A protected member is SKIPPED (ledger detail `protected-declaration`), not
+   * failed: "this extension is never removed" is the declared contract, and a
+   * failed batch that had just installed it converges by leaving it installed.
+   * Default: the shared `resolveDeclaredProtection` resolver — the SAME verdict
+   * both removal gates refuse on. Fail-closed: a reader throw (a present but
+   * unreadable declaration) is treated as PROTECTED (skip), never as removable.
+   */
+  isMemberProtected: (packageName: string) => Promise<boolean>;
+  /**
    * #1042 slice-2 ROW-SCOPED compensation inverse. Removes ONLY the freshly-
    * installed (package, actor-scope) canonical row — never the package-global
    * hard-delete branch of `extensionRegistry.uninstall` (which would tear down
@@ -454,6 +475,25 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
         { registryUrl: "", packageName: member.packageName, version: member.version },
         actor,
       );
+    },
+    isMemberProtected: async (packageName) => {
+      const { resolveDeclaredProtection } = await import(
+        "@cinatra-ai/extensions/protected-extension"
+      );
+      try {
+        return await resolveDeclaredProtection(packageName);
+      } catch (err) {
+        // FAIL-CLOSED (cinatra#1927): a PRESENT but unreadable/malformed
+        // protection declaration means we cannot prove the member is removable
+        // — treat it as protected and skip the teardown rather than tear down
+        // something a shipped declaration may protect.
+        console.warn(
+          "[extension-install-batch] protection declaration for %s is unreadable — treating as PROTECTED (compensation skipped):",
+          packageName,
+          err instanceof Error ? err.message : err,
+        );
+        return true;
+      }
     },
     uninstallMemberRowScoped: async (member, actor) => {
       // #1042 slice-2: ROW-SCOPED compensation. PRECISELY resolve the single
@@ -1056,6 +1096,24 @@ export async function installExtensionWithDependencies(
       for (const m of [...installedThisBatch].reverse()) {
         const ledgerMember = batch!.members.find((x) => x.packageName === m.packageName);
         if (m.action !== "install-side-by-side" && ledgerMember?.preState.present) continue; // never remove a pre-existing install
+        // DECLARATION-DRIVEN PROTECTION (cinatra#1927) — never tear down an
+        // extension whose own declaration marks it protected, on EITHER
+        // compensation inverse (the dispatcher route would refuse anyway; the
+        // row-scoped route bypasses the dispatcher and would not). Recorded
+        // honestly as a skip, so the ledger shows the extension is still
+        // installed BY DECLARATION rather than as a silent compensation gap.
+        if (await deps.isMemberProtected(m.packageName)) {
+          await deps.ledger
+            .updateMember(batch!.batchId, m.packageName, {
+              detail: "compensation skipped — protected-declaration (cinatra#1927)",
+            })
+            .catch(() => undefined);
+          console.warn(
+            `[extension-install-batch] compensation of ${m.packageName} SKIPPED (batch ${batch!.batchId}): ` +
+              `the extension declares itself protected — it is never uninstalled.`,
+          );
+          continue;
+        }
         try {
           if (m.action === "install-side-by-side") {
             await deps.uninstallSideBySideMember(
@@ -1186,6 +1244,9 @@ export async function sweepStaleInstallBatches(
       patch: Partial<Pick<InstallBatchMember, "status" | "installOpId" | "detail">>,
     ) => Promise<InstallBatch>;
     uninstallMember?: (member: { typeId: string; packageName: string; version: string }) => Promise<void>;
+    /** cinatra#1927 — same declaration-driven protection check the live saga
+     *  applies, so BOOT RECOVERY cannot tear down a protected extension either. */
+    isMemberProtected?: (packageName: string) => Promise<boolean>;
     /** Version-scoped teardown for `install-side-by-side` members (cinatra#1040 S3). */
     uninstallSideBySideMember?: (member: {
       typeId: string;
@@ -1213,6 +1274,18 @@ export async function sweepStaleInstallBatches(
       patch: Partial<Pick<InstallBatchMember, "status" | "installOpId" | "detail">>,
     ) => batchOps.updateInstallBatchMember(id, pkg, patch, batchOpsDeps));
   const sweeperActor: Actor = { actorType: "system", source: "worker" };
+  const isMemberProtected =
+    depsOverride?.isMemberProtected ??
+    (async (packageName: string) => {
+      const { resolveDeclaredProtection } = await import(
+        "@cinatra-ai/extensions/protected-extension"
+      );
+      try {
+        return await resolveDeclaredProtection(packageName);
+      } catch {
+        return true; // fail-closed: unreadable declaration ⇒ never swept away
+      }
+    });
   const uninstallMember =
     depsOverride?.uninstallMember ??
     (async (member: { typeId: string; packageName: string; version: string }) => {
@@ -1262,6 +1335,14 @@ export async function sweepStaleInstallBatches(
       );
     let failures = 0;
     for (const m of candidates) {
+      // cinatra#1927: a protected extension is never torn down, not even by
+      // boot recovery — recorded as a skip, exactly like the live saga.
+      if (await isMemberProtected(m.packageName)) {
+        await updateMember(batch.batchId, m.packageName, {
+          detail: "boot-sweep compensation skipped — protected-declaration (cinatra#1927)",
+        }).catch(() => undefined);
+        continue;
+      }
       try {
         if (m.action === "install-side-by-side") {
           await uninstallSideBySideMember({
