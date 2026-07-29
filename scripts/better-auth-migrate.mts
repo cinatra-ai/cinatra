@@ -103,6 +103,19 @@ export interface SessionActivationGuardResult {
 }
 
 /**
+ * Result of the app-owned `public."organization"."name"` non-blank guard
+ * provisioning step (cinatra#1942, archive program S6 — the empty-name rider).
+ */
+export interface OrganizationNameNotBlankResult {
+  /** true when THIS run added (or replaced) the non-blank CHECK constraint. */
+  provisioned: boolean;
+  /** Rows whose blank name (empty or space-only per btrim) was backfilled. */
+  backfilledNames: number;
+  /** Set when nothing could be done: the organization table does not exist. */
+  skipped?: "table-missing";
+}
+
+/**
  * The session activation-guard function + trigger DDL (cinatra#1937).
  *
  * WHY a trigger and not app code: Better Auth's own transactions (set-active,
@@ -427,6 +440,168 @@ export async function ensureTeamMemberRoleColumn(
 }
 
 /**
+ * Canonical spellings of the expected non-blank-name CHECK expression.
+ * Postgres types the empty-string literal (`''::text`) and wraps the predicate
+ * in an extra paren pair when it stores `CHECK (btrim(name) <> '')`; the raw
+ * spellings are kept as defensive equivalents. Compared whitespace-normalized
+ * (mirrors EXPECTED_ROLE_CHECK_DEFS / ensureRoleCheckConstraint).
+ */
+const EXPECTED_NAME_NOT_BLANK_CHECK_DEFS = new Set([
+  `CHECK ((btrim(name) <> ''::text))`,
+  `CHECK ((btrim(name) <> ''))`,
+  `CHECK (btrim(name) <> '')`,
+]);
+
+/**
+ * Ensure the organization non-blank-name CHECK exists WITH the expected
+ * definition — same rationale as ensureRoleCheckConstraint: `ADD CONSTRAINT`
+ * has no `IF NOT EXISTS`, and a name-only probe would accept a same-named
+ * constraint with the WRONG definition (or a NOT VALID one). Probe
+ * `pg_constraint` scoped to the table (`conrelid`) and validate
+ * `contype` / `convalidated` / `pg_get_constraintdef()`; a mismatched
+ * constraint is dropped and replaced (the re-add validates every row, so a
+ * blank name that slipped in fails the migration loudly instead of leaking
+ * past the check). Returns true when this run added or replaced it.
+ */
+async function ensureOrganizationNameCheckConstraint(
+  client: PoolClient,
+): Promise<boolean> {
+  const existing = await client.query<{
+    contype: string;
+    convalidated: boolean;
+    def: string;
+  }>(
+    `SELECT contype, convalidated, pg_get_constraintdef(oid) AS def
+       FROM pg_constraint
+      WHERE conname = 'organization_name_not_blank'
+        AND conrelid = 'public."organization"'::regclass`,
+  );
+  const row = existing.rows[0];
+  if (row) {
+    const normalizedDef = row.def.replace(/\s+/g, " ").trim();
+    if (
+      row.contype === "c" &&
+      row.convalidated &&
+      EXPECTED_NAME_NOT_BLANK_CHECK_DEFS.has(normalizedDef)
+    ) {
+      return false;
+    }
+    await client.query(
+      `ALTER TABLE public."organization" DROP CONSTRAINT "organization_name_not_blank"`,
+    );
+  }
+  await client.query(
+    `ALTER TABLE public."organization"
+       ADD CONSTRAINT "organization_name_not_blank" CHECK (btrim(name) <> '')`,
+  );
+  return true;
+}
+
+/**
+ * Provision the organization non-blank-name guard: backfill legacy
+ * blank/whitespace-only names, then arm a CHECK — app-owned, guarded,
+ * idempotent (cinatra#1942, the empty-name rider).
+ *
+ * WHY HERE (not a `core__NNNN` migration or Better Auth config): `organization`
+ * is a Better-Auth-managed table (`getMigrations()` owns its DDL), and this
+ * runner already co-locates the other org-table guards (the teamMember role
+ * column, the session activation trigger). Better Auth's `name.required`
+ * rejects null/empty but NOT a whitespace-only string, and the third-party
+ * create-organization dialog (@daveyplate/better-auth-ui) bypasses the
+ * first-party trim in src/app/organizations/new/actions.ts — so legacy
+ * whitespace-only names can exist and new ones could be planted. core__0053
+ * converged NULL names to the ratified "Organization (…)" default but never
+ * touched whitespace-only names; this rider is the blank-name analogue.
+ *
+ * ARMING GUARD (backfill-then-constrain, fail-loud): the whole
+ * probe -> LOCK -> backfill -> ADD CONSTRAINT unit runs inside ONE transaction
+ * that FIRST takes a constant-key advisory xact-lock (serializes concurrent
+ * runners, like ensureTeamMemberRoleColumn) and THEN
+ * `LOCK TABLE ... IN SHARE ROW EXCLUSIVE MODE` (blocks app writers for the
+ * backfill->arm window during a rolling deploy, like core__0053) so no
+ * blank-name INSERT can race between the backfill and the constraint add and
+ * abort the DDL. The backfill assigns a deterministic, id-derived placeholder
+ * `Organization (<short-id>)` (the design's placeholder option, consistent
+ * with core__0053's "Organization (…)" idiom) to every row whose name trims to
+ * empty; the ADD CONSTRAINT then validates every row. Refuse to arm when the
+ * organization table is absent (the ensureSessionActivationGuardTrigger
+ * "table-missing" precedent), and ROLLBACK+rethrow on any failure (a table
+ * whose blank-name guard cannot be armed must stop the deployment, never be
+ * silently skipped — the same fail-loud contract as the sibling post-steps).
+ *
+ * Idempotent: once armed the CHECK prevents new blank names, so re-runs find
+ * zero rows to backfill and the constraint probe confirms the expected
+ * definition (no DROP/ADD). A same-named constraint with a wrong / NOT-VALID
+ * definition is replaced so the re-add re-validates every row. NULL names (if
+ * any) are neither matched by the backfill (`btrim(NULL)` is NULL, never `''`)
+ * nor rejected by the CHECK (a CHECK passes on NULL) — core__0053 owns NULL.
+ */
+export async function ensureOrganizationNameNotBlank(
+  pool: Pool,
+): Promise<OrganizationNameNotBlankResult> {
+  // One checked-out client for the whole unit — pool.query() may hop
+  // connections between statements, which would detach the advisory lock and
+  // the LOCK TABLE from the transaction that needs them.
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Serialize concurrent runners BEFORE probing (see ensureTeamMemberRoleColumn).
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext('cinatra-migrations'), hashtext('organization.nameNotBlank'))`,
+    );
+
+    const tableExists = await client.query(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name = 'organization'
+       ) AS "exists"`,
+    );
+    if (!tableExists.rows[0]?.exists) {
+      await client.query("ROLLBACK");
+      return { provisioned: false, backfilledNames: 0, skipped: "table-missing" };
+    }
+
+    // Block concurrent app writers for the backfill->arm window (rolling-deploy
+    // safety, mirrors core__0053) — AFTER the existence probe so we never LOCK
+    // a table that isn't there.
+    await client.query(
+      `LOCK TABLE public."organization" IN SHARE ROW EXCLUSIVE MODE`,
+    );
+
+    // Backfill every blank name to a deterministic, id-derived placeholder
+    // BEFORE arming the CHECK so the ADD CONSTRAINT validates cleanly.
+    // `btrim(name) = ''` matches empty and space-padded names — btrim's
+    // default trim charset is the SPACE character (the design-ratified
+    // predicate; the CHECK below uses the SAME expression, so backfill and
+    // constraint can never disagree — a name padded with exotic whitespace
+    // (tab/newline) is neither backfilled nor rejected, by design). NULL is
+    // excluded (btrim(NULL) is NULL) and owned by core__0053.
+    const backfilled = await client.query(
+      `UPDATE public."organization"
+          SET name = 'Organization (' || left(id, 8) || ')'
+        WHERE btrim(name) = ''`,
+    );
+
+    const provisioned = await ensureOrganizationNameCheckConstraint(client);
+    await client.query("COMMIT");
+    return { provisioned, backfilledNames: backfilled.rowCount ?? 0 };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    // Fail LOUDLY (stop the deployment): an organization table whose blank-name
+    // guard cannot be armed must never be silently enabled.
+    throw new Error(
+      `better-auth-migrate: provisioning the public."organization".name ` +
+        `non-blank guard failed: ${
+          err instanceof Error ? err.message : String(err)
+        }. Fix the organization table, then re-run \`pnpm auth:migrate\`.`,
+      { cause: err },
+    );
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Apply the Better Auth schema migration against the given database.
  * Importing this module has no side effects — callers invoke this explicitly.
  */
@@ -437,6 +612,7 @@ export async function runBetterAuthMigration(
   columnSetsAdded: number;
   teamMemberRole: TeamMemberRoleProvisionResult;
   sessionActivationGuard: SessionActivationGuardResult;
+  organizationNameNotBlank: OrganizationNameNotBlankResult;
 }> {
   if (!config.connectionString) {
     throw new Error("runBetterAuthMigration: `connectionString` is required.");
@@ -468,11 +644,17 @@ export async function runBetterAuthMigration(
     // every invocation (single tx, OR-REPLACE) — fresh installs, upgrades,
     // and drifted definitions all converge on the canonical guard.
     const sessionActivationGuard = await ensureSessionActivationGuardTrigger(pool);
+    // cinatra#1942 (empty-name rider): backfill legacy blank/whitespace-only
+    // organization names, then arm the non-blank CHECK — runs AFTER
+    // getMigrations() has had its chance to create the organization table on
+    // fresh installs. Inert in production until it finds a blank name to fix.
+    const organizationNameNotBlank = await ensureOrganizationNameNotBlank(pool);
     return {
       created: toBeCreated.map((entry) => entry.table),
       columnSetsAdded: toBeAdded.length,
       teamMemberRole,
       sessionActivationGuard,
+      organizationNameNotBlank,
     };
   } finally {
     await pool.end();
@@ -502,9 +684,14 @@ if (
   const guardNote = result.sessionActivationGuard.skipped
     ? `skipped (${result.sessionActivationGuard.skipped})`
     : "provisioned";
+  const nameNote = result.organizationNameNotBlank.skipped
+    ? `skipped (${result.organizationNameNotBlank.skipped})`
+    : result.organizationNameNotBlank.provisioned
+      ? `armed (${result.organizationNameNotBlank.backfilledNames} blank name(s) backfilled)`
+      : "present";
   console.log(
     `Better Auth migration: created [${
       result.created.join(", ") || "none"
-    }], column-sets added ${result.columnSetsAdded}, teamMember.role ${roleNote}, session activation guard ${guardNote}.`,
+    }], column-sets added ${result.columnSetsAdded}, teamMember.role ${roleNote}, session activation guard ${guardNote}, organization name guard ${nameNote}.`,
   );
 }
