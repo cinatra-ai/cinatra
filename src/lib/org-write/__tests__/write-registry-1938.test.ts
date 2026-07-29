@@ -199,10 +199,15 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
       "createAgentRun", "createAgentRunPendingInput",
       // kernel entry points
       "redeemCompletionTicket", "snapshotLeasesQuery",
+      // lease-expiry finalizer's fenced settle (#1940 P4)
+      "finalizeExpiredLeaseRun",
+      // lease-expiry finalizer's phase-1 pooled bookkeeping writers (#1940 P4
+      // — registered + banned to the finalizer module)
+      "incrementLeaseFinalizeAttemptsQuery", "escalateLeaseFinalizeQuery",
     ]) {
       expect(banned.has(w), `${w} must be import-banned`).toBe(true);
     }
-    expect(banned.size).toBe(22);
+    expect(banned.size).toBe(25);
   });
 });
 

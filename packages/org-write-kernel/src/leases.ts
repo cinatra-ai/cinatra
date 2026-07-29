@@ -122,3 +122,130 @@ export function settleLeaseForRunQuery(input: {
     values: [input.orgId, input.runId],
   };
 }
+
+// ---------------------------------------------------------------------------
+// Lease-expiry finalizer shapes — cinatra#1940 P4. Pure SQL
+// builders, same discipline as the shapes above: the kernel owns every shape
+// that touches `org_archive_lease` so eligibility/durability semantics have
+// one source. None of these run inside `guardOrgMutation`/
+// `guardOrgLifecycleMutation` EXCEPT `expiredLeaseForUpdateStatement` (used
+// inside the fence by `finalizeExpiredLeaseRun`); the sweep read and the
+// attempts/escalation writes are POOLED (phase 1, durable runtime-cancel
+// bookkeeping) — deliberately outside any org lock, per the design's phased
+// split (phase 1 durability, phase 2 the audited fenced settle).
+// ---------------------------------------------------------------------------
+
+/** Bounded batch sweep read (pooled, no authority — advisory only; the fence
+ *  + FOR UPDATE re-verify inside `finalizeExpiredLeaseRun` are the actual
+ *  admission check). Oldest-expiry first so a backlog drains FIFO.
+ *
+ *  LEFT JOIN (not INNER) on `agent_runs`: `finalizeExpiredLeaseRun` treats a
+ *  vanished run row as settle-orphan (lease-only DELETE, the same path an
+ *  already-terminal run takes) — an INNER JOIN would make that path
+ *  unreachable from the sweep, leaving orphaned lease rows (whose run was
+ *  deleted out from under them) stranded forever. `r.status`, `r.a2a_task_id`,
+ *  `r.template_id` are NULL for an orphan row; the caller must treat all
+ *  three as optional. */
+export function sweepExpiredLeasesQuery(input: {
+  schema: string;
+  limit: number;
+}): { text: string; values: unknown[] } {
+  assertSafeSchemaName(input.schema);
+  return {
+    text:
+      `SELECT l.org_id, l.archive_epoch, l.run_id, l.execution_attempt_id, l.finalize_attempts,` +
+      ` r.status, r.a2a_task_id, r.template_id` +
+      ` FROM "${input.schema}"."${ORG_ARCHIVE_LEASE_TABLE}" l` +
+      ` LEFT JOIN "${input.schema}".agent_runs r ON r.id = l.run_id` +
+      ` WHERE l.expires_at <= now()` +
+      ` ORDER BY l.expires_at ASC` +
+      ` LIMIT $1`,
+    values: [input.limit],
+  };
+}
+
+/** Atomic conditional attempts-increment: a single statement increments AND
+ *  re-verifies the lease is still expired in one round trip. 0 rows returned
+ *  means the lease was
+ *  settled/epoch-invalidated/not-actually-expired since the sweep read — the
+ *  caller MUST skip, never mutate a lease this returns nothing for. */
+export function incrementLeaseFinalizeAttemptsQuery(input: {
+  schema: string;
+  orgId: string;
+  archiveEpoch: number;
+  runId: string;
+}): { text: string; values: unknown[] } {
+  assertSafeSchemaName(input.schema);
+  return {
+    text:
+      `UPDATE "${input.schema}"."${ORG_ARCHIVE_LEASE_TABLE}"` +
+      ` SET finalize_attempts = finalize_attempts + 1, finalize_last_attempt_at = now()` +
+      ` WHERE org_id = $1 AND archive_epoch = $2 AND run_id = $3 AND expires_at <= now()` +
+      ` RETURNING finalize_attempts`,
+    values: [input.orgId, input.archiveEpoch, input.runId],
+  };
+}
+
+/** Idempotent escalation stamp: 0 rows means already escalated (a concurrent
+ *  tick beat this one) — the caller proceeds to force-settle WITHOUT a
+ *  second escalation audit. */
+export function escalateLeaseFinalizeQuery(input: {
+  schema: string;
+  orgId: string;
+  archiveEpoch: number;
+  runId: string;
+}): { text: string; values: unknown[] } {
+  assertSafeSchemaName(input.schema);
+  return {
+    text:
+      `UPDATE "${input.schema}"."${ORG_ARCHIVE_LEASE_TABLE}"` +
+      ` SET finalize_escalated_at = now()` +
+      ` WHERE org_id = $1 AND archive_epoch = $2 AND run_id = $3 AND finalize_escalated_at IS NULL` +
+      ` RETURNING finalize_escalated_at`,
+    values: [input.orgId, input.archiveEpoch, input.runId],
+  };
+}
+
+/** Pre-cancel re-verify (phase 1): a cheap, pooled, read-only EXISTS check —
+ *  is this lease STILL expired at THIS moment, at the SAME (org, epoch, run)
+ *  the sweep read? Called immediately before `bestEffortCancelRuntime`
+ *  (lease-expiry-finalizer.ts) to narrow the window between the
+ *  attempts-increment (which can succeed just before an unarchive invalidates
+ *  the lease) and the runtime-cancel side-effect: cancelling a runtime for a
+ *  run the fence would now refuse to finalize is a real user-visible harm
+ *  (interrupting a run that is legitimately continuing post-unarchive), unlike
+ *  a redundant/no-op settle attempt. This is advisory only, same as
+ *  `sweepExpiredLeasesQuery` — the fence's own FOR UPDATE re-verify inside
+ *  `finalizeExpiredLeaseRun` remains the actual admission check for the
+ *  WRITE; this shape only gates the best-effort cancel side-effect. */
+export function leaseStillExpiredQuery(input: {
+  schema: string;
+  orgId: string;
+  archiveEpoch: number;
+  runId: string;
+}): { text: string; values: unknown[] } {
+  assertSafeSchemaName(input.schema);
+  return {
+    text:
+      `SELECT 1 FROM "${input.schema}"."${ORG_ARCHIVE_LEASE_TABLE}"` +
+      ` WHERE org_id = $1 AND archive_epoch = $2 AND run_id = $3 AND expires_at <= now()`,
+    values: [input.orgId, input.archiveEpoch, input.runId],
+  };
+}
+
+/** In-fence re-verify (phase 2): locks the exact expired-lease row FOR UPDATE
+ *  inside `finalizeExpiredLeaseRun`'s guarded transaction, BEFORE any
+ *  terminal write. `archiveEpoch` MUST be the fence's own locked-state epoch
+ *  (the permit's `archiveEpoch`) — never the sweep's stale read — so an
+ *  unarchive that lands between the sweep and the fence self-resolves (the
+ *  re-verify finds no row at the new epoch). As a drizzle SQL statement (the
+ *  callback-world fence tx). */
+export function expiredLeaseForUpdateStatement(input: {
+  schema: string;
+  orgId: string;
+  archiveEpoch: number;
+  runId: string;
+}): SQL {
+  assertSafeSchemaName(input.schema);
+  return sql`SELECT run_id, execution_attempt_id FROM ${sql.raw(`"${input.schema}"."${ORG_ARCHIVE_LEASE_TABLE}"`)} WHERE org_id = ${input.orgId} AND archive_epoch = ${input.archiveEpoch} AND run_id = ${input.runId} AND expires_at <= now() FOR UPDATE`;
+}
