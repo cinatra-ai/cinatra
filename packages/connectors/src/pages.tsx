@@ -5,7 +5,7 @@ import {
   getActorContext,
 } from "@/lib/auth-session";
 import {
-  readOrgsWithTeamsForUser,
+  readOrgsWithTeamsForUserActiveOnly,
   readProjectsForUser,
 } from "@/lib/better-auth-db";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
@@ -61,7 +61,7 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
   // Build the actor's accessible scopes (organizations they belong to,
   // projects they can read). Used to populate the scope-filter Select.
   const actorUserId = session.user?.id ?? null;
-  const orgs = actorUserId ? await readOrgsWithTeamsForUser(actorUserId) : [];
+  const orgs = actorUserId ? await readOrgsWithTeamsForUserActiveOnly(actorUserId) : [];
   const activeOrgId = session.session?.activeOrganizationId ?? null;
   const projects =
     actorUserId && activeOrgId ? await readProjectsForUser(actorUserId, activeOrgId) : [];

@@ -26,7 +26,7 @@ import { DeleteItemForm } from "@/components/data-safety/delete-item-form";
 import { SearchParamToast, type SearchParamToastConfig } from "@cinatra-ai/sdk-ui/search-param-toast";
 import { getListViewCookieName } from "@/lib/list-view";
 import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
-import { readOrgsWithTeamsForUser, readProjectsForUser } from "@/lib/better-auth-db";
+import { readOrgsWithTeamsForUserActiveOnly, readProjectsForUser } from "@/lib/better-auth-db";
 import { SkillsToolbar } from "./skills-toolbar";
 import type { AvailableScopes } from "@/components/access-scope";
 import {
@@ -156,7 +156,7 @@ export async function SkillsPage({ searchParams }: SkillsPageProps) {
   // non-admins and a stale ?scope=admin collapses to the default.
   const isAdmin = isPlatformAdmin(session);
   const actorUserId = session?.user?.id ?? null;
-  const orgs = actorUserId ? await readOrgsWithTeamsForUser(actorUserId) : [];
+  const orgs = actorUserId ? await readOrgsWithTeamsForUserActiveOnly(actorUserId) : [];
   const activeOrgId = session?.session?.activeOrganizationId ?? null;
   const projects =
     actorUserId && activeOrgId ? await readProjectsForUser(actorUserId, activeOrgId) : [];
