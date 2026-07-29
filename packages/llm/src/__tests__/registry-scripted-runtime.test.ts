@@ -20,6 +20,9 @@ vi.mock("@/lib/llm-provider-surfaces", () => ({
 }));
 vi.mock("@/lib/database", () => ({
   readDefaultLlmProviderFromDatabase: () => readDefaultLlmProviderFromDatabase(),
+  // S6 (cinatra#2093): the implicit-global order also reads the stored FAILOVER
+  // POLICY. Default "exact" = bind to the stored provider and nothing else.
+  readLlmProviderFailoverPolicyFromDatabase: () => "exact",
   readDefaultImageProviderFromDatabase: () => null,
 }));
 vi.mock("@/lib/external-mcp-registry", () => ({

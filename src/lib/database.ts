@@ -15,6 +15,12 @@ import {
 } from "@/lib/drizzle-store";
 import type { ExtensionLifecycleAuditRow } from "@/lib/drizzle-store";
 import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
+// S6 un-fencing (cinatra#2093): global-default eligibility DERIVES from the ABI
+// v2 `defaultCapable` flag. Read from the SDK LEAF (not the agents policy leaf)
+// so this chokepoint and `packages/llm`'s two implicit-global resolvers — which
+// cannot import `@cinatra-ai/agents` without inverting the layering — share ONE
+// authority.
+import { buildKnownDefaultCapableProviders } from "@cinatra-ai/sdk-extensions/llm-provider-contract";
 import type {
   Campaign,
   OpenAIServiceTier,
@@ -907,51 +913,65 @@ export function readAnthropicLoggingEnabledFromDatabase(): boolean {
 
 export function readDefaultLlmProviderFromDatabase() {
   const stored = readConnectorConfigFromDatabase<string>("llm_default_provider", "openai");
-  // The WRITE chokepoint cannot heal stale persisted values. A stale
-  // `llm_default_provider === "anthropic"` or any non-global-eligible value
-  // must NEVER be trusted as the resolved global default because
-  // `resolveFirstAvailableAdapter()` reads this first. Sanitize on read:
-  // coerce anything outside the global-eligible set back to OpenAI so
-  // Anthropic can only ever be a per-purpose override, never the resolved
-  // global default.
+  // Still sanitized on read: the WRITE chokepoint cannot heal values persisted
+  // by an older build or an out-of-band edit, and this is read FIRST by both
+  // implicit-global resolvers. S6 (cinatra#2093) changed the SET, not the
+  // discipline — trustworthy iff `defaultCapable`. Anthropic now qualifies; an
+  // undeclared provider still coerces back to OpenAI.
   return isGlobalDefaultLlmProviderEligible(stored) ? stored : "openai";
 }
 
 /**
- * Authoritative chokepoint that keeps only globally eligible providers as the
- * resolved GLOBAL default. Anthropic is always only a selectable per-purpose
- * option and is NEVER promoted to the global default.
+ * Pure predicate: is `provider` allowed to be the resolved GLOBAL default?
  *
- * `llm_default_provider` is read first by `resolveFirstAvailableAdapter()` (see
- * llm/src/registry.ts) — so any writer that could persist
- * `"anthropic"` here would flip the global default. There are 3 writers
- * (setDefaultLlmProviderAction, setDefaultProvidersAction, the
- * /api/admin/default-llm-provider route). Rather than guard each, we
- * fail closed at this single sink: a non-global-eligible provider is refused
- * and the prior value is preserved. The agent-creation Anthropic pin is an
- * explicit, separate per-purpose override (agent_creation_llm_provider) and
- * never touches this key.
- */
-const GLOBAL_DEFAULT_LLM_ELIGIBLE = new Set(["openai", "gemini"]);
-
-/**
- * Pure predicate: is `provider` allowed to be the resolved GLOBAL default LLM
- * provider? Anthropic is always `false` (selectable per-purpose only).
- * Exported so the invariant is unit-testable without driving the DB-bound
- * writer.
+ * S6 UN-FENCING (cinatra#2093): was a hardcoded `Set(["openai","gemini"])` —
+ * one of FOUR sites that architecturally barred Anthropic. All four now DERIVE
+ * from the ABI v2 `defaultCapable` flag, so the eligible set is DECLARED by
+ * connectors rather than kept as a list here.
+ *
+ * Still the AUTHORITATIVE single sink: rather than guard each writer
+ * (setDefaultLlmProviderAction, setDefaultProvidersAction, the admin route, the
+ * S6 saga's commit), a non-default-capable provider is refused here and the
+ * prior value preserved. Exported so the invariant is unit-testable.
  */
 export function isGlobalDefaultLlmProviderEligible(provider: string): boolean {
-  return GLOBAL_DEFAULT_LLM_ELIGIBLE.has(provider);
+  return (buildKnownDefaultCapableProviders() as readonly string[]).includes(provider);
 }
 
 export function writeDefaultLlmProviderToDatabase(provider: string) {
   if (!isGlobalDefaultLlmProviderEligible(provider)) {
     console.warn(
-      `[writeDefaultLlmProviderToDatabase] refusing to set global default LLM provider to "${provider}" — Anthropic (and unknown providers) may only be selected per-purpose, never as the global default. Prior value preserved.`,
+      `[writeDefaultLlmProviderToDatabase] refusing to set global default LLM provider to "${provider}" — only providers whose cinatra.llmProvider declaration sets defaultCapable may be the global default (currently: ${buildKnownDefaultCapableProviders().join(", ")}). Prior value preserved.`,
     );
     return;
   }
   writeConnectorConfigToDatabase("llm_default_provider", provider);
+}
+
+// Provider FAILOVER POLICY (cinatra#2093, S6). Pre-S6 the implicit-global
+// resolvers silently hopped to the next eligible provider when the stored one
+// was unavailable — indistinguishable, to the operator, from "my provider is
+// working", just on a provider nobody chose with a different capability matrix
+// and egress destination. S6 makes EXACT binding the default and failover an
+// explicit stored policy: "exact" (stored provider only; unavailability is a
+// VISIBLE failure) or "ordered" (the pre-S6 fallthrough, opted into). Fail-
+// closed on an unrecognised value.
+export const LLM_FAILOVER_POLICY_CONFIG_KEY = "llm_provider_failover_policy";
+export type LlmProviderFailoverPolicy = "exact" | "ordered";
+
+export function readLlmProviderFailoverPolicyFromDatabase(): LlmProviderFailoverPolicy {
+  const stored = readConnectorConfigFromDatabase<string>(LLM_FAILOVER_POLICY_CONFIG_KEY, "exact");
+  return stored === "ordered" ? "ordered" : "exact";
+}
+
+export function writeLlmProviderFailoverPolicyToDatabase(policy: LlmProviderFailoverPolicy) {
+  if (policy !== "exact" && policy !== "ordered") {
+    console.warn(
+      `[writeLlmProviderFailoverPolicyToDatabase] refusing unknown failover policy "${policy}"; prior value preserved.`,
+    );
+    return;
+  }
+  writeConnectorConfigToDatabase(LLM_FAILOVER_POLICY_CONFIG_KEY, policy);
 }
 
 // ---------------------------------------------------------------------------

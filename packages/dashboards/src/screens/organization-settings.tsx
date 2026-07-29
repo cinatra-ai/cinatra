@@ -27,6 +27,7 @@ import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 import { Button } from "@/components/ui/button";
+import { LifecycleBadge } from "@/components/lifecycle-badge";
 import { getAuthSession } from "@/lib/auth-session";
 import { CrumbContributions } from "@/components/crumb-contributions";
 import {
@@ -80,6 +81,11 @@ export async function OrganizationSettingsPage({
       .select({
         name: betterAuthOrganizations.name,
         slug: betterAuthOrganizations.slug,
+        // cinatra#1942 V4 — threaded through for the archived badge + the
+        // read-only posture on the manage panel below; reads `archivedAt`
+        // directly, never the archive activation gate (visibility surfaces
+        // are gate-blind by design).
+        archivedAt: betterAuthOrganizations.archivedAt,
       })
       .from(betterAuthOrganizations)
       .where(eq(betterAuthOrganizations.id, id))
@@ -104,6 +110,11 @@ export async function OrganizationSettingsPage({
   }
 
   const orgName = org.name ?? "";
+  // cinatra#1942 V4 — read-only posture: while archived, the manage panel
+  // below stops rendering the interactive Settings / Members forms in favor
+  // of a disabled, read-only presentation (the UI affordance layer; the
+  // SERVER ACTION rejection is a separate, later authority change).
+  const isArchived = org.archivedAt !== null;
   const accessModel = buildOrganizationAccessModel(memberRows, teams);
 
   // Viewed-org management capabilities (cinatra#1510) — the single-source
@@ -166,12 +177,15 @@ export async function OrganizationSettingsPage({
         description="Who has access to this organization, and its management controls."
         divider={false}
         actions={
-          <Button asChild variant="outline">
-            <Link href={`/organizations/${encodeURIComponent(id)}`}>
-              <ArrowLeft data-icon="inline-start" aria-hidden="true" />
-              Back to organization
-            </Link>
-          </Button>
+          <div className="flex items-center gap-2">
+            {isArchived ? <LifecycleBadge status="archived" /> : null}
+            <Button asChild variant="outline">
+              <Link href={`/organizations/${encodeURIComponent(id)}`}>
+                <ArrowLeft data-icon="inline-start" aria-hidden="true" />
+                Back to organization
+              </Link>
+            </Button>
+          </div>
         }
       />
       <PageContent className="flex flex-col gap-6 pb-8">
@@ -199,6 +213,7 @@ export async function OrganizationSettingsPage({
             deleteBlockers={deleteBlockers}
             members={buildOrganizationManageMembers(memberRows)}
             invitations={pendingInvitations}
+            isArchived={isArchived}
           />
         ) : null}
       </PageContent>
