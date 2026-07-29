@@ -58,7 +58,7 @@ jobs:
     # `ref` input below are pinned to the SAME cinatra-ai/ci commit (the
     # multi-repo-capable gate, cinatra-ai/ci#82), so the gate code is never
     # pulled from mutable main.
-    uses: cinatra-ai/ci/.github/workflows/skills-drift-gate.yml@3cc2f075fb91341e2f81870e258cbe0606c2a56b # v0.1.2-next.3cc2f07
+    uses: cinatra-ai/ci/.github/workflows/skills-drift-gate.yml@89f7df4e7040d4b042f93ab44832cc37be070925 # v0.1.2-next.89f7df4
     with:
       # Successor-skill pins (cinatra#2090 S3): the former single
       # @cinatra-ai/assistant-skills pack was consolidated into six successor
@@ -81,4 +81,4 @@ jobs:
         cinatra-ai/blog-content-skill@163f73c05b441b61799a2db203f8ce873ec8aae7
         cinatra-ai/hitl-prompt-drive-skill@81edce91254e677d7e68269503f3cf22fe7c9a2d
       mode: enforce
-      ref: 3cc2f075fb91341e2f81870e258cbe0606c2a56b # same SHA as the workflow @ref
+      ref: 89f7df4e7040d4b042f93ab44832cc37be070925 # same SHA as the workflow @ref
