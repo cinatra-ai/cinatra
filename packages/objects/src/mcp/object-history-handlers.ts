@@ -32,9 +32,29 @@ import {
 } from "@/lib/authz/enforce-resource-access";
 import { AuthzError } from "@/lib/authz/errors";
 import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
 import type { PrimitiveInvocationRequest } from "@cinatra-ai/mcp-client";
 import * as schemas from "./schemas";
+
+// Org-write kernel authority (cinatra#1939 wave 3 Stage D): the MCP transport
+// mints an OrgWriteAuthority once at context-build and stamps it onto the
+// actor (the §2e / run_stop precedent in packages/agents/src/mcp/handlers.ts).
+// Restore is now a guarded canonical-writer.ts write, so it demands the same
+// frame authority — absence fails closed rather than silently writing
+// unguarded.
+function requireFrameAuthority(
+  request: PrimitiveInvocationRequest<unknown>,
+): OrgWriteAuthority {
+  const authority = (request.actor as { orgWriteAuthority?: OrgWriteAuthority })
+    .orgWriteAuthority;
+  if (!authority) {
+    throw new Error(
+      "restore requires an org-write authority on the request frame (missing orgWriteAuthority)",
+    );
+  }
+  return authority;
+}
 
 // Casting helper to read the org/user fields stamped onto the actor by the
 // MCP transport. Mirrors the pattern used elsewhere in handlers.ts.
@@ -218,6 +238,7 @@ export function createObjectHistoryPrimitiveHandlers() {
         changeSetId: input.changeSetId,
         actor: actorFromRequest(request),
         externalFreshness,
+        authority: requireFrameAuthority(request),
       });
       return {
         ok: true as const,
@@ -251,6 +272,7 @@ export function createObjectHistoryPrimitiveHandlers() {
         objectId: input.objectId,
         targetVersion: input.targetVersion,
         actor: actorFromRequest(request),
+        authority: requireFrameAuthority(request),
       });
       return {
         ok: true as const,

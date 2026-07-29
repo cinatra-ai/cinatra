@@ -13,6 +13,7 @@ import {
   resolveSessionRestoreAuthz,
 } from "@/lib/object-history/restore-eligibility";
 import { AuthzError } from "@/lib/authz/errors";
+import { verifySessionAuthority } from "@/lib/org-write/authority";
 
 // Server action: invoke change_set_undo. Mirrors the MCP handler's per-
 // object authz loop + pre-fetches external freshness. NEVER exposes a
@@ -70,11 +71,17 @@ export async function restoreChangeSetAction(input: {
   // Resolve freshness for any CMS-tagged events.
   const externalFreshness = await resolveExternalFreshness(loaded, { orgId });
 
+  // Org-write kernel authority (cinatra#1939 wave 3 Stage D) — independent of
+  // the per-object RBAC loop above (roleHints there is a read-side hint, not
+  // an org-write capability grant).
+  const authority = await verifySessionAuthority(session.user.id, orgId);
+
   try {
     const result = restoreChangeSet({
       changeSetId: input.changeSetId,
       actor,
       externalFreshness,
+      authority,
     });
     return {
       ok: true,

@@ -30,6 +30,17 @@ import { normalizeOwnershipVocabulary } from "@/lib/derived-store-ownership";
 import { mcpRequestContextStorage } from "@/lib/mcp-request-context";
 import { assertProjectWritableSync } from "@/lib/project-writable";
 import { resolveProjectInheritanceForType } from "@/lib/project-inheritance";
+// Org-write kernel guard (cinatra#1939 wave 3 Stage D). This module runs on
+// the postgres-sync (raw-SQL, fixed-batch) world — no drizzle transaction to
+// hand `guardOrgMutation` — so it uses the kernel's dark-since-S2 fixed-batch
+// adapter instead: `buildGuardedOrgWriteBatch` prepends the org write lock +
+// an in-SQL capability-ruling refusal to this writer's own query list, and
+// `runGuardedOrgWriteBatchSync` (the ONE sanctioned unwrap consumer) runs the
+// WHOLE assembled list in a single postgres-sync transaction, so the lock,
+// the lifecycle ruling, and the real write are atomic — no gap between check
+// and use.
+import { buildGuardedOrgWriteBatch } from "@cinatra-ai/org-write-kernel";
+import { runGuardedOrgWriteBatchSync } from "@/lib/org-write/batch-wrapper";
 
 import {
   closeChangeSet,
@@ -124,6 +135,21 @@ function ensureEffect(
 
 function ensureSchemaVersion(schemaVersion: string | undefined): string {
   return schemaVersion ?? DEFAULT_SCHEMA_VERSION;
+}
+
+/** Org-write kernel guard precondition (cinatra#1939 wave 3 Stage D): the
+ *  actor's `orgId` IS the org axis `buildGuardedOrgWriteBatch` locks + rules
+ *  against. `ensureActor` already required `actor`/`actorKind`; a null orgId
+ *  (system/legacy actor with no org) cannot be guarded — fail closed rather
+ *  than silently skip the fence. */
+function requireGuardOrgId(actor: HistoryActor): string {
+  if (actor.orgId === null) {
+    throw new HistoryWriterContractError(
+      "missing-actor",
+      "history-aware writer requires actor.orgId to guard the write through the org-write kernel",
+    );
+  }
+  return actor.orgId;
 }
 
 function autoChangeSet(
@@ -851,13 +877,20 @@ export function historyAwareUpsert(
       })
     : buildCreateStatement(common);
 
-  let result: { rows: Array<Record<string, unknown>>; rowCount: number } | undefined;
+  const orgId = requireGuardOrgId(options.actor);
+  const batch = buildGuardedOrgWriteBatch(
+    { orgId, capability: "content.write", authority: options.authority },
+    [statement],
+  );
+
+  let result: { rows: Array<Record<string, unknown>>; rowCount: number | null } | undefined;
   try {
-    [result] = runPostgresQueriesSync({
-      connectionString: getPostgresConnectionString(),
-      transaction: true,
-      queries: [statement],
-    });
+    // The guarded batch PREPENDS lock/refusal/ruling statements ahead of
+    // `[statement]` — the write's own result is always the LAST entry, never
+    // index 0 (cinatra#1939 wave 3 Stage D correctness fix: reading index 0
+    // here would silently read the lock statement's result instead of the
+    // write's).
+    result = runGuardedOrgWriteBatchSync(batch).at(-1);
   } catch (e) {
     if (isCasAssertError(e)) {
       const current = readObjectRowForSnapshot(schema, id);
@@ -1064,13 +1097,17 @@ export function historyAwareSoftDelete(
     checksum,
   });
 
-  let result: { rows: Array<Record<string, unknown>>; rowCount: number } | undefined;
+  const softDeleteOrgId = requireGuardOrgId(options.actor);
+  const softDeleteBatch = buildGuardedOrgWriteBatch(
+    { orgId: softDeleteOrgId, capability: "content.write", authority: options.authority },
+    [statement],
+  );
+
+  let result: { rows: Array<Record<string, unknown>>; rowCount: number | null } | undefined;
   try {
-    [result] = runPostgresQueriesSync({
-      connectionString: getPostgresConnectionString(),
-      transaction: true,
-      queries: [statement],
-    });
+    // See historyAwareUpsert's identical note: the write's result is always
+    // the LAST entry of the guarded batch's results, never index 0.
+    result = runGuardedOrgWriteBatchSync(softDeleteBatch).at(-1);
   } catch (e) {
     if (isCasAssertError(e)) {
       const current = readObjectRowForSnapshot(schema, input.objectId);
@@ -1242,13 +1279,17 @@ export function historyAwareUndelete(
     checksum,
   });
 
-  let result: { rows: Array<Record<string, unknown>>; rowCount: number } | undefined;
+  const undeleteOrgId = requireGuardOrgId(options.actor);
+  const undeleteBatch = buildGuardedOrgWriteBatch(
+    { orgId: undeleteOrgId, capability: "content.write", authority: options.authority },
+    [statement],
+  );
+
+  let result: { rows: Array<Record<string, unknown>>; rowCount: number | null } | undefined;
   try {
-    [result] = runPostgresQueriesSync({
-      connectionString: getPostgresConnectionString(),
-      transaction: true,
-      queries: [statement],
-    });
+    // See historyAwareUpsert's identical note: the write's result is always
+    // the LAST entry of the guarded batch's results, never index 0.
+    result = runGuardedOrgWriteBatchSync(undeleteBatch).at(-1);
   } catch (e) {
     if (isCasAssertError(e)) {
       const current = readObjectRowForSnapshot(schema, input.objectId);

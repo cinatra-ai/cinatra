@@ -14,6 +14,7 @@ import { enforceResourceAccess } from "@/lib/authz/enforce-resource-access";
 import { AuthzError } from "@/lib/authz/errors";
 import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 import { actorFromSession } from "@/lib/authz/build-actor-context";
+import { verifySessionAuthority } from "@/lib/org-write/authority";
 
 // Server action wrapping the existing object_version_restore
 // MCP engine. Mirrors restoreChangeSetAction's authz
@@ -79,11 +80,17 @@ export async function restoreObjectToVersionAction(input: {
     orgId,
   };
 
+  // Org-write kernel authority (cinatra#1939 wave 3 Stage D): a fresh,
+  // independent role verification — deliberately NOT reusing `roleHints`
+  // above (a per-object RBAC hint, not an org-write capability grant).
+  const authority = await verifySessionAuthority(session.user.id, orgId);
+
   try {
     const result = await restoreObjectToVersion({
       objectId: input.objectId,
       targetVersion: input.targetVersion,
       actor,
+      authority,
     });
     return {
       ok: true,

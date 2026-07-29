@@ -2,11 +2,13 @@
 //
 // True all-or-none semantics: the restore engine pre-flights every CAS
 // check + every authz check + computes every inverse statement, then
-// submits all statements as a SINGLE
-// runPostgresQueriesSync({ transaction: true, queries: [...] }) call.
-// Any failure (CAS race, FK violation, etc.) aborts the whole transaction
-// — the new restore change_set rolls back atomically with the inverse
-// writes.
+// submits all statements as a SINGLE guarded batch (cinatra#1939 wave 3
+// Stage D: buildGuardedOrgWriteBatch + runGuardedOrgWriteBatchSync — the
+// org-write kernel's fixed-batch adapter, which itself runs the whole list
+// through one runPostgresQueriesSync({ transaction: true, queries: [...] })
+// call). Any failure (CAS race, FK violation, a lifecycle-ruling refusal,
+// etc.) aborts the whole transaction — the new restore change_set rolls
+// back atomically with the inverse writes.
 //
 // Append-only history: the new change_set carries
 // restore_of_change_set_id pointing at the original. The original
@@ -26,10 +28,14 @@ import { randomUUID } from "node:crypto";
 
 import {
   ensurePostgresSchema,
-  getPostgresConnectionString,
   postgresSchema,
 } from "@/lib/database";
-import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+// Org-write kernel guard (cinatra#1939 wave 3 Stage D) — same fixed-batch
+// adapter canonical-writer.ts uses; this engine builds its OWN statement
+// lists (a batched multi-event undo, and the single historyAware* delegate
+// calls below), so both writer bodies in this file guard their own batch.
+import { buildGuardedOrgWriteBatch, type OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
+import { runGuardedOrgWriteBatchSync } from "@/lib/org-write/batch-wrapper";
 
 import {
   closeChangeSet,
@@ -86,6 +92,9 @@ export type RestoreChangeSetInput = {
   // actions) should resolve freshness via resolveExternalFreshness and
   // pass the result here.
   externalFreshness?: ExternalFreshnessMap;
+  // Org-write kernel authority (cinatra#1939 wave 3 Stage D) — guards the
+  // batched inverse-statement transaction below. Minted by the caller.
+  authority: OrgWriteAuthority;
 };
 
 export type RestoreChangeSetResult = {
@@ -99,6 +108,11 @@ export type RestoreObjectToVersionInput = {
   targetVersion: number;
   actor: HistoryActor;
   parentChangeSetId?: string;
+  // Org-write kernel authority (cinatra#1939 wave 3 Stage D) — threaded
+  // straight through to the canonical writer's guarded batch. Minted by the
+  // caller (a live session or a forwarded MCP-frame authority); this engine
+  // never mints one itself.
+  authority: OrgWriteAuthority;
 };
 
 export class RestoreNotEligibleError extends Error {
@@ -247,13 +261,21 @@ export function restoreChangeSet(
   }
 
   // 3. Execute every statement in a SINGLE transaction. Any failure
-  // aborts the whole tx — true all-or-none.
+  // aborts the whole tx — true all-or-none. Org-write kernel guard
+  // (cinatra#1939 wave 3 Stage D): the write lock + lifecycle ruling
+  // statements are prepended to this SAME batch so the fence covers every
+  // inverse statement atomically, not just the first one.
   try {
-    runPostgresQueriesSync({
-      connectionString: getPostgresConnectionString(),
-      transaction: true,
-      queries: statements,
-    });
+    if (input.actor.orgId === null) {
+      throw new Error(
+        "restoreChangeSet: actor.orgId is required to guard the restore through the org-write kernel",
+      );
+    }
+    const batch = buildGuardedOrgWriteBatch(
+      { orgId: input.actor.orgId, capability: "content.write", authority: input.authority },
+      statements,
+    );
+    runGuardedOrgWriteBatchSync(batch);
   } catch (e) {
     closeChangeSet(restoreHandle, {
       closureReason: `restore-failed: ${(e as Error).message}`,
@@ -605,6 +627,7 @@ export async function restoreObjectToVersion(
         expectedBaseVersion: current.version,
         historyEffect: "reversible-internal",
         actor: input.actor,
+        authority: input.authority,
       },
     );
   } else if (!currentIsDeleted && targetIsDeleted) {
@@ -619,6 +642,7 @@ export async function restoreObjectToVersion(
         expectedBaseVersion: current.version,
         historyEffect: "reversible-internal",
         actor: input.actor,
+        authority: input.authority,
       },
     );
   } else if (currentIsDeleted && !targetIsDeleted) {
@@ -634,6 +658,7 @@ export async function restoreObjectToVersion(
         expectedBaseVersion: current.version,
         historyEffect: "reversible-internal",
         actor: input.actor,
+        authority: input.authority,
       },
     );
   } else {
