@@ -158,6 +158,12 @@ describe("restoreObjectToVersion — deleted/live state transitions", () => {
       objectId: "obj_1",
       targetVersion: 2,
       actor: { actorId: "user_1", actorKind: "user", orgId: "org_1" },
+      // cinatra#1939 wave 3 Stage D: authority is required on
+      // RestoreObjectToVersionInput; historyAwareUpsert/SoftDelete/Undelete
+      // are mocked above (this test locks restoreObjectToVersion's
+      // deleted-state BRANCHING, not the guard), so a stub authority is
+      // sufficient — it is never evaluated against a real capability table.
+      authority: { orgId: "org_1", can: () => true },
     });
     expect(mocks.upsert).toHaveBeenCalledTimes(1);
     expect(mocks.softDelete).not.toHaveBeenCalled();
@@ -192,6 +198,12 @@ describe("restoreObjectToVersion — deleted/live state transitions", () => {
       objectId: "obj_1",
       targetVersion: 2,
       actor: { actorId: "user_1", actorKind: "user", orgId: "org_1" },
+      // cinatra#1939 wave 3 Stage D: authority is required on
+      // RestoreObjectToVersionInput; historyAwareUpsert/SoftDelete/Undelete
+      // are mocked above (this test locks restoreObjectToVersion's
+      // deleted-state BRANCHING, not the guard), so a stub authority is
+      // sufficient — it is never evaluated against a real capability table.
+      authority: { orgId: "org_1", can: () => true },
     });
     expect(mocks.softDelete).toHaveBeenCalledTimes(1);
     expect(mocks.upsert).not.toHaveBeenCalled();
@@ -222,6 +234,12 @@ describe("restoreObjectToVersion — deleted/live state transitions", () => {
       objectId: "obj_1",
       targetVersion: 2,
       actor: { actorId: "user_1", actorKind: "user", orgId: "org_1" },
+      // cinatra#1939 wave 3 Stage D: authority is required on
+      // RestoreObjectToVersionInput; historyAwareUpsert/SoftDelete/Undelete
+      // are mocked above (this test locks restoreObjectToVersion's
+      // deleted-state BRANCHING, not the guard), so a stub authority is
+      // sufficient — it is never evaluated against a real capability table.
+      authority: { orgId: "org_1", can: () => true },
     });
     expect(mocks.undelete).toHaveBeenCalledTimes(1);
     expect(mocks.undelete.mock.calls[0][0]).toMatchObject({
@@ -261,6 +279,12 @@ describe("restoreObjectToVersion — deleted/live state transitions", () => {
       objectId: "obj_1",
       targetVersion: 2,
       actor: { actorId: "user_1", actorKind: "user", orgId: "org_1" },
+      // cinatra#1939 wave 3 Stage D: authority is required on
+      // RestoreObjectToVersionInput; historyAwareUpsert/SoftDelete/Undelete
+      // are mocked above (this test locks restoreObjectToVersion's
+      // deleted-state BRANCHING, not the guard), so a stub authority is
+      // sufficient — it is never evaluated against a real capability table.
+      authority: { orgId: "org_1", can: () => true },
     });
     expect(mocks.upsert).not.toHaveBeenCalled();
     expect(mocks.softDelete).not.toHaveBeenCalled();

@@ -21,10 +21,34 @@ const h = vi.hoisted(() => ({
   // Default TRUE: the provisioned world (cinatra#1566) — the creator's
   // membership insert carries role='admin'. The degrade case flips it.
   teamMemberRoleColumnExists: vi.fn(async () => true),
+  // cinatra#1939 wave 3 Stage D seam spies: the action now mints a session
+  // authority and runs its transaction through guardOrgMutation. This suite's
+  // concern is the ACTIVE-ORG DESTINATION flow, so the kernel guard is a
+  // pass-through here (its refusal semantics are the kernel's own test
+  // suite's concern); the spies still let us assert the wiring.
+  verifySessionAuthority: vi.fn(async (userId: string, orgId: string) => ({
+    orgId,
+    can: () => true,
+  })),
+  guardOrgMutation: vi.fn(
+    async (
+      db: { transaction: (cb: (tx: unknown) => Promise<unknown>) => Promise<unknown> },
+      _req: unknown,
+      fn: (tx: unknown, permit: unknown) => Promise<unknown>,
+    ) => db.transaction(async (tx) => fn(tx, {})),
+  ),
 }));
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: h.requireAuthSession,
+}));
+
+vi.mock("@/lib/org-write/authority", () => ({
+  verifySessionAuthority: h.verifySessionAuthority,
+}));
+
+vi.mock("@cinatra-ai/org-write-kernel", () => ({
+  guardOrgMutation: h.guardOrgMutation,
 }));
 
 vi.mock("@/lib/better-auth-db", () => ({
@@ -216,6 +240,17 @@ describe("createTeamAction active-org destination guard", () => {
     const memberInsert = sqlText(tx.execute.mock.calls[1]?.[0]);
     expect(memberInsert).not.toContain('"role"');
     expect(memberInsert).not.toContain("'admin'");
+  });
+
+  it("runs the create through guardOrgMutation with membership.write + a session authority minted for the CHOSEN org (#1939 Stage D)", async () => {
+    mockSession(ACTIVE_ORG);
+
+    await runAndCaptureRedirect(formFor(OTHER_ORG));
+
+    expect(h.verifySessionAuthority).toHaveBeenCalledWith(USER_ID, OTHER_ORG);
+    expect(h.guardOrgMutation).toHaveBeenCalledTimes(1);
+    const [, req] = h.guardOrgMutation.mock.calls[0]!;
+    expect(req).toMatchObject({ orgId: OTHER_ORG, capability: "membership.write" });
   });
 
   it("fails visibly when the switch rejects post-create (no silent /teams redirect)", async () => {

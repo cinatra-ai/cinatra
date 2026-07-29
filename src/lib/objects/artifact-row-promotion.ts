@@ -33,6 +33,7 @@ import * as errors from "@/lib/object-history/errors";
 
 import type { ApprovalViewer } from "@/app/configuration/approvals/sources/types";
 import { redactChatCaptureText } from "@/lib/chat-capture/redact";
+import { verifySessionAuthority } from "@/lib/org-write/authority";
 import type {
   ArtifactPromotionRequestRow,
   ArtifactPromotionRequestStatus,
@@ -191,7 +192,7 @@ export interface ArtifactPromotionDeps {
     toOwnerId: string;
     expectedBaseVersion: number;
     actor: ApprovalViewer;
-  }): WidenOutcome;
+  }): Promise<WidenOutcome>;
   scanContent(content: unknown): { clean: boolean };
 }
 
@@ -226,8 +227,20 @@ async function productionDeps(): Promise<ArtifactPromotionDeps> {
           orgId: rec.orgId,
         };
       },
-      widenAndReproject: (input) => {
+      widenAndReproject: async (input) => {
         try {
+          // Org-write kernel authority (cinatra#1939 wave 3 Stage D), minted
+          // HERE rather than threaded from the top of the shared, multi-
+          // subject `ApprovalSource.decide` seam (agent-creation and other
+          // promotion-adjacent backends share that generic contract; widening
+          // it for one subject's kernel authority would ripple into backends
+          // that never touch canonical-writer.ts). `input.actor` already
+          // carries the fresh session's userId/orgId verified upstream by
+          // `decideArtifactPromotion`'s `viewer.isAdmin` gate.
+          const authority = await verifySessionAuthority(
+            input.actor.userId,
+            input.actor.orgId,
+          );
           writer.historyAwareUpsert(
             {
               id: input.object.id,
@@ -246,6 +259,7 @@ async function productionDeps(): Promise<ArtifactPromotionDeps> {
               },
               historyEffect: "reversible-internal",
               expectedBaseVersion: input.expectedBaseVersion,
+              authority,
             },
           );
           return { ok: true };
@@ -648,7 +662,7 @@ export async function decideArtifactPromotion(
   //     version-guarded widen is idempotent on the retry).
   let widened: WidenOutcome;
   try {
-    widened = deps.widenAndReproject({
+    widened = await deps.widenAndReproject({
       object,
       toVisibility: request.toVisibility,
       toOwnerLevel: request.toOwnerLevel,

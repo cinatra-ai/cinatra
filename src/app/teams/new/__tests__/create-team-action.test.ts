@@ -60,8 +60,16 @@ describe("createTeamAction — slug + atomicity contract", () => {
     expect(ACTION_SOURCE).toMatch(/from\s+"\.\/team-slug"/);
   });
 
-  it("wraps the team + teamMember inserts in a transaction (no orphan team)", () => {
-    expect(ACTION_SOURCE).toMatch(/betterAuthDb\.transaction/);
+  it("wraps the team + teamMember inserts in the guarded kernel transaction (no orphan team; #1939 Stage D)", () => {
+    // The org-write kernel guard OPENS the transaction (guardOrgMutation runs
+    // db.transaction itself), replacing the former bare betterAuthDb.transaction
+    // call — the atomicity contract is unchanged, the fence is new.
+    expect(ACTION_SOURCE).toMatch(/await guardOrgMutation\(/);
+    expect(ACTION_SOURCE).toMatch(/capability: "membership\.write"/);
+    expect(ACTION_SOURCE).toMatch(/verifySessionAuthority\(session\.user\.id, organizationId\)/);
+    // No bare (unguarded) transaction CALL remains — the identifier may still
+    // appear in comments describing the conversion.
+    expect(ACTION_SOURCE).not.toMatch(/betterAuthDb\.transaction\(/);
     // teamMember insert lives inside the same write path.
     expect(ACTION_SOURCE).toMatch(/public\."teamMember"/);
   });
@@ -69,7 +77,7 @@ describe("createTeamAction — slug + atomicity contract", () => {
   it("keeps redirect() outside the transaction callback", () => {
     // Anchor on the awaited-result consumer (`if (!result.ok)`) rather than the
     // first `});` so a future nested callback can't fool the boundary.
-    const txStart = ACTION_SOURCE.indexOf("await betterAuthDb.transaction");
+    const txStart = ACTION_SOURCE.indexOf("await guardOrgMutation(");
     const txEnd = ACTION_SOURCE.indexOf("if (!result.ok)", txStart);
     expect(txStart).toBeGreaterThan(-1);
     expect(txEnd).toBeGreaterThan(txStart);

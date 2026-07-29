@@ -2280,6 +2280,9 @@ importers:
       '@cinatra-ai/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
+      '@cinatra-ai/org-write-kernel':
+        specifier: workspace:*
+        version: link:../org-write-kernel
       '@cinatra-ai/sdk-extensions':
         specifier: workspace:*
         version: link:../sdk-extensions

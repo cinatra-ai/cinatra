@@ -165,15 +165,25 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     }
   });
 
-  it("the Stage-A exception ledger is EXACTLY the workflows-extension (#1939) + new-run (#1940) rows", () => {
+  it("the exception ledger is EXACTLY the workflows-extension + new-run + Stage-D-deferred rows", () => {
+    // cinatra#1939 wave 3 Stage D additions: createSemanticArtifact (found
+    // during grounding to have a ~30-caller blast radius — its own dedicated
+    // wave, not this slice) and the three team-member actions (a
+    // platform-admin/team-admin authority-tier gap the kernel's session
+    // authority resolver cannot express yet — a design decision, not a
+    // mechanical thread). Both disclosed in the wave-3 Stage D PR body.
     const ledger = ORG_WRITE_REGISTRY.filter((r) => r.importBanExemption)
       .map((r) => `${r.exportName}#${r.importBanExemption!.issue}`)
       .sort();
     expect(ledger).toEqual([
+      "addTeamMemberAction#1939",
       "createAgentRun#1940",
       "createAgentRunPendingInput#1940",
+      "createSemanticArtifact#1939",
       "materializeExtensionInstanceForProject#1939",
       "materializeExtensionTemplate#1939",
+      "removeTeamMemberAction#1939",
+      "updateTeamMemberRoleAction#1939",
       "upgradeExtensionDashboards#1939",
     ]);
   });
@@ -197,7 +207,12 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     ]) {
       expect(banned.has(w), `${w} must be import-banned in Stage A`).toBe(true);
     }
-    expect(banned.size).toBe(20);
+    // Stage A's own set was exactly 20; cinatra#1939 wave 3 Stage D added 9
+    // more banned rows (historyAwareUpsert/SoftDelete/Undelete/Tombstone,
+    // restoreChangeSet, restoreObjectToVersion, runResourceProjectMove,
+    // runAgentRunMoveWithOutputs, createTeamAction) — asserted in the Stage-D
+    // describe block below, not re-enumerated here.
+    expect(banned.size).toBe(29);
   });
 });
 
@@ -346,5 +361,40 @@ describe("delete-time rulings — registry-derived blocker inventory (#1939 wave
     expect(row.cascadeOwnership).toBe("block");
     expect(row.storageReferences).toContain("team");
     expect(orgDeleteBlockTables().has("team")).toBe(true);
+  });
+});
+
+describe("wave 3 Stage D — chokepoint writer conversions", () => {
+  it("the canonical-writer.ts / restore-engine.ts / resource-project-move.ts / createTeamAction flip set is import-banned", () => {
+    const banned = new Set(
+      ORG_WRITE_REGISTRY.filter((r) => r.importBanned).map((r) => r.exportName),
+    );
+    for (const w of [
+      "historyAwareUpsert",
+      "historyAwareSoftDelete",
+      "historyAwareUndelete",
+      "historyAwareTombstone",
+      "restoreChangeSet",
+      "restoreObjectToVersion",
+      "runResourceProjectMove",
+      "runAgentRunMoveWithOutputs",
+      "createTeamAction",
+    ]) {
+      expect(banned.has(w), `${w} must be import-banned in Stage D`).toBe(true);
+    }
+  });
+
+  it("the fictional canonicalObjectWriter / teamMemberActions / ensureBuiltinAssistantRegistration export names are gone", () => {
+    const names = ORG_WRITE_REGISTRY.map((r) => r.exportName);
+    expect(names).not.toContain("canonicalObjectWriter");
+    expect(names).not.toContain("teamMemberActions");
+    expect(names).not.toContain("ensureBuiltinAssistantRegistration");
+  });
+
+  it("member-actions.ts rows carry the corrected storageReferences (teamMember only, no invitation)", () => {
+    for (const name of ["addTeamMemberAction", "removeTeamMemberAction", "updateTeamMemberRoleAction"]) {
+      const row = ORG_WRITE_REGISTRY.find((r) => r.exportName === name)!;
+      expect(row.storageReferences).toEqual(["teamMember"]);
+    }
   });
 });

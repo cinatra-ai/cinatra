@@ -16,6 +16,7 @@ import { enforceResourceAccess } from "@/lib/authz/enforce-resource-access";
 import { AuthzError } from "@/lib/authz/errors";
 import { getObjectById } from "@/lib/objects-store";
 import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
+import { verifySessionAuthority } from "@/lib/org-write/authority";
 
 // Server action: approve the merge proposal. Requires actor.object.update
 // on the target object. Reads the current object data fresh from the
@@ -75,11 +76,13 @@ export async function approveMergeProposalAction(input: {
     actorKind: "user",
     orgId,
   };
+  const authority = await verifySessionAuthority(session.user.id, orgId);
   try {
     const result = approveMergeProposal({
       proposalId: input.proposalId,
       actor,
       currentData: (target.data as Record<string, unknown>) ?? {},
+      authority,
     });
     return {
       ok: true,
