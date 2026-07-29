@@ -85,6 +85,26 @@ vi.mock("@/lib/auth-session", () => ({
   // external-dispatch happy paths this suite pins flowing (the authority
   // semantics themselves are covered by the org-write suites).
   resolveOrgRoleForUser: async () => "member",
+  // cinatra#2202: the INTERNAL branch resolves the caller's ActorContext
+  // through the canonical session-lineage resolver and refuses to dispatch
+  // without one. This suite's routing assertions still need the internal
+  // fall-through to run, so the resolver answers with the session's actor.
+  // (The actor semantics themselves are pinned by
+  // a2a-actions-internal-actor.test.ts.)
+  getActorContext: async () =>
+    sess.user
+      ? {
+          principalType: "HumanUser",
+          principalId: sess.user.id,
+          organizationId: sess.session?.activeOrganizationId ?? undefined,
+          orgRole: "member",
+          platformRole: "member",
+          authSource: "ui",
+          policyVersion: "v2",
+          projectGrants: [],
+          projectIds: [],
+        }
+      : undefined,
 }));
 
 vi.mock("@/lib/background-jobs", () => ({

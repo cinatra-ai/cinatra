@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { writeDefaultLlmProviderToDatabase } from "@/lib/database";
 import { logAuditEventStrict } from "@/lib/authz/audit";
 import type { ActorContext } from "@/lib/authz/actor-context";
+import type { LlmProvider } from "@cinatra-ai/agents/llm-provider-policy";
 
 // ---------------------------------------------------------------------------
 // Single chokepoint for mutating the GLOBAL default LLM provider.
@@ -20,8 +21,13 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 //      and DO NOT write — no unaudited privileged mutation.
 //
 // The provider value itself is still validated by the caller and re-validated
-// by `writeDefaultLlmProviderToDatabase` (the authoritative {openai,gemini}
-// fail-closed sink); this helper does not relax that.
+// by `writeDefaultLlmProviderToDatabase` — the authoritative fail-closed sink,
+// which since S6 (cinatra#2093) DERIVES its eligible set from the ABI v2
+// `defaultCapable` declaration flag rather than a hardcoded {openai,gemini}.
+// This helper does not relax that; it is WIDENED accordingly (the `provider`
+// parameter is now the open `LlmProvider` union, so Anthropic — un-fenced by
+// S6 — flows through the SAME audited mutation as every other provider rather
+// than needing a second write path).
 // ---------------------------------------------------------------------------
 
 export class DefaultLlmProviderAuthzError extends Error {
@@ -46,7 +52,7 @@ export class DefaultLlmProviderAuditError extends Error {
  */
 export async function updateDefaultLlmProvider(args: {
   actor: ActorContext | undefined;
-  provider: "openai" | "gemini";
+  provider: LlmProvider;
   requestId?: string;
 }): Promise<void> {
   const { actor, provider, requestId } = args;

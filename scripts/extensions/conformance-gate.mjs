@@ -361,7 +361,18 @@ const CHAT_VIEW_TYPE_RE = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
 // native_mcp-status / approval VOCABULARIES are DERIVED (loadLiveRules), never
 // re-listed. Drift in these structural key sets can only produce a false CI
 // signal, never a security gap; the leaf schema stays the runtime authority.
-const LLM_PROVIDER_ALLOWED_KEYS = new Set(["abiVersion", "provider", "capabilities", "models"]);
+// ABI v2 (cinatra#2093, epic #2086 S6) adds the two setup-time provider-choice
+// flags. Kept as a hand-mirror of the leaf's `.strict()` key set, exactly like
+// the nested key sets below — only the DATA literals (abi version + the four
+// vocabularies) are derived.
+const LLM_PROVIDER_ALLOWED_KEYS = new Set([
+  "abiVersion",
+  "provider",
+  "capabilities",
+  "models",
+  "defaultCapable",
+  "wizardEligible",
+]);
 const LLM_PROVIDER_NATIVE_MCP_ALLOWED_KEYS = new Set(["status", "transports", "approval"]);
 const LLM_PROVIDER_MODELS_ALLOWED_KEYS = new Set(["default", "allowed"]);
 
@@ -777,7 +788,8 @@ function checkLlmProvider(pkg, rules) {
     findings.push({
       rule: "manifest.llm-provider-shape",
       file,
-      detail: "cinatra.llmProvider must be an object ({ abiVersion, provider, capabilities, models }).",
+      detail:
+        "cinatra.llmProvider must be an object ({ abiVersion, provider, capabilities, models, defaultCapable, wizardEligible }).",
     });
     return findings;
   }
@@ -788,7 +800,7 @@ function checkLlmProvider(pkg, rules) {
     findings.push({
       rule: "manifest.llm-provider-extraneous-key",
       file,
-      detail: `cinatra.llmProvider may only declare { abiVersion, provider, capabilities, models }; unexpected key(s): ${extraKeys.join(", ")}.`,
+      detail: `cinatra.llmProvider may only declare { ${[...LLM_PROVIDER_ALLOWED_KEYS].join(", ")} }; unexpected key(s): ${extraKeys.join(", ")}.`,
     });
   }
   if (decl.abiVersion !== rules.llmProviderAbiVersion) {
@@ -796,6 +808,30 @@ function checkLlmProvider(pkg, rules) {
       rule: "manifest.llm-provider-abi-version",
       file,
       detail: `cinatra.llmProvider.abiVersion must be exactly ${rules.llmProviderAbiVersion} (got ${JSON.stringify(decl.abiVersion)}).`,
+    });
+  }
+  // --- ABI v2 flags (cinatra#2093, epic #2086 S6) -------------------------
+  // REQUIRED booleans, plus the cross-field subset rule: the setup wizard's
+  // only act is committing the stored default, so offering a provider that
+  // could never BE the default is incoherent and is rejected here rather than
+  // discovered at setup time. FAIL-CLOSED at publish: a connector RELEASE must
+  // carry v2 (the host's transitional v1 acceptance is host-side only and is
+  // gated by an allowlist that this gate deliberately does not honour).
+  for (const flag of ["defaultCapable", "wizardEligible"]) {
+    if (typeof decl[flag] !== "boolean") {
+      findings.push({
+        rule: "manifest.llm-provider-flag-type",
+        file,
+        detail: `cinatra.llmProvider.${flag} must be a boolean (got ${JSON.stringify(decl[flag])}).`,
+      });
+    }
+  }
+  if (decl.wizardEligible === true && decl.defaultCapable !== true) {
+    findings.push({
+      rule: "manifest.llm-provider-wizard-subset",
+      file,
+      detail:
+        "cinatra.llmProvider.wizardEligible requires defaultCapable: wizard eligibility is a strict subset of default capability (the wizard's only act is committing the stored default).",
     });
   }
   if (typeof decl.provider !== "string" || !rules.llmProviders.has(decl.provider)) {

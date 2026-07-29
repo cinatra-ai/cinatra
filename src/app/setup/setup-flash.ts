@@ -18,6 +18,26 @@
 import type { SearchParamToastConfig } from "@cinatra-ai/sdk-ui/search-param-toast";
 
 export const SETUP_ERROR_MESSAGES = {
+  // S6 (cinatra#2093) AI step: the provider choice + the readiness saga.
+  // The saga's ACTIONABLE detail (and its fix-forward prompt) is rendered
+  // inline on the step from the stored failure record — never carried in the
+  // query string, per this module's codes-only protocol.
+  "setup-provider-invalid":
+    "Choose one of the offered AI providers and enter its credentials.",
+  // The provider CREDENTIAL save failed (distinct from the readiness run below,
+  // which never started). The actionable detail — including which step to
+  // complete first — renders inline at the credential form from the stored
+  // failure record; this code is the transient flash, and carries no text of
+  // its own per the codes-only protocol.
+  "setup-provider-save-failed":
+    "That provider key could not be saved. The step shows what failed and what to do first.",
+  // The switch is ordered so that no partial outcome can read as ready; the
+  // step re-renders whatever durable state survived, so the code says "look at
+  // the step" rather than asserting what did or did not change.
+  "setup-mcp-mode-switch-failed":
+    "Could not switch the Anthropic connector to native MCP delivery. The step shows the current state — try again, or see server logs.",
+  "setup-readiness-failed":
+    "AI setup could not be verified. The step shows what failed and how to fix it.",
   "operator-email-missing": "Could not determine operator email. Please sign in again.",
   "identity-exists":
     "Instance namespace is already configured. Use Administration → Instance to edit or rename.",

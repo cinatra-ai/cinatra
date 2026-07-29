@@ -1540,6 +1540,71 @@ export type LlmProviderSurface = {
       outputTruncated?: boolean;
     }>;
   };
+  /**
+   * NATIVE-SKILLS PROBE — the `cinatra.llmProvider` ABI v2 surface member
+   * (cinatra#2093, epic #2086 S6). OPTIONAL: a provider whose setup path does
+   * no skill upload (OpenAI, Gemini) simply omits it.
+   *
+   * WHY A LIVE PROBE AND NOT A MANIFEST CLAIM. `capabilities.native_mcp.status`
+   * is a DECLARATION — "this connector can speak native MCP". It says nothing
+   * about the connection actually stored on THIS instance. The concrete failure
+   * S6 closes: an Anthropic connection whose effective MCP mode is
+   * `function-tools` reports ready on key presence alone and passes every
+   * declaration check, then rejects EVERY `container.skills` request at run
+   * time — so setup completes "successfully" and skills silently never reach
+   * the model. Only asking the real API with a real skill id distinguishes the
+   * two, which is why the saga's readiness receipt is a probe RESULT rather
+   * than a cached boolean.
+   *
+   * CONTRACT:
+   *  - `skillId` + `version` name an ACTUALLY-UPLOADED revision. BOTH halves
+   *    are required because a `container.skills` reference is
+   *    `{skill_id, version}`: an id alone could resolve a DIFFERENT revision
+   *    than the one just uploaded, so the probe would not prove what it
+   *    claims. The saga passes a pair from the strict initial sync it just
+   *    performed; when that set is legitimately empty it creates a disposable
+   *    probe skill, probes, and deletes it (the caller owns that lifecycle and
+   *    its consent record — the connector never invents a skill).
+   *  - The implementation MUST issue a real request that exercises the
+   *    `container.skills` path and MUST NOT fall back to function-tool
+   *    emulation to make the probe pass: emulation is exactly the broken state
+   *    being detected (the MCP Injection Rule).
+   *  - Returns a verdict; it does NOT throw for a negative result. A thrown
+   *    error means the probe could not be performed at all (transport failure),
+   *    which the caller treats as inconclusive-and-therefore-failed
+   *    (fail-closed), distinctly from a clean `accepted: false`.
+   */
+  probeNativeSkills?(input: {
+    /** An actually-uploaded skill's id. */
+    skillId: string;
+    /** That skill's EXACT uploaded revision. */
+    version: string;
+    /** Optional bound so a hung provider cannot stall the setup saga. */
+    timeoutMs?: number;
+  }): Promise<LlmNativeSkillsProbeResult>;
+};
+
+/**
+ * The verdict of {@link LlmProviderSurface.probeNativeSkills}.
+ *
+ * `accepted: true` means the provider's EFFECTIVE, as-configured mode took a
+ * `container.skills` request — the only evidence that injectable skills will
+ * actually reach the model on this instance.
+ */
+export type LlmNativeSkillsProbeResult = {
+  accepted: boolean;
+  /**
+   * The effective delivery mode the provider reported/used. `"function-tools"`
+   * with `accepted:false` is the specific misconfiguration the S6 saga must
+   * fail with a fix-forward prompt rather than a generic error.
+   */
+  mode?: "container-skills" | "function-tools" | "unknown";
+  /**
+   * Operator-facing reason when `accepted` is false. MUST NOT contain
+   * credentials or raw provider payloads — the host surfaces it verbatim in the
+   * setup UI and writes it to the readiness receipt.
+   */
+  reason?: string;
 };
 
 // ---------------------------------------------------------------------------

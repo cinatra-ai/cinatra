@@ -17,7 +17,16 @@ import type { LlmProvider, LlmProviderAdapter, LlmMcpServerTool } from "./types"
 // silent fallback to deleted in-core code; a registered-but-malformed surface
 // makes `getLlmProviderAdapterSurface` THROW (fail closed).
 import { getLlmProviderAdapterSurface } from "@/lib/llm-provider-surfaces";
-import { readDefaultLlmProviderFromDatabase, readDefaultImageProviderFromDatabase } from "@/lib/database";
+import {
+  readDefaultLlmProviderFromDatabase,
+  readDefaultImageProviderFromDatabase,
+  readLlmProviderFailoverPolicyFromDatabase,
+} from "@/lib/database";
+// S6 un-fencing (cinatra#2093): the implicit-global eligible set derives from
+// the ABI v2 `defaultCapable` flag. Same authority as `src/lib/database.ts`'s
+// storage chokepoint — read from the SDK leaf because `packages/llm` cannot
+// import `@cinatra-ai/agents` (agents → llm, not the reverse).
+import { buildKnownDefaultCapableProviders } from "@cinatra-ai/sdk-extensions/llm-provider-contract";
 import {
   buildRegisteredExternalMcpServerTools,
   buildSingleExternalMcpTool,
@@ -253,31 +262,63 @@ export async function resolveProviderAdapter(provider: LlmProvider): Promise<Llm
 }
 
 /**
+ * The IMPLICIT-GLOBAL resolution ORDER — the single place `packages/llm` turns
+ * "no explicit caller preference" into a concrete provider list.
+ *
+ * S6 EXACT BINDING (cinatra#2093, epic #2086). Before S6 this was a hardcoded
+ * `[dbDefault, ...["openai","gemini"].filter(...)]`: Anthropic was excluded
+ * architecturally, and every OTHER provider silently failed over. Both halves
+ * change:
+ *
+ *  - the eligible set DERIVES from the ABI v2 `defaultCapable` declaration flag
+ *    (`buildKnownDefaultCapableProviders`) — the same authority
+ *    `isGlobalDefaultLlmProviderEligible` uses at the storage chokepoint, so
+ *    Anthropic is un-fenced in ONE coherent move rather than four;
+ *  - the DEFAULT is now EXACT: the list is `[storedProvider]` and nothing else.
+ *    An unavailable stored provider resolves `null`, which the callers that must
+ *    fail visibly turn into a named error (`resolveBoundDefaultAdapter`).
+ *    Falling through to another provider happens ONLY under the explicit stored
+ *    admin policy `llm_provider_failover_policy === "ordered"`.
+ *
+ * Exported for the S6 unit tests, which drive the order directly rather than
+ * inferring it from whichever adapter happened to be registered.
+ */
+export function resolveImplicitGlobalProviderOrder(): {
+  providers: LlmProvider[];
+  storedProvider: LlmProvider;
+  policy: "exact" | "ordered";
+} {
+  // Already sanitized on read to a default-capable provider (or coerced back to
+  // openai), so it can be trusted as the head of the list.
+  const storedProvider = readDefaultLlmProviderFromDatabase() as LlmProvider;
+  const policy = readLlmProviderFailoverPolicyFromDatabase();
+  if (policy !== "ordered") {
+    return { providers: [storedProvider], storedProvider, policy: "exact" };
+  }
+  const eligible = buildKnownDefaultCapableProviders();
+  return {
+    providers: [storedProvider, ...eligible.filter((p) => p !== storedProvider)],
+    storedProvider,
+    policy: "ordered",
+  };
+}
+
+/**
  * Resolve the first available provider adapter from a preference list.
- * When no explicit list is provided, reads the DB-configured default provider
- * first, then falls back through all remaining providers in order.
+ *
+ * With an explicit `preferredProviders` list the list is AUTHORITATIVE and
+ * walked in order (unchanged — an explicit per-purpose pin is exactly what the
+ * S6 purpose policy calls `explicit-pin`).
+ *
+ * WITHOUT one, resolution binds to the STORED provider exactly (see
+ * {@link resolveImplicitGlobalProviderOrder}) unless the admin has opted into
+ * ordered failover. Callers that need the failure to be VISIBLE rather than a
+ * `null` should use {@link resolveBoundDefaultAdapter}.
  */
 export async function resolveFirstAvailableAdapter(
   preferredProviders?: LlmProvider[],
 ): Promise<LlmProviderAdapter | null> {
-  let providers: LlmProvider[];
-  if (preferredProviders) {
-    // Explicit caller preference (e.g. a per-purpose Anthropic selection) is
-    // honored as-is — Anthropic IS a valid per-purpose target.
-    providers = preferredProviders;
-  } else {
-    // Standing invariant: the GLOBAL default resolution (no explicit
-    // preference) must never resolve Anthropic.
-    // `readDefaultLlmProviderFromDatabase()` is already sanitized to
-    // openai/gemini, but the implicit fallthrough list must ALSO exclude
-    // Anthropic so an unavailable OpenAI cannot silently promote a connected
-    // Anthropic to the resolved global adapter. Anthropic stays reachable via
-    // an explicit `preferredProviders`/`resolveProviderAdapter("anthropic")`
-    // per-purpose call — just never as the implicit global default.
-    const dbDefault = readDefaultLlmProviderFromDatabase() as LlmProvider;
-    const globalEligible: LlmProvider[] = ["openai", "gemini"];
-    providers = [dbDefault, ...globalEligible.filter((p) => p !== dbDefault)];
-  }
+  const providers = preferredProviders ?? resolveImplicitGlobalProviderOrder().providers;
 
   for (const provider of providers) {
     const adapter = await resolveProviderAdapter(provider);
@@ -285,6 +326,46 @@ export async function resolveFirstAvailableAdapter(
   }
 
   return null;
+}
+
+/**
+ * Raised when the STORED global default provider has no available adapter.
+ *
+ * S6 (cinatra#2093) AC: "the assistant uses exactly the stored provider;
+ * unavailability is a VISIBLE ERROR, not a silent hop." A `null` return is not
+ * visible enough — it is indistinguishable from "no provider configured at all",
+ * and the pre-S6 behaviour hid the condition entirely by answering on a
+ * different provider. This error names the provider the operator actually chose
+ * so the message can say so.
+ */
+export class BoundDefaultProviderUnavailableError extends Error {
+  readonly storedProvider: LlmProvider;
+  readonly failoverPolicy: "exact" | "ordered";
+  constructor(storedProvider: LlmProvider, failoverPolicy: "exact" | "ordered") {
+    super(
+      failoverPolicy === "exact"
+        ? `The configured default LLM provider "${storedProvider}" is not available (its connector is not installed/active, or its credentials are missing or invalid). Fix that provider's configuration, choose a different default provider, or enable ordered failover in LLM settings.`
+        : `No LLM provider is available. The configured default "${storedProvider}" is unavailable and ordered failover found no other configured provider.`,
+    );
+    this.name = "BoundDefaultProviderUnavailableError";
+    this.storedProvider = storedProvider;
+    this.failoverPolicy = failoverPolicy;
+  }
+}
+
+/**
+ * The EXACT-BINDING default resolution: like {@link resolveDefaultAdapter} but
+ * THROWS {@link BoundDefaultProviderUnavailableError} instead of returning
+ * `null`, so the stored provider being down surfaces as a named, actionable
+ * failure at the assistant / LLM-bridge boundary.
+ */
+export async function resolveBoundDefaultAdapter(): Promise<LlmProviderAdapter> {
+  const { providers, storedProvider, policy } = resolveImplicitGlobalProviderOrder();
+  for (const provider of providers) {
+    const adapter = await resolveProviderAdapter(provider);
+    if (adapter) return adapter;
+  }
+  throw new BoundDefaultProviderUnavailableError(storedProvider, policy);
 }
 
 /**

@@ -9,6 +9,7 @@ import { NextResponse } from "next/server";
 import {
   runResolvedSkillAwareDeterministicLlmTask,
   resolveConfiguredLlmRuntime,
+  resolveImplicitGlobalProviderOrder,
   resolveProviderAdapter,
   createLocalSkillShellTool,
   openAiModelSupportsShell,
@@ -1099,13 +1100,29 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
+  // PURPOSE POLICY: exact-default (llm-purpose-policy.ts, purpose
+  // "llm-bridge-passthrough"). An agent that states no `preferredProvider` is
+  // asking for "the instance's provider" — so S6 (cinatra#2093) binds this to
+  // the STORED provider exactly. When it is unavailable the 503 now NAMES it
+  // instead of the undifferentiated "No LLM provider configured", which was
+  // indistinguishable from "this instance was never set up" and sent operators
+  // to the wrong place.
   const resolvedRuntime = await resolveConfiguredLlmRuntime().catch((e: unknown) => {
     console.error("[llm-bridge] resolveConfiguredLlmRuntime threw:", e);
     return null;
   });
   if (!resolvedRuntime) {
+    const { storedProvider, policy } = resolveImplicitGlobalProviderOrder();
     return NextResponse.json(
-      { error: "No LLM provider configured", code: "NO_LLM_PROVIDER" },
+      {
+        error:
+          policy === "exact"
+            ? `The configured default LLM provider "${storedProvider}" is not available`
+            : `No LLM provider is available (configured default "${storedProvider}", ordered failover found no alternative)`,
+        code: "NO_LLM_PROVIDER",
+        provider: storedProvider,
+        failoverPolicy: policy,
+      },
       { status: 503 },
     );
   }
