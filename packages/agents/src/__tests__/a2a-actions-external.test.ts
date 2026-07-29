@@ -79,6 +79,12 @@ vi.mock("@/lib/auth-session", () => ({
     if (!sess.user) throw new Error("unauthorized");
     return { user: sess.user, session: sess.session };
   },
+  // cinatra#1940 P3: the external branch mints the member session authority
+  // (verifySessionAuthority) before its guarded createAgentRun — the mint
+  // reads the membership role through THIS mocked module. "member" keeps the
+  // external-dispatch happy paths this suite pins flowing (the authority
+  // semantics themselves are covered by the org-write suites).
+  resolveOrgRoleForUser: async () => "member",
 }));
 
 vi.mock("@/lib/background-jobs", () => ({

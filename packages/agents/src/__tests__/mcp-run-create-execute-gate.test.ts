@@ -41,6 +41,12 @@ const authSessionMock = vi.hoisted(() => ({
   getAuthSession: vi.fn(async (): Promise<unknown> => null),
   isPlatformAdmin: vi.fn(() => false),
   requireAuthSession: vi.fn(),
+  // cinatra#1940 P3: handleAgentBuilderRun now resolves a run-creation
+  // authority for the guarded creation perimeter — the resolver's
+  // delegating-principal path reads the membership role through THIS mocked
+  // module. "member" keeps the allowed-actor paths this suite pins flowing
+  // (the authority semantics themselves are covered by the org-write suites).
+  resolveOrgRoleForUser: vi.fn(async () => "member"),
 }));
 vi.mock("@/lib/auth-session", () => authSessionMock);
 
