@@ -29,6 +29,10 @@ import {
 } from "@/lib/assistant-agent-registration";
 import { beforeCreateTeamEnsureSlug } from "@/lib/better-auth-org-hooks";
 import { buildInvitationAcceptUrl, buildInvitationEmail } from "@/lib/org-invitation-email";
+import {
+  buildOrganizationListAfterHook,
+  buildOrganizationDispatchPolicyBeforeHook,
+} from "@/lib/organization-dispatch-policy";
 
 const authBaseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
 const authSecret = process.env.BETTER_AUTH_SECRET;
@@ -468,6 +472,25 @@ export const auth = betterAuth({
         },
       },
     },
+  },
+  // cinatra#1942 (archive V2, Decision 5) — the FIRST top-level `hooks:`
+  // layer on this config (distinct from `databaseHooks` above, which is
+  // per-TABLE, not per-endpoint). Both entries are built in
+  // `@/lib/organization-dispatch-policy` (a plain, non-`auth*`-named module)
+  // so the decision logic stays unit-testable without constructing a live
+  // `betterAuth()` instance; this file only wires the two builders:
+  //   - after:  strips archived organizations from `/organization/list` on
+  //             BOTH transports (raw HTTP + `auth.api.listOrganizations`).
+  //   - before: the dispatch-hook endpoint policy — refuses prohibited
+  //             membership-write endpoints (add/remove-team-member,
+  //             set-active(-team), accept-invitation) while the target org
+  //             is archived, and always allows the cleanup/exit endpoints
+  //             (leave, reject/cancel-invitation). Fires before the
+  //             endpoint on both transports, mirroring
+  //             `disableOrganizationDeletion`'s first-gate posture.
+  hooks: {
+    before: [buildOrganizationDispatchPolicyBeforeHook()],
+    after: [buildOrganizationListAfterHook()],
   },
   // The plugin tuple is built through the SHARED factory at
   // `./better-auth-plugins.ts` — the SINGLE SOURCE OF TRUTH consumed by both
