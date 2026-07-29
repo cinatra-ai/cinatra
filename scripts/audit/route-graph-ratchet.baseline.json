@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1642,
-    "/api/mcp": 1638,
-    "/chat": 1716,
-    "/api/a2a": 1643,
-    "/api/llm-bridge": 1653
+    "/sign-in": 1644,
+    "/api/mcp": 1640,
+    "/chat": 1718,
+    "/api/a2a": 1645,
+    "/api/llm-bridge": 1655
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1641,
-      "to": 1642,
-      "reason": "cinatra#1939 wave 3 Stage D: the canonical object-history writer (canonical-writer.ts, statically reachable from all five locked routes) converts onto the org-write kernel's guarded fixed-batch, making src/lib/org-write/batch-wrapper.ts (the S2 adapter's single sanctioned unwrap consumer, dark until now) newly reachable — exactly +1 first-party module per route. The kernel package itself was already on every route graph since waves 1/2. Cannot be narrowed without leaving the write outside the perimeter fence. Stacks on top of the cinatra#1940 P3 raise already baked into base (1641); RE-MEASURED on the merged tree with the companion extensions cloned pinned.",
-      "pr": 2203
+      "from": 1642,
+      "to": 1644,
+      "reason": "cinatra#1942 archive V2 (PR 2214): src/lib/auth.ts gains the archived-organization Better Auth hooks, importing two new first-party modules — organization-dispatch-policy.ts (the /organization/list after-filter + the per-endpoint archived-org mutation policy) and organization-archive-guard.ts (the shared app-native archived-org write guard the policy module reuses for its archivedAt reads). auth.ts is statically reachable from all five locked routes, so each route's reachable first-party count grows by exactly +2 with no further fan-out (both modules' remaining imports — better-auth-db, drizzle-orm, database — are already reachable from every locked route). CI's route-graph measurement at the first V2 CI round confirmed the uniform +2 (e.g. /sign-in 1644 vs ceiling 1642) with missingCount 0; the growth is the feature's runtime enforcement layer, not rot.",
+      "pr": 2214
     },
     "/api/mcp": {
-      "from": 1637,
-      "to": 1638,
-      "reason": "cinatra#1939 wave 3 Stage D: the canonical object-history writer (canonical-writer.ts, statically reachable from all five locked routes) converts onto the org-write kernel's guarded fixed-batch, making src/lib/org-write/batch-wrapper.ts (the S2 adapter's single sanctioned unwrap consumer, dark until now) newly reachable — exactly +1 first-party module per route. The kernel package itself was already on every route graph since waves 1/2. Cannot be narrowed without leaving the write outside the perimeter fence. Stacks on top of the cinatra#1940 P3 raise already baked into base (1637); RE-MEASURED on the merged tree with the companion extensions cloned pinned.",
-      "pr": 2203
+      "from": 1638,
+      "to": 1640,
+      "reason": "cinatra#1942 archive V2 (PR 2214): src/lib/auth.ts gains the archived-organization Better Auth hooks, importing two new first-party modules — organization-dispatch-policy.ts (the /organization/list after-filter + the per-endpoint archived-org mutation policy) and organization-archive-guard.ts (the shared app-native archived-org write guard the policy module reuses for its archivedAt reads). auth.ts is statically reachable from all five locked routes, so each route's reachable first-party count grows by exactly +2 with no further fan-out (both modules' remaining imports — better-auth-db, drizzle-orm, database — are already reachable from every locked route). CI's route-graph measurement at the first V2 CI round confirmed the uniform +2 (e.g. /sign-in 1644 vs ceiling 1642) with missingCount 0; the growth is the feature's runtime enforcement layer, not rot.",
+      "pr": 2214
     },
     "/chat": {
-      "from": 1715,
-      "to": 1716,
-      "reason": "cinatra#1939 wave 3 Stage D: the canonical object-history writer (canonical-writer.ts, statically reachable from all five locked routes) converts onto the org-write kernel's guarded fixed-batch, making src/lib/org-write/batch-wrapper.ts (the S2 adapter's single sanctioned unwrap consumer, dark until now) newly reachable — exactly +1 first-party module per route. The kernel package itself was already on every route graph since waves 1/2. Cannot be narrowed without leaving the write outside the perimeter fence. Stacks on top of the cinatra#1940 P3 raise already baked into base (1715); RE-MEASURED on the merged tree with the companion extensions cloned pinned.",
-      "pr": 2203
+      "from": 1716,
+      "to": 1718,
+      "reason": "cinatra#1942 archive V2 (PR 2214): src/lib/auth.ts gains the archived-organization Better Auth hooks, importing two new first-party modules — organization-dispatch-policy.ts (the /organization/list after-filter + the per-endpoint archived-org mutation policy) and organization-archive-guard.ts (the shared app-native archived-org write guard the policy module reuses for its archivedAt reads). auth.ts is statically reachable from all five locked routes, so each route's reachable first-party count grows by exactly +2 with no further fan-out (both modules' remaining imports — better-auth-db, drizzle-orm, database — are already reachable from every locked route). CI's route-graph measurement at the first V2 CI round confirmed the uniform +2 (e.g. /sign-in 1644 vs ceiling 1642) with missingCount 0; the growth is the feature's runtime enforcement layer, not rot.",
+      "pr": 2214
     },
     "/api/a2a": {
-      "from": 1642,
-      "to": 1643,
-      "reason": "cinatra#1939 wave 3 Stage D: the canonical object-history writer (canonical-writer.ts, statically reachable from all five locked routes) converts onto the org-write kernel's guarded fixed-batch, making src/lib/org-write/batch-wrapper.ts (the S2 adapter's single sanctioned unwrap consumer, dark until now) newly reachable — exactly +1 first-party module per route. The kernel package itself was already on every route graph since waves 1/2. Cannot be narrowed without leaving the write outside the perimeter fence. Stacks on top of the cinatra#1940 P3 raise already baked into base (1642); RE-MEASURED on the merged tree with the companion extensions cloned pinned.",
-      "pr": 2203
+      "from": 1643,
+      "to": 1645,
+      "reason": "cinatra#1942 archive V2 (PR 2214): src/lib/auth.ts gains the archived-organization Better Auth hooks, importing two new first-party modules — organization-dispatch-policy.ts (the /organization/list after-filter + the per-endpoint archived-org mutation policy) and organization-archive-guard.ts (the shared app-native archived-org write guard the policy module reuses for its archivedAt reads). auth.ts is statically reachable from all five locked routes, so each route's reachable first-party count grows by exactly +2 with no further fan-out (both modules' remaining imports — better-auth-db, drizzle-orm, database — are already reachable from every locked route). CI's route-graph measurement at the first V2 CI round confirmed the uniform +2 (e.g. /sign-in 1644 vs ceiling 1642) with missingCount 0; the growth is the feature's runtime enforcement layer, not rot.",
+      "pr": 2214
     },
     "/api/llm-bridge": {
-      "from": 1652,
-      "to": 1653,
-      "reason": "cinatra#1939 wave 3 Stage D: the canonical object-history writer (canonical-writer.ts, statically reachable from all five locked routes) converts onto the org-write kernel's guarded fixed-batch, making src/lib/org-write/batch-wrapper.ts (the S2 adapter's single sanctioned unwrap consumer, dark until now) newly reachable — exactly +1 first-party module per route. The kernel package itself was already on every route graph since waves 1/2. Cannot be narrowed without leaving the write outside the perimeter fence. Stacks on top of the cinatra#1940 P3 raise already baked into base (1652); RE-MEASURED on the merged tree with the companion extensions cloned pinned.",
-      "pr": 2203
+      "from": 1653,
+      "to": 1655,
+      "reason": "cinatra#1942 archive V2 (PR 2214): src/lib/auth.ts gains the archived-organization Better Auth hooks, importing two new first-party modules — organization-dispatch-policy.ts (the /organization/list after-filter + the per-endpoint archived-org mutation policy) and organization-archive-guard.ts (the shared app-native archived-org write guard the policy module reuses for its archivedAt reads). auth.ts is statically reachable from all five locked routes, so each route's reachable first-party count grows by exactly +2 with no further fan-out (both modules' remaining imports — better-auth-db, drizzle-orm, database — are already reachable from every locked route). CI's route-graph measurement at the first V2 CI round confirmed the uniform +2 (e.g. /sign-in 1644 vs ceiling 1642) with missingCount 0; the growth is the feature's runtime enforcement layer, not rot.",
+      "pr": 2214
     }
   }
 }

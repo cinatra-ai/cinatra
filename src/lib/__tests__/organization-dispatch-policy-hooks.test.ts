@@ -105,14 +105,16 @@ function makeAuth(
         // factory — no override needed here.
       }),
     ],
+    // The EXACT root-hooks shape src/lib/auth.ts uses: ONE middleware per
+    // phase, never the plugin-style {matcher, handler} array (that shape
+    // crashes the handler chain at runtime — the wiring class this contract
+    // test exists to catch).
     hooks: {
-      before: [
-        buildOrganizationDispatchPolicyBeforeHook({
-          ...storeBackedDeps(db),
-          ...beforeHookDepOverrides,
-        }),
-      ],
-      after: [buildOrganizationListAfterHook()],
+      before: buildOrganizationDispatchPolicyBeforeHook({
+        ...storeBackedDeps(db),
+        ...beforeHookDepOverrides,
+      }),
+      after: buildOrganizationListAfterHook(),
     },
   });
 }
@@ -127,7 +129,7 @@ async function seedUserWithSession(auth: ReturnType<typeof makeAuth>, label: str
   const cookie = (res.headers.get("set-cookie") ?? "").split(";")[0];
   expect(cookie).not.toBe("");
   const body = (await res.json()) as { user: { id: string } };
-  return { userId: body.user.id, cookie };
+  return { userId: body.user.id, cookie, email };
 }
 
 async function seedOrg(auth: ReturnType<typeof makeAuth>, ownerUserId: string): Promise<string> {
@@ -243,7 +245,10 @@ describe("dispatch-hook endpoint policy — PROHIBITED endpoints refuse on an ar
     ownerCookie = owner.cookie;
     orgId = await seedOrg(auth, ownerUserId);
     const team = await auth.api.createTeam({
-      body: { name: "Team Alpha", organizationId: orgId },
+      // `slug` is REQUIRED by the public create-team endpoint's body schema
+      // (the team.slug additionalField is required:true — see
+      // better-auth-org-hooks' scope note).
+      body: { name: "Team Alpha", slug: `team-alpha-${crypto.randomUUID()}`, organizationId: orgId },
       headers: new Headers({ cookie: ownerCookie }),
     });
     expect(team).toBeTruthy();
@@ -318,12 +323,15 @@ describe("dispatch-hook endpoint policy — PROHIBITED endpoints refuse on an ar
   });
 
   it("in-process auth.api.acceptInvitation refuses on the archived org (org resolved via invitationId)", async () => {
+    // The invitee exists FIRST so the invitation row can carry their real
+    // email — better-auth's own recipient check must pass, leaving the
+    // dispatch policy as the ONLY refusal source this test can observe.
+    const invitee = await seedUserWithSession(auth, "invitee");
     const invitationId = seedInvitation(db, {
       organizationId: orgId,
       inviterId: ownerUserId,
-      email: "invitee@example.test",
+      email: invitee.email,
     });
-    const invitee = await seedUserWithSession(auth, "invitee");
     await expect(
       auth.api.acceptInvitation({
         body: { invitationId },
@@ -333,12 +341,12 @@ describe("dispatch-hook endpoint policy — PROHIBITED endpoints refuse on an ar
   });
 
   it("raw HTTP POST /organization/accept-invitation refuses on the archived org", async () => {
+    const invitee = await seedUserWithSession(auth, "invitee2");
     const invitationId = seedInvitation(db, {
       organizationId: orgId,
       inviterId: ownerUserId,
-      email: "invitee2@example.test",
+      email: invitee.email,
     });
-    const invitee = await seedUserWithSession(auth, "invitee2");
     const res = await rawPost(auth, "/organization/accept-invitation", { invitationId }, invitee.cookie);
     expect(res.status).toBe(403);
   });
@@ -520,12 +528,15 @@ describe("dispatch-hook endpoint policy — CLEANUP endpoints stay ALLOWED on an
   });
 
   it("raw HTTP POST /organization/reject-invitation still succeeds on an archived org", async () => {
+    // Invitee first — the invitation must carry their REAL email, or
+    // better-auth's own recipient check 403s and masks the cleanup-allow
+    // this test exists to prove.
+    const invitee = await seedUserWithSession(auth, "reject-me");
     const invitationId = seedInvitation(db, {
       organizationId: orgId,
       inviterId: ownerUserId,
-      email: "reject-me@example.test",
+      email: invitee.email,
     });
-    const invitee = await seedUserWithSession(auth, "reject-me");
     plantArchived(db, orgId);
     const res = await rawPost(auth, "/organization/reject-invitation", { invitationId }, invitee.cookie);
     expect(res.status).toBe(200);

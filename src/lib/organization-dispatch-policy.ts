@@ -86,29 +86,35 @@ export function extractOrganizationListPayload(
   return null;
 }
 
-/** The Better-Auth `{matcher, handler}` after-hook entry for `hooks.after`. */
+/**
+ * The `hooks.after` middleware for the `betterAuth()` config. Better Auth's
+ * ROOT-level `hooks.before`/`hooks.after` each take ONE `createAuthMiddleware`
+ * that runs for EVERY endpoint, with the path narrowing done INSIDE the
+ * middleware via `ctx.path` (the documented root-hooks shape; the
+ * `{matcher, handler}` ARRAY form belongs to PLUGIN hooks only — passing it
+ * here type-degrades the whole options generic AND crashes the handler chain
+ * at runtime, which is exactly how the first CI round of this change died).
+ */
 export function buildOrganizationListAfterHook() {
-  return {
-    matcher: (ctx: { path: string }) => ctx.path === ORGANIZATION_LIST_ENDPOINT,
-    handler: createAuthMiddleware(async (ctx) => {
-      const returned = (ctx.context as { returned?: unknown }).returned;
-      const organizations = extractOrganizationListPayload(returned);
-      // Fail OPEN on an unrecognized shape (Decision 5) — never throw here;
-      // worst case a stale archived org briefly shows in a picker, never a
-      // broken /organization/list response.
-      if (!organizations) return;
-      const filtered = filterArchivedOrganizations(organizations);
-      if (filtered.length === organizations.length) return; // nothing to strip
-      if (Array.isArray(returned)) {
-        (ctx.context as { returned: unknown }).returned = filtered;
-      } else {
-        (ctx.context as { returned: unknown }).returned = {
-          ...(returned as object),
-          organizations: filtered,
-        };
-      }
-    }),
-  };
+  return createAuthMiddleware(async (ctx) => {
+    if (ctx.path !== ORGANIZATION_LIST_ENDPOINT) return;
+    const returned = (ctx.context as { returned?: unknown }).returned;
+    const organizations = extractOrganizationListPayload(returned);
+    // Fail OPEN on an unrecognized shape (Decision 5) — never throw here;
+    // worst case a stale archived org briefly shows in a picker, never a
+    // broken /organization/list response.
+    if (!organizations) return;
+    const filtered = filterArchivedOrganizations(organizations);
+    if (filtered.length === organizations.length) return; // nothing to strip
+    if (Array.isArray(returned)) {
+      (ctx.context as { returned: unknown }).returned = filtered;
+    } else {
+      (ctx.context as { returned: unknown }).returned = {
+        ...(returned as object),
+        organizations: filtered,
+      };
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -349,41 +355,43 @@ export function buildOrganizationDispatchPolicyBeforeHook(deps: DispatchPolicyHo
     readOrganizationIdBySlug: deps.readOrganizationIdBySlug ?? readOrganizationIdBySlugSql,
   };
 
-  return {
-    matcher: (ctx: { path: string }) => POLICED_ENDPOINTS.has(ctx.path),
-    handler: createAuthMiddleware(async (ctx) => {
-      const session = (ctx.context as { session?: { session?: { activeOrganizationId?: string | null } } })
-        .session;
-      const resolution = await resolveDispatchTarget(
-        ctx.path,
-        (ctx.body ?? null) as Record<string, unknown> | null,
-        session?.session?.activeOrganizationId ?? null,
-        resolveDeps,
-      );
-      // No authoritative target in the request — the endpoint's own
-      // validation/authorization handles it; this policy stands aside.
-      if (resolution.kind === "unresolvable") return;
+  // ONE root-level middleware (see buildOrganizationListAfterHook's doc for
+  // why the `{matcher, handler}` array form must NOT be used here): it runs
+  // for every endpoint and narrows to the policed set via `ctx.path` first,
+  // so the non-policed 99% of auth traffic pays one Set lookup and returns.
+  return createAuthMiddleware(async (ctx) => {
+    if (!POLICED_ENDPOINTS.has(ctx.path)) return;
+    const session = (ctx.context as { session?: { session?: { activeOrganizationId?: string | null } } })
+      .session;
+    const resolution = await resolveDispatchTarget(
+      ctx.path,
+      (ctx.body ?? null) as Record<string, unknown> | null,
+      session?.session?.activeOrganizationId ?? null,
+      resolveDeps,
+    );
+    // No authoritative target in the request — the endpoint's own
+    // validation/authorization handles it; this policy stands aside.
+    if (resolution.kind === "unresolvable") return;
 
-      let archived: boolean | "unknown";
-      if (resolution.kind === "error") {
+    let archived: boolean | "unknown";
+    if (resolution.kind === "error") {
+      archived = "unknown";
+    } else {
+      try {
+        const archivedAt = await readArchivedAt(resolution.organizationId);
+        archived = archivedAt !== null && archivedAt !== undefined;
+      } catch {
         archived = "unknown";
-      } else {
-        try {
-          const archivedAt = await readArchivedAt(resolution.organizationId);
-          archived = archivedAt !== null && archivedAt !== undefined;
-        } catch {
-          archived = "unknown";
-        }
       }
+    }
 
-      const decision = decideDispatchPolicy(ctx.path, archived);
-      if (decision === "refuse") {
-        throw APIError.from("FORBIDDEN", {
-          code: "ORGANIZATION_ARCHIVED",
-          message: "This organization is archived; that action is unavailable.",
-        });
-      }
-      // "allow" / "not-policed" — no-op, let the endpoint proceed.
-    }),
-  };
+    const decision = decideDispatchPolicy(ctx.path, archived);
+    if (decision === "refuse") {
+      throw APIError.from("FORBIDDEN", {
+        code: "ORGANIZATION_ARCHIVED",
+        message: "This organization is archived; that action is unavailable.",
+      });
+    }
+    // "allow" / "not-policed" — no-op, let the endpoint proceed.
+  });
 }

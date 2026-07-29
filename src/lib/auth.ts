@@ -493,9 +493,15 @@ export const auth = betterAuth({
   //             prohibited endpoints fail CLOSED, cleanup fails OPEN. Fires
   //             before the endpoint on both transports, mirroring
   //             `disableOrganizationDeletion`'s first-gate posture.
+  // SHAPE IS LOAD-BEARING: root-level `hooks.before`/`hooks.after` each take
+  // ONE `createAuthMiddleware` (path narrowing INSIDE the middleware). The
+  // `[{matcher, handler}]` ARRAY form is the PLUGIN hooks shape — passing it
+  // here collapses the options generic (erasing `session.activeOrganizationId`
+  // / `user.role` from `$Infer` across the app) and throws
+  // "handler is not a function" on every auth request at runtime.
   hooks: {
-    before: [buildOrganizationDispatchPolicyBeforeHook()],
-    after: [buildOrganizationListAfterHook()],
+    before: buildOrganizationDispatchPolicyBeforeHook(),
+    after: buildOrganizationListAfterHook(),
   },
   // The plugin tuple is built through the SHARED factory at
   // `./better-auth-plugins.ts` — the SINGLE SOURCE OF TRUTH consumed by both
