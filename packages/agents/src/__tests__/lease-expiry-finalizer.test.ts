@@ -89,7 +89,7 @@ vi.mock("@cinatra-ai/a2a", () => ({
       cancelTask: async (taskId: string) => {
         shared.log.push("cancel");
         shared.cancelTaskCalls.push(taskId);
-        return shared.cancelTaskImpl(taskId);
+        return shared.cancelTaskImpl();
       },
     };
   }),
