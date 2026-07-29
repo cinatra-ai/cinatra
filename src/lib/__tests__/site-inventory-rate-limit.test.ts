@@ -4,6 +4,7 @@ import {
   __resetSiteInventoryRateLimitForTests,
   allowSiteInventoryRequest,
   checkSiteInventoryDebounce,
+  DEBOUNCE_MAX_TRACKED_SITES,
   markSiteInventoryAccepted,
   SITE_INVENTORY_DEBOUNCE_MS,
   SITE_INVENTORY_MAX_TRACKED_BUCKETS,
@@ -147,6 +148,16 @@ describe("site-inventory-rate-limit", () => {
       expect(checkSiteInventoryDebounce({ siteId: "site-b", now: now + 1 })).toEqual({
         allowed: true,
       });
+    });
+
+    it("still records a just-accepted site's window at the tracked-site cap — never a silent no-op that would let its next request bypass the 60s window", () => {
+      const now = 1_000_000;
+      // Fill the debounce map to the cap with distinct, still-live sites.
+      for (let i = 0; i < DEBOUNCE_MAX_TRACKED_SITES; i++) {
+        markSiteInventoryAccepted({ siteId: `fill-site-${i}`, now });
+      }
+      markSiteInventoryAccepted({ siteId: "new-site", now });
+      expect(checkSiteInventoryDebounce({ siteId: "new-site", now: now + 1 }).allowed).toBe(false);
     });
   });
 });

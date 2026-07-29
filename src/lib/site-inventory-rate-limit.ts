@@ -6,8 +6,10 @@ import "server-only";
 // connect-rate-limit.ts's per-IP/per-code shape but keyed for THIS route's own
 // threat model:
 //
-//   - `allowSiteInventoryRequest` — a pre-auth sliding-window limiter charging
-//     TWO buckets per request (either exhausted denies, mirroring
+//   - `allowSiteInventoryRequest` — a pre-auth FIXED-window limiter (one
+//     count/resetAt pair per key, reset in a single jump once the window
+//     elapses — bursts can cluster around the reset boundary) charging TWO
+//     buckets per request (either exhausted denies, mirroring
 //     `allowConnectTokenRequest`'s ip+codeKey pairing):
 //       * an IP bucket — best-effort (the forwarded-for chain is
 //         caller-influencable on a public route), blunts naive flooding;
@@ -82,13 +84,22 @@ export const SITE_INVENTORY_DEBOUNCE_MS = 60_000;
 
 /** Cap on tracked debounce sites — naturally bounded by real enrolled sites
  * (the key is a credential-VERIFIED siteId), capped anyway for hygiene. */
-const DEBOUNCE_MAX_TRACKED_SITES = 10_000;
+export const DEBOUNCE_MAX_TRACKED_SITES = 10_000;
 
 function sweepExpiredBuckets(map: Map<string, RateBucket>, now: number): void {
   for (const [key, bucket] of map) {
     if (bucket.resetAt <= now) map.delete(key);
   }
 }
+
+/** Throttle for the saturated-map sweep below: a full-table scan costs
+ * O(SITE_INVENTORY_MAX_TRACKED_BUCKETS), so re-running it on every single
+ * new-key request during a sustained unique-key flood (pre-auth, unbounded
+ * request rate) would let request volume amplify CPU cost roughly 2x per
+ * request (two `hit()` calls). Capping sweep frequency bounds the total
+ * scan cost per wall-clock second regardless of how many requests arrive. */
+const SWEEP_MIN_INTERVAL_MS = 1_000;
+let lastSweepAt = 0;
 
 /** Charge one bucket. Returns false when the bucket is exhausted OR when the
  * map is saturated with live buckets and this would be a NEW key (fail
@@ -103,7 +114,10 @@ function hit(
   const existing = map.get(key);
   if (!existing || existing.resetAt <= now) {
     if (!existing && map.size >= SITE_INVENTORY_MAX_TRACKED_BUCKETS) {
-      sweepExpiredBuckets(map, now);
+      if (now - lastSweepAt >= SWEEP_MIN_INTERVAL_MS) {
+        sweepExpiredBuckets(map, now);
+        lastSweepAt = now;
+      }
       if (map.size >= SITE_INVENTORY_MAX_TRACKED_BUCKETS) return false;
     }
     map.set(key, { count: 1, resetAt: now + windowMs });
@@ -163,13 +177,18 @@ export function checkSiteInventoryDebounce(input: {
 
 /**
  * Record an ACCEPTED (committed) inventory send — starts the site's debounce
- * window. Called by the route only after the transaction commits. Capped for
- * hygiene: at the cap, stale entries (older than the window, no longer
- * denying anything) are swept; a still-full map skips the bookkeeping rather
- * than denying — this map is keyed by credential-VERIFIED siteIds (bounded by
- * real enrolled sites, not attacker-mintable), and skipping only skips
- * backpressure bookkeeping while the atomic anti-replay gate stays the
- * correctness authority.
+ * window. Called by the route only after the transaction commits, so the
+ * send this call represents has already landed — this function must never
+ * silently skip recording it (that would leave the just-accepted site's NEXT
+ * request bypassing the 60s window entirely, which is worse than the cap
+ * itself). Capped for hygiene: at the cap, stale entries (older than the
+ * window, no longer denying anything) are swept first; if the map is STILL
+ * full afterward (every tracked site genuinely active within its own
+ * window), the single oldest entry is evicted to make room — this map is
+ * keyed by credential-VERIFIED siteIds (bounded by real enrolled sites, not
+ * attacker-mintable), so eviction only ever trims the longest-idle real
+ * site's window early, never an unbounded/attacker-driven growth, and the
+ * atomic anti-replay gate stays the correctness authority regardless.
  */
 export function markSiteInventoryAccepted(input: { siteId: string; now?: number }): void {
   const now = input.now ?? Date.now();
@@ -178,7 +197,17 @@ export function markSiteInventoryAccepted(input: { siteId: string; now?: number 
     for (const [key, last] of map) {
       if (now - last >= SITE_INVENTORY_DEBOUNCE_MS) map.delete(key);
     }
-    if (map.size >= DEBOUNCE_MAX_TRACKED_SITES) return;
+    if (map.size >= DEBOUNCE_MAX_TRACKED_SITES) {
+      let oldestKey: string | undefined;
+      let oldestLast = Infinity;
+      for (const [key, last] of map) {
+        if (last < oldestLast) {
+          oldestLast = last;
+          oldestKey = key;
+        }
+      }
+      if (oldestKey !== undefined) map.delete(oldestKey);
+    }
   }
   map.set(input.siteId, now);
 }
@@ -187,4 +216,5 @@ export function markSiteInventoryAccepted(input: { siteId: string; now?: number 
 export function __resetSiteInventoryRateLimitForTests(): void {
   rateBuckets().clear();
   debounceMap().clear();
+  lastSweepAt = 0;
 }
