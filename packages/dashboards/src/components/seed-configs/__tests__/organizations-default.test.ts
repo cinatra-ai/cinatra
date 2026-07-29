@@ -1,6 +1,6 @@
 /**
- * Content pin for the `/organizations` default seed config (cinatra#1942
- * Decision 6): the main list query defaults to `lifecycle_status = active`.
+ * Content pin for the `/organizations` default seed config (cinatra#1942):
+ * the main list query defaults to `lifecycle_status = active`.
  *
  * The envelope-shape / registry-validity proof for every seed config
  * (including this one) already lives in the sibling suite
@@ -34,7 +34,7 @@ describe("ORGANIZATIONS_DEFAULT_CONFIG (cinatra#1942)", () => {
     expect(ORGANIZATIONS_DEFAULT_CONFIG.portlets).toHaveLength(1);
   });
 
-  it("defaults the main list to lifecycle_status = active (Decision 6)", () => {
+  it("defaults the main list to lifecycle_status = active", () => {
     expect(query.filters).toEqual([
       { member: "organizations.lifecycle_status", operator: "equals", values: ["active"] },
     ]);

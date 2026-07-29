@@ -348,7 +348,7 @@ describe("organizations cube — accessibleOrgIds predicate", () => {
     expect(params ?? []).not.toContain("-");
   });
 
-  // cinatra#1942 (Decision 6) — the lifecycle_status / archived_at dimensions.
+  // cinatra#1942 — the lifecycle_status / archived_at dimensions.
   const mkOrganizationsCube = () => {
     const layer = stubLayer();
     const cube = createOrganizationsCube({
@@ -416,10 +416,9 @@ describe("organizations cube — accessibleOrgIds predicate", () => {
     expect(base.params ?? []).toEqual(expect.arrayContaining(["org_acme", "org_b"]));
     expect(scoped.params ?? []).toEqual(expect.arrayContaining(["org_acme", "org_b"]));
     expect((scoped.params ?? []).length).toBeGreaterThan((base.params ?? []).length);
-    // Stronger than a param-count check alone (codex r0 nit): assert the
-    // predicates are actually CONJOINED with AND, not silently OR'd or
-    // replaced — count `AND` occurrences rather than just inferring it from
-    // param growth.
+    // Stronger than a param-count check alone: assert the predicates are
+    // actually CONJOINED with AND, not silently OR'd or replaced — count
+    // `AND` occurrences rather than just inferring it from param growth.
     const andCount = (s: string) => (s.match(/\bAND\b/gi) ?? []).length;
     expect(andCount(scoped.sql)).toBeGreaterThan(andCount(base.sql));
     expect(scoped.sql).toMatch(/case\s+when/i);

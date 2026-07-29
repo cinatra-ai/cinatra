@@ -24,9 +24,9 @@
  *     emitted. `archived_at` is the raw-timestamp sibling dimension for
  *     callers that need the underlying predicate instead of the label.
  *     Both are read-only projections of the org's `archivedAt` column —
- *     they do not consult the `org_archive_activation` gate (Decision 3:
- *     with the gate off no org has `archivedAt` set, so these dimensions
- *     are inert-but-correct until S6 lands the real archive transaction).
+ *     they do not consult the `org_archive_activation` gate: with the
+ *     gate off no org has `archivedAt` set, so these dimensions are
+ *     inert-but-correct until S6 lands the real archive transaction.
  *
  * This file (inside the sdk-dashboard adapter directory) is
  * the only place the cube wiring is allowed to talk about Better Auth
