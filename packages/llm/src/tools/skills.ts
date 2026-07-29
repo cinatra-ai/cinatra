@@ -14,8 +14,18 @@ import * as path from "node:path";
 import { existsSync, promises as fsPromises } from "node:fs";
 import { createHash } from "node:crypto";
 import { readSkillFileContent, type SkillSource } from "@cinatra-ai/skills";
+import {
+  extractOneHopReferences,
+  injectedSkillMembers,
+  planInlineExpansion,
+  resolveInlineSkillBudgetBytes,
+  type InjectedSkillDrop,
+  type InlineExpansionUnit,
+  type ResolvedInjectedSkillSet,
+} from "@cinatra-ai/skills/injection";
 import { createDeterministicSkillsClient } from "@cinatra-ai/skills/mcp-client";
 import type {
+  SkillExposureEntry,
   LlmTool,
   LlmShellTool,
   LlmFunctionTool,
@@ -709,6 +719,26 @@ export async function readSkillContent(skillId: string): Promise<string | null> 
   return skill.body ?? skill.content ?? null;
 }
 
+/**
+ * Resolve the bytes CORE needs to inline a skill itself (cinatra#2091 S4).
+ *
+ * An inline-mechanism provider (Gemini) receives no shell tool and no
+ * container reference, so core reads the router body AND its on-disk directory
+ * so the one-hop reference expansion can reach `references/*`. Returns a null
+ * body when the catalog cannot resolve the skill; the caller records that as a
+ * whole-skill drop rather than emitting an empty skill.
+ */
+export async function resolveSkillInlineSource(
+  skillId: string,
+): Promise<{ body: string | null; directoryPath: string | null }> {
+  const client = getSkillsClient();
+  const skill = await client.installed.get(skillId);
+  if (!skill) return { body: null, directoryPath: null };
+  const body = skill.body ?? skill.content ?? null;
+  const directoryPath = skill.sourcePath ? path.dirname(skill.sourcePath) : null;
+  return { body, directoryPath };
+}
+
 // ---------------------------------------------------------------------------
 // Helper: build skill context for the system prompt
 // ---------------------------------------------------------------------------
@@ -786,5 +816,180 @@ export function createMcpServerTool(input: {
       "Does NOT have access to permissions, settings, or auth functions.",
     allowedTools: input.allowedTools,
     approval: "auto_execute",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Core-owned INLINE skill delivery (cinatra#2091, epic #2086 S4)
+//
+// When a provider's declared mechanism is `inline` (Gemini today), CORE
+// SHORT-CIRCUITS before any delivery adapter or connector surface is consulted:
+// it reads each member's router body plus its ONE-HOP reference files, plans a
+// budgeted whole-file expansion (`planInlineExpansion`, the pure core in
+// `@cinatra-ai/skills/injection`), and merges the result into the system
+// context. Nothing new crosses the v1 ABI — the completed system context flows
+// through the request adapter exactly as it does today.
+//
+// Co-located with the other skill-reading primitives (rather than in its own
+// module) because it IS one: it owns only the reads, and every decision — what
+// expands, what fits, what is dropped — lives in the pure core so it is
+// testable without a disk. The tracked dev-perf routes carry a monotonic
+// reachable-module ceiling, and a read helper does not need its own module.
+// ---------------------------------------------------------------------------
+
+/** What a one-hop reference read produced. */
+type ReferenceRead =
+  | { kind: "content"; content: string }
+  /** Present, in-bundle, but larger than the whole request budget. */
+  | { kind: "oversized" }
+  /** Absent, unreadable, or refused by containment. */
+  | { kind: "absent" };
+
+/**
+ * Read a ONE-HOP reference file, refusing anything that leaves the skill
+ * directory.
+ *
+ * Containment is checked on the FULLY RESOLVED (symlink-followed) path, not
+ * lexically: `lstat` alone only rejects a final-component symlink, so a
+ * `references -> /outside` directory symlink would let `references/secret.md`
+ * resolve to a perfectly ordinary regular file outside the bundle and pass a
+ * lexical `path.relative` check. Both ends are realpath'd and compared, so a
+ * symlink ANYWHERE in the chain is caught.
+ */
+async function readReferenceFile(
+  directoryPath: string,
+  relativePath: string,
+  maxBytes: number,
+): Promise<ReferenceRead> {
+  let containedIn: string;
+  try {
+    containedIn = await fsPromises.realpath(path.resolve(directoryPath));
+  } catch {
+    return { kind: "absent" };
+  }
+  const candidate = path.resolve(containedIn, relativePath);
+  let absolute: string;
+  try {
+    // Resolves EVERY component, so a symlinked parent directory cannot smuggle
+    // an out-of-bundle file back in through a lexically-innocent path.
+    absolute = await fsPromises.realpath(candidate);
+  } catch {
+    return { kind: "absent" };
+  }
+  const relative = path.relative(containedIn, absolute);
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return { kind: "absent" };
+  }
+  try {
+    const stat = await fsPromises.stat(absolute);
+    if (!stat.isFile()) return { kind: "absent" };
+    // A single reference bigger than the WHOLE request budget can never fit;
+    // report it so the caller drops the WHOLE skill rather than quietly
+    // shipping a router whose reference is missing.
+    if (stat.size > maxBytes) return { kind: "oversized" };
+    return { kind: "content", content: await fsPromises.readFile(absolute, "utf8") };
+  } catch {
+    return { kind: "absent" };
+  }
+}
+
+export type InlineSkillDeliveryResult = {
+  /** The system-context fragment to merge. `""` when nothing was inlined. */
+  systemContext: string;
+  /** Exposure entries for the skills actually inlined. */
+  exposure: SkillExposureEntry[];
+  /** Whole-skill drops (budget overflow / unresolvable body). */
+  dropped: InjectedSkillDrop[];
+};
+
+/**
+ * Expand + inline the injected set for an inline-mechanism provider.
+ *
+ * Members arrive in DELIVERY order (personal delta first, then declared
+ * dependencies, then recommendations) and the budget is consumed greedily in
+ * that order, so an over-budget request drops the least important skills.
+ */
+export async function deliverInjectedSkillsInline(input: {
+  set: ResolvedInjectedSkillSet;
+  /** Defaults to the deployment-configured budget. Tests override. */
+  budgetBytes?: number;
+}): Promise<InlineSkillDeliveryResult> {
+  const members = injectedSkillMembers(input.set);
+  if (members.length === 0) {
+    return { systemContext: "", exposure: [], dropped: [] };
+  }
+
+  const budgetBytes =
+    input.budgetBytes ?? resolveInlineSkillBudgetBytes(process.env);
+  const units: InlineExpansionUnit[] = [];
+  for (const member of members) {
+    if (member.deliveryMode === "inline") {
+      // The personal delta: its body is already in hand and has no bundle.
+      units.push({
+        skillId: member.skillId,
+        rank: member.rank,
+        body: member.content ?? null,
+        references: [],
+      });
+      continue;
+    }
+    const source = await resolveSkillInlineSource(member.skillId);
+    const references: Array<{ path: string; content: string }> = [];
+    let oversized = false;
+    if (source.body && source.directoryPath) {
+      for (const relativePath of extractOneHopReferences(source.body)) {
+        const read = await readReferenceFile(
+          source.directoryPath,
+          relativePath,
+          budgetBytes,
+        );
+        // A named-but-ABSENT reference is simply not expanded; the router body
+        // still ships (the file does not exist on this deployment). A reference
+        // that EXISTS but cannot fit is different: shipping the router without
+        // it would deliver instructions that route somewhere unreachable, so the
+        // WHOLE skill is dropped and recorded.
+        if (read.kind === "content") {
+          references.push({ path: relativePath, content: read.content });
+        } else if (read.kind === "oversized") {
+          oversized = true;
+        }
+      }
+    }
+    units.push({
+      skillId: member.skillId,
+      rank: member.rank,
+      body: source.body,
+      references,
+      oversized,
+    });
+  }
+
+  const plan = planInlineExpansion({ units, budgetBytes });
+
+  const included = new Set(plan.includedSkillIds);
+  const exposure: SkillExposureEntry[] = members
+    .filter((m) => included.has(m.skillId))
+    .map((m) => ({
+      skillId: m.skillId,
+      deliveryMode:
+        m.deliveryMode === "inline"
+          ? ("personal_inline" as const)
+          : ("gemini_inline" as const),
+      // Inline delivery has no per-skill invocation signal on any provider.
+      invocationAttributable: false,
+    }));
+
+  if (plan.dropped.length > 0) {
+    console.warn(
+      `[skill-injection] inline expansion dropped ${plan.dropped.length} whole ` +
+        `skill(s) under a ${budgetBytes}-byte budget: ` +
+        plan.dropped.map((d) => `${d.skillId} (${d.reason})`).join(", "),
+    );
+  }
+
+  return {
+    systemContext: plan.systemContext,
+    exposure,
+    dropped: plan.dropped,
   };
 }

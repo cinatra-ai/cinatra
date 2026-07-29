@@ -296,7 +296,11 @@ describe("/api/llm-bridge assigned-skills actor wiring (#1401) — fail-closed /
 
   it("ABSENT run ⇒ resolver handed null, delivery is ACTOR-LESS (regression pin)", async () => {
     await POST(makeRequest({ user: "hi", agent_id: "agent-x" }));
-    expect(resolveAssignedSkillsActorForRunMock).toHaveBeenCalledWith(null);
+    // cinatra#2091 S4: with NO server-verified run owner the contract does not
+    // even ask for a scope-aware actor — the assignment resolves actor-less
+    // (arity 1), which is the SAME delivery this pinned, reached one step
+    // earlier and strictly more fail-closed.
+    expect(resolveAssignedSkillsActorForRunMock).not.toHaveBeenCalled();
     expect(firstAssignedCall()).toEqual(["agent-x"]);
   });
 
@@ -304,7 +308,11 @@ describe("/api/llm-bridge assigned-skills actor wiring (#1401) — fail-closed /
     readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN); // would resolve IF the route read a body id
     await POST(makeRequest({ user: "hi", agent_id: "agent-x", agent_run_id: VERIFIED_RUN.id }));
     expect(readAgentRunByIdMock).not.toHaveBeenCalled();
-    expect(resolveAssignedSkillsActorForRunMock).toHaveBeenCalledWith(null);
+    // cinatra#2091 S4: with NO server-verified run owner the contract does not
+    // even ask for a scope-aware actor — the assignment resolves actor-less
+    // (arity 1), which is the SAME delivery this pinned, reached one step
+    // earlier and strictly more fail-closed.
+    expect(resolveAssignedSkillsActorForRunMock).not.toHaveBeenCalled();
     expect(firstAssignedCall()).toEqual(["agent-x"]);
   });
 
@@ -317,7 +325,11 @@ describe("/api/llm-bridge assigned-skills actor wiring (#1401) — fail-closed /
         { "x-cinatra-run-token": "garbage", "x-cinatra-a2a-context-id": "ctx-1" },
       ),
     );
-    expect(resolveAssignedSkillsActorForRunMock).toHaveBeenCalledWith(null);
+    // cinatra#2091 S4: with NO server-verified run owner the contract does not
+    // even ask for a scope-aware actor — the assignment resolves actor-less
+    // (arity 1), which is the SAME delivery this pinned, reached one step
+    // earlier and strictly more fail-closed.
+    expect(resolveAssignedSkillsActorForRunMock).not.toHaveBeenCalled();
     expect(firstAssignedCall()).toEqual(["agent-x"]);
   });
 

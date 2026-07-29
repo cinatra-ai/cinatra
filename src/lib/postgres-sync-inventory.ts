@@ -284,7 +284,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/agent-run-skills-used.ts": {
     class: "migratable-request-path",
     justification:
-      "Records skills used during an agent run — snapshot, exposure telemetry, and per-invocation counting (cinatra#1368). Request/run-time write; migratable to async pooled access.",
+      "Records skills used during an agent run — snapshot, exposure telemetry, per-invocation counting (cinatra#1368), and the typed injection contract's resolved-but-dropped markers (cinatra#2091 S4). Request/run-time write; migratable to async pooled access.",
   },
   "src/lib/run-selected-skill-revisions.ts": {
     class: "migratable-request-path",
