@@ -145,7 +145,10 @@ export function settleLeaseForRunQuery(input: {
  *  unreachable from the sweep, leaving orphaned lease rows (whose run was
  *  deleted out from under them) stranded forever. `r.status`, `r.a2a_task_id`,
  *  `r.template_id` are NULL for an orphan row; the caller must treat all
- *  three as optional. */
+ *  three as optional. The join predicate is `r.id = l.run_id` ONLY (no
+ *  `org_id` qualifier needed): `agent_runs.id` is a global, non-composite
+ *  primary key (`text("id").primaryKey()`, schema.ts), so it is unambiguous
+ *  across every org by construction. */
 export function sweepExpiredLeasesQuery(input: {
   schema: string;
   limit: number;
