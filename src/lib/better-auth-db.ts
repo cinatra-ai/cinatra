@@ -959,8 +959,13 @@ export async function listAccessibleOrgIdsForUser(userId: string): Promise<strin
 }
 
 /**
- * Return all orgs the user belongs to, each with the teams they are a member
- * of within that org.
+ * Shared implementation behind `readOrgsWithTeamsForUser` (mixed authz/UI
+ * reader — unfiltered) and `readOrgsWithTeamsForUserActiveOnly` (cinatra#1942
+ * archive V1 — the UI scope-picker variant). Two NAMED exports, not a
+ * defaulted boolean flag, so a call site's choice of which surface it is
+ * ("authz" vs "UI picker") stays grep-visible and lockstep-testable — an
+ * authz caller can never silently lose an archived org's membership via a
+ * flag default (archive-activation design Decision 4).
  *
  * Implementation notes:
  *  - INNER JOIN member → organization to get org id + name.
@@ -971,10 +976,12 @@ export async function listAccessibleOrgIdsForUser(userId: string): Promise<strin
  *    name ascending.
  *  - Returns [] when the user has no memberships.
  */
-export async function readOrgsWithTeamsForUser(
+async function readOrgsWithTeamsForUserImpl(
   userId: string,
+  options: { activeOnly: boolean },
 ): Promise<Array<{ id: string; name: string; teams: Array<{ id: string; name: string }> }>> {
-  // Step 1 — fetch all orgs the user belongs to.
+  // Step 1 — fetch all orgs the user belongs to. activeOnly additionally
+  // excludes archived orgs (cinatra#1942 archive V1 — Decision 4).
   const memberRows = await betterAuthDb
     .select({
       orgId: betterAuthOrganizations.id,
@@ -985,7 +992,11 @@ export async function readOrgsWithTeamsForUser(
       betterAuthOrganizations,
       eq(betterAuthMembers.organizationId, betterAuthOrganizations.id),
     )
-    .where(eq(betterAuthMembers.userId, userId));
+    .where(
+      options.activeOnly
+        ? and(eq(betterAuthMembers.userId, userId), isNull(betterAuthOrganizations.archivedAt))
+        : eq(betterAuthMembers.userId, userId),
+    );
 
   if (memberRows.length === 0) return [];
 
@@ -1036,6 +1047,34 @@ export async function readOrgsWithTeamsForUser(
   return result;
 }
 
+/**
+ * Return all orgs the user belongs to, each with the teams they are a member
+ * of within that org. UNFILTERED — includes archived orgs.
+ *
+ * cinatra#1942 (archive V1) Decision 4: this reader is MIXED — consumed by
+ * both UI scope pickers and authz code (`build-actor-context-from-run.ts`,
+ * `permissions-kind-hooks.ts`). An archived org's owner must still resolve
+ * their own membership/role (so authz stays correct and they can reach
+ * Unarchive), so this variant stays unfiltered. UI scope pickers must call
+ * `readOrgsWithTeamsForUserActiveOnly` instead — never this one.
+ */
+export async function readOrgsWithTeamsForUser(
+  userId: string,
+): Promise<Array<{ id: string; name: string; teams: Array<{ id: string; name: string }> }>> {
+  return readOrgsWithTeamsForUserImpl(userId, { activeOnly: false });
+}
+
+/**
+ * Same as `readOrgsWithTeamsForUser`, but excludes archived orgs (cinatra#1942
+ * archive V1 — the UI scope-picker variant, Decision 4). Use this from every
+ * UI org/team scope picker; NEVER from an authz code path.
+ */
+export async function readOrgsWithTeamsForUserActiveOnly(
+  userId: string,
+): Promise<Array<{ id: string; name: string; teams: Array<{ id: string; name: string }> }>> {
+  return readOrgsWithTeamsForUserImpl(userId, { activeOnly: true });
+}
+
 export async function readTeamCreatableOrganizationsForUser(
   userId: string,
   userRole?: string | null,
@@ -1057,7 +1096,15 @@ export async function readTeamCreatableOrganizationsForUser(
       betterAuthOrganizations,
       eq(betterAuthMembers.organizationId, betterAuthOrganizations.id),
     )
-    .where(eq(betterAuthMembers.userId, userId));
+    .where(
+      and(
+        eq(betterAuthMembers.userId, userId),
+        // cinatra#1942 (archive V1, Decision 4) — this is a UI team-creation
+        // PICKER, not an authz reader: an archived org must never offer
+        // itself as a team-creation destination.
+        isNull(betterAuthOrganizations.archivedAt),
+      ),
+    );
 
   return rows
     .filter((row) => isPlatformAdmin || row.role === "owner" || row.role === "admin")

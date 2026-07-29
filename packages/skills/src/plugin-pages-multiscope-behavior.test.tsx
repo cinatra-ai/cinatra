@@ -30,7 +30,9 @@ vi.mock("@/lib/auth-session", () => ({
   requireActorContext: vi.fn(async () => ({ userId: ACTOR, organizationId: ORG })),
 }));
 vi.mock("@/lib/better-auth-db", () => ({
-  readOrgsWithTeamsForUser: vi.fn(async () => [
+  // SkillsPage is a UI scope picker (cinatra#1942 archive V1, Decision 4) —
+  // it calls the active-only sibling, not the mixed authz/UI reader.
+  readOrgsWithTeamsForUserActiveOnly: vi.fn(async () => [
     { id: ORG, name: "Org One", teams: [{ id: "t1", name: "Team One" }] },
   ]),
   readProjectsForUser: vi.fn(async () => [{ id: "p1", name: "Project One" }]),
