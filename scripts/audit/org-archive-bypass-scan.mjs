@@ -35,9 +35,23 @@
  *      proved correct), scoped to this gate's own table + symbol universe.
  *   2. Session lifecycle-column writes — a dedicated detector for raw SQL
  *      `UPDATE ... session ... SET ... "activeOrganizationId"|"activeTeamId"`
- *      and Drizzle `.update(betterAuthSessions).set({... activeOrganizationId
- *      | activeTeamId ...})`, since `scanSource()`'s table-level matcher does
- *      not model column-level targets.
+ *      AND `INSERT INTO ... session ...` naming either column (covers
+ *      upsert/ON CONFLICT shapes too — codex 1942-v2 r0 #5), plus Drizzle
+ *      `.update(betterAuthSessions).set({...})` and
+ *      `.insert(betterAuthSessions)...values({...})` naming either column,
+ *      since `scanSource()`'s table-level matcher does not model
+ *      column-level targets.
+ *
+ * KNOWN RESIDUALS (deliberate, documented — not silent): a TOTALLY-BARE
+ * unqualified table in raw SQL (`INSERT INTO member ...`, no schema, no
+ * quotes) is NOT matched — the org-write-table-sweep lesson (a bare-word
+ * anchor matches prose/fluent-JS and greens the gate for the wrong reason);
+ * every real write in this tree is `public.`-qualified or quoted, and the
+ * fixture test pins the exclusion as a decision. Cross-module aliasing of a
+ * Drizzle table symbol is likewise review territory, not lexical (the same
+ * accepted residual as `system-writer-manifest-gate.mjs`). The gate is a
+ * strong tripwire for every write shape that exists in this repo, not an
+ * unbreakable proof.
  *
  * GATE SEMANTICS (mirrors the writer-manifest gate — no ratchet, two-
  * directional): a surface triple with no allowlist row is UNLISTED (fail); an
@@ -98,6 +112,18 @@ const SESSION_RAW_SQL_RE = new RegExp(
   "gi",
 );
 
+// Raw SQL INSERT (incl. upsert / ON CONFLICT DO UPDATE): an INSERT whose
+// target is the (possibly schema-qualified, possibly quoted) `session` table
+// and whose statement names either lifecycle column within a bounded window
+// (codex 1942-v2 r0 #5 — the UPDATE-only detector missed insert/upsert
+// writes to these columns).
+const SESSION_RAW_INSERT_RE = new RegExp(
+  String.raw`\bINSERT\s+INTO\s+(?:[A-Za-z_$][\w$]*\s*\.\s*)?"?session"?\s*\([\s\S]{0,500}?"(${SESSION_COLUMNS.join(
+    "|",
+  )})"`,
+  "gi",
+);
+
 // Drizzle: `.update(betterAuthSessions)` ... `.set({ ... activeOrganizationId|activeTeamId ... })`
 // within a bounded window (chained builder calls; `.set(` is usually the very
 // next call, but tolerate `.where()`-before-`.set()` reordering by scanning
@@ -107,6 +133,14 @@ const SESSION_RAW_SQL_RE = new RegExp(
 // simple).
 const SESSION_DRIZZLE_RE = new RegExp(
   String.raw`\.update\s*\(\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)*betterAuthSessions\b[\s\S]{0,500}?\.set\s*\([\s\S]{0,500}?(${SESSION_COLUMN_GROUP})\b`,
+  "g",
+);
+
+// Drizzle: `.insert(betterAuthSessions)` ... `.values({ ... })` (or an
+// `.onConflictDoUpdate` upsert) naming either lifecycle column within the
+// same bounded window (codex 1942-v2 r0 #5).
+const SESSION_DRIZZLE_INSERT_RE = new RegExp(
+  String.raw`\.insert\s*\(\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)*betterAuthSessions\b[\s\S]{0,500}?(${SESSION_COLUMN_GROUP})\b`,
   "g",
 );
 
@@ -124,7 +158,12 @@ function lineOf(code, index) {
  */
 export function scanSessionColumnWrites(strippedCode) {
   const findings = [];
-  for (const re of [SESSION_RAW_SQL_RE, SESSION_DRIZZLE_RE]) {
+  for (const re of [
+    SESSION_RAW_SQL_RE,
+    SESSION_RAW_INSERT_RE,
+    SESSION_DRIZZLE_RE,
+    SESSION_DRIZZLE_INSERT_RE,
+  ]) {
     re.lastIndex = 0;
     let m;
     while ((m = re.exec(strippedCode)) !== null) {

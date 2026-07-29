@@ -317,6 +317,135 @@ describe("dispatch-hook endpoint policy — PROHIBITED endpoints refuse on an ar
       }),
     ).resolves.toBeTruthy();
   });
+
+  // --- codex 1942-v2 r0 #1 — the organizationId-spoof exploit is DEAD ------
+  it("SPOOF PIN: add-team-member with a planted ACTIVE organizationId still refuses (target = the team's org)", async () => {
+    // A second, ACTIVE org the attacker points the checker at.
+    const activeOrgId = await seedOrg(auth, ownerUserId);
+    const res = await rawPost(
+      auth,
+      "/organization/add-team-member",
+      // teamId belongs to the ARCHIVED org; organizationId names the ACTIVE
+      // one. The policy must resolve via the team and refuse.
+      { teamId, userId: "user-that-need-not-exist", organizationId: activeOrgId },
+      ownerCookie,
+    );
+    expect(res.status).toBe(403);
+  });
+
+  // --- codex 1942-v2 r0 #3 — the extended prohibit set fires (raw HTTP; a
+  // wrong path name would 404 here, so these also pin the endpoint names) ---
+  it("raw HTTP POST /organization/invite-member refuses on the archived org", async () => {
+    const res = await rawPost(
+      auth,
+      "/organization/invite-member",
+      { email: "new-invitee@example.test", role: "member", organizationId: orgId },
+      ownerCookie,
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("raw HTTP POST /organization/remove-member refuses on the archived org", async () => {
+    const res = await rawPost(
+      auth,
+      "/organization/remove-member",
+      { memberIdOrEmail: "someone@example.test", organizationId: orgId },
+      ownerCookie,
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("in-process auth.api.removeMember refuses on the archived org (the extension class fires in-process too)", async () => {
+    await expect(
+      auth.api.removeMember({
+        body: { memberIdOrEmail: "someone@example.test", organizationId: orgId },
+        headers: new Headers({ cookie: ownerCookie }),
+      }),
+    ).rejects.toMatchObject({ status: "FORBIDDEN" });
+  });
+
+  it("raw HTTP POST /organization/update-member-role refuses on the archived org", async () => {
+    const res = await rawPost(
+      auth,
+      "/organization/update-member-role",
+      { memberId: "member-row-id", role: "member", organizationId: orgId },
+      ownerCookie,
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("raw HTTP POST /organization/create-team refuses on the archived org", async () => {
+    const res = await rawPost(
+      auth,
+      "/organization/create-team",
+      { name: "New Team", slug: "new-team", organizationId: orgId },
+      ownerCookie,
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("raw HTTP POST /organization/update (org settings) refuses on the archived org", async () => {
+    const res = await rawPost(
+      auth,
+      "/organization/update",
+      { data: { name: "Renamed While Archived" }, organizationId: orgId },
+      ownerCookie,
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("raw HTTP POST /organization/update-team refuses on the archived org (team-target resolution)", async () => {
+    const res = await rawPost(
+      auth,
+      "/organization/update-team",
+      { teamId, data: { name: "Renamed Team" } },
+      ownerCookie,
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("raw HTTP POST /organization/remove-team refuses on the archived org (team-target resolution)", async () => {
+    const res = await rawPost(auth, "/organization/remove-team", { teamId, organizationId: orgId }, ownerCookie);
+    expect(res.status).toBe(403);
+  });
+
+  // --- the organizationSlug leg (set-active accepts a slug instead of an id)
+  it("raw HTTP POST /organization/set-active via organizationSlug refuses on the archived org", async () => {
+    const slug = `slug-leg-${crypto.randomUUID()}`;
+    const org = await auth.api.createOrganization({
+      body: { name: "Slug Leg Org", slug, userId: ownerUserId },
+    });
+    expect(org).toBeTruthy();
+    plantArchived(db, org!.id);
+    const res = await rawPost(auth, "/organization/set-active", { organizationSlug: slug }, ownerCookie);
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("dispatch-hook endpoint policy — the set-active(null) UNSET escape hatch is never policed", () => {
+  it("a user whose session still points at an archived org can always unset it (organizationId: null)", async () => {
+    const db = makeDb();
+    const auth = makeAuth(db);
+    const owner = await seedUserWithSession(auth, "owner");
+    const orgId = await seedOrg(auth, owner.userId);
+    // Make the org the session's active org WHILE it is still active...
+    await auth.api.setActiveOrganization({
+      body: { organizationId: orgId },
+      headers: new Headers({ cookie: owner.cookie }),
+    });
+    // ...then archive it out from under the session.
+    plantArchived(db, orgId);
+    // The UNSET must succeed — policing it via the active-org fallback would
+    // trap the user in the archived org.
+    const res = await auth.handler(
+      new Request("http://localhost/api/auth/organization/set-active", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: owner.cookie },
+        body: JSON.stringify({ organizationId: null }),
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
 });
 
 describe("dispatch-hook endpoint policy — CLEANUP endpoints stay ALLOWED on an archived org, BOTH transports", () => {

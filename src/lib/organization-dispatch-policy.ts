@@ -17,11 +17,26 @@ import { readOrganizationArchivedAt } from "@/lib/organization-archive-guard";
  *    `auth.api.listOrganizations`). Fails OPEN on an unrecognized response
  *    shape (never hides on uncertainty, only on a confirmed archived row).
  *  - Mechanism 3 — the dispatch-hook BEFORE-hook: a per-endpoint allow/
- *    prohibit policy for organization membership/invitation endpoints when
- *    the target org is archived, with a SPLIT read-error polarity (codex r0
- *    finding #6): prohibited (membership-write) endpoints fail CLOSED,
- *    cleanup/exit endpoints fail OPEN. Fires before the endpoint on BOTH
- *    transports (raw HTTP via the catch-all route; in-process `auth.api.*`).
+ *    prohibit policy for organization mutation endpoints when the target org
+ *    is archived, with a SPLIT read-error polarity (design codex r0 finding
+ *    #6): prohibited (mutation) endpoints fail CLOSED, cleanup/exit
+ *    endpoints fail OPEN. Fires before the endpoint on BOTH transports (raw
+ *    HTTP via the catch-all route; in-process `auth.api.*`).
+ *
+ * TARGET RESOLUTION IS ENDPOINT-CLASS-AWARE (V2 adversarial review, codex
+ * 1942-v2 r0 findings #1/#2): the org whose `archivedAt` this policy checks
+ * is derived EXACTLY the way the endpoint itself derives its target —
+ *  - team-target endpoints resolve ONLY via `body.teamId` -> the team's
+ *    organization (an extra `body.organizationId` is IGNORED: trusting it
+ *    would let a caller point the check at an active org while the endpoint
+ *    mutated an archived org's team);
+ *  - invitation-target endpoints resolve ONLY via `body.invitationId`;
+ *  - organization-target endpoints resolve via `body.organizationId`, else
+ *    `body.organizationSlug`, else the caller's active organization (the
+ *    same default Better Auth's own org-scoped endpoints apply).
+ * A resolution LOOKUP ERROR is treated as "archived state unknown" and takes
+ * the SPLIT polarity (prohibited -> refuse, cleanup -> allow) — it never
+ * falls back to checking some other org.
  */
 
 // ---------------------------------------------------------------------------
@@ -102,16 +117,37 @@ export function buildOrganizationListAfterHook() {
 
 /**
  * Endpoints that must REFUSE while the target org is archived. Fail CLOSED
- * on a read error (Decision 5 / codex r0 finding #6) — there is no
- * downstream DB fence for these Better-Auth membership/invitation writes
+ * on a read error (design Decision 5 / codex r0 #6) — there is no downstream
+ * DB fence for these Better-Auth membership/invitation/furniture writes
  * pre-Stage-E, so this hook IS the fence.
+ *
+ * The first five are the design's Decision 5 table. The rest were added
+ * after the V2 adversarial review (codex 1942-v2 r0 finding #3): they are
+ * the REMAINING Better-Auth organization mutation endpoints — invitation
+ * create, member remove / role change, server-only member add, team CRUD,
+ * and the org-settings update. Decision 7's per-action inventory already
+ * rules every one of these "reject while archived" (manage capabilities are
+ * zeroed on an archived org); the Decision 5 endpoint table simply had not
+ * enumerated their Better-Auth-endpoint legs, which are directly reachable
+ * (e.g. the invite dialog calls `authClient.organization.inviteMember`).
  */
 export const ARCHIVED_PROHIBITED_ENDPOINTS = new Set<string>([
+  // Design Decision 5's original prohibit table:
   "/organization/add-team-member",
   "/organization/remove-team-member",
   "/organization/set-active",
   "/organization/set-active-team",
   "/organization/accept-invitation",
+  // Adversarial-review extension (codex 1942-v2 r0 #3) — same class, same
+  // Decision 7 ruling:
+  "/organization/invite-member",
+  "/organization/remove-member",
+  "/organization/update-member-role",
+  "/organization/add-member",
+  "/organization/create-team",
+  "/organization/update-team",
+  "/organization/remove-team",
+  "/organization/update",
 ]);
 
 /**
@@ -134,8 +170,9 @@ export type DispatchPolicyDecision = "allow" | "refuse" | "not-policed";
 
 /**
  * Pure decision function — no I/O, fully unit-testable. `archived` is
- * `"unknown"` when the archivedAt read failed; the SPLIT polarity (codex r0
- * finding #6) means the decision differs by endpoint class in that case.
+ * `"unknown"` when the archivedAt read (or the target resolution it depends
+ * on) failed; the SPLIT polarity (codex r0 #6) means the decision differs by
+ * endpoint class in that case.
  */
 export function decideDispatchPolicy(
   path: string,
@@ -149,69 +186,114 @@ export function decideDispatchPolicy(
   return isProhibited ? "refuse" : "allow"; // archived: cleanup stays allowed
 }
 
-// ---- Target-organization-id resolution -------------------------------------
+// ---- Target-organization resolution (endpoint-class-aware) -----------------
 
-export type DispatchPolicyRequest = {
-  path: string;
-  body: Record<string, unknown> | null | undefined;
-  activeOrganizationId?: string | null;
-};
-
-export type ResolveOrgIdDeps = {
-  readTeamOrganizationId: (teamId: string) => Promise<string | null>;
-  readInvitationOrganizationId: (invitationId: string) => Promise<string | null>;
+/**
+ * How each policed endpoint names the organization it acts on. This mirrors
+ * Better Auth's OWN target derivation, which is the anti-spoof property
+ * (codex 1942-v2 r0 #1): the policy must check exactly the org the endpoint
+ * will mutate, never an unrelated id a caller plants in the body.
+ */
+export const ENDPOINT_TARGET_CLASS: Record<string, "team" | "invitation" | "organization"> = {
+  "/organization/add-team-member": "team",
+  "/organization/remove-team-member": "team",
+  "/organization/set-active-team": "team",
+  "/organization/update-team": "team",
+  "/organization/remove-team": "team",
+  "/organization/accept-invitation": "invitation",
+  "/organization/reject-invitation": "invitation",
+  "/organization/cancel-invitation": "invitation",
+  "/organization/set-active": "organization",
+  "/organization/leave": "organization",
+  "/organization/invite-member": "organization",
+  "/organization/remove-member": "organization",
+  "/organization/update-member-role": "organization",
+  "/organization/add-member": "organization",
+  "/organization/create-team": "organization",
+  "/organization/update": "organization",
 };
 
 /**
- * Resolve the organization a policed request TARGETS, trying the body shapes
- * Better Auth's org+teams endpoints actually carry (grounded against this
- * repo's own `auth.api.*` call sites — `setActiveOrganization({body:
- * {organizationId}})` in `src/app/teams/new/actions.ts`, `cancelInvitation(
- * {body:{invitationId}})` in `organization-manage-actions.ts`):
- *   1. an explicit `body.organizationId`;
- *   2. `body.teamId` -> the team's organization (add/remove-team-member, set-active-team);
- *   3. `body.invitationId` -> the invitation's organization (accept/reject/cancel-invitation);
- *   4. the caller's current active organization (best-effort fallback only).
- * Returns `null` when no target can be determined — the caller must then
- * treat the request as un-policeable (never guess and block/allow blindly;
- * the endpoint's own validation/authorization still runs normally).
+ * Resolution outcome. `unresolvable` = the request carries no authoritative
+ * target (missing/blank id, an explicit `null` unset, or an id that matches
+ * no row) — the endpoint's own validation/authorization handles it, and this
+ * policy stands aside. `error` = a lookup FAILED — the archived state is
+ * unknowable, and the SPLIT polarity governs (prohibited -> refuse, cleanup
+ * -> allow). Never a fallback to a different org (codex 1942-v2 r0 #2).
  */
-export async function resolveDispatchTargetOrganizationId(
-  req: DispatchPolicyRequest,
-  deps: ResolveOrgIdDeps,
-): Promise<string | null> {
-  const body = req.body ?? {};
+export type DispatchTargetResolution =
+  | { kind: "resolved"; organizationId: string }
+  | { kind: "unresolvable" }
+  | { kind: "error" };
 
-  const explicitOrgId = body["organizationId"];
-  if (typeof explicitOrgId === "string" && explicitOrgId.length > 0) {
-    return explicitOrgId;
-  }
+export type ResolveTargetDeps = {
+  readTeamOrganizationId: (teamId: string) => Promise<string | null>;
+  readInvitationOrganizationId: (invitationId: string) => Promise<string | null>;
+  readOrganizationIdBySlug: (slug: string) => Promise<string | null>;
+};
 
-  const teamId = body["teamId"];
-  if (typeof teamId === "string" && teamId.length > 0) {
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+export async function resolveDispatchTarget(
+  path: string,
+  body: Record<string, unknown> | null | undefined,
+  activeOrganizationId: string | null | undefined,
+  deps: ResolveTargetDeps,
+): Promise<DispatchTargetResolution> {
+  const cls = ENDPOINT_TARGET_CLASS[path];
+  if (!cls) return { kind: "unresolvable" };
+  const b = body ?? {};
+
+  if (cls === "team") {
+    // `set-active-team` with `teamId: null` UNSETS the active team — a
+    // cleanup motion with no target org; never police it.
+    const teamId = nonEmptyString(b["teamId"]);
+    if (!teamId) return { kind: "unresolvable" };
     try {
       const orgId = await deps.readTeamOrganizationId(teamId);
-      if (orgId) return orgId;
+      return orgId ? { kind: "resolved", organizationId: orgId } : { kind: "unresolvable" };
     } catch {
-      // fall through to other resolution strategies — never crash the hook.
+      return { kind: "error" };
     }
   }
 
-  const invitationId = body["invitationId"];
-  if (typeof invitationId === "string" && invitationId.length > 0) {
+  if (cls === "invitation") {
+    const invitationId = nonEmptyString(b["invitationId"]);
+    if (!invitationId) return { kind: "unresolvable" };
     try {
       const orgId = await deps.readInvitationOrganizationId(invitationId);
-      if (orgId) return orgId;
+      return orgId ? { kind: "resolved", organizationId: orgId } : { kind: "unresolvable" };
     } catch {
-      // fall through
+      return { kind: "error" };
     }
   }
 
-  if (typeof req.activeOrganizationId === "string" && req.activeOrganizationId.length > 0) {
-    return req.activeOrganizationId;
+  // cls === "organization"
+  // `set-active` with an explicit `organizationId: null` UNSETS the active
+  // organization — the escape hatch a user whose session still points at an
+  // archived org needs; policing it (via the active-org fallback below)
+  // would trap them. Never police an explicit unset.
+  if (path === "/organization/set-active" && b["organizationId"] === null) {
+    return { kind: "unresolvable" };
   }
-
-  return null;
+  const explicitOrgId = nonEmptyString(b["organizationId"]);
+  if (explicitOrgId) return { kind: "resolved", organizationId: explicitOrgId };
+  const slug = nonEmptyString(b["organizationSlug"]);
+  if (slug) {
+    try {
+      const orgId = await deps.readOrganizationIdBySlug(slug);
+      return orgId ? { kind: "resolved", organizationId: orgId } : { kind: "unresolvable" };
+    } catch {
+      return { kind: "error" };
+    }
+  }
+  // Better Auth's org-scoped endpoints default to the caller's active
+  // organization when the body names none — mirror exactly that.
+  const fallback = nonEmptyString(activeOrganizationId);
+  if (fallback) return { kind: "resolved", organizationId: fallback };
+  return { kind: "unresolvable" };
 }
 
 // ---- Real I/O (default deps; injectable for tests) -------------------------
@@ -238,9 +320,20 @@ async function readInvitationOrganizationIdSql(invitationId: string): Promise<st
   return rows.rows?.[0]?.organizationId ?? null;
 }
 
+async function readOrganizationIdBySlugSql(slug: string): Promise<string | null> {
+  const [{ betterAuthDb }, { sql }] = await Promise.all([
+    import("@/lib/better-auth-db"),
+    import("drizzle-orm"),
+  ]);
+  const rows = await betterAuthDb.execute<{ id: string }>(
+    sql`SELECT id FROM public."organization" WHERE slug = ${slug} LIMIT 1`,
+  );
+  return rows.rows?.[0]?.id ?? null;
+}
+
 export type ReadArchivedAt = (organizationId: string) => Promise<Date | string | null>;
 
-export type DispatchPolicyHookDeps = Partial<ResolveOrgIdDeps & { readArchivedAt: ReadArchivedAt }>;
+export type DispatchPolicyHookDeps = Partial<ResolveTargetDeps & { readArchivedAt: ReadArchivedAt }>;
 
 /**
  * The Better-Auth `{matcher, handler}` before-hook entry for `hooks.before`.
@@ -249,34 +342,38 @@ export type DispatchPolicyHookDeps = Partial<ResolveOrgIdDeps & { readArchivedAt
  */
 export function buildOrganizationDispatchPolicyBeforeHook(deps: DispatchPolicyHookDeps = {}) {
   const readArchivedAt = deps.readArchivedAt ?? readOrganizationArchivedAt;
-  const readTeamOrganizationId = deps.readTeamOrganizationId ?? readTeamOrganizationIdSql;
-  const readInvitationOrganizationId =
-    deps.readInvitationOrganizationId ?? readInvitationOrganizationIdSql;
+  const resolveDeps: ResolveTargetDeps = {
+    readTeamOrganizationId: deps.readTeamOrganizationId ?? readTeamOrganizationIdSql,
+    readInvitationOrganizationId:
+      deps.readInvitationOrganizationId ?? readInvitationOrganizationIdSql,
+    readOrganizationIdBySlug: deps.readOrganizationIdBySlug ?? readOrganizationIdBySlugSql,
+  };
 
   return {
     matcher: (ctx: { path: string }) => POLICED_ENDPOINTS.has(ctx.path),
     handler: createAuthMiddleware(async (ctx) => {
       const session = (ctx.context as { session?: { session?: { activeOrganizationId?: string | null } } })
         .session;
-      const orgId = await resolveDispatchTargetOrganizationId(
-        {
-          path: ctx.path,
-          body: (ctx.body ?? null) as Record<string, unknown> | null,
-          activeOrganizationId: session?.session?.activeOrganizationId ?? null,
-        },
-        { readTeamOrganizationId, readInvitationOrganizationId },
+      const resolution = await resolveDispatchTarget(
+        ctx.path,
+        (ctx.body ?? null) as Record<string, unknown> | null,
+        session?.session?.activeOrganizationId ?? null,
+        resolveDeps,
       );
-      // Never guess: if the target org cannot be determined, this hook does
-      // not police the request — the endpoint's own validation/authorization
-      // still runs normally.
-      if (!orgId) return;
+      // No authoritative target in the request — the endpoint's own
+      // validation/authorization handles it; this policy stands aside.
+      if (resolution.kind === "unresolvable") return;
 
       let archived: boolean | "unknown";
-      try {
-        const archivedAt = await readArchivedAt(orgId);
-        archived = archivedAt !== null && archivedAt !== undefined;
-      } catch {
+      if (resolution.kind === "error") {
         archived = "unknown";
+      } else {
+        try {
+          const archivedAt = await readArchivedAt(resolution.organizationId);
+          archived = archivedAt !== null && archivedAt !== undefined;
+        } catch {
+          archived = "unknown";
+        }
       }
 
       const decision = decideDispatchPolicy(ctx.path, archived);

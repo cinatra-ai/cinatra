@@ -481,12 +481,17 @@ export const auth = betterAuth({
   // `betterAuth()` instance; this file only wires the two builders:
   //   - after:  strips archived organizations from `/organization/list` on
   //             BOTH transports (raw HTTP + `auth.api.listOrganizations`).
-  //   - before: the dispatch-hook endpoint policy — refuses prohibited
-  //             membership-write endpoints (add/remove-team-member,
-  //             set-active(-team), accept-invitation) while the target org
-  //             is archived, and always allows the cleanup/exit endpoints
-  //             (leave, reject/cancel-invitation). Fires before the
-  //             endpoint on both transports, mirroring
+  //   - before: the dispatch-hook endpoint policy — while the TARGET org is
+  //             archived, refuses every organization mutation endpoint
+  //             (membership add/remove/role, invitation create/accept,
+  //             set-active(-team), team CRUD, org-settings update) and
+  //             always allows the cleanup/exit endpoints (leave,
+  //             reject/cancel-invitation). Target resolution is
+  //             endpoint-class-aware (team/invitation/org — never a
+  //             caller-planted organizationId on a team/invitation-target
+  //             endpoint), and a failed archivedAt read splits by risk:
+  //             prohibited endpoints fail CLOSED, cleanup fails OPEN. Fires
+  //             before the endpoint on both transports, mirroring
   //             `disableOrganizationDeletion`'s first-gate posture.
   hooks: {
     before: [buildOrganizationDispatchPolicyBeforeHook()],

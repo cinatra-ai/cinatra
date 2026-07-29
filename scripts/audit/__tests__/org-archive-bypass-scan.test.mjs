@@ -81,10 +81,36 @@ describe("a new app-native write site is caught — session lifecycle columns", 
       "await db.update(betterAuthSessions).set({ activeTeamId: null }).where(x);",
       "activeTeamId",
     ],
+    [
+      "raw SQL INSERT INTO session naming activeOrganizationId (codex 1942-v2 r0 #5)",
+      'await q(`INSERT INTO public."session" (id, "userId", "activeOrganizationId") VALUES ($1, $2, $3)`);',
+      "activeOrganizationId",
+    ],
+    [
+      "raw SQL INSERT ... ON CONFLICT upsert naming activeTeamId",
+      'await q(`INSERT INTO public."session" (id, "activeTeamId") VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET "activeTeamId" = EXCLUDED."activeTeamId"`);',
+      "activeTeamId",
+    ],
+    [
+      "Drizzle .insert(betterAuthSessions).values({activeOrganizationId})",
+      "await db.insert(betterAuthSessions).values({ id, userId, activeOrganizationId: orgId });",
+      "activeOrganizationId",
+    ],
   ])("catches %s", (_label, code, column) => {
     const hits = scanSessionColumnWrites(code);
-    expect(hits).toHaveLength(1);
+    expect(hits.length).toBeGreaterThanOrEqual(1);
     expect(hits[0]).toMatchObject({ target: column, ref: `session-column:${column}` });
+  });
+
+  it("does NOT flag a session INSERT that touches neither lifecycle column", () => {
+    expect(
+      scanSessionColumnWrites(
+        'await q(`INSERT INTO public."session" (id, "userId", token) VALUES ($1, $2, $3)`);',
+      ),
+    ).toEqual([]);
+    expect(
+      scanSessionColumnWrites("await db.insert(betterAuthSessions).values({ id, userId, token });"),
+    ).toEqual([]);
   });
 });
 
