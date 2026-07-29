@@ -72,16 +72,18 @@
  *      workflow B". Several rows here (the two above under
  *      `extension-lifecycle-db-tests`, plus the root-vitest-suite rows under
  *      `perpetual-loops-invariants`/`test`) name jobs that live in
- *      `build-image.yml`, a DIFFERENT file from where Decision 1 originally
- *      proposed wiring the gate step (`org-write-boundary-gate.yml`). If the
- *      gate step is wired there, EVERY row pointing at a `build-image.yml`
- *      job will be structurally unable to satisfy `--strict` no matter how
- *      green the underlying test is. The likely correct fix (left for the
- *      P1-CI follow-up, a `.github/workflows` edit, out of scope here): add
- *      the coverage-gate step as a job INSIDE `build-image.yml` itself
- *      (alongside the jobs it depends on), not `org-write-boundary-gate.yml`.
- *      `--strict` mode below reports this exact mismatch per-row rather than
- *      silently mis-reporting a false pass or an uninformative fail.
+ *      `build-image.yml`. SELF_WORKFLOW/SELF_JOB below are set to
+ *      `build-image.yml` / `archive-acceptance-gate` for exactly this reason
+ *      (cinatra#1943 P1-CI, wired in #2209): the gate's own job lives
+ *      alongside the jobs it depends on, not in `org-write-boundary-gate.yml`
+ *      — a same-named-sounding but UNRELATED workflow (it enforces #1938's
+ *      kernel-boundary / table-sweep / writer-manifest checks and has no
+ *      `archive-acceptance-gate` job at all; the constants briefly pointed
+ *      there by mistake after #2207 merged, fixed here). Until the
+ *      `archive-acceptance-gate` job actually exists in `build-image.yml`,
+ *      `--strict` mode correctly reports "self job not found" for every
+ *      green row — the honest, expected pre-wiring state, not a bug in this
+ *      script.
  *
  * Usage:
  *   node scripts/audit/archive-acceptance-gate.mjs            # audit mode (default)
@@ -102,16 +104,19 @@ const LABEL = "archive-acceptance-gate";
 export const MANIFEST_PATH = join(__dirname, "archive-acceptance-manifest.json");
 
 /**
- * Where Decision 1 designates the gate's OWN CI job to live, for `--strict`
- * mode's `needs:` check. See the header's "HONEST DISCLOSURE" #2 above: this
- * is provisional until the P1-CI follow-up actually wires a job — recorded
- * here (not invented per-call) so a future wiring PR changes exactly one
- * place, and so `--strict` mode has a concrete target to check against even
- * before that PR exists (reporting "not wired yet" rather than silently
- * no-op'ing).
+ * Where the gate's OWN CI job lives, for `--strict` mode's `needs:` check.
+ * See the header's "HONEST DISCLOSURE" #2 above: this is the real P1-CI
+ * wiring target (cinatra#1943 P1-CI, #2209) — recorded here (not invented
+ * per-call) so a future rename changes exactly one place, and so `--strict`
+ * mode has a concrete target to check against even before that job exists in
+ * `build-image.yml` (reporting "not wired yet" rather than silently
+ * no-op'ing). NOT `org-write-boundary-gate.yml` / `org-write-boundary-gate`
+ * — that is a same-named-sounding but unrelated workflow (#1938's
+ * kernel-boundary gates); these constants briefly pointed there by mistake
+ * after #2207 merged.
  */
-export const SELF_WORKFLOW = "org-write-boundary-gate.yml";
-export const SELF_JOB = "org-write-boundary-gate";
+export const SELF_WORKFLOW = "build-image.yml";
+export const SELF_JOB = "archive-acceptance-gate";
 
 /**
  * The 15 literal criteria from #1943's issue body (GROUNDING.md §4 /
