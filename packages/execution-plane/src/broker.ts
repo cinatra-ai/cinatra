@@ -256,7 +256,43 @@ export function verifyServiceToken(
   return timingSafeEqual(a, b);
 }
 
+/**
+ * This producer's denied-cooldown POSTURE (cinatra#2266 AC1).
+ *
+ * Every record this mapper emits pins `resourceType` / `operation` to
+ * `execution_sandbox` / `sandbox_execute`, and the actor is always the same
+ * user, so the kernel's default cooldown key (`actor : resourceType :
+ * operation`) is ONE constant string per user. Under that key the kernel
+ * recorded the FIRST refusal in a 60 s window and silently discarded every
+ * later one — across different jobs, different commands and different reasons.
+ * Ten forged vouchers in a minute produced one audit row.
+ *
+ * `record_every` rather than a finer key, and the reason is not convenience
+ * (Codex convergence, adopted over two rounds). A finer key has to be built
+ * from something the record carries, and the refusal paths that matter most
+ * carry nothing that distinguishes them: a voucher is rejected BEFORE its
+ * claims are trusted, so a forged, expired or replayed voucher has no
+ * `commandId` at all, and neither does a job-level refusal. Keying on
+ * job + reason + rejection collapses exactly the burst an investigation needs
+ * to see; adding the record's own `atMs` only shrinks the collision to
+ * "inside the same millisecond", which two concurrent refusals on one job can
+ * still hit. A refusal is an authorization DECISION, and one that is discarded
+ * makes an investigation read "no record" as "it did not happen" — so this
+ * producer states plainly that it has no repeat semantics, instead of
+ * approximating one it cannot express.
+ *
+ * ACCEPTED VOLUME: a refusal loop now writes one row per refusal instead of
+ * one per minute. That is the point. The rate is bounded by what the app
+ * submits — every refusal costs a full app→broker round trip carrying a
+ * voucher — not by the audit kernel.
+ *
+ * The MINT side is deliberately different (`execution-broker-construct.ts`):
+ * a mint event carries a REQUIRED `commandId`, so it CAN say what makes two
+ * denials the same event, and it opts into the finer key instead.
+ */
+
 /** Map a broker audit record onto the authz audit-kernel input vocabulary. */
+
 export function toAuthzAuditEventInput(record: ExecutionAuditRecord): {
   organizationId: string;
   actorPrincipalId: string;
@@ -267,6 +303,7 @@ export function toAuthzAuditEventInput(record: ExecutionAuditRecord): {
   operation: string;
   decision: "allowed" | "denied";
   runId?: string;
+  deniedCooldown: "record_every";
   metadata: Record<string, unknown>;
 } {
   return {
@@ -279,6 +316,10 @@ export function toAuthzAuditEventInput(record: ExecutionAuditRecord): {
     operation: "sandbox_execute",
     decision: record.decision === "executed" ? "allowed" : "denied",
     ...(record.runId ? { runId: record.runId } : {}),
+    // Cooldown CONTROL field, not audit data: the kernel reads it to decide
+    // whether to suppress a denied event and never persists it. Allowed rows
+    // are never suppressed and ignore it.
+    deniedCooldown: "record_every",
     metadata: {
       surface: record.surface,
       cwd: record.cwd,

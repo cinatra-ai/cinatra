@@ -58,6 +58,9 @@ import {
   execServiceUri,
   ExecutionVoucherVerifier,
   type CommandVoucherMinter,
+  type DrainAuditPayload,
+  type DrainAuditResultPayload,
+  type ExecutionAuditRecord,
 } from "@cinatra-ai/execution-plane";
 import { DEFAULT_CARRIER_TTL_MS } from "@cinatra-ai/llm/execution-plane";
 import type { SandboxExecutor } from "@cinatra-ai/llm";
@@ -104,8 +107,88 @@ export const AUDIT_DRAIN_MAX_RECORDS = 512;
  */
 export const AUDIT_DRAIN_MAX_PASSES = 8;
 
+/**
+ * Stdio entries this loop pulls per pass: ZERO, deliberately (cinatra#2266,
+ * the #2258 stdio discard).
+ *
+ * `drainAudit` is DESTRUCTIVE — `drain()` splices what it returns out of the
+ * broker's buffers — and `maxStdioEntries` defaults to "all of it". So a drain
+ * that asked only for audit records still pulled EVERY retained stdout/stderr
+ * entry into `batch.stdio`, and this loop has no stdio consumer to hand them
+ * to: no app-side `ExecutionStdioSink` exists on either placement (the local
+ * placement wires none at all). Retained remote stdio was therefore destroyed
+ * on a 15-second cycle, silently.
+ *
+ * Asking for ZERO is the fix that the surrounding design supports: the entries
+ * stay retained in the broker's own buffer, under the bound that buffer already
+ * declares, until a consumer lands. The alternative — keep pulling and write
+ * them somewhere — has no somewhere to write to, and inventing one here would
+ * put unredacted sandbox output into app logs.
+ *
+ * THE CONSEQUENCE, stated: the broker's stdio buffer now sits at its bound
+ * (`DEFAULT_AUDIT_RELAY_MAX_STDIO` entries, each capped at the per-stream
+ * `maxStdioBytes`) instead of being emptied every interval. That bound is the
+ * relay's own declared overflow contract — "an app that stops draining is
+ * bounded, and the drop is COUNTED" — not a new one, and `droppedStdio` is now
+ * logged below so the loss is visible as a gap rather than a reset counter.
+ * Giving stdio its own delivery and capacity semantics is #2266 AC9's job.
+ */
+export const AUDIT_DRAIN_MAX_STDIO_ENTRIES = 0;
+
 /** The voucher SIGNING key. Required for this placement and no other. */
 export const VOUCHER_SIGNING_KEY_ENV = "EXECUTION_VOUCHER_SIGNING_KEY";
+
+/** The single `drainAudit` capability this loop needs; narrowed for testing. */
+export type AuditDrainSource = {
+  drainAudit(limits?: DrainAuditPayload): Promise<DrainAuditResultPayload>;
+};
+
+/**
+ * ONE drain — bounded passes over the remote broker's buffered audit records.
+ *
+ * Exported (rather than closed over inside `constructRemoteExecutionBroker`)
+ * so the delivery posture is testable without standing up mTLS, a handshake
+ * and a live broker: what it asks for, what it writes, and what it reports as
+ * a gap are the whole contract.
+ */
+export async function drainAuditPasses(
+  source: AuditDrainSource,
+  auditSink: (record: ExecutionAuditRecord) => void | Promise<void>,
+  opts?: { maxPasses?: number; onGap?: (message: string) => void },
+): Promise<void> {
+  const maxPasses = opts?.maxPasses ?? AUDIT_DRAIN_MAX_PASSES;
+  const onGap = opts?.onGap ?? ((message: string) => console.error(message));
+  for (let pass = 0; pass < maxPasses; pass += 1) {
+    const batch = await source.drainAudit({
+      maxAuditRecords: AUDIT_DRAIN_MAX_RECORDS,
+      maxStdioEntries: AUDIT_DRAIN_MAX_STDIO_ENTRIES,
+    });
+    if (batch.droppedAudit > 0) {
+      onGap(
+        `[execution-plane] the remote broker dropped ${batch.droppedAudit} audit record(s) ` +
+          "before this drain — the audit trail has a gap",
+      );
+    }
+    // `drain()` RESETS the drop counters as it answers, so a counter this loop
+    // does not read is a loss no one ever hears about. Stdio is left retained
+    // (see AUDIT_DRAIN_MAX_STDIO_ENTRIES), which means its buffer can now reach
+    // its bound and shed the oldest — that is exactly the event this reports.
+    if (batch.droppedStdio > 0) {
+      onGap(
+        `[execution-plane] the remote broker dropped ${batch.droppedStdio} retained stdio ` +
+          "entry(ies) — its stdio buffer is at its bound and no consumer drains it",
+      );
+    }
+    for (const record of batch.audit) await auditSink(record);
+    // A short batch means the buffer is drained; anything else means the
+    // broker had more than one pass' worth and we keep going, bounded.
+    if (batch.audit.length < AUDIT_DRAIN_MAX_RECORDS) return;
+  }
+  onGap(
+    `[execution-plane] the remote broker still had buffered audit records after ` +
+      `${maxPasses} drain passes — the next drain continues from there`,
+  );
+}
 
 type Env = Record<string, string | undefined>;
 
@@ -295,32 +378,18 @@ async function composeAgainst(
   // pull two batches concurrently and write them to the kernel interleaved. One
   // tracked promise makes drains strictly sequential and gives `stop()`
   // something to await instead of racing.
+  //
+  // The pass loop itself is `drainAuditPasses` above — extracted so the posture
+  // it encodes (what it ASKS the broker for, what it writes, what it reports as
+  // a gap) is testable without mTLS and a live broker. In particular it asks for
+  // ZERO stdio entries, because this side has no stdio consumer to hand them to
+  // and a destructive drain would otherwise delete them (cinatra#2266).
   const auditSink = createExecutionAuditSink();
   let draining: Promise<void> | null = null;
 
-  const drainPasses = async (maxPasses: number): Promise<void> => {
-    for (let pass = 0; pass < maxPasses; pass += 1) {
-      const batch = await client.drainAudit({ maxAuditRecords: AUDIT_DRAIN_MAX_RECORDS });
-      if (batch.droppedAudit > 0) {
-        console.error(
-          `[execution-plane] the remote broker dropped ${batch.droppedAudit} audit record(s) ` +
-            "before this drain — the audit trail has a gap",
-        );
-      }
-      for (const record of batch.audit) await auditSink(record);
-      // A short batch means the buffer is drained; anything else means the
-      // broker had more than one pass' worth and we keep going, bounded.
-      if (batch.audit.length < AUDIT_DRAIN_MAX_RECORDS) return;
-    }
-    console.error(
-      `[execution-plane] the remote broker still had buffered audit records after ` +
-        `${maxPasses} drain passes — the next drain continues from there`,
-    );
-  };
-
   const drainOnce = (maxPasses = AUDIT_DRAIN_MAX_PASSES): Promise<void> => {
     if (draining) return draining;
-    draining = drainPasses(maxPasses).finally(() => {
+    draining = drainAuditPasses(client, auditSink, { maxPasses }).finally(() => {
       draining = null;
     });
     return draining;
