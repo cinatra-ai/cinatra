@@ -98,7 +98,7 @@
         "testName": "a child-run creation blocked behind an in-progress archive LOSES the race: refused, and no child row ever lands"
       },
       "ciDependency": { "workflow": "build-image.yml", "job": "agents-integration-db" },
-      "status": "red",
+      "status": "green",
       "trackingIssue": 1943
     },
     {
@@ -109,7 +109,7 @@
         "testName": "a genuinely expired lease on a non-terminal run settles to a typed FAILURE, never a bare denial — real CAS + real lease DELETE"
       },
       "ciDependency": { "workflow": "build-image.yml", "job": "agents-integration-db" },
-      "status": "red",
+      "status": "green",
       "trackingIssue": 1943
     },
     {
