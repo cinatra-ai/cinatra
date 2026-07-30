@@ -12,7 +12,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { composeBrokerService } from "../broker-entry";
+import { composeBrokerService, deploymentEgressMaximumFromEnv } from "../broker-entry";
 import {
   EKU_CLIENT_AUTH,
   EKU_SERVER_AUTH,
@@ -195,6 +195,58 @@ describe("broker entry — fail-closed on unwired seams", () => {
     expect(() => composeBrokerService(brokerEnv({ EXEC_EGRESS_MODE: "wide-open" }))).toThrow(
       /EXEC_EGRESS_MODE must be one of/,
     );
+  });
+
+  describe("deployment egress ceiling (exec-plane L5)", () => {
+    it("is absent when none of the three variables is set — the signed policy stands", () => {
+      expect(deploymentEgressMaximumFromEnv({})).toBeUndefined();
+    });
+
+    it("reads the same three variables, with the same meaning, as the in-process placement", () => {
+      expect(
+        deploymentEgressMaximumFromEnv({
+          EXECUTION_EGRESS_MAX_MODE: "allowlist",
+          EXECUTION_EGRESS_MAX_ALLOWLIST: "pypi.org, files.pythonhosted.org",
+          EXECUTION_EGRESS_MAX_BYTES_PER_JOB: "1024",
+        }),
+      ).toEqual({
+        mode: "allowlist",
+        allowlist: ["pypi.org", "files.pythonhosted.org"],
+        maxBytesPerJob: 1024,
+      });
+    });
+
+    it("splits the allowlist on COMMAS ONLY, so one config means one host set in both placements", () => {
+      // The sibling EXEC_EGRESS_ALLOWLIST splits on whitespace too, but that is a
+      // different variable. Diverging here would make an operator's ceiling
+      // quietly WIDER in the deployed placement than in the in-process one.
+      expect(
+        deploymentEgressMaximumFromEnv({
+          EXECUTION_EGRESS_MAX_ALLOWLIST: "a.example b.example",
+        })?.allowlist,
+      ).toEqual(["a.example b.example"]);
+    });
+
+    it("never floors a POSITIVE byte ceiling to zero — zero means UNCAPPED downstream", () => {
+      expect(
+        deploymentEgressMaximumFromEnv({ EXECUTION_EGRESS_MAX_BYTES_PER_JOB: "0.5" })
+          ?.maxBytesPerJob,
+      ).toBe(1);
+      // An EXPLICIT zero still means what it is documented to mean.
+      expect(
+        deploymentEgressMaximumFromEnv({ EXECUTION_EGRESS_MAX_BYTES_PER_JOB: "0" })
+          ?.maxBytesPerJob,
+      ).toBe(0);
+    });
+
+    it("refuses a typo'd ceiling rather than guessing one", () => {
+      expect(() =>
+        deploymentEgressMaximumFromEnv({ EXECUTION_EGRESS_MAX_MODE: "allowlst" }),
+      ).toThrow(/EXECUTION_EGRESS_MAX_MODE must be one of/);
+      expect(() =>
+        deploymentEgressMaximumFromEnv({ EXECUTION_EGRESS_MAX_BYTES_PER_JOB: "-1" }),
+      ).toThrow(/non-negative number/);
+    });
   });
 
   it("composes a listening-ready service when every seam is acknowledged", async () => {
