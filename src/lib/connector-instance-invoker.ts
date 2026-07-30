@@ -243,9 +243,26 @@ export type ConnectorInstanceInvokerDeps = {
    * D4-REVISED, PR-σ): a SIBLING addition to the destructiveHook slot above —
    * same seam shape, NOT a restructure of the authz→policy→classify→hook→
    * execute→audit order. This PR ships the SLOT + the invoker's own trigger
-   * only; no consumer is registered here (PR-τ, wordpress-mcp-connector,
-   * registers `evaluateStagedContentWrite` against it, replacing that
-   * composition's current inline per-handler wiring in `wordpress_post_update`).
+   * only; no consumer is registered here.
+   *
+   * STATUS (still true as of the facade-deletion PR that removes the old
+   * `wordpress_post_update` tool name): NO WordPress binding exists yet.
+   * `evaluateStagedContentWrite` (wordpress-mcp-connector's
+   * `src/integration/cms-review-trigger.ts`) is the composition this slot was
+   * meant to carry, but registering it here turned out to need a HOST-SIDE
+   * bind (this slot has no connector-facing registration API — only
+   * `register-host-connector-services.ts`'s `buildConnectorInstanceInvokerDeps`
+   * can populate `contentReviewHook` at all, the same place `destructiveHook`
+   * is bound below), which no connector-only change can reach. The old
+   * `wordpress_post_update` tool's inline call to `evaluateStagedContentWrite`
+   * — the review-before-publish gate's only enforcement point — is deleted
+   * along with that tool once wordpress-mcp-connector's facade-deletion PR
+   * merges. Until a WordPress `contentReviewHook` binding is added here (or
+   * this composition is otherwise re-hosted), the cinatra#2043
+   * review-before-publish gate does not fire for ANY WordPress content write,
+   * including through `wordpress_site_tool_call`. This is a real, disclosed
+   * regression risk on the facade-deletion PR, not a cosmetic gap — flagged
+   * for whoever builds the binding, not silently absorbed.
    *
    * TRIGGER (deliberately connector-agnostic, unlike destructiveHook's
    * annotation+floor pair): fires for any NON-READ (mutating) resolved tool —

@@ -12,14 +12,14 @@ import {
 // edit path. Pin both directions + fail-closed on unknowns.
 
 describe("in-admin CMS tool policy — allowlist membership", () => {
-  it("allows exactly the MCP-backed CMS primitives the SKILL.md uses", () => {
-    // WordPress: wordpress-agent SKILL.md STEP 1/2 (the only two it calls;
-    // every other WP primitive is a NEVER rule there), rerouted onto the plugin
-    // MCP content server. Drupal: drupal-agent SKILL.md full tool set, all via
-    // drupal/mcp_tools.
+  it("allows exactly the MCP-backed CMS primitives each content-editor agent uses", () => {
+    // WordPress: the generic, governed connector-instance invoker primitives
+    // (cinatra-ai/cinatra#2022 S7 deleted the old named per-operation tools —
+    // wordpress_post_get/wordpress_post_update no longer exist in any form).
+    // Drupal: drupal-agent's full tool set, all via drupal/mcp_tools.
     const expected = [
-      "wordpress_post_get",
-      "wordpress_post_update",
+      "wordpress_site_tool_call",
+      "wordpress_site_tools_list",
       "drupal_node_get",
       "drupal_node_create_draft_revision",
       "drupal_node_update",
@@ -33,11 +33,10 @@ describe("in-admin CMS tool policy — allowlist membership", () => {
     }
   });
 
-  it("DENIES the neighbouring WordPress primitives that remain direct-REST-backed", () => {
-    // The residual #1214 violation surface — still egress via direct REST, so
-    // the in-admin assistant must not be able to reach them until they are
-    // rerouted onto plugin MCP abilities (the follow-up issue).
+  it("DENIES the deleted named WordPress tools (cinatra-ai/cinatra#2022 S7 — they no longer exist in any form)", () => {
     for (const name of [
+      "wordpress_post_get",
+      "wordpress_post_update",
       "wordpress_post_status",
       "wordpress_posts_list",
       "wordpress_pages_list",
@@ -58,10 +57,10 @@ describe("in-admin CMS tool policy — allowlist membership", () => {
       "agent_run",
       "objects_list",
       "permissions_grant",
-      "wordpress_post_get_v2",
+      "wordpress_site_tool_call_v2",
       "drupal_node_delete",
       "",
-      "WORDPRESS_POST_GET", // case-sensitive: not the registered tool name
+      "WORDPRESS_SITE_TOOL_CALL", // case-sensitive: not the registered tool name
     ]) {
       expect(isInAdminCmsMcpToolAllowed(name)).toBe(false);
     }
