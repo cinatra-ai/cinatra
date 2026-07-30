@@ -28,8 +28,9 @@
  * arm below exists to settle — and why the reject half of it, unlike the accept
  * half, is asserted as an observation to record rather than a pass to bank.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
 import {
+  ANTHROPIC_SKILLS_BETAS,
   FetchAnthropicCustomSkillsClient,
   type AnthropicSkillUpload,
 } from "../tools/anthropic-custom-skills-client";
@@ -41,6 +42,19 @@ import {
 const LIVE = process.env.ANTHROPIC_SKILL_BOUNDARY_LIVE === "1";
 const KEY = process.env.ANTHROPIC_API_KEY ?? "";
 
+/**
+ * Per-run discriminator for every `display_title` this suite uploads.
+ *
+ * MUST be unique per run. `display_title` is workspace-unique, and the shipped
+ * client reconciles a collision by ADOPTING the existing remote skill and
+ * returning its id — so a deterministic title makes the "just under the constant
+ * is accepted" assertion pass on every run after the first WITHOUT ever
+ * uploading the artifact under test. The check would silently become vacuous
+ * exactly when it matters (after the constant next moves). A fresh title forces
+ * a real upload every run.
+ */
+const RUN_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
 /** Build a canonical bundle whose UNCOMPRESSED total is exactly `bytes`. */
 function bundleOfUncompressedSize(bytes: number, rootDir: string): AnthropicSkillUpload {
   const skillMd = Buffer.from(`---\nname: ${rootDir}\n---\n`);
@@ -50,10 +64,67 @@ function bundleOfUncompressedSize(bytes: number, rootDir: string): AnthropicSkil
     bundledFiles: [{ relPath: "pad.bin", bytes: Buffer.alloc(Math.max(0, padLen), 0x61) }],
     rootDir,
   });
-  return { displayTitle: `boundary-probe-${rootDir}`, rootDir, zipBytes: zip.zipBytes };
+  return {
+    displayTitle: `boundary-probe-${rootDir}-${RUN_ID}`,
+    rootDir,
+    zipBytes: zip.zipBytes,
+  };
+}
+
+/**
+ * Reclaim a probe upload in the documented versions-then-skill order (the server
+ * refuses a skill delete while versions remain). This suite uploads ~30 MiB
+ * artifacts to a real workspace; leaving them behind would both accumulate
+ * multi-megabyte junk and, before the unique title above, poison later runs.
+ */
+async function reclaim(skillId: string): Promise<void> {
+  const headers = {
+    "x-api-key": KEY,
+    "anthropic-version": "2023-06-01",
+    "anthropic-beta": ANTHROPIC_SKILLS_BETAS,
+  };
+  const base = "https://api.anthropic.com";
+  const listed = await fetch(
+    `${base}/v1/skills/${encodeURIComponent(skillId)}/versions?limit=100`,
+    { headers },
+  );
+  if (listed.ok) {
+    const body = (await listed.json()) as {
+      data?: Array<{ version?: string } | string>;
+      versions?: Array<{ version?: string } | string>;
+    };
+    for (const v of body.data ?? body.versions ?? []) {
+      const version = typeof v === "string" ? v : v.version;
+      if (!version) continue;
+      await fetch(
+        `${base}/v1/skills/${encodeURIComponent(skillId)}/versions/${encodeURIComponent(version)}`,
+        { method: "DELETE", headers },
+      );
+    }
+  }
+  await fetch(`${base}/v1/skills/${encodeURIComponent(skillId)}`, {
+    method: "DELETE",
+    headers,
+  });
 }
 
 describe.skipIf(!LIVE || !KEY)("Anthropic Skills API boundary (LIVE, gated)", () => {
+  /** Every remote skill this suite mints, reclaimed in afterAll. */
+  const uploaded: string[] = [];
+
+  afterAll(async () => {
+    for (const id of uploaded) {
+      try {
+        await reclaim(id);
+      } catch {
+        // Never fail the suite on cleanup, but do say so — a leaked ~30 MiB
+        // probe skill is an operator problem worth seeing.
+        // eslint-disable-next-line no-console -- cleanup visibility
+        console.warn(`[boundary-probe] could not reclaim a probe skill; reclaim it manually`);
+      }
+    }
+  }, 120_000);
+
   it("accepts just under the constant, and records what happens AT it", async () => {
     const client = new FetchAnthropicCustomSkillsClient(KEY);
 
@@ -64,9 +135,9 @@ describe.skipIf(!LIVE || !KEY)("Anthropic Skills API boundary (LIVE, gated)", ()
       ANTHROPIC_SKILL_MAX_UPLOAD_BYTES - 1_000,
       "boundary-under",
     );
-    await expect(client.createSkill(under)).resolves.toMatchObject({
-      skillId: expect.any(String),
-    });
+    const underResult = await client.createSkill(under);
+    expect(underResult).toMatchObject({ skillId: expect.any(String) });
+    uploaded.push(underResult.skillId);
 
     // AT the constant: we do NOT assert a rejection. The C10 evidence already
     // showed the server accepting well past our previous gate, so asserting
@@ -78,6 +149,7 @@ describe.skipIf(!LIVE || !KEY)("Anthropic Skills API boundary (LIVE, gated)", ()
       .createSkill(at)
       .then((r) => ({ accepted: true as const, skillId: r.skillId }))
       .catch((e: unknown) => ({ accepted: false as const, error: String(e).slice(0, 300) }));
+    if (outcome.accepted) uploaded.push(outcome.skillId);
     // eslint-disable-next-line no-console -- the recorded observation IS this test's output
     console.log(
       `[boundary-probe] at ${ANTHROPIC_SKILL_MAX_UPLOAD_BYTES} bytes → ` +
@@ -90,15 +162,19 @@ describe.skipIf(!LIVE || !KEY)("Anthropic Skills API boundary (LIVE, gated)", ()
 // Always-present marker so the gated suite is discoverable even when skipped,
 // and so the value can never drift without a deliberate edit here.
 describe("Anthropic Skills API boundary (constant guard)", () => {
-  it("pins the evidence-grounded 30 MiB boundary", () => {
+  it("pins the 30 MiB boundary (a docs-based POLICY reading, not a measured server limit)", () => {
+    // The live evidence refutes the OLD value and bounds only a LOWER edge; it
+    // does not derive this one. See the constant's own doc comment: an
+    // evidence-only value would be the observed-accepted size + 1.
     expect(ANTHROPIC_SKILL_MAX_UPLOAD_BYTES).toBe(31_457_280);
     expect(ANTHROPIC_SKILL_MAX_UPLOAD_BYTES).toBe(30 * 1024 * 1024);
   });
 
   it("is above the archive size the live API was observed to accept", () => {
-    // evidence/2094-s7-acceptance/live-results.json, check C10.
-    const OBSERVED_ACCEPTED_ARCHIVE_BYTES = 30_000_505;
-    const OBSERVED_ACCEPTED_UNCOMPRESSED_BYTES = 30_000_169;
+    // evidence/2094-s7-acceptance/live-reverify-results.json, check R10 — the run
+    // that drove the SHIPPED client (round 1's C10 saw 30,000,505 / 30,000,169).
+    const OBSERVED_ACCEPTED_ARCHIVE_BYTES = 30_000_513;
+    const OBSERVED_ACCEPTED_UNCOMPRESSED_BYTES = 30_000_189;
     expect(ANTHROPIC_SKILL_MAX_UPLOAD_BYTES).toBeGreaterThan(
       OBSERVED_ACCEPTED_ARCHIVE_BYTES,
     );
