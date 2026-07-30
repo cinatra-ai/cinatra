@@ -31,6 +31,16 @@
 # src/lib/__tests__/connector-instance-native-read-injection-scale-matrix.test.ts
 # and IS part of the required gate of record (perpetual-loops-invariants ->
 # `pnpm test:root`).
+#
+# cinatra#2024 (S9 program acceptance, item A): this job also runs the M1
+# GOVERNED-INVOKER live counterpart
+# (src/lib/__tests__/connector-instance-invoker-live-scale-smoke.test.ts) —
+# the real-provider-round-trip proof PR #2189 itself deferred to program
+# acceptance ("real provider round-trips deferred to program acceptance").
+# It reuses the SAME already-booted fixture and minted app password this job
+# already produces for the M2 live test above; no extra boot step. Its own
+# synthetic half (connector-instance-invoker-scale-matrix.test.ts) likewise
+# runs in the normal root Vitest suite, not here.
 
 name: Trusted-Read Scale Smoke
 
@@ -53,6 +63,11 @@ on:
       - "packages/llm/src/mcp-materializer.ts"
       - "src/lib/__tests__/connector-instance-native-read-injection-live-scale-smoke.test.ts"
       - "src/lib/__tests__/connector-instance-native-read-injection-scale-matrix.test.ts"
+      - "src/lib/connector-instance-invoker.ts"
+      - "src/lib/connector-instance-mcp-transport.ts"
+      - "src/lib/connector-instance-snapshot-loader.ts"
+      - "src/lib/__tests__/connector-instance-invoker-live-scale-smoke.test.ts"
+      - "src/lib/__tests__/connector-instance-invoker-scale-matrix.test.ts"
 
 permissions:
   contents: read
@@ -127,6 +142,13 @@ jobs:
         run: >-
           pnpm exec vitest run --config vitest.config.ts --no-coverage
           src/lib/__tests__/connector-instance-native-read-injection-live-scale-smoke.test.ts
+      - name: Run the live M1 governed-invoker provider-scale proof (cinatra#2024 S9 item A)
+        env:
+          WP_BASE_URL: http://localhost:8080
+          WP_MCP_BASIC_AUTH: ${{ env.WP_MCP_BASIC_AUTH }}
+        run: >-
+          pnpm exec vitest run --config vitest.config.ts --no-coverage
+          src/lib/__tests__/connector-instance-invoker-live-scale-smoke.test.ts
       - name: Compose logs (always)
         if: ${{ always() }}
         run: |
