@@ -30,9 +30,6 @@ vi.mock("@/app/api/chat/explicit-dispatch-server", () => ({
 vi.mock("@/app/api/chat/chat-user-context", () => ({
   buildChatUserContextSections: vi.fn(async () => []),
 }));
-vi.mock("@/app/api/chat/shell-skill-gate", () => ({
-  shouldDeliverChatShellSkillTools: () => true,
-}));
 vi.mock("@/app/api/chat/extension-confirmation", () => ({
   buildExtensionImplementationConfirmationPolicy: () => "",
 }));
@@ -82,7 +79,21 @@ vi.mock("@cinatra-ai/llm", () => ({
   // of calling buildSkillTools directly.
   selectSkillDeliveryAdapter: vi.fn(() => ({
     provider: "openai",
-    deliver: vi.fn(async () => ({ tools: [], systemContext: "", exposure: [] })),
+    // A REALISTIC OpenAI delivery (cinatra#2094 F11). This stub used to return
+    // no vehicle at all, which the real adapter never does for a turn whose
+    // injection contract resolved skills: a skills-without-execution OpenAI
+    // request mounts the restricted NAMED `skill_file_read` function tool
+    // (exec-plane S2's singular-native-shell rule, cinatra#1707). Since a
+    // no-vehicle delivery is now REFUSED outright — a silently skill-less
+    // assistant is never an acceptable degrade — the old empty stub made every
+    // turn in this file abort before reaching the execution-provenance
+    // behaviour under test. The vehicle is incidental here; only its presence
+    // matters.
+    deliver: vi.fn(async () => ({
+      tools: [{ type: "function", name: "skill_file_read" }],
+      systemContext: "",
+      exposure: [],
+    })),
   })),
   deliverInjectedSkillsInline: vi.fn(async () => ({
     systemContext: "",
