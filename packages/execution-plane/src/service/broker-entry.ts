@@ -85,6 +85,10 @@ import {
   createBufferedAuditRelay,
   type BrokerService,
 } from "./broker-server";
+import {
+  createCompositeHealthProvider,
+  createGatewayHealthProbe,
+} from "./composite-health";
 import { execServiceUri, loadExecClientTlsMaterial, loadExecTlsMaterial } from "./mtls";
 import { EXEC_PROTOCOL_VERSION, EXEC_PROTOCOL_VERSION_ENV } from "./protocol";
 import { describeThrown } from "./rpc-transport";
@@ -98,6 +102,15 @@ import { WorkerServiceClient } from "./worker-client";
 export const EXEC_VOUCHER_VERIFY_PUBLIC_KEY_FILE_ENV = "EXEC_VOUCHER_VERIFY_PUBLIC_KEY_FILE";
 
 export const DEFAULT_BROKER_LISTEN_PORT = 4100;
+
+/**
+ * Ceiling on ONE composite-health dependency probe (exec-plane L4). Short on
+ * purpose: the caller is a boot phase or an admin page, and a dependency that
+ * needs longer than this to say hello is not one a placement should be
+ * activated on. Probes run concurrently, so this is the endpoint's worst case,
+ * not the sum of three.
+ */
+export const COMPOSITE_PROBE_TIMEOUT_MS = 2_000;
 
 type Env = Record<string, string | undefined>;
 
@@ -317,12 +330,50 @@ export function composeBrokerService(env: Env = process.env): BrokerEntryComposi
     ...(hostExclusivity ? { placementGuard: hostExclusivity.guard } : {}),
   });
 
+  // COMPOSITE HEALTH (exec-plane L4). This is the one place that holds the
+  // worker client, the gateway endpoint and the lease guard at the same time,
+  // so it is the only place that can answer for all three without a second
+  // source of truth. Each dependency's APPLICABILITY is derived from the same
+  // configuration that decides whether the broker uses it at all — the gateway
+  // from the egress tier, the lease from `EXEC_HOST_EXCLUSIVITY` — so an
+  // operator can never end up with a composite that quietly ignores something
+  // the placement actually depends on.
+  const composite = createCompositeHealthProvider({
+    worker: async () => {
+      await workerClient.health();
+    },
+    gateway: gateway?.adminUrl
+      ? { probe: createGatewayHealthProbe(gateway.adminUrl, COMPOSITE_PROBE_TIMEOUT_MS) }
+      : {
+          notApplicable:
+            policy.mode === "none"
+              ? "egress is disabled for this deployment, so there is no gateway to check"
+              : "no gateway admin endpoint is configured, so its liveness cannot be checked " +
+                "from here (EXEC_GATEWAY_ADMIN_URL)",
+        },
+    lease: hostExclusivity
+      ? {
+          probe: async () => {
+            const verdict = await hostExclusivity.leaseGuard.check();
+            if (!verdict.ok) {
+              throw new Error(`host_exclusivity_${verdict.reason}: ${verdict.message}`);
+            }
+          },
+        }
+      : {
+          notApplicable:
+            "this broker's workers are not host-exclusive (EXEC_HOST_EXCLUSIVITY)",
+        },
+    timeoutMs: COMPOSITE_PROBE_TIMEOUT_MS,
+  });
+
   const service = createBrokerService({
     broker,
     instance,
     serviceToken,
     tls,
     relay,
+    composite,
     onRefusal: (entry) => {
       // Structured, value-free refusal log (key names + codes only).
       process.stdout.write(`${JSON.stringify({ svc: "exec-broker", ...entry })}\n`);

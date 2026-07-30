@@ -32,12 +32,14 @@ import {
   type BrokerServiceBroker,
   type BrokerService,
 } from "../broker-server";
+import { createCompositeHealthProvider } from "../composite-health";
 import { EKU_CLIENT_AUTH, EKU_SERVER_AUTH, execServiceUri, type ExecTlsMaterial } from "../mtls";
 import {
   EXEC_PROTOCOL_HEADER,
   EXEC_PROTOCOL_VERSION,
   EXEC_RPC_PATH,
   EXEC_SERVICE_TOKEN_HEADER,
+  type ExecCompositeHealth,
 } from "../protocol";
 import { WorkerServiceClient } from "../worker-client";
 import { createWorkerService, type WorkerService } from "../worker-server";
@@ -182,7 +184,10 @@ afterEach(async () => {
 
 async function startBroker(
   broker: BrokerServiceBroker,
-  opts: { relay?: ReturnType<typeof createBufferedAuditRelay> } = {},
+  opts: {
+    relay?: ReturnType<typeof createBufferedAuditRelay>;
+    composite?: () => Promise<ExecCompositeHealth>;
+  } = {},
 ): Promise<Started<BrokerService>> {
   const service = createBrokerService({
     broker,
@@ -190,6 +195,7 @@ async function startBroker(
     serviceToken: BROKER_TOKEN,
     tls: BROKER_SERVER,
     ...(opts.relay ? { relay: opts.relay } : {}),
+    ...(opts.composite ? { composite: opts.composite } : {}),
   });
   const started = await listen(service);
   teardown.push(() => service.close());
@@ -968,6 +974,75 @@ describe("worker service — the broker cannot tell the difference", () => {
     ]);
     expect(calls[0]?.[0]).toBe("ps");
     expect(calls.at(-1)).toEqual(["rm", "--force", "cinatra-exec-job-7-0"]);
+  });
+
+  it("KILLING THE WORKER turns the broker's composite unhealthy while the broker keeps answering", async () => {
+    // The closest honest analogue of "kill the worker container" that a unit
+    // suite can stage: a REAL worker service on a REAL socket, reached over
+    // REAL mTLS, then stopped. It is the case the whole composite exists for —
+    // a broker whose own health is perfect and whose worker is gone.
+    const workerService = createWorkerService({
+      worker: { runCommand: async () => RESULT },
+      instance: INSTANCE,
+      serviceToken: WORKER_TOKEN,
+      tls: WORKER_SERVER,
+    });
+    const startedWorker = await listen(workerService);
+    const toWorker = workerClient(startedWorker.port);
+
+    const composite = createCompositeHealthProvider({
+      worker: async () => {
+        await toWorker.health();
+      },
+      gateway: { notApplicable: "egress is disabled for this deployment" },
+      lease: { notApplicable: "workers are not host-exclusive" },
+      timeoutMs: 2_000,
+    });
+    const { port } = await startBroker(fakeBroker(), { composite });
+    const app = brokerClient(port);
+
+    const before = await app.health();
+    expect(before.composite?.ok).toBe(true);
+    expect(before.composite?.worker.state).toBe("ok");
+    // The two dependencies this topology genuinely does not have stay
+    // `not-applicable` — never silently upgraded to a pass.
+    expect(before.composite?.gateway.state).toBe("not-applicable");
+    expect(before.composite?.lease.state).toBe("not-applicable");
+
+    await workerService.close();
+
+    const after = await app.health();
+    // The BROKER still answers — that is exactly why "the broker answered" is
+    // not a readiness signal and the composite is.
+    expect(after.protocolVersion).toBe(EXEC_PROTOCOL_VERSION);
+    expect(after.composite?.ok).toBe(false);
+    expect(after.composite?.worker.state).toBe("unhealthy");
+    expect(after.composite?.worker.detail).toMatch(/health|did not/i);
+  });
+
+  it("answers the health op over the real hop without running a container (exec-plane L4)", async () => {
+    const calls: string[][] = [];
+    const docker: DockerCli = async (args): Promise<DockerRunOutcome> => {
+      calls.push(args);
+      return { exitCode: 0, stdout: "", stderr: "", stdioOverflow: false, timedOut: false };
+    };
+    let ran = 0;
+    const worker: SandboxWorker = {
+      runCommand: async () => {
+        ran += 1;
+        return RESULT;
+      },
+    };
+    const { port } = await startWorker(worker, docker);
+
+    const health = await workerClient(port).health();
+    expect(health.protocolVersion).toBe(EXEC_PROTOCOL_VERSION);
+    expect(typeof health.atMs).toBe("number");
+    // The whole claim of the op: reaching this reply already proves mTLS, the
+    // byte-exact broker-client SAN + EKU, the token and the version — and it
+    // costs the host nothing, so polling it can never be a load generator.
+    expect(ran).toBe(0);
+    expect(calls).toEqual([]);
   });
 
   it("refuses the app's own client role on a worker endpoint", async () => {

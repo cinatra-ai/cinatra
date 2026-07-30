@@ -39,6 +39,11 @@ const OPTED_IN_ENV: Record<string, string | undefined> = {
 
 let settings: ExecutionPlaneSettings;
 let constructResult: { ok: boolean; reason?: string };
+let remoteResult: {
+  ok: boolean;
+  reason?: string;
+  composite?: Record<string, unknown>;
+};
 
 vi.mock("@/lib/execution/execution-plane-settings", async (importOriginal) => {
   const actual = await importOriginal<
@@ -71,9 +76,37 @@ vi.mock("@/lib/execution/execution-broker-construct", () => ({
       : { ok: false, reason: constructResult.reason ?? "handshake failed" },
 }));
 
+vi.mock("@/lib/execution/execution-broker-remote-construct", () => ({
+  constructRemoteExecutionBroker: async () =>
+    !remoteResult.ok && remoteResult.composite
+      ? {
+          ok: false,
+          reason: remoteResult.reason,
+          composite: remoteResult.composite,
+        }
+      : remoteResult.ok
+      ? {
+          ok: true,
+          value: {
+            executor: async () => [],
+            handshake: { completedAtMs: 3, imageDigest: "sha256:remote", wallMs: 77 },
+            composite: {
+              ok: true,
+              worker: { state: "ok", detail: "the sandbox worker answered" },
+              gateway: { state: "ok", detail: "the gateway answered" },
+              lease: { state: "not-applicable", detail: "not host-exclusive" },
+            },
+            probeLiveness: async () => ({ ok: true, detail: "up", atMs: 4 }),
+            stop: async () => {},
+          },
+        }
+      : { ok: false, reason: remoteResult.reason ?? "the broker did not answer a health call" },
+}));
+
 beforeEach(() => {
   settings = { mode: "local-dev", egressMode: "default_internet", egressAllowlist: [] };
   constructResult = { ok: true };
+  remoteResult = { ok: true };
   __resetBootStateForTests();
   _resetExecutionExecutorFactoryForTests();
   _resetExecutionBrokerStatusForTests();
@@ -128,21 +161,95 @@ describe("flag on — mode gating", () => {
     expect(resolveExecutionEnvironmentReadiness(on).state).toBe("unavailable");
   });
 
-  it("mode `remote`: renders in the vocabulary but does NOT activate", async () => {
+  // exec-plane L4 made `remote` operable. These arms replace the two that
+  // pinned it as renders-only; the AC1 inertness block above is untouched,
+  // because NOTHING about the flag-off posture changed.
+  it("mode `remote`: activates past a completed COMPOSITE handshake", async () => {
     settings = { mode: "remote", egressMode: "default_internet", egressAllowlist: [] };
     const [phase] = executionBrokerPhases(on);
     await runBootPhase(phase);
     const status = getExecutionBrokerStatus();
+    expect(status.state).toBe("running");
+    expect(status.handshake).toMatchObject({ imageDigest: "sha256:remote", wallMs: 77 });
+    // The composite evidence rides the status, so the admin surface reports the
+    // real thing rather than "the broker answered".
+    expect(status.composite?.ok).toBe(true);
+    expect(status.composite?.worker.state).toBe("ok");
+    expect(status.composite?.lease.state).toBe("not-applicable");
+    expect(resolveExecutionEnvironmentReadiness(on).state).toBe("ready");
+  });
+
+  it("mode `remote` with an UNREACHABLE broker registers nothing and keeps the verbatim reason", async () => {
+    settings = { mode: "remote", egressMode: "default_internet", egressAllowlist: [] };
+    remoteResult = {
+      ok: false,
+      reason: "the broker did not answer a health call: connect ECONNREFUSED",
+    };
+    const [phase] = executionBrokerPhases(on);
+    await runBootPhase(phase);
+    const status = getExecutionBrokerStatus();
     expect(status.state).toBe("unavailable");
-    expect(status.detail).toMatch(/not operable/i);
+    // VERBATIM: an operator must read the actual failure, not a paraphrase.
+    expect(status.detail).toBe(
+      "the broker did not answer a health call: connect ECONNREFUSED",
+    );
+    expect(status.composite).toBeUndefined();
+    // Nothing registered ⇒ every declared-environment run still refuses.
     expect(resolveExecutionEnvironmentReadiness(on).state).toBe("unavailable");
   });
 
-  it("mode `remote` on a REQUIRED instance class is deploy-blocking", async () => {
+  it("mode `remote` whose broker reports an UNHEALTHY dependency does not activate", async () => {
     settings = { mode: "remote", egressMode: "default_internet", egressAllowlist: [] };
+    remoteResult = {
+      ok: false,
+      reason:
+        "the broker's dependencies are not healthy — worker unhealthy (connect refused); " +
+        "gateway ok (answered); lease ok (held)",
+    };
+    const [phase] = executionBrokerPhases(on);
+    await runBootPhase(phase);
+    expect(getExecutionBrokerStatus().state).toBe("unavailable");
+    expect(getExecutionBrokerStatus().detail).toMatch(/worker unhealthy/);
+    expect(resolveExecutionEnvironmentReadiness(on).state).toBe("unavailable");
+  });
+
+  it("a FAILED remote wiring still carries the composite, so the surface names the broken hop", async () => {
+    settings = { mode: "remote", egressMode: "none", egressAllowlist: [] };
+    remoteResult = {
+      ok: false,
+      reason: "the broker's dependencies are not healthy — worker unhealthy (connect refused)",
+      composite: {
+        ok: false,
+        worker: { state: "unhealthy", detail: "connect refused" },
+        gateway: { state: "not-applicable", detail: "egress is disabled" },
+        lease: { state: "not-applicable", detail: "not host-exclusive" },
+      },
+    };
+    const [phase] = executionBrokerPhases(on);
+    await runBootPhase(phase);
+    const status = getExecutionBrokerStatus();
+    expect(status.state).toBe("unavailable");
+    // "unavailable" tells an operator to look; the composite tells them WHERE.
+    expect(status.composite?.worker.state).toBe("unhealthy");
+    expect(status.composite?.gateway.state).toBe("not-applicable");
+    // Still nothing registered.
+    expect(resolveExecutionEnvironmentReadiness(on).state).toBe("unavailable");
+  });
+
+  it("an unwired `remote` placement is deploy-blocking on a REQUIRED instance class", async () => {
+    settings = { mode: "remote", egressMode: "default_internet", egressAllowlist: [] };
+    remoteResult = { ok: false, reason: "missing EXECUTION_BROKER_CLIENT_CERT_FILE" };
     const [phase] = executionBrokerPhases({ ...on, EXECUTION_PLANE_REQUIRED: "1" });
     expect(phase.policy).toBe("degraded");
-    await expect(Promise.resolve(phase.run())).rejects.toThrow(/not operable/i);
+    await expect(Promise.resolve(phase.run())).rejects.toThrow(/deploy-blocking/);
+  });
+
+  it("an unwired `remote` placement is never fatal on a non-required class", async () => {
+    settings = { mode: "remote", egressMode: "default_internet", egressAllowlist: [] };
+    remoteResult = { ok: false, reason: "missing EXECUTION_BROKER_INSTANCE" };
+    const [phase] = executionBrokerPhases(on);
+    expect(phase.policy).toBe("retryable");
+    await expect(runBootPhase(phase)).resolves.not.toThrow();
   });
 });
 

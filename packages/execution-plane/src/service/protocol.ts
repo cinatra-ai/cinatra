@@ -108,6 +108,13 @@ export type BrokerOp = (typeof BROKER_OPS)[number];
  * worker answers the new op with its existing `malformed_request` refusal —
  * which is the correct, fail-closed outcome — and both peers of a deployment
  * ship from the same bundle build anyway.
+ *
+ * `health` (exec-plane L4) is added under that SAME rule. It is what makes the
+ * broker's own health answer composite rather than self-referential: a broker
+ * that reports itself up while its worker is gone is exactly the lie the
+ * app-side activation gate must not be built on. A worker that predates the op
+ * answers `malformed_request`, which the composite reads as NOT ok — the
+ * fail-closed direction.
  */
 export const WORKER_OPS = [
   "runCommand",
@@ -116,6 +123,7 @@ export const WORKER_OPS = [
   "stageSkills",
   "removeSkills",
   "cancelJobContainers",
+  "health",
 ] as const;
 export type WorkerOp = (typeof WORKER_OPS)[number];
 
@@ -195,11 +203,57 @@ export type DrainAuditResultPayload = {
   relayed: boolean;
 };
 
+/**
+ * One dependency's health, as the broker sees it (exec-plane L4).
+ *
+ * THREE-VALUED, and the third value is the point. `not-applicable` is an
+ * explicit statement that this deployment has no such dependency — a `none`
+ * egress tier genuinely has no gateway, a broker whose workers are not
+ * host-exclusive genuinely has no lease — and it is NOT the same claim as
+ * `ok`. Collapsing the two would let an unconfigured dependency read as a
+ * healthy one, which is the failure this composite exists to prevent.
+ *
+ * `detail` is operator-facing prose and is subject to the same rule as every
+ * other field the services log: NEVER a secret, never a token, never a URL that
+ * could carry one.
+ */
+export type ExecSubsystemHealth = {
+  state: "ok" | "unhealthy" | "not-applicable";
+  detail: string;
+};
+
+/**
+ * The broker's COMPOSITE readiness (exec-plane L4): every hop the managed
+ * placement actually depends on, answered in one round trip.
+ *
+ * `ok` is the conjunction over the APPLICABLE subsystems only — a
+ * `not-applicable` dependency neither passes nor fails it — and it is computed
+ * on the BROKER, next to the things it describes, so the app cannot drift into
+ * a different opinion of what "composite" means.
+ */
+export type ExecCompositeHealth = {
+  ok: boolean;
+  /** The broker→worker hop: an authorized `health` call over mTLS. */
+  worker: ExecSubsystemHealth;
+  /** The attributing egress gateway's open `/__health` endpoint. */
+  gateway: ExecSubsystemHealth;
+  /** The host-exclusivity lease this broker revalidates before placement. */
+  lease: ExecSubsystemHealth;
+};
+
 export type HealthResultPayload = {
   protocolVersion: number;
   /** Commands executing right now (the broker's global semaphore). */
   executingCount: number;
   atMs: number;
+  /**
+   * Present when the service was composed with a composite provider
+   * (exec-plane L4). ADDITIVE and optional on purpose: a peer that predates it
+   * simply omits the field, and the app-side gate treats an ABSENT composite as
+   * "not proven", never as "fine" — so the version does not move (see the
+   * module header's rule and `WORKER_OPS`).
+   */
+  composite?: ExecCompositeHealth;
 };
 
 export type BrokerRequest =
@@ -256,6 +310,17 @@ export type CancelJobContainersPayload = { jobId: string };
 export type VolumeResultPayload = { volumeName: string };
 export type RemovedResultPayload = { removed: true };
 export type CancelledResultPayload = { cancelled: string[] };
+/**
+ * The worker's liveness answer (exec-plane L4). Deliberately minimal: reaching
+ * this reply already proves mTLS, the URI-SAN/EKU authorization, the service
+ * token and the protocol version all hold on the broker→worker hop, which is
+ * exactly the claim the composite makes for `worker`. It runs NO container and
+ * touches NO volume, so a health poll can never be a load generator.
+ */
+export type WorkerHealthResultPayload = {
+  protocolVersion: number;
+  atMs: number;
+};
 
 export type WorkerRequest =
   | { op: "runCommand"; payload: RunCommandPayload }
@@ -263,7 +328,8 @@ export type WorkerRequest =
   | { op: "removeWorkspace"; payload: RemoveWorkspacePayload }
   | { op: "stageSkills"; payload: StageSkillsPayload }
   | { op: "removeSkills"; payload: RemoveSkillsPayload }
-  | { op: "cancelJobContainers"; payload: CancelJobContainersPayload };
+  | { op: "cancelJobContainers"; payload: CancelJobContainersPayload }
+  | { op: "health"; payload: HealthPayload };
 
 export type WorkerResultFor<Op extends WorkerOp> = Op extends "runCommand"
   ? SandboxCommandResult
@@ -277,7 +343,9 @@ export type WorkerResultFor<Op extends WorkerOp> = Op extends "runCommand"
           ? RemovedResultPayload
           : Op extends "cancelJobContainers"
             ? CancelledResultPayload
-            : never;
+            : Op extends "health"
+              ? WorkerHealthResultPayload
+              : never;
 
 // ---------------------------------------------------------------------------
 // Envelopes
@@ -781,6 +849,8 @@ export function parseWorkerRequest(
         request: { op: "cancelJobContainers", payload: { jobId: p.jobId } },
       };
     }
+    case "health":
+      return { ok: true, request: { op: "health", payload: {} } };
   }
 }
 

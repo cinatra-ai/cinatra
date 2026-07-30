@@ -12,9 +12,17 @@ import "server-only";
 // wired, so the health surface says exactly that. The boot phase only registers
 // a `running` status AFTER a completed broker↔worker health handshake.
 //
-// SECRET DISCIPLINE: the gateway's control secret and the broker service token
-// NEVER enter this slot — only a container name, the proxy port and the
-// loopback admin origin, all of which are already operator-visible.
+// SECRET DISCIPLINE: the gateway's control secret, the broker service token and
+// every piece of mTLS private material NEVER enter this slot — only a container
+// name, the proxy port, the loopback admin origin and, since exec-plane L4, the
+// broker's COMPOSITE readiness, which is a fixed three-state verdict plus
+// operator prose per subsystem. The remote placement's own credentials
+// (`EXECUTION_BROKER_SERVICE_TOKEN`, the app-client key/cert, the voucher
+// signing key) are held by the construction module and never handed here; the
+// slot is read by a server component that renders to an admin, so anything it
+// holds is one template interpolation away from a page.
+
+import type { ExecCompositeHealth } from "@cinatra-ai/execution-plane";
 
 import type { ExecutionEgressMode, ExecutionPlaneMode } from "@/lib/execution/execution-plane-settings";
 
@@ -35,6 +43,19 @@ export type ExecutionBrokerGatewayInfo = {
   adminOrigin?: string;
 };
 
+/**
+ * The remote broker's COMPOSITE readiness (exec-plane L4), re-exported under an
+ * app-layer name so the admin surface never imports the package barrel just for
+ * a type. Sub-states are `ok` / `unhealthy` / `not-applicable` per subsystem —
+ * worker, gateway, lease — plus the broker-side conjunction.
+ *
+ * WHY THE APP DOES NOT RECOMPUTE `ok`: the broker sits next to these
+ * dependencies and knows which of them this deployment actually has. An
+ * app-side re-derivation would be a second opinion of what "composite" means,
+ * and the two would drift the first time a subsystem is added.
+ */
+export type ExecutionBrokerComposite = ExecCompositeHealth;
+
 export type ExecutionBrokerStatus = {
   /** Was the default-off ROLLOUT flag on at boot? */
   rolloutEnabled: boolean;
@@ -53,6 +74,13 @@ export type ExecutionBrokerStatus = {
   gateway?: ExecutionBrokerGatewayInfo;
   egressMode?: ExecutionEgressMode;
   /**
+   * The composite the boot handshake obtained from a REMOTE broker (exec-plane
+   * L4). Absent for the `local-dev` placement, which has no service boundary to
+   * ask — and absent is NOT an all-clear: the surface renders "—" for a
+   * placement that has no composite rather than implying one passed.
+   */
+  composite?: ExecutionBrokerComposite;
+  /**
    * Live re-probe seam the health surface calls to answer "is the worker alive
    * RIGHT NOW" rather than "did it come up at boot". Present only when running.
    */
@@ -64,6 +92,12 @@ export type ExecutionBrokerLiveness = {
   detail: string;
   /** Epoch ms the probe ran. */
   atMs: number;
+  /**
+   * The composite as of THIS probe, when the placement has one. The boot-time
+   * composite above answers "how did it come up"; this one answers "what is
+   * true now", and the surface prefers it whenever it is present.
+   */
+  composite?: ExecutionBrokerComposite;
 };
 
 declare global {

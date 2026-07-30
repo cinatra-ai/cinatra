@@ -50,6 +50,7 @@ import type {
   CancelledResultPayload,
   RemovedResultPayload,
   VolumeResultPayload,
+  WorkerHealthResultPayload,
 } from "./protocol";
 import { ExecRpcClient, type ExecRpcCallResult } from "./rpc-transport";
 
@@ -200,6 +201,18 @@ export class WorkerServiceClient
     );
     if (!outcome.ok) throw workerCallError("cancelJobContainers", outcome);
     return outcome.result.cancelled;
+  }
+
+  /**
+   * Liveness of the broker→worker hop (exec-plane L4). NOT retried: this call
+   * feeds the broker's composite health answer, whose whole value is telling
+   * the truth about RIGHT NOW — a retry would report a worker that has already
+   * failed once as healthy, and hold the health request open while doing it.
+   */
+  async health(): Promise<WorkerHealthResultPayload> {
+    const outcome = await this.rpc.call<WorkerHealthResultPayload>("health", {});
+    if (!outcome.ok) throw workerCallError("health", outcome);
+    return outcome.result;
   }
 }
 

@@ -46,8 +46,10 @@ import {
   type EgressDeploymentMaximum,
   type EgressMode,
   type EgressPolicy,
+  type ExecResult,
   type ExecutionAuditRecord,
   type LocalGateway,
+  type OpenJobResult,
 } from "@cinatra-ai/execution-plane";
 import {
   DEFAULT_CARRIER_TTL_MS,
@@ -544,13 +546,28 @@ type HandshakeResult =
   | { ok: false; reason: string };
 
 /**
+ * The three calls a handshake makes, expressed STRUCTURALLY (exec-plane L4).
+ *
+ * `ExecutionBroker` satisfies it, and so does `BrokerServiceClient` — which is
+ * the point: the remote placement's boot self-check must be the SAME check,
+ * not a second implementation that could drift into accepting something the
+ * local one would refuse. The handshake below is therefore placement-agnostic
+ * and neither branch owns a private definition of "the plane works".
+ */
+export type HandshakeCapableBroker = {
+  openJob(carrier: string): Promise<OpenJobResult>;
+  exec(jobId: string, command: string, voucher: string): Promise<ExecResult>;
+  closeJob(jobId: string, opts?: { removeWorkspace?: boolean }): Promise<void>;
+};
+
+/**
  * ONE broker↔worker health handshake: seal a fresh carrier, open a job, run the
  * probe command in a real container, close the job and remove its workspace.
  * Never throws — every failure mode becomes a precise `reason` string the boot
  * phase and the health surface can show an operator verbatim.
  */
 export async function runBrokerHandshake(
-  broker: ExecutionBroker,
+  broker: HandshakeCapableBroker,
   mintVoucher: CommandVoucherMinter,
 ): Promise<HandshakeResult> {
   let carrier: string;
@@ -566,7 +583,7 @@ export async function runBrokerHandshake(
     return { ok: false, reason: `cannot seal a handshake session: ${(err as Error).message}` };
   }
 
-  let opened: Awaited<ReturnType<ExecutionBroker["openJob"]>>;
+  let opened: OpenJobResult;
   try {
     opened = await broker.openJob(carrier);
   } catch (err) {

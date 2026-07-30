@@ -54,6 +54,7 @@ import {
   type BrokerRequest,
   type DrainAuditPayload,
   type DrainAuditResultPayload,
+  type ExecCompositeHealth,
   type ExecutionStdioEntry,
   type HealthResultPayload,
 } from "./protocol";
@@ -184,6 +185,23 @@ export type BrokerServiceConfig = {
   maxBodyBytes?: number;
   onRefusal?: ExecRpcListenerConfig["onRefusal"];
   nowMs?: () => number;
+  /**
+   * COMPOSITE health provider (exec-plane L4) — the broker's own view of the
+   * dependencies BELOW it: the worker hop, the attributing egress gateway and
+   * the host-exclusivity lease. Supplied by the composition site
+   * (`broker-entry.ts`), which is the only place that holds all three.
+   *
+   * Optional so an in-process placement, and every merged test that builds this
+   * service without one, keeps the exact answer it has today. Absent ⇒ the
+   * reply carries NO `composite` field, and the app-side gate reads that as
+   * "not proven" rather than as an all-clear.
+   *
+   * MUST NOT THROW to be correct: the dispatcher wraps it anyway and degrades a
+   * thrown provider to an `unhealthy` composite, because a health endpoint that
+   * 500s when a dependency is down tells an operator strictly less than one
+   * that names which dependency is down.
+   */
+  composite?: () => Promise<ExecCompositeHealth>;
 };
 
 export type BrokerService = {
@@ -342,11 +360,27 @@ export function createBrokerDispatch(
         };
       }
       case "health": {
+        const composite = config.composite
+          ? await config.composite().catch(
+              (err): ExecCompositeHealth => ({
+                ok: false,
+                worker: { state: "unhealthy", detail: describeThrown(err) },
+                gateway: { state: "unhealthy", detail: "not evaluated" },
+                lease: { state: "unhealthy", detail: "not evaluated" },
+              }),
+            )
+          : undefined;
         const result: HealthResultPayload = {
           protocolVersion: EXEC_PROTOCOL_VERSION,
           executingCount: config.broker.executingCount,
           atMs: now(),
+          ...(composite ? { composite } : {}),
         };
+        // 200 EVEN WHEN THE COMPOSITE IS NOT OK. The broker answered, and that
+        // answer carries the diagnosis; collapsing it into a transport-level
+        // failure would leave the caller unable to tell "the broker is gone"
+        // from "the broker is up and its worker is gone" — the exact
+        // distinction the activation gate needs.
         return { status: 200, body: execOkResponse(result) };
       }
     }

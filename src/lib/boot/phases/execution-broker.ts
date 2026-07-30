@@ -18,12 +18,20 @@
 //
 // With the flag ON the phase reads the persisted placement mode:
 //   - `disabled`  → nothing wired; status `inert`.
-//   - `remote`    → NOT operable in this slice (the remote service boundary is
-//     the S4 CLI slice); nothing wired; status `unavailable` with that reason.
-//     The vocabulary persists, the placement does not activate — no pretending.
+//   - `remote`    → construct a CLIENT of the out-of-process broker over the
+//     merged HTTP/mTLS service boundary, gate on the broker's COMPOSITE
+//     readiness (its worker hop, the attributing gateway and the
+//     host-exclusivity lease) and then on a real command handshake, and ONLY
+//     past both register the executor factory. Anything short of both leaves
+//     the plane exactly as inert as `disabled` does, with the verbatim reason.
 //   - `local-dev` → construct broker + worker (+ the attributing egress
 //     gateway), run the broker↔worker health handshake, and ONLY on a completed
 //     handshake register the executor factory (AC3).
+//
+// THE ROLLOUT GATE IS THE SAME ONE. `remote` becoming operable (exec-plane L4)
+// moved nothing about WHO is exposed: the phase still exists only when
+// `CINATRA_EXECUTION_PLANE_ROLLOUT` is exactly `"on"`, the stored default is
+// still `disabled`, and no flag is flipped for anyone by this slice.
 //
 // Never fatal: a wiring failure leaves the plane exactly as inert as it is
 // today (fail-closed), it never blocks a boot — except on an instance CLASS
@@ -84,22 +92,63 @@ export function executionBrokerPhases(
         }
 
         if (settings.mode === "remote") {
-          const detail =
-            "Remote placement is part of the persisted vocabulary but is not operable on this " +
-            "instance yet (the remote broker service boundary ships with the CLI slice). " +
-            "Nothing is wired; the plane stays fail-closed.";
-          clearExecutionExecutorFactory();
+          const { constructRemoteExecutionBroker } = await import(
+            "@/lib/execution/execution-broker-remote-construct"
+          );
+
+          const constructed = await constructRemoteExecutionBroker({ settings, env });
+          if (!constructed.ok) {
+            // Identical posture to a failed local-dev handshake: NOTHING
+            // registers, `resolveExecutionEnvironmentReadiness()` keeps
+            // reporting a not-ready state, and every declared-environment run
+            // keeps refusing. The reason travels verbatim — an operator reading
+            // "missing EXECUTION_BROKER_CLIENT_CERT_FILE" can act; one reading
+            // "remote is unavailable" cannot.
+            clearExecutionExecutorFactory();
+            registerExecutionBrokerStatus({
+              rolloutEnabled: true,
+              mode: settings.mode,
+              state: "unavailable",
+              detail: constructed.reason,
+              // Carry the per-subsystem breakdown when the broker produced one:
+              // an operator staring at "unavailable" needs to know WHICH hop.
+              ...(constructed.composite ? { composite: constructed.composite } : {}),
+              egressMode: settings.egressMode,
+            });
+            if (required) {
+              throw new Error(
+                `[${EXECUTION_BROKER_PHASE}] execution plane REQUIRED but the remote broker could ` +
+                  `not be wired (${constructed.reason}) — deploy-blocking for this instance class.`,
+              );
+            }
+            return {
+              skipped: `remote broker not wired (${constructed.reason}) — the plane stays inert`,
+            };
+          }
+
+          const remote = constructed.value;
+          // AC3, one rung longer than local-dev: past a COMPOSITE handshake —
+          // the broker answered over mutual TLS, its worker/gateway/lease are
+          // all healthy or explicitly not-applicable, AND a real command ran to
+          // completion on a remote container through the per-command voucher
+          // boundary.
+          registerExecutionExecutorFactory(() => remote.executor);
           registerExecutionBrokerStatus({
             rolloutEnabled: true,
             mode: settings.mode,
-            state: "unavailable",
-            detail,
+            state: "running",
+            handshake: remote.handshake,
+            composite: remote.composite,
             egressMode: settings.egressMode,
+            probeLiveness: remote.probeLiveness,
           });
-          if (required) {
-            throw new Error(`[${EXECUTION_BROKER_PHASE}] ${detail}`);
-          }
-          return { skipped: detail };
+          console.log(
+            `[${EXECUTION_BROKER_PHASE}] remote broker wired — composite handshake completed in ` +
+              `${remote.handshake.wallMs} ms over image ${remote.handshake.imageDigest} ` +
+              `(worker ${remote.composite.worker.state}, gateway ${remote.composite.gateway.state}, ` +
+              `lease ${remote.composite.lease.state})`,
+          );
+          return;
         }
 
         // local-dev: construct + handshake.
