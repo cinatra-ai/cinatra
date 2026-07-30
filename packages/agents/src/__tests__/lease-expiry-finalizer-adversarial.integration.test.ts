@@ -175,6 +175,15 @@ describe("lease-expiry finalizer adversarial (cinatra#1943 A3, row 10) — real 
     createdRunIds.push(run.id);
     const attemptId = `att-${randomUUID()}`;
 
+    // Fixture-only status bump (direct write, not the CAS under test — same
+    // convention as unbound-output-outbox.integration.test.ts): the racing
+    // completion attempt below transitions running->completed, the ONLY
+    // to="completed" edge LEGAL_TRANSITIONS actually contains (queued->completed
+    // is not an edge — a run must be dispatched first). Without this, the
+    // completion attempt would reject on the pre-guard's illegal_transition
+    // check BEFORE ever reaching the org-write lock, never blocking at all.
+    await db.update(agentRuns).set({ status: "running" }).where(eq(agentRuns.id, run.id));
+
     await archiveOrg(orgId, 1);
     // A currently-VALID (unexpired) in-window lease — what the archive
     // snapshot mints for a genuinely in-flight run; the completion attempt's
@@ -201,7 +210,7 @@ describe("lease-expiry finalizer adversarial (cinatra#1943 A3, row 10) — real 
       // The real production completion path. It BLOCKS on the write lock
       // the fence holds and cannot even reach its own locked state read.
       let completed = false;
-      const completePromise = transitionRunStatus(run.id, "queued", "completed", undefined, runAuthority).then(
+      const completePromise = transitionRunStatus(run.id, "running", "completed", undefined, runAuthority).then(
         (r) => {
           completed = true;
           return r;
