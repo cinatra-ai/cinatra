@@ -1149,7 +1149,16 @@ describe.skipIf(!enabled)(
     });
 
     afterAll(async () => {
-      process.env.SUPABASE_SCHEMA = previousSupabaseSchema;
+      // Guarded restore: assigning `undefined` to a process.env key stores
+      // the literal STRING "undefined" (Node coerces), and appSchema()
+      // re-reads the var per call — a later suite in this worker would then
+      // resolve a bogus "undefined" schema. When the var was unset before
+      // this suite, DELETE it instead of assigning.
+      if (previousSupabaseSchema === undefined) {
+        delete process.env.SUPABASE_SCHEMA;
+      } else {
+        process.env.SUPABASE_SCHEMA = previousSupabaseSchema;
+      }
       // Seed the gate back OFF (the stub's map has no clear surface — an
       // explicit OFF write is equivalent hygiene for anything after us).
       writeConnectorConfigSeam(ORG_ARCHIVE_ACTIVATION_CONFIG_KEY, { enabled: false });
