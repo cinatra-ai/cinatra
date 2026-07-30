@@ -586,13 +586,17 @@ describe.skipIf(!enabled)("org-write archive race — kernel harness on live Pos
     await ensureSessionActivationGuardTrigger(pool);
     await ensureAuthFloorArchiveGuardTriggers(pool);
     const teamId = `team_${randomUUID().slice(0, 8)}`;
+    // team_slug_format (pre-existing CHECK on public.team) disallows the
+    // underscore in an id-shaped string — plant a distinct, hyphenated slug
+    // rather than reusing teamId.
+    const teamSlug = `archive-team-${randomUUID().slice(0, 8)}`;
     const s1 = `sess_${randomUUID().slice(0, 8)}`;
     const s2 = `sess_${randomUUID().slice(0, 8)}`;
     try {
       await root.query(
         `INSERT INTO public."team" (id, name, "organizationId", "createdAt", slug)
-         VALUES ($1, 'Archive Team', $2, now(), $1)`,
-        [teamId, orgId],
+         VALUES ($1, 'Archive Team', $2, now(), $3)`,
+        [teamId, orgId, teamSlug],
       );
       // Planted while the org is ACTIVE — the guard resolves and allows.
       await root.query(

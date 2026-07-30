@@ -88,10 +88,14 @@ vi.mock("../../components/organization-archive-danger-form", () => ({
 
 import { OrganizationSettingsPage } from "../organization-settings";
 
-const ORG_ROW = { name: "Acme Inc", slug: "acme", archivedAt: null };
+const ORG_ROW: { name: string; slug: string; archivedAt: Date | null } = {
+  name: "Acme Inc",
+  slug: "acme",
+  archivedAt: null,
+};
 // cinatra#1942 V4 — a planted archived org (the read-only posture + the
 // archived badge).
-const ARCHIVED_ORG_ROW = {
+const ARCHIVED_ORG_ROW: typeof ORG_ROW = {
   name: "Acme Inc",
   slug: "acme",
   archivedAt: new Date("2026-01-01T00:00:00.000Z"),
