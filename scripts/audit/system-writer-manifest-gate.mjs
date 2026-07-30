@@ -142,14 +142,33 @@ export const SWEEP_ORG_AXIS_TABLES = [
   "agent_runs",
   "org_archive_lease",
   "org_write_completion_ticket",
+  // cinatra#1939 wave 3 edge-family sweep: org-axis tables the per-family
+  // write inventory registered (mirrors org-write-table-sweep.mjs's own
+  // wave-3 addition — the lockstep test below pins these two lists equal).
+  // `semantic_assertion` moves here (out of MAINTENANCE_TABLES) rather than
+  // being listed in both: it is a registered storageReferences table in
+  // write-registry.ts, so it no longer sits OUTSIDE the kernel write
+  // universe as MAINTENANCE_TABLES requires — the sweep now owns it.
+  "semantic_assertion",
+  "assistant_threads",
+  "assistant_turns",
+  "assistant_thread_pause_state",
+  "artifact_refs",
+  "connect_authorization_codes",
+  "connect_sites",
+  "widget_auth_transactions",
+  "widget_auth_codes",
+  "widget_user_tokens",
 ];
 
 /**
  * Org-keyed MAINTENANCE tables surfaced by #1941's job classification that sit
  * OUTSIDE the kernel write universe (caches, run-owned link furniture, the
- * binding reconcile queue, the semantic-assertion draft table). A raw/Drizzle
- * write to one of these from a boot phase or CLI is exactly the unaudited
- * system writer this manifest is meant to enumerate.
+ * binding reconcile queue). A raw/Drizzle write to one of these from a boot
+ * phase or CLI is exactly the unaudited system writer this manifest is meant
+ * to enumerate. (The semantic-assertion draft table moved to
+ * SWEEP_ORG_AXIS_TABLES above once the #1939 wave-3 sweep started tracking it
+ * as a registered org-axis table — see that entry's comment.)
  */
 export const MAINTENANCE_TABLES = [
   "artifact_provider_cache",
@@ -157,7 +176,6 @@ export const MAINTENANCE_TABLES = [
   "environment_layer_references",
   "agent_run_pm_links",
   "artifact_binding_reconcile_queue",
-  "semantic_assertion",
 ];
 
 /** The full table universe this gate anchors raw-SQL / Drizzle detection on. */
