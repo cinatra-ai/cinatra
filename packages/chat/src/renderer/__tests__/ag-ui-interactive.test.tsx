@@ -128,6 +128,28 @@ describe("ConversationTurn — RUN_ERROR banner", () => {
     expect(screen.getByRole("alert").textContent).toContain("The model call failed.");
     expect(screen.queryByRole("status")).toBeNull();
   });
+
+  // cinatra#2094 F10 — the RENDERED banner must carry the provider name.
+  // The exact-binding message is long-ish (264 chars); the normalizer's
+  // raw-HTTP-body simplification kicks in above 300, so this also pins that the
+  // real message is NOT swallowed by that guard. If the wording ever grows past
+  // the cap, this test fails instead of the operator silently losing the name.
+  it("F10: renders the provider-NAMING exact-binding failure verbatim", () => {
+    const reason =
+      'The configured default LLM provider "anthropic" is not available (its connector is not ' +
+      "installed/active, or its credentials are missing or invalid). Fix that provider's " +
+      "configuration, choose a different default provider, or enable ordered failover in LLM settings.";
+    const state = reduceAgUiEvents([
+      runStarted(),
+      { type: "RUN_ERROR", threadId: "th1", runId: "r1", message: reason, timestamp: 1 },
+    ]);
+    render(<ConversationTurn state={state} renderers={{ renderText: plainText }} />);
+    const text = screen.getByRole("alert").textContent ?? "";
+    expect(text).toContain("anthropic");
+    expect(text).toBe(reason);
+    expect(text).not.toContain("The request failed");
+    expect(text).not.toContain("Something went wrong");
+  });
 });
 
 describe("ConversationTurn — live status", () => {

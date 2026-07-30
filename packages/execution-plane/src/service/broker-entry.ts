@@ -25,16 +25,24 @@
  *     never a silent default. `EXEC_BROKER_RUN_LIVENESS=carrier-ttl-only` is that
  *     acknowledgement; without it the service refuses to start.
  *
- *   * VOLUME OPS. The broker provisions L2 workspace + read-only skills volumes
- *     through its own `DockerCli` seam, i.e. on the broker HOST. Routing those to
- *     a remote worker is a change inside `broker.ts` and is deliberately not made
- *     in this additive slice, so the broker host must genuinely have docker.
- *     `EXEC_BROKER_VOLUME_OPS=host-docker` is that acknowledgement; without it
- *     the service refuses to start rather than opening jobs whose workspace
- *     provisioning will fail at the first command.
+ *   * VOLUME OPS. Since exec-plane L3 both bindings exist and the choice is the
+ *     operator's, still with no inferable default:
+ *     `EXEC_BROKER_VOLUME_OPS=worker-routed` places the L2 workspace and
+ *     read-only skills lifecycles on the WORKER host over the typed volume-ops
+ *     seam — the deployed topology, in which the broker container has no docker
+ *     socket at all — while `host-docker` keeps them on the broker host
+ *     (local/single-host). Without either the service refuses to start.
  *
  * Both refusals name the missing binding verbatim so an operator is never left
  * guessing, and neither can be satisfied by accident.
+ *
+ * HOST EXCLUSIVITY (exec-plane L3). A spoke that runs workers IN-VM is
+ * single-tenant for local execution, enforced by a lease the provisioning side
+ * takes on the host. `EXEC_HOST_EXCLUSIVITY=enforced` (+
+ * `EXEC_HOST_EXCLUSIVITY_TENANT`) makes the broker revalidate that lease before
+ * every placement decision and drain when it stops holding;
+ * `not-applicable` is the explicit statement that this broker's workers are not
+ * host-exclusive. See `lease.ts` for why the lease is read BY PATH every time.
  *
  * TWO TLS CREDENTIALS, because the broker is two identities. It LISTENS to the
  * app as `broker-server` and DIALS a worker as `broker-client`, and `mtls.ts`
@@ -55,14 +63,33 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import { ExecutionVoucherVerifier } from "../authz/voucher";
+import type { EgressDeploymentMaximum } from "../authz/egress-clamp";
 import { ExecutionBroker } from "../broker";
 import { DEFAULT_SANDBOX_NETWORK } from "../egress";
-import type { EgressGatewayEndpoint, EgressMode, EgressPolicy } from "../types";
+import type {
+  EgressGatewayEndpoint,
+  EgressMode,
+  EgressPolicy,
+  PlacementGuard,
+} from "../types";
+import {
+  HOST_EXCLUSIVITY_LEASE_PATH_ENV,
+  HOST_EXCLUSIVITY_MODE_ENV,
+  HOST_EXCLUSIVITY_RENEW_INTERVAL_ENV,
+  HOST_EXCLUSIVITY_TENANT_ENV,
+  HostExclusivityLeaseGuard,
+  hostExclusivityPlacementGuard,
+  startHostExclusivityRenewal,
+} from "./lease";
 import {
   createBrokerService,
   createBufferedAuditRelay,
   type BrokerService,
 } from "./broker-server";
+import {
+  createCompositeHealthProvider,
+  createGatewayHealthProbe,
+} from "./composite-health";
 import { execServiceUri, loadExecClientTlsMaterial, loadExecTlsMaterial } from "./mtls";
 import { EXEC_PROTOCOL_VERSION, EXEC_PROTOCOL_VERSION_ENV } from "./protocol";
 import { describeThrown } from "./rpc-transport";
@@ -76,6 +103,15 @@ import { WorkerServiceClient } from "./worker-client";
 export const EXEC_VOUCHER_VERIFY_PUBLIC_KEY_FILE_ENV = "EXEC_VOUCHER_VERIFY_PUBLIC_KEY_FILE";
 
 export const DEFAULT_BROKER_LISTEN_PORT = 4100;
+
+/**
+ * Ceiling on ONE composite-health dependency probe (exec-plane L4). Short on
+ * purpose: the caller is a boot phase or an admin page, and a dependency that
+ * needs longer than this to say hello is not one a placement should be
+ * activated on. Probes run concurrently, so this is the endpoint's worst case,
+ * not the sum of three.
+ */
+export const COMPOSITE_PROBE_TIMEOUT_MS = 2_000;
 
 type Env = Record<string, string | undefined>;
 
@@ -103,6 +139,78 @@ export function assertProtocolVersionEnv(env: Env): void {
         `version ${EXEC_PROTOCOL_VERSION}; refusing to start (a version bump is a lockstep deploy).`,
     );
   }
+}
+
+/**
+ * The DEPLOYMENT egress ceiling this broker clamps every SIGNED policy against
+ * (`authz/egress-clamp.ts`), read from scoped env — never from a tenant-editable
+ * store, which is the whole point of the clamp.
+ *
+ * WHY THIS EXISTS HERE AND NOT ONLY APP-SIDE (exec-plane L5). `.env.example`
+ * has always documented `EXECUTION_EGRESS_MAX_MODE` / `_ALLOWLIST` /
+ * `_BYTES_PER_JOB` as the deployment ceiling, and the IN-PROCESS placement reads
+ * them (`src/lib/execution/execution-broker-construct.ts`). The DEPLOYED broker
+ * did not: `composeBrokerService` constructed `ExecutionBroker` without
+ * `deploymentEgressMaximum`, so `clampEgressPolicy` was handed `undefined` and
+ * the signed policy passed through untouched. A tenant-resolved
+ * `default_internet` therefore ran as `default_internet` on a deployment whose
+ * declared ceiling was `allowlist` — the ceiling existed in documentation and in
+ * one of the two placements only. The service-boundary E2E battery caught it by
+ * asking the real topology for the clamp and not finding one.
+ *
+ * Same three-axis vocabulary and the same fail-loud posture as the app-side
+ * resolver: an UNRECOGNIZED mode refuses to start rather than guessing, because
+ * guessing either widens the ceiling (unsafe) or narrows it to `none` (a
+ * mystery outage). All three unset ⇒ no ceiling, and the signed policy stands.
+ */
+export function deploymentEgressMaximumFromEnv(env: Env): EgressDeploymentMaximum | undefined {
+  const rawMode = env.EXECUTION_EGRESS_MAX_MODE?.trim();
+  const rawAllowlist = env.EXECUTION_EGRESS_MAX_ALLOWLIST?.trim();
+  const rawBytes = env.EXECUTION_EGRESS_MAX_BYTES_PER_JOB?.trim();
+  if (!rawMode && !rawAllowlist && !rawBytes) return undefined;
+
+  let mode: EgressMode = "default_internet";
+  if (rawMode) {
+    if (rawMode !== "none" && rawMode !== "allowlist" && rawMode !== "default_internet") {
+      throw new Error(
+        `EXECUTION_EGRESS_MAX_MODE must be one of none | allowlist | default_internet ` +
+          `(got "${rawMode}"); refusing to start rather than guess a ceiling.`,
+      );
+    }
+    mode = rawMode;
+  }
+  // COMMA-ONLY, matching `resolveDeploymentEgressMaximum` (Codex round 1,
+  // finding 2 — ADOPTED). The sibling `EXEC_EGRESS_ALLOWLIST` below splits on
+  // whitespace too, but that is a DIFFERENT variable: the same
+  // `EXECUTION_EGRESS_MAX_ALLOWLIST` value must mean the same host set in both
+  // placements, or an operator's ceiling is quietly wider in the deployed one.
+  // A space-separated list therefore yields one entry that matches nothing —
+  // narrower than intended, which is the correct direction to be wrong in.
+  const allowlist = (rawAllowlist ?? "")
+    .split(",")
+    .map((host) => host.trim())
+    .filter((host) => host.length > 0);
+  let maxBytesPerJob: number | undefined;
+  if (rawBytes) {
+    const parsed = Number(rawBytes);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      throw new Error(
+        `EXECUTION_EGRESS_MAX_BYTES_PER_JOB must be a non-negative number (got "${rawBytes}").`,
+      );
+    }
+    // A POSITIVE ceiling never floors to zero (Codex round 1, finding 1 —
+    // ADOPTED). `0` means "no ceiling" everywhere downstream, so `Math.floor`
+    // alone would turn the tightest possible ask — `0.5` — into an UNCAPPED
+    // deployment, a fail-OPEN at exactly the axis this value exists to bound.
+    // Same normalization as `egress-clamp.ts`'s `normalizeByteCap`; an explicit
+    // `0` still means "no ceiling", which is what it is documented to mean.
+    maxBytesPerJob = parsed > 0 ? Math.max(1, Math.floor(parsed)) : 0;
+  }
+  return {
+    mode,
+    ...(allowlist.length > 0 ? { allowlist } : {}),
+    ...(maxBytesPerJob !== undefined ? { maxBytesPerJob } : {}),
+  };
 }
 
 function egressPolicyFromEnv(env: Env): EgressPolicy {
@@ -145,6 +253,48 @@ function gatewayFromEnv(env: Env, policy: EgressPolicy): EgressGatewayEndpoint |
   };
 }
 
+/**
+ * Compose the host-exclusivity precondition from scoped env (exec-plane L3).
+ *
+ * THREE-VALUED ON PURPOSE. `enforced` builds the guard; `not-applicable` is an
+ * explicit operator statement that this broker does not place work on a
+ * host-exclusive spoke; anything else — including a typo — refuses to start.
+ * Leaving the variable UNSET keeps the merged behaviour (no guard), because a
+ * broker whose worker pool is off-host has no host to be exclusive about and
+ * must not be broken by this slice. A spoke running workers IN-VM sets
+ * `enforced`; the shipped `docker-compose.exec.yml` does.
+ */
+function composeHostExclusivity(
+  env: Env,
+): { guard: PlacementGuard; renewIntervalMs: number; leaseGuard: HostExclusivityLeaseGuard } | undefined {
+  const mode = env[HOST_EXCLUSIVITY_MODE_ENV]?.trim();
+  if (mode === undefined || mode === "" || mode === "not-applicable") return undefined;
+  if (mode !== "enforced") {
+    throw new Error(
+      `${HOST_EXCLUSIVITY_MODE_ENV} must be "enforced" or "not-applicable" (got "${mode}").`,
+    );
+  }
+  const tenant = required(env, HOST_EXCLUSIVITY_TENANT_ENV);
+  const leasePath = env[HOST_EXCLUSIVITY_LEASE_PATH_ENV]?.trim();
+  const leaseGuard = new HostExclusivityLeaseGuard({
+    tenant,
+    ...(leasePath ? { leasePath } : {}),
+  });
+  const rawInterval = env[HOST_EXCLUSIVITY_RENEW_INTERVAL_ENV]?.trim();
+  const renewIntervalMs = rawInterval ? Number(rawInterval) : 0;
+  if (!Number.isFinite(renewIntervalMs) || renewIntervalMs < 0) {
+    throw new Error(
+      `${HOST_EXCLUSIVITY_RENEW_INTERVAL_ENV} must be a non-negative number of milliseconds ` +
+        `(got "${rawInterval}"); 0 disables renewal.`,
+    );
+  }
+  return {
+    guard: hostExclusivityPlacementGuard(leaseGuard),
+    renewIntervalMs,
+    leaseGuard,
+  };
+}
+
 export type BrokerEntryComposition = {
   service: BrokerService;
   port: number;
@@ -179,13 +329,15 @@ export function composeBrokerService(env: Env = process.env): BrokerEntryComposi
         "command closed until the app-side probe seam is wired.",
     );
   }
-  const volumeOps = env.EXEC_BROKER_VOLUME_OPS?.trim();
-  if (volumeOps !== "host-docker") {
+  const volumeOpsMode = env.EXEC_BROKER_VOLUME_OPS?.trim();
+  if (volumeOpsMode !== "host-docker" && volumeOpsMode !== "worker-routed") {
     throw new Error(
-      "Refusing to start the execution-plane broker service: it provisions L2 workspace and " +
-        "read-only skills volumes through its own docker seam, so the broker HOST must have " +
-        "docker. Set EXEC_BROKER_VOLUME_OPS=host-docker to acknowledge that; worker-routed " +
-        "volume operations are not wired in this slice.",
+      "Refusing to start the execution-plane broker service: where its L2 workspace and " +
+        "read-only skills volumes are provisioned is not an inferable default. Set " +
+        "EXEC_BROKER_VOLUME_OPS=worker-routed to place them on the WORKER host over the " +
+        "typed volume-ops seam (the broker then needs no docker of its own — this is the " +
+        "deployed topology), or EXEC_BROKER_VOLUME_OPS=host-docker to acknowledge that the " +
+        "BROKER host has docker and performs them itself (local/single-host).",
     );
   }
 
@@ -218,6 +370,7 @@ export function composeBrokerService(env: Env = process.env): BrokerEntryComposi
   });
 
   const policy = egressPolicyFromEnv(env);
+  const deploymentEgressMaximum = deploymentEgressMaximumFromEnv(env);
   const gateway = gatewayFromEnv(env, policy);
   const network = env.EXEC_SANDBOX_NETWORK?.trim() || DEFAULT_SANDBOX_NETWORK;
 
@@ -229,6 +382,7 @@ export function composeBrokerService(env: Env = process.env): BrokerEntryComposi
   });
 
   const relay = createBufferedAuditRelay();
+  const hostExclusivity = composeHostExclusivity(env);
 
   const broker = new ExecutionBroker({
     worker: workerClient,
@@ -237,9 +391,58 @@ export function composeBrokerService(env: Env = process.env): BrokerEntryComposi
     // Acknowledged above: bounded by carrier TTL, not by the run store.
     livenessProbe: async () => "alive",
     voucherVerifier,
+    // The deployment ceiling the signed policy is clamped against, on all three
+    // axes. Absent ⇒ no ceiling and the signed policy stands, which is the
+    // documented meaning of leaving the three variables unset.
+    ...(deploymentEgressMaximum ? { deploymentEgressMaximum } : {}),
     egressPolicyResolver: () => policy,
     sandboxNetwork: network,
     ...(gateway ? { gateway } : {}),
+    // exec-plane L3: worker-routed volume + container operations. The client is
+    // structurally a `SandboxVolumeOps`/`SandboxContainerOps`, so the broker
+    // performs NO docker call of its own in this mode — which is what lets the
+    // deployment keep the socket on the worker container alone.
+    ...(volumeOpsMode === "worker-routed"
+      ? { volumeOps: workerClient, containerOps: workerClient }
+      : {}),
+    ...(hostExclusivity ? { placementGuard: hostExclusivity.guard } : {}),
+  });
+
+  // COMPOSITE HEALTH (exec-plane L4). This is the one place that holds the
+  // worker client, the gateway endpoint and the lease guard at the same time,
+  // so it is the only place that can answer for all three without a second
+  // source of truth. Each dependency's APPLICABILITY is derived from the same
+  // configuration that decides whether the broker uses it at all — the gateway
+  // from the egress tier, the lease from `EXEC_HOST_EXCLUSIVITY` — so an
+  // operator can never end up with a composite that quietly ignores something
+  // the placement actually depends on.
+  const composite = createCompositeHealthProvider({
+    worker: async () => {
+      await workerClient.health();
+    },
+    gateway: gateway?.adminUrl
+      ? { probe: createGatewayHealthProbe(gateway.adminUrl, COMPOSITE_PROBE_TIMEOUT_MS) }
+      : {
+          notApplicable:
+            policy.mode === "none"
+              ? "egress is disabled for this deployment, so there is no gateway to check"
+              : "no gateway admin endpoint is configured, so its liveness cannot be checked " +
+                "from here (EXEC_GATEWAY_ADMIN_URL)",
+        },
+    lease: hostExclusivity
+      ? {
+          probe: async () => {
+            const verdict = await hostExclusivity.leaseGuard.check();
+            if (!verdict.ok) {
+              throw new Error(`host_exclusivity_${verdict.reason}: ${verdict.message}`);
+            }
+          },
+        }
+      : {
+          notApplicable:
+            "this broker's workers are not host-exclusive (EXEC_HOST_EXCLUSIVITY)",
+        },
+    timeoutMs: COMPOSITE_PROBE_TIMEOUT_MS,
   });
 
   const service = createBrokerService({
@@ -248,6 +451,7 @@ export function composeBrokerService(env: Env = process.env): BrokerEntryComposi
     serviceToken,
     tls,
     relay,
+    composite,
     onRefusal: (entry) => {
       // Structured, value-free refusal log (key names + codes only).
       process.stdout.write(`${JSON.stringify({ svc: "exec-broker", ...entry })}\n`);
@@ -258,6 +462,28 @@ export function composeBrokerService(env: Env = process.env): BrokerEntryComposi
   if (!Number.isFinite(port) || port <= 0) {
     throw new Error(`EXEC_BROKER_LISTEN_PORT must be a positive port number (got "${env.EXEC_BROKER_LISTEN_PORT}").`);
   }
+  // Renewal keeps `acquired_at` moving so a TTL'd lease does not lapse under a
+  // live broker. It is a TIMER, not a precondition: `check()` re-reads the lease
+  // on every placement regardless, so a missed renewal degrades to a fail-closed
+  // refusal rather than to silent over-run.
+  const stopRenewal =
+    hostExclusivity && hostExclusivity.renewIntervalMs > 0
+      ? startHostExclusivityRenewal(
+          hostExclusivity.leaseGuard,
+          hostExclusivity.renewIntervalMs,
+          (result) => {
+            process.stdout.write(
+              `${JSON.stringify({
+                svc: "exec-broker",
+                kind: "host-exclusivity-renewal",
+                ok: result.ok,
+                ...(result.ok ? {} : { reason: result.reason }),
+              })}\n`,
+            );
+          },
+        )
+      : undefined;
+
   return {
     service,
     workerClient,
@@ -266,6 +492,7 @@ export function composeBrokerService(env: Env = process.env): BrokerEntryComposi
     // posture the egress gateway's admin listener documents.
     address: env.EXEC_LISTEN_ADDRESS?.trim() || "0.0.0.0",
     stop: async () => {
+      stopRenewal?.();
       workerClient.close();
       await service.close();
     },

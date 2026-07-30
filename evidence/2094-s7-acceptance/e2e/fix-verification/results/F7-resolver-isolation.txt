@@ -1,0 +1,22 @@
+# F7 resolver isolation — the in-process probe the S7 round could not build
+
+Temporary probe, applied to the working tree, driven on the LIVE failing turn, then
+reverted (`git checkout --`). It logs the resolver class from BOTH sides of the
+Next.js compilation boundary in ONE process, ONE run:
+
+```
+[F7-PROBE][boot] ensureAnthropicSkillSyncMapRegistered ENTER resolverBefore=UnsyncedAnthropicSkillMap
+[F7-PROBE][boot] about to install table-backed map
+[F7-PROBE][boot] installed; resolverAfter=TableBackedAnthropicSkillSyncMap
+[F7-PROBE][request] resolver=UnsyncedAnthropicSkillMap ids=["@cinatra-ai/chat:chat-assistant-core","@cinatra-ai/chat:chat-extension-authoring","@cinatra-ai/chat:chat-automation-authoring","@cinatra-ai/chat:company-research","@cinatra-ai/chat:blog-content"]
+[F7-PROBE][request] resolver=UnsyncedAnthropicSkillMap ids=["@cinatra-ai/chat:chat-assistant-core","@cinatra-ai/chat:chat-extension-authoring","@cinatra-ai/chat:chat-automation-authoring","@cinatra-ai/chat:company-research","@cinatra-ai/chat:blog-content"]
+```
+
+Boot compilation installs the table-backed map; the /chat REQUEST compilation still
+holds the fail-loud default. Same process. That is the mechanism, measured — not
+inferred. The five ids listed are the Cinatra assistant's own required skills, and
+the throw that follows is committed verbatim below.
+
+```
+[assistants/chat] runProducer threw: Error [AnthropicSkillNotSyncedError]: Anthropic skill delivery requires pre-synced Custom Skills, but these catalog skill(s) have no Anthropic sync mapping yet: @cinatra-ai/chat:chat-assistant-core, @cinatra-ai/chat:chat-extension-authoring, @cinatra-ai/chat:chat-automation-authoring, @cinatra-ai/chat:company-research, @cinatra-ai/chat:blog-content. Enable and run the Anthropic skill sync before using these skills with the Anthropic provider.
+```

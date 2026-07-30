@@ -13,6 +13,18 @@ import "server-only";
 // `Mcp-Session-Id` on every call. Typed errors DISTINGUISH 400-no-session and
 // network/timeout (absent stack) from a tool error (§1.3 test contract).
 //
+// BOUNDED SESSION-RETRY: the pinned third-party WordPress mcp-adapter plugin's
+// SessionManager does an unprotected read-modify-write when persisting its
+// session list, so concurrent session creations can race and silently drop a
+// just-established session. The next call against that session gets a clean
+// HTTP 404 `-32005 "session not found"` — classified here as its own
+// `session_not_found` code (distinct from `session_required`, which is "never
+// had a session"). On that error EXACTLY, `callConnectorInstanceMcpTool` /
+// `listConnectorInstanceMcpTools` drop the dead client, re-establish a FRESH
+// session via a brand-new client from the factory, and retry the original call
+// ONCE. A second consecutive `session_not_found` is not retried again — it
+// surfaces as-is. No other error class is ever retried.
+//
 // This module is GENERIC over the wire tool name + wire args — the invoker
 // (connector-instance-invoker.ts) decides triad translation (toolName →
 // `mcp-adapter-execute-ability{ability_name,parameters}`) vs direct call and
@@ -42,6 +54,7 @@ export type InvokerErrorCode =
   | "network_error" // fetch failure / connection refused (absent stack)
   | "timeout" // aborted / timed out (absent stack)
   | "session_required" // HTTP 400 `-32600 Missing Mcp-Session-Id` (reachable but no session)
+  | "session_not_found" // HTTP 404 `-32005 session not found` — a previously-live session was dropped server-side (WP mcp-adapter SessionManager race). The transport retries ONCE with a freshly re-established session before ever surfacing this; seeing it means the retry ALSO hit a dropped session.
   | "tool_error" // isError result — WP_Error passthrough (code + message)
   | "empty_response" // no structuredContent and no text content
   | "invalid_response" // text content that is not JSON
@@ -183,9 +196,10 @@ function extractToolError(result: unknown): { code?: string; message?: string } 
 }
 
 /** Classify a thrown connect/call error into the typed absent-stack split:
- * `session_required` (reachable but 400 no-session) vs `timeout` vs
- * `network_error`. Message-based (the SDK surfaces the upstream HTTP/JSON-RPC
- * shape in the error message); never includes the credential. */
+ * `session_required` (reachable but 400 no-session) vs `session_not_found`
+ * (reachable, 404 — a session THAT EXISTED got dropped server-side) vs
+ * `timeout` vs `network_error`. Message-based (the SDK surfaces the upstream
+ * HTTP/JSON-RPC shape in the error message); never includes the credential. */
 export function classifyTransportError(err: unknown): InvokerError {
   const raw = err instanceof Error ? err.message : String(err ?? "");
   const msg = raw.toLowerCase();
@@ -194,6 +208,13 @@ export function classifyTransportError(err: unknown): InvokerError {
       httpStatus: 400,
     });
   }
+  if (msg.includes("-32005") || msg.includes("session not found")) {
+    return new InvokerError(
+      "session_not_found",
+      "connector instance MCP session no longer exists (session not found)",
+      { httpStatus: 404 },
+    );
+  }
   const name = err instanceof Error ? err.name : "";
   if (name === "AbortError" || msg.includes("timeout") || msg.includes("timed out") || msg.includes("aborted")) {
     return new InvokerError("timeout", "connector instance MCP call timed out");
@@ -201,21 +222,16 @@ export function classifyTransportError(err: unknown): InvokerError {
   return new InvokerError("network_error", "connector instance MCP stack unreachable");
 }
 
-/**
- * Connect, call ONE wire tool, unwrap, close. `structuredContent` is preferred
- * (clean JSON object); falls back to the first text content parsed as JSON.
- * `isError` → typed `tool_error` (WP_Error code+message passthrough). A connect
- * failure → the typed absent-stack split (`session_required` / `timeout` /
- * `network_error`). Empty → `empty_response`; non-JSON text → `invalid_response`.
- */
-export async function callConnectorInstanceMcpTool(input: {
-  endpoint: string;
-  authHeader: string;
-  name: string;
-  arguments: Record<string, unknown>;
-  clientFactory?: ConnectorInstanceMcpClientFactory;
-}): Promise<unknown> {
-  const factory = input.clientFactory ?? defaultConnectorInstanceMcpClientFactory;
+/** ONE connect → callTool → unwrap → close-in-finally attempt, on a FRESH
+ * client from `factory` (a fresh client means a fresh `initialize` handshake,
+ * i.e. a brand-new server-side session — this is what "re-establish the
+ * session" means for the retry in `callConnectorInstanceMcpTool` below). Every
+ * attempt closes its own client regardless of outcome, so a retried attempt
+ * never reuses a dead session or leaks the superseded client. */
+async function attemptConnectAndCallTool(
+  factory: ConnectorInstanceMcpClientFactory,
+  input: { endpoint: string; authHeader: string; name: string; arguments: Record<string, unknown> },
+): Promise<unknown> {
   const client = factory({ endpoint: input.endpoint, authHeader: input.authHeader });
   let connected = false;
   try {
@@ -262,26 +278,44 @@ export async function callConnectorInstanceMcpTool(input: {
 }
 
 /**
- * Connect, call the wire `tools/list` ONCE, unwrap the `tools[]` rows, close.
- * The additive per-server catalog primitive (§2): the snapshot loader calls this
- * once per (instance, server) to BOTH (a) classify exposure mode by inspecting
- * the returned wire tool names for the triad trio and (b) build the first-class
- * snapshot from the same rows — one wire round-trip serves both.
+ * Connect, call ONE wire tool, unwrap, close. `structuredContent` is preferred
+ * (clean JSON object); falls back to the first text content parsed as JSON.
+ * `isError` → typed `tool_error` (WP_Error code+message passthrough). A connect
+ * failure → the typed absent-stack split (`session_required` / `session_not_found`
+ * / `timeout` / `network_error`). Empty → `empty_response`; non-JSON text →
+ * `invalid_response`.
  *
- * Returns the raw `tools[]` records (may be EMPTY — a server can legitimately
- * expose zero tools; that is not an error, it classifies as a first-class server
- * with no tools). A well-formed response missing its `tools` array is
- * `invalid_response`. A connect / list failure maps through the SAME typed
- * absent-stack split as `callConnectorInstanceMcpTool`
- * (`session_required` / `timeout` / `network_error`). NEVER carries the auth
- * header in an error (the classifier composes its own message).
+ * BOUNDED RETRY: a `session_not_found` (the dropped-session race, see the
+ * module header) triggers exactly ONE retry — a brand-new client/session via
+ * `factory`, replaying the same `name`/`arguments`. Any other error, or a
+ * SECOND consecutive `session_not_found`, propagates immediately; there is no
+ * retry loop.
  */
-export async function listConnectorInstanceMcpTools(input: {
+export async function callConnectorInstanceMcpTool(input: {
   endpoint: string;
   authHeader: string;
-  clientFactory?: ConnectorInstanceMcpListClientFactory;
-}): Promise<Array<Record<string, unknown>>> {
+  name: string;
+  arguments: Record<string, unknown>;
+  clientFactory?: ConnectorInstanceMcpClientFactory;
+}): Promise<unknown> {
   const factory = input.clientFactory ?? defaultConnectorInstanceMcpClientFactory;
+  try {
+    return await attemptConnectAndCallTool(factory, input);
+  } catch (err) {
+    if (err instanceof InvokerError && err.code === "session_not_found") {
+      return await attemptConnectAndCallTool(factory, input);
+    }
+    throw err;
+  }
+}
+
+/** ONE connect → listTools → unwrap → close-in-finally attempt, on a FRESH
+ * client from `factory` — see `attemptConnectAndCallTool` above for why a
+ * fresh client is what "re-establish the session" means for the retry. */
+async function attemptConnectAndListTools(
+  factory: ConnectorInstanceMcpListClientFactory,
+  input: { endpoint: string; authHeader: string },
+): Promise<Array<Record<string, unknown>>> {
   const client = factory({ endpoint: input.endpoint, authHeader: input.authHeader });
   let connected = false;
   try {
@@ -313,5 +347,42 @@ export async function listConnectorInstanceMcpTools(input: {
     return tools.filter((t): t is Record<string, unknown> => typeof t === "object" && t !== null);
   } finally {
     if (connected) await client.close().catch(() => {});
+  }
+}
+
+/**
+ * Connect, call the wire `tools/list` ONCE, unwrap the `tools[]` rows, close.
+ * The additive per-server catalog primitive (§2): the snapshot loader calls this
+ * once per (instance, server) to BOTH (a) classify exposure mode by inspecting
+ * the returned wire tool names for the triad trio and (b) build the first-class
+ * snapshot from the same rows — one wire round-trip serves both.
+ *
+ * Returns the raw `tools[]` records (may be EMPTY — a server can legitimately
+ * expose zero tools; that is not an error, it classifies as a first-class server
+ * with no tools). A well-formed response missing its `tools` array is
+ * `invalid_response`. A connect / list failure maps through the SAME typed
+ * absent-stack split as `callConnectorInstanceMcpTool`
+ * (`session_required` / `session_not_found` / `timeout` / `network_error`).
+ * NEVER carries the auth header in an error (the classifier composes its own
+ * message).
+ *
+ * BOUNDED RETRY: same ONE-retry contract as `callConnectorInstanceMcpTool` —
+ * a `session_not_found` re-establishes a fresh session and retries the
+ * `tools/list` once; any other error, or a second consecutive
+ * `session_not_found`, propagates immediately.
+ */
+export async function listConnectorInstanceMcpTools(input: {
+  endpoint: string;
+  authHeader: string;
+  clientFactory?: ConnectorInstanceMcpListClientFactory;
+}): Promise<Array<Record<string, unknown>>> {
+  const factory = input.clientFactory ?? defaultConnectorInstanceMcpClientFactory;
+  try {
+    return await attemptConnectAndListTools(factory, input);
+  } catch (err) {
+    if (err instanceof InvokerError && err.code === "session_not_found") {
+      return await attemptConnectAndListTools(factory, input);
+    }
+    throw err;
   }
 }

@@ -8,11 +8,27 @@
  * because hosted-shell incompatibility for them is unverified and the
  * platform default never selects them.
  *
- * Kept as a tiny dependency-free leaf (no "server-only", no imports) so every
- * shell-skill-delivery surface — the chat runner gate
- * (`src/app/api/chat/shell-skill-gate.ts`) and the llm-bridge route
- * (`src/app/api/llm-bridge/route.ts`) — shares one set instead of drifting
- * inline copies. This must NOT live in
+ * Kept as a tiny dependency-free leaf (no "server-only", no imports).
+ *
+ * SCOPE, stated accurately (codex round-1 finding #4): the shipped OpenAI
+ * connector keeps its OWN copy of this fact at
+ * `extensions/cinatra-ai/openai-connector/src/adapter/openai-model-capabilities.ts`
+ * and imports THAT — a relocated connector must not import host/core internals.
+ * So this leaf is NOT a shared single source of truth across the adapter
+ * boundary; it is core's copy, and the two are a KNOWN mirrored pair that must
+ * be changed together.
+ *
+ * OWNERSHIP (cinatra#2094 F11): this fact answers exactly one question — "may
+ * this model be handed a HOSTED SHELL tool?" — and only a provider adapter may
+ * ask it. The two former CALLER-side gates (the chat runner's
+ * `shell-skill-gate.ts` and the llm-bridge route) used it to skip skill delivery
+ * ALTOGETHER for a shell-incompatible model, which produced a silent
+ * no-delivery: the adapter already degrades such a request to the restricted
+ * NAMED `skill_file_read` function tool (exec-plane S2's singular-native-shell
+ * rule, cinatra#1707), so no `type:"shell"` could have reached the model anyway.
+ * Both gates are retired; do not reintroduce a caller-side one.
+ *
+ * This must NOT live in
  * `@cinatra-ai/agents/llm-provider-policy` — that package is depended on by
  * `@cinatra-ai/llm` consumers in the opposite direction, and the agents
  * package must not import from `@cinatra-ai/llm` (circular).

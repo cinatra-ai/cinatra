@@ -55,6 +55,12 @@ const IMPLICIT_RESOLVERS = [
   "resolveFirstAvailableAdapter",
   "resolveDefaultImageAdapter",
   "hasConfiguredLlmRuntime",
+  // cinatra#2094 F10 — the provider-NAMING counterpart of `hasConfiguredLlmRuntime`.
+  // It walks the SAME implicit order (resolveImplicitGlobalProviderOrder) and is
+  // what the pre-stream availability guards call, so leaving it off this list
+  // would let a call site take the operator's stored-default decision with NO
+  // inventory entry — i.e. silently shrink this gate's coverage.
+  "describeLlmRuntimeUnavailability",
   "runDeterministicLlmTask",
 ] as const;
 

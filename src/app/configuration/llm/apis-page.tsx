@@ -13,6 +13,10 @@ import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy"
 import { Label } from "@/components/ui/label";
 import { readDefaultLlmProviderFromDatabase, readDefaultImageProviderFromDatabase, readObjectsClassificationModelFromDatabase, readAgentCreationLlmProviderFromDatabase, readAgentCreationModelFromDatabase, isAgentCreationPinActive } from "@/lib/database";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";
+import {
+  OPENAI_PARTIAL_SAVE_NOTICE_CODE,
+  OPENAI_PARTIAL_SAVE_NOTICE_MESSAGE,
+} from "@/lib/openai-partial-save-notice";
 import { SearchParamToast } from "@/components/search-param-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -379,8 +383,25 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
                 ?saved=<provider>. A single static message covers every provider
                 (no value → fires on any non-empty `saved`), so URL-supplied text
                 is never toasted. */}
+            {/* `?notice=<code>` is the PARTIAL-SAVE channel (cinatra#2094 F9):
+                this modal posts to the plain `saveOpenAIConnectionAction` with
+                `redirectTo=/configuration/llm?modal=openai`, so a save that stored
+                a live-validated key but could not complete the connection-service
+                copy lands back HERE. Without this entry that outcome would render
+                as a clean success on this surface and survive only in the
+                notification centre — the exact silent success the reporting exists
+                to prevent. The schema-config admin surface gets the same outcome
+                as the connector's `savedWithoutConnectionService` banner instead. */}
             <SearchParamToast
-              toasts={[{ param: "saved", message: "The API connection was saved." }]}
+              toasts={[
+                { param: "saved", message: "The API connection was saved." },
+                {
+                  param: "notice",
+                  value: OPENAI_PARTIAL_SAVE_NOTICE_CODE,
+                  message: OPENAI_PARTIAL_SAVE_NOTICE_MESSAGE,
+                  variant: "warning" as const,
+                },
+              ]}
             />
           </Suspense>
 

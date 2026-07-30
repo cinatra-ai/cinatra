@@ -82,44 +82,68 @@
     {
       "criterion": "Cross-job capability misuse",
       "owner": "self",
+      "kernelProof": {
+        "file": "src/lib/org-write/__tests__/job-system-authority-mint-adversarial.test.ts",
+        "testName": "every real mintable job refuses every purpose NOT in its own declared allowedPurposes"
+      },
       "ciDependency": { "workflow": "build-image.yml", "job": "perpetual-loops-invariants" },
-      "status": "red",
-      "trackingIssue": 1941
+      "status": "green",
+      "trackingIssue": 1943
     },
     {
       "criterion": "Pre-archive parent spawning post-archive child denied",
       "owner": "self",
-      "ciDependency": { "workflow": "build-image.yml", "job": "test" },
-      "status": "red",
-      "trackingIssue": 1940
+      "kernelProof": {
+        "file": "packages/agents/src/__tests__/run-creation-race.integration.test.ts",
+        "testName": "a child-run creation blocked behind an in-progress archive LOSES the race: refused, and no child row ever lands"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "agents-integration-db" },
+      "status": "green",
+      "trackingIssue": 1943
     },
     {
       "criterion": "Lease expiry mid-completion → cancel-then-settle",
       "owner": "self",
-      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
-      "status": "red",
-      "trackingIssue": 1940
+      "kernelProof": {
+        "file": "packages/agents/src/__tests__/lease-expiry-finalizer-adversarial.integration.test.ts",
+        "testName": "a genuinely expired lease on a non-terminal run settles to a typed FAILURE, never a bare denial — real CAS + real lease DELETE"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "agents-integration-db" },
+      "status": "green",
+      "trackingIssue": 1943
     },
     {
       "criterion": "Archive-vs-terminal-CAS race",
       "owner": "sibling",
-      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
-      "status": "red",
+      "kernelProof": {
+        "file": "packages/agents/src/__tests__/run-transition-lease-settle.test.ts",
+        "testName": "archived org + held lease + run.complete ⇒ CAS + meta + lease DELETE commit together"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "test" },
+      "status": "green",
       "trackingIssue": 1940
     },
     {
       "criterion": "Direct BA-DML-vs-archive, both lock interleavings",
       "owner": "self",
+      "kernelProof": {
+        "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
+        "testName": "interleaving 1 — a queued member INSERT holds the org row's FOR SHARE lock first (org still active): the archive UPDATE genuinely BLOCKS behind it, and only lands after the insert commits"
+      },
       "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
-      "status": "red",
+      "status": "green",
       "trackingIssue": 1939
     },
     {
       "criterion": "Dual-transport coverage",
       "owner": "self",
-      "ciDependency": { "workflow": "build-image.yml", "job": "test" },
-      "status": "red",
-      "trackingIssue": 1942
+      "kernelProof": {
+        "file": "src/lib/__tests__/organization-archive-dual-transport-adversarial.test.ts",
+        "testName": "ONE shared archive flip refuses ALL THREE surfaces for the identical org — in-process BA, raw-HTTP BA, and the app-native guard"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "perpetual-loops-invariants" },
+      "status": "green",
+      "trackingIssue": 1943
     },
     {
       "criterion": "BOUNDED, deterministic eventual-successful-archive under contention (a fixed retry ceiling, not an unbounded spin)",

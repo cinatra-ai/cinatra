@@ -898,8 +898,21 @@ jobs:
   # referenced tests currently pass, only that the manifest is well-formed
   # and every reference is grep-findable — a different, unrelated concern
   # from whether `test`/`extension-lifecycle-db-tests`/
-  # `perpetual-loops-invariants` happened to go green this run); it still
-  # respects `detect`'s docs-only/draft skip.
+  # `perpetual-loops-invariants`/`agents-integration-db` happened to go green
+  # this run); it still respects `detect`'s docs-only/draft skip.
+  #
+  # `agents-integration-db` (cinatra#1943 P1-CI follow-up) — added so a row
+  # whose ciDependency names that job (the two live-Postgres acceptance rows
+  # built in #2250: "Pre-archive parent spawning post-archive child denied"
+  # and "Lease expiry mid-completion → cancel-then-settle") is structurally
+  # satisfiable under `--strict` mode's own-job `needs:` check, the same way
+  # the three jobs above already are. Before this, `strictCheckRow` would
+  # report "the coverage-gate's own job does not needs: agents-integration-db
+  # yet" for those rows even after their tests pass — a structural gap, not a
+  # test-health one. This edit alone does not turn either row green (that is
+  # manifest CONTENT, #2250's/a follow-up's call, not this workflow-only
+  # change) — it only removes the CI-graph blocker so a future green claim on
+  # those rows can actually be verified instead of failing on a missing edge.
   #
   # Only `audit` mode is a real (blocking) check here — the manifest-hygiene
   # check Decision 1 says runs on every PR. `--strict` mode is run for
@@ -909,18 +922,17 @@ jobs:
   # correct, by-design state, not something this wiring PR should turn red
   # CI over.
   #
-  # KNOWN MISMATCH, FLAGGED RATHER THAN FIXED HERE: the gate script's own
-  # SELF_WORKFLOW/SELF_JOB constants are currently hardcoded to
-  # `org-write-boundary-gate.yml` / `org-write-boundary-gate` (the design's
-  # original, since-revised sketch — see the paragraph above). This job is
-  # instead named `archive-acceptance-gate` inside `build-image.yml`, per
-  # the finding above. Updating those two constants is a change to the gate
-  # script itself, owned by #1943/#2207 — out of scope for this
-  # workflow-only PR, which touches no script/manifest content. Reported
-  # back rather than forked.
+  # RESOLVED (was a KNOWN MISMATCH flagged, not fixed, when this job was
+  # first wired in #2209): the gate script's SELF_WORKFLOW/SELF_JOB constants
+  # briefly pointed at `org-write-boundary-gate.yml` / `org-write-boundary-
+  # gate` (the design's original, since-revised sketch) instead of this job's
+  # real location. #2211 already corrected both constants to
+  # `build-image.yml` / `archive-acceptance-gate`, matching where this job
+  # actually lives — noted here only so a future reader does not go looking
+  # for a mismatch that no longer exists.
   archive-acceptance-gate:
     name: Archive acceptance coverage-completeness gate (#1943)
-    needs: [detect, test, extension-lifecycle-db-tests, perpetual-loops-invariants]
+    needs: [detect, test, extension-lifecycle-db-tests, perpetual-loops-invariants, agents-integration-db]
     if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

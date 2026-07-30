@@ -152,6 +152,26 @@ export function createSetupReadinessPorts(options?: {
           "the Anthropic catalog sync did not run because no API key is configured",
         );
       }
+      // A REFUSED skill is a skill that WILL fail loud at delivery time
+      // (`AnthropicSkillNotSyncedError`), so declaring "AI setup complete" over
+      // it is precisely the masquerading success strict mode exists to stop
+      // (cinatra#2094 F7-A). Before this, `captureDiagnostics` was discarded
+      // here: the wizard reported "22 skill(s) uploaded" while every multi-file
+      // skill — including 3 of the 5 the Cinatra assistant itself requires — had
+      // been refused by the S2 fail-closed one-hop lint and was absent from the
+      // mirror. The refusal must reach the operator, naming each skill and the
+      // bundled file its router points at but does not ship.
+      const refused = result.captureDiagnostics?.refusedForDanglingReferences ?? [];
+      if (refused.length > 0) {
+        throw new Error(
+          `${refused.length} skill(s) were REFUSED by the packaging gate and were not uploaded, ` +
+            `so requests that select them would fail: ` +
+            refused
+              .map((r) => `${r.catalogSkillId} (router references no bundled ${r.missing.join(", ")})`)
+              .join("; ") +
+            ". Fix the skill bundle(s) — a refused skill can never be delivered to Claude.",
+        );
+      }
       // The skills that ACTUALLY hold a remote revision after this run — the
       // only references the probe may legitimately use. THROWS on any lookup
       // failure rather than degrading to `[]`.

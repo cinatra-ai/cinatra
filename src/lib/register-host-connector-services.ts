@@ -427,14 +427,17 @@ export function resolveConnectorConfigEnvOverrides(packageName: string): Record<
 // selected. The host-authoritative source available to this shared impl at call
 // time is the SIGNED, host-minted connector-instance pin on the ambient delegated
 // actor (§2.7); an absent pin (the org-scope-via-shared-primitive path §1.6 flags
-// as the danger) FAILS CLOSED (`connector_key_underivable`). The job path (S7
-// seam) supplies `connectorKey` from a host-minted enqueue binding to the
+// as the danger) FAILS CLOSED (`connector_key_underivable`) — UNLESS the actor is
+// a `chat` delegation supplying an explicit per-call `instanceId` (cinatra#2024
+// S9 G1 fix, see `resolveConnectorInstanceInvokerContext` below). The job path
+// (S7 seam) supplies `connectorKey` from a host-minted enqueue binding to the
 // low-level core API directly — never a payload field (R3-B1).
 //
-// SHIP-DARK (§1.5): nothing in production reaches these methods yet — delegated
-// chat/widget deny-by-default keeps the connector primitives off every live
-// perimeter until the S7 cutover. This publication only lets the connector's
-// `register(ctx)` RESOLVE the capability fail-loud at boot.
+// SHIP-DARK (§1.5) HISTORICAL NOTE: nothing in production reached these methods
+// before the S7 cutover shipped `chat`/`public_site_widget` into the delegated
+// perimeter's allowlist. `agent_run`/`public_site_widget` reach them today via
+// their signed pin; `chat` reaches them via the G1 fix's explicit-instanceId
+// path (below) — never a durable pin, a fresh `requireUse` re-check every call.
 // ---------------------------------------------------------------------------
 
 /** Per-process catalog cache (S3 owns TTL/invalidation/lifecycle — N6). */
@@ -725,14 +728,52 @@ function buildConnectorInstanceInvokerDeps(boundConnectorKey: string): Connector
   };
 }
 
+/**
+ * The ONLY connectorKey a `chat` delegation may ever host-derive without a
+ * signed pin (cinatra#2024 S9 G1 fix). NOT a general kind-lookup: chat's own
+ * perimeter allowlist (`ALLOWED_EXACT` in `delegated-chat-tool-policy.ts`)
+ * only ever routes a chat turn into THIS guard through the
+ * `wordpress_site_tool_call`/`wordpress_site_tools_list` primitive names — no
+ * `drupal_site_tool_call`/`drupal_site_tools_list` equivalent is chat-
+ * allowlisted, and `resolveConnectorInstanceEndpoint` below resolves nothing
+ * for any other connectorKey today. A fixed HOST constant (never read from
+ * caller input) rather than a caller-selectable field — extending chat to a
+ * second connector kind is a distinct, reviewed change to this constant plus
+ * the perimeter allowlist, not a runtime selector.
+ */
+const CHAT_DERIVABLE_CONNECTOR_KEY = "wordpress";
+
 /** Resolve the HOST-DERIVED connectorKey + trusted actor for a guard call.
  * cinatra#2020 S5 (D6): additionally derives the ConfirmationSurface from the
  * VERIFIED `delegatedActor.delegation` discriminant (null → `session`) — the
  * members pass it as the invoker input's existing `sourceType` (guard-set;
  * the connector-facing shape has no such field, so it is unforgeable by
  * construction — the M6 pattern) — plus the ambient frame `runId` the members
- * forward as advisory `causation`. */
-async function resolveConnectorInstanceInvokerContext(): Promise<{
+ * forward as advisory `causation`.
+ *
+ * cinatra#2024 S9 G1 fix: the `chat` delegation carries no signed instance pin
+ * by design (request-context.ts's `DelegatedMcpActor` doc — chat's trust model
+ * is deliberately weaker than `agent_run`/`public_site_widget`'s durable-pin
+ * path). Ruled fix shape: when the actor is `chat` AND the caller supplies an
+ * EXPLICIT `instanceId` as a per-call tool argument (never persisted on the
+ * actor, never a durable pin — a fresh value on every single tool call), the
+ * connectorKey host-derives to the fixed `CHAT_DERIVABLE_CONNECTOR_KEY`
+ * constant above. This does NOT loosen authorization: `actor.connectorInstancePin`
+ * stays `undefined` for this branch, so the invoker's own `runSharedGate` takes
+ * its existing no-pin path — `effectiveInstanceId` is the caller's explicit
+ * `instanceId` verbatim, and `deps.requireUse` (the live per-instance +
+ * org-membership authority gate, `connector-instance-write-authority.ts`)
+ * re-runs in FULL on every call. A wrong, unknown, or other-tenant instanceId
+ * is denied there exactly as it would be for any other unpinned caller — this
+ * function only decides which store `requireUse` consults, never whether the
+ * call is authorized. `agent_run` / `public_site_widget` without a pin are
+ * UNCHANGED (still fail closed): the new branch is scoped to `chat` only. */
+async function resolveConnectorInstanceInvokerContext(input?: {
+  /** The caller-supplied per-call `instanceId` tool argument (§ above) — read
+   * ONLY to host-derive a chat actor's connectorKey; never trusted as an
+   * authorization decision by itself. */
+  explicitInstanceId?: string;
+}): Promise<{
   actor: InvokerTrustedActor;
   boundConnectorKey: string;
   surface: ConfirmationSurface;
@@ -743,12 +784,19 @@ async function resolveConnectorInstanceInvokerContext(): Promise<{
   // The `chat` delegation member carries no pin; narrow via `in` before reading.
   const pin =
     delegated && "connectorInstancePin" in delegated ? delegated.connectorInstancePin : undefined;
-  // connectorKey is HOST-DERIVED from the signed pin (host-authoritative) — never
-  // connector-selected (M6/R2-B1). No pin / unknown kind ⇒ fail closed.
-  if (!pin || !CONNECTOR_INSTANCE_INVOKER_KINDS.has(pin.connectorKey)) {
+  const explicitInstanceId = input?.explicitInstanceId?.trim();
+  const chatDerivedConnectorKey =
+    !pin && delegated?.delegation === "chat" && explicitInstanceId
+      ? CHAT_DERIVABLE_CONNECTOR_KEY
+      : undefined;
+  const boundConnectorKey = pin?.connectorKey ?? chatDerivedConnectorKey;
+  // connectorKey is HOST-DERIVED from the signed pin, or (chat only, no pin)
+  // the fixed chat-derivable constant above — never connector-selected
+  // (M6/R2-B1). Neither source / unknown kind ⇒ fail closed.
+  if (!boundConnectorKey || !CONNECTOR_INSTANCE_INVOKER_KINDS.has(boundConnectorKey)) {
     throw new InvokerError(
       "connector_key_underivable",
-      "the governed invoker requires a signed connector-instance pin to host-derive the connector",
+      "the governed invoker requires a signed connector-instance pin — or, for a chat actor, an explicit instanceId — to host-derive the connector",
     );
   }
   const resolved = await resolveTrustedWriteActor();
@@ -758,8 +806,13 @@ async function resolveConnectorInstanceInvokerContext(): Promise<{
     throw new InstanceWriteAuthorityError("no_trusted_actor");
   }
   return {
+    // `connectorInstancePin: pin` stays `undefined` on the chat-derived
+    // branch (no pin was found) — NEVER synthesize one here. A durable pin
+    // would let `runSharedGate` skip straight to its pinned-effectiveInstanceId
+    // branch; leaving it undefined keeps chat on the no-pin branch, whose
+    // `requireUse` re-authorizes fresh on every call (no cross-call caching).
     actor: { ...resolved, connectorInstancePin: pin },
-    boundConnectorKey: pin.connectorKey,
+    boundConnectorKey,
     surface: deriveConfirmationSurface(delegated?.delegation),
     ...(frame?.runId ? { frameRunId: frame.runId } : {}),
   };
@@ -1321,14 +1374,18 @@ export function registerHostConnectorServices(): void {
 
   // cinatra#2017 S2 — the governed connector-instance invoker (Plane C). ONE
   // shared guard; `connectorKey` is HOST-DERIVED from the signed instance pin on
-  // the ambient delegated actor (M6/R2-B1), never a connector/kind selector on
-  // the connector-facing shape. `listSiteTools` runs the SAME pin + live USE
-  // authority gate BEFORE any catalog read (B2). Ship-dark: no live perimeter
-  // reaches these until S7 (delegated deny-by-default keeps them off, untouched).
+  // the ambient delegated actor (M6/R2-B1), or — `chat` only, cinatra#2024 S9
+  // G1 fix — the explicit-instanceId path in `resolveConnectorInstanceInvokerContext`
+  // above; never a connector/kind selector on the connector-facing shape.
+  // `listSiteTools` runs the SAME gate + live USE authority pass BEFORE any
+  // catalog read (B2). The S7 perimeter allowlist (`wordpress_site_tool_call`/
+  // `wordpress_site_tools_list` in chat's `ALLOWED_EXACT`) is what actually
+  // routes live chat/agent_run/widget traffic into this guard.
   register(svc.connectorInstanceInvoker, {
     invokeSiteTool: async (input) => {
-      const { actor, boundConnectorKey, surface, frameRunId } =
-        await resolveConnectorInstanceInvokerContext();
+      const { actor, boundConnectorKey, surface, frameRunId } = await resolveConnectorInstanceInvokerContext(
+        { explicitInstanceId: input.instanceId },
+      );
       return invokeConnectorInstanceTool(
         {
           connectorKey: boundConnectorKey,
@@ -1349,8 +1406,9 @@ export function registerHostConnectorServices(): void {
       );
     },
     listSiteTools: async (input) => {
-      const { actor, boundConnectorKey, surface, frameRunId } =
-        await resolveConnectorInstanceInvokerContext();
+      const { actor, boundConnectorKey, surface, frameRunId } = await resolveConnectorInstanceInvokerContext(
+        { explicitInstanceId: input.instanceId },
+      );
       return listConnectorInstanceTools(
         {
           connectorKey: boundConnectorKey,

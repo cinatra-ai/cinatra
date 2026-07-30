@@ -1,0 +1,73 @@
+{
+  "at": "2026-07-30T07:18:04.370Z",
+  "port": 39473,
+  "observedInS7": "read ECONNRESET",
+  "note": "Both clients are the shipped ones (@nangohq/node + the runtime fetch); only the SERVER is a stand-in driven through real wire conditions. The S7 lane's own remote condition is not knowable from the committed artifacts (that instance and its env are gone), so this records the condition -> message MAPPING and identifies which condition reproduces the observed string.",
+  "wireConditionMatrix": {
+    "fin": {
+      "connectionServiceHop": {
+        "message": "socket hang up",
+        "surfaced": "socket hang up"
+      },
+      "openAiValidationHop": {
+        "message": "fetch failed",
+        "cause": "other side closed"
+      }
+    },
+    "rst": {
+      "connectionServiceHop": {
+        "message": "read ECONNRESET",
+        "surfaced": "read ECONNRESET"
+      },
+      "openAiValidationHop": {
+        "message": "fetch failed",
+        "cause": "read ECONNRESET"
+      }
+    },
+    "rst-on-connect": {
+      "connectionServiceHop": {
+        "message": "read ECONNRESET",
+        "surfaced": "read ECONNRESET"
+      },
+      "openAiValidationHop": {
+        "message": "fetch failed",
+        "cause": "read ECONNRESET"
+      }
+    }
+  },
+  "reproducingConditions": [
+    "rst",
+    "rst-on-connect"
+  ],
+  "checks": [
+    {
+      "id": "T1a",
+      "what": "a REAL wire condition of the connection-service hop reproduces the S7 string exactly",
+      "verdict": "PASS",
+      "detail": "conditions reproducing \"read ECONNRESET\": [\"rst\",\"rst-on-connect\"]"
+    },
+    {
+      "id": "T1b",
+      "what": "the connector's own getNangoErrorMessage passes the transport message through VERBATIM (no HTTP response to prefer)",
+      "verdict": "PASS",
+      "detail": "[{\"message\":\"read ECONNRESET\",\"surfaced\":\"read ECONNRESET\"},{\"message\":\"read ECONNRESET\",\"surfaced\":\"read ECONNRESET\"}]"
+    },
+    {
+      "id": "T1c",
+      "what": "the S7 landing URL is reproduced byte-for-byte from that surfaced string",
+      "verdict": "PASS",
+      "detail": "/setup/ai?error=read%20ECONNRESET /setup/ai?error=read%20ECONNRESET"
+    },
+    {
+      "id": "T2a",
+      "what": "the OpenAI validation hop (undici fetch) produces the S7 string under NO wire condition",
+      "verdict": "PASS",
+      "detail": "fin={\"message\":\"fetch failed\",\"cause\":\"other side closed\"} rst={\"message\":\"fetch failed\",\"cause\":\"read ECONNRESET\"} rst-on-connect={\"message\":\"fetch failed\",\"cause\":\"read ECONNRESET\"}"
+    },
+    {
+      "id": "T2b",
+      "what": "ATTRIBUTION: the S7 `?error=read%20ECONNRESET` is the CONNECTION-SERVICE hop, not the OpenAI hop",
+      "verdict": "PASS"
+    }
+  ]
+}

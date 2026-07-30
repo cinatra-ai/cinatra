@@ -1,10 +1,19 @@
 name: renovate-freshness-gate
 
-# Detectable-dormancy guard for the hosted Renovate (Mend) app on THIS repo.
+# Detectable-dormancy guard for Renovate on THIS repo.
 #
 # Renovate rewrites its Dependency Dashboard issue on every run it completes, so
-# a frozen dashboard means the hosted app has stopped executing against this
-# repo — even while the org-wide installation keeps running sibling repos.
+# a frozen dashboard means Renovate has stopped executing against this repo —
+# whatever is meant to be executing it.
+#
+# WHICH RENOVATE: this gate was written against the hosted Mend app, which went
+# dormant twice (cinatra#1632, cinatra#2241). The runs now come from
+# `.github/workflows/renovate-self-hosted.yml` — the same Renovate, executed
+# here, authenticating as the org bot GitHub App instead of Mend's
+# `renovate[bot]`. The gate is therefore IDENTITY-AGNOSTIC: a dashboard write by
+# ANY recognised Renovate identity (see RENOVATE_LOGINS below) proves a run. It
+# keeps accepting the Mend identity so the historical dashboard, and the hosted
+# app while it is still installed, still count.
 #
 # Freshness is measured from the last RENOVATE-AUTHORED write to the dashboard
 # (the issue's edit history via GraphQL `userContentEdits`, falling back to the
@@ -55,6 +64,15 @@ jobs:
       MAX_AGE_DAYS: "10"
       # Idempotency key: at most one open alert issue, edited in place.
       ALERT_LABEL: "renovate-health"
+      # Identities whose dashboard write counts as "Renovate ran". Space-separated
+      # GraphQL Bot logins (no `app/` prefix; the REST/`gh` listing adds one and
+      # is normalised before comparing):
+      #   renovate     — the hosted Mend app (historical writes; still installed)
+      #   groganz-bot  — the org bot App that self-hosted Renovate runs as
+      # Adding an identity here is what makes an executor swap a non-event for
+      # this gate. Dropping `renovate` before the hosted app is uninstalled would
+      # blind the gate to whichever of the two actually ran.
+      RENOVATE_LOGINS: "renovate groganz-bot"
     steps:
       - name: Evaluate Dependency Dashboard freshness
         run: |
@@ -70,15 +88,34 @@ jobs:
             --description "Renovate bot-health / freshness-gate alerts" \
             2>/dev/null || true
 
-          # Resolve the Renovate Dependency Dashboard issue by author + exact title.
-          # Not hardcoded to a number so the check survives a dashboard re-create.
-          dash_num="$(gh issue list --repo "$REPO" \
-            --search 'Dependency Dashboard in:title author:app/renovate' \
-            --state open --json number,title \
-            --jq 'map(select(.title=="Dependency Dashboard")) | (first.number // "")')"
+          # Recognised Renovate identities, as a jq array (see RENOVATE_LOGINS).
+          allowed="$(jq -cn --arg s "$RENOVATE_LOGINS" '$s | split(" ") | map(select(length > 0))')"
+          echo "Recognised Renovate identities: $(jq -r 'join(", ")' <<<"$allowed")"
+
+          # Resolve the Dependency Dashboard by exact title, then keep the ones a
+          # recognised Renovate identity authored. Searching on TITLE (rather than
+          # `author:app/renovate`, as this gate did while Mend was the only
+          # executor) is what makes an executor swap survive: Renovate scopes its
+          # issue lookups to its own login, so a bot-account change can leave a
+          # frozen dashboard from the old identity beside a live one from the new.
+          # Freshness is the NEWEST write across ALL of them, so a superseded
+          # dashboard can never pin this gate red — and a re-created dashboard is
+          # still found, exactly as before (never hardcoded to a number).
+          dash_json="$(gh issue list --repo "$REPO" \
+            --search 'Dependency Dashboard in:title' \
+            --state open --limit 100 --json number,title,author \
+            | jq -c --argjson allowed "$allowed" \
+              'map(select(.title == "Dependency Dashboard"
+                          and ((.author.login // "") | ltrimstr("app/")) as $l
+                          | $allowed | index($l)))
+               | map(.number)')"
+          mapfile -t DASH_NUMS < <(jq -r '.[]' <<<"$dash_json")
+          echo "Dependency Dashboard candidates: ${DASH_NUMS[*]:-none}"
 
           last_bot_write=""
-          if [ -n "$dash_num" ]; then
+          dash_num=""
+          for cand in "${DASH_NUMS[@]:-}"; do
+            [ -n "$cand" ] || continue
             # Last RENOVATE-AUTHORED write: newest bot-authored body edit, or the
             # issue's creation if the bot has never edited it. Deliberately NOT
             # `updatedAt`: human edits (checkbox ticks, comments) bump that too
@@ -108,7 +145,7 @@ jobs:
                       }
                     }
                   }
-                }' -f owner="$OWNER" -f name="$NAME" -F num="$dash_num" \
+                }' -f owner="$OWNER" -f name="$NAME" -F num="$cand" \
                 ${cursor:+-f after="$cursor"})"
               if [ "$page_no" -eq 1 ]; then
                 created_at="$(jq -r '.data.repository.issue.createdAt // ""' <<<"$page")"
@@ -120,27 +157,42 @@ jobs:
               cursor="$(jq -r '.data.repository.issue.userContentEdits.pageInfo.endCursor // ""' <<<"$page")"
               [ "$has_next" = "true" ] && [ -n "$cursor" ] || break
             done
-            last_bot_write="$(jq -r --arg created "$created_at" --arg author "$author_login" '
+            cand_write="$(jq -r --arg created "$created_at" --arg author "$author_login" --argjson allowed "$allowed" '
               (
                 [ .[]
-                  | select((.editor.login // "") == "renovate")
+                  | ((.editor.login // "") | ltrimstr("app/")) as $l
+                  | select($allowed | index($l))
                   | .editedAt ]
                 | max
               )
-              // (if $author == "renovate" then $created else "" end)
+              // (($author | ltrimstr("app/")) as $a
+                  | if ($allowed | index($a)) then $created else "" end)
               // ""
             ' <<<"$all_edits")"
+            echo "Dashboard #${cand}: last Renovate-authored write=${cand_write:-none} (author=${author_login:-unknown})"
+            # Keep the NEWEST write across candidates. ISO-8601 UTC timestamps all
+            # share one format, so lexical > is chronological here.
+            if [ -n "$cand_write" ] && { [ -z "$last_bot_write" ] || [[ "$cand_write" > "$last_bot_write" ]]; }; then
+              last_bot_write="$cand_write"
+              dash_num="$cand"
+            fi
+          done
+
+          # No candidate carried a provable bot write: still name one in the alert
+          # so the reader has somewhere to look.
+          if [ -z "$dash_num" ] && [ "${#DASH_NUMS[@]}" -gt 0 ]; then
+            dash_num="${DASH_NUMS[0]}"
           fi
 
           if [ -z "$dash_num" ]; then
             stale=1
             age_days="n/a"
-            reason="No open **Dependency Dashboard** issue authored by \`app/renovate\` was found. Renovate has either never onboarded or its dashboard was deleted."
+            reason="No open **Dependency Dashboard** issue authored by a recognised Renovate identity (\`${RENOVATE_LOGINS}\`) was found. Renovate has either never onboarded, its dashboard was deleted, or it now runs under an identity this gate does not yet recognise (extend \`RENOVATE_LOGINS\` in \`.github/workflows/renovate-freshness-gate.yml\`)."
             echo "::error::No open Renovate 'Dependency Dashboard' issue found."
           elif [ -z "$last_bot_write" ]; then
             stale=1
             age_days="n/a"
-            reason="The Dependency Dashboard (#${dash_num}) exists but no Renovate-authored write was found in its collected edit history and it was not created by \`app/renovate\` under the expected login — the dashboard no longer carries any provable bot activity."
+            reason="The Dependency Dashboard (#${dash_num}) exists but no write by a recognised Renovate identity (\`${RENOVATE_LOGINS}\`) was found in its collected edit history, and it was not created by one either — the dashboard no longer carries any provable bot activity."
             echo "::error::Dependency Dashboard #${dash_num}: no Renovate-authored write found."
           else
             now_s=$(date -u +%s)
@@ -153,7 +205,7 @@ jobs:
             # not only at a full 11 days (integer-day flooring would delay detection).
             if [ "$age_secs" -gt "$max_secs" ]; then
               stale=1
-              reason="The Renovate **Dependency Dashboard** (#${dash_num}) was last written by Renovate itself at \`${last_bot_write}\` — **${age_days} days** ago, exceeding the ${MAX_AGE_DAYS}-day freshness window (weekly Renovate schedule + grace). Renovate rewrites the dashboard on every completed run, so a frozen bot-write timestamp means the hosted Renovate (Mend) app has stopped executing against this repo. Newer HUMAN edits (e.g. ticking a dashboard checkbox) do not count: only a Renovate-authored write proves a completed run."
+              reason="The Renovate **Dependency Dashboard** (#${dash_num}) was last written by Renovate itself at \`${last_bot_write}\` — **${age_days} days** ago, exceeding the ${MAX_AGE_DAYS}-day freshness window (weekly Renovate schedule + grace). Renovate rewrites the dashboard on every completed run, so a frozen bot-write timestamp means NO Renovate executor — the self-hosted workflow, or the hosted Mend app while it is still installed — has completed a run against this repo. Newer HUMAN edits (e.g. ticking a dashboard checkbox) do not count: only a Renovate-authored write proves a completed run."
             else
               stale=0
             fi
@@ -181,7 +233,7 @@ jobs:
           {
             printf '## Renovate appears dormant on this repository\n\n'
             printf '%s\n\n' "$reason"
-            printf '**Dashboard:** %s · [Mend web portal](https://developer.mend.io/github/%s)\n' "$dash_ref" "$REPO"
+            printf '**Dashboard:** %s · **Recognised Renovate identities:** `%s`\n' "$dash_ref" "$RENOVATE_LOGINS"
             printf '**Freshness window:** %s days · **Observed age:** %s day(s) since the last Renovate-authored write\n' "$MAX_AGE_DAYS" "$age_days"
             printf '**Detected by:** `.github/workflows/renovate-freshness-gate.yml` (run: %s/%s/actions/runs/%s)\n\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
             printf '### What this means\n'
@@ -189,15 +241,25 @@ jobs:
             printf 'history), not `updatedAt` — human edits such as checkbox ticks bump `updatedAt`\n'
             printf 'and can mask a dead bot. A stale bot-write is not a schedule symptom — a manual\n'
             printf 'dashboard "run again" request bypasses the schedule and neither it nor the\n'
-            printf 'schedule can freeze the dashboard. It means the hosted Renovate (Mend) app has\n'
-            printf 'stopped completing runs against this repo.\n\n'
-            printf '### Owner action required (Mend developer portal — not fixable in-repo)\n'
-            printf '1. Open https://developer.mend.io/github/%s (authenticated as a cinatra-ai admin).\n' "$REPO"
-            printf '2. Read the latest job log for this repo; look for a run error / "job disabled" / resource-limit / paused state, and paste its terminal status into the tracking thread.\n'
-            printf '3. Clear the error state and trigger a run (portal "Recheck" / "Run now"), or reset onboarding if the portal offers it.\n'
-            printf '4. If the portal shows NO jobs at all for this repo in the stale window, a portal reset alone is known-insufficient (tried 2026-07-15, cinatra#1632): escalate to Mend support (https://support.mend.io) citing the repo slug and the last bot-write timestamp.\n'
+            printf 'schedule can freeze the dashboard. It means no Renovate executor has completed a\n'
+            printf 'run against this repo inside the window.\n\n'
+            printf '### Fix it here first (self-hosted Renovate — in-repo, no portal)\n'
+            printf '1. Open the `renovate-self-hosted` workflow: %s/%s/actions/workflows/renovate-self-hosted.yml\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY"
+            printf '2. Read the last run. Three distinct failures look identical from here:\n'
+            printf '   - **red run** — open it, download the `renovate-log-*` artifact, read the error;\n'
+            printf '   - **green run that did nothing** — the cron drifted outside the config schedule window (`before 6am on monday`, Europe/Berlin), so every update was skipped;\n'
+            printf '   - **no run at all** — GitHub disables scheduled workflows after 60 days of repository inactivity, and a disabled workflow is silent. Re-enable it on that page.\n'
+            printf '3. Re-run now: `gh workflow run renovate-self-hosted.yml -f dry_run=disabled` (the dispatch default is a DRY run and writes nothing).\n'
+            printf '4. If the run is green and the dashboard still does not move, check that the bot App installation still has contents:write + pull_requests:write + issues:write on this repo, and that the `RENOVATE_APP_ID` / `RENOVATE_APP_PRIVATE_KEY` repository secrets are still set (a rotated App key fails the token-mint step loudly).\n'
             printf '5. Confirm this issue auto-closes on the next `renovate-freshness-gate` run once Renovate writes the dashboard again.\n\n'
-            printf 'Root-cause diagnosis and background: cinatra#1632. Systemic ceremony guard: engineering#552.\n'
+            printf '### If the hosted Mend app is still the executor\n'
+            printf 'Until the Mend app is uninstalled it may also be writing this dashboard. If the\n'
+            printf 'self-hosted workflow is healthy and you are chasing the hosted app instead, its\n'
+            printf 'state lives in the Mend developer portal (https://developer.mend.io/github/%s),\n' "$REPO"
+            printf 'not in this repo; a portal reset alone was known-insufficient once already\n'
+            printf '(2026-07-15, cinatra#1632). The self-hosted workflow exists precisely so this\n'
+            printf 'branch of the runbook is no longer load-bearing.\n\n'
+            printf 'Root-cause diagnosis and background: cinatra#1632, cinatra#2241. Systemic ceremony guard: engineering#552.\n'
           } > "$body_file"
 
           if [ -n "$existing" ]; then
@@ -213,5 +275,5 @@ jobs:
             echo "Opened alert issue: ${new}"
           fi
 
-          echo "::error::Renovate Dependency Dashboard is stale/missing (age=${age_days}, threshold=${MAX_AGE_DAYS}d) — hosted Renovate is not running on this repo. See the surfaced alert issue."
+          echo "::error::Renovate Dependency Dashboard is stale/missing (age=${age_days}, threshold=${MAX_AGE_DAYS}d) — no Renovate executor is completing runs on this repo. See the surfaced alert issue."
           exit 1

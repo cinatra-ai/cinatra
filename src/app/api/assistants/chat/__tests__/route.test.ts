@@ -18,7 +18,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const getAuthSession = vi.fn();
 const requireActorContext = vi.fn();
 const isPlatformAdmin = vi.fn();
-const hasConfiguredLlmRuntime = vi.fn();
+const describeLlmRuntimeUnavailability = vi.fn();
 const runChatTurn = vi.fn();
 const readChatThreadOwnershipById = vi.fn();
 const isActorTeamMemberForChat = vi.fn();
@@ -40,7 +40,7 @@ vi.mock("@/lib/auth-session", () => ({
   isPlatformAdmin: (s: unknown) => isPlatformAdmin(s),
 }));
 vi.mock("@/app/api/chat/runner", () => ({
-  hasConfiguredLlmRuntime: () => hasConfiguredLlmRuntime(),
+  describeLlmRuntimeUnavailability: () => describeLlmRuntimeUnavailability(),
   runChatTurn: (...a: unknown[]) => runChatTurn(...a),
 }));
 vi.mock("@/lib/better-auth-db", () => ({
@@ -134,7 +134,8 @@ beforeEach(() => {
   getAuthSession.mockResolvedValue(sessionFor("user-1", "org-1"));
   requireActorContext.mockResolvedValue({ actorType: "human", source: "route", userId: "user-1" });
   isPlatformAdmin.mockReturnValue(false);
-  hasConfiguredLlmRuntime.mockResolvedValue(true);
+  // cinatra#2094 F10: the guard now asks for the REASON (null = a runtime is available).
+  describeLlmRuntimeUnavailability.mockResolvedValue(null);
   readChatThreadOwnershipById.mockReturnValue(null);
   getAssistantThread.mockReturnValue(null);
   createAssistantThread.mockImplementation((input: Record<string, unknown>) => input);
@@ -304,6 +305,71 @@ describe("POST /api/assistants/chat — authorization", () => {
   it("rejects a malformed body (strict schema)", async () => {
     const res = await POST(chatReq({ messages: [{ role: "user", content: "hi", extra: 1 }] }));
     expect(res.status).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2094 F10 — the exact-binding failure must NAME the stored provider.
+// ---------------------------------------------------------------------------
+// This guard is where the S6 contract ("unavailability is a VISIBLE error, not a
+// silent hop") is actually decided: it rejects the turn BEFORE the durable stream
+// exists, so the producer's `BoundDefaultProviderUnavailableError` — the class
+// written to name the provider — is never reached. The guard used to answer the
+// fixed string "No LLM provider configured.", which is exactly the useless
+// generic that error replaced, and S7's block C measured the consequence: the
+// string `anthropic` appeared NOWHERE on the rendered page.
+describe("POST /api/assistants/chat — bound-provider unavailability (F10)", () => {
+  const reason =
+    'The configured default LLM provider "anthropic" is not available (its connector is not ' +
+    "installed/active, or its credentials are missing or invalid). Fix that provider's " +
+    "configuration, choose a different default provider, or enable ordered failover in LLM settings.";
+
+  it("400s with the PROVIDER-NAMING reason + its code, never the generic, and starts no turn", async () => {
+    describeLlmRuntimeUnavailability.mockResolvedValue(reason);
+    const res = await POST(chatReq({ threadId: "th1", messages: [{ role: "user", content: "hi" }] }));
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; code: string };
+    expect(body.error).toContain("anthropic");
+    expect(body.error).toBe(reason);
+    expect(body.error).not.toBe("No LLM provider configured.");
+    // The discriminant the chat client requires before it will render a
+    // server-supplied reason at all — drift-pinned to the client's own literal.
+    expect(body.code).toBe("llm-provider-unavailable");
+    // No silent hop: the rejection happens before any producer runs.
+    expect(runChatTurn).not.toHaveBeenCalled();
+    expect(runAssistantTurn).not.toHaveBeenCalled();
+    expect(appendAssistantTurn).not.toHaveBeenCalled();
+  });
+
+  // The naming makes the body PRIVILEGED configuration, so the guard has to sit
+  // behind authentication and thread authorization (codex round 1). These pin that
+  // an unauthenticated / unauthorized caller cannot enumerate the stored provider.
+  it("does NOT name the provider to an unauthenticated caller (401 first)", async () => {
+    describeLlmRuntimeUnavailability.mockResolvedValue(reason);
+    getAuthSession.mockResolvedValue(null);
+    const res = await POST(chatReq({ threadId: "th1", messages: [{ role: "user", content: "hi" }] }));
+    expect(res.status).toBe(401);
+    expect(JSON.stringify(await res.json())).not.toContain("anthropic");
+    // The availability probe never even ran for this caller.
+    expect(describeLlmRuntimeUnavailability).not.toHaveBeenCalled();
+  });
+
+  it("does NOT name the provider on a thread the caller may not use (403 first)", async () => {
+    describeLlmRuntimeUnavailability.mockResolvedValue(reason);
+    readChatThreadOwnershipById.mockReturnValue({ ownerUserId: "someone-else", ownerOrgId: null });
+    const res = await POST(chatReq({ threadId: "th1", messages: [{ role: "user", content: "hi" }] }));
+    expect(res.status).toBe(403);
+    expect(JSON.stringify(await res.json())).not.toContain("anthropic");
+    expect(describeLlmRuntimeUnavailability).not.toHaveBeenCalled();
+  });
+
+  it("streams normally when a runtime IS available (null reason)", async () => {
+    describeLlmRuntimeUnavailability.mockResolvedValue(null);
+    const res = await POST(chatReq({ threadId: "th1", messages: [{ role: "user", content: "hi" }] }));
+    expect(res.status).toBe(200);
+    // Drain the stream inside the test: an undrained run finishes ASYNCHRONOUSLY
+    // and its stream teardown would then land in the NEXT test's mock counts.
+    expect(await readSse(res)).toContain('"type":"RUN_FINISHED"');
   });
 });
 

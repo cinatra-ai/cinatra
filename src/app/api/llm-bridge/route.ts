@@ -12,7 +12,6 @@ import {
   resolveImplicitGlobalProviderOrder,
   resolveProviderAdapter,
   createLocalSkillShellTool,
-  openAiModelSupportsShell,
   buildLlmMcpServerToolForAgentRun,
   buildLlmMcpServerTool,
   getLlmMcpCredentials,
@@ -1213,25 +1212,19 @@ export async function POST(req: Request): Promise<Response> {
     ) {
       const skillDirPath = path.dirname(resolvedPath);
       const skillSlug = path.basename(skillDirPath);
-      // Model-aware skill-tool injection.
-      // OpenAI's Responses API rejects the `shell` tool for several
-      // models (gpt-5 returns "400 Tool 'shell' is not supported with
-      // gpt-5"). Surfaced by tracing the web-scrape-agent failure to
-      // a docker/wayflow `_patched_run_task EXCEPTION` line:
-      // packages/llm/src/providers/openai.ts translates
-      // `type:"shell"` to the Responses API tool, which the model rejects.
-      // The no-shell model set lives in the shared capability leaf
-      // (@cinatra-ai/llm/openai-model-capabilities) so this route and the
-      // chat runner gate (src/app/api/chat/shell-skill-gate.ts) cannot
-      // drift apart. When the agent's preferredModel is shell-incompatible,
-      // skill delivery degrades (see the else branch below) — the legacy
-      // `read_skill` function-tool fallback is retired.
-      const dispatchModel =
-        dispatch.kind === "dispatch"
-          ? (dispatch.preferredModel ?? "")
-          : "";
-      const modelSupportsShell = openAiModelSupportsShell(dispatchModel);
-      if (modelSupportsShell) {
+      // SKILL MOUNTING IS MODEL-INDEPENDENT HERE (cinatra#2094 F11).
+      // This route used to skip mounting the skill tool entirely when the
+      // agent's `preferredModel` was hosted-shell-incompatible (issue #47's
+      // `400 Tool 'shell' is not supported with gpt-5`). That gate is retired:
+      // the model-aware decision belongs to the PROVIDER ADAPTER, which already
+      // owns it and, for a shell-incompatible model, emits the restricted NAMED
+      // `skill_file_read` function tool instead of the hosted shell (exec-plane
+      // S2's singular-native-shell rule, cinatra#1707). So no `type:"shell"` can
+      // reach such a model, and gating here only produced a SILENT
+      // no-delivery — the agent ran without its SKILL.md while reporting
+      // success. The capability leaf (@cinatra-ai/llm/openai-model-capabilities)
+      // stays the single source of truth for the ADAPTER's choice.
+      {
         // Bridge-side preflight: register the auto-discovered SKILL.md into
         // the catalog so its on-disk copy lives under the default
         // `data/skills` root — matching the chat path's
@@ -1284,16 +1277,6 @@ export async function POST(req: Request): Promise<Response> {
               },
             ],
           }),
-        );
-      } else {
-        // Shell-incompatible model (gpt-5 / gpt-5-mini). The legacy
-        // `read_skill` function-tool fallback has been retired to close
-        // the catalog-bypass surface; no in-repo agent currently selects
-        // these models. If a future agent does, skill delivery degrades to
-        // no inline skill tool — the model still runs but without the
-        // SKILL.md instructions via this surface.
-        console.warn(
-          `[bridge] shell-incompatible model "${dispatchModel}" — skill tool delivery degrades for agent slug "${skillSlug}"`,
         );
       }
     }
@@ -1589,9 +1572,10 @@ export async function POST(req: Request): Promise<Response> {
       // probe, so it is handed over rather than re-scanned. A bundle this route
       // mounts itself is EXCLUDED: it already reaches the model through the
       // shell channel, and injecting it again would double-deliver the bytes and
-      // burn a second cap slot. When the mount degraded (shell-incompatible
-      // model, registration failure) the edge is still delivered — through the
-      // contract, at declared-dependency rank.
+      // burn a second cap slot. When the mount did not happen (a registration
+      // failure; the shell-incompatible-model skip is retired — cinatra#2094 F11)
+      // the edge is still delivered — through the contract, at
+      // declared-dependency rank.
       declaredDependencySkillIds: declaredSkillEdge
         ? [declaredSkillEdge.skillId]
         : [],

@@ -40,9 +40,6 @@ vi.mock("@/app/api/chat/chat-user-context", () => ({
   // sections here so the wrapper is deterministic and formatting-rule only.
   buildChatUserContextSections: vi.fn(async () => []),
 }));
-vi.mock("@/app/api/chat/shell-skill-gate", () => ({
-  shouldDeliverChatShellSkillTools: () => true,
-}));
 vi.mock("@/app/api/chat/extension-confirmation", () => ({
   buildExtensionImplementationConfirmationPolicy: () => CONFIRMATION_POLICY,
 }));

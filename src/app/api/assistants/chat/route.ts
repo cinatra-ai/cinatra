@@ -2,7 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 import { getAuthSession, requireActorContext, isPlatformAdmin, resolveOrgRoleForUser } from "@/lib/auth-session";
-import { hasConfiguredLlmRuntime, runChatTurn, type ChatRequestMessage } from "@/app/api/chat/runner";
+import { describeLlmRuntimeUnavailability, runChatTurn, type ChatRequestMessage } from "@/app/api/chat/runner";
 import {
   authorizeThreadForTurn,
   streamAgUiChatTurn,
@@ -89,6 +89,21 @@ const WIDGET_AUTH_REQUIRED_HEADER = "X-Cinatra-Widget-Auth";
 // The site transport token prefix — the discriminant for the broker-auth
 // branch. A cookie-session caller carries NO Authorization bearer.
 const SHORT_LIVED_TOKEN_PREFIX = "cit_";
+
+/**
+ * The machine-readable discriminant on the ONE rejection body whose reason the
+ * chat client is allowed to render (cinatra#2094 F10).
+ *
+ * The client refuses to surface a server-supplied reason unless it sees this
+ * code, so an arbitrary 5xx / HTML proxy page / stack-bearing JSON can never
+ * reach the chat banner. A DRIFT-PINNED LITERAL on both sides, deliberately:
+ * `packages/chat` cannot value-import from core or from the llm barrel (the
+ * barrel pulls the host graph; see this route's client counterpart for the same
+ * pattern applied to the contract version). Drift FAILS CLOSED — the client
+ * falls back to its generic text — and is caught by the F10 tests on both sides,
+ * which use this exact string.
+ */
+const LLM_PROVIDER_UNAVAILABLE_CODE = "llm-provider-unavailable";
 
 const attachmentRefSchema = z
   .object({
@@ -221,11 +236,6 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
   // the token-bound origin checked inside consumeWidgetStreamToken below.
   const allowedOrigin = resolveWidgetStreamOrigin(requestOrigin, entry.auth);
   const corsHeaders = buildWidgetStreamCorsHeaders(allowedOrigin ?? requestOrigin ?? "");
-
-  const hasProvider = await hasConfiguredLlmRuntime();
-  if (!hasProvider) {
-    return Response.json({ error: "No LLM provider configured." }, { status: 400, headers: corsHeaders });
-  }
 
   // ----- cit_ SHORT-LIVED PATH. The token is authoritative: it binds
   // origin/aud/scope/expiry and is re-checked against the STORED row + live
@@ -374,6 +384,21 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     return Response.json({ error: authz.error }, { status: authz.status, headers: corsHeaders });
   }
 
+  // cinatra#2094 F10 — see the cookie-session branch below for the full note. The
+  // guard sits AFTER the whole dual-token fail-closed sequence and the thread
+  // authorization for the same reason it does there: naming the stored provider
+  // makes the body privileged configuration, and this branch is reachable
+  // cross-origin from a public site. An invalid/expired `cit_`/`cwu_` pair must
+  // therefore never learn which provider the instance is bound to. The DECISION is
+  // unchanged (it reads no request input).
+  const runtimeUnavailable = await describeLlmRuntimeUnavailability();
+  if (runtimeUnavailable) {
+    return Response.json(
+      { error: runtimeUnavailable, code: LLM_PROVIDER_UNAVAILABLE_CODE },
+      { status: 400, headers: corsHeaders },
+    );
+  }
+
   // Resolve the assistant's OWN persisted runtime config (the SAME generalized
   // resolution ladder the cookie-session selector branch uses). Unknown/corrupt
   // → 404, never a Cinatra fallback for a non-built-in principal.
@@ -503,11 +528,6 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
   const { threadId } = parsed.data;
   const messages: ChatRequestMessage[] = parsed.data.messages;
 
-  const hasProvider = await hasConfiguredLlmRuntime();
-  if (!hasProvider) {
-    return Response.json({ error: "No LLM provider configured." }, { status: 400 });
-  }
-
   const session = await getAuthSession();
   const userId = session?.user?.id;
   if (!userId) {
@@ -528,6 +548,41 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
   });
   if (!authz.ok) {
     return Response.json({ error: authz.error }, { status: authz.status });
+  }
+
+  // cinatra#2094 F10 — THE EXACT-BINDING FAILURE HAS TO NAME THE PROVIDER HERE.
+  //
+  // This is the last gate before the durable stream exists, so it is where the S6
+  // contract ("the assistant uses exactly the stored provider; unavailability is a
+  // VISIBLE error, not a silent hop") is actually decided for the common case.
+  // Under the shipped EXACT binding the resolver walks ONLY the stored provider,
+  // so a stored default that is down fails HERE — and the old boolean guard
+  // answered the fixed string "No LLM provider configured.", which is precisely
+  // the useless generic `BoundDefaultProviderUnavailableError` was written to
+  // replace. The producer's throwing resolver was never reached, so the naming
+  // error class could not help: the guard SHADOWED it.
+  //
+  // WHY IT SITS AFTER AUTHENTICATION AND THREAD AUTHORIZATION (codex round 1).
+  // The pre-F10 guard ran before the session check, which was harmless while its
+  // body was a constant. Naming the stored provider makes the body PRIVILEGED
+  // configuration: run it any earlier and an unauthenticated caller could
+  // enumerate which provider this instance is bound to and that it is down. The
+  // DECISION is unchanged by the move (it reads no request input), so an
+  // authorized caller sees exactly what it saw before, and everyone else gets
+  // 401/403 first.
+  //
+  // `describeLlmRuntimeUnavailability()` makes the identical decision to the old
+  // boolean guard (same scripted-provider seam, same order, same per-provider
+  // resolution) and returns the error class's own wording, so the operator is
+  // told WHICH provider to fix. The status stays 400; the `code` is the
+  // machine-readable discriminant the chat client requires before it is willing
+  // to surface a server-supplied reason at all.
+  const runtimeUnavailable = await describeLlmRuntimeUnavailability();
+  if (runtimeUnavailable) {
+    return Response.json(
+      { error: runtimeUnavailable, code: LLM_PROVIDER_UNAVAILABLE_CODE },
+      { status: 400 },
+    );
   }
 
   // Producer selection (cinatra#1823, epic #1037 P4.1). ABSENT `assistant` keeps

@@ -406,6 +406,43 @@ function normalizeBundleWrite(write: RevisionBundleWrite): {
 }
 
 /**
+ * How a bundle write may move the CURRENT-BUNDLE POINTER (`skill_bundle_heads`).
+ *
+ * Every variant is enforced INSIDE the head UPSERT, over the head row's OWN
+ * columns only, so the decision is atomic with the write (see the comment on the
+ * head statement in {@link buildRevisionBundleQueries} for why a correlated
+ * subquery could not be).
+ *
+ *  - `"always"` — unconditional. The LIFECYCLE write path: the authority itself
+ *    is speaking, so it owns the pointer outright.
+ *  - `"only-derived"` — advance only while the incumbent head is itself
+ *    disk-derived (`bundle:` prefix). The CAPTURE path's default: an
+ *    authority-owned (lifecycle/rollback) head installed concurrently — between
+ *    capture's head read and its write — can never be clobbered by disk bytes.
+ *  - `"only-if-absent"` — INSERT a head only when the skill has none at all
+ *    (`ON CONFLICT DO NOTHING`). The pre-S1 re-baseline SEED: it exists to give a
+ *    head-less skill a starting pointer, so a head that appeared concurrently
+ *    (a lifecycle write racing the seed) must win, never be overwritten.
+ *  - `{ cas: { revisionId, bundleDigest, skillPayload } }` — COMPARE-AND-SWAP on
+ *    the exact rows the caller read and classified. Used by the router-only-seed
+ *    heal, where the decision to replace an authority-owned head depends on facts
+ *    that must be read before the write. It covers BOTH mutable inputs:
+ *      * the head row's own `(revision_id, bundle_digest)`;
+ *      * the classified `skills.payload` — locked and re-checked with `FOR UPDATE`
+ *        in the SAME statement, because a raw catalog writer can flip a skill into
+ *        the custom/personal class with a bare `UPDATE ... SET payload` that
+ *        touches no revision and no head (`packages/skills/src/cli.mjs`
+ *        `compileAndRegisterAgentSkillsViaPg`), which a head-only CAS would miss.
+ *    Comparing the payload TEXT (not a parsed projection) keeps the guard free of
+ *    a `payload::jsonb` cast that a malformed row could abort the write on.
+ */
+export type BundleHeadGuard =
+  | "always"
+  | "only-derived"
+  | "only-if-absent"
+  | { cas: { revisionId: string; bundleDigest: string; skillPayload: string } };
+
+/**
  * Build the query list that persists a revision's bundle — content-addressed
  * blob upserts (ON CONFLICT DO NOTHING; a blob is a pure function of its digest)
  * + the immutable manifest rows (ON CONFLICT DO NOTHING so a concurrent/idempotent
@@ -420,12 +457,8 @@ export function buildRevisionBundleQueries(
   schemaName: string,
   write: RevisionBundleWrite,
   options?: {
-    /** `"only-derived"` makes the head advance CONDITIONAL: it overwrites an
-     * existing head only while that head is itself disk-derived. Used by the
-     * capture path so an authority-owned (lifecycle/rollback) head installed
-     * concurrently — between capture's head read and its write — can never be
-     * clobbered. The lifecycle path uses the default (`"always"`). */
-    headGuard?: "always" | "only-derived";
+    /** How the CURRENT-BUNDLE POINTER may move — see {@link BundleHeadGuard}. */
+    headGuard?: BundleHeadGuard;
   },
 ): Array<{ text: string; values?: unknown[] }> {
   const s = schemaName.replaceAll('"', '""');
@@ -451,18 +484,62 @@ export function buildRevisionBundleQueries(
   // yet. `skill_bundle_heads` is the authority's own pointer — the lifecycle
   // `skills.active_revision_id` covers custom/personal skills ONLY, so a derived
   // (extension) skill would otherwise have no resolvable current bundle at all.
-  const headGuardClause =
-    options?.headGuard === "only-derived"
-      ? `\n        WHERE "${s}"."skill_bundle_heads".revision_id LIKE '${DERIVED_REVISION_PREFIX}%'`
-      : "";
-  queries.push({
-    text: `INSERT INTO "${s}"."skill_bundle_heads" (skill_id, revision_id, bundle_digest, updated_at)
-      VALUES ($1, $2, $3, now())
+  //
+  // EVERY guard predicate below reads ONLY the head row's OWN columns. That is
+  // deliberate and load-bearing (cinatra#2094, codex round-1 finding #2): under
+  // READ COMMITTED an `ON CONFLICT DO UPDATE` that waits on a concurrent
+  // transaction re-evaluates its `WHERE` against the LATEST COMMITTED VERSION of
+  // the conflicting row, so a predicate over that row's own columns is a true
+  // compare-and-swap. A correlated SUBQUERY over another table (e.g. "does the
+  // incumbent head's revision have any non-router manifest row?") is NOT: the
+  // subquery still runs in this statement's snapshot, so it can see the
+  // concurrent transaction's new head row while that transaction's manifest rows
+  // are still invisible — and then pass, clobbering a freshly installed
+  // authority head. No guard here may take that shape.
+  const head = options?.headGuard ?? "always";
+  const headValues: unknown[] = [write.skillId, write.revisionId, bundleDigest];
+  if (typeof head === "object") {
+    // CAS. The `ownership` CTE runs FIRST (the INSERT selects from it): it takes a
+    // ROW LOCK on the catalog row and re-checks the classified payload against the
+    // row's LATEST version. A concurrent payload write either lands before the
+    // lock (the equality then fails and the CTE is empty, so nothing is inserted
+    // at all) or is blocked behind us until this transaction commits — so the
+    // ownership fact cannot go stale while the head upsert waits on the head-row
+    // lock. Lock order is skills → skill_bundle_heads, matching the lifecycle
+    // write and the rollback CTE, so the two can never deadlock.
+    headValues.push(head.cas.revisionId, head.cas.bundleDigest, head.cas.skillPayload);
+    queries.push({
+      text: `WITH ownership AS (
+        SELECT 1 FROM "${s}"."skills" WHERE id = $1 AND payload = $6 FOR UPDATE
+      )
+      INSERT INTO "${s}"."skill_bundle_heads" (skill_id, revision_id, bundle_digest, updated_at)
+      SELECT $1, $2, $3, now() FROM ownership
       ON CONFLICT (skill_id) DO UPDATE
         SET revision_id = EXCLUDED.revision_id,
             bundle_digest = EXCLUDED.bundle_digest,
-            updated_at = now()${headGuardClause}`,
-    values: [write.skillId, write.revisionId, bundleDigest],
+            updated_at = now()
+        WHERE "${s}"."skill_bundle_heads".revision_id = $4
+          AND "${s}"."skill_bundle_heads".bundle_digest = $5`,
+      values: headValues,
+    });
+    return queries;
+  }
+  const headConflictClause =
+    head === "only-if-absent"
+      ? "ON CONFLICT (skill_id) DO NOTHING"
+      : `ON CONFLICT (skill_id) DO UPDATE
+        SET revision_id = EXCLUDED.revision_id,
+            bundle_digest = EXCLUDED.bundle_digest,
+            updated_at = now()${
+              head === "only-derived"
+                ? `\n        WHERE "${s}"."skill_bundle_heads".revision_id LIKE '${DERIVED_REVISION_PREFIX}%'`
+                : ""
+            }`;
+  queries.push({
+    text: `INSERT INTO "${s}"."skill_bundle_heads" (skill_id, revision_id, bundle_digest, updated_at)
+      VALUES ($1, $2, $3, now())
+      ${headConflictClause}`,
+    values: headValues,
   });
   return queries;
 }
@@ -481,7 +558,7 @@ export function bundleDigestForFiles(files: BundleFileInput[]): string {
  */
 export function writeRevisionBundleToDatabase(
   write: RevisionBundleWrite,
-  options?: { headGuard?: "always" | "only-derived" },
+  options?: { headGuard?: BundleHeadGuard },
 ): string {
   ensurePostgresSchema();
   const { bundleDigest } = normalizeBundleWrite(write);
@@ -664,6 +741,36 @@ export async function readSkillDirectoryAsBundleFiles(
   return out;
 }
 
+/**
+ * Whether a skill's catalog payload marks it CUSTOM or PERSONAL — the class for
+ * which the DATABASE, not the disk, is the content authority.
+ *
+ * A faithful twin of `isCustomOrPersonalSkillPayload` in
+ * `packages/skills/src/skill-source.ts` and of the `CUSTOM_PREDICATE` SQL in
+ * `migrations/core/core__0029_skill-lifecycle.mjs` — the predicate that decided
+ * which skills got a lifecycle revision in the first place. Inlined here for the
+ * same reason `normalizeBundledRelPath` above is (this store is reachable from
+ * every locked route, so a new first-party import would push the route-graph
+ * ratchet), and pinned to the canonical implementation by a drift test in
+ * `src/lib/__tests__/skill-bundle-router-only-seed-heal.test.ts`.
+ *
+ * FAIL-CLOSED: an unparseable payload counts as custom/personal, so an
+ * unreadable row can never license a disk write over a DB-owned head.
+ */
+function isCustomOrPersonalSkillPayloadJson(payloadText: unknown): boolean {
+  if (typeof payloadText !== "string") return true;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payloadText);
+  } catch {
+    return true;
+  }
+  if (!parsed || typeof parsed !== "object") return true;
+  const p = parsed as Record<string, unknown>;
+  if (typeof p.packageId === "string" && p.packageId.startsWith("custom:")) return true;
+  return p.isCustomSkill === true || p.isPersonal === true;
+}
+
 /** A skill's current-bundle pointer row. */
 export interface SkillBundleHead {
   skillId: string;
@@ -752,7 +859,17 @@ export interface SkillBundleCapture {
   skillId: string;
   revisionId: string;
   bundleDigest: string;
-  /** True when this capture advanced the head (new or changed disk content). */
+  /**
+   * True when the head resolves to THIS capture's revision after the guarded
+   * write — i.e. new or changed disk content landed.
+   *
+   * A REPORTING signal, not an authority fact: the sync service uses it only to
+   * bucket a skill as `captured` vs `unchanged`. Under two concurrent captures of
+   * the SAME disk content both derive the same content-addressed revision, so the
+   * one whose guarded write wrote no rows still finds that revision installed and
+   * reports `true`. Over-reporting costs a redundant re-sync consideration and
+   * never loses or overwrites authority (codex round-3 warning).
+   */
   changed: boolean;
   /** True when the head is AUTHORITY-OWNED (a lifecycle revision) and disagrees
    * with what is on disk — capture deliberately left it alone. */
@@ -792,7 +909,18 @@ export interface SkillBundleCapture {
  * when that revision has no durable blob (nothing authoritative to seed from) —
  * in which case capture proceeds and records the disk bundle.
  */
-function seedBundleHeadFromLifecycleRevision(skillId: string): SkillBundleHead | null {
+function seedBundleHeadFromLifecycleRevision(
+  skillId: string,
+  /**
+   * How many files the skill's on-disk bundle actually ships (cinatra#2094 F7).
+   * A bundle-of-ONE seed is only a faithful re-baseline for a skill whose whole
+   * bundle IS its router; see the multi-file guard below.
+   */
+  diskFileCount: number,
+): SkillBundleHead | null {
+  // Every head write below is `only-if-absent`: this is a SEED, reached only
+  // because the skill had no head a moment ago. If a lifecycle write installed
+  // one in the meantime, that head is the authority's own and must win.
   const existing = readSkillBundleHeadFromDatabase(skillId);
   if (existing) return existing;
   ensurePostgresSchema();
@@ -801,7 +929,7 @@ function seedBundleHeadFromLifecycleRevision(skillId: string): SkillBundleHead |
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT sk.active_revision_id, c.content
+        text: `SELECT sk.active_revision_id, sk.payload, c.content
                  FROM "${s}"."skills" sk
                  LEFT JOIN "${s}"."skill_revisions" r
                         ON r.id = sk.active_revision_id AND r.skill_id = sk.id
@@ -812,27 +940,200 @@ function seedBundleHeadFromLifecycleRevision(skillId: string): SkillBundleHead |
       },
     ],
   });
-  const row = results[0]?.rows?.[0] as { active_revision_id?: unknown; content?: unknown } | undefined;
+  const row = results[0]?.rows?.[0] as
+    | { active_revision_id?: unknown; payload?: unknown; content?: unknown }
+    | undefined;
   const revisionId = typeof row?.active_revision_id === "string" ? row.active_revision_id : null;
   if (!revisionId) return null;
   // Already has a manifest (a post-S1 lifecycle write) → just point the head at it.
   const stored = readRevisionBundleFromDatabase(skillId, revisionId);
   if (stored) {
-    writeRevisionBundleToDatabase({
-      revisionId,
-      skillId,
-      files: stored.files.map((f) => ({ path: f.path, bytes: f.bytes, mode: f.mode, isRouter: f.isRouter })),
-    });
+    writeRevisionBundleToDatabase(
+      {
+        revisionId,
+        skillId,
+        files: stored.files.map((f) => ({ path: f.path, bytes: f.bytes, mode: f.mode, isRouter: f.isRouter })),
+      },
+      { headGuard: "only-if-absent" },
+    );
     return readSkillBundleHeadFromDatabase(skillId);
   }
   const content = typeof row?.content === "string" ? row.content : null;
   if (content == null) return null; // no durable blob — nothing authoritative to seed
-  writeRevisionBundleToDatabase({
-    revisionId,
-    skillId,
-    files: [{ path: SKILL_ROUTER_PATH, bytes: Buffer.from(content, "utf8"), isRouter: true }],
-  });
+  // MULTI-FILE GUARD (cinatra#2094 F7-A). A pre-S1 lifecycle revision stores
+  // ONLY the router body, so seeding from it mints a bundle-of-ONE manifest.
+  // That manifest is AUTHORITY-OWNED (its revision id carries no `bundle:`
+  // prefix), so `captureSkillBundleFromDisk` below then classifies the skill as
+  // an `authorityOwnedDivergence` and NEVER advances the head — permanently, on
+  // every subsequent capture.
+  //
+  // For a skill whose on-disk bundle is a router PLUS one-hop `references/*`,
+  // that outcome is not a conservative re-baseline; it is a manifest the
+  // router provably dead-ends against, which S2's fail-closed one-hop lint
+  // (cinatra#2089) then REFUSES as an upload candidate. Measured consequence
+  // (cinatra#2094 S7): every multi-file skill — including 3 of the 5 the Cinatra
+  // assistant itself requires — was silently absent from the Anthropic mirror
+  // after a readiness saga that reported "22 skill(s) uploaded", so the first
+  // /chat turn failed loud on skills the wizard claimed to have synced.
+  //
+  // The re-baseline exists for a CUSTOM/PERSONAL skill written before this
+  // slice (its whole bundle IS one SKILL.md, and a rollback must not be
+  // clobbered by a stale disk projection). Skipping the seed lets capture record
+  // the real bundle under a derived (`bundle:`) revision, which stays disk-owned
+  // and re-capturable exactly as intended.
+  //
+  // THE SKIP IS ITSELF GATED ON OWNERSHIP (codex round-4 finding). Disk file
+  // count alone is not a licence to skip: `core__0029` seeded a NULL-stamped
+  // `migration` revision for exactly the pre-S1 CUSTOM/PERSONAL skills, and a
+  // pre-S1 `upsertSkill` recorded no file set either — so such a skill DOES reach
+  // this seed, and any stray sibling in its directory (an old reference, editor
+  // residue) makes it look multi-file. Skipping there would leave it head-less,
+  // and the capture below would then INSERT a disk-derived head over its
+  // DB-authoritative revision with no head to compare against — an authority
+  // violation on the FIRST capture, with no race involved. For that class the
+  // bundle-of-one re-baseline is always the right answer, so the seed always
+  // runs. Fail-closed: an unreadable payload counts as custom/personal.
+  if (diskFileCount > 1 && !isCustomOrPersonalSkillPayloadJson(row?.payload)) return null;
+  writeRevisionBundleToDatabase(
+    {
+      revisionId,
+      skillId,
+      files: [{ path: SKILL_ROUTER_PATH, bytes: Buffer.from(content, "utf8"), isRouter: true }],
+    },
+    { headGuard: "only-if-absent" },
+  );
   return readSkillBundleHeadFromDatabase(skillId);
+}
+
+/**
+ * Whether a skill's CURRENT head is provably one minted by the pre-guard
+ * bundle-of-ONE branch of {@link seedBundleHeadFromLifecycleRevision}
+ * (cinatra#2094 F7-A) — the head the heal below is allowed to replace.
+ *
+ * The discriminator is DURABLE ROW PROVENANCE, not file counts (codex round-1
+ * finding #1: manifest CARDINALITY cannot tell the defective seed apart from a
+ * custom/personal skill that is a DELIBERATE bundle of one, whose disk write
+ * rewrites only `SKILL.md` and leaves siblings in place).
+ *
+ * WHAT MAKES THE READ-THEN-WRITE SAFE (codex round-2 + round-3 findings). Every
+ * condition is either (a) a row in a table that raises on UPDATE/DELETE
+ * (`skill_revisions`, `skill_revision_files`), or (b) a fact whose only way to
+ * change is a write that ALSO replaces the head row — which the target-row CAS
+ * detects. Specifically:
+ *   - conditions 2–5 read append-only rows. New manifest PATHS could in principle
+ *     be INSERTed under an existing revision (the PK is `(revision_id, path)`),
+ *     but every shipped writer mints a FRESH revision id for a new file set: the
+ *     lifecycle write, the rollback, and capture all do, and the seed writes only
+ *     when the skill has no head. Nothing appends to a legacy lifecycle revision;
+ *   - condition 0 reads the MUTABLE `skills.payload`. That is safe in the
+ *     direction that matters: a skill ENTERS the custom/personal class through
+ *     `upsertSkill`, whose write path records a bundle-of-one revision and
+ *     performs an UNCONDITIONAL head write in the same transaction — so the head
+ *     row changes and this heal's CAS misses.
+ * The classifier deliberately does NOT read `skills.active_revision_id`: a
+ * lifecycle "pure state re-record" (no `bundleFiles`) moves that pointer WITHOUT
+ * touching the head, so it is mutable state the CAS could not protect.
+ *
+ *  0. the skill is NOT custom/personal. This is the one that decides WHOSE
+ *     content authority is at stake, and it is checked first for that reason.
+ *     For a custom/personal skill the DATABASE is the authority and the on-disk
+ *     copy is a projection a rollback does not rewrite — a bundle-of-one head is
+ *     the seed's CORRECT re-baseline there, not a defect, and healing it would be
+ *     the authority violation. It has to be an explicit condition rather than a
+ *     consequence of the others: `core__0029` seeded a NULL-stamped `migration`
+ *     revision for exactly the pre-S1 custom/personal skills, and a pre-S1
+ *     `upsertSkill` recorded no file set either, so such a skill reaches the seed
+ *     with the same row shape a derived one does. Any stray sibling left in its
+ *     directory (an old reference, editor residue) would then make it look
+ *     multi-file. Predicate: the canonical custom/personal marker set — the same
+ *     one `core__0029`'s backfill used to decide who gets a lifecycle revision;
+ *  1. the head is AUTHORITY-OWNED (no `bundle:` prefix) — a derived head takes
+ *     the ordinary capture path and never reaches the heal at all;
+ *  2. a `skill_revisions` row for the head's revision EXISTS (scoped to the
+ *     skill) — the seed only ever points a head at a real lifecycle revision;
+ *  3. **that revision's `bundle_digest` is NULL.** This is the load-bearing
+ *     fact. `skill_revisions` is APPEND-ONLY, so the column can only ever be
+ *     written at INSERT — and the lifecycle write path stamps it at INSERT for
+ *     EVERY write that records a file set (`buildSkillLifecycleRevisionQueries`:
+ *     `bundle_digest = bundleDigestForFiles(...)` whenever `bundleFiles` is
+ *     present, and it emits the manifest rows in the SAME transaction). So a
+ *     manifest sitting under a NULL-stamped lifecycle revision CANNOT have come
+ *     from the lifecycle path. Conversely the defective seed can only fire when
+ *     the revision had NO manifest — i.e. was written without `bundleFiles` — so
+ *     its `bundle_digest` is NULL by construction. A deliberate custom/personal
+ *     bundle-of-one is therefore excluded outright: `buildUpsertRevisionWrite`
+ *     always passes the one-file bundle, so its revision is stamped;
+ *  4. the revision's `source` is NOT `'rollback'`. A rollback revision legitimately
+ *     carries a NULL `bundle_digest` when it restores a pre-S1 target (the column
+ *     is copied from that target), while its manifest is written by the rollback
+ *     CTE / the pre-S1 bundle-of-one arm in `applySkillRollbackInDatabase`. A
+ *     rollback head is a deliberate authority decision and is NEVER healed;
+ *  5. the manifest is EXACTLY the router: one row, and that row is `SKILL.md`.
+ *     ZERO manifest rows is deliberately NOT a match (codex round-1 finding #2,
+ *     second half): a head pointing at an empty manifest is an unresolvable head
+ *     that every read already fails closed on, not a seed to heal.
+ *
+ * Together 1–5 identify the WRITER of that manifest by elimination — only three
+ * paths ever write manifest rows under a non-`bundle:` revision id: the lifecycle
+ * write (excluded by 3), the rollback (excluded by 4), and this seed; `core__0084`
+ * ships no backfill, so there is no fourth — and condition 0 establishes that
+ * healing that seed's head is the RIGHT thing to do for this skill.
+ */
+function readLifecycleSeedHeadProvenance(skillId: string): {
+  head: SkillBundleHead;
+  isLifecycleSeedHead: boolean;
+  /** The catalog payload condition 0 was decided on — CAS'd by the head write. */
+  skillPayload: string;
+} | null {
+  const head = readSkillBundleHeadFromDatabase(skillId);
+  if (!head) return null;
+  if (head.revisionId.startsWith(DERIVED_REVISION_PREFIX)) {
+    return { head, isLifecycleSeedHead: false, skillPayload: "" };
+  }
+  ensurePostgresSchema();
+  const s = postgresSchema.replaceAll('"', '""');
+  const results = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    transaction: true,
+    queries: [
+      {
+        // No row at all (no such lifecycle revision for this skill, or no catalog
+        // row) ⇒ not a seed head. Fail closed. The ownership class is decided in
+        // JS over the raw payload rather than by a `payload::jsonb` cast, so a
+        // malformed payload degrades to "custom/personal" instead of aborting
+        // capture with a cast error.
+        text: `SELECT r.bundle_digest AS revision_bundle_digest,
+                      r.source        AS revision_source,
+                      sk.payload      AS skill_payload,
+                      (SELECT count(*) FROM "${s}"."skill_revision_files" f
+                        WHERE f.revision_id = $2 AND f.skill_id = $1) AS manifest_file_count,
+                      (SELECT count(*) FROM "${s}"."skill_revision_files" f
+                        WHERE f.revision_id = $2 AND f.skill_id = $1 AND f.path = $3) AS router_file_count
+                 FROM "${s}"."skill_revisions" r
+                 JOIN "${s}"."skills" sk ON sk.id = r.skill_id
+                WHERE r.id = $2 AND r.skill_id = $1`,
+        values: [skillId, head.revisionId, SKILL_ROUTER_PATH],
+      },
+    ],
+  });
+  const row = results[0]?.rows?.[0] as
+    | {
+        revision_bundle_digest?: unknown;
+        revision_source?: unknown;
+        skill_payload?: unknown;
+        manifest_file_count?: unknown;
+        router_file_count?: unknown;
+      }
+    | undefined;
+  if (!row) return { head, isLifecycleSeedHead: false, skillPayload: "" };
+  const isLifecycleSeedHead =
+    !isCustomOrPersonalSkillPayloadJson(row.skill_payload) &&
+    row.revision_bundle_digest == null &&
+    row.revision_source !== "rollback" &&
+    Number(row.manifest_file_count) === 1 &&
+    Number(row.router_file_count) === 1;
+  // `skill_payload` is `text NOT NULL`; the String() is defensive only.
+  return { head, isLifecycleSeedHead, skillPayload: String(row.skill_payload ?? "") };
 }
 
 export async function captureSkillBundleFromDisk(
@@ -850,7 +1151,7 @@ export async function captureSkillBundleFromDisk(
   // Pre-S1 re-baseline: adopt an existing LIFECYCLE head before considering the
   // disk copy, so an upgraded deployment never lets stale disk bytes override
   // the authoritative stored revision.
-  const head = seedBundleHeadFromLifecycleRevision(skillId);
+  const head = seedBundleHeadFromLifecycleRevision(skillId, files.length);
   if (head && head.bundleDigest === bundleDigest) {
     return {
       skillId,
@@ -861,7 +1162,36 @@ export async function captureSkillBundleFromDisk(
       lint,
     };
   }
-  if (head && !head.revisionId.startsWith(DERIVED_REVISION_PREFIX)) {
+  // HEAL an instance already pinned by the pre-guard seed (cinatra#2094 F7-A).
+  // The seed above no longer mints a bundle-of-ONE head for a multi-file skill,
+  // but an instance provisioned before this fix already carries one, and every
+  // later capture would keep reporting `authorityOwnedDivergence` forever — so
+  // its stored manifest could never gain the `references/*` the router needs and
+  // the skill stayed permanently unpublishable to Anthropic.
+  //
+  // The heal fires ONLY on a head whose DURABLE ROW PROVENANCE proves it was
+  // minted by that seed — see `readLifecycleSeedHeadProvenance` for each
+  // condition and why it holds. It is deliberately NOT keyed on manifest
+  // cardinality: a custom/personal skill is a DELIBERATE bundle of one whose disk
+  // write rewrites only `SKILL.md`, so it presents the same file counts and would
+  // otherwise have its genuine lifecycle/rollback head replaced by a derived disk
+  // head (codex round-1 finding #1).
+  //
+  // Narrowed further by `files.length > 1`: the heal exists because the stored
+  // manifest can never gain the `references/*` the router links to. A single-file
+  // disk bundle diverging from a single-file authority head is an ordinary
+  // authority divergence (a rollback disk did not rewrite) and stays untouched.
+  const provenance = head ? readLifecycleSeedHeadProvenance(skillId) : null;
+  /** The exact head row the CAS below is licensed to replace, or null. */
+  const healableSeedHead =
+    head != null &&
+    files.length > 1 &&
+    provenance != null &&
+    provenance.isLifecycleSeedHead &&
+    provenance.head.revisionId === head.revisionId
+      ? provenance
+      : null;
+  if (head && !healableSeedHead && !head.revisionId.startsWith(DERIVED_REVISION_PREFIX)) {
     // AUTHORITY-OWNED head (a lifecycle revision written by the custom/personal
     // write path, or by a rollback). For those skills the DB — not the disk — is
     // the content authority: the disk copy is a projection that a rollback does
@@ -883,7 +1213,27 @@ export async function captureSkillBundleFromDisk(
   // write installed an authority-owned head since the read above, the head
   // advance is skipped atomically (the manifest rows are still recorded — they
   // are immutable history, harmless to keep).
-  writeRevisionBundleToDatabase({ revisionId, skillId, files }, { headGuard: "only-derived" });
+  writeRevisionBundleToDatabase(
+    { revisionId, skillId, files },
+    // Healing a provenance-confirmed seed head is the ONLY case that may replace
+    // an authority-owned head, and it does so as a TARGET-ROW CAS against the
+    // exact `(revision_id, bundle_digest)` that was classified — so if a
+    // lifecycle/rollback write installed a real authority head since that read,
+    // the swap is atomically a NO-OP rather than a clobber (cinatra#2094, codex
+    // round-1 finding #2). Every other capture keeps the strict `only-derived`
+    // guard.
+    {
+      headGuard: healableSeedHead
+        ? {
+            cas: {
+              revisionId: healableSeedHead.head.revisionId,
+              bundleDigest: healableSeedHead.head.bundleDigest,
+              skillPayload: healableSeedHead.skillPayload,
+            },
+          }
+        : "only-derived",
+    },
+  );
   // Report the head as it ACTUALLY stands after the guarded write.
   const after = readSkillBundleHeadFromDatabase(skillId);
   if (!after || after.revisionId !== revisionId) {

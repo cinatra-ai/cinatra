@@ -54,6 +54,11 @@ test-*.ts
 # context so it's always fresh.
 scripts/better-auth-migrate.bundle.mjs
 scripts/schema-bootstrap.bundle.mjs
+# Same rule for the execution-plane service bundles (RUN pnpm
+# build:exec-service-bundle, inside docker/exec-worker/Dockerfile): a stale
+# local build must never enter any image's build context.
+scripts/exec-broker-service.bundle.mjs
+scripts/exec-worker-service.bundle.mjs
 
 # Required-extension OAS seed (cinatra-ai/ops#436). Projected INSIDE the build
 # from the acquired /app/extensions (RUN build-required-oas-seed.mjs). A stale

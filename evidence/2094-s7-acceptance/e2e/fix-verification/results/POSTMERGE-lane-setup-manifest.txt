@@ -1,0 +1,17 @@
+host commit                : fa0503c72f151851898bc6ab4b00d0449f74c0a0
+origin/main at report time    : 6cf22be5a (main advanced AFTER the run started; the run is pinned at fa0503c72)
+run pinned at                : fa0503c72 = origin/main at lane start
+contains #2254 (eff336119) : yes
+contains #2246 (e646347d8) : yes
+contains #2249 (cab30ca89) : yes
+extension repos cloned     : 111/111 at the pinned SHAs (sync-dev-extensions --pinned, exit 0)
+anthropic-connector SHA    : e0a6c09 (DELIBERATE off-pin exception — finding F12; lock pins 9783123)
+runtime                    : next build + next start (production server); BUILD_EXIT=0
+node                       : v22.23.0
+postgres                   : PostgreSQL18.4(Debian18.4-1.pgdg13+1)
+core migrations applied     : 73
+tables in schema cinatra   : 160
+catalog skills registered  : 28
+multi-file skill bundles on disk : 6
+operator account role      : admin
+MCP public base URL row    : {"publicBaseUrl":"https://<lane-funnel-origin>","publicBaseUrlSource":"manual"}

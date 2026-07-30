@@ -73,6 +73,26 @@ if (!DIR) {
         toolTypes: Array.isArray(parsed?.tools)
           ? parsed.tools.map((t) => t?.type ?? t?.function?.name ?? "unnamed")
           : null,
+        // The tool NAME alongside its type (cinatra#2094 F11 fix-verification).
+        // `toolTypes` alone collapses every OpenAI function tool to the string
+        // "function", which is exactly why the S7 round read a delivered skill
+        // tool as "no delivery": OpenAI's singular-native-shell rule
+        // (cinatra#1707) emits the skill vehicle as the restricted NAMED
+        // `skill_file_read` FUNCTION tool whenever the request is
+        // skills-without-execution — a `type:"shell"` is emitted only for an
+        // execution-authorized turn. Recording the name makes "was a skill tool
+        // mounted?" a MEASUREMENT instead of an inference. Tool names are
+        // structural identifiers, never secrets — no argument or body is kept.
+        toolNames: Array.isArray(parsed?.tools)
+          ? parsed.tools.map((t) => ({
+              type: t?.type ?? null,
+              name: t?.name ?? t?.function?.name ?? null,
+              // The skill listing the hosted shell carries, when there is one.
+              shellSkillCount: Array.isArray(t?.environment?.skills)
+                ? t.environment.skills.length
+                : null,
+            }))
+          : null,
         messageCount: Array.isArray(parsed?.messages) ? parsed.messages.length : null,
         stream: parsed?.stream === true,
       };

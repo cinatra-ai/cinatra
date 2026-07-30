@@ -30,10 +30,17 @@
  * jobs/audit DB tables (migration-seq-at-merge), routing the broker's L2
  * workspace + read-only skills volume operations to a REMOTE worker (the broker
  * still performs them through its own docker seam), a broker-side per-command
- * run-liveness binding for the remote placement, making the `remote` placement
- * mode selectable in the platform-admin settings surface, a live broker
- * reachability probe in the health-view boot phase, and the registry
- * read-through cache on the gateway.
+ * run-liveness binding for the remote placement, and the registry read-through
+ * cache on the gateway.
+ *
+ * Two items that used to sit on that list landed in the app layer with
+ * exec-plane L4 and are named here so this header stays a true map: making the
+ * `remote` placement mode selectable in the platform-admin settings surface
+ * (`src/lib/execution/execution-plane-settings.ts`) and the LIVE broker
+ * reachability probe in the health-view boot phase
+ * (`src/lib/boot/phases/execution-plane-health.ts`, behind its own default-off
+ * flag). What this package contributes to both is the COMPOSITE health answer
+ * below — `service/composite-health.ts`.
  */
 
 export {
@@ -53,6 +60,10 @@ export {
   resolveL0ImageRef,
   assertSafeImageRef,
   containerNameFor,
+  containerNamePrefixFor,
+  isContainerNameForJob,
+  SANDBOX_CONTAINER_LABEL,
+  SANDBOX_CONTAINER_JOB_LABEL,
   sandboxEnvironment,
   wrapSandboxCommand,
   buildHardenedRunArgs,
@@ -95,6 +106,17 @@ export {
   type BrokerSandboxExecutorOptions,
   type CommandVoucherMinter,
 } from "./executor";
+
+// Exec-plane L3 (epic cinatra#1705): the TYPED host-operation seam that lets a
+// broker place its volume + container operations on the worker host instead of
+// its own, and the host-exclusivity precondition it revalidates before every
+// placement decision.
+export {
+  createLocalDockerContainerOps,
+  createLocalDockerVolumeOps,
+  type SandboxContainerOps,
+  type SandboxVolumeOps,
+} from "./volume-ops";
 
 // ---------------------------------------------------------------------------
 // The per-command authorization boundary (epic #1705). VERIFY-ONLY: the signing
@@ -169,6 +191,8 @@ export {
   type ExecResult,
   type ExecFailureReason,
   type ExecRevalidationChallenge,
+  type PlacementGuard,
+  type PlacementVerdict,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -302,6 +326,8 @@ export {
   type ExecErrorBody,
   type ExecRequestEnvelope,
   type ExecResponseEnvelope,
+  type ExecCompositeHealth,
+  type ExecSubsystemHealth,
   type ExecutionStdioEntry,
   type OpenJobPayload,
   type ExecPayload,
@@ -313,7 +339,22 @@ export {
   type HealthResultPayload,
   type RunCommandPayload,
   type StageSkillsPayload,
+  type WorkerHealthResultPayload,
 } from "./service/protocol";
+
+// The broker's COMPOSITE readiness (exec-plane L4): bounded, non-throwing
+// probes of the worker hop, the attributing gateway and the host-exclusivity
+// lease, composed where all three are held (`service/broker-entry.ts`).
+export {
+  createCompositeHealthProvider,
+  createGatewayHealthProbe,
+  redactCompositeDetail,
+  DEFAULT_COMPOSITE_PROBE_TIMEOUT_MS,
+  MAX_COMPOSITE_PROBE_TIMEOUT_MS,
+  type CompositeHealthSources,
+  type SubsystemProbe,
+  type SubsystemSource,
+} from "./service/composite-health";
 
 export {
   EXEC_URI_SAN_SCHEME,
@@ -405,3 +446,45 @@ export {
   DEFAULT_WORKER_CLIENT_RETRY_DELAY_MS,
   type WorkerServiceClientConfig,
 } from "./service/worker-client";
+
+// The worker's fail-closed NAME POLICY for the typed ops (exec-plane L3).
+export {
+  ExecVolumeNameRefusedError,
+  assertDrainJobId,
+  assertExecVolumeName,
+  assertExecVolumeOwnership,
+  assertStagingJobId,
+  assertWorkspaceKey,
+  type ExecVolumeTier,
+} from "./service/volume-guard";
+
+// The host-exclusivity lease the broker revalidates before every placement.
+export {
+  DEFAULT_HOST_EXCLUSIVITY_LEASE_PATH,
+  DEFAULT_LEASE_CACHE_TTL_MS,
+  LOCK_RELEASE_ATTEMPTS,
+  LOCK_SPIN_ATTEMPTS,
+  LOCK_SPIN_DELAY_MS,
+  STALE_LOCK_MINUTES,
+  TEMP_NAME_ATTEMPTS,
+  lockIsStale,
+  HOST_EXCLUSIVITY_LEASE_PATH_ENV,
+  HOST_EXCLUSIVITY_LOCK_DIR_NAME,
+  HOST_EXCLUSIVITY_MODE_ENV,
+  HOST_EXCLUSIVITY_RENEW_INTERVAL_ENV,
+  HOST_EXCLUSIVITY_TENANT_ENV,
+  HostExclusivityLeaseGuard,
+  TENANT_SLUG_RE,
+  evaluateHostExclusivityLease,
+  hostExclusivityPlacementGuard,
+  nodeLeaseIo,
+  parseHostExclusivityLease,
+  serializeHostExclusivityLease,
+  startHostExclusivityRenewal,
+  type HostExclusivityGuardConfig,
+  type HostExclusivityLease,
+  type LeaseIo,
+  type LeaseRefusalReason,
+  type LeaseRenewalResult,
+  type LeaseVerdict,
+} from "./service/lease";

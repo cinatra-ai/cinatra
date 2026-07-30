@@ -1,0 +1,176 @@
+name: renovate-self-hosted
+
+# Self-hosted Renovate for THIS repo — the permanent replacement for the hosted
+# Mend Renovate app, which silently stopped executing against this repo twice in
+# one month (cinatra#1632, cinatra#2241). Both outages were caught by
+# `renovate-freshness-gate.yml` and neither was fixable in-repo: the hosted app's
+# run scheduling lives in a third-party portal we do not control. Running the
+# same Renovate here removes that dependency — the run is a GitHub Actions job,
+# so a missed run is visible (and re-dispatchable) in this repo's Actions tab.
+# Public-repo Actions minutes are free, so this costs nothing.
+#
+# WHAT IS *NOT* CHANGING: the dependency-update behaviour itself. Renovate reads
+# the SAME in-repo `renovate.json` (which extends the org preset) it always did —
+# this workflow passes NO `configurationFile`, so PR grouping, the schedule, the
+# dependency dashboard and every packageRule are byte-for-byte the ones that were
+# already in force. Only the executor changes.
+#
+# IDENTITY: Renovate authenticates as the org bot GitHub App (installation token
+# minted per run from RENOVATE_APP_ID / RENOVATE_APP_PRIVATE_KEY), not as the
+# Mend `renovate[bot]` account. Two consequences, both handled:
+#   1. `ignorePrAuthor` (below) is Renovate's documented bot-account-migration
+#      lever, so the new identity ADOPTS the existing Dependency Dashboard issue
+#      and the open `renovate/*` PRs instead of duplicating them.
+#   2. `renovate-freshness-gate.yml` now accepts a dashboard write from EITHER
+#      identity — it is updated in the same change that adds this workflow.
+# Using an App token (rather than the default GITHUB_TOKEN) is also what keeps
+# the required PR gates running: branches/PRs pushed with GITHUB_TOKEN do not
+# trigger workflows, App-token ones do.
+#
+# SCHEDULE — the cron MUST fall inside the repo config's own Renovate window.
+# `renovate.json` inherits `schedule: ["before 6am on monday"]` in timezone
+# Europe/Berlin from the org preset. Renovate evaluates that window at run time
+# and skips ALL branch work outside it (the run would only refresh the
+# dashboard), so a badly chosen cron would look healthy and update nothing. The
+# window is Monday 00:00-05:59 Berlin = Sun 22:00-03:59 UTC (CEST) / Sun
+# 23:00-04:59 UTC (CET). Monday 01:37 UTC sits inside it in BOTH DST regimes
+# (03:37 / 02:37 Berlin) with >2h of headroom for GitHub's scheduled-run queue
+# delay, and collides with no other cron in this repo. Keep this cron and the
+# preset's window coupled: moving one without the other silently stops updates.
+# `renovate-lockfile-repair.yml` runs later the same morning (07:41 UTC) and
+# repairs the lockfiles on whatever PRs this run produced.
+#
+# MANUAL RUNS default to DRY-RUN (`dry_run: full`): an accidental dispatch can
+# never open, rebase or close a PR. Choose `disabled` for a real off-schedule
+# run. Scheduled runs are always live (the input is empty on a schedule event and
+# Renovate ignores an empty RENOVATE_DRY_RUN).
+#
+# A manual run also has to DEFEAT the config schedule, or it would be pointless:
+# a dispatch on a Thursday is outside "before 6am on monday", so Renovate would
+# log "Skipping branch creation as not within schedule" for every update and
+# change nothing (observed exactly that in the validation dry run). RENOVATE_FORCE
+# below overrides the schedule for dispatch runs ONLY — the documented use of
+# `force` ("forcing a null (no) schedule to make sure Renovate raises PRs on a run
+# even if the repository itself or its preset defines a schedule that's currently
+# inactive"). Scheduled runs never set it, so the weekly batching policy still
+# governs the automatic cadence.
+
+on:
+  schedule:
+    - cron: '37 1 * * 1' # Mondays 01:37 UTC — inside the config's Berlin window
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry-run mode. `full` (default) does everything EXCEPT writing branches/PRs/issues. Pick `disabled` for a real run (it also overrides the weekly schedule window).'
+        required: false
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - lookup
+          - extract
+          - disabled
+      log_level:
+        description: 'Console log level (the uploaded log artifact is always debug).'
+        required: false
+        default: 'info'
+        type: choice
+        options:
+          - info
+          - debug
+
+# The default GITHUB_TOKEN does no work here: every Renovate call uses the App
+# installation token minted below. Nothing needs write.
+permissions:
+  contents: read
+
+concurrency:
+  group: renovate-self-hosted
+  cancel-in-progress: false
+
+jobs:
+  renovate:
+    name: Run Renovate against this repo
+    # Upstream only: a fork must never run the org bot's credentials, and the
+    # secrets do not exist there anyway.
+    if: github.repository == 'cinatra-ai/cinatra'
+    runs-on: ubuntu-latest
+    # Extraction + lookups across this monorepo (npm workspaces, docker-compose,
+    # Dockerfiles, the upgrade-matrix custom manager) plus lockfile artifact
+    # updates is minutes, not seconds; the cap only stops a hung run.
+    timeout-minutes: 60
+    steps:
+      # An installation token for the org bot App, scoped to THIS repo (the
+      # action defaults `repositories` to the current one). Expires in an hour,
+      # so nothing long-lived is handed to the container.
+      - name: Mint bot App installation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RENOVATE_APP_ID }}
+          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+
+      - name: Self-hosted Renovate
+        uses: renovatebot/github-action@973d3e5a68e735a444e8c03432b66eedb343c302 # v46.2.0
+        with:
+          # `x-access-token:` is how Renovate is told the token is a GitHub App
+          # installation token rather than a PAT; it then resolves its own bot
+          # identity (login + git author) from the App itself.
+          token: 'x-access-token:${{ steps.app-token.outputs.token }}'
+          # The action only forwards env vars matching this regex into the
+          # Renovate container. This is the upstream default PLUS LOG_FILE /
+          # LOG_FILE_LEVEL, without which the run log cannot be written to the
+          # mounted /tmp and uploaded as an artifact below.
+          env-regex: '^(?:RENOVATE_\w+|LOG_LEVEL|LOG_FILE|LOG_FILE_LEVEL|GITHUB_COM_TOKEN|NODE_OPTIONS|NO_COLOR|(?:HTTPS?|NO)_PROXY|(?:https?|no)_proxy)$'
+          # Pin the Renovate CONTAINER too, not just the action. The action's
+          # default is the mutable major tag `44`, which would let unreviewed
+          # upstream changes run in a job holding a contents:write + PR-write App
+          # token. This exact version is the one the validation dry run exercised.
+          # Bump it deliberately (with the action SHA); a pin that goes stale
+          # fails LOUD — a red run in this workflow, not the silent dormancy this
+          # workflow exists to end.
+          renovate-version: '44.2.3'
+        env:
+          # Scope: this repo only. Org-wide autodiscover is a later slice.
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
+          RENOVATE_AUTODISCOVER: 'false'
+          # The repo is long onboarded (`renovate.json` is committed). Both flags
+          # are belt-and-braces: never open an onboarding PR, and fail loudly
+          # rather than silently self-onboarding if the config ever disappears.
+          RENOVATE_ONBOARDING: 'false'
+          RENOVATE_REQUIRE_CONFIG: 'required'
+          # Bot-account migration lever (Renovate's self-hosted docs name this
+          # exact case: "migrate bot accounts, including from the Mend Renovate
+          # App to self-hosted"). Renovate normally filters issues and PRs to the
+          # ones its OWN login created; without this, running as the bot App
+          # would ignore the Mend-created Dependency Dashboard and the open
+          # `renovate/*` PRs and duplicate them. With it, the existing dashboard
+          # is edited in place and existing PRs are adopted.
+          RENOVATE_IGNORE_PR_AUTHOR: 'true'
+          # Empty on a schedule event (Renovate ignores an empty value = live
+          # run); `full` by default on manual dispatch. The UI choice `disabled`
+          # is translated to the literal `null` Renovate accepts as "not a dry
+          # run" — `disabled` is NOT a valid dryRun value and would abort the run.
+          RENOVATE_DRY_RUN: ${{ inputs.dry_run == 'disabled' && 'null' || inputs.dry_run }}
+          # Dispatch-only schedule override (see the header). Empty on a schedule
+          # event, and Renovate ignores an empty value.
+          RENOVATE_FORCE: ${{ github.event_name == 'workflow_dispatch' && '{"schedule":null}' || '' }}
+          LOG_LEVEL: ${{ inputs.log_level || 'info' }}
+          # Written inside the container to /tmp, which the action mounts from
+          # the runner (its default docker-volumes is /tmp:/tmp), so the step
+          # below can upload it. Always debug: this file is the post-mortem for a
+          # run that did nothing, and re-running costs a week of currency.
+          LOG_FILE: /tmp/renovate-log.ndjson
+          LOG_FILE_LEVEL: debug
+
+      # The run log is the evidence that a scheduled run actually did something
+      # (the failure mode this whole change exists to end is a bot that stops
+      # silently). Uploaded even when Renovate fails.
+      - name: Upload Renovate log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: renovate-log-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/renovate-log.ndjson
+          if-no-files-found: warn
+          retention-days: 14

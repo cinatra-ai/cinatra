@@ -116,6 +116,10 @@ export {
   BoundDefaultProviderUnavailableError,
   resolveDefaultImageAdapter,
   hasConfiguredLlmRuntime,
+  // cinatra#2094 F10: the provider-NAMING counterpart of the boolean above, for
+  // guards that must reject before a stream exists (and therefore before
+  // `BoundDefaultProviderUnavailableError` could be thrown).
+  describeLlmRuntimeUnavailability,
   resolveChatExternalMcpTools,
 } from "./registry";
 

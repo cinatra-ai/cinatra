@@ -49,6 +49,7 @@ import {
   simulateArchiveTransition,
   holdOrgLocks,
 } from "@cinatra-ai/org-write-kernel/testing";
+import { ensureAuthFloorArchiveGuardTriggers } from "../../../../scripts/better-auth-migrate.mts";
 
 const dbUrl = process.env.SUPABASE_DB_URL ?? "";
 const enabled =
@@ -565,3 +566,294 @@ describe.skipIf(!enabled)("org-write archive race — kernel harness on live Pos
     }
   });
 });
+
+// =============================================================================
+// cinatra#1943 A4 — manifest row 12: "Direct BA-DML-vs-archive, both lock
+// interleavings". Extends this file in place (this file's own established
+// convention — see its header) rather than forking a parallel file: DESIGN.md
+// Decision 4's sketch named a new file, but `.github/workflows/build-image.yml`'s
+// `extension-lifecycle-db-tests` job invokes THIS file via an explicit
+// per-file step (not a glob) — a new file would need its own CI-wiring step,
+// which is a `.github/workflows/**` edit and therefore its OWN
+// always-human-gated PR (Decision 6), never bundled into a content PR.
+// Extending the already-wired file avoids that coupling and keeps this row's
+// proof genuinely CI-verified the moment it merges, no follow-up PR required.
+//
+// #1939 wave 3 Stage E (scripts/better-auth-migrate.mts,
+// `ensureAuthFloorArchiveGuardTriggers`) added two DATABASE-LEVEL triggers —
+// `cinatra_member_archive_guard` on public.member, `cinatra_invitation_
+// archive_guard` on public.invitation — as the floor underneath BOTH the
+// org-write kernel (the describe block above) and the app-layer Better-Auth
+// dispatch policy (organization-dispatch-policy.ts): a write that reaches
+// these tables by ANY path — including one that bypasses both of those
+// layers entirely (a script, a future direct-SQL caller, a library upgrade) —
+// still cannot grow access into an archived organization. Stage E's own test
+// (src/lib/__tests__/better-auth-migrate-auth-floor-guard.test.ts) pins the
+// SQL's shape against a SCRIPTED FAKE pg pool — it never proves the trigger
+// actually fires and blocks against REAL, CONCURRENT Postgres connections.
+// That is what this section proves, against the real trigger, provisioned
+// for real via `ensureAuthFloorArchiveGuardTriggers` (idempotent OR-REPLACE —
+// safe to call again even if a prior job step already ran it).
+//
+// "Both lock interleavings" (the literal issue-body / manifest wording) means
+// the two orderings a direct writer and a concurrent archive transition can
+// race in, at the level of REAL POSTGRES ROW LOCKS (not the kernel's advisory
+// locks above, which this trigger has no relationship to):
+//   - the direct write's guard-triggered `FOR SHARE OF o NOWAIT` read wins the
+//     org row first (still active) and holds it open in an uncommitted
+//     transaction; the archive's plain UPDATE of `archivedAt` needs a
+//     conflicting row lock and genuinely BLOCKS (no NOWAIT on that side)
+//     until the write commits — the write lands, archive commits after;
+//   - the archive's UPDATE wins the row lock first (open, uncommitted); the
+//     direct write's `FOR SHARE ... NOWAIT` immediately fails with Postgres
+//     55P03 (lock_not_available) the instant it tries to acquire a
+//     conflicting lock — the write never lands, regardless of whether the
+//     archive has committed yet.
+// A sequential (non-concurrent) baseline for both guarded tables is proven
+// first — the trivial ordering where the org is already fully archived
+// before the direct write is attempted.
+// =============================================================================
+
+describe.skipIf(!enabled)(
+  "BA-DML-vs-archive race — the auth-floor triggers on live Postgres (cinatra#1943 A4, manifest row 12)",
+  () => {
+    let root: Client;
+    let pool: Pool;
+    let orgId: string;
+    let userId: string;
+    let userId2: string;
+
+    beforeAll(async () => {
+      root = new Client({ connectionString: dbUrl });
+      await root.connect();
+      // Idempotent (IF NOT EXISTS / guarded DO blocks) — safe even if the
+      // describe block above already applied it in this same run.
+      await root.query(readFileSync(PUBLIC_SCHEMA_SQL, "utf8"));
+      pool = new Pool({ connectionString: dbUrl });
+      // Provisions BOTH triggers for real (member + invitation) — idempotent
+      // OR-REPLACE, so calling it here is safe regardless of whether some
+      // other step in this CI job already ran it.
+      const result = await ensureAuthFloorArchiveGuardTriggers(pool);
+      if (result.skipped) {
+        throw new Error(
+          `ensureAuthFloorArchiveGuardTriggers skipped (${result.skipped}) — the public schema fixture must provision member/invitation/organization before this suite runs`,
+        );
+      }
+    });
+
+    afterAll(async () => {
+      await pool?.end();
+      await root?.end();
+    });
+
+    beforeEach(async () => {
+      orgId = `org_badml_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+      userId = `user_badml_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+      userId2 = `user_badml2_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+      await root.query(
+        `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now())`,
+        [orgId, "BA-DML Race", orgId],
+      );
+      await root.query(
+        `INSERT INTO public."user" (id, name, email, "emailVerified") VALUES ($1, $2, $3, false)`,
+        [userId, "BA-DML Test User", `${userId}@example.test`],
+      );
+      await root.query(
+        `INSERT INTO public."user" (id, name, email, "emailVerified") VALUES ($1, $2, $3, false)`,
+        [userId2, "BA-DML Test User 2", `${userId2}@example.test`],
+      );
+    });
+
+    async function dropFixtures(): Promise<void> {
+      // ON DELETE CASCADE on member/invitation's organizationId+userId/
+      // inviterId FKs removes any rows this suite planted for this org/user.
+      await root.query(`DELETE FROM public."organization" WHERE id = $1`, [orgId]);
+      await root.query(`DELETE FROM public."user" WHERE id = $1`, [userId]);
+      await root.query(`DELETE FROM public."user" WHERE id = $1`, [userId2]);
+    }
+
+    async function archiveNow(): Promise<void> {
+      await root.query(
+        `UPDATE public."organization" SET "archivedAt" = now(), "archiveEpoch" = COALESCE("archiveEpoch", 0) + 1 WHERE id = $1`,
+        [orgId],
+      );
+    }
+
+    // -------------------------------------------------------------------
+    // Sequential baseline (no concurrency): the org is fully archived
+    // BEFORE the direct write is attempted — the trivial ordering.
+    // -------------------------------------------------------------------
+
+    it("member: a direct INSERT succeeds while active; once archived, BOTH a fresh INSERT and a role-elevation UPDATE on the existing row are refused (organization-archived)", async () => {
+      try {
+        const memberId = `member_${randomUUID().slice(0, 8)}`;
+        await root.query(
+          `INSERT INTO public."member" (id, "organizationId", "userId", "role", "createdAt") VALUES ($1, $2, $3, $4, now())`,
+          [memberId, orgId, userId, "member"],
+        );
+
+        await archiveNow();
+
+        await expect(
+          root.query(`UPDATE public."member" SET "role" = 'admin' WHERE id = $1`, [memberId]),
+        ).rejects.toThrow(/cinatra-member-archive-guard: organization-archived/);
+
+        const secondMemberId = `member_${randomUUID().slice(0, 8)}`;
+        await expect(
+          root.query(
+            `INSERT INTO public."member" (id, "organizationId", "userId", "role", "createdAt") VALUES ($1, $2, $3, $4, now())`,
+            [secondMemberId, orgId, userId2, "member"],
+          ),
+        ).rejects.toThrow(/cinatra-member-archive-guard: organization-archived/);
+      } finally {
+        await dropFixtures();
+      }
+    });
+
+    it("invitation: accepting a pending invitation is refused once archived, but rejecting/canceling it (the narrow cleanup capability) still succeeds", async () => {
+      try {
+        const invitationId = `invite_${randomUUID().slice(0, 8)}`;
+        await root.query(
+          `INSERT INTO public."invitation" (id, "organizationId", "email", "role", "status", "expiresAt", "createdAt", "inviterId")
+             VALUES ($1, $2, $3, $4, 'pending', now() + interval '1 hour', now(), $5)`,
+          [invitationId, orgId, "invitee@example.test", "member", userId],
+        );
+
+        await archiveNow();
+
+        await expect(
+          root.query(`UPDATE public."invitation" SET "status" = 'accepted' WHERE id = $1`, [invitationId]),
+        ).rejects.toThrow(/cinatra-invitation-archive-guard: organization-archived/);
+
+        const secondInvitationId = `invite_${randomUUID().slice(0, 8)}`;
+        await expect(
+          root.query(
+            `INSERT INTO public."invitation" (id, "organizationId", "email", "role", "status", "expiresAt", "createdAt", "inviterId")
+               VALUES ($1, $2, $3, $4, 'pending', now() + interval '1 hour', now(), $5)`,
+            [secondInvitationId, orgId, "second-invitee@example.test", "member", userId],
+          ),
+        ).rejects.toThrow(/cinatra-invitation-archive-guard: organization-archived/);
+
+        // Narrow cleanup capability (Stage E's own design note, live-proven
+        // here): declining a pending invite into an archived org is never
+        // blocked — the guard only ever refuses a write that GROWS access.
+        await expect(
+          root.query(`UPDATE public."invitation" SET "status" = 'rejected' WHERE id = $1`, [invitationId]),
+        ).resolves.toBeTruthy();
+      } finally {
+        await dropFixtures();
+      }
+    });
+
+    // -------------------------------------------------------------------
+    // Both lock interleavings — real, concurrent Postgres connections, no
+    // timing sleeps driving correctness (bounded confirmation via a race
+    // against a deadline, the same convention the describe block above
+    // uses for its own two-connection races).
+    // -------------------------------------------------------------------
+
+    it("interleaving 1 — a queued member INSERT holds the org row's FOR SHARE lock first (org still active): the archive UPDATE genuinely BLOCKS behind it, and only lands after the insert commits", async () => {
+      const dmlConn = new Client({ connectionString: dbUrl });
+      const archiverConn = new Client({ connectionString: dbUrl });
+      await dmlConn.connect();
+      await archiverConn.connect();
+      const memberId = `member_${randomUUID().slice(0, 8)}`;
+      try {
+        await dmlConn.query("BEGIN");
+        // Org is still active — the trigger's FOR SHARE OF o NOWAIT read
+        // succeeds and the row lock is HELD (uncommitted) for the rest of
+        // this test's setup.
+        await dmlConn.query(
+          `INSERT INTO public."member" (id, "organizationId", "userId", "role", "createdAt") VALUES ($1, $2, $3, $4, now())`,
+          [memberId, orgId, userId, "member"],
+        );
+
+        let archiveSettled = false;
+        const archivePromise = archiverConn
+          .query(
+            `UPDATE public."organization" SET "archivedAt" = now(), "archiveEpoch" = COALESCE("archiveEpoch", 0) + 1 WHERE id = $1`,
+            [orgId],
+          )
+          .then((r) => {
+            archiveSettled = true;
+            return r;
+          });
+
+        const raced = await Promise.race([
+          archivePromise.then(() => "archive-settled" as const, () => "archive-settled" as const),
+          new Promise<"archive-blocked">((r) => setTimeout(() => r("archive-blocked"), 300)),
+        ]);
+        expect(raced).toBe("archive-blocked");
+        expect(archiveSettled).toBe(false);
+
+        // Release the FOR SHARE hold — the archive's UPDATE can now acquire
+        // its row lock and complete.
+        await dmlConn.query("COMMIT");
+        await archivePromise;
+        expect(archiveSettled).toBe(true);
+
+        // The queued write landed (it started while active); the org is now
+        // archived — both true, no torn state.
+        const memberCheck = await root.query(`SELECT 1 FROM public."member" WHERE id = $1`, [memberId]);
+        expect(memberCheck.rowCount).toBe(1);
+        const orgCheck = await root.query<{ archivedAt: Date | null }>(
+          `SELECT "archivedAt" FROM public."organization" WHERE id = $1`,
+          [orgId],
+        );
+        expect(orgCheck.rows[0]?.archivedAt).not.toBeNull();
+      } finally {
+        await dmlConn.end();
+        await archiverConn.end();
+        await dropFixtures();
+      }
+    });
+
+    it("interleaving 2 — an in-flight (uncommitted) archive UPDATE holds the org row lock first: a concurrent member INSERT's FOR SHARE...NOWAIT fails IMMEDIATELY (55P03), never landing a row into what becomes an archived org", async () => {
+      const archiverConn = new Client({ connectionString: dbUrl });
+      const writerConn = new Client({ connectionString: dbUrl });
+      await archiverConn.connect();
+      await writerConn.connect();
+      const memberId = `member_${randomUUID().slice(0, 8)}`;
+      try {
+        await archiverConn.query("BEGIN");
+        // The archive's row lock is now held, uncommitted.
+        await archiverConn.query(
+          `UPDATE public."organization" SET "archivedAt" = now(), "archiveEpoch" = COALESCE("archiveEpoch", 0) + 1 WHERE id = $1`,
+          [orgId],
+        );
+
+        let caught: unknown;
+        try {
+          await writerConn.query(
+            `INSERT INTO public."member" (id, "organizationId", "userId", "role", "createdAt") VALUES ($1, $2, $3, $4, now())`,
+            [memberId, orgId, userId, "member"],
+          );
+        } catch (err) {
+          caught = err;
+        }
+        expect(caught).toBeDefined();
+        // 55P03 = lock_not_available — the trigger's OWN FOR SHARE ... NOWAIT
+        // read never even reaches its archived-state check; it fails on lock
+        // acquisition alone, a DISTINCT failure mode from the custom
+        // "organization-archived" RAISE EXCEPTION the sequential baseline
+        // above asserts (that one requires the archive to have COMMITTED
+        // first; this one fires while it is still in flight).
+        expect((caught as { code?: string }).code).toBe("55P03");
+
+        await archiverConn.query("COMMIT");
+
+        const memberCheck = await root.query(`SELECT 1 FROM public."member" WHERE id = $1`, [memberId]);
+        expect(memberCheck.rowCount).toBe(0);
+        const orgCheck = await root.query<{ archivedAt: Date | null }>(
+          `SELECT "archivedAt" FROM public."organization" WHERE id = $1`,
+          [orgId],
+        );
+        expect(orgCheck.rows[0]?.archivedAt).not.toBeNull();
+      } finally {
+        await archiverConn.end();
+        await writerConn.end();
+        await dropFixtures();
+      }
+    });
+  },
+);

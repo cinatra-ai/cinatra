@@ -251,11 +251,42 @@ if (PROVIDER === "anthropic") {
 } else {
   const call = delivering[0] ?? null;
   const toolTypes = call?.fingerprint?.toolTypes ?? [];
+  const toolNames = call?.fingerprint?.toolNames ?? [];
+  // TOOL-MOUNT, as the product actually defines it (cinatra#2094 F11).
+  //
+  // The S7 round asserted a literal `type:"shell"` on the wire and, finding
+  // none, recorded "skills are silently not delivered on the default model".
+  // That assertion was WRONG about the contract: exec-plane S2's
+  // singular-native-shell rule (cinatra#1707) emits `type:"shell"` ONLY for an
+  // execution-authorized request; a skills-without-execution turn — which every
+  // /chat turn is — mounts the SAME skill bundle as the restricted NAMED
+  // `skill_file_read` FUNCTION tool. A hosted shell for chat would be a
+  // privilege escalation, not the goal.
+  //
+  // So the tool-mount property is: a skill vehicle is on the wire, by name —
+  // either the merged native shell (execution-authorized) or `skill_file_read`.
+  // Asserted against `toolNames`, which the observer now records.
+  const mountedSkillTool = toolNames.find(
+    (t) => t?.name === "skill_file_read" || t?.type === "shell",
+  );
   check(
     "R2",
-    "skill delivery on the completed turn was TOOL-MOUNT (a mounted shell tool on the wire)",
-    toolTypes.some((t) => /shell|container|local_shell/i.test(String(t))),
-    JSON.stringify(toolTypes),
+    "skill delivery on the completed turn was TOOL-MOUNT (a NAMED skill tool on the wire: " +
+      "`skill_file_read` for a skills-without-execution turn, or the merged native shell)",
+    Boolean(mountedSkillTool),
+    JSON.stringify(toolNames.length > 0 ? toolNames : toolTypes),
+  );
+  // The cap the acceptance names. A hosted native shell carries its skill
+  // listing inline, so it is counted on the wire; the named function tool is a
+  // SINGLE vehicle serving the whole (already contract-capped) set, so the
+  // wire-side count for it is the injected set the runtime resolved.
+  const wireSkillCount = mountedSkillTool?.shellSkillCount ?? null;
+  check(
+    "R2b",
+    `the mounted skill vehicle carries no more than ${HARD_CAP} skills`,
+    Boolean(mountedSkillTool) && (wireSkillCount === null || wireSkillCount <= HARD_CAP),
+    `shellSkillCount=${wireSkillCount} (null ⇒ the single named skill_file_read vehicle; ` +
+      `the per-request cap is enforced by the injection contract before delivery)`,
   );
   check(
     "R3",

@@ -82,6 +82,11 @@ const REMOVE_ERROR_COPY: Record<
     "A team keeps at least one admin — make someone else an admin first.",
   role_unavailable:
     "Team roles are not provisioned on this deployment yet.",
+  // cinatra#1942 (archive V2) — the team's organization is archived; team
+  // membership can't be changed until it's unarchived (matches the V4
+  // manage-panel/detail-dashboard archived-org copy).
+  org_archived:
+    "This organization is archived. Membership can't be changed until it's unarchived.",
   unknown_error: "Something went wrong. Try again.",
 };
 

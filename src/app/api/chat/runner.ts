@@ -12,7 +12,9 @@ import "server-only";
 // `src/lib/assistant-runtime/__tests__/cinatra-parity.test.ts`).
 //
 // It is retained at this path — and keeps the `runChatTurn` /
-// `hasConfiguredLlmRuntime` / `ChatRequestMessage` exports — as the Cinatra
+// provider-availability / `ChatRequestMessage` exports (the availability export is
+// `describeLlmRuntimeUnavailability` since cinatra#2094 F10: the endpoint needs the
+// provider-NAMING reason, not a boolean) — as the Cinatra
 // assistant binding consumed by the unified AG-UI endpoint
 // (src/app/api/assistants/chat/route.ts). The bespoke HTTP SSE route that
 // used to live beside it (POST /api/chat) was deleted by the #1216 S2 delete
@@ -23,7 +25,7 @@ import "server-only";
 
 import {
   runAssistantTurn,
-  hasConfiguredLlmRuntime,
+  describeLlmRuntimeUnavailability,
   type RunChatTurnArgs,
 } from "@/lib/assistant-runtime/runtime";
 import { buildCinatraAssistantRuntimeConfig } from "@/lib/assistant-runtime/cinatra-assistant-config";
@@ -33,7 +35,7 @@ export type {
   ChatStreamSink,
   RunChatTurnArgs,
 } from "@/lib/assistant-runtime/runtime";
-export { hasConfiguredLlmRuntime };
+export { describeLlmRuntimeUnavailability };
 
 /**
  * Drive one Cinatra `/chat` turn. Binds the extracted assistant runtime to the
