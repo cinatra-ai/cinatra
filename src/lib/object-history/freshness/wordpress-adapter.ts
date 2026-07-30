@@ -82,22 +82,21 @@ import {
 // Type-only imports are erased at compile time and stay static.
 import type { InvokerTrustedActor } from "@/lib/connector-instance-invoker";
 
-/** Lazily resolve the governed-invoker stack (see the import-discipline note
- * above). Split per module so vitest `vi.mock` factories intercept each one
- * independently, exactly as they would a static import. */
+/** Lazily resolve the governed-invoker stack through the single dedicated
+ * `invoker-deps-lazy.ts` entry point (see that file's header for why: this
+ * used to be FOUR separate `Promise.all`-batched `import()` call sites right
+ * here, which produced four independent Turbopack async chunk groups over a
+ * module set the S5 pending-call executor and the blog WordPress client also
+ * reach via ordinary static imports — a dual static+dynamic reachability
+ * shape that collided in the production Turbopack build ("Two or more
+ * assets with different content were emitted to the same output path").
+ * Collapsing to one dynamic entry point removes the collision without
+ * changing the laziness: nothing loads until a freshness probe actually
+ * runs. vi.mock still intercepts each leaf specifier exactly as before —
+ * mocking is specifier-based, not call-site-based. */
 async function loadInvokerStack() {
-  const [invoker, hostServices, writeAuthority, transport] = await Promise.all([
-    import("@/lib/connector-instance-invoker"),
-    import("@/lib/register-host-connector-services"),
-    import("@/lib/connector-instance-write-authority"),
-    import("@/lib/connector-instance-mcp-transport"),
-  ]);
-  return {
-    invokeConnectorInstanceTool: invoker.invokeConnectorInstanceTool,
-    buildConnectorInstanceInvokerDeps: hostServices.buildConnectorInstanceInvokerDeps,
-    resolveTrustedWriteActor: writeAuthority.resolveTrustedWriteActor,
-    InvokerError: transport.InvokerError,
-  };
+  const { loadInvokerDeps } = await import("./invoker-deps-lazy");
+  return loadInvokerDeps();
 }
 
 type ProbeResult =
