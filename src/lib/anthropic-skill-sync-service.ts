@@ -226,6 +226,18 @@ export type SkillBundleCaptureReport = {
   authorityOwnedDivergences: string[];
   /** One-hop router references that resolve to no bundled file (diagnostic). */
   danglingReferences: { catalogSkillId: string; missing: string[] }[];
+  /**
+   * Skills whose LIFECYCLE revision names a `content_digest` that resolves to no
+   * durable blob (cinatra#2265, gap (b)). The pre-S1 re-baseline cannot seed from
+   * content that does not exist, so capture correctly recorded the DISK bundle
+   * under a derived head — this names the skill, the revision and the
+   * unresolvable digest so that fallback is never silent.
+   */
+  unresolvedLifecycleContent: {
+    catalogSkillId: string;
+    revisionId: string;
+    contentDigest: string | null;
+  }[];
 };
 
 /**
@@ -246,6 +258,7 @@ export async function captureSkillBundlesFromDisk(): Promise<SkillBundleCaptureR
     unchanged: [],
     authorityOwnedDivergences: [],
     danglingReferences: [],
+    unresolvedLifecycleContent: [],
   };
   for (const skill of syncable) {
     const sourcePath = skill.sourcePath;
@@ -305,6 +318,16 @@ export async function captureSkillBundlesFromDisk(): Promise<SkillBundleCaptureR
     }
     (capture.changed ? report.captured : report.unchanged).push(skill.id);
     if (capture.authorityOwnedDivergence) report.authorityOwnedDivergences.push(skill.id);
+    if (capture.unresolvedLifecycleContent) {
+      // cinatra#2265 gap (b): the skill carries a lifecycle revision, but that
+      // revision's content_digest resolves to no durable blob — so the derived
+      // head capture just installed is a FALLBACK, not a classification. Name it.
+      report.unresolvedLifecycleContent.push({
+        catalogSkillId: skill.id,
+        revisionId: capture.unresolvedLifecycleContent.revisionId,
+        contentDigest: capture.unresolvedLifecycleContent.contentDigest,
+      });
+    }
     if (!capture.lint.ok) {
       // DIAGNOSTIC at S1 — a dangling one-hop router reference is reported, not
       // a hard rejection (fail-closed packaging enforcement is S2's gate).
@@ -420,6 +443,19 @@ export type AppSyncResult = SyncResult & {
      * why — the refusal is never silent.
      */
     refusedForDanglingReferences?: { catalogSkillId: string; missing: string[] }[];
+    /**
+     * cinatra#2265 gap (b): skills whose lifecycle revision names a
+     * `content_digest` with no durable blob behind it. The pre-S1 re-baseline
+     * declined (correctly — there is nothing authoritative to seed from) and the
+     * DISK bundle was recorded under a derived head instead. Carried here so the
+     * readiness/sync caller can say WHY a custom-classed skill ended up
+     * disk-owned; the classification itself is unchanged.
+     */
+    unresolvedLifecycleContent?: {
+      catalogSkillId: string;
+      revisionId: string;
+      contentDigest: string | null;
+    }[];
   };
 };
 
@@ -558,6 +594,7 @@ async function runCatalogSyncLocked(strict: boolean): Promise<AppSyncResult> {
     const hasDiagnostics =
       capture.authorityOwnedDivergences.length > 0 ||
       capture.danglingReferences.length > 0 ||
+      capture.unresolvedLifecycleContent.length > 0 ||
       refusedForDanglingReferences.length > 0;
     return hasDiagnostics
       ? {
@@ -566,6 +603,9 @@ async function runCatalogSyncLocked(strict: boolean): Promise<AppSyncResult> {
             authorityOwnedDivergences: capture.authorityOwnedDivergences,
             danglingReferences: capture.danglingReferences,
             ...(refusedForDanglingReferences.length > 0 ? { refusedForDanglingReferences } : {}),
+            ...(capture.unresolvedLifecycleContent.length > 0
+              ? { unresolvedLifecycleContent: capture.unresolvedLifecycleContent }
+              : {}),
           },
         }
       : result;

@@ -79,6 +79,30 @@ export async function orchestrateAnthropicSkillSync(): Promise<void> {
         kind: "error",
       });
     }
+    // cinatra#2265 gap (b): a skill whose lifecycle revision names a
+    // `content_digest` with no durable blob behind it. Capture correctly fell
+    // back to the DISK bundle under a derived head — but that skill's catalog
+    // row says the DATABASE owns its content, so without this the operator sees
+    // a disk-owned skill and cannot tell it from one that was always disk-owned.
+    // Reported, not raised: the classification is right, only its silence was not.
+    const unresolved = result.captureDiagnostics?.unresolvedLifecycleContent ?? [];
+    if (unresolved.length > 0) {
+      await createNotification({
+        title: `${unresolved.length} skill(s) fell back to their on-disk bundle`,
+        body:
+          "These skills carry a stored revision whose content is missing from the " +
+          "content authority, so the on-disk copy was used instead and now owns " +
+          "the skill's current bundle. Re-save each skill to restore a stored " +
+          "revision: " +
+          unresolved
+            .map(
+              (u) =>
+                `${u.catalogSkillId} (revision ${u.revisionId}, content ${u.contentDigest ?? "unrecorded"})`,
+            )
+            .join("; "),
+        kind: "warning",
+      });
+    }
   } catch (err) {
     await createNotification({
       title: "Anthropic skill sync failed",
