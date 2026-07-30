@@ -414,7 +414,12 @@ export async function archiveOrganizationAction(
     if (!org) {
       return { ok: false, error: "This organization no longer exists." };
     }
-    if (confirmName !== org.name) {
+    // `readRequiredString` above already throws fail-closed on a blank
+    // `confirmName`, so an empty org name can never be matched by an empty
+    // submission in practice — but require org.name to be non-empty
+    // explicitly anyway (defense in depth, mirrors the client-side arming
+    // guard) rather than relying on that indirectly.
+    if (!org.name || confirmName !== org.name) {
       return {
         ok: false,
         error: "The name you typed does not match the organization's name.",

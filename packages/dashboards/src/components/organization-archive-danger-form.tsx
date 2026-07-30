@@ -78,7 +78,10 @@ export function OrganizationArchiveDangerForm({
     );
   }
 
-  const armed = !pending && confirmName === orgName;
+  // orgName can be "" (settings screen falls back to `org.name ?? ""`);
+  // without the length guard, confirmName === orgName === "" arms the
+  // destructive button before the operator types anything.
+  const armed = !pending && orgName.length > 0 && confirmName === orgName;
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
