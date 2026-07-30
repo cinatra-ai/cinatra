@@ -211,6 +211,11 @@ const TOOL_ACTION_LABELS: Record<string, string> = {
   "linkedin_post_publish": "LinkedIn post published",
   "wordpress_post_create_draft": "WordPress draft created",
   "wordpress_post_update_meta": "WordPress post updated",
+  // The generic, per-instance governed forwarding primitives (cinatra#2022) —
+  // `toolName` alone doesn't carry which underlying site ability a call
+  // dispatched, so these labels stay ability-agnostic on purpose.
+  "wordpress_site_tool_call": "WordPress action performed",
+  "wordpress_site_tools_list": "WordPress tools loaded",
   "agent_source_list": "Agent sources loaded",
   "agent_source_read": "Agent source read",
   "agent_source_write": "Agent source written",

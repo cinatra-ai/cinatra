@@ -1,7 +1,9 @@
 /**
  * Anthropic Custom Skills HTTP client.
  *
- * VERIFIED API facts (spec §3): `POST /v1/skills` (multipart, <30MB) returns a
+ * VERIFIED API facts (spec §3): `POST /v1/skills` (multipart; the client-side
+ * upload bound is 30 MiB — a docs-based policy reading, NOT a measured server
+ * limit; see {@link ANTHROPIC_SKILL_MAX_UPLOAD_BYTES}) returns a
  * `skill_id` + an immutable epoch `latest_version`; `POST /v1/skills/{id}/versions`
  * creates a NEW immutable version to update. Custom Skills require betas
  * `code-execution-2025-08-25,skills-2025-10-02,files-api-2025-04-14` and are
@@ -25,6 +27,59 @@ const ANTHROPIC_VERSION = "2023-06-01";
 /** Stacked betas required for Custom Skills (spec §3). */
 export const ANTHROPIC_SKILLS_BETAS =
   "code-execution-2025-08-25,skills-2025-10-02,files-api-2025-04-14";
+
+/**
+ * Default page size for the two list walks.
+ *
+ * Both walks follow the documented cursor to exhaustion — but only ONE of the
+ * two endpoints actually offers a cursor. `GET /v1/skills/{id}/versions`
+ * paginates and its walk is live-proven exhaustive; `GET /v1/skills` truncates
+ * to this value and returns no cursor at all, so there this is a hard ceiling on
+ * what the walk can observe (finding F6 — see
+ * {@link FetchAnthropicCustomSkillsClient} `findCustomSkillByDisplayTitle`).
+ *
+ * Injectable purely so a conformance probe can drive a genuinely multi-page walk
+ * against the real API without uploading `limit + 1` versions.
+ */
+export const ANTHROPIC_SKILLS_LIST_PAGE_LIMIT = 100;
+
+/**
+ * The list envelope the Skills API actually returns.
+ *
+ * `{ data, has_more, next_page }` — the forward cursor is the **`page`** query
+ * parameter, carrying the opaque `next_page` value. This is the documented
+ * Managed-Agents `page`/`next_page` cursor scheme (`GET /v1/skills` is called
+ * out by name as a `page`-scheme endpoint that also returns a `has_more`
+ * boolean), and it is what the S7 live acceptance captured on the wire
+ * (`evidence/2094-s7-acceptance/live-results.json`, checks C3 + C4).
+ *
+ * There is **no `last_id`** and no `after_id`: the Message Batches / Files /
+ * Models endpoints use that other scheme, the Skills endpoints do not. An
+ * earlier revision of this client advanced on `has_more` + `last_id` ->
+ * `after_id`, which the API never returns, so both walks silently terminated
+ * after page one (finding F1 on cinatra#2094).
+ */
+type SkillsListEnvelope<TRow> = {
+  data?: TRow[];
+  /** Only the versions endpoint has ever been observed to use this alias. */
+  versions?: TRow[];
+  has_more?: boolean;
+  next_page?: string | null;
+};
+
+/**
+ * The cursor to request next, or `null` when the walk is complete.
+ *
+ * Advance ONLY on a non-empty `next_page`, and never when the server has said
+ * `has_more: false` — so `{has_more:true, next_page:null}` (a page that claims
+ * more but hands back no cursor) terminates rather than re-requesting page one
+ * forever.
+ */
+function nextListPageCursor(body: SkillsListEnvelope<unknown>): string | null {
+  if (body.has_more === false) return null;
+  const next = body.next_page;
+  return typeof next === "string" && next !== "" ? next : null;
+}
 
 /**
  * A skill's uploadable payload: the single canonical ZIP artifact rooted at the
@@ -116,6 +171,8 @@ export class FetchAnthropicCustomSkillsClient implements AnthropicCustomSkillsCl
   constructor(
     private readonly apiKey: string,
     private readonly baseUrl: string = ANTHROPIC_API_BASE,
+    /** Page size for the collision-reconciliation walk. See {@link ANTHROPIC_SKILLS_LIST_PAGE_LIMIT}. */
+    private readonly pageLimit: number = ANTHROPIC_SKILLS_LIST_PAGE_LIMIT,
   ) {}
 
   private headers(): Record<string, string> {
@@ -182,15 +239,48 @@ export class FetchAnthropicCustomSkillsClient implements AnthropicCustomSkillsCl
    * Paginate `GET /v1/skills?source=custom` to exhaustion and return the id +
    * latest_version of the custom skill whose `display_title` matches exactly, or
    * null. Used ONLY to reconcile a lost create response.
+   *
+   * Walks the REAL envelope (`{data, has_more, next_page}`, forward cursor on
+   * the `page` param — see {@link SkillsListEnvelope}), so the cursor this walk
+   * keys on is the one the API actually documents and returns.
+   *
+   * ## KNOWN RESIDUAL RISK — finding F6, live-measured (cinatra#2094 S7)
+   *
+   * Unlike `GET /v1/skills/{id}/versions` (which genuinely paginates — the S7
+   * post-fix re-verification walked a 4-version history across 4 pages), the
+   * **workspace skills list does not paginate at all**. Measured on the live API
+   * with 8 rows present: `limit=1` returned 1 row and `limit=2` returned 2 rows,
+   * and EVERY response carried `has_more:false` with `next_page:null`; an
+   * unknown `page` value is accepted and silently ignored. See
+   * `evidence/2094-s7-acceptance/live-reverify-results.json`, check R3.
+   *
+   * Consequence: this walk can only ever observe the FIRST `pageLimit` rows. In
+   * a workspace holding more than {@link ANTHROPIC_SKILLS_LIST_PAGE_LIMIT}
+   * custom skills, a `display_title` beyond that row is invisible here, so a
+   * lost create response rethrows instead of adopting the existing remote
+   * identity — the retry-stability property this reconciliation exists to
+   * provide. Nothing in this walk can fix that: the server hands back no cursor
+   * to paginate with, `display_title` is not a supported server-side filter (it
+   * is accepted and ignored), and a larger `limit` is accepted without error but
+   * could not be proven honoured beyond the rows available to measure. Raising
+   * the bound on that unproven basis would be a guess, so the risk is RECORDED
+   * here rather than papered over. Do not describe this walk as "paginating to
+   * exhaustion" against the live API — on this endpoint it does not, and cannot.
    */
   private async findCustomSkillByDisplayTitle(
     displayTitle: string,
   ): Promise<CreateSkillResult | null> {
-    let afterId: string | undefined;
-    // Bound the walk defensively so a misbehaving `has_more` can never loop.
-    for (let page = 0; page < 10_000; page++) {
-      const params = new URLSearchParams({ source: "custom", limit: "100" });
-      if (afterId) params.set("after_id", afterId);
+    let page: string | undefined;
+    // A server that echoes a cursor it already handed back would otherwise walk
+    // the same page forever; the seen-set makes that terminate.
+    const seenCursors = new Set<string>();
+    // Bound the walk defensively so a misbehaving `next_page` can never loop.
+    for (let i = 0; i < 10_000; i++) {
+      const params = new URLSearchParams({
+        source: "custom",
+        limit: String(this.pageLimit),
+      });
+      if (page) params.set("page", page);
       const res = await fetch(`${this.baseUrl}/v1/skills?${params.toString()}`, {
         method: "GET",
         headers: this.headers(),
@@ -201,11 +291,11 @@ export class FetchAnthropicCustomSkillsClient implements AnthropicCustomSkillsCl
           `[anthropic-custom-skills] GET /v1/skills failed: ${res.status} ${detail.slice(0, 500)}`,
         );
       }
-      const body = (await res.json()) as {
-        data?: Array<{ id?: string; display_title?: string; latest_version?: string }>;
-        has_more?: boolean;
-        last_id?: string;
-      };
+      const body = (await res.json()) as SkillsListEnvelope<{
+        id?: string;
+        display_title?: string;
+        latest_version?: string;
+      }>;
       const data = body.data ?? [];
       for (const s of data) {
         if (
@@ -216,8 +306,10 @@ export class FetchAnthropicCustomSkillsClient implements AnthropicCustomSkillsCl
           return { skillId: s.id, version: s.latest_version };
         }
       }
-      if (body.has_more !== true || !body.last_id) return null;
-      afterId = body.last_id;
+      const next = nextListPageCursor(body);
+      if (!next || seenCursors.has(next)) return null;
+      seenCursors.add(next);
+      page = next;
     }
     return null;
   }
@@ -262,6 +354,8 @@ export class FetchAnthropicCustomSkillsGcClient {
   constructor(
     private readonly apiKey: string,
     private readonly baseUrl: string = ANTHROPIC_API_BASE,
+    /** Page size for the versions walk. See {@link ANTHROPIC_SKILLS_LIST_PAGE_LIMIT}. */
+    private readonly pageLimit: number = ANTHROPIC_SKILLS_LIST_PAGE_LIMIT,
   ) {}
 
   private headers(): Record<string, string> {
@@ -274,43 +368,56 @@ export class FetchAnthropicCustomSkillsGcClient {
 
   /**
    * List EVERY remote version of a skill, paginating the cursor to exhaustion
-   * (`has_more` + `last_id` / `after_id`, the standard Anthropic list shape)
    * BEFORE the caller deletes any version. A single un-paginated page would
    * leave undeleted versions behind, and the subsequent skill delete would then
-   * 400 ("delete all versions first") — wedging the GC run. A 404 means the
-   * skill is already gone (idempotent) ⇒ nothing to delete.
+   * be REFUSED ("Cannot delete skill with existing versions. Delete all
+   * versions first." — the live S7 acceptance confirmed the server enforces
+   * that ordering, check C5). The reclaim would then never converge: every run
+   * re-deletes the same first page and resurfaces the same refusal.
+   *
+   * The cursor is the REAL one: `{data, has_more, next_page}` with the forward
+   * cursor on the `page` query parameter (see {@link SkillsListEnvelope}) —
+   * NOT `last_id`/`after_id`, which this endpoint never returns. This walk
+   * reaching exhaustion is the S0 deliverable "paginate `listSkillVersions` to
+   * exhaustion before any `deleteSkill`".
+   *
+   * A 404 means the skill is already gone (idempotent) ⇒ nothing to delete.
    */
   async listSkillVersions(anthropicSkillId: string): Promise<string[]> {
     const out: string[] = [];
-    let afterId: string | undefined;
-    // Bound the walk defensively so a misbehaving `has_more` can never loop.
-    for (let page = 0; page < 10_000; page++) {
-      const params = new URLSearchParams({ limit: "100" });
-      if (afterId) params.set("after_id", afterId);
+    let page: string | undefined;
+    // A server that echoes a cursor it already handed back would otherwise walk
+    // the same page forever; the seen-set makes that terminate.
+    const seenCursors = new Set<string>();
+    // Bound the walk defensively so a misbehaving `next_page` can never loop.
+    for (let i = 0; i < 10_000; i++) {
+      const params = new URLSearchParams({ limit: String(this.pageLimit) });
+      if (page) params.set("page", page);
       const res = await fetch(
         `${this.baseUrl}/v1/skills/${encodeURIComponent(anthropicSkillId)}/versions?${params.toString()}`,
         { method: "GET", headers: this.headers() },
       );
-      if (res.status === 404) return page === 0 ? [] : out; // skill gone mid-walk
+      if (res.status === 404) return i === 0 ? [] : out; // skill gone mid-walk
       if (!res.ok) {
         const detail = await res.text().catch(() => "");
         throw new Error(
           `[anthropic-custom-skills-gc] GET versions failed: ${res.status} ${detail.slice(0, 500)}`,
         );
       }
-      const body = (await res.json()) as {
-        versions?: Array<{ version?: string } | string>;
-        data?: Array<{ version?: string } | string>;
-        has_more?: boolean;
-        last_id?: string;
-      };
-      const list = body.versions ?? body.data ?? [];
+      const body = (await res.json()) as SkillsListEnvelope<
+        { version?: string } | string
+      >;
+      // `data` is what the live wire returns; the `versions` alias is kept as a
+      // tolerated fallback and is checked SECOND so the observed key wins.
+      const list = body.data ?? body.versions ?? [];
       for (const v of list) {
         if (typeof v === "string") out.push(v);
         else if (v && typeof v.version === "string") out.push(v.version);
       }
-      if (body.has_more !== true || !body.last_id) return out;
-      afterId = body.last_id;
+      const next = nextListPageCursor(body);
+      if (!next || seenCursors.has(next)) return out;
+      seenCursors.add(next);
+      page = next;
     }
     return out;
   }

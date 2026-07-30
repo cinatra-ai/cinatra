@@ -8,7 +8,7 @@
  *    mount) and mounted READ-ONLY at /skills by the run profile;
  *  - a docker failure mid-staging cleans up (helper container first, then the
  *    volume) and still refuses;
- *  - broker.openJob(carrier, {stagedSkills}) refuses `staging_failed` on a bad
+ *  - openVouched(broker, carrier, {stagedSkills}) refuses `staging_failed` on a bad
  *    snapshot and threads `skillsVolume` into every worker dispatch;
  *  - createBrokerSandboxExecutor opens ONE job per carrier, resolves staged
  *    files exactly once, returns STRUCTURED refusals (never throws into the
@@ -49,6 +49,13 @@ import type {
   StagedSkillInput,
 } from "../types";
 import type { DockerCli } from "../docker-cli";
+import {
+  execVouched,
+  makeVerifier,
+  openVouched,
+  rememberBrokerPolicy,
+  testMinter,
+} from "./support/voucher-fixture";
 
 const SECRET = "unit-test-broker-secret";
 const PROV_KEY = "unit-test-provenance-key";
@@ -275,10 +282,12 @@ function makeBroker(
       audits.push(record);
     },
     livenessProbe: async () => "alive",
+    voucherVerifier: makeVerifier(),
     egressPolicyResolver: () => ({ mode: "none" }),
     docker,
     ...(quotas ? { quotas } : {}),
   });
+  rememberBrokerPolicy(broker, { mode: "none" });
   return { broker, audits };
 }
 
@@ -288,7 +297,7 @@ describe("ExecutionBroker — staged skills", () => {
     const { broker } = makeBroker(fakeWorker(), docker);
     const bad = stagedSkill();
     bad.files[0] = { ...bad.files[0], digest: "0".repeat(64) };
-    const opened = await broker.openJob(carrierFor(), { stagedSkills: [bad] });
+    const opened = await openVouched(broker, carrierFor(), { stagedSkills: [bad] });
     expect(opened.ok).toBe(false);
     if (!opened.ok) {
       expect(opened.reason).toBe("staging_failed");
@@ -300,27 +309,27 @@ describe("ExecutionBroker — staged skills", () => {
     const { docker } = recordingDocker();
     const worker = fakeWorker();
     const { broker } = makeBroker(worker, docker);
-    const withSkills = await broker.openJob(carrierFor("run-a"), {
+    const withSkills = await openVouched(broker, carrierFor("run-a"), {
       stagedSkills: [stagedSkill()],
     });
     expect(withSkills.ok).toBe(true);
     if (!withSkills.ok) return;
-    await broker.exec(withSkills.jobId, "cat /skills/my-skill/SKILL.md");
-    await broker.exec(withSkills.jobId, "echo again");
+    await execVouched(broker, withSkills.jobId, "cat /skills/my-skill/SKILL.md");
+    await execVouched(broker, withSkills.jobId, "echo again");
     expect(worker.specs[0].skillsVolume).toBe(skillsVolumeName(withSkills.jobId));
     expect(worker.specs[1].skillsVolume).toBe(skillsVolumeName(withSkills.jobId));
 
-    const withoutSkills = await broker.openJob(carrierFor("run-b"));
+    const withoutSkills = await openVouched(broker, carrierFor("run-b"));
     expect(withoutSkills.ok).toBe(true);
     if (!withoutSkills.ok) return;
-    await broker.exec(withoutSkills.jobId, "echo hi");
+    await execVouched(broker, withoutSkills.jobId, "echo hi");
     expect(worker.specs[2].skillsVolume).toBeUndefined();
   });
 
   it("closeJob removes the per-job skills volume", async () => {
     const { docker, argvs } = recordingDocker();
     const { broker } = makeBroker(fakeWorker(), docker);
-    const opened = await broker.openJob(carrierFor("run-c"), {
+    const opened = await openVouched(broker, carrierFor("run-c"), {
       stagedSkills: [stagedSkill()],
     });
     expect(opened.ok).toBe(true);
@@ -354,7 +363,7 @@ describe("createBrokerSandboxExecutor", () => {
     const { docker } = recordingDocker();
     const worker = fakeWorker();
     const { broker } = makeBroker(worker, docker);
-    const executor = createBrokerSandboxExecutor(broker);
+    const executor = createBrokerSandboxExecutor(broker, { mintVoucher: testMinter() });
     const carrier = carrierFor("run-x");
 
     const first = await executor({
@@ -377,7 +386,7 @@ describe("createBrokerSandboxExecutor", () => {
     const { docker } = recordingDocker();
     const worker = fakeWorker();
     const { broker } = makeBroker(worker, docker);
-    const executor = createBrokerSandboxExecutor(broker);
+    const executor = createBrokerSandboxExecutor(broker, { mintVoucher: testMinter() });
     const mount = mountFor("sha256:declared-env");
 
     const outputs = await executor({
@@ -395,7 +404,7 @@ describe("createBrokerSandboxExecutor", () => {
     const { docker } = recordingDocker();
     const worker = fakeWorker();
     const { broker } = makeBroker(worker, docker);
-    const executor = createBrokerSandboxExecutor(broker);
+    const executor = createBrokerSandboxExecutor(broker, { mintVoucher: testMinter() });
 
     await executor({ sessionCarrier: carrierFor("run-noenv"), commands: ["echo hi"] });
     expect(worker.specs[0].environment).toBeUndefined();
@@ -404,7 +413,7 @@ describe("createBrokerSandboxExecutor", () => {
   it("returns a STRUCTURED refusal (never throws) when the carrier is rejected", async () => {
     const { docker } = recordingDocker();
     const { broker } = makeBroker(fakeWorker(), docker);
-    const executor = createBrokerSandboxExecutor(broker);
+    const executor = createBrokerSandboxExecutor(broker, { mintVoucher: testMinter() });
     const outputs = await executor({
       sessionCarrier: "v1.not-a-real-carrier",
       commands: ["echo hi"],
@@ -418,7 +427,7 @@ describe("createBrokerSandboxExecutor", () => {
     const { docker } = recordingDocker();
     const worker = fakeWorker({ termination: "timeout", exitCode: null });
     const { broker } = makeBroker(worker, docker);
-    const executor = createBrokerSandboxExecutor(broker);
+    const executor = createBrokerSandboxExecutor(broker, { mintVoucher: testMinter() });
     const outputs = await executor({
       sessionCarrier: carrierFor("run-t"),
       commands: ["sleep 999"],
@@ -433,7 +442,7 @@ describe("createBrokerSandboxExecutor", () => {
     // flood long before the executor's 256-carrier tracking cap — raise it so
     // this test exercises the EXECUTOR's eviction, not the broker quota.
     const { broker } = makeBroker(worker, docker, { maxOpenJobsPerOrg: 1000 });
-    const executor = createBrokerSandboxExecutor(broker);
+    const executor = createBrokerSandboxExecutor(broker, { mintVoucher: testMinter() });
     const first = carrierFor("run-evict-0");
     await executor({ sessionCarrier: first, commands: ["echo first"] });
     const firstJobId = worker.specs[0].jobId;
@@ -447,15 +456,20 @@ describe("createBrokerSandboxExecutor", () => {
     expect(again[0].outcome).toEqual({ type: "exit", exitCode: 0 });
     const reopenedJobId = worker.specs[worker.specs.length - 1].jobId;
     expect(reopenedJobId).not.toBe(firstJobId);
-    // And the ORIGINAL job is still alive at the broker (not terminated).
-    const direct = await broker.exec(firstJobId, "echo direct");
+    // And the ORIGINAL job is still alive at the broker (not terminated). The job
+    // was opened THROUGH the executor, so the voucher's session must be spelled
+    // out here — it is bound to that job's own carrier identity (`run-evict-0`),
+    // and a voucher carrying any other run would be refused `session_mismatch`.
+    const direct = await execVouched(broker, firstJobId, "echo direct", {
+      runId: "run-evict-0",
+    });
     expect(direct.ok).toBe(true);
   });
 
   it("a non-Error throwable (throw null) from resolveFiles still becomes a structured refusal", async () => {
     const { docker } = recordingDocker();
     const { broker } = makeBroker(fakeWorker(), docker);
-    const executor = createBrokerSandboxExecutor(broker);
+    const executor = createBrokerSandboxExecutor(broker, { mintVoucher: testMinter() });
     const outputs = await executor({
       sessionCarrier: carrierFor("run-null-throw"),
       commands: ["echo hi"],
@@ -478,7 +492,7 @@ describe("createBrokerSandboxExecutor", () => {
   it("a HOSTILE throwable (throwing instanceof/message traps) still yields a structured refusal", async () => {
     const { docker } = recordingDocker();
     const { broker } = makeBroker(fakeWorker(), docker);
-    const executor = createBrokerSandboxExecutor(broker);
+    const executor = createBrokerSandboxExecutor(broker, { mintVoucher: testMinter() });
     const hostile = new Proxy(
       {},
       {
@@ -511,7 +525,7 @@ describe("createBrokerSandboxExecutor", () => {
   it("a THROWING resolveFiles becomes a structured refusal, never an escaping rejection", async () => {
     const { docker } = recordingDocker();
     const { broker } = makeBroker(fakeWorker(), docker);
-    const executor = createBrokerSandboxExecutor(broker);
+    const executor = createBrokerSandboxExecutor(broker, { mintVoucher: testMinter() });
     const carrier = carrierFor("run-throw");
     const throwing: SandboxStagedSkill = {
       skillId: "skill-x",

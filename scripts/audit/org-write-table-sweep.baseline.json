@@ -1,4 +1,6 @@
 {
+  "src/lib/database.ts": 3,
+  "src/lib/project-inheritance.ts": 6,
   "packages/objects/src/graphiti-projector.ts": 9,
   "packages/objects/src/graphiti-rebuild.ts": 4
 }

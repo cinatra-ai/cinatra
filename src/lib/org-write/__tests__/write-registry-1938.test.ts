@@ -165,7 +165,7 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     }
   });
 
-  it("the exception ledger is EXACTLY the workflows-extension + Stage-D-deferred rows (#1940 P3 flipped the new-run rows out)", () => {
+  it("the exception ledger is EXACTLY the workflows-extension + Stage-D-deferred + edge-family-sweep rows (#1940 P3 flipped the new-run rows out)", () => {
     // COMBINED truth after the #2201 merge:
     // - cinatra#1940 P3 (Decision 2): the two new-run creation rows
     //   (createAgentRun / createAgentRunPendingInput) were the #1940-linked
@@ -178,18 +178,51 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     //   org-admin authority-tier gap the kernel's session authority resolver
     //   cannot express yet — a design decision, not a mechanical thread).
     //   All disclosed in the wave-3 Stage D PR body.
+    // - cinatra#1939 wave 3 edge-family sweep additions: the writer surfaces
+    //   the per-family inventory found UNREGISTERED — the semantic-type
+    //   assertion store (shares createSemanticArtifact's caller families),
+    //   the site-widget connect + login/grant stores (no-session legs carry
+    //   the org axis on stored grant rows), and BOTH chat-thread writer
+    //   surfaces (assistant-thread-store.ts and the database.ts facade —
+    //   nullable org axis by design). Registered + ledgered rather than
+    //   silently unknown; the sweep PR body carries the full family
+    //   inventory. The three dead write exports the sweep found
+    //   (confirmAssertion / archiveAssertion / bindAssistantThread) are NOT
+    //   here — they are import-banned outright instead.
     const ledger = ORG_WRITE_REGISTRY.filter((r) => r.importBanExemption)
       .map((r) => `${r.exportName}#${r.importBanExemption!.issue}`)
       .sort();
     expect(ledger).toEqual([
       "addTeamMemberAction#1939",
+      "appendAssistantTurn#1939",
+      "assertSemanticType#1939",
+      "consumeAuthorizationCode#1939",
+      "consumeUserWidgetToken#1939",
+      "createAssistantThread#1939",
+      "createAuthTransaction#1939",
       "createSemanticArtifact#1939",
       "createTeamAction#1939",
+      "deleteAllChatThreadsFromDatabase#1939",
+      "deleteChatThreadFromDatabase#1939",
+      "ensureThreadSlug#1939",
+      "insertAuthorizationCode#1939",
+      "issueUserAuthCode#1939",
+      "loadActiveTransaction#1939",
       "materializeExtensionInstanceForProject#1939",
       "materializeExtensionTemplate#1939",
+      "purgeBackfilledDormantContentTurns#1939",
+      "redeemUserAuthCode#1939",
       "removeTeamMemberAction#1939",
+      "revokeConnectSiteRow#1939",
+      "setAssistantThreadPauseParticipant#1939",
+      "sweepExpiredAuthorizationCodes#1939",
+      "touchAssistantThread#1939",
+      "touchConnectSiteLastUsed#1939",
+      "updateAssistantTurn#1939",
       "updateTeamMemberRoleAction#1939",
       "upgradeExtensionDashboards#1939",
+      "upsertChatThreadInDatabase#1939",
+      "upsertConnectSiteCredential#1939",
     ]);
   });
 
@@ -224,10 +257,13 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     // SoftDelete/Undelete/Tombstone, restoreChangeSet, restoreObjectToVersion,
     // runResourceProjectMove, runAgentRunMoveWithOutputs — asserted in the
     // Stage-D describe block below); cinatra#1940 P3 added 2 (createAgentRun,
-    // createAgentRunPendingInput); cinatra#1940 P4 added 3 more (the lease-
-    // expiry finalizer's fenced settle plus its two pooled bookkeeping
-    // writers, all enumerated above). 20 + 8 + 2 + 3 = 33.
-    expect(banned.size).toBe(33);
+    // createAgentRunPendingInput); cinatra#1940 P4 added 3 (the lease-expiry
+    // finalizer's fenced settle plus its two pooled bookkeeping writers, all
+    // enumerated above); the edge-family sweep added 3 more total bans on
+    // DEAD write exports with zero production callers (confirmAssertion,
+    // archiveAssertion, bindAssistantThread — banned so an unguarded dead
+    // writer cannot gain a caller). 20 + 8 + 2 + 3 + 3 = 36.
+    expect(banned.size).toBe(36);
   });
 });
 

@@ -72,11 +72,24 @@ export const SKILL_ROUTER_MAX_LINES = 500;
 
 /**
  * Boundary rule (S0, #2087): reject when EITHER the archive bytes OR the
- * uncompressed file total REACHES 30,000,000. Mirrors
- * `ANTHROPIC_SKILL_MAX_UPLOAD_BYTES` in
- * packages/llm/src/tools/anthropic-skill-content-hash.ts.
+ * uncompressed file total REACHES this value.
+ *
+ * MIRRORS `ANTHROPIC_SKILL_MAX_UPLOAD_BYTES` in
+ * packages/llm/src/tools/anthropic-skill-content-hash.ts, and the
+ * "agreement pins" test in `__tests__/skill-packaging-gate.test.mjs` asserts the
+ * two are equal — a packaging gate that rejected at a different size than the
+ * uploader would either pass bundles the upload then refuses, or refuse bundles
+ * the API accepts.
+ *
+ * Raised 30,000,000 -> 31,457,280 (30 MiB) with the S7 live evidence
+ * (cinatra#2094): the API ACCEPTED a rooted canonical zip the old value rejected,
+ * so it was a confirmed client-side false rejection. Read the full grounding on
+ * the mirrored constant — in particular that 31,457,280 is the docs-based POLICY
+ * reading of "under 30 MB", consistent with but not derived from the measurement
+ * (which bounds only a lower edge). Change both constants together or the
+ * agreement pin fails.
  */
-export const SKILL_BUNDLE_MAX_BYTES = 30_000_000;
+export const SKILL_BUNDLE_MAX_BYTES = 31_457_280;
 
 /** A `kind:"skill"` package name is SINGULAR: `@<scope>/<slug>-skill`. */
 export const SKILL_PACKAGE_NAME_RE = /^@[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*-skill$/;

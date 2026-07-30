@@ -107,8 +107,10 @@ export function mapCatalogLoadErrorToServerHealth(
 export type ConnectorInstanceInvokerDeps = {
   /** Step 1 — the SINGLE live per-instance USE authority pass (M4). */
   requireUse: RequireInstanceUseGate;
-  /** Lazy first-touch backstop (R2-B2): ensure an explicit open policy row on the
-   * first AUTHORIZED touch. Runs after step 1, before the catalog read. */
+  /** Lazy first-touch backstop (R2-B2): ensure an explicit policy row on the
+   * first AUTHORIZED touch. Runs after step 1, before the catalog read.
+   * cinatra#2022 S7 PR-δ: writes restricted+empty (deny-all), not the pre-δ
+   * open default — the name is kept for a minimal diff footprint. */
   ensureDefaultOpenPolicy: (input: {
     connectorKey: string;
     instanceId: string;
@@ -435,8 +437,10 @@ async function runSharedGate(
     },
   );
 
-  // Lazy first-touch backstop (R2-B2) — ensure an explicit open policy row on the
-  // first AUTHORIZED touch, so "absent" is provably transient.
+  // Lazy first-touch backstop (R2-B2) — ensure an explicit policy row on the
+  // first AUTHORIZED touch, so "absent" is provably transient. cinatra#2022 S7
+  // PR-δ: the row written is restricted+empty (deny-all), not the pre-δ open
+  // default.
   await deps.ensureDefaultOpenPolicy({
     connectorKey: boundConnectorKey,
     instanceId: effectiveInstanceId,
@@ -683,7 +687,7 @@ export async function invokeConnectorInstanceTool(
   const ref: ToolRef = { serverId, name };
   const policy = await deps.readPolicy(input.connectorKey, effectiveInstanceId);
   const decision = evaluateInstanceToolPolicy(policy, ref);
-  if (decision.warn === "absent_policy_fallback_open") {
+  if (decision.warn === "absent_policy_default_restricted") {
     deps.warnAbsentPolicy?.(input.connectorKey, effectiveInstanceId);
   } else if (decision.warn === "invalid_policy_deny_all") {
     deps.warnInvalidPolicy?.(input.connectorKey, effectiveInstanceId);
@@ -1010,7 +1014,7 @@ export async function listConnectorInstanceTools(
   const allRows: SiteToolRow[] = sorted.map((entry: CatalogToolEntry) => {
     const snap = snapshotById.get(entry.serverId)!;
     const decision = evaluateInstanceToolPolicy(policy, { serverId: entry.serverId, name: entry.name });
-    if (decision.warn === "absent_policy_fallback_open" && !warnedAbsent) {
+    if (decision.warn === "absent_policy_default_restricted" && !warnedAbsent) {
       warnedAbsent = true;
       deps.warnAbsentPolicy?.(input.connectorKey, effectiveInstanceId);
     } else if (decision.warn === "invalid_policy_deny_all" && !warnedInvalid) {

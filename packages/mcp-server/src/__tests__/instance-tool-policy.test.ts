@@ -11,9 +11,17 @@ const base = { connectorKey: "wordpress", instanceId: "inst-1", updatedBy: "u", 
 const ref = { serverId: "mcp-adapter-default", name: "ewpa/create-post" };
 
 describe("evaluateInstanceToolPolicy — §10-A3 truth table", () => {
-  it("absent record → OPEN (allow) + warn-once signal (compatibility fallback ONLY)", () => {
-    expect(evaluateInstanceToolPolicy(null, ref)).toEqual({ status: "allowed", warn: "absent_policy_fallback_open" });
-    expect(evaluateInstanceToolPolicy(undefined, ref)).toEqual({ status: "allowed", warn: "absent_policy_fallback_open" });
+  // cinatra#2022 S7 PR-δ: absent → RESTRICTED+empty
+  // (deny-all), not the pre-δ OPEN compatibility fallback.
+  it("absent record → RESTRICTED+empty (deny) + warn-once signal (cinatra#2022 S7 PR-δ)", () => {
+    expect(evaluateInstanceToolPolicy(null, ref)).toEqual({
+      status: "denied",
+      warn: "absent_policy_default_restricted",
+    });
+    expect(evaluateInstanceToolPolicy(undefined, ref)).toEqual({
+      status: "denied",
+      warn: "absent_policy_default_restricted",
+    });
   });
 
   it("open mode → allow every tool EXCEPT entries in deny (deny applies in open mode)", () => {

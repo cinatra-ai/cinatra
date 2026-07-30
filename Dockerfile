@@ -118,6 +118,14 @@ RUN pnpm build:auth-migrate-bundle
 # the chain references (cinatra#1136, prod-deploy surface).
 RUN pnpm build:schema-bootstrap-bundle
 
+# Bundle the execution-plane SERVICE entrypoints (exec-plane S1 service slice,
+# epic #1705) — same standalone-image reasoning as the two bundles above: the
+# runtime stage ships neither the TypeScript source nor the workspace
+# node_modules the loose `packages/execution-plane/src/service/*-entry.ts` would
+# need. Builds BOTH entries so the worker artifact is proven to build here; only
+# the BROKER bundle is copied into the runtime stage below (see that COPY).
+RUN pnpm build:exec-service-bundle
+
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 # Cinatra is a large Next app (many workspace packages). Default Node heap
@@ -204,6 +212,22 @@ COPY --from=build /app/scripts/better-auth-migrate.bundle.mjs ./scripts/better-a
 # executes against an upgraded-but-not-yet-bootstrapped database (cinatra#1136,
 # prod-deploy surface). Load-bearing for release upgrades of EXISTING databases.
 COPY --from=build /app/scripts/schema-bootstrap.bundle.mjs ./scripts/schema-bootstrap.bundle.mjs
+
+# Execution-plane BROKER service entrypoint (exec-plane S1 service slice, epic
+# #1705). Self-contained ESM: the broker is pure Node — it opens the sealed
+# execution-session carrier, revalidates liveness, bounds load, audits, and talks
+# mutual TLS to a worker — so the exec-broker service container IS this app image
+# launched with `node scripts/exec-broker-service.bundle.mjs`, exactly as
+# build-exec-images.yml describes ("the deploy digest-pins the app image for
+# broker + worker"). Deliberately INERT in the app's own boot: nothing imports
+# it, `server.js` never loads it, and it only listens when run directly — so this
+# COPY changes no existing behaviour of the image.
+#
+# The WORKER bundle is deliberately NOT copied. The worker shells out to `docker`
+# for every command, so it belongs in a worker image that carries a docker
+# client; adding docker-cli to the APP image to host it would widen the app's
+# attack surface for no benefit. That image is a later slice.
+COPY --from=build /app/scripts/exec-broker-service.bundle.mjs ./scripts/exec-broker-service.bundle.mjs
 
 # Required-extension OAS seed (cinatra-ai/ops#436). The image-owned, symlink-free
 # projection of the required set's agent OAS trees (built in the build stage from

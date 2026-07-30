@@ -1,0 +1,39 @@
+# VACUOUS — read this first.
+#
+# This file is a POST-TEARDOWN re-run of drivers/diagnose-sync-key.mjs and it
+# proves NOTHING about F7. By the time it ran, block C had removed the Anthropic
+# credential, the per-arm reset had cleared cinatra.anthropic_skill_sync, and the
+# live-API cleanup had reclaimed all 22 remote skills. So every lookup is 0
+# because the state is gone, NOT because of the defect.
+#
+# It is committed anyway, under this name, for two reasons:
+#   1. the ONE line still meaningful is the last block: all five of the
+#      assistant's required skills carry allowAnthropicUpload=true, so the
+#      governance gate permits them. That is state-independent and still holds.
+#   2. the prior S7 lane was bitten by a probe that "passed" by adopting an
+#      earlier run's state; a vacuous artifact that is silently filed as evidence
+#      is the same failure mode. Labelling it is the correction.
+#
+# The measurement that F7 actually rests on was taken while the state existed and
+# its output was NOT captured to a file at the time. PROOF.md quotes it and says
+# so explicitly rather than pointing here. Re-deriving it needs a fresh arm.
+#
+stored anthropic credential row present: false
+BETTER_AUTH_SECRET visible to this process: true
+
+computed fingerprint (hmac path) : <null>
+computed fingerprint (sha path)  : <null>
+stored   fingerprint             : <no rows>
+fingerprint MATCHES (hmac)       : false
+fingerprint MATCHES (sha)        : false
+
+computed environment             : schema=cinatra;db=902cfcdba7d5612f;dep=
+stored   environment             : <no rows>
+environment MATCHES              : false
+
+per-skill lookup under the COMPUTED key:
+  @cinatra-ai/chat:chat-assistant-core          rowUnderComputedKey=0 rowUnderAnyKey=0 allowAnthropicUpload=true
+  @cinatra-ai/chat:chat-extension-authoring     rowUnderComputedKey=0 rowUnderAnyKey=0 allowAnthropicUpload=true
+  @cinatra-ai/chat:chat-automation-authoring    rowUnderComputedKey=0 rowUnderAnyKey=0 allowAnthropicUpload=true
+  @cinatra-ai/chat:company-research             rowUnderComputedKey=0 rowUnderAnyKey=0 allowAnthropicUpload=true
+  @cinatra-ai/chat:blog-content                 rowUnderComputedKey=0 rowUnderAnyKey=0 allowAnthropicUpload=true

@@ -1,0 +1,70 @@
+{
+  "arm": "openai",
+  "label": "LIVE — real openai API; provider boundary OBSERVED (pass-through), never stubbed",
+  "expectedMechanism": "tool-mount",
+  "hardCap": 8,
+  "at": "2026-07-30T03:13:38.303Z",
+  "succeeded": false,
+  "successAttempt": null,
+  "attempts": [
+    {
+      "attempt": 1,
+      "outcome": "error",
+      "providerMessageCalls": 1,
+      "statuses": [
+        200
+      ]
+    },
+    {
+      "attempt": 2,
+      "outcome": "error",
+      "providerMessageCalls": 1,
+      "statuses": [
+        200
+      ]
+    },
+    {
+      "attempt": 3,
+      "outcome": "error",
+      "providerMessageCalls": 1,
+      "statuses": [
+        200
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "R1",
+      "what": "a REAL assistant turn completed on openai",
+      "verdict": "FAIL",
+      "detail": "no attempt answered in 3"
+    },
+    {
+      "id": "R2",
+      "what": "skill delivery on the completed turn was TOOL-MOUNT (a mounted shell tool on the wire)",
+      "verdict": "FAIL",
+      "detail": "[]"
+    },
+    {
+      "id": "R3",
+      "what": "no container.skills was sent on the OpenAI path",
+      "verdict": "PASS",
+      "detail": "null"
+    },
+    {
+      "id": "R7",
+      "what": "the OpenAI assistant run performed ZERO Anthropic egress (MEASURED from the ledger)",
+      "verdict": "PASS",
+      "detail": "anthropic calls in 3 recorded provider calls: 0"
+    },
+    {
+      "id": "R8",
+      "what": "RECORDED GAP: the chat surface writes NO durable per-run delivery record",
+      "verdict": "PASS",
+      "detail": "agent_run_skills_used rows with a delivery_mode after a completed chat turn: 0 (finding F8)"
+    }
+  ],
+  "pageErrors": [],
+  "wireRecordForCompletedTurn": null,
+  "agentRunSkillsUsedRowsWithDeliveryMode": 0
+}

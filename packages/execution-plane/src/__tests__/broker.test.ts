@@ -7,6 +7,7 @@ import {
 
 import { ExecutionBroker, toAuthzAuditEventInput, verifyServiceToken } from "../broker";
 import type {
+  EgressPolicy,
   ExecutionAuditRecord,
   SandboxCommandResult,
   SandboxCommandSpec,
@@ -23,6 +24,12 @@ import {
   ENVIRONMENT_BUILDER_VERSION,
   type EnvironmentBuildRecipe,
 } from "../environment/recipe";
+import {
+  execVouched,
+  makeVerifier,
+  openVouched,
+  rememberBrokerPolicy,
+} from "./support/voucher-fixture";
 
 const SECRET = "unit-test-broker-secret";
 
@@ -90,10 +97,25 @@ function makeBroker(over: Partial<ConstructorParameters<typeof ExecutionBroker>[
       audits.push(record);
     },
     livenessProbe: async () => "alive",
+    voucherVerifier: makeVerifier(),
     egressPolicyResolver: () => ({ mode: "none" }),
     docker: fakeDocker,
     ...over,
   });
+  // The signed voucher — not the resolver — now carries the egress policy the
+  // command runs under. Mint this suite's vouchers with the tier the fixture was
+  // configured with, so every existing assertion keeps testing the same tier
+  // through the new (signed) path. A resolver that THROWS is only reachable on the
+  // pre-voucher audit fallback now, so `none` is the right voucher tier there.
+  let voucherPolicy: EgressPolicy = { mode: "none" };
+  try {
+    voucherPolicy = (over.egressPolicyResolver ?? (() => ({ mode: "none" }) as EgressPolicy))(
+      { orgId: "org-1", userId: "user-1", surface: "agent_run" },
+    );
+  } catch {
+    voucherPolicy = { mode: "none" };
+  }
+  rememberBrokerPolicy(broker, voucherPolicy);
   return { broker, audits, worker: worker as ReturnType<typeof fakeWorker> };
 }
 
@@ -104,7 +126,7 @@ beforeEach(() => {
 describe("openJob — carrier verification (fail-closed)", () => {
   it("opens a job for a valid carrier", async () => {
     const { broker } = makeBroker();
-    const result = await broker.openJob(carrierFor());
+    const result = await openVouched(broker, carrierFor());
     expect(result.ok).toBe(true);
   });
 
@@ -113,13 +135,13 @@ describe("openJob — carrier verification (fail-closed)", () => {
     const carrier = carrierFor();
     const [version, body] = carrier.split(".");
     const forged = `${version}.${body}.${"A".repeat(43)}`;
-    const result = await broker.openJob(forged);
+    const result = await openVouched(broker, forged);
     expect(result).toMatchObject({ ok: false, reason: "carrier_bad_signature" });
   });
 
   it("rejects garbage with carrier_malformed", async () => {
     const { broker } = makeBroker();
-    expect(await broker.openJob("not-a-carrier")).toMatchObject({
+    expect(await openVouched(broker, "not-a-carrier")).toMatchObject({
       ok: false,
       reason: "carrier_malformed",
     });
@@ -137,7 +159,7 @@ describe("openJob — carrier verification (fail-closed)", () => {
       ttlMs: 10,
     });
     const { broker } = makeBroker({ nowMs: () => 10_000 });
-    expect(await broker.openJob(carrier)).toMatchObject({
+    expect(await openVouched(broker, carrier)).toMatchObject({
       ok: false,
       reason: "carrier_expired",
     });
@@ -145,7 +167,7 @@ describe("openJob — carrier verification (fail-closed)", () => {
 
   it("refuses to open a job whose run is already gone", async () => {
     const { broker } = makeBroker({ livenessProbe: async () => "gone" });
-    expect(await broker.openJob(carrierFor())).toMatchObject({
+    expect(await openVouched(broker, carrierFor())).toMatchObject({
       ok: false,
       reason: "run_removed",
     });
@@ -156,16 +178,16 @@ describe("exec — per-command liveness revalidation (S1 AC6)", () => {
   it("purge mid-job fails the NEXT command closed and terminates the job", async () => {
     let live: "alive" | "gone" = "alive";
     const { broker, audits } = makeBroker({ livenessProbe: async () => live });
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     if (!opened.ok) throw new Error("open failed");
 
-    expect((await broker.exec(opened.jobId, "echo 1")).ok).toBe(true);
+    expect((await execVouched(broker, opened.jobId, "echo 1")).ok).toBe(true);
     live = "gone";
-    const second = await broker.exec(opened.jobId, "echo 2");
+    const second = await execVouched(broker, opened.jobId, "echo 2");
     expect(second).toMatchObject({ ok: false, reason: "run_removed" });
     // Terminated: even after liveness recovers, the job stays dead.
     live = "alive";
-    const third = await broker.exec(opened.jobId, "echo 3");
+    const third = await execVouched(broker, opened.jobId, "echo 3");
     expect(third).toMatchObject({ ok: false, reason: "job_terminated" });
     // Refusals are audited too.
     expect(audits.filter((a) => a.decision === "refused")).toHaveLength(2);
@@ -173,10 +195,10 @@ describe("exec — per-command liveness revalidation (S1 AC6)", () => {
 
   it("archive does NOT interrupt an in-flight job", async () => {
     const { broker } = makeBroker({ livenessProbe: async () => "archived" });
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     if (!opened.ok) throw new Error("open failed");
-    expect((await broker.exec(opened.jobId, "echo 1")).ok).toBe(true);
-    expect((await broker.exec(opened.jobId, "echo 2")).ok).toBe(true);
+    expect((await execVouched(broker, opened.jobId, "echo 1")).ok).toBe(true);
+    expect((await execVouched(broker, opened.jobId, "echo 2")).ok).toBe(true);
   });
 });
 
@@ -187,10 +209,10 @@ describe("exec — quotas and bounded queueing (S1 load contract)", () => {
       worker,
       quotas: { maxConcurrentPerOrg: 2, maxGlobalConcurrent: 4, maxQueuedPerOrg: 32 },
     });
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     if (!opened.ok) throw new Error("open failed");
     const burst = await Promise.all(
-      Array.from({ length: 10 }, (_, i) => broker.exec(opened.jobId, `echo ${i}`)),
+      Array.from({ length: 10 }, (_, i) => execVouched(broker, opened.jobId, `echo ${i}`)),
     );
     expect(burst.every((r) => r.ok)).toBe(true);
     expect(worker.concurrentPeak).toBeLessThanOrEqual(2);
@@ -203,12 +225,12 @@ describe("exec — quotas and bounded queueing (S1 load contract)", () => {
       worker,
       quotas: { maxConcurrentPerOrg: 1, maxGlobalConcurrent: 4, maxQueuedPerOrg: 1 },
     });
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     if (!opened.ok) throw new Error("open failed");
     const [first, second, third] = await Promise.allSettled([
-      broker.exec(opened.jobId, "a"),
-      broker.exec(opened.jobId, "b"),
-      broker.exec(opened.jobId, "c"),
+      execVouched(broker, opened.jobId, "a"),
+      execVouched(broker, opened.jobId, "b"),
+      execVouched(broker, opened.jobId, "c"),
     ]).then((settled) =>
       settled.map((s) => (s.status === "fulfilled" ? s.value : null)),
     );
@@ -229,9 +251,9 @@ describe("exec — command hygiene hook (never the boundary)", () => {
           ? { allowed: false, reason: "blocked by hygiene list" }
           : { allowed: true },
     });
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     if (!opened.ok) throw new Error("open failed");
-    expect(await broker.exec(opened.jobId, "run forbidden thing")).toMatchObject({
+    expect(await execVouched(broker, opened.jobId, "run forbidden thing")).toMatchObject({
       ok: false,
       reason: "command_blocked",
     });
@@ -242,9 +264,9 @@ describe("exec — command hygiene hook (never the boundary)", () => {
 describe("audit + separated stdio retention", () => {
   it("audits EVERY executed command with policy, digest and resource fields", async () => {
     const { broker, audits } = makeBroker();
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     if (!opened.ok) throw new Error("open failed");
-    await broker.exec(opened.jobId, "echo audited");
+    await execVouched(broker, opened.jobId, "echo audited");
     expect(audits).toHaveLength(1);
     expect(audits[0]).toMatchObject({
       orgId: "org-1",
@@ -271,9 +293,9 @@ describe("audit + separated stdio retention", () => {
       },
       stdioRedactor: (text) => text.replace("token-xyz", "[redacted]"),
     });
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     if (!opened.ok) throw new Error("open failed");
-    await broker.exec(opened.jobId, "echo");
+    await execVouched(broker, opened.jobId, "echo");
     expect(stdio).toHaveLength(1);
     expect(stdio[0].stdout).toBe("hello [redacted]");
     expect(stdio[0].stderr).toBe("warn");
@@ -281,9 +303,9 @@ describe("audit + separated stdio retention", () => {
 
   it("maps onto the authz kernel vocabulary with actorPrincipalType model", async () => {
     const { broker, audits } = makeBroker();
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     if (!opened.ok) throw new Error("open failed");
-    await broker.exec(opened.jobId, "echo");
+    await execVouched(broker, opened.jobId, "echo");
     const mapped = toAuthzAuditEventInput(audits[0]);
     expect(mapped).toMatchObject({
       organizationId: "org-1",
@@ -302,12 +324,12 @@ describe("disk-quota termination + teardown hook", () => {
     const { broker } = makeBroker({
       worker: fakeWorker({ result: { termination: "disk_quota_exceeded", workspaceKb: 999_999 } }),
     });
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     if (!opened.ok) throw new Error("open failed");
-    const first = await broker.exec(opened.jobId, "dd big file");
+    const first = await execVouched(broker, opened.jobId, "dd big file");
     expect(first.ok).toBe(true);
     if (first.ok) expect(first.result.termination).toBe("disk_quota_exceeded");
-    expect(await broker.exec(opened.jobId, "echo again")).toMatchObject({
+    expect(await execVouched(broker, opened.jobId, "echo again")).toMatchObject({
       ok: false,
       reason: "job_terminated",
     });
@@ -315,14 +337,14 @@ describe("disk-quota termination + teardown hook", () => {
 
   it("terminateJobsForRun kills every job bound to the run", async () => {
     const { broker } = makeBroker();
-    const a = await broker.openJob(carrierFor({ runId: "run-X" }));
-    const b = await broker.openJob(carrierFor({ runId: "run-X" }));
-    const c = await broker.openJob(carrierFor({ runId: "run-Y" }));
+    const a = await openVouched(broker, carrierFor({ runId: "run-X" }));
+    const b = await openVouched(broker, carrierFor({ runId: "run-X" }));
+    const c = await openVouched(broker, carrierFor({ runId: "run-Y" }));
     if (!a.ok || !b.ok || !c.ok) throw new Error("open failed");
     expect(await broker.terminateJobsForRun("run-X")).toBe(2);
-    expect(await broker.exec(a.jobId, "echo")).toMatchObject({ ok: false, reason: "job_terminated" });
-    expect(await broker.exec(b.jobId, "echo")).toMatchObject({ ok: false, reason: "job_terminated" });
-    expect((await broker.exec(c.jobId, "echo")).ok).toBe(true);
+    expect(await execVouched(broker, a.jobId, "echo")).toMatchObject({ ok: false, reason: "job_terminated" });
+    expect(await execVouched(broker, b.jobId, "echo")).toMatchObject({ ok: false, reason: "job_terminated" });
+    expect((await execVouched(broker, c.jobId, "echo")).ok).toBe(true);
   });
 });
 
@@ -330,13 +352,13 @@ describe("workspace keying — run-scoped persistence, job-scoped otherwise", ()
   it("same runId shares one workspace volume; distinct runs never share", async () => {
     const worker = fakeWorker();
     const { broker } = makeBroker({ worker });
-    const a = await broker.openJob(carrierFor({ runId: "run-share" }));
-    const b = await broker.openJob(carrierFor({ runId: "run-share" }));
-    const c = await broker.openJob(carrierFor({ runId: "run-other" }));
+    const a = await openVouched(broker, carrierFor({ runId: "run-share" }));
+    const b = await openVouched(broker, carrierFor({ runId: "run-share" }));
+    const c = await openVouched(broker, carrierFor({ runId: "run-other" }));
     if (!a.ok || !b.ok || !c.ok) throw new Error("open failed");
-    await broker.exec(a.jobId, "1");
-    await broker.exec(b.jobId, "2");
-    await broker.exec(c.jobId, "3");
+    await execVouched(broker, a.jobId, "1");
+    await execVouched(broker, b.jobId, "2");
+    await execVouched(broker, c.jobId, "3");
     const volumes = worker.specs.map((s) => s.workspaceVolume);
     expect(volumes[0]).toBe(volumes[1]);
     expect(volumes[2]).not.toBe(volumes[0]);
@@ -368,9 +390,9 @@ describe("gateway egress registration (fail-closed, unforgeable attribution)", (
       gateway: gatewayEndpoint,
       fetchImpl,
     });
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     if (!opened.ok) throw new Error("open failed");
-    expect((await broker.exec(opened.jobId, "pip install x")).ok).toBe(true);
+    expect((await execVouched(broker, opened.jobId, "pip install x")).ok).toBe(true);
     expect(registrations).toHaveLength(1);
     expect(registrations[0].url).toContain("/__register");
     expect(registrations[0].header).toBe("ctrl");
@@ -393,16 +415,20 @@ describe("gateway egress registration (fail-closed, unforgeable attribution)", (
       gateway: gatewayEndpoint,
       fetchImpl,
     });
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     if (!opened.ok) throw new Error("open failed");
-    const result = await broker.exec(opened.jobId, "curl example.com");
+    const result = await execVouched(broker, opened.jobId, "curl example.com");
     expect(result).toMatchObject({ ok: false, reason: "egress_unavailable" });
     // The worker was never invoked — no unattributed egress could occur.
     expect(worker.specs).toHaveLength(0);
     expect(audits.at(-1)).toMatchObject({ decision: "refused", reason: "egress_unavailable" });
   });
 
-  it("a throwing egress policy resolver is audited + refused, not leaked", async () => {
+  it("a throwing egress policy resolver can no longer decide a command's egress", async () => {
+    // The dispatch policy is the SIGNED one (clamped). The resolver survives only
+    // as the audit-row fallback for refusals that happen before any voucher is
+    // verified — so a throwing resolver must neither refuse a properly authorized
+    // command nor leak out of the pre-voucher audit path.
     const worker = fakeWorker();
     const { broker, audits } = makeBroker({
       worker,
@@ -410,14 +436,22 @@ describe("gateway egress registration (fail-closed, unforgeable attribution)", (
         throw new Error("policy store down");
       },
     });
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     if (!opened.ok) throw new Error("open failed");
-    const result = await broker.exec(opened.jobId, "echo");
-    expect(result).toMatchObject({ ok: false, reason: "egress_unavailable" });
-    expect(audits.at(-1)).toMatchObject({ decision: "refused", reason: "egress_unavailable" });
-    // The semaphore permit was released — a subsequent command still runs once
-    // the resolver recovers is out of scope, but the broker must not be wedged:
+    const result = await execVouched(broker, opened.jobId, "echo");
+    expect(result.ok).toBe(true);
+    expect(audits.at(-1)).toMatchObject({ decision: "executed" });
     expect(broker.executingCount).toBe(0);
+
+    // ...and a PRE-voucher refusal (no signed policy to report) still returns its
+    // structured refusal instead of throwing out of the audit fallback.
+    const missing = await broker.exec(opened.jobId, "echo", "");
+    expect(missing).toMatchObject({ ok: false, reason: "voucher_missing" });
+    expect(audits.at(-1)).toMatchObject({
+      decision: "refused",
+      reason: "voucher_missing",
+      effectivePolicy: { egressMode: "none" },
+    });
   });
 
   it("a gateway-mode policy with no gateway configured is refused egress_unavailable", async () => {
@@ -427,9 +461,9 @@ describe("gateway egress registration (fail-closed, unforgeable attribution)", (
       egressPolicyResolver: () => ({ mode: "default_internet" }),
       // no gateway configured
     });
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     if (!opened.ok) throw new Error("open failed");
-    expect(await broker.exec(opened.jobId, "curl x")).toMatchObject({
+    expect(await execVouched(broker, opened.jobId, "curl x")).toMatchObject({
       ok: false,
       reason: "egress_unavailable",
     });
@@ -447,9 +481,9 @@ describe("gateway egress registration (fail-closed, unforgeable attribution)", (
     const { broker, audits } = makeBroker({
       worker: throwingWorker as unknown as ReturnType<typeof fakeWorker>,
     });
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     if (!opened.ok) throw new Error("open failed");
-    const result = await broker.exec(opened.jobId, "echo");
+    const result = await execVouched(broker, opened.jobId, "echo");
     expect(result).toMatchObject({ ok: false, reason: "worker_error" });
     expect(audits.at(-1)).toMatchObject({ decision: "refused", reason: "worker_error" });
   });
@@ -458,14 +492,14 @@ describe("gateway egress registration (fail-closed, unforgeable attribution)", (
 describe("open-job ceiling (carrier-replay volume bound)", () => {
   it("refuses opening beyond the per-org open-job ceiling", async () => {
     const { broker } = makeBroker({ quotas: { maxOpenJobsPerOrg: 2 } });
-    const a = await broker.openJob(carrierFor({ runId: "r1" }));
-    const b = await broker.openJob(carrierFor({ runId: "r2" }));
-    const c = await broker.openJob(carrierFor({ runId: "r3" }));
+    const a = await openVouched(broker, carrierFor({ runId: "r1" }));
+    const b = await openVouched(broker, carrierFor({ runId: "r2" }));
+    const c = await openVouched(broker, carrierFor({ runId: "r3" }));
     expect(a.ok && b.ok).toBe(true);
     expect(c).toMatchObject({ ok: false, reason: "open_jobs_exhausted" });
     // Closing one frees a slot.
     if (a.ok) await broker.closeJob(a.jobId);
-    expect((await broker.openJob(carrierFor({ runId: "r4" }))).ok).toBe(true);
+    expect((await openVouched(broker, carrierFor({ runId: "r4" }))).ok).toBe(true);
   });
 
   it("the ceiling holds under a concurrent openJob burst (no race past it)", async () => {
@@ -483,7 +517,7 @@ describe("open-job ceiling (carrier-replay volume bound)", () => {
     }) as typeof fakeDocker;
     const { broker } = makeBroker({ quotas: { maxOpenJobsPerOrg: 3 }, docker: slowDocker });
     const results = await Promise.all(
-      Array.from({ length: 10 }, (_, i) => broker.openJob(carrierFor({ runId: `burst-${i}` }))),
+      Array.from({ length: 10 }, (_, i) => openVouched(broker, carrierFor({ runId: `burst-${i}` }))),
     );
     const opened = results.filter((r) => r.ok);
     const refused = results.filter((r) => !r.ok && r.reason === "open_jobs_exhausted");
@@ -501,11 +535,11 @@ describe("post-queue re-authorization", () => {
       livenessProbe: async () => live,
       quotas: { maxConcurrentPerOrg: 1, maxGlobalConcurrent: 1, maxQueuedPerOrg: 8 },
     });
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     if (!opened.ok) throw new Error("open failed");
     // First occupies the single concurrency slot; second queues behind it.
-    const first = broker.exec(opened.jobId, "one");
-    const second = broker.exec(opened.jobId, "two");
+    const first = execVouched(broker, opened.jobId, "one");
+    const second = execVouched(broker, opened.jobId, "two");
     // Purge while the second is queued.
     live = "gone";
     const [r1, r2] = await Promise.all([first, second]);
@@ -555,11 +589,11 @@ describe("openJob — L1 environment mount (exec-plane S3)", () => {
   it("threads the resolved environment onto EVERY command spec", async () => {
     const { broker, worker } = makeBroker();
     const env = environmentMount();
-    const opened = await broker.openJob(carrierFor(), { environment: env });
+    const opened = await openVouched(broker, carrierFor(), { environment: env });
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
-    await broker.exec(opened.jobId, "echo one");
-    await broker.exec(opened.jobId, "echo two");
+    await execVouched(broker, opened.jobId, "echo one");
+    await execVouched(broker, opened.jobId, "echo two");
     expect(worker.specs).toHaveLength(2);
     expect(worker.specs[0].environment).toEqual(env);
     expect(worker.specs[1].environment).toEqual(env);
@@ -567,10 +601,10 @@ describe("openJob — L1 environment mount (exec-plane S3)", () => {
 
   it("omits environment when the job declares none (byte-identical S1/S2 spec)", async () => {
     const { broker, worker } = makeBroker();
-    const opened = await broker.openJob(carrierFor());
+    const opened = await openVouched(broker, carrierFor());
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
-    await broker.exec(opened.jobId, "echo hi");
+    await execVouched(broker, opened.jobId, "echo hi");
     expect(worker.specs[0].environment).toBeUndefined();
   });
 
@@ -581,10 +615,10 @@ describe("openJob — L1 environment mount (exec-plane S3)", () => {
       },
     };
     const { broker, audits } = makeBroker({ worker: throwingWorker });
-    const opened = await broker.openJob(carrierFor(), { environment: environmentMount() });
+    const opened = await openVouched(broker, carrierFor(), { environment: environmentMount() });
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
-    const result = await broker.exec(opened.jobId, "echo hi");
+    const result = await execVouched(broker, opened.jobId, "echo hi");
     expect(result).toMatchObject({ ok: false, reason: "environment_untrusted" });
     const refusal = audits.find(
       (a) => a.decision === "refused" && a.reason === "environment_untrusted",

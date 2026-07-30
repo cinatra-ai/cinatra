@@ -37,6 +37,22 @@ const ORG_AXIS_TABLES = [
   "agent_runs",
   "org_archive_lease",
   "org_write_completion_ticket",
+  // cinatra#1939 wave 3 edge-family sweep: org-axis tables the per-family
+  // write inventory registered. The assistant/assertion/pin tables below are
+  // written in the quoted-literal style this regex sees; the connect/widget
+  // tables' CURRENT writers interpolate their table names (invisible to this
+  // regex — the registry writer-set lockstep tests are the pin for those
+  // modules), listed here so any FUTURE quoted-style writer is caught.
+  "semantic_assertion",
+  "assistant_threads",
+  "assistant_turns",
+  "assistant_thread_pause_state",
+  "artifact_refs",
+  "connect_authorization_codes",
+  "connect_sites",
+  "widget_auth_transactions",
+  "widget_auth_codes",
+  "widget_user_tokens",
 ];
 
 /** Registry-covered / infrastructure modules: raw DML here is accounted for. */
@@ -51,6 +67,18 @@ const COVERED_PREFIXES = [
   // runAgentRunMoveWithOutputs rows) + converted onto the kernel's guarded
   // fixed-batch — baseline entry removed (the ratchet shrinks).
   "src/lib/resource-project-move.ts",
+  // cinatra#1939 wave 3 edge-family sweep: registered SINGLE-PURPOSE store
+  // modules (rows + exemptions in write-registry.ts; a writer-set lockstep
+  // test pins each module's full export surface — stronger than this count
+  // ratchet). The BROAD modules the same sweep registered writers in
+  // (src/lib/database.ts and the project-inheritance.ts builders its chat
+  // writers execute) are deliberately NOT prefix-covered: they carry
+  // committed BASELINE counts instead, so a new raw org-axis DML site in
+  // either file fails this gate rather than hiding behind a prefix.
+  "src/lib/assistant-thread-store.ts",
+  "src/lib/assistant-thread-dormant-content-purge.ts",
+  "src/lib/connect-sites-store.ts",
+  "src/lib/widget-user-auth.ts",
   "src/lib/drizzle-store.ts", // DDL owner
   "packages/org-write-kernel/",
   "packages/migrations/",

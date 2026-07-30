@@ -729,6 +729,429 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     allowedImporters: ["packages/agents/src/mcp/handlers.ts"],
   },
 
+  // — semantic-type assertion store (cinatra#1939 wave 3 edge-family sweep):
+  //   found as a REAL unregistered raw-SQL writer while tracing the artifact
+  //   upload family — it runs its own advisory-locked transaction against
+  //   org-axis tables, entirely outside the artifact-creation entry point's
+  //   already-ledgered path. Registered here; NOT converted in this slice:
+  //   its caller surface (upload typing, authoring, templates, the matcher
+  //   job, three blog materializers) is the same many-caller blast radius
+  //   that deferred createSemanticArtifact above, and the two share callers —
+  //   they convert together in that per-caller-family wave. —
+  {
+    module: "src/lib/artifacts/semantic-assertion-store.ts",
+    exportName: "assertSemanticType",
+    capability: "content.write",
+    orgIdExtractor: "input.orgId (advisory-locked per artifact)",
+    storageReferences: ["objects", "semantic_assertion", "graphiti_projection_outbox"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "seven caller files across upload typing / authoring / templates / matcher job / blog materializers — the same many-caller blast radius that deferred createSemanticArtifact; converts with that per-caller-family wave",
+    },
+  },
+  {
+    // ZERO production callers (verified in the edge-family sweep) — a dead
+    // unguarded write export. Import-banned OUTRIGHT so it cannot gain a
+    // caller while it awaits deletion or conversion (an empty allowlist is
+    // the pairOneUntwinnedDashboardTwin total-ban precedent).
+    module: "src/lib/artifacts/semantic-assertion-store.ts",
+    exportName: "confirmAssertion",
+    capability: "content.write",
+    orgIdExtractor: "input.orgId (advisory-locked per artifact)",
+    storageReferences: ["objects", "semantic_assertion", "graphiti_projection_outbox"],
+    cascadeOwnership: "inert-history",
+    importBanned: true,
+    allowedImporters: [],
+  },
+  {
+    // ZERO production callers — same dead-surface total ban as confirmAssertion.
+    module: "src/lib/artifacts/semantic-assertion-store.ts",
+    exportName: "archiveAssertion",
+    capability: "content.write",
+    orgIdExtractor: "input.orgId (advisory-locked per artifact)",
+    storageReferences: ["objects", "semantic_assertion", "graphiti_projection_outbox"],
+    cascadeOwnership: "inert-history",
+    importBanned: true,
+    allowedImporters: [],
+  },
+
+  // — site-widget connect provisioning (cinatra#1939 wave 3 edge-family
+  //   sweep): the external-site widget's connect/authorize surface. Every row
+  //   below is a raw-SQL writer against tables carrying a real org axis
+  //   (org_id on connect_authorization_codes / connect_sites), previously
+  //   invisible to this registry AND to the table sweep (the DML interpolates
+  //   its table names, so the quote-anchored sweep regex cannot see it — the
+  //   registry lockstep tests are the pin for this module). NOT converted in
+  //   this slice: the approval action has a real session to mint from, but
+  //   the server-to-server token-exchange legs have NO session — the org axis
+  //   rides the stored grant row (the registration-bootstrap class). Needs an
+  //   authority-minting decision for the no-session legs, not a mechanical
+  //   thread. —
+  {
+    module: "src/lib/connect-sites-store.ts",
+    exportName: "insertAuthorizationCode",
+    capability: "org.settings",
+    orgIdExtractor: "input.orgId (nullable pre-approval; stamped on the grant row)",
+    storageReferences: ["connect_authorization_codes"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "site-widget connect surface: no-session token-exchange legs carry the org axis on the stored grant row — needs an authority-minting decision, not a mechanical thread",
+    },
+  },
+  {
+    module: "src/lib/connect-sites-store.ts",
+    exportName: "consumeAuthorizationCode",
+    capability: "org.settings",
+    orgIdExtractor: "stored grant row's org_id (single-use consume returns it)",
+    storageReferences: ["connect_authorization_codes"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "site-widget connect surface: no-session token-exchange legs carry the org axis on the stored grant row — needs an authority-minting decision, not a mechanical thread",
+    },
+  },
+  {
+    // Cross-org maintenance DELETE of EXPIRED grant rows only (the narrow
+    // cleanup class — removing an archived org's expired codes must never
+    // wedge).
+    module: "src/lib/connect-sites-store.ts",
+    exportName: "sweepExpiredAuthorizationCodes",
+    capability: "org.settings",
+    orgIdExtractor: "none (global expiry sweep; deletes only expired rows)",
+    storageReferences: ["connect_authorization_codes"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "global expired-grant cleanup sweep (no per-org principal exists) — the conversion decision must rule the cleanup class before this can demand an authority",
+    },
+  },
+  {
+    module: "src/lib/connect-sites-store.ts",
+    exportName: "upsertConnectSiteCredential",
+    capability: "org.settings",
+    orgIdExtractor: "input.orgId (nullable pre-approval; stamped on the site row)",
+    storageReferences: ["connect_sites"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "site-widget connect surface: credential mint/rotation rides both a session-authorized approval AND no-session provisioning legs — needs the same authority-minting decision as the grant rows",
+    },
+  },
+  {
+    module: "src/lib/connect-sites-store.ts",
+    exportName: "revokeConnectSiteRow",
+    capability: "org.settings",
+    orgIdExtractor: "explicit input.orgId (revocation scoped per site + org)",
+    storageReferences: ["connect_sites"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "site-widget connect surface — converts with the connect provisioning family once the authority-minting decision lands",
+    },
+  },
+  {
+    module: "src/lib/connect-sites-store.ts",
+    exportName: "touchConnectSiteLastUsed",
+    capability: "org.settings",
+    orgIdExtractor: "site row's org_id (bookkeeping UPDATE keyed by site_id)",
+    storageReferences: ["connect_sites"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "last-used bookkeeping on the site credential row (no-session request path) — converts with the connect provisioning family",
+    },
+  },
+
+  // — site-widget user login/grant store (same sweep, same surface class):
+  //   raw-SQL writers whose tables carry a NOT NULL org axis
+  //   (widget_auth_transactions / widget_auth_codes / widget_user_tokens).
+  //   Table names sit behind module constants, so the table sweep cannot see
+  //   this DML either — the registry lockstep tests pin this module. The
+  //   browser-facing legs have no app session (the org axis rides the
+  //   verified site credential and the stored single-use grant rows). —
+  {
+    module: "src/lib/widget-user-auth.ts",
+    exportName: "createAuthTransaction",
+    capability: "org.settings",
+    orgIdExtractor: "input.site (verified site credential context carries the org)",
+    storageReferences: ["widget_auth_transactions"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "site-widget login flow: the org axis rides the verified site credential; the route has no app session to mint from — needs the connect-surface authority-minting decision",
+    },
+  },
+  {
+    // Cleanup-on-read: the transaction lookup first DELETEs expired
+    // transaction rows (module-shared expiry sweep) before its SELECT — a
+    // writer, not a pure read, and the writer-set lockstep test counts it.
+    module: "src/lib/widget-user-auth.ts",
+    exportName: "loadActiveTransaction",
+    capability: "org.settings",
+    orgIdExtractor: "stored transaction row's org (expiry sweep is global)",
+    storageReferences: ["widget_auth_transactions"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "expired-grant cleanup sweep riding the lookup path (no per-org principal) — needs the cleanup-class ruling with the rest of the connect surface",
+    },
+  },
+  {
+    module: "src/lib/widget-user-auth.ts",
+    exportName: "issueUserAuthCode",
+    capability: "org.settings",
+    orgIdExtractor: "consumed transaction row's org (single-use consume)",
+    storageReferences: ["widget_auth_transactions", "widget_auth_codes"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "site-widget login flow: org axis rides the stored transaction row — needs the connect-surface authority-minting decision",
+    },
+  },
+  {
+    module: "src/lib/widget-user-auth.ts",
+    exportName: "redeemUserAuthCode",
+    capability: "org.settings",
+    orgIdExtractor: "consumed code row's org (single-use DELETE...RETURNING)",
+    storageReferences: ["widget_auth_codes", "widget_user_tokens"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "site-widget login flow: mints the browser-held bearer from the stored grant row, no app session — needs the connect-surface authority-minting decision",
+    },
+  },
+  {
+    module: "src/lib/widget-user-auth.ts",
+    exportName: "consumeUserWidgetToken",
+    capability: "org.settings",
+    orgIdExtractor: "stored token row's org (validation consume + expiry sweep)",
+    storageReferences: ["widget_user_tokens"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "site-widget login flow: bearer validation deletes spent/expired token rows on the no-session request path — needs the connect-surface authority-minting decision",
+    },
+  },
+
+  // — assistant chat thread store (cinatra#1939 wave 3 edge-family sweep, the
+  //   org-scoped chat family): raw-SQL writers for assistant_threads /
+  //   assistant_turns / assistant_thread_pause_state. The org axis
+  //   (assistant_threads.org_id) is NULLABLE BY DESIGN — ambient/personal
+  //   threads carry no organization; project/org/team threads do. The two
+  //   production transports already refuse without a verified user+org, but
+  //   nothing rules the org's lifecycle state. NOT converted in this slice:
+  //   guarding needs a guard-when-org-scoped ruling (what does an ambient
+  //   thread demand?) plus an authority mint for the assistant transports —
+  //   a design decision, not a mechanical thread. —
+  {
+    module: "src/lib/assistant-thread-store.ts",
+    exportName: "createAssistantThread",
+    capability: "content.write",
+    orgIdExtractor: "input.orgId (nullable — ambient threads have no org)",
+    storageReferences: ["assistant_threads"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "org axis is nullable by design (ambient threads) — needs a guard-when-org-scoped ruling plus an assistant-transport authority mint",
+    },
+  },
+  {
+    module: "src/lib/assistant-thread-store.ts",
+    exportName: "ensureThreadSlug",
+    capability: "content.write",
+    orgIdExtractor: "thread row's org_id (slug mint keyed by thread id)",
+    storageReferences: ["assistant_threads"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "org axis is nullable by design (ambient threads) — converts with the chat-thread family ruling",
+    },
+  },
+  {
+    module: "src/lib/assistant-thread-store.ts",
+    exportName: "touchAssistantThread",
+    capability: "content.write",
+    orgIdExtractor: "thread row's org_id (updated_at bookkeeping)",
+    storageReferences: ["assistant_threads"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "org axis is nullable by design (ambient threads) — converts with the chat-thread family ruling",
+    },
+  },
+  {
+    // ZERO production callers (verified in the edge-family sweep; only tests
+    // reference it) — dead surface, import-banned outright. src/lib/database.ts
+    // reaches this MODULE opaquely (a lazy require of the sync-leaf store), so
+    // the gate's intersection rule requires it on this banned row's allowlist
+    // even though it never calls this export.
+    module: "src/lib/assistant-thread-store.ts",
+    exportName: "bindAssistantThread",
+    capability: "content.write",
+    orgIdExtractor: "thread row's org_id (binding repoint)",
+    storageReferences: ["assistant_threads"],
+    cascadeOwnership: "inert-history",
+    importBanned: true,
+    allowedImporters: ["src/lib/database.ts"],
+  },
+  {
+    module: "src/lib/assistant-thread-store.ts",
+    exportName: "appendAssistantTurn",
+    capability: "content.write",
+    orgIdExtractor: "thread row's org_id (turn INSERT keyed by thread id)",
+    storageReferences: ["assistant_turns"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "org axis is nullable by design (ambient threads) — converts with the chat-thread family ruling",
+    },
+  },
+  {
+    module: "src/lib/assistant-thread-store.ts",
+    exportName: "updateAssistantTurn",
+    capability: "content.write",
+    orgIdExtractor: "thread row's org_id (turn UPDATE keyed by turn id)",
+    storageReferences: ["assistant_turns"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "org axis is nullable by design (ambient threads) — converts with the chat-thread family ruling",
+    },
+  },
+  {
+    module: "src/lib/assistant-thread-store.ts",
+    exportName: "setAssistantThreadPauseParticipant",
+    capability: "content.write",
+    orgIdExtractor: "thread row's org_id (pause flag keyed by thread id)",
+    storageReferences: ["assistant_thread_pause_state"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "org axis is nullable by design (ambient threads) — converts with the chat-thread family ruling",
+    },
+  },
+
+  // — chat thread persistence facade (same sweep, same chat family):
+  //   src/lib/database.ts composes its OWN raw-SQL transactions for the chat
+  //   thread lifecycle (builders live in project-inheritance.ts /
+  //   artifact-refs-store.ts — builders return statements and are not writer
+  //   entry points; these three exported executors are). A SECOND independent
+  //   writer surface over the assistant thread tables, distinct from
+  //   assistant-thread-store.ts above, plus the org-scoped artifact_refs
+  //   pin-sync rows. Same nullable-org wrinkle; callers additionally span
+  //   three authority contexts (session server actions, the chat transport's
+  //   frame, an HTTP handler). —
+  {
+    module: "src/lib/database.ts",
+    exportName: "upsertChatThreadInDatabase",
+    capability: "content.write",
+    orgIdExtractor:
+      "options.orgId / options.assistantMirrorOrgId (both nullable — ambient threads have no org; pin-sync runs only when orgId present)",
+    storageReferences: [
+      "artifact_refs",
+      "assistant_threads",
+      "assistant_turns",
+      "assistant_thread_pause_state",
+    ],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "callers span session actions, the chat transport frame, and an HTTP handler — each leg needs its own authority thread; converts with the chat-thread family ruling",
+    },
+  },
+  {
+    module: "src/lib/database.ts",
+    exportName: "deleteChatThreadFromDatabase",
+    capability: "content.write",
+    orgIdExtractor:
+      "none at the call boundary (delete keyed by thread id; the deleted rows carry their own org axis)",
+    storageReferences: ["artifact_refs", "assistant_threads", "assistant_turns", "chat_threads"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "thread deletion is the cleanup class (a user erasing their thread must never wedge on org state) — the conversion decision must rule cleanup semantics before this can demand an authority",
+    },
+  },
+  {
+    // Cross-org BY DESIGN: sweeps the calling user's OWN legacy-origin threads
+    // across every organization they belong to (account-level cleanup; the
+    // ownership + provenance scoping is enforced in the SQL itself). Does not
+    // fit the kernel's single-org guard contract as shaped today — registered
+    // so the ledger knows the hole, exactly like the global expiry sweep above.
+    module: "src/lib/database.ts",
+    exportName: "deleteAllChatThreadsFromDatabase",
+    capability: "content.write",
+    orgIdExtractor: "none (owner_user_id-scoped sweep across the user's orgs)",
+    storageReferences: ["artifact_refs", "assistant_threads", "assistant_turns", "chat_threads"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "user-scoped cross-org cleanup sweep (account-deletion class) — the kernel's single-org contract cannot express it today; needs the cleanup-class ruling",
+    },
+  },
+  {
+    // Migration hygiene purge (found by the widened table sweep during the
+    // same inventory): NULLs durable content on pre-cutover legacy turns,
+    // cutoff-bounded, dry-run by default, wired as a boot Migrate+Verify step.
+    // Cross-org by nature — no per-org principal exists on the boot path.
+    module: "src/lib/assistant-thread-dormant-content-purge.ts",
+    exportName: "purgeBackfilledDormantContentTurns",
+    capability: "content.write",
+    orgIdExtractor: "none (cross-org migration purge; cutoff-bounded, dry-run default)",
+    storageReferences: ["assistant_turns"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "cross-org migration/cleanup purge on the boot path (no per-org principal) — needs the cleanup-class ruling with the other maintenance sweeps",
+    },
+  },
+
   // — kernel-owned tables (S2's own entry points) —
   {
     module: "packages/org-write-kernel/src/tickets.ts",

@@ -231,3 +231,176 @@ It returned four corrections, all applied:
 
 Codex also asked that each `.fails` assertion be narrow enough to fail only for
 the pagination defect; both were tightened and annotated to that effect.
+
+---
+
+# Round 2 — F1 + F2 fixed, live re-verified, and the cross-provider suite added
+
+Round 1 (everything above) recorded the acceptance and **reported** two defects
+rather than patching them. Both are now fixed in this branch and re-driven against
+the live API, and one of the two round-1 `notRun` gaps is closed — but the
+acceptance **is still not complete**: the re-verification is **9 PASS / 1 FAIL**,
+and it surfaced a NEW finding (**F6**) that qualifies how much F1's fix can
+deliver. Read §F6 before treating S7 as done.
+
+| round-1 item | round-2 state |
+|---|---|
+| **F1** both list walks paginate on a cursor the API never returns | **FIXED for the cursor bug** — both walks now key on the real `{data, has_more, next_page}` envelope (forward cursor on the `page` param). Exhaustion is live-proven on the **versions** walk (**R4**, 4 pages, 4 of 4 versions; the pre-fix shape returned 1 of 4). On the **skills-list** walk the cursor is now correct but exhaustion is **unreachable** — the endpoint returns no cursor at all (**F6**, measured by **R3**, which FAILS). |
+| **F2** the 30,000,000-byte gate is stricter than the live API | **FIXED** — `ANTHROPIC_SKILL_MAX_UPLOAD_BYTES` 30,000,000 → **31,457,280** (30 MiB). The OLD value is refuted LIVE (**R10**); the NEW value is a docs-based policy reading, not a measured server limit — see §R10. |
+| `notRun` #2 — no "one bundle through all three adapters" suite | **CLOSED** — `packages/llm/src/__tests__/cross-provider-router-acceptance.test.ts` (21 tests). |
+| `notRun` #1 — browser-level per-provider post-setup E2E | **STILL NOT RUN.** Unchanged and still not claimed. See §Still not run. |
+
+## The live re-verification — 9 PASS / 1 FAIL
+
+`drivers/live-reverify-postfix.mjs` → `live-reverify-results.json`. **105 real
+requests** to `api.anthropic.com`; **9 PASS / 1 FAIL**; the driver exits **1**;
+cleanup **15 skills / 15 versions, `allReclaimed: true`** in the documented
+versions-then-skill order. Round 1's `live-results.json` is **preserved
+untouched** — the original 7 PASS / 3 FAIL measurement is the record of the
+defects, and this is a second, additive record.
+
+**The acceptance is therefore NOT complete, and this is not a green record.** F1's
+fix is fixed and live-proven for the GC/versions walk (R4) and F2's is settled
+(R10), but R3 measures a product property that is still unmet because of new
+finding **F6**.
+
+> ### A correction worth stating plainly
+>
+> An earlier revision of this driver reported **10/10**. It got there by
+> re-scoping R3 after the multi-page framing could not hold — and the re-scoped
+> check happened to select a target on page **one**, which the **pre-fix** client
+> would also have satisfied, since it finds a first-page match before reaching any
+> pagination logic. A check the bug passes proves nothing, and an upstream
+> limitation does not convert an unmet product behaviour into a pass. Codex flagged
+> this as goalpost-moving in the round-2 convergence and was right. R3 now measures
+> the property directly and records **FAIL**.
+
+**This run is a stronger claim than round 1.** Round 1 deliberately
+reimplemented the canonical zip builder and both walks so it could run without
+booting the app's module graph — fine for *discovering* a contract, but it proves
+nothing about the shipped code. Round 2 imports and drives the **real production
+modules** (`FetchAnthropicCustomSkillsClient`, `FetchAnthropicCustomSkillsGcClient`,
+`isDisplayTitleConflict`, `buildCanonicalSkillZip`, `checkSkillBoundary`,
+`ANTHROPIC_SKILL_MAX_UPLOAD_BYTES`) under `node --import tsx`. R3/R4/R10 are
+therefore claims about the code that ships.
+
+| # | check | verdict |
+|---|---|---|
+| R1 | rooted-zip multipart create through the shipped client | **PASS** |
+| R2 | `POST /v1/skills/{id}/versions` mints a new immutable version | **PASS** |
+| R3 | collision reconciliation resolves a `display_title` BEYOND the page `GET /v1/skills` serves | **FAIL** — finding **F6** |
+| R4 | versions-list pagination to exhaustion over a genuinely multi-page history | **PASS** |
+| R5 | skill delete refused while versions remain | **PASS** |
+| R6 | versions-then-skill order reclaims the skill | **PASS** |
+| R7 | collision rejected **and** classified by the shipped predicate | **PASS** |
+| R8 | `container.skills` cap — 8 accepted, 9 rejected | **PASS** |
+| R9 | unresolvable reference fails closed | **PASS** |
+| R10 | the raised upload gate agrees with the live API | **PASS** |
+
+### R4 — the F1 fix, with a quantified delta
+
+A disposable skill was given **four** versions and walked by the **real GC
+client** at an injected page size of 1 — a genuinely multi-page history:
+
+- `versionRequestsMadeByTheWalk: 4`, `versionsReturnedByTheWalk: 4`,
+  `sameVersionSet: true`.
+- The **pre-fix** cursor shape (`has_more` + `last_id` → `after_id`), replayed
+  over the same history, returned **1 of 4**.
+
+That 1-of-4 is the non-converging reclaim in one number: the GC would delete only
+what it saw, then be refused the skill delete (R5) on every subsequent run,
+forever. The S0 deliverable *"paginate `listSkillVersions` to exhaustion before
+any `deleteSkill`"* is restored **on the wire**, not just in a stub.
+
+### R10 — the F2 raise: what is live, and what is only local
+
+One artifact (**30,000,513** archive bytes / **30,000,189** uncompressed), built by the
+**real** canonical zip builder:
+
+- the live API **accepted** it (HTTP 200) — the false rejection is real;
+- the **shipped** gate now accepts it — the lift reaches the product;
+- the shipped gate **still rejects** at/above its own constant — a raise, not a
+  removal (`oldGateRejectionDimension: "uncompressed"`).
+
+**Only the first bullet is live.** The other two are in-process
+`checkSkillBoundary()` calls, and the at-limit case is a *synthetic* object rather
+than an upload — they prove the gate's own arithmetic, not server agreement. The
+phrase "live-proven in all three directions" appeared in an earlier revision of
+this document and was false; it is corrected here.
+
+**What the evidence bounds, exactly.** Only a LOWER bound: the server's threshold
+is strictly greater than the largest artifact it accepted (30,000,513 bytes), so an
+evidence-only constant under this module's `>=` semantics would be **30,000,514**.
+The shipped **31,457,280** is instead the docs-based *policy* reading of "under
+30 MB" (binary MB) — consistent with the measurement but **not derived from it**,
+since nothing between the observed floor and 31,457,280 was probed in either
+direction. It is chosen so the gate tracks the published contract rather than
+whichever artifact size happened to be tested, and it is labelled as a policy
+inference on the constant itself. Probing near 31,457,280 is the follow-up that
+would upgrade the top of that band from inference to evidence; leaving 30,000,000
+was rejected because it preserves a confirmed false rejection.
+
+## F6 — NEW finding, measured by this re-verification (reported, NOT patched)
+
+**`GET /v1/skills` does not paginate.** Measured live with **4 custom skills
+present**: `limit=1` returned 1 row and `limit=2` returned 2 rows, and **every**
+response carried `has_more:false` with `next_page:null`; an unknown `page` value is
+accepted and silently ignored (all rows came back). The endpoint truncates to
+`limit` and never offers a second page.
+
+**R3 is the direct proof, not an inference.** The driver collided on a
+`display_title` the endpoint provably does not return, and the shipped
+reconciliation made its **1** list request, found nothing, and **rethrew** instead
+of adopting the existing remote identity (`adoptedTheExistingIdentity: false`,
+`rethrewInstead: true`). A **positive control** — the same reconciliation on a
+title *inside* the served page — **adopted correctly**, which attributes the
+failure to the page ceiling rather than to the reconciliation logic or the
+collision classifier.
+
+This is the honest qualification of F1's fix, and the two endpoints differ:
+
+- **versions** endpoint — paginates properly; F1's fix is load-bearing and
+  live-proven there (R4).
+- **skills-list** endpoint — F1's fix corrects the cursor the client *keys on*,
+  but **cannot restore exhaustion**, because the server hands back nothing to
+  paginate with.
+
+**Blast radius.** `findCustomSkillByDisplayTitle` requests `limit=100`, so it can
+only ever observe the first 100 custom skills. In a workspace holding more than
+100, a `display_title` beyond row 100 is invisible, so a lost create response
+rethrows instead of adopting the existing remote identity — the retry-stability
+property S0 claimed. Severity is bounded by that precondition (>100 custom skills
+in one workspace) and by R3's live result: within the page the endpoint does
+serve, a real collision **does** adopt correctly.
+
+**Why it is not patched here.** No *complete* client-side fix is evidence-backed,
+and every mitigation was probed rather than assumed (all recorded under R3's
+`paginationProbe`): the `display_title` filter is **accepted and ignored** (4 of 4
+rows returned, `filtered: false`), and `limit=101`/`limit=1000` return HTTP 200 but
+cannot be shown to be *honoured* beyond the rows available to measure. Raising the
+page size on that basis would be a guess dressed as a fix.
+
+**A partial mitigation does exist, and is recommended rather than silently
+applied.** When a no-cursor page comes back FULL (`rows == limit`) with no match,
+the walk currently cannot distinguish "absent" from "truncated" — it treats the
+page as exhaustive. Reporting that case as TRUNCATED/indeterminate would let a
+caller fail loudly instead of minting a duplicate remote identity. That is a
+behaviour change to shipped code, outside this lane's authorised F1/F2 scope, so
+it is written down here and on the method instead of being slipped in. Any
+higher-limit mitigation should be proven against **more than 100 live rows**
+before F6 is closed.
+
+The wire suite's paged collision arm is now explicitly labelled as a guarantee
+about the **client's** walk shape against the documented scheme, **not** an
+observed-live claim, so nothing in the tree reads as proving more than R3 showed.
+
+## Still not run
+
+**Browser-level per-provider post-setup E2E — NOT RUN, unchanged from round 1.**
+The S7 delta (a post-setup assistant run showing container-delivered injection ≤8
+on the live Anthropic path and tool-mount delivery ≤8 on OpenAI, the exact-binding
+failure surface, and the zero-Anthropic-egress ledger for the OpenAI arm) is still
+uncovered. No screenshot, egress ledger, or verdict is claimed for it. The ≤8 cap
+and the per-provider mechanisms are covered at unit level by the S4 suites and by
+the new cross-provider acceptance suite — which is **not** a substitute for a
+real browser run, and is labelled stubbed in its own header.
