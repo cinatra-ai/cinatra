@@ -56,6 +56,10 @@ import {
   initialConversationState,
   type ConversationViewState,
 } from "./renderer/ag-ui-reducer";
+// The SAME normalizer the reducer applies to a RUN_ERROR message, reused for a
+// non-OK turn response so a rejection BEFORE the stream reads identically to one
+// raised inside it (cinatra#2094 F10).
+import { extractErrorMessage } from "./renderer/stream-normalizers";
 import type { UiMessage, UiThread, UiThreadSummary } from "./types";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 
@@ -280,6 +284,72 @@ async function foldSseBody(
   }
 }
 
+const GENERIC_TURN_REJECTION = "Chat request failed.";
+
+/**
+ * The ONE rejection code whose server-supplied reason this client will render.
+ *
+ * DRIFT-PINNED LITERAL, same reason as the contract-version literal above: this
+ * module cannot value-import from the host app or from the `@cinatra-ai/llm`
+ * barrel (the barrel pulls the whole host graph). The endpoint emits the same
+ * string; drift FAILS CLOSED — an unrecognized code keeps the generic text — and
+ * the F10 tests on both sides pin this exact value.
+ */
+const LLM_PROVIDER_UNAVAILABLE_CODE = "llm-provider-unavailable";
+
+/** Longest reason this client will render — matches the reducer's own cap for a
+ *  RUN_ERROR message, applied here AFTER unwrapping (the normalizer's own cap
+ *  sits before its `{error}`/`{message}` unwrap, so it does not bound this). */
+const MAX_RENDERED_REJECTION_LENGTH = 300;
+
+/**
+ * The operator-facing reason a turn was REJECTED before the stream existed
+ * (cinatra#2094 F10).
+ *
+ * WHY THE BODY IS READ AT ALL. The endpoint rejects an unavailable bound default
+ * provider with a 400 whose reason NAMES the provider to fix. Discarding the body
+ * and throwing a fixed `"Chat request failed."` destroyed exactly that: the S6
+ * contract's "unavailability is a VISIBLE error" reached the client and was thrown
+ * away one line before the banner — which is what S7's block C captured.
+ *
+ * WHY IT IS NOT READ IN GENERAL (codex round 1). A non-OK response can be
+ * anything: an arbitrary 5xx, an HTML proxy error page, a JSON body carrying
+ * stack detail. Rendering any of those in the chat banner would be an information
+ * leak wearing a bug fix's clothes. So this is an ALLOW-LIST of exactly one
+ * shape — HTTP 400 + `code === LLM_PROVIDER_UNAVAILABLE_CODE` + a string
+ * `error` — and everything else, including an unparseable body, keeps the generic
+ * text. The admitted reason is then whitespace-collapsed and hard-capped, because
+ * the normalizer's own cap is applied BEFORE its `{error}` unwrap and therefore
+ * does not bound an unwrapped value.
+ */
+async function turnRejectionMessage(response: Response): Promise<string> {
+  if (response.status !== 400) return GENERIC_TURN_REJECTION;
+  let raw = "";
+  try {
+    raw = await response.text();
+  } catch {
+    // A torn/unreadable error body must never mask the rejection itself.
+    return GENERIC_TURN_REJECTION;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return GENERIC_TURN_REJECTION;
+  }
+  if (parsed === null || typeof parsed !== "object") return GENERIC_TURN_REJECTION;
+  const body = parsed as { code?: unknown; error?: unknown };
+  if (body.code !== LLM_PROVIDER_UNAVAILABLE_CODE) return GENERIC_TURN_REJECTION;
+  if (typeof body.error !== "string") return GENERIC_TURN_REJECTION;
+  // `extractErrorMessage` is the reducer's own normalizer, so an admitted
+  // pre-stream rejection and a mid-stream RUN_ERROR render through one path.
+  const reason = extractErrorMessage(body.error).replace(/\s+/g, " ").trim();
+  if (!reason) return GENERIC_TURN_REJECTION;
+  return reason.length > MAX_RENDERED_REJECTION_LENGTH
+    ? `${reason.slice(0, MAX_RENDERED_REJECTION_LENGTH - 1)}…`
+    : reason;
+}
+
 /**
  * Drive one assistant turn over the AG-UI wire. Resolves with the final
  * reduced state (status "finished" | "error", or the last folded state when
@@ -322,7 +392,7 @@ export async function streamAssistantTurn(
     }),
     signal: options.signal,
   });
-  if (!response.ok) throw new Error("Chat request failed.");
+  if (!response.ok) throw new Error(await turnRejectionMessage(response));
   if (!response.body) throw new Error("No response stream.");
 
   // One-shot durable-log resume: a FULL replay folded into a FRESH state
