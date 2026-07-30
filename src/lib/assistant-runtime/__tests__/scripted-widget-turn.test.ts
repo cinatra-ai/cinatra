@@ -118,6 +118,8 @@ function argsWith(
     platformRole: "member" as const,
     sessionOrgId: "o1",
     send,
+    // cinatra#2240 — required turn/run identity (see runtime RunChatTurnArgs).
+    turnIdentity: { turnId: "turn-widget", runId: "run-widget" },
     widgetPrincipal,
   };
 }

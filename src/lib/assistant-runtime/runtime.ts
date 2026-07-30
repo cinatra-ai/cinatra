@@ -44,6 +44,14 @@ import { getAllManifests } from "@/lib/wizard-manifest-registry";
 // appointment schedules, ...) resolve through the chat-user-context capability
 // registry — the runtime no longer imports any connector package by name.
 import { buildChatUserContextSections } from "@/app/api/chat/chat-user-context";
+// cinatra#2240 (finding F8): the durable per-turn skill-DELIVERY record. The
+// chat surface used to deliver skills to a provider and leave NO trace, so an
+// audit could only be settled at the wire.
+import { recordTurnSkillDelivery } from "@/lib/assistant-turn-skill-delivery";
+import {
+  buildTurnSkillDeliveryRows,
+  type TurnSkillDeliveryRow,
+} from "./skill-delivery-record";
 import {
   describeLlmRuntimeUnavailability,
   stream,
@@ -65,6 +73,7 @@ import {
   resolveInjectedSkillSet,
   injectedCatalogSkillIds,
   injectedSkillDrops,
+  injectedSkillMembers,
   isInlineSkillMechanism,
   type InjectionAuthorization,
   type InjectionResolverPorts,
@@ -133,6 +142,18 @@ export type RunChatTurnArgs = {
   platformRole: "platform_admin" | "member";
   sessionOrgId: string | null;
   send: ChatStreamSink;
+  /**
+   * The DURABLE identity of this turn (cinatra#2240) — the `assistant_turns`
+   * row id plus the AG-UI run id, both already minted by every chat entry point
+   * BEFORE the producer runs (`streamAgUiChatTurn` for the HTTP surfaces,
+   * `driveTurn` for the in-process `chat_thread_send` MCP surface). It keys the
+   * per-turn skill-delivery record.
+   *
+   * REQUIRED, deliberately: an optional identity with a "log and skip" fallback
+   * would silently reproduce finding F8 (a turn that delivers skills and
+   * records nothing) the first time a new entry point forgot to pass it.
+   */
+  turnIdentity: { turnId: string; runId: string };
   /** Aborted when the client disconnects (#503) so the run stops LLM/MCP work
    *  promptly instead of running to completion with nobody listening. */
   signal?: AbortSignal;
@@ -480,6 +501,35 @@ export function buildAssistantInjectionPorts(
   };
 }
 
+/**
+ * Commit the turn's durable skill-delivery record (cinatra#2240).
+ *
+ * AWAITED, never fire-and-forget: a detached promise can lose the write when
+ * the process/lambda tears down at the end of the turn, which would reproduce
+ * exactly the "delivered but unrecorded" gap this closes.
+ *
+ * Best-effort BUT LOUD: telemetry persistence must not fail a user's turn (the
+ * same posture as the agent-run ledger in `/api/llm-bridge`), so a failure is
+ * swallowed — but it is reported as a structured `console.error` naming the
+ * turn and run, because a silently-lost record makes the acceptance
+ * ("leaves a durable row") unverifiable in operation.
+ */
+async function persistTurnSkillDelivery(
+  turnIdentity: { turnId: string; runId: string },
+  rows: readonly TurnSkillDeliveryRow[],
+): Promise<void> {
+  if (rows.length === 0) return;
+  try {
+    await recordTurnSkillDelivery({ turnId: turnIdentity.turnId, rows });
+  } catch (err) {
+    console.error(
+      `[assistant-runtime] durable skill-delivery record write FAILED for turn ` +
+        `${turnIdentity.turnId} (run ${turnIdentity.runId}, ${rows.length} row(s)) — ` +
+        "the turn continues, but this run's delivery is NOT auditable from the store:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
 
 export async function runAssistantTurn(
   runtimeConfig: AssistantRuntimeConfig,
@@ -667,6 +717,14 @@ export async function runAssistantTurn(
   // on a tool-mount/container provider, the EXPANDED skill bodies on an inline
   // provider. Declared out here because both branches below feed it.
   let skillSystemContext = "";
+  // cinatra#2240 — the turn's DELIVERY FACTS, captured here during preparation
+  // and COMMITTED at the true dispatch boundary (immediately before `stream()`,
+  // or on the refusal return). Capturing and committing at different points is
+  // deliberate: several paths return between delivery preparation and dispatch
+  // (an unreachable public MCP URL, the explicit-dispatch short circuit), and a
+  // record written at `deliver()` time would claim skills reached a model they
+  // never reached.
+  let turnSkillDeliveryRows: TurnSkillDeliveryRow[] = [];
   if (isInlineSkillMechanism(adapter.provider)) {
     // Inline mechanism (Gemini): core SHORT-CIRCUITS — no delivery adapter, no
     // connector surface. It reads each member's router body plus its ONE-HOP
@@ -683,6 +741,19 @@ export async function runAssistantTurn(
           inline.dropped.map((d) => `${d.skillId} (${d.reason})`).join(", "),
       );
     }
+    // The inline vehicle has no adapter and no refusal path of its own: a
+    // skill that did not make the byte budget is a DROP, not a refusal, and is
+    // recorded as one. Both drop channels feed the record — the injection
+    // contract's cap drops and the inline expansion's whole-skill drops.
+    turnSkillDeliveryRows = buildTurnSkillDeliveryRows({
+      provider: adapter.provider,
+      requestedSkillIds: injectedSkillMembers(injectedSkills).map((m) => m.skillId),
+      exposure: inline.exposure,
+      contractDrops: [...injectionDrops, ...inline.dropped].map((d) => ({
+        skillId: d.skillId,
+        reason: d.reason,
+      })),
+    });
   }
   if (isNativeMcpProvider(adapter.provider)) {
   // adapter.provider is narrowed to "openai" | "anthropic" in this block
@@ -714,16 +785,48 @@ export async function runAssistantTurn(
     });
     skillTools = delivery.tools;
     skillSystemContext = delivery.systemContext;
+    // cinatra#2240 — capture what the adapter reported it delivered (per-skill
+    // mode → vehicle), the Anthropic container refs actually emitted, and every
+    // resolved-but-undelivered skill with its reason.
+    turnSkillDeliveryRows = buildTurnSkillDeliveryRows({
+      provider: adapter.provider,
+      requestedSkillIds: catalogSkillIds,
+      exposure: delivery.exposure ?? [],
+      tools: delivery.tools,
+      contractDrops: injectionDrops.map((d) => ({ skillId: d.skillId, reason: d.reason })),
+      adapterDroppedSkillIds: delivery.droppedSkillIds,
+      adapterSelectionReason: delivery.selectionReason,
+    });
     // LOUD, never silent: the injection contract resolved skills for this turn,
     // so a delivery that produced no vehicle at all means the operator's
     // assistant is running WITHOUT its instructions. Refuse the turn rather than
     // answer as a skill-less assistant while claiming to be the configured one.
     if (skillTools.length === 0 && !delivery.systemContext) {
+      const refusalReason =
+        `skill delivery produced NO vehicle for provider "${adapter.provider}" ` +
+        `model "${adapter.defaultModel}" — the turn was refused`;
       console.error(
         `[assistant-runtime] skill delivery produced NO vehicle for provider ` +
           `"${adapter.provider}" model "${adapter.defaultModel}" with ` +
           `${catalogSkillIds.length} resolved skill(s) — refusing the turn ` +
           "(a silently skill-less assistant is never an acceptable degrade)",
+      );
+      // The refusal record IS the point of #2240: it names every skill the
+      // operator's assistant lost, durably, so the refusal is answerable from
+      // the store and not only from a log line. Committed BEFORE the error
+      // event so a client that tears down on `error` cannot race the write.
+      await persistTurnSkillDelivery(
+        args.turnIdentity,
+        buildTurnSkillDeliveryRows({
+          provider: adapter.provider,
+          requestedSkillIds: catalogSkillIds,
+          exposure: [],
+          contractDrops: injectionDrops.map((d) => ({
+            skillId: d.skillId,
+            reason: d.reason,
+          })),
+          refusalReason,
+        }),
       );
       send("error", {
         message:
@@ -986,6 +1089,13 @@ export async function runAssistantTurn(
     );
     send("text", { content: verdict.notice });
   };
+
+  // cinatra#2240 — THE DISPATCH BOUNDARY. Everything above can still return
+  // without reaching a provider (an unreachable public MCP URL, the
+  // explicit-dispatch HARD short circuit); from here the turn IS dispatched, so
+  // this is the first point at which "these skills went to this provider via
+  // this vehicle" is a true statement about the wire.
+  await persistTurnSkillDelivery(args.turnIdentity, turnSkillDeliveryRows);
 
   try {
     await stream({

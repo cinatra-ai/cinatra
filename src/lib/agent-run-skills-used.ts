@@ -238,12 +238,39 @@ export function recordSkillInjectionDrops(input: {
  * efficacy view and deprecation-candidate computation.
  *   - exposureRunCount: distinct runs the skill was exposed in (any mode).
  *   - attributableExposureRunCount: distinct runs the skill was exposed in via
- *     an INVOCATION-ATTRIBUTABLE mode (invocation_attributable=true). Only these
- *     count toward the minimum sample — a skill exposed only via
- *     non-attributable modes can never be a candidate.
+ *     an INVOCATION-ATTRIBUTABLE mode (invocation_attributable=true) ON A PATH
+ *     WHERE AN INVOCATION WOULD ACTUALLY HAVE BEEN OBSERVED. Only these count
+ *     toward the minimum sample — a skill exposed only via non-attributable
+ *     modes can never be a candidate.
  *   - invocationCount: total invocations across all runs.
  *   - lastExposedAt: most recent exposure (first_invoked_at proxy).
  *   - deliveryModes: distinct non-null modes observed, ascending.
+ *
+ * TWO SOURCES, ONE ROLLUP (cinatra#2240). The agent-run path writes
+ * `agent_run_skills_used`; the CHAT path writes its per-turn delivery record to
+ * `assistant_turn_skill_delivery` — it cannot share this table, whose `run_id`
+ * is `NOT NULL REFERENCES agent_runs(id)` while a chat turn has no agent run.
+ * This reader UNIONS them, so there is exactly one exposure/efficacy ledger and
+ * no parallel bookkeeping downstream: `skill-efficacy.ts` and
+ * `/configuration/skills` consume the same aggregate shape unchanged.
+ *
+ * WHY CHAT ROWS ARE NOT CANDIDATE-ELIGIBLE. `isDeprecationCandidate`
+ * (skill-efficacy.ts) flags an ACTIVE skill exposed attributably at least
+ * SKILL_DEPRECATION_MIN_EXPOSURE_SAMPLE times and NEVER invoked. That rule is
+ * sound only where an invocation would have been OBSERVED. Chat mounts OpenAI
+ * skills with `invocation_attributable = true` — truthfully; that is what the
+ * adapter reports — but the chat path does not wire the `onSkillRead`
+ * invocation signal, so a chat-delivered skill's invocation count can only ever
+ * be 0. Counting those exposures toward the sample would manufacture false
+ * deprecation candidates for healthy skills after ~20 chat turns. The chat arm
+ * therefore contributes exposures, delivery modes and recency but NEVER the
+ * candidate-eligible attributable count. Wiring chat invocation accounting (and
+ * only then promoting the arm) is follow-up work, not a licence to corrupt the
+ * signal now.
+ *
+ * Distinct-source counting is NAMESPACED (`agent:<run_id>` / `chat:<turn_id>`):
+ * the two id spaces are unrelated, and counting raw ids across them could
+ * collide. The AGENT arm's semantics are byte-unchanged.
  */
 export type SkillExposureAggregate = {
   skillId: string;
@@ -258,21 +285,47 @@ export function readSkillExposureAggregates(): SkillExposureAggregate[] {
   const connectionString = getPostgresConnectionString();
   const schema = postgresSchema;
   const table = `"${schema.replaceAll('"', '""')}"."agent_run_skills_used"`;
+  const chatTable = `"${schema.replaceAll('"', '""')}"."assistant_turn_skill_delivery"`;
   const [result] = runPostgresQueriesSync({
     connectionString,
     queries: [
       {
-        text: `SELECT
+        text: `WITH exposures AS (
+                 SELECT skill_id,
+                        'agent:' || run_id AS source_key,
+                        invocation_attributable,
+                        invocation_count,
+                        first_invoked_at AS observed_at,
+                        delivery_mode,
+                        TRUE AS candidate_eligible
+                   FROM ${table}
+                 UNION ALL
+                 -- cinatra#2240 chat arm: DELIVERED rows only (a drop or a
+                 -- refusal never reached the model, so it is not an exposure).
+                 -- candidate_eligible=FALSE — see this function's doc comment.
+                 SELECT skill_id,
+                        'chat:' || turn_id AS source_key,
+                        invocation_attributable,
+                        0 AS invocation_count,
+                        created_at AS observed_at,
+                        delivery_mode,
+                        FALSE AS candidate_eligible
+                   FROM ${chatTable}
+                  WHERE outcome = 'delivered'
+               )
+               SELECT
                  skill_id,
-                 COUNT(DISTINCT run_id) AS exposure_run_count,
-                 COUNT(DISTINCT run_id) FILTER (WHERE invocation_attributable IS TRUE) AS attributable_exposure_run_count,
+                 COUNT(DISTINCT source_key) AS exposure_run_count,
+                 COUNT(DISTINCT source_key) FILTER (
+                   WHERE candidate_eligible AND invocation_attributable IS TRUE
+                 ) AS attributable_exposure_run_count,
                  COALESCE(SUM(invocation_count), 0) AS invocation_count,
-                 MAX(first_invoked_at) AS last_exposed_at,
+                 MAX(observed_at) AS last_exposed_at,
                  COALESCE(
                    ARRAY_AGG(DISTINCT delivery_mode) FILTER (WHERE delivery_mode IS NOT NULL),
                    '{}'
                  ) AS delivery_modes
-               FROM ${table}
+               FROM exposures
                GROUP BY skill_id`,
         values: [],
       },

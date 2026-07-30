@@ -469,7 +469,11 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
   };
 
   const messages: ChatRequestMessage[] = parsed.data.messages;
-  const runProducer: Parameters<typeof streamAgUiChatTurn>[0]["runProducer"] = (send, signal) =>
+  const runProducer: Parameters<typeof streamAgUiChatTurn>[0]["runProducer"] = (
+    send,
+    signal,
+    turnIdentity,
+  ) =>
     runAssistantTurn(runtimeConfig, {
       messages,
       actorContext: widgetActorContext,
@@ -478,6 +482,9 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
       sessionOrgId: widgetPrincipal.orgId,
       send,
       signal,
+      // cinatra#2240 — the harness-bound turn/run identity keys this turn's
+      // durable skill-delivery record.
+      turnIdentity,
       widgetPrincipal,
     });
 
@@ -596,8 +603,18 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
   // a non-built-in principal.
   let runProducer: Parameters<typeof streamAgUiChatTurn>[0]["runProducer"];
   if (parsed.data.assistant === undefined) {
-    runProducer = (send, signal) =>
-      runChatTurn({ messages, actorContext, userId, platformRole, sessionOrgId, send, signal });
+    runProducer = (send, signal, turnIdentity) =>
+      runChatTurn({
+        messages,
+        actorContext,
+        userId,
+        platformRole,
+        sessionOrgId,
+        send,
+        signal,
+        // cinatra#2240 — keys this turn's durable skill-delivery record.
+        turnIdentity,
+      });
   } else {
     const handle = parsed.data.assistant.trim().toLowerCase();
     const resolvedHandles = await resolveAssistantHandles([handle]);
@@ -623,7 +640,7 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
       return Response.json({ error: "Assistant not found" }, { status: 404 });
     }
     const runtimeConfig = resolved.runtimeConfig;
-    runProducer = (send, signal) =>
+    runProducer = (send, signal, turnIdentity) =>
       runAssistantTurn(runtimeConfig, {
         messages,
         actorContext,
@@ -632,6 +649,8 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
         sessionOrgId,
         send,
         signal,
+        // cinatra#2240 — keys this turn's durable skill-delivery record.
+        turnIdentity,
       });
   }
 
