@@ -6,21 +6,26 @@ import "server-only";
 // pure decision logic lives in `@cinatra-ai/mcp-server/instance-tool-policy`
 // (`evaluateInstanceToolPolicy`). This module owns PERSISTENCE only.
 //
-// The "migrated instances are pinned OPEN" guarantee is delivered by THREE layers
-// (R2-B2), never a single in-migration enumeration:
+// The "every instance gets an explicit default row" guarantee is delivered by
+// THREE layers (R2-B2), never a single in-migration enumeration:
 //   1. creation-default writer — wired into the host-side instance-creation hook
 //      (register-host-connector-services), so a new instance has an explicit
-//      `mode:"open"` row BEFORE any tool_call/tools_list (R3-B2, the PRIMARY
+//      default row BEFORE any tool_call/tools_list (R3-B2, the PRIMARY
 //      guarantee; a write failure fails the creation loudly);
 //   2. deploy-gated reconcile — `reconcileConnectorInstanceToolPolicies` writes
-//      an explicit `open` row for every enrolled instance under a SYSTEM actor,
+//      an explicit default row for every enrolled instance under a SYSTEM actor,
 //      idempotently, run at deploy/boot;
 //   3. lazy first-touch backstop — the invoker's authorized path calls
 //      `ensureDefaultOpenPolicy` on the first authorized touch, so a
 //      never-reconciled instance converges to an explicit row the moment it is
 //      used ("absent" is provably transient, never a steady state).
-// An ABSENT read is a compatibility FALLBACK (open) only (M5 / §10-A3), never the
-// normal migrated state.
+// cinatra#2022 S7 PR-δ: the row this shared default writer creates FLIPPED
+// from `mode:"open"` to `mode:"restricted"` (empty allow/deny) — no data
+// migration, existing instances simply lose mutation access until a site
+// owner re-selects tools. An ABSENT read is a compatibility FALLBACK (now
+// restricted+empty, i.e. deny-all — see `evaluateInstanceToolPolicy`) only
+// (M5 / §10-A3), never the normal migrated state; the three layers above make
+// "absent" provably transient either way.
 //
 // DB access mirrors extension-update-read-model-store: an INJECTED query fn
 // (unit-testable without a DB) + a lazy pooled connection + a schema-qualified
@@ -127,8 +132,9 @@ function rowToRecord(row: PolicyRow): InstanceToolPolicyRecord {
 
 /**
  * Read the persisted policy for `(connectorKey, instanceId)`, or `null` when no
- * row exists (the compatibility-fallback-open window — see §10-A3; the caller
- * warns-once and treats it as open). Point read on the primary key.
+ * row exists (the compatibility-fallback window — see §10-A3; the caller
+ * warns-once. Post cinatra#2022 S7 PR-δ, an absent row evaluates as
+ * restricted+empty i.e. deny-all, NOT open). Point read on the primary key.
  */
 export async function readInstanceToolPolicy(
   connectorKey: string,
@@ -148,10 +154,18 @@ export async function readInstanceToolPolicy(
 }
 
 /**
- * Ensure an explicit `mode:"open"` row exists for `(connectorKey, instanceId)` —
- * a create-if-absent default (INSERT … ON CONFLICT DO NOTHING). NEVER clobbers an
- * existing row (an operator edit / a prior open row survives). Returns
+ * Ensure an explicit default row exists for `(connectorKey, instanceId)` — a
+ * create-if-absent default (INSERT … ON CONFLICT DO NOTHING). NEVER clobbers an
+ * existing row (an operator edit / a prior row survives). Returns
  * `{ created }`; emits an audit event only when a row is actually written.
+ *
+ * cinatra#2022 S7 PR-δ: the row written here FLIPPED from `mode:"open"` to
+ * `mode:"restricted"` with empty allow/deny (deny-all) — this ends the pre-δ
+ * OPEN compatibility window outright, with no data migration; site owners
+ * re-select tools in connector settings. The function name is kept from its
+ * pre-δ "open" era for a minimal diff footprint; it now ensures the RESTRICTED
+ * default, not an open one — read the mode literal in the INSERT below, not
+ * the name, for ground truth.
  *
  * This is the SHARED core of all three write layers: the creation-hook writer,
  * the deploy-gated reconcile, and the lazy first-touch backstop each call it with
@@ -164,7 +178,7 @@ export async function ensureDefaultOpenPolicy(
   const { query, table, audit } = resolveDeps(deps);
   const rows = await query<{ connector_key: string }>(
     `INSERT INTO ${table} (connector_key, instance_id, mode, allow_refs, deny_refs, updated_by, updated_at)
-     VALUES ($1, $2, 'open', NULL, NULL, $3, now())
+     VALUES ($1, $2, 'restricted', NULL, NULL, $3, now())
      ON CONFLICT (connector_key, instance_id) DO NOTHING
      RETURNING connector_key`,
     [input.connectorKey, input.instanceId, input.updatedBy],
@@ -176,12 +190,12 @@ export async function ensureDefaultOpenPolicy(
       resourceId: input.instanceId,
       actorPrincipalType: "system",
       authSource: "worker",
-      operation: "policy_default_open",
-      decision: "allowed",
+      operation: "policy_default_restricted",
+      decision: "denied",
       policyVersion: "connector-instance-tool-policy",
       metadata: {
         connectorKey: input.connectorKey,
-        mode: "open",
+        mode: "restricted",
         updatedBy: input.updatedBy,
         reason: input.reason,
       },
@@ -192,9 +206,10 @@ export async function ensureDefaultOpenPolicy(
 
 /**
  * Creation-hook writer (R3-B2, the PRIMARY guarantee): write the explicit
- * `mode:"open"` default at instance creation, BEFORE any tool_call/tools_list.
- * Wired into the host-side instance-creation hook; a write failure must fail the
- * creation loudly (this throws on a DB error rather than swallowing).
+ * restricted+empty default (cinatra#2022 S7 PR-δ) at instance creation, BEFORE
+ * any tool_call/tools_list. Wired into the host-side instance-creation hook; a
+ * write failure must fail the creation loudly (this throws on a DB error
+ * rather than swallowing).
  */
 export async function writeCreationDefaultPolicy(
   input: { connectorKey: string; instanceId: string; updatedBy?: string },
@@ -212,11 +227,12 @@ export async function writeCreationDefaultPolicy(
 }
 
 /**
- * Deploy-gated, idempotent reconcile (R2-B2): write an explicit `mode:"open"` row
- * for every enrolled instance under the SYSTEM backfill actor. Enumerates the
- * host-side reader's instance ids (passed in — the store never reaches into the
- * connector-config KV blob itself), so this is a data step run at deploy/boot,
- * NOT an in-DDL migration. Returns the number of rows newly written.
+ * Deploy-gated, idempotent reconcile (R2-B2): write an explicit restricted+
+ * empty default row (cinatra#2022 S7 PR-δ) for every enrolled instance under
+ * the SYSTEM backfill actor. Enumerates the host-side reader's instance ids
+ * (passed in — the store never reaches into the connector-config KV blob
+ * itself), so this is a data step run at deploy/boot, NOT an in-DDL migration.
+ * Returns the number of rows newly written.
  */
 export async function reconcileConnectorInstanceToolPolicies(
   input: { connectorKey: string; instanceIds: readonly string[] },

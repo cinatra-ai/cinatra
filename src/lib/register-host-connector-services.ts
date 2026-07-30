@@ -694,9 +694,13 @@ function buildConnectorInstanceInvokerDeps(boundConnectorKey: string): Connector
       },
     }),
     warnAbsentPolicy: (connectorKey, instanceId) => {
+      // cinatra#2022 S7 PR-δ: the compatibility fallback flipped from OPEN to
+      // RESTRICTED+empty (deny-all) — a site owner must add an explicit allow
+      // entry in connector settings before this instance can reach any tool.
       console.warn(
         `[connector-instance-invoker] no persisted policy for ${connectorKey}/${instanceId} — ` +
-          `compatibility fallback OPEN (transient; reconcile + first-touch converge it).`,
+          `compatibility fallback RESTRICTED+empty (deny-all; transient — reconcile + first-touch ` +
+          `converge it to an explicit row; the site owner must add an allow entry to permit any tool).`,
       );
     },
     // Fail-closed INVALID policy (§10-A3): denies-all AND emits an audit warn —
