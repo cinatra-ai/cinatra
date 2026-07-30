@@ -1230,11 +1230,34 @@ describe.skipIf(!enabled)(
         const results = await Promise.all(
           Array.from({ length: CONCURRENT_CALLERS }, () => archiveOrganization(orgId, ownerId)),
         );
-        for (const r of results) {
-          expect(r.ok).toBe(true);
-        }
-        const winners = results.filter((r) => r.ok && !r.idempotent);
-        const idempotentNoOps = results.filter((r) => r.ok && r.idempotent === true);
+
+        // The expected contract, re-derived from the REAL implementation
+        // end-to-end (not assumed): the kernel's capability table rules
+        // org.lifecycle "allow" in BOTH lifecycle states
+        // (ORG_WRITE_CAPABILITY_TABLE in packages/org-write-kernel/src/
+        // capabilities.ts), and guardOrgLifecycleMutation adds no other
+        // state-dependent pre-check — so every fence LOSER proceeds to the
+        // FOR UPDATE pin, sees archivedAt already set, throws the internal
+        // idempotency marker, and maps to {ok:true, idempotent:true}
+        // (organization-archive.ts's mapTransitionError). Exactly one
+        // caller — whichever wins the advisory fence — takes the real
+        // transition. No call may refuse.
+        //
+        // SELF-EVIDENCING assertions (this suite cannot run outside CI, so
+        // the vitest diff is the only diagnostic instrument): project every
+        // result to its full outcome shape and assert on the projections —
+        // a refusal appears in the diff WITH its reason and error string,
+        // and a wrong winner/loser split prints the complete multiset,
+        // never a bare "expected false to be true".
+        const outcomes = results.map((r) =>
+          r.ok
+            ? { ok: true as const, idempotent: r.idempotent === true }
+            : { ok: false as const, reason: r.reason, error: r.error ?? null },
+        );
+        const refusals = outcomes.filter((o) => !o.ok);
+        const winners = outcomes.filter((o) => o.ok && o.idempotent === false);
+        const idempotentNoOps = outcomes.filter((o) => o.ok && o.idempotent === true);
+        expect(refusals).toEqual([]);
         expect(winners).toHaveLength(1);
         expect(idempotentNoOps).toHaveLength(CONCURRENT_CALLERS - 1);
 
@@ -1352,9 +1375,13 @@ describe.skipIf(!enabled)(
         });
         const elapsedMs = Date.now() - started;
 
-        expect(result.ok).toBe(false);
+        // toMatchObject (not a bare ok-boolean check) so a mismatch prints
+        // the FULL received result — reason and error string included — in
+        // the vitest diff (the same self-evidencing discipline as the
+        // concurrent-attempts test above; CI is this suite's only
+        // diagnostic instrument).
+        expect(result).toMatchObject({ ok: false, reason: "error" });
         if (!result.ok) {
-          expect(result.reason).toBe("error");
           expect(result.error).toMatch(/bounded attempts/);
         }
         // Bounded: the whole exhausted attempt sequence finishes well inside
