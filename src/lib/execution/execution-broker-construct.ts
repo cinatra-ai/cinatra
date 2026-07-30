@@ -328,6 +328,23 @@ export function createVoucherMintAuditSink(): (event: VoucherMintAuditEvent) => 
         operation: "sandbox_authorize",
         decision: event.decision === "minted" ? "allowed" : "denied",
         ...(event.runId ? { runId: event.runId } : {}),
+        // Denied-cooldown policy (cinatra#2266 AC1). This producer pins
+        // resourceType/operation to constants exactly as the command sink does,
+        // so without an override every mint denial a user received inside one
+        // 60 s window collapsed onto the FIRST one. Cooldown control only —
+        // never persisted.
+        //
+        // A finer key here, NOT the command sink's `record_every`: `commandId`
+        // is REQUIRED on a mint event, so job + denial + command is already a
+        // complete identity for this producer. Two denials of two commands are
+        // always distinct, and a retry of the SAME command under the SAME
+        // denial is a genuine repeat — which is exactly what the cooldown
+        // should absorb. The command sink cannot say that, because a voucher it
+        // refuses was rejected before its claims (and its command id) could be
+        // trusted.
+        deniedCooldown: {
+          discriminator: [event.jobId, event.denial ?? "", event.commandId].join("|"),
+        },
         metadata: {
           surface: event.surface,
           commandId: event.commandId,

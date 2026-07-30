@@ -44,6 +44,9 @@ export type AuditEvent = {
 // when actor context is incomplete.
 // ---------------------------------------------------------------------------
 
+/** See `AuditEventInput.deniedCooldown` (cinatra#2266 AC1). */
+export type DeniedCooldownPolicy = "record_every" | { discriminator: string };
+
 export type AuditEventInput = {
   organizationId?: string;
   actorPrincipalId?: string;
@@ -61,6 +64,56 @@ export type AuditEventInput = {
   a2aTaskId?: string;
   ip?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * OPT-IN override of the denied-event cooldown, for a producer that knows
+   * the default key is wrong for it (cinatra#2266 AC1).
+   *
+   * The cooldown keys on `(actorPrincipalId, resourceType, operation)`, which
+   * is the right granularity for a producer whose refusals differ in those
+   * three fields. It is the WRONG granularity for one that pins all three to
+   * constants: every execution-plane refusal a user received mapped to the
+   * single key `<userId>:execution_sandbox:sandbox_execute`, so inside one 60 s
+   * window the first was recorded and every later one — a different job, a
+   * different command, a forged voucher, a replayed nonce — was silently
+   * discarded before insert.
+   *
+   * THE CHOSEN MECHANISM, stated rather than implied: a per-producer opt-in
+   * with two dispositions, so a producer declares what a repeat MEANS for it
+   * instead of inheriting an answer that does not fit.
+   *
+   *   - `"record_every"` — this producer has no repeat semantics at all;
+   *     suppress nothing. For a producer whose events are individually
+   *     load-bearing (an authorization refusal is a decision, and discarding
+   *     one makes an investigation read "no record" as "it did not happen")
+   *     and which cannot always supply an identity: a voucher is rejected
+   *     BEFORE its claims are trusted, so a forged one has no command id to
+   *     key on.
+   *   - `{ discriminator }` — the default key EXTENDED by a producer-supplied
+   *     identity. For a producer that CAN say what makes two denials the same
+   *     event, so a genuine retry is still absorbed.
+   *
+   * ABSENT (every pre-existing caller) the key and the behaviour are exactly
+   * what they always were. The noise control that stops a retry loop from
+   * flooding `audit_events` is deliberately NOT weakened globally: a key that
+   * included `resourceId` for every producer would let a scan over 10 000 ids
+   * write 10 000 rows a minute.
+   *
+   * This is a CONTROL field: it participates in the cooldown decision only and
+   * is never persisted. The event's own identity already rides `resourceId` /
+   * `metadata`.
+   *
+   * NOT a delivery de-dup key. It bounds noise; it does not make a write
+   * idempotent. The durable spool's delivery identity (#2266 G2/AC2) is a
+   * separate mechanism and is not in this slice.
+   *
+   * BOUNDED, AND SEPARATE. A discriminator that varies per command makes each
+   * key effectively single-use, which nothing would ever expire lazily — so
+   * opted-in keys live in their own hard-capped map
+   * (`DENIED_COOLDOWN_MAX_SCOPED_KEYS`) rather than growing, or evicting from,
+   * the map every other caller shares. Build a discriminator from bounded
+   * identifiers, not from free text.
+   */
+  deniedCooldown?: DeniedCooldownPolicy;
 };
 
 // ---------------------------------------------------------------------------
@@ -101,25 +154,134 @@ export function sanitizeMetadata(
 // ---------------------------------------------------------------------------
 
 const DENIED_COOLDOWN_MS = 60_000;
+
+/**
+ * Cooldown keys for callers that did NOT opt into a discriminator — the
+ * original map, with the original semantics. Its key space is the
+ * `(actor, resourceType, operation)` triple, which is why it was never bounded
+ * and is deliberately still not: nothing an opted-in producer does may change
+ * how an opted-out caller behaves, and a shared bound would let one producer's
+ * volume evict the other's live keys (Codex convergence, adopted).
+ */
 const _deniedCooldown = new Map<string, number>(); // key → expiresAt (ms)
 
+/**
+ * Cooldown keys for producers that DID opt in (cinatra#2266 AC1). Kept apart
+ * from the map above and BOUNDED, because a discriminator that varies per
+ * command makes every key effectively single-use: nothing looks one up a second
+ * time, so nothing triggers the lazy expiry below and the map would grow for
+ * the life of the process.
+ */
+const _deniedCooldownScoped = new Map<string, number>(); // key → expiresAt (ms)
+
+/**
+ * The cooldown key. `(actor, resourceType, operation)` by default — unchanged
+ * for every caller that does not opt in — extended by the producer-supplied
+ * discriminator when the policy carries one. See
+ * `AuditEventInput.deniedCooldown` (cinatra#2266 AC1).
+ *
+ * The key SHAPE and the map choice are both derived from the same
+ * discriminated union, deliberately (Codex convergence, adopted): deciding one
+ * on the policy's type and the other on the discriminator's truthiness let an
+ * EMPTY discriminator produce an unscoped-looking key inside the scoped map,
+ * where it could both suppress and be evicted on a legacy caller's behalf.
+ */
 function deniedCooldownKey(input: AuditEventInput): string {
-  return `${input.actorPrincipalId ?? ""}:${input.resourceType ?? ""}:${input.operation ?? ""}`;
+  const base = `${input.actorPrincipalId ?? ""}:${input.resourceType ?? ""}:${input.operation ?? ""}`;
+  const policy = input.deniedCooldown;
+  return typeof policy === "object" ? `${base}:${policy.discriminator}` : base;
 }
 
-export function isDeniedCoolingDown(key: string): boolean {
-  const expiresAt = _deniedCooldown.get(key);
+function coolingDownIn(live: Map<string, number>, key: string): boolean {
+  const expiresAt = live.get(key);
   if (!expiresAt) return false;
   if (Date.now() > expiresAt) {
-    _deniedCooldown.delete(key);
+    live.delete(key);
     return false;
   }
   return true;
 }
 
-/** Test-only seam — drains the cooldown map between vitest runs. */
+/**
+ * The UNSCOPED cooldown map only — the exported signature takes a bare key,
+ * which carries no evidence of which class it belongs to, so this answers for
+ * the map it always answered for and its behaviour is unchanged.
+ *
+ * It must not fall back to the scoped map (Codex convergence, adopted). Both
+ * keys are colon-joined strings over caller-supplied text, so a base triple
+ * whose `operation` ends in `:x` serializes identically to a scoped key whose
+ * discriminator is `x` — and a probe that consulted both would let one class
+ * silently suppress the other, which is exactly the isolation the split
+ * exists to provide. The write paths below resolve the map from the INPUT's
+ * own policy instead, so the two classes never meet whatever their keys spell.
+ */
+export function isDeniedCoolingDown(key: string): boolean {
+  return coolingDownIn(_deniedCooldown, key);
+}
+
+/** The cooling-down check the write paths use: map chosen by the input. */
+function isDeniedCoolingDownFor(input: AuditEventInput, key: string): boolean {
+  return coolingDownIn(isScoped(input) ? _deniedCooldownScoped : _deniedCooldown, key);
+}
+
+/**
+ * Hard cap on live SCOPED cooldown keys (cinatra#2266 AC1). Applies to the
+ * opted-in map only — the unscoped map above is left exactly as it was.
+ *
+ * Every entry carries the SAME ttl and a key is only ever inserted while
+ * absent (the cooling-down branch returns before the write, and the expiry
+ * branch deletes it), so Map insertion order IS expiry order — the front of
+ * the map is always the closest to expiring. Sweeping the expired prefix
+ * therefore costs only what it reclaims, and the eviction that follows, if the
+ * sweep was not enough, drops the entries with the least cooldown left.
+ *
+ * Evicting early re-opens a key for one extra row before its 60 s elapsed —
+ * the failure direction that writes an audit row it could have suppressed,
+ * never the direction that discards one.
+ */
+export const DENIED_COOLDOWN_MAX_SCOPED_KEYS = 10_000;
+
+/**
+ * Register a cooldown key. `scoped` selects the map — and therefore whether
+ * the bound applies. EVERY write to either map goes through here, so the
+ * bound cannot be bypassed by a second entry point growing its own `.set`
+ * (Codex convergence, adopted: `logDeniedAuditEventStrictWithCooldown` was
+ * exactly such an entry point).
+ */
+function rememberDeniedCooldown(key: string, nowMs: number, scoped: boolean): void {
+  const live = scoped ? _deniedCooldownScoped : _deniedCooldown;
+  if (scoped && live.size >= DENIED_COOLDOWN_MAX_SCOPED_KEYS) {
+    for (const [candidate, expiresAt] of live) {
+      if (expiresAt > nowMs) break; // ordered by expiry — the rest are live
+      live.delete(candidate);
+    }
+    while (live.size >= DENIED_COOLDOWN_MAX_SCOPED_KEYS) {
+      const oldest = live.keys().next();
+      if (oldest.done) break;
+      live.delete(oldest.value);
+    }
+  }
+  // Delete-then-set so a re-insert moves to the back and the ordering
+  // invariant above holds unconditionally, not only on the paths that
+  // currently reach here.
+  live.delete(key);
+  live.set(key, nowMs + DENIED_COOLDOWN_MS);
+}
+
+/** True when this input opted into the finer key — i.e. which map it uses. */
+function isScoped(input: AuditEventInput): boolean {
+  return typeof input.deniedCooldown === "object";
+}
+
+/** Test-only seam — drains both cooldown maps between vitest runs. */
 export function _resetDeniedCooldownForTests(): void {
   _deniedCooldown.clear();
+  _deniedCooldownScoped.clear();
+}
+
+/** Test-only seam — live key counts per map, for the bound's own test. */
+export function _deniedCooldownSizesForTests(): { base: number; scoped: number } {
+  return { base: _deniedCooldown.size, scoped: _deniedCooldownScoped.size };
 }
 
 // ---------------------------------------------------------------------------
@@ -177,15 +339,18 @@ function getAuditDb(): ReturnType<typeof createAuditDb> {
 //      Postgres INSERT (fast); any failure is silently ignored.
 //   3. Sanitizes metadata via the SENSITIVE_KEYS blocklist before insert.
 //   4. Denied events are cooldown-suppressed within a 60s window per
-//      (actorPrincipalId, resourceType, operation) key.
+//      (actorPrincipalId, resourceType, operation) key — unless the producer
+//      opted out or supplied a finer key via `deniedCooldown`, which exists
+//      for producers that pin those three to constants (cinatra#2266 AC1).
 // ---------------------------------------------------------------------------
 
 export async function logAuditEvent(input: AuditEventInput): Promise<void> {
-  // Cooldown gate — denied events only.
+  // Cooldown gate — denied events only, and only for producers that did not
+  // declare themselves out of it.
   let deniedCooldownKey_: string | undefined;
-  if (input.decision === "denied") {
+  if (input.decision === "denied" && input.deniedCooldown !== "record_every") {
     const key = deniedCooldownKey(input);
-    if (isDeniedCoolingDown(key)) return;
+    if (isDeniedCoolingDownFor(input, key)) return;
     // Record the key to register AFTER a successful insert attempt so that a
     // failed insert (DB down, constraint error) does not set the cooldown and
     // create a 60-second blind spot where all subsequent denied events are
@@ -229,7 +394,7 @@ export async function logAuditEvent(input: AuditEventInput): Promise<void> {
   // actually attempted and succeeded — avoids a 60-second blind spot on
   // transient DB failures.
   if (inserted && deniedCooldownKey_) {
-    _deniedCooldown.set(deniedCooldownKey_, Date.now() + DENIED_COOLDOWN_MS);
+    rememberDeniedCooldown(deniedCooldownKey_, Date.now(), isScoped(input));
   }
 }
 
@@ -310,10 +475,20 @@ export async function logAuditEventStrict(
 export async function logDeniedAuditEventStrictWithCooldown(
   input: AuditEventInput,
 ): Promise<{ id: string } | { skipped: true }> {
+  // `deniedCooldown` is honoured here for the same reason it exists on the
+  // fail-silent path: a producer that declares its denials individually
+  // load-bearing must not have them collapsed by whichever helper it reached.
+  if (input.deniedCooldown === "record_every") {
+    return logAuditEventStrict({ ...input, decision: "denied" });
+  }
   const key = deniedCooldownKey({ ...input, decision: "denied" });
-  if (isDeniedCoolingDown(key)) return { skipped: true };
+  if (isDeniedCoolingDownFor(input, key)) return { skipped: true };
   const result = await logAuditEventStrict({ ...input, decision: "denied" });
-  _deniedCooldown.set(key, Date.now() + DENIED_COOLDOWN_MS);
+  // Through the shared helper, not a bare `.set`: this path accepts the same
+  // AuditEventInput, so it can carry a discriminator, and a second writer that
+  // grew its own insert would have escaped the scoped map's bound entirely
+  // (Codex convergence, adopted).
+  rememberDeniedCooldown(key, Date.now(), isScoped(input));
   return result;
 }
 
