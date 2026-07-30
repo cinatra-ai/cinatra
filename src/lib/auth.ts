@@ -29,6 +29,10 @@ import {
 } from "@/lib/assistant-agent-registration";
 import { beforeCreateTeamEnsureSlug } from "@/lib/better-auth-org-hooks";
 import { buildInvitationAcceptUrl, buildInvitationEmail } from "@/lib/org-invitation-email";
+import {
+  buildOrganizationListAfterHook,
+  buildOrganizationDispatchPolicyBeforeHook,
+} from "@/lib/organization-dispatch-policy";
 
 const authBaseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
 const authSecret = process.env.BETTER_AUTH_SECRET;
@@ -468,6 +472,36 @@ export const auth = betterAuth({
         },
       },
     },
+  },
+  // cinatra#1942 (archive V2, Decision 5) — the FIRST top-level `hooks:`
+  // layer on this config (distinct from `databaseHooks` above, which is
+  // per-TABLE, not per-endpoint). Both entries are built in
+  // `@/lib/organization-dispatch-policy` (a plain, non-`auth*`-named module)
+  // so the decision logic stays unit-testable without constructing a live
+  // `betterAuth()` instance; this file only wires the two builders:
+  //   - after:  strips archived organizations from `/organization/list` on
+  //             BOTH transports (raw HTTP + `auth.api.listOrganizations`).
+  //   - before: the dispatch-hook endpoint policy — while the TARGET org is
+  //             archived, refuses every organization mutation endpoint
+  //             (membership add/remove/role, invitation create/accept,
+  //             set-active(-team), team CRUD, org-settings update) and
+  //             always allows the cleanup/exit endpoints (leave,
+  //             reject/cancel-invitation). Target resolution is
+  //             endpoint-class-aware (team/invitation/org — never a
+  //             caller-planted organizationId on a team/invitation-target
+  //             endpoint), and a failed archivedAt read splits by risk:
+  //             prohibited endpoints fail CLOSED, cleanup fails OPEN. Fires
+  //             before the endpoint on both transports, mirroring
+  //             `disableOrganizationDeletion`'s first-gate posture.
+  // SHAPE IS LOAD-BEARING: root-level `hooks.before`/`hooks.after` each take
+  // ONE `createAuthMiddleware` (path narrowing INSIDE the middleware). The
+  // `[{matcher, handler}]` ARRAY form is the PLUGIN hooks shape — passing it
+  // here collapses the options generic (erasing `session.activeOrganizationId`
+  // / `user.role` from `$Infer` across the app) and throws
+  // "handler is not a function" on every auth request at runtime.
+  hooks: {
+    before: buildOrganizationDispatchPolicyBeforeHook(),
+    after: buildOrganizationListAfterHook(),
   },
   // The plugin tuple is built through the SHARED factory at
   // `./better-auth-plugins.ts` — the SINGLE SOURCE OF TRUTH consumed by both

@@ -33,7 +33,10 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { requireAdminSession } from "@/lib/auth-session";
 import { readExecutionAuditRows } from "@/lib/execution/execution-audit-read";
-import { getExecutionBrokerStatus } from "@/lib/execution/execution-broker-slot";
+import {
+  getExecutionBrokerStatus,
+  type ExecutionBrokerComposite,
+} from "@/lib/execution/execution-broker-slot";
 import {
   EXECUTION_PLANE_MODES,
   OPERABLE_EXECUTION_PLANE_MODES,
@@ -64,7 +67,7 @@ const MODE_COPY: Record<
   remote: {
     label: "Remote",
     description:
-      "Sandbox commands run on a managed remote worker pool. Part of the mode vocabulary, not yet operable on this instance — it activates with the CLI slice.",
+      "Sandbox commands run on a managed worker pool outside this app, reached over mutual TLS. This instance needs the broker's address, its service token and a client certificate before the mode can come up; until the broker and its worker both answer, nothing runs and the health tab says why.",
   },
   "local-dev": {
     label: "Local development",
@@ -245,6 +248,12 @@ async function HealthTab({ orgId }: { orgId: string | null }) {
   // The REAL state, not a cached boot verdict: re-run the broker↔worker
   // handshake when the plane claims to be running.
   const liveness = status.probeLiveness ? await status.probeLiveness() : null;
+  // Prefer the composite from THIS probe over the one the boot handshake
+  // recorded: the rows below answer "what is true now", and a boot-time verdict
+  // shown next to a live one would be the more convincing of the two lies. A
+  // placement with no composite at all (local-dev) renders no rows rather than
+  // rows that imply a check that never ran.
+  const composite = liveness?.composite ?? status.composite ?? null;
   const readiness = resolveExecutionEnvironmentReadiness();
   const serviceState = getExecutionServiceState();
   const rows = readExecutionAuditRows({ orgId, limit: 25 });
@@ -297,6 +306,19 @@ async function HealthTab({ orgId }: { orgId: string | null }) {
                   : (status.detail ?? "No handshake has completed on this instance.")}
             </span>
           </HealthRow>
+          {composite && (
+            <>
+              <HealthRow label="Worker">
+                <SubsystemHealth health={composite.worker} />
+              </HealthRow>
+              <HealthRow label="Gateway">
+                <SubsystemHealth health={composite.gateway} />
+              </HealthRow>
+              <HealthRow label="Host lease">
+                <SubsystemHealth health={composite.lease} />
+              </HealthRow>
+            </>
+          )}
         </CardContent>
       </Card>
 
@@ -384,6 +406,25 @@ async function HealthTab({ orgId }: { orgId: string | null }) {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/**
+ * One composite sub-state. `not-applicable` renders as its own neutral pill, not
+ * as a pass: an operator must be able to tell "checked and healthy" from "this
+ * deployment has no such dependency" at a glance, because the two lead to very
+ * different next steps when something is wrong.
+ */
+function SubsystemHealth({ health }: { health: ExecutionBrokerComposite["worker"] }) {
+  const pill: StatusPillStatus =
+    health.state === "ok" ? "running" : health.state === "unhealthy" ? "failed" : "idle";
+  const label =
+    health.state === "ok" ? "Healthy" : health.state === "unhealthy" ? "Unhealthy" : "Not used";
+  return (
+    <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-3">
+      <StatusPill status={pill}>{label}</StatusPill>
+      <span className="min-w-0 text-sm break-words text-muted-foreground">{health.detail}</span>
     </div>
   );
 }

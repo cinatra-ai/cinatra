@@ -470,14 +470,15 @@ describe("strictVerdict — the FULL strict-mode pass condition", () => {
     expect(verdict.rowFailures).toHaveLength(1);
   });
 
-  it("the real committed manifest is honestly NOT READY under strict mode today (cinatra#1943 A1/A3b landed 2 rows; A2-A7 remain) — not a bug", () => {
+  it("the real committed manifest is honestly NOT READY under strict mode today (cinatra#1943 A1/A3b/A5 landed 3 rows; A2-A4/A6/A7 remain) — not a bug", () => {
     const manifest = loadManifest();
     const verdict = strictVerdict(manifest);
     expect(verdict.ready).toBe(false);
-    // Cross-job capability misuse (A1) and Archive-vs-terminal-CAS race
-    // (A3b) are structurally verified green this stage; every other row
-    // honestly stays red pending its own sibling gate or CI-wiring PR.
-    expect(verdict.notYetGreen).toHaveLength(13);
+    // Cross-job capability misuse (A1), Archive-vs-terminal-CAS race (A3b),
+    // and Dual-transport coverage (A5) are structurally verified green this
+    // stage; every other row honestly stays red pending its own sibling gate
+    // or CI-wiring PR.
+    expect(verdict.notYetGreen).toHaveLength(12);
     expect(verdict.rowFailures).toEqual([]);
   });
 });

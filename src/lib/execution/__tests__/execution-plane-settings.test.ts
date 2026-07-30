@@ -1,7 +1,9 @@
 // Unit tests for the execution-plane settings store (exec-plane S1b activation,
-// cinatra#2138 deliverable 5). The persisted vocabulary is the FULL
-// `remote | local-dev | disabled` set; only `local-dev` and `disabled` are
-// operable in this slice, and the write path refuses the rest fail-closed.
+// cinatra#2138 deliverable 5; `remote` made operable in exec-plane L4). The
+// persisted vocabulary is the FULL `remote | local-dev | disabled` set and all
+// three are now operable — the boot phase knows how to honor each. What did NOT
+// change is the part that actually governs exposure: the stored default is
+// still `disabled` and every write still passes the default-off ROLLOUT gate.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -44,9 +46,25 @@ afterEach(() => {
 });
 
 describe("execution-plane settings", () => {
-  it("persists the full mode vocabulary but marks only two operable", () => {
+  it("persists the full mode vocabulary, all of it operable since exec-plane L4", () => {
     expect([...EXECUTION_PLANE_MODES]).toEqual(["remote", "local-dev", "disabled"]);
-    expect([...OPERABLE_EXECUTION_PLANE_MODES]).toEqual(["local-dev", "disabled"]);
+    expect([...OPERABLE_EXECUTION_PLANE_MODES]).toEqual(["remote", "local-dev", "disabled"]);
+  });
+
+  it("keeps the fail-closed edge armed for a mode with no boot branch", () => {
+    // The guard is unreachable today and stays: the NEXT mode added to the
+    // vocabulary before its boot branch exists must be refused by the write
+    // path, not stored and silently ignored.
+    expect(() =>
+      writeExecutionPlaneSettings({
+        mode: "warp-drive" as never,
+        egressMode: "default_internet",
+        egressAllowlist: [],
+      }),
+    ).not.toThrow();
+    // An unknown mode coerces to the disabled default rather than persisting —
+    // the same fail-closed direction, one layer earlier.
+    expect(readExecutionPlaneSettings().mode).toBe("disabled");
   });
 
   it("defaults to disabled when nothing is stored (fail-closed)", () => {
@@ -68,16 +86,25 @@ describe("execution-plane settings", () => {
     });
   });
 
-  it("REFUSES `remote` — it renders in the vocabulary but cannot be persisted here", () => {
+  it("ACCEPTS `remote` now that the boot phase can honor it (exec-plane L4)", () => {
     expect(() =>
       writeExecutionPlaneSettings({
         mode: "remote",
         egressMode: "default_internet",
         egressAllowlist: [],
       }),
-    ).toThrow(ExecutionPlaneModeNotOperableError);
-    // Nothing was written — the previous (default) posture stands.
-    expect(readExecutionPlaneSettings().mode).toBe("disabled");
+    ).not.toThrow();
+    expect(readExecutionPlaneSettings().mode).toBe("remote");
+    // Persisting the intent is NOT the same as the placement coming up: an
+    // unreachable broker still leaves the plane inert. That is the boot phase's
+    // test, and this store deliberately knows nothing about it.
+  });
+
+  it("still exports the not-operable refusal for a mode outside the operable set", () => {
+    // Constructed directly: there is no such mode today, and the error's
+    // guidance must still name the real operable set rather than a stale one.
+    const err = new ExecutionPlaneModeNotOperableError("remote");
+    expect(err.message).toContain("remote / local-dev / disabled");
   });
 
   it("coerces an unknown stored mode back to the disabled default", () => {

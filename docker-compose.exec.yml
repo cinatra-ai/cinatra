@@ -94,6 +94,22 @@ services:
       - ${CINATRA_EXEC_TLS_DIR:-/opt/cinatra-exec/tls}:/etc/cinatra-exec/tls:ro
     networks:
       - cinatra-exec-internal
+      # THE APP-FACING LEG, AND THE ONLY REASON IT EXISTS. `cinatra-exec-internal`
+      # is `internal: true`, and docker does not publish a port for a container
+      # attached ONLY to an internal network: the binding is accepted and then
+      # silently dropped (`HostConfig.PortBindings` keeps it,
+      # `NetworkSettings.Ports` comes back empty). With the broker on the internal
+      # network alone, `127.0.0.1:4100` therefore answered nothing at all and the
+      # app could not reach the broker it was configured to dial — the whole
+      # topology was unreachable. The exec-plane L5 service-boundary E2E battery
+      # is what caught it, on the first real handshake.
+      #
+      # So the broker gets a SECOND, non-internal leg whose only job is to let the
+      # loopback publish take effect. Nothing else is attached to it, the SANDBOX
+      # network stays internal (that is the network-layer half of egress
+      # enforcement and it is untouched), and reachability is still not authority:
+      # mTLS plus the service token remain the boundary, exactly as below.
+      - cinatra-exec-app
     ports:
       # Loopback only. mTLS — not network reachability — is the authorization
       # boundary; publishing wider would add exposure without adding authority.
@@ -172,3 +188,31 @@ networks:
   # The gateway's internet leg. Nothing else is ever attached to it.
   cinatra-exec-egress:
     name: cinatra-exec-egress
+  # The broker's app-facing leg. Deliberately NOT internal — that is the entire
+  # point: a container on an internal network cannot have a published port, so
+  # without this the loopback publish above is silently a no-op. Only the broker
+  # is ever attached, and no sandbox ever is.
+  #
+  # NOT-INTERNAL IS NOT MEANT AS "GIVE IT THE INTERNET". A default bridge
+  # masquerades outbound traffic, which would hand the broker a raw route past
+  # the attributing gateway. Port PUBLISHING is host-side DNAT and does not depend
+  # on masquerading, so the two are separated here: publish stays on, the bridge's
+  # own NAT comes off. `enable_icc: "false"` costs nothing (only the broker is
+  # ever attached) and keeps that true if anything else ever is.
+  #
+  # WHAT THIS DOES NOT BUY, stated because the exec-plane L5 battery MEASURED it
+  # rather than trusting the setting: `enable_ip_masquerade: "false"` removes the
+  # BRIDGE's NAT, which is a real hardening on a plain Linux engine — the deploy
+  # target — but a Docker Desktop VM NATs underneath it, so the broker there still
+  # has an outbound route. This option is therefore defense in depth, not a
+  # containment boundary. The broker's actual containment is what it does NOT
+  # have: no docker socket, and none of the app's configuration or secrets (it
+  # rides the app IMAGE but is launched straight at the broker bundle with no app
+  # env_file), plus mTLS and an independently-scoped service token on the one port
+  # it serves.
+  cinatra-exec-app:
+    name: cinatra-exec-app
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+      com.docker.network.bridge.enable_icc: "false"
