@@ -593,6 +593,13 @@ describe.skipIf(!enabled)("org-write archive race — kernel harness on live Pos
     const s1 = `sess_${randomUUID().slice(0, 8)}`;
     const s2 = `sess_${randomUUID().slice(0, 8)}`;
     try {
+      // The sessions below FK-reference this user (session_userId_fkey) —
+      // same create-a-prerequisite-user convention as the BA-DML-vs-archive
+      // describe block further down this file.
+      await root.query(
+        `INSERT INTO public."user" (id, name, email, "emailVerified") VALUES ($1, $2, $3, false)`,
+        ["user_v5", "V5 Archive Test User", "user_v5@example.test"],
+      );
       await root.query(
         `INSERT INTO public."team" (id, name, "organizationId", "createdAt", slug)
          VALUES ($1, 'Archive Team', $2, now(), $3)`,
@@ -651,6 +658,7 @@ describe.skipIf(!enabled)("org-write archive race — kernel harness on live Pos
     } finally {
       await root.query(`DELETE FROM public."session" WHERE id IN ($1, $2)`, [s1, s2]);
       await root.query(`DELETE FROM public."team" WHERE id = $1`, [teamId]);
+      await root.query(`DELETE FROM public."user" WHERE id = $1`, ["user_v5"]);
       await dropOrg();
     }
   });
