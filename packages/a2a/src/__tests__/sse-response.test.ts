@@ -240,13 +240,3 @@ describe("toSseResponse — id: frame emission", () => {
     expect(body).toContain(`data: ${JSON.stringify(chunks[0])}`);
   });
 });
-
-// TEMPORARY — cinatra#2226 acceptance (a) negative proof. This deliberately
-// failing assertion exists only to demonstrate that a red packages/a2a test now
-// turns the required "Build and publish image" check red through the new
-// a2a-unit job. REVERTED in the very next commit on this branch.
-describe("cinatra#2226 negative proof (temporary)", () => {
-  it("deliberately fails so CI must go red", () => {
-    expect("packages/a2a has a CI runner").toBe("packages/a2a has no CI runner");
-  });
-});
