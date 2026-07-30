@@ -29,9 +29,25 @@ import * as https from "node:https";
 
 import { runDocker, type DockerCli } from "../docker-cli";
 import { EnvironmentMountRefusedError } from "../environment/mount";
-import { removeSkillsVolume, stageSkillsVolume } from "../staging";
+import { removeSkillsVolume, skillsVolumeName, stageSkillsVolume } from "../staging";
 import type { SandboxCommandResult, SandboxWorker } from "../types";
-import { ensureWorkspaceVolume, removeWorkspaceVolume } from "../workspace";
+import {
+  createLocalDockerContainerOps,
+  type SandboxContainerOps,
+} from "../volume-ops";
+import {
+  ensureWorkspaceVolume,
+  removeWorkspaceVolume,
+  workspaceVolumeName,
+} from "../workspace";
+import {
+  ExecVolumeNameRefusedError,
+  assertDrainJobId,
+  assertExecVolumeName,
+  assertRemovableExecVolume,
+  assertStagingJobId,
+  assertWorkspaceKey,
+} from "./volume-guard";
 import {
   createInMemoryCommandLedger,
   type CommandLedger,
@@ -57,6 +73,11 @@ export type WorkerServiceConfig = {
   worker: SandboxWorker;
   /** Docker seam for the volume lifecycles; defaults to the real CLI. */
   docker?: DockerCli;
+  /**
+   * Container cancellation for the host-exclusivity drain (exec-plane L3);
+   * defaults to the local docker-backed implementation over `docker`.
+   */
+  containerOps?: SandboxContainerOps;
   instance: string;
   serviceToken: string;
   /** mTLS material for the `worker-server` identity. Required. */
@@ -100,6 +121,7 @@ export function createWorkerDispatch(
   config: WorkerServiceConfig & { ledger: CommandLedger },
 ): (raw: unknown, ctx: ExecRpcContext) => Promise<ExecRpcReply> {
   const docker = config.docker ?? runDocker;
+  const containerOps = config.containerOps ?? createLocalDockerContainerOps(docker);
 
   async function handle(request: WorkerRequest): Promise<ExecRpcReply> {
     switch (request.op) {
@@ -190,19 +212,29 @@ export function createWorkerDispatch(
         });
         return { status: 200, body: execOkResponse(result) };
       }
+      // The four volume ops + the drain all run under `volume-guard.ts`: the
+      // worker re-derives what a legitimate name looks like instead of
+      // trusting the broker's. See that module's header for why the boundary,
+      // not the broker, is where this belongs.
       case "ensureWorkspace": {
-        const volumeName = await ensureWorkspaceVolume(
+        const workspaceKey = assertWorkspaceKey(
           request.payload.workspaceKey,
-          docker,
+          workspaceVolumeName,
         );
+        const volumeName = await ensureWorkspaceVolume(workspaceKey, docker);
         return { status: 200, body: execOkResponse({ volumeName }) };
       }
       case "removeWorkspace": {
-        await removeWorkspaceVolume(request.payload.volumeName, docker);
+        const volumeName = assertExecVolumeName(request.payload.volumeName, "l2");
+        // An ABSENT volume is a no-op, not a refusal — removal is idempotent by
+        // contract and the broker retries it on close and on teardown.
+        const state = await assertRemovableExecVolume(volumeName, "l2", docker);
+        if (state === "labelled") await removeWorkspaceVolume(volumeName, docker);
         return { status: 200, body: execOkResponse({ removed: true as const }) };
       }
       case "stageSkills": {
-        const { jobId, skills, imageRef } = request.payload;
+        const { skills, imageRef } = request.payload;
+        const jobId = assertStagingJobId(request.payload.jobId, skillsVolumeName);
         // A staging refusal (digest mismatch / unsafe path / docker failure) is
         // load-bearing: the broker fails the OPEN closed on it. Surface it as a
         // structured op failure carrying the staging message verbatim.
@@ -210,8 +242,15 @@ export function createWorkerDispatch(
         return { status: 200, body: execOkResponse({ volumeName }) };
       }
       case "removeSkills": {
-        await removeSkillsVolume(request.payload.volumeName, docker);
+        const volumeName = assertExecVolumeName(request.payload.volumeName, "skills");
+        const state = await assertRemovableExecVolume(volumeName, "skills", docker);
+        if (state === "labelled") await removeSkillsVolume(volumeName, docker);
         return { status: 200, body: execOkResponse({ removed: true as const }) };
+      }
+      case "cancelJobContainers": {
+        const jobId = assertDrainJobId(request.payload.jobId);
+        const cancelled = await containerOps.cancelJobContainers(jobId);
+        return { status: 200, body: execOkResponse({ cancelled }) };
       }
     }
   }
@@ -227,6 +266,16 @@ export function createWorkerDispatch(
     try {
       return await handle(parsed.request);
     } catch (err) {
+      // A name the worker refuses is a MALFORMED REQUEST, not an op that
+      // failed: the broker asked for something outside the vocabulary, and
+      // calling that `op_failed` would invite a retry of an argument that can
+      // never become legal. The message never echoes the rejected value.
+      if (err instanceof ExecVolumeNameRefusedError) {
+        return {
+          status: EXEC_ERROR_STATUS.malformed_request,
+          body: execErrorResponse("malformed_request", err.message),
+        };
+      }
       return opFailed(parsed.request.op, err);
     }
   };

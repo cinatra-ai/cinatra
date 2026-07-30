@@ -84,10 +84,22 @@ export function resolveL0ImageRef(override?: string): string {
   return DEFAULT_L0_IMAGE_LOCAL_DEV;
 }
 
+/**
+ * The name PREFIX every container of one job shares.
+ *
+ * The per-dispatch `seq` is owned by the worker, so a host-exclusivity drain
+ * (`service/lease.ts`) cannot enumerate exact names — it enumerates by this
+ * prefix instead. Kept as the single construction site so the prefix and the
+ * full name can never drift apart.
+ */
+export function containerNamePrefixFor(jobId: string): string {
+  const safe = jobId.replace(/[^a-zA-Z0-9_.-]/g, "-");
+  return `cinatra-exec-${safe}-`;
+}
+
 /** Deterministic container name for one command dispatch (kill target). */
 export function containerNameFor(jobId: string, seq: number): string {
-  const safe = jobId.replace(/[^a-zA-Z0-9_.-]/g, "-");
-  return `cinatra-exec-${safe}-${seq}`;
+  return `${containerNamePrefixFor(jobId)}${seq}`;
 }
 
 /**

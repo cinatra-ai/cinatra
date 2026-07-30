@@ -101,12 +101,21 @@ export const BROKER_OPS = [
 ] as const;
 export type BrokerOp = (typeof BROKER_OPS)[number];
 
+/**
+ * `cancelJobContainers` was ADDED in exec-plane L3 without a version bump, and
+ * that is the documented rule applied, not an exception to it: the version
+ * covers the SHAPES on this wire, and a new op changes none of them. An older
+ * worker answers the new op with its existing `malformed_request` refusal —
+ * which is the correct, fail-closed outcome — and both peers of a deployment
+ * ship from the same bundle build anyway.
+ */
 export const WORKER_OPS = [
   "runCommand",
   "ensureWorkspace",
   "removeWorkspace",
   "stageSkills",
   "removeSkills",
+  "cancelJobContainers",
 ] as const;
 export type WorkerOp = (typeof WORKER_OPS)[number];
 
@@ -228,16 +237,24 @@ export type StageSkillsPayload = {
   imageRef: string;
 };
 export type RemoveSkillsPayload = { volumeName: string };
+/**
+ * The host-exclusivity drain (exec-plane L3). A JOB ID, never a container name
+ * and never an argv: the worker derives the container-name prefix itself, so
+ * this op cannot be used to remove a container the job does not own.
+ */
+export type CancelJobContainersPayload = { jobId: string };
 
 export type VolumeResultPayload = { volumeName: string };
 export type RemovedResultPayload = { removed: true };
+export type CancelledResultPayload = { cancelled: string[] };
 
 export type WorkerRequest =
   | { op: "runCommand"; payload: RunCommandPayload }
   | { op: "ensureWorkspace"; payload: EnsureWorkspacePayload }
   | { op: "removeWorkspace"; payload: RemoveWorkspacePayload }
   | { op: "stageSkills"; payload: StageSkillsPayload }
-  | { op: "removeSkills"; payload: RemoveSkillsPayload };
+  | { op: "removeSkills"; payload: RemoveSkillsPayload }
+  | { op: "cancelJobContainers"; payload: CancelJobContainersPayload };
 
 export type WorkerResultFor<Op extends WorkerOp> = Op extends "runCommand"
   ? SandboxCommandResult
@@ -249,7 +266,9 @@ export type WorkerResultFor<Op extends WorkerOp> = Op extends "runCommand"
         ? VolumeResultPayload
         : Op extends "removeSkills"
           ? RemovedResultPayload
-          : never;
+          : Op extends "cancelJobContainers"
+            ? CancelledResultPayload
+            : never;
 
 // ---------------------------------------------------------------------------
 // Envelopes
@@ -738,6 +757,13 @@ export function parseWorkerRequest(
       return {
         ok: true,
         request: { op: "removeSkills", payload: { volumeName: p.volumeName } },
+      };
+    }
+    case "cancelJobContainers": {
+      if (!isNonEmptyString(p.jobId)) return fail("`jobId` is required.");
+      return {
+        ok: true,
+        request: { op: "cancelJobContainers", payload: { jobId: p.jobId } },
       };
     }
   }

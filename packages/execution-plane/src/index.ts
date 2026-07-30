@@ -53,6 +53,7 @@ export {
   resolveL0ImageRef,
   assertSafeImageRef,
   containerNameFor,
+  containerNamePrefixFor,
   sandboxEnvironment,
   wrapSandboxCommand,
   buildHardenedRunArgs,
@@ -95,6 +96,17 @@ export {
   type BrokerSandboxExecutorOptions,
   type CommandVoucherMinter,
 } from "./executor";
+
+// Exec-plane L3 (epic cinatra#1705): the TYPED host-operation seam that lets a
+// broker place its volume + container operations on the worker host instead of
+// its own, and the host-exclusivity precondition it revalidates before every
+// placement decision.
+export {
+  createLocalDockerContainerOps,
+  createLocalDockerVolumeOps,
+  type SandboxContainerOps,
+  type SandboxVolumeOps,
+} from "./volume-ops";
 
 // ---------------------------------------------------------------------------
 // The per-command authorization boundary (epic #1705). VERIFY-ONLY: the signing
@@ -169,6 +181,8 @@ export {
   type ExecResult,
   type ExecFailureReason,
   type ExecRevalidationChallenge,
+  type PlacementGuard,
+  type PlacementVerdict,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -405,3 +419,39 @@ export {
   DEFAULT_WORKER_CLIENT_RETRY_DELAY_MS,
   type WorkerServiceClientConfig,
 } from "./service/worker-client";
+
+// The worker's fail-closed NAME POLICY for the typed ops (exec-plane L3).
+export {
+  ExecVolumeNameRefusedError,
+  assertDrainJobId,
+  assertExecVolumeName,
+  assertRemovableExecVolume,
+  assertStagingJobId,
+  assertWorkspaceKey,
+  type ExecVolumeTier,
+} from "./service/volume-guard";
+
+// The host-exclusivity lease the broker revalidates before every placement.
+export {
+  DEFAULT_HOST_EXCLUSIVITY_LEASE_PATH,
+  DEFAULT_LEASE_CACHE_TTL_MS,
+  HOST_EXCLUSIVITY_LEASE_PATH_ENV,
+  HOST_EXCLUSIVITY_LOCK_DIR_NAME,
+  HOST_EXCLUSIVITY_MODE_ENV,
+  HOST_EXCLUSIVITY_RENEW_INTERVAL_ENV,
+  HOST_EXCLUSIVITY_TENANT_ENV,
+  HostExclusivityLeaseGuard,
+  TENANT_SLUG_RE,
+  evaluateHostExclusivityLease,
+  hostExclusivityPlacementGuard,
+  nodeLeaseIo,
+  parseHostExclusivityLease,
+  serializeHostExclusivityLease,
+  startHostExclusivityRenewal,
+  type HostExclusivityGuardConfig,
+  type HostExclusivityLease,
+  type LeaseIo,
+  type LeaseRefusalReason,
+  type LeaseRenewalResult,
+  type LeaseVerdict,
+} from "./service/lease";

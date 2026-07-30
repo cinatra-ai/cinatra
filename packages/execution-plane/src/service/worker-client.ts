@@ -23,10 +23,13 @@
  * first dispatch is still running, so we wait rather than duplicate.
  *
  * The volume lifecycles (`ensureWorkspace` / `removeWorkspace` / `stageSkills` /
- * `removeSkills`) are exposed here as well. The broker currently performs those
- * through its own `DockerCli` seam, so routing them to a REMOTE worker is a
- * wiring change in the broker and is deliberately NOT made in this slice — this
- * client only makes the calls available to the slice that does it.
+ * `removeSkills`) are exposed here as well, and since exec-plane L3 this class
+ * satisfies `SandboxVolumeOps` and `SandboxContainerOps` STRUCTURALLY — so a
+ * broker configured with `{ volumeOps: workerClient, containerOps: workerClient }`
+ * performs every host operation on the worker host and needs no docker of its
+ * own. What crosses the wire is a closed vocabulary of typed operations; there
+ * is deliberately no remote `DockerCli`, because that would be remote
+ * arbitrary-docker-argv execution on the one host that has a socket.
  */
 
 import { randomUUID } from "node:crypto";
@@ -41,8 +44,10 @@ import type {
   SandboxWorker,
   StagedSkillInput,
 } from "../types";
+import type { SandboxContainerOps, SandboxVolumeOps } from "../volume-ops";
 import type { ExecTlsMaterial } from "./mtls";
 import type {
+  CancelledResultPayload,
   RemovedResultPayload,
   VolumeResultPayload,
 } from "./protocol";
@@ -81,7 +86,9 @@ function toMountRefusalReason(message: string): EnvironmentMountRefusalReason {
   return MOUNT_REFUSAL_REASONS.includes(trimmed) ? trimmed : "unverifiable_provenance";
 }
 
-export class WorkerServiceClient implements SandboxWorker {
+export class WorkerServiceClient
+  implements SandboxWorker, SandboxVolumeOps, SandboxContainerOps
+{
   private readonly rpc: ExecRpcClient;
   private readonly maxAttempts: number;
   private readonly retryDelayMs: number;
@@ -179,6 +186,20 @@ export class WorkerServiceClient implements SandboxWorker {
       volumeName,
     });
     if (!outcome.ok) throw workerCallError("removeSkills", outcome);
+  }
+
+  /**
+   * Force-remove every container of a job on the worker host (the
+   * host-exclusivity drain, exec-plane L3). A JOB ID crosses the wire — never a
+   * container name — and the worker derives and validates the prefix itself.
+   */
+  async cancelJobContainers(jobId: string): Promise<string[]> {
+    const outcome = await this.rpc.call<CancelledResultPayload>(
+      "cancelJobContainers",
+      { jobId },
+    );
+    if (!outcome.ok) throw workerCallError("cancelJobContainers", outcome);
+    return outcome.result.cancelled;
   }
 }
 

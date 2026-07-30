@@ -51,9 +51,14 @@ import {
   type EgressClampAxis,
   type EgressDeploymentMaximum,
 } from "./authz/egress-clamp";
-import { ensureWorkspaceVolume, removeWorkspaceVolume } from "./workspace";
-// Exec-plane S2 (cinatra#1707): read-only skill staging under /skills/<slug>.
-import { stageSkillsVolume, removeSkillsVolume } from "./staging";
+// Exec-plane L3: the broker no longer touches docker for volume lifecycles —
+// it holds a TYPED seam that defaults to the same local docker-backed helpers.
+import {
+  createLocalDockerContainerOps,
+  createLocalDockerVolumeOps,
+  type SandboxContainerOps,
+  type SandboxVolumeOps,
+} from "./volume-ops";
 import { resolveL0ImageRef } from "./l0-profile";
 // Exec-plane S3 (cinatra#1708): the resolved L1 environment a job mounts +
 // the worker's fail-closed mount-verification refusal.
@@ -78,6 +83,8 @@ import {
   type OpenJobFailureReason,
   type ResolvedEgress,
   type OpenJobResult,
+  type PlacementGuard,
+  type PlacementVerdict,
   type RunLivenessProbe,
   type SandboxCommandResult,
   type StagedSkillInput,
@@ -119,8 +126,41 @@ export type ExecutionBrokerOptions = {
   /** Sandbox network + gateway endpoint for gateway egress modes. */
   sandboxNetwork?: string;
   gateway?: EgressGatewayEndpoint;
-  /** Injection seam so workspace ops share the worker's docker CLI in tests. */
+  /**
+   * Injection seam so workspace ops share the worker's docker CLI in tests.
+   * Since exec-plane L3 this is the seam the DEFAULT `volumeOps` /
+   * `containerOps` are built over — pass `volumeOps` to place those operations
+   * off this host entirely.
+   */
   docker?: DockerCli;
+  /**
+   * Where the L2 workspace + read-only skills volume lifecycles are performed
+   * (exec-plane L3). Absent ⇒ the local docker-backed implementation over
+   * `docker`, byte-identical to the pre-seam behaviour. A managed placement
+   * passes its `WorkerServiceClient`, so the broker host needs no docker at all
+   * — and, deliberately, gets no remote raw `DockerCli`: the seam is four typed
+   * operations whose arguments the worker re-validates.
+   */
+  volumeOps?: SandboxVolumeOps;
+  /**
+   * How a revoked host-exclusivity lease drains what is already running
+   * (exec-plane L3). Absent ⇒ the local docker-backed implementation. Only ever
+   * consulted when `placementGuard` refuses, so a broker without a guard makes
+   * no container calls it did not make before.
+   */
+  containerOps?: SandboxContainerOps;
+  /**
+   * Fail-closed revalidation run before EVERY placement decision — opening a
+   * job (which places a volume) and dispatching a command (which places a
+   * container). Absent ⇒ no host-scoped precondition, today's behaviour.
+   *
+   * The shipped implementation is the host-exclusivity lease
+   * (`service/lease.ts`). A refusal STOPS ADMISSION and DRAINS: every open job
+   * is terminated and its containers are cancelled by name, because a host we
+   * can no longer prove is exclusively ours must not be running our containers
+   * next to another tenant's.
+   */
+  placementGuard?: PlacementGuard;
   /** Injection seam for the gateway control-channel registration call. */
   fetchImpl?: typeof fetch;
   /** Injectable clock for hermetic tests. */
@@ -329,9 +369,20 @@ export class ExecutionBroker {
    */
   private readonly inFlightCommandIds = new Set<string>();
   private readonly opts: ExecutionBrokerOptions;
+  /**
+   * The typed host-operation seams. Resolved ONCE in the constructor over
+   * `opts.docker`, which is exactly what the six call sites used to pass to the
+   * `workspace.ts` / `staging.ts` helpers — the argv a default-constructed
+   * broker emits is unchanged (`volume-ops-parity.test.ts`).
+   */
+  private readonly volumeOps: SandboxVolumeOps;
+  private readonly containerOps: SandboxContainerOps;
 
   constructor(opts: ExecutionBrokerOptions) {
     this.opts = opts;
+    this.volumeOps = opts.volumeOps ?? createLocalDockerVolumeOps(opts.docker);
+    this.containerOps =
+      opts.containerOps ?? createLocalDockerContainerOps(opts.docker);
     this.quotas = { ...DEFAULT_BROKER_QUOTAS, ...opts.quotas };
     this.limits = { ...DEFAULT_SANDBOX_LIMITS, ...opts.limits };
     this.globalSemaphore = new BoundedSemaphore(
@@ -399,6 +450,21 @@ export class ExecutionBroker {
           "The bound run no longer exists (hard-removed); no job is opened (fail-closed).",
       };
     }
+    // Host-exclusivity revalidation BEFORE the first placement of this job: an
+    // L2 volume created on a host we no longer hold is a footprint on somebody
+    // else's machine. Ordered here — after the carrier/liveness refusals, so an
+    // unauthenticated caller never reaches the lease read, and BEFORE the
+    // open-job reservation, whose check-and-claim must stay strictly
+    // synchronous (an `await` between them reopens the burst race the
+    // reservation exists to close).
+    const placement = await this.checkPlacement();
+    if (!placement.ok) {
+      return {
+        ok: false,
+        reason: "placement_refused",
+        message: placement.message,
+      };
+    }
     // Bound carrier-replay volume/memory exhaustion: a valid carrier within its
     // TTL can be presented repeatedly, so cap simultaneously-open jobs per org
     // (each open job holds one L2 volume). Reserve the slot SYNCHRONOUSLY here
@@ -419,10 +485,7 @@ export class ExecutionBroker {
     const jobId = randomUUID();
     const workspaceKey = session.runId ?? jobId;
     try {
-      const workspaceVolume = await ensureWorkspaceVolume(
-        workspaceKey,
-        this.opts.docker,
-      );
+      const workspaceVolume = await this.volumeOps.ensureWorkspace(workspaceKey);
       // Exec-plane S2 (cinatra#1707): stage skill snapshots read-only. A
       // staging refusal (digest mismatch / unsafe path / docker failure) fails
       // the OPEN closed — a job must never run with a partial skill set the
@@ -431,11 +494,10 @@ export class ExecutionBroker {
       let skillsVolume: string | undefined;
       if (openOpts?.stagedSkills && openOpts.stagedSkills.length > 0) {
         try {
-          skillsVolume = await stageSkillsVolume(
+          skillsVolume = await this.volumeOps.stageSkills(
             jobId,
             openOpts.stagedSkills,
             resolveL0ImageRef(),
-            this.opts.docker,
           );
         } catch (err) {
           return {
@@ -493,6 +555,15 @@ export class ExecutionBroker {
     if (job.terminated) {
       return this.refuse(job, command, "job_terminated",
         `The job was terminated (${job.terminationReason ?? "unspecified"}); no further commands run on it.`);
+    }
+
+    // Host-exclusivity gate, admission half. A revoked lease must stop new work
+    // entering the pipeline BEFORE the (potentially unbounded) admission wait,
+    // not only at dispatch — otherwise a queue full of already-admitted
+    // commands would keep placing containers on a host that is no longer ours.
+    const admissionPlacement = await this.checkPlacement();
+    if (!admissionPlacement.ok) {
+      return this.refuse(job, command, "placement_revoked", admissionPlacement.message);
     }
 
     // --- the authorization boundary ----------------------------------------
@@ -752,6 +823,18 @@ export class ExecutionBroker {
       const beforeDispatch = await requireFreshVoucher();
       if (beforeDispatch) return beforeDispatch;
 
+      // Host-exclusivity gate, DISPATCH half — the actual placement decision.
+      // Same reasoning as the voucher's check 2: the admission wait, the
+      // liveness re-probe and the gateway registration are all awaited, and the
+      // lease can be reclaimed inside any of them. The host must be provably
+      // ours at the instant a container is placed on it, not merely when the
+      // command was admitted.
+      const dispatchPlacement = await this.checkPlacement();
+      if (!dispatchPlacement.ok) {
+        return await this.refuse(job, command, "placement_revoked",
+          dispatchPlacement.message, policy, detail);
+      }
+
       // Claim the commandId at the LAST point before dispatch: everything above
       // is a refusal the client may legitimately retry, everything below has
       // (or may have) touched the sandbox.
@@ -839,11 +922,11 @@ export class ExecutionBroker {
       if (job.session.runId !== runId || job.terminated) continue;
       this.terminate(job, "run_removed");
       if (opts?.removeWorkspace) {
-        await removeWorkspaceVolume(job.workspaceVolume, this.opts.docker);
+        await this.volumeOps.removeWorkspace(job.workspaceVolume);
       }
       // The skills volume is strictly per-job (never shared): remove eagerly.
       if (job.skillsVolume) {
-        await removeSkillsVolume(job.skillsVolume, this.opts.docker);
+        await this.volumeOps.removeSkills(job.skillsVolume);
       }
       terminated += 1;
     }
@@ -858,11 +941,11 @@ export class ExecutionBroker {
     if (!job) return;
     this.terminate(job, "closed");
     if (opts?.removeWorkspace) {
-      await removeWorkspaceVolume(job.workspaceVolume, this.opts.docker);
+      await this.volumeOps.removeWorkspace(job.workspaceVolume);
     }
     // The skills volume is strictly per-job (never shared): remove eagerly.
     if (job.skillsVolume) {
-      await removeSkillsVolume(job.skillsVolume, this.opts.docker);
+      await this.volumeOps.removeSkills(job.skillsVolume);
     }
     this.jobs.delete(jobId);
   }
@@ -936,6 +1019,69 @@ export class ExecutionBroker {
   private terminate(job: BrokerJob, reason: string): void {
     job.terminated = true;
     job.terminationReason = reason;
+  }
+
+  /**
+   * Revalidate the host-scoped precondition for placing work here, and DRAIN on
+   * any refusal.
+   *
+   * FAIL-CLOSED ON A THROWING GUARD — deliberately the opposite of
+   * `probeLiveness`. That probe stays permissive because killing every
+   * in-flight sandbox on a transient store blip is the worse failure for ONE
+   * run. This guard is a TENANCY boundary: a host we cannot prove is
+   * exclusively ours is a host that may already be running another tenant's
+   * workers, and "the check errored" is not evidence that it is not.
+   */
+  private async checkPlacement(): Promise<PlacementVerdict> {
+    if (!this.opts.placementGuard) return { ok: true };
+    let verdict: PlacementVerdict;
+    try {
+      verdict = await this.opts.placementGuard();
+    } catch (err) {
+      verdict = {
+        ok: false,
+        reason: "placement_guard_error",
+        message:
+          "The execution host's placement precondition could not be evaluated; " +
+          `placement is refused (fail-closed): ${(err as Error).message}`,
+      };
+    }
+    if (!verdict.ok) await this.drainRevokedPlacement(verdict.reason);
+    return verdict;
+  }
+
+  /**
+   * Stop admitting AND cancel what is already running.
+   *
+   * `terminate` is a synchronous flag flip: it closes the job to further
+   * commands but does not touch a container that is mid-run. On a revoked host
+   * that is precisely the state that must not persist, so every terminated
+   * job's containers are force-removed BY NAME through the typed container
+   * seam. Per-job and best-effort: one job whose cancellation fails must not
+   * abort the drain of the others.
+   *
+   * Volumes are deliberately NOT removed here. Reclaiming the host is the
+   * provisioning side's decision and the retention GC's job; destroying a
+   * tenant's workspace because a lease read failed would turn a refusal into
+   * data loss.
+   */
+  private async drainRevokedPlacement(reason: string): Promise<string[]> {
+    const jobIds: string[] = [];
+    for (const job of this.jobs.values()) {
+      if (job.terminated) continue;
+      this.terminate(job, `placement_revoked:${reason}`);
+      jobIds.push(job.jobId);
+    }
+    const cancelled: string[] = [];
+    for (const jobId of jobIds) {
+      try {
+        cancelled.push(...(await this.containerOps.cancelJobContainers(jobId)));
+      } catch {
+        // Best-effort by contract — the refusal is the decision, the drain is
+        // remediation, and a failure to reach docker must not mask either.
+      }
+    }
+    return cancelled;
   }
 
   /**
