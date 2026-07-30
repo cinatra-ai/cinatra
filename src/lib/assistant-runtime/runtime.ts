@@ -1130,12 +1130,27 @@ export async function runAssistantTurn(
   // is an idempotent insert (a fact is never rewritten), a retry could not
   // repair it.
   //
-  // `onStepStart` is the honest signal: every provider adapter fires it at the
-  // top of its step loop, immediately BEFORE issuing the request. So it is set
-  // when — and only when — the request carrying these skills is actually sent,
-  // INCLUDING the case the operator most needs recorded: a request that the
-  // provider then rejects (the issue-#47 400s that motivated #2094 F11).
-  let providerDispatchStarted = false;
+  // TWO signals, and the record needs BOTH — it FAILS CLOSED, because a false
+  // audit fact is strictly worse than a missing one (the missing case is a turn
+  // the operator already sees as failed; the false case silently corrupts the
+  // answer to "what did this run get?" forever).
+  //
+  //   providerStepStarted — `onStepStart`, which every provider adapter fires at
+  //     the top of its step loop. NOT sufficient on its own: an adapter may do
+  //     local work between that callback and the SDK call (the connectors write
+  //     an operator-enabled request log there), and a failure in it would leave
+  //     `delivered` rows for a request that never left the process.
+  //   providerResponded — any signal that can only exist once the provider is
+  //     genuinely engaged: a text delta, a tool call/result, a step end,
+  //     citations, or an adapter-reported error. A completed `stream()` counts
+  //     too, and is the ordinary case.
+  //
+  // Together they cover the run an operator most needs recorded — a request the
+  // provider REJECTED (the issue-#47 400s that motivated #2094 F11) — while
+  // excluding every failure that happened before egress.
+  let providerStepStarted = false;
+  let providerResponded = false;
+  let streamCompleted = false;
 
   try {
     await stream({
@@ -1192,12 +1207,18 @@ export async function runAssistantTurn(
         : AbortSignal.timeout(120_000),
       logLabel: "chat",
       onTextDelta: (delta) => {
+        // cinatra#2240 — provider engagement: this can only fire once the
+        // request carrying these skills actually reached the provider.
+        providerResponded = true;
         // Accumulated for the end-of-turn execution-provenance verdict
         // (cinatra#2175); the sink emission itself is unchanged.
         assistantTurnText += delta;
         send("text", { content: delta });
       },
       onToolCall: (call) => {
+        // cinatra#2240 — provider engagement: this can only fire once the
+        // request carrying these skills actually reached the provider.
+        providerResponded = true;
         if (isHiddenTool(call.name)) return;
         send("tool_call", {
           id: call.id,
@@ -1207,6 +1228,9 @@ export async function runAssistantTurn(
         });
       },
       onToolResult: (result) => {
+        // cinatra#2240 — provider engagement: this can only fire once the
+        // request carrying these skills actually reached the provider.
+        providerResponded = true;
         if (isHiddenTool(result.name)) return;
         send("tool_result", {
           id: result.id,
@@ -1218,15 +1242,21 @@ export async function runAssistantTurn(
         });
       },
       onStepStart: (step) => {
-        // cinatra#2240 — the provider is about to be called with this turn's
-        // tools. See the dispatch-boundary note above the try.
-        providerDispatchStarted = true;
+        // cinatra#2240 — a provider step is BEGINNING. Necessary but NOT
+        // sufficient on its own; see the dispatch-boundary note above the try.
+        providerStepStarted = true;
         send("thinking_start", { round: step });
       },
       onStepEnd: (step) => {
+        // cinatra#2240 — provider engagement: this can only fire once the
+        // request carrying these skills actually reached the provider.
+        providerResponded = true;
         send("thinking_end", { round: step });
       },
       onCitations: (citations) => {
+        // cinatra#2240 — provider engagement: this can only fire once the
+        // request carrying these skills actually reached the provider.
+        providerResponded = true;
         const searchId = `web_search_${Date.now()}`;
         send("tool_call", { id: searchId, name: "web_search", status: "running" });
         send("tool_result", {
@@ -1238,6 +1268,9 @@ export async function runAssistantTurn(
         send("citations", { citations });
       },
       onError: (error) => {
+        // cinatra#2240 — provider engagement: this can only fire once the
+        // request carrying these skills actually reached the provider.
+        providerResponded = true;
         // `error` is a TERMINAL sink frame: the AG-UI adapter ignores every
         // event after the first terminal. An adapter that reports through this
         // callback and then RESOLVES would therefore have its marker dropped
@@ -1255,6 +1288,8 @@ export async function runAssistantTurn(
     // only reachable status while the plane is dark) emits nothing.
     markUnverifiedExecutionClaim();
 
+    // cinatra#2240 — `stream()` returned: the provider phase ran to completion.
+    streamCompleted = true;
     send("done", {});
   } catch (error) {
     // Same verdict before the terminal error frame: the partial text is
@@ -1264,11 +1299,14 @@ export async function runAssistantTurn(
     const message = error instanceof Error ? error.message : "Chat request failed.";
     send("error", { message });
   } finally {
-    // Commit ONLY if a provider request actually carried these skills — on the
-    // success path AND on the failure path (a rejected request still delivered
-    // them, and that is exactly the run an operator needs to audit). A turn
-    // that died inside `stream()` BEFORE `adapter.stream()` records nothing.
-    if (providerDispatchStarted) {
+    // Commit ONLY when a provider request demonstrably carried these skills: a
+    // step began AND the provider either answered or the whole stream ran to
+    // completion. Both the success path and the provider-REJECTED path qualify
+    // (a rejected request still delivered them, and that is exactly the run an
+    // operator needs to audit). Anything that failed before egress — adapter
+    // resolution, MCP/execution injection, attachment resolution, or an
+    // adapter's own pre-request work — records NOTHING.
+    if (providerStepStarted && (streamCompleted || providerResponded)) {
       await persistTurnSkillDelivery(args.turnIdentity, turnSkillDeliveryRows);
     }
   }

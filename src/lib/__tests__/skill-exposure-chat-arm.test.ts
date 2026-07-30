@@ -16,7 +16,15 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-const runPostgresQueriesSync = vi.hoisted(() => vi.fn(() => [{ rows: [] }]));
+type SyncQueryBatch = { queries: Array<{ text: string; values?: unknown[] }> };
+type SyncQueryResult = Array<{ rows: Array<Record<string, unknown>> }>;
+
+// Explicitly typed: the reader is called with ONE argument and the cases below
+// read it back off `mock.calls[0][0]`, which an inferred zero-arg mock types as
+// an empty tuple.
+const runPostgresQueriesSync = vi.hoisted(() =>
+  vi.fn((_batch: SyncQueryBatch): SyncQueryResult => [{ rows: [] }]),
+);
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/postgres-sync", () => ({ runPostgresQueriesSync }));
@@ -33,12 +41,9 @@ import {
 
 function queryTextFor(): string {
   runPostgresQueriesSync.mockClear();
-  runPostgresQueriesSync.mockReturnValueOnce([{ rows: [] }] as never);
+  runPostgresQueriesSync.mockReturnValueOnce([{ rows: [] }]);
   readSkillExposureAggregates();
-  const call = runPostgresQueriesSync.mock.calls[0][0] as unknown as {
-    queries: Array<{ text: string }>;
-  };
-  return call.queries[0].text;
+  return runPostgresQueriesSync.mock.calls[0][0].queries[0].text;
 }
 
 describe("readSkillExposureAggregates unions the chat delivery record", () => {
@@ -88,7 +93,7 @@ describe("readSkillExposureAggregates unions the chat delivery record", () => {
           },
         ],
       },
-    ] as never);
+    ]);
     expect(readSkillExposureAggregates()).toEqual([
       {
         skillId: "@cinatra-ai/a",

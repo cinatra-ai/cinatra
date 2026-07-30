@@ -46,10 +46,16 @@ const state = vi.hoisted(() => ({
   recorded: [] as Array<{ turnId: string; rows: Array<Record<string, unknown>> }>,
   /** Keys already persisted — reproduces `ON CONFLICT DO NOTHING`. */
   persistedKeys: new Set<string>(),
-  /** Throw inside `stream()` BEFORE the provider request is issued. */
+  /** Throw inside `stream()` BEFORE any provider step begins. */
   streamFailsBeforeDispatch: false,
-  /** Throw AFTER the provider request went out (a provider-side rejection). */
-  streamFailsAfterDispatch: false,
+  /**
+   * Throw AFTER `onStepStart` but BEFORE any provider response — the adapter's
+   * own pre-request work failing (the connectors write an operator-enabled
+   * request log there). Nothing left the process.
+   */
+  streamFailsAfterStepStartBeforeEgress: false,
+  /** Throw after the provider ANSWERED (a rejection it reported back). */
+  streamFailsAfterProviderResponded: false,
 }));
 
 vi.mock("@/lib/register-host-connector-services", () => ({}));
@@ -143,8 +149,14 @@ vi.mock("@cinatra-ai/llm", () => ({
       throw new Error("attachment resolution failed");
     }
     (input.onStepStart as (step: number) => void)?.(1);
-    if (state.streamFailsAfterDispatch) {
+    if (state.streamFailsAfterStepStartBeforeEgress) {
+      // `onStepStart` fired, then the adapter's own pre-request work threw. No
+      // provider callback ever fires, so nothing reached the wire.
+      throw new Error("request log write failed");
+    }
+    if (state.streamFailsAfterProviderResponded) {
       // The request WAS sent and the provider rejected it (the issue-#47 400s).
+      (input.onError as (e: Error) => void)?.(new Error("400 unsupported tool"));
       throw new Error("400 unsupported tool");
     }
     (input.onTextDelta as (d: string) => void)?.("Hi");
@@ -194,7 +206,8 @@ beforeEach(() => {
   };
   state.inlineResult = { systemContext: "", exposure: [], dropped: [] };
   state.streamFailsBeforeDispatch = false;
-  state.streamFailsAfterDispatch = false;
+  state.streamFailsAfterStepStartBeforeEgress = false;
+  state.streamFailsAfterProviderResponded = false;
 });
 
 describe("a chat turn writes EXACTLY ONE delivery record, keyed to the turn the chat path minted", () => {
@@ -354,8 +367,27 @@ describe("the record never OVERCLAIMS", () => {
     });
   });
 
+  it("a turn that fires onStepStart but never reaches the wire writes NO record", () => {
+    // `onStepStart` alone is NOT dispatch: each adapter does its own local work
+    // (an operator-enabled request-log write) between that callback and the SDK
+    // call. A failure there means nothing left the process, so a `delivered`
+    // row would be a permanent false audit fact. The gate FAILS CLOSED.
+    state.streamFailsAfterStepStartBeforeEgress = true;
+    state.deliveryResult.exposure = bundleSkillIds().map((skillId) => ({
+      skillId,
+      deliveryMode: "openai_shell",
+      invocationAttributable: true,
+    }));
+
+    const send = vi.fn();
+    return runAssistantTurn(buildCinatraAssistantRuntimeConfig(), makeArgs(send)).then(() => {
+      expect(send).toHaveBeenCalledWith("error", expect.anything());
+      expect(state.recorded).toEqual([]);
+    });
+  });
+
   it("a request the PROVIDER rejected IS recorded — that is the run an operator must audit", () => {
-    state.streamFailsAfterDispatch = true;
+    state.streamFailsAfterProviderResponded = true;
     state.deliveryResult.exposure = bundleSkillIds().map((skillId) => ({
       skillId,
       deliveryMode: "openai_shell",
