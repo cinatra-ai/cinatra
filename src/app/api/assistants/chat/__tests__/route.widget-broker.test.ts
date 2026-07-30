@@ -25,7 +25,7 @@ const getAuthSession = vi.fn();
 const requireActorContext = vi.fn();
 const isPlatformAdmin = vi.fn();
 const resolveOrgRoleForUser = vi.fn();
-const hasConfiguredLlmRuntime = vi.fn();
+const describeLlmRuntimeUnavailability = vi.fn();
 const runChatTurn = vi.fn();
 const resolveAssistantHandles = vi.fn();
 const resolveAssistantRuntimeConfigByPrincipal = vi.fn();
@@ -52,7 +52,7 @@ vi.mock("@/lib/auth-session", () => ({
   resolveOrgRoleForUser: (...a: unknown[]) => resolveOrgRoleForUser(...a),
 }));
 vi.mock("@/app/api/chat/runner", () => ({
-  hasConfiguredLlmRuntime: () => hasConfiguredLlmRuntime(),
+  describeLlmRuntimeUnavailability: () => describeLlmRuntimeUnavailability(),
   runChatTurn: (...a: unknown[]) => runChatTurn(...a),
 }));
 vi.mock("@/lib/better-auth-db", () => ({
@@ -141,7 +141,8 @@ function widgetReq(opts: {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  hasConfiguredLlmRuntime.mockResolvedValue(true);
+  // cinatra#2094 F10: the guard now asks for the REASON (null = a runtime is available).
+  describeLlmRuntimeUnavailability.mockResolvedValue(null);
   widgetStreamRequestSource.mockReturnValue("src-key");
   resolveWidgetStreamAgentUnion.mockResolvedValue(WP_ENTRY);
   resolveWidgetStreamOrigin.mockReturnValue(ORIGIN);

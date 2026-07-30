@@ -223,7 +223,8 @@ export const LLM_PURPOSE_INVENTORY: readonly LlmPurposeEntry[] = Object.freeze([
   {
     purpose: "assistant-availability-gate",
     file: "src/app/api/assistants/chat/route.ts",
-    what: "The pre-turn broker gate that refuses a turn when no LLM runtime is configured.",
+    what:
+      "The pre-turn gate that refuses a turn when the bound LLM runtime is unavailable, NAMING the stored provider (cinatra#2094 F10).",
     policy: "unavailable-without-provider",
     rationale:
       "The honest answer when the stored provider is unavailable is 'this cannot run', surfaced to the caller — exactly the S6 no-silent-hop AC. Degrading onto another provider here would defeat the exact binding the rest of the change establishes.",

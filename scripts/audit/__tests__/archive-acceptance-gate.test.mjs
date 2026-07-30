@@ -470,11 +470,15 @@ describe("strictVerdict — the FULL strict-mode pass condition", () => {
     expect(verdict.rowFailures).toHaveLength(1);
   });
 
-  it("the real committed manifest (all red) is honestly NOT READY under strict mode today — expected pre-P1-CI, not a bug", () => {
+  it("the real committed manifest is honestly NOT READY under strict mode today (cinatra#1943 A1/A3b landed 2 rows; A2-A7 remain) — not a bug", () => {
     const manifest = loadManifest();
     const verdict = strictVerdict(manifest);
     expect(verdict.ready).toBe(false);
-    expect(verdict.notYetGreen).toHaveLength(15);
+    // Cross-job capability misuse (A1) and Archive-vs-terminal-CAS race
+    // (A3b) are structurally verified green this stage; every other row
+    // honestly stays red pending its own sibling gate or CI-wiring PR.
+    expect(verdict.notYetGreen).toHaveLength(13);
+    expect(verdict.rowFailures).toEqual([]);
   });
 });
 
@@ -498,11 +502,17 @@ describe("the real committed manifest", () => {
     expect(new Set(manifest.rows.map((r) => r.criterion))).toEqual(new Set(CANONICAL_CRITERIA));
   });
 
-  it("every row is red at this authoring stage (Decision 1's zero-baseline) with a trackingIssue", () => {
+  it("every row carries a trackingIssue while red; a row claimed green is structurally verified against the real tree (cinatra#1943 A1-A3b)", () => {
     const manifest = loadManifest();
     for (const row of manifest.rows) {
-      expect(row.status).toBe("red");
-      expect(row.trackingIssue).toBeGreaterThan(0);
+      if (row.status === "red") {
+        expect(row.trackingIssue).toBeGreaterThan(0);
+      } else {
+        expect(row.status).toBe("green");
+        const { ok, reasons } = strictCheckRow(row);
+        expect(reasons).toEqual([]);
+        expect(ok).toBe(true);
+      }
     }
   });
 });

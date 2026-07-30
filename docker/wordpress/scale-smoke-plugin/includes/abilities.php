@@ -86,7 +86,7 @@ function scalesmoke_register_abilities(): void {
 					),
 					'required'   => array( 'id', 'note' ),
 				),
-				'execute_callback'    => function ( $input ) use ( $index ) {
+				'execute_callback'    => function ( $input = array() ) use ( $index ) {
 					unset( $input );
 					return array(
 						'id'   => $index,
