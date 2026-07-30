@@ -9,7 +9,8 @@ import { getExtensionStoreSkillRootPath } from "./extension-store-root";
 import { assertPersonalSkillOwnership, installedSkillPackages, normalizeStoredAccessPolicy, projectSelectionToLevelScope, readSkillsCatalogSnapshot, resolveUpsertAccessConfig, visibilityToLevelScope } from "./skill-packages";
 export { resolveEffectiveSkillAccessPolicy } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
-import { buildSkillSourceForWrite, buildUpsertRevisionWrite, isSkillSource, resolveSkillSource, type RevisionSource, type SkillSource } from "./skill-source";
+import { buildSkillSourceForWrite, buildUpsertRevisionWrite, isSkillSource, resolveSkillSource, type RevisionSource, type SkillSource, type UpsertBundleFile } from "./skill-source";
+import { isRedundantSkillBundleWrite } from "@/lib/skill-bundle-store";
 import { assertSafePathSegment } from "@cinatra-ai/registries";
 // Agent-bound skill identity / path derivation (cinatra#537) — extracted to a
 // sibling module to keep this file under the ratchet (behavior identical); only
@@ -1133,6 +1134,10 @@ export async function upsertSkill(input: {
   storagePackagePath?: string;
   // Provenance on the atomic skill_revisions row (cinatra#1361 vocab); defaults "manual", chat-capture pipeline passes "chat-capture" (cinatra#1367).
   revisionSource?: RevisionSource;
+  // The skill's REAL on-disk bundle (cinatra#2274). Present ⇒ the recorded revision
+  // describes the WHOLE file set (not a bundle of ONE) and a re-registration whose
+  // bytes already match records NO new revision. See resolveUpsertBundleFiles.
+  bundleFiles?: readonly UpsertBundleFile[];
 }): Promise<PersistedSkill> {
   const existingCatalog = await readSkillsCatalog();
   const updatedAt = new Date().toISOString();
@@ -1351,10 +1356,15 @@ export async function upsertSkill(input: {
     ]),
   };
 
+  // Atomic revision (cinatra#1361; source threaded per cinatra#1367; real disk
+  // bundle threaded per cinatra#2274). Dropped ONLY when a disk-derived
+  // re-registration would re-record byte-identical authority (see the helper).
+  const revision = buildUpsertRevisionWrite(skillRecord, isPersonal, input.ownerUserId, input.revisionSource, input.bundleFiles);
+  const redundant = isRedundantSkillBundleWrite(skillId, revision.bundleFiles, input.bundleFiles != null);
   replaceSkillCatalogInDatabase({
     skillPackages: nextCatalog.skillPackages,
     skills: nextCatalog.skills,
-    lifecycleWrites: [buildUpsertRevisionWrite(skillRecord, isPersonal, input.ownerUserId, input.revisionSource)], // atomic revision (cinatra#1361; source threaded per cinatra#1367)
+    lifecycleWrites: redundant ? [] : [revision],
   });
 
   // Write SKILL.md to disk so the local path is available to the LLM shell tool.

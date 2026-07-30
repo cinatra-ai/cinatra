@@ -854,6 +854,109 @@ export function derivedBundleRevisionId(skillId: string, bundleDigest: string): 
   return `${DERIVED_REVISION_PREFIX}${keyed}`;
 }
 
+/**
+ * Whether a revision id was minted by CAPTURE (disk-owned) rather than by an
+ * authority write. Exported so a WRITER can tell "the head already standing is
+ * my own authority" apart from "the head is a disk capture" without re-deriving
+ * the prefix (cinatra#2274).
+ */
+export function isDerivedBundleRevisionId(revisionId: string): boolean {
+  return typeof revisionId === "string" && revisionId.startsWith(DERIVED_REVISION_PREFIX);
+}
+
+/** The head + lifecycle-pointer state an idempotent AUTHORITY writer reads. */
+export interface AuthorityBundleHeadState {
+  headRevisionId: string;
+  headBundleDigest: string;
+  /** `skills.active_revision_id` — the lifecycle pointer, which the authority
+   * writer moves in the SAME transaction as the head. */
+  activeRevisionId: string | null;
+  /** False when the head is a `bundle:` capture — i.e. NOT written by an authority. */
+  isAuthorityOwned: boolean;
+}
+
+/**
+ * Read a skill's current-bundle pointer TOGETHER with its lifecycle pointer, in
+ * ONE statement (cinatra#2274). Two separate reads would each spawn their own
+ * synchronous pg worker and could observe different transactions, so the "is my
+ * authority already fully recorded?" question would be answered from a torn view.
+ */
+export function readAuthorityBundleHeadState(skillId: string): AuthorityBundleHeadState | null {
+  ensurePostgresSchema();
+  const s = postgresSchema.replaceAll('"', '""');
+  const results = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT h.revision_id, h.bundle_digest, sk.active_revision_id
+                 FROM "${s}"."skill_bundle_heads" h
+                 JOIN "${s}"."skills" sk ON sk.id = h.skill_id
+                WHERE h.skill_id = $1`,
+        values: [skillId],
+      },
+    ],
+  });
+  const row = results[0]?.rows?.[0] as
+    | { revision_id?: unknown; bundle_digest?: unknown; active_revision_id?: unknown }
+    | undefined;
+  if (!row) return null;
+  const headRevisionId = String(row.revision_id);
+  return {
+    headRevisionId,
+    headBundleDigest: String(row.bundle_digest),
+    activeRevisionId:
+      typeof row.active_revision_id === "string" ? row.active_revision_id : null,
+    isAuthorityOwned: !isDerivedBundleRevisionId(headRevisionId),
+  };
+}
+
+/**
+ * Whether an authority writer's lifecycle revision would record EXACTLY what the
+ * skill already carries — so recording it again would only append an immutable
+ * duplicate and re-point two pointers at it (cinatra#2274 AC5).
+ *
+ * Deliberately NOT applied to every `upsertSkill`: cinatra#1361 fixed that
+ * revision provenance is per EVENT, not per content digest, so a user re-saving
+ * identical text must still record a revision. `recordedDiskBundle` is the
+ * caller's assertion that this write is a DISK-DERIVED re-registration (the
+ * extension registration writer replaying a boot scan), where a per-boot
+ * revision is churn rather than provenance.
+ *
+ * Fail-open toward WRITING: every uncertainty (no head, a `bundle:` capture
+ * head, a lifecycle pointer that disagrees with the head, an undigestible file
+ * set) answers `false`, so the authority is recorded rather than assumed.
+ *
+ * NOT A COMPARE-AND-SWAP, and deliberately not pretending to be (codex round-1
+ * finding #3). It reads the head one statement before the transaction that acts
+ * on the answer, so a head moved in that window makes the skip wrong. It is not
+ * closable here — the decision feeds `replaceSkillCatalogInDatabase`, whose
+ * lifecycle write owns the head unconditionally — so the WRITER carries the
+ * proof instead: `registerExtensionSkill` re-reads the head after the write and
+ * REFUSES to report a registration whose head is not the bundle it just read
+ * (`assertRegistrationRecordedTheBundle`). A lost race therefore surfaces as a
+ * loud, retried registration rather than a silently stale authority.
+ */
+export function isRedundantSkillBundleWrite(
+  skillId: string,
+  bundleFiles: BundleFileInput[] | null | undefined,
+  recordedDiskBundle: boolean,
+): boolean {
+  if (!recordedDiskBundle || !bundleFiles || bundleFiles.length === 0) return false;
+  let digest: string;
+  try {
+    digest = bundleDigestForFiles(bundleFiles);
+  } catch {
+    return false;
+  }
+  const state = readAuthorityBundleHeadState(skillId);
+  return (
+    state != null &&
+    state.isAuthorityOwned &&
+    state.activeRevisionId === state.headRevisionId &&
+    state.headBundleDigest === digest
+  );
+}
+
 /** Outcome of a capture: the resolved head + whether disk content had changed. */
 export interface SkillBundleCapture {
   skillId: string;

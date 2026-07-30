@@ -139,16 +139,44 @@ const failureVisible = (await page.getByTestId("setup-readiness-failure").count(
 const failureText = failureVisible
   ? ((await page.getByTestId("setup-readiness-failure").innerText()).replace(/\s+/g, " ").trim())
   : "";
+// WHICH STEP refused. The failure alert titles itself "AI setup did not complete
+// (<step>)" from the saga's own `SETUP_READINESS_STEPS` vocabulary, so the step
+// name is readable from the rendered text — the driver no longer has to infer it
+// from prose (cinatra#2274 AC4).
+const failureStep = (failureText.match(/AI setup did not complete \(([a-z-]+)\)/i) ?? [])[1] ?? "";
+// A PACKAGING refusal is `initial-sync` failing with the cinatra#2254 honesty
+// message. It happens BEFORE the probe, so when it fires A4a/A4b both score FAIL
+// for a reason that has nothing to do with what they test.
+const packagingRefusal =
+  failureStep === "initial-sync" || /REFUSED by the packaging gate/i.test(failureText);
 check(
   "A4a",
   "a function-tools instance fails the native-skills probe ACTIONABLY",
   failureVisible && /native-skills-probe/i.test(failureText),
-  failureText.slice(0, 300),
+  `step=${failureStep || "(none)"} :: ${failureText.slice(0, 300)}`,
+);
+// The EXPECTATION in A4a is correct and stays: a `function-tools` instance SHOULD
+// fail the native-skills probe once packaging works, and A5's fix-forward flip is
+// what then exercises the success arm. What was missing is a check that names the
+// step, so a FAIL is DIAGNOSTIC instead of shape-blind. cinatra#2274 fixed the
+// packaging defect (the extension registration writer recorded a bundle-of-ONE for
+// a multi-file disk bundle, which the fail-closed one-hop lint then refused); this
+// asserts the saga got PAST `initial-sync` and reached the probe at all.
+check(
+  "A4a-step",
+  "the refusal is the PROBE, not an earlier packaging refusal at initial-sync",
+  failureVisible && !packagingRefusal,
+  packagingRefusal
+    ? `PACKAGING REFUSAL at step=${failureStep || "initial-sync"} — the saga never reached the native-skills probe :: ${failureText.slice(0, 300)}`
+    : `step=${failureStep || "(none)"}`,
 );
 check(
   "A4b",
   "the performable fix-forward control is rendered",
   (await page.getByTestId("setup-enable-native-mcp").count()) > 0,
+  // Same diagnostic carry: the control is only offered for a probe-mode failure,
+  // so an earlier packaging refusal is why it is absent — say so on the FAIL.
+  packagingRefusal ? `absent because the run refused at step=${failureStep || "initial-sync"}` : `step=${failureStep || "(none)"}`,
 );
 await shot("A3-readiness-failure-function-tools");
 
