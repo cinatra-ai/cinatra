@@ -264,7 +264,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/skill-bundle-store.ts": {
     class: "migratable-request-path",
     justification:
-      "Bundle-aware skill content authority DB primitives (cinatra#2088): the content-addressed blob + revision-file manifest write, the atomic bundle read, and the current-bundle head read. Built as a sync leaf mirroring skill-lifecycle-store.ts's synchronous access pattern so its query BUILDER can be appended to the same synchronous catalog/lifecycle transaction (the reason it cannot be async today); the standalone read/write entry points migrate to async typed access together with the skills subsystem.",
+      "Bundle-aware skill content authority DB primitives (cinatra#2088): the content-addressed blob + revision-file manifest write, the atomic bundle read, and the current-bundle head read, plus the combined head+lifecycle-pointer read the extension-skill registration writer proves its result with (cinatra#2274 — deliberately ONE statement so the two pointers can never be read from a torn view, which two separate sync calls could not guarantee). Built as a sync leaf mirroring skill-lifecycle-store.ts's synchronous access pattern so its query BUILDER can be appended to the same synchronous catalog/lifecycle transaction (the reason it cannot be async today); the standalone read/write entry points migrate to async typed access together with the skills subsystem.",
   },
   "packages/skills/src/llm-matching/skill-matches-store.ts": {
     class: "migratable-request-path",
