@@ -31,9 +31,13 @@ export type InstanceToolPolicyRecord = {
 export type InstanceToolPolicyStatus = "allowed" | "denied";
 
 /** The reason a fallback / fail-closed verdict was reached — the caller uses it
- *  to warn-once / emit an audit event (§10-A3). Undefined on a normal verdict. */
+ *  to warn-once / emit an audit event (§10-A3). Undefined on a normal verdict.
+ *  `absent_policy_default_restricted` (cinatra#2022 S7 PR-δ) replaces the
+ *  earlier `absent_policy_fallback_open` value: the compatibility OPEN window
+ *  is deliberately ended, not extended; keeping the old name would misdescribe
+ *  the current deny-by-default verdict. */
 export type InstanceToolPolicyWarning =
-  | "absent_policy_fallback_open"
+  | "absent_policy_default_restricted"
   | "invalid_policy_deny_all";
 
 export type InstanceToolPolicyDecision = {
@@ -81,21 +85,29 @@ export function isValidInstanceToolPolicyRecord(
  * Evaluate the §10-A3 truth table for a resolved `{serverId, name}` tool ref.
  * Deny precedence is absolute; matching is always on the full pair.
  *
- * | Record state                         | Result                                        |
- * |--------------------------------------|-----------------------------------------------|
- * | absent (compatibility window ONLY)   | OPEN — allow; warn-once per instance           |
- * | `open`                               | allow every tool EXCEPT entries in `deny`      |
- * | `restricted`                         | allow ONLY `allow` minus `deny`; empty ⇒ deny  |
- * | invalid (unknown mode / malformed)   | deny-all (evaluate as restricted+empty) + warn |
+ * | Record state                            | Result                                        |
+ * |------------------------------------------|-----------------------------------------------|
+ * | absent (cinatra#2022 S7 PR-δ default)     | RESTRICTED+empty — deny-all; warn-once/instance|
+ * | `open`                                    | allow every tool EXCEPT entries in `deny`      |
+ * | `restricted`                              | allow ONLY `allow` minus `deny`; empty ⇒ deny  |
+ * | invalid (unknown mode / malformed)        | deny-all (evaluate as restricted+empty) + warn |
+ *
+ * cinatra#2022 S7 PR-δ: the absent-record default FLIPS from OPEN to
+ * RESTRICTED+empty here — this ends the pre-δ compatibility window outright,
+ * with no data migration. A site owner must add an explicit allow entry (via
+ * connector settings) before ANY ability is reachable for an instance with no
+ * persisted policy row, on every surface (chat/in-admin/blog-publish/
+ * freshness) alike, since this evaluator is surface-independent.
  */
 export function evaluateInstanceToolPolicy(
   record: InstanceToolPolicyRecord | null | undefined,
   ref: ToolRef,
 ): InstanceToolPolicyDecision {
-  // Absent → compatibility fallback OPEN (transient; never the migrated steady
-  // state). The caller warns-once per instance (§2.6/§10-A3).
+  // Absent → RESTRICTED+empty (deny-all). Pre-δ this was a compatibility
+  // fallback to OPEN; δ ends that window. The caller
+  // warns-once per instance (§2.6/§10-A3).
   if (record === null || record === undefined) {
-    return { status: "allowed", warn: "absent_policy_fallback_open" };
+    return { status: "denied", warn: "absent_policy_default_restricted" };
   }
 
   // Invalid (unknown mode, malformed entries) → fail-closed deny-all, evaluated

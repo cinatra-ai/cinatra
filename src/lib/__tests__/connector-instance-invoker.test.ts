@@ -234,6 +234,132 @@ describe("invokeConnectorInstanceTool — deny short-circuits (no wire call, sin
   });
 });
 
+// cinatra#2022 S7 PR-δ — pre-merge tests for the chat-widening PR: chat gains
+// reach to the generic WordPress site-tool primitives, so this block proves
+// the per-instance tool-policy floor's new deny-by-default posture holds.
+// Confirmation-hook firing on `chat` and the annotation-floor mechanics are
+// ALREADY proven generically above (the "destructive hook" describe block,
+// e.g. the FLOOR-trigger and `sourceType: "chat"` park-material tests) and in
+// connector-instance-destructive-hook.test.ts's full surface × policy-state
+// matrix — unchanged by δ. This block proves the NEW property δ adds: the
+// per-instance tool-policy floor now denies by default (restricted+empty)
+// regardless of which surface reaches it, closing the gap even when the
+// destructive hook itself would not have fired.
+describe("invokeConnectorInstanceTool — δ chat-widening policy floor (cinatra#2022 S7)", () => {
+  // An existing pre-δ instance with no explicit policy record
+  // produces ZERO mutation access from ANY surface until the site owner adds
+  // an explicit allow entry. The per-instance policy step is surface-
+  // independent by construction (§2.6/§10-A3) — proven here across the surface
+  // vocabulary the destructive hook itself recognizes (chat/agent_run/
+  // public_site_widget/session), standing in for chat/in-admin/blog-publish/
+  // freshness respectively.
+  it("absent policy record denies every surface alike (chat, agent_run, public_site_widget, session)", async () => {
+    const readPolicy = vi.fn(async (): Promise<InstanceToolPolicyRecord | null> => null);
+    for (const sourceType of ["chat", "agent_run", "public_site_widget", "session"] as const) {
+      const { deps, callWireTool } = makeDeps({ readPolicy });
+      await expect(
+        invokeConnectorInstanceTool(
+          { connectorKey: "wordpress", toolName: "ewpa/create-post", args: {}, actor: ACTOR, sourceType },
+          deps,
+        ),
+      ).rejects.toMatchObject({ code: "tool_policy_denied" });
+      expect(callWireTool).not.toHaveBeenCalled();
+    }
+  });
+
+  // A newly-created post-δ instance gets the identical restricted-
+  // empty default via the ORDINARY fallback path — no special-case creation
+  // branch. At the invoker level this means: whether readPolicy returns null
+  // (never touched) or an explicit restricted+empty row (already
+  // first-touch-backstopped), the verdict is the same deny.
+  it("an explicit restricted+empty row (the first-touch-backstopped shape) denies identically to an absent record", async () => {
+    const readPolicy = vi.fn(async (): Promise<InstanceToolPolicyRecord | null> => ({
+      connectorKey: "wordpress",
+      instanceId: "inst-1",
+      mode: "restricted",
+      updatedBy: "system:connector-instance-policy-first-touch",
+      updatedAt: "2026-07-30T00:00:00Z",
+    }));
+    const { deps, callWireTool } = makeDeps({ readPolicy });
+    await expect(
+      invokeConnectorInstanceTool(
+        { connectorKey: "wordpress", toolName: "ewpa/create-post", args: {}, actor: ACTOR, sourceType: "chat" },
+        deps,
+      ),
+    ).rejects.toMatchObject({ code: "tool_policy_denied" });
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+
+  // Deny precedence in the policy store wins over any conflicting allow.
+  it("deny precedence: an ability in BOTH allow and deny is denied", async () => {
+    const readPolicy = vi.fn(async (): Promise<InstanceToolPolicyRecord | null> => ({
+      connectorKey: "wordpress",
+      instanceId: "inst-1",
+      mode: "restricted",
+      allow: [{ serverId: CATALOG_DEFAULT_SERVER_ID, name: "ewpa/create-post" }],
+      deny: [{ serverId: CATALOG_DEFAULT_SERVER_ID, name: "ewpa/create-post" }],
+      updatedBy: "admin",
+      updatedAt: "2026-07-30T00:00:00Z",
+    }));
+    const { deps, callWireTool } = makeDeps({ readPolicy });
+    await expect(
+      invokeConnectorInstanceTool(
+        { connectorKey: "wordpress", toolName: "ewpa/create-post", args: {}, actor: ACTOR, sourceType: "chat" },
+        deps,
+      ),
+    ).rejects.toMatchObject({ code: "tool_policy_denied" });
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+
+  // An Administrator-scoped instance's dangerous tool stays blocked until
+  // explicitly allowed. `ewpa/create-code-snippet` can run arbitrary PHP if
+  // the connection is Administrator-scoped; the per-instance policy floor
+  // denies it by default regardless of what the connected WordPress user's
+  // OWN role permits.
+  it("an Administrator-scoped dangerous ability (ewpa/create-code-snippet) stays blocked absent an explicit allow", async () => {
+    const readPolicy = vi.fn(async (): Promise<InstanceToolPolicyRecord | null> => null);
+    const { deps, callWireTool } = makeDeps({ readPolicy });
+    deps.cache.set(
+      "inst-1",
+      triadSnapshot([{ name: "ewpa/create-code-snippet", rawAnnotations: {} }]),
+    );
+    await expect(
+      invokeConnectorInstanceTool(
+        {
+          connectorKey: "wordpress",
+          toolName: "ewpa/create-code-snippet",
+          args: {},
+          actor: ACTOR,
+          sourceType: "chat",
+        },
+        deps,
+      ),
+    ).rejects.toMatchObject({ code: "tool_policy_denied" });
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+
+  // A misclassified/unknown-annotation tool cannot silently bypass the
+  // confirmation path. Even a tool whose annotations carry NO destructive/
+  // write hints (so the step-3 destructive hook would never fire for it) is
+  // still caught by the step-2 policy floor's deny-by-default — defense in
+  // depth, independent of annotation classification.
+  it("a tool with empty/unclassified annotations is still denied by the policy floor (defense in depth vs. the hook)", async () => {
+    const fire = vi.fn<DestructiveHookFire>(async () => {});
+    const readPolicy = vi.fn(async (): Promise<InstanceToolPolicyRecord | null> => null);
+    const { deps, callWireTool } = makeDeps({ readPolicy, destructiveHook: { enabled: () => true, fire } });
+    deps.cache.set("inst-1", triadSnapshot([{ name: "totally-unclassified-tool", rawAnnotations: {} }]));
+    await expect(
+      invokeConnectorInstanceTool(
+        { connectorKey: "wordpress", toolName: "totally-unclassified-tool", args: {}, actor: ACTOR, sourceType: "chat" },
+        deps,
+      ),
+    ).rejects.toMatchObject({ code: "tool_policy_denied" });
+    // Denied at step 2 — step 3's hook never even runs.
+    expect(fire).not.toHaveBeenCalled();
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+});
+
 describe("invokeConnectorInstanceTool — duplicate-name routing (§3.6)", () => {
   it("ambiguous name across two servers with no serverId → ambiguous_tool", async () => {
     const { deps } = makeDeps();
