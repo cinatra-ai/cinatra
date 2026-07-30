@@ -185,9 +185,18 @@ describe.skipIf(!LIVE)(
         //         derives {id, note} deterministically from each ability's own
         //         numeric suffix, so a misattributed response is caught exactly,
         //         not just "a response came back". ---------------------------
+        // The wire `name` on a REAL mcp-adapter tools/list is the ability id
+        // with its category-namespace "/" sanitized to "-" (MCP tool names
+        // cannot carry a slash) — e.g. ability `scalesmoke/note-get-001` is
+        // advertised as tool `scalesmoke-note-get-001`. Confirmed against the
+        // committed fixturelabs precedent capture (tests/e2e/wp-mcp-gateway/
+        // captures/annotations-e-edge-cases.json: ability
+        // "fixturelabs/note-get-unannotated" -> real captured
+        // `toolName: "fixturelabs-note-get-unannotated"`) — the SAME
+        // adapter/eafm sanitization this fixture's abilities go through.
         const candidateNames = wireScaleTools
           .map((t) => t.name as string)
-          .filter((n) => /^scalesmoke\/note-get-\d+$/.test(n))
+          .filter((n) => /^scalesmoke-note-get-\d+$/.test(n))
           .slice(0, CONCURRENT_SAMPLE_SIZE);
         expect(candidateNames.length).toBe(CONCURRENT_SAMPLE_SIZE);
 

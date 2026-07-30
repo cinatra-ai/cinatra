@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "cinatra#2024 (S9 program acceptance) — item A / design §3 / D2 only: the M1 governed-invoker (invokeConnectorInstanceTool / listConnectorInstanceTools) provider-scale + live proof PR #2189 (S4/#2019's scale-smoke fixture) explicitly deferred to program acceptance. Scoped to this evidence row alone, NOT the full S9 closing report (that is a separate, later item). Follows the S1 (#2016) capture pattern verbatim (schemaVersion + provenance + verdicts[]), with the codex r0 four-value vocabulary (PASS | PENDING_GATE | FAIL | WAIVED/BLOCKED-UPSTREAM) this program's design (§0 D1) adopted for exactly this kind of row.",
+  "description": "cinatra#2024 (S9 program acceptance) — item A / design §3 / D2 only: the M1 governed-invoker (invokeConnectorInstanceTool / listConnectorInstanceTools) provider-scale + live proof PR #2189 (S4/#2019's scale-smoke fixture) explicitly deferred to program acceptance. Scoped to this evidence row alone, NOT the full S9 closing report (that is a separate, later item). Follows the S1 (#2016) capture pattern verbatim (schemaVersion + provenance + verdicts[]), with the four-value vocabulary (PASS | PENDING_GATE | FAIL | WAIVED/BLOCKED-UPSTREAM) this program's design (§0 D1) adopted for exactly this kind of row.",
   "verdicts": [
     {
       "item": "m1-governed-invoker-scale-matrix (synthetic)",
@@ -53,7 +53,7 @@
     "capturedAt": "2026-07-30T11:21:02.000Z",
     "scaleSmokePluginSha256": "1868a6747717d617ad85824539e2f7ab7f819e79a3d58633da139456272b6f27",
     "invokerScaleMatrixTestSha256": "3f8652b5ffba5af9edf17409cb79057a6dd53168eb9c16ff13324e6fc6bb0a83",
-    "invokerLiveScaleSmokeTestSha256": "c6b75677b59023d0845dbfc4c74075cb3ef992935fa1b0f900fcee1ddf54d745",
+    "invokerLiveScaleSmokeTestSha256": "6a19ab7bada0ba7070974f71d046e3f9a2818a87475b0c7f2ce6a91fbad28720",
     "invokerSourceSha256": "362b0a2e371ed69b27d3d9e4c42998079ecbe04ee8b37ae87aa1549b58f2a434",
     "hashingConvention": "sha256OfFile / sha256OfTree from tests/e2e/wp-mcp-gateway/provenance.mjs (same algorithm the S1 capture set uses) — computed fresh in this repo tree, not copied from an unrelated capture"
   }
