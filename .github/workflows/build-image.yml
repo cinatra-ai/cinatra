@@ -131,9 +131,10 @@ jobs:
         run: node --test scripts/audit/__tests__/actions-pinned-gate.test.mjs
 
   # PR gate for typecheck + unit tests.
-  # `pnpm test` excludes integration tests via vitest.config.ts; they run in
-  # the integration test step below when CINATRA_TEST_DB_URL is provided.
-  # Without that secret/service the integration step is skipped.
+  # `pnpm test` excludes integration tests via vitest.config.ts; the
+  # packages/agents integration tier runs in the dedicated
+  # `agents-integration-db` job below (Postgres + Redis service containers),
+  # NOT as a step here — see that job's header for why (cinatra#2226).
   test:
     name: Typecheck and unit tests
     # This job is the SOLE full TypeScript gate now that the CI `next build`s skip
@@ -189,18 +190,9 @@ jobs:
         run: pnpm typecheck
 
       # Default vitest run; vitest.config.ts excludes *.integration.test.ts
-      # from this run.
+      # from this run. The integration tier has its own job below.
       - name: Unit tests (packages/agents)
         run: cd packages/agents && pnpm test
-
-      # Integration tests are gated on a CI-provided test DB URL. When the
-      # secret is empty the step is skipped; provide CINATRA_TEST_DB_URL or
-      # a Postgres service container to enable this step.
-      - name: Integration tests (packages/agents)
-        if: env.CINATRA_TEST_DB_URL != ''
-        env:
-          CINATRA_TEST_DB_URL: ${{ secrets.CINATRA_TEST_DB_URL }}
-        run: cd packages/agents && pnpm test:integration
 
   # Full packages/skills unit suite (#1359). Runs in its OWN top-level job —
   # NOT appended to `test` — for the same reason as rbac-authz-unit / auth-
@@ -240,6 +232,49 @@ jobs:
 
       - name: Skills unit tests (full packages/skills suite)
         run: cd packages/skills && pnpm test
+
+  # Full packages/a2a unit suite (cinatra#2226). Byte-for-byte the skills-unit
+  # shape above, and for the identical reason: packages/a2a is absent from the
+  # root `vitest.config.ts` include set AND from every workflow, so its 28 files
+  # / 193 tests passed locally and ran NOWHERE in CI. Anything pinned only there
+  # was unpinned as a merge gate — which is why the #2202 fix had to add a
+  # duplicate structural pin over in packages/agents just to get CI coverage.
+  # This job retires that workaround's reason to exist.
+  #
+  # REQUIRED STRUCTURALLY, not via branch protection: the `build` job `needs` it
+  # and its "Guard prerequisite gates" step hard-fails the
+  # (branch-protection-required) `build` if this job did not succeed — the exact
+  # mechanism behind `test` / `skills-unit`, so NO branch-protection contexts
+  # change is needed and this job's own context stays non-required.
+  #
+  # Self-contained: packages/a2a/vitest.config.ts stubs @cinatra-ai/agents and
+  # @cinatra-ai/llm and resolves @a2a-js/sdk from its own node_modules, so a bare
+  # `pnpm install --frozen-lockfile` suffices — no companion-extension clone, no
+  # DB, no Redis. Measured suite runtime: ~2s (the job is dominated by
+  # checkout+install, ~1-2 min).
+  a2a-unit:
+    name: A2A protocol unit tests
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: A2A unit tests (full packages/a2a suite)
+        run: cd packages/a2a && pnpm test
 
   # RBAC authz unit tests — runs the whole `src/lib/authz` suite (20 files /
   # 160 tests), including the resolver matrix used by the e2e job as the
@@ -597,6 +632,241 @@ jobs:
       - name: Archive-race adversarial acceptance tests — not yet landed (cinatra#1943)
         if: ${{ hashFiles('src/lib/__tests__/integration/org-write-archive-race.integration.test.ts') == '' }}
         run: echo "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts not present yet (cinatra#2207 not merged) — reporting this CI-wiring step as a deliberate green no-op stub until it lands; see cinatra#1943."
+
+  # packages/agents INTEGRATION tier (cinatra#2226). Replaces the dead step that
+  # used to live at the end of the `test` job:
+  #
+  #     - name: Integration tests (packages/agents)
+  #       if: env.CINATRA_TEST_DB_URL != ''
+  #       env:
+  #         CINATRA_TEST_DB_URL: <the repo secret of the same name>
+  #
+  # (That last line is PARAPHRASED on purpose. secrets-required-gate scans this
+  # file for `secrets.<NAME>` tokens WITHOUT skipping comments, so writing the
+  # real `${{ secrets.… }}` expression here — even quoted inside a comment —
+  # makes the gate believe the workflow still consumes a secret that
+  # .github/secrets-required.txt has retired, and it fails CLOSED. Do not
+  # "restore" the literal.)
+  #
+  # A step-level `if:` is evaluated BEFORE that step's own `env:` block is
+  # applied, so `env.CINATRA_TEST_DB_URL` was always the empty string and the
+  # tier skipped on EVERY run since the step was written — including any run
+  # where the secret WAS populated. The fix is the repo's existing working
+  # pattern for a DB-backed suite (`extension-lifecycle-db-tests`, directly
+  # above): a dedicated job with SERVICE CONTAINERS and JOB-LEVEL `env`, which
+  # every step sees unconditionally, so there is no guard left to misfire.
+  #
+  # THE GUARD WAS ONLY THE OUTER LAYER. Even with the URL delivered, the tier
+  # still self-skipped: `packages/agents/vitest.integration.config.ts` forwards
+  # CINATRA_TEST_DB_URL → SUPABASE_DB_URL, but ESM hoists its
+  # `import baseConfig from "./vitest.config"` ABOVE that assignment, so the base
+  # config captured its `postgres://unused:unused@localhost:5432/unused`
+  # placeholder and vitest injected THAT into every worker. Measured on this
+  # branch before the config fix: 21 of 277 tests ran (22 of 31 files self-skipped
+  # on the placeholder, the rest hit ECONNREFUSED :5432). After the fix, with
+  # ONLY CINATRA_TEST_DB_URL set: 0 skipped, all 31 files execute. Both halves
+  # were required to make this job non-vacuous.
+  #
+  # PROVISIONING. The suites expect the baseline a dev checkout gets from
+  # `cinatra setup branch`; a bare `vitest run` boots no app, so nothing would
+  # create it. Two steps do it explicitly, in production boot order: the Better
+  # Auth `public` tables first (the store DDL FKs into them), then the canonical
+  # store bootstrap DDL. Both scripts are idempotent and fail closed.
+  #
+  # NOT a `build` prerequisite — deliberately, and consistent with the sibling
+  # `extension-lifecycle-db-tests` job, which is likewise standalone: this is a
+  # NEW check context, kept NON-REQUIRED. No branch-protection change is made or
+  # implied by this PR.
+  #
+  # KNOWN-RED CARVE-OUT (`--exclude` below). With a real DB the tier runs 31
+  # files / 277 tests and 44 of them fail — pre-existing rot in 8 files that no
+  # CI job has ever executed, NOT a consequence of this wiring, and each
+  # reproducible in isolation on a clean DB:
+  #   * trigger-handlers / trigger-gate / trigger-schedule — the shared
+  #     `ensureParentRun` helper inserts an `agent_runs` row whose `templateId`
+  #     is a fresh `tmpl-<uuid>` that is never inserted into `agent_templates`,
+  #     so every case violates `agent_runs_template_id_fkey` (an FK added after
+  #     these suites were written; the sibling trigger-store suite, which DOES
+  #     create the template, passes).
+  #   * extension-handler — `vi.mock("@cinatra-ai/registries")` factory is
+  #     missing `vendorScopeOfPackage`, which the source now imports.
+  #   * trigger-gate-integration — `vi.mock("../wayflow-url")` factory is missing
+  #     `describeWayflowDispatchError` + `WAYFLOW_UNDICI_TIMEOUT_MS`.
+  #   * lifecycle-repair-dispatch (1/7) + lifecycle-repair-successor-batch (5/7)
+  #     — assertion drift against the org-write-kernel refusal path.
+  #   * store-auth-policy (1/22) — one AuthzError-shape assertion drift.
+  # Repairing them is test-health work with per-file causes, out of scope for a
+  # CI-wiring PR; carving them out is what lets the OTHER 23 files gate for real
+  # instead of the whole tier staying invisible. Same convention as
+  # `rbac-authz-unit`'s deliberate `--exclude` and vitest.config.ts's documented
+  # carve-outs: every entry names its reason, and shrinking this list is a
+  # follow-up, not a silent drift.
+  #
+  # The carve-out does NOT hide the debt: step (2) below runs the WHOLE tier
+  # (all 31 files, no exclude) informationally on every run, so the 8 red files
+  # are named in the log each time — a green job here can never mean "the tier
+  # is fine", only "the gated set did not regress".
+  #
+  # RUNTIME ADDED TO CI (measured in CI on this branch, plus locally on a fresh
+  # postgres:18 + redis:8): gated step ~52 s, informational whole-tier step ~68 s,
+  # two DDL provisioning passes ~2 s each in CI. The whole job measured 3.0 min in
+  # CI before the serialisation flag and lands around 4-5 min with it — compare the
+  # sibling `extension-lifecycle-db-tests` DB job at 1.8 min. It is a NEW PARALLEL
+  # job and deliberately NOT a `build` prerequisite, so it adds nothing to the
+  # critical path of the required gate. The sibling `a2a-unit` job measured 0.5 min
+  # in CI (its suite is ~2 s; the job is checkout+install-dominated).
+  agents-integration-db:
+    # The name says GATED SET, not "the integration tier", on purpose: a green
+    # result here means "the 23-file gated set did not regress", never "all 31
+    # files pass". The full-tier report is the informational step (2).
+    name: Agents integration — gated set (+ full-tier report)
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:8
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    # JOB-LEVEL env — the whole point of this job's shape. Every step sees these
+    # unconditionally, so no `if:` can read an unset value. SUPABASE_DB_URL is
+    # what the provisioning scripts read; CINATRA_TEST_DB_URL is what
+    # vitest.integration.config.ts reads (and hard-throws on if absent, so a
+    # broken wiring change here fails loudly instead of skipping quietly).
+    env:
+      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      CINATRA_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      SUPABASE_SCHEMA: cinatra
+      REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Provision Better Auth tables (public schema)
+        # FIRST — the store DDL below carries FKs to public."user" /
+        # "organization" / "team" / "member". Same step, same reason, as the
+        # extension-lifecycle-db-tests and e2e jobs.
+        run: node scripts/apply-public-schema.mjs
+
+      - name: Provision the cinatra store schema (bootstrap DDL)
+        # The baseline `cinatra setup branch` gives a dev checkout. Needs tsx —
+        # the canonical builder is TypeScript and imports `@/…`.
+        run: node --import tsx scripts/ci/apply-store-schema.mjs
+
+      - name: Provision a second store schema for the informational whole-tier pass
+        # The two suite steps below get their OWN schema each. The suites write
+        # real rows and several self-skip when a fixture they expect to create
+        # already exists, so re-running the tier against a schema a previous
+        # step already populated turns 7 real assertions into silent skips —
+        # the exact vacuity class this job exists to remove. One schema per
+        # pass keeps BOTH runs pristine and their numbers comparable.
+        env:
+          SUPABASE_SCHEMA: cinatra_full_tier
+        run: node --import tsx scripts/ci/apply-store-schema.mjs
+
+      # (1) THE BLOCKING SIGNAL — the gated set. `--exclude` entries are the
+      # documented known-red carve-out in this job's header; do not add one
+      # without a reason there. A regression in any of these 23 files reds this
+      # job, which is the coverage this issue exists to create.
+      #
+      # `--no-file-parallelism` IS LOAD-BEARING, not a performance knob. These
+      # suites were written for a per-developer schema, and several of them apply
+      # the store bootstrap DDL in their own `beforeAll`. Run concurrently against
+      # ONE schema, two forks take `AccessExclusiveLock` on the same shared
+      # `public` objects and Postgres kills one with `40P01 deadlock detected` —
+      # observed exactly once in CI on this branch (run 30507842403,
+      # lifecycle-interceptions-s0), which would have made this gate a flaky one.
+      # Serialising the FILES removes the concurrency that causes it. Per-file
+      # process isolation is UNAFFECTED: the base config's `pool: "forks"` +
+      # vitest's default `isolate: true` still give every file a fresh child
+      # process (the module-cache pollution that config warns about needs a
+      # SHARED fork, which this flag does not create) — verified by three green
+      # serialised runs, and by the whole-tier step below reproducing its recorded
+      # failure baseline exactly. Cost is small: 52 s serialised, and the CI
+      # parallel run measured 52 s too, since the DB is the bottleneck either way.
+      - name: Agents integration tests — gated set (packages/agents)
+        working-directory: packages/agents
+        run: >-
+          pnpm exec vitest run
+          --config vitest.integration.config.ts
+          --no-coverage
+          --no-file-parallelism
+          --exclude '**/extension-handler.integration.test.ts'
+          --exclude '**/lifecycle-repair-dispatch.integration.test.ts'
+          --exclude '**/lifecycle-repair-successor-batch.integration.test.ts'
+          --exclude '**/store-auth-policy.integration.test.ts'
+          --exclude '**/trigger-gate.integration.test.ts'
+          --exclude '**/trigger-gate-integration.integration.test.ts'
+          --exclude '**/trigger-handlers.integration.test.ts'
+          --exclude '**/trigger-schedule.integration.test.ts'
+
+      # (2) THE WHOLE TIER, INFORMATIONAL — every one of the 31 files, including
+      # the 8 carved out above, with NO filter and NO exclude. Never fails this
+      # job (same convention as the archive-acceptance-gate `--strict` step
+      # below). Two reasons it is here rather than omitted:
+      #   - a green step (1) alone would advertise "the integration tier runs"
+      #     while silently dropping 89 tests — precisely the vacuity class this
+      #     issue is about, and the one scripts/audit/ci-pinned-tests-exist.mjs
+      #     exists to prevent elsewhere. This step keeps the debt VISIBLE in the
+      #     log of every run, with the exact failing files named, so shrinking
+      #     the carve-out cannot be quietly forgotten;
+      #   - it is the honest artifact for the issue's acceptance criterion "a CI
+      #     run's log shows the integration tier executing, not skipping": all
+      #     31 files / 277 tests, 0 skipped.
+      # Runs against its OWN schema (see the provisioning step above) so step (1)
+      # cannot have pre-populated fixtures out from under it. `!cancelled()` (not
+      # `always()`) so it still reports after a red step (1) but honours a
+      # workflow cancellation.
+      #
+      # The warning below deliberately does NOT assert a cause: a non-zero exit
+      # here can be the known-red assertion failures, but it can equally be a
+      # vitest crash, an OOM, a config error, or MORE failures than the recorded
+      # baseline. It reports the observed exit code and points at the baseline for
+      # comparison rather than explaining the failure away.
+      - name: Agents integration tests — WHOLE tier incl. known-red files (informational; never blocking)
+        if: ${{ !cancelled() }}
+        working-directory: packages/agents
+        env:
+          SUPABASE_SCHEMA: cinatra_full_tier
+        run: |
+          set +e
+          pnpm exec vitest run --config vitest.integration.config.ts --no-coverage --no-file-parallelism
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::Whole-tier packages/agents integration run exited $status. Recorded baseline for this branch (cinatra#2226): 31 files / 277 tests, 0 skipped, 8 files / 44 tests failing — pre-existing test-health debt named in this job's header. COMPARE the summary above against that baseline: a WORSE result (more failing files/tests, a different file, a crash or timeout rather than assertion failures) is a real finding and should be investigated, not assumed pre-existing. This step never fails the job; the gated step above is the blocking signal."
+          fi
+          exit 0
 
   # Archive-acceptance coverage-completeness gate (cinatra#1943 Decision 1 /
   # the "P1-CI" wiring PR). Wires scripts/audit/archive-acceptance-gate.mjs
@@ -1981,8 +2251,11 @@ jobs:
     # `needs: detect` is added so a docs-only PR skips the build entirely (the
     # `skip` gate below has no value without that edge); the publish-after-
     # test dependency is preserved.
-    needs: [detect, test, skills-unit]
-    # Run even when a prerequisite (`detect`/`test`/`skills-unit`) FAILED, so the guard step
+    # `a2a-unit` (cinatra#2226) joins for the same reason `skills-unit` did: it is
+    # the ONLY CI runner for packages/a2a, and coupling it here is what makes it a
+    # merge gate WITHOUT adding a branch-protection context.
+    needs: [detect, test, skills-unit, a2a-unit]
+    # Run even when a prerequisite (`detect`/`test`/`skills-unit`/`a2a-unit`) FAILED, so the guard step
     # below reports a definitive job FAILURE instead of a SKIP. GitHub can count a
     # skipped required check as successful, so a failed `test` merely *skipping*
     # `build` would NOT block a merge gated on the build status. The guard closes
@@ -2011,10 +2284,10 @@ jobs:
       # Hard-fail the build (definitive RED, never a non-failing "skip") when a
       # prerequisite gate did not pass — the type-safety enforcement for the
       # CI-only in-build-tsc skip (see the `test` job). No-ops on the success path.
-      - name: Guard prerequisite gates (detect + test + skills-unit)
-        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' }}
+      - name: Guard prerequisite gates (detect + test + skills-unit + a2a-unit)
+        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' || needs['a2a-unit'].result != 'success' }}
         run: |
-          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }}. Refusing to build the image."
+          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }} a2a-unit=${{ needs['a2a-unit'].result }}. Refusing to build the image."
           exit 1
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
