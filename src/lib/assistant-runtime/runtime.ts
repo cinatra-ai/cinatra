@@ -502,19 +502,6 @@ export function buildAssistantInjectionPorts(
 }
 
 /**
- * Commit the turn's durable skill-delivery record (cinatra#2240).
- *
- * AWAITED, never fire-and-forget: a detached promise can lose the write when
- * the process/lambda tears down at the end of the turn, which would reproduce
- * exactly the "delivered but unrecorded" gap this closes.
- *
- * Best-effort BUT LOUD: telemetry persistence must not fail a user's turn (the
- * same posture as the agent-run ledger in `/api/llm-bridge`), so a failure is
- * swallowed — but it is reported as a structured `console.error` naming the
- * turn and run, because a silently-lost record makes the acceptance
- * ("leaves a durable row") unverifiable in operation.
- */
-/**
  * A delivery adapter is an EXTENSION surface, so it can report a
  * `deliveryMode` this build has no vehicle name for. The record stays truthful
  * (`delivered`, vehicle `unknown`, raw mode preserved) rather than fabricating
@@ -535,6 +522,19 @@ function warnOnUnclassifiedVehicles(
   );
 }
 
+/**
+ * Commit the turn's durable skill-delivery record (cinatra#2240).
+ *
+ * AWAITED, never fire-and-forget: a detached promise can lose the write when
+ * the process/lambda tears down at the end of the turn, which would reproduce
+ * exactly the "delivered but unrecorded" gap this closes.
+ *
+ * Best-effort BUT LOUD: telemetry persistence must not fail a user's turn (the
+ * same posture as the agent-run ledger in `/api/llm-bridge`), so a failure is
+ * swallowed — but it is reported as a structured `console.error` naming the
+ * turn and run, because a silently-lost record makes the acceptance
+ * ("leaves a durable row") unverifiable in operation.
+ */
 async function persistTurnSkillDelivery(
   turnIdentity: { turnId: string; runId: string },
   rows: readonly TurnSkillDeliveryRow[],
@@ -798,6 +798,36 @@ export async function runAssistantTurn(
   // is the one forbidden outcome, so the gate is retired and the seam decides.
   let skillTools: LlmTool[] = [];
   const catalogSkillIds = injectedCatalogSkillIds(injectedSkills);
+  // cinatra#2240 — the record's DENOMINATOR is every member the injection
+  // contract RESOLVED, not the catalog subset the native vehicle can carry.
+  // `injectedCatalogSkillIds` filters to `deliveryMode === "catalog"`, so a
+  // non-catalog member (the personal delta, always `inline`) is absent from it
+  // — and this runtime never merges a non-catalog member's body into the system
+  // context on a native provider. Keying the record on the catalog subset would
+  // therefore leave such a member RESOLVED, UNDELIVERED and UNRECORDED, which is
+  // precisely the shape finding F8 reported. It is recorded as a DROP naming the
+  // structural reason instead.
+  //
+  // Latent rather than live today: `buildAssistantInjectionPorts` supplies no
+  // `resolvePersonalDelta` port, so the assistant surface currently resolves
+  // catalog members only and this set equals `catalogSkillIds`. The point is
+  // that wiring the delta later cannot silently reintroduce an unrecorded
+  // member.
+  const resolvedMembers = injectedSkillMembers(injectedSkills);
+  const resolvedSkillIds = resolvedMembers.map((m) => m.skillId);
+  const nonCatalogDrops = resolvedMembers
+    .filter((m) => m.deliveryMode !== "catalog")
+    .map((m) => ({
+      skillId: m.skillId,
+      reason:
+        `resolved as a "${m.deliveryMode}" member (rank "${m.rank}") — the ` +
+        `${adapter.provider} native vehicle delivers catalog members only, so it ` +
+        "never reached the model",
+    }));
+  const nativeContractDrops = [
+    ...injectionDrops.map((d) => ({ skillId: d.skillId, reason: d.reason })),
+    ...nonCatalogDrops,
+  ];
   if (catalogSkillIds.length > 0) {
     const delivery = await selectSkillDeliveryAdapter(adapter.provider).deliver({
       skillIds: catalogSkillIds,
@@ -812,10 +842,10 @@ export async function runAssistantTurn(
     // resolved-but-undelivered skill with its reason.
     turnSkillDeliveryRows = buildTurnSkillDeliveryRows({
       provider: adapter.provider,
-      requestedSkillIds: catalogSkillIds,
+      requestedSkillIds: resolvedSkillIds,
       exposure: delivery.exposure ?? [],
       tools: delivery.tools,
-      contractDrops: injectionDrops.map((d) => ({ skillId: d.skillId, reason: d.reason })),
+      contractDrops: nativeContractDrops,
       adapterDroppedSkillIds: delivery.droppedSkillIds,
       adapterSelectionReason: delivery.selectionReason,
     });
@@ -847,12 +877,9 @@ export async function runAssistantTurn(
         args.turnIdentity,
         buildTurnSkillDeliveryRows({
           provider: adapter.provider,
-          requestedSkillIds: catalogSkillIds,
+          requestedSkillIds: resolvedSkillIds,
           exposure: [],
-          contractDrops: injectionDrops.map((d) => ({
-            skillId: d.skillId,
-            reason: d.reason,
-          })),
+          contractDrops: nativeContractDrops,
           adapterDroppedSkillIds: delivery.droppedSkillIds,
           adapterSelectionReason: delivery.selectionReason,
           refusalReason,
@@ -867,6 +894,21 @@ export async function runAssistantTurn(
       });
       return;
     }
+  } else if (nativeContractDrops.length > 0 || resolvedSkillIds.length > 0) {
+    // NO catalog member survived to the native vehicle, but the injection
+    // contract DID resolve skills for this turn — non-catalog members, or
+    // members it dropped at the cap. No delivery adapter runs, so nothing
+    // reaches the model; without this branch that turn records NOTHING and the
+    // loss is invisible, which is the finding-F8 shape the record exists to
+    // close. It is a set of DROPS, never a refusal: the loud refusal is
+    // specifically "the adapter ran and produced no vehicle", which did not
+    // happen here.
+    turnSkillDeliveryRows = buildTurnSkillDeliveryRows({
+      provider: adapter.provider,
+      requestedSkillIds: resolvedSkillIds,
+      exposure: [],
+      contractDrops: nativeContractDrops,
+    });
   }
   // Dead-ingress guard (#1699): a configured-but-unreachable public MCP URL
   // is WORSE than a missing one — OpenAI silently omits the hosted MCP server
@@ -1140,17 +1182,40 @@ export async function runAssistantTurn(
   //     local work between that callback and the SDK call (the connectors write
   //     an operator-enabled request log there), and a failure in it would leave
   //     `delivered` rows for a request that never left the process.
-  //   providerResponded — any signal that can only exist once the provider is
-  //     genuinely engaged: a text delta, a tool call/result, a step end,
-  //     citations, or an adapter-reported error. A completed `stream()` counts
-  //     too, and is the ordinary case.
+  //   providerResponded — PROVIDER-PRODUCED output: a text delta, a tool
+  //     call/result, citations, or a completed step. None of those can exist
+  //     unless the request reached the provider and it answered.
   //
-  // Together they cover the run an operator most needs recorded — a request the
-  // provider REJECTED (the issue-#47 400s that motivated #2094 F11) — while
-  // excluding every failure that happened before egress.
+  // TWO THINGS THAT LOOK LIKE PROOF AND ARE NOT — both verified against the
+  // shipped adapters (openai-connector `openai-adapter.ts`, anthropic-connector
+  // `anthropic-adapter.ts`, gemini-connector `gemini-adapter.ts`):
+  //
+  //   `onError` is NOT egress. Every shipped adapter routes its stream-iteration
+  //     failure through `input.onError(...)` — and a DNS/ECONNREFUSED/TLS
+  //     failure raises inside exactly that iteration, BEFORE any byte reaches
+  //     the provider. Counting `onError` would stamp permanent `delivered` rows
+  //     on the single most common broken-configuration failure, which is
+  //     precisely when an operator reads this record.
+  //   A RESOLVED `stream()` is NOT egress either. All three adapters call
+  //     `onError` and then `break` their step loop, so `adapter.stream()`
+  //     RESOLVES NORMALLY after a connection failure. "The stream completed" is
+  //     therefore true of a turn that never left the process, and cannot gate
+  //     the write.
+  //
+  //   `onStepEnd` IS egress: every adapter fires it only AFTER the step's stream
+  //     was consumed and its final response read — every error path `break`s
+  //     before reaching it — so a completed step is provider-produced.
+  //
+  // KNOWN, DELIBERATE UNDER-REPORT: a provider that REJECTS the request outright
+  // (the issue-#47 400s that motivated #2094 F11) produces no output, so its
+  // turn records nothing. Recording it would require an adapter signal that
+  // separates "the request was sent and refused" from "the request never went
+  // out", and the delivery ABI does not expose one. Under-reporting is the
+  // correct side of that trade: an absent record reads as "not auditable" and is
+  // logged loudly, while a false one is indistinguishable from the truth and,
+  // because the write is an idempotent insert, can never be repaired.
   let providerStepStarted = false;
   let providerResponded = false;
-  let streamCompleted = false;
 
   try {
     await stream({
@@ -1268,9 +1333,11 @@ export async function runAssistantTurn(
         send("citations", { citations });
       },
       onError: (error) => {
-        // cinatra#2240 — provider engagement: this can only fire once the
-        // request carrying these skills actually reached the provider.
-        providerResponded = true;
+        // cinatra#2240 — deliberately NOT a dispatch signal. Every shipped
+        // adapter reports a stream-iteration failure here, and a DNS/connection
+        // failure raises inside that same iteration before anything reaches the
+        // provider. See the dispatch-boundary note above the try.
+        //
         // `error` is a TERMINAL sink frame: the AG-UI adapter ignores every
         // event after the first terminal. An adapter that reports through this
         // callback and then RESOLVES would therefore have its marker dropped
@@ -1288,8 +1355,6 @@ export async function runAssistantTurn(
     // only reachable status while the plane is dark) emits nothing.
     markUnverifiedExecutionClaim();
 
-    // cinatra#2240 — `stream()` returned: the provider phase ran to completion.
-    streamCompleted = true;
     send("done", {});
   } catch (error) {
     // Same verdict before the terminal error frame: the partial text is
@@ -1300,13 +1365,12 @@ export async function runAssistantTurn(
     send("error", { message });
   } finally {
     // Commit ONLY when a provider request demonstrably carried these skills: a
-    // step began AND the provider either answered or the whole stream ran to
-    // completion. Both the success path and the provider-REJECTED path qualify
-    // (a rejected request still delivered them, and that is exactly the run an
-    // operator needs to audit). Anything that failed before egress — adapter
-    // resolution, MCP/execution injection, attachment resolution, or an
-    // adapter's own pre-request work — records NOTHING.
-    if (providerStepStarted && (streamCompleted || providerResponded)) {
+    // step began AND the provider PRODUCED something. Anything that failed
+    // before egress — adapter resolution, MCP/execution injection, attachment
+    // resolution, an adapter's own pre-request work, or a connection that never
+    // opened — records NOTHING, including the cases where the adapter reports
+    // the failure through `onError` and then resolves normally.
+    if (providerStepStarted && providerResponded) {
       await persistTurnSkillDelivery(args.turnIdentity, turnSkillDeliveryRows);
     }
   }

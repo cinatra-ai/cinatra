@@ -71,6 +71,136 @@ describe("an adapter-reported mode this build cannot classify FAILS HONEST", () 
   });
 });
 
+describe("a MALFORMED adapter exposure entry cannot corrupt the whole record", () => {
+  // The record is written as ONE statement, so a row that violates the table's
+  // mode biconditional ((outcome='delivered') = (delivery_mode IS NOT NULL))
+  // does not just lose itself — the constraint error loses EVERY row for the
+  // turn. A delivery adapter is an EXTENSION surface, so a nullish or blank
+  // `deliveryMode` is reachable despite the `string` type.
+  it.each([
+    ["undefined", undefined],
+    ["null", null],
+    ["a blank string", ""],
+    ["whitespace", "   "],
+  ])("keeps the row REPRESENTABLE when the adapter reports %s as the mode", (_label, mode) => {
+    const rows = buildTurnSkillDeliveryRows({
+      provider: "openai",
+      requestedSkillIds: ["@cinatra-ai/a", "@cinatra-ai/b"],
+      exposure: [
+        { skillId: "@cinatra-ai/a", deliveryMode: mode as never, invocationAttributable: true },
+        { skillId: "@cinatra-ai/b", deliveryMode: "openai_shell", invocationAttributable: true },
+      ],
+    });
+
+    const malformed = rowFor(rows, "@cinatra-ai/a");
+    expect(malformed).toMatchObject({
+      outcome: "delivered",
+      vehicle: "unknown",
+      deliveryMode: "unknown",
+      nonDeliveryReason: null,
+    });
+    // The biconditionals hold for EVERY row, so the single statement survives
+    // and the healthy sibling row is not collateral damage.
+    for (const row of rows) {
+      const delivered = row.outcome === "delivered";
+      expect(row.vehicle !== null).toBe(delivered);
+      expect(row.deliveryMode !== null).toBe(delivered);
+      expect(row.nonDeliveryReason === null).toBe(delivered);
+    }
+    expect(rowFor(rows, "@cinatra-ai/b").vehicle).toBe("tool-mount");
+  });
+
+  it("drops an UNNAMED exposure entry rather than letting it abort the whole record", () => {
+    // `skill_id` is `text NOT NULL` and half the primary key, and the record is
+    // ONE statement — so a single nullish id would take every OTHER skill's row
+    // down with it. The named skills must survive.
+    const rows = buildTurnSkillDeliveryRows({
+      provider: "openai",
+      requestedSkillIds: ["@cinatra-ai/a"],
+      exposure: [
+        { skillId: null as never, deliveryMode: "openai_shell", invocationAttributable: true },
+        { skillId: "   " as never, deliveryMode: "openai_shell", invocationAttributable: true },
+        { skillId: "@cinatra-ai/a", deliveryMode: "openai_shell", invocationAttributable: true },
+      ],
+    });
+
+    expect(rows.map((r) => r.skillId)).toEqual(["@cinatra-ai/a"]);
+    expect(rows[0].outcome).toBe("delivered");
+    for (const row of rows) expect(row.skillId.trim()).not.toBe("");
+  });
+
+  it("drops unnamed ids from every OTHER channel too", () => {
+    const rows = buildTurnSkillDeliveryRows({
+      provider: "openai",
+      requestedSkillIds: ["@cinatra-ai/a", "" as never, null as never],
+      exposure: [],
+      contractDrops: [
+        { skillId: "", reason: "blank" },
+        { skillId: null as never, reason: "nullish" },
+      ],
+      adapterDroppedSkillIds: ["", null as never],
+    });
+
+    expect(rows.map((r) => r.skillId)).toEqual(["@cinatra-ai/a"]);
+  });
+
+  it("normalises a non-boolean invocationAttributable to null rather than undefined", () => {
+    const rows = buildTurnSkillDeliveryRows({
+      provider: "openai",
+      requestedSkillIds: ["@cinatra-ai/a"],
+      exposure: [
+        {
+          skillId: "@cinatra-ai/a",
+          deliveryMode: "openai_shell",
+          invocationAttributable: undefined as never,
+        },
+      ],
+    });
+    expect(rows[0].invocationAttributable).toBeNull();
+  });
+});
+
+describe("a drop channel that names a skill WITHOUT a reason still gets a row", () => {
+  // The ids a channel dropped and the reasons it gave are DIFFERENT sets. Only
+  // reasoned drops land in the reason map, so sweeping the map instead of the
+  // id set would lose a blank-reason drop entirely — the finding-F8 shape.
+  it("records it as a drop with the synthesized reason, even when the resolved set never named it", () => {
+    const rows = buildTurnSkillDeliveryRows({
+      provider: "openai",
+      requestedSkillIds: ["@cinatra-ai/kept"],
+      exposure: [
+        { skillId: "@cinatra-ai/kept", deliveryMode: "openai_shell", invocationAttributable: true },
+      ],
+      // Named by the channel, blank reason, and NOT in the resolved set.
+      contractDrops: [{ skillId: "@cinatra-ai/silent", reason: "" }],
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rowFor(rows, "@cinatra-ai/silent")).toMatchObject({
+      outcome: "dropped",
+      vehicle: null,
+      deliveryMode: null,
+    });
+    expect(rowFor(rows, "@cinatra-ai/silent").nonDeliveryReason).toBeTruthy();
+  });
+
+  it("under a REFUSAL it stays a DROP — a drop is never relabelled 'refused'", () => {
+    // Skipping the refusal only for skills with a REASON would mislabel this
+    // one, misattributing a cap loss to the no-vehicle refusal.
+    const rows = buildTurnSkillDeliveryRows({
+      provider: "openai",
+      requestedSkillIds: ["@cinatra-ai/kept", "@cinatra-ai/blank"],
+      exposure: [],
+      contractDrops: [{ skillId: "@cinatra-ai/blank", reason: "" }],
+      refusalReason: "no vehicle",
+    });
+
+    expect(rowFor(rows, "@cinatra-ai/kept").outcome).toBe("refused");
+    expect(rowFor(rows, "@cinatra-ai/blank").outcome).toBe("dropped");
+    expect(rowFor(rows, "@cinatra-ai/blank").nonDeliveryReason).toBeTruthy();
+  });
+});
+
 describe("a delivered skill OUTSIDE the resolved set is still recorded", () => {
   it("records an exposure the adapter reported but the turn never requested", () => {
     // Losing it would hide a real delivery; recording it is what an audit needs.

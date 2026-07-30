@@ -2,8 +2,10 @@
 //
 // Pins the persistence contract the acceptance rests on, through the store's
 // INJECTED query seam (no database needed):
-//   - one statement per turn carrying every row, so a turn's record is written
-//     atomically rather than row-by-row;
+//   - ONE statement per turn carrying every row, so a turn's record is written
+//     atomically rather than row-by-row — for every record size the injection
+//     contract's cap can produce, and in fact for anything under Postgres's
+//     65,535 bind-parameter ceiling;
 //   - `ON CONFLICT (turn_id, skill_id) DO NOTHING` — the NO-DOUBLE-WRITE
 //     property. A delivery fact is an audit fact: a repeat write must never
 //     REWRITE the first one (that would launder an accidental second execution);
@@ -110,6 +112,49 @@ describe("recordTurnSkillDelivery", () => {
     const { query } = recorder();
     expect(await recordTurnSkillDelivery({ turnId: "t1", rows: [] }, { query })).toBe(0);
     expect(query).not.toHaveBeenCalled();
+  });
+
+  it("keeps a record far beyond the injection cap in ONE statement", async () => {
+    // The cap is 8; this is 500. Everything a shipped port can produce stays a
+    // single atomic statement — the chunk below must never fragment a realistic
+    // record.
+    const rows = Array.from({ length: 500 }, (_, i) => ({
+      ...DELIVERED,
+      skillId: `@cinatra-ai/s${i}`,
+    }));
+    const { query } = recorder([rows.map(() => ({ turn_id: "t1" }))]);
+    expect(await recordTurnSkillDelivery({ turnId: "t1", rows }, { query })).toBe(500);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it("a PATHOLOGICAL record degrades into several statements instead of failing entirely", async () => {
+    // Postgres refuses a statement carrying more than 65,535 bind parameters.
+    // At ten parameters per row a 6,554-row record would blow that ceiling and
+    // lose EVERY row — so the writer chunks. Unreachable through the shipped
+    // ports (the injection contract caps a turn at 8 members); pinned so a
+    // future port that lifts the cap degrades instead of writing nothing.
+    const rows = Array.from({ length: 6_100 }, (_, i) => ({
+      ...DELIVERED,
+      skillId: `@cinatra-ai/s${i}`,
+    }));
+    const { calls, query } = recorder([
+      Array.from({ length: 6_000 }, () => ({ turn_id: "t1" })),
+      Array.from({ length: 100 }, () => ({ turn_id: "t1" })),
+    ]);
+
+    expect(await recordTurnSkillDelivery({ turnId: "t1", rows }, { query })).toBe(6_100);
+    expect(query).toHaveBeenCalledTimes(2);
+    for (const call of calls) {
+      expect(call.values!.length).toBeLessThanOrEqual(65_535);
+      // Every chunk is still the same idempotent statement — chunking must not
+      // weaken the no-double-write property.
+      expect(call.text).toContain("ON CONFLICT (turn_id, skill_id) DO NOTHING");
+    }
+    // Every row is written exactly once across the chunks, none dropped.
+    const writtenSkillIds = calls.flatMap((c) =>
+      (c.values ?? []).filter((_, i) => i % 10 === 1),
+    );
+    expect(new Set(writtenSkillIds).size).toBe(6_100);
   });
 });
 

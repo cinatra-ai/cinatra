@@ -157,16 +157,36 @@ export function buildTurnSkillDeliveryRows(
 ): TurnSkillDeliveryRow[] {
   const provider = input.provider;
   const containerRefs = containerRefsByCatalogId(input.tools ?? []);
+  // `skill_id` is `text NOT NULL` and is half the primary key. Every id below
+  // arrives from a channel the types promise is a `string` but that a malformed
+  // extension adapter can violate at runtime — and a single nullish or blank id
+  // would abort the ONE statement the whole record is written in, losing every
+  // OTHER skill's row too. An unnamed entry is therefore skipped at the door;
+  // when it also appears in `requestedSkillIds` it is unaffected, and when it
+  // does not, there was never an identity to record.
+  const named = (value: unknown): value is string =>
+    typeof value === "string" && value.trim() !== "";
+  const requestedSkillIds = (input.requestedSkillIds ?? []).filter(named);
   const rows: TurnSkillDeliveryRow[] = [];
   // Skills that already have a row. `emitted`, NOT "delivered": a row is
   // claimed here whatever its outcome, so the drop sweep below never appends a
   // second, vaguer row for the same skill.
   const emitted = new Set<string>();
 
-  // Reasons for the drops we were TOLD about, keyed by skill id. An empty
+  // TWO structures, deliberately: `droppedIds` is WHICH skills a drop channel
+  // named, `dropReasons` is WHY for the ones that told us. They are not the
+  // same set — a channel may report `{skillId, reason: ""}`, and an empty
   // reason is treated as ABSENT so a blank string can never reach the record.
+  // Driving both the refusal skip and the drop sweep off `dropReasons` (the
+  // reasons) instead of `droppedIds` (the ids) would lose a blank-reason drop
+  // entirely when its id is not also in `requestedSkillIds`, and would mislabel
+  // it "refused" when it is — exactly the misattribution this record exists to
+  // prevent.
+  const droppedIds = new Set<string>();
   const dropReasons = new Map<string, string>();
   for (const drop of input.contractDrops ?? []) {
+    if (!named(drop?.skillId)) continue;
+    droppedIds.add(drop.skillId);
     if (drop.reason && !dropReasons.has(drop.skillId)) {
       dropReasons.set(drop.skillId, drop.reason);
     }
@@ -175,6 +195,8 @@ export function buildTurnSkillDeliveryRows(
     input.adapterSelectionReason ||
     `over the provider's per-request skill cap; rank-and-truncated off this ${provider} request`;
   for (const skillId of input.adapterDroppedSkillIds ?? []) {
+    if (!named(skillId)) continue;
+    droppedIds.add(skillId);
     if (!dropReasons.has(skillId)) dropReasons.set(skillId, adapterReason);
   }
 
@@ -186,11 +208,12 @@ export function buildTurnSkillDeliveryRows(
   // entirely would hide it, which is the finding-F8 failure mode itself).
   const refusalReason = input.refusalReason || null;
   if (refusalReason) {
-    for (const skillId of input.requestedSkillIds) {
+    for (const skillId of requestedSkillIds) {
       if (emitted.has(skillId)) continue;
       // An EXPLICITLY dropped skill was removed from the attempt before it
-      // could be refused; the drop sweep below records it with its real reason.
-      if (dropReasons.has(skillId)) continue;
+      // could be refused; the drop sweep below records it with its real reason
+      // (or the synthesized one, when the channel named it without a reason).
+      if (droppedIds.has(skillId)) continue;
       emitted.add(skillId);
       rows.push({
         skillId,
@@ -206,9 +229,24 @@ export function buildTurnSkillDeliveryRows(
     }
   } else {
     for (const entry of input.exposure) {
+      // An exposure entry with no usable id cannot be recorded: `skill_id` is
+      // half the primary key. Skipping it costs nothing an audit could use, and
+      // keeping it would abort the whole record.
+      if (!named(entry?.skillId)) continue;
       if (emitted.has(entry.skillId)) continue;
       emitted.add(entry.skillId);
-      const vehicle = vehicleForDeliveryMode(entry.deliveryMode);
+      // A delivery adapter is an EXTENSION surface: `deliveryMode` is TYPED as a
+      // string, but a malformed adapter can hand back `undefined` or a blank.
+      // That must not become a NULL `delivery_mode` on a `delivered` row — the
+      // table's mode biconditional would reject it, and because the record is
+      // ONE statement the constraint error would lose EVERY row for the turn,
+      // not just this one. `unknown` is the honest value: there is no raw mode
+      // to preserve, so nothing truthful is lost by naming it.
+      const reportedMode =
+        typeof entry.deliveryMode === "string" && entry.deliveryMode.trim() !== ""
+          ? entry.deliveryMode
+          : "unknown";
+      const vehicle = vehicleForDeliveryMode(reportedMode);
       const ref = containerRefs.get(entry.skillId);
       rows.push({
         skillId: entry.skillId,
@@ -220,8 +258,13 @@ export function buildTurnSkillDeliveryRows(
         // it a drop would be a false audit fact; guessing a transport would be
         // worse. The runtime logs the unclassified mode loudly.
         vehicle: vehicle ?? "unknown",
-        deliveryMode: entry.deliveryMode,
-        invocationAttributable: entry.invocationAttributable,
+        deliveryMode: reportedMode,
+        // Normalised for the same reason: the row type promises `boolean | null`
+        // and a malformed adapter's `undefined` would violate it.
+        invocationAttributable:
+          typeof entry.invocationAttributable === "boolean"
+            ? entry.invocationAttributable
+            : null,
         providerSkillId: ref?.providerSkillId ?? null,
         skillVersion: ref?.version ? ref.version : null,
         nonDeliveryReason: null,
@@ -234,10 +277,12 @@ export function buildTurnSkillDeliveryRows(
   // is simply absent from `exposure`, the silent case finding F8 could not
   // see) plus every skill a drop channel named.
   const undelivered = new Set<string>();
-  for (const skillId of input.requestedSkillIds) {
+  for (const skillId of requestedSkillIds) {
     if (!emitted.has(skillId)) undelivered.add(skillId);
   }
-  for (const skillId of dropReasons.keys()) {
+  // Driven off the ID set, NOT the reason map: a channel that named a skill
+  // without a reason still loses it, and losing it is the finding-F8 shape.
+  for (const skillId of droppedIds) {
     if (!emitted.has(skillId)) undelivered.add(skillId);
   }
   for (const skillId of undelivered) {
@@ -256,7 +301,7 @@ export function buildTurnSkillDeliveryRows(
     });
   }
 
-  return dedupeBySkillId(sortByRequestOrder(rows, input.requestedSkillIds));
+  return dedupeBySkillId(sortByRequestOrder(rows, requestedSkillIds));
 }
 
 function sortByRequestOrder(

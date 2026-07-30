@@ -88,6 +88,34 @@ export type PersistedTurnSkillDelivery = TurnSkillDeliveryRow & {
   createdAt: string;
 };
 
+/** Bind parameters emitted per row — the insert's column count. */
+const COLUMNS = 10;
+/**
+ * Rows per INSERT statement. Postgres caps a statement at 65,535 bind
+ * parameters, so at `COLUMNS` params/row a record of 6,554+ rows would fail the
+ * WHOLE write and lose every row rather than the excess.
+ *
+ * Every realistic record is orders of magnitude smaller — the injection
+ * contract caps a turn at `INJECTED_SKILL_CAP` (8) members — so this ceiling is
+ * unreachable through the shipped ports and the single-statement path is what
+ * actually runs. The chunk exists so the pathological case (an operator bundle
+ * far beyond the cap, reaching a future port) degrades into several atomic
+ * statements instead of failing entirely; it deliberately does NOT rewrite the
+ * insert into `UNNEST`, which would change the shipped statement shape for a
+ * case no live database has ever seen.
+ *
+ * MULTI-CHUNK ATOMICITY, stated plainly: chunks are separate statements, so a
+ * failure part-way through a multi-chunk write leaves the earlier chunks
+ * committed and the record partial. That is accepted, not overlooked — the path
+ * is unreachable through every shipped port (the cap is 8), each chunk is
+ * individually atomic, and because the insert is idempotent on
+ * `(turn_id, skill_id)` a re-run for the same turn backfills the missing rows
+ * without rewriting any existing fact. Making it transactional would mean
+ * checking out a dedicated client and reshaping the injected-query seam this
+ * store is tested through, for a case no port can produce.
+ */
+const MAX_ROWS_PER_STATEMENT = 6_000;
+
 /**
  * Persist the turn's delivery record. Idempotent on `(turn_id, skill_id)`;
  * no-op on an empty row set. Returns the number of rows this call actually
@@ -104,17 +132,34 @@ export async function recordTurnSkillDelivery(
   if (input.rows.length === 0) return 0;
   const { query, table } = resolveDeps(deps);
 
-  const COLUMNS = 10;
+  let inserted = 0;
+  for (let start = 0; start < input.rows.length; start += MAX_ROWS_PER_STATEMENT) {
+    inserted += await insertRecordChunk(
+      query,
+      table,
+      input.turnId,
+      input.rows.slice(start, start + MAX_ROWS_PER_STATEMENT),
+    );
+  }
+  return inserted;
+}
+
+async function insertRecordChunk(
+  query: TurnSkillDeliveryQuery,
+  table: string,
+  turnId: string,
+  rows: readonly TurnSkillDeliveryRow[],
+): Promise<number> {
   const valuesSql: string[] = [];
   const params: unknown[] = [];
-  input.rows.forEach((row, i) => {
+  rows.forEach((row, i) => {
     const base = i * COLUMNS;
     valuesSql.push(
       `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, ` +
         `$${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10})`,
     );
     params.push(
-      input.turnId,
+      turnId,
       row.skillId,
       row.outcome,
       row.provider,

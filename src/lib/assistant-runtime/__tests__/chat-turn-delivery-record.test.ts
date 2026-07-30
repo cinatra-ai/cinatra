@@ -54,8 +54,22 @@ const state = vi.hoisted(() => ({
    * request log there). Nothing left the process.
    */
   streamFailsAfterStepStartBeforeEgress: false,
-  /** Throw after the provider ANSWERED (a rejection it reported back). */
+  /**
+   * Report a failure through `onError` and then RESOLVE — what every shipped
+   * adapter does. A DNS/ECONNREFUSED failure takes exactly this path, so
+   * neither `onError` nor a resolved `stream()` proves the request left.
+   */
+  streamReportsErrorThenResolves: false,
+  /** The provider answered (a text delta) and THEN the turn failed. */
   streamFailsAfterProviderResponded: false,
+  /**
+   * Splice a personal-delta member into the resolved injected set. The
+   * assistant's own ports factory wires no `resolvePersonalDelta` yet, so this
+   * is the only way to drive the non-catalog member path the record must cover.
+   */
+  personalDeltaSkillId: null as string | null,
+  /** Drop every CATALOG member, leaving the native vehicle nothing to carry. */
+  dropCatalogMembers: false,
 }));
 
 vi.mock("@/lib/register-host-connector-services", () => ({}));
@@ -89,6 +103,41 @@ vi.mock("@/lib/instance-identity-store", () => ({ readInstanceIdentity: () => nu
 vi.mock("@/lib/artifacts/attachment-resolver-ports", () => ({
   buildAttachmentResolverPorts: vi.fn(() => ({})),
 }));
+
+// The REAL injection contract runs (its accessors and cap are the thing under
+// test), with one seam: the resolved set can be given the non-catalog member
+// `buildAssistantInjectionPorts` cannot supply today. That member is the
+// "resolved but never delivered" shape the record has to cover on a NATIVE
+// provider, where the vehicle carries catalog members only.
+vi.mock("@cinatra-ai/skills/injection", async (importActual) => {
+  const actual = await importActual<typeof import("@cinatra-ai/skills/injection")>();
+  return {
+    ...actual,
+    resolveInjectedSkillSet: vi.fn(
+      async (...args: Parameters<typeof actual.resolveInjectedSkillSet>) => {
+        const set = await actual.resolveInjectedSkillSet(...args);
+        if (!state.personalDeltaSkillId && !state.dropCatalogMembers) return set;
+        return {
+          ...set,
+          members: [
+            ...(state.personalDeltaSkillId
+              ? [
+                  {
+                    skillId: state.personalDeltaSkillId,
+                    rank: "personal_delta" as const,
+                    deliveryMode: "inline" as const,
+                    revisionId: null,
+                    content: "PERSONAL DELTA BODY",
+                  },
+                ]
+              : []),
+            ...(state.dropCatalogMembers ? [] : set.members),
+          ],
+        };
+      },
+    ),
+  };
+});
 
 // The store under observation. The real writer's SQL contract is pinned in
 // src/lib/__tests__/assistant-turn-skill-delivery.test.ts; here the stub
@@ -154,12 +203,21 @@ vi.mock("@cinatra-ai/llm", () => ({
       // provider callback ever fires, so nothing reached the wire.
       throw new Error("request log write failed");
     }
+    if (state.streamReportsErrorThenResolves) {
+      // FAITHFUL to every shipped adapter: a stream-iteration failure — which is
+      // where a DNS/ECONNREFUSED failure lands, BEFORE any byte reaches the
+      // provider — is reported through `onError`, the step loop breaks, and
+      // `adapter.stream()` RESOLVES. No provider output is ever produced.
+      (input.onError as (e: Error) => void)?.(new Error("ECONNREFUSED"));
+      return;
+    }
     if (state.streamFailsAfterProviderResponded) {
-      // The request WAS sent and the provider rejected it (the issue-#47 400s).
-      (input.onError as (e: Error) => void)?.(new Error("400 unsupported tool"));
-      throw new Error("400 unsupported tool");
+      // The provider ANSWERED (a real delta) and the turn failed afterwards.
+      (input.onTextDelta as (d: string) => void)?.("partial");
+      throw new Error("stream aborted mid-answer");
     }
     (input.onTextDelta as (d: string) => void)?.("Hi");
+    (input.onStepEnd as (step: number) => void)?.(1);
   }),
 }));
 
@@ -207,7 +265,10 @@ beforeEach(() => {
   state.inlineResult = { systemContext: "", exposure: [], dropped: [] };
   state.streamFailsBeforeDispatch = false;
   state.streamFailsAfterStepStartBeforeEgress = false;
+  state.streamReportsErrorThenResolves = false;
   state.streamFailsAfterProviderResponded = false;
+  state.personalDeltaSkillId = null;
+  state.dropCatalogMembers = false;
 });
 
 describe("a chat turn writes EXACTLY ONE delivery record, keyed to the turn the chat path minted", () => {
@@ -320,6 +381,64 @@ describe("a chat turn writes EXACTLY ONE delivery record, keyed to the turn the 
   });
 });
 
+describe("a RESOLVED member the native vehicle cannot carry is recorded, not lost", () => {
+  // The denominator is every member the injection contract RESOLVED, not the
+  // catalog subset `injectedCatalogSkillIds` returns. A non-catalog member (the
+  // personal delta, always `inline`) is absent from that subset AND is never
+  // merged into the system context on a native provider — so keying the record
+  // on the subset would leave it resolved, undelivered and UNRECORDED, which is
+  // the finding-F8 shape itself.
+  it("records the non-catalog member as a DROP naming the structural reason", async () => {
+    state.personalDeltaSkillId = "@u1/personal-delta";
+    const ids = bundleSkillIds();
+    state.deliveryResult.exposure = ids.map((skillId) => ({
+      skillId,
+      deliveryMode: "openai_shell",
+      invocationAttributable: true,
+    }));
+
+    await runAssistantTurn(buildCinatraAssistantRuntimeConfig(), makeArgs(vi.fn()));
+
+    const record = onlyRecord();
+    expect(record.rows.map((r) => r.skillId).sort()).toEqual(
+      [...ids, "@u1/personal-delta"].sort(),
+    );
+    const delta = record.rows.find((r) => r.skillId === "@u1/personal-delta")!;
+    expect(delta.outcome).toBe("dropped");
+    expect(delta.vehicle).toBeNull();
+    expect(String(delta.nonDeliveryReason)).toContain("catalog members only");
+    // The catalog members are unaffected — the wider denominator adds a row, it
+    // never reclassifies a real delivery.
+    for (const skillId of ids) {
+      expect(record.rows.find((r) => r.skillId === skillId)!.outcome).toBe("delivered");
+    }
+  });
+
+  it("records the turn even when NO catalog member reaches the native vehicle at all", async () => {
+    // `catalogSkillIds` is empty, so no delivery adapter runs and there is no
+    // refusal to report — but skills WERE resolved and none reached the model.
+    // Without a record that loss is invisible.
+    state.personalDeltaSkillId = "@u1/personal-delta";
+    state.dropCatalogMembers = true;
+
+    const send = vi.fn();
+    await runAssistantTurn(buildCinatraAssistantRuntimeConfig(), makeArgs(send));
+
+    // The turn still ran — this is a drop, not the loud no-vehicle refusal.
+    expect(capturedStreamInput).not.toBeNull();
+    expect(send).toHaveBeenCalledWith("done", {});
+
+    const record = onlyRecord();
+    expect(record.rows).toHaveLength(1);
+    expect(record.rows[0]).toMatchObject({
+      skillId: "@u1/personal-delta",
+      outcome: "dropped",
+      vehicle: null,
+      deliveryMode: null,
+    });
+  });
+});
+
 describe("the loud no-vehicle REFUSAL is durable, not just a log line", () => {
   it("records every resolved skill as refused, and never dispatches", async () => {
     state.deliveryResult = {
@@ -386,7 +505,32 @@ describe("the record never OVERCLAIMS", () => {
     });
   });
 
-  it("a request the PROVIDER rejected IS recorded — that is the run an operator must audit", () => {
+  it("an adapter-reported ERROR is NOT dispatch — a connection that never opened writes NO record", async () => {
+    // The decisive case. Every shipped adapter (openai/anthropic/gemini) routes
+    // its stream-iteration failure through `onError` and then RESOLVES — and a
+    // DNS/ECONNREFUSED failure raises inside exactly that iteration, before any
+    // byte reaches the provider. So NEITHER `onError` NOR a resolved `stream()`
+    // proves egress; treating either as proof would stamp permanent `delivered`
+    // rows on the most common broken-configuration failure, which is precisely
+    // when an operator reads this record. The gate needs provider-PRODUCED
+    // output.
+    state.streamReportsErrorThenResolves = true;
+    state.deliveryResult.exposure = bundleSkillIds().map((skillId) => ({
+      skillId,
+      deliveryMode: "openai_shell",
+      invocationAttributable: true,
+    }));
+
+    const send = vi.fn();
+    await runAssistantTurn(buildCinatraAssistantRuntimeConfig(), makeArgs(send));
+
+    expect(send).toHaveBeenCalledWith("error", expect.anything());
+    expect(state.recorded).toEqual([]);
+  });
+
+  it("a turn the provider ANSWERED and that then failed IS recorded", () => {
+    // The provider produced a real delta, so the request demonstrably carried
+    // these skills; a later failure does not un-deliver them.
     state.streamFailsAfterProviderResponded = true;
     state.deliveryResult.exposure = bundleSkillIds().map((skillId) => ({
       skillId,
