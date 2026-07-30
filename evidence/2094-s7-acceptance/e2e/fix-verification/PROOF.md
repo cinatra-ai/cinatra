@@ -732,11 +732,14 @@ on trust.
 
 ## Follow-up filed
 
-The two pre-existing derived-head writer holes named in #2254's own body — the
-payload-only CLI writer, and a lifecycle revision whose `content_digest` resolves
-to no durable blob — are filed as their own issue, with the third one this run
-adds (`registerExtensionSkill`'s bundle-of-one lifecycle write, the mechanism
-behind arm 1's failure) recorded alongside them as the same defect family.
+**#2265** — the two pre-existing authority gaps named in #2254's own body: the
+payload-only CLI writer (`compileAndRegisterAgentSkillsViaPg`), and a lifecycle
+revision whose `content_digest` resolves to no durable blob. Both put a
+custom-classed skill under a DERIVED bundle head. The third family member this
+run found — `registerExtensionSkill` → `upsertSkill` recording a bundle-of-ONE
+lifecycle revision, the mechanism behind arm 1's failure — is cited there as
+field evidence but is **explicitly out of scope of #2265**: it belongs to this
+issue, #2094 / F7-2.
 
 ## Codex round — ten rounds, ending **SOUND**
 
