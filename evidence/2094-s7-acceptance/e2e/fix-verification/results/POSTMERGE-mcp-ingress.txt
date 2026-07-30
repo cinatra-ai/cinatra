@@ -1,0 +1,95 @@
+# POST-MERGE re-run — the public MCP ingress, as configured and as measured
+#
+# The gate the prior round never reached. Recorded here because "the relay could
+# not reach this laptop" was the stated reason a completed Anthropic answer was
+# NOT claimed in evidence/2094-s7-acceptance/e2e/fix-verification/PROOF.md.
+
+## 1. What was published, and how the sibling lane was left alone
+
+The machine's single Tailscale Funnel :443 slot already carried a handler:
+
+    "/" -> proxy http://127.0.0.1:3000
+
+Measured before touching anything: NOTHING was listening on 127.0.0.1:3000 and no
+Next.js server process existed anywhere on the machine — the handler was a dead
+leftover. It was nevertheless NOT taken over. This lane added a SECOND,
+PATH-SCOPED handler on the SAME standard :443 origin and left "/" byte-identical:
+
+    tailscale funnel --bg --yes --set-path=/api/mcp http://127.0.0.1:3298/api/mcp
+
+Consequences, both deliberate:
+  * the provider relay reaches the instance on the STANDARD https port (443).
+    The prior round could only publish on :8443, and recorded that Anthropic's
+    relay never issued a request against it;
+  * only `/api/mcp` — an auth-gated endpoint — was ever public. The rest of the
+    lane instance was NOT internet-reachable at any point.
+
+## 2. Public reachability, measured from the internet-facing origin
+
+    HEAD https://<funnel-origin>/api/mcp                       -> 405
+    POST https://<funnel-origin>/api/mcp  (jsonrpc initialize) -> 401
+         {"error":"unauthorized","message":"Authentication is required to access the Cinatra MCP server."}
+
+Any HTTP response proves a live ingress (packages/llm/src/mcp-access.ts states
+exactly this contract for its own reachability probe); a 401 additionally proves
+the request reached the Cinatra MCP transport itself, not a proxy error page.
+
+## 3. The instance's public MCP base URL — the second half of the gate
+
+Written to `cinatra.metadata` BEFORE the production server booted, so no cached
+null could survive into the run:
+
+    connector_config:mcp_server =
+      {"publicBaseUrl":"https://<funnel-origin>","publicBaseUrlSource":"manual"}
+
+`getPublicMcpServerUrl()` returns null unless this row is set, and every chat
+attach site (`buildLlmMcpServerToolForChat`) omits the hosted MCP server tool
+when it is null. With it set, the tool is attached and the provider is handed
+this public URL — the only MCP URL any provider saw during this run.
+
+## 4. The MCP transport SERVED requests during the completed turn — counts measured, attribution inferred
+
+`src/lib/agent-run-context-durable.ts` emits exactly one
+`[mcp-run-ctx] served-by=` line PER REQUEST served by the MCP transport.
+Counted per production boot:
+
+    boot 1 (Anthropic wizard arm)      : 0   — no model-inference turn ran
+    boot 2 (Anthropic assistant run)   : 0   — 3/3 turns refused before the
+                                              model-inference call (that boot DID
+                                              emit 17 Anthropic /v1/skills/*/versions
+                                              calls from the per-turn lazy re-sync;
+                                              none is a model turn, and none can
+                                              cause an MCP callback)
+    boot 3 (OpenAI arm + assistant run): 4   — the single completed turn
+
+The completed OpenAI turn carried `{type:"mcp"}` on the wire (see
+`ledgers/egress-postmerge.jsonl`) and returned 200.
+
+The COUNTS above are measured. The reading that those four requests are the
+hosted-MCP provider relay calling back through the public funnel origin is an
+INFERENCE, and its basis is stated so it can be checked: the public origin is the
+only MCP URL any provider was ever handed, and the two boots in which no
+model-inference turn ran served ZERO. This run captured no per-request access log, so
+no request IDENTITY was recorded and no other client was independently excluded.
+
+WHAT THIS DOES AND DOES NOT ESTABLISH. It STRONGLY SUPPORTS — it does not prove —
+that the funnel + the `connector_config:mcp_server` row make this instance
+reachable by a hosted-MCP provider relay, which is what the prior round could not
+show at all. What is PROVEN outright is narrower: the endpoint answers from the
+public internet (401 from the Cinatra MCP transport), the instance advertises the
+public origin, and the transport served four requests in the boot with the
+completed turn and none in the boots without one. It does NOT
+establish the same for ANTHROPIC's relay specifically: the Anthropic turn never
+issued a `/v1/messages` call (it is refused in-process — see the F7-2 finding), so
+Anthropic's model plane was never handed the URL at all. The Anthropic egress that
+DID occur in those boots is skill-sync traffic to `/v1/skills/*`, which carries no
+MCP block and cannot produce a callback. That half remains unproven, and is blocked by
+skill delivery rather than by ingress.
+
+## 5. Teardown
+
+    tailscale funnel --https=443 --set-path=/api/mcp off
+
+`tailscale serve status --json` afterwards is BYTE-IDENTICAL to the state
+captured before the run (verified by diff). The sibling's "/" handler was never
+modified, and no funnel of this lane's remains.

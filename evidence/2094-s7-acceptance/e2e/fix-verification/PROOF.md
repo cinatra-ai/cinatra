@@ -330,3 +330,432 @@ The full live wizard + provider re-drive above was NOT repeated: the live GREEN
 already exists on the same logical change, and what changed since is heal SAFETY,
 which is proven on a real database rather than on a real provider. Everything under
 "Not claimed" still stands.
+
+---
+
+# POST-MERGE RE-RUN — the two arms, driven again on `main` after #2254 / #2246 / #2249 landed
+
+Everything above this line is the pre-merge record and is unchanged. This section
+is a **new run**, on **post-merge `main`**, of exactly the two arms the S7 round
+recorded as failed. It uses the SAME committed drivers, a fresh instance, and the
+real provider APIs.
+
+**Headline, stated before the detail so it cannot be missed.**
+
+* **OpenAI — the assistant run is GREEN: 6/6.** A real turn completed on the
+  shipped default model with tool-mount delivery on the wire, boundary-observed,
+  and nothing on the wire exceeding the cap (the ≤ 8 itself is contract-enforced
+  before delivery, not counted on the wire — see R2b). The OpenAI **wizard** arm around it is **11/12**: **F9
+  reproduced** — the key still cannot be saved through the form.
+* **Anthropic — FAILED.** On a fresh instance whose catalog was registered
+  through `registerColocatedWorkspaceSkills` → `registerExtensionSkill` →
+  `upsertSkill` — the writer the dev boot scan uses, and the same one a
+  production-reachable lazy resolver uses (scope note below); the same way S6, S7
+  and the pre-merge fix-verification instance were all built — the readiness saga
+  **refuses to complete at all** (6 skills refused by the packaging gate), so no receipt is
+  issued and the post-wizard turn cannot be driven as one. Driven anyway as a
+  diagnostic, the turn still throws `AnthropicSkillNotSyncedError`. The evidence
+  is consistent with **F7-1 fixed** and **F7-2 NOT fixed for an instance
+  registered through that writer** — both of F7-2's guards are gated off there.
+  Mechanism below. The separate `syncInstalledSkillsToDatabase` install path was
+  **not exercised** by this run and nothing here is claimed about it.
+* **The ingress gate the prior round never reached is now CONFIGURED and
+  EXERCISED.** The funnel is on the standard :443 slot, the endpoint answers from
+  the public internet, the instance's public MCP base URL is set, and the MCP
+  transport **served 4 requests during the boot in which the OpenAI turn
+  completed, and 0 in the two boots where no model-inference turn ran**. Reading
+  those four as the provider relay calling back is an **inference** (basis below),
+  not a captured request identity. It was Anthropic's *turn* that never got that
+  far, not the ingress.
+
+## Where this ran
+
+| | |
+|---|---|
+| base | `origin/main` @ **`fa0503c72`** — contains #2254 (`eff336119`, F7/F11), #2246 (`e646347d8`, F10 + F9-core) and #2249 (`cab30ca89`, suite wiring). `main` advanced to `6cf22be5a` *after* the run began; the run is pinned at `fa0503c72` |
+| runtime | **production**: `next build` (`BUILD_EXIT=0`) + `next start`. Not a dev boot — but see "Lane deviations" for how the schema and catalog were bootstrapped |
+| database | a **fresh** lane Postgres **18.4** on a lane-unique port; Better Auth schema via `pnpm auth:migrate`, then **73 core migrations EXECUTED** — each one's `### MIGRATION … (UP) ###` line is committed in `results/POSTMERGE-core-migrations-executed.txt`, which the ledger-fake path does not emit — → **160 tables**, **28 catalog skills** |
+| instance state | genuinely pre-setup: zero provider/consent/sync rows. The operator account was created through the real sign-up form and auto-promoted to `admin` |
+| extension universe | **111/111** repos at the SHAs in the committed locks (`sync-dev-extensions --pinned`, exit 0), with the SAME single recorded exception as S6/S7: `anthropic-connector` at `e0a6c09`, **off-pin** (finding **F12** — the lock still pins `9783123`, on which readiness cannot start) |
+| provider boundary | **NOT STUBBED.** Real `api.anthropic.com` / `api.openai.com` with the org keys; the `node --import` preload only OBSERVES |
+| ingress | Tailscale Funnel on the **standard :443**, **path-scoped to `/api/mcp` only**; `connector_config:mcp_server.publicBaseUrl` set BEFORE boot. Full record: `results/POSTMERGE-mcp-ingress.txt` |
+| live-API hygiene | **22/22** lane-uploaded skills reclaimed, **46** versions deleted, **0** indeterminate — `results/POSTMERGE-live-api-cleanup.json` |
+| provenance | re-measured in `results/POSTMERGE-lane-setup-manifest.txt` |
+
+## The table, extended
+
+The two columns on the left are the pre-merge record above. The third is this run.
+
+| | before the fix (S7) | after the fix, pre-merge lane instance | **POST-MERGE, fresh instance (same registration writer)** |
+|---|---|---|---|
+| Anthropic wizard arm | probe fails on `function-tools` (by design) | **17/17 PASS** | **9 PASS / 8 FAIL** — the saga never reaches the probe: it **refuses at `initial-sync`** |
+| skills uploaded by the saga | 22 of 28 | **28 of 28** | **22 of 28**; the other **6 REFUSED** by the packaging gate |
+| `syncedSkillCount` on the receipt | 22 | 28 | **no receipt is issued at all** |
+| heads for the multi-file skills | router-only, authority-owned | `bundle:` heads with 6 / 5 / 8 files (healed) | **router-only, authority-owned — the heal cannot fire** |
+| `/chat` turn on Anthropic | `AnthropicSkillNotSyncedError` naming **5** skills, 0 `/v1/messages` | reaches the provider; `container.skills` × 5 on the wire | `AnthropicSkillNotSyncedError` naming **3** skills, **0 `/v1/messages`** (3/3 attempts) |
+| `/chat` turn on OpenAI | errored; delivery read as absent | answered; `skill_file_read` on the wire | **answered on attempt 1**; `skill_file_read` on the wire; **6/6 PASS** |
+| OpenAI key saved through the form | **FAIL** — `read ECONNRESET` (F9) | PASS — not reproduced | **FAIL — `read ECONNRESET` REPRODUCED** |
+
+---
+
+## Arm 1 — ANTHROPIC: **FAILED**, and where exactly
+
+`results/POSTMERGE-anthropic-arm.json` (9 PASS / 8 FAIL) ·
+`results/POSTMERGE-anthropic-assistant-run.json` (1 PASS / 6 FAIL) ·
+`screenshots/POSTMERGE-A-initial-sync-refusal.png`
+
+### What the wizard does now, and why that part is CORRECT
+
+A1–A3 pass exactly as before: both providers offered, Gemini absent, the pick
+persisted, **22 skills uploaded LIVE** — `ledgers/egress-postmerge.jsonl` records
+**22 × `POST /v1/skills → 200`** in phase `A-readiness-run-1`, and 22
+`anthropic_skill_sync` rows behind them — plus **24** bulk-consent rows. Then the
+saga **stops**, with the loud refusal #2254 added
+(`results/POSTMERGE-readiness-last-failure.json`, verbatim):
+
+```
+step: initial-sync
+The initial skill upload to Anthropic did not complete: 6 skill(s) were REFUSED
+by the packaging gate and were not uploaded, so requests that select them would
+fail: @cinatra-ai/chat:chat-automation-authoring (router references no bundled
+references/create-campaign.md, references/chat-campaign-creation.md,
+references/create-trigger.md, references/chat-workflow-authoring.md); @cinatra-
+ai/web-resear
+```
+
+**That refusal is the fix working.** Pre-#2254 this instance would have reported
+*"AI setup complete — 22 skill(s) uploaded"* over the same six refusals. It no
+longer masquerades. The driver's A4a/A4b assert the *older* failure shape (the
+`native-skills-probe` refusal), so they score FAIL here for the right reason: the
+saga never gets that far. A5a and A6a–A6e then fail as consequences — no
+`mcpMode` flip control is rendered, no receipt, no committed default. **A5b
+PASSES**: nothing fabricated a readiness that did not happen.
+
+### Why the six are refused
+
+`results/POSTMERGE-bundle-head-provenance.txt` — every catalog skill, its bundle
+head, that head's manifest size, the head revision's provenance and the payload
+class. `results/POSTMERGE-head-shape-histogram.txt` collapses **all 28 rows** (not
+a sample) into distinct shapes, and there is exactly **one**:
+
+```
+  28   head_manifest_files=1 | source=manual | bundle_digest IS NULL=f | packageId LIKE 'custom:%'=t | head = skills.active_revision_id=t
+```
+
+Against that, the disk ships **six** multi-file bundles (router + `references/*`):
+
+```
+6  chat-assistant-core        8  chat-extension-authoring   5  chat-automation-authoring
+4  blog-writing               4  list-curation              3  web-research
+```
+
+**Six multi-file bundles on disk; the product reports exactly six refusals.** The
+stored failure message is TRUNCATED by the product, so the committed artifact
+names only the first two of the six (`chat-automation-authoring` and a truncated
+`@cinatra-ai/web-resear…`) — both of which are in the multi-file set. The
+six-to-six identity is therefore a **count match plus two confirmed members**, not
+a full name-by-name mapping; the remaining four are not named in any artifact this
+run captured.
+
+The mechanism, end to end. Steps 1–2 and 4–5 are read from committed source on
+`origin/main`; step 3 and the ordering are the reading those measurements support,
+not separately instrumented (see "What is inferred" below). None of it is
+introduced by #2254:
+
+1. `registerExtensionSkill` (`packages/skills/src/register-extension-skill.ts`)
+   calls `upsertSkill` with the router's **content only**, and mirrors
+   `references/**` to disk **afterwards**;
+2. every `upsertSkill` lifecycle write records a **bundle of ONE**
+   (`packages/skills/src/skill-source.ts` — `bundleFiles: [{path:"SKILL.md", …}]`,
+   unconditional whenever content + digest exist) and therefore stamps a
+   **non-NULL** `skill_revisions.bundle_digest` at INSERT
+   (`buildRevisionBundleQueries` explicitly does **not** write that column, so a
+   non-NULL value can only have come from the revision INSERT);
+3. `seedBundleHeadFromLifecycleRevision` finds that manifest already present and
+   takes its *"already has a manifest → point the head at it"* branch, so the head
+   is **authority-owned with one file**;
+4. `captureSkillBundleFromDisk` then classifies every later capture as an
+   `authorityOwnedDivergence` and **never advances the head**;
+5. S2's fail-closed one-hop lint (#2089) **refuses** each such skill as an upload
+   candidate, and #2254's new honesty rule turns that into a **failed setup**.
+
+**Both of #2254's guards are gated off on this instance, by construction:**
+
+| guard | condition it needs | what all 28 rows show |
+|---|---|---|
+| multi-file **seed skip** | payload is **not** custom/personal | every extension skill registers with `packageId = "custom:<pkg-slug>"` → the predicate says custom → **skip never applies** |
+| provenance-gated **heal** | condition 0 not custom/personal **and** condition 3 `bundle_digest IS NULL` | custom **and** digest non-NULL → **two independent misses** |
+
+The heal was built for an instance already damaged by the pre-guard bundle-of-one
+seed — heads whose revision carries a NULL digest. An instance registered through
+the dev-watcher path never enters that state: it is damaged one step earlier, by
+the registration write itself. So the pre-merge GREEN above is not reproducible on
+a fresh instance built the way that instance was built, and this run says so
+rather than reporting the earlier result again.
+
+**Scope of that statement — corrected twice during review, and it widens rather
+than narrows.** `registerColocatedWorkspaceSkills` has **five** direct call sites
+in this tree:
+
+* `src/lib/extensions-dev-watcher.ts` × 3 (lines 120, 386, 416) — the dev boot
+  scan, which is what registered THIS instance's 28 skills;
+* `packages/skills/src/extension-skill-resolver.ts` × 2 (lines 563, 645) — the
+  lazy resolvers. The second is reached from `src/lib/assistant-runtime/runtime.ts`
+  via `ensureAssistantSkillsRegistered`, which is CALLED on every native-MCP chat
+  turn. It is memoized per already-registered skill id, so it does not reach the
+  underlying writer on every turn — but it does reach it whenever a required
+  skill is not already registered, which is a production path.
+
+So the bundle-of-one lifecycle write is **not a dev-only artefact**: the same
+writer is on a production-reachable path. What this run did NOT exercise is the
+separate `syncInstalledSkillsToDatabase` install path; whether that one records
+the same revision shape is **untested here**, and no claim is made about it.
+
+### The chat turn — driven anyway, as a diagnostic
+
+With no receipt the wizard commits no default provider, so to learn anything at
+all about the turn this lane wrote two metadata rows by hand
+(`connector_config:llm_default_provider = anthropic`,
+`connector_config:anthropic = {"mcpMode":"native"}`) and restarted the server.
+**This is an explicitly non-UI diagnostic step and changes no verdict: arm 1 is
+FAILED at the wizard.**
+
+3/3 attempts errored with **0 `/v1/messages`** — the refusal happens before the
+model-inference call. Stated precisely, because the ledger is not empty for those
+phases: the per-turn lazy re-sync DID emit **17** `POST /v1/skills/<id>/versions →
+200` across attempts 1–2, so the claim is **zero model-inference calls**, not zero
+Anthropic egress. `results/POSTMERGE-F7-server-error-prod.txt`, captured verbatim
+from the production server log:
+
+```
+AnthropicSkillNotSyncedError: … these catalog skill(s) have no Anthropic sync
+mapping yet: @cinatra-ai/chat:chat-assistant-core,
+@cinatra-ai/chat:chat-extension-authoring,
+@cinatra-ai/chat:chat-automation-authoring
+```
+
+**Three names, not five.** The S7 round's identical error named all five,
+including `company-research` and `blog-content`, whose sync rows measurably
+existed — the symptom of F7-1, the chat request holding the fail-loud default
+resolver. Those two are now **absent from the error**, on an instance where they
+*are* synced and the other three are not. That is **consistent with F7-1 being
+fixed**, and it leaves F7-2 as the defect the error now names. It does not by
+itself exclude other latent defects on that path; no turn got far enough to
+exercise them.
+
+---
+
+## Arm 2 — OPENAI: the assistant run is **GREEN**
+
+`results/POSTMERGE-openai-arm.json` (11 PASS / 1 FAIL — the wizard arm) ·
+`results/POSTMERGE-openai-assistant-run.json` (**6 PASS / 0 FAIL** — the run) ·
+`screenshots/POSTMERGE-B-chat-turn-answered.png`
+
+| # | check | verdict |
+|---|---|---|
+| **R1** | a REAL assistant turn **completed** on openai | **PASS — answered on attempt 1** |
+| **R2** | delivery was **TOOL-MOUNT**: a NAMED skill tool on the wire | **PASS** |
+| **R2b** | the mounted vehicle carries **no more than 8** skills | **PASS as the driver scores it — but the cap is NOT MEASURED on the wire**; see below |
+| R3 | no `container.skills` on the OpenAI path | **PASS** |
+| R7 | **ZERO Anthropic egress**, measured from the ledger | **PASS** |
+| R8 | the chat surface writes no durable per-run delivery record | **PASS** (finding **F8**, #2240, still open) |
+
+**R2b is not a wire measurement of the cap.** A hosted native shell would carry its
+skill listing inline and be countable; the named `skill_file_read` function tool is
+a SINGLE vehicle serving the whole set, so `shellSkillCount` is `null` on the wire.
+R2b therefore records that a vehicle is mounted and that nothing on the wire
+exceeds the cap — the ≤ 8 itself rests on the injection contract enforcing it
+BEFORE delivery, which this run did not independently measure.
+
+**A defect in the committed driver, found by this run and NOT patched here.**
+`results/POSTMERGE-openai-assistant-run.json` is internally contradictory: `R1`
+records that the turn completed, while `R8`'s detail string asserts *"no turn
+completed in this arm"*. That string is a **static template** in
+`drivers/assistant-run.mjs`, written for the S7 round where no turn ever
+completed, and it is emitted unconditionally. The R8 **assertion** is unaffected
+(it asserts the row count is zero, and the count was zero); only its prose is
+stale. The artifact is left byte-as-recorded rather than edited, and the defect is
+recorded here.
+
+The wire record, on the **shipped default model**
+(`ledgers/egress-postmerge.jsonl`):
+
+```
+POSTMERGE-openai-assistant-run-attempt-1  openai  POST /v1/responses  200
+  model=gpt-5.5  stream=true
+  tools=[{type:mcp}, {type:function, name:"skill_file_read"}, {type:web_search}]
+```
+
+`toolNames` — the extended observer field #2254 added — is what makes "was a skill
+tool mounted?" a **measurement**. The S7 round's fingerprint collapsed every
+function tool to the bare string `"function"` and so read a delivered skill tool
+as no delivery; this run records the name, and the name is there.
+
+One turn, one provider call, answered. No retry loop was needed.
+
+### F9 REPRODUCED — the OpenAI key still cannot be saved from the form
+
+`B2a` **FAIL**: the form save lands on `/setup/ai?error=read%20ECONNRESET`. The
+pre-merge fix-verification run recorded F9 as *not reproduced*; on this fresh
+post-merge instance it **reproduces**. `B2b` passes — the attempt **does** reach
+the live OpenAI validation boundary (2 × `GET /v1/models` recorded in that phase),
+so the request is made and the connection is reset, rather than never leaving. The
+arm then continues from the seeded credential row and records `credentialPath`
+accordingly; nothing here claims a form save that did not happen. No diagnosis is
+offered, and nothing here attributes the reset to the product rather than to this
+network path — this is a re-observation, not an isolation.
+
+---
+
+## The ingress gate — CONFIGURED and EXERCISED, and exactly how far
+
+Full record: `results/POSTMERGE-mcp-ingress.txt`. In short:
+
+* the machine's :443 funnel slot carried a **dead** handler (`/` → `127.0.0.1:3000`,
+  nothing listening, no Next.js process on the machine). It was **not** taken over.
+  A second, **path-scoped** handler was added for `/api/mcp` only, on the same
+  standard :443 origin, leaving `/` byte-identical;
+* public reachability measured from the internet-facing origin: `HEAD → 405`,
+  `POST → 401 {"error":"unauthorized"}` — the request reaches the Cinatra MCP
+  transport, not a proxy error page;
+* `connector_config:mcp_server.publicBaseUrl` was written **before** the server
+  booted, so no cached null could survive into the run. Without that row
+  `getPublicMcpServerUrl()` returns null and every chat attach site omits the
+  hosted MCP tool entirely;
+* **what was measured** (`results/POSTMERGE-mcp-requests-served.txt`):
+  `[mcp-run-ctx] served-by=` is emitted once per request served by the MCP
+  transport — **0** in the Anthropic wizard boot, **0** in the Anthropic
+  assistant-run boot, **4** in the boot in which the single OpenAI turn completed,
+  a turn whose wire record carries `{type:"mcp"}`;
+* **what is inferred from it**: that those 4 requests are the hosted-MCP provider
+  relay calling back through the public funnel origin. The basis is that the
+  public origin is the only MCP URL any provider was given, and that the two boots
+  with no completed turn served zero. This run captured **no per-request access
+  log**, so the attribution is the strongest available reading of the counts, not
+  a recorded request identity.
+* teardown: the handler was removed and `tailscale serve status --json` is
+  **byte-identical** to the state captured before the run (verified by `diff`).
+
+**Not claimed:** that *Anthropic's* relay reached this instance. The Anthropic turn never
+issued a `/v1/messages` call, so Anthropic's model plane was never handed the URL
+(the only Anthropic egress in those boots is the skill-sync `/v1/skills/*` traffic,
+which carries no MCP block). That half is blocked
+by skill delivery, not by ingress.
+
+---
+
+## Live-API hygiene
+
+`results/POSTMERGE-live-api-cleanup.json` — allow-listed to this lane's own
+`cinatra.anthropic_skill_sync` rows, captured to a CSV before the per-arm reset
+cleared them, and diffed against the remote list. Anthropic's four built-ins
+(`xlsx`, `pptx`, `pdf`, `docx`) were reported and **left untouched**.
+
+| | |
+|---|---|
+| lane-uploaded skills | **22** |
+| versions deleted | **46** (documented versions-then-skill order) |
+| skills reclaimed | **22 / 22**, each scored only on a definitive 404 |
+| indeterminate | **0** |
+
+## Lane deviations, named — including the ones NOT eliminated
+
+Stated so a reader can discount the verdict themselves rather than take the label
+on trust.
+
+1. **`anthropic-connector` off-pin** at `e0a6c09` while the lock pins `9783123`
+   (finding **F12**; the same exception S6 and S7 recorded, because readiness
+   cannot start on the pinned SHA). Arm 1 fails *before* the connector is reached
+   — at the catalog packaging gate — but this run did not re-drive the arm on the
+   pinned SHA, so it is not eliminated by measurement.
+2. **Node `v22.23.0`**, while CI and the runtime image use **Node 24**. The repo
+   declares no `engines` field or `.nvmrc`, so nothing enforced 24 here. The
+   failing path is a SQL row shape produced by an unconditional object literal in
+   committed source, which a runtime minor cannot vary — but this run did **not**
+   re-drive the arms on Node 24, so it is recorded as an un-eliminated deviation
+   rather than as ruled out.
+3. **Bootstrap order**: the schema, the 73 migrations and the 28-skill catalog
+   were created by ONE dev boot; every arm then ran against `next build` +
+   `next start`. The dev extension watcher is what registered the skills. That
+   writer is shared with a production-reachable lazy resolver (see "Scope of that
+   statement"), so the finding is not confined to dev — but the separate
+   `syncInstalledSkillsToDatabase` install path was **not** exercised. Every prior
+   round in this evidence tree (S6, S7, the pre-merge fix verification)
+   bootstrapped the same way, so the comparison between rounds is like-for-like.
+4. **Four non-UI steps**, each recorded above and below.
+
+## Steps NOT driven through the UI, each recorded
+
+1. the **Anthropic credential** row (`drivers/seed-provider-credential.mjs`) — the
+   same deliberate exception S6 and S7 recorded: the connector's key writer
+   hard-requires the connection service, which this lane does not run;
+2. the **OpenAI credential** row, after the form save failed (**F9**);
+3. `connector_config:mcp_server.publicBaseUrl` — instance ingress configuration,
+   written pre-boot so the cache could not serve a stale null;
+4. `connector_config:llm_default_provider` + `connector_config:anthropic.mcpMode`
+   — written **only** to make the Anthropic chat turn drivable as a diagnostic
+   after the wizard refused to issue a receipt. Arm 1's verdict is unchanged by it.
+
+## What is inferred, not measured
+
+* the six refused skills are the six multi-file disk bundles: a **count match**
+  plus **two confirmed members**; the product truncates its own message, so four
+  names are absent from every artifact here;
+* the writer of each one-file revision, and the ORDER in which the seed and
+  capture branches ran: read from committed source plus the end-state rows, not
+  from per-write instrumentation. No probe was placed inside the running
+  registration path;
+* that the 4 MCP requests came from the provider relay (basis stated above);
+* the OpenAI **≤ 8** half of R2b: the wire carries a single named vehicle with no
+  inline skill listing (`shellSkillCount = null`), so the cap is taken from the
+  injection contract that enforces it before delivery, not counted on the wire;
+* **that F7-1 is fixed**, and that the wizard's refusal is *"the fix working"*:
+  both read the post-#2254 behaviour against the S7 round's recorded behaviour on
+  a DIFFERENT instance. No pre-#2254 build was re-driven on THIS instance, so
+  neither is a controlled before/after on the same state;
+* that the fail-closed one-hop lint is the *exclusive* cause of the six refusals —
+  the product's own message names that reason, and no competing reason was
+  observed, but no alternative was independently excluded.
+
+## Not claimed by this run
+
+* a completed Anthropic answer, or `container.skills` ≤ 8 on the wire — **neither
+  is proven here**, and the named blocker is F7-2, not ingress;
+* anything about the separate `syncInstalledSkillsToDatabase` install path: it was
+  not exercised, so arm 1's finding is scoped to the
+  `registerColocatedWorkspaceSkills` → `registerExtensionSkill` → `upsertSkill`
+  writer this run drove (which is itself production-reachable — see above);
+* that Anthropic's hosted-MCP relay can reach this instance;
+* any diagnosis of F9's `ECONNRESET`, or any attribution of it to the product;
+* any statement about the **pinned** `anthropic-connector` (**F12** stands);
+* **F8** (#2240) is untouched: delivery is asserted from the **wire**, as before.
+
+## Follow-up filed
+
+The two pre-existing derived-head writer holes named in #2254's own body — the
+payload-only CLI writer, and a lifecycle revision whose `content_digest` resolves
+to no durable blob — are filed as their own issue, with the third one this run
+adds (`registerExtensionSkill`'s bundle-of-one lifecycle write, the mechanism
+behind arm 1's failure) recorded alongside them as the same defect family.
+
+## Codex round — ten rounds, ending **SOUND**
+
+Converged with Codex read-only over STDIN, one round per revision of this
+document. Every finding was adopted; none was rebutted. The verdicts are captured
+in the lane's own files, not summarised from memory.
+
+| round | finding | outcome |
+|---|---|---|
+| 1 | "OpenAI arm GREEN" contradicted the arm's own 11/12; "A5/A6 fail" contradicted `A5b PASS`; several claims (28-row identity, six-to-six mapping, 73 migrations executed, 22 uploaded LIVE) had no attached artifact | ADOPTED — claims split, artifacts attached |
+| 2 | the OpenAI results file contradicts itself (`R1` completed vs `R8`'s "no turn completed"); the ingress artifact still said "measured" where the main text said "inferred"; `R2b`'s ≤ 8 rests on a `null` wire count | ADOPTED — driver-text defect recorded, artifact re-scoped, R2b re-labelled |
+| 3 | `R2b` still scored as if measured; the ingress artifact still said "establishes"/"CLOSED"; "F7-1 is fixed" and "the refusal is the fix working" were themselves inferences and were not listed as such | ADOPTED |
+| 4 | the document generalised to "a fresh install" while naming the production registration path as unexercised | ADOPTED — scoped to the writer actually driven |
+| 5 | the "exactly one caller" claim was false | ADOPTED — and it WIDENED the finding: the writer is production-reachable |
+| 6 | the call-site count was still wrong (five, not three), and "every native-MCP chat turn" ignored memoization | ADOPTED with exact `file:line` list |
+| 7 | **"0 provider calls" / "before egress" is false** — the ledger records 17 `/v1/skills/*/versions` calls during those attempts. The supported claim is 0 `/v1/messages` | ADOPTED — every such phrase re-scoped to the model-inference call |
+| 8–9 | the same phrasing survived in the ingress artifact and in the requests-served captions | ADOPTED |
+| 10 | — | **SOUND** |
+
+Round 10, verbatim: *"The arm results, provider ledger, bundle-head provenance,
+source predicates, ingress-count semantics, cleanup record, and stated limitations
+are mutually consistent; no soundness-breaking overclaim remains."*

@@ -1,0 +1,32 @@
+# POST-MERGE (origin/main fa0503c72) — the Anthropic /chat turn's server-side exception, verbatim.
+# Captured from the production server log during POSTMERGE-anthropic-assistant-run (3/3 attempts).
+
+[assistants/chat] runProducer threw: Error [AnthropicSkillNotSyncedError]: Anthropic skill delivery requires pre-synced Custom Skills, but these catalog skill(s) have no Anthropic sync mapping yet: @cinatra-ai/chat:chat-assistant-core, @cinatra-ai/chat:chat-extension-authoring, @cinatra-ai/chat:chat-automation-authoring. Enable and run the Anthropic skill sync before using these skills with the Anthropic provider.
+    at u.deliver (.next/server/chunks/_0j_yuw-._.js:930:48873)
+    at async M (.next/server/chunks/src_1ulfti5._.js:36:2706)
+    at async (.next/server/chunks/_1el3ed4._.js:1:4197) {
+  provider: 'anthropic',
+  code: 'anthropic_skill_not_synced',
+  catalogSkillIds: [
+    '@cinatra-ai/chat:chat-assistant-core',
+    '@cinatra-ai/chat:chat-extension-authoring',
+--
+[assistants/chat] runProducer threw: Error [AnthropicSkillNotSyncedError]: Anthropic skill delivery requires pre-synced Custom Skills, but these catalog skill(s) have no Anthropic sync mapping yet: @cinatra-ai/chat:chat-assistant-core, @cinatra-ai/chat:chat-extension-authoring, @cinatra-ai/chat:chat-automation-authoring. Enable and run the Anthropic skill sync before using these skills with the Anthropic provider.
+    at u.deliver (.next/server/chunks/_0j_yuw-._.js:930:48873)
+    at async M (.next/server/chunks/src_1ulfti5._.js:36:2706)
+    at async (.next/server/chunks/_1el3ed4._.js:1:4197) {
+  provider: 'anthropic',
+  code: 'anthropic_skill_not_synced',
+  catalogSkillIds: [
+    '@cinatra-ai/chat:chat-assistant-core',
+    '@cinatra-ai/chat:chat-extension-authoring',
+--
+[assistants/chat] runProducer threw: Error [AnthropicSkillNotSyncedError]: Anthropic skill delivery requires pre-synced Custom Skills, but these catalog skill(s) have no Anthropic sync mapping yet: @cinatra-ai/chat:chat-assistant-core, @cinatra-ai/chat:chat-extension-authoring, @cinatra-ai/chat:chat-automation-authoring. Enable and run the Anthropic skill sync before using these skills with the Anthropic provider.
+    at u.deliver (.next/server/chunks/_0j_yuw-._.js:930:48873)
+    at async M (.next/server/chunks/src_1ulfti5._.js:36:2706)
+    at async (.next/server/chunks/_1el3ed4._.js:1:4197) {
+  provider: 'anthropic',
+  code: 'anthropic_skill_not_synced',
+  catalogSkillIds: [
+    '@cinatra-ai/chat:chat-assistant-core',
+    '@cinatra-ai/chat:chat-extension-authoring',
