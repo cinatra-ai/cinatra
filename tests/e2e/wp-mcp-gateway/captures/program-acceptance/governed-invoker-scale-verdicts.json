@@ -48,9 +48,9 @@
     }
   ],
   "provenance": {
-    "capturedAtCommit": "PENDING — filled in from this branch's actual head after commit (see the PR for the exact SHA)",
+    "capturedAtCommit": "7bdbc4a20232d51f2c87e2af6ad89b17318a598b",
     "runUrl": null,
-    "capturedAt": "PENDING-LOCAL-ONLY",
+    "capturedAt": "2026-07-30T11:21:02.000Z",
     "scaleSmokePluginSha256": "1868a6747717d617ad85824539e2f7ab7f819e79a3d58633da139456272b6f27",
     "invokerScaleMatrixTestSha256": "3f8652b5ffba5af9edf17409cb79057a6dd53168eb9c16ff13324e6fc6bb0a83",
     "invokerLiveScaleSmokeTestSha256": "c6b75677b59023d0845dbfc4c74075cb3ef992935fa1b0f900fcee1ddf54d745",
