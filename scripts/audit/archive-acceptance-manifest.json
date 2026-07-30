@@ -126,8 +126,12 @@
     {
       "criterion": "Direct BA-DML-vs-archive, both lock interleavings",
       "owner": "self",
+      "kernelProof": {
+        "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
+        "testName": "interleaving 1 — a queued member INSERT holds the org row's FOR SHARE lock first (org still active): the archive UPDATE genuinely BLOCKS behind it, and only lands after the insert commits"
+      },
       "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
-      "status": "red",
+      "status": "green",
       "trackingIssue": 1939
     },
     {
