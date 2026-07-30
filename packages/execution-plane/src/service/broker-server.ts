@@ -84,7 +84,7 @@ export type BrokerServiceBroker = {
       environment?: ResolvedEnvironmentMount;
     },
   ): Promise<OpenJobResult>;
-  exec(jobId: string, command: string): Promise<ExecResult>;
+  exec(jobId: string, command: string, voucher: string): Promise<ExecResult>;
   closeJob(jobId: string, opts?: { removeWorkspace?: boolean }): Promise<void>;
   terminateJobsForRun(runId: string, opts?: { removeWorkspace?: boolean }): Promise<number>;
   closeIdleJobs(idleMs: number): Promise<number>;
@@ -229,7 +229,7 @@ export function createBrokerDispatch(
         return { status: 200, body: execOkResponse(result) };
       }
       case "exec": {
-        const { jobId, command, commandId } = request.payload;
+        const { jobId, command, commandId, voucher } = request.payload;
         const claim = await config.ledger.claim(commandId, jobId);
         if (claim.state === "in_flight") {
           return {
@@ -286,7 +286,7 @@ export function createBrokerDispatch(
         }
         let result: ExecResult;
         try {
-          result = await config.broker.exec(jobId, command);
+          result = await config.broker.exec(jobId, command, voucher);
         } catch (err) {
           // A THROW IS NOT PROOF THAT NOTHING RAN. `broker.exec` converts almost
           // everything into a structured refusal, so a throw that gets here comes

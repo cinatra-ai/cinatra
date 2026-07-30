@@ -79,9 +79,8 @@ describe("webhook mutation routes — no organization-axis write in repo", () =>
     }
   });
 
-  it("the WordPress connector webhook route performs no database write of any kind", () => {
-    const src = stripComments(readFileSync("src/app/api/webhooks/wordpress/route.ts", "utf-8"));
-    expect(src).not.toMatch(DML_VERBS_RE);
+  it("no longer has a dedicated WordPress webhook route (cinatra#2022: the legacy /api/webhooks/wordpress route was deleted; the generic /webhook/... route is covered below)", () => {
+    expect(existsSync("src/app/api/webhooks/wordpress/route.ts")).toBe(false);
   });
 
   it("the Nango facade (src/lib/nango-system.ts) performs no database write of any kind — the connection-persisting gateway is a separate, out-of-repo extension", () => {
