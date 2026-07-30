@@ -1,4 +1,6 @@
-// cinatra#2240 — the durable per-turn skill-delivery store.
+// cinatra#2240 — the durable per-turn skill-delivery store (the CHAT arm of the
+// skill-exposure ledger, which lives in `agent-run-skills-used.ts` beside the
+// rollup that unions it).
 //
 // Pins the persistence contract the acceptance rests on, through the store's
 // INJECTED query seam (no database needed):
@@ -26,7 +28,7 @@ import {
   listTurnSkillDelivery,
   listTurnSkillDeliveryByRunId,
   type TurnSkillDeliveryRow,
-} from "@/lib/assistant-turn-skill-delivery";
+} from "@/lib/agent-run-skills-used";
 
 const DELIVERED: TurnSkillDeliveryRow = {
   skillId: "@cinatra-ai/a",

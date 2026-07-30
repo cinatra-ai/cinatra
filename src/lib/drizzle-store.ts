@@ -14,7 +14,7 @@ import {
   projectInstancesSchemaQueries,
   widgetStreamMetadataGrantSchemaQueries,
 } from "@/lib/extension-grant-schema";
-import { assistantThreadSchemaQueries, assistantHandleSchemaQueries } from "@/lib/assistant-thread-schema"; import { assistantTurnSkillDeliverySchemaQueries } from "@/lib/assistant-turn-skill-delivery-schema"; // cinatra#2240 per-turn skill-delivery record (pure-strings leaf, same file-size-ratchet headroom pattern)
+import { assistantThreadSchemaQueries, assistantHandleSchemaQueries, assistantTurnSkillDeliverySchemaQueries } from "@/lib/assistant-thread-schema"; // + cinatra#2240 per-turn skill-delivery record (same pure-strings leaf as its FK parent)
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema";

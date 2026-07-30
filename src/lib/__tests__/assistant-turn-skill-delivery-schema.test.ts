@@ -18,7 +18,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { assistantTurnSkillDeliverySchemaQueries } from "@/lib/assistant-turn-skill-delivery-schema";
+import { assistantTurnSkillDeliverySchemaQueries } from "@/lib/assistant-thread-schema";
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
 
 const ddl = () =>

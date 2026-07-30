@@ -47,7 +47,7 @@ import { buildChatUserContextSections } from "@/app/api/chat/chat-user-context";
 // cinatra#2240 (finding F8): the durable per-turn skill-DELIVERY record. The
 // chat surface used to deliver skills to a provider and leave NO trace, so an
 // audit could only be settled at the wire.
-import { recordTurnSkillDelivery } from "@/lib/assistant-turn-skill-delivery";
+import { recordTurnSkillDelivery } from "@/lib/agent-run-skills-used";
 import {
   buildTurnSkillDeliveryRows,
   type TurnSkillDeliveryRow,

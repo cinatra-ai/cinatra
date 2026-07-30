@@ -140,10 +140,12 @@ vi.mock("@cinatra-ai/skills/injection", async (importActual) => {
 });
 
 // The store under observation. The real writer's SQL contract is pinned in
-// src/lib/__tests__/assistant-turn-skill-delivery.test.ts; here the stub
-// reproduces its OBSERVABLE behaviour (idempotent insert keyed on
-// (turn_id, skill_id)) so the runtime's no-double-write property is testable.
-vi.mock("@/lib/assistant-turn-skill-delivery", () => ({
+// src/lib/__tests__/turn-skill-delivery-store.test.ts; here the stub reproduces
+// its OBSERVABLE behaviour (idempotent insert keyed on (turn_id, skill_id)) so
+// the runtime's no-double-write property is testable. `recordTurnSkillDelivery`
+// is the ONLY export the runtime takes from this module, so a full replacement
+// stubs exactly the surface under test.
+vi.mock("@/lib/agent-run-skills-used", () => ({
   recordTurnSkillDelivery: vi.fn(
     async (input: { turnId: string; rows: Array<Record<string, unknown>> }) => {
       state.recorded.push({ turnId: input.turnId, rows: input.rows });
@@ -605,7 +607,7 @@ describe("NO DOUBLE WRITE on a retry within the same turn", () => {
 
 describe("a delivery ledger failure never fails the user's turn", () => {
   it("the turn still streams and completes when the record write throws", async () => {
-    const store = await import("@/lib/assistant-turn-skill-delivery");
+    const store = await import("@/lib/agent-run-skills-used");
     vi.mocked(store.recordTurnSkillDelivery).mockRejectedValueOnce(
       new Error("relation does not exist"),
     );
