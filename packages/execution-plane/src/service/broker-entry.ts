@@ -63,6 +63,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import { ExecutionVoucherVerifier } from "../authz/voucher";
+import type { EgressDeploymentMaximum } from "../authz/egress-clamp";
 import { ExecutionBroker } from "../broker";
 import { DEFAULT_SANDBOX_NETWORK } from "../egress";
 import type {
@@ -125,6 +126,78 @@ export function assertProtocolVersionEnv(env: Env): void {
         `version ${EXEC_PROTOCOL_VERSION}; refusing to start (a version bump is a lockstep deploy).`,
     );
   }
+}
+
+/**
+ * The DEPLOYMENT egress ceiling this broker clamps every SIGNED policy against
+ * (`authz/egress-clamp.ts`), read from scoped env — never from a tenant-editable
+ * store, which is the whole point of the clamp.
+ *
+ * WHY THIS EXISTS HERE AND NOT ONLY APP-SIDE (exec-plane L5). `.env.example`
+ * has always documented `EXECUTION_EGRESS_MAX_MODE` / `_ALLOWLIST` /
+ * `_BYTES_PER_JOB` as the deployment ceiling, and the IN-PROCESS placement reads
+ * them (`src/lib/execution/execution-broker-construct.ts`). The DEPLOYED broker
+ * did not: `composeBrokerService` constructed `ExecutionBroker` without
+ * `deploymentEgressMaximum`, so `clampEgressPolicy` was handed `undefined` and
+ * the signed policy passed through untouched. A tenant-resolved
+ * `default_internet` therefore ran as `default_internet` on a deployment whose
+ * declared ceiling was `allowlist` — the ceiling existed in documentation and in
+ * one of the two placements only. The service-boundary E2E battery caught it by
+ * asking the real topology for the clamp and not finding one.
+ *
+ * Same three-axis vocabulary and the same fail-loud posture as the app-side
+ * resolver: an UNRECOGNIZED mode refuses to start rather than guessing, because
+ * guessing either widens the ceiling (unsafe) or narrows it to `none` (a
+ * mystery outage). All three unset ⇒ no ceiling, and the signed policy stands.
+ */
+export function deploymentEgressMaximumFromEnv(env: Env): EgressDeploymentMaximum | undefined {
+  const rawMode = env.EXECUTION_EGRESS_MAX_MODE?.trim();
+  const rawAllowlist = env.EXECUTION_EGRESS_MAX_ALLOWLIST?.trim();
+  const rawBytes = env.EXECUTION_EGRESS_MAX_BYTES_PER_JOB?.trim();
+  if (!rawMode && !rawAllowlist && !rawBytes) return undefined;
+
+  let mode: EgressMode = "default_internet";
+  if (rawMode) {
+    if (rawMode !== "none" && rawMode !== "allowlist" && rawMode !== "default_internet") {
+      throw new Error(
+        `EXECUTION_EGRESS_MAX_MODE must be one of none | allowlist | default_internet ` +
+          `(got "${rawMode}"); refusing to start rather than guess a ceiling.`,
+      );
+    }
+    mode = rawMode;
+  }
+  // COMMA-ONLY, matching `resolveDeploymentEgressMaximum` (Codex round 1,
+  // finding 2 — ADOPTED). The sibling `EXEC_EGRESS_ALLOWLIST` below splits on
+  // whitespace too, but that is a DIFFERENT variable: the same
+  // `EXECUTION_EGRESS_MAX_ALLOWLIST` value must mean the same host set in both
+  // placements, or an operator's ceiling is quietly wider in the deployed one.
+  // A space-separated list therefore yields one entry that matches nothing —
+  // narrower than intended, which is the correct direction to be wrong in.
+  const allowlist = (rawAllowlist ?? "")
+    .split(",")
+    .map((host) => host.trim())
+    .filter((host) => host.length > 0);
+  let maxBytesPerJob: number | undefined;
+  if (rawBytes) {
+    const parsed = Number(rawBytes);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      throw new Error(
+        `EXECUTION_EGRESS_MAX_BYTES_PER_JOB must be a non-negative number (got "${rawBytes}").`,
+      );
+    }
+    // A POSITIVE ceiling never floors to zero (Codex round 1, finding 1 —
+    // ADOPTED). `0` means "no ceiling" everywhere downstream, so `Math.floor`
+    // alone would turn the tightest possible ask — `0.5` — into an UNCAPPED
+    // deployment, a fail-OPEN at exactly the axis this value exists to bound.
+    // Same normalization as `egress-clamp.ts`'s `normalizeByteCap`; an explicit
+    // `0` still means "no ceiling", which is what it is documented to mean.
+    maxBytesPerJob = parsed > 0 ? Math.max(1, Math.floor(parsed)) : 0;
+  }
+  return {
+    mode,
+    ...(allowlist.length > 0 ? { allowlist } : {}),
+    ...(maxBytesPerJob !== undefined ? { maxBytesPerJob } : {}),
+  };
 }
 
 function egressPolicyFromEnv(env: Env): EgressPolicy {
@@ -284,6 +357,7 @@ export function composeBrokerService(env: Env = process.env): BrokerEntryComposi
   });
 
   const policy = egressPolicyFromEnv(env);
+  const deploymentEgressMaximum = deploymentEgressMaximumFromEnv(env);
   const gateway = gatewayFromEnv(env, policy);
   const network = env.EXEC_SANDBOX_NETWORK?.trim() || DEFAULT_SANDBOX_NETWORK;
 
@@ -304,6 +378,10 @@ export function composeBrokerService(env: Env = process.env): BrokerEntryComposi
     // Acknowledged above: bounded by carrier TTL, not by the run store.
     livenessProbe: async () => "alive",
     voucherVerifier,
+    // The deployment ceiling the signed policy is clamped against, on all three
+    // axes. Absent ⇒ no ceiling and the signed policy stands, which is the
+    // documented meaning of leaving the three variables unset.
+    ...(deploymentEgressMaximum ? { deploymentEgressMaximum } : {}),
     egressPolicyResolver: () => policy,
     sandboxNetwork: network,
     ...(gateway ? { gateway } : {}),

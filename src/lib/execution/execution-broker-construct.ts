@@ -284,7 +284,16 @@ export function resolveDeploymentEgressMaximum(
         reason: `EXECUTION_EGRESS_MAX_BYTES_PER_JOB="${rawBytes}" is not a non-negative number`,
       };
     }
-    maxBytesPerJob = Math.floor(parsed);
+    // A POSITIVE ceiling never floors to zero. `0` means "no ceiling" everywhere
+    // downstream (`registerJobEgress` and `gatewayEnvironment` both send
+    // `maxBytesPerJob ?? 0`, and the gateway reads 0 as uncapped), so
+    // `Math.floor` alone turned the tightest possible ask — `0.5` — into an
+    // UNCAPPED deployment: a fail-OPEN at exactly the axis this value bounds.
+    // Same normalization as `egress-clamp.ts`'s `normalizeByteCap` and as the
+    // deployed broker's `deploymentEgressMaximumFromEnv`, so the two placements
+    // read an identical ceiling from identical configuration. An explicit `0`
+    // still means "no ceiling", which is what it is documented to mean.
+    maxBytesPerJob = parsed > 0 ? Math.max(1, Math.floor(parsed)) : 0;
   }
   return {
     ok: true,

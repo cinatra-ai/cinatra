@@ -364,6 +364,22 @@ describe("the per-command authorization boundary — host-side seams (epic #1705
     ).toMatchObject({ ok: true, maximum: { allowlist: ["pypi.org"] } });
   });
 
+  it("never floors a POSITIVE byte ceiling to zero — zero means UNCAPPED downstream", () => {
+    // `0` is "no ceiling" everywhere downstream, so a bare `Math.floor` turned
+    // the tightest possible ask into an unbounded deployment: a fail-OPEN on the
+    // one axis this value exists to bound (Codex convergence, exec-plane L5).
+    expect(
+      resolveDeploymentEgressMaximum({ EXECUTION_EGRESS_MAX_BYTES_PER_JOB: "0.5" }),
+    ).toMatchObject({ ok: true, maximum: { maxBytesPerJob: 1 } });
+    expect(
+      resolveDeploymentEgressMaximum({ EXECUTION_EGRESS_MAX_BYTES_PER_JOB: "1.9" }),
+    ).toMatchObject({ ok: true, maximum: { maxBytesPerJob: 1 } });
+    // An EXPLICIT zero still means what it is documented to mean.
+    expect(
+      resolveDeploymentEgressMaximum({ EXECUTION_EGRESS_MAX_BYTES_PER_JOB: "0" }),
+    ).toMatchObject({ ok: true, maximum: { maxBytesPerJob: 0 } });
+  });
+
   it("audits a mint DENIAL as a denied authz row — it never reaches the broker to be audited there", async () => {
     await createVoucherMintAuditSink()({
       decision: "denied",
