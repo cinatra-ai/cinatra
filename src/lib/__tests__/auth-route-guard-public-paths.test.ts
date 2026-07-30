@@ -95,8 +95,8 @@ describe("auth-route-guard PUBLIC_PATH_PREFIXES - WayFlow ApiNode bridge routes"
     expect(guardSource).not.toMatch(/from\s+["']@\/lib\/generated\/webhook-public-paths["']/);
   });
 
-  it("keeps /api/webhooks/wordpress as a SEPARATE hand-pin (the #343 boundary), not folded into /webhook", () => {
-    expect(guardSource).toMatch(/"\/api\/webhooks\/wordpress"/);
+  it("no longer exempts /api/webhooks/wordpress (cinatra#2022: the dedicated legacy route was deleted)", () => {
+    expect(guardSource).not.toMatch(/"\/api\/webhooks\/wordpress"/);
   });
 
   it("does NOT exempt /connect/authorize (the consent screen stays session-gated)", () => {
