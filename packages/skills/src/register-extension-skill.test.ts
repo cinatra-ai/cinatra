@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mkdtemp, writeFile, rm, mkdir, readFile, symlink } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 
@@ -17,8 +16,12 @@ import os from "node:os";
 
 vi.mock("server-only", () => ({}));
 
-const { upsertSkillMock } = vi.hoisted(() => ({
+const { upsertSkillMock, headState } = vi.hoisted(() => ({
   upsertSkillMock: vi.fn(),
+  // cinatra#2274 added a registration POST-CONDITION that re-reads the skill's
+  // bundle head. There is no DB here, so ONLY that reader is stubbed; the real
+  // bundle walker + digest stay real (see the mock below).
+  headState: { value: null as unknown },
 }));
 
 vi.mock("./skills-store", () => ({
@@ -26,6 +29,11 @@ vi.mock("./skills-store", () => ({
   readSkillsStorageConfig: vi.fn(() => ({ dataPath: "data/skills" })),
   syncInstalledSkillsToDatabase: vi.fn(async () => ({ skillPackages: [], skills: [] })),
 }));
+
+vi.mock("@/lib/skill-bundle-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/skill-bundle-store")>();
+  return { ...actual, readAuthorityBundleHeadState: () => headState.value };
+});
 
 vi.mock("./skills-registry", () => ({
   parseFrontmatter: (content: string) => {
@@ -44,7 +52,27 @@ vi.mock("./skills-registry", () => ({
   },
 }));
 
-import { registerExtensionSkill, mirrorSkillBundleAssets } from "./register-extension-skill";
+import { registerExtensionSkill } from "./register-extension-skill";
+import { bundleDigestForFiles } from "@/lib/skill-bundle-store";
+import { resolveUpsertBundleFiles } from "./skill-source";
+
+/** Emulate the real store: write the canonical SKILL.md from `content` and
+ * publish the head its lifecycle write would have installed. */
+async function storeLike(storeDir: string) {
+  return async (input: { content: string; bundleFiles?: unknown }) => {
+    await mkdir(storeDir, { recursive: true });
+    await writeFile(path.join(storeDir, "SKILL.md"), input.content, "utf8");
+    headState.value = {
+      headRevisionId: "rev-1",
+      headBundleDigest: bundleDigestForFiles(
+        resolveUpsertBundleFiles(input.content, input.bundleFiles as never),
+      ),
+      activeRevisionId: "rev-1",
+      isAuthorityOwned: true,
+    };
+    return { id: "@cinatra-ai/chat:chat-assistant", sourcePath: path.join(storeDir, "SKILL.md") };
+  };
+}
 
 const SKILL_MD = `---
 name: chat-assistant
@@ -66,10 +94,9 @@ describe("registerExtensionSkill — skills-layer invariant", () => {
   });
 
   it("registers via upsertSkill (type:workspace) and returns {id, sourcePath}", async () => {
-    upsertSkillMock.mockResolvedValue({
-      id: "@cinatra-ai/chat:chat-assistant",
-      sourcePath: "/data/skills/system/chat/chat-assistant/SKILL.md",
-    });
+    // A REAL canonical dir: the cinatra#2274 post-condition walks it back.
+    const storeDir = await mkdtemp(path.join(os.tmpdir(), "pss-store1-"));
+    upsertSkillMock.mockImplementation(await storeLike(storeDir));
 
     const out = await registerExtensionSkill({
       skillId: "@cinatra-ai/chat:chat-assistant",
@@ -78,7 +105,7 @@ describe("registerExtensionSkill — skills-layer invariant", () => {
     });
 
     expect(out.id).toBe("@cinatra-ai/chat:chat-assistant");
-    expect(out.sourcePath).toBe("/data/skills/system/chat/chat-assistant/SKILL.md");
+    expect(out.sourcePath).toBe(path.join(storeDir, "SKILL.md"));
     const call = upsertSkillMock.mock.calls[0][0];
     expect(call.type).toBe("workspace");
     expect(call.packageName).toBe("@cinatra-ai/chat");
@@ -116,106 +143,19 @@ describe("registerExtensionSkill — skills-layer invariant", () => {
   });
 });
 
-// Delivered-surface completeness (cinatra#2090 S3 fold): registration must
-// mirror the bundle's references/** beside the stored SKILL.md, because the
-// shell tool serves one-hop reference reads from the CANONICAL dir — a router
-// registered without its references promises paths that do not resolve.
-describe("registerExtensionSkill — bundle-asset mirroring (references/**)", () => {
-  let srcDir: string;
-  let storeDir: string;
-
-  beforeEach(async () => {
-    upsertSkillMock.mockReset();
-    srcDir = await mkdtemp(path.join(os.tmpdir(), "pss-src-"));
-    storeDir = await mkdtemp(path.join(os.tmpdir(), "pss-store-"));
-    await writeFile(path.join(srcDir, "SKILL.md"), SKILL_MD, "utf8");
-    await mkdir(path.join(srcDir, "references", "deep"), { recursive: true });
-    await writeFile(path.join(srcDir, "references", "one.md"), "ref one\n", "utf8");
-    await writeFile(path.join(srcDir, "references", "deep", "two.md"), "ref two\n", "utf8");
-  });
-
-  it("copies references/** (recursively) into the canonical dir; SKILL.md stays upsertSkill-owned", async () => {
-    const storedSkillMd = path.join(storeDir, "SKILL.md");
-    await writeFile(storedSkillMd, "CANONICAL BODY (written by upsertSkill)\n", "utf8");
-    upsertSkillMock.mockResolvedValue({
-      id: "@cinatra-ai/chat:chat-assistant",
-      sourcePath: storedSkillMd,
-    });
-
-    await registerExtensionSkill({
-      skillId: "@cinatra-ai/chat:chat-assistant",
-      packageName: "@cinatra-ai/chat",
-      skillMdPath: path.join(srcDir, "SKILL.md"),
-    });
-
-    expect(await readFile(path.join(storeDir, "references", "one.md"), "utf8")).toBe("ref one\n");
-    expect(await readFile(path.join(storeDir, "references", "deep", "two.md"), "utf8")).toBe("ref two\n");
-    // The canonical SKILL.md is upsertSkill's write — the mirror never overwrites it.
-    expect(await readFile(storedSkillMd, "utf8")).toBe("CANONICAL BODY (written by upsertSkill)\n");
-
-    await rm(srcDir, { recursive: true, force: true });
-    await rm(storeDir, { recursive: true, force: true });
-  });
-
-  it("mirrorSkillBundleAssets skips symlinks fail-closed (nothing outside the bundle is pulled in)", async () => {
-    const outside = await mkdtemp(path.join(os.tmpdir(), "pss-outside-"));
-    await writeFile(path.join(outside, "secret.md"), "outside\n", "utf8");
-    await symlink(path.join(outside, "secret.md"), path.join(srcDir, "references", "link.md"));
-    await symlink(outside, path.join(srcDir, "linked-dir"));
-
-    await mirrorSkillBundleAssets(srcDir, storeDir);
-
-    expect(existsSync(path.join(storeDir, "references", "one.md"))).toBe(true);
-    expect(existsSync(path.join(storeDir, "references", "link.md"))).toBe(false);
-    expect(existsSync(path.join(storeDir, "linked-dir"))).toBe(false);
-
-    await rm(srcDir, { recursive: true, force: true });
-    await rm(storeDir, { recursive: true, force: true });
-    await rm(outside, { recursive: true, force: true });
-  });
-
-  it("mirrorSkillBundleAssets refuses to write through a pre-existing symlink leaf in the storage dir", async () => {
-    const outside = await mkdtemp(path.join(os.tmpdir(), "pss-outside2-"));
-    await mkdir(path.join(storeDir, "references"), { recursive: true });
-    await symlink(path.join(outside, "target.md"), path.join(storeDir, "references", "one.md"));
-
-    await expect(mirrorSkillBundleAssets(srcDir, storeDir)).rejects.toThrow(/symlink leaf/);
-    expect(existsSync(path.join(outside, "target.md"))).toBe(false);
-
-    await rm(srcDir, { recursive: true, force: true });
-    await rm(storeDir, { recursive: true, force: true });
-    await rm(outside, { recursive: true, force: true });
-  });
-
-  it("is a no-op when the source bundle dir has no extra assets (single SKILL.md bundles)", async () => {
-    const bare = await mkdtemp(path.join(os.tmpdir(), "pss-bare-"));
-    await writeFile(path.join(bare, "SKILL.md"), SKILL_MD, "utf8");
-    await mirrorSkillBundleAssets(bare, storeDir);
-    expect(existsSync(path.join(storeDir, "references"))).toBe(false);
-    await rm(bare, { recursive: true, force: true });
-    await rm(srcDir, { recursive: true, force: true });
-    await rm(storeDir, { recursive: true, force: true });
-  });
-});
-
-// Appended alongside the mirroring suite: a pre-existing SYMLINKED DIRECTORY
-// in the storage tree must refuse the descent (a linked references/ would
-// redirect every copied leaf outside the canonical dir).
-describe("mirrorSkillBundleAssets — symlinked destination directory", () => {
-  it("refuses to descend through a symlinked destination directory", async () => {
-    const src = await mkdtemp(path.join(os.tmpdir(), "pss-src2-"));
-    const store = await mkdtemp(path.join(os.tmpdir(), "pss-store2-"));
-    const outside = await mkdtemp(path.join(os.tmpdir(), "pss-outside3-"));
-    await writeFile(path.join(src, "SKILL.md"), SKILL_MD, "utf8");
-    await mkdir(path.join(src, "references"), { recursive: true });
-    await writeFile(path.join(src, "references", "one.md"), "ref one\n", "utf8");
-    await symlink(outside, path.join(store, "references"));
-
-    await expect(mirrorSkillBundleAssets(src, store)).rejects.toThrow(/symlinked directory/);
-    expect(existsSync(path.join(outside, "one.md"))).toBe(false);
-
-    await rm(src, { recursive: true, force: true });
-    await rm(store, { recursive: true, force: true });
-    await rm(outside, { recursive: true, force: true });
-  });
-});
+// DELIVERED-SURFACE COMPLETENESS (cinatra#2090 S3 fold) moved off the
+// copy-the-source mirror in cinatra#2274.
+//
+// `mirrorSkillBundleAssets` is GONE. Registration now materializes the canonical
+// directory from the CONTENT AUTHORITY it just recorded
+// (`materializeRevisionBundleToDirectory`): staged into a sibling temp dir and
+// renamed into place, replacing whatever stood there. That removes the whole
+// class the deleted suite covered — a stale reference cannot survive a
+// wholesale replacement, and a planted symlink in the storage dir is removed by
+// the `rm -r` (which lstats and unlinks a link) instead of being written
+// through, so there is no "refuse to write through a symlink" path left to test.
+// The `references/**` delivery, the stale-file case, and the symlink case are
+// proven END TO END against a real database + real filesystem in
+// src/lib/__tests__/integration/skill-extension-writer-authority.integration.test.ts;
+// the delivery DECISION (materialize only on drift) is unit-pinned in
+// src/__tests__/extension-skill-bundle-authority.test.ts.

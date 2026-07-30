@@ -28,7 +28,13 @@ import path from "node:path";
 
 // `vi.mock` factories are hoisted above all top-level statements, so the mock
 // fn must be created via `vi.hoisted` to be referenceable inside the factory.
-const { upsertSkillMock } = vi.hoisted(() => ({ upsertSkillMock: vi.fn() }));
+const { upsertSkillMock, headState } = vi.hoisted(() => ({
+  upsertSkillMock: vi.fn(),
+  // The cinatra#2274 registration POST-CONDITION re-reads the skill's bundle
+  // head from the DB. There is no DB in this unit, so ONLY that reader is
+  // stubbed (the real bundle walker and digest stay real — see the mock below).
+  headState: { value: null as unknown },
+}));
 
 // Mock the two module deps register-extension-skill pulls: `../skills-store`
 // (for upsertSkill) and `../skills-registry` (for parseFrontmatter — real
@@ -40,8 +46,14 @@ vi.mock("../skills-registry", () => ({
     body: content,
   }),
 }));
+vi.mock("@/lib/skill-bundle-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/skill-bundle-store")>();
+  return { ...actual, readAuthorityBundleHeadState: () => headState.value };
+});
 
 import { registerPackageAgentSkill } from "../register-extension-skill";
+import { bundleDigestForFiles } from "@/lib/skill-bundle-store";
+import { resolveUpsertBundleFiles } from "../skill-source";
 
 let root: string;
 let skillMdPath: string;
@@ -73,10 +85,32 @@ afterAll(async () => {
 
 beforeEach(() => {
   upsertSkillMock.mockReset();
-  upsertSkillMock.mockResolvedValue({
-    id: "skill-1",
-    sourcePath:
-      "/store/workspace/~agents/acme-vendor/reviewer-agent/reviewer-methodology/SKILL.md",
+  headState.value = null;
+  // Stand in for the real store: write the canonical SKILL.md from `content`
+  // into a real storage dir, and publish the head the write would have
+  // installed. Both are what the cinatra#2274 post-condition then re-reads.
+  upsertSkillMock.mockImplementation(async (input: { content: string; bundleFiles?: unknown }) => {
+    const storageDir = path.join(
+      root,
+      "store",
+      "workspace",
+      "~agents",
+      "acme-vendor",
+      "reviewer-agent",
+      "reviewer-methodology",
+    );
+    await mkdir(storageDir, { recursive: true });
+    await writeFile(path.join(storageDir, "SKILL.md"), input.content, "utf8");
+    const digest = bundleDigestForFiles(
+      resolveUpsertBundleFiles(input.content, input.bundleFiles as never),
+    );
+    headState.value = {
+      headRevisionId: "rev-1",
+      headBundleDigest: digest,
+      activeRevisionId: "rev-1",
+      isAuthorityOwned: true,
+    };
+    return { id: "skill-1", sourcePath: path.join(storageDir, "SKILL.md") };
   });
 });
 

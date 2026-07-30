@@ -594,6 +594,87 @@ export interface UpsertRevisionSkill {
   content?: string | null;
 }
 
+/** One non-router file entering an upsert's recorded bundle (cinatra#2274). */
+export interface UpsertBundleFile {
+  /** Path relative to the bundle root (POSIX or native — normalized on write). */
+  path: string;
+  /** Raw file bytes. */
+  bytes: Buffer;
+  /** Unix file mode (default 0o644 on write). */
+  mode?: number;
+  /** Set on the SKILL.md router; such an entry is DROPPED here (see below). */
+  isRouter?: boolean;
+}
+
+/** The canonical router path a bundle must carry exactly once. */
+const UPSERT_ROUTER_PATH = "SKILL.md";
+
+/** Whether a bundle-relative path names the canonical router, modulo `./` and
+ * backslash separators. A faithful subset of the store's
+ * `normalizeBundledRelPath`; anything it would REJECT is not the router, and the
+ * store's own normalizer still fails the write closed on it. */
+function isUpsertRouterPath(relPath: string): boolean {
+  if (typeof relPath !== "string") return false;
+  return (
+    relPath
+      .replaceAll("\\", "/")
+      .split("/")
+      .filter((s) => s.length > 0 && s !== ".")
+      .join("/") === UPSERT_ROUTER_PATH
+  );
+}
+
+/**
+ * The FILE SET an upsert records as the revision's bundle (cinatra#2274).
+ *
+ * The router entry is ALWAYS re-derived from `content` and never taken from the
+ * caller's file set — three consumers have to agree byte-for-byte and only this
+ * makes that true by construction:
+ *   - `skill_revision_contents` stores `content` and the DB CHECK hashes it;
+ *   - `upsertSkill` writes `content` to the canonical SKILL.md on disk, which is
+ *     what `captureSkillBundleFromDisk` later re-hashes;
+ *   - the manifest's router digest is sha256 of the same bytes, which is exactly
+ *     `computeSkillSourceRevision(content)` — the revision's `content_digest`.
+ * A caller-supplied router entry could disagree with `content` (it is read from
+ * a DIFFERENT file on a different filesystem read), and the resulting revision
+ * would claim a manifest its own content blob does not appear in.
+ *
+ * With no `bundleFiles` this is the cinatra#2088 BUNDLE OF ONE, unchanged — an
+ * authored/chat-captured skill IS its router.
+ *
+ * @throws when an entry carries `isRouter: true` on a path that is NOT the
+ *   canonical router. Silently dropping it would EXCLUDE a real bundled file
+ *   from the manifest while the mirror still materializes it on disk — the exact
+ *   authority-vs-disk disagreement this whole fix removes. The store's own
+ *   `normalizeBundleWrite` raises on the same condition; failing here just makes
+ *   it a clean caller error instead of a mid-write one.
+ */
+export function resolveUpsertBundleFiles(
+  content: string,
+  bundleFiles?: readonly UpsertBundleFile[] | null,
+): Array<{ path: string; bytes: Buffer; mode?: number; isRouter?: boolean }> {
+  const router = {
+    path: UPSERT_ROUTER_PATH,
+    bytes: Buffer.from(content, "utf8"),
+    isRouter: true,
+  };
+  if (!bundleFiles || bundleFiles.length === 0) return [router];
+  const rest: Array<{ path: string; bytes: Buffer; mode?: number; isRouter?: boolean }> = [];
+  for (const f of bundleFiles) {
+    const isRouterPath = isUpsertRouterPath(f.path);
+    if (f.isRouter === true && !isRouterPath) {
+      throw new Error(
+        `resolveUpsertBundleFiles: is_router set on a non-router path: ${f.path}`,
+      );
+    }
+    // The caller's OWN router entry is dropped — the router is re-derived from
+    // `content` above, which is the whole point.
+    if (isRouterPath) continue;
+    rest.push({ path: f.path, bytes: f.bytes, mode: f.mode, isRouter: false });
+  }
+  return [router, ...rest];
+}
+
 /**
  * Build the atomic `lifecycleWrites` entry for a custom/personal `upsertSkill`
  * write (cinatra#1361): a distinct immutable revision (content digest = the
@@ -609,6 +690,15 @@ export function buildUpsertRevisionWrite(
   isPersonal: boolean,
   ownerUserId?: string | null,
   revisionSource?: RevisionSource,
+  /**
+   * The skill's REAL on-disk bundle (cinatra#2274). Omit for the authored /
+   * chat-captured writers, whose bundle IS the router. Supplied by the extension
+   * registration writer, whose package ships a router PLUS `references/*` — a
+   * bundle-of-one manifest there is an authority that DESCRIBES ONE FILE while
+   * the disk ships several, which freezes the head at `authorityOwnedDivergence`
+   * forever and makes the fail-closed one-hop lint refuse the skill.
+   */
+  bundleFiles?: readonly UpsertBundleFile[] | null,
 ): SkillLifecycleRevisionWrite {
   const digest =
     skill.source?.revision && typeof skill.source.revision.value === "string"
@@ -641,9 +731,14 @@ export function buildUpsertRevisionWrite(
     // "custom skills can never carry references" gap). The router's per-file
     // digest is sha256(utf8 content) — the SAME value as `computeSkillSourceRevision`,
     // so the manifest agrees with the source revision digest by construction.
+    //
+    // A caller that KNOWS the skill's real file set passes it (cinatra#2274) and
+    // the manifest describes the whole bundle instead. Still gated on
+    // `content + digest`: with no content there is no authority to record at all,
+    // and a manifest without its own router's blob would be a broken one.
     bundleFiles:
       typeof skill.content === "string" && digest != null
-        ? [{ path: "SKILL.md", bytes: Buffer.from(skill.content, "utf8"), isRouter: true }]
+        ? resolveUpsertBundleFiles(skill.content, bundleFiles)
         : null,
     initialState: INITIAL_LIFECYCLE_STATE,
   };
