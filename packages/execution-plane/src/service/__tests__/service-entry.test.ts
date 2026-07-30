@@ -59,9 +59,28 @@ afterEach(async () => {
  * `loadExecTlsMaterial` reads from the filesystem, so the entry tests write the
  * PEMs to a temp dir. Kept tiny and deterministic.
  */
+import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+/**
+ * The broker's voucher-verify key (epic #1705 L2) is a SEPARATE Ed25519
+ * keypair from the mTLS leaves above — `ExecutionVoucherVerifier` only ever
+ * sees the public half, written to its own scoped-env file path.
+ */
+const VOUCHER_KEYS = generateKeyPairSync("ed25519");
+const VOUCHER_PUBLIC_KEY_PEM = VOUCHER_KEYS.publicKey.export({
+  type: "spki",
+  format: "pem",
+}) as string;
+
+function voucherKeyEnv(): Record<string, string> {
+  const dir = mkdtempSync(join(tmpdir(), "exec-entry-voucher-"));
+  const path = join(dir, "voucher-verify.pem");
+  writeFileSync(path, VOUCHER_PUBLIC_KEY_PEM);
+  return { EXEC_VOUCHER_VERIFY_PUBLIC_KEY_FILE: path };
+}
 
 function tlsEnv(pem: Record<string, string>): Record<string, string> {
   const dir = mkdtempSync(join(tmpdir(), "exec-entry-"));
@@ -99,6 +118,7 @@ function brokerEnv(overrides: Record<string, string | undefined> = {}): Record<s
     EXEC_EGRESS_MODE: "none",
     ...tlsEnv(BROKER_PEM),
     ...clientTlsEnv(BROKER_CLIENT_PEM),
+    ...voucherKeyEnv(),
     ...overrides,
   };
 }
@@ -141,6 +161,9 @@ describe("broker entry — fail-closed on unwired seams", () => {
     expect(() => composeBrokerService(brokerEnv({ EXEC_TLS_CA_FILE: undefined }))).toThrow(
       /EXEC_TLS_CA_FILE/,
     );
+    expect(() =>
+      composeBrokerService(brokerEnv({ EXEC_VOUCHER_VERIFY_PUBLIC_KEY_FILE: undefined })),
+    ).toThrow(/EXEC_VOUCHER_VERIFY_PUBLIC_KEY_FILE/);
   });
 
   it("refuses a plaintext worker URL — the hop is mutually-authenticated TLS", () => {

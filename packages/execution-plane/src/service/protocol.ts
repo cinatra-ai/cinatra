@@ -132,6 +132,15 @@ export type ExecPayload = {
    * binding's concern, not this contract's.
    */
   commandId: string;
+  /**
+   * Per-command authorization voucher (epic #1705 L2). Opaque over the wire —
+   * this contract never inspects it, it only carries it byte-exact to
+   * `ExecutionBroker.exec`'s own `voucherVerifier`, which is the sole party
+   * that verifies it. REQUIRED: a wire contract that let this field be
+   * omitted would be a broker that can be asked to run an unauthorized
+   * command, which is exactly the outcome the voucher exists to prevent.
+   */
+  voucher: string;
 };
 
 export type CloseJobPayload = { jobId: string; removeWorkspace?: boolean };
@@ -612,11 +621,17 @@ export function parseBrokerRequest(
       if (!isNonEmptyString(p.jobId)) return fail("`jobId` is required.");
       if (typeof p.command !== "string") return fail("`command` is required.");
       if (!isNonEmptyString(p.commandId)) return fail("`commandId` is required.");
+      if (!isNonEmptyString(p.voucher)) return fail("`voucher` is required.");
       return {
         ok: true,
         request: {
           op: "exec",
-          payload: { jobId: p.jobId, command: p.command, commandId: p.commandId },
+          payload: {
+            jobId: p.jobId,
+            command: p.command,
+            commandId: p.commandId,
+            voucher: p.voucher,
+          },
         },
       };
     }

@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ExecutionBroker } from "../../broker";
 import type { DockerCli, DockerRunOutcome } from "../../docker-cli";
 import { EnvironmentMountRefusedError } from "../../environment/mount";
+import type { CommandVoucherMinter } from "../../executor";
 import type {
   ExecResult,
   ExecutionAuditRecord,
@@ -104,6 +105,16 @@ const SPEC: SandboxCommandSpec = {
 /** The merged broker must satisfy the service's structural surface. */
 const _brokerSurfaceIsSatisfied = (broker: ExecutionBroker): BrokerServiceBroker => broker;
 void _brokerSurfaceIsSatisfied;
+
+/**
+ * A fixed opaque voucher for wire-level tests. Nothing here exercises
+ * `ExecutionVoucherVerifier` (no real `ExecutionBroker` is constructed in this
+ * file — see `_brokerSurfaceIsSatisfied` above), so the string is never
+ * cryptographically verified; it only has to round-trip byte-exact through
+ * the wire to the `FakeBroker`.
+ */
+const TEST_VOUCHER = "test-voucher";
+const mintTestVoucher: CommandVoucherMinter = async () => ({ ok: true, voucher: TEST_VOUCHER });
 
 type FakeBroker = BrokerServiceBroker & {
   execCalls: Array<{ jobId: string; command: string }>;
@@ -303,7 +314,7 @@ describe("broker service — authorized round trip", () => {
     const client = brokerClient(port);
 
     expect(await client.openJob("sealed.carrier")).toEqual({ ok: true, jobId: "job-1" });
-    const result = await client.exec("job-1", "printf hi", { commandId: "c1" });
+    const result = await client.exec("job-1", "printf hi", TEST_VOUCHER, { commandId: "c1" });
     expect(result).toEqual({ ok: true, result: RESULT });
     expect(broker.execCalls).toEqual([{ jobId: "job-1", command: "printf hi" }]);
   });
@@ -323,7 +334,7 @@ describe("broker service — authorized round trip", () => {
       reason: "carrier_expired",
       message: "stale",
     });
-    expect(await client.exec("job-1", "ls", { commandId: "c2" })).toEqual({
+    expect(await client.exec("job-1", "ls", TEST_VOUCHER, { commandId: "c2" })).toEqual({
       ok: false,
       reason: "run_removed",
       message: "purged",
@@ -374,8 +385,8 @@ describe("broker service — idempotency", () => {
     const { port } = await startBroker(broker);
     const client = brokerClient(port);
 
-    const first = await client.exec("job-1", "install", { commandId: "same" });
-    const second = await client.exec("job-1", "install", { commandId: "same" });
+    const first = await client.exec("job-1", "install", TEST_VOUCHER, { commandId: "same" });
+    const second = await client.exec("job-1", "install", TEST_VOUCHER, { commandId: "same" });
     expect(second).toEqual(first);
     expect(broker.execCalls).toHaveLength(1);
   });
@@ -389,12 +400,12 @@ describe("broker service — idempotency", () => {
     const { port } = await startBroker(broker);
     const client = brokerClient(port);
 
-    const first = client.exec("job-1", "install", { commandId: "hot" });
+    const first = client.exec("job-1", "install", TEST_VOUCHER, { commandId: "hot" });
     // Give the first dispatch time to claim the id before the duplicate lands.
     // The claim happens synchronously right after the body parse, so this is a
     // generous margin rather than a race the test depends on winning.
     await new Promise<void>((resolve) => setTimeout(resolve, 250));
-    const duplicate = await client.exec("job-1", "install", { commandId: "hot" });
+    const duplicate = await client.exec("job-1", "install", TEST_VOUCHER, { commandId: "hot" });
     expect(duplicate.ok).toBe(false);
     if (duplicate.ok) return;
     expect(duplicate.reason).toBe("worker_error");
@@ -656,7 +667,7 @@ describe("broker service — audit relay", () => {
 describe("broker service — the injected SandboxExecutor", () => {
   it("produces model-visible outputs over the real service", async () => {
     const { port } = await startBroker(fakeBroker());
-    const executor = createRemoteSandboxExecutor(brokerClient(port));
+    const executor = createRemoteSandboxExecutor(brokerClient(port), { mintVoucher: mintTestVoucher });
     const outputs = await executor({ sessionCarrier: "sealed", commands: ["a", "b"] });
     expect(outputs).toHaveLength(2);
     expect(outputs[0]).toEqual({
@@ -670,7 +681,7 @@ describe("broker service — the injected SandboxExecutor", () => {
     // Point at a closed port: the executor's contract is that it NEVER rejects
     // into the provider tool loop.
     const client = brokerClient(1);
-    const executor = createRemoteSandboxExecutor(client);
+    const executor = createRemoteSandboxExecutor(client, { mintVoucher: mintTestVoucher });
     const outputs = await executor({ sessionCarrier: "sealed", commands: ["a"] });
     expect(outputs).toHaveLength(1);
     expect(outputs[0]?.outcome).toEqual({ type: "exit", exitCode: 126 });
@@ -691,7 +702,7 @@ describe("broker service — the injected SandboxExecutor", () => {
         openResult: { ok: false, reason: "open_jobs_exhausted", message: "too many" },
       }),
     );
-    const executor = createRemoteSandboxExecutor(brokerClient(port));
+    const executor = createRemoteSandboxExecutor(brokerClient(port), { mintVoucher: mintTestVoucher });
     const outputs = await executor({ sessionCarrier: "sealed", commands: ["a", "b"] });
     expect(outputs).toHaveLength(2);
     expect(outputs.every((o) => o.refusedByPlane === true)).toBe(true);
@@ -703,20 +714,20 @@ describe("broker service — the injected SandboxExecutor", () => {
         execResult: { ok: false, reason: "queue_saturated", message: "full" },
       }),
     );
-    const executor = createRemoteSandboxExecutor(brokerClient(port));
+    const executor = createRemoteSandboxExecutor(brokerClient(port), { mintVoucher: mintTestVoucher });
     const outputs = await executor({ sessionCarrier: "sealed", commands: ["a"] });
     expect(outputs[0]?.refusedByPlane).toBe(true);
   });
 
   it("leaves a REAL execution unmarked, so the guard can still tell the two apart", async () => {
     const { port } = await startBroker(fakeBroker());
-    const executor = createRemoteSandboxExecutor(brokerClient(port));
+    const executor = createRemoteSandboxExecutor(brokerClient(port), { mintVoucher: mintTestVoucher });
     const outputs = await executor({ sessionCarrier: "sealed", commands: ["a"] });
     expect(outputs[0]?.refusedByPlane).toBeUndefined();
   });
 
   it("an unreachable broker's refusal is marked too — the transport path is not an exception", async () => {
-    const executor = createRemoteSandboxExecutor(brokerClient(1));
+    const executor = createRemoteSandboxExecutor(brokerClient(1), { mintVoucher: mintTestVoucher });
     const outputs = await executor({ sessionCarrier: "sealed", commands: ["a"] });
     expect(outputs[0]?.refusedByPlane).toBe(true);
   });
@@ -734,11 +745,11 @@ describe("service idempotency — a commandId is scoped to ONE job", () => {
     const broker = fakeBroker();
     const { port } = await startBroker(broker);
     const client = brokerClient(port);
-    expect(await client.exec("job-1", "a", { commandId: "shared-id" })).toEqual({
+    expect(await client.exec("job-1", "a", TEST_VOUCHER, { commandId: "shared-id" })).toEqual({
       ok: true,
       result: RESULT,
     });
-    const crossed = await client.exec("job-2", "b", { commandId: "shared-id" });
+    const crossed = await client.exec("job-2", "b", TEST_VOUCHER, { commandId: "shared-id" });
     expect(crossed).toEqual({
       ok: false,
       reason: "worker_error",
@@ -766,9 +777,9 @@ describe("service idempotency — a commandId is scoped to ONE job", () => {
     const { port } = await startBroker(broker);
     const client = brokerClient(port);
 
-    const first = await client.exec("job-1", "a", { commandId: "same-id" });
+    const first = await client.exec("job-1", "a", TEST_VOUCHER, { commandId: "same-id" });
     expect(first.ok).toBe(false);
-    const retry = await client.exec("job-1", "a", { commandId: "same-id" });
+    const retry = await client.exec("job-1", "a", TEST_VOUCHER, { commandId: "same-id" });
     expect(retry.ok).toBe(false);
     if (!retry.ok) expect(retry.message).toMatch(/not retryable under the same id/);
     // The broker was entered EXACTLY once, despite the retry.
@@ -791,10 +802,10 @@ describe("service idempotency — a commandId is scoped to ONE job", () => {
     });
     const { port } = await startBroker(broker);
     const client = brokerClient(port);
-    const first = await client.exec("job-1", "a", { commandId: "null-throw" });
+    const first = await client.exec("job-1", "a", TEST_VOUCHER, { commandId: "null-throw" });
     expect(first.ok).toBe(false);
     // Answerable, and the id is SPENT rather than wedged in-flight.
-    const retry = await client.exec("job-1", "a", { commandId: "null-throw" });
+    const retry = await client.exec("job-1", "a", TEST_VOUCHER, { commandId: "null-throw" });
     expect(retry.ok).toBe(false);
     if (!retry.ok) expect(retry.message).toMatch(/not retryable under the same id/);
     expect(broker.execCalls).toHaveLength(1);
