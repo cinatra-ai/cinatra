@@ -347,6 +347,10 @@ export async function runAnthropicSkillUploadReconcile(options?: {
         const result = await syncCatalogSkillsToAnthropicStrict();
         writeLastRunDigest(nsKey, digest);
         const refused = result.captureDiagnostics?.refusedForDanglingReferences ?? [];
+        // cinatra#2265 gap (b): count the skills whose stored revision resolved
+        // to no durable content, so the durable worker's own record says the
+        // derived head was a FALLBACK rather than leaving it unexplained.
+        const unresolved = result.captureDiagnostics?.unresolvedLifecycleContent ?? [];
         const ineligible = result.outcomes.filter(
           (o) => o.action === "skipped" && o.reason === "governance_denied",
         );
@@ -354,7 +358,8 @@ export async function runAnthropicSkillUploadReconcile(options?: {
           leaseToken,
           reconcileRows.map((r) => r.id),
           `reconciled digest=${digest.slice(0, 16)} outcomes=${result.outcomes.length} ` +
-            `upload-ineligible=${ineligible.length} refused=${refused.length}`,
+            `upload-ineligible=${ineligible.length} refused=${refused.length} ` +
+            `unresolved-lifecycle-content=${unresolved.length}`,
         );
         summary.reconciled = reconcileRows.length;
       }

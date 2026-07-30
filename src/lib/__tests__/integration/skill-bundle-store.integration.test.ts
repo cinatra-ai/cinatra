@@ -962,4 +962,300 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#2088 bundle-aware content authority (real
       await t2.end().catch(() => {});
     }
   });
+
+  // -------------------------------------------------------------------------
+  // cinatra#2265 — the two CONTENT-AUTHORITY gaps, on the real authority.
+  //
+  // Each test below states which gap it covers (AC5):
+  //   gap (a) = the payload-only CLI writer (packages/skills/src/cli.mjs,
+  //             compileAndRegisterAgentSkillsViaPg) — a `custom:`-classed
+  //             catalog row written with NO lifecycle revision and NO head;
+  //   gap (b) = a lifecycle revision whose `content_digest` resolves to no
+  //             durable blob — the seed declines and capture falls back to the
+  //             disk bundle under a derived head, silently.
+  // -------------------------------------------------------------------------
+
+  /** Build a temp `agents/<slug>/skills/<name>/` tree the CLI walker compiles. */
+  function materializeAgentRepo(
+    dirSlug: string,
+    skillDirName: string,
+    routerBody: string,
+    referenceBody: string | null,
+  ): { repoRoot: string; skillDir: string; routerPath: string } {
+    const repoRoot = mkdtempSync(path.join(tmpdir(), `agent-repo-2265-${dirSlug}-`));
+    const agentDir = path.join(repoRoot, "agents", dirSlug);
+    const skillDir = path.join(agentDir, "skills", skillDirName);
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(path.join(agentDir, "package.json"), JSON.stringify({ name: `@acme/${dirSlug}` }));
+    writeFileSync(path.join(skillDir, "SKILL.md"), routerBody);
+    if (referenceBody !== null) {
+      mkdirSync(path.join(skillDir, "references"), { recursive: true });
+      writeFileSync(path.join(skillDir, "references", "a.md"), referenceBody);
+    }
+    return { repoRoot, skillDir, routerPath: path.join(skillDir, "SKILL.md") };
+  }
+
+  it("gap (a): the CLI writer BACKS the custom class it asserts — lifecycle revision + authority head", async () => {
+    const { compileAndRegisterAgentSkillsViaPg } = await import(
+      "../../../../packages/skills/src/cli.mjs"
+    );
+    const ROUTER = "---\nname: cli authority\n---\n# Router\nSee [a](references/a.md).\n";
+    const repo = materializeAgentRepo("acme-2265", "cli-authority", ROUTER, "# a\n");
+    const SKILL = "custom:acme-2265:cli-authority";
+    try {
+      const out = await compileAndRegisterAgentSkillsViaPg({
+        repoRoot: repo.repoRoot,
+        dbUrl: DB_URL,
+        schemaName: TEST_SCHEMA,
+      });
+      expect(out.skipped).toEqual([]);
+      expect(out.registered).toEqual([SKILL]);
+
+      // The row IS in the custom class (the predicate keys on `packageId`)...
+      const catalog = await client.query(
+        `SELECT payload, lifecycle_state, active_revision_id FROM "${TEST_SCHEMA}"."skills" WHERE id = $1`,
+        [SKILL],
+      );
+      expect(JSON.parse(catalog.rows[0].payload).packageId).toBe("custom:acme-2265");
+      // ...and the authority the class implies is now RECORDED.
+      const revisionId = catalog.rows[0].active_revision_id as string;
+      expect(revisionId).toMatch(/^agent-compile:/);
+      expect(catalog.rows[0].lifecycle_state).toBe("active");
+
+      const head = await headOf(SKILL);
+      expect(head!.revision_id).toBe(revisionId);
+      // NOT a derived head: the head the class claims is authority-owned.
+      expect(head!.revision_id.startsWith("bundle:")).toBe(false);
+
+      // The manifest is the WHOLE compiled bundle, not a bundle of one — a
+      // router-only authority head under a multi-file skill is the cinatra#2094
+      // F7-A defect this must not reintroduce.
+      const current = store.readCurrentSkillBundleFromDatabase(SKILL)!;
+      expect([...current.files.map((f) => f.path)].sort()).toEqual(
+        ["SKILL.md", "references/a.md"].sort(),
+      );
+      expect(current.bundleDigest).toBe(head!.bundle_digest);
+      // The revision identity is STAMPED at INSERT, which is also what keeps
+      // this revision outside cinatra#2094's heal predicate (AC4: untouched).
+      const rev = await client.query(
+        `SELECT bundle_digest, content_digest, source FROM "${TEST_SCHEMA}"."skill_revisions" WHERE id = $1 AND skill_id = $2`,
+        [revisionId, SKILL],
+      );
+      expect(rev.rows[0].bundle_digest).toBe(current.bundleDigest);
+      expect(rev.rows[0].source).toBe("migration");
+      // The pre-S1 content read resolves too (a durable blob, not a dangling digest).
+      const blob = await client.query(
+        `SELECT content FROM "${TEST_SCHEMA}"."skill_revision_contents" WHERE content_digest = $1`,
+        [rev.rows[0].content_digest],
+      );
+      expect(blob.rows[0].content).toBe(ROUTER);
+      // ONE SNAPSHOT (codex round-1): the lifecycle content blob and the
+      // manifest's router bytes are two framings of the SAME read, so the
+      // immutable revision can never pair a body with a bundle it did not come
+      // from. `skill_revisions` is append-only and the insert is ON CONFLICT DO
+      // NOTHING, so a mismatched pairing would be unhealable.
+      const manifestRouter = current.files.find((f) => f.isRouter)!;
+      expect(manifestRouter.bytes.toString("utf8")).toBe(blob.rows[0].content);
+      expect(rev.rows[0].content_digest).toBe(sha(Buffer.from(ROUTER, "utf8")));
+
+      // A SUBSEQUENT CAPTURE does not install a derived head over the claim.
+      const cap = await store.captureSkillBundleFromDisk(SKILL, repo.routerPath);
+      expect(cap.changed).toBe(false);
+      expect(cap.authorityOwnedDivergence).toBe(false);
+      expect(cap.revisionId).toBe(revisionId);
+      expect(cap.unresolvedLifecycleContent).toBeNull();
+      expect((await headOf(SKILL))!.revision_id).toBe(revisionId);
+
+      // IDEMPOTENT on re-compile: same revision, same head, no extra rows.
+      const again = await compileAndRegisterAgentSkillsViaPg({
+        repoRoot: repo.repoRoot,
+        dbUrl: DB_URL,
+        schemaName: TEST_SCHEMA,
+      });
+      expect(again.registered).toEqual([SKILL]);
+      expect(again.skipped).toEqual([]);
+      const revCount = await client.query(
+        `SELECT count(*)::int AS n FROM "${TEST_SCHEMA}"."skill_revisions" WHERE skill_id = $1`,
+        [SKILL],
+      );
+      expect(revCount.rows[0].n).toBe(1);
+      const fileCount = await client.query(
+        `SELECT count(*)::int AS n FROM "${TEST_SCHEMA}"."skill_revision_files" WHERE skill_id = $1`,
+        [SKILL],
+      );
+      expect(fileCount.rows[0].n).toBe(2);
+      expect((await headOf(SKILL))!.revision_id).toBe(revisionId);
+    } finally {
+      rmSync(repo.repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("gap (a): changed disk content mints a NEW authority revision and advances the head", async () => {
+    const { compileAndRegisterAgentSkillsViaPg } = await import(
+      "../../../../packages/skills/src/cli.mjs"
+    );
+    const SKILL = "custom:acme-2265-edit:edited";
+    const first = materializeAgentRepo(
+      "acme-2265-edit",
+      "edited",
+      "---\nname: edited\n---\n# v1\n",
+      null,
+    );
+    let firstRev: string;
+    try {
+      await compileAndRegisterAgentSkillsViaPg({
+        repoRoot: first.repoRoot,
+        dbUrl: DB_URL,
+        schemaName: TEST_SCHEMA,
+      });
+      firstRev = (await headOf(SKILL))!.revision_id;
+    } finally {
+      rmSync(first.repoRoot, { recursive: true, force: true });
+    }
+    const second = materializeAgentRepo(
+      "acme-2265-edit",
+      "edited",
+      "---\nname: edited\n---\n# v2 CHANGED\n",
+      null,
+    );
+    try {
+      const out = await compileAndRegisterAgentSkillsViaPg({
+        repoRoot: second.repoRoot,
+        dbUrl: DB_URL,
+        schemaName: TEST_SCHEMA,
+      });
+      expect(out.registered).toEqual([SKILL]);
+      const head = await headOf(SKILL);
+      expect(head!.revision_id).not.toBe(firstRev);
+      expect(head!.revision_id).toMatch(/^agent-compile:/);
+      expect(
+        store.readCurrentSkillBundleFromDatabase(SKILL)!.files[0].bytes.toString("utf8"),
+      ).toContain("v2 CHANGED");
+    } finally {
+      rmSync(second.repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("gap (a): a schema without the authority tables REFUSES the custom row rather than writing it unbacked", async () => {
+    // The behaviour AC1 turns on: the class assertion and the authority that
+    // backs it commit together, so a writer that cannot record the authority
+    // writes NO catalog row at all — instead of leaving a custom-classed skill
+    // the database is supposed to own with nothing recording that ownership.
+    const { compileAndRegisterAgentSkillsViaPg } = await import(
+      "../../../../packages/skills/src/cli.mjs"
+    );
+    const BARE_SCHEMA = "cinatra_test_skill_bundle_2265_bare";
+    await client.query(`DROP SCHEMA IF EXISTS "${BARE_SCHEMA}" CASCADE`);
+    await client.query(`CREATE SCHEMA "${BARE_SCHEMA}"`);
+    await client.query(
+      `CREATE TABLE "${BARE_SCHEMA}"."skills" (id text PRIMARY KEY, payload text NOT NULL)`,
+    );
+    await client.query(
+      `CREATE TABLE "${BARE_SCHEMA}"."skill_packages" (
+         id text PRIMARY KEY, payload text NOT NULL, owner_scope text, owner_id text,
+         binding_scope text, source_kind text, vendor text, package text,
+         agent_template_id text, skill_slug text)`,
+    );
+    const repo = materializeAgentRepo(
+      "acme-2265-bare",
+      "unbacked",
+      "---\nname: unbacked\n---\n# body\n",
+      null,
+    );
+    try {
+      const out = await compileAndRegisterAgentSkillsViaPg({
+        repoRoot: repo.repoRoot,
+        dbUrl: DB_URL,
+        schemaName: BARE_SCHEMA,
+      });
+      expect(out.registered).toEqual([]);
+      expect(out.skipped).toHaveLength(1);
+      expect(out.skipped[0].slug).toBe("acme-2265-bare/unbacked");
+      expect(out.skipped[0].reason).toMatch(/skills upsert failed/);
+      const rows = await client.query(`SELECT count(*)::int AS n FROM "${BARE_SCHEMA}"."skills"`);
+      expect(rows.rows[0].n).toBe(0); // the payload write rolled back with it
+    } finally {
+      rmSync(repo.repoRoot, { recursive: true, force: true });
+      await client.query(`DROP SCHEMA IF EXISTS "${BARE_SCHEMA}" CASCADE`);
+    }
+  });
+
+  it("gap (b): a DANGLING content_digest is reported as a structured diagnostic, not absorbed", async () => {
+    // The revision EXISTS and the skill is custom-classed, but the digest it
+    // names has no `skill_revision_contents` row — so the pre-S1 re-baseline
+    // cannot seed and capture records the DISK bundle under a derived head.
+    // That outcome is correct and unchanged; what it must no longer be is silent.
+    const SKILL = "dangling-digest-2265";
+    const REV = "rev-dangling-digest-2265";
+    const MISSING_DIGEST = sha(Buffer.from("content that was never stored", "utf8"));
+    await client.query(
+      `INSERT INTO "${TEST_SCHEMA}"."skill_revisions" (id, skill_id, content_digest, source) VALUES ($1,$2,$3,'manual')`,
+      [REV, SKILL, MISSING_DIGEST],
+    );
+    await client.query(
+      `INSERT INTO "${TEST_SCHEMA}"."skills" (id, payload, lifecycle_state, active_revision_id) VALUES ($1,$2,'active',$3)`,
+      [SKILL, JSON.stringify({ packageId: "custom:agent-skills", isCustomSkill: true }), REV],
+    );
+    // Nothing resolves that digest.
+    const blob = await client.query(
+      `SELECT count(*)::int AS n FROM "${TEST_SCHEMA}"."skill_revision_contents" WHERE content_digest = $1`,
+      [MISSING_DIGEST],
+    );
+    expect(blob.rows[0].n).toBe(0);
+
+    const multi = materializeSkill("dangling-digest-2265", true);
+    try {
+      const cap = await store.captureSkillBundleFromDisk(SKILL, multi.routerPath);
+      // The DIAGNOSTIC names the skill's revision and the unresolvable digest.
+      expect(cap.unresolvedLifecycleContent).toEqual({
+        revisionId: REV,
+        contentDigest: MISSING_DIGEST,
+      });
+      // The classification is unchanged: the disk bundle under a DERIVED head.
+      expect(cap.changed).toBe(true);
+      expect(cap.authorityOwnedDivergence).toBe(false);
+      expect(cap.revisionId).toMatch(/^bundle:/);
+      expect((await headOf(SKILL))!.revision_id).toBe(cap.revisionId);
+
+      // IDEMPOTENT on re-capture — and STILL reported. The fallback is a
+      // standing condition, not a one-shot event: the readiness saga and the
+      // reconcile worker run long after the capture that first installed the
+      // derived head, and a diagnostic that went quiet after run 1 would leave
+      // exactly the silence this gap is about.
+      const again = await store.captureSkillBundleFromDisk(SKILL, multi.routerPath);
+      expect(again.changed).toBe(false);
+      expect(again.revisionId).toBe(cap.revisionId);
+      expect(again.unresolvedLifecycleContent).toEqual({
+        revisionId: REV,
+        contentDigest: MISSING_DIGEST,
+      });
+      expect((await headOf(SKILL))!.revision_id).toBe(cap.revisionId);
+
+      // And it CLEARS once the missing blob is restored: the next capture can
+      // resolve the revision's content, so the fallback is no longer in force.
+      await client.query(
+        `INSERT INTO "${TEST_SCHEMA}"."skill_revision_contents" (content_digest, content, byte_length)
+         VALUES ($1,$2,octet_length($2)) ON CONFLICT (content_digest) DO NOTHING`,
+        [MISSING_DIGEST, "content that was never stored"],
+      );
+      const healed = await store.captureSkillBundleFromDisk(SKILL, multi.routerPath);
+      expect(healed.unresolvedLifecycleContent).toBeNull();
+    } finally {
+      rmSync(multi.root, { recursive: true, force: true });
+    }
+  });
+
+  it("gap (b): a RESOLVABLE lifecycle revision reports no diagnostic (the signal is specific)", async () => {
+    const SKILL = "resolvable-digest-2265";
+    const REV = "rev-resolvable-digest-2265";
+    await seedPreS1Lifecycle(SKILL, REV);
+    const single = materializeSkill("resolvable-digest-2265", false);
+    try {
+      const cap = await store.captureSkillBundleFromDisk(SKILL, single.routerPath);
+      expect(cap.unresolvedLifecycleContent).toBeNull();
+      expect(cap.revisionId).toBe(REV); // seeded from the durable blob
+    } finally {
+      rmSync(single.root, { recursive: true, force: true });
+    }
+  });
 });
