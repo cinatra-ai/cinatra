@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "description": "cinatra#2024 (S9 program acceptance) — closeout rows that this program does NOT re-test, only re-cites: evidence that already exists on real, merged artifacts, per the design's own re-cite convention ('honest verdict rows pointing at real artifacts, never a new suite'). Every artifact named here was independently confirmed to exist (read from the live repo tree or the live merged-PR record) before being cited — none of this is assumed from an issue's own prose.",
+  "verdicts": [
+    {
+      "item": "internal-pipeline-equivalence (S1 VERIFY: ewpa/create-post, ewpa/upload-image, ewpa/update-post-meta, ewpa/get-posts)",
+      "verdict": "PASS",
+      "evidence": "tests/e2e/wp-mcp-gateway/captures/verify-verdicts.json",
+      "detail": {
+        "alreadyCaptured": "cinatra#2016 (S1), closed",
+        "summary": "3 of 4 VERIFY items PASS (ewpa/create-post draft-at-creation, ewpa/update-post-meta, ewpa/get-posts publish-filter+ordering); 1 disclosed FAIL (ewpa/upload-image — inputSchema is URL-only, no base64/MIME fields) with a named fallback (an upstream contribution to enable-abilities-for-mcp, never a cinatra ability rewrite) — this is the program's own accepted, disclosed carve-out, not a silent gap",
+        "citedCapturedAtCommit": "b7208b94660e53a23adb1051e2247fe6759b5afb",
+        "citedRunUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30442320352",
+        "citedFileSha256": "74f4c937d7fc3bd57a802b75960023f9f510c58e77f548b6073f9655a493966a",
+        "note": "no new run performed; this row simply carries the already-committed capture's own provenance forward into S9's closing checklist"
+      }
+    },
+    {
+      "item": "blog-publish regression (3 of 4 legs re-pointed onto the generic invoker; the featured-image-upload carve-out stays on direct WordPress core REST, unchanged)",
+      "verdict": "PASS",
+      "evidence": "src/lib/blog/__tests__/wordpress-invoker-repoint.test.ts",
+      "detail": {
+        "mergedAs": "cinatra#2216",
+        "mergeCommit": "d0bf8526eb939813578782a143f129bf1b70d4ff",
+        "whatItAsserts": "draft creation -> ewpa/create-post, draft meta write -> ewpa/update-post-meta, latest-published read -> ewpa/get-posts all reach the governed invoker; the featured-image upload leg never reaches the invoker and stays on direct WordPress core REST — the suite asserts the both-paths-live seam never leaks either direction",
+        "localRun": {
+          "command": "pnpm exec vitest run --config vitest.config.ts --no-coverage src/lib/blog/__tests__/wordpress-invoker-repoint.test.ts",
+          "result": "11 passed, 0 failed",
+          "environment": "local (operator box), re-run fresh at this evidence capture's own commit"
+        },
+        "fileSha256": "3104d630ed1c4032050da7abb60e70693c59f78539f5b6ab69cc8db8f85192e5"
+      }
+    },
+    {
+      "item": "pointer regression (wordpress_content_editor_run relay extraction — a pure refactor, no behavior change)",
+      "verdict": "PASS",
+      "evidence": "wordpress-mcp-connector: src/mcp/relay.ts, src/__tests__/content-editor-run.test.ts, src/__tests__/content-editor-run-widget.test.ts, src/__tests__/handlers.test.ts",
+      "detail": {
+        "repo": "cinatra-ai/wordpress-mcp-connector",
+        "mergedAs": "wordpress-mcp-connector#98",
+        "mergeCommit": "173eef2fb908f914d4ef2b8e36817f24fd98fa22",
+        "note": "a different repo from cinatra core — verified via the live merged-PR record (title, file list, merge commit), not re-run locally in this cinatra worktree. Extracts wordpress_content_editor_run's dispatch into its own relay module; the PR's own test files (updated, not newly added) cover the refactor. CI required checks passed at merge, per branch protection on that repo."
+      }
+    },
+    {
+      "item": "webhook regression (settings-page webhook subscription URL repointed off the retired legacy route)",
+      "verdict": "PASS",
+      "evidence": "wordpress-assistant-connector: src/settings-page.tsx",
+      "detail": {
+        "repo": "cinatra-ai/wordpress-assistant-connector",
+        "mergedAs": "wordpress-assistant-connector#46",
+        "mergeCommit": "e00830bb26300a0ff71d8b4c9da4720bfedca184",
+        "note": "a small, direct URL-construction edit (19 additions, 2 deletions), no dedicated regression test was added alongside it — recorded honestly rather than implying test coverage that does not exist. The change itself is verified to exist via the live merged-PR record; CI required checks passed at merge, per branch protection on that repo."
+      }
+    },
+    {
+      "item": "multi-site / multi-server determinism (pin enforcement, serverId disambiguation, collision rejection)",
+      "verdict": "PASS",
+      "evidence": "src/lib/__tests__/connector-instance-invoker.test.ts, src/lib/__tests__/site-tools-list.test.ts",
+      "detail": {
+        "alreadyCaptured": "cinatra#2018 (S3), closed — pre-dates S9, re-cited here rather than re-tested",
+        "whatItAsserts": "a wrong instanceId against a signed pin, and a foreign connectorKey pin (cross-connector), both reject as instance_pin_mismatch — at both the invoker layer and the site-tools-list layer",
+        "checkedAgainstCinatra2255": "cinatra#2255's own M1 governed-invoker scale-matrix test proves a DIFFERENT, complementary invariant — correct positive attribution of concurrent calls to their own pinned instance+server at scale — not pin-REJECTION. The two are not duplicates: this row is the negative/rejection half, #2255 is the positive/attribution-under-concurrency half.",
+        "designSuggestedExtensionNotDoneHere": "the design (§2 row 1b/§3) suggests optionally extending this suite with scale-smoke-plugin's server as an 'extra manual server route' — not done in this batch (the determinism guarantee this row proves — pin enforcement, serverId disambiguation, collision rejection — already holds regardless of which server names are involved); left as optional future work, not a gap in this row's PASS",
+        "localRun": {
+          "command": "pnpm exec vitest run --config vitest.config.ts --no-coverage src/lib/__tests__/connector-instance-invoker.test.ts src/lib/__tests__/site-tools-list.test.ts",
+          "result": "50 passed, 0 failed",
+          "environment": "local (operator box), re-run fresh at this evidence capture's own commit"
+        },
+        "fileSha256": {
+          "connectorInstanceInvokerTest": "df83a52ace413a1e655e9a04d5a1f794e19a647d2b8a427e5b14523a68201025",
+          "siteToolsListTest": "980d32cc7a4863fffb783977dc996a065073f600568d1d0d18b46c0647502921"
+        }
+      }
+    },
+    {
+      "item": "Drupal untouched (Drupal connector/suite re-run, unchanged by any WordPress-program work)",
+      "verdict": "PASS",
+      "evidence": "src/lib/__tests__/drupal-mcp-connection.test.ts, src/lib/__tests__/wp-drupal-uat-bounded-run-guard.test.ts, src/lib/__tests__/wp-drupal-uat-paths-filter-coverage.test.ts, src/lib/__tests__/wp-drupal-contract.test.ts",
+      "detail": {
+        "localRun": {
+          "command": "pnpm exec vitest run --config vitest.config.ts --no-coverage src/lib/__tests__/drupal-mcp-connection.test.ts src/lib/__tests__/wp-drupal-uat-bounded-run-guard.test.ts src/lib/__tests__/wp-drupal-uat-paths-filter-coverage.test.ts src/lib/__tests__/wp-drupal-contract.test.ts",
+          "result": "65 passed, 0 failed",
+          "environment": "local (operator box), run fresh at this evidence capture's own commit — proves the Drupal suite is unaffected by every WordPress-program change merged so far (cinatra#2216/#2256 and this batch's own additions)"
+        },
+        "fileSha256": {
+          "drupalMcpConnectionTest": "a6f8b965bfd1f2928726378d801e5cf0a95c09c7fa7649ea38dc9b1cb8647c41",
+          "wpDrupalUatBoundedRunGuardTest": "d5ff5604e1bfc7e517968db6fc8985d4b5d9d1743c8b3ed40df2bc9183634a82",
+          "wpDrupalUatPathsFilterCoverageTest": "6eb95df97a4ab9bb8d2d2d7efe6630325ab568b2871a8a954f25f6d72ee94621",
+          "wpDrupalContractTest": "ca8d786c855fc5ee21a88afc72ee818b7d155cee3eed7a465fb6b1fb09c3ded3"
+        }
+      }
+    }
+  ],
+  "provenance": {
+    "capturedAtCommit": "f6b2b17ec0bc054a57142c628e9354e76e2f7b6b",
+    "runUrl": null,
+    "capturedAt": "2026-07-30T13:22:25.000Z",
+    "hashingConvention": "sha256OfFile from tests/e2e/wp-mcp-gateway/provenance.mjs — every locally-run file's hash computed fresh in this repo tree at this commit; the two other-repo rows (wordpress-mcp-connector, wordpress-assistant-connector) cite their own merge commits instead, since this capture lives in the cinatra repo tree only"
+  }
+}

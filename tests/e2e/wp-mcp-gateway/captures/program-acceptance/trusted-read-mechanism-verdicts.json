@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "description": "cinatra#2024 (S9 program acceptance) — design closeout row for criterion 1(d) only: the trusted-read native-injection MECHANISM proof (row i, synthetic, PASS) plus the SEPARATE live-observation waiver (row ii, WAIVED/BLOCKED-UPSTREAM) that criterion 1(d) requires kept apart, never folded into one row. Scoped to this evidence item alone, not the full S9 closing report (that is a separate, later item). Follows the cinatra#2016 (S1) capture pattern (schemaVersion + provenance + verdicts[]) with the four-value verdict vocabulary (PASS | PENDING_GATE | FAIL | WAIVED/BLOCKED-UPSTREAM) this program adopted for exactly this kind of split.",
+  "verdicts": [
+    {
+      "item": "trusted-read-native-injection-mechanism (synthetic, at scale-smoke-plugin scale)",
+      "verdict": "PASS",
+      "evidence": "src/lib/__tests__/connector-instance-native-read-injection-trusted-read-mechanism.test.ts",
+      "detail": {
+        "runsIn": "normal root Vitest suite (pnpm test:root) — no live stack",
+        "provesTheMechanismNotTheLiveFixture": "the pinned community stack's shipped TRUSTED_READ_DESCRIPTOR_SET.entries is [] by construction (src/lib/connector-instance-trusted-read-descriptors.ts) — no descriptor-verified read can appear natively against today's fixture. This test proves the injection MECHANISM itself using the same descriptorSet/shippedConsent test-only override seam connector-instance-native-read-injection.test.ts's own first test already exercises, extended to real fixture scale.",
+        "scaleFixtureModeled": "a second enrolled, first-class dedicated server carrying 64 real-named read tools (scalesmoke-note-get-001..064), matching docker/wordpress/scale-smoke-plugin/includes/abilities.php's actual wire naming — the same fixture cinatra#2189/#2255 use for the M1 governed-invoker scale proof",
+        "invariantsProven": [
+          "the one descriptor-verified entry still emits correctly with a real-shaped 64-tool third-party dedicated server enrolled alongside it",
+          "none of the 64 scale-smoke tool names ever appear in the native-injection allowlist, proven at real fixture scale rather than with a single sibling tool",
+          "the dry-run preview (settings-card twin) agrees: verifiedNames is exactly the one entry, and the 64 scale-smoke names are never even reported as ejected — they are structurally invisible to the verifier's own per-descriptor-entry conjunction, never candidates",
+          "a spoofed collision — the scale-smoke-shaped server also advertising the verified entry's exact name amid its 64 siblings — subtracts the real entry (duplicate_on_other_server) rather than trusting the impostor, proven amid many candidate names, not just one"
+        ],
+        "composesWithM1GovernedPath": "the 64 scale-smoke tools staying out of native injection is only half the criterion; that they remain reachable through the M1 governed invoker is cinatra#2255's own evidence row (governed-invoker-scale-verdicts.json), not re-proven here",
+        "localRun": {
+          "command": "pnpm exec vitest run --config vitest.config.ts --no-coverage src/lib/__tests__/connector-instance-native-read-injection-trusted-read-mechanism.test.ts",
+          "result": "3 passed, 0 failed",
+          "environment": "local (operator box) — no live WordPress fixture required for this half"
+        }
+      }
+    },
+    {
+      "item": "trusted-read-live-observation (a descriptor-verified read appears natively on the pinned fixture)",
+      "verdict": "WAIVED/BLOCKED-UPSTREAM",
+      "evidence": "src/lib/connector-instance-trusted-read-descriptors.ts",
+      "detail": {
+        "reason": "TRUSTED_READ_DESCRIPTOR_SET ships version 1 with entries: [] by construction on the pinned community-stack tuple (WordPress 6.9, mcp-adapter 0.5.0, enable-abilities-for-mcp 2.0.20) — that stack exposes the default adapter server triad-only (no per-ability wire tools), so no name can carry the interface-fingerprint capture proof an entry requires. The 'appears natively' half of criterion 1(d) is therefore structurally unobservable against today's fixture — not a bug, and not something a new test can produce.",
+        "pinnedStackTuple": { "wp": "6.9", "mcpAdapter": "0.5.0", "eafm": "2.0.20" },
+        "unblockCondition": "an upstream community-plugin version that exposes a first-class per-ability wire tool on the default server, with a refreshed capture proving it — entirely outside this program's control or timeline",
+        "requiresExplicitOwnerSignOff": true,
+        "note": "recorded as its own row, deliberately never folded into the mechanism row's PASS — an epic-closing criterion is a higher bar than a mid-program disclosed carve-out, and unobserved live behavior must never read as fully accepted. This row stays WAIVED/BLOCKED-UPSTREAM until either the upstream unblock lands or the owner explicitly signs off on the waiver."
+      }
+    }
+  ],
+  "provenance": {
+    "capturedAtCommit": "f6b2b17ec0bc054a57142c628e9354e76e2f7b6b",
+    "runUrl": null,
+    "capturedAt": "2026-07-30T13:22:25.000Z",
+    "mechanismTestSha256": "9f3bf39c2fa90fe1b28aeb34301911807ed7fb3e2bef9e3b661a8a700bf224af",
+    "nativeReadInjectionSourceSha256": "d97915f72707c9509ce6c83138267d9e5a939b08e06b97e142f6d5cf33e18c76",
+    "trustedReadVerifierSourceSha256": "9b4f8e34c124a41884308647c8c525b89d6d581ae4de77985894c5b956926475",
+    "trustedReadDescriptorsSourceSha256": "74b5f4ce5f788513b42d0de7d8ca1b19053e71a561a3366bc4ae248d276bbf02",
+    "hashingConvention": "sha256OfFile from tests/e2e/wp-mcp-gateway/provenance.mjs (same algorithm the S1 capture set uses) — computed fresh in this repo tree, not copied from an unrelated capture"
+  }
+}

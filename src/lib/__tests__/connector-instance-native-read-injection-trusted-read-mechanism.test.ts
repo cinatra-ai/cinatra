@@ -15,11 +15,10 @@ import {
   type WordPressNativeReadInjectionDeps,
 } from "@/lib/connector-instance-native-read-injection";
 
-// cinatra#2024 S9 program acceptance — design §2 row 1(d)-i / §0 D5-REVISED
-// (G2's mechanism half, adopted per the "Accept" ruling on eng#586: PASS the
-// mechanism on synthetic evidence, WAIVED/BLOCKED-UPSTREAM the live
-// observation as its own separate row — see the sibling evidence capture,
-// not this file).
+// cinatra#2024 S9 program acceptance — the trusted-read criterion's
+// mechanism half: PASS the mechanism on synthetic evidence here,
+// WAIVED/BLOCKED-UPSTREAM the live observation as its own separate row (see
+// the sibling evidence capture, not this file).
 //
 // The pinned community stack ships TRUSTED_READ_DESCRIPTOR_SET.entries: []
 // (connector-instance-trusted-read-descriptors.ts's own header) — the

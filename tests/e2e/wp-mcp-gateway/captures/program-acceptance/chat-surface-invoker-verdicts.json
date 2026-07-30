@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "description": "cinatra#2024 (S9 program acceptance) — the chat-surface invoker-suite closeout row, unblocked by cinatra#2256's merge (the chat connectorKey-derivation fix). This is a RE-CITE of #2256's own merged resolver-level test — no new test is written here, per this program's own do-not-duplicate-assertions discipline; this row folds that already-proven evidence into S9's own closing checklist ('Suites green: invoker — chat surface').",
+  "verdicts": [
+    {
+      "item": "invoker-suite-chat-surface (wordpress_site_tool_call / wordpress_site_tools_list reachable from chat via the real resolver, explicit instanceId, no durable pin)",
+      "verdict": "PASS",
+      "evidence": "src/lib/__tests__/connector-instance-invoker-chat-actor.test.ts",
+      "detail": {
+        "mergedAs": "cinatra#2256",
+        "mergeCommit": "6cf22be5aa77ce2674d296f13d07ebb5d43e5767",
+        "whyThisIsTheRightEvidence": "wordpress_site_tool_call/wordpress_site_tools_list are the two model-visible primitives that call invokeSiteTool/listSiteTools directly (packages/sdk-extensions/src/connector-instance-invoker-contract.ts's own header comment). This suite drives invoker.invokeSiteTool/invoker.listSiteTools end to end through the REAL resolveConnectorInstanceInvokerContext() under a chat-delegated ambient MCP request frame — never a mocked resolver — so it is direct proof of chat-surface reachability, not an adjacent policy-layer check.",
+        "assertionsAlreadyProvenThereNotRestatedHere": [
+          "POSITIVE: an explicit instanceId lets a chat actor reach a real dispatch (connectorKey host-derives, no pin, the live org-membership gate re-checks and allows)",
+          "NEGATIVE: no instanceId still fails closed (connector_key_underivable) before any authority check runs",
+          "NEGATIVE: a forged/other-tenant instanceId still fails closed (instance_org_mismatch) via the real, unmocked per-instance org-binding gate",
+          "NO DURABLE PIN: two calls from the same chat actor targeting different instances re-resolve and re-authorize independently — no cross-call reuse",
+          "REGRESSION GUARDS: agent_run and public_site_widget without a signed pin are unchanged — the fix is scoped to chat only",
+          "listSiteTools gets the identical treatment as invokeSiteTool, both positive and negative"
+        ],
+        "whatThisRowAdds": "folds cinatra#2256's already-merged, already-CI-green evidence into S9's own closing checklist as its own named row — previously blocked on the chat connectorKey-derivation gap, now satisfied",
+        "priorGap": "before cinatra#2256, every chat-surface call to either primitive threw connector_key_underivable unconditionally — a real regression against the earlier perimeter-policy change that first allowlisted these two primitives for chat. The pre-fix ship-dark test only asserted the policy-layer allowlist, never the resolver, so it could not catch this.",
+        "localRun": {
+          "command": "pnpm exec vitest run --config vitest.config.ts --no-coverage src/lib/__tests__/connector-instance-invoker-chat-actor.test.ts",
+          "result": "8 passed, 0 failed (re-run fresh at this evidence capture's own commit, confirming it still holds — not assumed from the original merge alone)",
+          "environment": "local (operator box) — no live WordPress fixture required; this suite is fully mocked at the wire-transport boundary"
+        }
+      }
+    }
+  ],
+  "provenance": {
+    "capturedAtCommit": "f6b2b17ec0bc054a57142c628e9354e76e2f7b6b",
+    "runUrl": null,
+    "capturedAt": "2026-07-30T13:22:25.000Z",
+    "chatActorTestSha256": "0537e5093f3d154f4e583c4c316521fec8bdf0c6a3e641f49d89ae8a37288b08",
+    "invokerContextSourceSha256": "a5488956ab9b3663dd390709814cbd9fe2aa97228ecbe38718d09dfbd74e636d",
+    "hashingConvention": "sha256OfFile from tests/e2e/wp-mcp-gateway/provenance.mjs — hashes computed fresh against the already-merged cinatra#2256 files as they stand in this branch's own tree, not copied from an unrelated capture"
+  }
+}
