@@ -339,7 +339,14 @@ export type OpenJobFailureReason =
   | "run_removed"
   | "open_jobs_exhausted"
   /** Skill staging refused (digest mismatch / unsafe path / docker failure) — exec-plane S2. */
-  | "staging_failed";
+  | "staging_failed"
+  /**
+   * The host-scoped precondition for placing work on this execution host does
+   * not hold (exec-plane L3): the host-exclusivity lease is absent, expired,
+   * unreadable or held by another tenant. No job is opened and no volume is
+   * created (fail-closed).
+   */
+  | "placement_refused";
 
 export type ExecFailureReason =
   | "unknown_job"
@@ -388,7 +395,29 @@ export type ExecFailureReason =
    * a generic worker error.
    */
   | "environment_untrusted"
+  /**
+   * The execution host's host-exclusivity lease no longer holds (exec-plane
+   * L3). The command is refused, every open job on this broker is terminated
+   * and their containers are cancelled by name — a host that may already be
+   * serving another tenant must not keep running ours.
+   */
+  | "placement_revoked"
   | "worker_error";
+
+/**
+ * A host-scoped precondition the broker revalidates before EVERY placement
+ * decision (exec-plane L3). The shipped implementation is the host-exclusivity
+ * lease (`service/lease.ts`); the broker itself stays free of any filesystem or
+ * tenancy knowledge and sees only the verdict.
+ *
+ * `reason` is an operator-facing token carried into the audit record; `message`
+ * is what the caller is told. Neither ever carries a tenant slug or a path.
+ */
+export type PlacementVerdict =
+  | { ok: true }
+  | { ok: false; reason: string; message: string };
+
+export type PlacementGuard = () => Promise<PlacementVerdict> | PlacementVerdict;
 
 export type OpenJobResult =
   | { ok: true; jobId: string }

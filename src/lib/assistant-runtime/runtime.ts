@@ -44,7 +44,6 @@ import { getAllManifests } from "@/lib/wizard-manifest-registry";
 // appointment schedules, ...) resolve through the chat-user-context capability
 // registry — the runtime no longer imports any connector package by name.
 import { buildChatUserContextSections } from "@/app/api/chat/chat-user-context";
-import { shouldDeliverChatShellSkillTools } from "@/app/api/chat/shell-skill-gate";
 import {
   describeLlmRuntimeUnavailability,
   stream,
@@ -694,32 +693,48 @@ export async function runAssistantTurn(
   // buildSkillTools emits the shell tool (also feeds the catalog-backed
   // loadSystemPrompt above; the read_skill fallback is retired).
   await ensureAssistantSkillsRegistered(runtimeConfig.skillIds);
-  // Model-aware shell delivery (issue #47). OpenAI rejects the hosted
-  // `shell` tool for gpt-5 / gpt-5-mini; sending it 400s EVERY turn.
-  // No per-request model is passed, so adapter.defaultModel (the
-  // connection's defaultModel) is exactly the model this request uses.
-  // Mirror the llm-bridge degrade semantics: skip the skill shell tool and
-  // keep the turn running — never reintroduce a read_skill function tool.
-  const deliverShellSkillTools = shouldDeliverChatShellSkillTools(adapter);
-  if (!deliverShellSkillTools) {
-    console.warn(
-      `[assistant-runtime] shell-incompatible OpenAI model "${adapter.defaultModel}" — ` +
-        "skipping the skill shell tool (skill delivery degrades; the " +
-        "turn continues with MCP + web_search tools only)",
-    );
-  }
+  // SKILL DELIVERY ALWAYS RUNS (cinatra#2094 F11). There is no caller-side
+  // model gate any more: the model-aware NATIVE-SHELL decision belongs to the
+  // provider adapter, which already owns it. For a shell-incompatible OpenAI
+  // model the adapter emits the RESTRICTED, NAMED `skill_file_read` function
+  // tool instead of the hosted `shell` (exec-plane S2's singular-native-shell
+  // rule, cinatra#1707) — so the 400 the old gate defended against (issue #47)
+  // cannot reach the wire, and gating here only DESTROYED delivery.
+  //
+  // What the old gate did, measured: on a shell-incompatible model the chat
+  // turn shipped ZERO skills behind a `console.warn` — a silent no-delivery on a
+  // configuration the wizard's own model input can produce. Silent no-delivery
+  // is the one forbidden outcome, so the gate is retired and the seam decides.
   let skillTools: LlmTool[] = [];
-  if (deliverShellSkillTools) {
-    const catalogSkillIds = injectedCatalogSkillIds(injectedSkills);
-    if (catalogSkillIds.length > 0) {
-      const delivery = await selectSkillDeliveryAdapter(adapter.provider).deliver({
-        skillIds: catalogSkillIds,
-        // The authoritative cap already ran in the contract; the adapter's own
-        // cap is a defence-in-depth invariant.
-        selectionMode: "general",
+  const catalogSkillIds = injectedCatalogSkillIds(injectedSkills);
+  if (catalogSkillIds.length > 0) {
+    const delivery = await selectSkillDeliveryAdapter(adapter.provider).deliver({
+      skillIds: catalogSkillIds,
+      // The authoritative cap already ran in the contract; the adapter's own
+      // cap is a defence-in-depth invariant.
+      selectionMode: "general",
+    });
+    skillTools = delivery.tools;
+    skillSystemContext = delivery.systemContext;
+    // LOUD, never silent: the injection contract resolved skills for this turn,
+    // so a delivery that produced no vehicle at all means the operator's
+    // assistant is running WITHOUT its instructions. Refuse the turn rather than
+    // answer as a skill-less assistant while claiming to be the configured one.
+    if (skillTools.length === 0 && !delivery.systemContext) {
+      console.error(
+        `[assistant-runtime] skill delivery produced NO vehicle for provider ` +
+          `"${adapter.provider}" model "${adapter.defaultModel}" with ` +
+          `${catalogSkillIds.length} resolved skill(s) — refusing the turn ` +
+          "(a silently skill-less assistant is never an acceptable degrade)",
+      );
+      send("error", {
+        message:
+          `The assistant's skills could not be delivered to ${adapter.provider} ` +
+          `(model "${adapter.defaultModel}"). The turn was refused instead of ` +
+          "answering without them — check the provider's model setting at " +
+          "/configuration/llm.",
       });
-      skillTools = delivery.tools;
-      skillSystemContext = delivery.systemContext;
+      return;
     }
   }
   // Dead-ingress guard (#1699): a configured-but-unreachable public MCP URL

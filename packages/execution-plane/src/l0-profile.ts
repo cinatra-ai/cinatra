@@ -84,10 +84,45 @@ export function resolveL0ImageRef(override?: string): string {
   return DEFAULT_L0_IMAGE_LOCAL_DEV;
 }
 
+/**
+ * Ownership labels stamped on every sandbox container (exec-plane L3). Shared
+ * key namespace with the volume retention label so one `ai.cinatra.*` prefix
+ * identifies everything the execution plane creates on a host.
+ */
+export const SANDBOX_CONTAINER_LABEL = "ai.cinatra.execution-plane";
+export const SANDBOX_CONTAINER_JOB_LABEL = "ai.cinatra.execution-plane.job";
+
+/**
+ * The exact name shape of one job's containers: the prefix plus the worker's
+ * decimal dispatch sequence, anchored at both ends.
+ *
+ * Anchoring at the END is load-bearing (Codex round 2, finding E1): a bare
+ * prefix test on job `foo` also matches `cinatra-exec-foo-bar-7` — the
+ * containers of the DIFFERENT job `foo-bar` — and matches the staging helper
+ * `cinatra-exec-stage-<uuid>` when a job is called `stage`.
+ */
+export function isContainerNameForJob(name: string, jobId: string): boolean {
+  const prefix = containerNamePrefixFor(jobId);
+  if (!name.startsWith(prefix)) return false;
+  return /^[0-9]+$/.test(name.slice(prefix.length));
+}
+
+/**
+ * The name PREFIX every container of one job shares.
+ *
+ * The per-dispatch `seq` is owned by the worker, so a host-exclusivity drain
+ * (`service/lease.ts`) cannot enumerate exact names — it enumerates by this
+ * prefix instead. Kept as the single construction site so the prefix and the
+ * full name can never drift apart.
+ */
+export function containerNamePrefixFor(jobId: string): string {
+  const safe = jobId.replace(/[^a-zA-Z0-9_.-]/g, "-");
+  return `cinatra-exec-${safe}-`;
+}
+
 /** Deterministic container name for one command dispatch (kill target). */
 export function containerNameFor(jobId: string, seq: number): string {
-  const safe = jobId.replace(/[^a-zA-Z0-9_.-]/g, "-");
-  return `cinatra-exec-${safe}-${seq}`;
+  return `${containerNamePrefixFor(jobId)}${seq}`;
 }
 
 /**
@@ -159,6 +194,17 @@ export function buildHardenedRunArgs(
     "--init",
     "--name",
     opts.containerName,
+    // OWNERSHIP LABELS (exec-plane L3; Codex round 2, finding A2/E1, ADOPTED).
+    // The host-exclusivity drain must remove this job's containers and only
+    // this job's. A name prefix alone is not proof of ownership and is not even
+    // unambiguous — `cinatra-exec-foo-` is a prefix of the containers of job
+    // `foo-bar` too. The drain therefore selects on this exact label and
+    // additionally re-checks the name shape; a container this worker did not
+    // start carries neither.
+    "--label",
+    `${SANDBOX_CONTAINER_LABEL}=sandbox`,
+    "--label",
+    `${SANDBOX_CONTAINER_JOB_LABEL}=${spec.jobId}`,
     "--user",
     `${SANDBOX_RUNTIME_UID}:${SANDBOX_RUNTIME_GID}`,
     "--read-only",
