@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "description": "cinatra#2024 (S9 program acceptance) — item A / design §3 / D2 only: the M1 governed-invoker (invokeConnectorInstanceTool / listConnectorInstanceTools) provider-scale + live proof PR #2189 (S4/#2019's scale-smoke fixture) explicitly deferred to program acceptance. Scoped to this evidence row alone, NOT the full S9 closing report (that is a separate, later item). Follows the S1 (#2016) capture pattern verbatim (schemaVersion + provenance + verdicts[]), with the codex r0 four-value vocabulary (PASS | PENDING_GATE | FAIL | WAIVED/BLOCKED-UPSTREAM) this program's design (§0 D1) adopted for exactly this kind of row.",
+  "verdicts": [
+    {
+      "item": "m1-governed-invoker-scale-matrix (synthetic)",
+      "verdict": "PASS",
+      "evidence": "src/lib/__tests__/connector-instance-invoker-scale-matrix.test.ts",
+      "detail": {
+        "runsIn": "normal root Vitest suite (pnpm test:root) — no live stack",
+        "callsRealFunctionsDirectly": ["invokeConnectorInstanceTool", "listConnectorInstanceTools"],
+        "fixtureShape": "3 synthetic connector instances x 3 enrolled servers each (1 default triad-only + 1 dedicated scale server carrying 64 scalesmoke/note-get-NNN tools, matching docker/wordpress/scale-smoke-plugin's real naming + count, + 1 vendor server)",
+        "invariantsProven": [
+          "no truncation across a paginated (pageSize=20) 64-tool listConnectorInstanceTools read",
+          "stable, revision-pinned ordering across two independent fully-paginated runs",
+          "per-instance isolation: a duplicate tool name filed onto instance-b's own second server produces the real ambiguous_tool resolution (never a silent misroute), while sibling instances A/C resolve the identical name unambiguously",
+          "report-never-drop: a duplicated name is never dropped from the governed list, only the invoke-by-name-alone path treats it as ambiguous",
+          "every acquire/gate call across the 3-instance matrix carries exactly its own instanceId (ledger-checked, not just gate-enforced)",
+          "9 CONCURRENT invokeConnectorInstanceTool calls spanning the full 3-instance x 3-server matrix resolve to their own pinned instance+server with zero cross-attribution and zero drops (set-equality checked against the real wire-call ledger, not assumed from call order)"
+        ],
+        "localRun": {
+          "command": "pnpm exec vitest run --config vitest.config.ts --no-coverage src/lib/__tests__/connector-instance-invoker-scale-matrix.test.ts",
+          "result": "5 passed, 0 failed",
+          "environment": "local (operator box) — no live WordPress fixture required for this half"
+        }
+      }
+    },
+    {
+      "item": "m1-governed-invoker-live-scale-smoke (real provider round-trip)",
+      "verdict": "PENDING_GATE",
+      "evidence": "src/lib/__tests__/connector-instance-invoker-live-scale-smoke.test.ts",
+      "detail": {
+        "reason": "self-skips without WP_BASE_URL + WP_MCP_BASIC_AUTH — this operator box cannot boot the cinatra dev/verify stack or any docker-compose db/redis band (workspace guardrail); the real round-trip only executes on a CI runner against a booted fixture.",
+        "wiredInto": ".github/workflows/trusted-read-scale-smoke.yml (new step added alongside the existing M2 live-proof step; reuses the same already-booted scale-smoke-plugin fixture and minted app password, no extra boot cost)",
+        "callsRealFunctionsDirectly": ["invokeConnectorInstanceTool", "listConnectorInstanceTools"],
+        "reusesRealProductionWireLayer": [
+          "callConnectorInstanceMcpTool (connector-instance-mcp-transport.ts) — the exact function register-host-connector-services.ts binds in production",
+          "listConnectorInstanceMcpTools (connector-instance-mcp-transport.ts)",
+          "createConnectorInstanceSnapshotLoader (connector-instance-snapshot-loader.ts) — the exact per-server snapshot loader prod binds as loadServerSnapshot"
+        ],
+        "whatItWillProveOnFirstCiRun": [
+          "listConnectorInstanceTools, paginated through the real M1 dispatch, returns >= 64 uniquely-named real scale-smoke tools with no truncation, byte-identical to an independently-fetched raw tools/list",
+          "the pinned default adapter server is also reachable through the same real M1 dispatch (non-empty triad-expanded read)",
+          "9 concurrent real invokeConnectorInstanceTool calls round-trip the real PHP execute path and attribute each response to its own requested ability (id/note keyed to the ability's own numeric suffix) — no cross-attribution under real concurrent wire calls"
+        ],
+        "note": "this row records the row's PENDING status honestly rather than fabricating a run URL; the PR's own CI run of the extended trusted-read-scale-smoke.yml workflow is the first authoritative execution. Re-file this verdict as PASS/FAIL once that run completes and its URL is known — not this lane's job (a follow-up S9 evidence-file update, per D1's own re-cite-at-checkpoint discipline)."
+      }
+    }
+  ],
+  "provenance": {
+    "capturedAtCommit": "PENDING — filled in from this branch's actual head after commit (see the PR for the exact SHA)",
+    "runUrl": null,
+    "capturedAt": "PENDING-LOCAL-ONLY",
+    "scaleSmokePluginSha256": "1868a6747717d617ad85824539e2f7ab7f819e79a3d58633da139456272b6f27",
+    "invokerScaleMatrixTestSha256": "3f8652b5ffba5af9edf17409cb79057a6dd53168eb9c16ff13324e6fc6bb0a83",
+    "invokerLiveScaleSmokeTestSha256": "c6b75677b59023d0845dbfc4c74075cb3ef992935fa1b0f900fcee1ddf54d745",
+    "invokerSourceSha256": "362b0a2e371ed69b27d3d9e4c42998079ecbe04ee8b37ae87aa1549b58f2a434",
+    "hashingConvention": "sha256OfFile / sha256OfTree from tests/e2e/wp-mcp-gateway/provenance.mjs (same algorithm the S1 capture set uses) — computed fresh in this repo tree, not copied from an unrelated capture"
+  }
+}
