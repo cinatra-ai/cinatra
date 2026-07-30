@@ -1,0 +1,408 @@
+{
+  "at": "2026-07-30T03:18:44.359Z",
+  "laneOwnedSkills": 22,
+  "versionsDeleted": 48,
+  "skillsReclaimed": 22,
+  "indeterminate": 0,
+  "allReclaimed": true,
+  "laneSkillsStillPresent": [],
+  "foreignSkillsLeftUntouched": [
+    "xlsx",
+    "pptx",
+    "pdf",
+    "docx"
+  ],
+  "remoteSkillsRemainingTotal": 4,
+  "ledger": [
+    {
+      "skillId": "skill_011KVH9RsfsoghTEi6wPWUg2",
+      "catalogSkillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+      "versions": [
+        {
+          "version": "1785378535965439",
+          "status": 200
+        },
+        {
+          "version": "1785380022501601",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_014h2313MbfVcSdVZzobwG4b",
+      "catalogSkillId": "@cinatra-ai/email-body-matcher-skill:email-body-matcher",
+      "versions": [
+        {
+          "version": "1785378542704996",
+          "status": 200
+        },
+        {
+          "version": "1785380038876889",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_016qsGHMRHywcQ3BhFQqHCYJ",
+      "catalogSkillId": "@cinatra-ai/media-transcript-agent:transcribe-media",
+      "versions": [
+        {
+          "version": "1785378549772282",
+          "status": 200
+        },
+        {
+          "version": "1785380044041137",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_018GbLBkjtDQAjdujEYbjqzU",
+      "catalogSkillId": "@cinatra-ai/marketing-icp-matcher-skill:marketing-icp-matcher",
+      "versions": [
+        {
+          "version": "1785378545569452",
+          "status": 200
+        },
+        {
+          "version": "1785380041343319",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_018XZTKdVtNP7VDxUmtAQrZS",
+      "catalogSkillId": "@cinatra-ai/wordpress-widget-chat-skill:wordpress-widget-chat",
+      "versions": [
+        {
+          "version": "1785378551413738",
+          "status": 200
+        },
+        {
+          "version": "1785380045735027",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_019zCWb1F8iZa4XvA2bPPzC9",
+      "catalogSkillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+      "versions": [
+        {
+          "version": "1785378538448861",
+          "status": 200
+        },
+        {
+          "version": "1785380031968027",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01AUd3iiLX9AD75dYETH129h",
+      "catalogSkillId": "@cinatra-ai/slide-deck-matcher-skill:slide-deck-matcher",
+      "versions": [
+        {
+          "version": "1785378550564585",
+          "status": 200
+        },
+        {
+          "version": "1785380043161531",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01BwtxgU1YsGAL3CsVgkT1hS",
+      "catalogSkillId": "@cinatra-ai/hitl-prompt-drive-skill:chat-hitl-prompt-drive",
+      "versions": [
+        {
+          "version": "1785378543506323",
+          "status": 200
+        },
+        {
+          "version": "1785380039629451",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01CEb4RbKqhJSgMkAMe3Frai",
+      "catalogSkillId": "@cinatra-ai/chat:blog-content",
+      "versions": [
+        {
+          "version": "1785378536892236",
+          "status": 200
+        },
+        {
+          "version": "1785379123493214",
+          "status": 200
+        },
+        {
+          "version": "1785380023518477",
+          "status": 200
+        },
+        {
+          "version": "1785380080474321",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01CpiYNZGYhYurMXLX8SN91j",
+      "catalogSkillId": "@cinatra-ai/marketing-icp-authoring-skill:marketing-icp-authoring",
+      "versions": [
+        {
+          "version": "1785378537691284",
+          "status": 200
+        },
+        {
+          "version": "1785380040515003",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01CPLq5DbS7PFaZH7NfXVzwD",
+      "catalogSkillId": "@cinatra-ai/skill-prefill-generation-skill:skill-prefill-generation",
+      "versions": [
+        {
+          "version": "1785378548224557",
+          "status": 200
+        },
+        {
+          "version": "1785380044832565",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01DaJXQeWV1EDQvyu55croDv",
+      "catalogSkillId": "@cinatra-ai/product-portfolio-matcher-skill:product-portfolio-matcher",
+      "versions": [
+        {
+          "version": "1785378547412386",
+          "status": 200
+        },
+        {
+          "version": "1785380032720184",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01DP5Zc9NNgYmyRbq9Sehggx",
+      "catalogSkillId": "@cinatra-ai/blog-idea-matcher-skill:blog-idea-matcher",
+      "versions": [
+        {
+          "version": "1785378534281573",
+          "status": 200
+        },
+        {
+          "version": "1785380020169084",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01EVERETdV1vA9SYUDn5mjha",
+      "catalogSkillId": "@cinatra-ai/marketing-strategy-matcher-skill:marketing-strategy-matcher",
+      "versions": [
+        {
+          "version": "1785378546569598",
+          "status": 200
+        },
+        {
+          "version": "1785380042235782",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01GDVYYJgxrSdfQXDqS3mBM8",
+      "catalogSkillId": "@cinatra-ai/chat:company-research",
+      "versions": [
+        {
+          "version": "1785378540261680",
+          "status": 200
+        },
+        {
+          "version": "1785379124350250",
+          "status": 200
+        },
+        {
+          "version": "1785380035279879",
+          "status": 200
+        },
+        {
+          "version": "1785380081310725",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01JRVSqGRrqrKCvqh7Tvkv6U",
+      "catalogSkillId": "@cinatra-ai/blog-image-matcher-skill:blog-image-matcher",
+      "versions": [
+        {
+          "version": "1785378535196979",
+          "status": 200
+        },
+        {
+          "version": "1785380021109724",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01KLuvTc2p667EReDdsdCvSA",
+      "catalogSkillId": "@cinatra-ai/contract-matcher-skill:contract-matcher",
+      "versions": [
+        {
+          "version": "1785378541078413",
+          "status": 200
+        },
+        {
+          "version": "1785380037071864",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01LHhQqvD5WkX7pGNCCtTNwS",
+      "catalogSkillId": "@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring",
+      "versions": [
+        {
+          "version": "1785378533400496",
+          "status": 200
+        },
+        {
+          "version": "1785380019281644",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01Si9SWBFKeuCRaAjp3VpaEf",
+      "catalogSkillId": "@cinatra-ai/sales-playbook-matcher-skill:sales-playbook-matcher",
+      "versions": [
+        {
+          "version": "1785378549056019",
+          "status": 200
+        },
+        {
+          "version": "1785380033553658",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01TXMygdcSucJ4SwKBLZLfeR",
+      "catalogSkillId": "@cinatra-ai/competitive-analysis-matcher-skill:competitive-analysis-matcher",
+      "versions": [
+        {
+          "version": "1785378539390739",
+          "status": 200
+        },
+        {
+          "version": "1785380036125404",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01WC8fWXCUZ7DRQ7D7rT6fSH",
+      "catalogSkillId": "@cinatra-ai/drupal-widget-chat-skill:drupal-widget-chat",
+      "versions": [
+        {
+          "version": "1785378541925762",
+          "status": 200
+        },
+        {
+          "version": "1785380037889363",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01WQV2smwEmam5Qp2drXFkzE",
+      "catalogSkillId": "@cinatra-ai/screenshot-matcher-skill:screenshot-matcher",
+      "versions": [
+        {
+          "version": "1785378544327626",
+          "status": 200
+        },
+        {
+          "version": "1785380034416918",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    }
+  ]
+}

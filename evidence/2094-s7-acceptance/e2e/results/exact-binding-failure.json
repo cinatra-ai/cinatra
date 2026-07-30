@@ -1,0 +1,51 @@
+{
+  "block": "C — exact-binding failure visibility",
+  "at": "2026-07-30T03:34:34.761Z",
+  "storedDefaultProvider": "\"anthropic\"",
+  "anthropicCredentialRows": 0,
+  "openaiCredentialRows": 1,
+  "checks": [
+    {
+      "id": "C0a",
+      "what": "the stored default provider is anthropic",
+      "verdict": "PASS",
+      "detail": "\"anthropic\""
+    },
+    {
+      "id": "C0b",
+      "what": "the anthropic credential is REMOVED (provider made unavailable)",
+      "verdict": "PASS"
+    },
+    {
+      "id": "C0c",
+      "what": "a VALID openai credential remains — a failover target exists",
+      "verdict": "PASS"
+    },
+    {
+      "id": "C1a",
+      "what": "the assistant surfaces a VISIBLE failure instead of answering",
+      "verdict": "PASS",
+      "detail": "INTELLIGENCE Chat New chat Threads Team chats Assistants Agents MANAGEMENT Personal Projects Teams Organizations INFORMATION Artifacts Analytics TOOLS Skills Connectors L2 Lane 2094 Operator lane2094o"
+    },
+    {
+      "id": "C1b",
+      "what": "the failure NAMES the stored provider (anthropic)",
+      "verdict": "FAIL",
+      "detail": "see surfaced text"
+    },
+    {
+      "id": "C2a",
+      "what": "NO SILENT FAILOVER — zero OpenAI egress while OpenAI was available (MEASURED)",
+      "verdict": "PASS",
+      "detail": "openai calls=0 anthropic calls=0 total=0"
+    },
+    {
+      "id": "C2b",
+      "what": "the turn produced no assistant answer to the prompt",
+      "verdict": "PASS",
+      "detail": "no answer text present"
+    }
+  ],
+  "serverLine": "",
+  "providerCallsDuringFailure": []
+}

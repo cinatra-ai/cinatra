@@ -6,7 +6,7 @@
  *    frontmatter `name` (the documented contract), with a normalized fallback;
  *  - the archive is deterministic (byte-identical for identical input) and
  *    well-formed (a minimal STORE reader round-trips the entries);
- *  - the boundary rule rejects at 30,000,000 on EITHER dimension;
+ *  - the boundary rule rejects at 31,457,280 (30 MiB) on EITHER dimension;
  *  - the display title is stable per catalog skill, workspace-unique across
  *    colliding names, and non-sensitive.
  */
@@ -165,7 +165,7 @@ describe("buildCanonicalSkillZip", () => {
   });
 });
 
-describe("checkSkillBoundary — reject at 30,000,000 on either dimension", () => {
+describe("checkSkillBoundary — reject at 31,457,280 (30 MiB) on either dimension", () => {
   it("uncompressed total reaching the limit is rejected", () => {
     const big = buildCanonicalSkillZip({
       skillMd: Buffer.alloc(100, 0x61),
@@ -186,10 +186,13 @@ describe("checkSkillBoundary — reject at 30,000,000 on either dimension", () =
     expect(r).toMatchObject({ exceeded: true, dimension: "archive" });
   });
 
-  it("under the limit ⇒ not exceeded; default limit is 30,000,000 (decimal)", () => {
+  it("under the limit ⇒ not exceeded; default limit is 31,457,280 (30 MiB)", () => {
     const zip = buildCanonicalSkillZip({ skillMd: SKILL_MD, bundledFiles: FILES, rootDir: "my-skill" });
     expect(checkSkillBoundary(zip)).toEqual({ exceeded: false });
-    expect(ANTHROPIC_SKILL_MAX_UPLOAD_BYTES).toBe(30_000_000);
+    // 30 MiB, raised from 30,000,000 on the S7 live evidence (C10: the API
+    // ACCEPTED 30,000,505 bytes). See the constant for the full grounding.
+    expect(ANTHROPIC_SKILL_MAX_UPLOAD_BYTES).toBe(31_457_280);
+    expect(ANTHROPIC_SKILL_MAX_UPLOAD_BYTES).toBe(30 * 1024 * 1024);
   });
 });
 

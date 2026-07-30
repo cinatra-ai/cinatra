@@ -1,0 +1,105 @@
+{
+  "arm": "anthropic",
+  "label": "LIVE — real Anthropic API with the org key; provider boundary observed, never stubbed",
+  "at": "2026-07-30T02:14:19.858Z",
+  "checks": [
+    {
+      "id": "A1a",
+      "what": "Anthropic is offered in the wizard",
+      "verdict": "PASS"
+    },
+    {
+      "id": "A1b",
+      "what": "OpenAI is offered in the wizard",
+      "verdict": "PASS"
+    },
+    {
+      "id": "A1c",
+      "what": "Gemini is NOT offered (wizardEligible false)",
+      "verdict": "PASS"
+    },
+    {
+      "id": "A2a",
+      "what": "the Anthropic credential form renders",
+      "verdict": "PASS"
+    },
+    {
+      "id": "A2b",
+      "what": "the matcher constraint is surfaced on Anthropic",
+      "verdict": "PASS"
+    },
+    {
+      "id": "A2c",
+      "what": "the pick is persisted",
+      "verdict": "PASS",
+      "detail": "\"anthropic\""
+    },
+    {
+      "id": "A3a",
+      "what": "strict catalog sync uploaded skills LIVE",
+      "verdict": "FAIL",
+      "detail": "sync rows=0"
+    },
+    {
+      "id": "A3b",
+      "what": "bulk consent was recorded",
+      "verdict": "FAIL",
+      "detail": "consent rows=0"
+    },
+    {
+      "id": "A4a",
+      "what": "a function-tools instance fails the native-skills probe ACTIONABLY",
+      "verdict": "FAIL",
+      "detail": "AI setup did not complete (credential-validation) The installed anthropic connector exposes no way to validate its credentials, so setup cannot confirm the connection works. Update the anthropic connector."
+    },
+    {
+      "id": "A4b",
+      "what": "the performable fix-forward control is rendered",
+      "verdict": "FAIL"
+    },
+    {
+      "id": "A5a",
+      "what": "the UI control flipped the STORED mcpMode to native",
+      "verdict": "FAIL",
+      "detail": ""
+    },
+    {
+      "id": "A5b",
+      "what": "the switch does not fabricate readiness (no receipt yet)",
+      "verdict": "PASS"
+    },
+    {
+      "id": "A6a",
+      "what": "the readiness saga reached a VALID receipt on the real API",
+      "verdict": "FAIL",
+      "detail": "null"
+    },
+    {
+      "id": "A6b",
+      "what": "the probe used container-skills mode",
+      "verdict": "FAIL",
+      "detail": "undefined"
+    },
+    {
+      "id": "A6c",
+      "what": "the receipt reports a real uploaded skill count",
+      "verdict": "FAIL",
+      "detail": "undefined"
+    },
+    {
+      "id": "A6d",
+      "what": "the wizard renders the completion receipt",
+      "verdict": "FAIL"
+    },
+    {
+      "id": "A6e",
+      "what": "the default provider is committed to anthropic",
+      "verdict": "FAIL",
+      "detail": ""
+    }
+  ],
+  "pageErrors": [],
+  "syncedSkillRows": 0,
+  "consentRows": 0,
+  "receipt": null
+}
