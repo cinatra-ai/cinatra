@@ -108,23 +108,30 @@ describe("createSkill — display_title collision reconciliation (retry stabilit
     expect(seen.filter((s) => s.startsWith("POST"))).toHaveLength(1);
   });
 
+  // The cursor here is the REAL one the API returns: `next_page`, replayed on
+  // the `page` query param. An earlier revision of this stub fabricated
+  // `last_id`/`after_id` (the Message-Batches/Files scheme, which the Skills
+  // endpoints do not use) and so agreed with a client that could not paginate
+  // against the live API at all — finding F1 on cinatra#2094. The captured live
+  // envelope is pinned in `anthropic-skills-api-wire-conformance.test.ts`.
   it("paginates the skills list to find the colliding title on a later page", async () => {
     global.fetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const u = String(url);
       if (init?.method === "POST") {
         return textResponse("display_title already taken", 409);
       }
-      if (u.includes("after_id=cursor1")) {
+      if (u.includes("page=cursor1")) {
         return jsonResponse({
           data: [{ id: "skill_mine", display_title: UPLOAD.displayTitle, latest_version: "vX" }],
           has_more: false,
+          next_page: null,
         });
       }
       // first page: no match, more pages
       return jsonResponse({
         data: [{ id: "s0", display_title: "nope", latest_version: "v0" }],
         has_more: true,
-        last_id: "cursor1",
+        next_page: "cursor1",
       });
     }) as unknown as typeof fetch;
 
@@ -152,18 +159,18 @@ describe("isDisplayTitleConflict", () => {
 });
 
 describe("GC client — listSkillVersions pagination + delete order", () => {
-  it("paginates versions to exhaustion via has_more/last_id + after_id", async () => {
+  it("paginates versions to exhaustion via has_more/next_page + page", async () => {
     const urls: string[] = [];
     global.fetch = vi.fn(async (url: string | URL) => {
       const u = String(url);
       urls.push(u);
-      if (u.includes("after_id=cur1")) {
-        return jsonResponse({ data: [{ version: "v3" }], has_more: false });
+      if (u.includes("page=cur1")) {
+        return jsonResponse({ data: [{ version: "v3" }], has_more: false, next_page: null });
       }
       return jsonResponse({
         data: [{ version: "v1" }, { version: "v2" }],
         has_more: true,
-        last_id: "cur1",
+        next_page: "cur1",
       });
     }) as unknown as typeof fetch;
 
@@ -173,7 +180,9 @@ describe("GC client — listSkillVersions pagination + delete order", () => {
     expect(urls).toHaveLength(2);
     expect(urls[0]).toContain("/v1/skills/skill_1/versions?");
     expect(urls[0]).toContain("limit=100");
-    expect(urls[1]).toContain("after_id=cur1");
+    expect(urls[1]).toContain("page=cur1");
+    // The fabricated cursor param must never be sent.
+    expect(urls.some((x) => x.includes("after_id"))).toBe(false);
   });
 
   it("a 404 on the first page ⇒ empty (skill already gone, idempotent)", async () => {
