@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
+import type { McpRuntimeToolCallback, McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 import type { Actor } from "@cinatra-ai/extension-types";
@@ -204,7 +204,17 @@ export function registerExtensionsPrimitives(server: McpRuntimeToolServer) {
                 ? (result as Record<string, unknown>)
                 : { result },
         };
-      }) as unknown as Parameters<typeof server.registerTool>[2],
+        // cinatra#2218 L1 — this cast used to be
+        // `Parameters<typeof server.registerTool>[2]`.
+        // `@modelcontextprotocol/server@2.0.0` added a SECOND (deprecated
+        // raw-shape) `registerTool` overload, and `Parameters<T>` on an
+        // overloaded signature resolves to the LAST overload — which pinned the
+        // raw-shape callback and, with it, demanded `inputSchema: ZodRawShape`
+        // instead of the Standard Schema this table actually holds
+        // (`z.ZodTypeAny`). `McpRuntimeToolCallback` names the STANDARD-SCHEMA
+        // overload's callback directly, so overload ORDER cannot drive inference
+        // and the cast stays a real type instead of an `any`/`never` hole.
+      }) as unknown as McpRuntimeToolCallback,
     );
   }
 }

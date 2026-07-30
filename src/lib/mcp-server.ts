@@ -1,6 +1,6 @@
 import "@/lib/extensions"; // initialises extensionRegistry side effects
 import "@/lib/register-test-delivery-send-port"; // wires the run-scoped test-delivery send PORT (#1625)
-import { createMcpServerAuthPlugins, createMcpServerMount, type McpServerSettings, type McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
+import { admitToolInputSchema, createMcpServerAuthPlugins, createMcpServerMount, type McpServerSettings, type McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import { CINATRA_MCP_INSTRUCTIONS, CINATRA_MCP_EXPERIMENTAL } from "./mcp-instructions";
 import { getRunContext } from "./agent-run-context-registry";
 import {
@@ -252,8 +252,31 @@ export async function registerAllCapabilities(
       skippedCollisions.push({ name, packageName });
       continue;
     }
-    registeredNames.add(name);
-    effectiveExtensionTools.push({ name, packageName });
+    // cinatra#2218 L1 — Standard-Schema admission at the ONE boundary where an
+    // unchecked third-party `inputSchema` reaches `registerTool`. server@2.0.0
+    // THROWS on a non-Standard-Schema value; unguarded, that throw escapes the
+    // per-request capability build and fails the request, taking EVERY other
+    // tool down with it (the retired alpha's equivalent failure mode was a
+    // `-32603` on `tools/list`). Refuse the one tool, name the extension, keep
+    // the endpoint serving. Rationale + the measured alpha behaviour:
+    // `admitToolInputSchema` in packages/mcp-server/src/runtime-server.ts.
+    //
+    // The admission check is a cheap PRE-FILTER, not the isolation: a schema can
+    // satisfy the structural check and still make `registerTool` throw (a
+    // `jsonSchema.input` converter that throws, or one returning an invalid
+    // root). The real isolation is the try/catch around the registration call
+    // below, and the fact that `registeredNames` / `effectiveExtensionTools` are
+    // only updated AFTER the registration actually succeeded — a failed
+    // registration must never claim the name (which would shadow a later host
+    // tool) nor enter the effective set (which the authz boundary shadow-allows
+    // against).
+    const schemaAdmission = admitToolInputSchema(entry.tool.inputSchema);
+    if (!schemaAdmission.admitted) {
+      console.warn(
+        `[mcp] extension tool "${name}" (${packageName}) NOT registered — ${schemaAdmission.reason}`,
+      );
+      continue;
+    }
     // The advertised description/schema follow the PLANNED registration: the
     // default's for default entries; the RETAINED version's for versioned
     // entries (the MCP SDK validates input against `~standard` of this schema —
@@ -271,19 +294,34 @@ export async function registerAllCapabilities(
               { expected: "versioned", packageName: entry.packageName, name, version: entry.version },
               input,
             );
-    (server.registerTool as (...a: unknown[]) => unknown)(
-      name,
-      {
-        title: name,
-        description: registration.description ?? name,
-        // Standard Schema (zod) — the MCP SDK validates against `~standard`.
-        inputSchema: (registration.inputSchema as z.ZodTypeAny) ?? z.object({}).passthrough(),
-      },
-      async (input: unknown) => {
-        const raw = await dispatchPlanned(input);
-        return wrapExtensionToolResult(raw);
-      },
-    );
+    try {
+      (server.registerTool as (...a: unknown[]) => unknown)(
+        name,
+        {
+          title: name,
+          description: registration.description ?? name,
+          // Standard Schema (zod) — the MCP SDK validates against `~standard`.
+          inputSchema: (registration.inputSchema as z.ZodTypeAny) ?? z.object({}).passthrough(),
+        },
+        async (input: unknown) => {
+          const raw = await dispatchPlanned(input);
+          return wrapExtensionToolResult(raw);
+        },
+      );
+    } catch (error) {
+      // Fail ISOLATED: one extension's unusable registration must not fail the
+      // per-request capability build (which would take down `tools/list` for
+      // every other tool). The name is deliberately NOT claimed and the tool is
+      // NOT published to the effective set.
+      console.warn(
+        `[mcp] extension tool "${name}" (${packageName}) NOT registered — registerTool rejected it: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      continue;
+    }
+    registeredNames.add(name);
+    effectiveExtensionTools.push({ name, packageName });
   }
   // Publish the EFFECTIVE extension-tool set so the authz boundary shadow-allows
   // only tools actually registered into the server (never a skipped collision).
