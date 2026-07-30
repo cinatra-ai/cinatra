@@ -16,7 +16,6 @@
     "src/app/api/agents/[agentSlug]/token/route.ts :: import :: @/lib/wp-drupal-contract": 1,
     "src/app/api/app/setup-status/route.ts :: import :: @cinatra-ai/google-oauth-connection": 1,
     "src/app/api/external-mcp/proxy/[serverId]/route.ts :: import :: @/lib/external-mcp/twenty-execute-tool-proxy": 1,
-    "src/app/api/webhooks/wordpress/route.ts :: path :: wordpress": 1,
     "src/app/configuration/apps/apollo/page.tsx :: path :: apollo": 1,
     "src/app/configuration/skills/page.tsx :: import :: ./save-skills-github-pat-form": 1,
     "src/app/configuration/skills/save-skills-github-pat-form.tsx :: path :: github": 1,
