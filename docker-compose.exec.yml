@@ -1,0 +1,174 @@
+# Execution-plane topology (exec-plane L3, epic cinatra#1705) — profile `exec`.
+#
+#   docker compose -f docker-compose.exec.yml --profile exec config
+#   docker compose -f docker-compose.exec.yml --profile exec up -d
+#
+# Three services and one rule that shapes all of them: THE APP'S SECRET SURFACE
+# NEVER REACHES HERE. Every service takes its configuration from its OWN scoped
+# env file under ${CINATRA_EXEC_ENV_DIR}/<service>/.env — never the app's
+# .env.local, never a shared env_file, never an inherited app variable. That is
+# not a convention: `scripts/audit/exec-compose-scoping-check.mjs` fails the
+# build if any service here declares a banned app key or reads an env file from
+# outside the exec-plane directory, and it is the conformance target this file
+# is written against.
+#
+# THE SOCKET IS ON THE WORKER, AND ONLY ON THE WORKER. `/var/run/docker.sock` is
+# root on the host. The worker needs it (it runs a container per command); the
+# broker does not (since exec-plane L3 it routes its volume + container
+# operations to the worker over the typed seam,
+# `EXEC_BROKER_VOLUME_OPS=worker-routed`); the gateway does not (it is an HTTP
+# proxy). The same self-check asserts exactly that shape.
+#
+# TLS MATERIAL IS MOUNTED, NEVER BAKED. Three identities, one PKI:
+# `broker-server` (the app dials it), `broker-client` (it dials the worker),
+# `worker-server`. `mtls.ts` admits exactly one URI SAN plus the
+# direction-appropriate EKU per credential, so the leaves are not
+# interchangeable — see `packages/execution-plane/src/service/mtls.ts`.
+
+name: cinatra-exec
+
+services:
+  # ---------------------------------------------------------------------------
+  # BROKER — the trust boundary. Pure Node: opens the sealed carrier, authorizes
+  # every command against its voucher, bounds load, audits, and talks mTLS to
+  # the worker. It rides the APP IMAGE (the image already carries
+  # scripts/exec-broker-service.bundle.mjs, deliberately inert in the app's own
+  # boot) launched directly at that bundle — with NO app env_file, so none of
+  # the app's configuration is present in the process.
+  # ---------------------------------------------------------------------------
+  cinatra-exec-broker:
+    restart: unless-stopped
+    profiles: ["exec"]
+    image: ${CINATRA_APP_IMAGE:?set CINATRA_APP_IMAGE to the digest-pinned app image}
+    command: ["node", "/app/scripts/exec-broker-service.bundle.mjs"]
+    env_file:
+      - path: ${CINATRA_EXEC_ENV_DIR:-/opt/cinatra-exec}/broker/.env
+        required: true
+    environment:
+      # --- identity + wire ---
+      EXEC_INSTANCE: ${CINATRA_EXEC_INSTANCE:?set CINATRA_EXEC_INSTANCE}
+      EXEC_PROTOCOL_VERSION: "1"
+      EXEC_BROKER_LISTEN_PORT: "4100"
+      EXEC_LISTEN_ADDRESS: "0.0.0.0"
+      # --- the two acknowledgements broker-entry.ts refuses to infer ---
+      # Liveness is bounded by the sealed carrier's TTL: this broker has no run
+      # store to consult.
+      EXEC_BROKER_RUN_LIVENESS: "carrier-ttl-only"
+      # Volume + container operations run on the WORKER host. This is what lets
+      # this container have no docker socket at all.
+      EXEC_BROKER_VOLUME_OPS: "worker-routed"
+      # --- worker hop ---
+      EXEC_WORKER_URL: "https://cinatra-exec-worker:4200"
+      # --- egress ---
+      EXEC_SANDBOX_NETWORK: "cinatra-exec-internal"
+      EXEC_EGRESS_MODE: ${CINATRA_EXEC_EGRESS_MODE:-allowlist}
+      EXEC_EGRESS_ALLOWLIST: ${CINATRA_EXEC_EGRESS_ALLOWLIST:-}
+      EXEC_EGRESS_MAX_BYTES_PER_JOB: ${CINATRA_EXEC_EGRESS_MAX_BYTES_PER_JOB:-0}
+      EXEC_GATEWAY_HOST: "cinatra-exec-gateway"
+      EXEC_GATEWAY_PORT: "3128"
+      EXEC_GATEWAY_ADMIN_URL: "http://cinatra-exec-gateway:3129"
+      # --- host exclusivity (exec-plane L3) ---
+      # A spoke running workers IN-VM is single-tenant for local execution. The
+      # broker revalidates the provisioning side's lease before EVERY placement
+      # decision and drains when it stops holding.
+      EXEC_HOST_EXCLUSIVITY: "enforced"
+      EXEC_HOST_EXCLUSIVITY_LEASE: "/opt/cinatra-exec/lease/host-exclusivity.lease"
+      EXEC_HOST_EXCLUSIVITY_RENEW_INTERVAL_MS: ${CINATRA_EXEC_LEASE_RENEW_MS:-60000}
+      # --- mTLS material (paths; the files ride the mount below) ---
+      EXEC_TLS_CA_FILE: "/etc/cinatra-exec/tls/ca.crt"
+      EXEC_TLS_CERT_FILE: "/etc/cinatra-exec/tls/broker-server.crt"
+      EXEC_TLS_KEY_FILE: "/etc/cinatra-exec/tls/broker-server.key"
+      EXEC_TLS_CLIENT_CERT_FILE: "/etc/cinatra-exec/tls/broker-client.crt"
+      EXEC_TLS_CLIENT_KEY_FILE: "/etc/cinatra-exec/tls/broker-client.key"
+    volumes:
+      # THE LEASE DIRECTORY, NOT THE LEASE FILE. The provisioning side publishes
+      # the lease with an atomic `mv`, i.e. a RENAME: a file bind-mount would pin
+      # the container to the OLD inode and it would go on reading a lease that no
+      # longer exists on the host. Binding the directory is what makes
+      # `lease.ts`'s read-by-path see the replacement.
+      #
+      # Its OWN directory, not the exec root: renewal has to write here, and the
+      # exec root also holds every service's scoped env file. Provision the host
+      # with a matching lease path so both sides agree on where it lives.
+      - ${CINATRA_EXEC_LEASE_DIR:-/opt/cinatra-exec/lease}:/opt/cinatra-exec/lease:rw
+      - ${CINATRA_EXEC_TLS_DIR:-/opt/cinatra-exec/tls}:/etc/cinatra-exec/tls:ro
+    networks:
+      - cinatra-exec-internal
+    ports:
+      # Loopback only. mTLS — not network reachability — is the authorization
+      # boundary; publishing wider would add exposure without adding authority.
+      - "127.0.0.1:4100:4100"
+    depends_on:
+      - cinatra-exec-worker
+      - cinatra-exec-gateway
+
+  # ---------------------------------------------------------------------------
+  # WORKER — the only container with a docker socket, and the reason the socket
+  # is not on anything else. Runs one hardened container per command over the
+  # digest-pinned L0 image, owns the L2 workspace + read-only skills volume
+  # lifecycles, and force-removes a job's containers when the broker drains a
+  # revoked host. Carries no app code and no app env.
+  # ---------------------------------------------------------------------------
+  cinatra-exec-worker:
+    restart: unless-stopped
+    profiles: ["exec"]
+    image: ${CINATRA_EXEC_WORKER_IMAGE:?set CINATRA_EXEC_WORKER_IMAGE to the digest-pinned worker image}
+    env_file:
+      - path: ${CINATRA_EXEC_ENV_DIR:-/opt/cinatra-exec}/worker/.env
+        required: true
+    environment:
+      EXEC_INSTANCE: ${CINATRA_EXEC_INSTANCE:?set CINATRA_EXEC_INSTANCE}
+      EXEC_PROTOCOL_VERSION: "1"
+      EXEC_WORKER_LISTEN_PORT: "4200"
+      EXEC_LISTEN_ADDRESS: "0.0.0.0"
+      # Digest-pinned L0 base. The worker records the RESOLVED digest of whatever
+      # ran in every audit record, so the effective image stays attributable.
+      CINATRA_SANDBOX_L0_IMAGE: ${CINATRA_SANDBOX_L0_IMAGE:?set CINATRA_SANDBOX_L0_IMAGE to a digest-pinned ref}
+      EXEC_TLS_CA_FILE: "/etc/cinatra-exec/tls/ca.crt"
+      EXEC_TLS_CERT_FILE: "/etc/cinatra-exec/tls/worker-server.crt"
+      EXEC_TLS_KEY_FILE: "/etc/cinatra-exec/tls/worker-server.key"
+    volumes:
+      # Root on the host, granted to exactly one container in this topology.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${CINATRA_EXEC_TLS_DIR:-/opt/cinatra-exec/tls}:/etc/cinatra-exec/tls:ro
+    networks:
+      - cinatra-exec-internal
+
+  # ---------------------------------------------------------------------------
+  # GATEWAY — the attributing egress proxy. Dual-homed BY DESIGN and by design
+  # ONLY: it is the single route out of the internal sandbox network, so it sits
+  # on both `cinatra-exec-internal` (no external route) and
+  # `cinatra-exec-egress` (its internet leg). Runs the real
+  # `runtime/egress-gateway.cjs` — which rides in the worker image, the first
+  # image it has ever been copied into.
+  # ---------------------------------------------------------------------------
+  cinatra-exec-gateway:
+    restart: unless-stopped
+    profiles: ["exec"]
+    image: ${CINATRA_EXEC_WORKER_IMAGE:?set CINATRA_EXEC_WORKER_IMAGE to the digest-pinned worker image}
+    command: ["node", "/srv/exec-worker/runtime/egress-gateway.cjs"]
+    env_file:
+      - path: ${CINATRA_EXEC_ENV_DIR:-/opt/cinatra-exec}/gateway/.env
+        required: true
+    environment:
+      EGRESS_PROXY_PORT: "3128"
+      EGRESS_ADMIN_PORT: "3129"
+      EGRESS_MODE: ${CINATRA_EXEC_EGRESS_MODE:-allowlist}
+      EGRESS_ALLOWLIST: ${CINATRA_EXEC_EGRESS_ALLOWLIST:-}
+      EGRESS_MAX_BYTES_PER_JOB: ${CINATRA_EXEC_EGRESS_MAX_BYTES_PER_JOB:-0}
+    networks:
+      - cinatra-exec-internal
+      - cinatra-exec-egress
+
+networks:
+  # The sandbox network. `internal: true` is the network-layer half of egress
+  # enforcement: a container attached only here has no NAT route out at all, so
+  # "no egress" is a property of the topology rather than of a policy check that
+  # could be bypassed. The explicit `name` keeps it stable — the worker is told
+  # this exact string and asserts the network really is internal before using it.
+  cinatra-exec-internal:
+    name: cinatra-exec-internal
+    internal: true
+  # The gateway's internet leg. Nothing else is ever attached to it.
+  cinatra-exec-egress:
+    name: cinatra-exec-egress

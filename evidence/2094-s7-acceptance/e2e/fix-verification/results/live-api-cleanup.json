@@ -1,0 +1,858 @@
+{
+  "at": "2026-07-30T08:05:53.810Z",
+  "laneOwnedSkills": 26,
+  "versionsDeleted": 151,
+  "skillsReclaimed": 26,
+  "indeterminate": 0,
+  "allReclaimed": true,
+  "laneSkillsStillPresent": [],
+  "foreignSkillsLeftUntouched": [
+    "skill_01FMLgcvGdk8JB3TMUT5g3of",
+    "skill_016S7nJzFHWAjhBTG6LN7ptb",
+    "xlsx",
+    "pptx",
+    "pdf",
+    "docx"
+  ],
+  "remoteSkillsRemainingTotal": 6,
+  "ledger": [
+    {
+      "skillId": "skill_011gmGzMdvXzBneV2sPMQ9yk",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387923983978",
+          "status": 200
+        },
+        {
+          "version": "1785388454907853",
+          "status": 200
+        },
+        {
+          "version": "1785395193253743",
+          "status": 200
+        },
+        {
+          "version": "1785395818884658",
+          "status": 200
+        },
+        {
+          "version": "1785396720086906",
+          "status": 200
+        },
+        {
+          "version": "1785397273041697",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_012WuxkwiM3cSi5P6kEExJ6h",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387939357015",
+          "status": 200
+        },
+        {
+          "version": "1785388474263337",
+          "status": 200
+        },
+        {
+          "version": "1785395249270756",
+          "status": 200
+        },
+        {
+          "version": "1785395849270519",
+          "status": 200
+        },
+        {
+          "version": "1785396756180307",
+          "status": 200
+        },
+        {
+          "version": "1785397318180349",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_013rvKqY6kTCypWrRWNizNCu",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387935549343",
+          "status": 200
+        },
+        {
+          "version": "1785388470377511",
+          "status": 200
+        },
+        {
+          "version": "1785395224498388",
+          "status": 200
+        },
+        {
+          "version": "1785395834255761",
+          "status": 200
+        },
+        {
+          "version": "1785396739262742",
+          "status": 200
+        },
+        {
+          "version": "1785397312638536",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_013wNAbmZvJkQBJD1wANGbnf",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785395816589350",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_015bnxCHK2NcP7os99p3aS55",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387936401819",
+          "status": 200
+        },
+        {
+          "version": "1785388471190767",
+          "status": 200
+        },
+        {
+          "version": "1785395234052083",
+          "status": 200
+        },
+        {
+          "version": "1785395845745396",
+          "status": 200
+        },
+        {
+          "version": "1785396753489055",
+          "status": 200
+        },
+        {
+          "version": "1785397315315151",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_015pa525SFnE4AD7EKLyGjBz",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387934694327",
+          "status": 200
+        },
+        {
+          "version": "1785388481179229",
+          "status": 200
+        },
+        {
+          "version": "1785395232954715",
+          "status": 200
+        },
+        {
+          "version": "1785395833236255",
+          "status": 200
+        },
+        {
+          "version": "1785396751861374",
+          "status": 200
+        },
+        {
+          "version": "1785397311480570",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_016euGGt21K98DE7g51XBXVe",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387931987844",
+          "status": 200
+        },
+        {
+          "version": "1785388478019518",
+          "status": 200
+        },
+        {
+          "version": "1785395229625925",
+          "status": 200
+        },
+        {
+          "version": "1785395842903581",
+          "status": 200
+        },
+        {
+          "version": "1785396744553975",
+          "status": 200
+        },
+        {
+          "version": "1785397307724040",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_016ujT2Rm93WzKGSuHdBbQAV",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785395815440830",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_018cDrRCAhCZZnm2PrB9bxoj",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387924740542",
+          "status": 200
+        },
+        {
+          "version": "1785388455921789",
+          "status": 200
+        },
+        {
+          "version": "1785395196339410",
+          "status": 200
+        },
+        {
+          "version": "1785395820093399",
+          "status": 200
+        },
+        {
+          "version": "1785396723328801",
+          "status": 200
+        },
+        {
+          "version": "1785397261949023",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_019w5CG1oToHof3pFYEvGfbm",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387933866823",
+          "status": 200
+        },
+        {
+          "version": "1785388480263964",
+          "status": 200
+        },
+        {
+          "version": "1785395231299159",
+          "status": 200
+        },
+        {
+          "version": "1785395843828800",
+          "status": 200
+        },
+        {
+          "version": "1785396749884359",
+          "status": 200
+        },
+        {
+          "version": "1785397309439202",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01CgwY5Ws2oaLDbwncF1tiM5",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387937420258",
+          "status": 200
+        },
+        {
+          "version": "1785388469569389",
+          "status": 200
+        },
+        {
+          "version": "1785388895041483",
+          "status": 200
+        },
+        {
+          "version": "1785388998949717",
+          "status": 200
+        },
+        {
+          "version": "1785395227343680",
+          "status": 200
+        },
+        {
+          "version": "1785395339199245",
+          "status": 200
+        },
+        {
+          "version": "1785395836501933",
+          "status": 200
+        },
+        {
+          "version": "1785396141777486",
+          "status": 200
+        },
+        {
+          "version": "1785396746367045",
+          "status": 200
+        },
+        {
+          "version": "1785396851449850",
+          "status": 200
+        },
+        {
+          "version": "1785397305013448",
+          "status": 200
+        },
+        {
+          "version": "1785397331959424",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01DCM59nURV2hEt8G3yiTaYM",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387928812184",
+          "status": 200
+        },
+        {
+          "version": "1785388468706834",
+          "status": 200
+        },
+        {
+          "version": "1785395228747844",
+          "status": 200
+        },
+        {
+          "version": "1785395840846234",
+          "status": 200
+        },
+        {
+          "version": "1785396742394484",
+          "status": 200
+        },
+        {
+          "version": "1785397305961861",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01GpDXmpMLSZw79uKExMujzD",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387925509514",
+          "status": 200
+        },
+        {
+          "version": "1785388458508472",
+          "status": 200
+        },
+        {
+          "version": "1785395200899504",
+          "status": 200
+        },
+        {
+          "version": "1785395821251074",
+          "status": 200
+        },
+        {
+          "version": "1785396724282691",
+          "status": 200
+        },
+        {
+          "version": "1785397263160301",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01GqeVJwjWF5p6okeJgV3S2Y",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387929546539",
+          "status": 200
+        },
+        {
+          "version": "1785388467764101",
+          "status": 200
+        },
+        {
+          "version": "1785395232051197",
+          "status": 200
+        },
+        {
+          "version": "1785395844756412",
+          "status": 200
+        },
+        {
+          "version": "1785396750988484",
+          "status": 200
+        },
+        {
+          "version": "1785397310589277",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01JMiLBAJcDqBMvyCiFmDWHu",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785395837440412",
+          "status": 200
+        },
+        {
+          "version": "1785396741437807",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01Ju5v9tVb7i38XNs9PS5qSR",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785395839841919",
+          "status": 200
+        },
+        {
+          "version": "1785396745489142",
+          "status": 200
+        },
+        {
+          "version": "1785397302729339",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01MJLFPa44os2qcBf9jANCqX",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387940329262",
+          "status": 200
+        },
+        {
+          "version": "1785388475616298",
+          "status": 200
+        },
+        {
+          "version": "1785395250171856",
+          "status": 200
+        },
+        {
+          "version": "1785395850128125",
+          "status": 200
+        },
+        {
+          "version": "1785396781163315",
+          "status": 200
+        },
+        {
+          "version": "1785397332855305",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01NRU8xXfiGicMFQiRuocxiU",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387938288371",
+          "status": 200
+        },
+        {
+          "version": "1785388472146775",
+          "status": 200
+        },
+        {
+          "version": "1785395252081525",
+          "status": 200
+        },
+        {
+          "version": "1785395846628637",
+          "status": 200
+        },
+        {
+          "version": "1785396754364989",
+          "status": 200
+        },
+        {
+          "version": "1785397316272356",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01NdwcKA9UenNWJsjpzeS44p",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387930333199",
+          "status": 200
+        },
+        {
+          "version": "1785388477024184",
+          "status": 200
+        },
+        {
+          "version": "1785395223652980",
+          "status": 200
+        },
+        {
+          "version": "1785395841973757",
+          "status": 200
+        },
+        {
+          "version": "1785396743462142",
+          "status": 200
+        },
+        {
+          "version": "1785397306827576",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01NqULpnKxUxE14ScPiB37No",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387932979031",
+          "status": 200
+        },
+        {
+          "version": "1785388479240586",
+          "status": 200
+        },
+        {
+          "version": "1785395230604207",
+          "status": 200
+        },
+        {
+          "version": "1785395835290787",
+          "status": 200
+        },
+        {
+          "version": "1785396748658968",
+          "status": 200
+        },
+        {
+          "version": "1785397308492098",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01P31gZK64rVs1X9joHjibgA",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387928147711",
+          "status": 200
+        },
+        {
+          "version": "1785388460795889",
+          "status": 200
+        },
+        {
+          "version": "1785395199644924",
+          "status": 200
+        },
+        {
+          "version": "1785395817711393",
+          "status": 200
+        },
+        {
+          "version": "1785396722182360",
+          "status": 200
+        },
+        {
+          "version": "1785397260239770",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01Pdw2hSeNrihiSz4YpCAs6n",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387927164967",
+          "status": 200
+        },
+        {
+          "version": "1785388459738903",
+          "status": 200
+        },
+        {
+          "version": "1785388895891703",
+          "status": 200
+        },
+        {
+          "version": "1785388999835189",
+          "status": 200
+        },
+        {
+          "version": "1785395201881065",
+          "status": 200
+        },
+        {
+          "version": "1785395335698910",
+          "status": 200
+        },
+        {
+          "version": "1785395814203354",
+          "status": 200
+        },
+        {
+          "version": "1785396143156803",
+          "status": 200
+        },
+        {
+          "version": "1785396721076684",
+          "status": 200
+        },
+        {
+          "version": "1785396852616915",
+          "status": 200
+        },
+        {
+          "version": "1785397270389786",
+          "status": 200
+        },
+        {
+          "version": "1785397330912180",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01SBUfoBkXNiDRkmPHT11PU2",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387931095666",
+          "status": 200
+        },
+        {
+          "version": "1785388473043014",
+          "status": 200
+        },
+        {
+          "version": "1785395247691832",
+          "status": 200
+        },
+        {
+          "version": "1785395847501202",
+          "status": 200
+        },
+        {
+          "version": "1785396755279664",
+          "status": 200
+        },
+        {
+          "version": "1785397317325731",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01TWes7tXdUk9Mk8oWDX9b8A",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387941246047",
+          "status": 200
+        },
+        {
+          "version": "1785388481994831",
+          "status": 200
+        },
+        {
+          "version": "1785395226211235",
+          "status": 200
+        },
+        {
+          "version": "1785395838807736",
+          "status": 200
+        },
+        {
+          "version": "1785396752695851",
+          "status": 200
+        },
+        {
+          "version": "1785397313548624",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01V81q2JNQQdMWkg77Jg6Xjk",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387942035943",
+          "status": 200
+        },
+        {
+          "version": "1785388482838032",
+          "status": 200
+        },
+        {
+          "version": "1785395251119296",
+          "status": 200
+        },
+        {
+          "version": "1785395848452399",
+          "status": 200
+        },
+        {
+          "version": "1785396740290150",
+          "status": 200
+        },
+        {
+          "version": "1785397301124622",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    },
+    {
+      "skillId": "skill_01WSa8e2YNnUSY5sdHcf115i",
+      "catalogSkillId": "",
+      "versions": [
+        {
+          "version": "1785387926288634",
+          "status": 200
+        },
+        {
+          "version": "1785388457312767",
+          "status": 200
+        },
+        {
+          "version": "1785395197844353",
+          "status": 200
+        },
+        {
+          "version": "1785395822219649",
+          "status": 200
+        },
+        {
+          "version": "1785396725530278",
+          "status": 200
+        },
+        {
+          "version": "1785397266804654",
+          "status": 200
+        }
+      ],
+      "outcome": "reclaimed",
+      "deleteStatus": 200,
+      "verifyStatus": 404
+    }
+  ]
+}
