@@ -209,8 +209,6 @@ function formatServerLabel(serverLabel: string): string {
 const TOOL_ACTION_LABELS: Record<string, string> = {
   "gmail_email_send": "Email sent",
   "linkedin_post_publish": "LinkedIn post published",
-  "wordpress_post_create_draft": "WordPress draft created",
-  "wordpress_post_update_meta": "WordPress post updated",
   // The generic, per-instance governed forwarding primitives (cinatra#2022) —
   // `toolName` alone doesn't carry which underlying site ability a call
   // dispatched, so these labels stay ability-agnostic on purpose.

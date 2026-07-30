@@ -7,17 +7,24 @@
 // assistant reaches the CMS ONLY through the CMS's MCP integration, never a
 // direct REST / JSON:API call with a stored credential.
 //
-// The two in-admin editing primitives were rerouted onto the MCP integrations
-// (WordPress: `wordpress_post_get` / `wordpress_post_update` via the plugin MCP
-// content server — connector #66; Drupal: `drupal_node_*` via `drupal/mcp_tools`
-// — connector #64). BUT the dispatched content-editor agent gets the cinatra
-// self-MCP tool with `allowedTools: null` (unrestricted), so it can still REACH
-// the neighbouring WordPress primitives that were NOT rerouted and remain
-// direct-REST-backed (`wordpress_post_status`, `wordpress_posts_list`,
-// `wordpress_post_delete`, `wordpress_media_upload`, `wordpress_post_create_draft`,
-// `wordpress_post_update_meta`). That residual reach is the boundary gap this
-// policy closes fail-closed: the content-editor agent's cinatra self-MCP access
-// is pinned to the MCP-backed primitives its SKILL.md actually uses.
+// WordPress's in-admin editing reroute went through two stages
+// (cinatra-ai/cinatra#2022 S7). It first rerouted the named
+// `wordpress_post_get` / `wordpress_post_update` tools onto the plugin MCP
+// content server (connector #66), then onto the governed
+// connector-instance invoker (the community "Enable Abilities for MCP"
+// catalog's `ewpa/get-post` / `ewpa/update-post` abilities, same tool names).
+// Both named tools were then DELETED once that retarget soaked: every
+// WordPress in-admin call now goes through the two generic, already-governed
+// primitives, `wordpress_site_tool_call` / `wordpress_site_tools_list`, which
+// forward to whatever ability the connected site's own MCP catalog exposes.
+// Drupal's two in-admin editing primitives went through one stage
+// (`drupal_node_*` via `drupal/mcp_tools` — connector #64) and were never
+// renamed or deleted. In both cases the dispatched content-editor agent gets
+// the cinatra self-MCP tool with `allowedTools: null` (unrestricted) by
+// default, so it could still REACH any other cinatra-mcp tool present. That
+// residual reach is the boundary gap this policy closes fail-closed: the
+// content-editor agent's cinatra self-MCP access is pinned to exactly the
+// tools its own agent configuration actually uses.
 //
 // Enforcement tier: an explicit `allowedTools` allowlist on the agent-run
 // cinatra self-MCP tool, applied at dispatch (the /api/llm-bridge tool build),
@@ -50,35 +57,43 @@
 
 /**
  * The MCP-backed cinatra-mcp primitives the in-admin CMS content-editor agents
- * are allowed to reach. Enumerated from each agent's SKILL.md (the operations it
- * actually performs), restricted to the primitives proven to egress ONLY via
- * the CMS MCP integration:
+ * are allowed to reach. Enumerated from each agent's own configuration (the
+ * operations it actually performs), restricted to the primitives proven to
+ * egress ONLY via the CMS's own MCP integration:
  *
- * WordPress (wordpress-agent SKILL.md STEP 1/STEP 2 — the only two tools it
- * calls; every other WordPress primitive is a "NEVER" rule there):
- *   - `wordpress_post_get`    → plugin MCP content server (connector #66)
- *   - `wordpress_post_update` → plugin MCP content server (connector #66)
+ * WordPress (wordpress-agent — its full tool set, since cinatra-ai/cinatra#2022
+ * S7 deleted the old named per-operation tools; every WordPress in-admin call
+ * now goes through the governed connector-instance invoker):
+ *   - `wordpress_site_tool_call`  → forwards to the connected site's own MCP
+ *     catalog ability (e.g. `ewpa/get-post` / `ewpa/get-page` / `ewpa/update-post`)
+ *   - `wordpress_site_tools_list` → discovers that catalog; declared optional
+ *     by the agent's manifest, unused by its current flow
  *
- * Drupal (drupal-agent SKILL.md STEP 1/STEP 2/STEP 3 — its full tool set; all
- * already route through `drupal/mcp_tools`, connector #64):
+ * Drupal (drupal-agent — its full tool set; all already route through
+ * `drupal/mcp_tools`, connector #64):
  *   - `drupal_node_get`                  → mcp_jsonapi_list_entities (MCP-primary read)
  *   - `drupal_node_create_draft_revision`→ drupal/mcp_tools
  *   - `drupal_node_update`               → mcp_update_content
  *   - `drupal_node_publish`              → mcp_publish_content
  *
- * DELIBERATELY EXCLUDED (still direct-REST — the residual violation #1214's
- * follow-up reroutes): `wordpress_post_status`, `wordpress_posts_list`,
- * `wordpress_pages_list`, `wordpress_post_get_latest`, `wordpress_post_delete`,
- * `wordpress_media_upload`, `wordpress_post_create_draft`,
- * `wordpress_post_update_meta`, `wordpress_status`, `wordpress_instances_list`.
- * The content-editor SKILL.md gates delete/meta behind "unless the user
- * explicitly asks"; under the invariant those requests fail closed here until
- * the primitives are rerouted onto plugin MCP abilities.
+ * There is no "deliberately excluded, still direct-REST" WordPress residual
+ * anymore — the 10 old direct-REST-backed named tools (`wordpress_status`,
+ * `wordpress_instances_list`, `wordpress_post_create_draft`,
+ * `wordpress_post_status`, `wordpress_post_delete`, `wordpress_media_upload`,
+ * `wordpress_posts_list`, `wordpress_pages_list`, `wordpress_post_get_latest`,
+ * `wordpress_post_update_meta`) don't exist in any form anymore, direct-REST
+ * or otherwise (cinatra-ai/cinatra#2022 S7). `wordpress_site_tool_call` is a
+ * generic forwarding primitive with no fixed CMS-editing operation set of its
+ * own — the boundary this policy enforces for WordPress is now "may the
+ * content-editor agent reach the site's catalog at all," not "which specific
+ * operation." The generic invoker's own per-instance tool-policy store is
+ * the finer-grained control over which abilities that catalog actually
+ * permits per connected site.
  */
 export const IN_ADMIN_CMS_MCP_ALLOWED_TOOLS: readonly string[] = [
-  // WordPress — rerouted onto the plugin MCP content server.
-  "wordpress_post_get",
-  "wordpress_post_update",
+  // WordPress — the generic, governed connector-instance invoker primitives.
+  "wordpress_site_tool_call",
+  "wordpress_site_tools_list",
   // Drupal — all already route through drupal/mcp_tools.
   "drupal_node_get",
   "drupal_node_create_draft_revision",
