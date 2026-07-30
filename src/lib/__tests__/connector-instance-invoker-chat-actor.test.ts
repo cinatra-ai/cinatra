@@ -146,8 +146,16 @@ vi.mock("@/lib/connector-policy-store", () => ({
 // --- the invoker's own per-instance tool-policy + multi-server enrollment
 // stores (cinatra#2018 S3 / §2.6). Mocked to a deterministic in-memory "open,
 // one default-enrolled server" shape so the REAL invoker pipeline (catalog
-// acquire → policy evaluate → execute) runs to completion without a DB. -----
-vi.mock("@/lib/connector-instance-tool-policy-store", () => ({
+// acquire → policy evaluate → execute) runs to completion without a DB.
+// importOriginal-SPREAD, not a bare factory: register-host-connector-services
+// (loaded by this suite) references more of this store's exports than the two
+// overridden here (e.g. `writeInstanceToolPolicy` via the #2022 settings
+// seam), and a partial factory crashes module registration the moment a new
+// export is referenced — the packages/agents instance-identity mock class.
+// The real (un-overridden) exports are never CALLED by this suite; only the
+// two deterministic overrides below are exercised. ---------------------------
+vi.mock("@/lib/connector-instance-tool-policy-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/connector-instance-tool-policy-store")>()),
   readInstanceToolPolicy: async (connectorKey: string, instanceId: string) => ({
     connectorKey,
     instanceId,
