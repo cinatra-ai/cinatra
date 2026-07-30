@@ -408,6 +408,25 @@ Codex also noted the cleanup is sound (22 targets, 48 version deletes, 22 × 404
 verified, 0 indeterminate) and the leak gate **passes** (no key value, password,
 machine path or private hostname; screenshots OCR-clean; gitleaks clean).
 
+## CI
+
+**56 pass / 3 skipping / 1 CodeQL**, zero product files touched.
+
+CodeQL raised **3 high `js/insufficient-password-hash`** alerts, all on
+`drivers/diagnose-sync-key.mjs`, and all **dismissed as false positives**
+(alerts 206–208) with the reason recorded on each:
+
+That file re-derives the product's **own** sync-lookup fingerprint
+(`deriveApiKeyFingerprint` — HMAC-SHA256 under `BETTER_AUTH_SECRET`, SHA-256
+fallback) for the sole purpose of **comparing** it against the value already
+stored in `cinatra.anthropic_skill_sync.api_key_fingerprint`, which is how F7's
+lookup key was isolated. It stores nothing, authenticates nothing, and guards
+nothing. The flagged input is an **API key**, not a user password, and the digest
+is an opaque namespace label. Substituting a slow KDF — CodeQL's remedy — would
+produce a *different* digest and destroy the only thing the check does: matching
+the shipped algorithm byte-for-byte. There is therefore no sanitizer fix that
+preserves the diagnostic, which is why this is a dismissal rather than a patch.
+
 ## Files
 
 | path | what |
