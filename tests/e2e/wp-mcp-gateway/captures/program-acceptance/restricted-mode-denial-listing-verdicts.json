@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "description": "cinatra#2024 (S9 program acceptance) — design closeout row for criterion 1(e) only: 'mode: restricted actually restricts and lists denials'. This row adds the ONE dimension the pre-existing restricted-mode policy-evaluator suite did not yet cover: proving denials are LISTED (a denied tool is a reported catalog row, never a silent drop) against a CONCRETE, real S1 community-stack fixture write/destructive ability, not an abstract single denied ref. Scoped to this evidence item alone, not the full S9 closing report (a separate, later item). Follows the cinatra#2016 (S1) capture pattern (schemaVersion + provenance + verdicts[]) with the four-value verdict vocabulary (PASS | PENDING_GATE | FAIL | WAIVED/BLOCKED-UPSTREAM) this program adopted.",
+  "verdicts": [
+    {
+      "item": "restricted-mode-denial-listing (mode: restricted lists denials against a concrete ewpa/* write/destructive ability)",
+      "verdict": "PASS",
+      "evidence": "packages/mcp-server/src/__tests__/instance-tool-policy.test.ts",
+      "detail": {
+        "runsIn": "normal root Vitest suite (pnpm test:root) — no live stack",
+        "whatThisRowAdds": "the pre-existing restricted-mode truth-table tests in this same file already prove allow/deny/deny-precedence/absent-record/invalid-record in the abstract, against a single synthetic tool ref. This row proves the LISTING behavior criterion 1(e) actually names: evaluating a realistic mixed catalog (one allowed read plus two real S1 community-stack fixture mutation abilities) reports every row's status rather than silently omitting the denied ones, and specifically names the concrete denied tools rather than an abstract empty-catalog denial.",
+        "concreteFixtureAbilitiesUsed": {
+          "writeAbility": "ewpa/update-post",
+          "destructiveAbility": "ewpa/create-code-snippet",
+          "allowedContrastAbility": "ewpa/get-post",
+          "source": "the S1 community-stack fixture (cinatra#2016's own captured annotations, tests/e2e/wp-mcp-gateway/captures/annotations-c-gateway-triad.json) — real production ability names, not synthetic placeholders"
+        },
+        "d3ChoiceApplied": "per the design's D3 decision, this reuses the S1 community-stack fixture's real ewpa/* write/destructive abilities as the write/destructive fixture leg (option b — zero new PHP), rather than adding a synthetic write-annotated ability to scale-smoke-plugin. Reported here as its own distinct row, never merged into or implied by the scale-smoke-fixture's own evidence rows (cinatra#2255's governed-invoker-scale-verdicts.json) — this row is unrelated to and does not restate that fixture's evidence.",
+        "invariantsProven": [
+          "a restricted-mode record with a narrow allow-list, evaluated against a 3-tool mixed catalog, reports a status for every row (nothing dropped — mirrors tools_list's own per-row policyStatus mapping, which never shortens the catalog)",
+          "the allowed read (ewpa/get-post) is listed 'allowed'; the real write ability (ewpa/update-post) and the real destructive ability (ewpa/create-code-snippet) are each listed 'denied' by name, not merged into one abstract denial",
+          "the same decision object that gates invocation (the invoker's step-2 policy floor throws tool_policy_denied on decision.status === 'denied') is asserted directly for the destructive ability — restricted mode blocks that ability's invocation path at the policy layer"
+        ],
+        "deliberatelyNotDuplicated": [
+          "absent-record default (restricted+empty) — already covered by this file's own 'absent record -> RESTRICTED+empty' test",
+          "deny-beats-allow precedence — already covered by this file's own 'deny beats allow' test",
+          "invalid-record fail-closed (unknown mode / malformed entry) — already covered by this file's own two 'invalid record' tests",
+          "server-qualified matching / stable-opaque serverId identity — already covered by this file's own 'server-qualified matching' describe block",
+          "the full end-to-end invoker-level block (throwing tool_policy_denied from a real invokeConnectorInstanceTool call, no wire call made) — already proven by src/lib/__tests__/connector-instance-invoker.test.ts's 'policy deny (restricted empty allow) -> tool_policy_denied' and its neighboring restricted-mode tests; not re-proven here, this row proves the packages/mcp-server policy-evaluator layer specifically, per the design's own 'where it runs' column"
+        ],
+        "postThetaReRunQueued": "this row proves the mechanism against the tool names live TODAY (ewpa/* triad-server ability names, unaffected by the wordpress_post_get/update facade deletion the theta lane is soaking toward). Once theta lands and the final post-deletion tool-name census is available, this same suite should be re-run and re-cited against the final names as part of S9's later 'suites green: policy/census/classification, final form' row — that re-run is theta-gated and intentionally NOT claimed as done by this row.",
+        "localRun": {
+          "command": "vitest run --config vitest.config.ts --no-coverage --maxWorkers=2 packages/mcp-server/src/__tests__/instance-tool-policy.test.ts",
+          "result": "12 passed, 0 failed (10 pre-existing + 2 new)",
+          "environment": "local (operator box) — pure unit-level policy-evaluator test, no live WordPress fixture required"
+        }
+      }
+    }
+  ],
+  "provenance": {
+    "capturedAtCommit": "b14767f7898a637138b0d974a1caa5c8d78ae092",
+    "runUrl": null,
+    "capturedAt": "2026-07-30T13:46:19.000Z",
+    "denialListingTestSha256": "c727f33a120c02afb5a8c1c1ee14a28e47bcd76ed02a8f6871730a1922cdbae3",
+    "instanceToolPolicySourceSha256": "6b1df42fbf7ef09adf41d2fc8d90fd3400b2c8950cb828c12c3b202f86550587",
+    "connectorInstanceInvokerSourceSha256": "362b0a2e371ed69b27d3d9e4c42998079ecbe04ee8b37ae87aa1549b58f2a434",
+    "hashingConvention": "sha256OfFile from tests/e2e/wp-mcp-gateway/provenance.mjs (same algorithm the S1 capture set uses) — computed fresh in this repo tree, not copied from an unrelated capture"
+  }
+}
