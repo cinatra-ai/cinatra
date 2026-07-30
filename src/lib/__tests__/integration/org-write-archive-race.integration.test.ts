@@ -36,7 +36,7 @@
  * AND-of-subproofs rule — the kernel subproof in the first block below is
  * not, by itself, enough once the criterion is live/product-level).
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -65,6 +65,46 @@ import {
   archiveOrganization,
   ORG_ARCHIVE_ACTIVATION_CONFIG_KEY,
 } from "@/lib/organization-archive";
+import { betterAuthPool } from "@/lib/better-auth-db";
+
+// ---------------------------------------------------------------------------
+// `@/lib/database` seam for the A6 block (the LAST describe block below).
+//
+// The root vitest config ALIASES `@/lib/database` to
+// tests/__stubs__/database.ts (see vitest.config.ts's alias table), so the
+// real connector-config store is structurally unreachable from any root
+// vitest run — including this CI job — and the stub exports NO
+// readConnectorConfigFromDatabase/writeConnectorConfigToDatabase at all.
+// `archiveOrganization`'s own activation-gate read
+// (`isArchiveActivationEnabled` → `await import("@/lib/database")`) resolves
+// through that same alias, so without this mock the gate can NEVER read ON
+// here (the missing function throws inside its try/catch → fail-closed OFF →
+// every call refuses `activation-gate-off`).
+//
+// This mock spreads the stub (keeping every export other tests' transitive
+// graphs rely on) and adds ONLY the connector-config pair, backed by a plain
+// in-memory map the A6 beforeAll seeds with `{enabled:true}`. That is the
+// honest scope of what gets faked: the GATE READ — a config-row lookup whose
+// on/off/error semantics are already exhaustively pinned elsewhere
+// (organization-archive-gate.test.ts's six-cell matrix, the staging flip
+// script's own tests). Everything the A6 block actually proves — the real
+// transaction, the kernel's advisory-lock fence, the lock_timeout +
+// bounded-retry wrapper, real concurrent Postgres connections — runs REAL.
+// The two earlier describe blocks never touch `@/lib/database`, so this
+// file-scoped mock is invisible to them.
+// ---------------------------------------------------------------------------
+const connectorConfigStore = vi.hoisted(() => new Map<string, unknown>());
+vi.mock("@/lib/database", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    readConnectorConfigFromDatabase: <T>(key: string, fallback: T): T =>
+      connectorConfigStore.has(key) ? (connectorConfigStore.get(key) as T) : fallback,
+    writeConnectorConfigToDatabase: (key: string, value: unknown): void => {
+      connectorConfigStore.set(key, value);
+    },
+  };
+});
 
 const dbUrl = process.env.SUPABASE_DB_URL ?? "";
 const enabled =
@@ -1057,14 +1097,14 @@ describe.skipIf(!enabled)(
 // Own describe block (own root/pool/beforeAll/afterAll/beforeEach), same
 // shape as the "BA-DML-vs-archive" block above, rather than reusing the
 // first block's isolated `schema`: this suite needs `process.env.
-// SUPABASE_SCHEMA` pointed at its OWN isolated schema before the FIRST call
-// that lazily imports `@/lib/database` (organization-archive.ts's
-// activation-gate read, and `@/lib/postgres-config`'s module-level
-// `postgresSchema` constant, captured at first import in this worker) — so
-// it cannot share a beforeAll with a block whose tests might run first
-// without that env var set. `archiveOrganization`'s own schema resolution
-// (`appSchema()`) re-reads the env var on every call, so setting it once in
-// this block's `beforeAll`, before any test body runs, is sufficient.
+// SUPABASE_SCHEMA` pointed at its OWN isolated schema (which carries the
+// org_archive_lease table the archive tx's in-fence lease snapshot writes
+// into) — `archiveOrganization`'s schema resolution (`appSchema()`) re-reads
+// the env var on every call, so setting it in this block's `beforeAll` and
+// restoring it in `afterAll` keeps the other blocks unaffected. The
+// activation gate is seeded ON via the `@/lib/database` seam mock at the top
+// of this file (see its comment for why the root vitest alias makes that the
+// only honest option here).
 // =============================================================================
 
 describe.skipIf(!enabled)(
@@ -1091,20 +1131,28 @@ describe.skipIf(!enabled)(
       previousSupabaseSchema = process.env.SUPABASE_SCHEMA;
       process.env.SUPABASE_SCHEMA = schema;
 
-      // Flip the activation gate ON for THIS isolated schema only — the same
-      // real write path scripts/ops/flip-org-archive-activation-staging.mjs
-      // uses (writeConnectorConfigToDatabase against the real connector-
-      // config store), never the production closeout script itself. Done
-      // once here (not per-test): the metadata row persists in this
-      // isolated schema for the whole block, and this is also the FIRST
-      // call in this file that reaches `@/lib/database`, which is what
-      // locks in `postgresSchema` at this schema for the block.
-      const { writeConnectorConfigToDatabase } = await import("@/lib/database");
-      writeConnectorConfigToDatabase(ORG_ARCHIVE_ACTIVATION_CONFIG_KEY, { enabled: true });
+      // Flip the activation gate ON — seeds the in-memory connector-config
+      // seam this file's `@/lib/database` mock exposes (see the mock's
+      // comment at the top of the file: the root vitest alias makes the real
+      // connector-config store structurally unreachable here, for this test
+      // AND for `archiveOrganization`'s own gate read, so both sides share
+      // this seam). NEVER the production closeout path; the real write
+      // path's own semantics are pinned by the staging flip script's tests.
+      connectorConfigStore.set(ORG_ARCHIVE_ACTIVATION_CONFIG_KEY, { enabled: true });
     });
 
     afterAll(async () => {
       process.env.SUPABASE_SCHEMA = previousSupabaseSchema;
+      connectorConfigStore.clear();
+      // Release the REAL Better-Auth pool the production action queried
+      // (same teardown as dashboard-actor-team-roles.integration.test.ts,
+      // the existing root-vitest precedent for driving the real
+      // betterAuthDb) so the worker exits cleanly.
+      try {
+        await betterAuthPool.end();
+      } catch {
+        /* pool may never have been created */
+      }
       await pool?.end();
       if (root) {
         await root.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
@@ -1199,8 +1247,16 @@ describe.skipIf(!enabled)(
 
         // The REAL production entry point, default retry options (the
         // owner-ruled default: lock_timeout + bounded retry with backoff).
+        // UNLIKE the kernel-level subproof above (whose fence callback flips
+        // nothing), this REALLY ARCHIVES the org mid-window — so any writer
+        // iteration landing AFTER the archive commits is REFUSED
+        // capability-denied. That refusal is the program's own invariant
+        // (the two-connection race above pins it), so the writer set is
+        // gathered with allSettled and capability-denied is asserted below
+        // as the ONLY tolerated writer failure — anything else (or an
+        // unsettled promise past the deadline) still fails this test.
         const fencePromise = archiveOrganization(orgId, ownerId);
-        const contentionSettled = Promise.all([fencePromise, ...writers]);
+        const contentionSettled = Promise.allSettled([fencePromise, ...writers]);
 
         // Phase 1 (bounded): no ordering/fairness claim (PostgreSQL
         // documents no waiter-FIFO guarantee for advisory locks) — only
@@ -1216,9 +1272,20 @@ describe.skipIf(!enabled)(
 
         // Phase 2 (eventual success): the REAL action actually SUCCEEDS once
         // the fixed, finite writer set drains — "bounded" alone would pass
-        // even if the fence never got in.
-        const [fenceResult] = await contentionSettled;
-        expect(fenceResult).toEqual({ ok: true });
+        // even if the fence never got in. (`archiveOrganization` returns
+        // result objects, never throws — a rejected fence outcome would be
+        // a bug in its own right.)
+        const [fenceOutcome, ...writerOutcomes] = await contentionSettled;
+        expect(fenceOutcome.status).toBe("fulfilled");
+        if (fenceOutcome.status === "fulfilled") {
+          expect(fenceOutcome.value).toEqual({ ok: true });
+        }
+        for (const outcome of writerOutcomes) {
+          if (outcome.status === "rejected") {
+            expect(outcome.reason).toBeInstanceOf(OrgWriteRefusedError);
+            expect((outcome.reason as OrgWriteRefusedError).reason).toBe("capability-denied");
+          }
+        }
 
         const state = await readOrgState();
         expect(state.archivedAt).not.toBeNull();
