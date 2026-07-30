@@ -275,6 +275,8 @@
     "seed:audit": "node --env-file=.env.local scripts/audit/seed-coverage-gate.mjs",
     "gate:design-packages": "node scripts/audit/design-packages-pack-smoke.mjs",
     "gate:gatekept-install": "node scripts/audit/gatekept-install-no-direct-registry.mjs",
+    "gate:exec-compose-scoping": "node scripts/audit/exec-compose-scoping-check.mjs",
+    "gate:exec-compose-scoping:test": "node --test scripts/audit/__tests__/exec-compose-scoping-check.test.mjs",
     "gate:file-size": "node scripts/audit/file-size-ratchet.mjs",
     "gate:archive-acceptance": "node scripts/audit/archive-acceptance-gate.mjs",
     "gate:archive-acceptance:strict": "node scripts/audit/archive-acceptance-gate.mjs --strict",

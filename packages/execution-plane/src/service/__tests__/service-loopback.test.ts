@@ -914,7 +914,19 @@ describe("worker service — the broker cannot tell the difference", () => {
     const calls: string[][] = [];
     const docker: DockerCli = async (args): Promise<DockerRunOutcome> => {
       calls.push(args);
-      return { exitCode: 0, stdout: "", stderr: "", stdioOverflow: false, timedOut: false };
+      return {
+        exitCode: 0,
+        // Since exec-plane L3 a REMOVAL re-reads the volume's labels and
+        // refuses anything the execution plane did not create, so the seam has
+        // to answer the inspect the way a plane-created volume would.
+        stdout:
+          args[0] === "volume" && args[1] === "inspect"
+            ? JSON.stringify({ "ai.cinatra.execution-plane": "l2" })
+            : "",
+        stderr: "",
+        stdioOverflow: false,
+        timedOut: false,
+      };
     };
     const worker: SandboxWorker = { runCommand: async () => RESULT };
     const { port } = await startWorker(worker, docker);
@@ -922,8 +934,40 @@ describe("worker service — the broker cannot tell the difference", () => {
 
     expect(await client.ensureWorkspace("run-1")).toBe("cinatra-exec-l2-run-1");
     await client.removeWorkspace("cinatra-exec-l2-run-1");
-    expect(calls[0]?.slice(0, 2)).toEqual(["volume", "create"]);
+    // Since exec-plane L3 both ops check ownership first (`volume create` adopts
+    // an existing name rather than failing), so the create is the SECOND call.
+    expect(calls.map((argv) => argv.slice(0, 2))).toEqual([
+      ["volume", "inspect"],
+      ["volume", "create"],
+      ["volume", "inspect"],
+      ["volume", "rm"],
+    ]);
     expect(calls.at(-1)).toEqual(["volume", "rm", "-f", "cinatra-exec-l2-run-1"]);
+  });
+
+  it("routes the drain op to the worker host (exec-plane L3)", async () => {
+    const calls: string[][] = [];
+    const docker: DockerCli = async (args): Promise<DockerRunOutcome> => {
+      calls.push(args);
+      return {
+        exitCode: 0,
+        stdout: args[0] === "ps" ? "cinatra-exec-job-7-0\n" : "",
+        stderr: "",
+        stdioOverflow: false,
+        timedOut: false,
+      };
+    };
+    const worker: SandboxWorker = { runCommand: async () => RESULT };
+    const { port } = await startWorker(worker, docker);
+
+    // A JOB ID crosses the wire, never a container name: the worker derives and
+    // validates the prefix itself, so this op cannot remove a container the job
+    // does not own.
+    expect(await workerClient(port).cancelJobContainers("job-7")).toEqual([
+      "cinatra-exec-job-7-0",
+    ]);
+    expect(calls[0]?.[0]).toBe("ps");
+    expect(calls.at(-1)).toEqual(["rm", "--force", "cinatra-exec-job-7-0"]);
   });
 
   it("refuses the app's own client role on a worker endpoint", async () => {

@@ -84,11 +84,42 @@ class UnsyncedAnthropicSkillMap implements AnthropicSkillSyncMap {
   }
 }
 
-let activeSyncMap: AnthropicSkillSyncMap = new UnsyncedAnthropicSkillMap();
+// CROSS-COMPILATION SINGLETON (cinatra#2094 F7). Next.js builds SEPARATE
+// bundler compilations (instrumentation / route / RSC), each with its own module
+// cache. The table-backed map is installed exactly once, from the
+// `anthropic-skill-sync-map` boot phase — i.e. in the INSTRUMENTATION
+// compilation — while every consumer (`/chat`, `/api/llm-bridge`) resolves it at
+// request time in a ROUTE compilation. A plain module-level `let` is therefore
+// re-instantiated per compilation, so the boot registration was invisible to the
+// request path and EVERY Anthropic skill delivery resolved through the fail-loud
+// default below: an instance whose wizard had just uploaded and probed its
+// catalog still failed its first `/chat` turn with `AnthropicSkillNotSyncedError`
+// listing skills that DO hold non-stale `cinatra.anthropic_skill_sync` rows
+// (measured in-process on the live failing turn:
+// `resolver=UnsyncedAnthropicSkillMap`).
+//
+// The holder is anchored on a namespaced+versioned `Symbol.for(...)` key — the
+// same idiom, for the same reason, as `src/lib/extension-capabilities-registry.ts`
+// and `extension-mcp-registry` (which is why the chat turn DID resolve its
+// connector-registered provider adapter while failing to see this map). One
+// publication now serves every compilation in the process.
+const SYNC_MAP_HOLDER_KEY = Symbol.for(
+  "@cinatra-ai/llm:anthropic-skill-sync-map/v1",
+);
+type SyncMapHolder = { [k: symbol]: AnthropicSkillSyncMap | undefined };
+const _holder = globalThis as unknown as SyncMapHolder;
 
-/** Resolve the active Anthropic skill sync map. */
+/**
+ * Resolve the active Anthropic skill sync map. Falls back to the fail-loud
+ * default when nothing has been installed in THIS PROCESS yet (never a
+ * per-compilation default while a table-backed map is installed).
+ */
 export function getAnthropicSkillSyncMap(): AnthropicSkillSyncMap {
-  return activeSyncMap;
+  const installed = _holder[SYNC_MAP_HOLDER_KEY];
+  if (installed) return installed;
+  const fallback = new UnsyncedAnthropicSkillMap();
+  _holder[SYNC_MAP_HOLDER_KEY] = fallback;
+  return fallback;
 }
 
 /**
@@ -97,10 +128,28 @@ export function getAnthropicSkillSyncMap(): AnthropicSkillSyncMap {
  * Tests MUST reset via {@link resetAnthropicSkillSyncMap} in `afterEach`.
  */
 export function setAnthropicSkillSyncMap(map: AnthropicSkillSyncMap): void {
-  activeSyncMap = map;
+  _holder[SYNC_MAP_HOLDER_KEY] = map;
 }
 
-/** Restore the default (all-null) sync map. */
+/**
+ * Restore the default (all-null) sync map.
+ *
+ * Also clears any INSTALLER-side idempotency flag parked on the process
+ * (codex round-1 finding #3). The host's `ensureAnthropicSkillSyncMapRegistered`
+ * anchors its "already registered" flag on `globalThis` for the same
+ * cross-compilation reason this holder is anchored there — so a reset that only
+ * restored the map would leave that flag TRUE, making a later `ensure...()` a
+ * no-op and stranding the process on the fail-loud default forever. Resetting
+ * both together keeps "installed map" and "believes it installed" from
+ * diverging. The key is duplicated as a string literal rather than imported
+ * because that flag lives in the host tree, which this package must not import.
+ */
+export const ANTHROPIC_SYNC_MAP_REGISTERED_FLAG_KEY =
+  "@cinatra-ai/host:anthropic-skill-sync-map-registered/v1";
+
 export function resetAnthropicSkillSyncMap(): void {
-  activeSyncMap = new UnsyncedAnthropicSkillMap();
+  _holder[SYNC_MAP_HOLDER_KEY] = new UnsyncedAnthropicSkillMap();
+  delete (globalThis as unknown as Record<symbol, unknown>)[
+    Symbol.for(ANTHROPIC_SYNC_MAP_REGISTERED_FLAG_KEY)
+  ];
 }
