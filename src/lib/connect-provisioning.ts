@@ -650,14 +650,18 @@ export type ConnectTokenResponse = {
   // The per-site inbound-webhook binding id for clients whose connector
   // declares cinatra.webhooks. The CMS sender POSTs publish events to
   // /webhook/<vendor>/<slug>/<hook>/<webhookBindingId>:
-  //   - wordpress without `webhook_contract` (#343): the legacy bridge — the
-  //     plugin signs the bespoke `X-Cinatra-Sig-256: sha256=<hmac>` over
-  //     webhookSecret.
   //   - wordpress with `webhook_contract: "standard-webhooks"` and drupal
   //     (#974): Standard-Webhooks headers (webhook-id / -timestamp /
   //     -signature) over the paired `whsec_` webhookSecret.
-  // Absent for clients with no webhook declaration, and for a standard-contract
-  // grant when the binding upsert failed (see the webhookSecret pairing above).
+  // Absent for clients with no webhook declaration, for a standard-contract
+  // grant when the binding upsert failed (see the webhookSecret pairing above),
+  // and — since cinatra#2022 — for a wordpress grant that has not (yet)
+  // negotiated `webhook_contract: "standard-webhooks"`: provisioning no longer
+  // mints a #343 legacy-flagged binding for this generic /webhook route on
+  // such a grant (see the removed-branch note below `provisionFromGrant`'s
+  // binding-mint chain). This is UNRELATED to the separate, now-deleted
+  // dedicated /api/webhooks/wordpress route, which never used this binding
+  // table at all.
   webhookBindingId?: string;
   // Echoed as "standard-webhooks" IFF this host understood AND served the
   // sender's `webhook_contract: "standard-webhooks"` request — INCLUDING the
@@ -775,10 +779,15 @@ async function provisionFromGrant(input: {
 
   // cinatra#974: did the WordPress sender negotiate the standard contract?
   // Gated on the REQUEST field because the host cannot otherwise distinguish
-  // an updated plugin from the in-field legacy fleet: handing a fresh whsec_
-  // to an OLD plugin on reconnect would break its `X-Cinatra-Sig-256` signing
-  // against /api/webhooks/wordpress (which verifies the SHARED secret). Old
-  // plugins never send the field, so their exchanges stay byte-identical.
+  // an updated plugin from one that has not yet upgraded — a not-yet-upgraded
+  // plugin never sends the field, so its exchange stays byte-identical to
+  // before this negotiation existed. (cinatra#2022 removed TWO separate
+  // pre-negotiation-only mechanisms behind a DB precondition gating that PR's
+  // merge, not a change to this gate itself: the dedicated
+  // /api/webhooks/wordpress route — which never used this file's binding
+  // table — and, independently, the legacy-bridge binding mint below that fed
+  // the generic /webhook route's binding table; see the removed-branch note
+  // further down.)
   const wordpressStandard =
     input.row.client === "wordpress" && input.webhookContract === STANDARD_WEBHOOK_CONTRACT;
 
@@ -813,17 +822,25 @@ async function provisionFromGrant(input: {
 
   // Mint (or rotate-in-place) the per-site inbound-webhook binding for the
   // clients whose connector declares cinatra.webhooks:
-  //   - wordpress without `webhook_contract` (#343): the shared webhookSecret
-  //     is bridged as the legacy HMAC secret (D3c option A) so the in-field
-  //     plugin keeps its `X-Cinatra-Sig-256` signing.
   //   - wordpress with `webhook_contract: "standard-webhooks"` and drupal
   //     (#974): a STANDARD binding storing the fresh per-binding `whsec_`
   //     secret; the sender signs Standard-Webhooks. For a WordPress site whose
-  //     binding was previously legacy-bridged, upsertStandard CONVERTS the row
-  //     in place (legacy columns cleared, bindingId preserved); a later
-  //     reconnect from a rolled-back OLD plugin (no `webhook_contract`) runs
-  //     upsertLegacy and re-enables the legacy bridge on the same binding, so
-  //     a plugin downgrade self-heals on reconnect.
+  //     binding was previously legacy-bridged (pre-cinatra#2022), upsertStandard
+  //     CONVERTS the row in place (legacy columns cleared, bindingId preserved).
+  //   - wordpress WITHOUT `webhook_contract`: no binding is minted here.
+  //     REMOVED (cinatra#2022): this arm used to call
+  //     `webhookSecretService.upsertLegacy(...)`, bridging the shared
+  //     webhookSecret as a #343 legacy-flagged binding on the GENERIC
+  //     /webhook/<vendor>/<slug>/<hook>/<bindingId> route's own binding
+  //     table — so a rolled-back plugin downgrade self-healed that binding on
+  //     the next reconnect. Removing this arm only stops NEW/refreshed legacy
+  //     bindings from being minted for WordPress; the generic /webhook route
+  //     itself, and its ability to resolve/verify any EXISTING legacy-flagged
+  //     binding (for WordPress or any other connector) via `verifyLegacyHmac`,
+  //     is untouched. Separately, in the same PR, the DEDICATED
+  //     /api/webhooks/wordpress route — a different receiver entirely, which
+  //     never read this binding table — was also deleted (see that PR's
+  //     body for the DB-gate precondition covering both removals).
   // All upserts are tuple-scoped + idempotent across reconnects / credential
   // rotations (a reconnect re-issues a fresh secret here; the binding's stored
   // secret is updated in place — dual-window for standard — preserving its
@@ -835,16 +852,14 @@ async function provisionFromGrant(input: {
   // strand the client with a rotated-but-unreturned credential — the auth code
   // is single-use and already consumed. On failure we log and return WITHOUT a
   // webhookBindingId; the binding is re-minted IDEMPOTENTLY on the next
-  // reconnect. For a LEGACY WordPress grant the in-field plugin still posts to
-  // the existing /api/webhooks/wordpress route, so no delivery is lost. For a
-  // standard-contract grant (drupal, wordpress-standard) the response then
-  // ALSO omits webhookSecret — the secret and bindingId are a PAIRED write
-  // (codex): returning a fresh secret without its binding would overwrite the
-  // sender's previously working secret while its stored bindingId still points
-  // at the old binding. The `webhookContract` ECHO is still returned on that
-  // failure arm (codex): it asserts "this host speaks the standard contract",
-  // which is what tells the sender to KEEP its existing pair rather than
-  // discard it.
+  // reconnect. The response then ALSO omits webhookSecret for a standard-
+  // contract grant (drupal, wordpress-standard) — the secret and bindingId are
+  // a PAIRED write (codex): returning a fresh secret without its binding would
+  // overwrite the sender's previously working secret while its stored
+  // bindingId still points at the old binding. The `webhookContract` ECHO is
+  // still returned on that failure arm (codex): it asserts "this host speaks
+  // the standard contract", which is what tells the sender to KEEP its
+  // existing pair rather than discard it.
   let webhookBindingId: string | undefined;
   if (wordpressStandard) {
     try {
@@ -860,23 +875,6 @@ async function provisionFromGrant(input: {
       // NEVER log the secret or the binding material — only the failure reason.
       console.error(
         "[connect/provisioning] WordPress STANDARD webhook binding upsert failed (credential still issued; secret+binding pair omitted; re-minted on next reconnect):",
-        err instanceof Error ? err.message : err,
-      );
-    }
-  } else if (input.row.client === "wordpress") {
-    try {
-      const binding = await webhookSecretService.upsertLegacy({
-        vendor: WORDPRESS_WEBHOOK_BINDING.vendor,
-        slug: WORDPRESS_WEBHOOK_BINDING.slug,
-        hook: WORDPRESS_WEBHOOK_BINDING.hook,
-        siteId: site.siteId,
-        legacySecret: clientWebhookSecret,
-      });
-      webhookBindingId = binding.bindingId;
-    } catch (err) {
-      // NEVER log the secret or the binding material — only the failure reason.
-      console.error(
-        "[connect/provisioning] WordPress webhook binding upsert failed (credential still issued; binding re-minted on next reconnect):",
         err instanceof Error ? err.message : err,
       );
     }
@@ -900,9 +898,15 @@ async function provisionFromGrant(input: {
   }
 
   // Paired write (standard contract): the secret is returned ONLY alongside
-  // its binding. A LEGACY WordPress grant keeps its always-present shared
-  // secret (the in-field plugin verifies against /api/webhooks/wordpress even
-  // without a binding).
+  // its binding. A non-negotiated ("legacy") WordPress grant keeps its
+  // always-present shared secret regardless of binding-mint state — this
+  // return-value behavior is UNCHANGED by cinatra#2022, which only removed
+  // (a) the dedicated /api/webhooks/wordpress route that used to consume this
+  // same secret directly, and (b) the generic-/webhook-route binding mint
+  // above that used to bridge it as a legacy-flagged secret. The value is
+  // still returned in case some other caller of this API depends on the
+  // existing response shape; it no longer backs any delivery path this repo
+  // owns.
   const standardContract = input.row.client === "drupal" || wordpressStandard;
   const includeWebhookSecret = !standardContract || webhookBindingId !== undefined;
 
