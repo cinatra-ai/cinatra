@@ -17,11 +17,23 @@
  *    lifecycle in `local-gateway.ts` and the gateway process itself in
  *    `runtime/egress-gateway.cjs`.
  *
- * Still OUTSIDE this package (later S1 slices / app wiring): the HTTP/mTLS
- * service boundary + OBO-ceiling authorization, durable jobs/audit DB tables
- * (migration-seq-at-merge), the authz-kernel sink binding, the platform-admin
- * settings surface, the health-view boot phase, and the registry read-through
- * cache on the gateway.
+ * Since the S1 service slice, ALSO in this package (see `./service/*`): the
+ * HTTP/mTLS SERVICE BOUNDARY — the versioned wire contract, mutual-TLS identity
+ * with exact URI-SAN + EKU authorization, thin broker/worker servers over the
+ * classes above, and the two clients that make a remote placement
+ * indistinguishable from an in-process one (`SandboxExecutor` for the app,
+ * `SandboxWorker` for the broker).
+ *
+ * Still OUTSIDE this package (later slices / app wiring): OBO-ceiling
+ * authorization on the service boundary, a DURABLE `commandId` ledger (the
+ * shipped one is process-local — see `service/command-ledger.ts`), durable
+ * jobs/audit DB tables (migration-seq-at-merge), routing the broker's L2
+ * workspace + read-only skills volume operations to a REMOTE worker (the broker
+ * still performs them through its own docker seam), a broker-side per-command
+ * run-liveness binding for the remote placement, making the `remote` placement
+ * mode selectable in the platform-admin settings surface, a live broker
+ * reachability probe in the health-view boot phase, and the registry
+ * read-through cache on the gateway.
  */
 
 export {
@@ -202,3 +214,153 @@ export {
   type EnvironmentMountRefusalReason,
   type EnvironmentMountResolution,
 } from "./environment/mount";
+
+// ---------------------------------------------------------------------------
+// The HTTP/mTLS SERVICE BOUNDARY (exec-plane S1 service slice, epic #1705).
+//
+// The managed placement's two hops — app→broker and broker→worker — as a
+// versioned wire contract (`service/protocol.ts`), mutual-TLS identity with
+// byte-exact URI-SAN + EKU authorization (`service/mtls.ts`), thin servers over
+// the merged `ExecutionBroker` / `SandboxWorker` (`service/broker-server.ts`,
+// `service/worker-server.ts`), and the two clients that keep a remote placement
+// indistinguishable from an in-process one: `BrokerServiceClient` +
+// `createRemoteSandboxExecutor` for the app, and `WorkerServiceClient` — which
+// IMPLEMENTS `SandboxWorker`, so the broker cannot tell the difference.
+//
+// The runnable entrypoints (`service/broker-entry.ts`,
+// `service/worker-entry.ts`) are deliberately NOT exported: nothing that
+// listens, reads `process.argv` or reads the filesystem at import time belongs
+// in this barrel — the same separation `runtime/egress-gateway.cjs` already has.
+// `pnpm build:exec-service-bundle` bundles those entries for a container.
+// ---------------------------------------------------------------------------
+
+export {
+  EXEC_PROTOCOL_VERSION,
+  EXEC_PROTOCOL_VERSION_ENV,
+  EXEC_PROTOCOL_HEADER,
+  EXEC_SERVICE_TOKEN_HEADER,
+  EXEC_RPC_PATH,
+  EXEC_DEFAULT_MAX_BODY_BYTES,
+  EXEC_ERROR_STATUS,
+  BROKER_OPS,
+  WORKER_OPS,
+  checkProtocolVersion,
+  checkProtocolHeader,
+  parseBrokerRequest,
+  parseWorkerRequest,
+  execRequestEnvelope,
+  execOkResponse,
+  execErrorResponse,
+  type BrokerOp,
+  type WorkerOp,
+  type BrokerRequest,
+  type WorkerRequest,
+  type BrokerResultFor,
+  type WorkerResultFor,
+  type ExecErrorCode,
+  type ExecErrorBody,
+  type ExecRequestEnvelope,
+  type ExecResponseEnvelope,
+  type ExecutionStdioEntry,
+  type OpenJobPayload,
+  type ExecPayload,
+  type CloseJobPayload,
+  type TerminateJobsForRunPayload,
+  type SweepPayload,
+  type DrainAuditPayload,
+  type DrainAuditResultPayload,
+  type HealthResultPayload,
+  type RunCommandPayload,
+  type StageSkillsPayload,
+} from "./service/protocol";
+
+export {
+  EXEC_URI_SAN_SCHEME,
+  EXEC_SERVICE_ROLES,
+  EXEC_TLS_MIN_VERSION,
+  EXEC_TLS_CERT_FILE_ENV,
+  EXEC_TLS_KEY_FILE_ENV,
+  EXEC_TLS_CA_FILE_ENV,
+  EXEC_TLS_KEY_PASSPHRASE_ENV,
+  EXEC_TLS_CLIENT_CERT_FILE_ENV,
+  EXEC_TLS_CLIENT_KEY_FILE_ENV,
+  EXEC_TLS_CLIENT_KEY_PASSPHRASE_ENV,
+  EKU_SERVER_AUTH,
+  EKU_CLIENT_AUTH,
+  execServiceUri,
+  parseUriSans,
+  authorizePeerIdentity,
+  authorizeServiceClient,
+  execServerTlsOptions,
+  execClientTlsOptions,
+  loadExecTlsMaterial,
+  loadExecClientTlsMaterial,
+  type ExecServiceRole,
+  type ExecServerRole,
+  type ExecClientRole,
+  type ExecPeerCertificate,
+  type ExecTlsMaterial,
+  type ExecServerTlsConfig,
+  type ExecClientTlsConfig,
+  type ExecClientTlsOptions,
+  type PeerAuthorization,
+  type PeerRefusalReason,
+} from "./service/mtls";
+
+export {
+  createInMemoryCommandLedger,
+  DEFAULT_COMMAND_LEDGER_MAX_RECORDS,
+  DEFAULT_COMMAND_LEDGER_RETENTION_MS,
+  DEFAULT_COMMAND_LEDGER_MIN_REPLAY_MS,
+  COMMAND_LEDGER_HARD_MAX_MULTIPLE,
+  type CommandLedger,
+  type CommandLedgerRecord,
+  type CommandClaim,
+  type CommandOutcome,
+} from "./service/command-ledger";
+
+export {
+  ExecRpcClient,
+  createExecRpcListener,
+  EXEC_DEFAULT_REQUEST_TIMEOUT_MS,
+  type ExecRpcClientConfig,
+  type ExecRpcCallResult,
+  type ExecRpcContext,
+  type ExecRpcDispatch,
+  type ExecRpcListenerConfig,
+  type ExecRpcReply,
+} from "./service/rpc-transport";
+
+export {
+  createBrokerService,
+  createBrokerDispatch,
+  createBufferedAuditRelay,
+  DEFAULT_AUDIT_RELAY_MAX_RECORDS,
+  DEFAULT_AUDIT_RELAY_MAX_STDIO,
+  type BrokerService,
+  type BrokerServiceConfig,
+  type BrokerServiceBroker,
+  type ExecAuditRelay,
+} from "./service/broker-server";
+
+export {
+  createWorkerService,
+  createWorkerDispatch,
+  type WorkerService,
+  type WorkerServiceConfig,
+} from "./service/worker-server";
+
+export {
+  BrokerServiceClient,
+  createRemoteSandboxExecutor,
+  ExecServiceUnavailableError,
+  type BrokerServiceClientConfig,
+  type RemoteExecutorBroker,
+} from "./service/broker-client";
+
+export {
+  WorkerServiceClient,
+  DEFAULT_WORKER_CLIENT_MAX_ATTEMPTS,
+  DEFAULT_WORKER_CLIENT_RETRY_DELAY_MS,
+  type WorkerServiceClientConfig,
+} from "./service/worker-client";
