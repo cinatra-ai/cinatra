@@ -46,6 +46,10 @@ const state = vi.hoisted(() => ({
   recorded: [] as Array<{ turnId: string; rows: Array<Record<string, unknown>> }>,
   /** Keys already persisted — reproduces `ON CONFLICT DO NOTHING`. */
   persistedKeys: new Set<string>(),
+  /** Throw inside `stream()` BEFORE the provider request is issued. */
+  streamFailsBeforeDispatch: false,
+  /** Throw AFTER the provider request went out (a provider-side rejection). */
+  streamFailsAfterDispatch: false,
 }));
 
 vi.mock("@/lib/register-host-connector-services", () => ({}));
@@ -127,8 +131,22 @@ vi.mock("@cinatra-ai/llm", () => ({
     name: "cinatra",
     serverLabel: "cinatra",
   })),
+  // Faithful to every shipped provider adapter: `onStepStart` fires at the top
+  // of the step loop, immediately BEFORE the provider request goes out. The
+  // runtime uses it as the observed dispatch boundary.
   stream: vi.fn(async (input: Record<string, unknown>) => {
     capturedStreamInput = input;
+    if (state.streamFailsBeforeDispatch) {
+      // Models a throw INSIDE `stream()` but BEFORE `adapter.stream()` —
+      // adapter resolution, MCP/execution injection, attachment resolution.
+      // Nothing left the process, so nothing may be recorded.
+      throw new Error("attachment resolution failed");
+    }
+    (input.onStepStart as (step: number) => void)?.(1);
+    if (state.streamFailsAfterDispatch) {
+      // The request WAS sent and the provider rejected it (the issue-#47 400s).
+      throw new Error("400 unsupported tool");
+    }
     (input.onTextDelta as (d: string) => void)?.("Hi");
   }),
 }));
@@ -175,6 +193,8 @@ beforeEach(() => {
     selectionReason: undefined,
   };
   state.inlineResult = { systemContext: "", exposure: [], dropped: [] };
+  state.streamFailsBeforeDispatch = false;
+  state.streamFailsAfterDispatch = false;
 });
 
 describe("a chat turn writes EXACTLY ONE delivery record, keyed to the turn the chat path minted", () => {
@@ -314,6 +334,43 @@ describe("the loud no-vehicle REFUSAL is durable, not just a log line", () => {
 });
 
 describe("the record never OVERCLAIMS", () => {
+  it("a turn that dies INSIDE stream() before the provider request writes NO record", () => {
+    // Reaching the `stream()` call is not proof of dispatch: adapter
+    // resolution, MCP/execution injection and attachment resolution all run
+    // first. A record committed on arrival would leave permanent `delivered`
+    // rows for a turn that never dispatched — and because the write is an
+    // idempotent insert, a retry could not repair it.
+    state.streamFailsBeforeDispatch = true;
+    state.deliveryResult.exposure = bundleSkillIds().map((skillId) => ({
+      skillId,
+      deliveryMode: "openai_shell",
+      invocationAttributable: true,
+    }));
+
+    const send = vi.fn();
+    return runAssistantTurn(buildCinatraAssistantRuntimeConfig(), makeArgs(send)).then(() => {
+      expect(send).toHaveBeenCalledWith("error", expect.anything());
+      expect(state.recorded).toEqual([]);
+    });
+  });
+
+  it("a request the PROVIDER rejected IS recorded — that is the run an operator must audit", () => {
+    state.streamFailsAfterDispatch = true;
+    state.deliveryResult.exposure = bundleSkillIds().map((skillId) => ({
+      skillId,
+      deliveryMode: "openai_shell",
+      invocationAttributable: true,
+    }));
+
+    const send = vi.fn();
+    return runAssistantTurn(buildCinatraAssistantRuntimeConfig(), makeArgs(send)).then(() => {
+      expect(send).toHaveBeenCalledWith("error", expect.anything());
+      const record = onlyRecord();
+      expect(record.turnId).toBe("turn-2240");
+      expect(record.rows.every((r) => r.outcome === "delivered")).toBe(true);
+    });
+  });
+
   it("a turn that returns before dispatch (dead public MCP ingress) writes NO record", async () => {
     // Delivery preparation succeeded, but the turn is refused at the
     // reachability guard and nothing ever reaches a provider. A record written

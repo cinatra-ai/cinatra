@@ -29,7 +29,14 @@
 //    `delivered` row carries a `vehicle` + `delivery_mode`; `dropped` and
 //    `refused` rows carry a `non_delivery_reason` instead. `refused` is the
 //    loud no-vehicle path (cinatra#2094 F11) — the assistant's skills existed
-//    and NOTHING could carry them, so the turn was refused.
+//    and NOTHING could carry them, so the turn was refused. `dropped` is an
+//    ORDINARY loss (injection cap, inline byte budget, Anthropic
+//    rank-and-truncate, an unmountable OpenAI skill) and is never conflated
+//    with a refusal.
+//  - `vehicle = 'unknown'` is the FAIL-HONEST value for a delivery a future or
+//    connector-supplied adapter reports under a `delivery_mode` this build
+//    cannot classify. The delivery happened; only its transport name is
+//    unresolvable, and `delivery_mode` still holds the raw value.
 //  - `provider_skill_id` / `skill_version` are the Anthropic container
 //    reference actually named on the wire (`container.skills`). Other vehicles
 //    carry no version at this seam and leave them NULL.
@@ -52,7 +59,7 @@ export function assistantTurnSkillDeliverySchemaQueries(
       skill_id text NOT NULL,
       outcome text NOT NULL CHECK (outcome IN ('delivered', 'dropped', 'refused')),
       provider text NOT NULL,
-      vehicle text CHECK (vehicle IS NULL OR vehicle IN ('container-skills', 'tool-mount', 'inline')),
+      vehicle text CHECK (vehicle IS NULL OR vehicle IN ('container-skills', 'tool-mount', 'inline', 'unknown')),
       delivery_mode text,
       invocation_attributable boolean,
       provider_skill_id text,
@@ -60,11 +67,20 @@ export function assistantTurnSkillDeliverySchemaQueries(
       non_delivery_reason text,
       created_at timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (turn_id, skill_id),
-      CONSTRAINT assistant_turn_skill_delivery_delivered_shape_check CHECK (
-        (outcome = 'delivered') = (vehicle IS NOT NULL AND delivery_mode IS NOT NULL)
+      -- Three BICONDITIONALS, so an untruthful row is unrepresentable in BOTH
+      -- directions: a delivered row must name its transport and must NOT carry
+      -- a non-delivery reason; a dropped/refused row must carry a reason and
+      -- must NOT name a transport. A one-way implication would still admit
+      -- e.g. a 'dropped' row with a vehicle, or a 'delivered' row with an
+      -- excuse attached.
+      CONSTRAINT assistant_turn_skill_delivery_vehicle_shape_check CHECK (
+        (outcome = 'delivered') = (vehicle IS NOT NULL)
+      ),
+      CONSTRAINT assistant_turn_skill_delivery_mode_shape_check CHECK (
+        (outcome = 'delivered') = (delivery_mode IS NOT NULL)
       ),
       CONSTRAINT assistant_turn_skill_delivery_reason_shape_check CHECK (
-        outcome = 'delivered' OR non_delivery_reason IS NOT NULL
+        (outcome = 'delivered') = (non_delivery_reason IS NULL)
       )
     )`,
     },

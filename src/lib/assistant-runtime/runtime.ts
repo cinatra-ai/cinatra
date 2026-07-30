@@ -514,6 +514,27 @@ export function buildAssistantInjectionPorts(
  * turn and run, because a silently-lost record makes the acceptance
  * ("leaves a durable row") unverifiable in operation.
  */
+/**
+ * A delivery adapter is an EXTENSION surface, so it can report a
+ * `deliveryMode` this build has no vehicle name for. The record stays truthful
+ * (`delivered`, vehicle `unknown`, raw mode preserved) rather than fabricating
+ * a transport or demoting a real delivery to a drop — but an unclassifiable
+ * vehicle means an operator's audit answer is degraded, so it is never silent.
+ */
+function warnOnUnclassifiedVehicles(
+  rows: readonly TurnSkillDeliveryRow[],
+  provider: string,
+): void {
+  const unclassified = rows.filter((r) => r.vehicle === "unknown");
+  if (unclassified.length === 0) return;
+  console.error(
+    `[assistant-runtime] ${provider} delivery reported ${unclassified.length} ` +
+      "skill(s) under a delivery mode this build cannot classify into a vehicle " +
+      `— recorded as delivered/vehicle=unknown: ` +
+      unclassified.map((r) => `${r.skillId} (mode=${r.deliveryMode})`).join(", "),
+  );
+}
+
 async function persistTurnSkillDelivery(
   turnIdentity: { turnId: string; runId: string },
   rows: readonly TurnSkillDeliveryRow[],
@@ -754,6 +775,7 @@ export async function runAssistantTurn(
         reason: d.reason,
       })),
     });
+    warnOnUnclassifiedVehicles(turnSkillDeliveryRows, adapter.provider);
   }
   if (isNativeMcpProvider(adapter.provider)) {
   // adapter.provider is narrowed to "openai" | "anthropic" in this block
@@ -797,6 +819,7 @@ export async function runAssistantTurn(
       adapterDroppedSkillIds: delivery.droppedSkillIds,
       adapterSelectionReason: delivery.selectionReason,
     });
+    warnOnUnclassifiedVehicles(turnSkillDeliveryRows, adapter.provider);
     // LOUD, never silent: the injection contract resolved skills for this turn,
     // so a delivery that produced no vehicle at all means the operator's
     // assistant is running WITHOUT its instructions. Refuse the turn rather than
@@ -815,6 +838,11 @@ export async function runAssistantTurn(
       // operator's assistant lost, durably, so the refusal is answerable from
       // the store and not only from a log line. Committed BEFORE the error
       // event so a client that tears down on `error` cannot race the write.
+      //
+      // The refusal is NOT the whole story: a skill the injection contract or
+      // the adapter had ALREADY dropped was never part of the delivery attempt,
+      // so it keeps its own drop reason rather than being relabelled "refused"
+      // (or, worse, losing its row entirely — the finding-F8 failure mode).
       await persistTurnSkillDelivery(
         args.turnIdentity,
         buildTurnSkillDeliveryRows({
@@ -825,6 +853,8 @@ export async function runAssistantTurn(
             skillId: d.skillId,
             reason: d.reason,
           })),
+          adapterDroppedSkillIds: delivery.droppedSkillIds,
+          adapterSelectionReason: delivery.selectionReason,
           refusalReason,
         }),
       );
@@ -1090,12 +1120,22 @@ export async function runAssistantTurn(
     send("text", { content: verdict.notice });
   };
 
-  // cinatra#2240 — THE DISPATCH BOUNDARY. Everything above can still return
-  // without reaching a provider (an unreachable public MCP URL, the
-  // explicit-dispatch HARD short circuit); from here the turn IS dispatched, so
-  // this is the first point at which "these skills went to this provider via
-  // this vehicle" is a true statement about the wire.
-  await persistTurnSkillDelivery(args.turnIdentity, turnSkillDeliveryRows);
+  // cinatra#2240 — THE DISPATCH BOUNDARY, observed rather than assumed.
+  //
+  // Reaching this line is NOT proof that a provider request happened: `stream()`
+  // still resolves the adapter, injects MCP/execution tools and resolves
+  // attachments before it calls `adapter.stream()`, and a throw in any of those
+  // means nothing left the process. Committing here would leave permanent
+  // `delivered` rows for a turn that never dispatched — and because the record
+  // is an idempotent insert (a fact is never rewritten), a retry could not
+  // repair it.
+  //
+  // `onStepStart` is the honest signal: every provider adapter fires it at the
+  // top of its step loop, immediately BEFORE issuing the request. So it is set
+  // when — and only when — the request carrying these skills is actually sent,
+  // INCLUDING the case the operator most needs recorded: a request that the
+  // provider then rejects (the issue-#47 400s that motivated #2094 F11).
+  let providerDispatchStarted = false;
 
   try {
     await stream({
@@ -1178,6 +1218,9 @@ export async function runAssistantTurn(
         });
       },
       onStepStart: (step) => {
+        // cinatra#2240 — the provider is about to be called with this turn's
+        // tools. See the dispatch-boundary note above the try.
+        providerDispatchStarted = true;
         send("thinking_start", { round: step });
       },
       onStepEnd: (step) => {
@@ -1220,5 +1263,13 @@ export async function runAssistantTurn(
     markUnverifiedExecutionClaim();
     const message = error instanceof Error ? error.message : "Chat request failed.";
     send("error", { message });
+  } finally {
+    // Commit ONLY if a provider request actually carried these skills — on the
+    // success path AND on the failure path (a rejected request still delivered
+    // them, and that is exactly the run an operator needs to audit). A turn
+    // that died inside `stream()` BEFORE `adapter.stream()` records nothing.
+    if (providerDispatchStarted) {
+      await persistTurnSkillDelivery(args.turnIdentity, turnSkillDeliveryRows);
+    }
   }
 }

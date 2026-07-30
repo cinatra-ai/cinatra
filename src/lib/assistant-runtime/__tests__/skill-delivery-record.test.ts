@@ -39,8 +39,51 @@ describe("vehicleForDeliveryMode", () => {
 
   it("refuses to name a vehicle for a mode this build does not know", () => {
     // Fabricating a transport for an unrecognised mode would put a false claim
-    // in an audit record. Null forces the caller to record it as undelivered.
+    // in an audit record. Null forces the caller into the fail-honest branch.
     expect(vehicleForDeliveryMode("some_future_mode")).toBeNull();
+  });
+});
+
+describe("an adapter-reported mode this build cannot classify FAILS HONEST", () => {
+  // A delivery adapter is an EXTENSION surface (llm-providers S4.x), so a
+  // connector can legitimately report a mode this core build has no vehicle
+  // name for. The skill WAS delivered; demoting it to a drop would be a false
+  // audit fact, and guessing a transport would be worse.
+  it("keeps the row DELIVERED, marks the vehicle unknown, and preserves the raw mode", () => {
+    const rows = buildTurnSkillDeliveryRows({
+      provider: "openai",
+      requestedSkillIds: ["@cinatra-ai/a"],
+      exposure: [
+        {
+          skillId: "@cinatra-ai/a",
+          deliveryMode: "some_future_mode" as never,
+          invocationAttributable: false,
+        },
+      ],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      outcome: "delivered",
+      vehicle: "unknown",
+      deliveryMode: "some_future_mode",
+      nonDeliveryReason: null,
+    });
+  });
+});
+
+describe("a delivered skill OUTSIDE the resolved set is still recorded", () => {
+  it("records an exposure the adapter reported but the turn never requested", () => {
+    // Losing it would hide a real delivery; recording it is what an audit needs.
+    const rows = buildTurnSkillDeliveryRows({
+      provider: "openai",
+      requestedSkillIds: ["@cinatra-ai/a"],
+      exposure: [
+        { skillId: "@cinatra-ai/a", deliveryMode: "openai_shell", invocationAttributable: true },
+        { skillId: "@rogue/x", deliveryMode: "openai_shell", invocationAttributable: true },
+      ],
+    });
+    expect(rows.map((r) => r.skillId)).toEqual(["@cinatra-ai/a", "@rogue/x"]);
+    expect(rowFor(rows, "@rogue/x").outcome).toBe("delivered");
   });
 });
 
@@ -196,6 +239,32 @@ describe("outcome: refused (the loud no-vehicle path, cinatra#2094 F11)", () => 
     }
   });
 
+  it("a skill an explicit drop channel named keeps its DROP reason, never 'refused'", () => {
+    // A bundle over the injection cap, whose survivors then hit the no-vehicle
+    // refusal. Relabelling the cap-dropped skill "refused" would misattribute
+    // the loss; omitting its row would hide it — the finding-F8 failure mode.
+    const rows = buildTurnSkillDeliveryRows({
+      provider: "openai",
+      requestedSkillIds: ["@cinatra-ai/kept1", "@cinatra-ai/kept2"],
+      exposure: [],
+      contractDrops: [{ skillId: "@cinatra-ai/over-cap", reason: "injection_cap_exceeded" }],
+      adapterDroppedSkillIds: ["@cinatra-ai/kept2"],
+      adapterSelectionReason: "rank-and-truncated",
+      refusalReason: "no vehicle",
+    });
+
+    expect(rows).toHaveLength(3);
+    expect(rowFor(rows, "@cinatra-ai/kept1").outcome).toBe("refused");
+    expect(rowFor(rows, "@cinatra-ai/over-cap")).toMatchObject({
+      outcome: "dropped",
+      nonDeliveryReason: "injection_cap_exceeded",
+    });
+    expect(rowFor(rows, "@cinatra-ai/kept2")).toMatchObject({
+      outcome: "dropped",
+      nonDeliveryReason: "rank-and-truncated",
+    });
+  });
+
   it("a refusal is total — it never leaves a 'delivered' row behind", () => {
     const rows = buildTurnSkillDeliveryRows({
       provider: "anthropic",
@@ -239,6 +308,68 @@ describe("record shape invariants", () => {
     const second = buildTurnSkillDeliveryRows(input);
     expect(first).toEqual(second);
     expect(first.map((r) => r.skillId)).toEqual(["@z/one", "@a/two", "@m/three"]);
+  });
+
+  it("never emits a blank non-delivery reason (an empty reason reads as ABSENT)", () => {
+    const rows = buildTurnSkillDeliveryRows({
+      provider: "openai",
+      requestedSkillIds: ["@cinatra-ai/a"],
+      exposure: [],
+      contractDrops: [{ skillId: "@cinatra-ai/a", reason: "" }],
+      adapterDroppedSkillIds: ["@cinatra-ai/b"],
+      adapterSelectionReason: "",
+    });
+    for (const row of rows) {
+      expect(row.outcome).toBe("dropped");
+      expect(row.nonDeliveryReason).toBeTruthy();
+    }
+  });
+
+  it("records an Anthropic delivery whose container reference is MISSING, without inventing one", () => {
+    const rows = buildTurnSkillDeliveryRows({
+      provider: "anthropic",
+      requestedSkillIds: ["@cinatra-ai/a"],
+      exposure: [
+        { skillId: "@cinatra-ai/a", deliveryMode: "anthropic_container", invocationAttributable: false },
+      ],
+      // The adapter reported the delivery but emitted no matching container ref.
+      tools: [{ type: "container_skills", skills: [] } as never],
+    });
+    expect(rows[0]).toMatchObject({
+      outcome: "delivered",
+      vehicle: "container-skills",
+      providerSkillId: null,
+      skillVersion: null,
+    });
+  });
+
+  it("every row satisfies the table's delivered/non-delivered CHECK biconditionals", () => {
+    const rows = [
+      ...buildTurnSkillDeliveryRows({
+        provider: "anthropic",
+        requestedSkillIds: ["@a/1", "@a/2", "@a/3"],
+        exposure: [
+          { skillId: "@a/1", deliveryMode: "anthropic_container", invocationAttributable: false },
+          { skillId: "@a/2", deliveryMode: "weird_mode" as never, invocationAttributable: false },
+        ],
+        tools: [
+          { type: "container_skills", skills: [{ skillId: "s", version: "1", catalogSkillId: "@a/1" }] } as never,
+        ],
+      }),
+      ...buildTurnSkillDeliveryRows({
+        provider: "openai",
+        requestedSkillIds: ["@b/1"],
+        exposure: [],
+        refusalReason: "no vehicle",
+      }),
+    ];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      const delivered = row.outcome === "delivered";
+      expect(row.vehicle !== null).toBe(delivered);
+      expect(row.deliveryMode !== null).toBe(delivered);
+      expect(row.nonDeliveryReason === null).toBe(delivered);
+    }
   });
 
   it("caps at the resolved set — never invents a skill the turn did not resolve", () => {

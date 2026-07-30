@@ -46,19 +46,21 @@ describe("assistantTurnSkillDeliverySchemaQueries", () => {
   it("pins the outcome and vehicle domains", () => {
     const text = ddl();
     expect(text).toContain("CHECK (outcome IN ('delivered', 'dropped', 'refused'))");
+    // `unknown` is the fail-honest vehicle for a connector-reported delivery
+    // mode this build cannot classify — the delivery happened, only its
+    // transport name is unresolvable.
     expect(text).toContain(
-      "CHECK (vehicle IS NULL OR vehicle IN ('container-skills', 'tool-mount', 'inline'))",
+      "CHECK (vehicle IS NULL OR vehicle IN ('container-skills', 'tool-mount', 'inline', 'unknown'))",
     );
   });
 
-  it("makes an untruthful row unrepresentable", () => {
+  it("makes an untruthful row unrepresentable in BOTH directions", () => {
     const text = ddl();
-    // A delivered row MUST name how it travelled; a non-delivered row MUST NOT.
-    expect(text).toContain(
-      "(outcome = 'delivered') = (vehicle IS NOT NULL AND delivery_mode IS NOT NULL)",
-    );
-    // ...and a non-delivered row MUST say why.
-    expect(text).toContain("outcome = 'delivered' OR non_delivery_reason IS NOT NULL");
+    // Biconditionals, not implications: a one-way rule would still admit a
+    // 'dropped' row carrying a vehicle, or a 'delivered' row carrying an excuse.
+    expect(text).toContain("(outcome = 'delivered') = (vehicle IS NOT NULL)");
+    expect(text).toContain("(outcome = 'delivered') = (delivery_mode IS NOT NULL)");
+    expect(text).toContain("(outcome = 'delivered') = (non_delivery_reason IS NULL)");
   });
 
   it("indexes the per-skill rollup axis the efficacy aggregate groups on", () => {
