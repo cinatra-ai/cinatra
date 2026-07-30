@@ -32,9 +32,9 @@ export type InstanceToolPolicyStatus = "allowed" | "denied";
 
 /** The reason a fallback / fail-closed verdict was reached — the caller uses it
  *  to warn-once / emit an audit event (§10-A3). Undefined on a normal verdict.
- *  `absent_policy_default_restricted` (cinatra#2022 S7 PR-δ): renamed from the
- *  pre-δ `absent_policy_fallback_open` — the compatibility OPEN window is
- *  deliberately ended, not extended; keeping the old name would misdescribe
+ *  `absent_policy_default_restricted` (cinatra#2022 S7 PR-δ) replaces the
+ *  earlier `absent_policy_fallback_open` value: the compatibility OPEN window
+ *  is deliberately ended, not extended; keeping the old name would misdescribe
  *  the current deny-by-default verdict. */
 export type InstanceToolPolicyWarning =
   | "absent_policy_default_restricted"
