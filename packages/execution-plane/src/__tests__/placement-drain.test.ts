@@ -20,7 +20,11 @@ import {
 
 import { ExecutionBroker } from "../broker";
 import type { DockerCli, DockerRunOutcome } from "../docker-cli";
-import { containerNameFor, containerNamePrefixFor } from "../l0-profile";
+import {
+  SANDBOX_CONTAINER_JOB_LABEL,
+  containerNameFor,
+  isContainerNameForJob,
+} from "../l0-profile";
 import type {
   ExecutionAuditRecord,
   PlacementVerdict,
@@ -37,15 +41,22 @@ type Recorded = string[][];
 /**
  * A docker seam that answers `volume create`, and reports the containers a
  * given job "has running" when the drain asks.
+ *
+ * The drain enumerates by the ownership LABEL the hardened run profile stamps,
+ * so this fake keeps the same label→names mapping the daemon would.
  */
-function drainableDocker(recorded: Recorded, running: Set<string>): DockerCli {
+function drainableDocker(
+  recorded: Recorded,
+  running: Set<string>,
+  labelled: Map<string, Set<string>>,
+): DockerCli {
   return async (args: string[]): Promise<DockerRunOutcome> => {
     recorded.push([...args]);
     if (args[0] === "ps") {
       const filter = args[args.indexOf("--filter") + 1] ?? "";
-      const prefix = filter.replace(/^name=\^/, "").replace(/\\/g, "");
-      const matches = [...running].filter((name) => name.startsWith(prefix));
-      return ok(matches.join("\n"));
+      const jobId = filter.replace(`label=${SANDBOX_CONTAINER_JOB_LABEL}=`, "");
+      const names = [...(labelled.get(jobId) ?? [])].filter((n) => running.has(n));
+      return ok(names.join("\n"));
     }
     if (args[0] === "rm") {
       running.delete(args[args.length - 1]);
@@ -67,7 +78,10 @@ function ok(stdout: string): DockerRunOutcome {
  * `LocalDevSandboxWorker` does it — so the names are the ones a real placement
  * would produce, and `started` records them rather than the test guessing.
  */
-function containerStartingWorker(running: Set<string>): SandboxWorker & {
+function containerStartingWorker(
+  running: Set<string>,
+  labelled: Map<string, Set<string>> = new Map(),
+): SandboxWorker & {
   specs: SandboxCommandSpec[];
   started: string[];
 } {
@@ -82,6 +96,10 @@ function containerStartingWorker(running: Set<string>): SandboxWorker & {
       const name = containerNameFor(spec.jobId, seq++);
       started.push(name);
       running.add(name);
+      // The real profile stamps `…​.job=<jobId>`; the drain selects on it.
+      const forJob = labelled.get(spec.jobId) ?? new Set<string>();
+      forJob.add(name);
+      labelled.set(spec.jobId, forJob);
       return {
         exitCode: 0,
         stdout: "",
@@ -116,17 +134,18 @@ function makeBroker(
 ) {
   const recorded: Recorded = [];
   const audits: ExecutionAuditRecord[] = [];
-  const worker = containerStartingWorker(running);
+  const labelled = new Map<string, Set<string>>();
+  const worker = containerStartingWorker(running, labelled);
   const broker = new ExecutionBroker({
     worker,
     auditSink: (record) => { audits.push(record); },
     livenessProbe: async () => "alive",
     voucherVerifier: makeVerifier(),
     egressPolicyResolver: () => ({ mode: "none" }),
-    docker: drainableDocker(recorded, running),
+    docker: drainableDocker(recorded, running, labelled),
     placementGuard: guard,
   });
-  return { broker, recorded, audits, running, worker };
+  return { broker, recorded, audits, running, worker, labelled };
 }
 
 beforeEach(() => {
@@ -216,11 +235,14 @@ describe("revocation drain", () => {
     expect(running.has(containerName)).toBe(false);
     expect(recorded).toContainEqual(["rm", "--force", containerName]);
 
-    // And the enumeration was anchored on the REAL name prefix.
+    // The enumeration selected on the OWNERSHIP LABEL, not on a name pattern:
+    // a name is not proof that this worker started the container.
     const ps = recorded.find((argv) => argv[0] === "ps");
     expect(ps).toBeDefined();
     const filter = ps?.[ps.indexOf("--filter") + 1] ?? "";
-    expect(filter.replace(/\\/g, "")).toBe(`name=^${containerNamePrefixFor(opened.jobId)}`);
+    expect(filter).toBe(`label=${SANDBOX_CONTAINER_JOB_LABEL}=${opened.jobId}`);
+    // …and the name still had to match the anchored shape for this job.
+    expect(isContainerNameForJob(containerName, opened.jobId)).toBe(true);
   });
 
   it("drains EVERY open job, not just the one that noticed", async () => {
@@ -260,6 +282,66 @@ describe("revocation drain", () => {
     held = false;
     await execVouched(broker, opened.jobId, "echo x");
     expect(recorded.some((argv) => argv[0] === "volume" && argv[1] === "rm")).toBe(false);
+  });
+
+  it("RETRIES a job whose earlier cancellation failed — terminated is not drained", async () => {
+    // Codex round 2, finding D1. The first drain marks the job terminated and
+    // its cancellation fails; a drain that skipped terminated jobs would never
+    // try again, and the container would outlive the host handover.
+    let held = true;
+    let failNextCancel = true;
+    const attempts: string[] = [];
+    const broker = new ExecutionBroker({
+      worker: containerStartingWorker(new Set()),
+      auditSink: () => {},
+      livenessProbe: async () => "alive",
+      voucherVerifier: makeVerifier(),
+      egressPolicyResolver: () => ({ mode: "none" }),
+      docker: async () => ok(""),
+      containerOps: {
+        cancelJobContainers: async (jobId) => {
+          attempts.push(jobId);
+          if (failNextCancel) {
+            failNextCancel = false;
+            throw new Error("docker unreachable");
+          }
+          return [`cinatra-exec-${jobId}-0`];
+        },
+      },
+      placementGuard: () => (held ? { ok: true } : REVOKED),
+    });
+    const opened = await openVouched(broker, carrierFor("run-retry"));
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    await execVouched(broker, opened.jobId, "sleep 300");
+
+    held = false;
+    await execVouched(broker, opened.jobId, "echo x"); // drain 1 — cancel fails
+    expect(attempts).toEqual([opened.jobId]);
+
+    // Any later refusal drains again, and the still-retained job is retried.
+    await openVouched(broker, carrierFor("run-retry-2"));
+    expect(attempts).toEqual([opened.jobId, opened.jobId]);
+  });
+
+  it("a job opened DURING a drain is never inserted active", async () => {
+    // Codex round 2, findings C1/D2: the drain walks the `jobs` map, and an
+    // openJob still in flight is not in it yet.
+    let held = true;
+    const running = new Set<string>();
+    const { broker } = makeBroker(() => (held ? { ok: true } : REVOKED), running);
+    const opened = await openVouched(broker, carrierFor("run-inflight"));
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    // Revoke, then open again: the final pre-insert check must catch it even
+    // though the earlier checks in the same call passed.
+    held = false;
+    const second = await openVouched(broker, carrierFor("run-inflight-2"));
+    expect(second).toMatchObject({ ok: false, reason: "placement_refused" });
+    // And the first job did not survive the drain.
+    expect(await execVouched(broker, opened.jobId, "echo x")).toMatchObject({
+      ok: false,
+    });
   });
 
   it("a failing container-cancel does not mask the refusal", async () => {

@@ -16,7 +16,9 @@ import * as path from "node:path";
 import {
   HOST_EXCLUSIVITY_LOCK_DIR_NAME,
   HostExclusivityLeaseGuard,
+  evaluateHostExclusivityLease,
   hostExclusivityPlacementGuard,
+  lockIsStale,
   parseHostExclusivityLease,
   serializeHostExclusivityLease,
 } from "../lease";
@@ -117,6 +119,48 @@ describe("lease document format", () => {
       parseHostExclusivityLease('{"tenant":"a","acquired_at":1,"ttl_seconds":"x"}').ok,
     ).toBe(false);
   });
+
+  // Codex round 1, finding 2b — the class of documents where JSON.parse and the
+  // writer's greedy `sed` DISAGREE. Each of these would previously have been
+  // read as ours, or as live, while the writer read it otherwise.
+  it("refuses a nested `tenant` the writer's greedy sed would read instead", () => {
+    // sed takes the LAST "tenant":"…" on the line: the writer sees "rival".
+    const hostile =
+      '{"tenant":"acme","acquired_at":1,"ttl_seconds":0,"renewed_at":1,"x":{"tenant":"rival"}}\n';
+    expect(/.*"tenant":"([^"]*)".*/.exec(hostile)?.[1]).toBe("rival");
+    expect(parseHostExclusivityLease(hostile).ok).toBe(false);
+  });
+
+  it("refuses exponent notation the writer would read as a different number", () => {
+    // `[0-9]*` captures "1" from "1e3": the writer sees ttl=1, we would see 1000.
+    const hostile =
+      '{"tenant":"acme","acquired_at":1000,"ttl_seconds":1e3,"renewed_at":1000}\n';
+    expect(/.*"ttl_seconds":([0-9]*).*/.exec(hostile)?.[1]).toBe("1");
+    expect(parseHostExclusivityLease(hostile).ok).toBe(false);
+  });
+
+  it("refuses reordered keys, extra whitespace and a missing newline", () => {
+    expect(
+      parseHostExclusivityLease(
+        '{"acquired_at":1,"tenant":"acme","ttl_seconds":0,"renewed_at":1}\n',
+      ).ok,
+    ).toBe(false);
+    expect(
+      parseHostExclusivityLease(
+        '{ "tenant":"acme", "acquired_at":1, "ttl_seconds":0, "renewed_at":1 }\n',
+      ).ok,
+    ).toBe(false);
+    expect(
+      parseHostExclusivityLease(
+        '{"tenant":"acme","acquired_at":1,"ttl_seconds":0,"renewed_at":1}',
+      ).ok,
+    ).toBe(false);
+  });
+
+  it("refuses a lease whose acquired_at + ttl is not exactly representable", () => {
+    const hostile = `{"tenant":"acme","acquired_at":${Number.MAX_SAFE_INTEGER},"ttl_seconds":2,"renewed_at":1}\n`;
+    expect(parseHostExclusivityLease(hostile).ok).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -128,14 +172,14 @@ describe("check() — the placement precondition", () => {
     await publishLease({ tenant: "acme", acquiredAtEpochS: 1000, ttlSeconds: 600 });
     const verdict = await guardFor("acme", { nowMs: () => 1_100_000 }).check();
     expect(verdict.ok).toBe(true);
-    if (verdict.ok) expect(verdict.expiresAtEpochS).toBe(1600);
+    if (verdict.ok) expect(verdict.liveThroughEpochS).toBe(1600);
   });
 
   it("a non-expiring lease (ttl 0) never lapses", async () => {
     await publishLease({ tenant: "acme", acquiredAtEpochS: 1000, ttlSeconds: 0 });
     const verdict = await guardFor("acme", { nowMs: () => 9_999_999_000 }).check();
     expect(verdict.ok).toBe(true);
-    if (verdict.ok) expect(verdict.expiresAtEpochS).toBeNull();
+    if (verdict.ok) expect(verdict.liveThroughEpochS).toBeNull();
   });
 
   it("ABSENT ⇒ refused", async () => {
@@ -184,7 +228,22 @@ describe("check() — the placement precondition", () => {
     expect(await guard.check()).toMatchObject({ ok: false, reason: "other_tenant" });
   });
 
-  it("the cache bounds staleness about the TENANT but never about EXPIRY", async () => {
+  it("does NOT cache by default — every placement decision re-reads the lease", async () => {
+    // Codex round 1, finding 2a. A cached ok verdict is stale about OWNERSHIP,
+    // and the window is one in which we would keep placing containers on a host
+    // another tenant already holds.
+    await publishLease({ tenant: "acme", acquiredAtEpochS: 1000, ttlSeconds: 0 });
+    const guard = new HostExclusivityLeaseGuard({
+      tenant: "acme",
+      leasePath,
+      nowMs: () => 1_100_000,
+    });
+    expect((await guard.check()).ok).toBe(true);
+    await publishLease({ tenant: "rival", acquiredAtEpochS: 1050, ttlSeconds: 0 });
+    expect(await guard.check()).toMatchObject({ ok: false, reason: "other_tenant" });
+  });
+
+  it("the OPT-IN cache bounds staleness about the TENANT but never about EXPIRY", async () => {
     await publishLease({ tenant: "acme", acquiredAtEpochS: 1000, ttlSeconds: 600 });
     let nowMs = 1_100_000;
     const guard = guardFor("acme", { nowMs: () => nowMs, cacheTtlMs: 60_000 });
@@ -318,6 +377,32 @@ describe("renew() — under the writer's own mutex", () => {
 // ---------------------------------------------------------------------------
 // Projection onto the broker's seam
 // ---------------------------------------------------------------------------
+
+describe("the writer's own predicates, reproduced", () => {
+  it("stale-lock reclaim matches `find -mmin +1`, which fires at ~120s not 60s", () => {
+    // Codex round 1, finding 4. Reclaiming at 60s would let this process delete
+    // a lock a legitimate 61–119s shell critical section still holds.
+    expect(lockIsStale(59_000)).toBe(false);
+    expect(lockIsStale(61_000)).toBe(false);
+    expect(lockIsStale(119_000)).toBe(false);
+    expect(lockIsStale(120_000)).toBe(true);
+    expect(lockIsStale(600_000)).toBe(true);
+  });
+
+  it("the expiry boundary is the writer's own, and the field is named for it", () => {
+    const lease = {
+      tenant: "acme",
+      acquiredAtEpochS: 100,
+      ttlSeconds: 10,
+      renewedAtEpochS: 100,
+    };
+    const live = evaluateHostExclusivityLease(lease, "acme", 110);
+    expect(live.ok).toBe(true);
+    // 110 is the LAST live second — `now > acq + ttl` is strict on both sides.
+    if (live.ok) expect(live.liveThroughEpochS).toBe(110);
+    expect(evaluateHostExclusivityLease(lease, "acme", 111).ok).toBe(false);
+  });
+});
 
 describe("hostExclusivityPlacementGuard", () => {
   it("projects a verdict without leaking the tenant or the path", async () => {

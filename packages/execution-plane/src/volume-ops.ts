@@ -25,7 +25,11 @@
  * seam existed (pinned by `volume-ops-parity.test.ts`).
  */
 
-import { containerNamePrefixFor } from "./l0-profile";
+import {
+  SANDBOX_CONTAINER_JOB_LABEL,
+  containerNamePrefixFor,
+  isContainerNameForJob,
+} from "./l0-profile";
 import { runDocker, type DockerCli } from "./docker-cli";
 import { removeSkillsVolume, stageSkillsVolume } from "./staging";
 import type { StagedSkillInput } from "./types";
@@ -81,12 +85,22 @@ export function createLocalDockerVolumeOps(docker?: DockerCli): SandboxVolumeOps
 /**
  * In-process container cancellation over a local docker daemon.
  *
- * The docker `name` filter is a REGEX matched unanchored, and a sanitized jobId
- * may legitimately contain `.` (a regex wildcard), so the filter is only a
- * cheap server-side narrowing: every returned name is re-checked in JS with a
- * literal `startsWith` before anything is removed. A container whose name the
- * daemon returned but that does not literally carry this job's prefix is left
- * alone.
+ * TWO INDEPENDENT PROOFS OF OWNERSHIP, because neither alone is one:
+ *
+ *  - the daemon-side filter selects on the exact `…​.job=<jobId>` LABEL the
+ *    hardened run profile stamps, so a container this worker did not start is
+ *    never even listed (a name filter would not have proved that — anybody with
+ *    the socket can name a container anything);
+ *  - every listed name is then re-checked against the ANCHORED shape
+ *    `<prefix><digits>`, so a label somebody managed to forge still cannot get
+ *    an arbitrarily-named container removed, and the containers of the
+ *    different job `foo-bar` are not swept up by a drain of job `foo`.
+ *
+ * FAILURES ARE NOT SILENCE (Codex round 2, finding E2). A failed enumeration or
+ * a removal that did not take means the host is NOT drained, and reporting that
+ * as an empty success would let a revoked host keep running our containers
+ * forever. Every removal is attempted, then the call THROWS if any step failed;
+ * the broker retries every retained job on its next refusal.
  */
 export function createLocalDockerContainerOps(
   docker?: DockerCli,
@@ -99,26 +113,34 @@ export function createLocalDockerContainerOps(
         "ps",
         "--all",
         "--filter",
-        `name=^${escapeForDockerNameFilter(prefix)}`,
+        `label=${SANDBOX_CONTAINER_JOB_LABEL}=${jobId}`,
         "--format",
         "{{.Names}}",
       ]);
-      if (listed.exitCode !== 0) return [];
+      if (listed.exitCode !== 0) {
+        throw new Error(
+          `Could not enumerate the containers of job "${jobId}" (docker exit ` +
+            `${String(listed.exitCode)}); the host is NOT drained.`,
+        );
+      }
       const names = listed.stdout
         .split("\n")
         .map((line) => line.trim())
-        .filter((name) => name.length > 0 && name.startsWith(prefix));
+        .filter((name) => name.length > 0 && isContainerNameForJob(name, jobId));
       const removed: string[] = [];
+      const failed: string[] = [];
       for (const name of names) {
         const outcome = await cli(["rm", "--force", name]);
         if (outcome.exitCode === 0) removed.push(name);
+        else failed.push(name);
+      }
+      if (failed.length > 0) {
+        throw new Error(
+          `Could not force-remove ${failed.length} container(s) of job "${jobId}"; ` +
+            `the host is NOT fully drained (prefix ${prefix}).`,
+        );
       }
       return removed;
     },
   };
-}
-
-/** Escape every RE2/Go-regexp metacharacter so the filter matches literally. */
-function escapeForDockerNameFilter(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

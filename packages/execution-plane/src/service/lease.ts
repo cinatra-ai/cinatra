@@ -64,18 +64,41 @@ export const HOST_EXCLUSIVITY_RENEW_INTERVAL_ENV =
   "EXEC_HOST_EXCLUSIVITY_RENEW_INTERVAL_MS";
 
 /**
- * How long a VALID lease document may be reused without re-reading. Short on
- * purpose: it bounds only how stale our view of the tenant/replacement can be,
- * never how stale our view of EXPIRY is — `check()` re-derives expiry against
- * the current clock on every call, cached document or not.
+ * How long a VALID lease document may be reused without re-reading.
+ *
+ * ZERO BY DEFAULT — every placement decision reads the lease (Codex round 1,
+ * finding 2a, ADOPTED). A cache here does not merely make the view stale, it
+ * makes it stale about OWNERSHIP: during the window, the provisioning side can
+ * revoke our lease and hand the host to another tenant while we keep admitting
+ * containers onto it. That is precisely the state the lease exists to prevent,
+ * and the read it saves is one small file on a local bind mount.
+ *
+ * The knob remains for a deployment that explicitly accepts up to `cacheTtlMs`
+ * of that exposure in exchange for the read. Even then the cache holds the
+ * DOCUMENT, never the verdict: expiry is re-derived against the current clock
+ * on every call.
  */
-export const DEFAULT_LEASE_CACHE_TTL_MS = 2_000;
+export const DEFAULT_LEASE_CACHE_TTL_MS = 0;
 
 /** Mutex spin, matching the provisioning script's bounded ~10s wait. */
 export const LOCK_SPIN_ATTEMPTS = 100;
 export const LOCK_SPIN_DELAY_MS = 100;
-/** A lock directory older than this belongs to a crashed holder. */
-export const STALE_LOCK_MS = 60_000;
+/**
+ * Stale-lock reclaim threshold, in WHOLE MINUTES, reproducing `find -mmin +1`
+ * (Codex round 1, finding 4, ADOPTED).
+ *
+ * `-mmin +1` compares TRUNCATED minutes and `+n` means strictly greater, so the
+ * shell first reclaims at ~120 s, not 60 s. A 60 s threshold here would let this
+ * process delete a lock a legitimate 61–119 s shell critical section still
+ * holds — two writers inside the read-decide-write section, which is the exact
+ * failure the mutex exists to prevent. Compare the same way the shell does.
+ */
+export const STALE_LOCK_MINUTES = 1;
+
+/** True when the shell's `find -mmin +STALE_LOCK_MINUTES` would fire. */
+export function lockIsStale(ageMs: number): boolean {
+  return Math.floor(ageMs / 60_000) > STALE_LOCK_MINUTES;
+}
 
 /** The tenant slug shape the provisioning script validates before writing. */
 export const TENANT_SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
@@ -101,8 +124,17 @@ export type LeaseVerdict =
   | {
       ok: true;
       lease: HostExclusivityLease;
-      /** Epoch seconds the lease lapses at; `null` for a non-expiring lease. */
-      expiresAtEpochS: number | null;
+      /**
+       * The LAST epoch second at which the lease is still live; `null` for a
+       * non-expiring lease.
+       *
+       * Named for the writer's own comparison (`now > acquired_at + ttl`), not
+       * for the moment of lapse: at `acquired_at + ttl` the lease is still held
+       * by both sides, and it first expires one second later. An
+       * `expiresAt`-shaped name reads one second early and would eventually be
+       * used that way (Codex round 1, finding 5a, ADOPTED).
+       */
+      liveThroughEpochS: number | null;
     }
   | { ok: false; reason: LeaseRefusalReason; message: string };
 
@@ -114,10 +146,15 @@ export type LeaseRenewalResult =
       message: string;
     };
 
+/** Retries for the exclusive temp-name mint and for the mutex release. */
+export const TEMP_NAME_ATTEMPTS = 5;
+export const LOCK_RELEASE_ATTEMPTS = 3;
+
 /** Injection seams so the matrix runs hermetically (and on a real temp dir). */
 export type LeaseIo = {
   readFile: (filePath: string) => Promise<string>;
-  writeFile: (filePath: string, data: string) => Promise<void>;
+  /** MUST fail with EEXIST rather than truncate or follow an existing path. */
+  writeFileExclusive: (filePath: string, data: string) => Promise<void>;
   rename: (from: string, to: string) => Promise<void>;
   mkdir: (dirPath: string) => Promise<void>;
   rmdir: (dirPath: string) => Promise<void>;
@@ -128,8 +165,11 @@ export type LeaseIo = {
 
 export const nodeLeaseIo: LeaseIo = {
   readFile: (filePath) => readFile(filePath, "utf8"),
-  // 0o600 mirrors the writer's `chmod 600` on the temp file.
-  writeFile: (filePath, data) => writeFile(filePath, data, { mode: 0o600 }),
+  // `wx` + 0o600 reproduces `mktemp` + `chmod 600`: O_EXCL means an existing
+  // path — including a symlink somebody planted — is an EEXIST error rather
+  // than a target we follow and truncate.
+  writeFileExclusive: (filePath, data) =>
+    writeFile(filePath, data, { mode: 0o600, flag: "wx" }),
   rename: (from, to) => rename(from, to),
   mkdir: (dirPath) => mkdir(dirPath),
   // `rmdir`, NOT `rm`: the lock is a DIRECTORY, and `fs.rm` without
@@ -185,7 +225,25 @@ export function serializeHostExclusivityLease(lease: {
   );
 }
 
-/** Parse one lease document. Anything unexpected is `malformed` (fail-closed). */
+/**
+ * Parse one lease document. Anything unexpected is `malformed` (fail-closed).
+ *
+ * THE DOCUMENT MUST BE IN THE WRITER'S EXACT CANONICAL FORM. Not a stylistic
+ * preference — a correctness requirement, because the writer parses with greedy
+ * `sed` over the raw bytes while this parses structured JSON, and the two
+ * disagree on inputs neither would ever produce (Codex round 1, findings 2b/3a,
+ * ADOPTED):
+ *
+ *   - `{"tenant":"a","x":{"tenant":"b"},…}` is tenant "b" to the greedy `sed`
+ *     and tenant "a" to `JSON.parse` — i.e. this process would believe it owns
+ *     a host the writer considers someone else's;
+ *   - `"ttl_seconds":1e3` is 1000 to `JSON.parse` and 1 to the `[0-9]*` capture,
+ *     so a lease the writer treats as long expired would verify here.
+ *
+ * Re-serializing the parsed values and requiring a byte-exact match with the
+ * input collapses that entire class: only what the writer itself emits is
+ * accepted, and anything else is `malformed` — which is a refusal.
+ */
 export function parseHostExclusivityLease(
   raw: string,
 ): { ok: true; lease: HostExclusivityLease } | { ok: false; message: string } {
@@ -212,15 +270,34 @@ export function parseHostExclusivityLease(
     return { ok: false, message: "the lease document carries no valid ttl_seconds" };
   }
   const renewedAt = record.renewed_at;
-  return {
-    ok: true,
-    lease: {
-      tenant,
-      acquiredAtEpochS,
-      ttlSeconds,
-      renewedAtEpochS: isNonNegativeInteger(renewedAt) ? renewedAt : null,
-    },
+  if (!isNonNegativeInteger(renewedAt)) {
+    return { ok: false, message: "the lease document carries no valid renewed_at" };
+  }
+  // The expiry the writer computes is `acquired_at + ttl_seconds` in shell
+  // integer arithmetic, which is exact past IEEE-754's safe range. A sum this
+  // process cannot represent exactly is a sum it must not compare against
+  // (Codex round 1, finding 5b, ADOPTED).
+  if (!Number.isSafeInteger(acquiredAtEpochS + ttlSeconds)) {
+    return {
+      ok: false,
+      message: "the lease document's acquired_at + ttl_seconds is not exactly representable",
+    };
+  }
+  const lease: HostExclusivityLease = {
+    tenant,
+    acquiredAtEpochS,
+    ttlSeconds,
+    renewedAtEpochS: renewedAt,
   };
+  if (serializeHostExclusivityLease({ ...lease, renewedAtEpochS: renewedAt }) !== raw) {
+    return {
+      ok: false,
+      message:
+        "the lease document is not in the writer's canonical form (it would be read " +
+        "differently by the writer's own parser)",
+    };
+  }
+  return { ok: true, lease };
 }
 
 /**
@@ -256,7 +333,7 @@ export function evaluateHostExclusivityLease(
   return {
     ok: true,
     lease,
-    expiresAtEpochS:
+    liveThroughEpochS:
       lease.ttlSeconds > 0 ? lease.acquiredAtEpochS + lease.ttlSeconds : null,
   };
 }
@@ -326,13 +403,11 @@ export class HostExclusivityLeaseGuard {
    * cache window.
    */
   async check(): Promise<LeaseVerdict> {
-    const nowMs = this.now();
-    const nowEpochS = Math.floor(nowMs / 1000);
-    if (this.cached && nowMs - this.cached.readAtMs < this.cacheTtlMs) {
+    if (this.cached && this.now() - this.cached.readAtMs < this.cacheTtlMs) {
       const verdict = evaluateHostExclusivityLease(
         this.cached.lease,
         this.tenant,
-        nowEpochS,
+        this.nowEpochS(),
       );
       if (!verdict.ok) this.cached = null;
       return verdict;
@@ -342,10 +417,22 @@ export class HostExclusivityLeaseGuard {
       this.cached = null;
       return read;
     }
-    this.cached = { lease: read.lease, readAtMs: nowMs };
-    const verdict = evaluateHostExclusivityLease(read.lease, this.tenant, nowEpochS);
+    this.cached = { lease: read.lease, readAtMs: this.now() };
+    // Sample the clock AFTER the awaited read, never before it (Codex round 1,
+    // finding 2c, ADOPTED): a read that completes across the expiry boundary
+    // would otherwise be judged against the timestamp from before it, and admit
+    // a placement the writer already considers expired.
+    const verdict = evaluateHostExclusivityLease(
+      read.lease,
+      this.tenant,
+      this.nowEpochS(),
+    );
     if (!verdict.ok) this.cached = null;
     return verdict;
+  }
+
+  private nowEpochS(): number {
+    return Math.floor(this.now() / 1000);
   }
 
   /**
@@ -370,7 +457,7 @@ export class HostExclusivityLeaseGuard {
     try {
       const read = await this.read();
       if (!read.ok) return read;
-      const nowEpochS = Math.floor(this.now() / 1000);
+      const nowEpochS = this.nowEpochS();
       const verdict = evaluateHostExclusivityLease(read.lease, this.tenant, nowEpochS);
       if (!verdict.ok) return verdict;
       const renewed: HostExclusivityLease = {
@@ -388,12 +475,34 @@ export class HostExclusivityLeaseGuard {
       // Same publish choreography as the writer: a fully-formed temp file in
       // the SAME directory (so the rename is atomic on one filesystem), then
       // rename over the target. A reader can only ever see one whole document.
-      const tempPath = path.join(this.leaseDir, `.lease.${this.tempSuffix()}`);
+      //
+      // The temp file is created EXCLUSIVELY (`wx`, mode 0600) and the name is
+      // retried on collision — `mktemp` semantics, not `writeFile`'s truncating
+      // open, which would follow a pre-planted symlink or reuse an existing
+      // file's permissions (Codex round 1, finding 3b, ADOPTED).
+      let tempPath: string | null = null;
       try {
-        await this.io.writeFile(tempPath, body);
+        for (let attempt = 0; attempt < TEMP_NAME_ATTEMPTS; attempt += 1) {
+          const candidate = path.join(this.leaseDir, `.lease.${this.tempSuffix()}`);
+          try {
+            await this.io.writeFileExclusive(candidate, body);
+            tempPath = candidate;
+            break;
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException | undefined)?.code !== "EEXIST") throw err;
+          }
+        }
+        if (tempPath === null) {
+          return {
+            ok: false,
+            reason: "write_failed",
+            message:
+              "Could not create a temp file to publish the renewed host-exclusivity lease.",
+          };
+        }
         await this.io.rename(tempPath, this.leasePath);
       } catch (err) {
-        await this.io.removeFile(tempPath).catch(() => {});
+        if (tempPath !== null) await this.io.removeFile(tempPath).catch(() => {});
         return {
           ok: false,
           reason: "write_failed",
@@ -403,7 +512,31 @@ export class HostExclusivityLeaseGuard {
       this.cached = { lease: renewed, readAtMs: this.now() };
       return { ok: true, lease: renewed };
     } finally {
-      await this.io.rmdir(this.lockDir).catch(() => {});
+      await this.releaseLock();
+    }
+  }
+
+  /**
+   * Release the mutex, retrying a bounded number of times.
+   *
+   * Codex round 1, finding 3c — PARTIALLY ADOPTED. The retry is adopted. The
+   * other half ("report failure instead of success") is REBUTTED and recorded:
+   * a renewal whose rename landed genuinely renewed the lease, and turning that
+   * into a reported failure would make the caller re-renew a lease that is
+   * already correct while the real problem — a lock nobody holds — went
+   * unaddressed either way. The designed remedy for a wedged lock is the
+   * stale-lock reclaim both sides implement, and it is what a crashed holder
+   * gets too.
+   */
+  private async releaseLock(): Promise<void> {
+    for (let attempt = 0; attempt < LOCK_RELEASE_ATTEMPTS; attempt += 1) {
+      try {
+        await this.io.rmdir(this.lockDir);
+        return;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return;
+        if (attempt + 1 < LOCK_RELEASE_ATTEMPTS) await this.io.sleep(LOCK_SPIN_DELAY_MS);
+      }
     }
   }
 
@@ -455,7 +588,7 @@ export class HostExclusivityLeaseGuard {
         return true;
       } catch {
         const modifiedAtMs = await this.io.dirModifiedAtMs(this.lockDir);
-        if (modifiedAtMs !== null && this.now() - modifiedAtMs > STALE_LOCK_MS) {
+        if (modifiedAtMs !== null && lockIsStale(this.now() - modifiedAtMs)) {
           await this.io.rmdir(this.lockDir).catch(() => {});
         }
       }

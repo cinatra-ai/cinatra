@@ -16,7 +16,7 @@ import {
   ExecVolumeNameRefusedError,
   assertDrainJobId,
   assertExecVolumeName,
-  assertRemovableExecVolume,
+  assertExecVolumeOwnership,
   assertStagingJobId,
   assertWorkspaceKey,
 } from "../volume-guard";
@@ -153,42 +153,42 @@ describe("assertRemovableExecVolume — the label check on removal", () => {
   it("accepts a volume carrying the tier label", async () => {
     const cli = docker(() => ({ stdout: JSON.stringify({ [WORKSPACE_LABEL]: "l2" }) }));
     await expect(
-      assertRemovableExecVolume("cinatra-exec-l2-run-1", "l2", cli),
+      assertExecVolumeOwnership("cinatra-exec-l2-run-1", "l2", cli),
     ).resolves.toBe("labelled");
   });
 
   it("treats an unknown volume as absent — removal is idempotent", async () => {
     const cli = docker(() => ({ exitCode: 1, stderr: "no such volume" }));
     await expect(
-      assertRemovableExecVolume("cinatra-exec-l2-run-1", "l2", cli),
+      assertExecVolumeOwnership("cinatra-exec-l2-run-1", "l2", cli),
     ).resolves.toBe("absent");
   });
 
   it("refuses an UNLABELLED volume that merely looks like ours", async () => {
     const cli = docker(() => ({ stdout: "null" }));
     await expect(
-      assertRemovableExecVolume("cinatra-exec-l2-run-1", "l2", cli),
+      assertExecVolumeOwnership("cinatra-exec-l2-run-1", "l2", cli),
     ).rejects.toThrow(ExecVolumeNameRefusedError);
   });
 
   it("refuses a volume labelled for the OTHER tier", async () => {
     const cli = docker(() => ({ stdout: JSON.stringify({ [WORKSPACE_LABEL]: "skills" }) }));
     await expect(
-      assertRemovableExecVolume("cinatra-exec-l2-run-1", "l2", cli),
+      assertExecVolumeOwnership("cinatra-exec-l2-run-1", "l2", cli),
     ).rejects.toThrow(ExecVolumeNameRefusedError);
   });
 
   it("refuses when the label output cannot be parsed (fail-closed)", async () => {
     const cli = docker(() => ({ stdout: "<no value>" }));
     await expect(
-      assertRemovableExecVolume("cinatra-exec-l2-run-1", "l2", cli),
+      assertExecVolumeOwnership("cinatra-exec-l2-run-1", "l2", cli),
     ).rejects.toThrow(ExecVolumeNameRefusedError);
   });
 
   it("reads labels as JSON, not through a nil-map-unsafe template index", async () => {
     const seen: string[][] = [];
     const cli = docker(() => ({ stdout: "null" }), seen);
-    await assertRemovableExecVolume("cinatra-exec-l2-run-1", "l2", cli).catch(() => {});
+    await assertExecVolumeOwnership("cinatra-exec-l2-run-1", "l2", cli).catch(() => {});
     expect(seen[0]).toEqual([
       "volume",
       "inspect",

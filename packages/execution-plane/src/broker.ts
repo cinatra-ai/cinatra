@@ -301,6 +301,11 @@ export function toAuthzAuditEventInput(record: ExecutionAuditRecord): {
   };
 }
 
+/** Total description of any thrown value — a non-Error throw must not re-throw. */
+function describeThrownValue(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /** A FIFO counting semaphore with a bounded wait queue. */
 class BoundedSemaphore {
   private inFlight = 0;
@@ -493,6 +498,14 @@ export class ExecutionBroker {
       // run-keyed (possibly shared) and retention GC owns it.
       let skillsVolume: string | undefined;
       if (openOpts?.stagedSkills && openOpts.stagedSkills.length > 0) {
+        // Re-check before the SECOND placement of this open (Codex round 2,
+        // finding C1): the workspace provisioning above is an awaited call, and
+        // the lease can be reclaimed inside it. Staging places another volume
+        // and a helper container, so it is its own placement decision.
+        const beforeStaging = await this.checkPlacement();
+        if (!beforeStaging.ok) {
+          return { ok: false, reason: "placement_refused", message: beforeStaging.message };
+        }
         try {
           skillsVolume = await this.volumeOps.stageSkills(
             jobId,
@@ -506,6 +519,20 @@ export class ExecutionBroker {
             message: `Skill staging refused: ${(err as Error).message}`,
           };
         }
+      }
+      // FINAL check, immediately before the job becomes visible (Codex round 2,
+      // findings C1/D2). A drain that ran while this open was in flight walked a
+      // `jobs` map this job was not yet in, so inserting it now would leave an
+      // ACTIVE job on a host that has already been handed over. The per-job
+      // skills volume is dropped on the way out; the workspace volume is
+      // run-keyed (possibly shared with a live job) and belongs to retention GC
+      // — the same posture as the staging-failure path above.
+      const beforeInsert = await this.checkPlacement();
+      if (!beforeInsert.ok) {
+        if (skillsVolume) {
+          await this.volumeOps.removeSkills(skillsVolume).catch(() => {});
+        }
+        return { ok: false, reason: "placement_refused", message: beforeInsert.message };
       }
       const job: BrokerJob = {
         jobId,
@@ -820,20 +847,26 @@ export class ExecutionBroker {
       // slow one could carry the voucher past its expiry between "still fresh" and
       // "running". The authorization must be live at the instant the sandbox is
       // handed the command, not merely at the instant admission was won.
-      const beforeDispatch = await requireFreshVoucher();
-      if (beforeDispatch) return beforeDispatch;
-
       // Host-exclusivity gate, DISPATCH half — the actual placement decision.
       // Same reasoning as the voucher's check 2: the admission wait, the
       // liveness re-probe and the gateway registration are all awaited, and the
       // lease can be reclaimed inside any of them. The host must be provably
       // ours at the instant a container is placed on it, not merely when the
       // command was admitted.
+      //
+      // Ordered BEFORE the final freshness check, not after (Codex round 2,
+      // finding C2): the merged contract is that authorization is live at the
+      // instant the sandbox is handed the command, so the VOUCHER check has to
+      // stay the last awaited gate. Nothing this guard learned can go stale in
+      // between — it reads the lease on every call.
       const dispatchPlacement = await this.checkPlacement();
       if (!dispatchPlacement.ok) {
         return await this.refuse(job, command, "placement_revoked",
           dispatchPlacement.message, policy, detail);
       }
+
+      const beforeDispatch = await requireFreshVoucher();
+      if (beforeDispatch) return beforeDispatch;
 
       // Claim the commandId at the LAST point before dispatch: everything above
       // is a refusal the client may legitimately retry, everything below has
@@ -1043,7 +1076,11 @@ export class ExecutionBroker {
         reason: "placement_guard_error",
         message:
           "The execution host's placement precondition could not be evaluated; " +
-          `placement is refused (fail-closed): ${(err as Error).message}`,
+          // A TOTAL formatter (Codex round 2, finding D3): `(err as Error).message`
+          // on a non-Error throw (`throw null`) throws again INSIDE this catch,
+          // escapes `checkPlacement`, and skips the drain entirely — turning the
+          // most alarming failure mode into the one that drains nothing.
+          `placement is refused (fail-closed): ${describeThrownValue(err)}`,
       };
     }
     if (!verdict.ok) await this.drainRevokedPlacement(verdict.reason);
@@ -1060,25 +1097,36 @@ export class ExecutionBroker {
    * seam. Per-job and best-effort: one job whose cancellation fails must not
    * abort the drain of the others.
    *
+   * TERMINATED IS NOT DRAINED (Codex round 2, finding D1). Cancellation is
+   * attempted for EVERY job this broker still retains, not only the ones this
+   * pass terminated: a job terminated by an earlier drain whose cancellation
+   * failed — or by an unrelated path while its container was mid-run — would
+   * otherwise never be retried, and its container would outlive the host
+   * handover. `closeJob` deletes from the map, so the retained set is exactly
+   * the work whose containers this broker is still answerable for, and every
+   * subsequent refusal retries it.
+   *
    * Volumes are deliberately NOT removed here. Reclaiming the host is the
    * provisioning side's decision and the retention GC's job; destroying a
    * tenant's workspace because a lease read failed would turn a refusal into
    * data loss.
    */
   private async drainRevokedPlacement(reason: string): Promise<string[]> {
-    const jobIds: string[] = [];
+    // Terminate synchronously FIRST — no await in this loop — so a concurrent
+    // `exec` cannot slip a command onto a job between the decision and the flag.
     for (const job of this.jobs.values()) {
       if (job.terminated) continue;
       this.terminate(job, `placement_revoked:${reason}`);
-      jobIds.push(job.jobId);
     }
     const cancelled: string[] = [];
-    for (const jobId of jobIds) {
+    for (const jobId of [...this.jobs.keys()]) {
       try {
         cancelled.push(...(await this.containerOps.cancelJobContainers(jobId)));
       } catch {
-        // Best-effort by contract — the refusal is the decision, the drain is
-        // remediation, and a failure to reach docker must not mask either.
+        // Per-job containment, not silence: `cancelJobContainers` THROWS on an
+        // incomplete drain, and swallowing it here only keeps one unreachable
+        // job from aborting the others. The retry is the next refusal, which
+        // walks this same retained set.
       }
     }
     return cancelled;

@@ -923,7 +923,14 @@ describe("worker service — the broker cannot tell the difference", () => {
 
     expect(await client.ensureWorkspace("run-1")).toBe("cinatra-exec-l2-run-1");
     await client.removeWorkspace("cinatra-exec-l2-run-1");
-    expect(calls[0]?.slice(0, 2)).toEqual(["volume", "create"]);
+    // Since exec-plane L3 both ops check ownership first (`volume create` adopts
+    // an existing name rather than failing), so the create is the SECOND call.
+    expect(calls.map((argv) => argv.slice(0, 2))).toEqual([
+      ["volume", "inspect"],
+      ["volume", "create"],
+      ["volume", "inspect"],
+      ["volume", "rm"],
+    ]);
     expect(calls.at(-1)).toEqual(["volume", "rm", "-f", "cinatra-exec-l2-run-1"]);
   });
 

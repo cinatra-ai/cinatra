@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { DockerCli, DockerRunOutcome } from "../../docker-cli";
+import { SANDBOX_CONTAINER_JOB_LABEL } from "../../l0-profile";
 import { WORKSPACE_LABEL } from "../../workspace";
 import { createInMemoryCommandLedger } from "../command-ledger";
 import { EXEC_ERROR_STATUS, WORKER_OPS, execRequestEnvelope } from "../protocol";
@@ -18,18 +19,32 @@ import { createWorkerDispatch } from "../worker-server";
 
 const CTX = { peerUri: "cinatra-exec://test/broker-client" };
 
-function harness(labels: Record<string, string> | null = { [WORKSPACE_LABEL]: "l2" }) {
+/**
+ * @param labels what `volume inspect` reports. `"absent"` makes the inspect
+ *        fail, which is what docker does for a volume that does not exist —
+ *        the normal case for a CREATE.
+ */
+function harness(
+  labels: Record<string, string> | null | "absent" = "absent",
+) {
   const seen: string[][] = [];
   const docker: DockerCli = async (args): Promise<DockerRunOutcome> => {
     seen.push([...args]);
-    const stdout =
-      args[0] === "volume" && args[1] === "inspect"
-        ? JSON.stringify(labels)
-        : args[0] === "volume" && args[1] === "create"
-          ? args[args.length - 1]
-          : args[0] === "ps"
-            ? ""
-            : "";
+    const isInspect = args[0] === "volume" && args[1] === "inspect";
+    if (isInspect && labels === "absent") {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: "no such volume",
+        stdioOverflow: false,
+        timedOut: false,
+      };
+    }
+    const stdout = isInspect
+      ? JSON.stringify(labels)
+      : args[0] === "volume" && args[1] === "create"
+        ? args[args.length - 1]
+        : "";
     return { exitCode: 0, stdout, stderr: "", stdioOverflow: false, timedOut: false };
   };
   const dispatch = createWorkerDispatch({
@@ -59,12 +74,38 @@ describe("worker service — the typed ops are wired", () => {
     );
     expect(reply.status).toBe(200);
     expect(reply.body).toMatchObject({ ok: true, result: { volumeName: "cinatra-exec-l2-run-1" } });
-    expect(seen[0][0]).toBe("volume");
-    expect(seen[0][1]).toBe("create");
+    // Ownership is checked BEFORE the create, because `volume create` ADOPTS an
+    // existing name rather than failing.
+    expect(seen.map((argv) => argv.slice(0, 2))).toEqual([
+      ["volume", "inspect"],
+      ["volume", "create"],
+    ]);
+  });
+
+  it("ensureWorkspace REFUSES to adopt a foreign volume squatting the name", async () => {
+    const { dispatch, seen } = harness({ "com.example": "someone-else" });
+    const reply = await dispatch(
+      execRequestEnvelope("ensureWorkspace", { workspaceKey: "run-1" }),
+      CTX,
+    );
+    expect(reply.status).toBe(EXEC_ERROR_STATUS.malformed_request);
+    expect(seen.some((argv) => argv[1] === "create")).toBe(false);
+  });
+
+  it("stageSkills REFUSES to write into a foreign volume squatting the name", async () => {
+    const { dispatch, seen } = harness({ "com.example": "someone-else" });
+    const reply = await dispatch(
+      execRequestEnvelope("stageSkills", { jobId: "job-1", skills: [], imageRef: "l0:dev" }),
+      CTX,
+    );
+    // Staging COPIES files in and force-removes the volume on failure, so
+    // adopting a foreign one would both write to it and delete it.
+    expect(reply.status).toBe(EXEC_ERROR_STATUS.malformed_request);
+    expect(seen.some((argv) => argv[1] === "create")).toBe(false);
   });
 
   it("removeWorkspace checks the LABEL before removing", async () => {
-    const { dispatch, seen } = harness();
+    const { dispatch, seen } = harness({ [WORKSPACE_LABEL]: "l2" });
     const reply = await dispatch(
       execRequestEnvelope("removeWorkspace", { volumeName: "cinatra-exec-l2-run-1" }),
       CTX,
@@ -118,7 +159,7 @@ describe("worker service — the typed ops are wired", () => {
     });
   }
 
-  it("cancelJobContainers takes a JOB ID and derives the prefix itself", async () => {
+  it("cancelJobContainers takes a JOB ID and selects on the ownership label", async () => {
     const { dispatch, seen } = harness();
     const reply = await dispatch(
       execRequestEnvelope("cancelJobContainers", { jobId: "job-9" }),
@@ -126,11 +167,13 @@ describe("worker service — the typed ops are wired", () => {
     );
     expect(reply.status).toBe(200);
     expect(reply.body).toMatchObject({ ok: true, result: { cancelled: [] } });
+    // A NAME is not proof that this worker started the container; the label the
+    // hardened run profile stamps is.
     expect(seen[0]).toEqual([
       "ps",
       "--all",
       "--filter",
-      "name=^cinatra-exec-job-9-",
+      `label=${SANDBOX_CONTAINER_JOB_LABEL}=job-9`,
       "--format",
       "{{.Names}}",
     ]);

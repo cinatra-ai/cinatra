@@ -20,27 +20,51 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 
 import { runDocker } from "../../docker-cli";
-import { containerNameFor, containerNamePrefixFor } from "../../l0-profile";
+import {
+  SANDBOX_CONTAINER_JOB_LABEL,
+  SANDBOX_CONTAINER_LABEL,
+  containerNameFor,
+  containerNamePrefixFor,
+} from "../../l0-profile";
 import { createLocalDockerContainerOps } from "../../volume-ops";
 
 const BASE_IMAGE = "busybox:stable";
 
 const jobId = `e2e-drain-${randomUUID()}`;
 const containers = [containerNameFor(jobId, 0), containerNameFor(jobId, 1)];
-/** A container that is NOT this job's — the drain must leave it alone. */
-const bystander = `cinatra-exec-${randomUUID()}-0`;
+/** Another job's container: same namespace, different label. */
+const otherJobId = `e2e-drain-${randomUUID()}`;
+const otherJobContainer = containerNameFor(otherJobId, 0);
+/**
+ * A container carrying THIS job's name shape but NOT its label — the case a
+ * name-only drain would have taken and an ownership-labelled one must not.
+ */
+const unlabelledLookalike = containerNameFor(jobId, 99);
+/**
+ * A container of the DIFFERENT job `<jobId>-nested`, whose names all begin with
+ * this job's prefix. The anchored name check is what keeps it out.
+ */
+const nestedJobContainer = containerNameFor(`${jobId}-nested`, 0);
 
 async function isRunning(name: string): Promise<boolean> {
   const inspected = await runDocker(["inspect", "--format", "{{.State.Running}}", name]);
   return inspected.exitCode === 0 && inspected.stdout.trim() === "true";
 }
 
-async function startSleeper(name: string): Promise<void> {
+async function startSleeper(name: string, labelJobId?: string): Promise<void> {
   const started = await runDocker([
     "run",
     "-d",
     "--name",
     name,
+    ...(labelJobId
+      ? [
+          "--label",
+          `${SANDBOX_CONTAINER_LABEL}=sandbox`,
+          "--label",
+          `${SANDBOX_CONTAINER_JOB_LABEL}=${labelJobId}`,
+        ]
+      : []),
     "--network",
     "none",
     BASE_IMAGE,
@@ -66,16 +90,25 @@ beforeAll(async () => {
 }, 300_000);
 
 afterAll(async () => {
-  for (const name of [...containers, bystander]) {
+  for (const name of [
+    ...containers,
+    otherJobContainer,
+    unlabelledLookalike,
+    nestedJobContainer,
+  ]) {
     await runDocker(["rm", "--force", name]);
   }
 });
 
 describe("host-exclusivity drain — real containers", () => {
   it("force-removes every container of the job and nothing else", async () => {
-    for (const name of containers) await startSleeper(name);
-    await startSleeper(bystander);
-    for (const name of [...containers, bystander]) {
+    for (const name of containers) await startSleeper(name, jobId);
+    await startSleeper(otherJobContainer, otherJobId);
+    await startSleeper(nestedJobContainer, `${jobId}-nested`);
+    // Labelled for NOTHING, but named exactly like one of this job's.
+    await startSleeper(unlabelledLookalike);
+    const bystanders = [otherJobContainer, nestedJobContainer, unlabelledLookalike];
+    for (const name of [...containers, ...bystanders]) {
       expect(await isRunning(name)).toBe(true);
     }
 
@@ -85,9 +118,14 @@ describe("host-exclusivity drain — real containers", () => {
     for (const name of containers) {
       expect(await isRunning(name)).toBe(false);
     }
-    // The bystander shares the `cinatra-exec-` namespace but not this job's
-    // prefix: an unanchored or over-broad filter would have taken it too.
-    expect(await isRunning(bystander)).toBe(true);
+    // Each bystander defeats a DIFFERENT wrong implementation:
+    //  - otherJobContainer: a filter on the shared `cinatra-exec-` namespace;
+    //  - nestedJobContainer: an unanchored prefix test (job `<jobId>-nested`
+    //    shares this job's whole prefix);
+    //  - unlabelledLookalike: a name-only drain with no ownership proof.
+    for (const name of bystanders) {
+      expect(await isRunning(name)).toBe(true);
+    }
     expect(containerNamePrefixFor(jobId).endsWith("-")).toBe(true);
   }, 180_000);
 

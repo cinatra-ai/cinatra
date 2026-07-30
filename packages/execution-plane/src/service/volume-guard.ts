@@ -158,12 +158,20 @@ export function assertDrainJobId(jobId: unknown): string {
 }
 
 /**
- * Re-read a volume's labels and assert it is one the execution plane created
- * for `tier` before removing it.
+ * Read a volume's labels and assert that, IF it exists, the execution plane
+ * created it for `tier`.
  *
- * Returns `"absent"` when docker does not know the volume (removal is
- * best-effort and idempotent — an absent volume is a no-op, never a refusal)
- * and `"labelled"` when the tier label matches. Anything else THROWS.
+ * Called on all four volume ops, not just removal (Codex round 2, finding A1).
+ * `docker volume create` on an existing name ADOPTS it rather than failing, so
+ * without this check a volume that merely occupies a plane-shaped name would be
+ * silently taken over — written into by staging, and force-removed by staging's
+ * own fail-closed cleanup path. Asserting ownership BEFORE the operation is
+ * what keeps "the plane only ever touches its own volumes" true rather than
+ * merely intended.
+ *
+ * Returns `"absent"` when docker does not know the volume — for a create that
+ * is the normal case, and for a removal it is a no-op (removal is idempotent by
+ * contract, never a refusal). Anything else THROWS.
  *
  * `{{json .Labels}}` rather than `{{index .Labels "…"}}`: a Go template
  * indexing a nil map is a template ERROR, which docker reports as a non-zero
@@ -171,7 +179,7 @@ export function assertDrainJobId(jobId: unknown): string {
  * downgraded to a no-op. JSON keeps "unlabelled" (`null`) distinguishable from
  * "unknown".
  */
-export async function assertRemovableExecVolume(
+export async function assertExecVolumeOwnership(
   volumeName: string,
   tier: ExecVolumeTier,
   docker: DockerCli,
@@ -188,7 +196,7 @@ export async function assertRemovableExecVolume(
   try {
     labels = JSON.parse(inspected.stdout.trim() || "null");
   } catch {
-    refuse("Refusing to remove a volume whose labels could not be read (fail-closed).");
+    refuse("Refusing to act on a volume whose labels could not be read (fail-closed).");
   }
   const value =
     labels !== null && typeof labels === "object"
@@ -196,7 +204,7 @@ export async function assertRemovableExecVolume(
       : undefined;
   if (value !== tier) {
     refuse(
-      `Refusing to remove a volume that does not carry "${WORKSPACE_LABEL}=${tier}" ` +
+      `Refusing to act on a volume that does not carry "${WORKSPACE_LABEL}=${tier}" ` +
         `— it was not created by the execution plane (fail-closed).`,
     );
   }

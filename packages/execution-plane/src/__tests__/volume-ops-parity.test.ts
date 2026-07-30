@@ -22,9 +22,13 @@ import {
 
 import { ExecutionBroker } from "../broker";
 import type { DockerCli, DockerRunOutcome } from "../docker-cli";
+import { SANDBOX_CONTAINER_JOB_LABEL } from "../l0-profile";
 import { removeSkillsVolume, stageSkillsVolume } from "../staging";
 import type { SandboxCommandResult, SandboxWorker } from "../types";
-import { createLocalDockerVolumeOps } from "../volume-ops";
+import {
+  createLocalDockerContainerOps,
+  createLocalDockerVolumeOps,
+} from "../volume-ops";
 import { ensureWorkspaceVolume, removeWorkspaceVolume } from "../workspace";
 import { makeVerifier, openVouched } from "./support/voucher-fixture";
 
@@ -143,6 +147,65 @@ describe("volume-ops seam — local-dev parity", () => {
     expect(recorded.some((argv) => argv[0] === "rm")).toBe(false);
   });
 });
+
+describe("container ops — ownership and failure reporting", () => {
+  it("selects on the ownership LABEL and re-checks the anchored name shape", async () => {
+    const recorded: Recorded = [];
+    const cli: DockerCli = async (args) => {
+      recorded.push([...args]);
+      if (args[0] === "ps") {
+        // A daemon that (or an attacker who) returns more than it should: a
+        // different job's container, and one that is not even name-shaped.
+        return okOut(
+          [
+            "cinatra-exec-job1-0",
+            "cinatra-exec-job1-bar-7", // the DIFFERENT job `job1-bar`
+            "cinatra-exec-job1-notanumber",
+            "postgres",
+          ].join("\n"),
+        );
+      }
+      return okOut("");
+    };
+    const removed = await createLocalDockerContainerOps(cli).cancelJobContainers("job1");
+    expect(removed).toEqual(["cinatra-exec-job1-0"]);
+    expect(recorded.filter((argv) => argv[0] === "rm")).toEqual([
+      ["rm", "--force", "cinatra-exec-job1-0"],
+    ]);
+    expect(recorded[0]).toContain(`label=${SANDBOX_CONTAINER_JOB_LABEL}=job1`);
+  });
+
+  it("THROWS when enumeration fails — an undrained host is not a drained one", async () => {
+    const cli: DockerCli = async (args) =>
+      args[0] === "ps" ? { ...okOut(""), exitCode: 1 } : okOut("");
+    await expect(
+      createLocalDockerContainerOps(cli).cancelJobContainers("job1"),
+    ).rejects.toThrow(/NOT drained/);
+  });
+
+  it("attempts EVERY removal, then throws naming the incomplete drain", async () => {
+    const attempted: string[] = [];
+    const cli: DockerCli = async (args) => {
+      if (args[0] === "ps") {
+        return okOut(["cinatra-exec-job1-0", "cinatra-exec-job1-1"].join("\n"));
+      }
+      if (args[0] === "rm") {
+        attempted.push(args[args.length - 1]);
+        // The FIRST removal fails; the second must still be attempted.
+        return { ...okOut(""), exitCode: attempted.length === 1 ? 1 : 0 };
+      }
+      return okOut("");
+    };
+    await expect(
+      createLocalDockerContainerOps(cli).cancelJobContainers("job1"),
+    ).rejects.toThrow(/NOT fully drained/);
+    expect(attempted).toEqual(["cinatra-exec-job1-0", "cinatra-exec-job1-1"]);
+  });
+});
+
+function okOut(stdout: string): DockerRunOutcome {
+  return { exitCode: 0, stdout, stderr: "", stdioOverflow: false, timedOut: false };
+}
 
 /** Neutralize the wall-clock `createdAt` label; keep every other element. */
 function normalize(recorded: Recorded): Recorded {

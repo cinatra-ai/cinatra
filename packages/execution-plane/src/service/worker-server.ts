@@ -44,7 +44,7 @@ import {
   ExecVolumeNameRefusedError,
   assertDrainJobId,
   assertExecVolumeName,
-  assertRemovableExecVolume,
+  assertExecVolumeOwnership,
   assertStagingJobId,
   assertWorkspaceKey,
 } from "./volume-guard";
@@ -221,6 +221,11 @@ export function createWorkerDispatch(
           request.payload.workspaceKey,
           workspaceVolumeName,
         );
+        // `volume create` ADOPTS an existing name rather than failing, so an
+        // ownership check has to happen BEFORE it: otherwise a volume that
+        // merely occupies a plane-shaped name would be taken over and later
+        // force-removed as if it were ours.
+        await assertExecVolumeOwnership(workspaceVolumeName(workspaceKey), "l2", docker);
         const volumeName = await ensureWorkspaceVolume(workspaceKey, docker);
         return { status: 200, body: execOkResponse({ volumeName }) };
       }
@@ -228,13 +233,17 @@ export function createWorkerDispatch(
         const volumeName = assertExecVolumeName(request.payload.volumeName, "l2");
         // An ABSENT volume is a no-op, not a refusal — removal is idempotent by
         // contract and the broker retries it on close and on teardown.
-        const state = await assertRemovableExecVolume(volumeName, "l2", docker);
+        const state = await assertExecVolumeOwnership(volumeName, "l2", docker);
         if (state === "labelled") await removeWorkspaceVolume(volumeName, docker);
         return { status: 200, body: execOkResponse({ removed: true as const }) };
       }
       case "stageSkills": {
         const { skills, imageRef } = request.payload;
         const jobId = assertStagingJobId(request.payload.jobId, skillsVolumeName);
+        // Same reason as ensureWorkspace, and sharper: staging COPIES FILES into
+        // the volume and its fail-closed cleanup path force-removes it, so
+        // adopting a foreign volume here would both write to it and delete it.
+        await assertExecVolumeOwnership(skillsVolumeName(jobId), "skills", docker);
         // A staging refusal (digest mismatch / unsafe path / docker failure) is
         // load-bearing: the broker fails the OPEN closed on it. Surface it as a
         // structured op failure carrying the staging message verbatim.
@@ -243,7 +252,7 @@ export function createWorkerDispatch(
       }
       case "removeSkills": {
         const volumeName = assertExecVolumeName(request.payload.volumeName, "skills");
-        const state = await assertRemovableExecVolume(volumeName, "skills", docker);
+        const state = await assertExecVolumeOwnership(volumeName, "skills", docker);
         if (state === "labelled") await removeSkillsVolume(volumeName, docker);
         return { status: 200, body: execOkResponse({ removed: true as const }) };
       }
