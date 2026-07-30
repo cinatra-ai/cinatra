@@ -245,6 +245,198 @@ export async function ensureSessionActivationGuardTrigger(
 }
 
 /**
+ * Result of the app-owned auth-floor archive-guard trigger provisioning step
+ * (cinatra#1939 wave 3 Stage E — "the auth floor", track 3's last piece).
+ */
+export interface AuthFloorArchiveGuardResult {
+  /** true when the functions + triggers were (re)defined this run. */
+  provisioned: boolean;
+  /** Set when nothing could be done: a referenced table does not exist. */
+  skipped?: "table-missing";
+}
+
+/**
+ * The membership/invitation archive-guard function + trigger DDL
+ * (cinatra#1939 wave 3 Stage E).
+ *
+ * WHY a trigger and not app code: `auth.api.updateMemberRole` /
+ * `auth.api.createInvitation` / better-auth's own internal member-insert path
+ * (registration, accept-invitation) all run Better Auth's OWN transaction —
+ * there is no seam for the org-write kernel's `guardOrgMutation` to wrap (the
+ * SQL is inside better-auth's library code, not ours). The app-layer defense
+ * (cinatra#1942's root `hooks.before` dispatch policy, `organization-dispatch-
+ * policy.ts`) covers every request that goes through a Better Auth endpoint —
+ * HTTP or `auth.api.*` — but a write that reaches `public.member` /
+ * `public.invitation` by ANY OTHER path (a future direct-SQL caller, a script,
+ * a library upgrade that changes the internal call shape) would sail past it.
+ * This table-level guard is the floor underneath both. Its claim, stated
+ * precisely: no writer, of any shape, can ADD, ELEVATE, RE-POINT, or REDEEM
+ * access into an archived organization through these tables — not "no writer
+ * can touch these tables" (see the honest scope note below).
+ *
+ * Semantics (mirrors `cinatra_session_activation_guard`'s per-field,
+ * fail-closed shape):
+ *  - `public.member`: fires BEFORE INSERT (a brand-new membership row) and
+ *    BEFORE UPDATE OF "role" / "organizationId" (a role change is
+ *    growth-shaped — elevating access in an archived org is the same category
+ *    of write as adding a member — and re-pointing an EXISTING membership row
+ *    at a different organization is a new-membership write in disguise; a
+ *    guard listening only on "role" would let a direct-SQL org re-point
+ *    through). Resolves the organization directly via `member."organizationId"`
+ *    (NOT NULL on the live table — no join needed, unlike the team case in the
+ *    session guard), locks it `FOR SHARE ... NOWAIT`, and refuses when the row
+ *    is missing (fail closed) or `"archivedAt" IS NOT NULL`.
+ *  - `public.invitation`: fires BEFORE INSERT (a brand-new pending invite),
+ *    BEFORE UPDATE OF "status" WHEN the new value is `'accepted'` — the ONLY
+ *    status transition that grows membership — and BEFORE UPDATE OF
+ *    "organizationId" (the same re-point argument as member). Moving status
+ *    to `'rejected'` or `'canceled'` is cleanup and never touches this guard
+ *    at all (the condition does not even evaluate for those transitions), so
+ *    declining or withdrawing an invitation into an archived org is always
+ *    possible.
+ *  - **Honest scope note (deliberately NOT floored here)**: an UPDATE that
+ *    edits OTHER columns of a still-pending invitation (role, teamId,
+ *    expiresAt) inside an archived org does not fire this guard — no access
+ *    is granted by such an edit, because the invitation cannot be ACCEPTED
+ *    while the org is archived (the accept transition IS floored above);
+ *    endpoint-level mutations of pending invites are the app-layer dispatch
+ *    policy's territory.
+ *  - **Narrow cleanup capability, by construction, not a special case**: DELETE
+ *    is not in either trigger's event list, and role/status UPDATEs outside the
+ *    growth conditions above never engage the archived check. So removing
+ *    a member (leaving an org, an admin removing someone, or the membership
+ *    rows a user's own account-deletion cascades through) and logging out
+ *    (`public.session` DELETE, already untouched by the S1 guard) can never get
+ *    stuck behind an archived organization — the guard only ever refuses a
+ *    write that would GROW access, never one that shrinks or exits it.
+ *  - DARK like its S1 sibling: until an organization row carries a non-null
+ *    `"archivedAt"`, both refusal paths are unreachable in production.
+ *
+ * Identifiers are the exact quoted camelCase column names Better Auth
+ * provisions (`organizationId`, `role`, `status`, `archivedAt`); the SQL-shape
+ * test pins them.
+ */
+export const MEMBER_ARCHIVE_GUARD_FUNCTION_SQL = `
+CREATE OR REPLACE FUNCTION public.cinatra_member_archive_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $cinatra_guard$
+DECLARE
+  org_archived_at timestamptz;
+BEGIN
+  IF TG_OP = 'INSERT'
+     OR NEW."role" IS DISTINCT FROM OLD."role"
+     OR NEW."organizationId" IS DISTINCT FROM OLD."organizationId" THEN
+    SELECT o."archivedAt" INTO org_archived_at
+      FROM public.organization o
+     WHERE o.id = NEW."organizationId"
+       FOR SHARE OF o NOWAIT;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'cinatra-member-archive-guard: organization-missing (%)',
+        NEW."organizationId";
+    END IF;
+    IF org_archived_at IS NOT NULL THEN
+      RAISE EXCEPTION 'cinatra-member-archive-guard: organization-archived (%)',
+        NEW."organizationId";
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$cinatra_guard$;
+`.trim();
+
+export const MEMBER_ARCHIVE_GUARD_TRIGGER_SQL = `
+CREATE OR REPLACE TRIGGER cinatra_member_archive_guard
+BEFORE INSERT OR UPDATE OF "role", "organizationId" ON public.member
+FOR EACH ROW EXECUTE FUNCTION public.cinatra_member_archive_guard()
+`.trim();
+
+export const INVITATION_ARCHIVE_GUARD_FUNCTION_SQL = `
+CREATE OR REPLACE FUNCTION public.cinatra_invitation_archive_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $cinatra_guard$
+DECLARE
+  org_archived_at timestamptz;
+BEGIN
+  IF TG_OP = 'INSERT'
+     OR (NEW."status" IS DISTINCT FROM OLD."status" AND NEW."status" = 'accepted')
+     OR NEW."organizationId" IS DISTINCT FROM OLD."organizationId" THEN
+    SELECT o."archivedAt" INTO org_archived_at
+      FROM public.organization o
+     WHERE o.id = NEW."organizationId"
+       FOR SHARE OF o NOWAIT;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'cinatra-invitation-archive-guard: organization-missing (%)',
+        NEW."organizationId";
+    END IF;
+    IF org_archived_at IS NOT NULL THEN
+      RAISE EXCEPTION 'cinatra-invitation-archive-guard: organization-archived (%)',
+        NEW."organizationId";
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$cinatra_guard$;
+`.trim();
+
+export const INVITATION_ARCHIVE_GUARD_TRIGGER_SQL = `
+CREATE OR REPLACE TRIGGER cinatra_invitation_archive_guard
+BEFORE INSERT OR UPDATE OF "status", "organizationId" ON public.invitation
+FOR EACH ROW EXECUTE FUNCTION public.cinatra_invitation_archive_guard()
+`.trim();
+
+/**
+ * Provision (or repair) the member + invitation archive-guard triggers.
+ * Idempotent by construction (same contract as `ensureSessionActivationGuard-
+ * Trigger`): BOTH functions and BOTH triggers redefine in place inside ONE
+ * transaction serialized by a constant-key advisory xact-lock, so a live
+ * repair run never leaves a window with only one of the two guards active,
+ * and concurrent runners cannot interleave definitions. Any failure rolls
+ * back and rethrows (the auth floor must not be silently left half-armed).
+ */
+export async function ensureAuthFloorArchiveGuardTriggers(
+  pool: Pool,
+): Promise<AuthFloorArchiveGuardResult> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext('cinatra-migrations'), hashtext('authFloor.archiveGuard'))`,
+    );
+
+    const tables = await client.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name IN ('member', 'invitation', 'organization')`,
+    );
+    const present = new Set(tables.rows.map((r) => r.table_name));
+    if (!present.has("member") || !present.has("invitation") || !present.has("organization")) {
+      await client.query("ROLLBACK");
+      return { provisioned: false, skipped: "table-missing" };
+    }
+
+    await client.query(MEMBER_ARCHIVE_GUARD_FUNCTION_SQL);
+    await client.query(MEMBER_ARCHIVE_GUARD_TRIGGER_SQL);
+    await client.query(INVITATION_ARCHIVE_GUARD_FUNCTION_SQL);
+    await client.query(INVITATION_ARCHIVE_GUARD_TRIGGER_SQL);
+    await client.query("COMMIT");
+    return { provisioned: true };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw new Error(
+      `better-auth-migrate: provisioning the auth-floor archive-guard triggers (member/invitation) failed: ${
+        err instanceof Error ? err.message : String(err)
+      }. Fix the member/invitation/organization tables, then re-run \`pnpm auth:migrate\`.`,
+      { cause: err },
+    );
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Canonical spellings of the expected CHECK expression. Postgres rewrites
  * `CHECK ("role" IN ('member', 'admin'))` into the `= ANY (ARRAY[...])` form
  * on modern servers; the raw IN-list spelling is kept as a defensive
@@ -613,6 +805,7 @@ export async function runBetterAuthMigration(
   teamMemberRole: TeamMemberRoleProvisionResult;
   sessionActivationGuard: SessionActivationGuardResult;
   organizationNameNotBlank: OrganizationNameNotBlankResult;
+  authFloorArchiveGuard: AuthFloorArchiveGuardResult;
 }> {
   if (!config.connectionString) {
     throw new Error("runBetterAuthMigration: `connectionString` is required.");
@@ -649,12 +842,18 @@ export async function runBetterAuthMigration(
     // getMigrations() has had its chance to create the organization table on
     // fresh installs. Inert in production until it finds a blank name to fix.
     const organizationNameNotBlank = await ensureOrganizationNameNotBlank(pool);
+    // cinatra#1939 wave 3 Stage E ("the auth floor"): definition-repaired on
+    // every invocation, same idiom as the session activation guard above —
+    // runs AFTER getMigrations() has had its chance to create the member /
+    // invitation tables on fresh installs.
+    const authFloorArchiveGuard = await ensureAuthFloorArchiveGuardTriggers(pool);
     return {
       created: toBeCreated.map((entry) => entry.table),
       columnSetsAdded: toBeAdded.length,
       teamMemberRole,
       sessionActivationGuard,
       organizationNameNotBlank,
+      authFloorArchiveGuard,
     };
   } finally {
     await pool.end();
@@ -689,9 +888,12 @@ if (
     : result.organizationNameNotBlank.provisioned
       ? `armed (${result.organizationNameNotBlank.backfilledNames} blank name(s) backfilled)`
       : "present";
+  const authFloorNote = result.authFloorArchiveGuard.skipped
+    ? `skipped (${result.authFloorArchiveGuard.skipped})`
+    : "provisioned";
   console.log(
     `Better Auth migration: created [${
       result.created.join(", ") || "none"
-    }], column-sets added ${result.columnSetsAdded}, teamMember.role ${roleNote}, session activation guard ${guardNote}, organization name guard ${nameNote}.`,
+    }], column-sets added ${result.columnSetsAdded}, teamMember.role ${roleNote}, session activation guard ${guardNote}, organization name guard ${nameNote}, auth floor archive guard ${authFloorNote}.`,
   );
 }
