@@ -21,6 +21,11 @@ vi.mock("../organization-delete-danger-form", () => ({
     <div data-testid="delete-danger-form" data-org={props.organizationId} />
   ),
 }));
+vi.mock("../organization-archive-danger-form", () => ({
+  OrganizationArchiveDangerForm: (props: { organizationId: string; mode: string }) => (
+    <div data-testid={`archive-danger-form-${props.mode}`} data-org={props.organizationId} />
+  ),
+}));
 
 import { OrganizationManagePanel } from "../organization-manage-panel";
 
@@ -154,5 +159,46 @@ describe("OrganizationManagePanel — read-only posture while archived (cinatra#
       />,
     );
     expect(screen.getByTestId("delete-danger-form")).toBeTruthy();
+  });
+});
+
+describe("OrganizationManagePanel — archive/unarchive card (cinatra#1942 V5)", () => {
+  test("default (no archiveControl): neither archive card renders — every pre-V5 call site is unaffected", () => {
+    render(
+      <OrganizationManagePanel {...BASE} canManageSettings canManageMembers />,
+    );
+    expect(screen.queryByTestId("archive-danger-form-archive")).toBeNull();
+    expect(screen.queryByTestId("archive-danger-form-unarchive")).toBeNull();
+  });
+
+  test('archiveControl="archive": the Archive card renders (screen computed active + canArchive + gate on)', () => {
+    render(
+      <OrganizationManagePanel
+        {...BASE}
+        canManageSettings
+        canManageMembers
+        archiveControl="archive"
+      />,
+    );
+    expect(screen.getByTestId("archive-danger-form-archive")).toBeTruthy();
+    expect(screen.queryByTestId("archive-danger-form-unarchive")).toBeNull();
+  });
+
+  test('archiveControl="unarchive": the Unarchive card renders, NOT inside a disabled fieldset (must stay operable while archived)', () => {
+    render(
+      <OrganizationManagePanel
+        {...BASE}
+        canManageSettings
+        canManageMembers
+        isArchived
+        archiveControl="unarchive"
+      />,
+    );
+    const unarchive = screen.getByTestId("archive-danger-form-unarchive");
+    expect(unarchive).toBeTruthy();
+    // The read-only posture disables the Settings/Members fieldsets — the
+    // Unarchive control must never be swallowed by that (recovery stays live).
+    expect(unarchive.closest("fieldset")).toBeNull();
+    expect(screen.queryByTestId("archive-danger-form-archive")).toBeNull();
   });
 });

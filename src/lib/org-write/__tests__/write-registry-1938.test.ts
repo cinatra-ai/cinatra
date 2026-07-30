@@ -249,6 +249,11 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
       // lease-expiry finalizer's phase-1 pooled bookkeeping writers (#1940 P4
       // — registered + banned to the finalizer module)
       "incrementLeaseFinalizeAttemptsQuery", "escalateLeaseFinalizeQuery",
+      // the real archive/unarchive transaction (#1942 V5 — banned from day
+      // one; sole sanctioned caller = the danger-zone server actions) plus
+      // the unarchive half of the kernel lease bookkeeping it consumes
+      // (registered with its first production caller)
+      "archiveOrganization", "unarchiveOrganization", "invalidateLeasesBeforeEpochQuery",
     ]) {
       expect(banned.has(w), `${w} must be import-banned`).toBe(true);
     }
@@ -262,8 +267,11 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     // enumerated above); the edge-family sweep added 3 more total bans on
     // DEAD write exports with zero production callers (confirmAssertion,
     // archiveAssertion, bindAssistantThread — banned so an unguarded dead
-    // writer cannot gain a caller). 20 + 8 + 2 + 3 + 3 = 36.
-    expect(banned.size).toBe(36);
+    // writer cannot gain a caller); cinatra#1942 V5 added 3 (the real
+    // archive/unarchive transaction pair, banned from day one, plus the
+    // kernel's invalidateLeasesBeforeEpochQuery registered with its first
+    // production caller). 20 + 8 + 2 + 3 + 3 + 3 = 39.
+    expect(banned.size).toBe(39);
   });
 });
 

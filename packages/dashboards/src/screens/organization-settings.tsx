@@ -44,6 +44,7 @@ import {
   countOrganizationDeleteBlockers,
   type OrganizationDeleteBlockers,
 } from "@/lib/organization-delete";
+import { isArchiveActivationEnabled } from "@/lib/organization-archive";
 
 import { buildSecurityContextFromSession } from "../auth/security-context";
 import { OrganizationPermissionsPanel } from "../components/organization-permissions-panel";
@@ -154,6 +155,21 @@ export async function OrganizationSettingsPage({
     }
   }
 
+  // Archive/unarchive control (cinatra#1942 V5): the ARCHIVE direction is
+  // hidden until the `org_archive_activation` gate is on (no dead button
+  // pre-flip — the tx would refuse `activation-gate-off` anyway); the
+  // UNARCHIVE direction always renders for an archived org (recovery is
+  // deliberately NOT gated, Decision 2 asymmetry). Only a `canArchive`
+  // viewer pays the gate read; the read itself is fail-closed (OFF on error).
+  let archiveControl: "archive" | "unarchive" | undefined;
+  if (manage.canArchive) {
+    if (isArchived) {
+      archiveControl = "unarchive";
+    } else if (await isArchiveActivationEnabled()) {
+      archiveControl = "archive";
+    }
+  }
+
   return (
     <Main className="min-h-screen">
       {/* Post-gate crumb publisher (cinatra#1737): resolves the intermediate
@@ -214,6 +230,7 @@ export async function OrganizationSettingsPage({
             members={buildOrganizationManageMembers(memberRows)}
             invitations={pendingInvitations}
             isArchived={isArchived}
+            archiveControl={archiveControl}
           />
         ) : null}
       </PageContent>
