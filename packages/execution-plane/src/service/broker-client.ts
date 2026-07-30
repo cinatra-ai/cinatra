@@ -50,6 +50,7 @@ import type {
 } from "@cinatra-ai/llm";
 
 import type { ResolvedEnvironmentMount } from "../environment/mount";
+import type { CommandVoucherMinter } from "../executor";
 import type { ExecResult, OpenJobResult, StagedSkillInput } from "../types";
 import type { ExecTlsMaterial } from "./mtls";
 import type {
@@ -150,15 +151,20 @@ export class BrokerServiceClient {
   /**
    * Execute one command. `commandId` is the idempotency key: pass a caller-owned
    * one to make a retry provably safe, or let the client mint one per call.
+   * `voucher` is the per-command authorization voucher (epic #1705 L2) the
+   * broker's `voucherVerifier` checks before dispatch — REQUIRED, mirroring
+   * `ExecutionBroker.exec`'s own signature: a client that could omit it would
+   * make the wire's authorization boundary optional in practice.
    * A transport failure maps to the merged `worker_error` refusal (header).
    */
   async exec(
     jobId: string,
     command: string,
+    voucher: string,
     opts?: { commandId?: string },
   ): Promise<ExecResult> {
     const commandId = opts?.commandId ?? this.newCommandId();
-    const outcome = await this.rpc.call<ExecResult>("exec", { jobId, command, commandId });
+    const outcome = await this.rpc.call<ExecResult>("exec", { jobId, command, commandId, voucher });
     if (outcome.ok) return outcome.result;
     return {
       ok: false,
@@ -227,6 +233,16 @@ export class BrokerServiceClient {
  */
 export type RemoteExecutorBroker = Pick<BrokerServiceClient, "openJob" | "exec">;
 
+export type RemoteSandboxExecutorOptions = {
+  /**
+   * REQUIRED, mirroring `executor.ts`'s `BrokerSandboxExecutorOptions`: an
+   * executor with no voucher source could submit no authorized command at
+   * all, so making it optional would only turn a compile-time requirement
+   * into a runtime refusal of everything.
+   */
+  mintVoucher: CommandVoucherMinter;
+};
+
 async function resolveStagedInputs(
   stagedSkills: SandboxStagedSkill[] | undefined,
 ): Promise<StagedSkillInput[]> {
@@ -263,6 +279,7 @@ function describeThrown(err: unknown): string {
  */
 export function createRemoteSandboxExecutor(
   broker: RemoteExecutorBroker,
+  opts: RemoteSandboxExecutorOptions,
 ): SandboxExecutor {
   const jobs = new Map<
     string,
@@ -321,9 +338,57 @@ export function createRemoteSandboxExecutor(
       }));
     }
 
+    const jobId = job.jobId;
+    /**
+     * Mint an authorization for one command and submit it — the same
+     * mint/remint shape as `executor.ts`'s `execWithVoucher` (see that
+     * module's header: this executor's contract is preserved verbatim).
+     */
+    const execWithVoucher = async (
+      command: string,
+      commandId: string,
+      nonce?: string,
+    ): Promise<ExecResult> => {
+      let minted: Awaited<ReturnType<CommandVoucherMinter>>;
+      try {
+        minted = await opts.mintVoucher({
+          sessionCarrier: input.sessionCarrier,
+          jobId,
+          command,
+          commandId,
+          ...(nonce ? { nonce } : {}),
+        });
+      } catch (err) {
+        return {
+          ok: false,
+          reason: "voucher_missing",
+          message: `the plane could not authorize this command: ${describeThrown(err)}`,
+        };
+      }
+      if (!minted.ok) {
+        return {
+          ok: false,
+          reason: "voucher_missing",
+          message: `the plane declined to authorize this command (${minted.reason}): ${minted.message}`,
+        };
+      }
+      return broker.exec(jobId, command, minted.voucher);
+    };
+
     const outputs: SandboxExecuteOutput[] = [];
     for (const command of input.commands) {
-      const result = await broker.exec(job.jobId, command);
+      // ONE commandId per command, stable across the single permitted remint
+      // (see `executor.ts`): identity the broker's idempotency and remint cap
+      // are keyed on.
+      const commandId = randomUUID();
+      let result = await execWithVoucher(command, commandId);
+
+      // The broker's one-shot revalidation: remint against its challenge
+      // nonce and resubmit exactly once (the cap itself lives in the broker).
+      if (!result.ok && result.reason === "revalidation_required" && result.revalidation) {
+        result = await execWithVoucher(command, commandId, result.revalidation.nonce);
+      }
+
       if (!result.ok) {
         outputs.push({
           stdout: "",

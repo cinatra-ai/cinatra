@@ -159,19 +159,35 @@ describe("app → broker payloads", () => {
   });
 
   it("requires a commandId on exec — idempotency is part of the contract", () => {
-    expect(parseBrokerRequest(envelope("exec", { jobId: "j", command: "ls" })).ok).toBe(false);
+    expect(
+      parseBrokerRequest(envelope("exec", { jobId: "j", command: "ls", voucher: "v" })).ok,
+    ).toBe(false);
     const parsed = parseBrokerRequest(
-      envelope("exec", { jobId: "j", command: "ls", commandId: "c1" }),
+      envelope("exec", { jobId: "j", command: "ls", commandId: "c1", voucher: "v" }),
+    );
+    expect(parsed.ok).toBe(true);
+  });
+
+  it("requires a voucher on exec — the per-command authorization boundary is part of the contract", () => {
+    expect(
+      parseBrokerRequest(envelope("exec", { jobId: "j", command: "ls", commandId: "c1" })).ok,
+    ).toBe(false);
+    const parsed = parseBrokerRequest(
+      envelope("exec", { jobId: "j", command: "ls", commandId: "c1", voucher: "v" }),
     );
     expect(parsed.ok).toBe(true);
   });
 
   it("accepts an EMPTY command string but not a non-string", () => {
     expect(
-      parseBrokerRequest(envelope("exec", { jobId: "j", command: "", commandId: "c" })).ok,
+      parseBrokerRequest(
+        envelope("exec", { jobId: "j", command: "", commandId: "c", voucher: "v" }),
+      ).ok,
     ).toBe(true);
     expect(
-      parseBrokerRequest(envelope("exec", { jobId: "j", command: 42, commandId: "c" })).ok,
+      parseBrokerRequest(
+        envelope("exec", { jobId: "j", command: 42, commandId: "c", voucher: "v" }),
+      ).ok,
     ).toBe(false);
   });
 
@@ -255,7 +271,7 @@ describe("JSON-serializable doctrine", () => {
       stagedSkills: [{ slug: "s", files: [{ path: "p", content: "c", digest: "d" }] }],
       environment: { imageRef: "r", provenance: { alg: "hmac", signature: "sig" } },
     }),
-    execRequestEnvelope("exec", { jobId: "j", command: "ls -la", commandId: "c" }),
+    execRequestEnvelope("exec", { jobId: "j", command: "ls -la", commandId: "c", voucher: "v" }),
     execRequestEnvelope("closeJob", { jobId: "j", removeWorkspace: true }),
     execRequestEnvelope("terminateJobsForRun", { runId: "r", removeWorkspace: false }),
     execRequestEnvelope("sweep", { idleMs: 900_000 }),
