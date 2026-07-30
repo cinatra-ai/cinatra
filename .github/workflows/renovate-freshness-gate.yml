@@ -37,9 +37,9 @@ name: renovate-freshness-gate
 # masquerade as "no updates available". It owns its own green path: a fresh
 # dashboard passes silently and auto-closes any prior alert.
 #
-# Systemic counterpart: engineering#552 adds the same input-freshness gate to
-# the closeout dependency-currency wave (a per-milestone ceremony check). This
-# workflow is the continuous, always-on detector between closeouts.
+# Systemic counterpart: the closeout dependency-currency wave carries the same
+# input-freshness gate as a per-milestone ceremony check. This workflow is the
+# continuous, always-on detector between closeouts.
 
 on:
   schedule:
@@ -259,7 +259,7 @@ jobs:
             printf 'not in this repo; a portal reset alone was known-insufficient once already\n'
             printf '(2026-07-15, cinatra#1632). The self-hosted workflow exists precisely so this\n'
             printf 'branch of the runbook is no longer load-bearing.\n\n'
-            printf 'Root-cause diagnosis and background: cinatra#1632, cinatra#2241. Systemic ceremony guard: engineering#552.\n'
+            printf 'Root-cause diagnosis and background: cinatra#1632, cinatra#2241.\n'
           } > "$body_file"
 
           if [ -n "$existing" ]; then
