@@ -16,6 +16,30 @@
 // discovery only) with a defense-in-depth mutating-verb denylist on top.
 // Deny-by-default: anything not explicitly listed is refused.
 //
+// AMENDMENT (cinatra#2022 S7 PR-δ): the invariant above — "the chat issuing
+// raw MCP mutations" must never reach a mutation directly — is narrowed, not
+// repealed, for exactly the two governed-invoker primitives below
+// (`wordpress_site_tool_call` / `wordpress_site_tools_list`, already built +
+// policy-classified in S2/S3, DARK on every delegated perimeter until this
+// PR). Chat MAY reach a generic per-site tool-forwarding primitive,
+// compensated by TWO independent layers neither of which existed as
+// compensating controls for any other tool on this allowlist: (1) the S5
+// destructive-confirmation hook (`connector-instance-destructive-hook.ts`),
+// which REQUIRES a rendered confirmation for any destructive-classified
+// ability on the `chat` surface (`CONFIRMATION_SURFACE_DEFAULTS.chat ===
+// "require"`); (2) the per-instance tool-policy floor
+// (`evaluateInstanceToolPolicy`), whose absent-record default this same PR
+// flips from OPEN to RESTRICTED+empty — so NOTHING is actually chat-reachable
+// for an instance until its site owner explicitly allow-lists specific
+// abilities in connector settings. A hijacked / prompt-injected chat LLM
+// therefore still cannot delete data through this channel on any instance
+// that hasn't been explicitly opened up ability-by-ability; on one that has,
+// the destructive-confirmation hook still stands between it and any
+// destructive call. No OTHER tool on this allowlist gained mutation reach —
+// this is a narrow, disclosed exception scoped to the two forwarding
+// primitives, not a change to the allowlist's general read+dispatch+
+// discovery posture.
+//
 // Enforcement is server-side at MCP-runtime-server construction
 // (registration-time filtering + a call-time handler guard) so it holds even
 // if a provider ignores the client-side `allowedTools` hint.
@@ -153,9 +177,22 @@ const ALLOWED_EXACT = new Set<string>([
   "media_feeds_list",
   "gmail_aliases_list",
   "linkedin_accounts_list",
-  "wordpress_instances_list",
-  "wordpress_posts_list",
   "drupal_instances_list",
+
+  // cinatra#2022 S7 PR-δ — the governed invoker's two
+  // generic per-site tool-forwarding primitives (already built + policy-
+  // classified in S2/S3; DARK on every delegated perimeter until this PR).
+  // Replaces the narrow `wordpress_instances_list` / `wordpress_posts_list`
+  // read-only entries above with the actual cutover target. See the
+  // AMENDMENT note at the top of this file for the two compensating layers
+  // (S5 destructive-confirmation hook + the per-instance tool-policy floor,
+  // now RESTRICTED+empty by default) that keep this a narrow, safe exception
+  // rather than a blanket mutation grant. `wordpress_site_tools_list` is
+  // read-only (catalog discovery); `wordpress_site_tool_call` is the one
+  // primitive on this ENTIRE allowlist that can mutate — by design, gated by
+  // the two layers above, not by this allowlist itself.
+  "wordpress_site_tool_call",
+  "wordpress_site_tools_list",
 
   // Dashboards — read-only catalog + semantic queries. CRUD on dashboard
   // entities themselves stays in ALLOWED_PROPOSAL_OVERRIDE below (create/update

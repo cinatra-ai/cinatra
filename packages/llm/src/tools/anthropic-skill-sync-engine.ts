@@ -39,9 +39,12 @@ import {
 import { AnthropicSkillDeliveryError, AnthropicSkillPreflightError } from "../errors";
 
 /**
- * Anthropic Custom Skills per-skill upload boundary. The docs say "under 30 MB";
- * we reject at exactly 30,000,000 bytes measured against BOTH the canonical
- * archive bytes AND the uncompressed file total (see the bundle-zip module).
+ * Anthropic Custom Skills per-skill upload boundary. The docs say "under
+ * 30 MB", read as BINARY MB (30 MiB = 31,457,280) because the S7 live
+ * acceptance saw the API accept 30,000,505 bytes; we reject at or above that
+ * value measured against BOTH the canonical archive bytes AND the uncompressed
+ * file total. Full grounding lives on the constant itself (see the bundle-zip
+ * module), which is the only place the value may move.
  */
 export const ANTHROPIC_SKILL_MAX_BYTES = ANTHROPIC_SKILL_MAX_UPLOAD_BYTES;
 
@@ -169,8 +172,8 @@ function boundaryPreflightError(
       `Anthropic skill sync preflight failed: skill "${catalogSkillId}" ` +
       `${dimension} size is ${humanMb(bytes)}, which reaches the ` +
       `${humanMb(maxBytes)} Anthropic Custom Skills upload limit (the docs say ` +
-      `"under 30 MB"; both the canonical archive bytes and the uncompressed ` +
-      `total are bounded). This is a configuration error — shrink the skill ` +
+      `"under 30 MB", read as 30 MiB; both the canonical archive bytes and the ` +
+      `uncompressed total are bounded). This is a configuration error — shrink the skill ` +
       `bundle before enabling/running sync (never a mid-run partial failure).`,
   });
 }

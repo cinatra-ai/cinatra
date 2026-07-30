@@ -1,0 +1,118 @@
+{
+  "arm": "anthropic",
+  "label": "LIVE — real Anthropic API with the org key; provider boundary observed, never stubbed",
+  "at": "2026-07-30T02:29:43.718Z",
+  "checks": [
+    {
+      "id": "A1a",
+      "what": "Anthropic is offered in the wizard",
+      "verdict": "PASS"
+    },
+    {
+      "id": "A1b",
+      "what": "OpenAI is offered in the wizard",
+      "verdict": "PASS"
+    },
+    {
+      "id": "A1c",
+      "what": "Gemini is NOT offered (wizardEligible false)",
+      "verdict": "PASS"
+    },
+    {
+      "id": "A2a",
+      "what": "the Anthropic credential form renders",
+      "verdict": "PASS"
+    },
+    {
+      "id": "A2b",
+      "what": "the matcher constraint is surfaced on Anthropic",
+      "verdict": "PASS"
+    },
+    {
+      "id": "A2c",
+      "what": "the pick is persisted",
+      "verdict": "PASS",
+      "detail": "\"anthropic\""
+    },
+    {
+      "id": "A3a",
+      "what": "strict catalog sync uploaded skills LIVE",
+      "verdict": "PASS",
+      "detail": "sync rows=22"
+    },
+    {
+      "id": "A3b",
+      "what": "bulk consent was recorded",
+      "verdict": "PASS",
+      "detail": "consent rows=24"
+    },
+    {
+      "id": "A4a",
+      "what": "a function-tools instance fails the native-skills probe ACTIONABLY",
+      "verdict": "PASS",
+      "detail": "AI setup did not complete (native-skills-probe) This Anthropic connection's MCP mode is 'function-tools'. In that mode Cinatra cannot deliver custom skills to Claude — every container.skills request is rejected. Use “Switch to native MCP delivery” below to set the Anthropic connector's MCP mode to '"
+    },
+    {
+      "id": "A4b",
+      "what": "the performable fix-forward control is rendered",
+      "verdict": "PASS"
+    },
+    {
+      "id": "A5a",
+      "what": "the UI control flipped the STORED mcpMode to native",
+      "verdict": "PASS",
+      "detail": "{\"mcpMode\":\"native\"}"
+    },
+    {
+      "id": "A5b",
+      "what": "the switch does not fabricate readiness (no receipt yet)",
+      "verdict": "PASS"
+    },
+    {
+      "id": "A6a",
+      "what": "the readiness saga reached a VALID receipt on the real API",
+      "verdict": "PASS",
+      "detail": "{\"receiptVersion\":1,\"provider\":\"anthropic\",\"completedAt\":\"2026-07-30T02:29:39.109Z\",\"fingerprint\":\"665c8c373cbe0862.de1f504c2a2c2b14\",\"probe\":{\"accepted\":true,\"mode\":\"container-skills\",\"skillId\":\"skill_01LHhQqvD5WkX7pGNCCtTNwS\",\"version\":\"1785378533400496\",\"disposable\":false},\"syncedSkillCount\":22}"
+    },
+    {
+      "id": "A6b",
+      "what": "the probe used container-skills mode",
+      "verdict": "PASS",
+      "detail": "container-skills"
+    },
+    {
+      "id": "A6c",
+      "what": "the receipt reports a real uploaded skill count",
+      "verdict": "PASS",
+      "detail": "22"
+    },
+    {
+      "id": "A6d",
+      "what": "the wizard renders the completion receipt",
+      "verdict": "PASS"
+    },
+    {
+      "id": "A6e",
+      "what": "the default provider is committed to anthropic",
+      "verdict": "PASS",
+      "detail": "\"anthropic\""
+    }
+  ],
+  "pageErrors": [],
+  "syncedSkillRows": 22,
+  "consentRows": 24,
+  "receipt": {
+    "receiptVersion": 1,
+    "provider": "anthropic",
+    "completedAt": "2026-07-30T02:29:39.109Z",
+    "fingerprint": "665c8c373cbe0862.de1f504c2a2c2b14",
+    "probe": {
+      "accepted": true,
+      "mode": "container-skills",
+      "skillId": "skill_01LHhQqvD5WkX7pGNCCtTNwS",
+      "version": "1785378533400496",
+      "disposable": false
+    },
+    "syncedSkillCount": 22
+  }
+}

@@ -161,22 +161,16 @@ describe("exchangeAuthorizationCode", () => {
       expect(r.response.credentialVersion).toBe(1);
       expect(r.response.contractVersion).toBe("v1");
       expect(r.response.capabilities.tokenBroker).toBe(false);
-      // cinatra#343: the WP grant mints a per-site legacy-bridge webhook binding
-      // and surfaces its id so the plugin can POST to the generic /webhook path.
-      expect(r.response.webhookBindingId).toBe("wh-binding-1");
+      // cinatra#2022: a non-negotiated ("legacy") WordPress grant no longer
+      // mints a webhook binding — the #343 legacy-bridge mint (and its only
+      // delivery target, /api/webhooks/wordpress) was removed.
+      expect(r.response.webhookBindingId).toBeUndefined();
     }
     // The store received the WEBHOOK secret HASH, never the plaintext.
     const upsertArg = store.upsertConnectSiteCredential.mock.calls[0][0];
     expect(upsertArg.webhookSecretHash).toBe(sha256Hex("hex32"));
-    // The binding is minted for the resolved site, bridging the shared secret as
-    // the legacy HMAC secret, on the WordPress connector tuple.
-    expect(webhookSecretServiceMock.upsertLegacy).toHaveBeenCalledWith({
-      vendor: "cinatra-ai",
-      slug: "wordpress-mcp-connector",
-      hook: "post-published",
-      siteId: "site-uuid-1",
-      legacySecret: "hex32",
-    });
+    // No binding is minted for a non-negotiated WordPress tuple.
+    expect(webhookSecretServiceMock.upsertLegacy).not.toHaveBeenCalled();
   });
 
   it("returns site_rotated semantics via credentialVersion>1 on reconnect", async () => {
@@ -382,101 +376,6 @@ describe("install-code flow", () => {
       tokenBrokerAvailable: false,
     });
     expect(r.ok).toBe(false);
-  });
-});
-
-describe("cinatra#343 — per-site WordPress webhook binding at connect time", () => {
-  const verifier = "verifier-" + "y".repeat(40);
-  const challenge = sha256Base64Url(verifier);
-
-  function wpRow() {
-    return {
-      codeHash: "h",
-      grantType: "auth_code",
-      client: "wordpress",
-      redirectUri: WP_CALLBACK,
-      widgetOrigin: "https://shop.example.com",
-      callbackOrigin: "https://shop.example.com",
-      codeChallenge: challenge,
-      adminUserId: "u1",
-      orgId: "o1",
-      scope: CONNECT_SCOPE,
-      createdAt: "t0",
-      expiresAt: "t1",
-      consumedAt: "t2",
-    };
-  }
-
-  function wpSite(siteId: string, credentialVersion: number) {
-    return {
-      siteId,
-      client: "wordpress",
-      widgetOrigin: "https://shop.example.com",
-      callbackOrigin: "https://shop.example.com",
-      credentialHash: "hash",
-      credentialVersion,
-      webhookSecretHash: null,
-      adminUserId: "u1",
-      orgId: "o1",
-      createdAt: "t0",
-      lastExchangedAt: "t0",
-      lastUsedAt: null,
-      revokedAt: null,
-      revokedBy: null,
-    };
-  }
-
-  it("rotation/reconnect path: upsertLegacy returns the SAME stable bindingId for the same site", async () => {
-    store.consumeAuthorizationCode.mockReturnValue(wpRow());
-    store.upsertConnectSiteCredential.mockReturnValue(wpSite("site-stable", 2));
-    // The idempotent tuple-scoped upsert preserves the bindingId across reconnects.
-    webhookSecretServiceMock.upsertLegacy.mockResolvedValue({
-      bindingId: "wh-binding-stable",
-      secret: "hex32",
-    });
-    const r = await exchangeAuthorizationCode({
-      code: "plaintext-code",
-      client: "wordpress",
-      redirectUri: WP_CALLBACK,
-      codeVerifier: verifier,
-      webhookSecret: "hex32",
-      tokenBrokerAvailable: false,
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.response.credentialVersion).toBe(2);
-      expect(r.response.webhookBindingId).toBe("wh-binding-stable");
-    }
-    expect(webhookSecretServiceMock.upsertLegacy).toHaveBeenCalledWith(
-      expect.objectContaining({ siteId: "site-stable", legacySecret: "hex32" }),
-    );
-  });
-
-  it("a webhook-binding mint FAILURE is non-fatal: the credential is still issued, no bindingId surfaced", async () => {
-    store.consumeAuthorizationCode.mockReturnValue(wpRow());
-    store.upsertConnectSiteCredential.mockReturnValue(wpSite("site-x", 1));
-    webhookSecretServiceMock.upsertLegacy.mockRejectedValue(new Error("db down"));
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const r = await exchangeAuthorizationCode({
-      code: "plaintext-code",
-      client: "wordpress",
-      redirectUri: WP_CALLBACK,
-      codeVerifier: verifier,
-      webhookSecret: "hex32",
-      tokenBrokerAvailable: false,
-    });
-    // The exchange SUCCEEDS (the already-committed credential is never stranded);
-    // the binding is re-minted idempotently on the next reconnect.
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.response.credential).toMatch(/^cnx_site-x_/);
-      expect(r.response.webhookBindingId).toBeUndefined();
-    }
-    // The failure is logged WITHOUT leaking the secret.
-    expect(errSpy).toHaveBeenCalled();
-    const logged = errSpy.mock.calls.flat().map(String).join(" ");
-    expect(logged).not.toContain("hex32");
-    errSpy.mockRestore();
   });
 });
 
@@ -718,7 +617,7 @@ describe("cinatra#974 — WordPress standard-contract negotiation (webhook_contr
     errSpy.mockRestore();
   });
 
-  it("no webhook_contract → byte-identical legacy behavior with NO echo (old plugins)", async () => {
+  it("no webhook_contract → shared secret still returned, but NO binding minted (cinatra#2022: the #343 legacy-bridge mint was removed)", async () => {
     store.consumeAuthorizationCode.mockReturnValue(wpRow());
     store.upsertConnectSiteCredential.mockReturnValue(wpSite("site-legacy-1", 2));
     const r = await exchangeAuthorizationCode({
@@ -731,16 +630,15 @@ describe("cinatra#974 — WordPress standard-contract negotiation (webhook_contr
     });
     expect(r.ok).toBe(true);
     expect(webhookSecretServiceMock.upsertStandard).not.toHaveBeenCalled();
-    expect(webhookSecretServiceMock.upsertLegacy).toHaveBeenCalledWith(
-      expect.objectContaining({ legacySecret: "shared-legacy-secret" }),
-    );
+    expect(webhookSecretServiceMock.upsertLegacy).not.toHaveBeenCalled();
     if (r.ok) {
       expect(r.response.webhookSecret).toBe("shared-legacy-secret");
       expect(r.response.webhookContract).toBeUndefined();
+      expect(r.response.webhookBindingId).toBeUndefined();
     }
   });
 
-  it("an UNKNOWN webhook_contract value degrades to the legacy behavior (never an error)", async () => {
+  it("an UNKNOWN webhook_contract value degrades the same way: shared secret, no binding, no echo, no error", async () => {
     store.consumeAuthorizationCode.mockReturnValue(wpRow());
     store.upsertConnectSiteCredential.mockReturnValue(wpSite("site-legacy-2", 1));
     const r = await exchangeAuthorizationCode({
@@ -754,10 +652,11 @@ describe("cinatra#974 — WordPress standard-contract negotiation (webhook_contr
     });
     expect(r.ok).toBe(true);
     expect(webhookSecretServiceMock.upsertStandard).not.toHaveBeenCalled();
-    expect(webhookSecretServiceMock.upsertLegacy).toHaveBeenCalled();
+    expect(webhookSecretServiceMock.upsertLegacy).not.toHaveBeenCalled();
     if (r.ok) {
       expect(r.response.webhookSecret).toBe("shared-legacy-secret");
       expect(r.response.webhookContract).toBeUndefined();
+      expect(r.response.webhookBindingId).toBeUndefined();
     }
   });
 

@@ -2,9 +2,9 @@ import { describe, it, expect } from "vitest";
 import { McpServer } from "@modelcontextprotocol/server";
 
 // Minimal fake Transport satisfying the SDK's Transport interface
-// (defined at packages/mcp-server/vendor/.../dist/index-Df8mSdyO.d.mts:4500).
+// (the SDK's exported `Transport` interface).
 // We only need start/send/close to be no-ops; the SDK attaches on* callbacks
-// during connect(). Used to drive the AlreadyConnected branch (vendor index.mjs:651).
+// during connect(). Used to drive the AlreadyConnected branch.
 function createFakeTransport() {
   const transport: any = {
     async start() {},
@@ -16,14 +16,14 @@ function createFakeTransport() {
   return transport;
 }
 
-describe("initialize handshake — vendored SDK direct", () => {
+describe("initialize handshake — SDK direct", () => {
   it("McpServer constructor stores `instructions` on the low-level Server", () => {
     const server = new McpServer(
       { name: "cinatra-mcp", version: "0.2.0" },
       { instructions: "PLACEHOLDER" },
     );
-    // The SDK stores the instructions on Server._instructions (vendored
-    // index.mjs:587 assigns it; index.mjs:763 reads it back into the initialize response).
+    // The SDK stores the instructions on Server._instructions and reads them
+    // back into the initialize response.
     expect((server.server as any)._instructions).toBe("PLACEHOLDER");
   });
 
@@ -32,8 +32,8 @@ describe("initialize handshake — vendored SDK direct", () => {
       { name: "x", version: "0.0.0" },
       { instructions: "" },
     );
-    // The SDK accepts "" at construction (index.mjs:587); the silent-drop happens at
-    // _oninitialize because of `..._instructions && { instructions }` (index.mjs:763).
+    // The SDK accepts "" at construction; the silent-drop happens at
+    // _oninitialize because of `..._instructions && { instructions }`.
     // The runtime mcp-instructions.ts helper must guarantee the string is non-empty in
     // practice. This test pins the SDK behavior so a future SDK upgrade that changes
     // truthiness handling does not silently break instruction delivery.
@@ -76,8 +76,8 @@ describe("initialize handshake — vendored SDK direct", () => {
       experimental: { "io.cinatra.protocols": { protocolRevision: "1" } },
     });
     await server.server.connect(fakeTransport);
-    // Post-connect call must throw — vendored Server.registerCapabilities
-    // checks `if (this.transport) throw ...` (vendor index.mjs:651).
+    // Post-connect call must throw — Server.registerCapabilities checks
+    // `if (this.transport) throw ...`.
     expect(() =>
       server.server.registerCapabilities({
         experimental: { another: { added: "later" } },

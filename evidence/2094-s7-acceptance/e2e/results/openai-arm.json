@@ -1,0 +1,110 @@
+{
+  "arm": "openai",
+  "label": "LIVE — real OpenAI API through the wizard form; provider boundary OBSERVED (pass-through), never stubbed",
+  "at": "2026-07-30T03:12:31.636Z",
+  "checks": [
+    {
+      "id": "B1a",
+      "what": "the OpenAI connection form renders under the choice",
+      "verdict": "PASS"
+    },
+    {
+      "id": "B1b",
+      "what": "the Anthropic matcher-constraint alert is ABSENT on the OpenAI arm",
+      "verdict": "PASS"
+    },
+    {
+      "id": "B2a",
+      "what": "the key was validated + saved THROUGH THE FORM",
+      "verdict": "FAIL",
+      "detail": "NOT saved — landed on http://localhost:3294/setup/ai?error=read%20ECONNRESET"
+    },
+    {
+      "id": "B2b",
+      "what": "the save attempt reached the LIVE OpenAI validation boundary",
+      "verdict": "PASS"
+    },
+    {
+      "id": "B2c",
+      "what": "the credential row is present after seeding",
+      "verdict": "PASS"
+    },
+    {
+      "id": "B3a",
+      "what": "readiness completed on OpenAI",
+      "verdict": "PASS",
+      "detail": "{\"receiptVersion\":1,\"provider\":\"openai\",\"completedAt\":\"2026-07-30T03:12:24.079Z\",\"fingerprint\":\"n/a.af003315f9d57702\"}"
+    },
+    {
+      "id": "B3b",
+      "what": "the wizard renders the completion receipt",
+      "verdict": "PASS"
+    },
+    {
+      "id": "B3c",
+      "what": "the default provider is committed to openai",
+      "verdict": "PASS",
+      "detail": "\"openai\""
+    },
+    {
+      "id": "B4a",
+      "what": "the ENTIRE OpenAI setup arm performed ZERO Anthropic egress (MEASURED)",
+      "verdict": "PASS",
+      "detail": "4 provider calls recorded in this arm; anthropic=0"
+    },
+    {
+      "id": "B4b",
+      "what": "no Anthropic skill UPLOAD happened during the OpenAI arm",
+      "verdict": "PASS"
+    },
+    {
+      "id": "B4c",
+      "what": "no container.skills PROBE happened during the OpenAI arm",
+      "verdict": "PASS"
+    },
+    {
+      "id": "B4d",
+      "what": "the OpenAI readiness path wrote no Anthropic sync rows",
+      "verdict": "PASS",
+      "detail": "sync rows=0"
+    }
+  ],
+  "pageErrors": [],
+  "receipt": {
+    "receiptVersion": 1,
+    "provider": "openai",
+    "completedAt": "2026-07-30T03:12:24.079Z",
+    "fingerprint": "n/a.af003315f9d57702"
+  },
+  "credentialPath": "seeded-after-form-failure",
+  "armProviderCalls": [
+    {
+      "phase": "B-openai-key-save",
+      "provider": "openai",
+      "method": "GET",
+      "path": "/v1/models",
+      "status": 200
+    },
+    {
+      "phase": "B-openai-key-save",
+      "provider": "openai",
+      "method": "GET",
+      "path": "/v1/models",
+      "status": 200
+    },
+    {
+      "phase": "B-openai-readiness",
+      "provider": "openai",
+      "method": "GET",
+      "path": "/v1/models",
+      "status": 200
+    },
+    {
+      "phase": "B-openai-readiness",
+      "provider": "openai",
+      "method": "GET",
+      "path": "/v1/models",
+      "status": 200
+    }
+  ]
+}

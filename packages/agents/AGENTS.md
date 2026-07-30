@@ -135,7 +135,7 @@ Never `vi.mock` a module that other files import without mocking unless you scop
 
 Test-only stubs live in `src/__tests__/__mocks__/` and are wired via `resolve.alias` in `vitest.config.ts`. Existing examples:
 
-- `__mocks__/modelcontextprotocol-server.ts` — vendored, workspace-private; tsconfig path-mapped, so vitest needs an explicit alias.
+- `__mocks__/modelcontextprotocol-server.ts` — the published npm `@modelcontextprotocol/server` (exact `2.0.0`); its dist re-imports its own `./_shims` subpath, which vite import-analysis cannot follow through a bare-package alias, so vitest needs an explicit alias to this stub.
 - `__mocks__/auth.ts`, `__mocks__/mcp-server.ts`, `__mocks__/primitive-handlers.ts`, `__mocks__/mcp-instructions.ts` — break heavy host-app import chains that pull in `better-auth`, the full connector tree, or React UI from server code.
 - `__mocks__/toast.ts` — `sonner` resolves as a CJS shim under vitest where the named `toast` export is `undefined`; the real `@/lib/toast` does `_toast.promise.bind(_toast)` at load time and crashes. The stub returns inert no-op functions.
 - `__mocks__/server-only.ts` — replaces the `server-only` import-time guard.
@@ -143,7 +143,7 @@ Test-only stubs live in `src/__tests__/__mocks__/` and are wired via `resolve.al
 
 ### Adding a new mock when a third-party package import-time-explodes
 
-When a new package added under `dependencies` or `peerDependencies` crashes vitest at module-load with `Cannot read properties of undefined (...)` or `... is not a function`, the symptom is a CJS/ESM interop mismatch — usually a CJS shim where a named export resolves `undefined` (sonner, lucide-react), or a vendored package mapped only via `tsconfig.json` paths (`@modelcontextprotocol/server`). Steps:
+When a new package added under `dependencies` or `peerDependencies` crashes vitest at module-load with `Cannot read properties of undefined (...)` or `... is not a function`, the symptom is a CJS/ESM interop mismatch — usually a CJS shim where a named export resolves `undefined` (sonner, lucide-react), or a package whose dist re-imports its own subpath exports (`@modelcontextprotocol/server`). Steps:
 
 1. Add `src/__tests__/__mocks__/<package-name>.ts` exporting the minimal shape that the production code uses at module load (typically inert no-op functions, default Proxy for icon libraries, plain objects for runtime singletons).
 2. Wire the alias in `packages/agents/vitest.config.ts` under `resolve.alias`. Place subpath aliases (`@cinatra/foo/bar`) BEFORE the bare alias (`@cinatra/foo`) so vite's prefix matcher prefers the more specific match.

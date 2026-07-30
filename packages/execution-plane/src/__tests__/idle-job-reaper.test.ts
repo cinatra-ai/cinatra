@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mintExecutionSession, sealExecutionSession } from "@cinatra-ai/llm/execution-plane";
 
 import { ExecutionBroker } from "../broker";
+import { makeVerifier, voucherFor } from "./support/voucher-fixture";
 import type { DockerCli } from "../docker-cli";
 import type {
   SandboxCommandResult,
@@ -69,11 +70,24 @@ function carrier(runId: string, nowMs: number): string {
   );
 }
 
+/**
+ * A voucher on the suite's INJECTED clock. The broker checks `iat`/`exp` against
+ * `nowMs`, so a wall-clock voucher would read as issued far in the future here.
+ */
+function vouch(clock: { now: number }, jobId: string, command: string, runId: string): string {
+  return voucherFor(jobId, command, {
+    runId,
+    iat: clock.now,
+    exp: clock.now + 30_000,
+  });
+}
+
 function makeBroker(clock: { now: number }) {
   return new ExecutionBroker({
     worker,
     auditSink: () => {},
     livenessProbe: async () => "alive",
+    voucherVerifier: makeVerifier(),
     egressPolicyResolver: () => ({ mode: "none" }),
     docker: fakeDocker,
     nowMs: () => clock.now,
@@ -97,12 +111,14 @@ describe("closeIdleJobs", () => {
 
     // The stale job is gone; a command on it is refused as unknown.
     if (stale.ok) {
-      const after = await broker.exec(stale.jobId, "echo hi");
+      const after = await broker.exec(stale.jobId, "echo hi", vouch(clock, stale.jobId, "echo hi", "run-stale"));
       expect(after).toMatchObject({ ok: false, reason: "unknown_job" });
     }
     // The fresh job still works.
     if (fresh.ok) {
-      await expect(broker.exec(fresh.jobId, "echo hi")).resolves.toMatchObject({ ok: true });
+      await expect(
+        broker.exec(fresh.jobId, "echo hi", vouch(clock, fresh.jobId, "echo hi", "run-fresh")),
+      ).resolves.toMatchObject({ ok: true });
     }
   });
 
@@ -114,7 +130,11 @@ describe("closeIdleJobs", () => {
     if (!opened.ok) return;
 
     clock.now += 10 * 60 * 1000;
-    await broker.exec(opened.jobId, "echo still-here");
+    await broker.exec(
+      opened.jobId,
+      "echo still-here",
+      vouch(clock, opened.jobId, "echo still-here", "run-active"),
+    );
     clock.now += 10 * 60 * 1000;
 
     // 20 minutes since OPEN, but only 10 since the last command.
@@ -151,6 +171,7 @@ describe("closeIdleJobs", () => {
       worker: slowWorker,
       auditSink: () => {},
       livenessProbe: async () => "alive",
+      voucherVerifier: makeVerifier(),
       egressPolicyResolver: () => ({ mode: "none" }),
       docker: fakeDocker,
       nowMs: () => clock.now,
@@ -159,7 +180,11 @@ describe("closeIdleJobs", () => {
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
 
-    const running = broker.exec(opened.jobId, "sleep-forever");
+    const running = broker.exec(
+      opened.jobId,
+      "sleep-forever",
+      vouch(clock, opened.jobId, "sleep-forever", "run-slow"),
+    );
     await new Promise((r) => setTimeout(r, 10));
     // The command is still dispatched; push the clock far past the window.
     clock.now += 60 * 60 * 1000;
@@ -177,6 +202,7 @@ describe("closeIdleJobs", () => {
       worker,
       auditSink: () => {},
       livenessProbe: async () => "alive",
+      voucherVerifier: makeVerifier(),
       egressPolicyResolver: () => ({ mode: "none" }),
       docker: fakeDocker,
       nowMs: () => clock.now,

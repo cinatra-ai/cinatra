@@ -95,6 +95,21 @@ describe("isDelegatedChatMcpToolAllowed", () => {
     }
   });
 
+  it("allows the WordPress governed-invoker primitives, denies the retired narrow reads they replaced (cinatra#2022 S7 PR-δ)", () => {
+    // wordpress_site_tool_call / wordpress_site_tools_list are the S2/S3
+    // governed-invoker primitives, chat-reachable as of this PR (ALLOWED_EXACT
+    // swap). See the file-header AMENDMENT note for the two compensating
+    // controls (S5 destructive-confirmation hook + the per-instance policy
+    // floor, now restricted+empty by default) that keep this narrow.
+    expect(isDelegatedChatMcpToolAllowed("wordpress_site_tool_call")).toBe(true);
+    expect(isDelegatedChatMcpToolAllowed("wordpress_site_tools_list")).toBe(true);
+    // The two narrow read-only entries they replaced are no longer chat-
+    // reachable under their own names (they're superseded by the generic
+    // primitives above, not additionally allowed).
+    expect(isDelegatedChatMcpToolAllowed("wordpress_instances_list")).toBe(false);
+    expect(isDelegatedChatMcpToolAllowed("wordpress_posts_list")).toBe(false);
+  });
+
   it("allows agent_run_stop (user-directed run cancellation, proposal override)", () => {
     expect(isDelegatedChatMcpToolAllowed("agent_run_stop")).toBe(true);
     // The bulk variant + resume stay denied.

@@ -10,6 +10,15 @@
  *    structured reason. The broker's own service boundary is guarded by an
  *    independently scoped service token (`verifyServiceToken`, timing-safe) —
  *    the seam the app-layer HTTP/mTLS wiring terminates on.
+ *  - AUTHORIZES EVERY COMMAND against a per-command VOUCHER (epic #1705): an
+ *    Ed25519-signed grant, minted per command by the app-layer mint site, that
+ *    binds the exact command text, the job, the session identity, the resolved
+ *    egress policy, a single-use nonce and a short expiry. The broker holds
+ *    VERIFY-ONLY public key material and is structurally incapable of minting
+ *    one. Verified BEFORE dispatch and re-checked for FRESHNESS after the
+ *    admission wait; a voucher that expired while queued releases its permit and
+ *    is answered with a one-shot revalidation challenge. The signed egress policy
+ *    is then CLAMPED against this deployment's own maximum on all three axes.
  *  - REVALIDATES LIVENESS PER COMMAND (not once at job start) via the
  *    host-injected probe: a run hard-removed by extension force_delete/purge
  *    fails the NEXT command closed and terminates the job; archive does NOT
@@ -33,6 +42,15 @@ import {
 } from "@cinatra-ai/llm/execution-plane";
 
 import { EgressRegistrationError, registerJobEgress, resolveEgress } from "./egress";
+// Per-command authorization boundary (epic #1705): the VERIFY-ONLY voucher
+// contract + the deployment egress clamp. The broker imports no signing code —
+// see the module header of authz/voucher.ts.
+import { type ExecutionVoucherVerifier } from "./authz/voucher";
+import {
+  clampEgressPolicy,
+  type EgressClampAxis,
+  type EgressDeploymentMaximum,
+} from "./authz/egress-clamp";
 import { ensureWorkspaceVolume, removeWorkspaceVolume } from "./workspace";
 // Exec-plane S2 (cinatra#1707): read-only skill staging under /skills/<slug>.
 import { stageSkillsVolume, removeSkillsVolume } from "./staging";
@@ -72,7 +90,26 @@ export type ExecutionBrokerOptions = {
   worker: SandboxWorker;
   auditSink: ExecutionAuditSink;
   livenessProbe: RunLivenessProbe;
-  /** Resolve the effective egress policy for a session (org/agent tiers). */
+  /**
+   * The per-command authorization boundary (epic #1705). REQUIRED, not optional:
+   * a broker constructed without one would be a broker that runs commands
+   * nobody authorized, and an authorization gate that can be omitted is an
+   * authorization gate that WILL be omitted. Holds VERIFY-ONLY public key
+   * material and cannot mint.
+   */
+  voucherVerifier: ExecutionVoucherVerifier;
+  /**
+   * Ceiling the DEPLOYMENT imposes on the signed egress policy (all three
+   * axes). Absent ⇒ no deployment ceiling, and the signed policy stands.
+   */
+  deploymentEgressMaximum?: EgressDeploymentMaximum;
+  /**
+   * Resolve the egress policy for a session. Since the voucher carries the
+   * policy RESOLVED AT MINT, this is no longer the dispatch input — it is the
+   * fallback used only to fill the `effectivePolicy` field of an audit record
+   * for a refusal that happened before any voucher was verified (there is no
+   * signed policy to report yet, but the row must still be complete).
+   */
   egressPolicyResolver: (session: ExecutionSession) => EgressPolicy;
   stdioSink?: ExecutionStdioSink;
   stdioRedactor?: ExecutionStdioRedactor;
@@ -88,7 +125,39 @@ export type ExecutionBrokerOptions = {
   fetchImpl?: typeof fetch;
   /** Injectable clock for hermetic tests. */
   nowMs?: () => number;
+  /** Injectable nonce source for the revalidation challenge (hermetic tests). */
+  nonceFactory?: () => string;
 };
+
+/**
+ * Bound on the per-`commandId` bookkeeping maps (revalidation attempts,
+ * outstanding challenges, executed ids). Entries are pruned by age first.
+ *
+ * At the hard cap the two REVALIDATION maps fail closed — a retry whose cap
+ * cannot be tracked is refused rather than granted an untracked challenge. The
+ * executed-id map instead evicts its oldest entry (see
+ * `recordExecutedCommandId`): refusing there would turn a bookkeeping bound into
+ * an execution outage, and that record only has to outlive the voucher that
+ * could re-present it.
+ */
+const MAX_TRACKED_COMMAND_IDS = 20_000;
+
+/**
+ * How long a `commandId` record is retained. Comfortably longer than any voucher
+ * TTL (30 s by default), so an executed command cannot be re-presented under a
+ * fresh voucher inside the window that matters.
+ *
+ * Codex round 2, finding 4 — REBUTTED and recorded: past this window the retry
+ * bookkeeping ages out, so the same `commandId` could receive a second challenge.
+ * That is deliberate. The cap exists to stop a TIGHT remint loop from holding a
+ * concurrency permit indefinitely, not to retire a `commandId` forever; a retry
+ * spaced 15 minutes apart is not that loop, its voucher must be freshly minted
+ * (the mint site re-derives and re-compares the run's OBO ceiling from scratch),
+ * and the executed-id record — the one that actually enforces idempotency — is
+ * retained for 30x the voucher TTL. A durable, unbounded-lifetime tombstone would
+ * need shared storage, which this slice deliberately does not add.
+ */
+const COMMAND_ID_RETENTION_MS = 15 * 60 * 1000;
 
 type BrokerJob = {
   jobId: string;
@@ -120,6 +189,13 @@ type BrokerJob = {
   inFlightCommands: number;
   terminated: boolean;
   terminationReason?: string;
+  /**
+   * Set when the injected liveness probe THREW rather than answering. The
+   * recorded posture keeps the command running (see `probeLiveness`), but the
+   * degraded observation rides every audit record for this job instead of being
+   * silently equated with a healthy read.
+   */
+  livenessDegraded?: boolean;
 };
 
 /**
@@ -174,6 +250,13 @@ export function toAuthzAuditEventInput(record: ExecutionAuditRecord): {
       egressTotalBytes: record.egressTotalBytes,
       wallMs: record.wallMs,
       workspaceKb: record.workspaceKb,
+      // Per-command authorization (epic #1705): the client's idempotency key,
+      // the precise voucher rejection when the refusal is an authorization
+      // refusal, and which egress axes the deployment clamp narrowed. The nonce
+      // is deliberately NOT carried — single-use, no evidentiary value.
+      commandId: record.commandId,
+      voucherRejection: record.voucherRejection,
+      egressClamped: record.egressClamped,
     },
   };
 }
@@ -227,6 +310,24 @@ export class ExecutionBroker {
    *  open-job ceiling (the live job count only reflects INSERTED jobs). */
   private readonly orgOpenReservations = new Map<string, number>();
   private readonly globalSemaphore: BoundedSemaphore;
+  /**
+   * Post-queue revalidation attempts per `commandId` — capped at ONE remint.
+   * BROKER-side on purpose: a client-side counter is a client-side promise, and
+   * an unbounded remint loop is a free way to hold a semaphore permit forever.
+   */
+  private readonly revalidationAttempts = new Map<string, { count: number; atMs: number }>();
+  /** Outstanding revalidation challenges: the nonce a remint MUST carry. */
+  private readonly revalidationChallenges = new Map<string, { nonce: string; atMs: number }>();
+  /** `commandId`s already DISPATCHED — per-command idempotency (in-memory). */
+  private readonly executedCommandIds = new Map<string, number>();
+  /**
+   * `commandId`s CONCURRENTLY in the exec pipeline. Closes the window between the
+   * idempotency check and the dispatch-time claim (there are awaits in between),
+   * so two submissions of the same commandId under two different valid nonces
+   * cannot both dispatch. Bounded by the admission ceilings — a claim is held only
+   * while a command is in this method, and the semaphores cap that population.
+   */
+  private readonly inFlightCommandIds = new Set<string>();
   private readonly opts: ExecutionBrokerOptions;
 
   constructor(opts: ExecutionBrokerOptions) {
@@ -281,7 +382,15 @@ export class ExecutionBroker {
       };
     }
     const session = opened.session;
-    const liveness = await this.opts.livenessProbe(session);
+    // Same containment as the per-command probe: a THROWING host probe must not
+    // escape into the caller (Codex round 2, finding 2). `probeLiveness` takes a
+    // job, which does not exist yet here, so inline the identical posture.
+    let liveness: "alive" | "archived" | "gone";
+    try {
+      liveness = await this.opts.livenessProbe(session);
+    } catch {
+      liveness = "alive";
+    }
     if (liveness === "gone") {
       return {
         ok: false,
@@ -361,10 +470,18 @@ export class ExecutionBroker {
 
   /**
    * Execute one command on an open job. Per-command pipeline:
-   * liveness revalidation → command-hygiene hook → quota/queue admission →
+   * VOUCHER VERIFICATION → liveness revalidation → command-hygiene hook →
+   * quota/queue admission → POST-QUEUE voucher freshness + liveness →
    * hardened dispatch → disk-quota verdict → audit + stdio retention.
+   *
+   * The voucher goes FIRST because it is the authorization boundary: an
+   * unauthorized command must not reach the run store, the hygiene hook, or the
+   * admission queue at all. The POST-QUEUE re-check exists because admission can
+   * wait unboundedly — an authorization that was live at submission may not be
+   * live at dispatch, and dispatching on it would be exactly the "authorized too
+   * early" defect the liveness re-probe already closes.
    */
-  async exec(jobId: string, command: string): Promise<ExecResult> {
+  async exec(jobId: string, command: string, voucher: string): Promise<ExecResult> {
     const job = this.jobs.get(jobId);
     if (!job) {
       return {
@@ -378,62 +495,216 @@ export class ExecutionBroker {
         `The job was terminated (${job.terminationReason ?? "unspecified"}); no further commands run on it.`);
     }
 
-    // Per-command liveness revalidation (S1 AC6): purge fails the NEXT command
-    // closed and terminates the job; archive proceeds.
-    const liveness = await this.opts.livenessProbe(job.session);
-    if (liveness === "gone") {
-      this.terminate(job, "run_removed");
-      return this.refuse(job, command, "run_removed",
-        "The bound run was hard-removed mid-job; the command is refused and the job is terminated (fail-closed).");
+    // --- the authorization boundary ----------------------------------------
+    const now = this.opts.nowMs?.() ?? Date.now();
+    this.pruneCommandBookkeeping(now);
+    const verified = this.opts.voucherVerifier.verify(voucher, {
+      jobId: job.jobId,
+      command,
+      session: {
+        orgId: job.session.orgId,
+        userId: job.session.userId,
+        surface: job.session.surface,
+        ...(job.session.runId ? { runId: job.session.runId } : {}),
+      },
+      nowMs: now,
+      requiredNonceForCommandId: (commandId) =>
+        this.revalidationChallenges.get(commandId)?.nonce,
+    });
+    if (!verified.ok) {
+      const reason: ExecFailureReason =
+        verified.rejection === "missing"
+          ? "voucher_missing"
+          : verified.rejection === "expired"
+            ? "voucher_expired"
+            : verified.rejection === "replayed"
+              ? "voucher_replayed"
+              : "voucher_invalid";
+      // The MODEL sees only the coarse reason; the precise rejection is audited.
+      return this.refuse(
+        job,
+        command,
+        reason,
+        "The command is not authorized: its per-command authorization voucher was " +
+          `rejected (${verified.rejection}). The command is refused (fail-closed).`,
+        undefined,
+        { voucherRejection: verified.rejection },
+      );
     }
+    const claims = verified.claims;
 
-    if (this.opts.commandPolicy) {
-      const verdict = this.opts.commandPolicy(job.session, command);
-      if (!verdict.allowed) {
-        return this.refuse(job, command, "command_blocked", verdict.reason);
-      }
+    // Clamp the SIGNED egress policy against this deployment's own maximum on
+    // all three axes. From here on `policy` — not the resolver — is what the
+    // command runs under, and any narrowing is audited (`egressClamped` rides
+    // EVERY record written from here on, executed and refused alike: an operator
+    // asking "why did egress fail" must see the narrowing even when the command
+    // was refused for an unrelated reason before it ever reached the sandbox).
+    const { policy: clampedPolicy, clamped } = clampEgressPolicy(
+      claims.egressPolicy,
+      this.opts.deploymentEgressMaximum,
+    );
+    const detail = { commandId: claims.commandId, egressClamped: clamped };
+
+    // Per-command idempotency, in TWO parts because `executedCommandIds` is only
+    // written at dispatch and there are awaits (the liveness probe, the admission
+    // wait) between here and there:
+    //   - `executedCommandIds` refuses a commandId that ALREADY reached the
+    //     sandbox, even under a freshly minted voucher;
+    //   - `inFlightCommandIds` refuses a commandId that is CONCURRENTLY in this
+    //     pipeline. Without it, two submissions carrying the same commandId under
+    //     two different (individually valid, individually un-replayed) nonces
+    //     would both pass the executed-check and both dispatch.
+    // The claim below is taken SYNCHRONOUSLY — no await between the check and the
+    // add — so a second submission cannot interleave into the gap. It is released
+    // in the `finally` on every path, so a refusal the client may legitimately
+    // retry (including the revalidation remint, which reuses the commandId by
+    // design) is never permanently blocked.
+    if (
+      this.executedCommandIds.has(claims.commandId) ||
+      this.inFlightCommandIds.has(claims.commandId)
+    ) {
+      return this.refuse(job, command, "command_replayed",
+        `Command ${claims.commandId} already executed (or is in flight) on this broker; the repeat is refused (idempotency).`,
+        clampedPolicy, detail);
     }
+    this.inFlightCommandIds.add(claims.commandId);
 
+    // The challenge (if any) is ANSWERED the moment `verify` accepted a voucher
+    // carrying it — `verify` consumed that nonce, so it can never be presented
+    // again. Clearing the pin HERE rather than after the admission wait matters
+    // (Codex round 2, finding 3): a remint that answers the challenge and is then
+    // refused early — hygiene hook, queue saturation — would otherwise leave the
+    // commandId pinned to an already-consumed nonce, i.e. permanently unusable.
+    // The ATTEMPT COUNT deliberately survives, so the one-remint cap still holds.
+    this.revalidationChallenges.delete(claims.commandId);
+
+    // Permit + claim accounting. The post-queue revalidation path must release
+    // the permits BEFORE it answers (see below), and the `finally` must neither
+    // double-release them nor leak the in-flight claim on any exit.
     const orgSem = this.orgSemaphore(job.session.orgId);
-    const orgAdmission = orgSem.tryAcquire();
-    if (orgAdmission === "saturated") {
-      return this.refuse(job, command, "queue_saturated",
-        "The org's execution queue is full; retry later (bounded queueing).");
-    }
-    if (orgAdmission === "queued") await orgSem.waitAcquire();
-    const globalAdmission = this.globalSemaphore.tryAcquire();
-    if (globalAdmission === "saturated") {
+    let permitsHeld = false;
+    const releasePermits = (): void => {
+      if (!permitsHeld) return;
+      permitsHeld = false;
+      this.globalSemaphore.release();
       orgSem.release();
-      return this.refuse(job, command, "queue_saturated",
-        "The global execution queue is full; retry later (bounded queueing).");
-    }
-    if (globalAdmission === "queued") await this.globalSemaphore.waitAcquire();
+    };
 
     try {
-      // Resolve the egress policy INSIDE the protected boundary: a throwing
-      // resolver must neither leak the acquired semaphore permits (the finally
-      // releases them) nor throw an unaudited error into the caller. Fall back
-      // to a `none` policy solely for the audit record on that failure.
-      let policy: EgressPolicy;
-      try {
-        policy = this.opts.egressPolicyResolver(job.session);
-      } catch (err) {
-        return await this.refuse(job, command, "egress_unavailable",
-          `Failed to resolve the egress policy: ${(err as Error).message}`, { mode: "none" });
+      // Per-command liveness revalidation (S1 AC6): purge fails the NEXT command
+      // closed and terminates the job; archive proceeds.
+      const liveness = await this.probeLiveness(job);
+      if (liveness === "gone") {
+        this.terminate(job, "run_removed");
+        return await this.refuse(job, command, "run_removed",
+          "The bound run was hard-removed mid-job; the command is refused and the job is terminated (fail-closed).",
+          clampedPolicy, detail);
       }
+
+      if (this.opts.commandPolicy) {
+        const verdict = this.opts.commandPolicy(job.session, command);
+        if (!verdict.allowed) {
+          return await this.refuse(job, command, "command_blocked", verdict.reason,
+            clampedPolicy, detail);
+        }
+      }
+
+      const orgAdmission = orgSem.tryAcquire();
+      if (orgAdmission === "saturated") {
+        return await this.refuse(job, command, "queue_saturated",
+          "The org's execution queue is full; retry later (bounded queueing).",
+          clampedPolicy, detail);
+      }
+      if (orgAdmission === "queued") await orgSem.waitAcquire();
+      const globalAdmission = this.globalSemaphore.tryAcquire();
+      if (globalAdmission === "saturated") {
+        orgSem.release();
+        return await this.refuse(job, command, "queue_saturated",
+          "The global execution queue is full; retry later (bounded queueing).",
+          clampedPolicy, detail);
+      }
+      if (globalAdmission === "queued") await this.globalSemaphore.waitAcquire();
+      permitsHeld = true;
+
+      // The signed, deployment-clamped policy IS the dispatch policy. The
+      // resolver is no longer consulted here: a policy the model's own broker
+      // re-resolved at dispatch time could differ from the one the mint site
+      // authorized, and the authorized one is the only one that may run.
+      const policy: EgressPolicy = clampedPolicy;
 
       // Re-authorize AFTER the (possibly unbounded) queue wait — a job purged or
       // terminated while queued must not execute (finding: queued commands
-      // authorized too early). Re-check termination and re-probe liveness here.
+      // authorized too early). Re-check termination, the voucher's freshness, and
+      // re-probe liveness here.
       if (job.terminated) {
         return await this.refuse(job, command, "job_terminated",
-          `The job was terminated (${job.terminationReason ?? "unspecified"}) while queued; the command is refused.`, policy);
+          `The job was terminated (${job.terminationReason ?? "unspecified"}) while queued; the command is refused.`,
+          policy, detail);
       }
-      const postQueueLiveness = await this.opts.livenessProbe(job.session);
+
+      // VOUCHER FRESHNESS, checked at every point where time may have passed. An
+      // authorization that expired while the command waited is not an
+      // authorization. Release the permit FIRST — a command that is going nowhere
+      // must not keep a concurrency slot warm across the audit write and the
+      // client's remint round-trip — then answer with a challenge the remint has
+      // to carry. Returns null when the voucher is still live.
+      const requireFreshVoucher = async (): Promise<ExecResult | null> => {
+        const atMs = this.opts.nowMs?.() ?? Date.now();
+        const fresh = this.opts.voucherVerifier.checkFreshness(claims, atMs);
+        if (fresh.ok) return null;
+        releasePermits();
+        const attempts = this.revalidationAttempts.get(claims.commandId)?.count ?? 0;
+        if (attempts >= 1) {
+          this.revalidationChallenges.delete(claims.commandId);
+          return await this.refuse(job, command, "revalidation_exhausted",
+            "The command's authorization expired again before it could run; it will not " +
+              "be revalidated a second time (fail-closed). Resubmit as a new command.",
+            policy, { ...detail, voucherRejection: fresh.rejection });
+        }
+        if (
+          this.revalidationAttempts.size >= MAX_TRACKED_COMMAND_IDS ||
+          this.revalidationChallenges.size >= MAX_TRACKED_COMMAND_IDS
+        ) {
+          // Cannot track the retry ⇒ cannot cap it ⇒ refuse rather than issue an
+          // untracked challenge.
+          return await this.refuse(job, command, "revalidation_exhausted",
+            "The broker cannot track another revalidation; the command is refused (fail-closed).",
+            policy, { ...detail, voucherRejection: fresh.rejection });
+        }
+        this.revalidationAttempts.set(claims.commandId, { count: attempts + 1, atMs });
+        const nonce = this.opts.nonceFactory?.() ?? randomUUID();
+        this.revalidationChallenges.set(claims.commandId, { nonce, atMs });
+        await this.audit(job, command, {
+          decision: "refused",
+          reason: "revalidation_required",
+          policy,
+          ...detail,
+          voucherRejection: fresh.rejection,
+        });
+        return {
+          ok: false,
+          reason: "revalidation_required",
+          message:
+            "The command's authorization expired before it could run. Remint the " +
+            "voucher for this commandId carrying the returned nonce and resubmit once.",
+          revalidation: {
+            commandId: claims.commandId,
+            nonce,
+            aud: this.opts.voucherVerifier.aud,
+          },
+        };
+      };
+
+      // Check 1 — right out of the admission queue, which is the unbounded wait.
+      const afterQueue = await requireFreshVoucher();
+      if (afterQueue) return afterQueue;
+
+      const postQueueLiveness = await this.probeLiveness(job);
       if (postQueueLiveness === "gone") {
         this.terminate(job, "run_removed");
         return await this.refuse(job, command, "run_removed",
-          "The bound run was hard-removed while the command was queued; refused and the job is terminated (fail-closed).", policy);
+          "The bound run was hard-removed while the command was queued; refused and the job is terminated (fail-closed).",
+          policy, detail);
       }
 
       // resolveEgress can throw (e.g. a gateway-requiring mode with no gateway
@@ -448,7 +719,8 @@ export class ExecutionBroker {
         });
       } catch (err) {
         return await this.refuse(job, command, "egress_unavailable",
-          `Failed to resolve egress for the command: ${(err as Error).message}`, policy);
+          `Failed to resolve egress for the command: ${(err as Error).message}`, policy,
+          detail);
       }
       // Register the per-job token + policy at the gateway BEFORE the sandbox
       // runs (unregistered tokens are refused by the gateway; this is what makes
@@ -464,12 +736,26 @@ export class ExecutionBroker {
         } catch (err) {
           if (err instanceof EgressRegistrationError) {
             return await this.refuse(job, command, "egress_unavailable",
-              `Egress gateway registration failed (${err.message}); the command is refused (fail-closed).`, policy);
+              `Egress gateway registration failed (${err.message}); the command is refused (fail-closed).`, policy,
+              detail);
           }
           throw err;
         }
       }
 
+      // Check 2 — IMMEDIATELY before dispatch (Codex round 2, finding 1). The
+      // post-queue check above is not sufficient on its own: the liveness re-probe
+      // and the gateway registration are both awaited network/store calls, and a
+      // slow one could carry the voucher past its expiry between "still fresh" and
+      // "running". The authorization must be live at the instant the sandbox is
+      // handed the command, not merely at the instant admission was won.
+      const beforeDispatch = await requireFreshVoucher();
+      if (beforeDispatch) return beforeDispatch;
+
+      // Claim the commandId at the LAST point before dispatch: everything above
+      // is a refusal the client may legitimately retry, everything below has
+      // (or may have) touched the sandbox.
+      this.recordExecutedCommandId(claims.commandId, this.opts.nowMs?.() ?? Date.now());
       const seq = job.seq++;
       job.lastActivityMs = this.opts.nowMs?.() ?? Date.now();
       job.inFlightCommands += 1;
@@ -500,28 +786,46 @@ export class ExecutionBroker {
         // masked as a generic worker error.
         if (err instanceof EnvironmentMountRefusedError) {
           return await this.refuse(job, command, "environment_untrusted",
-            `The job's declared execution environment could not be trusted (${err.reason}); the command is refused (fail-closed).`, policy);
+            `The job's declared execution environment could not be trusted (${err.reason}); the command is refused (fail-closed).`, policy,
+            detail);
         }
         return await this.refuse(job, command, "worker_error",
-          `The sandbox worker failed to run the command: ${(err as Error).message}`, policy);
+          `The sandbox worker failed to run the command: ${(err as Error).message}`, policy,
+          detail);
       }
 
       if (result.termination === "disk_quota_exceeded") {
         this.terminate(job, "disk_quota_exceeded");
       }
 
-      await this.retainStdio(job, seq, result);
-      await this.audit(job, command, {
-        decision: "executed",
-        reason:
-          result.termination === "exited" ? undefined : result.termination,
-        result,
-        policy,
-      });
+      // The command HAS RUN. A retention or audit transport failure from here on
+      // must not turn a completed execution into a thrown error the caller would
+      // read as "it did not run" and retry (Codex round 2, finding 2). Both sinks
+      // are best-effort at this point; the decision was enforced before dispatch.
+      try {
+        await this.retainStdio(job, seq, result);
+      } catch {
+        // stdio retention is observability, never the decision.
+      }
+      try {
+        await this.audit(job, command, {
+          decision: "executed",
+          reason:
+            result.termination === "exited" ? undefined : result.termination,
+          result,
+          policy,
+          ...detail,
+        });
+      } catch {
+        // Same posture as the host sink's own guard.
+      }
       return { ok: true, result };
     } finally {
-      this.globalSemaphore.release();
-      orgSem.release();
+      releasePermits();
+      // Release the concurrency claim on EVERY exit. `executedCommandIds` is
+      // what keeps a DISPATCHED commandId from running twice; this set only ever
+      // bounds concurrent submissions of the same id.
+      this.inFlightCommandIds.delete(claims.commandId);
     }
   }
 
@@ -634,6 +938,26 @@ export class ExecutionBroker {
     job.terminationReason = reason;
   }
 
+  /**
+   * Liveness with a THROWING host probe contained (Codex round 2, finding 2).
+   *
+   * The injected probe's recorded contract already answers `alive` on a store
+   * READ ERROR — killing every in-flight sandbox on a transient blip is the worse
+   * failure — so a probe that THROWS is the same class of event reaching the seam
+   * a different way, and gets the same posture rather than an exception escaping
+   * `exec`. It is a HOST BUG either way, so it is not silently equated with a
+   * healthy read: the audit record carries `livenessDegraded`, exactly as the
+   * mint site records its own degraded probe.
+   */
+  private async probeLiveness(job: BrokerJob): Promise<"alive" | "archived" | "gone"> {
+    try {
+      return await this.opts.livenessProbe(job.session);
+    } catch {
+      job.livenessDegraded = true;
+      return "alive";
+    }
+  }
+
   private async retainStdio(
     job: BrokerJob,
     seq: number,
@@ -649,17 +973,71 @@ export class ExecutionBroker {
     });
   }
 
+  /**
+   * Age out the per-`commandId` bookkeeping. Called on every exec so the maps
+   * track only what is still meaningful; the hard caps in the paths that WRITE
+   * them are the second, fail-closed bound.
+   */
+  private pruneCommandBookkeeping(nowMs: number): void {
+    const cutoff = nowMs - COMMAND_ID_RETENTION_MS;
+    for (const [id, at] of this.executedCommandIds) {
+      if (at <= cutoff) this.executedCommandIds.delete(id);
+    }
+    for (const [id, entry] of this.revalidationAttempts) {
+      if (entry.atMs <= cutoff) this.revalidationAttempts.delete(id);
+    }
+    for (const [id, entry] of this.revalidationChallenges) {
+      if (entry.atMs <= cutoff) this.revalidationChallenges.delete(id);
+    }
+  }
+
+  /**
+   * Claim a `commandId` as dispatched. At the hard cap the OLDEST record is
+   * dropped: the alternative — refusing the dispatch — would turn a bookkeeping
+   * bound into an execution outage, and the record only needs to outlive the
+   * voucher that could re-present it (COMMAND_ID_RETENTION_MS ≫ any voucher TTL).
+   * The pruning above keeps this eviction unreachable in practice.
+   */
+  private recordExecutedCommandId(commandId: string, nowMs: number): void {
+    if (this.executedCommandIds.size >= MAX_TRACKED_COMMAND_IDS) {
+      const oldest = this.executedCommandIds.keys().next().value as string | undefined;
+      if (oldest !== undefined) this.executedCommandIds.delete(oldest);
+    }
+    this.executedCommandIds.set(commandId, nowMs);
+    this.revalidationAttempts.delete(commandId);
+    this.revalidationChallenges.delete(commandId);
+  }
+
+  /** Audit-only egress tier for a refusal with no signed policy. Never throws. */
+  private resolvePolicyForAudit(job: BrokerJob): EgressPolicy {
+    try {
+      return this.opts.egressPolicyResolver(job.session);
+    } catch {
+      return { mode: "none" };
+    }
+  }
+
   private async refuse(
     job: BrokerJob,
     command: string,
     reason: ExecFailureReason,
     message: string,
     policy?: EgressPolicy,
+    voucherDetail?: {
+      commandId?: string;
+      voucherRejection?: string;
+      egressClamped?: readonly EgressClampAxis[];
+    },
   ): Promise<ExecResult> {
     await this.audit(job, command, {
       decision: "refused",
       reason,
-      policy: policy ?? this.opts.egressPolicyResolver(job.session),
+      // No signed policy yet (a pre-voucher refusal) ⇒ fall back to the resolver
+      // purely so the audit row carries an egress tier at all. A THROWING
+      // resolver must not turn a refusal into an unhandled rejection — the
+      // refusal is the decision, the tier is only decoration on the record.
+      policy: policy ?? this.resolvePolicyForAudit(job),
+      ...(voucherDetail ?? {}),
     });
     return { ok: false, reason, message };
   }
@@ -672,6 +1050,9 @@ export class ExecutionBroker {
       reason?: string;
       result?: SandboxCommandResult;
       policy: EgressPolicy;
+      commandId?: string;
+      voucherRejection?: string;
+      egressClamped?: readonly EgressClampAxis[];
     },
   ): Promise<void> {
     const record: ExecutionAuditRecord = {
@@ -680,10 +1061,24 @@ export class ExecutionBroker {
       userId: job.session.userId,
       surface: job.session.surface,
       ...(job.session.runId ? { runId: job.session.runId } : {}),
+      // NOTE (Codex round 2, finding 5 — REBUTTED): `command` is the raw command
+      // text and is PRE-EXISTING on this record. It never reaches an audit row:
+      // `toAuthzAuditEventInput` above deliberately omits it (and the whole
+      // per-destination egress list), the host sink is that projection, and the
+      // authz kernel additionally strips its own sensitive-key blocklist on write.
+      // The field stays because the in-process record is also what the stdio
+      // retention/redaction seam is correlated against. Do not add it to the
+      // projection.
       command,
       cwd: SANDBOX_WORKSPACE_DIR,
       decision: detail.decision,
       ...(detail.reason ? { reason: detail.reason } : {}),
+      ...(detail.commandId ? { commandId: detail.commandId } : {}),
+      ...(job.livenessDegraded ? { livenessDegraded: true } : {}),
+      ...(detail.voucherRejection ? { voucherRejection: detail.voucherRejection } : {}),
+      ...(detail.egressClamped && detail.egressClamped.length > 0
+        ? { egressClamped: [...detail.egressClamped] }
+        : {}),
       ...(detail.result
         ? {
             exitCode: detail.result.exitCode,
