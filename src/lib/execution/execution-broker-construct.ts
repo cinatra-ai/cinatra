@@ -17,20 +17,34 @@ import "server-only";
 //   * the EGRESS POLICY       → the instance settings, resolved onto the
 //     attributing gateway the boot phase brings up (deliverable 4).
 //
+// It also arms the PER-COMMAND AUTHORIZATION BOUNDARY (epic #1705): it resolves
+// the Ed25519 voucher keypair, hands the broker the VERIFY-ONLY half plus this
+// deployment's egress ceiling, and builds the mint side
+// (`execution-voucher-mint.ts`) that re-derives and containment-compares each
+// run's OBO ceiling before signing a per-command grant. Both halves are wired
+// here because this is the one place that holds the run store, the audit kernel
+// and the broker at the same time — and the boot handshake goes through the
+// boundary too, so a green handshake is evidence the boundary works.
+//
 // Separated from the boot phase itself so the phase module stays free of the
 // heavy `@cinatra-ai/execution-plane` graph (the phase list is imported by unit
 // tests); the phase reaches this module only on the local-dev branch.
 
+import { generateKeyPairSync, randomUUID } from "node:crypto";
 import * as path from "node:path";
 
-import { readAgentRunById } from "@cinatra-ai/agents";
+import { readAgentRunById, readAgentTemplateById } from "@cinatra-ai/agents";
 import {
   createBrokerSandboxExecutor,
   DEFAULT_SANDBOX_NETWORK,
   ExecutionBroker,
+  ExecutionVoucherVerifier,
   LocalDevSandboxWorker,
   startLocalGateway,
   toAuthzAuditEventInput,
+  type CommandVoucherMinter,
+  type EgressDeploymentMaximum,
+  type EgressMode,
   type EgressPolicy,
   type ExecutionAuditRecord,
   type LocalGateway,
@@ -44,6 +58,14 @@ import {
 import type { SandboxExecutor } from "@cinatra-ai/llm";
 
 import { logAuditEvent } from "@/lib/authz/audit";
+import {
+  createCommandVoucherMinter,
+  createEd25519VoucherSigner,
+  DEFAULT_BROKER_IDENTITY_URI,
+  VoucherSigningKeyError,
+  type VoucherMintAuditEvent,
+  type VoucherSigner,
+} from "@/lib/execution/execution-voucher-mint";
 import type {
   ExecutionBrokerGatewayInfo,
   ExecutionBrokerHandshake,
@@ -171,6 +193,144 @@ export function createRunLivenessProbe(): (
   };
 }
 
+// ---------------------------------------------------------------------------
+// The per-command authorization boundary (epic #1705) — host-side seams
+// ---------------------------------------------------------------------------
+
+/**
+ * This broker's own identity, which every voucher's `aud` must equal. In a
+ * managed placement it is the URI SAN of the broker's service certificate — the
+ * same name the mTLS peer check terminates on — so "who is this voucher for" and
+ * "who am I" come from one source of truth instead of two configs that drift.
+ */
+export function resolveBrokerIdentity(env: Record<string, string | undefined>): string {
+  return env.EXECUTION_BROKER_IDENTITY_URI?.trim() || DEFAULT_BROKER_IDENTITY_URI;
+}
+
+export type VoucherKeyMaterial = {
+  signer: VoucherSigner;
+  /** True when the keypair was generated for THIS process (see below). */
+  ephemeral: boolean;
+};
+
+/**
+ * Resolve the voucher keypair.
+ *
+ *  - `EXECUTION_VOUCHER_SIGNING_KEY` set (Ed25519 PKCS#8 PEM) ⇒ use it. The
+ *    broker's verify half is DERIVED from it, so the two can never be a
+ *    mismatched pair.
+ *  - Absent ⇒ generate an EPHEMERAL keypair for this process. That is sound for
+ *    the only operable placement today (`local-dev`, broker in-process): the
+ *    private key never leaves the process that already holds
+ *    `EXECUTION_BROKER_SECRET`, and the public half goes no further than the
+ *    in-process broker. It is NOT sound for an out-of-process broker — a
+ *    restart would invalidate every outstanding voucher and a second app
+ *    instance would sign with a key the broker never trusted — so the remote
+ *    placement (not wired in this slice) MUST configure the key explicitly.
+ *
+ * Deliberately no "public key only" mode: a host that cannot sign cannot
+ * authorize any command, so the plane must fail to come up rather than come up
+ * refusing everything.
+ */
+export function resolveVoucherKeyMaterial(
+  env: Record<string, string | undefined>,
+): VoucherKeyMaterial {
+  const configured = env.EXECUTION_VOUCHER_SIGNING_KEY?.trim();
+  if (configured) {
+    return { signer: createEd25519VoucherSigner(configured), ephemeral: false };
+  }
+  const { privateKey } = generateKeyPairSync("ed25519");
+  return { signer: createEd25519VoucherSigner(privateKey), ephemeral: true };
+}
+
+/**
+ * The DEPLOYMENT egress ceiling, read from the broker's own scoped environment —
+ * never from the tenant-editable settings store. That separation is the point:
+ * instance settings choose a tier, the deployment bounds what any tier may
+ * reach, and the broker clamps the signed policy against this on all three axes.
+ *
+ * An UNRECOGNIZED mode is a hard failure, not a silent default: a typo in a
+ * ceiling must be loud, and guessing either widens the ceiling (unsafe) or
+ * narrows it to `none` (a mystery outage).
+ */
+export function resolveDeploymentEgressMaximum(
+  env: Record<string, string | undefined>,
+): { ok: true; maximum?: EgressDeploymentMaximum } | { ok: false; reason: string } {
+  const rawMode = env.EXECUTION_EGRESS_MAX_MODE?.trim();
+  const rawAllowlist = env.EXECUTION_EGRESS_MAX_ALLOWLIST?.trim();
+  const rawBytes = env.EXECUTION_EGRESS_MAX_BYTES_PER_JOB?.trim();
+  if (!rawMode && !rawAllowlist && !rawBytes) return { ok: true };
+
+  let mode: EgressMode = "default_internet";
+  if (rawMode) {
+    if (rawMode !== "none" && rawMode !== "allowlist" && rawMode !== "default_internet") {
+      return {
+        ok: false,
+        reason: `EXECUTION_EGRESS_MAX_MODE="${rawMode}" is not one of none | allowlist | default_internet`,
+      };
+    }
+    mode = rawMode;
+  }
+  const allowlist = (rawAllowlist ?? "")
+    .split(",")
+    .map((h) => h.trim())
+    .filter((h) => h.length > 0);
+  let maxBytesPerJob: number | undefined;
+  if (rawBytes) {
+    const parsed = Number(rawBytes);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return {
+        ok: false,
+        reason: `EXECUTION_EGRESS_MAX_BYTES_PER_JOB="${rawBytes}" is not a non-negative number`,
+      };
+    }
+    maxBytesPerJob = Math.floor(parsed);
+  }
+  return {
+    ok: true,
+    maximum: {
+      mode,
+      ...(allowlist.length > 0 ? { allowlist } : {}),
+      ...(maxBytesPerJob !== undefined ? { maxBytesPerJob } : {}),
+    },
+  };
+}
+
+/**
+ * Audit sink for the MINT side. A mint denial is the authorization decision
+ * itself — an OBO ceiling that no longer contains the run's re-derived chain, a
+ * hard-removed run — and it never reaches the broker (no voucher is issued), so
+ * it must be recorded here or it is recorded nowhere. `decision: "denied"` maps
+ * to a denied authz row; a successful mint maps to an allowed one, which is what
+ * makes "the ceiling was checked" auditable rather than merely asserted.
+ */
+export function createVoucherMintAuditSink(): (event: VoucherMintAuditEvent) => Promise<void> {
+  return async (event: VoucherMintAuditEvent): Promise<void> => {
+    try {
+      await logAuditEvent({
+        organizationId: event.orgId,
+        actorPrincipalId: event.userId,
+        actorPrincipalType: "model",
+        authSource: "agent",
+        resourceType: "execution_command_voucher",
+        resourceId: event.jobId,
+        operation: "sandbox_authorize",
+        decision: event.decision === "minted" ? "allowed" : "denied",
+        ...(event.runId ? { runId: event.runId } : {}),
+        metadata: {
+          surface: event.surface,
+          commandId: event.commandId,
+          denial: event.denial,
+          detail: event.detail,
+          livenessDegraded: event.livenessDegraded,
+        },
+      });
+    } catch {
+      // Same posture as the command audit sink: the decision is already made.
+    }
+  };
+}
+
 export type ConstructedExecutionBroker = {
   broker: ExecutionBroker;
   executor: SandboxExecutor;
@@ -206,6 +366,65 @@ export async function constructLocalDevExecutionBroker(input: {
   const policy = egressPolicyFromSettings(input.settings);
   const network = env.EXECUTION_SANDBOX_NETWORK?.trim() || DEFAULT_SANDBOX_NETWORK;
 
+  // The authorization boundary comes up BEFORE anything can run: a plane that
+  // cannot authorize a command must not be a plane that runs one.
+  const aud = resolveBrokerIdentity(env);
+  let keyMaterial: VoucherKeyMaterial;
+  try {
+    keyMaterial = resolveVoucherKeyMaterial(env);
+  } catch (err) {
+    return {
+      ok: false,
+      reason:
+        err instanceof VoucherSigningKeyError
+          ? `per-command voucher key material is unusable: ${err.message}`
+          : `per-command voucher key material could not be resolved: ${(err as Error).message}`,
+    };
+  }
+  const deploymentMax = resolveDeploymentEgressMaximum(env);
+  if (!deploymentMax.ok) {
+    return { ok: false, reason: `deployment egress ceiling is misconfigured: ${deploymentMax.reason}` };
+  }
+  let voucherVerifier: ExecutionVoucherVerifier;
+  try {
+    voucherVerifier = new ExecutionVoucherVerifier({
+      publicKey: keyMaterial.signer.publicKey,
+      aud,
+    });
+  } catch (err) {
+    return { ok: false, reason: `voucher verification could not be armed: ${(err as Error).message}` };
+  }
+
+  const mintVoucher: CommandVoucherMinter = createCommandVoucherMinter({
+    aud,
+    signer: keyMaterial.signer,
+    // The SAME probe the broker uses per command — one definition of `gone`.
+    livenessProbe: createRunLivenessProbe(),
+    // No actor is passed to the store read: this is an authorization DERIVATION,
+    // not a user-facing read, and routing it through the run-access gate would
+    // make the ceiling comparison depend on the very authority it is bounding.
+    readRun: async (runId) => {
+      const run = await readAgentRunById(runId);
+      if (!run) return null;
+      return {
+        id: run.id,
+        orgId: run.orgId ?? null,
+        templateId: run.templateId,
+        projectId: run.projectId,
+        oboCeiling: run.oboCeiling,
+        runBy: run.runBy,
+      };
+    },
+    readTemplate: async (templateId) => {
+      const template = await readAgentTemplateById(templateId);
+      return template
+        ? { ownerLevel: template.ownerLevel ?? null, ownerId: template.ownerId ?? null }
+        : null;
+    },
+    resolveEgressPolicy: () => policy,
+    audit: createVoucherMintAuditSink(),
+  });
+
   const worker = new LocalDevSandboxWorker({
     ...(env.CINATRA_SANDBOX_L0_IMAGE ? { imageRef: env.CINATRA_SANDBOX_L0_IMAGE } : {}),
     ...(env.EXECUTION_ENVIRONMENT_PROVENANCE_KEY
@@ -238,18 +457,20 @@ export async function constructLocalDevExecutionBroker(input: {
     worker,
     auditSink: createExecutionAuditSink(),
     livenessProbe: createRunLivenessProbe(),
+    voucherVerifier,
+    ...(deploymentMax.maximum ? { deploymentEgressMaximum: deploymentMax.maximum } : {}),
     egressPolicyResolver: () => policy,
     sandboxNetwork: network,
     ...(gateway ? { gateway: gateway.endpoint } : {}),
   });
 
-  const handshake = await runBrokerHandshake(broker);
+  const handshake = await runBrokerHandshake(broker, mintVoucher);
   if (!handshake.ok) {
     await gateway?.stop().catch(() => {});
     return { ok: false, reason: handshake.reason };
   }
 
-  const executor = createBrokerSandboxExecutor(broker);
+  const executor = createBrokerSandboxExecutor(broker, { mintVoucher });
 
   // Bound the open-job population (Codex convergence finding 3). The executor
   // memoizes one broker job per sealed carrier and a request has no
@@ -293,7 +514,7 @@ export async function constructLocalDevExecutionBroker(input: {
         if (cached && now - cached.at < LIVENESS_CACHE_MS) return cached.value;
         if (inFlight) return inFlight;
         inFlight = (async () => {
-          const result = await runBrokerHandshake(broker);
+          const result = await runBrokerHandshake(broker, mintVoucher);
           const value: ExecutionBrokerLiveness = result.ok
             ? {
                 ok: true,
@@ -328,7 +549,10 @@ type HandshakeResult =
  * Never throws — every failure mode becomes a precise `reason` string the boot
  * phase and the health surface can show an operator verbatim.
  */
-export async function runBrokerHandshake(broker: ExecutionBroker): Promise<HandshakeResult> {
+export async function runBrokerHandshake(
+  broker: ExecutionBroker,
+  mintVoucher: CommandVoucherMinter,
+): Promise<HandshakeResult> {
   let carrier: string;
   try {
     carrier = sealExecutionSession(
@@ -353,7 +577,26 @@ export async function runBrokerHandshake(broker: ExecutionBroker): Promise<Hands
   }
 
   try {
-    const executed = await broker.exec(opened.jobId, HANDSHAKE_COMMAND);
+    // The handshake is a real command, so it needs a real authorization — the
+    // boot self-check goes through the SAME per-command boundary a tenant's
+    // command does. Its session carries no run binding, so no OBO ceiling
+    // applies; everything else (audience, command binding, expiry, nonce) is
+    // enforced exactly as in production, which is what makes a green handshake
+    // evidence that the boundary itself works.
+    const commandId = `boot-handshake-${randomUUID()}`;
+    const minted = await mintVoucher({
+      sessionCarrier: carrier,
+      jobId: opened.jobId,
+      command: HANDSHAKE_COMMAND,
+      commandId,
+    });
+    if (!minted.ok) {
+      return {
+        ok: false,
+        reason: `the plane could not authorize the handshake command (${minted.reason}): ${minted.message}`,
+      };
+    }
+    const executed = await broker.exec(opened.jobId, HANDSHAKE_COMMAND, minted.voucher);
     if (!executed.ok) {
       return { ok: false, reason: `handshake command refused (${executed.reason}): ${executed.message}` };
     }

@@ -346,6 +346,7 @@
       "@cinatra-ai/llm/mcp-materializer": ["./packages/llm/src/mcp-materializer.ts"],
       "@cinatra-ai/execution-plane": ["./packages/execution-plane/src/index.ts"],
       "@cinatra-ai/execution-plane/environment/promotion": ["./packages/execution-plane/src/environment/promotion.ts"],
+      "@cinatra-ai/execution-plane/voucher": ["./packages/execution-plane/src/authz/voucher.ts"],
       "@cinatra-ai/notifications/host-adapters": ["./packages/notifications/src/host-adapters.ts"],
       "@cinatra-ai/notifications/types": ["./packages/notifications/src/types.ts"],
       "@cinatra-ai/notifications/client": ["./packages/notifications/src/client.ts"],

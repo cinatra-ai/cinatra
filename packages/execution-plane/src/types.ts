@@ -271,6 +271,31 @@ export type ExecutionAuditRecord = {
   exitCode?: number | null;
   termination?: SandboxTermination;
   imageDigest?: string;
+  /**
+   * The voucher's per-command id, when a voucher was verified for this command.
+   * Ties the audit row to the client's own idempotency key. The nonce is never
+   * recorded — it is single-use and carries no post-hoc evidentiary value.
+   */
+  commandId?: string;
+  /**
+   * Precise voucher rejection (`bad_signature`, `wrong_audience`, …) when the
+   * refusal is a voucher refusal. The MODEL only ever sees the coarse
+   * `ExecFailureReason`; the operator-grade detail lives here.
+   */
+  voucherRejection?: string;
+  /**
+   * Egress axes the broker narrowed against its deployment maximum. Present and
+   * non-empty ⇒ the tenant's configured tier did not survive the clamp, which is
+   * exactly the fact an egress investigation needs.
+   */
+  egressClamped?: string[];
+  /**
+   * True when this job's liveness probe THREW rather than answering. The recorded
+   * posture keeps the command running, so the degraded observation is recorded
+   * rather than silently equated with a healthy read (same field, same meaning as
+   * the mint site's own `livenessDegraded`).
+   */
+  livenessDegraded?: boolean;
   effectivePolicy: {
     egressMode: EgressMode;
     limits: SandboxResourceLimits;
@@ -323,6 +348,39 @@ export type ExecFailureReason =
   | "queue_saturated"
   | "command_blocked"
   | "egress_unavailable"
+  // --- per-command authorization voucher (epic #1705, the authz boundary) ---
+  /**
+   * No voucher was presented for the command. The executor also projects a MINT
+   * REFUSAL onto this reason — an OBO ceiling mismatch, a hard-removed run — since
+   * from the boundary's side the outcome is identical: no authorization exists.
+   * The mint's own precise denial rides the message and is audited at the mint site.
+   */
+  | "voucher_missing"
+  /**
+   * A voucher was presented and REJECTED: bad signature, wrong audience,
+   * malformed claims, a command/job/session binding that is not this command's,
+   * or a saturated replay cache. One reason for the whole class deliberately —
+   * a caller learns only "not authorized"; the precise `rejection` goes to the
+   * audit record, not to the model.
+   */
+  | "voucher_invalid"
+  /** The voucher was already expired when the command was submitted. */
+  | "voucher_expired"
+  /** The voucher's nonce was already consumed (replay). */
+  | "voucher_replayed"
+  /**
+   * This `commandId` already executed on this broker, or is concurrently in
+   * flight on it (idempotency). In-memory, so the guarantee is per broker
+   * PROCESS: see the `executedCommandIds` note in broker.ts.
+   */
+  | "command_replayed"
+  /**
+   * The voucher expired while the command waited for admission. The permit is
+   * released and a fresh nonce is returned: remint ONCE against that nonce.
+   */
+  | "revalidation_required"
+  /** A second post-queue expiry for the same `commandId` — no further remint. */
+  | "revalidation_exhausted"
   /**
    * The job's declared L1 environment layer failed provenance verification at
    * mount, or no host key was configured to verify it (exec-plane S3,
@@ -336,6 +394,25 @@ export type OpenJobResult =
   | { ok: true; jobId: string }
   | { ok: false; reason: OpenJobFailureReason; message: string };
 
+/**
+ * The broker's revalidation CHALLENGE, returned with `revalidation_required`.
+ * The client remints a voucher for the SAME `commandId` carrying exactly this
+ * `nonce` (the broker refuses any other nonce for that command), so the retry
+ * answers this broker's challenge and cannot itself be a replay.
+ */
+export type ExecRevalidationChallenge = {
+  commandId: string;
+  nonce: string;
+  /** The audience the reminted voucher must carry (this broker's identity). */
+  aud: string;
+};
+
 export type ExecResult =
   | { ok: true; result: SandboxCommandResult }
-  | { ok: false; reason: ExecFailureReason; message: string };
+  | {
+      ok: false;
+      reason: ExecFailureReason;
+      message: string;
+      /** Present ONLY with `revalidation_required`. */
+      revalidation?: ExecRevalidationChallenge;
+    };

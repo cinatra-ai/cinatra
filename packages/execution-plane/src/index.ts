@@ -78,7 +78,47 @@ export {
   stageSkillsVolume,
   removeSkillsVolume,
 } from "./staging";
-export { createBrokerSandboxExecutor } from "./executor";
+export {
+  createBrokerSandboxExecutor,
+  type BrokerSandboxExecutorOptions,
+  type CommandVoucherMinter,
+} from "./executor";
+
+// ---------------------------------------------------------------------------
+// The per-command authorization boundary (epic #1705). VERIFY-ONLY: the signing
+// side lives in the app layer (src/lib/execution/execution-voucher-mint.ts),
+// which is the only holder of the private key and of the run store the OBO
+// ceiling is re-derived from. The canonical wire form is exported so the mint
+// site produces byte-identical bodies without restating the format — the app
+// reaches it through the dependency-free `@cinatra-ai/execution-plane/voucher`
+// subpath, never through this barrel.
+// ---------------------------------------------------------------------------
+export {
+  ExecutionVoucherVerifier,
+  VoucherKeyMaterialError,
+  VOUCHER_VERSION,
+  VOUCHER_SIGNING_DOMAIN,
+  VOUCHER_CLOCK_SKEW_MS,
+  DEFAULT_VOUCHER_NONCE_CAPACITY,
+  canonicalVoucherPayload,
+  encodeVoucherBody,
+  voucherSigningInput,
+  assembleVoucher,
+  commandDigest,
+  type ExecutionVoucherClaims,
+  type ExecutionVoucherVerifierOptions,
+  type VoucherRejection,
+  type VoucherVerification,
+  type VoucherVerificationContext,
+} from "./authz/voucher";
+
+export {
+  clampEgressPolicy,
+  intersectAllowlists,
+  type EgressClampAxis,
+  type EgressClampResult,
+  type EgressDeploymentMaximum,
+} from "./authz/egress-clamp";
 
 export {
   GATEWAY_CONTAINER_NAME,
@@ -116,6 +156,7 @@ export {
   type OpenJobFailureReason,
   type ExecResult,
   type ExecFailureReason,
+  type ExecRevalidationChallenge,
 } from "./types";
 
 // ---------------------------------------------------------------------------
