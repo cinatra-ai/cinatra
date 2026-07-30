@@ -171,7 +171,15 @@ describe.skipIf(!LIVE)(
         const allRows = await fetchAllPages({ connectorKey: "wordpress", actor }, deps);
         const scaleRows = allRows.filter((r) => r.serverId === SCALE_SERVER_ID);
         expect(scaleRows.length).toBeGreaterThanOrEqual(SCALE_SMOKE_MIN_TOOL_COUNT);
-        expect(new Set(scaleRows.map((r) => r.name))).toEqual(new Set(wireScaleTools.map((t) => t.name as string)));
+        // Sorted-array equality (not Set equality) so a pagination bug that
+        // returns overlapping pages — duplicated tools, none actually missing
+        // — fails here: Set equality alone would ignore the duplicates and
+        // pass. The explicit uniqueness check closes the remaining gap where
+        // BOTH sides happen to carry the identical duplicate.
+        const scaleNames = scaleRows.map((r) => r.name).sort();
+        const wireNames = wireScaleTools.map((t) => t.name as string).sort();
+        expect(scaleNames).toEqual(wireNames);
+        expect(new Set(scaleNames).size).toBe(scaleNames.length);
 
         // ---- 2. The pinned default server is ALSO reachable through the same
         //         real M1 dispatch (non-empty triad-expanded read). -------------

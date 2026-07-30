@@ -331,7 +331,14 @@ describe("connector-instance-invoker — governed M1 provider-scale matrix (cina
       expect(first.rows).toHaveLength(READ_TOOL_COUNT + 2);
       expect(first.revisions.size).toBe(1); // stable, revision-pinned across pages
       const scaleNames = first.rows.filter((r) => r.serverId !== CATALOG_DEFAULT_SERVER_ID && r.name.startsWith("scalesmoke/"));
-      expect(new Set(scaleNames.map((r) => r.name))).toEqual(new Set(READ_TOOL_NAMES));
+      // Sorted-array equality (not Set equality) so a pagination bug that
+      // returns overlapping pages — duplicated tools, none actually missing
+      // — fails here: Set equality alone would ignore the duplicates and
+      // pass. The explicit uniqueness check closes the remaining gap where
+      // BOTH sides happen to carry the identical duplicate.
+      const sortedScaleNames = scaleNames.map((r) => r.name).sort();
+      expect(sortedScaleNames).toEqual([...READ_TOOL_NAMES].sort());
+      expect(new Set(sortedScaleNames).size).toBe(sortedScaleNames.length);
       expect(scaleNames).toHaveLength(READ_TOOL_COUNT); // no truncation, no dup rows
 
       // Stable ordering across two independent, fully-paginated runs.
