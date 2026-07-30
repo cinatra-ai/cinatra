@@ -1,0 +1,54 @@
+{
+  "note": "App-native archived-org write bypass allowlist (cinatra#1942 archive V2). Every row is a write site to member/invitation/teamMember/session.activeOrganizationId/activeTeamId OUTSIDE the Better-Auth dispatch-hook's view (src/lib/organization-dispatch-policy.ts). The gate fails on any scanner hit absent here (unlisted), any row the scanner no longer finds (stale), and any count drift. `scripts/**` and migration trees are out of scope by doctrine (see the gate's own module doc). Regenerate with: node scripts/audit/org-archive-bypass-scan.mjs --write-allowlist -- then RESTORE each row's `reason` (this command does not fabricate one).",
+  "version": 1,
+  "writers": [
+    {
+      "file": "src/app/teams/[teamId]/settings/member-actions.ts",
+      "ref": "raw-sql:teamMember",
+      "count": 3,
+      "reason": "GATED (not a bypass): addTeamMemberAction/removeTeamMemberAction/updateTeamMemberRoleAction all resolve authority through assertTeamMemberAuthority, which calls the shared assertTargetOrgNotArchived guard (fail-closed) right after authority resolves, before any of these three raw teamMember writes. Verified by the 'archived-org guard' test block in team-member-actions.test.ts."
+    },
+    {
+      "file": "src/app/teams/new/actions.ts",
+      "ref": "raw-sql:teamMember",
+      "count": 2,
+      "reason": "GATED upstream (not a bypass): createTeamAction only offers organizations from readTeamCreatableOrganizationsForUser, which filters isNull(archivedAt) (cinatra#1942 archive V1, merged). An archived org can never reach this insert. The two INSERT statements are the hasRoleColumn / roleless branches of the same guarded call site (only one executes per request)."
+    },
+    {
+      "file": "src/lib/auth.ts",
+      "ref": "session-column:activeOrganizationId",
+      "count": 2,
+      "reason": "System/boot-only (not a bypass): both writes are inside the first-admin/default-org bootstrap functions (ensureInitialAdminBootstrap, ensureDefaultOrganizationMembership), which always target the Default organization created by ensureDefaultOrganizationRow at instance bootstrap. Neither is a user-facing, user-chosen-org write path, so an archived org is never a reachable target here."
+    },
+    {
+      "file": "src/lib/better-auth-membership-bootstrap.ts",
+      "ref": "drizzle:betterAuthMembers",
+      "count": 2,
+      "reason": "System/boot + dev-only (not a bypass): ensureBetterAuthMembershipRow's insert+update pair has exactly two production-relevant callers, both in src/lib/auth.ts (ensureInitialAdminBootstrap, ensureDefaultOrganizationMembership — Default-org bootstrap only, see that row's reason), plus one dev-only caller in src/lib/dev-auto-setup.ts (UAT-fixture seeding, hard-gated to CINATRA_RUNTIME_MODE==='development', never runs in production)."
+    },
+    {
+      "file": "src/lib/drizzle-store.ts",
+      "ref": "raw-sql:member",
+      "count": 1,
+      "reason": "Migration/setup-only (out of scope by doctrine, not a bypass): a one-shot dedup DELETE gated on a to_regclass('public.member_org_user_uniq') probe, part of the schema-setup query list. Runs at most once per deployment as part of schema provisioning; migrations and schema setup are excluded by the same doctrine system-writer-manifest-gate.mjs cites (docs/internals/contracts/schema-migrations-and-org-write-policy.md)."
+    },
+    {
+      "file": "src/lib/organization-delete.ts",
+      "ref": "raw-sql:invitation",
+      "count": 1,
+      "reason": "Disclosed, gate-controlled infrastructure (not a V2 bypass): deleteOrganizationReferenceGuarded's invitation delete is part of the guarded org-deletion transaction (cinatra#1936/#1939), consuming guardOrgLifecycleMutation. Today the demanded capability is org.lifecycle (conditionalCapabilities fallback while the org_archive_activation gate is off), which is 'allow' in BOTH active and archived states (Decision 1) — this is deliberate pre-flip behavior, not an oversight. Post-V6-flip, delete becomes archived-only per the design (Decision 3/12); tracked by the archive-program V5/V6 PRs, out of V2's scope."
+    },
+    {
+      "file": "src/lib/organization-delete.ts",
+      "ref": "raw-sql:member",
+      "count": 1,
+      "reason": "Same disclosed, gate-controlled infrastructure as this file's raw-sql:invitation row above — see that reason. deleteOrganizationReferenceGuarded's member delete runs under the same guarded transaction."
+    },
+    {
+      "file": "src/lib/organization-delete.ts",
+      "ref": "session-column:activeOrganizationId",
+      "count": 1,
+      "reason": "Same disclosed, gate-controlled infrastructure as this file's raw-sql:invitation row above — see that reason. Clears activeOrganizationId for sessions pointed at the deleted org, inside the same guarded transaction."
+    }
+  ]
+}
