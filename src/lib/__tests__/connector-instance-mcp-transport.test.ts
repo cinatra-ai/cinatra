@@ -111,6 +111,203 @@ describe("classifyTransportError", () => {
   });
 });
 
+// cinatra — bounded session-retry (owner-ruled, PR #2255 diagnosis): the
+// pinned WordPress mcp-adapter plugin's SessionManager races concurrent
+// session creations (unprotected read-modify-write), silently dropping a
+// just-established session. The next call against it gets a clean JSON-RPC
+// -32005 "session not found", surfaced by the SDK as an HTTP 404. This is
+// its OWN classification (`session_not_found`, distinct from `session_required`
+// — "never had a session" vs "had one, it got dropped"), and triggers exactly
+// ONE transport-level retry against a freshly re-established session.
+
+describe("classifyTransportError — session_not_found (§ retry)", () => {
+  it("-32005 / 'session not found' → session_not_found, distinct from session_required", () => {
+    expect(classifyTransportError(new Error("MCP error -32005: Session not found")).code).toBe("session_not_found");
+    expect(
+      classifyTransportError(new Error("Streamable HTTP error: Error POSTing to endpoint: session not found")).code,
+    ).toBe("session_not_found");
+  });
+  it("carries httpStatus 404, matching the WP mcp-adapter's mapping", () => {
+    expect(classifyTransportError(new Error("MCP error -32005: Session not found")).httpStatus).toBe(404);
+  });
+  it("stays distinct from session_required (400 no-session, never had one)", () => {
+    expect(classifyTransportError(new Error("HTTP 400: Missing Mcp-Session-Id header (-32600)")).code).toBe(
+      "session_required",
+    );
+  });
+});
+
+/** A SEQUENCED fake client/factory for retry tests: the bounded retry spins up
+ * a brand-new client per attempt (`factory()` called again), so this queues
+ * one behavior per attempt (the LAST entry repeats if more attempts happen
+ * than entries) and tracks how many attempts/closes actually occurred — a
+ * test can assert the retry closed the dead client and minted exactly one
+ * fresh one, never looping past the bound. */
+function sequencedClient(
+  behaviors: Array<{ connectError?: unknown; error?: unknown; result?: unknown }>,
+): { factory: () => ConnectorInstanceMcpListClient; attempts: () => number; closedCount: () => number } {
+  let attempt = -1;
+  let closedCount = 0;
+  const factory = (): ConnectorInstanceMcpListClient => {
+    attempt += 1;
+    const behavior = behaviors[Math.min(attempt, behaviors.length - 1)];
+    return {
+      connect: async () => {
+        if (behavior.connectError) throw behavior.connectError;
+      },
+      callTool: async () => {
+        if (behavior.error) throw behavior.error;
+        return behavior.result;
+      },
+      listTools: async () => {
+        if (behavior.error) throw behavior.error;
+        return behavior.result;
+      },
+      close: async () => {
+        closedCount += 1;
+      },
+    };
+  };
+  return { factory, attempts: () => attempt + 1, closedCount: () => closedCount };
+}
+
+const SESSION_NOT_FOUND_ERROR = new Error("MCP error -32005: Session not found");
+
+describe("callConnectorInstanceMcpTool — bounded session-retry", () => {
+  it("success-after-retry: session_not_found once, then a fresh session succeeds", async () => {
+    const { factory, attempts, closedCount } = sequencedClient([
+      { error: SESSION_NOT_FOUND_ERROR },
+      { result: { structuredContent: { success: true } } },
+    ]);
+    await expect(
+      callConnectorInstanceMcpTool({
+        endpoint: "https://site/x",
+        authHeader: "Basic s",
+        name: "mcp-adapter-execute-ability",
+        arguments: {},
+        clientFactory: factory,
+      }),
+    ).resolves.toEqual({ success: true });
+    expect(attempts()).toBe(2); // exactly one retry — a fresh client per attempt
+    expect(closedCount()).toBe(2); // the dead client AND the fresh one both close
+  });
+
+  it("double-failure: session_not_found twice surfaces the distinct code, no further retry", async () => {
+    const { factory, attempts } = sequencedClient([{ error: SESSION_NOT_FOUND_ERROR }, { error: SESSION_NOT_FOUND_ERROR }]);
+    await expect(
+      callConnectorInstanceMcpTool({
+        endpoint: "https://site/x",
+        authHeader: "Basic s",
+        name: "mcp-adapter-execute-ability",
+        arguments: {},
+        clientFactory: factory,
+      }),
+    ).rejects.toMatchObject({ code: "session_not_found", httpStatus: 404 });
+    expect(attempts()).toBe(2); // retried exactly once, never a third attempt (no retry loop)
+  });
+
+  it("no retry on timeout — surfaces immediately, single attempt", async () => {
+    const err = new Error("aborted");
+    err.name = "AbortError";
+    const { factory, attempts } = sequencedClient([{ connectError: err }, { result: { structuredContent: {} } }]);
+    await expect(
+      callConnectorInstanceMcpTool({
+        endpoint: "https://site/x",
+        authHeader: "Basic s",
+        name: "x",
+        arguments: {},
+        clientFactory: factory,
+      }),
+    ).rejects.toMatchObject({ code: "timeout" });
+    expect(attempts()).toBe(1);
+  });
+
+  it("no retry on a genuine network error — surfaces immediately, single attempt", async () => {
+    const { factory, attempts } = sequencedClient([
+      { connectError: new Error("ECONNREFUSED") },
+      { result: { structuredContent: {} } },
+    ]);
+    await expect(
+      callConnectorInstanceMcpTool({
+        endpoint: "https://site/x",
+        authHeader: "Basic s",
+        name: "x",
+        arguments: {},
+        clientFactory: factory,
+      }),
+    ).rejects.toMatchObject({ code: "network_error" });
+    expect(attempts()).toBe(1);
+  });
+
+  it("no retry on tool_error (isError result) — surfaces immediately, single attempt", async () => {
+    const { factory, attempts } = sequencedClient([
+      { result: { isError: true, structuredContent: { error: { code: "rest_forbidden", message: "no" } } } },
+      { result: { structuredContent: {} } },
+    ]);
+    await expect(
+      callConnectorInstanceMcpTool({
+        endpoint: "https://site/x",
+        authHeader: "Basic s",
+        name: "x",
+        arguments: {},
+        clientFactory: factory,
+      }),
+    ).rejects.toMatchObject({ code: "tool_error", wpErrorCode: "rest_forbidden" });
+    expect(attempts()).toBe(1);
+  });
+
+  it("never leaks the auth header on a session_not_found error", async () => {
+    const { factory } = sequencedClient([
+      { error: new Error("MCP error -32005: Session not found (Basic secret-never-in-errors)") },
+      { error: new Error("MCP error -32005: Session not found (Basic secret-never-in-errors)") },
+    ]);
+    try {
+      await callConnectorInstanceMcpTool({
+        endpoint: "https://site/x",
+        authHeader: "Basic secret-never-in-errors",
+        name: "x",
+        arguments: {},
+        clientFactory: factory,
+      });
+    } catch (e) {
+      expect((e as InvokerError).message).not.toContain("secret-never-in-errors");
+    }
+  });
+});
+
+describe("listConnectorInstanceMcpTools — bounded session-retry", () => {
+  it("success-after-retry: session_not_found once, then a fresh session succeeds", async () => {
+    const { factory, attempts, closedCount } = sequencedClient([
+      { error: SESSION_NOT_FOUND_ERROR },
+      { result: { tools: [{ name: "a" }] } },
+    ]);
+    await expect(
+      listConnectorInstanceMcpTools({ endpoint: "https://site/x", authHeader: "Basic s", clientFactory: factory }),
+    ).resolves.toEqual([{ name: "a" }]);
+    expect(attempts()).toBe(2);
+    expect(closedCount()).toBe(2);
+  });
+
+  it("double-failure: session_not_found twice surfaces the distinct code, no further retry", async () => {
+    const { factory, attempts } = sequencedClient([{ error: SESSION_NOT_FOUND_ERROR }, { error: SESSION_NOT_FOUND_ERROR }]);
+    await expect(
+      listConnectorInstanceMcpTools({ endpoint: "https://site/x", authHeader: "Basic s", clientFactory: factory }),
+    ).rejects.toMatchObject({ code: "session_not_found", httpStatus: 404 });
+    expect(attempts()).toBe(2);
+  });
+
+  it("no retry on other errors — surfaces immediately, single attempt", async () => {
+    const { factory, attempts } = sequencedClient([
+      { error: new Error("ECONNRESET") },
+      { result: { tools: [] } },
+    ]);
+    await expect(
+      listConnectorInstanceMcpTools({ endpoint: "https://site/x", authHeader: "Basic s", clientFactory: factory }),
+    ).rejects.toMatchObject({ code: "network_error" });
+    expect(attempts()).toBe(1);
+  });
+});
+
 // cinatra#2018 S3 PR-B — the additive per-server `tools/list` wire primitive (§2).
 
 async function listTools(behavior: Parameters<typeof fakeClient>[0]) {
