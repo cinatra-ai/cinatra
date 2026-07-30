@@ -1,0 +1,15 @@
+# Lane setup manifest — cinatra#2094 S7 item 3a
+# Re-measured from the live lane at write time; machine paths redacted.
+
+host_commit: 3163ee87a24b3bcdce5dcfccc76939a809f9554d
+extensions_cloned_pinned: 111
+sync_dev_extensions_result: OK: 111/111 extension repos cloned
+anthropic_connector_pinned_sha: 9783123fe02bf4930fdaa0f24dab27ae9c0667b4
+anthropic_connector_used_for_block_A: e0a6c0990e951d8ab2a0b92f8322d3495d576d8c (OFF-PIN — see F12)
+production_build: BUILD_EXIT=0
+postgres_image: postgres:18
+core_migrations_applied: 73
+tables_in_cinatra_schema: 160
+skills_registered: 28
+human_users: 1
+operator_role: admin
