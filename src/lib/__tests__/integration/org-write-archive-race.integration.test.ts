@@ -63,9 +63,15 @@ import {
 } from "../../../../scripts/better-auth-migrate.mts";
 import {
   archiveOrganization,
+  isArchiveActivationEnabled,
   ORG_ARCHIVE_ACTIVATION_CONFIG_KEY,
 } from "@/lib/organization-archive";
 import { betterAuthPool } from "@/lib/better-auth-db";
+// STATIC import of the mocked seam (declared just below; vi.mock is hoisted
+// above all imports) — this materializes the mocked module ONCE, at file
+// load, single-threaded, so no test body can ever be the FIRST importer.
+// See the seam comment below for the CI race this closes.
+import { writeConnectorConfigToDatabase as writeConnectorConfigSeam } from "@/lib/database";
 
 // ---------------------------------------------------------------------------
 // `@/lib/database` seam for the A6 block (the LAST describe block below).
@@ -81,10 +87,23 @@ import { betterAuthPool } from "@/lib/better-auth-db";
 // here (the missing function throws inside its try/catch → fail-closed OFF →
 // every call refuses `activation-gate-off`).
 //
-// This mock spreads the stub (keeping every export other tests' transitive
-// graphs rely on) and adds ONLY the connector-config pair, backed by a plain
-// in-memory map the A6 beforeAll seeds with `{enabled:true}`. That is the
-// honest scope of what gets faked: the GATE READ — a config-row lookup whose
+// The factory is deliberately SYNCHRONOUS, and the module is additionally
+// warmed by the static import above. An earlier revision used an async
+// `importOriginal`-spreading factory, and in CI the A6 block's FIRST test —
+// five concurrent archiveOrganization calls, each performing the first-ever
+// dynamic `import("@/lib/database")` — raced that factory's mid-evaluation
+// await: one caller observed the namespace without the connector-config
+// functions, the TypeError was swallowed by the gate read's fail-closed
+// try/catch, and that call returned `activation-gate-off` (a fast ok:false
+// with zero server-side Postgres errors — exactly the failure signature;
+// the two later tests passed because the module had settled by then). A
+// synchronous factory has no mid-evaluation await to race, and the static
+// import means no runtime call is ever the first importer — both halves of
+// that failure mode are gone. The stub's own inert surface is replicated
+// below (not importOriginal-spread) so any transitive consumer still sees
+// the exact shape the alias would give it.
+//
+// Honest scope of what gets faked: the GATE READ — a config-row lookup whose
 // on/off/error semantics are already exhaustively pinned elsewhere
 // (organization-archive-gate.test.ts's six-cell matrix, the staging flip
 // script's own tests). Everything the A6 block actually proves — the real
@@ -94,17 +113,25 @@ import { betterAuthPool } from "@/lib/better-auth-db";
 // file-scoped mock is invisible to them.
 // ---------------------------------------------------------------------------
 const connectorConfigStore = vi.hoisted(() => new Map<string, unknown>());
-vi.mock("@/lib/database", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    readConnectorConfigFromDatabase: <T>(key: string, fallback: T): T =>
-      connectorConfigStore.has(key) ? (connectorConfigStore.get(key) as T) : fallback,
-    writeConnectorConfigToDatabase: (key: string, value: unknown): void => {
-      connectorConfigStore.set(key, value);
-    },
-  };
-});
+vi.mock("@/lib/database", () => ({
+  // The connector-config pair the A6 block (and the production gate read)
+  // actually uses, over the hoisted in-memory map.
+  readConnectorConfigFromDatabase: <T>(key: string, fallback: T): T =>
+    connectorConfigStore.has(key) ? (connectorConfigStore.get(key) as T) : fallback,
+  writeConnectorConfigToDatabase: (key: string, value: unknown): void => {
+    connectorConfigStore.set(key, value);
+  },
+  // tests/__stubs__/database.ts's inert surface, replicated (parameters the
+  // stubs ignore are omitted — a lower-arity function is assignable, and the
+  // repo's lint warns on trailing unused params).
+  readMetadataValueFromDatabase: <T>(_key: string, fallback: T): T => fallback,
+  writeMetadataValueToDatabase: (): void => {},
+  readRawMetadataStringFromDatabase: (): string | null => null,
+  compareAndSwapMetadataValueFromDatabase: (): boolean => false,
+  postgresSchema: "cinatra",
+  getPostgresConnectionString: (): string => "postgres://stub",
+  ensurePostgresSchema: (): void => {},
+}));
 
 const dbUrl = process.env.SUPABASE_DB_URL ?? "";
 const enabled =
@@ -1131,14 +1158,20 @@ describe.skipIf(!enabled)(
       previousSupabaseSchema = process.env.SUPABASE_SCHEMA;
       process.env.SUPABASE_SCHEMA = schema;
 
-      // Flip the activation gate ON — seeds the in-memory connector-config
-      // seam this file's `@/lib/database` mock exposes (see the mock's
-      // comment at the top of the file: the root vitest alias makes the real
-      // connector-config store structurally unreachable here, for this test
-      // AND for `archiveOrganization`'s own gate read, so both sides share
-      // this seam). NEVER the production closeout path; the real write
-      // path's own semantics are pinned by the staging flip script's tests.
-      connectorConfigStore.set(ORG_ARCHIVE_ACTIVATION_CONFIG_KEY, { enabled: true });
+      // Flip the activation gate ON through the seam's own (mocked) write —
+      // see the mock's comment at the top of the file: the root vitest alias
+      // makes the real connector-config store structurally unreachable here,
+      // for this test AND for `archiveOrganization`'s own gate read, so both
+      // sides share this seam. NEVER the production closeout path; the real
+      // write path's own semantics are pinned by the staging flip script's
+      // tests.
+      writeConnectorConfigSeam(ORG_ARCHIVE_ACTIVATION_CONFIG_KEY, { enabled: true });
+      // Sanity: read the gate back through the EXACT production path
+      // archiveOrganization consults first (which also pre-warms its dynamic
+      // import once, before any concurrent test body) — a broken seam fails
+      // the whole block LOUDLY here, instead of surfacing as a confusing
+      // per-call `activation-gate-off` refusal inside a contention test.
+      expect(await isArchiveActivationEnabled()).toBe(true);
     });
 
     afterAll(async () => {
