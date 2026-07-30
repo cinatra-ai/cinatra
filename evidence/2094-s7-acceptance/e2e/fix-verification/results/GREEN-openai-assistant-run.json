@@ -1,0 +1,105 @@
+{
+  "arm": "openai",
+  "label": "LIVE — real openai API; provider boundary OBSERVED (pass-through), never stubbed",
+  "expectedMechanism": "tool-mount",
+  "hardCap": 8,
+  "at": "2026-07-30T07:50:59.082Z",
+  "succeeded": true,
+  "successAttempt": 2,
+  "attempts": [
+    {
+      "attempt": 1,
+      "outcome": "error",
+      "providerMessageCalls": 0,
+      "statuses": []
+    },
+    {
+      "attempt": 2,
+      "outcome": "answered",
+      "providerMessageCalls": 2,
+      "statuses": [
+        200,
+        200
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "R1",
+      "what": "a REAL assistant turn completed on openai",
+      "verdict": "PASS",
+      "detail": "answered on attempt 2"
+    },
+    {
+      "id": "R2",
+      "what": "skill delivery on the completed turn was TOOL-MOUNT (a NAMED skill tool on the wire: `skill_file_read` for a skills-without-execution turn, or the merged native shell)",
+      "verdict": "PASS",
+      "detail": "[{\"type\":\"mcp\",\"name\":null,\"shellSkillCount\":null},{\"type\":\"function\",\"name\":\"skill_file_read\",\"shellSkillCount\":null},{\"type\":\"web_search\",\"name\":null,\"shellSkillCount\":null}]"
+    },
+    {
+      "id": "R2b",
+      "what": "the mounted skill vehicle carries no more than 8 skills",
+      "verdict": "PASS",
+      "detail": "shellSkillCount=null (null ⇒ the single named skill_file_read vehicle; the per-request cap is enforced by the injection contract before delivery)"
+    },
+    {
+      "id": "R3",
+      "what": "no container.skills was sent on the OpenAI path",
+      "verdict": "PASS",
+      "detail": "null"
+    },
+    {
+      "id": "R7",
+      "what": "the OpenAI assistant run performed ZERO Anthropic egress (MEASURED from the ledger)",
+      "verdict": "PASS",
+      "detail": "anthropic calls in 2 recorded provider calls: 0"
+    },
+    {
+      "id": "R8",
+      "what": "the chat surface wrote NO durable per-run delivery record (global count is 0)",
+      "verdict": "PASS",
+      "detail": "agent_run_skills_used rows with a delivery_mode at end of arm: 0 (finding F8; no turn completed in this arm, so this is corroboration, not a per-turn measurement)"
+    }
+  ],
+  "pageErrors": [],
+  "wireRecordForCompletedTurn": {
+    "at": "2026-07-30T07:50:55.287Z",
+    "phase": "GREEN2-B-assistant-run-attempt-2",
+    "provider": "openai",
+    "method": "POST",
+    "path": "/v1/responses",
+    "status": 200,
+    "ms": 785,
+    "fingerprint": {
+      "model": "gpt-5.5",
+      "hasContainer": false,
+      "containerSkillCount": null,
+      "containerSkillRefs": null,
+      "toolTypes": [
+        "mcp",
+        "function",
+        "web_search"
+      ],
+      "toolNames": [
+        {
+          "type": "mcp",
+          "name": null,
+          "shellSkillCount": null
+        },
+        {
+          "type": "function",
+          "name": "skill_file_read",
+          "shellSkillCount": null
+        },
+        {
+          "type": "web_search",
+          "name": null,
+          "shellSkillCount": null
+        }
+      ],
+      "messageCount": null,
+      "stream": true
+    }
+  },
+  "agentRunSkillsUsedRowsWithDeliveryMode": 0
+}
