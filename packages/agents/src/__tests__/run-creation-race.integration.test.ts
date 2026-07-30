@@ -119,6 +119,11 @@ describe("createAgentRun — pre-archive parent spawning post-archive child (cin
     const blocker = new Client({ connectionString: process.env.SUPABASE_DB_URL });
     await blocker.connect();
     const childId = `child-${randomUUID()}`;
+    // Teardown safety net (cinatra#1943 A5 fold-in, #2250 review thread): the
+    // assertion below expects the child creation to be refused and no row to
+    // land, but if a regression ever let it through, this run must still be
+    // cleaned up by afterAll rather than orphaned.
+    createdRunIds.push(childId);
     try {
       // An in-progress archive holds BOTH lifecycle locks (the harness — real
       // advisory locks, no timing sleep drives the ordering below).

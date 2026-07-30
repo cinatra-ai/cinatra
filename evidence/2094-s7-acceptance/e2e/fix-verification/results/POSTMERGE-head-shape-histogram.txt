@@ -1,0 +1,10 @@
+# POST-MERGE re-run — distinct row SHAPES across ALL 28 catalog skills.
+# Columns: head_manifest_files | head_revision_source | head_revision_bundle_digest_IS_NULL | payload_packageId_LIKE_custom% | head_revision = skills.active_revision_id
+# Produced from results/POSTMERGE-bundle-head-provenance.txt (all 28 rows), not a sample.
+
+  28 1|manual|f|t|t
+
+# One shape, 28 rows. Read: every catalog skill's bundle head names a ONE-FILE manifest,
+# on a 'manual'-source revision that was born WITH a file set (bundle_digest NOT NULL),
+# under a payload the custom/personal predicate classifies as custom, and that head IS
+# the skill's lifecycle head.

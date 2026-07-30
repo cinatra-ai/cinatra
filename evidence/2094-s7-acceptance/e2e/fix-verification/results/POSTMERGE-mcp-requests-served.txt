@@ -1,0 +1,16 @@
+# POST-MERGE re-run — MCP transport requests SERVED, per production boot.
+# src/lib/agent-run-context-durable.ts emits exactly ONE '[mcp-run-ctx] served-by=' line
+# per request served by the MCP transport.
+
+  prod-server.log      0 request(s) served
+  prod-server-2.log    0 request(s) served
+  prod-server-3.log    4 request(s) served
+
+  boot 1 = the Anthropic wizard arm            (no model-inference turn ran)
+  boot 2 = the Anthropic assistant run          (3/3 turns refused before the
+                                                /v1/messages call. That boot DID
+                                                emit 17 Anthropic /v1/skills/*/versions
+                                                calls from the per-turn lazy re-sync —
+                                                skill-sync traffic, carrying no MCP
+                                                block and unable to cause a callback)
+  boot 3 = the OpenAI arm + the completed turn  (1 model turn, carrying {type:mcp}, 200)
