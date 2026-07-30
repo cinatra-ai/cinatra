@@ -47,12 +47,12 @@ export default defineConfig({
     tsconfigPaths: true,
     alias: {
       "@cinatra-ai/registries": path.join(root, "packages/registries/src/index.ts"),
-      // `@modelcontextprotocol/server` is a vendored, workspace-private
-      // package mapped via the root
-      // tsconfig.json `paths` entry. vitest doesn't read that, so .tsx
+      // `@modelcontextprotocol/server` is the published npm package (exact
+      // `2.0.0`; cinatra#2218 L1 retired the vendored copy). Its dist
+      // re-imports its own `./_shims` subpath at module top, which vite's
+      // import-analysis cannot follow through a bare-package alias, so .tsx
       // tests that transitively touch `src/mcp/discovery.ts` (which imports
-      // `ResourceTemplate`) fail at vite import-analysis with
-      // "Failed to resolve import". Mirror the tsconfig mapping here.
+      // `ResourceTemplate`) fail at import-analysis. Point them at the stub.
       // Affects: grouped-setup-form-renderer.test.tsx,
       // permissions-tab-client.test.tsx (and any future test that loads
       // discovery.ts transitively).

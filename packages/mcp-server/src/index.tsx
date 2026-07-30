@@ -28,6 +28,15 @@ import { notFound, redirect } from "next/navigation";
 import { NextResponse } from "next/server";
 import { McpServer, WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
 import {
+  appendCorsHeaders,
+  createModernEraHandler,
+  normaliseAcceptHeader,
+  finishEraResponse,
+  resolveInboundEra,
+  serveLegacyEra,
+  unclassifiableEraResponse,
+} from "./inbound-era";
+import {
   createMcpRuntimeServer,
   type McpRuntimeToolServer,
 } from "./runtime-server";
@@ -451,20 +460,6 @@ async function getRequestHeaders() {
   return new Headers(incomingHeaders);
 }
 
-function appendCorsHeaders(response: Response) {
-  const nextHeaders = new Headers(response.headers);
-  nextHeaders.set("Access-Control-Allow-Origin", "*");
-  nextHeaders.set("Access-Control-Allow-Headers", "Authorization, Content-Type, MCP-Protocol-Version");
-  nextHeaders.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  nextHeaders.set("Access-Control-Expose-Headers", "WWW-Authenticate, MCP-Protocol-Version");
-
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: nextHeaders,
-  });
-}
-
 function createUnauthorizedResponse(resourceMetadataUrl: string) {
   return appendCorsHeaders(
     Response.json(
@@ -827,9 +822,13 @@ export {
 // `McpRequestContext` / `DelegatedMcpActor` by the app + agent layers.
 export {
   createMcpRuntimeServer,
+  admitToolInputSchema,
+  isStandardSchemaWithJson,
+  type McpRuntimeToolCallback,
   type McpRuntimeToolServer,
   type NavigationTarget,
   type ScreenDescriptor,
+  type ToolInputSchemaAdmission,
 } from "./runtime-server";
 export {
   mcpRequestContextStorage,
@@ -1002,12 +1001,22 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       // selectDelegatedToolPolicy in ./request-context.
       ...selectDelegatedToolPolicy(delegatedActor),
     });
+    // The two inbound serving legs — inbound posture row A. The legacy leg is an
+    // EXPLICIT stateless transport on `application/json` framing rather than the
+    // SDK's built-in `legacy: 'stateless'` fallback; the modern leg serves
+    // 2026-07-28 over the SAME per-request runtime server. Full rationale and
+    // the contract-doc citation: MCP_INBOUND_LEGACY_POSTURE in ./inbound-era.
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     });
 
     await server.connect(transport);
+
+    const modernHandler = createModernEraHandler(server, (error) => {
+      // Reporting only (the SDK never alters a response from this callback).
+      console.warn("[mcp-2026-07-28] rejected/failed modern exchange:", error.message);
+    });
 
     const parsedBody =
       request.method === "POST" ? await request.clone().json().catch(() => undefined) : undefined;
@@ -1022,29 +1031,9 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       },
     });
 
-    // The MCP Streamable HTTP spec requires Accept: application/json, text/event-stream.
-    // Some clients (e.g. OpenAI) only send Accept: application/json.
-    // In stateless + enableJsonResponse mode, SSE is never used, so we normalise
-    // the Accept header to satisfy the SDK validator without changing behaviour.
-    const acceptHeader = request.headers.get("accept") ?? "";
-    // Normalise Accept to include text/event-stream so the MCP SDK validator is
-    // satisfied even when clients only send application/json (e.g. OpenAI).
-    // Avoid `new Request(request, init)` — that form tries to copy the private
-    // #state field from `request`, which fails when Next.js's bundled undici
-    // and the vendored MCP undici are different class instances.
-    const normalisedRequest = acceptHeader.includes("text/event-stream")
-      ? request
-      : new Request(request.url, {
-          method: request.method,
-          headers: new Headers({
-            ...Object.fromEntries(request.headers.entries()),
-            accept: acceptHeader ? `${acceptHeader}, text/event-stream` : "application/json, text/event-stream",
-          }),
-          // Body must be omitted for bodyless methods to avoid "duplex" errors.
-          ...(request.method !== "GET" && request.method !== "HEAD" && request.method !== "DELETE"
-            ? { body: request.body, duplex: "half" }
-            : {}),
-        });
+    // Normalise Accept so the SDK validator admits clients that send only
+    // `application/json` (e.g. OpenAI's hosted relay). See ./inbound-era.
+    const normalisedRequest = normaliseAcceptHeader(request);
 
     // Inject clientId from the JWT into AsyncLocalStorage so tool handlers can
     // resolve the calling assistant's identity without SDK changes.
@@ -1261,29 +1250,36 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
           : undefined,
       orgWriteAuthority,
     };
+    // ERA SPLIT — inbound posture row A (see ./inbound-era). The legacy leg is
+    // today's JSON-framed stateless transport; the modern leg is the 2026-07-28
+    // handler, which also owns the ladder rejections for an envelope-less modern
+    // header (-32602) and a header/body revision mismatch (-32020).
+    const era = await resolveInboundEra(normalisedRequest, parsedBody);
+    // NEVER guess an era: an unreadable body is answered with a parse error
+    // rather than downgraded to the 2025-era codec (see resolveInboundEra).
+    if (era === "unclassifiable") {
+      await modernHandler.close().catch(() => undefined);
+      return appendCorsHeaders(unclassifiableEraResponse());
+    }
+
     const response = await mcpRequestContextStorage.run(
       requestStore,
-      () => transport.handleRequest(normalisedRequest, { parsedBody }),
+      () =>
+        era === "modern"
+          ? modernHandler.fetch(normalisedRequest, { parsedBody })
+          : serveLegacyEra(transport, normalisedRequest, parsedBody),
     ) as Response;
 
-    const responseContentType = response.headers.get("content-type");
-    const responseBody = responseContentType?.includes("application/json")
-      ? await response.clone().json().catch(() => null)
-      : await response.clone().text().catch(() => null);
-
-    await writeMcpServerLogFile({
-      label: "transport",
-      kind: "response",
-      body: {
-        method: request.method,
-        url: request.url,
-        status: response.status,
-        headers: Object.fromEntries(response.headers.entries()),
-        body: responseBody,
-      },
-    });
-
-    return appendCorsHeaders(response);
+    // Teardown + log-safe body capture + guarded logging (see ./inbound-era).
+    return appendCorsHeaders(
+      await finishEraResponse({
+        request,
+        era,
+        response,
+        modernHandler,
+        writeLog: (body) => writeMcpServerLogFile({ label: "transport", kind: "response", body }),
+      }),
+    );
   }
 
   async function protectedResourceMetadataHandler(request: Request) {

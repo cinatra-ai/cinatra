@@ -183,14 +183,14 @@ const nextConfig: NextConfig = {
     "openai",
     "@anthropic-ai/sdk",
     "@google/genai",
-    // @modelcontextprotocol/* packages are ESM-only with vendored sub-chunks and transitive
-    // deps (@cfworker/json-schema etc.) that are not in root node_modules. Keeping them
-    // external lets Node.js resolve them from packages/mcp-server/node_modules at runtime
-    // instead of Turbopack trying (and failing) to bundle the vendored dist files.
+    // @modelcontextprotocol/* packages ship chunked dist bundles with their own
+    // transitive deps (server@2.0.0 exact-pins @modelcontextprotocol/core). Keeping them
+    // external lets Node.js resolve them from node_modules at runtime instead of
+    // Turbopack pulling the whole chunk graph into the module graph. cinatra#2218 L1
+    // retired the vendored copies; the -node / -express shims were never imported.
     "@modelcontextprotocol/sdk",
     "@modelcontextprotocol/server",
-    "@modelcontextprotocol/node",
-    "@modelcontextprotocol/express",
+    "@modelcontextprotocol/core",
     // BullMQ and IORedis are server-only Redis/queue runtimes (bullmq: 5 MB). External
     // keeps them out of the Turbopack module graph entirely.
     "bullmq",

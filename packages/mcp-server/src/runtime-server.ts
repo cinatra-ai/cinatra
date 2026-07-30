@@ -4,6 +4,7 @@ import {
   type ReadResourceTemplateCallback,
   type ResourceMetadata,
   type ResourceTemplate,
+  type ToolCallback,
 } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { isDelegatedChatMcpToolAllowed } from "./delegated-chat-tool-policy";
@@ -28,6 +29,21 @@ export type NavigationTarget = {
   readonly capabilities: readonly string[];
   readonly requires: Readonly<Record<string, string>>;
 };
+
+/**
+ * The tool-handler callback of the STANDARD-SCHEMA `registerTool` overload
+ * (cinatra#2218 L1).
+ *
+ * Consumers that must cast an untyped handler MUST use this and never
+ * `Parameters<typeof server.registerTool>[2]`: `@modelcontextprotocol/server@2.0.0`
+ * added a SECOND, deprecated raw-Zod-shape overload, and `Parameters<T>` on an
+ * overloaded signature resolves to the LAST overload — which would pin the
+ * raw-shape callback and, with it, demand `inputSchema: ZodRawShape` instead of
+ * the Standard Schema every registry actually holds. Naming the callback type
+ * directly makes the cast independent of overload ORDER, and keeps it a real
+ * type rather than an `any`/`never` hole.
+ */
+export type McpRuntimeToolCallback = ToolCallback<z.ZodTypeAny>;
 
 export type McpRuntimeToolServer = {
   registerTool: InstanceType<typeof McpServer>["registerTool"];
@@ -240,8 +256,9 @@ export async function createMcpRuntimeServer(input: {
   }) as InstanceType<typeof McpServer>["registerTool"];
 
   // Capability merge order. Must be called BEFORE server.connect(transport);
-  // the vendored SDK throws SdkErrorCode.AlreadyConnected once a transport is attached
-  // (vendor/.../index.mjs:651). Done here, immediately after construction, so the
+  // the SDK throws SdkErrorCode.AlreadyConnected once a transport is attached
+  // ("Cannot register capabilities after connecting to transport"). Done here,
+  // immediately after construction, so the
   // experimental block is merged into capabilities before any registerCapabilities
   // callback or connect attempt.
   if (input.experimental) {
@@ -292,4 +309,130 @@ export async function createMcpRuntimeServer(input: {
   );
 
   return server;
+}
+
+/**
+ * Standard-Schema admission for tool `inputSchema` values that arrive from
+ * OUTSIDE the type system (cinatra#2218 L1).
+ *
+ * ## Why this exists
+ *
+ * `McpServer.registerTool`'s TYPE has always required a Standard Schema
+ * (`{ "~standard": { validate, jsonSchema } }`) — a zod v4 schema is one. Every
+ * in-repo registration passes one: each module registry types its table as
+ * `Record<string, { inputSchema: z.ZodTypeAny }>`. There is exactly one place a
+ * value the compiler never checked can reach `registerTool`: the extension
+ * replay in `src/lib/mcp-server.ts`, where a third-party extension's
+ * `registration.inputSchema` is cast to `z.ZodTypeAny`.
+ *
+ * ## What changed at the SDK boundary
+ *
+ * The retired vendored `@modelcontextprotocol/server@2.0.0-alpha.0` bundled two
+ * JSON-Schema validator providers and carried `@cfworker/json-schema` as a hard
+ * dependency. `2.0.0` drops that dependency entirely and moves the providers to
+ * the `./validators/ajv` and `./validators/cf-worker` subpath exports, to be
+ * supplied explicitly by a consumer that converts a raw JSON Schema through
+ * `fromJsonSchema()`.
+ *
+ * cinatra imports NEITHER provider, deliberately. The reason is a measured fact
+ * about the retired tree, not an assumption: passing a raw JSON Schema to the
+ * alpha's `registerTool` was accepted at registration and then **broken at
+ * runtime** — `tools/call` answered `isError` with
+ * `Cannot read properties of undefined (reading 'validate')`, and `tools/list`
+ * failed the WHOLE list with `-32603`
+ * (`Cannot read properties of undefined (reading 'jsonSchema')`), taking every
+ * other tool on the server down with it. So the alpha's tolerance was never
+ * working JSON-Schema validation; there is no behaviour to preserve, and wiring
+ * a validator in would be a shim for a path that never functioned.
+ *
+ * `2.0.0` instead THROWS at registration (`inputSchema/outputSchema/argsSchema
+ * must be a Standard Schema …`). Unguarded, that throw propagates out of the
+ * per-request capability build and fails the request — again taking down every
+ * tool. This module is the guard: a non-Standard-Schema value is refused at the
+ * boundary, loudly and by name, and only that one tool is dropped.
+ */
+
+/** A minimal structural check for the Standard Schema + JSON Schema interface the SDK requires. */
+export function isStandardSchemaWithJson(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  const standard = (value as { "~standard"?: unknown })["~standard"];
+  if (standard === null || typeof standard !== "object") return false;
+  const props = standard as { validate?: unknown; jsonSchema?: unknown };
+  if (typeof props.validate !== "function") return false;
+  // The SDK CALLS `~standard.jsonSchema.input(options)` to advertise the tool in
+  // `tools/list`, so a present-but-empty `jsonSchema` (`{}`) is NOT enough — the
+  // `input` converter must exist and be callable. This check is a cheap
+  // pre-filter only: a converter that exists and THROWS is caught by the
+  // registration try/catch at the call site, which is the real isolation.
+  if (props.jsonSchema === null || typeof props.jsonSchema !== "object") return false;
+  return typeof (props.jsonSchema as { input?: unknown }).input === "function";
+}
+
+export type ToolInputSchemaAdmission =
+  | { readonly admitted: true }
+  | { readonly admitted: false; readonly reason: string };
+
+/**
+ * Decide whether an externally-supplied `inputSchema` may be handed to
+ * `registerTool`. `undefined` is admitted — the caller substitutes its own
+ * default schema, exactly as before.
+ *
+ * Two checks, because a structural check alone is NOT enough. Measured against
+ * `server@2.0.0`:
+ *
+ * - a raw JSON Schema is rejected by `registerTool` itself, with a throw;
+ * - but a schema carrying a `~standard.jsonSchema.input` converter that THROWS
+ *   (or returns a non-object root) registers CLEANLY and then fails
+ *   `tools/list` for the ENTIRE server with `-32603` the first time the list is
+ *   served — the same whole-surface outage the retired alpha produced. No
+ *   try/catch at the registration call site can catch that, because nothing
+ *   throws there.
+ *
+ * So the converter is PROBED here, once, with the same call the SDK makes when
+ * advertising the tool. A converter that cannot produce a JSON-Schema object is
+ * refused at admission, before it can take `tools/list` down.
+ */
+export function admitToolInputSchema(value: unknown): ToolInputSchemaAdmission {
+  if (value === undefined || value === null) return { admitted: true };
+  if (!isStandardSchemaWithJson(value)) {
+    const shape =
+      typeof value === "object"
+        ? Object.prototype.hasOwnProperty.call(value, "type")
+          ? "a raw JSON Schema object"
+          : "an object without a usable `~standard.jsonSchema.input` converter"
+        : `a ${typeof value}`;
+    return {
+      admitted: false,
+      reason:
+        `inputSchema is ${shape}, not a Standard Schema. ` +
+        "@modelcontextprotocol/server@2.0.0 requires a Standard Schema with a JSON Schema " +
+        "converter (e.g. a zod v4 schema); a raw JSON Schema is rejected at registration.",
+    };
+  }
+  const convert = (
+    (value as { "~standard": { jsonSchema: { input: (options: { target: string }) => unknown } } })[
+      "~standard"
+    ]
+  ).jsonSchema.input;
+  let converted: unknown;
+  try {
+    converted = convert({ target: "draft-2020-12" });
+  } catch (error) {
+    return {
+      admitted: false,
+      reason:
+        "inputSchema's `~standard.jsonSchema.input` converter threw: " +
+        (error instanceof Error ? error.message : String(error)) +
+        ". Such a schema registers cleanly and then fails tools/list for the WHOLE server with -32603.",
+    };
+  }
+  if (converted === null || typeof converted !== "object" || Array.isArray(converted)) {
+    return {
+      admitted: false,
+      reason:
+        "inputSchema's `~standard.jsonSchema.input` converter returned " +
+        `${Array.isArray(converted) ? "an array" : typeof converted} instead of a JSON Schema object.`,
+    };
+  }
+  return { admitted: true };
 }

@@ -1,11 +1,10 @@
-// Minimal test-only stub for the vendored
-// `@modelcontextprotocol/server` package.
+// Minimal test-only stub for the `@modelcontextprotocol/server` package.
 //
-// Why a stub instead of aliasing the real vendor dist:
-//   The real dist (packages/mcp-server/vendor/modelcontextprotocol-server/dist/index.mjs)
-//   re-imports its own subpath `@modelcontextprotocol/server/_shims` at module
-//   top, which works under Node's package-exports resolver but breaks under
-//   vite's import-analysis (the bare-package alias short-circuits the
+// Why a stub instead of resolving the real package (npm `2.0.0` since
+// cinatra#2218 L1 retired the vendored copy):
+//   The real dist re-imports its own subpath `@modelcontextprotocol/server/_shims`
+//   at module top, which works under Node's package-exports resolver but breaks
+//   under vite's import-analysis (the bare-package alias short-circuits the
 //   exports map). Tests that transitively touch `src/mcp/discovery.ts` only
 //   need `ResourceTemplate` as a constructable value — they never exercise
 //   the runtime behavior. The smaller stub keeps test-only surface minimal.

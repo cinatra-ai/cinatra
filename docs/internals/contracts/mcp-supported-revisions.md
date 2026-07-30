@@ -9,8 +9,10 @@ older revision — in both directions.
 Every statement below is tagged **CURRENT** or **TARGET**.
 
 - **CURRENT** describes what the code on `main` actually does. Each claim names
-  the file (and, for vendored SDK behaviour, the bundled function) it was read
-  from. Verified against `origin/main` @ `a57a6c4` on 2026-07-29.
+  the file (and, for SDK behaviour, the bundled function) it was read from. The
+  outbound section was verified against `origin/main` @ `a57a6c4` on 2026-07-29;
+  the inbound section was rewritten by the cinatra#2218 **L1** server cutover
+  (base `03fe07a`) and names the code that implements it.
 - **TARGET** describes the policy cinatra#2218 adopts. **It is not implemented.**
 
 This distinction is the point of the document. **A policy document does not make
@@ -50,133 +52,160 @@ Two consequences that are easy to get wrong:
 
 ### CURRENT
 
-The endpoint is served by the **vendored** `@modelcontextprotocol/server`
-`2.0.0-alpha.0` at `packages/mcp-server/vendor/modelcontextprotocol-server`
-(a `file:` dependency of `packages/mcp-server/package.json`), mounted through
-`WebStandardStreamableHTTPServerTransport` constructed in
-`packages/mcp-server/src/index.tsx` with `sessionIdGenerator: undefined` and
-`enableJsonResponse: true` — stateless, one server instance per request, SSE never
-used.
+**Inbound posture: row A.** The recorded product ruling on cinatra#2218
+(2026-07-29) selected `legacy: 'stateless'` — the accepted inbound set is
+`2026-07-28` **plus** all five previously-accepted revisions. Landed by
+cinatra#2218 L1.
+
+The endpoint runs the **published** `@modelcontextprotocol/server` **`2.0.0`**
+(exact pin in `packages/mcp-server/package.json`; the vendored
+`2.0.0-alpha.0` tree at `packages/mcp-server/vendor/` is **retired and deleted**,
+together with the never-imported `-node` / `-express` shims). `2.0.0` exact-pins
+`@modelcontextprotocol/core@2.0.0` as a required transitive dependency.
 
 **Accepted set (CURRENT):**
 
 ```
-2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07
+2026-07-28, 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07
 ```
 
-Five revisions. `2026-07-28` is **not** accepted and **not** served — the string
-does not occur anywhere in the vendored tree.
+Six revisions. The five legacy entries are still the SDK default
+(`SUPPORTED_PROTOCOL_VERSIONS`, alongside `LATEST_PROTOCOL_VERSION = "2025-11-25"`
+and `DEFAULT_NEGOTIATED_PROTOCOL_VERSION = "2025-03-26"`); no cinatra source file
+passes `supportedProtocolVersions`. `2026-07-28` is the SDK's single modern
+revision (`SUPPORTED_MODERN_PROTOCOL_VERSIONS`).
 
-This set is the SDK default, not a cinatra choice. No cinatra source file passes
-`supportedProtocolVersions`, and the inbound path contains no MCP revision string
-of its own. The list is `SUPPORTED_PROTOCOL_VERSIONS` in the vendored bundle,
-alongside `LATEST_PROTOCOL_VERSION = "2025-11-25"` and
-`DEFAULT_NEGOTIATED_PROTOCOL_VERSION = "2025-03-26"`.
+**How the two eras are served (CURRENT).** `packages/mcp-server/src/inbound-era.ts`
+owns the split; `packages/mcp-server/src/index.tsx` (`transportHandler`) calls it.
+Both legs are built from the **same** per-request runtime server
+(`createMcpRuntimeServer`), so the eras can never advertise a different tool
+surface.
 
-Across all of `src/` and `packages/` (excluding `vendor/`) there is exactly **one**
-MCP revision string in cinatra source: the unused `MCP_PROTOCOL_VERSION` constant
-on the outbound side, recorded under "Known divergence — documentation, not wire"
-below. It has no effect on the inbound set.
+| Leg | Built by | Serves |
+| --- | --- | --- |
+| Legacy (2025-era) | `WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })` — `serveLegacyEra()` | the five legacy revisions, per-request stateless, `application/json` framing. `GET` / `DELETE` (2025 session operations) answered `405` / `Method not allowed.` |
+| Modern (2026-era) | `createModernEraHandler()` → `createMcpHandler(factory, { legacy: 'reject' })` | `2026-07-28` via `server/discover` behind the `_meta` envelope, plus every modern-path ladder rejection |
 
-**Where negotiation is enforced (CURRENT).** Two places, both inside the vendored
-SDK — cinatra adds no revision check of its own:
+Routing is `resolveInboundEra()`, which calls the SDK's **own** exported
+`isLegacyRequest(request, parsedBody)` predicate — the same classification step
+`createMcpHandler` runs internally — so the split never *decides* an era
+differently from the SDK. The `legacy: 'reject'` arm is never reached under row
+A: legacy-classified requests are handed to the legacy leg before the handler
+sees them.
 
-1. **Header validation** — `WebStandardStreamableHTTPServerTransport.validateProtocolVersion(req)`.
-   An `MCP-Protocol-Version` request header naming a revision outside the accepted
-   set is rejected with HTTP **400** and JSON-RPC error **`-32000`**, message
+There is a third outcome, and it is deliberate: when the classifier itself
+rejects (it does so only when the request body cannot be read at all)
+`resolveInboundEra` returns `"unclassifiable"` and the endpoint answers HTTP
+**400** / **`-32700`** `Parse error: the request body could not be read for
+protocol-era classification.` It does **not** fall back to either era —
+downgrading a classification failure to the legacy leg would let an I/O error
+silently decide a protocol downgrade.
+
+**Why row A is not wired as the literal `legacy: 'stateless'` option.** The SDK's
+built-in stateless fallback (`createLegacyStatelessFallback` in
+`@modelcontextprotocol/server@2.0.0`) constructs its legacy transport with **only**
+`sessionIdGenerator: undefined` — **without** `enableJsonResponse` — so every
+2025-era response would come back as `text/event-stream` instead of
+`application/json`, and the option exposes no way to re-enable JSON framing on
+that leg (`responseMode` governs the MODERN leg only). That would change the wire
+format for every existing caller, including the in-repo Anthropic
+function-tools probe at `src/app/configuration/mcp/llm-access/test/route.ts`,
+which POSTs `tools/list` and calls `.json()` on the result. The **accepted set**
+is row A's exactly; the **framing** existing callers see is unchanged. This is the
+user-land `isLegacyRequest()` composition upstream documents, and which the
+`legacy` option's own docs name as the way to keep an existing legacy wiring
+serving 2025 traffic beside a strict modern endpoint.
+
+**Where negotiation is enforced (CURRENT).** Three places — cinatra adds no
+revision check of its own beyond the era split:
+
+1. **Era classification** — `isLegacyRequest` / `classifyInboundRequest`. A
+   request carrying a well-formed `_meta` envelope claim naming a modern
+   revision is modern; everything else (claim-less POSTs including `initialize`,
+   body-less `GET`/`DELETE`, all-legacy batches, posted responses, non-JSON
+   bodies) is legacy. Three classes are **modern despite carrying no valid
+   envelope**, because the modern path owns their answer: an envelope-less modern
+   `MCP-Protocol-Version` header, a header/body revision mismatch, and a
+   **claim-less modern-header NOTIFICATION** — the last is accepted with `202`
+   and dropped, and requires neither `_meta` nor `Mcp-Method`.
+2. **Legacy header validation** — `WebStandardStreamableHTTPServerTransport.validateProtocolVersion(req)`.
+   An `MCP-Protocol-Version` header naming a revision outside the five is
+   rejected HTTP **400** / **`-32000`**, message
    `Bad Request: Unsupported protocol version: <v> (supported versions: <list>)`.
-   The header being **absent is accepted** — the request falls back to the version
-   negotiated at initialization, or to `DEFAULT_NEGOTIATED_PROTOCOL_VERSION`
-   (`2025-03-26`) when there is none.
-2. **Handshake negotiation** — the `initialize` handler. The requested
-   `params.protocolVersion` is **echoed back if it is in the accepted set**;
-   otherwise the server answers with the **head of the list** (`2025-11-25`).
-   An unknown or future revision is therefore **not an error** here — it is
-   silently down-negotiated.
+   An **absent** header is accepted (falls back to
+   `DEFAULT_NEGOTIATED_PROTOCOL_VERSION`, `2025-03-26`).
+3. **Legacy handshake negotiation** — the `initialize` handler echoes the
+   requested `params.protocolVersion` when it is in the set, otherwise answers
+   the **head of the list** (`2025-11-25`). An unknown or future revision is
+   **not** an error here — it is silently down-negotiated.
+
+**Modern-path rejections (CURRENT), all HTTP 400.** Measured against
+`server@2.0.0`; covered by
+`packages/mcp-server/src/__tests__/supported-revisions-inbound.test.ts`:
+
+| Condition | Answer |
+| --- | --- |
+| `MCP-Protocol-Version: 2026-07-28` with **no** `_meta` envelope | `-32602`, naming the missing envelope key(s) |
+| Envelope present but incomplete (`_meta` must carry BOTH `io.modelcontextprotocol/protocolVersion` and `io.modelcontextprotocol/clientCapabilities`) | `-32602` |
+| Envelope revision ≠ `MCP-Protocol-Version` header | `-32020` |
+| Missing `Mcp-Method` header on a modern **request** (notifications are exempt) | `-32020` |
+| Missing / mismatched / bad-Base64 `Mcp-Name` on `tools/call`, `prompts/get`, `resources/read` — and only when the body supplies the mirrored `params.name` / `params.uri`; no other method requires it | `-32020` |
+| Envelope claims a modern revision the endpoint does not serve | unsupported-protocol-version error |
 
 Two adjacent CURRENT behaviours that interact with the above:
 
-- **Accept-header normalization** (`packages/mcp-server/src/index.tsx`): when a
-  client sends `Accept: application/json` without `text/event-stream`, cinatra
-  rebuilds the request with `text/event-stream` appended so the SDK's validator
-  admits it. This **does** change the outcome — without it the request is rejected
-  — but it does not change the response format: stateless + `enableJsonResponse`
-  means SSE is never actually used either way. It exists because some hosted
-  relays send only `application/json`.
-- **CORS** (`packages/mcp-server/src/index.tsx`):
-  `Access-Control-Allow-Headers: Authorization, Content-Type, MCP-Protocol-Version`
+- **Accept-header normalization** (`normaliseAcceptHeader` in
+  `packages/mcp-server/src/inbound-era.ts`): when a client sends
+  `Accept: application/json` without `text/event-stream`, cinatra rebuilds the
+  request with `text/event-stream` appended. This **does** change the outcome on
+  the legacy leg — without it the request is answered `406`
+  (`Not Acceptable: Client must accept both application/json and text/event-stream`)
+  — but it does not change the response format: the legacy leg runs with
+  `enableJsonResponse`, so SSE is never used there either way. It exists because
+  some hosted relays send only `application/json`.
+- **CORS** (`MCP_CORS_ALLOW_HEADERS` in `packages/mcp-server/src/inbound-era.ts`):
+  `Access-Control-Allow-Headers: Authorization, Content-Type, MCP-Protocol-Version, Mcp-Method, Mcp-Name`
   and `Access-Control-Expose-Headers: WWW-Authenticate, MCP-Protocol-Version`.
-  The `2026-07-28` routing headers `Mcp-Method` and `Mcp-Name` are **not** in
-  either list.
+  `Mcp-Method` / `Mcp-Name` are **required request headers of the revision**, not
+  optional gateway-routing extras: `Mcp-Method` on every modern REQUEST, and
+  `Mcp-Name` on the three name-bearing methods above. A modern request missing a
+  required one is answered `-32020`, so their admission had to land in the SAME
+  change as the revision, or `2026-07-28` would be unusable from any
+  browser-origin client.
 
 ### TARGET
 
-`/api/mcp` serves `2026-07-28`, negotiated via `server/discover` behind the
-`_meta` envelope, on `@modelcontextprotocol/server@2.0.0`.
-
-The 2.0.0 entry point `createMcpHandler(factory, options)` decides the inbound
-accepted set through one option, `legacy: 'stateless' | 'reject'`:
-
-| `legacy` | Accepted inbound set | 2025-era traffic |
-| --- | --- | --- |
-| `'stateless'` (default, and when omitted) | `2026-07-28` **plus** all five legacy revisions | served per-request through the stateless idiom; `GET` and `DELETE` (2025 session operations) answered `405` |
-| `'reject'` | `2026-07-28` only | **not served at all** — legacy-classified requests get the unsupported-protocol-version error; legacy-classified notifications get `202` and are dropped |
-
-There is **no handler-valued `legacy` option** in 2.0.0. To keep a separate
-existing legacy wiring alive beside a strict modern endpoint, the supported
-pattern is to route in user land on the exported `isLegacyRequest(request)`
-predicate in front of a `legacy: 'reject'` handler.
-
-**The inbound accepted set is an OPEN DECISION and is deliberately not settled in
-this document.** It is a product/release-communication decision about who may call
-us, not an engineering detail, so it is owner-gated under #2218 rather than chosen
-by whoever writes this file. This is the one axis on which the document is a stub,
-and it is a stub on purpose.
-
-What makes it a ruling rather than a default: choosing `'reject'` drops **five**
-currently-accepted revisions, including the `2025-11-25` that `/api/mcp`
-negotiates today. It is not a floor-raise from `2025-06-18` to `2025-11-25` — it
-is removal of the entire legacy era. Choosing `'stateless'` keeps all five and
-adds `2026-07-28`.
-
-Both branches are fully specified below, so the only thing the ruling supplies is
-which one applies. Recording the outcome here is a **prerequisite** for L1 wiring
-the 2.0.0 handler; until then this document states no inbound TARGET floor and no
-`legacy` value.
-
-Also TARGET, independent of that decision: `Mcp-Method` and `Mcp-Name` are added
-to the CORS allow/expose lists if and when header-based routing is adopted
-(tracked separately — adoption is not automatic just because the headers exist).
+None outstanding for the inbound surface. Row A is implemented; a later
+deliberate legacy-era deprecation (row B) remains open as its own owner-gated
+decision with its own release communication.
 
 ### Behaviour on an older-revision inbound peer
 
-**CURRENT.** Accept, and down-negotiate silently.
+**CURRENT.** Accept, and down-negotiate silently — row A.
 
-- A client that requests any of the five accepted revisions in `initialize` gets
-  that exact revision echoed back and is served.
+- A client that requests any of the five legacy revisions in `initialize` gets
+  that exact revision echoed back and is served, through the 2025-era codec.
 - A client that requests a revision **outside** the set in `initialize` is **not
   rejected** — it is answered `2025-11-25` and served. Whether it can actually
   speak `2025-11-25` is not checked.
 - A client that sends an unaccepted revision in the `MCP-Protocol-Version`
   **header** on a subsequent request **is** rejected, 400 / `-32000`.
+- `GET` / `DELETE` are answered `405`.
 
-The asymmetry between those last two is SDK behaviour, not a cinatra policy: the
-handshake is lenient, the header is strict. It is recorded here because it is
-surprising and because tests must cover both paths, not one.
+The asymmetry between the middle two is SDK behaviour, not a cinatra policy: the
+handshake is lenient, the header is strict. The preservation is deliberate and
+both paths are tested.
 
-**TARGET.** Exactly one of the two rows below, selected by the ruling. Whichever
-applies, the behaviour is covered by a test in both directions — the
-acceptance-or-rejection must be a decision, not a side effect of a default.
-
-| If the ruling selects | Accepted inbound set | An older-revision inbound peer |
-| --- | --- | --- |
-| `legacy: 'stateless'` | `2026-07-28` + `2025-11-25` + `2025-06-18` + `2025-03-26` + `2024-11-05` + `2024-10-07` | **Accepted** and served through the 2025-era codec. `GET`/`DELETE` answered `405`. The lenient-handshake / strict-header asymmetry above is preserved, and the preservation is deliberate and tested. |
-| `legacy: 'reject'` | `2026-07-28` only | **Rejected** with the unsupported-protocol-version error naming `2026-07-28` as the only supported revision; legacy-classified notifications get `202` and are dropped. Requires release communication before it ships. |
+**TARGET.** None. Row B — dropping the legacy era so the accepted set is
+`2026-07-28` only, with legacy-classified notifications answered `202` and
+dropped — stays available as a one-line flip of `MCP_INBOUND_LEGACY_POSTURE`
+in `packages/mcp-server/src/inbound-era.ts`, and is covered by a test so the
+posture is provably a decision rather than a default. It requires release
+communication before it ships and is not scheduled.
 
 No third option is in scope: 2.0.0 exposes no handler-valued `legacy` option, and
-a user-land `isLegacyRequest()` split in front of `legacy: 'reject'` reproduces the
-`'stateless'` row's accepted set with more moving parts, so it is not a distinct
-policy.
+the user-land `isLegacyRequest()` split reproduces row A's accepted set (which is
+exactly what the implementation above does).
 
 ## Outbound — per client surface
 
@@ -185,7 +214,9 @@ policy.
 `@modelcontextprotocol/sdk` is declared `^1.29.0` in the root `package.json` and
 the lockfile resolves **`1.29.0`**, whose `LATEST_PROTOCOL_VERSION` is
 `2025-11-25` and whose `SUPPORTED_PROTOCOL_VERSIONS` is the same five-revision
-list as the server side.
+list the inbound legacy leg accepts. **Unchanged by cinatra#2218 L1** — that lane
+is the server surface only; the client migration to
+`@modelcontextprotocol/client@2.0.0` is its own lane.
 
 | Surface | Client | Offers on `initialize` | Accepts from server |
 | --- | --- | --- | --- |
@@ -297,9 +328,14 @@ inferred from the installed package version alone.
 
 ## What this document does not settle
 
-- **The inbound accepted set / `legacy` posture.** Open; owner-gated under #2218.
-  Recording it here is a prerequisite for wiring the 2.0.0 handler.
-- **`Mcp-Method` / `Mcp-Name` CORS admission.** Follows header-routing adoption,
-  which is a separate, non-automatic decision.
+- ~~**The inbound accepted set / `legacy` posture.**~~ **Settled: row A**
+  (recorded ruling, 2026-07-29) and implemented by cinatra#2218 L1. Row B
+  remains a separate, owner-gated future decision.
+- ~~**`Mcp-Method` / `Mcp-Name` CORS admission.**~~ **Settled: admitted.** This
+  was filed as "follows header-routing adoption, which is a separate,
+  non-automatic decision" — that framing was WRONG. The two headers are
+  REQUIRED request headers of `2026-07-28` (a modern request missing either is
+  answered `-32020` by `validateStandardRequestHeaders`), so adopting the
+  revision forces their admission; there is no separate adoption decision.
 - **Anything about conformance.** The presence of a TARGET paragraph is not
   evidence that any surface implements it.
