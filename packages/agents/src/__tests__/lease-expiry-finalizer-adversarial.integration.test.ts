@@ -36,7 +36,7 @@ import { randomUUID } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import { Client } from "pg";
 import { holdOrgLocks } from "@cinatra-ai/org-write-kernel/testing";
-import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
+import { assertSafeSchemaName, type OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { orgWriteLeaseSchemaName } from "@/lib/org-write/schema-name";
 import { createAgentRun, createAgentTemplate, transitionRunStatus } from "../store";
 import { finalizeExpiredLeaseRun } from "../run-transition";
@@ -228,6 +228,14 @@ describe("lease-expiry finalizer adversarial (cinatra#1943 A3, row 10) — real 
       // shape is separately proven by the sibling test above; this proves
       // the CONCURRENT completion attempt's behavior against an equivalent
       // committed settle.
+      //
+      // Consistency polish (cinatra#1943 A5 fold-in, #2250 review thread):
+      // `schema` is process.env-derived, read once at module load — no
+      // attacker/user-input path reaches this raw-pg interpolation — but the
+      // kernel's own raw-SQL builders (leases.ts/tickets.ts/batch.ts) always
+      // fence a schema name through this same assertion before interpolating
+      // it, so this test-only raw pg.Client query matches that convention.
+      assertSafeSchemaName(schema);
       await blocker.query(`UPDATE "${schema}".agent_runs SET status = 'failed' WHERE id = $1`, [run.id]);
       await blocker.query(
         `DELETE FROM "${schema}".org_archive_lease WHERE org_id = $1 AND run_id = $2 AND execution_attempt_id = $3`,

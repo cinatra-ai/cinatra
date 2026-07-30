@@ -133,9 +133,13 @@
     {
       "criterion": "Dual-transport coverage",
       "owner": "self",
-      "ciDependency": { "workflow": "build-image.yml", "job": "test" },
-      "status": "red",
-      "trackingIssue": 1942
+      "kernelProof": {
+        "file": "src/lib/__tests__/organization-archive-dual-transport-adversarial.test.ts",
+        "testName": "ONE shared archive flip refuses ALL THREE surfaces for the identical org — in-process BA, raw-HTTP BA, and the app-native guard"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "perpetual-loops-invariants" },
+      "status": "green",
+      "trackingIssue": 1943
     },
     {
       "criterion": "BOUNDED, deterministic eventual-successful-archive under contention (a fixed retry ceiling, not an unbounded spin)",
