@@ -14,6 +14,14 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertExtensionsPresent } from "./audit/lib/assert-extensions-cloned.mjs";
+// Shared assistant-declaration predicates (the SAME pinned mirror the manifest
+// generator's validateAgentAssistantDeclaration reuses) so this validator and
+// the fail-closed BLOCKING generator step never drift on what a config.json
+// assistant declaration is.
+import {
+  hasAssistantBlock,
+  validateAssistantConfig,
+} from "./audit/connector-access-config-gate.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, "..");
@@ -102,6 +110,33 @@ function validateAgentJson(content, filePath) {
   return errors;
 }
 
+/**
+ * Decide how ci-validate-agents should treat a `kind:"agent"` package, given
+ * which definition files exist. Pure + exported for unit testing. Fail-closed:
+ * a config.json assistant SKIP requires no oas.json AND no agent.json AND a
+ * VALID assistant declaration (the SAME pinned mirror — hasAssistantBlock +
+ * validateAssistantConfig — that the manifest generator's
+ * validateAgentAssistantDeclaration reuses, so the two never drift).
+ *
+ * @param {{ hasOas: boolean, hasLegacy: boolean, config: unknown, packageName: string }} input
+ *   `config` is the parsed cinatra/config.json object, or null when absent.
+ * @returns {{ verdict: "oas" | "legacy" | "assistant" | "assistant-invalid" | "missing", errors?: string[] }}
+ *   oas/legacy → validate that definition file; assistant → config.json-declared
+ *   assistant, defer/skip; assistant-invalid → malformed assistant block, FAIL;
+ *   missing → no definition at all, FAIL.
+ */
+export function classifyAgentDefinition({ hasOas, hasLegacy, config, packageName }) {
+  if (hasOas) return { verdict: "oas" };
+  if (hasLegacy) return { verdict: "legacy" };
+  if (config && hasAssistantBlock(config)) {
+    const errors = validateAssistantConfig(config, packageName);
+    return errors.length > 0
+      ? { verdict: "assistant-invalid", errors }
+      : { verdict: "assistant" };
+  }
+  return { verdict: "missing" };
+}
+
 async function main() {
   // Fail-closed: the agent source is cloned back before this gate
   // in CI. If the extension tree is absent/under-populated the gate must NOT
@@ -121,6 +156,7 @@ async function main() {
   let failCount = 0;
   let passCount = 0;
   let skippedNonAgents = 0;
+  let skippedAssistantDecl = 0;
 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
@@ -130,11 +166,14 @@ async function main() {
     // "oas.json not found" failures. Read the extension's declared
     // cinatra.kind from package.json and skip anything that isn't an agent.
     let kind;
+    let packageName;
     try {
       const pkg = JSON.parse(await readFile(join(agentsDir, entry.name, "package.json"), "utf8"));
       kind = pkg?.cinatra?.kind;
+      packageName = typeof pkg?.name === "string" ? pkg.name : `@cinatra-ai/${entry.name}`;
     } catch {
       kind = undefined;
+      packageName = `@cinatra-ai/${entry.name}`;
     }
     if (kind !== "agent") {
       skippedNonAgents++;
@@ -144,7 +183,51 @@ async function main() {
     // back to cinatra/agent.json (pre-200 transitional filename).
     const oasPath = join(agentsDir, entry.name, "cinatra", "oas.json");
     const legacyPath = join(agentsDir, entry.name, "cinatra", "agent.json");
-    const agentJsonPath = existsSync(oasPath) ? oasPath : legacyPath;
+    const configPath = join(agentsDir, entry.name, "cinatra", "config.json");
+    const hasOas = existsSync(oasPath);
+    const hasLegacy = existsSync(legacyPath);
+
+    // Third agent form (epic #1873 W6/W7): an ASSISTANT-kind agent declares via
+    // cinatra/config.json's `assistant` block instead of a compiled-plan
+    // oas.json / legacy agent.json. Read config.json ONLY when there is no
+    // oas.json / agent.json to validate; malformed JSON is an honest FAIL (not a
+    // silent skip). `config` stays null otherwise.
+    let config = null;
+    if (!hasOas && !hasLegacy && existsSync(configPath)) {
+      try {
+        config = JSON.parse(await readFile(configPath, "utf8"));
+      } catch (parseErr) {
+        console.error(`FAIL ${configPath}: invalid JSON — ${parseErr.message}`);
+        failCount++;
+        continue;
+      }
+    }
+
+    const classification = classifyAgentDefinition({ hasOas, hasLegacy, config, packageName });
+    if (classification.verdict === "assistant") {
+      // config.json-declared assistant — its declaration is owned + fully
+      // validated by the manifest generator's validateAgentAssistantDeclaration
+      // (a fail-closed BLOCKING build step) + the assistant-declaration gate.
+      // This legacy OAS/agent validator defers to them.
+      console.log(`SKIP ${configPath} (config.json-declared assistant — validated by the assistant-declaration gate)`);
+      skippedAssistantDecl++;
+      continue;
+    }
+    if (classification.verdict === "assistant-invalid") {
+      // A malformed assistant block still FAILS here (fail-closed; same pinned
+      // mirror the generator uses) rather than being green-washed as a skip.
+      console.error(`FAIL ${configPath}: assistant declaration invalid:`);
+      for (const e of classification.errors) console.error(`  - ${e}`);
+      failCount++;
+      continue;
+    }
+    if (classification.verdict === "missing") {
+      // No oas.json, no agent.json, no assistant declaration → genuinely broken.
+      console.error(`FAIL ${oasPath}: oas.json (or agent.json fallback) not found or unreadable`);
+      failCount++;
+      continue;
+    }
+    const agentJsonPath = hasOas ? oasPath : legacyPath;
     let raw;
     try {
       raw = await readFile(agentJsonPath, "utf8");
@@ -174,14 +257,30 @@ async function main() {
     }
   }
 
-  console.log(`\nResults: ${passCount} passed, ${failCount} failed, ${skippedNonAgents} skipped (non-agent kinds)`);
+  console.log(`\nResults: ${passCount} passed, ${failCount} failed, ${skippedNonAgents} skipped (non-agent kinds), ${skippedAssistantDecl} skipped (config.json-declared assistants)`);
   if (failCount > 0) {
     process.exit(1);
   }
   process.exit(0);
 }
 
-main().catch((err) => {
-  console.error("Unexpected error:", err);
-  process.exit(1);
-});
+// Run main() ONLY when invoked directly (node scripts/ci-validate-agents.mjs),
+// so unit tests can import the pure `classifyAgentDefinition` helper without
+// triggering the filesystem walk / process.exit.
+const isDirectRun = (() => {
+  try {
+    return (
+      import.meta.url === new URL(`file://${process.argv[1]}`).href ||
+      Boolean(process.argv[1]?.endsWith("ci-validate-agents.mjs"))
+    );
+  } catch {
+    return false;
+  }
+})();
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error("Unexpected error:", err);
+    process.exit(1);
+  });
+}
