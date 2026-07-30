@@ -707,13 +707,14 @@ jobs:
   # are named in the log each time — a green job here can never mean "the tier
   # is fine", only "the gated set did not regress".
   #
-  # RUNTIME ADDED TO CI (measured on a fresh postgres:18 + redis:8, this branch):
-  # gated step 23 files / 188 tests in ~12 s of vitest; informational whole-tier
-  # step 31 files / 277 tests in ~13 s; two DDL provisioning passes ~15 s each.
-  # With checkout + frozen install the whole job lands around 4-6 min. It is a
-  # NEW parallel job, so it adds nothing to the critical path of the required
-  # `build` gate (which it is deliberately not a prerequisite of). The sibling
-  # `a2a-unit` job adds ~2 s of vitest, likewise install-dominated (~1-2 min).
+  # RUNTIME ADDED TO CI (measured in CI on this branch, plus locally on a fresh
+  # postgres:18 + redis:8): gated step ~52 s, informational whole-tier step ~68 s,
+  # two DDL provisioning passes ~2 s each in CI. The whole job measured 3.0 min in
+  # CI before the serialisation flag and lands around 4-5 min with it — compare the
+  # sibling `extension-lifecycle-db-tests` DB job at 1.8 min. It is a NEW PARALLEL
+  # job and deliberately NOT a `build` prerequisite, so it adds nothing to the
+  # critical path of the required gate. The sibling `a2a-unit` job measured 0.5 min
+  # in CI (its suite is ~2 s; the job is checkout+install-dominated).
   agents-integration-db:
     # The name says GATED SET, not "the integration tier", on purpose: a green
     # result here means "the 23-file gated set did not regress", never "all 31
@@ -797,12 +798,29 @@ jobs:
       # documented known-red carve-out in this job's header; do not add one
       # without a reason there. A regression in any of these 23 files reds this
       # job, which is the coverage this issue exists to create.
+      #
+      # `--no-file-parallelism` IS LOAD-BEARING, not a performance knob. These
+      # suites were written for a per-developer schema, and several of them apply
+      # the store bootstrap DDL in their own `beforeAll`. Run concurrently against
+      # ONE schema, two forks take `AccessExclusiveLock` on the same shared
+      # `public` objects and Postgres kills one with `40P01 deadlock detected` —
+      # observed exactly once in CI on this branch (run 30507842403,
+      # lifecycle-interceptions-s0), which would have made this gate a flaky one.
+      # Serialising the FILES removes the concurrency that causes it. Per-file
+      # process isolation is UNAFFECTED: the base config's `pool: "forks"` +
+      # vitest's default `isolate: true` still give every file a fresh child
+      # process (the module-cache pollution that config warns about needs a
+      # SHARED fork, which this flag does not create) — verified by three green
+      # serialised runs, and by the whole-tier step below reproducing its recorded
+      # failure baseline exactly. Cost is small: 52 s serialised, and the CI
+      # parallel run measured 52 s too, since the DB is the bottleneck either way.
       - name: Agents integration tests — gated set (packages/agents)
         working-directory: packages/agents
         run: >-
           pnpm exec vitest run
           --config vitest.integration.config.ts
           --no-coverage
+          --no-file-parallelism
           --exclude '**/extension-handler.integration.test.ts'
           --exclude '**/lifecycle-repair-dispatch.integration.test.ts'
           --exclude '**/lifecycle-repair-successor-batch.integration.test.ts'
@@ -842,7 +860,7 @@ jobs:
           SUPABASE_SCHEMA: cinatra_full_tier
         run: |
           set +e
-          pnpm exec vitest run --config vitest.integration.config.ts --no-coverage
+          pnpm exec vitest run --config vitest.integration.config.ts --no-coverage --no-file-parallelism
           status=$?
           set -e
           if [ "$status" -ne 0 ]; then
