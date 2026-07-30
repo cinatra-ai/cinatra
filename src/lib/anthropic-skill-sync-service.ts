@@ -576,15 +576,27 @@ async function runCatalogSyncLocked(strict: boolean): Promise<AppSyncResult> {
 // Sync-map registration
 // ---------------------------------------------------------------------------
 
-let registered = false;
+// CROSS-COMPILATION SINGLETON (cinatra#2094 F7) — the idempotency flag is
+// anchored on globalThis for the same reason the map holder in
+// `@cinatra-ai/llm`'s `anthropic-skill-sync-map` is: Next.js gives each bundler
+// compilation (instrumentation / route / RSC) its own module cache, so a plain
+// module-level `let` here would let a route compilation believe it had already
+// registered (or re-register redundantly) independently of the boot compilation
+// that actually did. Keying the flag globally makes "registered" a per-PROCESS
+// fact, matching the per-process map holder it writes to.
+const SYNC_MAP_REGISTERED_KEY = Symbol.for(
+  "@cinatra-ai/host:anthropic-skill-sync-map-registered/v1",
+);
+type RegisteredHolder = { [k: symbol]: boolean | undefined };
+const _registeredHolder = globalThis as unknown as RegisteredHolder;
 
 /**
  * Idempotent registration of the table-backed sync map. Called from
- * instrumentation boot AND lazily by any Anthropic delivery path.
+ * instrumentation boot; idempotent so any future eager/lazy caller is safe.
  */
 export function ensureAnthropicSkillSyncMapRegistered(): void {
-  if (registered) return;
-  registered = true;
+  if (_registeredHolder[SYNC_MAP_REGISTERED_KEY] === true) return;
+  _registeredHolder[SYNC_MAP_REGISTERED_KEY] = true;
 
   const statePort: AnthropicSyncMapStatePort = {
     readRow: async (catalogSkillId) => {

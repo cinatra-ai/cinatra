@@ -49,7 +49,6 @@ vi.mock("@/app/api/chat/explicit-dispatch", () => ({
 }));
 vi.mock("@/app/api/chat/explicit-dispatch-server", () => ({ serverSideExplicitDispatch: vi.fn() }));
 vi.mock("@/app/api/chat/chat-user-context", () => ({ buildChatUserContextSections: vi.fn(async () => []) }));
-vi.mock("@/app/api/chat/shell-skill-gate", () => ({ shouldDeliverChatShellSkillTools: () => true }));
 vi.mock("@/app/api/chat/extension-confirmation", () => ({
   buildExtensionImplementationConfirmationPolicy: () => "",
 }));
@@ -77,7 +76,15 @@ vi.mock("@cinatra-ai/llm", () => ({
   // cinatra#2091 S4: skill delivery runs through the provider seam.
   selectSkillDeliveryAdapter: vi.fn(() => ({
     provider: "openai",
-    deliver: vi.fn(async () => ({ tools: [], systemContext: "", exposure: [] })),
+    // Realistic OpenAI delivery — see the same note in
+    // `execution-provenance-turn.test.ts` (cinatra#2094 F11): a no-vehicle
+    // delivery is now refused, so an empty stub would abort the widget turn
+    // before the external-MCP surface assertion this file exists for.
+    deliver: vi.fn(async () => ({
+      tools: [{ type: "function", name: "skill_file_read" }],
+      systemContext: "",
+      exposure: [],
+    })),
   })),
   resolveChatExternalMcpTools: vi.fn(async () => []),
   buildLlmMcpServerToolForChat: vi.fn(async () => ({ type: "mcp", name: "cinatra" })),
