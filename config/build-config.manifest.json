@@ -333,6 +333,7 @@
     { "alias": "@cinatra-ai/llm/mcp-materializer", "target": "./packages/llm/src/mcp-materializer.ts" },
     { "alias": "@cinatra-ai/execution-plane", "target": "./packages/execution-plane/src/index.ts" },
     { "alias": "@cinatra-ai/execution-plane/environment/promotion", "target": "./packages/execution-plane/src/environment/promotion.ts" },
+    { "alias": "@cinatra-ai/execution-plane/voucher", "target": "./packages/execution-plane/src/authz/voucher.ts" },
     { "alias": "@cinatra-ai/notifications/host-adapters", "target": "./packages/notifications/src/host-adapters.ts" },
     { "alias": "@cinatra-ai/notifications/types", "target": "./packages/notifications/src/types.ts" },
     { "alias": "@cinatra-ai/notifications/client", "target": "./packages/notifications/src/client.ts" },
